@@ -2942,26 +2942,30 @@ window.addEventListener('resize', () => {
 /* ---- Open on YouTube Music ---- */
 function updateUrlBar() {
   const ytmBtn = document.getElementById('np-url-toggle');
-  if (!ytmBtn) return;
+  const mpYtmBtn = document.getElementById('mp-url-toggle');
   if (_currentVideoId) {
-    ytmBtn.href = 'https://music.youtube.com/watch?v=' + encodeURIComponent(_currentVideoId);
-    ytmBtn.style.display = '';
+    const url = 'https://music.youtube.com/watch?v=' + encodeURIComponent(_currentVideoId);
+    if (ytmBtn) { ytmBtn.href = url; ytmBtn.style.display = ''; }
+    if (mpYtmBtn) { mpYtmBtn.href = url; mpYtmBtn.style.display = ''; }
   } else {
-    ytmBtn.removeAttribute('href');
-    ytmBtn.style.display = 'none';
+    if (ytmBtn) { ytmBtn.removeAttribute('href'); ytmBtn.style.display = 'none'; }
+    if (mpYtmBtn) { mpYtmBtn.removeAttribute('href'); mpYtmBtn.style.display = 'none'; }
   }
 }
 
 (function () {
   const ytmBtn = document.getElementById('np-url-toggle');
+  const mpYtmBtn = document.getElementById('mp-url-toggle');
   updateUrlBar();
 
-  ytmBtn.addEventListener('click', (e) => {
+  const onClick = (e) => {
     if (!_currentVideoId) {
       e.preventDefault();
       toast('No song playing.', 'error');
     }
-  });
+  };
+  if (ytmBtn) ytmBtn.addEventListener('click', onClick);
+  if (mpYtmBtn) mpYtmBtn.addEventListener('click', onClick);
 })();
 
 /* ---- Mobile sidebar ---- */

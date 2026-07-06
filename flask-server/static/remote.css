@@ -1200,7 +1200,8 @@
     display: flex;
     gap: 4px;
   }
-  .mini-popup-np-actions button {
+  .mini-popup-np-actions button,
+  .mp-ytm-btn {
     background: none;
     border: none;
     color: var(--muted);
@@ -1212,9 +1213,12 @@
     justify-content: center;
     cursor: pointer;
     transition: color .15s;
+    text-decoration: none;
   }
-  .mini-popup-np-actions button:hover { color: var(--text); }
-  .mini-popup-np-actions button svg { width: 16px; height: 16px; }
+  .mini-popup-np-actions button:hover,
+  .mp-ytm-btn:hover { color: var(--text); }
+  .mini-popup-np-actions button svg,
+  .mp-ytm-btn svg { width: 16px; height: 16px; }
   .mini-popup-np-actions button.shuffle-active { color: var(--accent); }
   /* Progress inside popup */
   .mini-popup-progress {
