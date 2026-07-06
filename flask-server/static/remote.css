@@ -183,7 +183,7 @@
       overflow: hidden;
       transition: grid-template-columns .4s cubic-bezier(.4, 0, .2, 1),
                   column-gap .4s cubic-bezier(.4, 0, .2, 1),
-                  align-content .4s cubic-bezier(.4, 0, .2, 1);
+                  padding-top .4s cubic-bezier(.4, 0, .2, 1);
     }
     .left-col {
       display: flex;
@@ -192,9 +192,11 @@
       grid-column: 1;
       min-width: 0;
     }
-    /* play-section stays compact regardless of idle/playing state */
+    /* play-section smoothly animates its max-width while staying centered */
     .play-section {
-      width: min(100%, 506px);
+      width: 100%;
+      max-width: 506px;
+      transition: max-width .4s cubic-bezier(.4, 0, .2, 1);
     }
     /* When queue or results are open, fill the left-col */
     main.has-queue .left-col,
@@ -203,7 +205,7 @@
     }
     main.has-queue .play-section,
     body.results-open .play-section {
-      width: 100%;
+      max-width: 100%;
     }
   }
 
@@ -1876,6 +1878,8 @@
   }
   @media (min-width: 900px) {
     main.idle .layout {
+      display: grid;
+      grid-template-columns: 1fr 0fr;
       align-content: start;
       padding-top: 3vh;
       overflow: visible;
