@@ -12,7 +12,11 @@ async function loadPlaylists() {
 }
 
 function getPlaylistsList() {
-  return Object.values(_playlistsData.playlists).sort((a, b) => b.updated_at - a.updated_at);
+  let lists = Object.values(_playlistsData.playlists);
+  if (!lists.find(p => p.id === 'liked')) {
+    lists.push({ id: 'liked', name: 'Liked Songs', updated_at: 0, tracks: [] });
+  }
+  return lists.sort((a, b) => b.updated_at - a.updated_at);
 }
 
 function renderPlaylists() {
@@ -26,13 +30,19 @@ function renderPlaylists() {
   }
   
   let html = '<div class="history-list">';
-  lists.forEach(pl => {
+  lists.forEach((pl) => {
     const trackCount = (pl.tracks || []).length;
     let thumbHtml = '<div class="queue-thumb"></div>';
-    if (trackCount > 0 && pl.tracks[0].thumbnail) {
+    
+    if (pl.id === 'liked') {
+      thumbHtml = `
+        <div class="queue-thumb" style="display: flex; align-items: center; justify-content: center; background: rgba(255, 255, 255, 0.05);">
+          <svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="width: 24px; height: 24px; color: var(--primary);"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+        </div>`;
+    } else if (trackCount > 0 && pl.tracks[0].thumbnail) {
       thumbHtml = `<img class="queue-thumb loaded" src="${escHtml(pl.tracks[0].thumbnail)}" alt="">`;
     }
-    
+
     html += `
       <div class="history-item" onclick="openPlaylistDetailModal('${escHtml(pl.id)}')">
         ${thumbHtml}
@@ -40,9 +50,6 @@ function renderPlaylists() {
           <div class="history-title">${escHtml(pl.name)}</div>
           <div class="history-artist">${trackCount} ${trackCount === 1 ? 'song' : 'songs'}</div>
         </div>
-        <button class="history-play-btn" title="Open Playlist" type="button">
-           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="9 18 15 12 9 6"/></svg>
-        </button>
       </div>
     `;
   });
