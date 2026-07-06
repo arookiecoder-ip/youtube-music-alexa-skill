@@ -2729,12 +2729,7 @@ function showRecsSkeleton(show) {
     skeleton.dataset.filled = '1';
   }
   skeleton.hidden = !show;
-  const list = document.getElementById('recs-list');
-  list.hidden = show;
-  // Restart the fade-in every time the skeleton is (re)shown, so a manual
-  // refresh (new track played -> back to idle) transitions in again instead
-  // of just popping the new tiles in place.
-  if (show) list.classList.remove('is-visible');
+  document.getElementById('recs-list').hidden = show;
 }
 
 async function loadRecommendations() {
@@ -2748,13 +2743,15 @@ async function loadRecommendations() {
     // never serves a stale cached list from an earlier fallback.
     const items = await api('/recommendations/?refresh=1');
     _recsLoaded = true;
+    // renderRecommendations keeps the skeleton up until the thumbnails have
+    // loaded, then swaps to the real grid — so no empty flash in between.
     renderRecommendations(items);
   } catch (e) {
     console.warn('Failed to load recommendations', e);
     section.hidden = true;
+    showRecsSkeleton(false);
   } finally {
     _recsLoading = false;
-    showRecsSkeleton(false);
   }
 }
 
@@ -2763,19 +2760,19 @@ function renderRecommendations(items) {
   const list = document.getElementById('recs-list');
   const shouldShow = !_hasTrack && !_resultsOpen && Array.isArray(items) && items.length > 0;
   section.hidden = !shouldShow;
-  if (!shouldShow) { list.innerHTML = ''; list.classList.remove('is-visible'); return; }
+  if (!shouldShow) { list.innerHTML = ''; return; }
   list.innerHTML = '';
-  let idx = 0;
+  const tiles = [];
   for (const item of items) {
     if (!item || !item.video_id) continue;
     const thumbUrl = (item.thumbnail && item.thumbnail.url) || item.thumbnail || '';
     const el = document.createElement('div');
+    // Each tile starts hidden and reveals only once its own thumbnail has
+    // finished loading (or failed), so no tile ever flashes as an empty/
+    // half-loaded box. .is-ready is added per-tile below.
     el.className = 'recs-tile';
-    // Staggered entrance: each tile animates in slightly after the previous
-    // one, capped so a full grid doesn't take too long to settle.
-    el.style.animationDelay = Math.min(idx * 35, 500) + 'ms';
     const thumbHtml = thumbUrl
-      ? `<img src="${escHtml(thumbUrl)}" alt="" loading="lazy">`
+      ? `<img src="${escHtml(thumbUrl)}" alt="" loading="eager">`
       : `<svg width="28" height="28" viewBox="0 0 24 24" fill="currentColor">
            <path d="M12 3v10.55A4 4 0 1 0 14 17V7h4V3h-6z"/>
          </svg>`;
@@ -2791,11 +2788,48 @@ function renderRecommendations(items) {
       thumbnail: thumbUrl,
     }));
     list.appendChild(el);
-    idx++;
+    tiles.push({ el, thumbUrl });
   }
-  // Next frame so the transition (opacity/transform) actually animates
-  // instead of the class landing before the browser has painted the tiles.
-  requestAnimationFrame(() => requestAnimationFrame(() => list.classList.add('is-visible')));
+
+  // Make the (still-empty-looking, tiles hidden) grid live so its <img>s start
+  // fetching; the skeleton stays on top until enough thumbnails are ready.
+  document.getElementById('recs-skeleton').hidden = false;
+  list.hidden = false;
+
+  let readyCount = 0;
+  let skeletonHidden = false;
+  const hideSkeletonOnce = () => {
+    if (skeletonHidden) return;
+    skeletonHidden = true;
+    document.getElementById('recs-skeleton').hidden = true;
+  };
+
+  // Reveal a tile once its thumbnail is decoded. A tile with no image, a
+  // broken/failed image, or one that's simply slow still reveals (on error /
+  // via the safety timeout) so nothing is ever stuck hidden.
+  const revealTile = (t, i) => {
+    if (t.el.dataset.ready) return;
+    t.el.dataset.ready = '1';
+    // Small stagger so revealed tiles cascade in rather than popping together.
+    t.el.style.transitionDelay = Math.min(i * 25, 400) + 'ms';
+    t.el.classList.add('is-ready');
+    readyCount++;
+    // Swap out the skeleton once the first ~2 rows (or everything) are ready,
+    // so the real grid appears already populated rather than empty.
+    if (readyCount >= Math.min(tiles.length, 12)) hideSkeletonOnce();
+  };
+  tiles.forEach((t, i) => {
+    const img = t.el.querySelector('img');
+    if (!img) { revealTile(t, i); return; }   // placeholder tile, no image
+    const done = () => revealTile(t, i);
+    if (img.complete && img.naturalWidth > 0) { done(); return; }  // cached
+    img.addEventListener('load', done, { once: true });
+    img.addEventListener('error', done, { once: true });
+  });
+  // Safety nets: never leave the skeleton up forever, and reveal any tiles
+  // still waiting on slow/hung images.
+  setTimeout(hideSkeletonOnce, 2500);
+  setTimeout(() => { tiles.forEach((t, i) => revealTile(t, i)); hideSkeletonOnce(); }, 5000);
 }
 
 /* ---- Open on YouTube Music ---- */

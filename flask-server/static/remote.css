@@ -1680,6 +1680,17 @@
     border: none;
     padding: 0;
   }
+  /* The grid area is a positioning context so the skeleton can overlay the
+     (loading) real grid — both occupy the same space instead of stacking. */
+  .recs-stack { position: relative; }
+  .recs-skeleton {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: 0;
+    z-index: 1;
+    background: var(--bg);
+  }
   .recs-section .section-head {
     padding: 0 16px;   /* aligns the label with the grid's left edge */
   }
@@ -1705,15 +1716,10 @@
        triggering browser back-navigation / page bounce on mobile. */
     -webkit-overflow-scrolling: touch;
     overscroll-behavior-x: contain;
-    /* Fade/rise in once populated, so the swap from skeleton to real tiles
-       reads as one continuous motion instead of a hard cut. */
-    opacity: 0;
-    transform: translateY(8px);
-    transition: opacity .4s ease, transform .4s ease;
   }
+  .recs-grid[hidden] { display: none; }
   .recs-grid::-webkit-scrollbar { height: 6px; }
   .recs-grid::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
-  .recs-grid.is-visible { opacity: 1; transform: none; }
   @media (min-width: 900px) {
     .recs-grid {
       grid-auto-columns: 132px;
@@ -1730,15 +1736,19 @@
     /* No background/border — the art itself is the only visual weight. */
     background: none;
     border: none;
-    /* Each tile rises in; JS staggers the delay per index. */
+    /* Hidden until the thumbnail has loaded (JS adds .is-ready). rise-in on
+       reveal. transitionDelay is set inline per tile for a cascade. */
     opacity: 0;
     transform: translateY(10px);
+    transition: opacity .35s ease, transform .35s cubic-bezier(.22,1,.36,1);
   }
-  .recs-grid.is-visible .recs-tile {
-    animation: recsTileIn .45s cubic-bezier(.22,1,.36,1) forwards;
+  .recs-tile.is-ready {
+    opacity: 1;
+    transform: none;
   }
-  @keyframes recsTileIn {
-    to { opacity: 1; transform: none; }
+  @media (prefers-reduced-motion: reduce) {
+    .recs-tile { transition: opacity .2s ease; transform: none; }
+    .recs-tile.is-ready { transform: none; }
   }
   .recs-tile-art {
     width: 100%;
@@ -1766,9 +1776,6 @@
     }
   }
   .recs-tile:active .recs-tile-art { transform: scale(.97); }
-  @media (prefers-reduced-motion: reduce) {
-    .recs-grid.is-visible .recs-tile { animation: none; opacity: 1; transform: none; }
-  }
   .recs-tile-title {
     font-size: .7rem;
     font-weight: 600;
