@@ -1586,7 +1586,15 @@ def _refresh_radio_queue(video_id):
         cur_queue = cur.get('queue') or []
         queue_stale = not any(q.get('video_id') == video_id for q in cur_queue)
         if cur.get('video_id') == video_id and (len(cur_queue) <= 1 or queue_stale):
-            _update_now_playing(queue=queue, queue_index=idx)
+            fields = {'queue': queue, 'queue_index': idx}
+            # If the now-playing track still has no duration (came from a
+            # recommendation/chart with duration_ms=0), fill it from the radio
+            # queue's matching entry so the progress bar gets a total.
+            if not int(cur.get('duration_ms') or 0):
+                match = next((q for q in queue if q.get('video_id') == video_id), None)
+                if match and int(match.get('duration_ms') or 0):
+                    fields['duration_ms'] = match['duration_ms']
+            _update_now_playing(**fields)
             _prewarm_queue_audio(queue, idx)
             return True
     except Exception:
@@ -2909,6 +2917,11 @@ def alexa_play_queue():
     # background and patch it into now-playing without blocking playback.
     if not int(item.get('duration_ms') or 0):
         threading.Thread(target=_lookup_and_update_np, args=(video_id,), daemon=True).start()
+    # Build the "Up Next" radio queue for this track right away. When a song is
+    # played from a recommendation/search it lands here with a single-item
+    # queue; without this the UP NEXT panel stays empty until (and unless) the
+    # skill's started webhook happens to rebuild it.
+    threading.Thread(target=_refresh_radio_queue, args=(video_id,), daemon=True).start()
     return jsonify({'ok': True, 'now_playing': {
         'title': item.get('title', ''),
         'artist': item.get('artist', ''),
