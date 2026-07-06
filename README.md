@@ -190,15 +190,76 @@ shared **Caddy** container (`Caddyfile` at repo root) — add more services +
 Caddyfile blocks for other projects on the same VPS without fighting over
 host ports 80/443.
 
-```bash
-cp .env.example .env   # fill in real values; gitignored, never commit it
-# edit Caddyfile: replace <your-ip-with-dashes>.sslip.io with your real host
-docker compose up -d --build
-```
+**First time on the VPS? Here's what to get onto the server, step by step:**
+
+1. **Get the code onto the VPS.** Easiest way — just clone the repo directly
+   on the VPS instead of copying files by hand:
+   ```bash
+   git clone https://github.com/arookiecoder-ip/youtube-music-alexa-skill.git
+   cd youtube-music-alexa-skill
+   ```
+   This brings over everything needed to run the server: `flask-server/`,
+   `docker-compose.yml`, `Caddyfile`. (`lambda/` is *not* deployed here — those
+   files get pasted into the Alexa console's code editor instead, see
+   [Alexa console setup](#3-alexa-console-setup).)
+2. **Create your real secrets file.** `.env.example` is just a template
+   (safe, checked into git, no real values). Copy it and fill in the blanks —
+   this file must **never** be committed:
+   ```bash
+   cp .env.example .env
+   nano .env   # fill in PUBLIC_BASE_URL, API_KEY, etc.
+   ```
+3. **Set your hostname in the Caddyfile.** Open `Caddyfile` and replace
+   `<your-ip-with-dashes>.sslip.io` with your real VPS address (see
+   [HTTPS setup](#2-https-caddy--sslipio--no-domain-needed) above for how to
+   derive it from your VPS's public IP).
+4. **Add your YouTube cookies.** yt-dlp needs a logged-in session to get past
+   YouTube's bot-blocking on datacenter/VPS IPs.
+   - ⚠️ Use a **throwaway Google account** for this, not your main one —
+     never export cookies from an account you actually care about.
+   - In your browser (on your PC), log into YouTube with that throwaway
+     account, then install a cookie-export extension — e.g. "Get cookies.txt
+     LOCALLY" (Chrome/Firefox) — and use it on a youtube.com tab to download
+     a `cookies.txt` file in Netscape format.
+   - Copy that file to the VPS:
+     ```bash
+     scp cookies.txt ubuntu@<your-vps-ip>:~/cookies.txt
+     ```
+   - Cookies expire/rotate occasionally — if yt-dlp starts throwing
+     bot-check/"Sign in to confirm" errors again, just repeat this step
+     (re-export + re-scp) to refresh them.
+5. **Build and start everything:**
+   ```bash
+   docker compose up -d --build
+   ```
 
 Cookies (`~/cookies.txt`) and the audio cache are mounted as volumes so they
 persist across container restarts. To update the server later:
 `docker compose up -d --build ytmusic`.
+
+**First-time VPS setup gotchas** (Ubuntu 24.04, only needed once per VPS):
+
+- `docker: unknown command: docker compose` — the Compose v2 plugin isn't
+  installed. Ubuntu's own apt repo doesn't carry `docker-compose-plugin`, so
+  install the binary directly instead of chasing that package:
+  ```bash
+  mkdir -p ~/.docker/cli-plugins
+  curl -SL https://github.com/docker/compose/releases/latest/download/docker-compose-linux-$(uname -m) \
+    -o ~/.docker/cli-plugins/docker-compose
+  chmod +x ~/.docker/cli-plugins/docker-compose
+  docker compose version   # should now print a version
+  ```
+- `permission denied while trying to connect to the docker API at
+  unix:///var/run/docker.sock` — your user isn't in the `docker` group yet:
+  ```bash
+  sudo usermod -aG docker $USER
+  ```
+  Don't just re-run with `sudo docker compose ...` — since the plugin above
+  was installed under your user's home directory, root's Docker CLI can't
+  find it and you'll hit the "unknown command" error again. Instead, either
+  log out and reconnect over SSH, or run `newgrp docker` to pick up the new
+  group in your current shell, then retry `docker compose up -d --build`
+  without `sudo`.
 
 This replaces both the systemd unit *and* the standalone Caddy install from
 the sections above — skip those if you go this route.
@@ -220,9 +281,24 @@ sudo iptables -I INPUT 5 -p tcp --dport 443 -j ACCEPT
 sudo apt install -y iptables-persistent && sudo netfilter-persistent save
 ```
 
-Install Caddy (official apt repo), then `/etc/caddy/Caddyfile`. The
-`/alexa/proxy/*` route is what makes the browser-driven Amazon login work —
-it forwards the public path to the local login proxy (port 5001):
+Install Caddy from its official apt repo:
+
+```bash
+sudo apt install -y debian-keyring debian-archive-keyring apt-transport-https curl
+curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | \
+  sudo gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
+curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | \
+  sudo tee /etc/apt/sources.list.d/caddy-stable.list
+sudo apt update
+sudo apt install -y caddy
+```
+
+Then edit `/etc/caddy/Caddyfile` (open it with `sudo nano /etc/caddy/Caddyfile`,
+replacing whatever default content is there) and replace its entire contents
+with the block below — swap in your real hostname for
+`<your-ip-with-dashes>.sslip.io` first. The `/alexa/proxy/*` route is what
+makes the browser-driven Amazon login work — it forwards the public path to
+the local login proxy (port 5001):
 
 ```
 <your-ip-with-dashes>.sslip.io {
@@ -234,6 +310,8 @@ it forwards the public path to the local login proxy (port 5001):
     }
 }
 ```
+
+Save and exit (in `nano`: `Ctrl+O`, `Enter`, `Ctrl+X`).
 
 `sudo systemctl reload caddy` — the certificate appears within a minute
 (`journalctl -u caddy` shows "certificate obtained successfully").
