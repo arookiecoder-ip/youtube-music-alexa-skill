@@ -38,9 +38,10 @@ function syncUiState() {
   // while a track is playing, preventing a massive empty screen void.
   const recsSection = document.getElementById('recs-section');
   if (recsSection) {
-    const shouldShowRecs = _loggedIn && !_resultsOpen;
-    if (shouldShowRecs && !_recsLoaded) loadRecommendations();
-    else recsSection.hidden = !shouldShowRecs || !_recsLoaded;
+    const queueOpen = document.querySelector('main').classList.contains('has-queue');
+    const shouldShow = _loggedIn && !_resultsOpen && !queueOpen;
+    if (shouldShow && !_recsLoaded) loadRecommendations();
+    else recsSection.hidden = !shouldShow || !_recsLoaded;
   }
   if (_hasTrack) {
     clearTimeout(player._hideTimer);
@@ -2795,7 +2796,8 @@ async function loadRecommendations() {
   if (!_loggedIn || _recsLoaded || _recsLoading) return;
   _recsLoading = true;
   const section = document.getElementById('recs-section');
-  section.hidden = !(!_hasTrack && !_resultsOpen);
+  const queueOpen = document.querySelector('main').classList.contains('has-queue');
+  section.hidden = !(!_resultsOpen && !queueOpen);
   showRecsSkeleton(true);
   try {
     // refresh=1 so each visit rebuilds from current history (a fresh mix) and
@@ -2843,7 +2845,8 @@ function recsRows() {
 function renderRecommendations(items) {
   const section = document.getElementById('recs-section');
   const list = document.getElementById('recs-list');
-  const shouldShow = !_hasTrack && !_resultsOpen && Array.isArray(items) && items.length > 0;
+  const queueOpen = document.querySelector('main').classList.contains('has-queue');
+  const shouldShow = !_resultsOpen && !queueOpen && Array.isArray(items) && items.length > 0;
   section.hidden = !shouldShow;
   if (!shouldShow) { list.innerHTML = ''; return; }
   list.innerHTML = '';
