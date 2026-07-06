@@ -315,6 +315,28 @@ document.addEventListener('DOMContentLoaded', () => {
   const plClose = document.getElementById('playlists-modal-close');
   if (plClose) plClose.addEventListener('click', closePlaylistsModal);
   
+  const importPlBtn = document.getElementById('import-playlist-btn');
+  if (importPlBtn) {
+    importPlBtn.addEventListener('click', async () => {
+      const url = prompt("Enter YouTube Playlist URL:");
+      if (!url) return;
+      const name = prompt("Enter a name for this Custom Playlist:");
+      if (!name) return;
+      
+      try {
+        const res = await api('/api/playlists/', { name: name, source_url: url });
+        _playlistsData.playlists[res.id] = res;
+        toast('Playlist created. Syncing tracks...', 'ok');
+        await api('/api/playlists/' + res.id + '/sync/', {}, 'POST');
+        renderPlaylists();
+        setTimeout(() => { loadPlaylists().then(renderPlaylists); }, 2500);
+      } catch (e) {
+        toast('Error importing playlist', 'error');
+        console.error(e);
+      }
+    });
+  }
+  
   const plDetailClose = document.getElementById('playlist-detail-close');
   if (plDetailClose) plDetailClose.addEventListener('click', closePlaylistDetailModal);
   
