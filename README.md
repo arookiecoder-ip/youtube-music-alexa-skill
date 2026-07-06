@@ -109,7 +109,7 @@ flask-server/         backend
 lambda/               Alexa skill code (paste into the Alexa-hosted code editor)
   lambda_function.py  intent + AudioPlayer event handlers
   data.py             spoken messages, imports DEFAULT_API_URL/API_KEY
-  api_key.py          API_KEY + DEFAULT_API_URL (gitignored — you create this)
+  api_key.py          API_KEY + DEFAULT_API_URL placeholder template (tracked — never commit real values, fill them in only in the Alexa console copy)
   mediaUtils/player.py  API client, playback controller, SSML escaping
   models/player_models.py  dataclasses
 skill-package/interactionModels/custom/   interaction model JSON (5 locales)
