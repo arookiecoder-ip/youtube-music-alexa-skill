@@ -203,12 +203,7 @@ init_db()
 def _load_history():
     with get_db() as conn:
         rows = conn.execute('SELECT * FROM history ORDER BY played_at DESC LIMIT ?', (HISTORY_MAX,)).fetchall()
-        res = []
-        for r in rows:
-            d = dict(r)
-            d['thumbnail'] = d.pop('thumbnail_url', '')
-            res.append(d)
-        return res
+        return [dict(r) for r in rows]
 
 def _record_listen(video_id, title, artist, thumbnail_url):
     if not video_id:
@@ -2764,6 +2759,8 @@ async def alexa_play():
                     _update_now_playing(playing=False)
                 else:
                     print(f"[alexa/play] direct link sent successfully video_id={direct_video_id}")
+                    _record_listen(direct_video_id, queue_item.get('title', ''),
+                                   queue_item.get('artist', ''), thumb)
                     _prewarm_queue_audio(queue, queue_index)
             except Exception:
                 traceback.print_exc()
@@ -2811,6 +2808,9 @@ async def alexa_play():
                         _update_now_playing(playing=False)
                     else:
                         print(f"[alexa/play] playlist sent successfully ({len(queue)} tracks)")
+                        _record_listen(first['video_id'], first.get('title', ''),
+                                       first.get('artist', ''),
+                                       first.get('thumbnail', ''))
                         _prewarm_queue_audio(queue, 0)
                 except Exception:
                     traceback.print_exc()
@@ -2885,6 +2885,8 @@ async def alexa_play():
                 _update_now_playing(playing=False)
             else:
                 print(f"[alexa/play] sent successfully")
+                _record_listen(video_id, fields.get('title', ''),
+                               fields.get('artist', ''), thumb)
         except Exception:
             traceback.print_exc()
             _update_now_playing(playing=False)
@@ -2967,6 +2969,11 @@ def alexa_play_queue():
         return _device_dispatch_failed(error)
 
     thumb = _thumbnail_url(item.get('thumbnail'))
+    # Record the listen right away so "Recently Played" updates immediately,
+    # instead of waiting for the Lambda webhook (which may lag or not fire for
+    # some playback flows).  _record_listen uses INSERT OR REPLACE, so a
+    # duplicate call from the webhook is harmless.
+    _record_listen(video_id, item.get('title', ''), item.get('artist', ''), thumb)
     _update_now_playing(playing=False,
                         title=item.get('title', ''),
                         artist=item.get('artist', ''),
