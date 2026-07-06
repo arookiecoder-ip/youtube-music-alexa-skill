@@ -67,12 +67,26 @@ function renderPlaylists() {
       thumbHtml = `<img class="queue-thumb loaded" src="${escHtml(pl.tracks[0].thumbnail)}" alt="">`;
     }
 
+    let syncIconHtml = '';
+    if (pl.source_url) {
+      syncIconHtml = `
+        <button class="clear-all-btn" title="Sync Playlist" style="padding: 4px 8px; margin-left: auto;" onclick="event.stopPropagation(); syncPlaylist('${escHtml(pl.id)}', this)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="width:16px;height:16px;">
+            <polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+          </svg>
+        </button>
+      `;
+    }
+
     html += `
       <div class="history-item" onclick="openPlaylistDetailModal('${escHtml(pl.id)}')">
         ${thumbHtml}
-        <div class="history-info">
-          <div class="history-title">${escHtml(pl.name)}</div>
-          <div class="history-artist">${trackCount} ${trackCount === 1 ? 'song' : 'songs'}</div>
+        <div class="history-info" style="display: flex; flex-direction: row; align-items: center; justify-content: space-between; flex: 1;">
+          <div>
+            <div class="history-title">${escHtml(pl.name)}</div>
+            <div class="history-artist">${trackCount} ${trackCount === 1 ? 'song' : 'songs'}</div>
+          </div>
+          ${syncIconHtml}
         </div>
       </div>
     `;
@@ -269,10 +283,12 @@ async function removeFromPlaylist(pl_id, track_uuid) {
   }
 }
 
-async function syncPlaylist(pl_id) {
-  const btn = document.getElementById('playlist-sync-btn');
-  btn.disabled = true;
-  btn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" class="spin"><path d="M21.5 2v6h-6M2.13 15.57a9 9 0 1 0 3.44-8.8L2.5 9M2.5 22v-6h6M21.87 8.43a9 9 0 1 0-3.44 8.8L21.5 15"/></svg> Syncing...`;
+async function syncPlaylist(pl_id, btnEl = null) {
+  const btn = btnEl || document.getElementById('playlist-sync-btn');
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" class="spin" style="width:16px;height:16px;"><path d="M21.5 2v6h-6M2.13 15.57a9 9 0 1 0 3.44-8.8L2.5 9M2.5 22v-6h6M21.87 8.43a9 9 0 1 0-3.44 8.8L21.5 15"/></svg>` + (btnEl ? '' : ' Syncing...');
+  }
   
   try {
     await api('/api/playlists/' + encodeURIComponent(pl_id) + '/sync/', {});
@@ -282,13 +298,19 @@ async function syncPlaylist(pl_id) {
       await loadPlaylists();
       if (document.getElementById('playlist-detail-modal-overlay').classList.contains('open')) {
         openPlaylistDetailModal(pl_id);
+      } else {
+        renderPlaylists();
       }
-      btn.disabled = false;
-      btn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg> Sync`;
+      if (btn && !btnEl) {
+        btn.disabled = false;
+        btn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg> Sync`;
+      }
     }, 4000);
   } catch(e) {
-    btn.disabled = false;
-    btn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg> Sync`;
+    if (btn && !btnEl) {
+      btn.disabled = false;
+      btn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg> Sync`;
+    }
     toast('Sync failed', 'error');
   }
 }
