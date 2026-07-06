@@ -1,0 +1,5 @@
+flask[async]
+ytmusicapi
+yt-dlp
+alexapy
+aiohttp

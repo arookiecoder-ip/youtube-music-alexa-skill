@@ -1,0 +1,308 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Music Box — Sign in</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --bg: #0a0a0a;
+    --surface: #141414;
+    --border: #252525;
+    --text: #e8e8e8;
+    --muted: #666;
+    --accent: #e8590c;
+    --accent-hover: #f76707;
+    --danger: #e03131;
+  }
+
+  html, body { height: 100%; }
+  body {
+    font-family: -apple-system, 'Segoe UI', system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px 16px;
+  }
+
+  body::before {
+    content: '';
+    position: fixed;
+    top: 0; left: 0; right: 0;
+    height: 3px;
+    background: var(--accent);
+    z-index: 100;
+  }
+
+  main { width: 100%; max-width: 380px; }
+
+  /* ---- Brand ---- */
+  .brand {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    margin: 0 0 24px 2px;
+  }
+
+  .eq-icon { display: flex; align-items: flex-end; gap: 3px; height: 22px; }
+  .eq-icon span {
+    display: block;
+    width: 3px;
+    background: var(--accent);
+    animation: eq 1.4s ease-in-out infinite;
+    transform-origin: bottom;
+  }
+  .eq-icon span:nth-child(1) { height: 35%; animation-delay: 0s; }
+  .eq-icon span:nth-child(2) { height: 75%; animation-delay: .15s; }
+  .eq-icon span:nth-child(3) { height: 50%; animation-delay: .35s; }
+  .eq-icon span:nth-child(4) { height: 90%; animation-delay: .1s; }
+  .eq-icon span:nth-child(5) { height: 60%; animation-delay: .25s; }
+
+  @keyframes eq {
+    0%, 100% { transform: scaleY(1); }
+    50% { transform: scaleY(.3); }
+  }
+
+  .brand h1 {
+    font-size: .85rem;
+    font-weight: 700;
+    letter-spacing: .14em;
+    text-transform: uppercase;
+  }
+  .brand p {
+    font-size: .72rem;
+    color: var(--muted);
+    margin-top: 3px;
+    text-transform: uppercase;
+    letter-spacing: .08em;
+  }
+
+  /* ---- Card ---- */
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    padding: 28px 24px;
+    position: relative;
+    overflow: hidden;
+  }
+
+  .step { display: none; }
+  .step.active { display: block; animation: rise .25s ease-out; }
+  @keyframes rise {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: none; }
+  }
+
+  label {
+    display: block;
+    font-size: .6rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: .14em;
+    color: var(--muted);
+    margin: 18px 0 7px;
+  }
+  label:first-of-type { margin-top: 0; }
+
+  input {
+    width: 100%;
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+    padding: 11px 12px;
+    font-size: .92rem;
+    font-family: inherit;
+    transition: border-color .15s;
+  }
+  input::placeholder { color: #3e3e3e; }
+  input:focus {
+    outline: none;
+    border-color: var(--accent);
+  }
+
+  .code-input {
+    letter-spacing: .5em;
+    text-align: center;
+    font-size: 1.4rem;
+    font-variant-numeric: tabular-nums;
+    padding-left: .5em;
+  }
+
+  button.primary {
+    width: 100%;
+    margin-top: 22px;
+    border: 1px solid var(--accent);
+    background: var(--accent);
+    color: #fff;
+    padding: 12px 14px;
+    font-size: .72rem;
+    font-weight: 700;
+    font-family: inherit;
+    text-transform: uppercase;
+    letter-spacing: .1em;
+    cursor: pointer;
+    transition: background .12s, border-color .12s;
+  }
+  button.primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+  button.primary:active { transform: scale(.98); }
+  button.primary:disabled { opacity: .4; cursor: default; }
+
+  .back {
+    background: none;
+    border: 0;
+    color: var(--muted);
+    cursor: pointer;
+    font-size: .75rem;
+    font-family: inherit;
+    padding: 4px 0;
+    margin-bottom: 6px;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    letter-spacing: .04em;
+  }
+  .back:hover { color: var(--text); }
+  .back svg { width: 14px; height: 14px; }
+
+  .step-title {
+    font-size: .95rem;
+    font-weight: 600;
+    margin: 2px 0 4px;
+  }
+  .step-hint {
+    font-size: .78rem;
+    color: var(--muted);
+    line-height: 1.5;
+    margin-bottom: 4px;
+  }
+
+  #status {
+    font-size: .75rem;
+    color: var(--danger);
+    min-height: 1.1em;
+    margin-top: 14px;
+  }
+</style>
+</head>
+<body>
+<main>
+  <div class="brand">
+    <div class="eq-icon">
+      <span></span><span></span><span></span><span></span><span></span>
+    </div>
+    <div>
+      <h1>Music Box</h1>
+      <p>Sign in to continue</p>
+    </div>
+  </div>
+
+  <div class="card">
+    <!-- Step 1: credentials -->
+    <form class="step active" id="step-creds" data-step="1">
+      <label for="username">Username</label>
+      <input type="text" id="username" name="username" autocomplete="username" autofocus>
+
+      <label for="password">Password</label>
+      <input type="password" id="password" name="password" autocomplete="current-password">
+
+      <button type="submit" class="primary" id="creds-btn">
+        {% if totp %}Continue{% else %}Sign in{% endif %}
+      </button>
+    </form>
+
+    <!-- Step 2: 2FA code (only when TOTP is enabled) -->
+    {% if totp %}
+    <form class="step" id="step-code" data-step="2">
+      <button type="button" class="back" id="back-btn">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+          <path d="M19 12H5M12 19l-7-7 7-7"/>
+        </svg>
+        Back
+      </button>
+      <div class="step-title">Two-factor code</div>
+      <p class="step-hint">Enter the 6-digit code from your authenticator app.</p>
+      <label for="code" style="position:absolute;left:-9999px">Authentication code</label>
+      <input type="text" id="code" name="code" class="code-input" inputmode="numeric"
+             autocomplete="one-time-code" pattern="[0-9]*" maxlength="6" placeholder="------">
+      <button type="submit" class="primary" id="code-btn">Sign in</button>
+    </form>
+    {% endif %}
+
+    <p id="status"></p>
+  </div>
+</main>
+
+<script>
+const TOTP = {{ 'true' if totp else 'false' }};
+const statusEl = document.getElementById('status');
+const stepCreds = document.getElementById('step-creds');
+const credsBtn = document.getElementById('creds-btn');
+
+function setError(msg) { statusEl.textContent = msg || ''; }
+
+function showStep(el) {
+  document.querySelectorAll('.step').forEach(s => s.classList.remove('active'));
+  el.classList.add('active');
+  setError('');
+  const input = el.querySelector('input');
+  if (input) setTimeout(() => input.focus(), 60);
+}
+
+async function post(payload) {
+  const res = await fetch('/login/', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'same-origin',
+    body: JSON.stringify(payload),
+  });
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(json.error || ('HTTP ' + res.status));
+  return json;
+}
+
+stepCreds.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  setError('');
+  credsBtn.disabled = true;
+  try {
+    const json = await post({
+      username: document.getElementById('username').value.trim(),
+      password: document.getElementById('password').value,
+    });
+    if (json.totp_required) {
+      showStep(document.getElementById('step-code'));
+    } else {
+      location.href = '/';
+    }
+  } catch (err) {
+    setError(err.message);
+  } finally {
+    credsBtn.disabled = false;
+  }
+});
+
+if (TOTP) {
+  const stepCode = document.getElementById('step-code');
+  const codeBtn = document.getElementById('code-btn');
+  document.getElementById('back-btn').onclick = () => showStep(stepCreds);
+  stepCode.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    setError('');
+    codeBtn.disabled = true;
+    try {
+      await post({ step: 'totp', code: document.getElementById('code').value.trim() });
+      location.href = '/';
+    } catch (err) {
+      setError(err.message);
+    } finally {
+      codeBtn.disabled = false;
+    }
+  });
+}
+</script>
+</body>
+</html>

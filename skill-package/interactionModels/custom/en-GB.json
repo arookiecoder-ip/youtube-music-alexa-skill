@@ -1,0 +1,210 @@
+{
+  "interactionModel": {
+    "languageModel": {
+      "invocationName": "music box",
+      "intents": [
+        {
+          "name": "AMAZON.CancelIntent",
+          "samples": []
+        },
+        {
+          "name": "AMAZON.HelpIntent",
+          "samples": []
+        },
+        {
+          "name": "AMAZON.StopIntent",
+          "samples": []
+        },
+        {
+          "name": "AMAZON.NavigateHomeIntent",
+          "samples": []
+        },
+        {
+          "name": "AMAZON.FallbackIntent",
+          "samples": []
+        },
+        {
+          "name": "AMAZON.ResumeIntent",
+          "samples": []
+        },
+        {
+          "name": "AMAZON.PauseIntent",
+          "samples": []
+        },
+        {
+          "name": "AMAZON.StartOverIntent",
+          "samples": []
+        },
+        {
+          "name": "AMAZON.ShuffleOnIntent",
+          "samples": []
+        },
+        {
+          "name": "AMAZON.ShuffleOffIntent",
+          "samples": []
+        },
+        {
+          "name": "AMAZON.RepeatIntent",
+          "samples": []
+        },
+        {
+          "name": "AMAZON.PreviousIntent",
+          "samples": []
+        },
+        {
+          "name": "AMAZON.NextIntent",
+          "samples": []
+        },
+        {
+          "name": "AMAZON.LoopOnIntent",
+          "samples": []
+        },
+        {
+          "name": "AMAZON.LoopOffIntent",
+          "samples": []
+        },
+        {
+          "name": "PlaySongIntent",
+          "slots": [
+            {
+              "name": "songName",
+              "type": "AMAZON.SearchQuery"
+            }
+          ],
+          "samples": [
+            "play {songName}"
+          ]
+        },
+        {
+          "name": "PlayArtistIntent",
+          "slots": [
+            {
+              "name": "artistName",
+              "type": "AMAZON.SearchQuery"
+            }
+          ],
+          "samples": [
+            "play songs by {artistName}",
+            "play music by {artistName}",
+            "play tracks by {artistName}"
+          ]
+        },
+        {
+          "name": "PlayAlbumIntent",
+          "slots": [
+            {
+              "name": "albumName",
+              "type": "AMAZON.SearchQuery"
+            }
+          ],
+          "samples": [
+            "play album {albumName}",
+            "play the album {albumName}"
+          ]
+        },
+        {
+          "name": "PlayAudio",
+          "slots": [],
+          "samples": [
+            "play",
+            "resume",
+            "resume music",
+            "resume playing",
+            "resume the music",
+            "resume the song",
+            "continue playing",
+            "keep playing"
+          ]
+        },
+        {
+          "name": "AnnounceNowPlayingIntent",
+          "slots": [],
+          "samples": [
+            "what is playing",
+            "what song is this",
+            "who sings this",
+            "announce now playing"
+          ]
+        },
+        {
+          "name": "StartPlaylistIntent",
+          "slots": [
+            {
+              "name": "playlistName",
+              "type": "AMAZON.SearchQuery"
+            }
+          ],
+          "samples": [
+            "play playlist {playlistName}",
+            "start playlist {playlistName}",
+            "play my playlist {playlistName}"
+          ]
+        },
+        {
+          "name": "CreatePlaylistIntent",
+          "slots": [
+            {
+              "name": "encodedPlaylistId",
+              "type": "AMAZON.SearchQuery"
+            }
+          ],
+          "samples": [
+            "add playlist {encodedPlaylistId}",
+            "save playlist {encodedPlaylistId}"
+          ]
+        },
+        {
+          "name": "DeletePlaylistIntent",
+          "slots": [
+            {
+              "name": "playlistName",
+              "type": "AMAZON.SearchQuery"
+            }
+          ],
+          "samples": [
+            "delete playlist {playlistName}",
+            "remove playlist {playlistName}"
+          ]
+        },
+        {
+          "name": "FindPlaylistIntent",
+          "slots": [],
+          "samples": [
+            "what are my playlists",
+            "list my playlists",
+            "find my playlists"
+          ]
+        },
+        {
+          "name": "SetApiurlIntent",
+          "slots": [
+            {
+              "name": "apiUrl",
+              "type": "AMAZON.SearchQuery"
+            }
+          ],
+          "samples": [
+            "set api url {apiUrl}",
+            "set api url to {apiUrl}"
+          ]
+        },
+        {
+          "name": "SeekIntent",
+          "slots": [
+            {
+              "name": "seconds",
+              "type": "AMAZON.NUMBER"
+            }
+          ],
+          "samples": [
+            "seek to {seconds} seconds",
+            "seek to {seconds}",
+            "go to {seconds} seconds",
+            "jump to {seconds} seconds"
+          ]
+        }
+      ],
+      "types": []
+    }
+  }
+}
