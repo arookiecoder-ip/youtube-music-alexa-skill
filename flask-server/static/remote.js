@@ -516,7 +516,7 @@ const progress = (function () {
 /* ---- API ---- */
 async function api(path, body) {
   const opts = body === undefined
-    ? { credentials: 'same-origin' }
+    ? { credentials: 'same-origin', cache: 'no-store' }
     : { method: 'POST', credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body) };
