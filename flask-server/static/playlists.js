@@ -1,3 +1,16 @@
+window.togglePlaylistMoreMenu = function(btn) {
+  const menus = document.querySelectorAll('.playlist-more-menu');
+  menus.forEach(m => {
+    if (m !== btn.nextElementSibling) m.style.display = 'none';
+  });
+  const menu = btn.nextElementSibling;
+  menu.style.display = menu.style.display === 'none' ? 'block' : 'none';
+};
+
+document.addEventListener('click', () => {
+  document.querySelectorAll('.playlist-more-menu').forEach(m => m.style.display = 'none');
+});
+
 let _playlistsData = { playlists: {}, liked_songs: [] };
 
 async function loadPlaylists() {
@@ -92,16 +105,27 @@ function openPlaylistDetailModal(pl_id) {
         thumbHtml = `<img class="queue-thumb loaded" src="${escHtml(track.thumbnail)}" alt="">`;
       }
       
-      const trashIcon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>`;
+      const trashIcon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="width: 100%; height: 100%;"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>`;
+      const moreSvg = `<svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg>`;
       
       html += `
-        <div class="history-item">
+        <div class="history-item" style="position: relative;">
           ${thumbHtml}
           <div class="history-info" onclick="playResult({video_id: '${escHtml(track.video_id)}', title: '${escHtml(track.title).replace(/'/g, "\\'")}', artist: '${escHtml(track.artist).replace(/'/g, "\\'")}'})">
             <div class="history-title">${escHtml(track.title)}</div>
             <div class="history-artist">${escHtml(track.artist)}</div>
           </div>
-          <button class="result-more-btn" type="button" title="Remove" onclick="removeFromPlaylist('${pl_id}', '${track.uuid || track.video_id}')">${trashIcon}</button>
+          <div class="playlist-more-container" style="position: relative; display: flex; align-items: center;">
+            <button class="result-more-btn" type="button" title="More options" onclick="event.stopPropagation(); window.togglePlaylistMoreMenu(this)" style="background: none; border: none; color: var(--text-muted, #aaa); cursor: pointer; padding: 8px;">
+              ${moreSvg}
+            </button>
+            <div class="playlist-more-menu" style="display: none; position: absolute; right: 8px; top: 100%; background: var(--bg-elevated, #2a2a2a); border: 1px solid var(--border, #444); border-radius: 8px; z-index: 100; min-width: 180px; box-shadow: 0 4px 12px rgba(0,0,0,0.5); overflow: hidden;">
+              <div class="result-menu-option" style="padding: 12px 16px; display: flex; align-items: center; color: #ff4d4d; cursor: pointer; transition: background 0.2s; font-size: 14px;" onclick="event.stopPropagation(); removeFromPlaylist('${pl_id}', '${track.uuid || track.video_id}')" onmouseover="this.style.background='rgba(255,255,255,0.1)'" onmouseout="this.style.background='transparent'">
+                <div style="width: 18px; height: 18px; margin-right: 12px; display: flex;">${trashIcon}</div>
+                Remove from playlist
+              </div>
+            </div>
+          </div>
         </div>
       `;
     });
