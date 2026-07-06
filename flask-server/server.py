@@ -176,53 +176,7 @@ def init_db():
             )
         ''')
         
-        # Automatic Migration from JSON
-        history_file = os.environ.get("HISTORY_FILE", os.path.join(os.path.dirname(os.path.abspath(__file__)), "history.json"))
-        playlists_file = os.environ.get("PLAYLISTS_FILE", os.path.join(os.path.dirname(os.path.abspath(__file__)), "playlists.json"))
-        
-        if os.path.exists(history_file):
-            try:
-                import json
-                with open(history_file, 'r', encoding='utf-8') as f:
-                    h_data = json.load(f)
-                if isinstance(h_data, list):
-                    for e in reversed(h_data):
-                        if isinstance(e, dict) and e.get('video_id'):
-                            conn.execute('''
-                                INSERT OR REPLACE INTO history (video_id, title, artist, thumbnail_url, played_at)
-                                VALUES (?, ?, ?, ?, ?)
-                            ''', (e.get('video_id'), e.get('title', ''), e.get('artist', ''), e.get('thumbnail_url', ''), e.get('played_at', time.time())))
-                os.rename(history_file, history_file + ".backup")
-                print("Migrated history.json to SQLite")
-            except Exception as e:
-                print("Failed to migrate history:", e)
-                
-        if os.path.exists(playlists_file):
-            try:
-                import json, uuid
-                with open(playlists_file, 'r', encoding='utf-8') as f:
-                    p_data = json.load(f)
-                if isinstance(p_data, dict):
-                    playlists = p_data.get('playlists', {})
-                    for pl_id, pl in playlists.items():
-                        conn.execute('''
-                            INSERT OR IGNORE INTO playlists (id, name, source_url, updated_at)
-                            VALUES (?, ?, ?, ?)
-                        ''', (pl.get('id', pl_id), pl.get('name', ''), pl.get('source_url'), pl.get('updated_at', time.time())))
-                        for t in pl.get('tracks', []):
-                            conn.execute('''
-                                INSERT OR IGNORE INTO playlist_tracks (uuid, playlist_id, video_id, title, artist, thumbnail_url, duration_ms, added_at)
-                                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                            ''', (t.get('uuid') or uuid.uuid4().hex, pl.get('id', pl_id), t.get('video_id'), t.get('title', ''), t.get('artist', ''), t.get('thumbnail', ''), t.get('duration_ms', 0), t.get('added_at', time.time())))
-                    
-                    liked_songs = p_data.get('liked_songs', [])
-                    if liked_songs or 'liked' in playlists:
-                        conn.execute("INSERT OR IGNORE INTO playlists (id, name, updated_at) VALUES ('liked', 'Liked Songs', ?)", (time.time(),))
-                        
-                os.rename(playlists_file, playlists_file + ".backup")
-                print("Migrated playlists.json to SQLite")
-            except Exception as e:
-                print("Failed to migrate playlists:", e)
+        # (Data migration script removed per user request)
 
 # Initialize on import
 init_db()
