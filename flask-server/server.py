@@ -195,6 +195,12 @@ def init_db():
         # Ensure default 'liked' playlist exists
         conn.execute("INSERT OR IGNORE INTO playlists (id, name, updated_at) VALUES ('liked', 'Liked Songs', ?)", (time.time(),))
         
+        # Migrations for existing databases
+        try:
+            conn.execute("ALTER TABLE playlists ADD COLUMN source_url TEXT")
+        except sqlite3.OperationalError:
+            pass # Column already exists
+        
         # (Data migration script removed per user request)
 
 # Initialize on import
