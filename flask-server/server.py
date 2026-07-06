@@ -320,7 +320,7 @@ def require_api_key():
     if path in _PUBLIC_PATHS or any(request.path.startswith(p) for p in _PUBLIC_PREFIXES):
         return None
     # A valid session cookie authorizes the remote page and its /alexa/* calls.
-    if _logged_in() and (path in _SESSION_PATHS or any(path.startswith(p) for p in _SESSION_PREFIXES)):
+    if _logged_in() and (path in _SESSION_PATHS or any(request.path.startswith(p) for p in _SESSION_PREFIXES)):
         # Mutating requests must be JSON. A cross-site HTML form or plain
         # <script> fetch cannot set Content-Type: application/json without
         # triggering a CORS preflight that our lack of CORS headers would
