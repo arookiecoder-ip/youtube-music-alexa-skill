@@ -176,6 +176,9 @@ def init_db():
             )
         ''')
         
+        # Ensure default 'liked' playlist exists
+        conn.execute("INSERT OR IGNORE INTO playlists (id, name, updated_at) VALUES ('liked', 'Liked Songs', ?)", (time.time(),))
+        
         # (Data migration script removed per user request)
 
 # Initialize on import
@@ -184,7 +187,67 @@ init_db()
 def _load_history():
     with get_db() as conn:
         rows = conn.execute('SELECT * FROM history ORDER BY played_at DESC LIMIT ?', (HISTORY_MAX,)).fetchall()
-        return [dict(r) for r in rows]
+        res = []
+        for r in rows:
+            d = dict(r)
+            d['thumbnail'] = d.pop('thumbnail_url', '')
+            res.append(d)
+        return res
+
+def _record_listen(video_id, title, artist, thumbnail_url):
+    if not video_id:
+        return
+    with get_db() as conn:
+        conn.execute('''
+            INSERT OR REPLACE INTO history (video_id, title, artist, thumbnail_url, played_at)
+            VALUES (?, ?, ?, ?, ?)
+        ''', (video_id, title or '', artist or '', thumbnail_url or '', time.time()))
+        
+        conn.execute('''
+            DELETE FROM history WHERE video_id NOT IN (
+                SELECT video_id FROM history ORDER BY played_at DESC LIMIT ?
+            )
+        ''', (HISTORY_MAX,))
+        conn.commit()
+
+def _backfill_history_metadata(video_id, title, artist, thumbnail_url):
+    if not video_id or not title:
+        return
+    with get_db() as conn:
+        row = conn.execute('SELECT title FROM history WHERE video_id = ?', (video_id,)).fetchone()
+        if row and not row['title']:
+            if thumbnail_url:
+                conn.execute('UPDATE history SET title = ?, artist = ?, thumbnail_url = ? WHERE video_id = ?', 
+                             (title, artist or '', thumbnail_url, video_id))
+            else:
+                conn.execute('UPDATE history SET title = ?, artist = ? WHERE video_id = ?', 
+                             (title, artist or '', video_id))
+            conn.commit()
+
+def _load_playlists():
+    with get_db() as conn:
+        data = {"playlists": {}, "liked_songs": []}
+        pl_rows = conn.execute('SELECT * FROM playlists').fetchall()
+        for r in pl_rows:
+            pl_id = r['id']
+            data["playlists"][pl_id] = {
+                "id": pl_id,
+                "name": r['name'],
+                "source_url": r['source_url'],
+                "updated_at": r['updated_at'],
+                "tracks": []
+            }
+        
+        tr_rows = conn.execute('SELECT * FROM playlist_tracks ORDER BY added_at ASC').fetchall()
+        for t in tr_rows:
+            pl_id = t['playlist_id']
+            if pl_id in data["playlists"]:
+                track = dict(t)
+                track['thumbnail'] = track.pop('thumbnail_url')
+                data["playlists"][pl_id]["tracks"].append(track)
+                if pl_id == "liked":
+                    data["liked_songs"].append(track['video_id'])
+        return data
 
 
 
@@ -206,15 +269,14 @@ _SESSION_PATHS = ('/remote', '/alexa/status', '/alexa/init', '/alexa/devices', '
                   '/alexa/shuffle_queue', '/alexa/search', '/alexa/clear',
                   '/alexa/queue_add', '/alexa/queue_remove',
                   '/alexa/queue_reorder', '/history', '/recommendations')
-# Sub-paths that also count as session-accessible (startswith match).
-_SESSION_PREFIXES = ('/alexa/now_playing/', '/history/')
+_SESSION_PREFIXES = ('/alexa/now_playing/', '/history/', '/api/playlists/', '/recommendations/')
 
 # API/device endpoints: the Alexa skill and web-remote JS hit these directly
 # and need a machine-readable JSON error, never an HTML redirect, on failure.
 _API_PREFIXES = ('/alexa/', '/proxy/', '/get_stream/', '/get_radio/',
                   '/find_stream_list/', '/armed_play/', '/stream_video/',
                   '/stream_playlist/', '/get_playlist_info/', '/history',
-                  '/recommendations')
+                  '/recommendations', '/api/playlists/')
 
 
 def _remote_login_enabled():
@@ -2395,7 +2457,9 @@ def get_history():
 @app.route("/history/", methods=["DELETE"])
 def clear_history():
     with _history_lock:
-        _save_history([])
+        with get_db() as conn:
+            conn.execute('DELETE FROM history')
+            conn.commit()
     # Recs are seeded from history; a stale cache would keep suggesting the
     # same tracks derived from history the user just wiped.
     with _recs_lock:
@@ -2406,9 +2470,9 @@ def clear_history():
 @app.route("/history/<video_id>", methods=["DELETE"])
 def remove_history_item(video_id):
     with _history_lock:
-        history = _load_history()
-        history = [e for e in history if e.get('video_id') != video_id]
-        _save_history(history)
+        with get_db() as conn:
+            conn.execute('DELETE FROM history WHERE video_id = ?', (video_id,))
+            conn.commit()
     return jsonify({'ok': True})
 
 
@@ -3248,7 +3312,7 @@ def api_add_track(pl_id):
     track_uuid = uuid.uuid4().hex
     title = body.get("title", "")
     artist = body.get("artist", "")
-    thumbnail = body.get("thumbnail", "")
+    thumbnail = body.get("thumbnail") or body.get("thumbnail_url", "")
     duration_ms = body.get("duration_ms", 0)
     now = time.time()
     

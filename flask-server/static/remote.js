@@ -2062,6 +2062,13 @@ function showQueue(queue, currentIndex) {
     const dragSvg = `<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/><circle cx="9" cy="10" r="1.5"/><circle cx="15" cy="10" r="1.5"/><circle cx="9" cy="15" r="1.5"/><circle cx="15" cy="15" r="1.5"/><circle cx="9" cy="20" r="1.5"/><circle cx="15" cy="20" r="1.5"/></svg>`;
     const moreSvg = `<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg>`;
 
+    const isLiked = typeof _playlistsData !== 'undefined' && _playlistsData.liked_songs && _playlistsData.liked_songs.includes(item.video_id);
+    const likeSvg = isLiked
+      ? '<svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>'
+      : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>';
+    const likeText = isLiked ? "Dislike" : "Like";
+    const likeClass = isLiked ? "queue-menu-option liked" : "queue-menu-option";
+
     el.innerHTML = `
       <div class="queue-drag-handle" title="Drag to reorder">${dragSvg}</div>
       <span class="queue-num">${i + 1}</span>
@@ -2072,9 +2079,9 @@ function showQueue(queue, currentIndex) {
       </div>
       <button class="queue-more-btn" type="button" title="More options">${moreSvg}</button>
       <div class="queue-more-menu">
-        <div class="queue-menu-option" data-action="like">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
-          Like / Unlike
+        <div class="${likeClass}" data-action="like">
+          ${likeSvg}
+          ${likeText}
         </div>
         <div class="queue-menu-option danger" data-action="remove">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
@@ -2137,10 +2144,20 @@ function showQueue(queue, currentIndex) {
       _closeAllQueueMenus();
       removeFromQueue(i, item.title, item.video_id);
     });
-    moreMenu.querySelector('[data-action="like"]').addEventListener('click', (e) => {
+    const likeBtn = moreMenu.querySelector('[data-action="like"]');
+    likeBtn.addEventListener('click', async (e) => {
       e.stopPropagation();
       _closeAllQueueMenus();
-      if (typeof toggleLike === 'function') toggleLike(item);
+      if (typeof toggleLike === 'function') {
+        await toggleLike(item);
+        const isLikedNow = typeof _playlistsData !== 'undefined' && _playlistsData.liked_songs && _playlistsData.liked_songs.includes(item.video_id);
+        const likeSvgNow = isLikedNow 
+          ? '<svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>'
+          : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>';
+        likeBtn.innerHTML = `\n          ${likeSvgNow}\n          ${isLikedNow ? "Dislike" : "Like"}\n        `;
+        if (isLikedNow) likeBtn.classList.add('liked');
+        else likeBtn.classList.remove('liked');
+      }
     });
 
     // Mobile: swipe gestures (like/delete)
