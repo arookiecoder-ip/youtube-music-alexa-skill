@@ -2,7 +2,7 @@ let _playlistsData = { playlists: {}, liked_songs: [] };
 
 async function loadPlaylists() {
   try {
-    const data = await api('/api/playlists/');
+    const data = await api('/api/playlists/?_=' + Date.now());
     if (data && data.playlists) {
       _playlistsData = data;
     }
@@ -50,7 +50,8 @@ function renderPlaylists() {
   body.innerHTML = html;
 }
 
-function openPlaylistsModal() {
+async function openPlaylistsModal() {
+  await loadPlaylists();
   renderPlaylists();
   document.getElementById('playlists-modal-overlay').classList.add('open');
 }
