@@ -115,7 +115,7 @@ async function toggleLike(item, btnElement) {
   
   try {
     if (isLiked) {
-      const res = await api('/api/playlists/liked/tracks/' + encodeURIComponent(vid), { method: 'DELETE' });
+      const res = await apiDelete('/api/playlists/liked/tracks/' + encodeURIComponent(vid));
       _playlistsData.liked_songs = res.liked_songs || [];
       if (_playlistsData.playlists.liked) {
         _playlistsData.playlists.liked.tracks = _playlistsData.playlists.liked.tracks.filter(t => t.video_id !== vid);
@@ -126,14 +126,10 @@ async function toggleLike(item, btnElement) {
       }
       toast('Removed from Liked Songs', 'ok');
     } else {
-      const res = await api('/api/playlists/liked/tracks/', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(item)
-      });
+      const res = await api('/api/playlists/liked/tracks/', item);
       _playlistsData.liked_songs = res.liked_songs || [];
       if (!_playlistsData.playlists.liked) {
-         _playlistsData.playlists.liked = {id: 'liked', name: 'Liked Songs', tracks: []};
+         _playlistsData.playlists.liked = {id: 'liked', name: 'Liked Songs', updated_at: Date.now(), tracks: []};
       }
       _playlistsData.playlists.liked.tracks.push(res.track);
       if (btnElement) {
@@ -181,11 +177,7 @@ async function createNewPlaylist() {
   
   nameInput.disabled = true;
   try {
-    const res = await api('/api/playlists/', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name: name })
-    });
+    const res = await api('/api/playlists/', { name: name });
     _playlistsData.playlists[res.id] = res;
     if (_currentItemToSave) {
       await addToPlaylist(res.id);
@@ -202,11 +194,7 @@ async function createNewPlaylist() {
 async function addToPlaylist(pl_id) {
   if (!_currentItemToSave) return;
   try {
-    const res = await api('/api/playlists/' + encodeURIComponent(pl_id) + '/tracks/', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(_currentItemToSave)
-    });
+    const res = await api('/api/playlists/' + encodeURIComponent(pl_id) + '/tracks/', _currentItemToSave);
     _playlistsData.playlists[pl_id].tracks.push(res.track);
     toast('Saved to playlist', 'ok');
     closeAddToPlaylistModal();
@@ -217,7 +205,7 @@ async function addToPlaylist(pl_id) {
 
 async function removeFromPlaylist(pl_id, track_uuid) {
   try {
-    await api('/api/playlists/' + encodeURIComponent(pl_id) + '/tracks/' + encodeURIComponent(track_uuid), { method: 'DELETE' });
+    await apiDelete('/api/playlists/' + encodeURIComponent(pl_id) + '/tracks/' + encodeURIComponent(track_uuid));
     if (_playlistsData.playlists[pl_id]) {
       _playlistsData.playlists[pl_id].tracks = _playlistsData.playlists[pl_id].tracks.filter(t => (t.uuid || t.video_id) !== track_uuid);
       if (document.getElementById('playlist-detail-modal-overlay').classList.contains('open')) {
@@ -236,7 +224,7 @@ async function syncPlaylist(pl_id) {
   btn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" class="spin"><path d="M21.5 2v6h-6M2.13 15.57a9 9 0 1 0 3.44-8.8L2.5 9M2.5 22v-6h6M21.87 8.43a9 9 0 1 0-3.44 8.8L21.5 15"/></svg> Syncing...`;
   
   try {
-    await api('/api/playlists/' + encodeURIComponent(pl_id) + '/sync/', { method: 'POST' });
+    await api('/api/playlists/' + encodeURIComponent(pl_id) + '/sync/', {});
     toast('Sync started...', 'ok');
     
     setTimeout(async () => {
@@ -287,4 +275,14 @@ document.addEventListener('DOMContentLoaded', () => {
   
   const newPlBtn = document.getElementById('new-playlist-btn');
   if (newPlBtn) newPlBtn.addEventListener('click', createNewPlaylist);
+
+  // Close modals when clicking outside on the overlay
+  const plOverlay = document.getElementById('playlists-modal-overlay');
+  if (plOverlay) plOverlay.addEventListener('click', (e) => { if (e.target === plOverlay) closePlaylistsModal(); });
+
+  const detailOverlay = document.getElementById('playlist-detail-modal-overlay');
+  if (detailOverlay) detailOverlay.addEventListener('click', (e) => { if (e.target === detailOverlay) closePlaylistDetailModal(); });
+
+  const addOverlay = document.getElementById('add-to-playlist-overlay');
+  if (addOverlay) addOverlay.addEventListener('click', (e) => { if (e.target === addOverlay) closeAddToPlaylistModal(); });
 });
