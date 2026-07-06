@@ -2564,10 +2564,37 @@ async function playFromQueue(item) {
     syncPlayPause();
     toast('Playing', 'ok');
     setTimeout(pollNowPlaying, 3000);
-    // Refresh history after the skill's 'started' webhook has had time to
-    // record this play — so the "Recently Listened" button reappears on its
-    // own (even if this is the same track that was last played, which wouldn't
-    // trip the video_id-change refresh in handleNpUpdate).
+    // Optimistically prepend this song to history right away so "Recently
+    // Played" shows it immediately without waiting for the server webhook.
+    const optimisticEntry = {
+      video_id: item.video_id,
+      title: item.title || '',
+      artist: item.artist || '',
+      thumbnail_url: (item.thumbnail && item.thumbnail.url) || item.thumbnail || '',
+    };
+    _historyCache = [optimisticEntry, ..._historyCache.filter(e => e.video_id !== item.video_id)].slice(0, 20);
+    syncHistoryTriggerVisibility();
+    // If the modal is open, prepend the new row with a slide-in animation.
+    const histOverlay = document.getElementById('history-modal-overlay');
+    if (histOverlay.classList.contains('open')) {
+      const list = histOverlay.querySelector('.history-list');
+      if (list) {
+        // Remove stale entry for same song if present
+        list.querySelectorAll('.history-item').forEach(el => {
+          if (el.dataset.videoId === item.video_id) el.remove();
+        });
+        const row = _buildHistoryRow(optimisticEntry);
+        row.classList.add('history-item-new');
+        row.dataset.videoId = item.video_id;
+        list.prepend(row);
+        // Add divider below new item if there's a sibling
+        const next = row.nextElementSibling;
+        if (next) next.style.borderTop = '1px solid var(--border)';
+      } else {
+        renderHistoryModalList(_historyCache);
+      }
+    }
+    // Still schedule server refreshes to pick up proper metadata / dedup
     scheduleHistoryRefresh();
   } catch (e) {
     toast(e.message, 'error');
@@ -2609,11 +2636,32 @@ async function loadHistory() {
   if (!_loggedIn) return;
   try {
     const history = await api('/history/?limit=20');
-    _historyCache = Array.isArray(history) ? history.filter(e => e && e.video_id) : [];
+    const fresh = Array.isArray(history) ? history.filter(e => e && e.video_id) : [];
+    const prevTopId = _historyCache.length ? _historyCache[0].video_id : null;
+    const newTopId  = fresh.length ? fresh[0].video_id : null;
+    _historyCache = fresh;
     syncHistoryTriggerVisibility();
-    // Keep the modal current if it happens to be open while a track starts.
-    if (document.getElementById('history-modal-overlay').classList.contains('open')) {
-      renderHistoryModalList(_historyCache);
+    // Keep the modal current if it's open.
+    const overlay = document.getElementById('history-modal-overlay');
+    if (overlay.classList.contains('open')) {
+      const isNewTop = newTopId && newTopId !== prevTopId;
+      const list = overlay.querySelector('.history-list');
+      if (isNewTop && list) {
+        // A genuinely new song appeared at the top — prepend it animated and
+        // remove any existing row for the same id (avoids duplicates from the
+        // optimistic insert above).
+        list.querySelectorAll('.history-item').forEach(el => {
+          if (el.dataset.videoId === newTopId) el.remove();
+        });
+        const row = _buildHistoryRow(fresh[0]);
+        row.classList.add('history-item-new');
+        row.dataset.videoId = newTopId;
+        list.prepend(row);
+      } else if (!list) {
+        // Modal open but no list yet — full render.
+        renderHistoryModalList(_historyCache);
+      }
+      // If only metadata changed (same top), leave the list as-is.
     }
   } catch (e) {
     console.warn('Failed to load history', e);

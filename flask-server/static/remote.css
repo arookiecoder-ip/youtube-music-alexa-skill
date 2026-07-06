@@ -68,6 +68,9 @@
     /* The recommendations grid uses a 100vw full-bleed break-out; clip any
        sub-pixel horizontal overflow it might introduce. */
     overflow-x: hidden;
+    /* Reserve the scrollbar gutter permanently so it never appears/disappears
+       mid-transition and causes a sudden width shift (e.g. on clear). */
+    scrollbar-gutter: stable;
   }
 
   body::before {
@@ -185,8 +188,22 @@
     .left-col {
       display: flex;
       flex-direction: column;
+      align-items: center;          /* always center play-section */
       grid-column: 1;
       min-width: 0;
+    }
+    /* play-section stays compact regardless of idle/playing state */
+    .play-section {
+      width: min(100%, 506px);
+    }
+    /* When queue or results are open, fill the left-col */
+    main.has-queue .left-col,
+    body.results-open .left-col {
+      align-items: stretch;
+    }
+    main.has-queue .play-section,
+    body.results-open .play-section {
+      width: 100%;
     }
   }
 
@@ -1587,6 +1604,14 @@
   }
   .history-item:hover { background: #1a1a1a; }
   .history-item + .history-item { border-top: 1px solid var(--border); }
+  /* New item slides in when added while the modal is open */
+  .history-item.history-item-new {
+    animation: historySlideIn .3s cubic-bezier(.22,1,.36,1) both;
+  }
+  @keyframes historySlideIn {
+    from { opacity: 0; transform: translateY(-10px); }
+    to   { opacity: 1; transform: none; }
+  }
   .history-thumb-placeholder {
     display: flex;
     align-items: center;
@@ -1851,21 +1876,11 @@
   }
   @media (min-width: 900px) {
     main.idle .layout {
-      display: grid;
-      grid-template-columns: 1fr 0fr;
       align-content: start;
       padding-top: 3vh;
-      /* Allow the search-suggestion dropdown to overflow the layout box while
-         idle (no column transition is running, so clipping isn't needed). */
       overflow: visible;
     }
-    main.idle .left-col {
-      align-items: center;
-    }
-    /* Search bar stays compact and centered. */
-    main.idle .play-section {
-      width: min(100%, 506px);
-    }
+    /* idle already inherits align-items:center and play-section width from base rules */
     main.idle #queue-section,
     main.idle #results-section {
       display: none !important;
