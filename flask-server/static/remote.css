@@ -2087,8 +2087,8 @@
     border-top: 1px solid var(--border);
   }
 
-  /* ---- Search result: mobile queue-add icon ---- */
-  .result-queue-btn {
+  /* ---- Search result: mobile queue-add icon & like icon ---- */
+  .result-queue-btn, .result-like-btn {
     flex: none;
     background: none;
     border: 1px solid var(--border);
@@ -2100,12 +2100,14 @@
     align-items: center;
     justify-content: center;
     cursor: pointer;
-    transition: color .15s, border-color .15s;
+    transition: color .15s, border-color .15s, transform .15s;
     border-radius: 50%;
+    margin-right: 6px;
   }
-  .result-queue-btn:hover { color: var(--text); border-color: #444; }
-  .result-queue-btn:active { color: var(--accent); border-color: var(--accent); }
-  .result-queue-btn svg { width: 16px; height: 16px; }
+  .result-queue-btn:hover, .result-like-btn:hover { color: var(--text); border-color: #444; }
+  .result-queue-btn:active, .result-like-btn:active { color: var(--accent); border-color: var(--accent); transform: scale(0.95); }
+  .result-like-btn.liked { color: var(--accent); border-color: var(--accent); }
+  .result-queue-btn svg, .result-like-btn svg { width: 16px; height: 16px; }
 
   /* ---- Search result: desktop more-options button ---- */
   .result-more-btn {
@@ -2354,3 +2356,5 @@
     .result-swipe-underlay { display: none !important; }
     .queue-delete-underlay { display: none !important; }
   }
+@ k e y f r a m e s   s p i n   {   t o   {   t r a n s f o r m :   r o t a t e ( 3 6 0 d e g ) ;   }   }   . s p i n   {   a n i m a t i o n :   s p i n   1 s   l i n e a r   i n f i n i t e ;   }  
+ 

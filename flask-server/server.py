@@ -1,4 +1,4 @@
-import asyncio, difflib, glob, hmac, itertools, json, os, random, secrets, sys, threading, time, re, subprocess, traceback
+import asyncio, difflib, glob, hmac, itertools, json, os, random, secrets, sys, threading, time, re, subprocess, traceback, logging, copy, uuid
 from datetime import timedelta
 from urllib.parse import parse_qs, unquote, urlparse
 from ytmusicapi import YTMusic
@@ -153,6 +153,36 @@ def _save_history(history):
         with open(tmp, 'w', encoding='utf-8') as f:
             json.dump(history, f)
         os.replace(tmp, HISTORY_FILE)
+    except OSError:
+        try:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+        except OSError:
+            pass
+
+PLAYLISTS_FILE = os.environ.get("PLAYLISTS_FILE", "/tmp/ytm_playlists.json")
+_playlists_lock = threading.Lock()
+
+def _load_playlists():
+    try:
+        with open(PLAYLISTS_FILE, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        data = {}
+    if not isinstance(data, dict):
+        data = {}
+    if "liked_songs" not in data:
+        data["liked_songs"] = []
+    if "playlists" not in data:
+        data["playlists"] = {}
+    return data
+
+def _save_playlists(data):
+    tmp = f"{PLAYLISTS_FILE}.tmp"
+    try:
+        with open(tmp, 'w', encoding='utf-8') as f:
+            json.dump(data, f)
+        os.replace(tmp, PLAYLISTS_FILE)
     except OSError:
         try:
             if os.path.exists(tmp):
@@ -3216,6 +3246,161 @@ def alexa_clear():
         })
     _notify_sse()
     return jsonify({'ok': True, 'stop_error': stop_error})
+
+
+# ---------- Playlists & Liked Songs ----------
+
+@app.route("/api/playlists/", methods=["GET"])
+def api_get_playlists():
+    with _playlists_lock:
+        return jsonify(_load_playlists())
+
+@app.route("/api/playlists/", methods=["POST"])
+def api_create_playlist():
+    body = request.get_json(silent=True) or {}
+    name = body.get("name")
+    if not name:
+        return jsonify({'error': 'Name required'}), 400
+    
+    pl_id = f"pl_{uuid.uuid4().hex}"
+    new_pl = {
+        "id": pl_id,
+        "name": name,
+        "source_url": body.get("source_url"),
+        "updated_at": time.time(),
+        "tracks": body.get("tracks") or []
+    }
+    with _playlists_lock:
+        data = _load_playlists()
+        data["playlists"][pl_id] = new_pl
+        _save_playlists(data)
+    return jsonify(new_pl)
+
+@app.route("/api/playlists/<pl_id>", methods=["DELETE"])
+def api_delete_playlist(pl_id):
+    if pl_id == "liked":
+        return jsonify({'error': 'Cannot delete liked songs'}), 400
+    with _playlists_lock:
+        data = _load_playlists()
+        if pl_id in data["playlists"]:
+            del data["playlists"][pl_id]
+            _save_playlists(data)
+    return jsonify({'ok': True})
+
+@app.route("/api/playlists/<pl_id>/tracks/", methods=["POST"])
+def api_add_track(pl_id):
+    body = request.get_json(silent=True) or {}
+    video_id = body.get("video_id")
+    if not video_id:
+        return jsonify({'error': 'video_id required'}), 400
+    
+    track = {
+        "uuid": uuid.uuid4().hex,
+        "video_id": video_id,
+        "title": body.get("title", ""),
+        "artist": body.get("artist", ""),
+        "thumbnail": body.get("thumbnail", ""),
+        "duration_ms": body.get("duration_ms", 0),
+        "added_at": time.time()
+    }
+    with _playlists_lock:
+        data = _load_playlists()
+        if pl_id == "liked":
+            if video_id not in data["liked_songs"]:
+                data["liked_songs"].append(video_id)
+            if "liked" not in data["playlists"]:
+                data["playlists"]["liked"] = {"id": "liked", "name": "Liked Songs", "source_url": None, "updated_at": time.time(), "tracks": []}
+            
+            # Avoid duplicate in tracks list for liked songs
+            if not any(t.get("video_id") == video_id for t in data["playlists"]["liked"]["tracks"]):
+                data["playlists"]["liked"]["tracks"].append(track)
+            data["playlists"]["liked"]["updated_at"] = time.time()
+            _save_playlists(data)
+            return jsonify({'ok': True, 'track': track, 'liked_songs': data["liked_songs"]})
+            
+        if pl_id in data["playlists"]:
+            data["playlists"][pl_id]["tracks"].append(track)
+            data["playlists"][pl_id]["updated_at"] = time.time()
+            _save_playlists(data)
+            return jsonify({'ok': True, 'track': track})
+    return jsonify({'error': 'Playlist not found'}), 404
+
+@app.route("/api/playlists/<pl_id>/tracks/<track_uuid>", methods=["DELETE"])
+def api_remove_track(pl_id, track_uuid):
+    with _playlists_lock:
+        data = _load_playlists()
+        
+        if pl_id == "liked":
+            # For liked songs, track_uuid is the video_id
+            video_id = track_uuid 
+            if video_id in data["liked_songs"]:
+                data["liked_songs"].remove(video_id)
+            if "liked" in data["playlists"]:
+                data["playlists"]["liked"]["tracks"] = [t for t in data["playlists"]["liked"]["tracks"] if t.get("video_id") != video_id]
+                data["playlists"]["liked"]["updated_at"] = time.time()
+            _save_playlists(data)
+            return jsonify({'ok': True, 'liked_songs': data["liked_songs"]})
+            
+        if pl_id in data["playlists"]:
+            pl = data["playlists"][pl_id]
+            pl["tracks"] = [t for t in pl["tracks"] if t.get("uuid") != track_uuid]
+            pl["updated_at"] = time.time()
+            _save_playlists(data)
+            return jsonify({'ok': True})
+    return jsonify({'error': 'Playlist not found'}), 404
+
+@app.route("/api/playlists/<pl_id>/sync/", methods=["POST"])
+def api_sync_playlist(pl_id):
+    def sync_bg():
+        with _playlists_lock:
+            data = _load_playlists()
+            if pl_id not in data["playlists"]: return
+            pl = data["playlists"][pl_id]
+            source_url = pl.get("source_url")
+        if not source_url: return
+        
+        list_id = source_url
+        if "list=" in source_url:
+            q = parse_qs(urlparse(source_url).query)
+            list_id = q.get("list", [None])[0] or source_url
+            
+        try:
+            # Re-use existing Supporting function
+            new_tracks_raw = asyncio.run(Supporting.get_playlist_tracks(list_id)) or []
+        except Exception as e:
+            print(f"[sync] Failed to sync {list_id}: {e}")
+            return
+            
+        new_tracks = []
+        for track in new_tracks_raw:
+            if not track.get("video_id"): continue
+            
+            new_tracks.append({
+                "uuid": uuid.uuid4().hex,
+                "video_id": track["video_id"],
+                "title": track.get("title", ""),
+                "artist": track.get("artist", ""),
+                "thumbnail": track.get("thumbnail")["url"] if isinstance(track.get("thumbnail"), dict) else (track.get("thumbnail") or ""),
+                "duration_ms": track.get("duration_ms", 0),
+                "added_at": time.time()
+            })
+            
+        with _playlists_lock:
+            data = _load_playlists()
+            if pl_id in data["playlists"]:
+                existing_vids = {t.get("video_id") for t in data["playlists"][pl_id]["tracks"]}
+                added = 0
+                for t in new_tracks:
+                    if t["video_id"] not in existing_vids:
+                        data["playlists"][pl_id]["tracks"].append(t)
+                        added += 1
+                if added > 0:
+                    data["playlists"][pl_id]["updated_at"] = time.time()
+                    _save_playlists(data)
+
+    threading.Thread(target=sync_bg, daemon=True).start()
+    return jsonify({'ok': True, 'status': 'syncing'})
+
 
 
 @app.route("/alexa/suggest/", methods=["GET"])

@@ -904,8 +904,28 @@ document.getElementById('play-query').onclick = () => {
   const query = document.getElementById('query').value.trim();
   if (!query) { toast('Type something', 'error'); return; }
   document.getElementById('query').blur();
-  if (isYoutubeLinkLike(query)) playDirectLink(query);
-  else runSearch(query);
+  
+  if (isYoutubeLinkLike(query)) {
+    if (query.includes('list=')) {
+      if (confirm('This looks like a playlist. Do you want to save it to your Playlists?')) {
+        const name = prompt("Enter a name for this playlist:", "Imported Playlist");
+        if (name) {
+          api('/api/playlists/', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: name, source_url: query })
+          }).then(res => {
+            toast('Playlist saved. Syncing...', 'ok');
+            if (typeof syncPlaylist === 'function') syncPlaylist(res.id);
+          }).catch(() => toast('Failed to save playlist', 'error'));
+          return;
+        }
+      }
+    }
+    playDirectLink(query);
+  } else {
+    runSearch(query);
+  }
 };
 
 /* ---- search results panel ---- */
@@ -1030,12 +1050,19 @@ function renderResults() {
     const queueAddSvg = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>`;
     const moreSvg = `<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg>`;
 
+    // Check if liked
+    const isLiked = _likedSongs && _likedSongs.includes(item.video_id);
+    const heartSvg = isLiked 
+      ? `<svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>`
+      : `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>`;
+
     inner.innerHTML = `
       ${thumbHtml}
       <div class="result-info">
         <div class="result-title">${escHtml(item.title)}</div>
         <div class="result-artist">${escHtml(item.artist)}</div>
       </div>
+      <button class="result-like-btn ${isLiked ? 'liked' : ''}" type="button" title="Like" data-vid="${escHtml(item.video_id)}">${heartSvg}</button>
       <button class="result-queue-btn" type="button" title="Add to queue">${queueAddSvg}</button>
       <button class="result-more-btn" type="button" title="More options">${moreSvg}</button>
       <div class="result-more-menu">
@@ -1046,6 +1073,10 @@ function renderResults() {
         <div class="result-menu-option" data-action="add-to-queue">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
           Add to queue
+        </div>
+        <div class="result-menu-option" data-action="save-playlist">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+          Save to Playlist
         </div>
       </div>
     `;
@@ -1112,6 +1143,23 @@ function renderResults() {
       _closeAllMoreMenus();
       addToQueue(item, 'last');
     });
+    const saveOpt = moreMenu.querySelector('[data-action="save-playlist"]');
+    if (saveOpt) {
+      saveOpt.addEventListener('click', (e) => {
+        e.stopPropagation();
+        _closeAllMoreMenus();
+        openAddToPlaylistModal(item);
+      });
+    }
+
+    const likeBtn = inner.querySelector('.result-like-btn');
+    if (likeBtn) {
+      likeBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        toggleLike(item, likeBtn);
+      });
+    }
+
 
     // Mobile: attach swipe gesture
     _attachSwipeGesture(wrapper, inner, item);

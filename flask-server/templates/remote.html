@@ -25,6 +25,17 @@
       <h1>Music Box</h1>
     </div>
     <div class="header-actions">
+      <button class="needs-login header-history-btn" id="playlists-modal-btn" title="Playlists" hidden style="margin-right:8px;">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <line x1="8" y1="6" x2="21" y2="6"/>
+          <line x1="8" y1="12" x2="21" y2="12"/>
+          <line x1="8" y1="18" x2="21" y2="18"/>
+          <line x1="3" y1="6" x2="3.01" y2="6"/>
+          <line x1="3" y1="12" x2="3.01" y2="12"/>
+          <line x1="3" y1="18" x2="3.01" y2="18"/>
+        </svg>
+        <span class="header-history-label">Playlists</span>
+      </button>
       <button class="needs-login header-history-btn" id="history-modal-btn" title="Recently Listened" hidden>
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <circle cx="12" cy="12" r="9"/>
@@ -417,6 +428,71 @@
   </div>
 </div>
 
+<!-- Playlists Modal -->
+<div class="history-modal-overlay" id="playlists-modal-overlay">
+  <div class="history-modal" id="playlists-modal">
+    <div class="history-modal-header">
+      <h3>Playlists</h3>
+      <div class="history-modal-header-actions">
+        <button class="history-modal-close" id="playlists-modal-close" title="Close">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+            <line x1="18" y1="6" x2="6" y2="18"/>
+            <line x1="6" y1="6" x2="18" y2="18"/>
+          </svg>
+        </button>
+      </div>
+    </div>
+    <div class="history-modal-body" id="playlists-modal-body">
+      <div class="history-modal-empty">Loading…</div>
+    </div>
+  </div>
+</div>
+
+<!-- Playlist Detail Modal -->
+<div class="history-modal-overlay" id="playlist-detail-modal-overlay">
+  <div class="history-modal" id="playlist-detail-modal">
+    <div class="history-modal-header">
+      <button class="history-modal-close" id="playlist-detail-back" title="Back to Playlists" style="margin-right:8px">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+          <polyline points="15 18 9 12 15 6"/>
+        </svg>
+      </button>
+      <h3 id="playlist-detail-title">Playlist</h3>
+      <div class="history-modal-header-actions">
+        <button class="clear-all-btn" id="playlist-sync-btn" title="Sync Playlist" hidden>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+            <polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+          </svg>
+          Sync
+        </button>
+        <button class="history-modal-close" id="playlist-detail-close" title="Close">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+            <line x1="18" y1="6" x2="6" y2="18"/>
+            <line x1="6" y1="6" x2="18" y2="18"/>
+          </svg>
+        </button>
+      </div>
+    </div>
+    <div class="history-modal-body" id="playlist-detail-body">
+    </div>
+  </div>
+</div>
+
+<!-- Add to Playlist Modal -->
+<div class="confirm-overlay" id="add-to-playlist-overlay">
+  <div class="confirm-dialog" style="text-align:left; max-height:80vh; display:flex; flex-direction:column; padding: 20px;">
+    <div class="confirm-title" style="margin-top:0">Save to Playlist</div>
+    <div style="margin-bottom:12px; display:flex; gap:8px;">
+      <input type="text" id="new-playlist-name" placeholder="New Playlist Name" style="flex:1; background:var(--surface); border:1px solid var(--border); color:var(--text); padding:8px 12px; border-radius:6px;" autocomplete="off">
+      <button class="btn-accent" id="new-playlist-btn">Create</button>
+    </div>
+    <div id="add-to-playlist-list" style="overflow-y:auto; flex:1; margin-bottom:16px;"></div>
+    <div class="confirm-actions">
+      <button class="confirm-cancel" id="add-to-playlist-close">Close</button>
+    </div>
+  </div>
+</div>
+
 <!-- Mini player (visible while search results are open and a track exists) -->
 <div class="mini-player" id="mini-player">
   <div class="mini-player-progress" aria-hidden="true">
@@ -547,5 +623,6 @@
 <div class="toast" id="toast"></div>
 
 <script src="/static/remote.js"></script>
+<script src="/static/playlists.js"></script>
 </body>
 </html>
