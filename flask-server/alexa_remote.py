@@ -255,12 +255,13 @@ class AlexaRemote:
         app.router.add_route("*", PROXY_PATH + "{tail:.*}", self._proxy.all_handler)
         runner = web.AppRunner(app)
         await runner.setup()
-        # local-only bind; Caddy fronts it with TLS on the public domain
-        site = web.TCPSite(runner, "127.0.0.1", PROXY_PORT)
+        # Bind on all interfaces so Caddy (running in a separate container) can
+        # reach this over the Docker network; Caddy fronts it with TLS publicly.
+        site = web.TCPSite(runner, "0.0.0.0", PROXY_PORT)
         await site.start()
         self._proxy_runner = runner
         self._proxy_started = True
-        logger.info("Alexa login proxy listening on 127.0.0.1:%s under %s", PROXY_PORT, PROXY_PATH)
+        logger.info("Alexa login proxy listening on 0.0.0.0:%s under %s", PROXY_PORT, PROXY_PATH)
         return None
 
     async def _proxy_start_url(self, email: str, password: str):
