@@ -3341,6 +3341,19 @@ def api_delete_playlist(pl_id):
         conn.commit()
     return jsonify({'ok': True})
 
+@app.route("/api/playlists/<pl_id>", methods=["PATCH"])
+def api_rename_playlist(pl_id):
+    if pl_id == "liked":
+        return jsonify({'error': 'Cannot rename Liked Songs'}), 400
+    body = request.get_json(silent=True) or {}
+    name = str(body.get("name") or "").strip()
+    if not name:
+        return jsonify({'error': 'Name required'}), 400
+    with get_db() as conn:
+        conn.execute('UPDATE playlists SET name = ?, updated_at = ? WHERE id = ?', (name, time.time(), pl_id))
+        conn.commit()
+    return jsonify({'ok': True, 'name': name})
+
 @app.route("/api/playlists/<pl_id>/tracks/", methods=["POST"])
 def api_add_track(pl_id):
     body = request.get_json(silent=True) or {}

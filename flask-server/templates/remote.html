@@ -485,6 +485,13 @@
           </svg>
           Sync
         </button>
+        <button class="history-modal-close" id="playlist-detail-more-btn" title="More options">
+          <svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg>
+        </button>
+        <div class="playlist-more-menu" id="playlist-detail-more-menu" style="display:none; position:fixed; background: var(--bg-elevated, #2a2a2a); border: 1px solid var(--border, #444); border-radius: 8px; z-index: 100; min-width: 180px; box-shadow: 0 4px 12px rgba(0,0,0,0.5); overflow: hidden;">
+          <div class="result-menu-option" id="playlist-detail-rename-opt" style="padding: 12px 16px; cursor: pointer;">Rename playlist</div>
+          <div class="result-menu-option" id="playlist-detail-delete-opt" style="padding: 12px 16px; cursor: pointer; color:#ff4d4d;">Delete playlist</div>
+        </div>
         <button class="history-modal-close" id="playlist-detail-close" title="Close">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
             <line x1="18" y1="6" x2="6" y2="18"/>
@@ -493,7 +500,36 @@
         </button>
       </div>
     </div>
+    <div style="padding: 0 20px;">
+      <button class="btn-accent" id="playlist-detail-play-all-btn" style="width:100%; margin-top:12px; display:flex; align-items:center; justify-content:center; gap:8px;" hidden>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+        Play All
+      </button>
+    </div>
     <div class="history-modal-body" id="playlist-detail-body">
+    </div>
+  </div>
+</div>
+
+<!-- Rename Playlist Modal -->
+<div class="history-modal-overlay" id="rename-playlist-overlay">
+  <div class="history-modal" style="display:flex; flex-direction:column; max-width:400px; height:auto;">
+    <div class="history-modal-header">
+      <h3>Rename Playlist</h3>
+      <div class="history-modal-header-actions">
+        <button class="history-modal-close" id="rename-playlist-close" title="Close">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+            <line x1="18" y1="6" x2="6" y2="18"/>
+            <line x1="6" y1="6" x2="18" y2="18"/>
+          </svg>
+        </button>
+      </div>
+    </div>
+    <div class="history-modal-body" style="padding: 20px; display: flex; flex-direction: column;">
+      <div style="margin-bottom:16px; display:flex; gap:8px;">
+        <input type="text" id="rename-playlist-input" placeholder="Playlist Name" style="flex:1; background:var(--surface); border:1px solid var(--border); color:var(--text); padding:8px 12px; border-radius:6px;" autocomplete="off">
+        <button class="btn-accent" id="rename-playlist-btn">Save</button>
+      </div>
     </div>
   </div>
 </div>

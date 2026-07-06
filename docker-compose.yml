@@ -11,6 +11,7 @@ services:
       - ~/cookies.txt:/app/cookies.txt:ro
       - ytmusic_cache:/tmp/ytm_audio_cache
       - ytmusic_data:/data
+      - ytmusic_alexa_cookies:/app/alexa_cookies
     networks:
       - web
 
@@ -35,5 +36,6 @@ networks:
 volumes:
   ytmusic_cache:
   ytmusic_data:
+  ytmusic_alexa_cookies:
   caddy_data:
   caddy_config:

@@ -10,6 +10,7 @@ let lastToastKind = '';
 let lastActionAt = 0;           // timestamp of last user button press
 const GRACE_MS = 8000;          // don't let SSE override state for 8s after a user action
 let _currentVideoId = '';       // video_id of the currently playing track
+let _currentThumbnail = '';     // thumbnail URL of the currently playing track
 let volumeUserActive = false;
 let volumeGraceUntil = 0;       // ignore server volume pushes until this time
 const VOLUME_GRACE_MS = 4000;   // covers the debounce + command round-trip
@@ -148,6 +149,7 @@ function showNowPlaying(info) {
       mpArt.classList.remove('has-thumb');
       _hasTrack = false;
       _currentVideoId = '';
+      _currentThumbnail = '';
       _lastNpFingerprint = '';
       updateUrlBar();
       syncUiState();
@@ -195,6 +197,7 @@ function showNowPlaying(info) {
     // unknown (optimistic plain-text play) so the "Open on YouTube Music"
     // link never keeps pointing at the previous song.
     _currentVideoId = info.video_id || '';
+    _currentThumbnail = info.thumbnail || '';
     updateUrlBar();
   }
 
@@ -1024,9 +1027,18 @@ function renderResults() {
   _resultsPage = Math.min(Math.max(0, _resultsPage), totalPages - 1);
   const start = _resultsPage * RESULTS_PER_PAGE;
   const pageItems = _searchResults.slice(start, start + RESULTS_PER_PAGE);
-  list.innerHTML = '';
+  // Transplant already-loaded thumbnails for videos that also appear on the
+  // new page (e.g. paging back and forth) so their <img> doesn't re-fetch
+  // and flash blank/reload.
+  const existingThumbsById = new Map();
+  for (const w of list.children) {
+    const id = w.dataset.videoId || '';
+    const img = w.querySelector('img.result-thumb.loaded');
+    if (id && img && !existingThumbsById.has(id)) existingThumbsById.set(id, img);
+  }
   // Close any open more-menu when re-rendering
   _closeAllMoreMenus();
+  const newChildren = [];
   pageItems.forEach((item) => {
     const wrapper = document.createElement('div');
     wrapper.className = 'result-swipe-wrapper';
@@ -1048,9 +1060,13 @@ function renderResults() {
     const inner = document.createElement('div');
     inner.className = 'result-item-inner' + (item.video_id === _currentVideoId ? ' active' : '');
 
-    const thumbHtml = item.thumbnail
-      ? `<img class="result-thumb" src="${escHtml(item.thumbnail)}" alt="" loading="lazy" onload="this.classList.add('loaded')">`
-      : `<div class="result-thumb"></div>`;
+    const reusableImg = item.thumbnail && existingThumbsById.get(item.video_id);
+    const sameUrl = reusableImg && reusableImg.src === item.thumbnail;
+    const thumbHtml = sameUrl
+      ? `<div class="result-thumb-slot"></div>`
+      : item.thumbnail
+        ? `<img class="result-thumb" src="${escHtml(item.thumbnail)}" alt="" loading="lazy" onload="this.classList.add('loaded')">`
+        : `<div class="result-thumb"></div>`;
 
     // SVG icons for buttons (inline to avoid extra network requests)
     const queueAddSvg = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>`;
@@ -1086,6 +1102,8 @@ function renderResults() {
         </div>
       </div>
     `;
+
+    if (sameUrl) inner.querySelector('.result-thumb-slot').replaceWith(reusableImg);
 
     wrapper.appendChild(inner);
 
@@ -1170,8 +1188,9 @@ function renderResults() {
     // Mobile: attach swipe gesture
     _attachSwipeGesture(wrapper, inner, item);
 
-    list.appendChild(wrapper);
+    newChildren.push(wrapper);
   });
+  list.replaceChildren(...newChildren);
   document.getElementById('results-page-label').textContent =
     'Page ' + (_resultsPage + 1) + ' of ' + totalPages;
   document.getElementById('results-prev').disabled = _resultsPage <= 0;
@@ -2028,12 +2047,27 @@ function showQueue(queue, currentIndex) {
   section.hidden = false;
   mainEl.classList.add('has-queue');
   requestAnimationFrame(() => section.classList.add('is-visible'));
-  list.innerHTML = '';
   _closeAllQueueMenus();
+
+  // Rows are rebuilt fresh every time (listeners capture the row's index by
+  // closure, so reusing whole nodes across a reorder would leave them acting
+  // on stale indices). But the <img> itself is transplanted from the old row
+  // when the same video_id already has one loaded at the same URL, so the
+  // browser never re-fetches/re-decodes it — that re-fetch flash on every
+  // track change was the visible flicker here.
+  const existingThumbsById = new Map();
+  for (const w of list.children) {
+    const id = w.dataset.videoId || '';
+    const img = w.querySelector('img.queue-thumb.loaded');
+    if (id && img && !existingThumbsById.has(id)) existingThumbsById.set(id, img);
+  }
+  const newChildren = [];
   queue.forEach((item, i) => {
+    const id = item.video_id || '';
     const wrapper = document.createElement('div');
     wrapper.className = 'queue-swipe-wrapper';
     wrapper.dataset.index = String(i);
+    wrapper.dataset.videoId = id;
 
     // Swipe-to-delete underlay (mobile, hidden on desktop via CSS)
     wrapper.innerHTML = `
@@ -2055,9 +2089,17 @@ function showQueue(queue, currentIndex) {
     el.dataset.index = String(i);
 
     const thumbUrl = item.thumbnail || '';
-    const thumbHtml = thumbUrl
-      ? `<img class="queue-thumb" src="${escHtml(thumbUrl)}" alt="" loading="lazy" onload="this.classList.add('loaded')">`
-      : `<div class="queue-thumb"></div>`;
+    const reusableImg = thumbUrl && existingThumbsById.get(id);
+    const sameUrl = reusableImg && reusableImg.src === thumbUrl;
+    // A placeholder marker <div> stands in for the thumb during innerHTML
+    // parsing; if we can transplant an already-loaded <img> for this exact
+    // video_id + URL, it replaces the marker right after (see below) so the
+    // image never re-fetches. Otherwise a fresh <img> is used as before.
+    const thumbHtml = sameUrl
+      ? `<div class="queue-thumb-slot"></div>`
+      : thumbUrl
+        ? `<img class="queue-thumb" src="${escHtml(thumbUrl)}" alt="" loading="lazy" onload="this.classList.add('loaded')">`
+        : `<div class="queue-thumb"></div>`;
 
     const dragSvg = `<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/><circle cx="9" cy="10" r="1.5"/><circle cx="15" cy="10" r="1.5"/><circle cx="9" cy="15" r="1.5"/><circle cx="15" cy="15" r="1.5"/><circle cx="9" cy="20" r="1.5"/><circle cx="15" cy="20" r="1.5"/></svg>`;
     const moreSvg = `<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg>`;
@@ -2083,6 +2125,10 @@ function showQueue(queue, currentIndex) {
           ${likeSvg}
           ${likeText}
         </div>
+        <div class="queue-menu-option" data-action="save-playlist">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path><line x1="12" y1="11" x2="12" y2="17"></line><line x1="9" y1="14" x2="15" y2="14"></line></svg>
+          Add to Playlist
+        </div>
         <div class="queue-menu-option danger" data-action="remove">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
             <path d="M3 6h18"/><path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2"/>
@@ -2092,6 +2138,7 @@ function showQueue(queue, currentIndex) {
         </div>
       </div>
     `;
+    if (sameUrl) el.querySelector('.queue-thumb-slot').replaceWith(reusableImg);
 
     wrapper.appendChild(el);
 
@@ -2111,7 +2158,7 @@ function showQueue(queue, currentIndex) {
         moreBtn.classList.add('open');
         // Position the menu using fixed coords so it escapes any scrollable parent
         const rect = moreBtn.getBoundingClientRect();
-        const menuHeight = 48; // approximate height of one option row
+        const menuHeight = 3 * 48; // approximate height of the three option rows
         const spaceBelow = window.innerHeight - rect.bottom;
         const openAbove = spaceBelow < menuHeight + 8;
         moreMenu.style.left = '';
@@ -2144,6 +2191,11 @@ function showQueue(queue, currentIndex) {
       _closeAllQueueMenus();
       removeFromQueue(i, item.title, item.video_id);
     });
+    moreMenu.querySelector('[data-action="save-playlist"]').addEventListener('click', (e) => {
+      e.stopPropagation();
+      _closeAllQueueMenus();
+      openAddToPlaylistModal(item);
+    });
     const likeBtn = moreMenu.querySelector('[data-action="like"]');
     likeBtn.addEventListener('click', async (e) => {
       e.stopPropagation();
@@ -2166,8 +2218,9 @@ function showQueue(queue, currentIndex) {
     // Drag-to-reorder (both mobile + desktop via the handle)
     _attachQueueDragReorder(el, list, i);
 
-    list.appendChild(wrapper);
+    newChildren.push(wrapper);
   });
+  list.replaceChildren(...newChildren);
   const active = list.querySelector('.active');
   if (active) active.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
 }
@@ -2714,6 +2767,22 @@ async function apiDelete(path) {
   return json;
 }
 
+async function apiPatch(path, body) {
+  let res;
+  try {
+    res = await fetch(path, {
+      method: 'PATCH', credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}),
+    });
+  } catch (_) {
+    throw new Error('Can’t reach the server. Check your connection and try again.');
+  }
+  if (res.status === 401) { throw new Error('Session expired'); }
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(json.error || ('HTTP ' + res.status));
+  return json;
+}
+
 async function loadHistory() {
   if (!_loggedIn) return;
   try {
@@ -3233,13 +3302,11 @@ function updateUrlBar() {
       if (!_currentVideoId) return;
       const title = document.getElementById('np-title').textContent || '';
       const artist = document.getElementById('np-artist').textContent || '';
-      // We don't have the thumbnail here easily, but the backend doesn't strictly need it for liked songs
-      const npArt = document.getElementById('np-art');
-      const item = { 
-        video_id: _currentVideoId, 
-        title, 
+      const item = {
+        video_id: _currentVideoId,
+        title,
         artist,
-        thumbnail: npArt ? npArt.src : ''
+        thumbnail: _currentThumbnail
       };
       if (typeof toggleLike === 'function') toggleLike(item, likeBtn);
     });

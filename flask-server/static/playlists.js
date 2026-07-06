@@ -70,13 +70,19 @@ function renderPlaylists() {
     let syncIconHtml = '';
     if (pl.source_url) {
       syncIconHtml = `
-        <button class="clear-all-btn" title="Sync Playlist" style="padding: 4px 8px; margin-left: auto;" onclick="event.stopPropagation(); syncPlaylist('${escHtml(pl.id)}', this)">
+        <button class="clear-all-btn" title="Sync Playlist" style="padding: 4px 8px;" onclick="event.stopPropagation(); syncPlaylist('${escHtml(pl.id)}', this)">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="width:16px;height:16px;">
             <polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
           </svg>
         </button>
       `;
     }
+
+    const playIconHtml = trackCount > 0 ? `
+        <button class="clear-all-btn" title="Play playlist" style="padding: 4px 8px; margin-left: auto;" onclick="event.stopPropagation(); playPlaylist('${escHtml(pl.id)}', this)">
+          <svg viewBox="0 0 24 24" fill="currentColor" style="width:16px;height:16px;"><path d="M8 5v14l11-7z"/></svg>
+        </button>
+      ` : '';
 
     html += `
       <div class="history-item" onclick="openPlaylistDetailModal('${escHtml(pl.id)}')">
@@ -87,6 +93,7 @@ function renderPlaylists() {
             <div class="history-artist">${trackCount} ${trackCount === 1 ? 'song' : 'songs'}</div>
           </div>
           ${syncIconHtml}
+          ${playIconHtml}
         </div>
       </div>
     `;
@@ -110,12 +117,15 @@ function closePlaylistsModal() {
   document.getElementById('playlists-modal-overlay').classList.remove('open');
 }
 
+let _currentPlaylistDetailId = null;
+
 function openPlaylistDetailModal(pl_id) {
   const pl = _playlistsData.playlists[pl_id];
   if (!pl) return;
-  
+  _currentPlaylistDetailId = pl_id;
+
   document.getElementById('playlist-detail-title').textContent = pl.name;
-  
+
   const syncBtn = document.getElementById('playlist-sync-btn');
   if (pl.source_url) {
     syncBtn.hidden = false;
@@ -123,7 +133,19 @@ function openPlaylistDetailModal(pl_id) {
   } else {
     syncBtn.hidden = true;
   }
-  
+
+  // "Rename" isn't offered for Liked Songs (a fixed system playlist); delete
+  // is hidden for it in the same way the backend already refuses both.
+  const moreBtn = document.getElementById('playlist-detail-more-btn');
+  const renameOpt = document.getElementById('playlist-detail-rename-opt');
+  const deleteOpt = document.getElementById('playlist-detail-delete-opt');
+  moreBtn.hidden = pl_id === 'liked';
+  renameOpt.hidden = pl_id === 'liked';
+  deleteOpt.hidden = pl_id === 'liked';
+
+  const playAllBtn = document.getElementById('playlist-detail-play-all-btn');
+  playAllBtn.hidden = !pl.tracks || pl.tracks.length === 0;
+
   const body = document.getElementById('playlist-detail-body');
   if (!pl.tracks || pl.tracks.length === 0) {
     body.innerHTML = '<div class="history-modal-empty">Playlist is empty.</div>';
@@ -175,6 +197,96 @@ function openPlaylistDetailModal(pl_id) {
 function closePlaylistDetailModal() {
   document.getElementById('playlist-detail-modal-overlay').classList.remove('open');
 }
+
+document.getElementById('playlist-detail-more-btn').addEventListener('click', (e) => {
+  e.stopPropagation();
+  const menu = document.getElementById('playlist-detail-more-menu');
+  const wasOpen = menu.style.display === 'block';
+  menu.style.display = 'none';
+  if (!wasOpen) {
+    const rect = e.currentTarget.getBoundingClientRect();
+    menu.style.top = (rect.bottom + 4) + 'px';
+    menu.style.right = (window.innerWidth - rect.right) + 'px';
+    menu.style.left = 'auto';
+    menu.style.display = 'block';
+  }
+});
+document.addEventListener('click', () => {
+  document.getElementById('playlist-detail-more-menu').style.display = 'none';
+});
+
+document.getElementById('playlist-detail-rename-opt').addEventListener('click', () => {
+  document.getElementById('playlist-detail-more-menu').style.display = 'none';
+  if (!_currentPlaylistDetailId) return;
+  const pl = _playlistsData.playlists[_currentPlaylistDetailId];
+  if (!pl) return;
+  const input = document.getElementById('rename-playlist-input');
+  input.value = pl.name;
+  document.getElementById('rename-playlist-overlay').classList.add('open');
+  setTimeout(() => input.focus(), 0);
+});
+
+document.getElementById('rename-playlist-close').addEventListener('click', () => {
+  document.getElementById('rename-playlist-overlay').classList.remove('open');
+});
+
+document.getElementById('rename-playlist-btn').addEventListener('click', async () => {
+  const input = document.getElementById('rename-playlist-input');
+  const name = input.value.trim();
+  if (!name || !_currentPlaylistDetailId) return;
+  const btn = document.getElementById('rename-playlist-btn');
+  btn.disabled = true;
+  try {
+    await apiPatch('/api/playlists/' + encodeURIComponent(_currentPlaylistDetailId), { name });
+    _playlistsData.playlists[_currentPlaylistDetailId].name = name;
+    document.getElementById('playlist-detail-title').textContent = name;
+    document.getElementById('rename-playlist-overlay').classList.remove('open');
+    toast('Playlist renamed', 'ok');
+  } catch (e) {
+    toast(e.message || 'Error renaming playlist', 'error');
+  }
+  btn.disabled = false;
+});
+
+document.getElementById('playlist-detail-delete-opt').addEventListener('click', async () => {
+  document.getElementById('playlist-detail-more-menu').style.display = 'none';
+  const pl_id = _currentPlaylistDetailId;
+  if (!pl_id) return;
+  const pl = _playlistsData.playlists[pl_id];
+  if (!pl) return;
+  if (!confirm('Delete playlist "' + pl.name + '"? This cannot be undone.')) return;
+  try {
+    await apiDelete('/api/playlists/' + encodeURIComponent(pl_id));
+    delete _playlistsData.playlists[pl_id];
+    closePlaylistDetailModal();
+    renderPlaylists();
+    toast('Playlist deleted', 'ok');
+  } catch (e) {
+    toast(e.message || 'Error deleting playlist', 'error');
+  }
+});
+
+async function playPlaylist(pl_id, btn) {
+  const pl = _playlistsData.playlists[pl_id];
+  if (!pl || !pl.tracks || pl.tracks.length === 0) return;
+  if (btn) btn.disabled = true;
+  try {
+    const [first, ...rest] = pl.tracks;
+    await playResult({ video_id: first.video_id, title: first.title, artist: first.artist, thumbnail: first.thumbnail });
+    for (const track of rest) {
+      await addToQueue({ video_id: track.video_id, title: track.title, artist: track.artist, thumbnail: track.thumbnail, duration_ms: track.duration_ms }, 'last');
+    }
+    closePlaylistDetailModal();
+    document.getElementById('playlists-modal-overlay').classList.remove('open');
+  } catch (e) {
+    toast(e.message || 'Error playing playlist', 'error');
+  }
+  if (btn) btn.disabled = false;
+}
+
+document.getElementById('playlist-detail-play-all-btn').addEventListener('click', (e) => {
+  if (_currentPlaylistDetailId) playPlaylist(_currentPlaylistDetailId, e.currentTarget);
+});
 
 async function toggleLike(item, btnElement) {
   const vid = item.video_id;
