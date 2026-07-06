@@ -1769,9 +1769,9 @@ function showControls(loggedIn) {
   for (const el of document.querySelectorAll('.needs-login')) el.hidden = !loggedIn;
   _loggedIn = !!loggedIn;
   if (!loggedIn) closeResults();
-  // showControls unhides every .needs-login section; the history trigger must
-  // stay hidden until loadHistory() confirms there is something to show.
-  syncHistoryTriggerVisibility([]);
+  // showControls unhides every .needs-login element; the header history button
+  // must stay hidden until loadHistory() confirms there's something to show.
+  syncHistoryTriggerVisibility();
   if (loggedIn) loadHistory();
   else document.getElementById('recs-section').hidden = true;
   syncUiState();
@@ -2547,7 +2547,17 @@ async function playFromQueue(item) {
   if (!item.video_id) { toast('That recommendation cannot be played.', 'error'); return; }
   toast('Playing \u201c' + item.title + '\u201d\u2026');
   try {
-    const data = await api('/alexa/play_queue/', { serial, video_id: item.video_id });
+    // Pass along metadata so a song that isn't in the server's queue yet (e.g.
+    // a recommendation tile) plays from the supplied title/artist/thumbnail
+    // instead of a metadata lookup that can fail ("no longer available").
+    const data = await api('/alexa/play_queue/', {
+      serial,
+      video_id: item.video_id,
+      title: item.title || '',
+      artist: item.artist || '',
+      thumbnail: (item.thumbnail && item.thumbnail.url) || item.thumbnail || '',
+      duration_ms: item.duration_ms || 0,
+    });
     const npInfo = { video_id: item.video_id, title: item.title, artist: item.artist, thumbnail: item.thumbnail };
     showNowPlaying(npInfo);
     progress.resetPending(item.video_id);
@@ -2561,12 +2571,11 @@ async function playFromQueue(item) {
 }
 
 /* ---- Recently listened ---- */
-// Server-side history, recorded when the skill confirms a real playback
-// start. Shown as a popup (opened from a trigger button on desktop and
-// another inside the mobile sidebar), not an inline card — so the trigger row
-// only needs to know whether there's anything to show, and the actual list is
-// fetched fresh each time the popup opens.
-let _historyHasItems = false;
+// Server-side history, recorded when the skill confirms a real playback start.
+// It's pre-fetched on load and cached here, and refreshed after each song, so
+// the popup (opened from the small header button) shows instantly from cache
+// rather than fetching on click.
+let _historyCache = [];
 
 async function apiDelete(path) {
   // DELETE with a JSON content-type: the server's CSRF guard rejects any
@@ -2590,22 +2599,20 @@ async function loadHistory() {
   if (!_loggedIn) return;
   try {
     const history = await api('/history/?limit=20');
-    syncHistoryTriggerVisibility(history);
-    // Keep the modal's list current if it's already open (e.g. a track
-    // started playing while the popup was up).
+    _historyCache = Array.isArray(history) ? history.filter(e => e && e.video_id) : [];
+    syncHistoryTriggerVisibility();
+    // Keep the modal current if it happens to be open while a track starts.
     if (document.getElementById('history-modal-overlay').classList.contains('open')) {
-      renderHistoryModalList(history);
+      renderHistoryModalList(_historyCache);
     }
   } catch (e) {
     console.warn('Failed to load history', e);
   }
 }
 
-function syncHistoryTriggerVisibility(history) {
-  _historyHasItems = Array.isArray(history) && history.length > 0;
-  const show = _loggedIn && _historyHasItems;
-  document.getElementById('history-trigger-row').hidden = !show;
-  document.getElementById('history-sidebar-section').hidden = !show;
+function syncHistoryTriggerVisibility() {
+  const show = _loggedIn && _historyCache.length > 0;
+  document.getElementById('history-modal-btn').hidden = !show;
 }
 
 function _buildHistoryRow(entry) {
@@ -2662,8 +2669,10 @@ function renderHistoryModalList(history) {
 async function doClearHistory() {
   try {
     await apiDelete('/history/');
+    _historyCache = [];
     renderHistoryModalList([]);
-    syncHistoryTriggerVisibility([]);
+    syncHistoryTriggerVisibility();
+    window._closeHistoryModal();
     toast('History cleared', 'ok');
   } catch (e) {
     toast(e.message, 'error');
@@ -2673,31 +2682,19 @@ async function doClearHistory() {
 (function () {
   const overlay = document.getElementById('history-modal-overlay');
   const closeBtn = document.getElementById('history-modal-close');
-  const openBtnDesktop = document.getElementById('history-modal-btn');
-  const openBtnSidebar = document.getElementById('history-modal-btn-sidebar');
+  const openBtn = document.getElementById('history-modal-btn');
 
-  async function openHistoryModal() {
+  function openHistoryModal() {
+    // Render immediately from the pre-fetched cache — no fetch-on-click wait.
+    renderHistoryModalList(_historyCache);
     overlay.classList.add('open');
-    document.getElementById('history-modal-body').innerHTML =
-      '<div class="history-modal-empty">Loading…</div>';
-    try {
-      const history = await api('/history/?limit=20');
-      renderHistoryModalList(history);
-    } catch (e) {
-      document.getElementById('history-modal-body').innerHTML =
-        '<div class="history-modal-empty">Couldn’t load history</div>';
-    }
   }
 
   function closeHistoryModal() {
     overlay.classList.remove('open');
   }
 
-  // Opening from the sidebar deliberately does NOT close the sidebar drawer —
-  // the popup layers on top of it (higher z-index), so both stay visible and
-  // the user can dismiss the popup to return right to the still-open menu.
-  openBtnDesktop.addEventListener('click', openHistoryModal);
-  openBtnSidebar.addEventListener('click', openHistoryModal);
+  openBtn.addEventListener('click', openHistoryModal);
   closeBtn.addEventListener('click', closeHistoryModal);
   overlay.addEventListener('click', (e) => { if (e.target === overlay) closeHistoryModal(); });
 
@@ -2758,11 +2755,15 @@ function renderRecommendations(items) {
   section.hidden = !shouldShow;
   if (!shouldShow) { list.innerHTML = ''; list.classList.remove('is-visible'); return; }
   list.innerHTML = '';
+  let idx = 0;
   for (const item of items) {
     if (!item || !item.video_id) continue;
     const thumbUrl = (item.thumbnail && item.thumbnail.url) || item.thumbnail || '';
     const el = document.createElement('div');
     el.className = 'recs-tile';
+    // Staggered entrance: each tile animates in slightly after the previous
+    // one, capped so a full grid doesn't take too long to settle.
+    el.style.animationDelay = Math.min(idx * 35, 500) + 'ms';
     const thumbHtml = thumbUrl
       ? `<img src="${escHtml(thumbUrl)}" alt="" loading="lazy">`
       : `<svg width="28" height="28" viewBox="0 0 24 24" fill="currentColor">
@@ -2780,6 +2781,7 @@ function renderRecommendations(items) {
       thumbnail: thumbUrl,
     }));
     list.appendChild(el);
+    idx++;
   }
   // Next frame so the transition (opacity/transform) actually animates
   // instead of the class landing before the browser has painted the tiles.

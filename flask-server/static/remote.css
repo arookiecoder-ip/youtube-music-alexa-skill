@@ -65,6 +65,9 @@
     justify-content: center;
     padding: 0 16px 0;
     overscroll-behavior-y: contain;
+    /* The recommendations grid uses a 100vw full-bleed break-out; clip any
+       sub-pixel horizontal overflow it might introduce. */
+    overflow-x: hidden;
   }
 
   body::before {
@@ -383,7 +386,8 @@
     font-size: .88rem;
     font-family: inherit;
     cursor: pointer;
-    transition: border-color .12s, background .12s;
+    transition: border-color .18s ease, background .18s ease,
+                color .18s ease, transform .15s ease, box-shadow .18s ease;
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -1546,29 +1550,27 @@
   .clear-all-btn svg { width: 12px; height: 12px; }
 
   /* ---- Recently listened ---- */
-  .history-trigger-row { margin-bottom: 10px; }
-  .history-trigger-btn {
-    width: 100%;
+  /* Small header button (opens the history popup). */
+  .header-history-btn {
     display: inline-flex;
     align-items: center;
-    justify-content: center;
-    gap: 8px;
-    padding: 12px 16px;
-    background: var(--surface);
+    gap: 6px;
+    padding: 7px 12px;
+    background: none;
     border: 1px solid var(--border);
-    color: var(--text);
+    color: var(--muted);
     font-family: inherit;
-    font-size: .78rem;
+    font-size: .68rem;
     font-weight: 600;
     text-transform: uppercase;
-    letter-spacing: .08em;
+    letter-spacing: .06em;
     cursor: pointer;
     transition: border-color .15s, color .15s;
+    white-space: nowrap;
   }
-  .history-trigger-btn:hover { border-color: var(--accent); color: var(--accent); }
-  .history-trigger-btn svg { flex: none; }
-  /* Sidebar copy sits inside a .sidebar-section, so no full-bleed margin */
-  .sidebar-section .history-trigger-btn { text-transform: none; letter-spacing: normal; }
+  .header-history-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .header-history-btn svg { flex: none; }
+  .header-history-btn[hidden] { display: none; }
 
   .history-list {
     display: flex;
@@ -1596,7 +1598,7 @@
      per-item remove control; Clear (with confirmation) is the only way to
      modify history from here) ---- */
   .history-modal-overlay {
-    display: none;
+    display: flex;
     position: fixed;
     inset: 0;
     background: rgba(0,0,0,.7);
@@ -1605,8 +1607,12 @@
     align-items: center;
     backdrop-filter: blur(4px);
     -webkit-backdrop-filter: blur(4px);
+    /* Smooth fade in/out instead of a hard display toggle. */
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity .25s ease, visibility .25s ease;
   }
-  .history-modal-overlay.open { display: flex; }
+  .history-modal-overlay.open { opacity: 1; visibility: visible; }
   .history-modal {
     width: 440px;
     max-width: 92vw;
@@ -1615,7 +1621,13 @@
     border: 1px solid var(--border);
     display: flex;
     flex-direction: column;
-    animation: confirmIn .2s ease-out;
+    transform: translateY(12px) scale(.98);
+    opacity: 0;
+    transition: transform .28s cubic-bezier(.22,1,.36,1), opacity .28s ease;
+  }
+  .history-modal-overlay.open .history-modal {
+    transform: none;
+    opacity: 1;
   }
   .history-modal-header {
     display: flex;
@@ -1672,11 +1684,11 @@
     padding: 0 20px;
   }
   @media (min-width: 900px) {
-    .recs-section .section-head { padding: 0; }
+    .recs-section .section-head { padding: 0 40px; }
   }
   .recs-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+    grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
     gap: 18px 14px;
     padding: 0 20px;
     /* Fade/rise in once populated, so the swap from skeleton to real tiles
@@ -1688,8 +1700,8 @@
   .recs-grid.is-visible { opacity: 1; transform: none; }
   @media (min-width: 900px) {
     .recs-grid {
-      grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
-      padding: 0;
+      grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+      padding: 0 40px;
     }
   }
   .recs-tile {
@@ -1700,6 +1712,15 @@
     /* No background/border — the art itself is the only visual weight. */
     background: none;
     border: none;
+    /* Each tile rises in; JS staggers the delay per index. */
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  .recs-grid.is-visible .recs-tile {
+    animation: recsTileIn .45s cubic-bezier(.22,1,.36,1) forwards;
+  }
+  @keyframes recsTileIn {
+    to { opacity: 1; transform: none; }
   }
   .recs-tile-art {
     width: 100%;
@@ -1710,14 +1731,21 @@
     align-items: center;
     justify-content: center;
     color: var(--muted);
-    transition: transform .2s ease;
+    transition: transform .25s cubic-bezier(.22,1,.36,1),
+                box-shadow .25s ease;
   }
   .recs-tile-art img {
     width: 100%;
     height: 100%;
     object-fit: cover;
   }
-  .recs-tile:hover .recs-tile-art { transform: scale(1.03); }
+  .recs-tile:hover .recs-tile-art {
+    transform: scale(1.04) translateY(-2px);
+    box-shadow: 0 8px 24px rgba(0,0,0,.5);
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .recs-grid.is-visible .recs-tile { animation: none; opacity: 1; transform: none; }
+  }
   .recs-tile-title {
     font-size: .72rem;
     font-weight: 600;
@@ -1799,20 +1827,25 @@
     main.idle .left-col {
       align-items: center;
     }
-    /* Search bar + history trigger stay compact and centered; the
-       recommendations grid alone spans the full column width. */
-    main.idle .play-section,
-    main.idle .history-trigger-row {
+    /* Search bar stays compact and centered. */
+    main.idle .play-section {
       width: min(100%, 506px);
-    }
-    main.idle .recs-section {
-      width: 100%;
-      margin-top: 32px;
     }
     main.idle #queue-section,
     main.idle #results-section {
       display: none !important;
     }
+  }
+  /* Recommendations break out of main's centered content column to span the
+     full viewport width (both breakpoints). The negative-margin full-bleed
+     trick works regardless of main's max-width or the surrounding grid. */
+  main.idle .recs-section {
+    width: 100vw;
+    max-width: 100vw;
+    margin-left: calc(-50vw + 50%);
+    margin-right: calc(-50vw + 50%);
+    margin-top: 32px;
+    box-sizing: border-box;
   }
 
   /* ---- Idle hero text ---- */
@@ -2217,8 +2250,9 @@
     .device-section-inline { display: none !important; }
     /* Hide inline queue — it's in the popup modal */
     #queue-section { display: none !important; }
-    /* Hide the desktop Recently Listened trigger — it's in the sidebar now */
-    #history-trigger-row { display: none !important; }
+    /* Header history button: icon only on mobile to save header space */
+    .header-history-label { display: none; }
+    .header-history-btn { padding: 7px 9px; }
     /* Desktop-only elements: hide on mobile */
     .result-more-btn { display: none !important; }
     .queue-more-btn { display: none !important; }
