@@ -1545,6 +1545,69 @@
   .clear-all-btn:hover { color: var(--danger); border-color: var(--danger); }
   .clear-all-btn svg { width: 12px; height: 12px; }
 
+  /* ---- Recently listened ---- */
+  .history-list {
+    max-height: 264px;   /* ~5 rows, then scroll */
+    overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+  }
+  .history-list::-webkit-scrollbar { width: 4px; }
+  .history-list::-webkit-scrollbar-thumb { background: var(--border); }
+  .history-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px 10px;
+    cursor: pointer;
+    background: var(--surface);
+    transition: background .15s;
+  }
+  .history-item:hover { background: #1a1a1a; }
+  .history-item + .history-item { border-top: 1px solid var(--border); }
+  .history-thumb-placeholder {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--muted);
+  }
+  .history-remove-btn {
+    flex: none;
+    background: none;
+    border: none;
+    color: var(--muted);
+    cursor: pointer;
+    /* 40px hit target for touch, icon stays small */
+    width: 40px;
+    height: 40px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: color .15s;
+  }
+  .history-remove-btn:hover { color: var(--danger); }
+
+  /* ---- Recommendations + skeleton loader ---- */
+  .recs-skeleton[hidden] { display: none; }
+  .skeleton-item { cursor: default; }
+  .skeleton-block,
+  .skeleton-line {
+    background: linear-gradient(90deg, var(--border) 25%, #2a2a2a 37%, var(--border) 63%);
+    background-size: 400% 100%;
+    animation: skeletonShimmer 1.4s ease infinite;
+    border-radius: 3px;
+  }
+  .skeleton-line { height: 10px; }
+  .skeleton-line-title { width: 70%; margin-bottom: 8px; }
+  .skeleton-line-artist { width: 45%; }
+  @keyframes skeletonShimmer {
+    0% { background-position: 100% 50%; }
+    100% { background-position: 0 50%; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .skeleton-block, .skeleton-line { animation: none; }
+  }
+
   /* ---- Player reveal (hidden until something is playing) ---- */
   .player-section {
     opacity: 0;
@@ -1584,7 +1647,9 @@
     main.idle .left-col {
       align-items: center;
     }
-    main.idle .play-section {
+    main.idle .play-section,
+    main.idle .history-section,
+    main.idle .recs-section {
       width: min(100%, 506px);
     }
     main.idle #queue-section,
@@ -1995,9 +2060,16 @@
     .device-section-inline { display: none !important; }
     /* Hide inline queue — it's in the popup modal */
     #queue-section { display: none !important; }
+    /* Hide inline Recently Listened — it's in the sidebar now */
+    #history-section { display: none !important; }
     /* Desktop-only elements: hide on mobile */
     .result-more-btn { display: none !important; }
     .queue-more-btn { display: none !important; }
+  }
+
+  /* Desktop: the sidebar (and its history copy) never renders */
+  @media (min-width: 900px) {
+    .history-sidebar-section { display: none !important; }
   }
 
   /* Desktop: hide mobile-only elements */

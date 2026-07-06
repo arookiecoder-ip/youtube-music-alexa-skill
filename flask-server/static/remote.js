@@ -34,6 +34,14 @@ function syncUiState() {
   document.body.classList.toggle('results-open', _resultsOpen);
   mini.classList.toggle('visible', _resultsOpen && _hasTrack);
   mainEl.classList.toggle('idle', _loggedIn && !_hasTrack && !_resultsOpen);
+  // Recommendations are a blank-state feature: once a track loads (even
+  // optimistically) there's a now-playing card and queue to look at instead.
+  const recsSection = document.getElementById('recs-section');
+  if (recsSection) {
+    const shouldShow = _loggedIn && !_hasTrack && !_resultsOpen;
+    if (shouldShow && !_recsLoaded) loadRecommendations();
+    else recsSection.hidden = !shouldShow || !_recsLoaded;
+  }
   if (_hasTrack) {
     clearTimeout(player._hideTimer);
     player.classList.remove('is-collapsed');
@@ -647,7 +655,22 @@ function _filterPendingRemovals(queue, queueIndex) {
   return { queue: out, queueIndex: idx };
 }
 
+let _lastHistoryVideoId = null;
+
 function handleNpUpdate(np) {
+  // A real track change means the server just recorded a listen (on the
+  // skill's 'started' webhook). Reload history after a short delay so the
+  // JSON write — and the async metadata backfill — have time to land.
+  const npVideoId = (np && np.video_id) || null;
+  if (npVideoId && npVideoId !== _lastHistoryVideoId) {
+    _lastHistoryVideoId = npVideoId;
+    setTimeout(loadHistory, 1500);
+    // A new track just entered history, which is what recommendations are
+    // seeded from — without this, _recsLoaded stays true for the rest of the
+    // page session and the user sees the same recs list (computed before this
+    // play) every time they return to the blank state.
+    _recsLoaded = false;
+  }
   if (np.playing && !selectedDeviceOnline()) {
     // Offline device: show the last known track but never as live playback —
     // otherwise the progress bar ticks along for music that isn't playing.
@@ -1746,6 +1769,11 @@ function showControls(loggedIn) {
   for (const el of document.querySelectorAll('.needs-login')) el.hidden = !loggedIn;
   _loggedIn = !!loggedIn;
   if (!loggedIn) closeResults();
+  // showControls unhides every .needs-login section; the history section must
+  // stay hidden until loadHistory() confirms there is something to show.
+  syncHistoryVisibility();
+  if (loggedIn) loadHistory();
+  else document.getElementById('recs-section').hidden = true;
   syncUiState();
   
   if (_firstShow && loggedIn) {
@@ -2532,6 +2560,205 @@ async function playFromQueue(item) {
   }
 }
 
+/* ---- Recently listened ---- */
+// Server-side history, recorded when the skill confirms a real playback start.
+// The section stays hidden until there is at least one entry.
+let _historyHasItems = false;
+
+async function apiDelete(path) {
+  // DELETE with a JSON content-type: the server's CSRF guard rejects any
+  // mutating session-cookie request that isn't application/json.
+  let res;
+  try {
+    res = await fetch(path, {
+      method: 'DELETE', credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' }, body: '{}',
+    });
+  } catch (_) {
+    throw new Error('Can’t reach the server. Check your connection and try again.');
+  }
+  if (res.status === 401) { location.href = '/login/'; throw new Error('Session expired'); }
+  const json = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(json.error || ('HTTP ' + res.status));
+  return json;
+}
+
+async function loadHistory() {
+  if (!_loggedIn) return;
+  try {
+    const history = await api('/history/?limit=20');
+    renderHistory(history);
+  } catch (e) {
+    console.warn('Failed to load history', e);
+  }
+}
+
+function syncHistoryVisibility() {
+  // Two copies of the section exist (desktop left-column, mobile sidebar);
+  // CSS media queries decide which one is actually visible.
+  document.getElementById('history-section').hidden = !(_loggedIn && _historyHasItems);
+  document.getElementById('history-sidebar-section').hidden = !(_loggedIn && _historyHasItems);
+}
+
+function _buildHistoryRow(entry) {
+  const el = document.createElement('div');
+  el.className = 'history-item';
+
+  const thumbHtml = entry.thumbnail_url
+    ? `<img class="queue-thumb" src="${escHtml(entry.thumbnail_url)}" alt="" loading="lazy">`
+    : `<div class="queue-thumb history-thumb-placeholder">
+         <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+           <path d="M12 3v10.55A4 4 0 1 0 14 17V7h4V3h-6z"/>
+         </svg>
+       </div>`;
+
+  el.innerHTML = `
+    ${thumbHtml}
+    <div class="queue-info">
+      <div class="queue-title">${escHtml(entry.title || 'Unknown title')}</div>
+      <div class="queue-artist">${escHtml(entry.artist)}</div>
+    </div>
+    <button class="history-remove-btn" type="button" title="Remove from history">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
+           stroke="currentColor" stroke-width="2" stroke-linecap="round">
+        <path d="M18 6 6 18"/><path d="M6 6l12 12"/>
+      </svg>
+    </button>
+  `;
+
+  el.addEventListener('click', () => {
+    // Playing from the mobile sidebar copy should close it, same as any other
+    // sidebar action — otherwise the user has to manually dismiss it to see
+    // the track they just started.
+    if (el.closest('#sidebar') && window._closeSidebar) window._closeSidebar();
+    playFromQueue({
+      video_id: entry.video_id,
+      title: entry.title || '',
+      artist: entry.artist || '',
+      thumbnail: entry.thumbnail_url || '',
+    });
+  });
+  el.querySelector('.history-remove-btn').addEventListener('click', (e) => {
+    e.stopPropagation();
+    removeHistoryItem(entry.video_id);
+  });
+  return el;
+}
+
+function renderHistory(history) {
+  const lists = [document.getElementById('history-list'), document.getElementById('history-list-sidebar')];
+  const clearBtns = [document.getElementById('clear-history-btn'), document.getElementById('clear-history-btn-sidebar')];
+
+  _historyHasItems = Array.isArray(history) && history.length > 0;
+  for (const btn of clearBtns) btn.hidden = !_historyHasItems;
+  syncHistoryVisibility();
+  for (const list of lists) list.innerHTML = '';
+  if (!_historyHasItems) return;
+
+  for (const entry of history) {
+    if (!entry || !entry.video_id) continue;
+    for (const list of lists) list.appendChild(_buildHistoryRow(entry));
+  }
+}
+
+async function removeHistoryItem(videoId) {
+  try {
+    await apiDelete('/history/' + encodeURIComponent(videoId));
+    await loadHistory();
+  } catch (e) {
+    toast(e.message, 'error');
+  }
+}
+
+async function doClearHistory() {
+  try {
+    await apiDelete('/history/');
+    renderHistory([]);
+    toast('History cleared', 'ok');
+  } catch (e) {
+    toast(e.message, 'error');
+  }
+}
+
+(function () {
+  const overlay = document.getElementById('confirm-clear-history');
+  const cancelBtn = document.getElementById('confirm-clear-history-cancel');
+  const yesBtn = document.getElementById('confirm-clear-history-yes');
+  const openOverlay = () => overlay.classList.add('open');
+  document.getElementById('clear-history-btn').addEventListener('click', openOverlay);
+  document.getElementById('clear-history-btn-sidebar').addEventListener('click', () => {
+    // Close the drawer first, same as sign-out, so the confirmation isn't
+    // shown with the sidebar still open behind it.
+    if (window._closeSidebar) window._closeSidebar();
+    openOverlay();
+  });
+  cancelBtn.addEventListener('click', () => overlay.classList.remove('open'));
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.classList.remove('open'); });
+  yesBtn.addEventListener('click', () => { overlay.classList.remove('open'); doClearHistory(); });
+})();
+
+/* ---- Recommendations (blank-state, mixed history + discovery) ---- */
+let _recsLoaded = false;
+let _recsLoading = false;   // guards re-entrancy: syncUiState can fire several
+                             // times in quick succession (SSE, np updates)
+                             // before the first fetch resolves.
+
+function showRecsSkeleton(show) {
+  document.getElementById('recs-skeleton').hidden = !show;
+  document.getElementById('recs-list').hidden = show;
+}
+
+async function loadRecommendations() {
+  if (!_loggedIn || _recsLoaded || _recsLoading) return;
+  _recsLoading = true;
+  const section = document.getElementById('recs-section');
+  section.hidden = !(!_hasTrack && !_resultsOpen);
+  showRecsSkeleton(true);
+  try {
+    const items = await api('/recommendations/');
+    _recsLoaded = true;
+    renderRecommendations(items);
+  } catch (e) {
+    console.warn('Failed to load recommendations', e);
+    section.hidden = true;
+  } finally {
+    _recsLoading = false;
+    showRecsSkeleton(false);
+  }
+}
+
+function renderRecommendations(items) {
+  const section = document.getElementById('recs-section');
+  const list = document.getElementById('recs-list');
+  const shouldShow = !_hasTrack && !_resultsOpen && Array.isArray(items) && items.length > 0;
+  section.hidden = !shouldShow;
+  if (!shouldShow) { list.innerHTML = ''; return; }
+  list.innerHTML = '';
+  for (const item of items) {
+    if (!item || !item.video_id) continue;
+    const thumbUrl = (item.thumbnail && item.thumbnail.url) || item.thumbnail || '';
+    const el = document.createElement('div');
+    el.className = 'history-item';
+    const thumbHtml = thumbUrl
+      ? `<img class="queue-thumb" src="${escHtml(thumbUrl)}" alt="" loading="lazy">`
+      : `<div class="queue-thumb"></div>`;
+    el.innerHTML = `
+      ${thumbHtml}
+      <div class="queue-info">
+        <div class="queue-title">${escHtml(item.title || '')}</div>
+        <div class="queue-artist">${escHtml(item.artist || '')}</div>
+      </div>
+    `;
+    el.addEventListener('click', () => playFromQueue({
+      video_id: item.video_id,
+      title: item.title || '',
+      artist: item.artist || '',
+      thumbnail: thumbUrl,
+    }));
+    list.appendChild(el);
+  }
+}
+
 /* ---- Open on YouTube Music ---- */
 function updateUrlBar() {
   const ytmBtn = document.getElementById('np-url-toggle');
@@ -2646,6 +2873,10 @@ function updateUrlBar() {
     closeSidebar();
     window._showSignOutConfirm();
   });
+
+  // Exposed so playing/removing a history row from inside the sidebar (mobile)
+  // can close it, matching the sign-out button's behavior.
+  window._closeSidebar = closeSidebar;
 })();
 
 /* ---- Queue modal (mobile) ---- */

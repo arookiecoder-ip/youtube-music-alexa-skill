@@ -4,9 +4,13 @@ services:
     container_name: ytmusic
     restart: unless-stopped
     env_file: .env
+    environment:
+      # Listen history must outlive the container; /tmp is ephemeral.
+      - HISTORY_FILE=/data/ytm_listen_history.json
     volumes:
       - ~/cookies.txt:/app/cookies.txt:ro
       - ytmusic_cache:/tmp/ytm_audio_cache
+      - ytmusic_data:/data
     networks:
       - web
 
@@ -30,5 +34,6 @@ networks:
 
 volumes:
   ytmusic_cache:
+  ytmusic_data:
   caddy_data:
   caddy_config:

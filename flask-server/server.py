@@ -1,4 +1,4 @@
-import asyncio, difflib, glob, hmac, json, os, secrets, sys, threading, time, re, subprocess, traceback
+import asyncio, difflib, glob, hmac, itertools, json, os, secrets, sys, threading, time, re, subprocess, traceback
 from datetime import timedelta
 from urllib.parse import parse_qs, unquote, urlparse
 from ytmusicapi import YTMusic
@@ -123,6 +123,95 @@ def _consume_armed_play(serial=None):
         return None
     return entry['video_id'], entry['offset_ms']
 
+# ---- Recently-listened history (web remote) ----
+# Persisted to a JSON file so it survives restarts; single-user tool, so a
+# flat file with a process-wide lock is enough. Entries are recorded when the
+# skill's 'started' webhook confirms real playback (not when a play is merely
+# requested), newest first, deduped by video_id.
+HISTORY_FILE = os.environ.get("HISTORY_FILE", "/tmp/ytm_listen_history.json")
+HISTORY_MAX = 100
+_history_lock = threading.Lock()
+
+
+def _load_history():
+    try:
+        with open(HISTORY_FILE, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return []
+    if not isinstance(data, list):
+        return []
+    # Guards against a hand-edited or partially-corrupted file (e.g. a stray
+    # null or string entry) crashing every caller that does e.get(...).
+    return [e for e in data if isinstance(e, dict) and e.get('video_id')]
+
+
+def _save_history(history):
+    # Write-then-replace so a crash mid-save can't leave a half-written file.
+    tmp = f"{HISTORY_FILE}.tmp"
+    try:
+        with open(tmp, 'w', encoding='utf-8') as f:
+            json.dump(history, f)
+        os.replace(tmp, HISTORY_FILE)
+    except OSError:
+        try:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+        except OSError:
+            pass
+
+
+# Set right before /alexa/seek/ or a resume-from-pause (/alexa/command/ with
+# action=play on an already-loaded track) re-dispatches playback on the *same*
+# track at an arbitrary offset. The started webhook that follows can land at
+# any offset (including near-zero — dragging the scrubber back to 0:02, or
+# resuming a track that was paused seconds in), which would otherwise look
+# identical to "track finished and restarted" and wrongly count as a fresh
+# listen. A short suppression window lets the webhook tell the two apart
+# without needing a seek/resume-specific field on the webhook body (Lambda's
+# PlaybackStarted event carries no such distinction).
+_last_reposition_at = 0.0
+_REPOSITION_SUPPRESS_WINDOW = 8.0  # seconds; covers the spoken-command round-trip
+
+
+def _record_listen(video_id, title, artist, thumbnail_url):
+    if not video_id:
+        return
+    with _history_lock:
+        history = _load_history()
+        history = [e for e in history if e.get('video_id') != video_id]
+        history.insert(0, {
+            'video_id': video_id,
+            'title': title or '',
+            'artist': artist or '',
+            'thumbnail_url': thumbnail_url or '',
+            'played_at': time.time(),
+        })
+        _save_history(history[:HISTORY_MAX])
+
+
+def _backfill_history_metadata(video_id, title, artist, thumbnail_url):
+    """Fill in title/artist/thumbnail on an existing history entry.
+
+    Tracks that aren't in the visible queue get recorded at 'started' time with
+    blank metadata (the real metadata arrives later via _lookup_and_update_np);
+    this patches the entry in place without bumping played_at."""
+    if not video_id or not title:
+        return
+    with _history_lock:
+        history = _load_history()
+        changed = False
+        for e in history:
+            if e.get('video_id') == video_id and not e.get('title'):
+                e['title'] = title
+                e['artist'] = artist or ''
+                if thumbnail_url:
+                    e['thumbnail_url'] = thumbnail_url
+                changed = True
+        if changed:
+            _save_history(history)
+
+
 # Endpoints that never need auth (public policy pages + the login flow itself,
 # plus the PWA manifest / service worker / icons, which the browser fetches with
 # no ?key= and which contain no private data).
@@ -139,15 +228,16 @@ _SESSION_PATHS = ('/remote', '/alexa/status', '/alexa/init', '/alexa/devices', '
                   '/alexa/seek', '/alexa/volume', '/alexa/play_queue',
                   '/alexa/shuffle_queue', '/alexa/search', '/alexa/clear',
                   '/alexa/queue_add', '/alexa/queue_remove',
-                  '/alexa/queue_reorder')
+                  '/alexa/queue_reorder', '/history', '/recommendations')
 # Sub-paths that also count as session-accessible (startswith match).
-_SESSION_PREFIXES = ('/alexa/now_playing/',)
+_SESSION_PREFIXES = ('/alexa/now_playing/', '/history/')
 
 # API/device endpoints: the Alexa skill and web-remote JS hit these directly
 # and need a machine-readable JSON error, never an HTML redirect, on failure.
 _API_PREFIXES = ('/alexa/', '/proxy/', '/get_stream/', '/get_radio/',
                   '/find_stream_list/', '/armed_play/', '/stream_video/',
-                  '/stream_playlist/', '/get_playlist_info/')
+                  '/stream_playlist/', '/get_playlist_info/', '/history',
+                  '/recommendations')
 
 
 def _remote_login_enabled():
@@ -817,6 +907,32 @@ class Supporting:
         return [seed]
 
     @staticmethod
+    async def get_charts_queue():
+        """Genre-agnostic trending tracks. Used as the discovery half of
+        recommendations, and as the sole source on a true cold start (no
+        history yet)."""
+        ytmusic = YTMusic()
+        try:
+            charts = await asyncio.to_thread(ytmusic.get_charts)
+        except Exception:
+            traceback.print_exc()
+            return None
+        songs = ((charts or {}).get('songs') or {}).get('items', [])
+        if not songs:
+            return None
+        return [
+            {
+                'title': track.get('title', ''),
+                'artist': " and ".join(a.get('name') or '' for a in track.get('artists') or []),
+                'video_id': track.get('videoId', ''),
+                'thumbnail': track['thumbnails'][-1] if track.get('thumbnails') else None,
+                'duration_ms': 0,
+            }
+            for track in songs
+            if track.get('videoId')
+        ]
+
+    @staticmethod
     async def get_radio_queue(video_id: str):
         """Full radio/autoplay queue seeded from one video. Used by /get_radio/
         for lazy queue expansion once playback has already started."""
@@ -1402,6 +1518,7 @@ def _lookup_and_update_np(video_id):
             if duration_ms:
                 fields['duration_ms'] = duration_ms
             _update_now_playing(**fields)
+            _backfill_history_metadata(video_id, title, author, thumb)
             sys.stderr.write(f"[np] lookup OK: {title!r} dur={duration_ms}ms\n")
         else:
             sys.stderr.write(f"[np] lookup: no title for {video_id}\n")
@@ -1512,6 +1629,12 @@ def _promote_next_track(reason, position_ms=0):
     with _np_lock:
         if _prefetched_next and _prefetched_next.get('video_id') == vid:
             _prefetched_next = None
+    # This path exists because the real 'started' webhook for this track never
+    # arrived — it's still a genuine new track starting, just detected late,
+    # so it must be recorded the same as any other listen (blank metadata here
+    # gets backfilled once the lookup below lands, same as the webhook path).
+    _record_listen(vid, next_item.get('title', ''), next_item.get('artist', ''),
+                   _thumbnail_url(next_item.get('thumbnail')))
     if not next_item.get('title'):
         threading.Thread(target=_lookup_and_update_np, args=(vid,), daemon=True).start()
     threading.Thread(target=_refresh_radio_queue, args=(vid,), daemon=True).start()
@@ -1942,6 +2065,8 @@ def alexa_command():
             # arm (play_video_id ignores its position argument and reads it back
             # from /armed_play/), so we must arm before triggering — otherwise the
             # skill gets no offset and resume silently does nothing.
+            global _last_reposition_at
+            _last_reposition_at = time.time()
             error = _dispatch_play_with_retry(serial, video_id, position_ms)
         else:
             error = alexa_remote.remote.command(serial, action, body.get("value"))
@@ -2003,6 +2128,8 @@ def alexa_seek():
     # short NLU-safe phrase and the skill reads the video id + offset back from
     # /armed_play/ — the offset is carried by the arm, not the phrase, so without
     # arming here the seek would replay from the start (or do nothing).
+    global _last_reposition_at
+    _last_reposition_at = time.time()
     error = _dispatch_play_with_retry(serial, video_id, position_ms)
     if error:
         return _device_dispatch_failed(error)
@@ -2054,6 +2181,10 @@ def alexa_state_event():
                                     duration_ms=matched.get('duration_ms', 0),
                                     playback_confirmed=True,
                                     queue_index=i, position_ms=offset_in_ms)
+                if offset_in_ms < 5000:
+                    _record_listen(video_id, matched.get('title', ''),
+                                   matched.get('artist', ''),
+                                   _thumbnail_url(matched.get('thumbnail')))
             else:
                 # queue_index=-1: this track isn't in the visible queue, so the
                 # old highlight is wrong until _refresh_radio_queue rebuilds it.
@@ -2063,6 +2194,11 @@ def alexa_state_event():
                 # whose track is missing from the visible queue.
                 _update_now_playing(playing=True, video_id=video_id, position_ms=offset_in_ms,
                                     playback_confirmed=True, queue_index=-1)
+                # Record with blank metadata now (the np card's title is still
+                # the previous track's here); _lookup_and_update_np backfills
+                # the real title/artist/thumbnail once the lookup lands.
+                if offset_in_ms < 5000:
+                    _record_listen(video_id, '', '', '')
                 threading.Thread(target=_lookup_and_update_np, args=(video_id,), daemon=True).start()
             threading.Thread(target=_refresh_radio_queue, args=(video_id,), daemon=True).start()
         else:
@@ -2076,6 +2212,17 @@ def alexa_state_event():
                 _now_playing['updated_at'] = time.time()
             _notify_sse()
             if video_id:
+                # A same-track restart from the top is a replay: bump it in
+                # history. A low offset alone doesn't prove that though — a
+                # seek (or a resume-from-pause) to near the start of the same
+                # track reports the same shape (same video_id, low offset)
+                # and must not count as a fresh listen, so also require that
+                # neither repositioned this very playback.
+                repositioned_recently = (time.time() - _last_reposition_at) < _REPOSITION_SUPPRESS_WINDOW
+                if offset_in_ms < 5000 and not repositioned_recently:
+                    np = _get_now_playing()
+                    _record_listen(video_id, np.get('title', ''), np.get('artist', ''),
+                                   _thumbnail_url(np.get('thumbnail')))
                 threading.Thread(target=_refresh_radio_queue, args=(video_id,), daemon=True).start()
         # Pre-download the next few songs in the queue now that playback has
         # started. This gives the full song duration (~3-5 min) to download,
@@ -2093,6 +2240,128 @@ def alexa_state_event():
         # grace period so the card doesn't stay wedged on the finished song.
         threading.Thread(target=_promote_after_finish,
                          args=(prev_video_id,), daemon=True).start()
+    return jsonify({'ok': True})
+
+
+
+# ---- Blank-state recommendations (web remote) ----
+# Mixes two sources so the idle screen isn't just "more of the same":
+#  - "for you": radio seeded from the most recently played track (familiar).
+#  - "discover": radio seeded from an older, less-recently-played track, minus
+#    anything already in history (new-to-the-user).
+# Cold start (no history at all) falls back to YT Music's charts.
+_RECS_CACHE_TTL = 30 * 60
+_recs_cache = {'built_at': 0, 'items': []}
+_recs_lock = threading.Lock()
+
+
+async def _none():
+    return None
+
+
+async def _build_recommendations():
+    with _history_lock:
+        history = _load_history()
+    seen_ids = {e['video_id'] for e in history if e.get('video_id')}
+
+    if not history:
+        charts = await Supporting.get_charts_queue()
+        return charts or []
+
+    recent_seed = history[0]['video_id']
+    # Pick a seed the user hasn't played in a while (or ever cycled back to)
+    # so the "discover" half doesn't just re-derive the same radio as "for
+    # you". With only one history entry there's no second seed to pick —
+    # skip the discover call entirely rather than re-querying the same seed
+    # (which would just produce the same list twice for no benefit).
+    discover_seed = history[min(5, len(history) - 1)]['video_id'] if len(history) > 1 else None
+
+    for_you, discover = await asyncio.gather(
+        Supporting.get_radio_queue(recent_seed),
+        Supporting.get_radio_queue(discover_seed) if discover_seed else _none(),
+    )
+    for_you = for_you or []
+    discover = discover or []
+
+    mixed, out_ids = [], set()
+    # Interleave so the list reads as one mixed feed rather than two blocks.
+    # zip_longest (not zip) so a shorter/failed list on one side doesn't
+    # discard the other side's perfectly good results.
+    for a, b in itertools.zip_longest(for_you, discover):
+        for item in (a, b):
+            if not item:
+                continue
+            vid = item.get('video_id')
+            if vid and vid not in out_ids:
+                out_ids.add(vid)
+                mixed.append(item)
+    # Prefer genuinely new tracks (not already in history) when trimming.
+    fresh = [i for i in mixed if i['video_id'] not in seen_ids]
+    familiar = [i for i in mixed if i['video_id'] in seen_ids]
+    result = (fresh + familiar)[:20]
+    if len(result) < 10:
+        charts = await Supporting.get_charts_queue() or []
+        for item in charts:
+            vid = item.get('video_id')
+            if vid and vid not in out_ids and vid not in seen_ids:
+                out_ids.add(vid)
+                result.append(item)
+            if len(result) >= 20:
+                break
+    return result
+
+
+@app.route("/recommendations/", methods=["GET"])
+def get_recommendations():
+    force = request.args.get('refresh') == '1'
+    # Held across the (slow, network-bound) rebuild so concurrent requests on
+    # a cold/expired cache queue up behind one rebuild instead of each firing
+    # their own set of YT Music calls (this is a single-user tool, so a few
+    # hundred ms of serialization here is a non-issue).
+    with _recs_lock:
+        fresh_enough = (time.time() - _recs_cache['built_at']) < _RECS_CACHE_TTL
+        if fresh_enough and not force:
+            return jsonify(_recs_cache['items'])
+        try:
+            items = asyncio.run(_build_recommendations())
+        except Exception:
+            traceback.print_exc()
+            return jsonify(_recs_cache['items'])
+        _recs_cache['items'] = items
+        _recs_cache['built_at'] = time.time()
+        return jsonify(items)
+
+
+# ---- Recently-listened history endpoints (web remote) ----
+@app.route("/history/", methods=["GET"])
+def get_history():
+    try:
+        limit = int(request.args.get('limit', 20))
+    except (TypeError, ValueError):
+        limit = 20
+    limit = max(1, min(limit, HISTORY_MAX))
+    with _history_lock:
+        history = _load_history()
+    return jsonify(history[:limit])
+
+
+@app.route("/history/", methods=["DELETE"])
+def clear_history():
+    with _history_lock:
+        _save_history([])
+    # Recs are seeded from history; a stale cache would keep suggesting the
+    # same tracks derived from history the user just wiped.
+    with _recs_lock:
+        _recs_cache['built_at'] = 0
+    return jsonify({'ok': True})
+
+
+@app.route("/history/<video_id>", methods=["DELETE"])
+def remove_history_item(video_id):
+    with _history_lock:
+        history = _load_history()
+        history = [e for e in history if e.get('video_id') != video_id]
+        _save_history(history)
     return jsonify({'ok': True})
 
 
