@@ -1697,18 +1697,18 @@
   @media (min-width: 900px) {
     .recs-section .section-head { padding: 0 40px; }
   }
-  /* Responsive wrapping grid: as many equal columns as fit the screen width,
-     wrapping into as many rows as needed. No horizontal scroll. */
+  /* Full-width grid, exactly 2 rows. Columns fill the screen width; JS trims
+     the tile list to (columns × 2) so it never wraps past 2 rows and never
+     scrolls. --recs-cols is set by JS to the number of columns that fit. */
   .recs-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+    grid-template-columns: repeat(var(--recs-cols, 5), 1fr);
     gap: 18px 14px;
     padding: 0 16px;
   }
   .recs-grid[hidden] { display: none; }
   @media (min-width: 900px) {
     .recs-grid {
-      grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
       gap: 22px 18px;
       padding: 0 40px;
     }
@@ -1860,31 +1860,19 @@
       display: none !important;
     }
   }
-  /* Recommendations span the full viewport width. The section is a direct
-     child of <main> (which is horizontally centered), so this canonical
-     full-bleed reliably reaches both viewport edges.
-     While recs are still loading the section stays at the normal centered
-     content width (no full-bleed); the moment tiles are ready JS adds
-     .recs-ready and it smoothly expands out to the viewport edges. */
+  /* Recommendations span the full viewport width — skeleton and real grid
+     alike. The section is a direct child of <main> (which is horizontally
+     centered), so this canonical full-bleed reliably reaches both viewport
+     edges. */
   main.idle .recs-section {
     position: relative;
-    width: 100%;
-    max-width: 100%;
-    left: 0;
-    margin-left: 0;
-    margin-right: 0;
-    margin-top: 24px;
-    box-sizing: border-box;
-    transition: margin-left .4s cubic-bezier(.22,1,.36,1),
-                margin-right .4s cubic-bezier(.22,1,.36,1),
-                width .4s cubic-bezier(.22,1,.36,1);
-  }
-  main.idle .recs-section.recs-ready {
     width: 100vw;
     max-width: 100vw;
     left: 50%;
     margin-left: -50vw;
     margin-right: -50vw;
+    margin-top: 24px;
+    box-sizing: border-box;
   }
   /* When idle, let the footer sit right after the recommendations grid instead
      of being pushed to the bottom of the 100dvh viewport (which left a big

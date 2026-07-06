@@ -2733,12 +2733,13 @@ let _recsItems = null;      // cached for the session so returning to the blank
 
 function showRecsSkeleton(show) {
   const skeleton = document.getElementById('recs-skeleton');
-  // Fill the skeleton grid with enough placeholder tiles to roughly match the
-  // real grid (built once, then reused).
-  if (show && !skeleton.dataset.filled) {
+  if (show) {
+    // Exactly 2 rows of skeleton tiles at the current column count, matching
+    // the real grid's full-width 2-row layout.
+    const cols = recsColumns();
+    skeleton.style.setProperty('--recs-cols', cols);
     const tile = `<div class="recs-skeleton-tile"><div class="skeleton-block"></div><div class="skeleton-line skeleton-line-title"></div><div class="skeleton-line skeleton-line-artist"></div></div>`;
-    skeleton.innerHTML = tile.repeat(24);
-    skeleton.dataset.filled = '1';
+    skeleton.innerHTML = tile.repeat(cols * 2);
   }
   skeleton.hidden = !show;
   document.getElementById('recs-list').hidden = show;
@@ -2755,9 +2756,10 @@ async function loadRecommendations() {
     // never serves a stale cached list from an earlier fallback.
     const items = await api('/recommendations/?refresh=1');
     _recsLoaded = true;
+    _recsItems = Array.isArray(items) ? items : [];
     // renderRecommendations keeps the skeleton up until the thumbnails have
     // loaded, then swaps to the real grid — so no empty flash in between.
-    renderRecommendations(items);
+    renderRecommendations(_recsItems);
   } catch (e) {
     console.warn('Failed to load recommendations', e);
     section.hidden = true;
@@ -2767,6 +2769,17 @@ async function loadRecommendations() {
   }
 }
 
+// How many columns fit the viewport at the current tile size, so we can show
+// exactly 2 rows that fill the width.
+function recsColumns() {
+  const wide = window.matchMedia('(min-width: 900px)').matches;
+  const minTile = wide ? 132 : 110;
+  const gap = wide ? 18 : 14;
+  const pad = wide ? 80 : 32;             // section side padding (both sides)
+  const avail = Math.max(0, window.innerWidth - pad);
+  return Math.max(2, Math.floor((avail + gap) / (minTile + gap)));
+}
+
 function renderRecommendations(items) {
   const section = document.getElementById('recs-section');
   const list = document.getElementById('recs-list');
@@ -2774,8 +2787,13 @@ function renderRecommendations(items) {
   section.hidden = !shouldShow;
   if (!shouldShow) { list.innerHTML = ''; return; }
   list.innerHTML = '';
+  // Exactly 2 rows: as many columns as fit the width, capped to 2 rows worth.
+  const cols = recsColumns();
+  _recsShownCols = cols;
+  list.style.setProperty('--recs-cols', cols);
+  const shown = items.filter(it => it && it.video_id).slice(0, cols * 2);
   const tiles = [];
-  for (const item of items) {
+  for (const item of shown) {
     if (!item || !item.video_id) continue;
     const thumbUrl = (item.thumbnail && item.thumbnail.url) || item.thumbnail || '';
     const el = document.createElement('div');
@@ -2814,9 +2832,6 @@ function renderRecommendations(items) {
     if (skeletonHidden) return;
     skeletonHidden = true;
     document.getElementById('recs-skeleton').hidden = true;
-    // Content is ready: smoothly expand the section from the normal centered
-    // width out to the full viewport width (see .recs-ready in CSS).
-    section.classList.add('recs-ready');
   };
 
   // Reveal a tile once its thumbnail is decoded. A tile with no image, a
@@ -2829,9 +2844,9 @@ function renderRecommendations(items) {
     t.el.style.transitionDelay = Math.min(i * 25, 400) + 'ms';
     t.el.classList.add('is-ready');
     readyCount++;
-    // Swap out the skeleton once the first ~2 rows (or everything) are ready,
-    // so the real grid appears already populated rather than empty.
-    if (readyCount >= Math.min(tiles.length, 12)) hideSkeletonOnce();
+    // Swap out the skeleton once (nearly) all the shown tiles are ready, so the
+    // real grid appears already populated rather than half-empty.
+    if (readyCount >= Math.max(1, tiles.length - 2)) hideSkeletonOnce();
   };
   tiles.forEach((t, i) => {
     const img = t.el.querySelector('img');
@@ -2846,6 +2861,20 @@ function renderRecommendations(items) {
   setTimeout(hideSkeletonOnce, 2500);
   setTimeout(() => { tiles.forEach((t, i) => revealTile(t, i)); hideSkeletonOnce(); }, 5000);
 }
+
+// Re-flow the 2-row grid when the column count changes on resize (e.g. window
+// resized, orientation change) so it always fills the width in exactly 2 rows.
+let _recsResizeTimer = null;
+let _recsShownCols = 0;
+window.addEventListener('resize', () => {
+  clearTimeout(_recsResizeTimer);
+  _recsResizeTimer = setTimeout(() => {
+    if (!_recsLoaded || !_recsItems) return;
+    if (document.getElementById('recs-section').hidden) return;
+    if (recsColumns() === _recsShownCols) return;   // no column change
+    renderRecommendations(_recsItems);
+  }, 200);
+});
 
 /* ---- Open on YouTube Music ---- */
 function updateUrlBar() {
