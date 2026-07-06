@@ -1886,7 +1886,9 @@
     }
     /* idle already inherits align-items:center and play-section width from base rules */
     main.idle #queue-section,
-    main.idle #results-section {
+    main.idle #results-section,
+    main.has-queue .recs-section,
+    body.results-open .recs-section {
       display: none !important;
     }
   }
