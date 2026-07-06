@@ -170,12 +170,19 @@ function showNowPlaying(info) {
     const art = document.getElementById('np-art');
     const mpArt = document.getElementById('mp-np-art');
     if (info.thumbnail) {
-      art.style.backgroundImage = 'url(' + info.thumbnail + ')';
-      art.classList.add('has-thumb');
-      miniArt.style.backgroundImage = 'url(' + info.thumbnail + ')';
-      miniArt.classList.add('has-thumb');
-      mpArt.style.backgroundImage = 'url(' + info.thumbnail + ')';
-      mpArt.classList.add('has-thumb');
+      const url = 'url(' + info.thumbnail + ')';
+      const img = new Image();
+      img.onload = () => {
+        if (_lastNpFingerprint === fp) {
+          art.style.backgroundImage = url;
+          art.classList.add('has-thumb');
+          miniArt.style.backgroundImage = url;
+          miniArt.classList.add('has-thumb');
+          mpArt.style.backgroundImage = url;
+          mpArt.classList.add('has-thumb');
+        }
+      };
+      img.src = info.thumbnail;
     } else {
       art.style.backgroundImage = '';
       art.classList.remove('has-thumb');
@@ -1016,7 +1023,7 @@ function renderResults() {
     inner.className = 'result-item-inner' + (item.video_id === _currentVideoId ? ' active' : '');
 
     const thumbHtml = item.thumbnail
-      ? `<img class="result-thumb" src="${escHtml(item.thumbnail)}" alt="" loading="lazy">`
+      ? `<img class="result-thumb" src="${escHtml(item.thumbnail)}" alt="" loading="lazy" onload="this.classList.add('loaded')">`
       : `<div class="result-thumb"></div>`;
 
     // SVG icons for buttons (inline to avoid extra network requests)
@@ -1991,7 +1998,7 @@ function showQueue(queue, currentIndex) {
 
     const thumbUrl = item.thumbnail || '';
     const thumbHtml = thumbUrl
-      ? `<img class="queue-thumb" src="${escHtml(thumbUrl)}" alt="" loading="lazy">`
+      ? `<img class="queue-thumb" src="${escHtml(thumbUrl)}" alt="" loading="lazy" onload="this.classList.add('loaded')">`
       : `<div class="queue-thumb"></div>`;
 
     const dragSvg = `<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/><circle cx="9" cy="10" r="1.5"/><circle cx="15" cy="10" r="1.5"/><circle cx="9" cy="15" r="1.5"/><circle cx="15" cy="15" r="1.5"/><circle cx="9" cy="20" r="1.5"/><circle cx="15" cy="20" r="1.5"/></svg>`;
@@ -2678,7 +2685,7 @@ function _buildHistoryRow(entry) {
   el.className = 'history-item';
 
   const thumbHtml = entry.thumbnail_url
-    ? `<img class="queue-thumb" src="${escHtml(entry.thumbnail_url)}" alt="" loading="lazy">`
+    ? `<img class="queue-thumb" src="${escHtml(entry.thumbnail_url)}" alt="" loading="lazy" onload="this.classList.add('loaded')">`
     : `<div class="queue-thumb history-thumb-placeholder">
          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
            <path d="M12 3v10.55A4 4 0 1 0 14 17V7h4V3h-6z"/>
@@ -2862,7 +2869,7 @@ function renderRecommendations(items) {
     // half-loaded box. .is-ready is added per-tile below.
     el.className = 'recs-tile';
     const thumbHtml = thumbUrl
-      ? `<img src="${escHtml(thumbUrl)}" alt="" loading="eager">`
+      ? `<img src="${escHtml(thumbUrl)}" alt="" loading="eager" onload="this.classList.add('loaded')">`
       : `<svg width="28" height="28" viewBox="0 0 24 24" fill="currentColor">
            <path d="M12 3v10.55A4 4 0 1 0 14 17V7h4V3h-6z"/>
          </svg>`;
@@ -3109,7 +3116,7 @@ function updateUrlBar() {
       el.dataset.index = String(i);
       const thumbUrl = item.thumbnail || '';
       const thumbHtml = thumbUrl
-        ? `<img class="queue-thumb" src="${escHtml(thumbUrl)}" alt="" loading="lazy">`
+        ? `<img class="queue-thumb" src="${escHtml(thumbUrl)}" alt="" loading="lazy" onload="this.classList.add('loaded')">`
         : `<div class="queue-thumb"></div>`;
       const dragSvg = `<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/><circle cx="9" cy="10" r="1.5"/><circle cx="15" cy="10" r="1.5"/><circle cx="9" cy="15" r="1.5"/><circle cx="15" cy="15" r="1.5"/><circle cx="9" cy="20" r="1.5"/><circle cx="15" cy="20" r="1.5"/></svg>`;
       el.innerHTML = `
