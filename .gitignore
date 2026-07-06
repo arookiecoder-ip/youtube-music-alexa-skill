@@ -6,4 +6,4 @@ __pycache__
 HANDOFF.md
 .env
 .code-review-graph/
-.storage
+.storage*.db

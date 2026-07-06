@@ -28,9 +28,9 @@ function renderPlaylists() {
   let html = '<div class="history-list">';
   lists.forEach(pl => {
     const trackCount = (pl.tracks || []).length;
-    let thumbHtml = '<div class="history-thumb"></div>';
+    let thumbHtml = '<div class="queue-thumb"></div>';
     if (trackCount > 0 && pl.tracks[0].thumbnail) {
-      thumbHtml = `<img class="history-thumb loaded" src="${escHtml(pl.tracks[0].thumbnail)}" alt="">`;
+      thumbHtml = `<img class="queue-thumb loaded" src="${escHtml(pl.tracks[0].thumbnail)}" alt="">`;
     }
     
     html += `
@@ -79,9 +79,9 @@ function openPlaylistDetailModal(pl_id) {
   } else {
     let html = '<div class="history-list">';
     pl.tracks.forEach((track) => {
-      let thumbHtml = '<div class="history-thumb"></div>';
+      let thumbHtml = '<div class="queue-thumb"></div>';
       if (track.thumbnail) {
-        thumbHtml = `<img class="history-thumb loaded" src="${escHtml(track.thumbnail)}" alt="">`;
+        thumbHtml = `<img class="queue-thumb loaded" src="${escHtml(track.thumbnail)}" alt="">`;
       }
       
       const trashIcon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>`;
