@@ -199,17 +199,6 @@
       max-width: 506px;
       transition: max-width .4s cubic-bezier(.4, 0, .2, 1);
     }
-    /* When queue or results are open, fill the left-col */
-    main.has-queue .left-col,
-    body.results-open .left-col {
-      align-items: stretch;
-    }
-    main.has-queue .play-section,
-    main.has-queue .player-section,
-    body.results-open .play-section,
-    body.results-open .player-section {
-      max-width: 100%;
-    }
   }
 
   /* ---- Header ---- */
