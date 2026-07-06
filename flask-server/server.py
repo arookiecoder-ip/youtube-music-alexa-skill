@@ -1,4 +1,4 @@
-import asyncio, difflib, glob, hmac, itertools, json, os, secrets, sys, threading, time, re, subprocess, traceback
+import asyncio, difflib, glob, hmac, itertools, json, os, random, secrets, sys, threading, time, re, subprocess, traceback
 from datetime import timedelta
 from urllib.parse import parse_qs, unquote, urlparse
 from ytmusicapi import YTMusic
@@ -2245,12 +2245,12 @@ def alexa_state_event():
 
 
 # ---- Blank-state recommendations (web remote) ----
-# Mixes two sources so the idle screen isn't just "more of the same":
-#  - "for you": radio seeded from the most recently played track (familiar).
-#  - "discover": radio seeded from an older, less-recently-played track, minus
-#    anything already in history (new-to-the-user).
-# Cold start (no history at all) falls back to YT Music's charts.
-_RECS_CACHE_TTL = 30 * 60
+# Mixes radios seeded from a couple of randomly chosen recent history tracks,
+# shuffled, so the idle screen varies between visits instead of showing the
+# same deterministic YouTube radio every time. Cold start (no history) falls
+# back to YT Music's charts. Short cache so a refresh a few minutes later gets
+# a fresh mix, without re-hitting YouTube on every single page load.
+_RECS_CACHE_TTL = 3 * 60
 _recs_cache = {'built_at': 0, 'items': []}
 _recs_lock = threading.Lock()
 
@@ -2285,49 +2285,50 @@ async def _build_recommendations():
 
     if not history:
         charts = await Supporting.get_charts_queue()
-        if charts:
-            return charts
-        return await _get_fallback_queue(seen_ids)
+        pool = charts if charts else await _get_fallback_queue(seen_ids)
+        random.shuffle(pool)
+        return pool[:40]
 
-    recent_seed = history[0]['video_id']
-    # Pick a seed the user hasn't played in a while (or ever cycled back to)
-    # so the "discover" half doesn't just re-derive the same radio as "for
-    # you". With only one history entry there's no second seed to pick —
-    # skip the discover call entirely rather than re-querying the same seed
-    # (which would just produce the same list twice for no benefit).
-    discover_seed = history[min(5, len(history) - 1)]['video_id'] if len(history) > 1 else None
+    # Seed radios from a couple of *randomly chosen* history tracks (biased
+    # toward recent ones) rather than always positions 0 and 5. Different seeds
+    # each build => a genuinely different mix on refresh, instead of the same
+    # deterministic YouTube radio every time.
+    recent_pool = history[:10]
+    seeds = []
+    seeds.append(random.choice(history[:3])['video_id'])  # something recent
+    if len(recent_pool) > 1:
+        others = [e['video_id'] for e in recent_pool if e['video_id'] != seeds[0]]
+        if others:
+            seeds.append(random.choice(others))            # a second, varied seed
 
-    for_you, discover = await asyncio.gather(
-        Supporting.get_radio_queue(recent_seed),
-        Supporting.get_radio_queue(discover_seed) if discover_seed else _none(),
-    )
-    for_you = for_you or []
-    discover = discover or []
+    radios = await asyncio.gather(*[Supporting.get_radio_queue(s) for s in seeds])
 
     mixed, out_ids = [], set()
-    # Interleave so the list reads as one mixed feed rather than two blocks.
-    # zip_longest (not zip) so a shorter/failed list on one side doesn't
-    # discard the other side's perfectly good results.
-    for a, b in itertools.zip_longest(for_you, discover):
-        for item in (a, b):
+    # Interleave the radios so the list reads as one mixed feed. zip_longest so
+    # a shorter/failed radio on one side doesn't discard the other's results.
+    for group in itertools.zip_longest(*[r or [] for r in radios]):
+        for item in group:
             if not item:
                 continue
             vid = item.get('video_id')
             if vid and vid not in out_ids:
                 out_ids.add(vid)
                 mixed.append(item)
-    # Prefer genuinely new tracks (not already in history) when trimming.
+
+    # Prefer genuinely new tracks (not already in history), then fill.
     fresh = [i for i in mixed if i['video_id'] not in seen_ids]
     familiar = [i for i in mixed if i['video_id'] in seen_ids]
-    result = (fresh + familiar)[:20]
-    if len(result) < 10:
+    # Shuffle the fresh pool so even identical seeds yield a different order.
+    random.shuffle(fresh)
+    result = (fresh + familiar)[:40]
+    if len(result) < 20:
         topoff = await Supporting.get_charts_queue() or await _get_fallback_queue(out_ids | seen_ids)
         for item in topoff:
             vid = item.get('video_id')
             if vid and vid not in out_ids and vid not in seen_ids:
                 out_ids.add(vid)
                 result.append(item)
-            if len(result) >= 20:
+            if len(result) >= 40:
                 break
     return result
 

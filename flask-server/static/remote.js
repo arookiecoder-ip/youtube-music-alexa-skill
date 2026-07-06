@@ -2720,7 +2720,15 @@ let _recsLoading = false;   // guards re-entrancy: syncUiState can fire several
                              // before the first fetch resolves.
 
 function showRecsSkeleton(show) {
-  document.getElementById('recs-skeleton').hidden = !show;
+  const skeleton = document.getElementById('recs-skeleton');
+  // Fill the skeleton grid with enough placeholder tiles to roughly match the
+  // real grid (built once, then reused).
+  if (show && !skeleton.dataset.filled) {
+    const tile = `<div class="recs-skeleton-tile"><div class="skeleton-block"></div><div class="skeleton-line skeleton-line-title"></div><div class="skeleton-line skeleton-line-artist"></div></div>`;
+    skeleton.innerHTML = tile.repeat(18);
+    skeleton.dataset.filled = '1';
+  }
+  skeleton.hidden = !show;
   const list = document.getElementById('recs-list');
   list.hidden = show;
   // Restart the fade-in every time the skeleton is (re)shown, so a manual

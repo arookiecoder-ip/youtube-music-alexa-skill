@@ -1688,8 +1688,8 @@
   }
   .recs-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
-    gap: 18px 14px;
+    grid-template-columns: repeat(auto-fill, minmax(92px, 1fr));
+    gap: 16px 12px;
     padding: 0 20px;
     /* Fade/rise in once populated, so the swap from skeleton to real tiles
        reads as one continuous motion instead of a hard cut. */
@@ -1700,14 +1700,15 @@
   .recs-grid.is-visible { opacity: 1; transform: none; }
   @media (min-width: 900px) {
     .recs-grid {
-      grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
-      padding: 0 40px;
+      grid-template-columns: repeat(auto-fill, minmax(118px, 1fr));
+      gap: 20px 16px;
+      padding: 0 32px;
     }
   }
   .recs-tile {
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: 6px;
     cursor: pointer;
     /* No background/border — the art itself is the only visual weight. */
     background: none;
@@ -1747,7 +1748,7 @@
     .recs-grid.is-visible .recs-tile { animation: none; opacity: 1; transform: none; }
   }
   .recs-tile-title {
-    font-size: .72rem;
+    font-size: .7rem;
     font-weight: 600;
     color: var(--text);
     white-space: nowrap;
@@ -1755,12 +1756,12 @@
     text-overflow: ellipsis;
   }
   .recs-tile-artist {
-    font-size: .66rem;
+    font-size: .62rem;
     color: var(--muted);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    margin-top: -4px;
+    margin-top: -5px;
   }
 
   /* ---- Recommendations skeleton loader (same grid shape as real tiles) ---- */
@@ -1822,7 +1823,7 @@
       display: grid;
       grid-template-columns: 1fr 0fr;
       align-content: start;
-      padding-top: 6vh;
+      padding-top: 3vh;
     }
     main.idle .left-col {
       align-items: center;
@@ -1837,15 +1838,23 @@
     }
   }
   /* Recommendations break out of main's centered content column to span the
-     full viewport width (both breakpoints). The negative-margin full-bleed
-     trick works regardless of main's max-width or the surrounding grid. */
+     full viewport width (both breakpoints). Viewport-relative positioning
+     (left:50% + translateX(-50%)) is independent of the parent's width, so it
+     works no matter what constrains .left-col / main. */
   main.idle .recs-section {
+    position: relative;
+    left: 50%;
+    transform: translateX(-50%);
     width: 100vw;
     max-width: 100vw;
-    margin-left: calc(-50vw + 50%);
-    margin-right: calc(-50vw + 50%);
-    margin-top: 32px;
+    margin-top: 24px;
     box-sizing: border-box;
+  }
+  /* When idle, let the footer sit right after the recommendations grid instead
+     of being pushed to the bottom of the 100dvh viewport (which left a big
+     black gap under a short grid). */
+  main.idle .site-footer {
+    margin-top: 32px;
   }
 
   /* ---- Idle hero text ---- */
