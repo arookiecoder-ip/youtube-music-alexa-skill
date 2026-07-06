@@ -109,6 +109,7 @@ resulting session cookie is stored (see
 ```
 flask-server/         backend
   server.py           search, radio, audio proxy, web-remote routes
+  data.db             SQLite database storing playlists, history, and liked songs
   alexa_remote.py     AlexaPy bridge + Amazon login proxy for the web remote
   templates/          setup page + /login/ + /remote/ UI
   static/             web-remote assets (PWA icons etc.)
@@ -208,7 +209,9 @@ Features:
   stay in sync. Dragging the scrubber seeks on release (Alexa can only seek
   by restarting the stream at the new offset, so expect a brief re-buffer).
 - **Queue view** — the upcoming radio queue, tap any entry to jump to it,
-  plus a shuffle-queue button (keeps the current song in place).
+  plus a shuffle-queue button (keeps the current song in place). On mobile, 
+  swipe left to remove a song or swipe right to like it. On desktop, these 
+  options are in the 3-dot menu.
 - **Pasted YouTube links** — a watch link plays directly (bypassing search);
   a watch link with a `list=` id queues the rest of that playlist, like
   YouTube does.
@@ -220,6 +223,10 @@ Features:
   dialog matching the rest of the UI (no browser `confirm()` popups). On
   mobile this section lives in the hamburger sidebar; on desktop it's in the
   main column.
+- **Playlists & Liked Songs** — save your favorite tracks! Click the heart on 
+  the main player or swipe right in the queue to instantly like a song. Create 
+  custom playlists, and even paste a YouTube playlist link to automatically 
+  sync and import all of its tracks into a custom playlist.
 - **Recommended for you** — shown only on the blank/idle screen, with a
   shimmering skeleton while it loads. Mixes a "for you" radio (seeded from
   your most-recent track) with a "discover" radio (seeded from an older

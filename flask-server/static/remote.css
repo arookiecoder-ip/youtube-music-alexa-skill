@@ -707,10 +707,9 @@
   .queue-swipe-wrapper .queue-item + .queue-item {
     border-top: none;
   }
+  .queue-like-underlay,
   .queue-delete-underlay {
-    /* Hidden until an actual rightward pull (.swiping set by JS): the row's
-       hold-selected background is translucent, so a permanently painted red
-       underlay would bleed through the whole row on a mere press-and-hold. */
+    /* Hidden until an actual pull (.swiping-* set by JS) */
     visibility: hidden;
     position: absolute;
     top: 0;
@@ -719,7 +718,6 @@
     left: 0;
     display: flex;
     align-items: center;
-    justify-content: flex-start;
     padding: 0 18px;
     font-size: .68rem;
     font-weight: 700;
@@ -729,10 +727,19 @@
     white-space: nowrap;
     pointer-events: none;
     gap: 6px;
+  }
+  .queue-like-underlay {
+    justify-content: flex-start;
+    background: var(--accent);
+  }
+  .queue-delete-underlay {
+    justify-content: flex-end;
     background: var(--danger);
   }
+  .queue-like-underlay svg,
   .queue-delete-underlay svg { width: 16px; height: 16px; }
-  .queue-swipe-wrapper.swiping .queue-delete-underlay { visibility: visible; }
+  .queue-swipe-wrapper.swiping-right .queue-like-underlay,
+  .queue-swipe-wrapper.swiping-left .queue-delete-underlay { visibility: visible; }
 
   /* ---- Queue item: drag-to-reorder ---- */
   .queue-drag-handle {
@@ -1417,7 +1424,8 @@
   }
 
   /* ---- Shuffle (small rounded icon beside URL toggle) ---- */
-  .np-shuffle-btn {
+  .np-shuffle-btn,
+  .np-like-btn {
     flex: none;
     background: none;
     border: 1px solid var(--border);
@@ -1432,13 +1440,20 @@
     transition: color .15s, border-color .15s, background .15s;
     border-radius: 50%;
   }
-  .np-shuffle-btn:hover { color: var(--text); border-color: #444; }
+  .np-shuffle-btn:hover,
+  .np-like-btn:hover { color: var(--text); border-color: #444; }
   .np-shuffle-btn.shuffle-active {
     color: var(--accent);
     border-color: var(--accent);
     background: rgba(232, 89, 12, .1);
   }
-  .np-shuffle-btn svg { width: 16px; height: 16px; }
+  .np-like-btn.liked {
+    color: var(--accent);
+    border-color: var(--accent);
+    background: rgba(232, 89, 12, .1);
+  }
+  .np-shuffle-btn svg,
+  .np-like-btn svg { width: 16px; height: 16px; }
 
   /* ---- YouTube Music button ---- */
   .np-ytm-btn {

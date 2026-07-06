@@ -197,6 +197,16 @@ function showNowPlaying(info) {
     _currentVideoId = info.video_id || '';
     updateUrlBar();
   }
+
+  const likeBtn = document.getElementById('np-like-btn');
+  if (likeBtn && _currentVideoId && typeof _playlistsData !== 'undefined' && _playlistsData.liked_songs) {
+    const isLiked = _playlistsData.liked_songs.includes(_currentVideoId);
+    likeBtn.classList.toggle('liked', isLiked);
+    likeBtn.innerHTML = isLiked 
+      ? `<svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>`
+      : `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>`;
+  }
+
   const wasTrack = _hasTrack;
   _hasTrack = true;
   if (changed || !wasTrack) {
@@ -910,11 +920,7 @@ document.getElementById('play-query').onclick = () => {
       if (confirm('This looks like a playlist. Do you want to save it to your Playlists?')) {
         const name = prompt("Enter a name for this playlist:", "Imported Playlist");
         if (name) {
-          api('/api/playlists/', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ name: name, source_url: query })
-          }).then(res => {
+          api('/api/playlists/', { name: name, source_url: query }).then(res => {
             toast('Playlist saved. Syncing...', 'ok');
             if (typeof syncPlaylist === 'function') syncPlaylist(res.id);
           }).catch(() => toast('Failed to save playlist', 'error'));
@@ -2038,6 +2044,10 @@ function showQueue(queue, currentIndex) {
         </svg>
         Remove
       </div>
+      <div class="queue-like-underlay">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+        Like
+      </div>
     `;
 
     const el = document.createElement('div');
@@ -2062,6 +2072,10 @@ function showQueue(queue, currentIndex) {
       </div>
       <button class="queue-more-btn" type="button" title="More options">${moreSvg}</button>
       <div class="queue-more-menu">
+        <div class="queue-menu-option" data-action="like">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+          Like / Unlike
+        </div>
         <div class="queue-menu-option danger" data-action="remove">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
             <path d="M3 6h18"/><path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2"/>
@@ -2123,9 +2137,14 @@ function showQueue(queue, currentIndex) {
       _closeAllQueueMenus();
       removeFromQueue(i, item.title, item.video_id);
     });
+    moreMenu.querySelector('[data-action="like"]').addEventListener('click', (e) => {
+      e.stopPropagation();
+      _closeAllQueueMenus();
+      if (typeof toggleLike === 'function') toggleLike(item);
+    });
 
-    // Mobile: swipe-to-delete
-    _attachQueueSwipeDelete(wrapper, el, i, item, currentIndex);
+    // Mobile: swipe gestures (like/delete)
+    _attachQueueSwipeGestures(wrapper, el, i, item, currentIndex);
 
     // Drag-to-reorder (both mobile + desktop via the handle)
     _attachQueueDragReorder(el, list, i);
@@ -2261,8 +2280,8 @@ async function reorderQueue(fromIndex, toIndex) {
   }
 }
 
-/* ---- Queue swipe-to-delete gesture (mobile) ---- */
-function _attachQueueSwipeDelete(wrapper, el, index, item, currentIndex) {
+/* ---- Queue swipe gestures (mobile) ---- */
+function _attachQueueSwipeGestures(wrapper, el, index, item, currentIndex) {
   const SWIPE_THRESHOLD = 80;
   const LOCK_DISTANCE = 8;
   const AXIS_BIAS = 1.2;
@@ -2275,7 +2294,7 @@ function _attachQueueSwipeDelete(wrapper, el, index, item, currentIndex) {
     if (wrapper._removing) return;
     clearTimeout(holdTimer);
     el.classList.remove('hold-selected');
-    wrapper.classList.remove('swiping');
+    wrapper.classList.remove('swiping-left', 'swiping-right');
     el.style.transition = '';
     el.style.transform = '';
     wrapper.style.transition = '';
@@ -2295,9 +2314,6 @@ function _attachQueueSwipeDelete(wrapper, el, index, item, currentIndex) {
     gesture = 'pending';
     holdReady = false;
     clearTimeout(holdTimer);
-    // No armed tint here: at 50ms every tap would flash red. The row stays
-    // its normal opaque color while sliding (Google-Music style) so only the
-    // revealed strip under it shows red.
     holdTimer = setTimeout(() => {
       if (gesture === 'scroll') return;
       holdReady = true;
@@ -2323,16 +2339,14 @@ function _attachQueueSwipeDelete(wrapper, el, index, item, currentIndex) {
 
     if (gesture !== 'swipe' || !holdReady) return;
     e.preventDefault();
-    if (dx < 0) {
-      currentX = 0;
-      el.style.transform = '';
-      wrapper.classList.remove('swiping');
-      return;
-    }
     currentX = dx;
-    // Reveal the red underlay only while actually pulling right — it must
-    // never show through on a mere hold/tap.
-    wrapper.classList.add('swiping');
+    if (currentX > 0) {
+      wrapper.classList.add('swiping-right');
+      wrapper.classList.remove('swiping-left');
+    } else {
+      wrapper.classList.add('swiping-left');
+      wrapper.classList.remove('swiping-right');
+    }
     el.style.transform = 'translateX(' + currentX + 'px)';
   }, { passive: false });
 
@@ -2343,42 +2357,38 @@ function _attachQueueSwipeDelete(wrapper, el, index, item, currentIndex) {
       return;
     }
     el._swipeSuppressClick = true;
-    // Resolve the row's CURRENT index at commit time \u2014 the render-time index
-    // goes stale when the list re-renders mid-gesture (touch events keep
-    // firing on the detached row), and deleting by it removes whatever song
-    // now occupies that slot. Compare against the live playing index too,
-    // for the same reason.
     const liveIdx = _liveQueueIndexOf(item, index);
-    const committed = currentX > SWIPE_THRESHOLD && !wrapper._removing;
-    if (committed && liveIdx !== -1 && liveIdx !== _lastQueueIndex) {
+    
+    // Left swipe = delete
+    const committedDelete = currentX < -SWIPE_THRESHOLD && !wrapper._removing;
+    // Right swipe = like
+    const committedLike = currentX > SWIPE_THRESHOLD && !wrapper._removing;
+
+    if (committedDelete && liveIdx !== -1 && liveIdx !== _lastQueueIndex) {
       wrapper._removing = true;
-      // Committed delete, Google-Music style: keep sliding out from where the
-      // finger left off (never backwards), then collapse the emptied row's
-      // height so the list closes up smoothly instead of jumping.
       el.style.transition = 'transform .15s ease-out';
-      el.style.transform = 'translateX(105%)';
+      el.style.transform = 'translateX(-105%)';
       wrapper.style.height = wrapper.offsetHeight + 'px';
-      void wrapper.offsetHeight; // commit the explicit height before transitioning
+      void wrapper.offsetHeight; 
       wrapper.style.transition = 'height .18s ease .12s, opacity .18s ease .12s';
       wrapper.style.height = '0px';
       wrapper.style.opacity = '0';
-      // Fire after the collapse transition (120ms delay + 180ms) has finished
-      // so the re-render doesn't cut the animation short.
       setTimeout(() => removeFromQueue(liveIdx, item.title, item.video_id), 320);
     } else {
-      if (committed) {
+      if (committedDelete) {
         if (liveIdx === -1) {
-          // Row no longer exists in the queue (removed elsewhere): resync.
           _lastQueueJson = '';
           setTimeout(pollNowPlaying, 300);
         } else {
-          toast('Can\u2019t remove the playing track', 'error');
+          toast('Can’t remove the playing track', 'error');
         }
+      } else if (committedLike) {
+        if (typeof toggleLike === 'function') toggleLike(item);
       }
+      
       el.style.transition = 'transform .25s cubic-bezier(.22,1,.36,1)';
       el.style.transform = '';
-      // Keep the underlay visible while the row springs back, then hide it.
-      setTimeout(() => wrapper.classList.remove('swiping'), 260);
+      setTimeout(() => wrapper.classList.remove('swiping-left', 'swiping-right'), 260);
     }
     gesture = 'idle';
     holdReady = false;
@@ -3191,6 +3201,21 @@ function updateUrlBar() {
     });
     const active = modalBody.querySelector('.active');
     if (active) setTimeout(() => active.scrollIntoView({ block: 'nearest', behavior: 'smooth' }), 100);
+  }
+})();
+
+/* ---- Like Button ---- */
+(function () {
+  const likeBtn = document.getElementById('np-like-btn');
+  if (likeBtn) {
+    likeBtn.addEventListener('click', () => {
+      if (!_currentVideoId) return;
+      const title = document.getElementById('np-title').textContent || '';
+      const artist = document.getElementById('np-artist').textContent || '';
+      // We don't have the thumbnail here easily, but the backend doesn't strictly need it for liked songs
+      const item = { video_id: _currentVideoId, title, artist };
+      if (typeof toggleLike === 'function') toggleLike(item, likeBtn);
+    });
   }
 })();
 

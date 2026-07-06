@@ -128,118 +128,111 @@ def _consume_armed_play(serial=None):
 # flat file with a process-wide lock is enough. Entries are recorded when the
 # skill's 'started' webhook confirms real playback (not when a play is merely
 # requested), newest first, deduped by video_id.
-HISTORY_FILE = os.environ.get("HISTORY_FILE", "/tmp/ytm_listen_history.json")
-HISTORY_MAX = 100
-_history_lock = threading.Lock()
+# ---- Database (SQLite) ----
+import sqlite3
 
+DB_FILE = os.environ.get("DB_FILE", os.path.join(os.path.dirname(os.path.abspath(__file__)), "data.db"))
+HISTORY_MAX = 100
+
+_history_lock = threading.Lock() # Dummy lock to avoid breaking other routes
+_playlists_lock = threading.Lock() # Dummy lock to avoid breaking other routes
+
+def get_db():
+    conn = sqlite3.connect(DB_FILE, timeout=10.0)
+    conn.row_factory = sqlite3.Row
+    conn.execute("PRAGMA foreign_keys = ON;")
+    return conn
+
+def init_db():
+    with get_db() as conn:
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS history (
+                video_id TEXT PRIMARY KEY,
+                title TEXT,
+                artist TEXT,
+                thumbnail_url TEXT,
+                played_at REAL
+            )
+        ''')
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS playlists (
+                id TEXT PRIMARY KEY,
+                name TEXT,
+                source_url TEXT,
+                updated_at REAL
+            )
+        ''')
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS playlist_tracks (
+                uuid TEXT PRIMARY KEY,
+                playlist_id TEXT,
+                video_id TEXT,
+                title TEXT,
+                artist TEXT,
+                thumbnail_url TEXT,
+                duration_ms INTEGER,
+                added_at REAL,
+                FOREIGN KEY(playlist_id) REFERENCES playlists(id) ON DELETE CASCADE
+            )
+        ''')
+        
+        # Automatic Migration from JSON
+        history_file = os.environ.get("HISTORY_FILE", os.path.join(os.path.dirname(os.path.abspath(__file__)), "history.json"))
+        playlists_file = os.environ.get("PLAYLISTS_FILE", os.path.join(os.path.dirname(os.path.abspath(__file__)), "playlists.json"))
+        
+        if os.path.exists(history_file):
+            try:
+                import json
+                with open(history_file, 'r', encoding='utf-8') as f:
+                    h_data = json.load(f)
+                if isinstance(h_data, list):
+                    for e in reversed(h_data):
+                        if isinstance(e, dict) and e.get('video_id'):
+                            conn.execute('''
+                                INSERT OR REPLACE INTO history (video_id, title, artist, thumbnail_url, played_at)
+                                VALUES (?, ?, ?, ?, ?)
+                            ''', (e.get('video_id'), e.get('title', ''), e.get('artist', ''), e.get('thumbnail_url', ''), e.get('played_at', time.time())))
+                os.rename(history_file, history_file + ".backup")
+                print("Migrated history.json to SQLite")
+            except Exception as e:
+                print("Failed to migrate history:", e)
+                
+        if os.path.exists(playlists_file):
+            try:
+                import json, uuid
+                with open(playlists_file, 'r', encoding='utf-8') as f:
+                    p_data = json.load(f)
+                if isinstance(p_data, dict):
+                    playlists = p_data.get('playlists', {})
+                    for pl_id, pl in playlists.items():
+                        conn.execute('''
+                            INSERT OR IGNORE INTO playlists (id, name, source_url, updated_at)
+                            VALUES (?, ?, ?, ?)
+                        ''', (pl.get('id', pl_id), pl.get('name', ''), pl.get('source_url'), pl.get('updated_at', time.time())))
+                        for t in pl.get('tracks', []):
+                            conn.execute('''
+                                INSERT OR IGNORE INTO playlist_tracks (uuid, playlist_id, video_id, title, artist, thumbnail_url, duration_ms, added_at)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                            ''', (t.get('uuid') or uuid.uuid4().hex, pl.get('id', pl_id), t.get('video_id'), t.get('title', ''), t.get('artist', ''), t.get('thumbnail', ''), t.get('duration_ms', 0), t.get('added_at', time.time())))
+                    
+                    liked_songs = p_data.get('liked_songs', [])
+                    if liked_songs or 'liked' in playlists:
+                        conn.execute("INSERT OR IGNORE INTO playlists (id, name, updated_at) VALUES ('liked', 'Liked Songs', ?)", (time.time(),))
+                        
+                os.rename(playlists_file, playlists_file + ".backup")
+                print("Migrated playlists.json to SQLite")
+            except Exception as e:
+                print("Failed to migrate playlists:", e)
+
+# Initialize on import
+init_db()
 
 def _load_history():
-    try:
-        with open(HISTORY_FILE, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError, OSError):
-        return []
-    if not isinstance(data, list):
-        return []
-    # Guards against a hand-edited or partially-corrupted file (e.g. a stray
-    # null or string entry) crashing every caller that does e.get(...).
-    return [e for e in data if isinstance(e, dict) and e.get('video_id')]
+    with get_db() as conn:
+        rows = conn.execute('SELECT * FROM history ORDER BY played_at DESC LIMIT ?', (HISTORY_MAX,)).fetchall()
+        return [dict(r) for r in rows]
 
 
-def _save_history(history):
-    # Write-then-replace so a crash mid-save can't leave a half-written file.
-    tmp = f"{HISTORY_FILE}.tmp"
-    try:
-        with open(tmp, 'w', encoding='utf-8') as f:
-            json.dump(history, f)
-        os.replace(tmp, HISTORY_FILE)
-    except OSError:
-        try:
-            if os.path.exists(tmp):
-                os.remove(tmp)
-        except OSError:
-            pass
-
-PLAYLISTS_FILE = os.environ.get("PLAYLISTS_FILE", "/tmp/ytm_playlists.json")
-_playlists_lock = threading.Lock()
-
-def _load_playlists():
-    try:
-        with open(PLAYLISTS_FILE, 'r', encoding='utf-8') as f:
-            data = json.load(f)
-    except (FileNotFoundError, json.JSONDecodeError, OSError):
-        data = {}
-    if not isinstance(data, dict):
-        data = {}
-    if "liked_songs" not in data:
-        data["liked_songs"] = []
-    if "playlists" not in data:
-        data["playlists"] = {}
-    return data
-
-def _save_playlists(data):
-    tmp = f"{PLAYLISTS_FILE}.tmp"
-    try:
-        with open(tmp, 'w', encoding='utf-8') as f:
-            json.dump(data, f)
-        os.replace(tmp, PLAYLISTS_FILE)
-    except OSError:
-        try:
-            if os.path.exists(tmp):
-                os.remove(tmp)
-        except OSError:
-            pass
-
-
-# Set right before /alexa/seek/ or a resume-from-pause (/alexa/command/ with
-# action=play on an already-loaded track) re-dispatches playback on the *same*
-# track at an arbitrary offset. The started webhook that follows can land at
-# any offset (including near-zero — dragging the scrubber back to 0:02, or
-# resuming a track that was paused seconds in), which would otherwise look
-# identical to "track finished and restarted" and wrongly count as a fresh
-# listen. A short suppression window lets the webhook tell the two apart
-# without needing a seek/resume-specific field on the webhook body (Lambda's
-# PlaybackStarted event carries no such distinction).
-_last_reposition_at = 0.0
-_REPOSITION_SUPPRESS_WINDOW = 8.0  # seconds; covers the spoken-command round-trip
-
-
-def _record_listen(video_id, title, artist, thumbnail_url):
-    if not video_id:
-        return
-    with _history_lock:
-        history = _load_history()
-        history = [e for e in history if e.get('video_id') != video_id]
-        history.insert(0, {
-            'video_id': video_id,
-            'title': title or '',
-            'artist': artist or '',
-            'thumbnail_url': thumbnail_url or '',
-            'played_at': time.time(),
-        })
-        _save_history(history[:HISTORY_MAX])
-
-
-def _backfill_history_metadata(video_id, title, artist, thumbnail_url):
-    """Fill in title/artist/thumbnail on an existing history entry.
-
-    Tracks that aren't in the visible queue get recorded at 'started' time with
-    blank metadata (the real metadata arrives later via _lookup_and_update_np);
-    this patches the entry in place without bumping played_at."""
-    if not video_id or not title:
-        return
-    with _history_lock:
-        history = _load_history()
-        changed = False
-        for e in history:
-            if e.get('video_id') == video_id and not e.get('title'):
-                e['title'] = title
-                e['artist'] = artist or ''
-                if thumbnail_url:
-                    e['thumbnail_url'] = thumbnail_url
-                changed = True
-        if changed:
-            _save_history(history)
 
 
 # Endpoints that never need auth (public policy pages + the login flow itself,
@@ -3252,8 +3245,7 @@ def alexa_clear():
 
 @app.route("/api/playlists/", methods=["GET"])
 def api_get_playlists():
-    with _playlists_lock:
-        return jsonify(_load_playlists())
+    return jsonify(_load_playlists())
 
 @app.route("/api/playlists/", methods=["POST"])
 def api_create_playlist():
@@ -3263,28 +3255,33 @@ def api_create_playlist():
         return jsonify({'error': 'Name required'}), 400
     
     pl_id = f"pl_{uuid.uuid4().hex}"
+    source_url = body.get("source_url")
+    now = time.time()
+    
     new_pl = {
         "id": pl_id,
         "name": name,
-        "source_url": body.get("source_url"),
-        "updated_at": time.time(),
-        "tracks": body.get("tracks") or []
+        "source_url": source_url,
+        "updated_at": now,
+        "tracks": []
     }
-    with _playlists_lock:
-        data = _load_playlists()
-        data["playlists"][pl_id] = new_pl
-        _save_playlists(data)
+    
+    with get_db() as conn:
+        conn.execute('''
+            INSERT INTO playlists (id, name, source_url, updated_at)
+            VALUES (?, ?, ?, ?)
+        ''', (pl_id, name, source_url, now))
+        conn.commit()
+        
     return jsonify(new_pl)
 
 @app.route("/api/playlists/<pl_id>", methods=["DELETE"])
 def api_delete_playlist(pl_id):
     if pl_id == "liked":
         return jsonify({'error': 'Cannot delete liked songs'}), 400
-    with _playlists_lock:
-        data = _load_playlists()
-        if pl_id in data["playlists"]:
-            del data["playlists"][pl_id]
-            _save_playlists(data)
+    with get_db() as conn:
+        conn.execute('DELETE FROM playlists WHERE id = ?', (pl_id,))
+        conn.commit()
     return jsonify({'ok': True})
 
 @app.route("/api/playlists/<pl_id>/tracks/", methods=["POST"])
@@ -3294,69 +3291,69 @@ def api_add_track(pl_id):
     if not video_id:
         return jsonify({'error': 'video_id required'}), 400
     
+    track_uuid = uuid.uuid4().hex
+    title = body.get("title", "")
+    artist = body.get("artist", "")
+    thumbnail = body.get("thumbnail", "")
+    duration_ms = body.get("duration_ms", 0)
+    now = time.time()
+    
     track = {
-        "uuid": uuid.uuid4().hex,
+        "uuid": track_uuid,
         "video_id": video_id,
-        "title": body.get("title", ""),
-        "artist": body.get("artist", ""),
-        "thumbnail": body.get("thumbnail", ""),
-        "duration_ms": body.get("duration_ms", 0),
-        "added_at": time.time()
+        "title": title,
+        "artist": artist,
+        "thumbnail": thumbnail,
+        "duration_ms": duration_ms,
+        "added_at": now
     }
-    with _playlists_lock:
-        data = _load_playlists()
+    
+    with get_db() as conn:
         if pl_id == "liked":
-            if video_id not in data["liked_songs"]:
-                data["liked_songs"].append(video_id)
-            if "liked" not in data["playlists"]:
-                data["playlists"]["liked"] = {"id": "liked", "name": "Liked Songs", "source_url": None, "updated_at": time.time(), "tracks": []}
-            
-            # Avoid duplicate in tracks list for liked songs
-            if not any(t.get("video_id") == video_id for t in data["playlists"]["liked"]["tracks"]):
-                data["playlists"]["liked"]["tracks"].append(track)
-            data["playlists"]["liked"]["updated_at"] = time.time()
-            _save_playlists(data)
+            conn.execute("INSERT OR IGNORE INTO playlists (id, name, updated_at) VALUES ('liked', 'Liked Songs', ?)", (now,))
+            existing = conn.execute("SELECT uuid FROM playlist_tracks WHERE playlist_id = 'liked' AND video_id = ?", (video_id,)).fetchone()
+            if not existing:
+                conn.execute('''
+                    INSERT INTO playlist_tracks (uuid, playlist_id, video_id, title, artist, thumbnail_url, duration_ms, added_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (track_uuid, pl_id, video_id, title, artist, thumbnail, duration_ms, now))
+                conn.execute('UPDATE playlists SET updated_at = ? WHERE id = ?', (now, pl_id))
+            conn.commit()
+            data = _load_playlists()
             return jsonify({'ok': True, 'track': track, 'liked_songs': data["liked_songs"]})
-            
-        if pl_id in data["playlists"]:
-            data["playlists"][pl_id]["tracks"].append(track)
-            data["playlists"][pl_id]["updated_at"] = time.time()
-            _save_playlists(data)
-            return jsonify({'ok': True, 'track': track})
-    return jsonify({'error': 'Playlist not found'}), 404
+        
+        conn.execute('''
+            INSERT INTO playlist_tracks (uuid, playlist_id, video_id, title, artist, thumbnail_url, duration_ms, added_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ''', (track_uuid, pl_id, video_id, title, artist, thumbnail, duration_ms, now))
+        conn.execute('UPDATE playlists SET updated_at = ? WHERE id = ?', (now, pl_id))
+        conn.commit()
+    
+    return jsonify({'ok': True, 'track': track})
 
 @app.route("/api/playlists/<pl_id>/tracks/<track_uuid>", methods=["DELETE"])
 def api_remove_track(pl_id, track_uuid):
-    with _playlists_lock:
-        data = _load_playlists()
-        
+    with get_db() as conn:
         if pl_id == "liked":
-            # For liked songs, track_uuid is the video_id
-            video_id = track_uuid 
-            if video_id in data["liked_songs"]:
-                data["liked_songs"].remove(video_id)
-            if "liked" in data["playlists"]:
-                data["playlists"]["liked"]["tracks"] = [t for t in data["playlists"]["liked"]["tracks"] if t.get("video_id") != video_id]
-                data["playlists"]["liked"]["updated_at"] = time.time()
-            _save_playlists(data)
+            conn.execute("DELETE FROM playlist_tracks WHERE playlist_id = 'liked' AND video_id = ?", (track_uuid,))
+            conn.execute('UPDATE playlists SET updated_at = ? WHERE id = ?', (time.time(), pl_id))
+            conn.commit()
+            data = _load_playlists()
             return jsonify({'ok': True, 'liked_songs': data["liked_songs"]})
             
-        if pl_id in data["playlists"]:
-            pl = data["playlists"][pl_id]
-            pl["tracks"] = [t for t in pl["tracks"] if t.get("uuid") != track_uuid]
-            pl["updated_at"] = time.time()
-            _save_playlists(data)
-            return jsonify({'ok': True})
-    return jsonify({'error': 'Playlist not found'}), 404
+        conn.execute("DELETE FROM playlist_tracks WHERE playlist_id = ? AND uuid = ?", (pl_id, track_uuid))
+        conn.execute('UPDATE playlists SET updated_at = ? WHERE id = ?', (time.time(), pl_id))
+        conn.commit()
+    return jsonify({'ok': True})
 
 @app.route("/api/playlists/<pl_id>/sync/", methods=["POST"])
 def api_sync_playlist(pl_id):
     def sync_bg():
-        with _playlists_lock:
-            data = _load_playlists()
-            if pl_id not in data["playlists"]: return
-            pl = data["playlists"][pl_id]
-            source_url = pl.get("source_url")
+        with get_db() as conn:
+            pl_row = conn.execute("SELECT * FROM playlists WHERE id = ?", (pl_id,)).fetchone()
+            if not pl_row: return
+            source_url = pl_row['source_url']
+            
         if not source_url: return
         
         list_id = source_url
@@ -3365,12 +3362,12 @@ def api_sync_playlist(pl_id):
             list_id = q.get("list", [None])[0] or source_url
             
         try:
-            # Re-use existing Supporting function
             new_tracks_raw = asyncio.run(Supporting.get_playlist_tracks(list_id)) or []
         except Exception as e:
             print(f"[sync] Failed to sync {list_id}: {e}")
             return
             
+        now = time.time()
         new_tracks = []
         for track in new_tracks_raw:
             if not track.get("video_id"): continue
@@ -3382,25 +3379,27 @@ def api_sync_playlist(pl_id):
                 "artist": track.get("artist", ""),
                 "thumbnail": track.get("thumbnail")["url"] if isinstance(track.get("thumbnail"), dict) else (track.get("thumbnail") or ""),
                 "duration_ms": track.get("duration_ms", 0),
-                "added_at": time.time()
+                "added_at": now
             })
             
-        with _playlists_lock:
-            data = _load_playlists()
-            if pl_id in data["playlists"]:
-                existing_vids = {t.get("video_id") for t in data["playlists"][pl_id]["tracks"]}
-                added = 0
-                for t in new_tracks:
-                    if t["video_id"] not in existing_vids:
-                        data["playlists"][pl_id]["tracks"].append(t)
-                        added += 1
-                if added > 0:
-                    data["playlists"][pl_id]["updated_at"] = time.time()
-                    _save_playlists(data)
+        with get_db() as conn:
+            existing_rows = conn.execute("SELECT video_id FROM playlist_tracks WHERE playlist_id = ?", (pl_id,)).fetchall()
+            existing_vids = {r['video_id'] for r in existing_rows}
+            
+            added = 0
+            for t in new_tracks:
+                if t["video_id"] not in existing_vids:
+                    conn.execute('''
+                        INSERT INTO playlist_tracks (uuid, playlist_id, video_id, title, artist, thumbnail_url, duration_ms, added_at)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    ''', (t['uuid'], pl_id, t['video_id'], t['title'], t['artist'], t['thumbnail'], t['duration_ms'], t['added_at']))
+                    added += 1
+            if added > 0:
+                conn.execute('UPDATE playlists SET updated_at = ? WHERE id = ?', (now, pl_id))
+            conn.commit()
 
     threading.Thread(target=sync_bg, daemon=True).start()
     return jsonify({'ok': True, 'status': 'syncing'})
-
 
 
 @app.route("/alexa/suggest/", methods=["GET"])

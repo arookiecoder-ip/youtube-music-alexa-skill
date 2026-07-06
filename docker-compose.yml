@@ -5,8 +5,11 @@ services:
     restart: unless-stopped
     env_file: .env
     environment:
-      # Listen history must outlive the container; /tmp is ephemeral.
+      # Listen history and playlists must outlive the container; /tmp is ephemeral.
+      - DB_FILE=/data/data.db
+      # Legacy paths required for automatic JSON migration
       - HISTORY_FILE=/data/ytm_listen_history.json
+      - PLAYLISTS_FILE=/data/ytm_playlists.json
     volumes:
       - ~/cookies.txt:/app/cookies.txt:ro
       - ytmusic_cache:/tmp/ytm_audio_cache
