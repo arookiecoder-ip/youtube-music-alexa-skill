@@ -1749,6 +1749,7 @@
     cursor: pointer;
     background: none;
     border: none;
+    min-width: 0;
     /* Tile is always visible — text shows immediately while art loads. */
     opacity: 1;
     transform: none;
