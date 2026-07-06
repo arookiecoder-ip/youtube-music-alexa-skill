@@ -34,13 +34,13 @@ function syncUiState() {
   document.body.classList.toggle('results-open', _resultsOpen);
   mini.classList.toggle('visible', _resultsOpen && _hasTrack);
   mainEl.classList.toggle('idle', _loggedIn && !_hasTrack && !_resultsOpen);
-  // Recommendations are a blank-state feature: once a track loads (even
-  // optimistically) there's a now-playing card and queue to look at instead.
+  // Recommendations are visible by default, so the user can continue browsing
+  // while a track is playing, preventing a massive empty screen void.
   const recsSection = document.getElementById('recs-section');
   if (recsSection) {
-    const shouldShow = _loggedIn && !_hasTrack && !_resultsOpen;
-    if (shouldShow && !_recsLoaded) loadRecommendations();
-    else recsSection.hidden = !shouldShow || !_recsLoaded;
+    const shouldShowRecs = _loggedIn && !_resultsOpen;
+    if (shouldShowRecs && !_recsLoaded) loadRecommendations();
+    else recsSection.hidden = !shouldShowRecs || !_recsLoaded;
   }
   if (_hasTrack) {
     clearTimeout(player._hideTimer);
