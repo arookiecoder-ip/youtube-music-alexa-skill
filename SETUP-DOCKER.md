@@ -205,7 +205,7 @@ sweep old files:
 
 ```bash
 (crontab -l 2>/dev/null | grep -v 'ytm_audio_cache'; \
- echo "*/30 * * * * docker exec ytmusic find /tmp/ytm_audio_cache -type f -mmin +120 -delete") | crontab -
+ echo "*/30 * * * * cd ~/youtube-music-alexa-skill && docker compose exec -T ytmusic find /tmp/ytm_audio_cache -type f -mmin +120 -delete") | crontab -
 ```
 
 ---
