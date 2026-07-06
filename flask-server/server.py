@@ -200,6 +200,16 @@ def init_db():
             conn.execute("ALTER TABLE playlists ADD COLUMN source_url TEXT")
         except sqlite3.OperationalError:
             pass # Column already exists
+            
+        try:
+            conn.execute("ALTER TABLE playlist_tracks ADD COLUMN duration_ms INTEGER")
+        except sqlite3.OperationalError:
+            pass
+            
+        try:
+            conn.execute("ALTER TABLE playlist_tracks ADD COLUMN added_at REAL")
+        except sqlite3.OperationalError:
+            pass
         
         # (Data migration script removed per user request)
 
