@@ -1751,9 +1751,14 @@
     font-size: .7rem;
     font-weight: 600;
     color: var(--text);
-    white-space: nowrap;
+    line-height: 1.3;
+    /* Wrap to at most 2 lines, then ellipsis, so longer song names stay
+       readable instead of being cut after a few words. */
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    -webkit-box-orient: vertical;
     overflow: hidden;
-    text-overflow: ellipsis;
   }
   .recs-tile-artist {
     font-size: .62rem;
@@ -1761,7 +1766,7 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    margin-top: -5px;
+    margin-top: 1px;
   }
 
   /* ---- Recommendations skeleton loader (same grid shape as real tiles) ---- */
@@ -1812,8 +1817,11 @@
   /* ---- Idle (nothing playing): search bar sits near the top (not
      vertical-centered) on desktop, leaving room for the full-width
      recommendations grid below without pushing it off-screen. ---- */
+  /* No flex:1 here — letting .layout grow to fill 100dvh is what left a big
+     empty gap between a short grid and the footer. It now takes only the
+     height its content needs, so the footer sits right after the grid. */
   main.idle .layout {
-    flex: 1;
+    flex: 0 0 auto;
     display: flex;
     flex-direction: column;
     justify-content: flex-start;
@@ -1838,15 +1846,16 @@
     }
   }
   /* Recommendations break out of main's centered content column to span the
-     full viewport width (both breakpoints). Viewport-relative positioning
-     (left:50% + translateX(-50%)) is independent of the parent's width, so it
-     works no matter what constrains .left-col / main. */
+     full viewport width. main is horizontally centered in the viewport, so
+     margin-left/right: calc(50% - 50vw) lines the section's edges up with the
+     viewport edges. align-self:stretch stops the flex column's align-items:
+     center from re-centering it at its natural (narrow) width. The grid's own
+     side padding keeps tiles clear of the screen edges. */
   main.idle .recs-section {
-    position: relative;
-    left: 50%;
-    transform: translateX(-50%);
-    width: 100vw;
-    max-width: 100vw;
+    align-self: stretch;
+    width: auto;
+    margin-left: calc(50% - 50vw);
+    margin-right: calc(50% - 50vw);
     margin-top: 24px;
     box-sizing: border-box;
   }

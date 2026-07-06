@@ -2289,23 +2289,23 @@ async def _build_recommendations():
         random.shuffle(pool)
         return pool[:40]
 
-    # Seed radios from a couple of *randomly chosen* history tracks (biased
-    # toward recent ones) rather than always positions 0 and 5. Different seeds
-    # each build => a genuinely different mix on refresh, instead of the same
-    # deterministic YouTube radio every time.
-    recent_pool = history[:10]
-    seeds = []
-    seeds.append(random.choice(history[:3])['video_id'])  # something recent
-    if len(recent_pool) > 1:
-        others = [e['video_id'] for e in recent_pool if e['video_id'] != seeds[0]]
-        if others:
-            seeds.append(random.choice(others))            # a second, varied seed
+    # Seed radios from *several* randomly chosen history tracks so the mix is
+    # firmly grounded in what the user actually listens to (e.g. Indian music),
+    # and yields enough tracks to fill the grid without falling through to the
+    # generic fallback. More seeds also means a different mix each refresh.
+    pool = [e['video_id'] for e in history if e.get('video_id')]
+    random.shuffle(pool)
+    # Bias toward recent history (first ~8), but pull up to 5 seeds total.
+    recent = [e['video_id'] for e in history[:8] if e.get('video_id')]
+    random.shuffle(recent)
+    seeds = list(dict.fromkeys(recent[:3] + pool))[:5]
 
     radios = await asyncio.gather(*[Supporting.get_radio_queue(s) for s in seeds])
 
     mixed, out_ids = [], set()
-    # Interleave the radios so the list reads as one mixed feed. zip_longest so
-    # a shorter/failed radio on one side doesn't discard the other's results.
+    # Interleave the radios so the list reads as one mixed feed rather than
+    # seed-1's whole radio then seed-2's. zip_longest so a shorter/failed radio
+    # on one side doesn't discard the others' results.
     for group in itertools.zip_longest(*[r or [] for r in radios]):
         for item in group:
             if not item:
@@ -2315,13 +2315,18 @@ async def _build_recommendations():
                 out_ids.add(vid)
                 mixed.append(item)
 
-    # Prefer genuinely new tracks (not already in history), then fill.
+    # Prefer genuinely new tracks (not already in history), then fill with
+    # familiar ones from the same (user-grounded) radios.
     fresh = [i for i in mixed if i['video_id'] not in seen_ids]
     familiar = [i for i in mixed if i['video_id'] in seen_ids]
-    # Shuffle the fresh pool so even identical seeds yield a different order.
     random.shuffle(fresh)
     result = (fresh + familiar)[:40]
-    if len(result) < 20:
+
+    # Only reach for the generic Western fallback when the user's own radios
+    # produced almost nothing (e.g. every seed's radio failed) — never just to
+    # top up an already-decent list, since that pollutes an Indian feed with
+    # unrelated tracks.
+    if len(result) < 6:
         topoff = await Supporting.get_charts_queue() or await _get_fallback_queue(out_ids | seen_ids)
         for item in topoff:
             vid = item.get('video_id')
