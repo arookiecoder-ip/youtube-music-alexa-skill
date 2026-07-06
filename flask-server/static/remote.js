@@ -596,6 +596,57 @@ function selectedDeviceOnline() {
   return !opt || opt.dataset.online !== '0';
 }
 
+/* Removals the user has committed locally but the server may not have
+   processed yet. Any queue snapshot that still contains one of these songs
+   (an SSE push generated before the removal landed, or a poll response that
+   raced it) is filtered before rendering, so deleted rows can't flash back
+   and renumber the list mid-delete. Entries carry a count (duplicate songs:
+   one delete hides one copy) and expire on their own so a failed request
+   can never hide a song forever. */
+const _pendingRemovals = new Map();   // video_id -> { count, expires }
+const PENDING_REMOVAL_TTL = 8000;
+
+function _markPendingRemoval(videoId) {
+  if (!videoId) return;
+  const e = _pendingRemovals.get(videoId);
+  _pendingRemovals.set(videoId, {
+    count: (e ? e.count : 0) + 1,
+    expires: Date.now() + PENDING_REMOVAL_TTL,
+  });
+}
+
+function _unmarkPendingRemoval(videoId) {
+  if (!videoId) return;
+  const e = _pendingRemovals.get(videoId);
+  if (!e) return;
+  if (e.count > 1) { e.count--; }
+  else _pendingRemovals.delete(videoId);
+}
+
+function _filterPendingRemovals(queue, queueIndex) {
+  if (!_pendingRemovals.size) return { queue, queueIndex };
+  const now = Date.now();
+  for (const [id, e] of _pendingRemovals) {
+    if (e.expires < now) _pendingRemovals.delete(id);
+  }
+  if (!_pendingRemovals.size) return { queue, queueIndex };
+  const consumed = new Map();
+  const out = [];
+  let idx = queueIndex;
+  queue.forEach((item, i) => {
+    const e = item && _pendingRemovals.get(item.video_id);
+    const used = consumed.get(item && item.video_id) || 0;
+    // Never hide the playing row — the server refuses to remove it anyway.
+    if (e && used < e.count && i !== queueIndex) {
+      consumed.set(item.video_id, used + 1);
+      if (i < queueIndex) idx--;
+      return;
+    }
+    out.push(item);
+  });
+  return { queue: out, queueIndex: idx };
+}
+
 function handleNpUpdate(np) {
   if (np.playing && !selectedDeviceOnline()) {
     // Offline device: show the last known track but never as live playback —
@@ -634,11 +685,14 @@ function handleNpUpdate(np) {
   progress.update(np);
   // Update queue. Re-render only when the list changes; if just the active
   // index changes, move the highlight without rebuilding the whole panel.
-  _lastQueueIndex = np.queue_index ?? -1;
-  const qJson = JSON.stringify(np.queue || []);
+  // Snapshots that raced a local delete still contain the removed song —
+  // filter those out so the row doesn't flash back (see _pendingRemovals).
+  const filtered = _filterPendingRemovals(np.queue || [], np.queue_index ?? -1);
+  _lastQueueIndex = filtered.queueIndex;
+  const qJson = JSON.stringify(filtered.queue);
   if (qJson !== _lastQueueJson) {
     _lastQueueJson = qJson;
-    showQueue(np.queue || [], _lastQueueIndex);
+    showQueue(filtered.queue, _lastQueueIndex);
     // The mobile queue modal renders its own copy of the list; without this
     // it keeps showing the stale order after a reorder/remove until reopened.
     refreshQueueModalIfOpen();
@@ -1115,6 +1169,9 @@ async function addToQueue(item, position) {
     } else {
       toast('Added \u201c' + item.title + '\u201d to queue', 'ok');
     }
+    // Re-adding a song right after deleting it must show up again \u2014 drop any
+    // pending-removal entry that would otherwise filter it out.
+    _pendingRemovals.delete(item.video_id);
     // Force queue refresh
     _lastQueueJson = '';
     setTimeout(pollNowPlaying, 500);
@@ -2050,8 +2107,11 @@ async function removeFromQueue(index, title, videoId) {
     }
     // Optimistically drop the row locally so it vanishes right away instead
     // of reappearing until the server confirms. On error the poll below
-    // restores the true queue.
+    // restores the true queue. Mark the id pending so a stale SSE snapshot
+    // (generated before the server processed this removal) can't resurrect
+    // the row and shift the numbering of a follow-up delete.
     if (index >= 0 && index < queue.length) {
+      _markPendingRemoval(videoId || (queue[index] && queue[index].video_id));
       queue.splice(index, 1);
       let currentIdx = _lastQueueIndex;
       if (currentIdx > index) currentIdx--;
@@ -2066,11 +2126,16 @@ async function removeFromQueue(index, title, videoId) {
     // on and the index no longer points at this song.
     await api('/alexa/queue_remove/', videoId ? { index, video_id: videoId } : { index });
     toast('Removed \u201c' + (title || 'track') + '\u201d from queue', 'ok');
-    _lastQueueJson = '';
+    // Keep the optimistic snapshot as-is: blanking _lastQueueJson here made
+    // a rapid follow-up delete resolve its index against an empty queue and
+    // silently no-op. The next SSE push / poll confirms the true state (with
+    // the pending filter suppressing any stale copy of this song).
     setTimeout(pollNowPlaying, 300);
   } catch (e) {
     toast(e.message, 'error');
-    // Revert the optimistic removal: force refresh from the server.
+    // Revert the optimistic removal: let the song show again and force a
+    // refresh from the server.
+    _unmarkPendingRemoval(videoId);
     _lastQueueJson = '';
     setTimeout(pollNowPlaying, 300);
   }

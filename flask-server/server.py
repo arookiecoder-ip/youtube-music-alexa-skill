@@ -361,6 +361,13 @@ _heartbeat_guard = threading.Lock()
 def _sse_heartbeat_loop():
     while True:
         time.sleep(_SSE_HEARTBEAT_INTERVAL)
+        # Recovery for lost PlaybackStarted webhooks: if the timer has run well
+        # past the track's known duration, the Echo has moved on to the next
+        # (buffered) track without us hearing about it — advance the card.
+        try:
+            _check_track_overrun()
+        except Exception:
+            traceback.print_exc()
         with _sse_lock:
             serials = {serial for serial in _sse_subscribers.values() if serial}
         with _np_lock:
@@ -1293,6 +1300,13 @@ def proxy_stream():
         current_video_id = _now_playing.get('video_id')
         current_confirmed = bool(_now_playing.get('playing') and _now_playing.get('playback_confirmed'))
     if video_id != current_video_id and current_confirmed:
+        # The Echo is buffering the NEXT track while the current one plays.
+        # Don't switch the card yet, but remember what it buffered: if the
+        # Lambda's PlaybackStarted webhook for it gets lost (fire-and-forget,
+        # short timeout), this is the only record of what actually plays next.
+        global _prefetched_next
+        with _np_lock:
+            _prefetched_next = {'video_id': video_id, 'at': time.time()}
         sys.stderr.write(f"[np] proxy prefetch ignored: current={current_video_id} requested={video_id}\n")
         sys.stderr.flush()
     elif video_id != current_video_id:
@@ -1452,6 +1466,86 @@ def _refresh_radio_queue(video_id):
     return False
 
 
+# What the Echo most recently buffered via /proxy/ while another track was
+# still playing (see proxy_stream). Guarded by _np_lock.
+_prefetched_next = None
+_PREFETCH_MAX_AGE = 15 * 60          # ignore prefetch records older than this
+_OVERRUN_GRACE_MS = 12000            # position past duration before assuming advance
+_FINISH_PROMOTE_DELAY = 5.0          # wait for the real 'started' webhook first
+
+
+def _promote_next_track(reason, position_ms=0):
+    """Fallback when the Lambda's PlaybackStarted webhook is lost: the Echo has
+    started the next (pre-buffered) track but the server never heard about it,
+    so the now-playing card would stay wedged on the finished song. Promote the
+    best-known next track: prefer what /proxy/ actually saw the Echo buffer,
+    else the next visible queue item."""
+    global _prefetched_next
+    with _np_lock:
+        queue = list(_now_playing.get('queue') or [])
+        idx = _now_playing.get('queue_index', -1)
+        cur_id = _now_playing.get('video_id')
+        pf = dict(_prefetched_next) if _prefetched_next else None
+    next_item = None
+    next_idx = -1
+    if pf and pf.get('video_id') and pf['video_id'] != cur_id \
+            and time.time() - pf.get('at', 0) < _PREFETCH_MAX_AGE:
+        vid = pf['video_id']
+        next_idx = next((i for i, it in enumerate(queue)
+                         if it.get('video_id') == vid), -1)
+        next_item = queue[next_idx] if next_idx >= 0 else {'video_id': vid}
+    elif 0 <= idx < len(queue) - 1:
+        next_idx = idx + 1
+        next_item = queue[next_idx]
+    if not next_item or next_item.get('video_id') == cur_id:
+        return False
+    vid = next_item['video_id']
+    sys.stderr.write(f"[np] promote next ({reason}): {vid} {next_item.get('title', '?')!r}\n")
+    sys.stderr.flush()
+    fields = dict(playing=True, video_id=vid, position_ms=max(0, int(position_ms)),
+                  playback_confirmed=True, queue_index=next_idx)
+    if next_item.get('title'):
+        fields.update(title=next_item['title'], artist=next_item.get('artist', ''),
+                      thumbnail=next_item.get('thumbnail', ''),
+                      duration_ms=next_item.get('duration_ms', 0))
+    _update_now_playing(**fields)
+    with _np_lock:
+        if _prefetched_next and _prefetched_next.get('video_id') == vid:
+            _prefetched_next = None
+    if not next_item.get('title'):
+        threading.Thread(target=_lookup_and_update_np, args=(vid,), daemon=True).start()
+    threading.Thread(target=_refresh_radio_queue, args=(vid,), daemon=True).start()
+    return True
+
+
+def _check_track_overrun():
+    """Heartbeat watchdog: playing+confirmed but the position ran well past the
+    known duration means both 'finished' and 'started' webhooks were lost."""
+    with _np_lock:
+        if not (_now_playing.get('playing') and _now_playing.get('playback_confirmed')):
+            return
+        duration = int(_now_playing.get('duration_ms') or 0)
+        started = _now_playing.get('started_at') or 0
+        if not duration or not started:
+            return
+        pos = int(_now_playing.get('position_ms', 0) or 0) \
+            + int((time.time() - started) * 1000)
+        overshoot = pos - duration
+    if overshoot > _OVERRUN_GRACE_MS:
+        _promote_next_track('overran duration', position_ms=overshoot)
+
+
+def _promote_after_finish(prev_video_id):
+    """'finished' arrived but no 'started' followed. Give the real webhook a
+    grace period; if state still points at the finished track, promote."""
+    time.sleep(_FINISH_PROMOTE_DELAY)
+    cur = _get_now_playing()
+    if cur.get('video_id') != prev_video_id or cur.get('playing'):
+        return  # a real webhook (or user action) already moved us on
+    _promote_next_track('finished, no started webhook',
+                        position_ms=int(_FINISH_PROMOTE_DELAY * 1000))
+
+
 def _queue_neighbor(action):
     cur = _get_now_playing()
     queue = cur.get('queue') or []
@@ -1471,8 +1565,61 @@ def _queue_neighbor(action):
     if target_idx < 0:
         return None, "You're already at the first recommendation."
     if target_idx >= len(queue):
-        return None, "No more recommendations are loaded yet."
+        # End of the visible queue: extend it with the radio continuation of
+        # the last track instead of dead-ending, mirroring what the skill does
+        # at PlaybackNearlyFinished.
+        extended = _extend_server_queue()
+        cur = _get_now_playing()
+        queue = cur.get('queue') or []
+        if not extended or target_idx >= len(queue):
+            return None, "No more recommendations are loaded yet."
     return (target_idx, queue[target_idx]), None
+
+
+def _extend_server_queue():
+    """Append the radio continuation of the queue's last track to the visible
+    queue (dedup against what's already there). Returns True iff it grew."""
+    try:
+        cur = _get_now_playing()
+        queue = cur.get('queue') or []
+        if not queue:
+            return False
+        last_id = queue[-1].get('video_id', '')
+        if not _valid_video_id(last_id):
+            return False
+        playlist = asyncio.run(Supporting.get_radio_queue(last_id))
+        if not playlist:
+            return False
+        have = {q.get('video_id') for q in queue}
+        new_items = []
+        for item in playlist:
+            vid = item.get('video_id', '')
+            if not vid or vid in have:
+                continue
+            have.add(vid)
+            t = item.get('thumbnail')
+            thumb = t.get('url', '') if isinstance(t, dict) else (t if isinstance(t, str) else '')
+            new_items.append({
+                'title': item.get('title', ''),
+                'artist': item.get('artist', ''),
+                'thumbnail': thumb,
+                'video_id': vid,
+                'duration_ms': item.get('duration_ms', 0),
+            })
+        if not new_items:
+            return False
+        with _np_lock:
+            live = list(_now_playing.get('queue') or [])
+            # Only append if the queue hasn't been replaced meanwhile.
+            if not live or live[-1].get('video_id') != last_id:
+                return False
+            _now_playing['queue'] = live + new_items
+            _now_playing['updated_at'] = time.time()
+        _notify_sse()
+        return True
+    except Exception:
+        traceback.print_exc()
+        return False
 
 
 def _confirm_stream_delivery(video_id):
@@ -1939,7 +2086,13 @@ def alexa_state_event():
             threading.Thread(target=_prewarm_queue_audio,
                              args=(queue, idx), daemon=True).start()
     elif event == 'finished':
+        prev_video_id = _now_playing.get('video_id')
         _update_now_playing(playing=False)
+        # The Echo starts the pre-buffered next track right away; if the
+        # matching 'started' webhook gets lost, promote it ourselves after a
+        # grace period so the card doesn't stay wedged on the finished song.
+        threading.Thread(target=_promote_after_finish,
+                         args=(prev_video_id,), daemon=True).start()
     return jsonify({'ok': True})
 
 

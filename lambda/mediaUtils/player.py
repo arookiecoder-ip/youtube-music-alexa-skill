@@ -145,11 +145,20 @@ def _notify_server(handler_input, event: str, **extra):
         payload = json.dumps({'event': event, **extra})
         url = f'{api_url}/alexa/state_event/?key={data.API_KEY}'
         logger.info(f'_notify_server: POST {event} to {api_url}/alexa/state_event/')
+        # 'started' is the web remote's only signal that the track changed on
+        # auto-advance — a dropped POST wedges its now-playing card. Give it a
+        # slightly longer timeout and one retry; other events stay cheap.
+        timeout = urllib3.Timeout(total=3.0 if event == 'started' else 2.0)
+        # allowed_methods=None: retry POST too (urllib3 excludes it by default);
+        # re-delivering the same state event is harmless.
+        retries = (urllib3.Retry(total=1, backoff_factor=0.3, allowed_methods=None)
+                   if event == 'started' else False)
         resp = http.request(
             'POST', url,
             body=payload,
             headers={'Content-Type': 'application/json'},
-            timeout=urllib3.Timeout(total=2.0),
+            timeout=timeout,
+            retries=retries,
         )
         logger.info(f'_notify_server: response {resp.status}')
     except Exception as e:
@@ -595,15 +604,53 @@ class Controller:
             if not playlist:
                 return False
             last = playlist[-1]
-            radio, error = Api.get_radio(handler_input, last.video_id)
-            if error or not radio:
-                logger.info(f'extend_radio_queue: no continuation ({error})')
-                return False
             have = {m.video_id for m in playlist if m.video_id}
-            new_tracks = [m for m in radio if m.video_id and m.video_id not in have]
-            # get_radio's first result is often the seed itself; skip it too.
-            new_tracks = [m for m in new_tracks if m.video_id != last.video_id]
+
+            # The playlist is usually itself a radio list, so the continuation
+            # seeded from its last track overlaps it heavily — after dedup
+            # nothing may be left, which used to end playback here. Try a few
+            # different seeds before giving up: the last track, then a couple
+            # of random earlier ones (each seeds a different radio thread).
+            seeds = [last]
+            if len(playlist) > 2:
+                seeds += random.sample(playlist[:-1], min(2, len(playlist) - 1))
+            new_tracks = []
+            first_radio = None
+            for seed in seeds:
+                if not seed.video_id:
+                    continue
+                radio, error = Api.get_radio(handler_input, seed.video_id)
+                if error or not radio:
+                    logger.info(f'extend_radio_queue: no continuation from {seed.video_id} ({error})')
+                    continue
+                if first_radio is None:
+                    first_radio = radio
+                candidates, seen = [], set()
+                for m in radio:
+                    if m.video_id and m.video_id not in have and m.video_id not in seen:
+                        candidates.append(m)
+                        seen.add(m.video_id)
+                if candidates:
+                    new_tracks = candidates
+                    break
+            if not new_tracks and first_radio:
+                # Every recommendation was already played. Rather than ending
+                # the session, allow repeats — but keep the most recent tracks
+                # out so the same songs don't come straight back to back.
+                recent = {m.video_id for m in playlist[-5:] if m.video_id}
+                seen = set()
+                for m in first_radio:
+                    if m.video_id and m.video_id not in recent and m.video_id not in seen:
+                        new_tracks.append(m)
+                        seen.add(m.video_id)
             if not new_tracks:
+                logger.info('extend_radio_queue: nothing new to append')
+                return False
+            # DynamoDB items are capped at 400KB; bound growth per extension
+            # and stop extending a runaway playlist.
+            new_tracks = new_tracks[:25]
+            if len(playlist) + len(new_tracks) > 400:
+                logger.warning('extend_radio_queue: playlist too large, not extending')
                 return False
 
             base = len(playlist)
