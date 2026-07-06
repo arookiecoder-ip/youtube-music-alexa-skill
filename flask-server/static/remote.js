@@ -1769,9 +1769,9 @@ function showControls(loggedIn) {
   for (const el of document.querySelectorAll('.needs-login')) el.hidden = !loggedIn;
   _loggedIn = !!loggedIn;
   if (!loggedIn) closeResults();
-  // showControls unhides every .needs-login section; the history section must
+  // showControls unhides every .needs-login section; the history trigger must
   // stay hidden until loadHistory() confirms there is something to show.
-  syncHistoryVisibility();
+  syncHistoryTriggerVisibility([]);
   if (loggedIn) loadHistory();
   else document.getElementById('recs-section').hidden = true;
   syncUiState();
@@ -2561,8 +2561,11 @@ async function playFromQueue(item) {
 }
 
 /* ---- Recently listened ---- */
-// Server-side history, recorded when the skill confirms a real playback start.
-// The section stays hidden until there is at least one entry.
+// Server-side history, recorded when the skill confirms a real playback
+// start. Shown as a popup (opened from a trigger button on desktop and
+// another inside the mobile sidebar), not an inline card — so the trigger row
+// only needs to know whether there's anything to show, and the actual list is
+// fetched fresh each time the popup opens.
 let _historyHasItems = false;
 
 async function apiDelete(path) {
@@ -2587,17 +2590,22 @@ async function loadHistory() {
   if (!_loggedIn) return;
   try {
     const history = await api('/history/?limit=20');
-    renderHistory(history);
+    syncHistoryTriggerVisibility(history);
+    // Keep the modal's list current if it's already open (e.g. a track
+    // started playing while the popup was up).
+    if (document.getElementById('history-modal-overlay').classList.contains('open')) {
+      renderHistoryModalList(history);
+    }
   } catch (e) {
     console.warn('Failed to load history', e);
   }
 }
 
-function syncHistoryVisibility() {
-  // Two copies of the section exist (desktop left-column, mobile sidebar);
-  // CSS media queries decide which one is actually visible.
-  document.getElementById('history-section').hidden = !(_loggedIn && _historyHasItems);
-  document.getElementById('history-sidebar-section').hidden = !(_loggedIn && _historyHasItems);
+function syncHistoryTriggerVisibility(history) {
+  _historyHasItems = Array.isArray(history) && history.length > 0;
+  const show = _loggedIn && _historyHasItems;
+  document.getElementById('history-trigger-row').hidden = !show;
+  document.getElementById('history-sidebar-section').hidden = !show;
 }
 
 function _buildHistoryRow(entry) {
@@ -2618,19 +2626,12 @@ function _buildHistoryRow(entry) {
       <div class="queue-title">${escHtml(entry.title || 'Unknown title')}</div>
       <div class="queue-artist">${escHtml(entry.artist)}</div>
     </div>
-    <button class="history-remove-btn" type="button" title="Remove from history">
-      <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
-           stroke="currentColor" stroke-width="2" stroke-linecap="round">
-        <path d="M18 6 6 18"/><path d="M6 6l12 12"/>
-      </svg>
-    </button>
   `;
 
+  // No per-row remove control by design — Clear (with confirmation) is the
+  // only way to modify history from this popup.
   el.addEventListener('click', () => {
-    // Playing from the mobile sidebar copy should close it, same as any other
-    // sidebar action — otherwise the user has to manually dismiss it to see
-    // the track they just started.
-    if (el.closest('#sidebar') && window._closeSidebar) window._closeSidebar();
+    window._closeHistoryModal();
     playFromQueue({
       video_id: entry.video_id,
       title: entry.title || '',
@@ -2638,42 +2639,31 @@ function _buildHistoryRow(entry) {
       thumbnail: entry.thumbnail_url || '',
     });
   });
-  el.querySelector('.history-remove-btn').addEventListener('click', (e) => {
-    e.stopPropagation();
-    removeHistoryItem(entry.video_id);
-  });
   return el;
 }
 
-function renderHistory(history) {
-  const lists = [document.getElementById('history-list'), document.getElementById('history-list-sidebar')];
-  const clearBtns = [document.getElementById('clear-history-btn'), document.getElementById('clear-history-btn-sidebar')];
+function renderHistoryModalList(history) {
+  const body = document.getElementById('history-modal-body');
+  const clearBtn = document.getElementById('clear-history-btn');
+  const items = Array.isArray(history) ? history.filter(e => e && e.video_id) : [];
 
-  _historyHasItems = Array.isArray(history) && history.length > 0;
-  for (const btn of clearBtns) btn.hidden = !_historyHasItems;
-  syncHistoryVisibility();
-  for (const list of lists) list.innerHTML = '';
-  if (!_historyHasItems) return;
-
-  for (const entry of history) {
-    if (!entry || !entry.video_id) continue;
-    for (const list of lists) list.appendChild(_buildHistoryRow(entry));
+  clearBtn.hidden = items.length === 0;
+  if (items.length === 0) {
+    body.innerHTML = '<div class="history-modal-empty">No listening history yet</div>';
+    return;
   }
-}
-
-async function removeHistoryItem(videoId) {
-  try {
-    await apiDelete('/history/' + encodeURIComponent(videoId));
-    await loadHistory();
-  } catch (e) {
-    toast(e.message, 'error');
-  }
+  const list = document.createElement('div');
+  list.className = 'history-list';
+  for (const entry of items) list.appendChild(_buildHistoryRow(entry));
+  body.innerHTML = '';
+  body.appendChild(list);
 }
 
 async function doClearHistory() {
   try {
     await apiDelete('/history/');
-    renderHistory([]);
+    renderHistoryModalList([]);
+    syncHistoryTriggerVisibility([]);
     toast('History cleared', 'ok');
   } catch (e) {
     toast(e.message, 'error');
@@ -2681,16 +2671,45 @@ async function doClearHistory() {
 }
 
 (function () {
+  const overlay = document.getElementById('history-modal-overlay');
+  const closeBtn = document.getElementById('history-modal-close');
+  const openBtnDesktop = document.getElementById('history-modal-btn');
+  const openBtnSidebar = document.getElementById('history-modal-btn-sidebar');
+
+  async function openHistoryModal() {
+    overlay.classList.add('open');
+    document.getElementById('history-modal-body').innerHTML =
+      '<div class="history-modal-empty">Loading…</div>';
+    try {
+      const history = await api('/history/?limit=20');
+      renderHistoryModalList(history);
+    } catch (e) {
+      document.getElementById('history-modal-body').innerHTML =
+        '<div class="history-modal-empty">Couldn’t load history</div>';
+    }
+  }
+
+  function closeHistoryModal() {
+    overlay.classList.remove('open');
+  }
+
+  // Opening from the sidebar deliberately does NOT close the sidebar drawer —
+  // the popup layers on top of it (higher z-index), so both stay visible and
+  // the user can dismiss the popup to return right to the still-open menu.
+  openBtnDesktop.addEventListener('click', openHistoryModal);
+  openBtnSidebar.addEventListener('click', openHistoryModal);
+  closeBtn.addEventListener('click', closeHistoryModal);
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) closeHistoryModal(); });
+
+  window._closeHistoryModal = closeHistoryModal;
+})();
+
+(function () {
   const overlay = document.getElementById('confirm-clear-history');
   const cancelBtn = document.getElementById('confirm-clear-history-cancel');
   const yesBtn = document.getElementById('confirm-clear-history-yes');
-  const openOverlay = () => overlay.classList.add('open');
-  document.getElementById('clear-history-btn').addEventListener('click', openOverlay);
-  document.getElementById('clear-history-btn-sidebar').addEventListener('click', () => {
-    // Close the drawer first, same as sign-out, so the confirmation isn't
-    // shown with the sidebar still open behind it.
-    if (window._closeSidebar) window._closeSidebar();
-    openOverlay();
+  document.getElementById('clear-history-btn').addEventListener('click', () => {
+    overlay.classList.add('open');
   });
   cancelBtn.addEventListener('click', () => overlay.classList.remove('open'));
   overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.classList.remove('open'); });
@@ -2705,7 +2724,12 @@ let _recsLoading = false;   // guards re-entrancy: syncUiState can fire several
 
 function showRecsSkeleton(show) {
   document.getElementById('recs-skeleton').hidden = !show;
-  document.getElementById('recs-list').hidden = show;
+  const list = document.getElementById('recs-list');
+  list.hidden = show;
+  // Restart the fade-in every time the skeleton is (re)shown, so a manual
+  // refresh (new track played -> back to idle) transitions in again instead
+  // of just popping the new tiles in place.
+  if (show) list.classList.remove('is-visible');
 }
 
 async function loadRecommendations() {
@@ -2732,22 +2756,22 @@ function renderRecommendations(items) {
   const list = document.getElementById('recs-list');
   const shouldShow = !_hasTrack && !_resultsOpen && Array.isArray(items) && items.length > 0;
   section.hidden = !shouldShow;
-  if (!shouldShow) { list.innerHTML = ''; return; }
+  if (!shouldShow) { list.innerHTML = ''; list.classList.remove('is-visible'); return; }
   list.innerHTML = '';
   for (const item of items) {
     if (!item || !item.video_id) continue;
     const thumbUrl = (item.thumbnail && item.thumbnail.url) || item.thumbnail || '';
     const el = document.createElement('div');
-    el.className = 'history-item';
+    el.className = 'recs-tile';
     const thumbHtml = thumbUrl
-      ? `<img class="queue-thumb" src="${escHtml(thumbUrl)}" alt="" loading="lazy">`
-      : `<div class="queue-thumb"></div>`;
+      ? `<img src="${escHtml(thumbUrl)}" alt="" loading="lazy">`
+      : `<svg width="28" height="28" viewBox="0 0 24 24" fill="currentColor">
+           <path d="M12 3v10.55A4 4 0 1 0 14 17V7h4V3h-6z"/>
+         </svg>`;
     el.innerHTML = `
-      ${thumbHtml}
-      <div class="queue-info">
-        <div class="queue-title">${escHtml(item.title || '')}</div>
-        <div class="queue-artist">${escHtml(item.artist || '')}</div>
-      </div>
+      <div class="recs-tile-art">${thumbHtml}</div>
+      <div class="recs-tile-title">${escHtml(item.title || '')}</div>
+      <div class="recs-tile-artist">${escHtml(item.artist || '')}</div>
     `;
     el.addEventListener('click', () => playFromQueue({
       video_id: item.video_id,
@@ -2757,6 +2781,9 @@ function renderRecommendations(items) {
     }));
     list.appendChild(el);
   }
+  // Next frame so the transition (opacity/transform) actually animates
+  // instead of the class landing before the browser has painted the tiles.
+  requestAnimationFrame(() => requestAnimationFrame(() => list.classList.add('is-visible')));
 }
 
 /* ---- Open on YouTube Music ---- */

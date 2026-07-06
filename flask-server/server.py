@@ -2259,6 +2259,25 @@ async def _none():
     return None
 
 
+# Well-known, durable YouTube Music videos used purely as radio *seeds* for
+# the trending/cold-start fallback. get_charts() varies across ytmusicapi
+# versions (return shape, auth requirements) and is unreliable in practice, so
+# get_radio_queue() — the same stable get_watch_playlist() call used for real
+# playback everywhere else in this app — is the primary fallback instead.
+# get_charts() is still tried first since when it works it's more genuinely
+# "trending", but a broken/missing/mismatched version must never leave
+# recommendations empty.
+_FALLBACK_SEED_IDS = ['dQw4w9WgXcQ', 'JGwWNGJdvx8', 'kJQP7kiw5Fk']
+
+
+async def _get_fallback_queue(exclude_ids):
+    for seed in _FALLBACK_SEED_IDS:
+        queue = await Supporting.get_radio_queue(seed)
+        if queue:
+            return [item for item in queue if item.get('video_id') not in exclude_ids]
+    return []
+
+
 async def _build_recommendations():
     with _history_lock:
         history = _load_history()
@@ -2266,7 +2285,9 @@ async def _build_recommendations():
 
     if not history:
         charts = await Supporting.get_charts_queue()
-        return charts or []
+        if charts:
+            return charts
+        return await _get_fallback_queue(seen_ids)
 
     recent_seed = history[0]['video_id']
     # Pick a seed the user hasn't played in a while (or ever cycled back to)
@@ -2300,8 +2321,8 @@ async def _build_recommendations():
     familiar = [i for i in mixed if i['video_id'] in seen_ids]
     result = (fresh + familiar)[:20]
     if len(result) < 10:
-        charts = await Supporting.get_charts_queue() or []
-        for item in charts:
+        topoff = await Supporting.get_charts_queue() or await _get_fallback_queue(out_ids | seen_ids)
+        for item in topoff:
             vid = item.get('video_id')
             if vid and vid not in out_ids and vid not in seen_ids:
                 out_ids.add(vid)

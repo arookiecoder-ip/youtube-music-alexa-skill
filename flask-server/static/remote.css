@@ -1546,19 +1546,39 @@
   .clear-all-btn svg { width: 12px; height: 12px; }
 
   /* ---- Recently listened ---- */
-  .history-list {
-    max-height: 264px;   /* ~5 rows, then scroll */
-    overflow-y: auto;
-    scrollbar-width: thin;
-    scrollbar-color: var(--border) transparent;
+  .history-trigger-row { margin-bottom: 10px; }
+  .history-trigger-btn {
+    width: 100%;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 12px 16px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    color: var(--text);
+    font-family: inherit;
+    font-size: .78rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: .08em;
+    cursor: pointer;
+    transition: border-color .15s, color .15s;
   }
-  .history-list::-webkit-scrollbar { width: 4px; }
-  .history-list::-webkit-scrollbar-thumb { background: var(--border); }
+  .history-trigger-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .history-trigger-btn svg { flex: none; }
+  /* Sidebar copy sits inside a .sidebar-section, so no full-bleed margin */
+  .sidebar-section .history-trigger-btn { text-transform: none; letter-spacing: normal; }
+
+  .history-list {
+    display: flex;
+    flex-direction: column;
+  }
   .history-item {
     display: flex;
     align-items: center;
     gap: 12px;
-    padding: 8px 10px;
+    padding: 10px 20px;
     cursor: pointer;
     background: var(--surface);
     transition: background .15s;
@@ -1571,25 +1591,153 @@
     justify-content: center;
     color: var(--muted);
   }
-  .history-remove-btn {
-    flex: none;
+
+  /* ---- Recently Listened modal (desktop + mobile — same markup, no
+     per-item remove control; Clear (with confirmation) is the only way to
+     modify history from here) ---- */
+  .history-modal-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,.7);
+    z-index: 500;
+    justify-content: center;
+    align-items: center;
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+  }
+  .history-modal-overlay.open { display: flex; }
+  .history-modal {
+    width: 440px;
+    max-width: 92vw;
+    max-height: 80vh;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    animation: confirmIn .2s ease-out;
+  }
+  .history-modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 16px 16px 20px;
+    border-bottom: 1px solid var(--border);
+  }
+  .history-modal-header h3 {
+    font-size: .85rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .14em;
+    color: var(--text);
+  }
+  .history-modal-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .history-modal-close {
     background: none;
     border: none;
     color: var(--muted);
+    padding: 4px;
     cursor: pointer;
-    /* 40px hit target for touch, icon stays small */
-    width: 40px;
-    height: 40px;
+    display: flex;
+  }
+  .history-modal-close:hover { color: var(--text); }
+  .history-modal-body {
+    flex: 1;
+    overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+  }
+  .history-modal-body::-webkit-scrollbar { width: 4px; }
+  .history-modal-body::-webkit-scrollbar-thumb { background: var(--border); }
+  .history-modal-empty {
     display: flex;
     align-items: center;
     justify-content: center;
-    transition: color .15s;
+    padding: 40px 20px;
+    color: var(--muted);
+    font-size: .82rem;
   }
-  .history-remove-btn:hover { color: var(--danger); }
 
-  /* ---- Recommendations + skeleton loader ---- */
+  /* ---- Recommendations: full-width tile grid, no card chrome ---- */
+  .recs-section {
+    background: none;
+    border: none;
+    padding: 0;
+  }
+  .recs-section .section-head {
+    padding: 0 20px;
+  }
+  @media (min-width: 900px) {
+    .recs-section .section-head { padding: 0; }
+  }
+  .recs-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+    gap: 18px 14px;
+    padding: 0 20px;
+    /* Fade/rise in once populated, so the swap from skeleton to real tiles
+       reads as one continuous motion instead of a hard cut. */
+    opacity: 0;
+    transform: translateY(8px);
+    transition: opacity .4s ease, transform .4s ease;
+  }
+  .recs-grid.is-visible { opacity: 1; transform: none; }
+  @media (min-width: 900px) {
+    .recs-grid {
+      grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+      padding: 0;
+    }
+  }
+  .recs-tile {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    cursor: pointer;
+    /* No background/border — the art itself is the only visual weight. */
+    background: none;
+    border: none;
+  }
+  .recs-tile-art {
+    width: 100%;
+    aspect-ratio: 1 / 1;
+    background: var(--bg);
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--muted);
+    transition: transform .2s ease;
+  }
+  .recs-tile-art img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+  .recs-tile:hover .recs-tile-art { transform: scale(1.03); }
+  .recs-tile-title {
+    font-size: .72rem;
+    font-weight: 600;
+    color: var(--text);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .recs-tile-artist {
+    font-size: .66rem;
+    color: var(--muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin-top: -4px;
+  }
+
+  /* ---- Recommendations skeleton loader (same grid shape as real tiles) ---- */
   .recs-skeleton[hidden] { display: none; }
-  .skeleton-item { cursor: default; }
+  .recs-skeleton-tile { cursor: default; }
   .skeleton-block,
   .skeleton-line {
     background: linear-gradient(90deg, var(--border) 25%, #2a2a2a 37%, var(--border) 63%);
@@ -1597,9 +1745,10 @@
     animation: skeletonShimmer 1.4s ease infinite;
     border-radius: 3px;
   }
-  .skeleton-line { height: 10px; }
-  .skeleton-line-title { width: 70%; margin-bottom: 8px; }
-  .skeleton-line-artist { width: 45%; }
+  .recs-skeleton .skeleton-block { width: 100%; aspect-ratio: 1 / 1; }
+  .skeleton-line { height: 9px; margin-top: 8px; }
+  .skeleton-line-title { width: 85%; }
+  .skeleton-line-artist { width: 55%; margin-top: 6px; }
   @keyframes skeletonShimmer {
     0% { background-position: 100% 50%; }
     100% { background-position: 0 50%; }
@@ -1631,7 +1780,9 @@
     to { opacity: 1; transform: none; }
   }
 
-  /* ---- Idle (nothing playing): center the search bar on desktop ---- */
+  /* ---- Idle (nothing playing): search bar sits near the top (not
+     vertical-centered) on desktop, leaving room for the full-width
+     recommendations grid below without pushing it off-screen. ---- */
   main.idle .layout {
     flex: 1;
     display: flex;
@@ -1642,15 +1793,21 @@
     main.idle .layout {
       display: grid;
       grid-template-columns: 1fr 0fr;
-      align-content: center;
+      align-content: start;
+      padding-top: 6vh;
     }
     main.idle .left-col {
       align-items: center;
     }
+    /* Search bar + history trigger stay compact and centered; the
+       recommendations grid alone spans the full column width. */
     main.idle .play-section,
-    main.idle .history-section,
-    main.idle .recs-section {
+    main.idle .history-trigger-row {
       width: min(100%, 506px);
+    }
+    main.idle .recs-section {
+      width: 100%;
+      margin-top: 32px;
     }
     main.idle #queue-section,
     main.idle #results-section {
@@ -2060,16 +2217,11 @@
     .device-section-inline { display: none !important; }
     /* Hide inline queue — it's in the popup modal */
     #queue-section { display: none !important; }
-    /* Hide inline Recently Listened — it's in the sidebar now */
-    #history-section { display: none !important; }
+    /* Hide the desktop Recently Listened trigger — it's in the sidebar now */
+    #history-trigger-row { display: none !important; }
     /* Desktop-only elements: hide on mobile */
     .result-more-btn { display: none !important; }
     .queue-more-btn { display: none !important; }
-  }
-
-  /* Desktop: the sidebar (and its history copy) never renders */
-  @media (min-width: 900px) {
-    .history-sidebar-section { display: none !important; }
   }
 
   /* Desktop: hide mobile-only elements */

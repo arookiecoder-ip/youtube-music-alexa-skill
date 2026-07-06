@@ -65,12 +65,19 @@ Core (`server.py`):
 | `YTDLP_COOKIES`   | path to cookies.txt; passed to every yt-dlp call                                                                                                                     |
 | `API_KEY`         | shared secret; when set, all endpoints except privacy/terms and the login flow require `?key=` (or `X-Api-Key` header) **or** a valid web-remote session cookie. Must match `API_KEY` in `lambda/api_key.py`. |
 | `AUDIO_CACHE_DIR` | audio cache location (default `/tmp/ytm_audio_cache`)                                                                                                               |
+| `HISTORY_FILE`    | listening-history JSON file location for the web remote's Recently Listened / Recommended sections (default `/tmp/ytm_listen_history.json`) — see the Docker note below |
 | `FLASK_DEBUG`     | set to `1` for auto-reload during local development                                                                                                                 |
 
 > **Docker Compose deployments:** `server.py` binds Flask to `0.0.0.0` (not
 > `127.0.0.1`) and the Amazon login proxy in `alexa_remote.py` does the same for
 > its port, since Caddy runs in a separate container and can only reach the
 > `ytmusic` container over the Docker bridge network, not via loopback.
+>
+> The audio cache volume (`ytmusic_cache` → `/tmp/ytm_audio_cache`) is TTL-swept
+> and `/tmp` itself is ephemeral, so listening history is kept on its own
+> `ytmusic_data` volume mounted at `/data`, with `HISTORY_FILE` pointed there
+> (`docker-compose.yml` sets this up already) — otherwise history would be
+> wiped on every container recreate.
 
 Web-remote login (see [Web remote](#web-remote-control-the-echo-from-any-browser)) — lets you open `/remote/` with a clean URL instead of `?key=<API_KEY>`:
 
@@ -205,6 +212,21 @@ Features:
 - **Pasted YouTube links** — a watch link plays directly (bypassing search);
   a watch link with a `list=` id queues the rest of that playlist, like
   YouTube does.
+- **Recently Listened** — a persistent, server-side history (survives page
+  reloads and server restarts) of tracks actually played, recorded only once
+  the skill confirms real playback (not on a mere play request, and not on a
+  seek or resume-from-pause). Tap an entry to replay it instantly; remove
+  individual entries or clear the whole list, with a themed confirmation
+  dialog matching the rest of the UI (no browser `confirm()` popups). On
+  mobile this section lives in the hamburger sidebar; on desktop it's in the
+  main column.
+- **Recommended for you** — shown only on the blank/idle screen, with a
+  shimmering skeleton while it loads. Mixes a "for you" radio (seeded from
+  your most-recent track) with a "discover" radio (seeded from an older
+  track), preferring songs you haven't already played; falls back to YT
+  Music's charts if you have no history yet, or if there isn't enough to mix.
+  Cached for 30 minutes server-side and invalidated whenever you clear your
+  history.
 
 Access is gated by the **web-remote login**: with `REMOTE_USER` /
 `REMOTE_PASSWORD` set, you sign in once at `/login/` and a session cookie
@@ -328,6 +350,10 @@ Worst-case leak then exposes an account that can only control your speaker.
 | `/alexa/now_playing/stream` | GET | Server-Sent Events stream of now-playing state; drives the live progress bar + queue across all open pages |
 | `/alexa/state_event/` | POST    | webhook the Lambda posts on playback `started`/`stopped`/`finished` (with the offset) so state is event-driven, not polled |
 | `/armed_play/`       | GET      | called by the skill to pick up a play the remote armed (API-key protected, not a session endpoint) |
+| `/history/`          | GET      | `?limit=…` (default 20, max 100) → recently-listened tracks, newest first  |
+| `/history/`          | DELETE   | clears all listening history                                     |
+| `/history/<video_id>` | DELETE  | removes a single track from history                              |
+| `/recommendations/`  | GET      | `?refresh=1` to bypass the 30-minute cache → mixed personalized + discovery track list for the blank-state screen |
 
 ---
 

@@ -85,18 +85,14 @@
       </button>
       </div>
     </div>
-    <div class="sidebar-section needs-login history-sidebar-section" id="history-sidebar-section" hidden>
-      <div class="section-head">
-        <div class="label">Recently Listened</div>
-        <button class="clear-all-btn" id="clear-history-btn-sidebar" title="Clear listening history" hidden>
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-            <path d="M3 6h18"/><path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2"/>
-            <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
-          </svg>
-          Clear
-        </button>
-      </div>
-      <div class="history-list" id="history-list-sidebar"></div>
+    <div class="sidebar-section needs-login" id="history-sidebar-section" hidden>
+      <button class="history-trigger-btn" id="history-modal-btn-sidebar" title="Recently Listened">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="9"/>
+          <polyline points="12 7 12 12 15.5 14"/>
+        </svg>
+        Recently Listened
+      </button>
     </div>
     <div class="sidebar-section">
       <button id="refresh-page-btn" onclick="location.reload()" style="width:100%; display:inline-flex; align-items:center; justify-content:center; gap:8px; font-size:.75rem; font-weight:600; text-transform:uppercase; letter-spacing:.08em; color:var(--muted); transition:color .15s, border-color .15s;">
@@ -136,49 +132,32 @@
     <div class="idle-hero-sub">Your music, one search away</div>
   </div>
 
-  <!-- Recently Listened (hidden while empty; rendered by remote.js) -->
-  <section class="needs-login history-section" id="history-section" hidden>
-    <div class="section-head">
-      <div class="label">Recently Listened</div>
-      <button class="clear-all-btn" id="clear-history-btn" title="Clear listening history" hidden>
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-          <path d="M3 6h18"/><path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2"/>
-          <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
-        </svg>
-        Clear
-      </button>
-    </div>
-    <div class="history-list" id="history-list"></div>
-  </section>
+  <!-- Recently Listened trigger (hidden while there's no history at all; a
+       popup — not an inline card — shows the actual list) -->
+  <div class="needs-login history-trigger-row" id="history-trigger-row" hidden>
+    <button class="history-trigger-btn" id="history-modal-btn" title="Recently Listened">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="9"/>
+        <polyline points="12 7 12 12 15.5 14"/>
+      </svg>
+      Recently Listened
+    </button>
+  </div>
 
-  <!-- Recommended for you: shown on blank state, skeleton while loading -->
+  <!-- Recommended for you: full-width tile grid, shown on blank state,
+       skeleton tiles while loading -->
   <section class="needs-login recs-section" id="recs-section" hidden>
     <div class="section-head">
       <div class="label">Recommended for you</div>
     </div>
-    <div class="history-list" id="recs-list"></div>
-    <div class="history-list recs-skeleton" id="recs-skeleton">
-      <div class="history-item skeleton-item">
-        <div class="queue-thumb skeleton-block"></div>
-        <div class="queue-info">
-          <div class="skeleton-line skeleton-line-title"></div>
-          <div class="skeleton-line skeleton-line-artist"></div>
-        </div>
-      </div>
-      <div class="history-item skeleton-item">
-        <div class="queue-thumb skeleton-block"></div>
-        <div class="queue-info">
-          <div class="skeleton-line skeleton-line-title"></div>
-          <div class="skeleton-line skeleton-line-artist"></div>
-        </div>
-      </div>
-      <div class="history-item skeleton-item">
-        <div class="queue-thumb skeleton-block"></div>
-        <div class="queue-info">
-          <div class="skeleton-line skeleton-line-title"></div>
-          <div class="skeleton-line skeleton-line-artist"></div>
-        </div>
-      </div>
+    <div class="recs-grid" id="recs-list"></div>
+    <div class="recs-grid recs-skeleton" id="recs-skeleton">
+      <div class="recs-skeleton-tile"><div class="skeleton-block"></div><div class="skeleton-line skeleton-line-title"></div><div class="skeleton-line skeleton-line-artist"></div></div>
+      <div class="recs-skeleton-tile"><div class="skeleton-block"></div><div class="skeleton-line skeleton-line-title"></div><div class="skeleton-line skeleton-line-artist"></div></div>
+      <div class="recs-skeleton-tile"><div class="skeleton-block"></div><div class="skeleton-line skeleton-line-title"></div><div class="skeleton-line skeleton-line-artist"></div></div>
+      <div class="recs-skeleton-tile"><div class="skeleton-block"></div><div class="skeleton-line skeleton-line-title"></div><div class="skeleton-line skeleton-line-artist"></div></div>
+      <div class="recs-skeleton-tile"><div class="skeleton-block"></div><div class="skeleton-line skeleton-line-title"></div><div class="skeleton-line skeleton-line-artist"></div></div>
+      <div class="recs-skeleton-tile"><div class="skeleton-block"></div><div class="skeleton-line skeleton-line-title"></div><div class="skeleton-line skeleton-line-artist"></div></div>
     </div>
   </section>
 
@@ -404,6 +383,34 @@
     <div class="confirm-actions">
       <button class="confirm-cancel" id="confirm-clear-cancel">Cancel</button>
       <button class="confirm-proceed" id="confirm-clear-yes">Clear</button>
+    </div>
+  </div>
+</div>
+
+<!-- Recently Listened popup (desktop + mobile). No per-row remove button by
+     design — only Clear (which asks for confirmation via the dialog below). -->
+<div class="history-modal-overlay" id="history-modal-overlay">
+  <div class="history-modal" id="history-modal">
+    <div class="history-modal-header">
+      <h3>Recently Listened</h3>
+      <div class="history-modal-header-actions">
+        <button class="clear-all-btn" id="clear-history-btn" title="Clear listening history" hidden>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+            <path d="M3 6h18"/><path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2"/>
+            <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+          </svg>
+          Clear
+        </button>
+        <button class="history-modal-close" id="history-modal-close" title="Close">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+            <line x1="18" y1="6" x2="6" y2="18"/>
+            <line x1="6" y1="6" x2="18" y2="18"/>
+          </svg>
+        </button>
+      </div>
+    </div>
+    <div class="history-modal-body" id="history-modal-body">
+      <div class="history-modal-empty">Loading…</div>
     </div>
   </div>
 </div>
