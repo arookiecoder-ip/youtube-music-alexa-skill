@@ -1,16 +1,11 @@
 # Fallback API URL used when none has been set via the "set api url" voice command.
-# Real value lives in server_config.py (gitignored) so the repo can be public.
-try:
-    from server_config import DEFAULT_API_URL
-except ImportError:
-    DEFAULT_API_URL = ""
-
 # Shared secret; must match the API_KEY env var on the Flask server.
-# Lives in api_key.py (gitignored) so the repo can be public.
+# Both live in api_key.py (gitignored) so the repo can be public.
 try:
-    from api_key import API_KEY
+    from api_key import API_KEY, DEFAULT_API_URL
 except ImportError:
     API_KEY = ""
+    DEFAULT_API_URL = ""
 
 WELCOME_MSG = "Welcome to music box. You can say, play blinding lights, to begin."
 WELCOME_REPROMPT_MSG = "You can say, play, followed by a song name, to begin."

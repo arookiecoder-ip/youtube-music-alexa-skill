@@ -104,8 +104,7 @@ flask-server/         backend
 lambda/               Alexa skill code (paste into the Alexa-hosted code editor)
   lambda_function.py  intent + AudioPlayer event handlers
   data.py             spoken messages, imports DEFAULT_API_URL/API_KEY
-  server_config.py    DEFAULT_API_URL (gitignored — you create this)
-  api_key.py          API_KEY secret (gitignored — you create this)
+  api_key.py          API_KEY + DEFAULT_API_URL (gitignored — you create this)
   mediaUtils/player.py  API client, playback controller, SSML escaping
   models/player_models.py  dataclasses
 skill-package/interactionModels/custom/   interaction model JSON (5 locales)
@@ -241,12 +240,11 @@ only for very long mixes. Bump to `+240` for a 4 h floor if needed.
    `skill-package/interactionModels/custom/` → Build. Invocation name:
    **"music box"**.
 3. Build tab → **Interfaces → Audio Player ON**.
-4. Create `lambda/server_config.py` (gitignored — never committed) containing
-   `DEFAULT_API_URL = "<your https://...sslip.io URL>"`, and create
-   `lambda/api_key.py` (gitignored — never committed) containing
-   `API_KEY = "<your secret>"`.
+4. Create `lambda/api_key.py` (gitignored — never committed) containing
+   `API_KEY = "<your secret>"` and
+   `DEFAULT_API_URL = "<your https://...sslip.io URL>"`.
 5. Code tab → copy in `lambda_function.py`, `requirements.txt` (replace),
-   `data.py`, `server_config.py`, `api_key.py`, `mediaUtils/player.py`,
+   `data.py`, `api_key.py`, `mediaUtils/player.py`,
    `models/player_models.py` → **Deploy**.
 6. Test tab (or a real Echo): _"ask music box to play blinding lights"_.
 

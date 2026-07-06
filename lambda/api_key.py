@@ -1,0 +1,2 @@
+API_KEY = ""
+DEFAULT_API_URL = ""

@@ -3,8 +3,6 @@
 *.ipynb
 __pycache__
 .venv
-lambda/api_key.py
-lambda/server_config.py
 HANDOFF.md
 .code-review-graph/
 .storage
