@@ -1590,10 +1590,15 @@ def _refresh_radio_queue(video_id):
             # If the now-playing track still has no duration (came from a
             # recommendation/chart with duration_ms=0), fill it from the radio
             # queue's matching entry so the progress bar gets a total.
-            if not int(cur.get('duration_ms') or 0):
-                match = next((q for q in queue if q.get('video_id') == video_id), None)
-                if match and int(match.get('duration_ms') or 0):
+            match = next((q for q in queue if q.get('video_id') == video_id), None)
+            if match:
+                if not int(cur.get('duration_ms') or 0) and int(match.get('duration_ms') or 0):
                     fields['duration_ms'] = match['duration_ms']
+                if not cur.get('title') or cur.get('title') in ['YouTube video', 'YouTube link']:
+                    fields['title'] = match.get('title', '')
+                    fields['artist'] = match.get('artist', '')
+                    if match.get('thumbnail'):
+                        fields['thumbnail'] = match.get('thumbnail')
             _update_now_playing(**fields)
             _prewarm_queue_audio(queue, idx)
             return True
@@ -2676,9 +2681,12 @@ async def alexa_play():
                                     if t['video_id'] == direct_video_id), None)
                         if idx is not None:
                             queue, queue_index = pl_queue, idx
+                            # Override fallback metadata with the real playlist item's metadata
+                            queue_item = pl_queue[idx]
+                            thumb = queue_item.get('thumbnail', '')
                 _update_now_playing(playing=False,
-                                    title=queue_item['title'],
-                                    artist=queue_item['artist'],
+                                    title=queue_item.get('title', 'YouTube video'),
+                                    artist=queue_item.get('artist', ''),
                                     thumbnail=thumb,
                                     video_id=direct_video_id,
                                     duration_ms=queue_item['duration_ms'],
