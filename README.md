@@ -255,6 +255,19 @@ cache:
  echo "0 5 * * * find ~/.cache/yt-dlp -type f -mtime +7 -delete 2>/dev/null") | crontab -
 ```
 
+**Docker Compose variant:** the cache lives in the `ytmusic_cache` named
+volume, not a host path, so the cron must reach into the running container
+instead:
+
+```bash
+(crontab -l 2>/dev/null | grep -v 'ytm_audio_cache'; \
+ echo "*/30 * * * * docker exec ytmusic find /tmp/ytm_audio_cache -type f -mmin +120 -delete") | crontab -
+```
+
+(yt-dlp's info cache is ephemeral inside the container and clears on
+`docker compose up --build`/recreation, so the second cron line isn't needed
+in this variant.)
+
 Note: 2 h retention (`-mmin +120`) means a track played continuously past two
 hours may be deleted mid-stream and re-downloaded — fine for songs, relevant
 only for very long mixes. Bump to `+240` for a 4 h floor if needed.
