@@ -79,7 +79,23 @@ AUDIO_CACHE_TTL = 24 * 60 * 60
 
 # When set, every request must carry ?key=<API_KEY> (or X-Api-Key header).
 # Key rides in the URL because Alexa devices fetch /proxy/ with no custom headers.
+# If not set in env, read from api_key.txt or generate a persistent one
 API_KEY = os.environ.get("API_KEY")
+if not API_KEY:
+    api_key_path = os.path.join(os.path.dirname(os.environ.get("DB_FILE", os.path.join(os.path.dirname(os.path.abspath(__file__)), "data.db"))), 'api_key.txt')
+    try:
+        if os.path.exists(api_key_path):
+            with open(api_key_path, 'r') as f:
+                API_KEY = f.read().strip()
+        else:
+            API_KEY = secrets.token_hex(16)
+            with open(api_key_path, 'w') as f:
+                f.write(API_KEY)
+    except Exception:
+        API_KEY = secrets.token_hex(16)
+
+if not os.environ.get("API_KEY"):
+    print(f"\n\n*** NO API KEY SET IN ENV. USING KEY: {API_KEY} ***\n\n")
 
 # ---- Armed-play store (web-remote direct plays) ----
 # The web remote can't reliably smuggle a video id through Alexa's speech NLU
