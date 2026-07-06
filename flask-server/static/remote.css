@@ -1714,6 +1714,15 @@
       padding: 0 40px;
     }
   }
+  /* Recs section fades in with a delay so it appears only after the player's
+     0.3s exit animation completes — prevents the layout-shift flash. */
+  .recs-section:not([hidden]) {
+    animation: recsFadeIn .25s ease .32s both;
+  }
+  @keyframes recsFadeIn {
+    from { opacity: 0; }
+    to   { opacity: 1; }
+  }
   .recs-tile {
     display: flex;
     flex-direction: column;
@@ -1721,12 +1730,12 @@
     cursor: pointer;
     background: none;
     border: none;
-    opacity: 0;
-    transform: translateY(10px);
-    transition: opacity .35s ease, transform .35s cubic-bezier(.22,1,.36,1);
+    /* Tile is always visible — text shows immediately while art loads. */
+    opacity: 1;
+    transform: none;
   }
   .recs-tile.is-ready {
-    opacity: 1;
+    opacity: 1;     /* kept for JS compat, tile already visible */
     transform: none;
   }
   @media (prefers-reduced-motion: reduce) {
@@ -1736,14 +1745,20 @@
   .recs-tile-art {
     width: 100%;
     aspect-ratio: 1 / 1;
-    background: var(--bg);
+    background: var(--surface);
     overflow: hidden;
     display: flex;
     align-items: center;
     justify-content: center;
     color: var(--muted);
-    transition: transform .25s cubic-bezier(.22,1,.36,1),
+    /* Art fades in once loaded; starts dark so skeleton shimmer shows through. */
+    opacity: 0;
+    transition: opacity .35s ease,
+                transform .25s cubic-bezier(.22,1,.36,1),
                 box-shadow .25s ease;
+  }
+  .recs-tile.is-ready .recs-tile-art {
+    opacity: 1;
   }
   .recs-tile-art img {
     width: 100%;

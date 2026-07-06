@@ -2846,18 +2846,14 @@ function renderRecommendations(items) {
     document.getElementById('recs-skeleton').hidden = true;
   };
 
-  // Reveal a tile once its thumbnail is decoded. A tile with no image, a
-  // broken/failed image, or one that's simply slow still reveals (on error /
-  // via the safety timeout) so nothing is ever stuck hidden.
+  // Reveal the art once its thumbnail is decoded. Text is already visible.
   const revealTile = (t, i) => {
     if (t.el.dataset.ready) return;
     t.el.dataset.ready = '1';
-    // Small stagger so revealed tiles cascade in rather than popping together.
-    t.el.style.transitionDelay = Math.min(i * 25, 400) + 'ms';
+    const art = t.el.querySelector('.recs-tile-art');
+    if (art) art.style.transitionDelay = Math.min(i * 25, 400) + 'ms';
     t.el.classList.add('is-ready');
     readyCount++;
-    // Swap out the skeleton once (nearly) all the shown tiles are ready, so the
-    // real grid appears already populated rather than half-empty.
     if (readyCount >= Math.max(1, tiles.length - 2)) hideSkeletonOnce();
   };
   tiles.forEach((t, i) => {
