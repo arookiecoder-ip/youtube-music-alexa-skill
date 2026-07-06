@@ -522,6 +522,28 @@
   </div>
 </div>
 
+<!-- Import Playlist Modal -->
+<div class="history-modal-overlay" id="import-playlist-overlay">
+  <div class="history-modal" style="display:flex; flex-direction:column; max-width:400px; height:auto;">
+    <div class="history-modal-header">
+      <h3>Import YouTube Playlist</h3>
+      <div class="history-modal-header-actions">
+        <button class="history-modal-close" id="import-playlist-close" title="Close">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+            <line x1="18" y1="6" x2="6" y2="18"/>
+            <line x1="6" y1="6" x2="18" y2="18"/>
+          </svg>
+        </button>
+      </div>
+    </div>
+    <div class="history-modal-body" style="padding: 20px; display: flex; flex-direction: column; gap: 16px; overflow:visible;">
+      <input type="text" id="import-playlist-url" placeholder="Paste YouTube Playlist URL here" style="background:var(--surface); border:1px solid var(--border); color:var(--text); padding:10px 12px; border-radius:6px;" autocomplete="off">
+      <input type="text" id="import-playlist-name" placeholder="Playlist Name (e.g. My Favorites)" style="background:var(--surface); border:1px solid var(--border); color:var(--text); padding:10px 12px; border-radius:6px;" autocomplete="off">
+      <button class="btn-accent" id="import-playlist-submit" style="padding:10px; font-weight:bold; display:flex; justify-content:center; align-items:center; gap:8px;">Import</button>
+    </div>
+  </div>
+</div>
+
 <!-- Mini player (visible while search results are open and a track exists) -->
 <div class="mini-player" id="mini-player">
   <div class="mini-player-progress" aria-hidden="true">

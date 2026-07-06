@@ -96,9 +96,14 @@ function renderPlaylists() {
 }
 
 async function openPlaylistsModal() {
+  const overlay = document.getElementById('playlists-modal-overlay');
+  overlay.classList.add('open');
+  const body = document.getElementById('playlists-modal-body');
+  if (body && (!getPlaylistsList().length)) {
+    body.innerHTML = '<div class="history-modal-empty">Loading...</div>';
+  }
   await loadPlaylists();
   renderPlaylists();
-  document.getElementById('playlists-modal-overlay').classList.add('open');
 }
 
 function closePlaylistsModal() {
@@ -338,21 +343,44 @@ document.addEventListener('DOMContentLoaded', () => {
   if (plClose) plClose.addEventListener('click', closePlaylistsModal);
   
   const importPlBtn = document.getElementById('import-playlist-btn');
-  if (importPlBtn) {
-    importPlBtn.addEventListener('click', async () => {
-      const url = prompt("Enter YouTube Playlist URL:");
-      if (!url) return;
-      const name = prompt("Enter a name for this Custom Playlist:");
-      if (!name) return;
+  const importOverlay = document.getElementById('import-playlist-overlay');
+  if (importPlBtn && importOverlay) {
+    importPlBtn.addEventListener('click', () => {
+      document.getElementById('import-playlist-url').value = '';
+      document.getElementById('import-playlist-name').value = '';
+      const submitBtn = document.getElementById('import-playlist-submit');
+      submitBtn.innerHTML = 'Import';
+      submitBtn.disabled = false;
+      importOverlay.classList.add('open');
+    });
+    
+    document.getElementById('import-playlist-close').addEventListener('click', () => {
+      importOverlay.classList.remove('open');
+    });
+
+    document.getElementById('import-playlist-submit').addEventListener('click', async () => {
+      const url = document.getElementById('import-playlist-url').value.trim();
+      const name = document.getElementById('import-playlist-name').value.trim();
+      if (!url || !name) return;
       
+      const submitBtn = document.getElementById('import-playlist-submit');
+      submitBtn.disabled = true;
+      submitBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" class="spin" style="width:18px;height:18px;"><path d="M21.5 2v6h-6M2.13 15.57a9 9 0 1 0 3.44-8.8L2.5 9M2.5 22v-6h6M21.87 8.43a9 9 0 1 0-3.44 8.8L21.5 15"/></svg> Importing...`;
+
       try {
         const res = await api('/api/playlists/', { name: name, source_url: url });
         _playlistsData.playlists[res.id] = res;
-        toast('Playlist created. Syncing tracks...', 'ok');
         await api('/api/playlists/' + res.id + '/sync/', {}, 'POST');
         renderPlaylists();
-        setTimeout(() => { loadPlaylists().then(renderPlaylists); }, 2500);
+        setTimeout(async () => {
+          await loadPlaylists();
+          renderPlaylists();
+          importOverlay.classList.remove('open');
+          toast('Playlist imported successfully', 'ok');
+        }, 2500);
       } catch (e) {
+        submitBtn.disabled = false;
+        submitBtn.innerHTML = 'Import';
         toast('Error importing playlist', 'error');
         console.error(e);
       }
@@ -380,4 +408,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   const addOverlay = document.getElementById('add-to-playlist-overlay');
   if (addOverlay) addOverlay.addEventListener('click', (e) => { if (e.target === addOverlay) closeAddToPlaylistModal(); });
+
+  const importOverlayEl = document.getElementById('import-playlist-overlay');
+  if (importOverlayEl) importOverlayEl.addEventListener('click', (e) => { if (e.target === importOverlayEl) importOverlayEl.classList.remove('open'); });
 });
