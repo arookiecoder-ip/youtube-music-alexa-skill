@@ -2925,9 +2925,13 @@ function recsRows() {
 function renderRecommendations(items) {
   const section = document.getElementById('recs-section');
   const list = document.getElementById('recs-list');
-  const shouldShow = !_hasTrack && !_resultsOpen && Array.isArray(items) && items.length > 0;
-  section.hidden = !shouldShow;
-  if (!shouldShow) { list.innerHTML = ''; return; }
+  const hasItems = Array.isArray(items) && items.length > 0;
+  section.hidden = !(!_hasTrack && !_resultsOpen && hasItems);
+  if (!hasItems) { 
+    list.innerHTML = ''; 
+    showRecsSkeleton(false);
+    return; 
+  }
   list.innerHTML = '';
   const cols = recsColumns();
   const rows = recsRows();
