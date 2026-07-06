@@ -4,7 +4,18 @@ window.togglePlaylistMoreMenu = function(btn) {
     if (m !== btn.nextElementSibling) m.style.display = 'none';
   });
   const menu = btn.nextElementSibling;
-  menu.style.display = menu.style.display === 'none' ? 'block' : 'none';
+  
+  if (menu.style.display === 'none') {
+    menu.style.display = 'block';
+    const rect = btn.getBoundingClientRect();
+    menu.style.position = 'fixed';
+    menu.style.top = (rect.bottom + 4) + 'px';
+    menu.style.right = (window.innerWidth - rect.right) + 'px';
+    menu.style.bottom = 'auto';
+    menu.style.left = 'auto';
+  } else {
+    menu.style.display = 'none';
+  }
 };
 
 document.addEventListener('click', () => {
@@ -100,9 +111,14 @@ function openPlaylistDetailModal(pl_id) {
   } else {
     let html = '<div class="history-list">';
     pl.tracks.forEach((track) => {
-      let thumbHtml = '<div class="queue-thumb"></div>';
+      let thumbHtml;
       if (track.thumbnail) {
         thumbHtml = `<img class="queue-thumb loaded" src="${escHtml(track.thumbnail)}" alt="">`;
+      } else {
+        thumbHtml = `
+          <div class="queue-thumb" style="display: flex; align-items: center; justify-content: center; background: rgba(255, 255, 255, 0.05);">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="width: 20px; height: 20px; color: var(--text-muted, #888);"><path d="M9 18V5l12-2v13"></path><circle cx="6" cy="18" r="3"></circle><circle cx="18" cy="16" r="3"></circle></svg>
+          </div>`;
       }
       
       const trashIcon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="width: 100%; height: 100%;"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>`;
@@ -111,7 +127,7 @@ function openPlaylistDetailModal(pl_id) {
       html += `
         <div class="history-item" style="position: relative;">
           ${thumbHtml}
-          <div class="history-info" onclick="playResult({video_id: '${escHtml(track.video_id)}', title: '${escHtml(track.title).replace(/'/g, "\\'")}', artist: '${escHtml(track.artist).replace(/'/g, "\\'")}'})">
+          <div class="history-info" style="flex: 1; min-width: 0; cursor: pointer;" onclick="playResult({video_id: '${escHtml(track.video_id)}', title: '${escHtml(track.title).replace(/'/g, "\\'")}', artist: '${escHtml(track.artist).replace(/'/g, "\\'")}'})">
             <div class="history-title">${escHtml(track.title)}</div>
             <div class="history-artist">${escHtml(track.artist)}</div>
           </div>

@@ -3230,7 +3230,13 @@ function updateUrlBar() {
       const title = document.getElementById('np-title').textContent || '';
       const artist = document.getElementById('np-artist').textContent || '';
       // We don't have the thumbnail here easily, but the backend doesn't strictly need it for liked songs
-      const item = { video_id: _currentVideoId, title, artist };
+      const npArt = document.getElementById('np-art');
+      const item = { 
+        video_id: _currentVideoId, 
+        title, 
+        artist,
+        thumbnail: npArt ? npArt.src : ''
+      };
       if (typeof toggleLike === 'function') toggleLike(item, likeBtn);
     });
   }
