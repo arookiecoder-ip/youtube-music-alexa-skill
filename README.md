@@ -67,6 +67,11 @@ Core (`server.py`):
 | `AUDIO_CACHE_DIR` | audio cache location (default `/tmp/ytm_audio_cache`)                                                                                                               |
 | `FLASK_DEBUG`     | set to `1` for auto-reload during local development                                                                                                                 |
 
+> **Docker Compose deployments:** `server.py` binds Flask to `0.0.0.0` (not
+> `127.0.0.1`) and the Amazon login proxy in `alexa_remote.py` does the same for
+> its port, since Caddy runs in a separate container and can only reach the
+> `ytmusic` container over the Docker bridge network, not via loopback.
+
 Web-remote login (see [Web remote](#web-remote-control-the-echo-from-any-browser)) — lets you open `/remote/` with a clean URL instead of `?key=<API_KEY>`:
 
 | Var                   | Purpose                                                                                                                                    |
@@ -352,6 +357,8 @@ proxy directly, without Caddy).
 | `/remote/` shows `{"error":"unauthorized"}` instead of a login | login not enabled — set **both** `REMOTE_USER` and `REMOTE_PASSWORD` in ytmusic.service, then daemon-reload + restart |
 | Web-remote login: "invalid authentication code"               | TOTP mismatch — check the phone clock, that the authenticator secret equals `REMOTE_TOTP_SECRET`, and that the code is current |
 | Signed in, but bounced back to `/login/` after a restart      | set `SECRET_KEY` (a random one is generated per boot, invalidating old cookies)             |
+| Search/queue works but no audio plays on the Echo              | `PUBLIC_BASE_URL` (`.env`/systemd) and `DEFAULT_API_URL` (Lambda's `api_key.py`) must both point at the domain the Echo can actually reach — a leftover placeholder (e.g. an old `sslip.io` hostname) after migrating to a real domain sends Alexa `audio_url`s that resolve nowhere |
+| 502 Bad Gateway, Caddy logs `connect: connection refused` (Docker) | Flask/aiohttp bound to `127.0.0.1` instead of `0.0.0.0` — Caddy can't reach a container's loopback address over the Docker network. See the Docker note under [Environment variables](#environment-variables) |
 | Amazon login page won't load / times out                      | the Caddy `/alexa/proxy/*` → `localhost:5001` route is missing, or `ALEXA_PROXY_BASE_URL`/`PUBLIC_BASE_URL` doesn't match the origin the browser is on |
 | Amazon login refused / loops                                  | `/alexa/status/` shows the state; check `AMAZON_DOMAIN` matches the account's Amazon site, then retry the in-page login (captcha/2FA happen in your browser) |
 | Web remote worked, then broke after months                    | Amazon changed the internal API → `~/ytm/bin/pip install -U alexapy` and restart; if the session expired, just log in again from the page |
