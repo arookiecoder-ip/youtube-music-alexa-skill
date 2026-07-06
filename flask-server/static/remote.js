@@ -665,11 +665,10 @@ function handleNpUpdate(np) {
   if (npVideoId && npVideoId !== _lastHistoryVideoId) {
     _lastHistoryVideoId = npVideoId;
     setTimeout(loadHistory, 1500);
-    // A new track just entered history, which is what recommendations are
-    // seeded from — without this, _recsLoaded stays true for the rest of the
-    // page session and the user sees the same recs list (computed before this
-    // play) every time they return to the blank state.
-    _recsLoaded = false;
+    // NOTE: recommendations are intentionally NOT reset here — they stay cached
+    // for the whole session (same set until the user refreshes the page), so
+    // returning to the blank state re-shows them instantly instead of re-
+    // fetching and reloading every thumbnail.
   }
   if (np.playing && !selectedDeviceOnline()) {
     // Offline device: show the last known track but never as live playback —
@@ -2565,9 +2564,20 @@ async function playFromQueue(item) {
     syncPlayPause();
     toast('Playing', 'ok');
     setTimeout(pollNowPlaying, 3000);
+    // Refresh history after the skill's 'started' webhook has had time to
+    // record this play — so the "Recently Listened" button reappears on its
+    // own (even if this is the same track that was last played, which wouldn't
+    // trip the video_id-change refresh in handleNpUpdate).
+    scheduleHistoryRefresh();
   } catch (e) {
     toast(e.message, 'error');
   }
+}
+
+// The 'started' webhook that records a listen can lag a few seconds behind the
+// play dispatch, so poll history a few times rather than once.
+function scheduleHistoryRefresh() {
+  [2500, 5000, 9000].forEach(ms => setTimeout(loadHistory, ms));
 }
 
 /* ---- Recently listened ---- */
@@ -2718,6 +2728,8 @@ let _recsLoaded = false;
 let _recsLoading = false;   // guards re-entrancy: syncUiState can fire several
                              // times in quick succession (SSE, np updates)
                              // before the first fetch resolves.
+let _recsItems = null;      // cached for the session so returning to the blank
+                             // state re-shows the same set instantly.
 
 function showRecsSkeleton(show) {
   const skeleton = document.getElementById('recs-skeleton');
@@ -2725,7 +2737,7 @@ function showRecsSkeleton(show) {
   // real grid (built once, then reused).
   if (show && !skeleton.dataset.filled) {
     const tile = `<div class="recs-skeleton-tile"><div class="skeleton-block"></div><div class="skeleton-line skeleton-line-title"></div><div class="skeleton-line skeleton-line-artist"></div></div>`;
-    skeleton.innerHTML = tile.repeat(18);
+    skeleton.innerHTML = tile.repeat(24);
     skeleton.dataset.filled = '1';
   }
   skeleton.hidden = !show;
@@ -2802,6 +2814,9 @@ function renderRecommendations(items) {
     if (skeletonHidden) return;
     skeletonHidden = true;
     document.getElementById('recs-skeleton').hidden = true;
+    // Content is ready: smoothly expand the section from the normal centered
+    // width out to the full viewport width (see .recs-ready in CSS).
+    section.classList.add('recs-ready');
   };
 
   // Reveal a tile once its thumbnail is decoded. A tile with no image, a

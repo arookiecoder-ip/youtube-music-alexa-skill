@@ -2904,6 +2904,11 @@ def alexa_play_queue():
                         playback_confirmed=False,
                         queue=queue,
                         queue_index=target_idx)
+    # Recommendations/charts carry no duration, so the progress bar would show
+    # --:-- with no total. Look the real metadata (incl. length) up in the
+    # background and patch it into now-playing without blocking playback.
+    if not int(item.get('duration_ms') or 0):
+        threading.Thread(target=_lookup_and_update_np, args=(video_id,), daemon=True).start()
     return jsonify({'ok': True, 'now_playing': {
         'title': item.get('title', ''),
         'artist': item.get('artist', ''),
