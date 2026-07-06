@@ -117,268 +117,37 @@ PROJECT-PLAN.md       roadmap
 
 ## Setup from scratch
 
-### 1. VPS (any Ubuntu box on a static IP; Oracle free tier works)
+Full step-by-step, beginner-friendly guides (server + Alexa skill, start to
+finish) live in their own files — pick one based on how you want to run the
+server:
 
-```bash
-# base deps
-sudo apt install -y python3-venv python3-full unzip docker.io
-python3 -m venv ~/ytm
-~/ytm/bin/pip install "flask[async]" ytmusicapi yt-dlp alexapy bgutil-ytdlp-pot-provider
+- **[SETUP-DOCKER.md](SETUP-DOCKER.md)** — Docker Compose. Recommended if
+  this VPS will host other projects too (keeps everything isolated,
+  shares Caddy across projects).
+- **[SETUP-VPS.md](SETUP-VPS.md)** — plain Python venv + systemd, no Docker.
+  Simpler if this VPS is dedicated to just this project.
 
-# deno (JS runtime for yt-dlp)
-curl -fsSL https://deno.land/install.sh | sh -s -- -y
+Both guides cover the same ground: installing dependencies, getting YouTube
+cookies, setting up HTTPS with Caddy, and creating/configuring the Alexa
+skill in the developer console. The rest of this README is reference
+material — architecture, environment variables, voice commands, the web
+remote, and troubleshooting.
 
-# PO token provider
-sudo docker run -d --name bgutil-provider --restart unless-stopped \
-  -p 127.0.0.1:4416:4416 brainicism/bgutil-ytdlp-pot-provider
-```
+### Shared secret: the API key
 
-**Cookies** (required on datacenter IPs): sign in to youtube.com with a
-**throwaway** Google account in a private browser window, export with a
-"Get cookies.txt LOCALLY"-style extension, `scp` to `~/cookies.txt`,
-`chmod 600`. Re-export if bot-check errors ever return.
-
-**Smoke test** — must print a googlevideo URL (production uses `tv` as the
-primary client, falling back to `mweb` automatically if `tv` fails for a
-given video; either works standalone for this check):
-
-```bash
-~/ytm/bin/yt-dlp --cookies ~/cookies.txt --remote-components ejs:github \
-  --extractor-args "youtube:player_client=mweb" -f ba -g J7p4bzqLvCw
-```
-
-Copy `flask-server/` to `~/flask-server`, then create
-`/etc/systemd/system/ytmusic.service` (this is the full production shape —
-the `REMOTE_*` / `SECRET_KEY` lines are for the web remote and can be added
-later, see [Remote login](#remote-login-clean-url-instead-of-a-key)):
-
-```ini
-[Unit]
-Description=YT Music Flask server
-After=network-online.target
-
-[Service]
-User=ubuntu
-WorkingDirectory=/home/ubuntu/flask-server
-Environment=YTDLP_COOKIES=/home/ubuntu/cookies.txt
-Environment=PUBLIC_BASE_URL=https://<your-ip-with-dashes>.sslip.io
-Environment=API_KEY=<same value as lambda/api_key.py>
-Environment=AMAZON_DOMAIN=<amazon.in / amazon.com / ...>
-Environment=SECRET_KEY=<openssl rand -hex 32>
-Environment=REMOTE_USER=<pick a username>
-Environment=REMOTE_PASSWORD=<pick a strong password>
-Environment=REMOTE_TOTP_SECRET=<base32 secret, optional 2FA>
-Environment=PATH=/home/ubuntu/ytm/bin:/home/ubuntu/.deno/bin:/usr/local/bin:/usr/bin:/bin
-ExecStart=/home/ubuntu/ytm/bin/python /home/ubuntu/flask-server/server.py
-Restart=always
-RestartSec=5
-
-[Install]
-WantedBy=multi-user.target
-```
-
-```bash
-sudo chmod 600 /etc/systemd/system/ytmusic.service   # it holds secrets
-sudo systemctl enable --now ytmusic
-```
-
-#### Alternative: Docker Compose (recommended if this VPS hosts other projects too)
-
-`flask-server/Dockerfile` packages the server + deno (JS challenge solver
-yt-dlp needs) + ffmpeg. The root `docker-compose.yml` runs it alongside a
-shared **Caddy** container (`Caddyfile` at repo root) — add more services +
-Caddyfile blocks for other projects on the same VPS without fighting over
-host ports 80/443.
-
-**First time on the VPS? Here's what to get onto the server, step by step:**
-
-1. **Get the code onto the VPS.** Easiest way — just clone the repo directly
-   on the VPS instead of copying files by hand:
-   ```bash
-   git clone https://github.com/arookiecoder-ip/youtube-music-alexa-skill.git
-   cd youtube-music-alexa-skill
-   ```
-   This brings over everything needed to run the server: `flask-server/`,
-   `docker-compose.yml`, `Caddyfile`. (`lambda/` is *not* deployed here — those
-   files get pasted into the Alexa console's code editor instead, see
-   [Alexa console setup](#3-alexa-console-setup).)
-2. **Create your real secrets file.** `.env.example` is just a template
-   (safe, checked into git, no real values). Copy it and fill in the blanks —
-   this file must **never** be committed:
-   ```bash
-   cp .env.example .env
-   nano .env   # fill in PUBLIC_BASE_URL, API_KEY, etc.
-   ```
-3. **Set your hostname in the Caddyfile.** Open `Caddyfile` and replace
-   `<your-ip-with-dashes>.sslip.io` with your real VPS address (see
-   [HTTPS setup](#2-https-caddy--sslipio--no-domain-needed) above for how to
-   derive it from your VPS's public IP).
-4. **Add your YouTube cookies.** yt-dlp needs a logged-in session to get past
-   YouTube's bot-blocking on datacenter/VPS IPs.
-   - ⚠️ Use a **throwaway Google account** for this, not your main one —
-     never export cookies from an account you actually care about.
-   - In your browser (on your PC), log into YouTube with that throwaway
-     account, then install a cookie-export extension — e.g. "Get cookies.txt
-     LOCALLY" (Chrome/Firefox) — and use it on a youtube.com tab to download
-     a `cookies.txt` file in Netscape format.
-   - Copy that file to the VPS:
-     ```bash
-     scp cookies.txt ubuntu@<your-vps-ip>:~/cookies.txt
-     ```
-   - Cookies expire/rotate occasionally — if yt-dlp starts throwing
-     bot-check/"Sign in to confirm" errors again, just repeat this step
-     (re-export + re-scp) to refresh them.
-5. **Build and start everything:**
-   ```bash
-   docker compose up -d --build
-   ```
-
-Cookies (`~/cookies.txt`) and the audio cache are mounted as volumes so they
-persist across container restarts. To update the server later:
-`docker compose up -d --build ytmusic`.
-
-**First-time VPS setup gotchas** (Ubuntu 24.04, only needed once per VPS):
-
-- `docker: unknown command: docker compose` — the Compose v2 plugin isn't
-  installed. Ubuntu's own apt repo doesn't carry `docker-compose-plugin`, so
-  install the binary directly instead of chasing that package:
-  ```bash
-  mkdir -p ~/.docker/cli-plugins
-  curl -SL https://github.com/docker/compose/releases/latest/download/docker-compose-linux-$(uname -m) \
-    -o ~/.docker/cli-plugins/docker-compose
-  chmod +x ~/.docker/cli-plugins/docker-compose
-  docker compose version   # should now print a version
-  ```
-- `permission denied while trying to connect to the docker API at
-  unix:///var/run/docker.sock` — your user isn't in the `docker` group yet:
-  ```bash
-  sudo usermod -aG docker $USER
-  ```
-  Don't just re-run with `sudo docker compose ...` — since the plugin above
-  was installed under your user's home directory, root's Docker CLI can't
-  find it and you'll hit the "unknown command" error again. Instead, either
-  log out and reconnect over SSH, or run `newgrp docker` to pick up the new
-  group in your current shell, then retry `docker compose up -d --build`
-  without `sudo`.
-
-This replaces both the systemd unit *and* the standalone Caddy install from
-the sections above — skip those if you go this route.
-
-### 2. HTTPS (Caddy + sslip.io — no domain needed)
-
-Get the VPS's public IP (`curl ifconfig.me` on the VPS, or check it in the
-cloud console), then replace the dots with dashes and append `.sslip.io` —
-e.g. `1.2.3.4` → `1-2-3-4.sslip.io`. sslip.io is a free wildcard DNS service:
-that hostname resolves straight to the IP, no domain registration needed.
-This becomes your `<your-ip-with-dashes>.sslip.io` value everywhere below.
-
-Open TCP 80 + 443 in **both** the cloud firewall (Oracle: VCN → subnet →
-Security List → Add Ingress Rules, source 0.0.0.0/0) **and** the instance:
-
-```bash
-sudo iptables -I INPUT 5 -p tcp --dport 80 -j ACCEPT
-sudo iptables -I INPUT 5 -p tcp --dport 443 -j ACCEPT
-sudo apt install -y iptables-persistent && sudo netfilter-persistent save
-```
-
-Install Caddy from its official apt repo:
-
-```bash
-sudo apt install -y debian-keyring debian-archive-keyring apt-transport-https curl
-curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | \
-  sudo gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
-curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' | \
-  sudo tee /etc/apt/sources.list.d/caddy-stable.list
-sudo apt update
-sudo apt install -y caddy
-```
-
-Then edit `/etc/caddy/Caddyfile` (open it with `sudo nano /etc/caddy/Caddyfile`,
-replacing whatever default content is there) and replace its entire contents
-with the block below — swap in your real hostname for
-`<your-ip-with-dashes>.sslip.io` first. The `/alexa/proxy/*` route is what
-makes the browser-driven Amazon login work — it forwards the public path to
-the local login proxy (port 5001):
-
-```
-<your-ip-with-dashes>.sslip.io {
-    handle /alexa/proxy/* {
-        reverse_proxy localhost:5001
-    }
-    handle {
-        reverse_proxy localhost:5000
-    }
-}
-```
-
-Save and exit (in `nano`: `Ctrl+O`, `Enter`, `Ctrl+X`).
-
-`sudo systemctl reload caddy` — the certificate appears within a minute
-(`journalctl -u caddy` shows "certificate obtained successfully").
-
-> Optional: you can serve the login proxy from a dedicated hostname instead
-> (a second Caddy site block with the same `/alexa/proxy/*` route). If you
-> do, set `ALEXA_PROXY_BASE_URL=https://<that-hostname>` in the systemd unit;
-> otherwise it defaults to `PUBLIC_BASE_URL` and needs no extra config.
-
-**Cache cleanup cron.** The audio cache is the only thing the server writes to
-disk that needs sweeping (thumbnails are remote URLs; Alexa auth cookies are
-left alone). A 30-minute sweep deletes audio files older than 2 h — this also
-clears any `.part` partial downloads — and a daily job trims yt-dlp's own info
-cache:
-
-```bash
-(crontab -l 2>/dev/null | grep -v 'ytm_audio_cache' | grep -v 'yt-dlp'; \
- echo "*/30 * * * * find /tmp/ytm_audio_cache -type f -mmin +120 -delete"; \
- echo "0 5 * * * find ~/.cache/yt-dlp -type f -mtime +7 -delete 2>/dev/null") | crontab -
-```
-
-**Docker Compose variant:** the cache lives in the `ytmusic_cache` named
-volume, not a host path, so the cron must reach into the running container
-instead:
-
-```bash
-(crontab -l 2>/dev/null | grep -v 'ytm_audio_cache'; \
- echo "*/30 * * * * docker exec ytmusic find /tmp/ytm_audio_cache -type f -mmin +120 -delete") | crontab -
-```
-
-(yt-dlp's info cache is ephemeral inside the container and clears on
-`docker compose up --build`/recreation, so the second cron line isn't needed
-in this variant.)
-
-Note: 2 h retention (`-mmin +120`) means a track played continuously past two
-hours may be deleted mid-stream and re-downloaded — fine for songs, relevant
-only for very long mixes. Bump to `+240` for a 4 h floor if needed.
-
-### 3. Alexa skill (Alexa-hosted, free — no AWS account needed)
-
-1. [developer.amazon.com/alexa](https://developer.amazon.com/alexa) → Create
-   Skill → Custom model → **Alexa-hosted (Python)**.
-2. Build tab → paste each locale JSON from
-   `skill-package/interactionModels/custom/` → Build. Invocation name:
-   **"music box"**.
-3. Build tab → **Interfaces → Audio Player ON**.
-4. Create `lambda/api_key.py` (gitignored — never committed) containing
-   `API_KEY = "<your secret>"` and
-   `DEFAULT_API_URL = "<your https://...sslip.io URL>"`.
-5. Code tab → copy in `lambda_function.py`, `requirements.txt` (replace),
-   `data.py`, `api_key.py`, `mediaUtils/player.py`,
-   `models/player_models.py` → **Deploy**.
-6. Test tab (or a real Echo): _"ask music box to play blinding lights"_.
-
-### 4. API key (shared secret between Lambda and server)
-
-Generate one secret, then use the same value in both places:
+Both setup guides have you generate one secret and use it in **two places**
+that must always match:
 
 ```bash
 openssl rand -base64 32 | tr -d '\n'
 ```
 
-- **Alexa console**: Code tab → `lambda/api_key.py` → `API_KEY = "<secret>"`
-  → Deploy.
-- **VPS**: the `Environment=API_KEY=<secret>` line in
-  `/etc/systemd/system/ytmusic.service` (see above), then
-  `sudo systemctl daemon-reload && sudo systemctl restart ytmusic`.
+- **Alexa console**: `lambda/api_key.py` → `API_KEY = "<secret>"` → Deploy.
+- **Server**: `API_KEY` in `.env` (Docker) or the systemd unit (plain VPS),
+  then restart the service.
+
+A mismatch here is the #1 cause of "401 everywhere" — see
+[Troubleshooting](#troubleshooting).
 
 ---
 
