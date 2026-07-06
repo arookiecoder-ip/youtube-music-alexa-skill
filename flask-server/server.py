@@ -910,13 +910,19 @@ class Supporting:
     async def get_charts_queue():
         """Genre-agnostic trending tracks. Used as the discovery half of
         recommendations, and as the sole source on a true cold start (no
-        history yet)."""
+        history yet). Country defaults to India so a cold start doesn't show a
+        US Top-40 list; falls back to the global chart if 'IN' isn't supported
+        by the installed ytmusicapi."""
         ytmusic = YTMusic()
-        try:
-            charts = await asyncio.to_thread(ytmusic.get_charts)
-        except Exception:
-            traceback.print_exc()
-            return None
+        charts = None
+        for country in (CHARTS_COUNTRY, 'ZZ'):
+            try:
+                charts = await asyncio.to_thread(ytmusic.get_charts, country)
+                if charts:
+                    break
+            except Exception:
+                traceback.print_exc()
+                charts = None
         songs = ((charts or {}).get('songs') or {}).get('items', [])
         if not songs:
             return None
@@ -948,17 +954,22 @@ class Supporting:
         songs = (radio_results or {}).get('tracks', [])
         if not songs:
             return None
-        return [
-            {
-                'title': track["title"],
-                'artist': " and ".join([artist["name"] for artist in track.get("artists", [])]),
-                'video_id': track["videoId"],
+        # Use .get() throughout: a single malformed track (missing title/etc.)
+        # must not KeyError and take down the whole radio (which would push
+        # recommendations onto the generic fallback).
+        out = []
+        for track in songs:
+            vid = track.get("videoId")
+            if not vid:
+                continue
+            out.append({
+                'title': track.get("title", ""),
+                'artist': " and ".join(a.get("name", "") for a in (track.get("artists") or [])),
+                'video_id': vid,
                 'thumbnail': track['thumbnail'][-1] if track.get('thumbnail') else None,
                 'duration_ms': Supporting.duration_ms(track),
-            }
-            for track in songs
-            if track.get("videoId")
-        ]
+            })
+        return out or None
 
     async def get_artist(artist_name: str):
         ytmusic = YTMusic()
@@ -2259,15 +2270,19 @@ async def _none():
     return None
 
 
-# Well-known, durable YouTube Music videos used purely as radio *seeds* for
-# the trending/cold-start fallback. get_charts() varies across ytmusicapi
-# versions (return shape, auth requirements) and is unreliable in practice, so
-# get_radio_queue() — the same stable get_watch_playlist() call used for real
-# playback everywhere else in this app — is the primary fallback instead.
-# get_charts() is still tried first since when it works it's more genuinely
-# "trending", but a broken/missing/mismatched version must never leave
-# recommendations empty.
-_FALLBACK_SEED_IDS = ['dQw4w9WgXcQ', 'JGwWNGJdvx8', 'kJQP7kiw5Fk']
+# Country for the cold-start charts (ISO 3166 alpha-2). Defaults to India so a
+# user with no history yet sees Indian trending music, not a US Top-40 list.
+CHARTS_COUNTRY = os.environ.get("CHARTS_COUNTRY", "IN")
+
+# Well-known, durable YouTube Music videos used purely as radio *seeds* for the
+# cold-start fallback (only reached when there's no history AND charts failed).
+# Indian tracks so the fallback matches the expected audience rather than a
+# generic Western radio. get_radio_queue() (get_watch_playlist) is the same
+# stable call used for real playback everywhere else in this app.
+#   - 1-YZS_TQhBc  Kesariya (Brahmastra)
+#   - RQf6ozD6EhE  Apna Bana Le (Bhediya)
+#   - lFhKQjxIsGw  Chaleya (Jawan)
+_FALLBACK_SEED_IDS = ['1-YZS_TQhBc', 'RQf6ozD6EhE', 'lFhKQjxIsGw']
 
 
 async def _get_fallback_queue(exclude_ids):
@@ -2282,8 +2297,11 @@ async def _build_recommendations():
     with _history_lock:
         history = _load_history()
     seen_ids = {e['video_id'] for e in history if e.get('video_id')}
+    sys.stderr.write(f"[recs] history has {len(history)} entries\n")
 
     if not history:
+        sys.stderr.write("[recs] no history -> charts/fallback (generic)\n")
+        sys.stderr.flush()
         charts = await Supporting.get_charts_queue()
         pool = charts if charts else await _get_fallback_queue(seen_ids)
         random.shuffle(pool)
@@ -2300,7 +2318,14 @@ async def _build_recommendations():
     random.shuffle(recent)
     seeds = list(dict.fromkeys(recent[:3] + pool))[:5]
 
-    radios = await asyncio.gather(*[Supporting.get_radio_queue(s) for s in seeds])
+    # return_exceptions so one failed/raising seed radio doesn't abort the whole
+    # build (which would return the stale cache — possibly a generic fallback).
+    radios = await asyncio.gather(
+        *[Supporting.get_radio_queue(s) for s in seeds], return_exceptions=True)
+    ok = sum(1 for r in radios if isinstance(r, list) and r)
+    sys.stderr.write(f"[recs] {len(seeds)} seeds -> {ok} non-empty radios\n")
+    sys.stderr.flush()
+    radios = [r if isinstance(r, list) else None for r in radios]
 
     mixed, out_ids = [], set()
     # Interleave the radios so the list reads as one mixed feed rather than
@@ -2321,12 +2346,17 @@ async def _build_recommendations():
     familiar = [i for i in mixed if i['video_id'] in seen_ids]
     random.shuffle(fresh)
     result = (fresh + familiar)[:40]
+    sys.stderr.write(f"[recs] built {len(result)} from history radios "
+                     f"(fresh={len(fresh)} familiar={len(familiar)})\n")
+    sys.stderr.flush()
 
     # Only reach for the generic Western fallback when the user's own radios
     # produced almost nothing (e.g. every seed's radio failed) — never just to
     # top up an already-decent list, since that pollutes an Indian feed with
     # unrelated tracks.
     if len(result) < 6:
+        sys.stderr.write("[recs] history radios nearly empty -> generic fallback\n")
+        sys.stderr.flush()
         topoff = await Supporting.get_charts_queue() or await _get_fallback_queue(out_ids | seen_ids)
         for item in topoff:
             vid = item.get('video_id')

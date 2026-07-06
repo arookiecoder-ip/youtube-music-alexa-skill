@@ -1681,28 +1681,44 @@
     padding: 0;
   }
   .recs-section .section-head {
-    padding: 0 20px;
+    padding: 0 16px;   /* aligns the label with the grid's left edge */
   }
   @media (min-width: 900px) {
     .recs-section .section-head { padding: 0 40px; }
   }
+  /* Exactly 2 rows of tiles that flow into columns and scroll horizontally,
+     like a music-app "recommended" shelf. grid-auto-flow: column fills the two
+     rows top-to-bottom, then adds new columns to the right. */
   .recs-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(92px, 1fr));
-    gap: 16px 12px;
-    padding: 0 20px;
+    grid-template-rows: repeat(2, auto);
+    grid-auto-flow: column;
+    grid-auto-columns: 108px;
+    gap: 14px 12px;
+    padding: 0 16px 6px;
+    overflow-x: auto;
+    overflow-y: hidden;
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+    scroll-snap-type: x proximity;
+    /* Smooth momentum scroll on iOS, and keep the horizontal swipe from
+       triggering browser back-navigation / page bounce on mobile. */
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-x: contain;
     /* Fade/rise in once populated, so the swap from skeleton to real tiles
        reads as one continuous motion instead of a hard cut. */
     opacity: 0;
     transform: translateY(8px);
     transition: opacity .4s ease, transform .4s ease;
   }
+  .recs-grid::-webkit-scrollbar { height: 6px; }
+  .recs-grid::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
   .recs-grid.is-visible { opacity: 1; transform: none; }
   @media (min-width: 900px) {
     .recs-grid {
-      grid-template-columns: repeat(auto-fill, minmax(118px, 1fr));
-      gap: 20px 16px;
-      padding: 0 32px;
+      grid-auto-columns: 132px;
+      gap: 18px 16px;
+      padding: 0 40px 8px;
     }
   }
   .recs-tile {
@@ -1710,6 +1726,7 @@
     flex-direction: column;
     gap: 6px;
     cursor: pointer;
+    scroll-snap-align: start;
     /* No background/border — the art itself is the only visual weight. */
     background: none;
     border: none;
@@ -1740,10 +1757,15 @@
     height: 100%;
     object-fit: cover;
   }
-  .recs-tile:hover .recs-tile-art {
-    transform: scale(1.04) translateY(-2px);
-    box-shadow: 0 8px 24px rgba(0,0,0,.5);
+  /* Hover lift only on real pointers — avoids the effect "sticking" after a
+     tap on touchscreens. Touch devices get a quick press feedback instead. */
+  @media (hover: hover) {
+    .recs-tile:hover .recs-tile-art {
+      transform: scale(1.04) translateY(-2px);
+      box-shadow: 0 8px 24px rgba(0,0,0,.5);
+    }
   }
+  .recs-tile:active .recs-tile-art { transform: scale(.97); }
   @media (prefers-reduced-motion: reduce) {
     .recs-grid.is-visible .recs-tile { animation: none; opacity: 1; transform: none; }
   }
@@ -1752,13 +1774,11 @@
     font-weight: 600;
     color: var(--text);
     line-height: 1.3;
-    /* Wrap to at most 2 lines, then ellipsis, so longer song names stay
-       readable instead of being cut after a few words. */
-    display: -webkit-box;
-    -webkit-line-clamp: 2;
-    line-clamp: 2;
-    -webkit-box-orient: vertical;
+    /* Single line + ellipsis so every tile is the same height and the two grid
+       rows stay aligned. */
+    white-space: nowrap;
     overflow: hidden;
+    text-overflow: ellipsis;
   }
   .recs-tile-artist {
     font-size: .62rem;
@@ -1845,17 +1865,17 @@
       display: none !important;
     }
   }
-  /* Recommendations break out of main's centered content column to span the
-     full viewport width. main is horizontally centered in the viewport, so
-     margin-left/right: calc(50% - 50vw) lines the section's edges up with the
-     viewport edges. align-self:stretch stops the flex column's align-items:
-     center from re-centering it at its natural (narrow) width. The grid's own
-     side padding keeps tiles clear of the screen edges. */
+  /* Recommendations span the full viewport width. The section is a direct
+     child of <main> (which is horizontally centered), so this canonical
+     full-bleed reliably reaches both viewport edges. */
   main.idle .recs-section {
-    align-self: stretch;
-    width: auto;
-    margin-left: calc(50% - 50vw);
-    margin-right: calc(50% - 50vw);
+    width: 100vw;
+    max-width: 100vw;
+    position: relative;
+    left: 50%;
+    right: 50%;
+    margin-left: -50vw;
+    margin-right: -50vw;
     margin-top: 24px;
     box-sizing: border-box;
   }

@@ -162,17 +162,6 @@
     </div>
   </section>
 
-  <!-- Recommended for you: full-width tile grid, shown on blank state,
-       skeleton tiles while loading -->
-  <section class="needs-login recs-section" id="recs-section" hidden>
-    <div class="section-head">
-      <div class="label">Recommended for you</div>
-    </div>
-    <div class="recs-grid" id="recs-list"></div>
-    <!-- Skeleton tiles are injected by remote.js to match the real grid size -->
-    <div class="recs-grid recs-skeleton" id="recs-skeleton" hidden></div>
-  </section>
-
   <!-- Player -->
   <section class="needs-login player-section is-collapsed" hidden>
     <!-- Now playing: single art element, no dual placeholder/img issue -->
@@ -297,6 +286,18 @@
     <div class="queue-section" id="queue-list"></div>
   </section>
   </div><!-- /.layout -->
+
+  <!-- Recommended for you: full-width tile grid (direct child of main so it can
+       span the viewport edge-to-edge, independent of .layout's width). Shown on
+       blank state; skeleton tiles while loading. -->
+  <section class="needs-login recs-section" id="recs-section" hidden>
+    <div class="section-head">
+      <div class="label">Recommended for you</div>
+    </div>
+    <div class="recs-grid" id="recs-list"></div>
+    <!-- Skeleton tiles are injected by remote.js to match the real grid size -->
+    <div class="recs-grid recs-skeleton" id="recs-skeleton" hidden></div>
+  </section>
 
   <footer class="site-footer">
     <a href="https://github.com/arookiecoder-ip" target="_blank" rel="noopener">

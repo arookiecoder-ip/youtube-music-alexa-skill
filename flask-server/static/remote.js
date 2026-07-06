@@ -2744,7 +2744,9 @@ async function loadRecommendations() {
   section.hidden = !(!_hasTrack && !_resultsOpen);
   showRecsSkeleton(true);
   try {
-    const items = await api('/recommendations/');
+    // refresh=1 so each visit rebuilds from current history (a fresh mix) and
+    // never serves a stale cached list from an earlier fallback.
+    const items = await api('/recommendations/?refresh=1');
     _recsLoaded = true;
     renderRecommendations(items);
   } catch (e) {
