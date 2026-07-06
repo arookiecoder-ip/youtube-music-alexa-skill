@@ -2734,12 +2734,10 @@ let _recsItems = null;      // cached for the session so returning to the blank
 function showRecsSkeleton(show) {
   const skeleton = document.getElementById('recs-skeleton');
   if (show) {
-    // Exactly 2 rows of skeleton tiles at the current column count, matching
-    // the real grid's full-width 2-row layout.
     const cols = recsColumns();
-    skeleton.style.setProperty('--recs-cols', cols);
+    const rows = recsRows();
     const tile = `<div class="recs-skeleton-tile"><div class="skeleton-block"></div><div class="skeleton-line skeleton-line-title"></div><div class="skeleton-line skeleton-line-artist"></div></div>`;
-    skeleton.innerHTML = tile.repeat(cols * 2);
+    skeleton.innerHTML = tile.repeat(cols * rows);
   }
   skeleton.hidden = !show;
   document.getElementById('recs-list').hidden = show;
@@ -2769,15 +2767,29 @@ async function loadRecommendations() {
   }
 }
 
-// How many columns fit the viewport at the current tile size, so we can show
-// exactly 2 rows that fill the width.
+// Mobile: always 3 columns. Desktop: fill width with tiles ≥132px.
 function recsColumns() {
   const wide = window.matchMedia('(min-width: 900px)').matches;
-  const minTile = wide ? 132 : 110;
-  const gap = wide ? 18 : 14;
-  const pad = wide ? 80 : 32;             // section side padding (both sides)
+  if (!wide) return 3;
+  const gap = 18, pad = 80;
   const avail = Math.max(0, window.innerWidth - pad);
-  return Math.max(2, Math.floor((avail + gap) / (minTile + gap)));
+  return Math.max(2, Math.floor((avail + gap) / (132 + gap)));
+}
+
+// How many rows fit in the visible area (including footer) without scrolling.
+function recsRows() {
+  const wide = window.matchMedia('(min-width: 900px)').matches;
+  const cols = recsColumns();
+  const hGap = wide ? 18 : 10;
+  const pad  = wide ? 80 : 24;
+  const vGap = wide ? 22 : 10;
+  const tileW = Math.floor((window.innerWidth - pad - hGap * (cols - 1)) / cols);
+  // tile height = square art + title + artist + internal gap (~40px desktop, ~34px mobile)
+  const tileH = tileW + (wide ? 40 : 34);
+  // overhead: header + idle-hero + search bar + section label + footer
+  const overhead = wide ? 320 : 280;
+  const avail = Math.max(tileH, window.innerHeight - overhead);
+  return Math.max(2, Math.floor((avail + vGap) / (tileH + vGap)));
 }
 
 function renderRecommendations(items) {
@@ -2787,11 +2799,11 @@ function renderRecommendations(items) {
   section.hidden = !shouldShow;
   if (!shouldShow) { list.innerHTML = ''; return; }
   list.innerHTML = '';
-  // Exactly 2 rows: as many columns as fit the width, capped to 2 rows worth.
   const cols = recsColumns();
+  const rows = recsRows();
   _recsShownCols = cols;
   list.style.setProperty('--recs-cols', cols);
-  const shown = items.filter(it => it && it.video_id).slice(0, cols * 2);
+  const shown = items.filter(it => it && it.video_id).slice(0, cols * rows);
   const tiles = [];
   for (const item of shown) {
     if (!item || !item.video_id) continue;

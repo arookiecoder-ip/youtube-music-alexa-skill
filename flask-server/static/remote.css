@@ -1697,18 +1697,19 @@
   @media (min-width: 900px) {
     .recs-section .section-head { padding: 0 40px; }
   }
-  /* Full-width grid, exactly 2 rows. Columns fill the screen width; JS trims
-     the tile list to (columns × 2) so it never wraps past 2 rows and never
-     scrolls. --recs-cols is set by JS to the number of columns that fit. */
+  /* Mobile: exactly 3 columns. Desktop: auto-fill based on tile min-width.
+     JS trims the tile list to (cols × rows) to fill the viewport without
+     scrolling. */
   .recs-grid {
     display: grid;
-    grid-template-columns: repeat(var(--recs-cols, 5), 1fr);
-    gap: 18px 14px;
-    padding: 0 16px;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 10px 10px;
+    padding: 0 12px;
   }
   .recs-grid[hidden] { display: none; }
   @media (min-width: 900px) {
     .recs-grid {
+      grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
       gap: 22px 18px;
       padding: 0 40px;
     }
@@ -1716,13 +1717,10 @@
   .recs-tile {
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 4px;
     cursor: pointer;
-    /* No background/border — the art itself is the only visual weight. */
     background: none;
     border: none;
-    /* Hidden until the thumbnail has loaded (JS adds .is-ready). rise-in on
-       reveal. transitionDelay is set inline per tile for a cascade. */
     opacity: 0;
     transform: translateY(10px);
     transition: opacity .35s ease, transform .35s cubic-bezier(.22,1,.36,1);
@@ -1762,23 +1760,21 @@
   }
   .recs-tile:active .recs-tile-art { transform: scale(.97); }
   .recs-tile-title {
-    font-size: .7rem;
+    font-size: .65rem;
     font-weight: 600;
     color: var(--text);
-    line-height: 1.3;
-    /* Single line + ellipsis so every tile is the same height and the two grid
-       rows stay aligned. */
+    line-height: 1.2;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
   }
   .recs-tile-artist {
-    font-size: .62rem;
+    font-size: .58rem;
     color: var(--muted);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
-    margin-top: 1px;
+    margin-top: 0;
   }
 
   /* ---- Recommendations skeleton loader (same grid shape as real tiles) ---- */
