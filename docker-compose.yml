@@ -1,0 +1,34 @@
+services:
+  ytmusic:
+    build: ./flask-server
+    container_name: ytmusic
+    restart: unless-stopped
+    env_file: .env
+    volumes:
+      - ~/cookies.txt:/app/cookies.txt:ro
+      - ytmusic_cache:/tmp/ytm_audio_cache
+    networks:
+      - web
+
+  caddy:
+    image: caddy:2
+    container_name: caddy
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - web
+
+networks:
+  web:
+    name: web
+
+volumes:
+  ytmusic_cache:
+  caddy_data:
+  caddy_config:

@@ -4,5 +4,6 @@
 __pycache__
 .venv
 HANDOFF.md
+.env
 .code-review-graph/
 .storage

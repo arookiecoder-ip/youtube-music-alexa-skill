@@ -182,7 +182,34 @@ sudo chmod 600 /etc/systemd/system/ytmusic.service   # it holds secrets
 sudo systemctl enable --now ytmusic
 ```
 
+#### Alternative: Docker Compose (recommended if this VPS hosts other projects too)
+
+`flask-server/Dockerfile` packages the server + deno (JS challenge solver
+yt-dlp needs) + ffmpeg. The root `docker-compose.yml` runs it alongside a
+shared **Caddy** container (`Caddyfile` at repo root) — add more services +
+Caddyfile blocks for other projects on the same VPS without fighting over
+host ports 80/443.
+
+```bash
+cp .env.example .env   # fill in real values; gitignored, never commit it
+# edit Caddyfile: replace <your-ip-with-dashes>.sslip.io with your real host
+docker compose up -d --build
+```
+
+Cookies (`~/cookies.txt`) and the audio cache are mounted as volumes so they
+persist across container restarts. To update the server later:
+`docker compose up -d --build ytmusic`.
+
+This replaces both the systemd unit *and* the standalone Caddy install from
+the sections above — skip those if you go this route.
+
 ### 2. HTTPS (Caddy + sslip.io — no domain needed)
+
+Get the VPS's public IP (`curl ifconfig.me` on the VPS, or check it in the
+cloud console), then replace the dots with dashes and append `.sslip.io` —
+e.g. `1.2.3.4` → `1-2-3-4.sslip.io`. sslip.io is a free wildcard DNS service:
+that hostname resolves straight to the IP, no domain registration needed.
+This becomes your `<your-ip-with-dashes>.sslip.io` value everywhere below.
 
 Open TCP 80 + 443 in **both** the cloud firewall (Oracle: VCN → subnet →
 Security List → Add Ingress Rules, source 0.0.0.0/0) **and** the instance:

@@ -1,0 +1,13 @@
+<your-ip-with-dashes>.sslip.io {
+    handle /alexa/proxy/* {
+        reverse_proxy ytmusic:5001
+    }
+    handle {
+        reverse_proxy ytmusic:5000
+    }
+}
+
+# Add one block per additional project sharing this VPS, e.g.:
+# <other-project-ip-with-dashes>.sslip.io {
+#     reverse_proxy other-project-container:PORT
+# }

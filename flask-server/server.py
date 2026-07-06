@@ -1369,6 +1369,13 @@ def _lookup_and_update_np(video_id):
                 if not duration_ms:
                     duration_ms = probed.get('duration_ms', 0)
         if title:
+            # The lookup can be slow; if the track changed while it ran, writing
+            # these fields would revert now_playing to the previous song (wrong
+            # card + progress reset) even though the queue moved on. Drop it.
+            if _get_now_playing().get('video_id') != video_id:
+                sys.stderr.write(f"[np] lookup discarded (track changed): {video_id}\n")
+                sys.stderr.flush()
+                return
             # Only attach duration; the video_id/title/etc. were already set by
             # the caller. Passing duration_ms here (without video_id) updates it
             # in place without re-triggering the track-change reset.
@@ -1903,8 +1910,13 @@ def alexa_state_event():
             else:
                 # queue_index=-1: this track isn't in the visible queue, so the
                 # old highlight is wrong until _refresh_radio_queue rebuilds it.
+                # The previous track's title/artist/thumbnail are stale for this
+                # video_id — look the real metadata up, otherwise the now-playing
+                # card stays wedged on the old song for every later auto-advance
+                # whose track is missing from the visible queue.
                 _update_now_playing(playing=True, video_id=video_id, position_ms=offset_in_ms,
                                     playback_confirmed=True, queue_index=-1)
+                threading.Thread(target=_lookup_and_update_np, args=(video_id,), daemon=True).start()
             threading.Thread(target=_refresh_radio_queue, args=(video_id,), daemon=True).start()
         else:
             # Same track re-starting (a seek): re-anchor to the reported offset
