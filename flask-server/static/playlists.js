@@ -177,24 +177,59 @@ function openPlaylistDetailModal(pl_id) {
   if (!pl.tracks || pl.tracks.length === 0) {
     body.innerHTML = '<div class="history-modal-empty">Playlist is empty.</div>';
   } else {
-    let html = '<div class="history-list">';
+    const trashIcon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="width: 100%; height: 100%;"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>`;
+    const moreSvg = `<svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg>`;
+    const queueAddSvg = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>`;
+    const playNextSvg = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>`;
+    const heartFilledSvg = `<svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>`;
+
+    const list = document.createElement('div');
+    list.className = 'history-list';
+
     pl.tracks.forEach((track) => {
-      let thumbHtml;
+      // Titles/artists from a synced YouTube playlist can contain quotes,
+      // backslashes, etc. -- building this row via string-interpolated
+      // onclick="..." attributes (as before) meant any such character could
+      // corrupt the attribute and silently break every button on the row with
+      // no console error. Building real DOM nodes and attaching real event
+      // listeners (passing `track` as a normal JS object, no serialization)
+      // sidesteps that entirely.
+      const item = { video_id: track.video_id, title: track.title, artist: track.artist,
+        thumbnail: track.thumbnail || '', duration_ms: Number(track.duration_ms) || 0 };
+
+      const row = document.createElement('div');
+      row.className = 'history-item';
+      row.style.position = 'relative';
+
       if (track.thumbnail) {
-        thumbHtml = `<img class="queue-thumb loaded" src="${escHtml(track.thumbnail)}" alt="">`;
+        const img = document.createElement('img');
+        img.className = 'queue-thumb loaded';
+        img.src = track.thumbnail;
+        img.alt = '';
+        row.appendChild(img);
       } else {
-        thumbHtml = `
-          <div class="queue-thumb" style="display: flex; align-items: center; justify-content: center; background: rgba(255, 255, 255, 0.05);">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="width: 20px; height: 20px; color: var(--text-muted, #888);"><path d="M9 18V5l12-2v13"></path><circle cx="6" cy="18" r="3"></circle><circle cx="18" cy="16" r="3"></circle></svg>
-          </div>`;
+        const ph = document.createElement('div');
+        ph.className = 'queue-thumb';
+        ph.style.cssText = 'display:flex; align-items:center; justify-content:center; background: rgba(255,255,255,0.05);';
+        ph.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="width: 20px; height: 20px; color: var(--text-muted, #888);"><path d="M9 18V5l12-2v13"></path><circle cx="6" cy="18" r="3"></circle><circle cx="18" cy="16" r="3"></circle></svg>`;
+        row.appendChild(ph);
       }
-      
-      const trashIcon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="width: 100%; height: 100%;"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>`;
-      const moreSvg = `<svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg>`;
-      const queueAddSvg = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>`;
-      const playNextSvg = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>`;
-      const heartFilledSvg = `<svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>`;
-      const itemArg = `{video_id: '${escHtml(track.video_id)}', title: '${escHtml(track.title).replace(/'/g, "\\'")}', artist: '${escHtml(track.artist).replace(/'/g, "\\'")}', thumbnail: '${escHtml(track.thumbnail || '').replace(/'/g, "\\'")}', duration_ms: ${Number(track.duration_ms) || 0}}`;
+
+      const info = document.createElement('div');
+      info.className = 'history-info';
+      info.style.cssText = 'flex:1; min-width:0; cursor:pointer;';
+      const titleEl = document.createElement('div');
+      titleEl.className = 'history-title';
+      titleEl.style.cssText = 'white-space:nowrap; overflow:hidden; text-overflow:ellipsis;';
+      titleEl.textContent = track.title;
+      const artistEl = document.createElement('div');
+      artistEl.className = 'history-artist';
+      artistEl.style.cssText = 'white-space:nowrap; overflow:hidden; text-overflow:ellipsis;';
+      artistEl.textContent = track.artist;
+      info.appendChild(titleEl);
+      info.appendChild(artistEl);
+      info.addEventListener('click', () => playResult(item));
+      row.appendChild(info);
 
       // Liked Songs is a fixed system playlist: every track here is already
       // liked, so the per-track "remove" action is a heart button (un-like)
@@ -204,48 +239,67 @@ function openPlaylistDetailModal(pl_id) {
       // right away: the button just flips to "disliked" so an accidental tap
       // is easy to undo (tap again to re-like) -- the row only disappears
       // once the modal is closed and reopened, reflecting the real list.
-      const heartHtml = pl_id === 'liked'
-        ? `<button class="track-like-btn liked" type="button" title="Dislike" onclick="event.stopPropagation(); toggleLike(${itemArg}, this)">${heartFilledSvg}</button>`
-        : '';
-      const menuOptionsHtml = pl_id === 'liked'
-        ? `
-              <div class="result-menu-option" style="padding: 12px 16px; display: flex; align-items: center; cursor: pointer; transition: background 0.2s; font-size: 14px;" onclick="addToQueue(${itemArg}, 'next')" onmouseover="this.style.background='rgba(255,255,255,0.1)'" onmouseout="this.style.background='transparent'">
-                <div style="width: 18px; height: 18px; margin-right: 12px; display: flex;">${playNextSvg}</div>
-                Play next
-              </div>
-              <div class="result-menu-option" style="padding: 12px 16px; display: flex; align-items: center; cursor: pointer; transition: background 0.2s; font-size: 14px;" onclick="addToQueue(${itemArg}, 'last')" onmouseover="this.style.background='rgba(255,255,255,0.1)'" onmouseout="this.style.background='transparent'">
-                <div style="width: 18px; height: 18px; margin-right: 12px; display: flex;">${queueAddSvg}</div>
-                Add to queue
-              </div>`
-        : `
-              <div class="result-menu-option" style="padding: 12px 16px; display: flex; align-items: center; color: #ff4d4d; cursor: pointer; transition: background 0.2s; font-size: 14px;" onclick="event.stopPropagation(); removeFromPlaylist('${pl_id}', '${escHtml(track.uuid || track.video_id)}')" onmouseover="this.style.background='rgba(255,255,255,0.1)'" onmouseout="this.style.background='transparent'">
-                <div style="width: 18px; height: 18px; margin-right: 12px; display: flex;">${trashIcon}</div>
-                Remove from playlist
-              </div>`;
+      if (pl_id === 'liked') {
+        const heartBtn = document.createElement('button');
+        heartBtn.className = 'track-like-btn liked';
+        heartBtn.type = 'button';
+        heartBtn.title = 'Dislike';
+        heartBtn.innerHTML = heartFilledSvg;
+        heartBtn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          toggleLike(item, heartBtn);
+        });
+        row.appendChild(heartBtn);
+      }
 
-      html += `
-        <div class="history-item" style="position: relative;">
-          ${thumbHtml}
-          <div class="history-info" style="flex: 1; min-width: 0; cursor: pointer;" onclick="playResult(${itemArg})">
-            <div class="history-title" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${escHtml(track.title)}</div>
-            <div class="history-artist" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${escHtml(track.artist)}</div>
-          </div>
-          ${heartHtml}
-          <div class="playlist-more-container" style="position: relative; display: flex; align-items: center;">
-            <button class="track-more-btn" type="button" title="More options" onclick="event.stopPropagation(); window.togglePlaylistMoreMenu(this)">
-              ${moreSvg}
-            </button>
-            <div class="playlist-more-menu" style="position: absolute; right: 8px; top: 100%; background: var(--bg-elevated, #2a2a2a); border: 1px solid var(--border, #444); border-radius: 8px; z-index: 100; min-width: 180px; box-shadow: 0 4px 12px rgba(0,0,0,0.5); overflow: hidden;">
-              ${menuOptionsHtml}
-            </div>
-          </div>
-        </div>
-      `;
+      const moreContainer = document.createElement('div');
+      moreContainer.className = 'playlist-more-container';
+      moreContainer.style.cssText = 'position:relative; display:flex; align-items:center;';
+
+      const moreBtn = document.createElement('button');
+      moreBtn.className = 'track-more-btn';
+      moreBtn.type = 'button';
+      moreBtn.title = 'More options';
+      moreBtn.innerHTML = moreSvg;
+      moreBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        window.togglePlaylistMoreMenu(moreBtn);
+      });
+
+      const menu = document.createElement('div');
+      menu.className = 'playlist-more-menu';
+      menu.style.cssText = 'position:absolute; right:8px; top:100%; background: var(--bg-elevated, #2a2a2a); border: 1px solid var(--border, #444); border-radius: 8px; z-index: 100; min-width: 180px; box-shadow: 0 4px 12px rgba(0,0,0,0.5); overflow: hidden;';
+
+      function addMenuOption(iconHtml, label, danger, onClick) {
+        const opt = document.createElement('div');
+        opt.className = 'result-menu-option';
+        opt.style.cssText = 'padding:12px 16px; display:flex; align-items:center; cursor:pointer; transition: background 0.2s; font-size:14px;' + (danger ? ' color:#ff4d4d;' : '');
+        opt.innerHTML = `<div style="width:18px; height:18px; margin-right:12px; display:flex;">${iconHtml}</div>${label}`;
+        opt.addEventListener('mouseover', () => { opt.style.background = 'rgba(255,255,255,0.1)'; });
+        opt.addEventListener('mouseout', () => { opt.style.background = 'transparent'; });
+        opt.addEventListener('click', (e) => { e.stopPropagation(); onClick(); });
+        menu.appendChild(opt);
+      }
+
+      if (pl_id === 'liked') {
+        addMenuOption(playNextSvg, 'Play next', false, () => addToQueue(item, 'next'));
+        addMenuOption(queueAddSvg, 'Add to queue', false, () => addToQueue(item, 'last'));
+      } else {
+        addMenuOption(trashIcon, 'Remove from playlist', true,
+          () => removeFromPlaylist(pl_id, track.uuid || track.video_id));
+      }
+
+      moreContainer.appendChild(moreBtn);
+      moreContainer.appendChild(menu);
+      row.appendChild(moreContainer);
+
+      list.appendChild(row);
     });
-    html += '</div>';
-    body.innerHTML = html;
+
+    body.innerHTML = '';
+    body.appendChild(list);
   }
-  
+
   document.getElementById('playlists-modal-overlay').classList.add('open');
   document.getElementById('playlist-detail-modal-overlay').classList.add('open');
 }
@@ -377,15 +431,27 @@ async function playPlaylist(pl_id, btn, shuffle) {
     // overwrite it with generated recommendations before our own queue_add
     // calls land (see /alexa/play_queue/'s suppress_radio handling).
     await playResult({ video_id: first.video_id, title: first.title, artist: first.artist, thumbnail: first.thumbnail, duration_ms: first.duration_ms }, rest.length > 0);
-    if (rest.length) toast('Adding rest of “' + pl.name + '” to queue…');
-    for (const track of rest) {
-      // silent: this loop queues the rest of the playlist in bulk, so per-track
-      // "Adding to queue…" toasts would spam the screen — one toast up front
-      // for the whole playlist is enough.
-      await addToQueue({ video_id: track.video_id, title: track.title, artist: track.artist, thumbnail: track.thumbnail, duration_ms: track.duration_ms }, 'last', true);
-    }
+    // Return to the main view the instant the first track is playing, instead
+    // of waiting out one HTTP round-trip per remaining song -- queuing the
+    // rest continues in the background below, so a long playlist doesn't
+    // hold the user on this modal for several seconds.
     closePlaylistDetailModal();
     document.getElementById('playlists-modal-overlay').classList.remove('open');
+    if (rest.length) {
+      toast('Adding rest of “' + pl.name + '” to queue…');
+      (async () => {
+        for (const track of rest) {
+          // silent: this loop queues the rest of the playlist in bulk, so
+          // per-track "Adding to queue…" toasts would spam the screen — one
+          // toast up front for the whole playlist is enough.
+          try {
+            await addToQueue({ video_id: track.video_id, title: track.title, artist: track.artist, thumbnail: track.thumbnail, duration_ms: track.duration_ms }, 'last', true);
+          } catch (e) {
+            toast(e.message || 'Error queuing “' + track.title + '”', 'error');
+          }
+        }
+      })();
+    }
   } catch (e) {
     toast(e.message || 'Error playing playlist', 'error');
   }

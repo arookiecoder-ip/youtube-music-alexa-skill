@@ -3463,20 +3463,40 @@ def _backfill_track_thumbnail(pl_id, track_uuid, video_id):
         traceback.print_exc()
 
 
+# Un-liking a song from the Liked Songs view is deliberately reversible in
+# the UI (tap the heart again to undo) without the row disappearing until the
+# modal is closed. But un-like deletes the DB row outright, so a same-song
+# re-like right after would normally get a fresh added_at and jump to the
+# bottom of the list -- surprising for what's meant to feel like an undo, not
+# a brand new "like". Remember the original added_at briefly so a quick
+# undo-relike restores the song to its old spot instead of the newest one.
+_recent_unlike_added_at = {}   # video_id -> (added_at, expires_at)
+_RECENT_UNLIKE_TTL = 5 * 60
+
+def _pop_recent_unlike_added_at(video_id):
+    now = time.time()
+    for vid in [v for v, (_, exp) in _recent_unlike_added_at.items() if exp < now]:
+        del _recent_unlike_added_at[vid]
+    entry = _recent_unlike_added_at.pop(video_id, None)
+    return entry[0] if entry else None
+
+
 @app.route("/api/playlists/<pl_id>/tracks/", methods=["POST"])
 def api_add_track(pl_id):
     body = request.get_json(silent=True) or {}
     video_id = body.get("video_id")
     if not video_id:
         return jsonify({'error': 'video_id required'}), 400
-    
+
     track_uuid = uuid.uuid4().hex
     title = body.get("title", "")
     artist = body.get("artist", "")
     thumbnail = body.get("thumbnail") or body.get("thumbnail_url", "")
     duration_ms = body.get("duration_ms", 0)
     now = time.time()
-    
+    if pl_id == "liked":
+        now = _pop_recent_unlike_added_at(video_id) or now
+
     track = {
         "uuid": track_uuid,
         "video_id": video_id,
@@ -3524,6 +3544,11 @@ def api_add_track(pl_id):
 def api_remove_track(pl_id, track_uuid):
     with get_db() as conn:
         if pl_id == "liked":
+            row = conn.execute(
+                "SELECT added_at FROM playlist_tracks WHERE playlist_id = 'liked' AND video_id = ?", (track_uuid,)
+            ).fetchone()
+            if row:
+                _recent_unlike_added_at[track_uuid] = (row['added_at'], time.time() + _RECENT_UNLIKE_TTL)
             conn.execute("DELETE FROM playlist_tracks WHERE playlist_id = 'liked' AND video_id = ?", (track_uuid,))
             conn.execute('UPDATE playlists SET updated_at = ? WHERE id = ?', (time.time(), pl_id))
             conn.commit()
