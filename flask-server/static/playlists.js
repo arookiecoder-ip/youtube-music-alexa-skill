@@ -142,6 +142,8 @@ function openPlaylistDetailModal(pl_id) {
 
   const playAllBtn = document.getElementById('playlist-detail-play-all-btn');
   playAllBtn.hidden = !pl.tracks || pl.tracks.length === 0;
+  const shuffleBtn = document.getElementById('playlist-detail-shuffle-btn');
+  shuffleBtn.hidden = !pl.tracks || pl.tracks.length === 0;
 
   const body = document.getElementById('playlist-detail-body');
   if (!pl.tracks || pl.tracks.length === 0) {
@@ -170,7 +172,7 @@ function openPlaylistDetailModal(pl_id) {
             <div class="history-artist" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${escHtml(track.artist)}</div>
           </div>
           <div class="playlist-more-container" style="position: relative; display: flex; align-items: center;">
-            <button class="result-more-btn" type="button" title="More options" onclick="event.stopPropagation(); window.togglePlaylistMoreMenu(this)" style="background: none; border: none; color: var(--text-muted, #aaa); cursor: pointer; padding: 8px;">
+            <button class="track-more-btn" type="button" title="More options" onclick="event.stopPropagation(); window.togglePlaylistMoreMenu(this)">
               ${moreSvg}
             </button>
             <div class="playlist-more-menu" style="display: none; position: absolute; right: 8px; top: 100%; background: var(--bg-elevated, #2a2a2a); border: 1px solid var(--border, #444); border-radius: 8px; z-index: 100; min-width: 180px; box-shadow: 0 4px 12px rgba(0,0,0,0.5); overflow: hidden;">
@@ -296,12 +298,22 @@ document.getElementById('playlist-detail-delete-opt').addEventListener('click', 
   }
 });
 
-async function playPlaylist(pl_id, btn) {
+function _shuffled(arr) {
+  const a = arr.slice();
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+async function playPlaylist(pl_id, btn, shuffle) {
   const pl = _playlistsData.playlists[pl_id];
   if (!pl || !pl.tracks || pl.tracks.length === 0) return;
   if (btn) btn.disabled = true;
   try {
-    const [first, ...rest] = pl.tracks;
+    const tracks = shuffle ? _shuffled(pl.tracks) : pl.tracks;
+    const [first, ...rest] = tracks;
     await playResult({ video_id: first.video_id, title: first.title, artist: first.artist, thumbnail: first.thumbnail, duration_ms: first.duration_ms });
     if (rest.length) toast('Adding rest of “' + pl.name + '” to queue…');
     for (const track of rest) {
@@ -320,6 +332,10 @@ async function playPlaylist(pl_id, btn) {
 
 document.getElementById('playlist-detail-play-all-btn').addEventListener('click', (e) => {
   if (_currentPlaylistDetailId) playPlaylist(_currentPlaylistDetailId, e.currentTarget);
+});
+
+document.getElementById('playlist-detail-shuffle-btn').addEventListener('click', (e) => {
+  if (_currentPlaylistDetailId) playPlaylist(_currentPlaylistDetailId, e.currentTarget, true);
 });
 
 async function toggleLike(item, btnElement) {

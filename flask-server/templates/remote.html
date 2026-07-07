@@ -500,10 +500,15 @@
         </button>
       </div>
     </div>
-    <div style="padding: 0 20px;">
-      <button class="btn-accent play-all-btn" id="playlist-detail-play-all-btn" style="width:100%; margin-top:12px; align-items:center; justify-content:center; gap:8px;" hidden>
+    <div style="padding: 0 20px; display: flex; gap: 8px; margin-top: 12px;">
+      <button class="btn-accent play-all-btn" id="playlist-detail-play-all-btn" style="flex: 1; align-items:center; justify-content:center; gap:8px;" hidden>
         <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
         Play All
+      </button>
+      <button class="btn-accent shuffle-play-btn" id="playlist-detail-shuffle-btn" title="Shuffle Play" style="flex: none; width: 40px; align-items:center; justify-content:center; padding: 0;" hidden>
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/><polyline points="21 16 21 21 16 21"/><line x1="15" y1="15" x2="21" y2="21"/><line x1="4" y1="4" x2="9" y2="9"/>
+        </svg>
       </button>
     </div>
     <div class="history-modal-body" id="playlist-detail-body">

@@ -267,7 +267,7 @@
   .device-section-inline[hidden] { display: none !important; }
   .device-section-inline .custom-select {
     flex: none;
-    width: 200px;
+    width: 140px;
   }
   .device-section-inline .custom-select-trigger {
     padding: 7px 10px;
@@ -2173,6 +2173,27 @@
   .result-more-btn:hover { color: var(--text); border-color: var(--border); background: var(--bg); }
   .result-more-btn.open { color: var(--text); border-color: var(--border); background: var(--bg); }
   .result-more-btn svg { width: 18px; height: 18px; }
+
+  /* ---- Playlist track row: more-options button (same look as search results) ---- */
+  .track-more-btn {
+    flex: none;
+    background: none;
+    border: 1px solid transparent;
+    color: var(--muted);
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: color .15s, border-color .15s, background .15s;
+    border-radius: 50%;
+    position: relative;
+  }
+  .track-more-btn:hover { color: var(--text); border-color: var(--border); background: var(--bg); }
+  .track-more-btn.open { color: var(--text); border-color: var(--border); background: var(--bg); }
+  .track-more-btn svg { width: 18px; height: 18px; }
 
   /* ---- Search result: more-options dropdown menu ---- */
   .result-more-menu {
