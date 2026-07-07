@@ -1098,7 +1098,10 @@ class Supporting:
         Unavailable tracks (no videoId) are dropped."""
         ytmusic = YTMusic()
         try:
-            search_results = await asyncio.to_thread(ytmusic.get_playlist, playlistId=playlist_id)
+            # limit=None: fetch every track. The default limit=100 would make
+            # sync's now-playing deletion pass (see api_sync_playlist) wrongly
+            # treat tracks beyond the cutoff as removed from the source.
+            search_results = await asyncio.to_thread(ytmusic.get_playlist, playlistId=playlist_id, limit=None)
         except Exception:
             # ytmusicapi raises on unknown/private playlist ids; treat as not found
             traceback.print_exc()
@@ -3307,12 +3310,30 @@ def api_get_playlists():
 @app.route("/api/playlists/", methods=["POST"])
 def api_create_playlist():
     body = request.get_json(silent=True) or {}
-    name = body.get("name")
+    name = (body.get("name") or "").strip()
+    source_url = body.get("source_url")
+    if not name and source_url:
+        # Import flow doesn't ask the user to type a name — use the real
+        # YouTube playlist title instead. A URL with no "list=" param (a plain
+        # video/song link, not a playlist link) is rejected outright rather
+        # than silently importing an empty "Imported Playlist".
+        if "list=" not in source_url:
+            return jsonify({'error': "That doesn't look like a YouTube playlist link (no playlist in the URL)."}), 400
+        q = parse_qs(urlparse(source_url).query)
+        list_id = q.get("list", [None])[0]
+        if not list_id:
+            return jsonify({'error': "That doesn't look like a YouTube playlist link (no playlist in the URL)."}), 400
+        try:
+            info = asyncio.run(Supporting.get_playlist_info(list_id))
+        except Exception:
+            info = None
+        if not info:
+            return jsonify({'error': "Couldn't find that playlist. Check the link and try again."}), 400
+        name = info.get("title") or "Imported Playlist"
     if not name:
         return jsonify({'error': 'Name required'}), 400
-    
+
     pl_id = f"pl_{uuid.uuid4().hex}"
-    source_url = body.get("source_url")
     now = time.time()
     
     new_pl = {
@@ -3432,9 +3453,15 @@ def api_sync_playlist(pl_id):
             list_id = q.get("list", [None])[0] or source_url
             
         try:
-            new_tracks_raw = asyncio.run(Supporting.get_playlist_tracks(list_id)) or []
+            new_tracks_raw = asyncio.run(Supporting.get_playlist_tracks(list_id))
         except Exception as e:
             print(f"[sync] Failed to sync {list_id}: {e}")
+            return
+        if new_tracks_raw is None:
+            # Unreadable this time (private/deleted/transient API failure) —
+            # bail out entirely rather than treating "couldn't fetch" as "the
+            # source playlist is now empty" and wiping every stored track.
+            print(f"[sync] {list_id} returned no data; skipping to avoid wiping tracks")
             return
             
         now = time.time()
@@ -3455,7 +3482,8 @@ def api_sync_playlist(pl_id):
         with get_db() as conn:
             existing_rows = conn.execute("SELECT video_id FROM playlist_tracks WHERE playlist_id = ?", (pl_id,)).fetchall()
             existing_vids = {r['video_id'] for r in existing_rows}
-            
+            source_vids = {t["video_id"] for t in new_tracks}
+
             added = 0
             for t in new_tracks:
                 if t["video_id"] not in existing_vids:
@@ -3464,7 +3492,17 @@ def api_sync_playlist(pl_id):
                         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     ''', (t['uuid'], pl_id, t['video_id'], t['title'], t['artist'], t['thumbnail'], t['duration_ms'], t['added_at']))
                     added += 1
-            if added > 0:
+
+            # Mirror deletions too: a track no longer in the source YouTube
+            # playlist is removed from our copy, so sync stays a true mirror
+            # instead of only ever growing.
+            removed_vids = existing_vids - source_vids
+            removed = 0
+            for vid in removed_vids:
+                conn.execute("DELETE FROM playlist_tracks WHERE playlist_id = ? AND video_id = ?", (pl_id, vid))
+                removed += 1
+
+            if added > 0 or removed > 0:
                 conn.execute('UPDATE playlists SET updated_at = ? WHERE id = ?', (now, pl_id))
             conn.commit()
 

@@ -56,8 +56,11 @@ function renderPlaylists() {
   let html = '<div class="history-list">';
   lists.forEach((pl) => {
     const trackCount = (pl.tracks || []).length;
-    let thumbHtml = '<div class="queue-thumb"></div>';
-    
+    let thumbHtml = `
+      <div class="queue-thumb" style="display: flex; align-items: center; justify-content: center; background: rgba(255, 255, 255, 0.05);">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="width: 20px; height: 20px; color: var(--text-muted, #888);"><path d="M9 18V5l12-2v13"></path><circle cx="6" cy="18" r="3"></circle><circle cx="18" cy="16" r="3"></circle></svg>
+      </div>`;
+
     if (pl.id === 'liked') {
       thumbHtml = `
         <div class="queue-thumb" style="display: flex; align-items: center; justify-content: center; background: rgba(255, 255, 255, 0.05);">
@@ -238,13 +241,46 @@ document.getElementById('rename-playlist-btn').addEventListener('click', async (
   btn.disabled = false;
 });
 
+// Generic on-screen confirm/alert dialog (replaces the native confirm()/
+// alert() popups). Resolves true/false depending on which button the user
+// clicks; for an alert-only notice (no Cancel button), always resolves true.
+// opts: { okLabel, danger (bool), alertOnly (bool) }
+function confirmDialog(message, opts) {
+  opts = opts || {};
+  const overlay = document.getElementById('confirm-dialog-overlay');
+  const okBtn = document.getElementById('confirm-dialog-ok');
+  const cancelBtn = document.getElementById('confirm-dialog-cancel');
+  document.getElementById('confirm-dialog-message').textContent = message;
+  okBtn.textContent = opts.okLabel || 'Delete';
+  okBtn.style.background = opts.danger === false ? '' : '#e03131';
+  okBtn.style.borderColor = opts.danger === false ? '' : '#e03131';
+  cancelBtn.hidden = !!opts.alertOnly;
+  overlay.classList.add('open');
+  return new Promise((resolve) => {
+    const cleanup = (result) => {
+      overlay.classList.remove('open');
+      okBtn.removeEventListener('click', onOk);
+      cancelBtn.removeEventListener('click', onCancel);
+      overlay.removeEventListener('click', onOverlay);
+      resolve(result);
+    };
+    const onOk = () => cleanup(true);
+    const onCancel = () => cleanup(false);
+    const onOverlay = (e) => { if (e.target === overlay) cleanup(!!opts.alertOnly); };
+    okBtn.addEventListener('click', onOk);
+    cancelBtn.addEventListener('click', onCancel);
+    overlay.addEventListener('click', onOverlay);
+  });
+}
+
 document.getElementById('playlist-detail-delete-opt').addEventListener('click', async () => {
   document.getElementById('playlist-detail-more-menu').style.display = 'none';
   const pl_id = _currentPlaylistDetailId;
   if (!pl_id) return;
   const pl = _playlistsData.playlists[pl_id];
   if (!pl) return;
-  if (!confirm('Delete playlist "' + pl.name + '"? This cannot be undone.')) return;
+  const ok = await confirmDialog('Delete playlist "' + pl.name + '"? This cannot be undone.');
+  if (!ok) return;
   try {
     await apiDelete('/api/playlists/' + encodeURIComponent(pl_id));
     delete _playlistsData.playlists[pl_id];
@@ -453,28 +489,48 @@ document.addEventListener('DOMContentLoaded', () => {
   if (importPlBtn && importOverlay) {
     importPlBtn.addEventListener('click', () => {
       document.getElementById('import-playlist-url').value = '';
-      document.getElementById('import-playlist-name').value = '';
       const submitBtn = document.getElementById('import-playlist-submit');
       submitBtn.innerHTML = 'Import';
       submitBtn.disabled = false;
       importOverlay.classList.add('open');
     });
-    
+
     document.getElementById('import-playlist-close').addEventListener('click', () => {
       importOverlay.classList.remove('open');
     });
 
+    // Extracts the YouTube "list=" id from a playlist URL so two differently
+    // formatted links to the same playlist are recognized as duplicates.
+    function extractPlaylistListId(url) {
+      try {
+        const u = new URL(url);
+        return u.searchParams.get('list') || url;
+      } catch (_) {
+        const m = url.match(/[?&]list=([\w-]+)/);
+        return m ? m[1] : url;
+      }
+    }
+
     document.getElementById('import-playlist-submit').addEventListener('click', async () => {
       const url = document.getElementById('import-playlist-url').value.trim();
-      const name = document.getElementById('import-playlist-name').value.trim();
-      if (!url || !name) return;
-      
+      if (!url) return;
+
+      const newListId = extractPlaylistListId(url);
+      const existing = Object.values(_playlistsData.playlists).find(
+        (p) => p.source_url && extractPlaylistListId(p.source_url) === newListId
+      );
+      if (existing) {
+        await confirmDialog('You already imported "' + existing.name + '" from this playlist. Open it from the Playlists list, or use its Sync button to pull in new tracks.', { okLabel: 'OK', danger: false, alertOnly: true });
+        return;
+      }
+
       const submitBtn = document.getElementById('import-playlist-submit');
       submitBtn.disabled = true;
       submitBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" class="spin" style="width:18px;height:18px;"><path d="M21.5 2v6h-6M2.13 15.57a9 9 0 1 0 3.44-8.8L2.5 9M2.5 22v-6h6M21.87 8.43a9 9 0 1 0-3.44 8.8L21.5 15"/></svg> Importing...`;
 
       try {
-        const res = await api('/api/playlists/', { name: name, source_url: url });
+        // name omitted — the server resolves the real YouTube playlist title.
+        const res = await api('/api/playlists/', { source_url: url });
         _playlistsData.playlists[res.id] = res;
         await api('/api/playlists/' + res.id + '/sync/', {}, 'POST');
         renderPlaylists();
@@ -487,12 +543,12 @@ document.addEventListener('DOMContentLoaded', () => {
       } catch (e) {
         submitBtn.disabled = false;
         submitBtn.innerHTML = 'Import';
-        toast('Error importing playlist', 'error');
+        toast(e.message || 'Error importing playlist', 'error');
         console.error(e);
       }
     });
   }
-  
+
   const plDetailClose = document.getElementById('playlist-detail-close');
   if (plDetailClose) plDetailClose.addEventListener('click', closePlaylistDetailModal);
   

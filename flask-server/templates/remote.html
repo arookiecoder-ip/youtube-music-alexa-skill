@@ -501,12 +501,25 @@
       </div>
     </div>
     <div style="padding: 0 20px;">
-      <button class="btn-accent" id="playlist-detail-play-all-btn" style="width:100%; margin-top:12px; display:flex; align-items:center; justify-content:center; gap:8px;" hidden>
+      <button class="btn-accent play-all-btn" id="playlist-detail-play-all-btn" style="width:100%; margin-top:12px; align-items:center; justify-content:center; gap:8px;" hidden>
         <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
         Play All
       </button>
     </div>
     <div class="history-modal-body" id="playlist-detail-body">
+    </div>
+  </div>
+</div>
+
+<!-- Confirm Dialog (generic) -->
+<div class="history-modal-overlay" id="confirm-dialog-overlay">
+  <div class="history-modal" style="display:flex; flex-direction:column; max-width:380px; height:auto;">
+    <div class="history-modal-body" style="padding: 20px; display: flex; flex-direction: column;">
+      <p id="confirm-dialog-message" style="margin: 0 0 20px; color: var(--text); font-size: .9rem; line-height: 1.5;"></p>
+      <div style="display:flex; gap:10px; justify-content:flex-end;">
+        <button class="history-modal-close" id="confirm-dialog-cancel" style="padding: 8px 16px; border: 1px solid var(--border); border-radius: 6px;">Cancel</button>
+        <button class="btn-accent" id="confirm-dialog-ok">Delete</button>
+      </div>
     </div>
   </div>
 </div>
@@ -574,7 +587,6 @@
     </div>
     <div class="history-modal-body" style="padding: 20px; display: flex; flex-direction: column; gap: 16px; overflow:visible;">
       <input type="text" id="import-playlist-url" placeholder="Paste YouTube Playlist URL here" style="background:var(--surface); border:1px solid var(--border); color:var(--text); padding:10px 12px; border-radius:6px;" autocomplete="off">
-      <input type="text" id="import-playlist-name" placeholder="Playlist Name (e.g. My Favorites)" style="background:var(--surface); border:1px solid var(--border); color:var(--text); padding:10px 12px; border-radius:6px;" autocomplete="off">
       <button class="btn-accent" id="import-playlist-submit" style="padding:10px; font-weight:bold; display:flex; justify-content:center; align-items:center; gap:8px;">Import</button>
     </div>
   </div>
