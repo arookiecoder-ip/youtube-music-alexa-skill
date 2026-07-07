@@ -707,6 +707,13 @@ class Controller:
     def stop(handler_input: HandlerInput) -> Response:
         playback_info = Attributes.get_playback_info(handler_input)
         playback_info['in_playback_session'] = False
+        # StopDirective clears Alexa's AudioPlayer queue, but our own session
+        # attributes don't know that -- if PlaybackNearlyFinished had already
+        # enqueued the next track before this stop, next_stream_enqueued would
+        # stay True and PlaybackNearlyFinished would then skip re-enqueuing on
+        # the next real playback, leaving no track queued for the *actual*
+        # next auto-advance.
+        playback_info['next_stream_enqueued'] = False
 
         handler_input.response_builder.add_directive(StopDirective())
         return handler_input.response_builder.response

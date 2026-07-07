@@ -335,35 +335,49 @@ function openPlaylistDetailModal(pl_id) {
   document.getElementById('playlist-detail-modal-overlay').classList.add('open');
 }
 
+function _closePlaylistDetailMoreMenu() {
+  const menu = document.getElementById('playlist-detail-more-menu');
+  menu.classList.remove('open');
+  // Defer the reparent until the fade-out transition finishes, same as
+  // _closeAllPlaylistMoreMenus -- mirrors the per-track menu handling below.
+  setTimeout(() => {
+    if (menu.classList.contains('open')) return;
+    if (menu._home && menu.parentElement !== menu._home) menu._home.appendChild(menu);
+  }, 150);
+}
+
 function closePlaylistDetailModal() {
   document.getElementById('playlist-detail-modal-overlay').classList.remove('open');
-  // This menu lives inside .history-modal (never portaled to <body>, unlike
-  // the per-track ones) -- position:fixed on a descendant of an element being
-  // animated with `transform` resolves relative to that ancestor instead of
-  // the viewport, so leaving the menu open while the modal's close transition
-  // plays dragged it along, visibly shifting before it faded out.
-  document.getElementById('playlist-detail-more-menu').classList.remove('open');
+  _closePlaylistDetailMoreMenu();
 }
 
 document.getElementById('playlist-detail-more-btn').addEventListener('click', (e) => {
   e.stopPropagation();
   const menu = document.getElementById('playlist-detail-more-menu');
   const wasOpen = menu.classList.contains('open');
-  menu.classList.remove('open');
+  _closePlaylistDetailMoreMenu();
   if (!wasOpen) {
     const rect = e.currentTarget.getBoundingClientRect();
     menu.style.top = (rect.bottom + 4) + 'px';
     menu.style.right = (window.innerWidth - rect.right) + 'px';
     menu.style.left = 'auto';
+    // Portal to <body> while open: it lives inside .history-modal, which is
+    // animated with `transform` on open/close. position:fixed on a
+    // descendant of a transformed ancestor resolves relative to that
+    // ancestor instead of the viewport, so closing the modal while this menu
+    // was still fading out dragged it sideways along with the modal's
+    // transform instead of just fading in place.
+    menu._home = menu.parentElement;
+    document.body.appendChild(menu);
     menu.classList.add('open');
   }
 });
 document.addEventListener('click', () => {
-  document.getElementById('playlist-detail-more-menu').classList.remove('open');
+  _closePlaylistDetailMoreMenu();
 });
 
 document.getElementById('playlist-detail-rename-opt').addEventListener('click', () => {
-  document.getElementById('playlist-detail-more-menu').classList.remove('open');
+  _closePlaylistDetailMoreMenu();
   if (!_currentPlaylistDetailId) return;
   const pl = _playlistsData.playlists[_currentPlaylistDetailId];
   if (!pl) return;
@@ -428,7 +442,7 @@ function confirmDialog(message, opts) {
 }
 
 document.getElementById('playlist-detail-delete-opt').addEventListener('click', async () => {
-  document.getElementById('playlist-detail-more-menu').classList.remove('open');
+  _closePlaylistDetailMoreMenu();
   const pl_id = _currentPlaylistDetailId;
   if (!pl_id) return;
   const pl = _playlistsData.playlists[pl_id];
