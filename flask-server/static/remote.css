@@ -213,10 +213,12 @@
 
   .brand { display: flex; align-items: center; gap: 14px; }
 
-  .eq-icon { display: flex; align-items: flex-end; gap: 3px; height: 22px; }
+  /* clamp() scales the icon down on narrow phones and up on wide screens
+     instead of a fixed size that looks oversized on small viewports. */
+  .eq-icon { display: flex; align-items: flex-end; gap: 3px; height: clamp(16px, 5vw, 22px); }
   .eq-icon span {
     display: block;
-    width: 3px;
+    width: clamp(2px, .7vw, 3px);
     background: var(--accent);
     animation: eq 1.4s ease-in-out infinite;
     transform-origin: bottom;
@@ -1087,6 +1089,23 @@
     color: #fff;
   }
 
+  .sidebar-footer {
+    display: flex;
+    justify-content: center;
+    padding-top: 16px;
+  }
+  .sidebar-footer a {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--muted);
+    text-decoration: none;
+    font-size: .7rem;
+    letter-spacing: .06em;
+    transition: color .15s;
+  }
+  .sidebar-footer a:hover { color: var(--text); }
+
   /* ---- Mini player popup (mobile bottom-sheet) ---- */
   .mini-popup-overlay {
     display: flex;
@@ -1796,6 +1815,7 @@
     background: none;
     border: none;
     padding: 0;
+    margin-bottom: 0;
   }
   /* The grid area is a positioning context so the skeleton can overlay the
      (loading) real grid — both occupy the same space instead of stacking. */
@@ -2472,6 +2492,12 @@
     .device-section-inline { display: none !important; }
     /* Hide inline queue — it's in the popup modal */
     #queue-section { display: none !important; }
+    /* Every section carries a trailing margin-bottom for spacing between
+       sections, but the last visible one in .left-col has nothing below it
+       to space from — left in, that margin plus main's own footer-clearance
+       padding made the page taller than the viewport and scrollable even
+       though there was nothing at the bottom to scroll to. */
+    .left-col > section:last-child { margin-bottom: 0; }
     /* Header history button: icon only on mobile to save header space */
     .header-history-label { display: none; }
     .header-history-btn { padding: 7px 9px; }
@@ -2486,26 +2512,10 @@
     /* .queue-more-btn stays visible on mobile now that the queue popup has
        its own 3-dot menu (Play Radio / Like / Add to Playlist / Remove). */
 
-    /* Pin the GitHub footer to the bottom of the screen instead of leaving
-       it wherever page content happens to end, with dead space beneath it
-       when content is shorter than the viewport. */
-    .site-footer {
-      position: fixed;
-      left: 0;
-      right: 0;
-      bottom: 0;
-      margin-top: 0;
-      padding: 10px 16px calc(10px + env(safe-area-inset-bottom, 0px));
-      background: var(--bg);
-      border-top: 1px solid var(--border);
-      z-index: 50;
-    }
-    /* The mini player already owns the bottom edge while browsing results;
-       don't stack the footer underneath/behind it. */
-    body.results-open .site-footer { display: none; }
-    /* Leave room at the bottom of the scrollable content so it doesn't end
-       up hidden behind the now-fixed footer. */
-    main { padding-bottom: 56px; }
+    /* The GitHub credit lives in the sidebar (.sidebar-footer) on mobile
+       instead — a fixed footer here either covered content or left the page
+       scrollable to reveal it, neither of which was wanted. */
+    .site-footer { display: none !important; }
   }
 
   /* Desktop: hide mobile-only elements */
