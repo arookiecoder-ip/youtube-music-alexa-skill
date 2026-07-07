@@ -2309,7 +2309,19 @@ def alexa_state_event():
     sys.stderr.write(f"[np] webhook: event={event!r} video_id={body.get('video_id', '')!r}\n")
     sys.stderr.flush()
     if event == 'stopped':
-        _update_now_playing(playing=False)
+        # position_ms is a stored anchor, not a live value -- while playing,
+        # the real position is only ever computed on the fly (_computed_position_ms)
+        # from that anchor + elapsed wall-clock time; it's never written back.
+        # Freezing playing=False without capturing that computed position first
+        # leaves the stored anchor stuck at wherever it was last *explicitly*
+        # set (track start or last seek), so a voice "stop" a minute into a
+        # song snapped the bar back to 0:00/track-start instead of freezing at
+        # the actual paused position. Mirrors the app-button pause path below.
+        with _np_lock:
+            _reset_progress(_computed_position_ms())
+            _now_playing['playing'] = False
+            _now_playing['updated_at'] = time.time()
+        _notify_sse()
     elif event == 'started':
         video_id = body.get('video_id', '')
         if video_id and not _valid_video_id(video_id):
@@ -2363,15 +2375,31 @@ def alexa_state_event():
                 threading.Thread(target=_lookup_and_update_np, args=(video_id,), daemon=True).start()
             threading.Thread(target=_refresh_radio_queue, args=(video_id,), daemon=True).start()
         else:
-            # Same track re-starting (a seek): re-anchor to the reported offset
-            # without disturbing the metadata. started_at is passed explicitly so
-            # _update_now_playing doesn't treat it as a no-op.
+            # Same track re-starting (a seek) -- OR a redundant confirmation
+            # for a track _confirm_stream_delivery already confirmed (that
+            # fallback fires as soon as the audio file is handed to the Echo,
+            # before it's actually decoding; this webhook then arrives a beat
+            # later reporting the same track at essentially the same offset).
+            # Re-anchoring unconditionally on the redundant case snapped the
+            # stored position back to ~0 after the client had already ticked
+            # forward a second or two against the first anchor, producing a
+            # visible progress-bar dip right after a fresh play. Only re-anchor
+            # when this genuinely moves the position (a real seek/replay) —
+            # skip it when already confirmed+playing at essentially this offset.
             with _np_lock:
-                _reset_progress(offset_in_ms)
-                _now_playing['playing'] = True
-                _now_playing['playback_confirmed'] = True
-                _now_playing['updated_at'] = time.time()
-            _notify_sse()
+                already_tracking = (_now_playing.get('playing')
+                                     and _now_playing.get('playback_confirmed'))
+                position_matches = abs(_computed_position_ms() - offset_in_ms) < 3000
+                if already_tracking and position_matches:
+                    redundant_confirmation = True
+                else:
+                    redundant_confirmation = False
+                    _reset_progress(offset_in_ms)
+                    _now_playing['playing'] = True
+                    _now_playing['playback_confirmed'] = True
+                    _now_playing['updated_at'] = time.time()
+            if not redundant_confirmation:
+                _notify_sse()
             if video_id:
                 # A same-track restart from the top is a replay: bump it in
                 # history. A low offset alone doesn't prove that though — a

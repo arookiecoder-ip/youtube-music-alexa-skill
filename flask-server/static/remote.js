@@ -585,6 +585,7 @@ function isYoutubeLinkLike(value) {
   return /^(https?:\/\/)?(www\.|m\.|music\.)?(youtube\.com\/|youtu\.be\/)/i.test((value || '').trim());
 }
 
+let _volumeRepaintTimer = null;
 function syncVolume(value, force) {
   const volume = Number(value);
   if (!Number.isFinite(volume)) return;
@@ -596,9 +597,17 @@ function syncVolume(value, force) {
   // landed still carries the OLD volume and would snap the slider back before
   // it jumps forward again. Hold server updates for a short grace window.
   if (!force && (volumeUserActive || Date.now() < volumeGraceUntil)) return;
-  volumeEl.value = v;
-  const mpVol = document.getElementById('mp-volume');
-  if (mpVol) mpVol.value = v;
+  // Rapid repeated voice commands ("volume up" a few times quickly) can have
+  // their state-report webhooks land out of order (no sequence/ordering info
+  // in Alexa's webhook payload) — applying each one immediately as it arrives
+  // visibly bounced the slider between values before settling. Coalesce a
+  // tight burst into a single repaint of whichever value arrives last.
+  clearTimeout(_volumeRepaintTimer);
+  _volumeRepaintTimer = setTimeout(() => {
+    volumeEl.value = v;
+    const mpVol = document.getElementById('mp-volume');
+    if (mpVol) mpVol.value = v;
+  }, 150);
 }
 
 async function refreshVolume(force) {

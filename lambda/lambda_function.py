@@ -140,6 +140,16 @@ class StartPlaybackHandler(AbstractRequestHandler):
 
     def handle(self, handler_input):
         logger.info("In StartPlaybackHandler")
+        # A track already actively playing means this "play"/"resume" wasn't
+        # resuming from a pause at all -- resume() always re-issues a fresh
+        # PlayDirective from the last *stopped* offset (stale/0 if nothing was
+        # ever paused this session), so calling it while already playing
+        # restarted the current track from that stale point instead of being
+        # a harmless no-op. Guard it here rather than in resume() itself,
+        # since other callers (e.g. the app's explicit play button after a
+        # real pause) still need the restart-from-offset behavior.
+        if player.Attributes.get_playback_info(handler_input).get('in_playback_session'):
+            return handler_input.response_builder.set_should_end_session(True).response
         # No spoken "Resuming..." — resume is triggered from the app's play
         # button and should be silent; the audio resuming is feedback enough.
         return player.Controller.resume(handler_input=handler_input, is_playback=True)
