@@ -1244,7 +1244,7 @@ document.getElementById('results-close').addEventListener('click', closeResults)
 
 /* ---- Add to queue ---- */
 let _addToQueueBusy = false;
-async function addToQueue(item, position) {
+async function addToQueue(item, position, silent) {
   if (_addToQueueBusy) return;
   // Nothing playing? Just play the song directly instead of silently queuing.
   if (!_hasTrack) {
@@ -1255,7 +1255,7 @@ async function addToQueue(item, position) {
   if (!serial) return;
   _addToQueueBusy = true;
   const label = position === 'next' ? 'Playing next' : 'Adding to queue';
-  toast(label + '\u2026');
+  if (!silent) toast(label + '\u2026');
   try {
     await api('/alexa/queue_add/', {
       serial,
@@ -1266,10 +1266,12 @@ async function addToQueue(item, position) {
       duration_ms: item.duration_ms,
       position,
     });
-    if (position === 'next') {
-      toast('\u201c' + item.title + '\u201d will play next', 'ok');
-    } else {
-      toast('Added \u201c' + item.title + '\u201d to queue', 'ok');
+    if (!silent) {
+      if (position === 'next') {
+        toast('\u201c' + item.title + '\u201d will play next', 'ok');
+      } else {
+        toast('Added \u201c' + item.title + '\u201d to queue', 'ok');
+      }
     }
     // Re-adding a song right after deleting it must show up again \u2014 drop any
     // pending-removal entry that would otherwise filter it out.
@@ -1278,7 +1280,8 @@ async function addToQueue(item, position) {
     _lastQueueJson = '';
     setTimeout(pollNowPlaying, 500);
   } catch (e) {
-    toast(e.message, 'error');
+    if (!silent) toast(e.message, 'error');
+    else throw e;
   } finally {
     _addToQueueBusy = false;
   }

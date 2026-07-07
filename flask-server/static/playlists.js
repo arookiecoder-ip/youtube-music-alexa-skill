@@ -67,17 +67,8 @@ function renderPlaylists() {
       thumbHtml = `<img class="queue-thumb loaded" src="${escHtml(pl.tracks[0].thumbnail)}" alt="">`;
     }
 
-    let syncIconHtml = '';
-    if (pl.source_url) {
-      syncIconHtml = `
-        <button class="clear-all-btn" title="Sync Playlist" style="padding: 4px 8px;" onclick="event.stopPropagation(); syncPlaylist('${escHtml(pl.id)}', this)">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="width:16px;height:16px;">
-            <polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
-          </svg>
-        </button>
-      `;
-    }
-
+    // Sync lives only in the playlist detail modal's header (for imported
+    // playlists) so every row here shows the same fixed set of controls.
     const playIconHtml = trackCount > 0 ? `
         <button class="clear-all-btn" title="Play playlist" style="padding: 4px 8px; margin-left: auto;" onclick="event.stopPropagation(); playPlaylist('${escHtml(pl.id)}', this)">
           <svg viewBox="0 0 24 24" fill="currentColor" style="width:16px;height:16px;"><path d="M8 5v14l11-7z"/></svg>
@@ -92,7 +83,6 @@ function renderPlaylists() {
             <div class="history-title">${escHtml(pl.name)}</div>
             <div class="history-artist">${trackCount} ${trackCount === 1 ? 'song' : 'songs'}</div>
           </div>
-          ${syncIconHtml}
           ${playIconHtml}
         </div>
       </div>
@@ -273,8 +263,12 @@ async function playPlaylist(pl_id, btn) {
   try {
     const [first, ...rest] = pl.tracks;
     await playResult({ video_id: first.video_id, title: first.title, artist: first.artist, thumbnail: first.thumbnail });
+    if (rest.length) toast('Adding rest of “' + pl.name + '” to queue…');
     for (const track of rest) {
-      await addToQueue({ video_id: track.video_id, title: track.title, artist: track.artist, thumbnail: track.thumbnail, duration_ms: track.duration_ms }, 'last');
+      // silent: this loop queues the rest of the playlist in bulk, so per-track
+      // "Adding to queue…" toasts would spam the screen — one toast up front
+      // for the whole playlist is enough.
+      await addToQueue({ video_id: track.video_id, title: track.title, artist: track.artist, thumbnail: track.thumbnail, duration_ms: track.duration_ms }, 'last', true);
     }
     closePlaylistDetailModal();
     document.getElementById('playlists-modal-overlay').classList.remove('open');
