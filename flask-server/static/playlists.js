@@ -272,22 +272,24 @@ function openPlaylistDetailModal(pl_id) {
       // portaled to <body> while open (a sibling of the modal overlay, not a
       // descendant), so a lower z-index here renders it behind the still-open
       // playlist detail modal instead of on top of it.
-      menu.style.cssText = 'position:absolute; right:8px; top:100%; background: var(--bg-elevated, #2a2a2a); border: 1px solid var(--border, #444); z-index: 9999; min-width: 180px; box-shadow: 0 4px 12px rgba(0,0,0,0.5); overflow: hidden;';
+      menu.style.cssText = 'position:absolute; right:8px; top:100%; background: var(--surface); border: 1px solid var(--border); z-index: 9999; min-width: 170px; box-shadow: 0 8px 24px rgba(0,0,0,.5); overflow: hidden;';
 
+      // Reuses .queue-menu-option (not .result-menu-option) so this menu's
+      // icon size/color, spacing, and hover/danger styling exactly match the
+      // queue's identical 3-dot menu instead of drifting from it.
       function addMenuOption(iconHtml, label, danger, onClick) {
         const opt = document.createElement('div');
-        opt.className = 'result-menu-option';
-        opt.style.cssText = 'padding:12px 16px; display:flex; align-items:center; cursor:pointer; transition: background 0.2s; font-size:14px;' + (danger ? ' color:#ff4d4d;' : '');
-        opt.innerHTML = `<div style="width:18px; height:18px; margin-right:12px; display:flex;">${iconHtml}</div>${label}`;
-        opt.addEventListener('mouseover', () => { opt.style.background = 'rgba(255,255,255,0.1)'; });
-        opt.addEventListener('mouseout', () => { opt.style.background = 'transparent'; });
+        opt.className = 'queue-menu-option' + (danger ? ' danger' : '');
+        opt.innerHTML = `${iconHtml}${label}`;
         opt.addEventListener('click', (e) => { e.stopPropagation(); onClick(); });
         menu.appendChild(opt);
       }
 
+      addMenuOption(playNextSvg, 'Play next', false, () => addToQueue(item, 'next'));
+      addMenuOption(queueAddSvg, 'Add to queue', false, () => addToQueue(item, 'last'));
       if (pl_id === 'liked') {
-        addMenuOption(playNextSvg, 'Play next', false, () => addToQueue(item, 'next'));
-        addMenuOption(queueAddSvg, 'Add to queue', false, () => addToQueue(item, 'last'));
+        // Liked Songs' per-track "remove" is the heart button above instead
+        // (un-like), not this menu -- see the heartBtn block above.
       } else {
         addMenuOption(trashIcon, 'Remove from playlist', true,
           () => removeFromPlaylist(pl_id, track.uuid || track.video_id));

@@ -2159,7 +2159,7 @@
   }
 
   /* ---- Search result: mobile queue-add icon & like icon ---- */
-  .result-queue-btn, .result-like-btn, .track-like-btn {
+  .result-queue-btn, .result-like-btn {
     flex: none;
     background: none;
     border: 1px solid var(--border);
@@ -2176,10 +2176,33 @@
     margin-right: 6px;
   }
   .result-queue-btn[hidden] { display: none; }
-  .result-queue-btn:hover, .result-like-btn:hover, .track-like-btn:hover { color: var(--text); border-color: #444; }
-  .result-queue-btn:active, .result-like-btn:active, .track-like-btn:active { color: var(--accent); border-color: var(--accent); transform: scale(0.95); }
-  .result-like-btn.liked, .track-like-btn.liked { color: var(--accent); border-color: var(--accent); }
-  .result-queue-btn svg, .result-like-btn svg, .track-like-btn svg { width: 16px; height: 16px; }
+  .result-queue-btn:hover, .result-like-btn:hover { color: var(--text); border-color: #444; }
+  .result-queue-btn:active, .result-like-btn:active { color: var(--accent); border-color: var(--accent); transform: scale(0.95); }
+  .result-like-btn.liked { color: var(--accent); border-color: var(--accent); }
+  .result-queue-btn svg, .result-like-btn svg { width: 16px; height: 16px; }
+
+  /* Sized to match .np-like-btn (the main player's heart) rather than the
+     search-result icons above, per feedback that this one read too big. */
+  .track-like-btn {
+    flex: none;
+    background: none;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: color .15s, border-color .15s, transform .15s;
+    border-radius: 50%;
+    margin-right: 6px;
+  }
+  .track-like-btn:hover { color: var(--text); border-color: #444; }
+  .track-like-btn:active { color: var(--accent); border-color: var(--accent); transform: scale(0.95); }
+  .track-like-btn.liked { color: var(--accent); border-color: var(--accent); }
+  .track-like-btn svg { width: 16px; height: 16px; }
 
   /* ---- Search result: desktop more-options button ---- */
   .result-more-btn {
@@ -2208,8 +2231,8 @@
     background: none;
     border: 1px solid transparent;
     color: var(--muted);
-    width: 32px;
-    height: 32px;
+    width: 28px;
+    height: 28px;
     padding: 0;
     display: inline-flex;
     align-items: center;
@@ -2218,10 +2241,11 @@
     transition: color .15s, border-color .15s, background .15s;
     border-radius: 50%;
     position: relative;
+    overflow: visible;
   }
   .track-more-btn:hover { color: var(--text); border-color: var(--border); background: var(--bg); }
   .track-more-btn.open { color: var(--text); border-color: var(--border); background: var(--bg); }
-  .track-more-btn svg { width: 18px; height: 18px; }
+  .track-more-btn svg { width: 16px; height: 16px; }
 
   /* ---- Search result: more-options dropdown menu ---- */
   .result-more-menu {
