@@ -296,7 +296,11 @@ function openPlaylistDetailModal(pl_id) {
         const opt = document.createElement('div');
         opt.className = 'queue-menu-option' + (danger ? ' danger' : '');
         opt.innerHTML = `${iconHtml}${label}`;
-        opt.addEventListener('click', (e) => { e.stopPropagation(); onClick(); });
+        opt.addEventListener('click', (e) => {
+          e.stopPropagation();
+          _closeAllPlaylistMoreMenus();
+          onClick();
+        });
         menu.appendChild(opt);
       }
 

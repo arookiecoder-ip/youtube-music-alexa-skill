@@ -1341,8 +1341,11 @@ async function addToQueue(item, position, silent) {
     // Re-adding a song right after deleting it must show up again \u2014 drop any
     // pending-removal entry that would otherwise filter it out.
     _pendingRemovals.delete(item.video_id);
-    // Force queue refresh
-    _lastQueueJson = '';
+    // Don't blank _lastQueueJson here: that forces the next SSE snapshot to be
+    // treated as "changed" even when it matches what's already on screen,
+    // triggering a full rebuild (visible flicker) for no reason. Just poll;
+    // the normal qJson !== _lastQueueJson check in updateNowPlaying will only
+    // re-render if the confirmed queue actually differs.
     setTimeout(pollNowPlaying, 500);
   } catch (e) {
     if (!silent) toast(e.message, 'error');
@@ -2483,8 +2486,10 @@ async function reorderQueue(fromIndex, toIndex) {
   } catch (_) {}
   try {
     await api('/alexa/queue_reorder/', { from_index: fromIndex, to_index: toIndex });
-    // Confirm with server data after a short delay
-    _lastQueueJson = '';
+    // Confirm with server data after a short delay. Don't blank _lastQueueJson
+    // here — the optimistic reorder above already matches what the server will
+    // report, and invalidating the cache forces a needless full rebuild (the
+    // visible flicker) as soon as the confirming snapshot arrives.
     setTimeout(pollNowPlaying, 500);
   } catch (e) {
     // Revert on error: force refresh from server
@@ -3237,12 +3242,17 @@ window.addEventListener('resize', () => {
   }, 200);
 });
 
-/* ---- Open on YouTube Music ---- */
+/* ---- Open on YouTube Music ----
+   The link carries the current playback position (?t=Ns) so YouTube resumes
+   where the Echo left off. Clicking it also pauses the Echo, since the user
+   is about to keep listening through the browser tab instead. */
 function updateUrlBar() {
   const ytmBtn = document.getElementById('np-url-toggle');
   const mpYtmBtn = document.getElementById('mp-url-toggle');
   if (_currentVideoId) {
-    const url = 'https://music.youtube.com/watch?v=' + encodeURIComponent(_currentVideoId);
+    const seconds = Math.floor(progress.livePosition() / 1000);
+    const url = 'https://music.youtube.com/watch?v=' + encodeURIComponent(_currentVideoId)
+      + (seconds > 0 ? '&t=' + seconds : '');
     if (ytmBtn) { ytmBtn.href = url; ytmBtn.style.display = ''; }
     if (mpYtmBtn) { mpYtmBtn.href = url; mpYtmBtn.style.display = ''; }
   } else {
@@ -3260,6 +3270,21 @@ function updateUrlBar() {
     if (!_currentVideoId) {
       e.preventDefault();
       toast('No song playing.', 'error');
+      return;
+    }
+    // Refresh the href with the latest position right before navigating,
+    // since livePosition() keeps ticking while the button just sits there.
+    const seconds = Math.floor(progress.livePosition() / 1000);
+    e.currentTarget.href = 'https://music.youtube.com/watch?v=' + encodeURIComponent(_currentVideoId)
+      + (seconds > 0 ? '&t=' + seconds : '');
+
+    const serial = selectedSerial();
+    if (serial && isPlaying) {
+      lastActionAt = Date.now();
+      lastActionIntent = false;
+      api('/alexa/command/', { serial, action: 'pause' })
+        .then(() => { isPlaying = false; lastActionIntent = false; syncPlayPause(); })
+        .catch(() => {});
     }
   };
   if (ytmBtn) ytmBtn.addEventListener('click', onClick);
