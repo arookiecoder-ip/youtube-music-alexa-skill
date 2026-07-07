@@ -3,3 +3,4 @@ ytmusicapi
 yt-dlp
 alexapy
 aiohttp
+waitress

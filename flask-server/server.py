@@ -1,10 +1,13 @@
-import asyncio, difflib, glob, hmac, itertools, json, os, random, secrets, sys, threading, time, re, subprocess, traceback, logging, copy, uuid
+import asyncio, difflib, glob, hmac, itertools, json, os, random, secrets, sys, threading, time, re, subprocess, logging, copy, uuid
 from datetime import timedelta
 from urllib.parse import parse_qs, unquote, urlparse
 from ytmusicapi import YTMusic
 import alexa_remote
 from flask import Flask, request, render_template, jsonify, send_file, session, redirect, Response
 from werkzeug.exceptions import HTTPException
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
+logger = logging.getLogger(__name__)
 
 app = Flask(__name__)
 
@@ -30,6 +33,7 @@ app.config.update(
     SESSION_COOKIE_SAMESITE="Lax",
     SESSION_COOKIE_SECURE=os.environ.get("COOKIE_INSECURE") != "1",
     PERMANENT_SESSION_LIFETIME=timedelta(days=30),
+    MAX_CONTENT_LENGTH=16 * 1024 * 1024,
 )
 
 # Human login for the web remote. When both are set, /remote/ and the /alexa/*
@@ -42,8 +46,8 @@ if REMOTE_USER and not REMOTE_PASSWORD:
     # bool("") is False, so _remote_login_enabled() would silently treat this
     # as "login not configured" and fall back to key-only access -- warn loudly
     # instead of disabling auth without telling anyone.
-    print(f"WARNING: REMOTE_USER is set but REMOTE_PASSWORD is empty/unset; "
-          f"web-remote login is DISABLED and /remote/ falls back to key-only access.")
+    logger.warning("REMOTE_USER is set but REMOTE_PASSWORD is empty/unset; "
+                   "web-remote login is DISABLED and /remote/ falls back to key-only access.")
 
 # Optional TOTP 2FA on top of the username/password login. Set REMOTE_TOTP_SECRET
 # to a base32 secret (same one you add to Google Authenticator / Authy). When set,
@@ -108,7 +112,7 @@ if not API_KEY:
         API_KEY = secrets.token_hex(16)
 
 if not os.environ.get("API_KEY"):
-    print(f"\n\n*** NO API KEY SET IN ENV. USING KEY: {API_KEY} ***\n\n")
+    logger.warning("NO API KEY SET IN ENV. USING AUTO-GENERATED KEY: %s", API_KEY)
 
 # ---- Armed-play store (web-remote direct plays) ----
 # The web remote can't reliably smuggle a video id through Alexa's speech NLU
@@ -346,7 +350,7 @@ def require_api_key():
     if not API_KEY:
         return None
     supplied = request.args.get('key') or request.headers.get('X-Api-Key')
-    if supplied != API_KEY:
+    if not hmac.compare_digest(supplied or "", API_KEY):
         # Device/skill endpoints must get a JSON error, never an HTML redirect.
         if any(request.path.startswith(p) for p in _API_PREFIXES):
             return jsonify({'error': 'unauthorized'}), 401
@@ -545,7 +549,7 @@ def _sse_heartbeat_loop():
         try:
             _check_track_overrun()
         except Exception:
-            traceback.print_exc()
+            logger.exception("")
         with _sse_lock:
             serials = {serial for serial in _sse_subscribers.values() if serial}
         with _np_lock:
@@ -604,7 +608,7 @@ def handle_alexa_unreachable(error):
 def handle_uncaught(error):
     if isinstance(error, HTTPException):
         return error
-    traceback.print_exc()
+    logger.exception("")
     return jsonify({'error': 'internal server error'}), 500
 
 
@@ -664,7 +668,7 @@ def _prepare_stream_list_cache(query: str, filter_name: str = 'songs'):
         _set_cached_stream_list(query, filter_name, response)
         return response
     except Exception:
-        traceback.print_exc()
+        logger.exception("")
         return None
     finally:
         with _stream_list_cache_lock:
@@ -732,7 +736,7 @@ def _lookup_video_metadata(video_id):
                 'duration_ms': duration_ms,
             }
     except Exception:
-        traceback.print_exc()
+        logger.exception("")
     # ytmusicapi only knows YT Music catalog tracks; arbitrary YouTube links
     # (what a pasted URL usually is) have no get_song entry, so fall back to
     # yt-dlp for the title/artist/thumbnail instead of showing "YouTube video".
@@ -1009,7 +1013,7 @@ class Supporting:
                 if charts:
                     break
             except Exception:
-                traceback.print_exc()
+                logger.exception("")
                 charts = None
         songs = ((charts or {}).get('songs') or {}).get('items', [])
         if not songs:
@@ -1037,7 +1041,7 @@ class Supporting:
             radio_results = await asyncio.to_thread(
                 ytmusic.get_watch_playlist, videoId=video_id, radio=True)
         except Exception:
-            traceback.print_exc()
+            logger.exception("")
             return None
         songs = (radio_results or {}).get('tracks', [])
         if not songs:
@@ -1126,7 +1130,7 @@ class Supporting:
             search_results = await asyncio.to_thread(ytmusic.get_playlist, playlistId=playlist_id, limit=None)
         except Exception:
             # ytmusicapi raises on unknown/private playlist ids; treat as not found
-            traceback.print_exc()
+            logger.exception("")
             return None
         playlist_raw = (search_results or {}).get('tracks')
         if not playlist_raw:
@@ -1163,7 +1167,7 @@ class Supporting:
                    "--remote-components", "ejs:github", "--", video_id]
         result = subprocess.run(command, capture_output=True, text=True)
         if result.returncode != 0:
-            print("Error: ", result.stderr)
+            logger.error("yt-dlp get-url failed: %s", result.stderr.strip())
             return None
         return result.stdout.strip()
 
@@ -1263,12 +1267,12 @@ class Supporting:
                     # tv occasionally can't extract a given video (e.g. some
                     # age-restricted content) — retry once with mweb, the
                     # previously proven-working client, before giving up.
-                    print("Error (tv client): ", result.stderr)
+                    logger.error("yt-dlp download failed (tv client): %s", result.stderr.strip())
                     result = subprocess.run(
                         Supporting.ytdlp_download_command(video_id, output, client="mweb"),
                         capture_output=True, text=True)
                     if result.returncode != 0:
-                        print("Error (mweb client): ", result.stderr)
+                        logger.error("yt-dlp download failed (mweb client): %s", result.stderr.strip())
             return Supporting.cached_audio_path(video_id)
 
     async def get_stream(video_id: str):
@@ -1315,7 +1319,7 @@ class Supporting:
         try:
             playlist_raw = await asyncio.to_thread(ytmusic.get_playlist, playlist_id)
         except Exception:
-            traceback.print_exc()
+            logger.exception("")
             return None
         if not playlist_raw or not playlist_raw.get('id'):
             return None
@@ -1329,7 +1333,7 @@ async def get_playlist_info():
     if not playlist_id:
         return error_response('missing required parameter "id"', 400)
     response = await Supporting.get_playlist_info(playlist_id)
-    print(f'Completed request in {time.time() - start_time:.2f} seconds.')
+    logger.info('Completed request in %.2f seconds.', time.time() - start_time)
     if response is None:
         return error_response('playlist not found', 404)
     return jsonify(response)
@@ -1341,7 +1345,7 @@ async def stream_playlist():
     if not playlist_id:
         return error_response('missing required parameter "id"', 400)
     response = await Supporting.stream_playlist(playlist_id)
-    print(f'Completed request in {time.time() - start_time:.2f} seconds.')
+    logger.info('Completed request in %.2f seconds.', time.time() - start_time)
     if response is None:
         return error_response('playlist not found or empty', 404)
     return jsonify(response)
@@ -1356,7 +1360,7 @@ async def get_stream():
     if not _valid_video_id(video_id):
         return error_response('invalid "video_id"', 400)
     response = await Supporting.get_stream(video_id)
-    print(f'Completed request in {time.time() - start_time:.2f} seconds.')
+    logger.info('Completed request in %.2f seconds.', time.time() - start_time)
     if response is None:
         return error_response('stream unavailable', 404)
     return jsonify(response)
@@ -1383,7 +1387,7 @@ async def stream_video():
     if not stream:
         return error_response('stream unavailable', 404)
     queue = _current_queue_for_video(video_id) or [metadata]
-    print(f'Completed stream_video in {time.time() - start_time:.2f} seconds.')
+    logger.info('Completed stream_video in %.2f seconds.', time.time() - start_time)
     return jsonify({'song_info': {'metadata': metadata, 'stream': stream}, 'playlist': queue})
 
 
@@ -1399,7 +1403,7 @@ async def get_radio():
     if not _valid_video_id(video_id):
         return error_response('invalid "video_id"', 400)
     playlist = await Supporting.get_radio_queue(video_id)
-    print(f'Completed get_radio in {time.time() - start_time:.2f} seconds.')
+    logger.info('Completed get_radio in %.2f seconds.', time.time() - start_time)
     if not playlist:
         return error_response('no radio queue found', 404)
     # Refresh the web remote's "Up Next" queue now that we have the full list
@@ -1451,7 +1455,7 @@ async def find_stream_list():
     if response is None:
         response = await Supporting.find_stream_list(query, filter)
         _set_cached_stream_list(query, filter, response)
-    print(f'Completed request in {time.time() - start_time:.2f} seconds.')
+    logger.info('Completed request in %.2f seconds.', time.time() - start_time)
     if response is None:
         return error_response('no results found', 404)
     # Capture now-playing metadata + queue (the skill calls this before /proxy/)
@@ -1628,7 +1632,7 @@ def _lookup_and_update_np(video_id):
     except Exception as e:
         sys.stderr.write(f"[np] lookup FAILED: {e}\n")
         sys.stderr.flush()
-        traceback.print_exc()
+        logger.exception("")
 
 
 def _refresh_radio_queue(video_id, force=False):
@@ -1708,7 +1712,7 @@ def _refresh_radio_queue(video_id, force=False):
                 threading.Thread(target=_backfill_queue_thumbnail, args=(vid,), daemon=True).start()
             return True
     except Exception:
-        traceback.print_exc()
+        logger.exception("")
     return False
 
 
@@ -1731,7 +1735,7 @@ def _backfill_queue_thumbnail(video_id):
         if changed:
             _notify_sse()
     except Exception:
-        traceback.print_exc()
+        logger.exception("")
 
 
 # What the Echo most recently buffered via /proxy/ while another track was
@@ -1892,7 +1896,7 @@ def _extend_server_queue():
         _notify_sse()
         return True
     except Exception:
-        traceback.print_exc()
+        logger.exception("")
         return False
 
 
@@ -1973,22 +1977,21 @@ def _watch_playback_confirmation(video_id, resend):
             return
         if not _still_relevant():
             return
-        print(f"[playback-watchdog] no confirmation for {video_id} in "
-              f"{PLAYBACK_CONFIRM_TIMEOUT}s, retrying once")
+        logger.warning("[playback-watchdog] no confirmation for %s in %ss, retrying once", video_id, PLAYBACK_CONFIRM_TIMEOUT)
         error = resend()
         if error:
-            print(f"[playback-watchdog] retry dispatch failed: {error}")
+            logger.error("[playback-watchdog] retry dispatch failed: %s", error)
             _update_now_playing(playback_error=error)
             return
         if _wait_once():
             return
         if not _still_relevant():
             return
-        print(f"[playback-watchdog] retry for {video_id} also unconfirmed")
+        logger.warning("[playback-watchdog] retry for %s also unconfirmed", video_id)
         _update_now_playing(
             playback_error="Playback didn't start. Check the device and try again.")
     except Exception:
-        traceback.print_exc()
+        logger.exception("")
 
 
 def _dispatch_play_with_retry(serial, video_id, offset_ms=0):
@@ -2567,7 +2570,7 @@ def get_recommendations():
         try:
             items = asyncio.run(_build_recommendations())
         except Exception:
-            traceback.print_exc()
+            logger.exception("")
             return jsonify(_recs_cache['items'])
         _recs_cache['items'] = items
         _recs_cache['built_at'] = time.time()
@@ -2716,8 +2719,8 @@ def resolve_play_query(query: str):
             if title:
                 return (f"{title} {author}").strip(), None
         except Exception:
-            print(f"[resolve] get_song({video_id}) failed, trying fallback")
-            traceback.print_exc()
+            logger.warning("[resolve] get_song(%s) failed, trying fallback", video_id)
+            logger.exception("")
         # Strategy 2: get_watch_playlist (proven to work on VPS)
         try:
             radio = ytmusic.get_watch_playlist(videoId=video_id)
@@ -2729,8 +2732,8 @@ def resolve_play_query(query: str):
                 if title:
                     return (f"{title} {artist}").strip(), None
         except Exception:
-            print(f"[resolve] get_watch_playlist({video_id}) failed, trying search")
-            traceback.print_exc()
+            logger.warning("[resolve] get_watch_playlist(%s) failed, trying search", video_id)
+            logger.exception("")
         # Strategy 3: search by video ID
         try:
             results = ytmusic.search(video_id, ignore_spelling=True)
@@ -2741,13 +2744,13 @@ def resolve_play_query(query: str):
                     if title:
                         return (f"{title} {artist}").strip(), None
         except Exception:
-            traceback.print_exc()
+            logger.exception("")
         return None, "Couldn't resolve that YouTube link."
     if list_match:
         try:
             playlist = ytmusic.get_playlist(list_match.group(1), 1)
         except Exception:
-            traceback.print_exc()
+            logger.exception("")
             return None, "Couldn't read that playlist link."
         tracks = (playlist or {}).get('tracks') or []
         if not tracks:
@@ -2776,7 +2779,7 @@ def _quick_song_lookup(query):
                 'duration_ms': Supporting.duration_ms(track),
             }
     except Exception:
-        traceback.print_exc()
+        logger.exception("")
     return {'title': query, 'artist': '', 'thumbnail': ''}
 
 
@@ -2787,7 +2790,7 @@ async def alexa_play():
     serial, query = body.get("serial"), str(body.get("query") or "").strip()
     if not serial or not query:
         return error_response('missing "serial" or "query"', 400)
-    print(f"[alexa/play] query={query!r} serial={serial}")
+    logger.info("[alexa/play] query=%r serial=%s", query, serial)
     # For plain-text queries (non-URLs), skip the blocking resolve and fire
     # everything in the background so the web remote gets an instant response.
     # Exact YouTube URLs bypass fuzzy search; playlist-only links still use the
@@ -2841,7 +2844,7 @@ async def alexa_play():
                     try:
                         tracks = asyncio.run(Supporting.get_playlist_tracks(list_match.group(1)))
                     except Exception:
-                        traceback.print_exc()
+                        logger.exception("")
                         tracks = None
                     if tracks:
                         pl_queue = [{
@@ -2874,22 +2877,22 @@ async def alexa_play():
                 _ensure_audio_ready_for_play(direct_video_id)
                 error = _dispatch_play_with_retry(serial, direct_video_id)
                 if error:
-                    print(f"[alexa/play] direct link play failed: {error}")
+                    logger.error("[alexa/play] direct link play failed: %s", error)
                     _update_now_playing(playing=False)
                 elif not _ensure_audio_ready_for_play(direct_video_id, wait=True):
-                    print(f"[alexa/play] direct link download failed video_id={direct_video_id}")
+                    logger.error("[alexa/play] direct link download failed video_id=%s", direct_video_id)
                     _update_now_playing(playing=False)
                 else:
-                    print(f"[alexa/play] direct link sent successfully video_id={direct_video_id}")
+                    logger.info("[alexa/play] direct link sent successfully video_id=%s", direct_video_id)
                     _record_listen(direct_video_id, queue_item.get('title', ''),
                                    queue_item.get('artist', ''), thumb)
                     _prewarm_queue_audio(queue, queue_index)
             except Exception:
-                traceback.print_exc()
+                logger.exception("")
                 _update_now_playing(playing=False)
 
         threading.Thread(target=_bg_play_direct_link, daemon=True).start()
-        print(f"[alexa/play] dispatched direct link video_id={direct_video_id}")
+        logger.info("[alexa/play] dispatched direct link video_id=%s", direct_video_id)
         return jsonify({'ok': True, 'now_playing': optimistic_info})
 
     # Playlist-only link: queue the playlist's own tracks (in order) instead of
@@ -2923,23 +2926,23 @@ async def alexa_play():
                     _ensure_audio_ready_for_play(first['video_id'])
                     error = _dispatch_play_with_retry(serial, first['video_id'])
                     if error:
-                        print(f"[alexa/play] playlist play failed: {error}")
+                        logger.error("[alexa/play] playlist play failed: %s", error)
                         _update_now_playing(playing=False)
                     elif not _ensure_audio_ready_for_play(first['video_id'], wait=True):
-                        print(f"[alexa/play] playlist download failed video_id={first['video_id']}")
+                        logger.error("[alexa/play] playlist download failed video_id=%s", first['video_id'])
                         _update_now_playing(playing=False)
                     else:
-                        print(f"[alexa/play] playlist sent successfully ({len(queue)} tracks)")
+                        logger.info("[alexa/play] playlist sent successfully (%d tracks)", len(queue))
                         _record_listen(first['video_id'], first.get('title', ''),
                                        first.get('artist', ''),
                                        first.get('thumbnail', ''))
                         _prewarm_queue_audio(queue, 0)
                 except Exception:
-                    traceback.print_exc()
+                    logger.exception("")
                     _update_now_playing(playing=False)
 
             threading.Thread(target=_bg_play_playlist, daemon=True).start()
-            print(f"[alexa/play] dispatched playlist ({len(queue)} tracks) video_id={first['video_id']}")
+            logger.info("[alexa/play] dispatched playlist (%d tracks) video_id=%s", len(queue), first['video_id'])
             return jsonify({'ok': True, 'now_playing': first})
         # Unreadable playlist (private, radio-only id, etc.): fall through to
         # the older resolver so the user still gets a sensible error/first song.
@@ -2947,9 +2950,9 @@ async def alexa_play():
     if is_link:
         spoken, error = await asyncio.to_thread(resolve_play_query, query)
         if error:
-            print(f"[alexa/play] resolve_play_query failed: {error}")
+            logger.error("[alexa/play] resolve_play_query failed: %s", error)
             return error_response(error, 502)
-        print(f"[alexa/play] resolved link to: {spoken!r}")
+        logger.info("[alexa/play] resolved link to: %r", spoken)
     else:
         spoken = query
 
@@ -2970,7 +2973,7 @@ async def alexa_play():
             if not meta.get('title'):
                 error = alexa_remote.remote.play_query(serial, spoken)
                 if error:
-                    print(f"[alexa/play] play_query failed: {error}")
+                    logger.error("[alexa/play] play_query failed: %s", error)
                     _update_now_playing(playing=False)
                 return
             thumb = ''
@@ -2990,32 +2993,28 @@ async def alexa_play():
             _update_now_playing(**fields)
             video_id = meta.get('video_id', '')
             if _valid_video_id(video_id):
-                # Dispatch now and let the download (already warming via
-                # get_stream) overlap Amazon's command→NLU→Lambda round trip.
-                # /proxy/ blocks until the file is ready, so the Echo just
-                # waits for the first byte instead of us waiting here.
                 _ensure_audio_ready_for_play(video_id)
                 error = _dispatch_play_with_retry(serial, video_id)
                 if not error and not _ensure_audio_ready_for_play(video_id, wait=True):
-                    print(f"[alexa/play] download failed video_id={video_id}")
+                    logger.error("[alexa/play] download failed video_id=%s", video_id)
                     _update_now_playing(playing=False)
                     return
             else:
                 error = alexa_remote.remote.play_query(serial, spoken)
             if error:
-                print(f"[alexa/play] play failed: {error}")
+                logger.error("[alexa/play] play failed: %s", error)
                 _update_now_playing(playing=False)
             else:
-                print(f"[alexa/play] sent successfully")
+                logger.info("[alexa/play] sent successfully")
                 _record_listen(video_id, fields.get('title', ''),
                                fields.get('artist', ''), thumb)
         except Exception:
-            traceback.print_exc()
+            logger.exception("")
             _update_now_playing(playing=False)
 
     threading.Thread(target=_bg_prepare_and_play, daemon=True).start()
 
-    print(f"[alexa/play] dispatched to background")
+    logger.info("[alexa/play] dispatched to background")
     return jsonify({'ok': True, 'now_playing': optimistic_info})
 
 
@@ -3559,7 +3558,7 @@ def _backfill_track_thumbnail(pl_id, track_uuid, video_id):
             )
             conn.commit()
     except Exception:
-        traceback.print_exc()
+        logger.exception("")
 
 
 # Un-liking a song from the Liked Songs view is deliberately reversible in
@@ -3677,13 +3676,13 @@ def api_sync_playlist(pl_id):
         try:
             new_tracks_raw = asyncio.run(Supporting.get_playlist_tracks(list_id))
         except Exception as e:
-            print(f"[sync] Failed to sync {list_id}: {e}")
+            logger.error("[sync] Failed to sync %s: %s", list_id, e)
             return
         if new_tracks_raw is None:
             # Unreadable this time (private/deleted/transient API failure) —
             # bail out entirely rather than treating "couldn't fetch" as "the
             # source playlist is now empty" and wiping every stored track.
-            print(f"[sync] {list_id} returned no data; skipping to avoid wiping tracks")
+            logger.warning("[sync] %s returned no data; skipping to avoid wiping tracks", list_id)
             return
             
         now = time.time()
@@ -3744,7 +3743,7 @@ async def alexa_suggest():
         ytmusic = YTMusic()
         raw = await asyncio.to_thread(ytmusic.get_search_suggestions, query)
     except Exception as e:
-        print(f"[alexa/suggest] failed: {e}")
+        logger.error("[alexa/suggest] failed: %s", e)
         return jsonify({'suggestions': []})
     # get_search_suggestions returns a list of strings (or dicts with 'text'
     # when detailed=True). Normalise to plain strings, keep the top few.
@@ -3855,4 +3854,5 @@ def service_worker():
 
 # Main entry point
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000)
+    import waitress
+    waitress.serve(app, host="0.0.0.0", port=5000, threads=8)
