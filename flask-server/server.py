@@ -389,6 +389,15 @@ _now_playing = {
 _volume_by_serial = {}
 _np_lock = threading.Lock()
 
+# Seek/resume-with-offset dispatch arms position_ms just before triggering
+# playback (see alexa_seek and the 'play' action in alexa_command). The skill
+# then reports a PlaybackStarted for the same track at a low offset, which
+# looks identical in shape to a genuine replay-from-the-top -- this window
+# lets alexa_state_event tell them apart and not miscount a reposition as a
+# fresh listen.
+_last_reposition_at = 0.0
+_REPOSITION_SUPPRESS_WINDOW = 5
+
 # ---------- SSE (Server-Sent Events) push ----------
 import queue as _queue_mod
 _sse_subscribers = {}
