@@ -551,7 +551,7 @@ async function api(path, body) {
     // Network-level failure: server unreachable, dropped connection, no internet.
     throw new Error('Can’t reach the server. Check your connection and try again.');
   }
-  if (res.status === 401) { throw new Error('Session expired'); }
+  if (res.status === 401) { showControls(false); throw new Error('Session expired'); }
   const json = await res.json().catch(() => ({}));
   if (!res.ok) {
     // 502/503 mean the Echo (or Amazon) didn't take the command — say so
@@ -565,10 +565,12 @@ async function api(path, body) {
 }
 
 /* ---- Sign-out confirmation ---- */
-function doSignOut() {
+async function doSignOut() {
   stopSSE();
-  api('/logout/', {}).catch(() => {});
-  // Do not redirect to login page automatically
+  try {
+    await api('/logout/', {});
+  } catch (_) { /* best-effort */ }
+  showControls(false);
 }
 
 (function () {
@@ -2909,7 +2911,7 @@ async function apiDelete(path) {
   } catch (_) {
     throw new Error('Can’t reach the server. Check your connection and try again.');
   }
-  if (res.status === 401) { throw new Error('Session expired'); }
+  if (res.status === 401) { showControls(false); throw new Error('Session expired'); }
   const json = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(json.error || ('HTTP ' + res.status));
   return json;
@@ -2925,7 +2927,7 @@ async function apiPatch(path, body) {
   } catch (_) {
     throw new Error('Can’t reach the server. Check your connection and try again.');
   }
-  if (res.status === 401) { throw new Error('Session expired'); }
+  if (res.status === 401) { showControls(false); throw new Error('Session expired'); }
   const json = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(json.error || ('HTTP ' + res.status));
   return json;
