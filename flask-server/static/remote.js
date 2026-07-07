@@ -8,6 +8,7 @@ let toastTimer;
 let lastToastMsg = '';
 let lastToastKind = '';
 let lastActionAt = 0;           // timestamp of last user button press
+let lastActionIntent = null;    // isPlaying value the last user action explicitly set, or null
 const GRACE_MS = 8000;          // don't let SSE override state for 8s after a user action
 let _currentVideoId = '';       // video_id of the currently playing track
 let _currentThumbnail = '';     // thumbnail URL of the currently playing track
@@ -401,7 +402,14 @@ const progress = (function () {
       }
     }
     if (typeof np.playing === 'boolean' && !awaitingStart) {
-      playing = np.playing && !!np.playback_confirmed;
+      const reported = np.playing && !!np.playback_confirmed;
+      // Mirror the top-level grace guard: a snapshot that contradicts the
+      // user's just-clicked play/pause intent can be a stale confirmation for
+      // the *start* of playback (already in flight when pause was clicked) --
+      // accepting it would resume the ticking bar right after the user paused.
+      const inGrace = (Date.now() - lastActionAt) < GRACE_MS;
+      const contradictsIntent = inGrace && lastActionIntent !== null && reported !== lastActionIntent;
+      if (!contradictsIntent) playing = reported;
     }
     syncLoop();
     paint();
@@ -701,13 +709,19 @@ function handleNpUpdate(np) {
     // _watch_playback_confirmation) — stop showing "loading" and tell the user.
     toast(np.playback_error, 'error');
     isPlaying = false;
+    lastActionIntent = false;
     syncPlayPause();
   }
   if (np.title) {
     showNowPlaying(np);
     if (np.playing !== undefined) {
       const inGrace = (Date.now() - lastActionAt) < GRACE_MS;
-      if (np.playing || !inGrace) {
+      // During the grace window, a snapshot that contradicts the user's last
+      // explicit play/pause intent is stale (Alexa's own round-trip hasn't
+      // caught up yet) and must not flip the button back — otherwise pausing
+      // shows a flicker back to "playing" before the real confirmation lands.
+      const contradictsIntent = inGrace && lastActionIntent !== null && np.playing !== lastActionIntent;
+      if (!contradictsIntent && (np.playing || !inGrace)) {
         isPlaying = np.playing;
         syncPlayPause();
       }
@@ -717,7 +731,8 @@ function handleNpUpdate(np) {
     showNowPlaying(null);
     if (np.playing !== undefined) {
       const inGrace = (Date.now() - lastActionAt) < GRACE_MS;
-      if (!inGrace) {
+      const contradictsIntent = inGrace && lastActionIntent !== null && np.playing !== lastActionIntent;
+      if (!contradictsIntent && !inGrace) {
         isPlaying = np.playing;
         syncPlayPause();
       }
@@ -903,6 +918,7 @@ async function playDirectLink(query) {
     // confirmation can end the wait.
     progress.resetPending(npInfo.video_id);
     isPlaying = true;
+    lastActionIntent = true;
     syncPlayPause();
     toast('Playing', 'ok');
     // Force queue refresh
@@ -1380,6 +1396,7 @@ async function playResult(item) {
     showNowPlaying(item);
     progress.resetPending(item.video_id);
     isPlaying = true;
+    lastActionIntent = true;
     syncPlayPause();
     toast('Playing', 'ok');
     _lastQueueJson = '';
@@ -1589,6 +1606,7 @@ async function doClearAll() {
   try {
     const data = await api('/alexa/clear/', serial ? { serial } : {});
     isPlaying = false;
+    lastActionIntent = false;
     syncPlayPause();
     clearUiAfterPlaybackReset();
     if (window._closeQueueModal) window._closeQueueModal();
@@ -1735,9 +1753,11 @@ document.getElementById('pp-btn').onclick = () => {
   lastActionAt = Date.now();
   const action = isPlaying ? 'pause' : 'play';
   toast((action === 'pause' ? 'Pausing' : 'Resuming') + '\u2026');
+  lastActionIntent = action === 'play';
   api('/alexa/command/', { serial, action })
     .then(() => {
       isPlaying = action === 'play';
+      lastActionIntent = isPlaying;
       syncPlayPause();
       toast(action === 'pause' ? 'Paused' : 'Resumed', 'ok');
     })
@@ -1771,6 +1791,7 @@ for (const btn of document.querySelectorAll('[data-action="previous"], [data-act
       .then((data) => {
         if (data.now_playing) showNowPlaying(data.now_playing);
         isPlaying = true;
+        lastActionIntent = true;
         syncPlayPause();
         // New track incoming: hold the bar at 0:00 until PlaybackStarted
         // confirms *this* video_id (not a stale push for the track we just left).
@@ -2699,6 +2720,7 @@ async function playFromQueue(item) {
     showNowPlaying(npInfo);
     progress.resetPending(item.video_id);
     isPlaying = true;
+    lastActionIntent = true;
     syncPlayPause();
     toast('Playing', 'ok');
     setTimeout(pollNowPlaying, 3000);

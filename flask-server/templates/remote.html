@@ -104,7 +104,15 @@
       </div>
     </div>
     <div class="sidebar-section">
-      <button class="needs-login" id="sidebar-playlists-btn" style="width:100%; display:inline-flex; align-items:center; justify-content:center; gap:8px; font-size:.75rem; font-weight:600; text-transform:uppercase; letter-spacing:.08em; color:var(--text); transition:color .15s; margin-bottom: 12px; background: var(--surface); border: 1px solid var(--border); padding: 10px; border-radius: 6px;">
+      <button id="refresh-page-btn" onclick="location.reload()" style="width:100%; display:inline-flex; align-items:center; justify-content:center; gap:8px; font-size:.75rem; font-weight:600; text-transform:uppercase; letter-spacing:.08em; color:var(--muted); transition:color .15s, border-color .15s; margin-bottom: 12px; background: var(--surface); border: 1px solid var(--border); padding: 10px; border-radius: 6px;">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
+             stroke="currentColor" stroke-width="2.2" stroke-linecap="square">
+          <path d="M21 2v6h-6"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/>
+          <path d="M3 22v-6h6"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/>
+        </svg>
+        Refresh Page
+      </button>
+      <button class="needs-login" id="sidebar-playlists-btn" style="width:100%; display:inline-flex; align-items:center; justify-content:center; gap:8px; font-size:.75rem; font-weight:600; text-transform:uppercase; letter-spacing:.08em; color:var(--text); transition:color .15s; background: var(--surface); border: 1px solid var(--border); padding: 10px; border-radius: 6px;">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <line x1="8" y1="6" x2="21" y2="6"/>
           <line x1="8" y1="12" x2="21" y2="12"/>
@@ -114,14 +122,6 @@
           <line x1="3" y1="18" x2="3.01" y2="18"/>
         </svg>
         Playlists
-      </button>
-      <button id="refresh-page-btn" onclick="location.reload()" style="width:100%; display:inline-flex; align-items:center; justify-content:center; gap:8px; font-size:.75rem; font-weight:600; text-transform:uppercase; letter-spacing:.08em; color:var(--muted); transition:color .15s, border-color .15s;">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
-             stroke="currentColor" stroke-width="2.2" stroke-linecap="square">
-          <path d="M21 2v6h-6"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/>
-          <path d="M3 22v-6h6"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/>
-        </svg>
-        Refresh Page
       </button>
     </div>
     <div class="sidebar-signout">
@@ -485,7 +485,7 @@
           </svg>
           Sync
         </button>
-        <button class="history-modal-close" id="playlist-detail-more-btn" title="More options">
+        <button class="history-modal-close playlist-more-btn" id="playlist-detail-more-btn" title="More options">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg>
         </button>
         <div class="playlist-more-menu" id="playlist-detail-more-menu" style="display:none; position:fixed; background: var(--bg-elevated, #2a2a2a); border: 1px solid var(--border, #444); border-radius: 8px; z-index: 100; min-width: 180px; box-shadow: 0 4px 12px rgba(0,0,0,0.5); overflow: hidden;">

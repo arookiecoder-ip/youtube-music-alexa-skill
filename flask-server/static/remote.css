@@ -1647,6 +1647,15 @@
     justify-content: center;
     color: var(--muted);
   }
+  .history-title {
+    font-size: .85rem;
+    font-weight: 600;
+  }
+  .history-artist {
+    font-size: .72rem;
+    color: var(--muted);
+    margin-top: 2px;
+  }
 
   /* ---- Recently Listened modal (desktop + mobile — same markup, no
      per-item remove control; Clear (with confirmation) is the only way to
@@ -1714,6 +1723,14 @@
     display: flex;
   }
   .history-modal-close:hover { color: var(--text); }
+  .playlist-more-btn {
+    border-radius: 50%;
+    width: 32px;
+    height: 32px;
+    align-items: center;
+    justify-content: center;
+  }
+  .playlist-more-btn:hover { background: var(--surface); }
   .history-modal-body {
     flex: 1;
     overflow-y: auto;
@@ -2363,6 +2380,9 @@
     /* Header history button: icon only on mobile to save header space */
     .header-history-label { display: none; }
     .header-history-btn { padding: 7px 9px; }
+    /* Playlists is already reachable from the sidebar menu on mobile —
+       don't duplicate it in the cramped header. */
+    #playlists-modal-btn { display: none !important; }
     /* Desktop-only elements: hide on mobile */
     .result-more-btn { display: none !important; }
     .queue-more-btn { display: none !important; }

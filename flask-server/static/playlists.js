@@ -40,7 +40,11 @@ function getPlaylistsList() {
   if (!lists.find(p => p.id === 'liked')) {
     lists.push({ id: 'liked', name: 'Liked Songs', updated_at: 0, tracks: [] });
   }
-  return lists.sort((a, b) => b.updated_at - a.updated_at);
+  return lists.sort((a, b) => {
+    if (a.id === 'liked') return -1;
+    if (b.id === 'liked') return 1;
+    return b.updated_at - a.updated_at;
+  });
 }
 
 function renderPlaylists() {
@@ -161,9 +165,9 @@ function openPlaylistDetailModal(pl_id) {
       html += `
         <div class="history-item" style="position: relative;">
           ${thumbHtml}
-          <div class="history-info" style="flex: 1; min-width: 0; cursor: pointer;" onclick="playResult({video_id: '${escHtml(track.video_id)}', title: '${escHtml(track.title).replace(/'/g, "\\'")}', artist: '${escHtml(track.artist).replace(/'/g, "\\'")}'})">
-            <div class="history-title">${escHtml(track.title)}</div>
-            <div class="history-artist">${escHtml(track.artist)}</div>
+          <div class="history-info" style="flex: 1; min-width: 0; cursor: pointer;" onclick="playResult({video_id: '${escHtml(track.video_id)}', title: '${escHtml(track.title).replace(/'/g, "\\'")}', artist: '${escHtml(track.artist).replace(/'/g, "\\'")}', thumbnail: '${escHtml(track.thumbnail || '').replace(/'/g, "\\'")}', duration_ms: ${Number(track.duration_ms) || 0}})">
+            <div class="history-title" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${escHtml(track.title)}</div>
+            <div class="history-artist" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${escHtml(track.artist)}</div>
           </div>
           <div class="playlist-more-container" style="position: relative; display: flex; align-items: center;">
             <button class="result-more-btn" type="button" title="More options" onclick="event.stopPropagation(); window.togglePlaylistMoreMenu(this)" style="background: none; border: none; color: var(--text-muted, #aaa); cursor: pointer; padding: 8px;">
@@ -298,7 +302,7 @@ async function playPlaylist(pl_id, btn) {
   if (btn) btn.disabled = true;
   try {
     const [first, ...rest] = pl.tracks;
-    await playResult({ video_id: first.video_id, title: first.title, artist: first.artist, thumbnail: first.thumbnail });
+    await playResult({ video_id: first.video_id, title: first.title, artist: first.artist, thumbnail: first.thumbnail, duration_ms: first.duration_ms });
     if (rest.length) toast('Adding rest of “' + pl.name + '” to queue…');
     for (const track of rest) {
       // silent: this loop queues the rest of the playlist in bulk, so per-track
@@ -363,8 +367,17 @@ function openAddToPlaylistModal(item) {
   
   let html = '';
   lists.forEach(pl => {
+    const trackCount = (pl.tracks || []).length;
+    let thumbHtml = `
+      <div class="queue-thumb" style="display: flex; align-items: center; justify-content: center; background: rgba(255, 255, 255, 0.05);">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="width: 20px; height: 20px; color: var(--text-muted, #888);"><path d="M9 18V5l12-2v13"></path><circle cx="6" cy="18" r="3"></circle><circle cx="18" cy="16" r="3"></circle></svg>
+      </div>`;
+    if (trackCount > 0 && pl.tracks[0].thumbnail) {
+      thumbHtml = `<img class="queue-thumb loaded" src="${escHtml(pl.tracks[0].thumbnail)}" alt="">`;
+    }
     html += `
-      <div style="padding: 12px; border-bottom: 1px solid var(--border); cursor: pointer; display:flex; align-items:center;" onclick="addToPlaylist('${escHtml(pl.id)}')">
+      <div style="padding: 12px; border-bottom: 1px solid var(--border); cursor: pointer; display:flex; align-items:center; gap:12px;" onclick="addToPlaylist('${escHtml(pl.id)}')">
+         ${thumbHtml}
          <div style="flex:1; font-weight: 500;">${escHtml(pl.name)}</div>
          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
       </div>
