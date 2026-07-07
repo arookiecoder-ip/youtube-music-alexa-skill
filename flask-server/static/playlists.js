@@ -1,26 +1,44 @@
-window.togglePlaylistMoreMenu = function(btn) {
-  const menus = document.querySelectorAll('.playlist-more-menu');
-  menus.forEach(m => {
-    if (m !== btn.nextElementSibling) m.style.display = 'none';
+// Closes every open per-track menu, returning each one from <body> (where it
+// was portaled while open, see below) back to its row.
+function _closeAllPlaylistMoreMenus() {
+  document.querySelectorAll('.playlist-more-menu.open').forEach(m => {
+    m.classList.remove('open');
+    // Defer the reparent until the fade-out transition finishes so a
+    // body-portaled menu doesn't visibly jump mid-fade.
+    setTimeout(() => {
+      if (m.classList.contains('open')) return;
+      if (m._home && m.parentElement !== m._home) m._home.appendChild(m);
+    }, 150);
   });
-  const menu = btn.nextElementSibling;
-  
-  if (menu.style.display === 'none') {
-    menu.style.display = 'block';
-    const rect = btn.getBoundingClientRect();
-    menu.style.position = 'fixed';
-    menu.style.top = (rect.bottom + 4) + 'px';
-    menu.style.right = (window.innerWidth - rect.right) + 'px';
-    menu.style.bottom = 'auto';
-    menu.style.left = 'auto';
-  } else {
-    menu.style.display = 'none';
-  }
 };
 
-document.addEventListener('click', () => {
-  document.querySelectorAll('.playlist-more-menu').forEach(m => m.style.display = 'none');
-});
+window.togglePlaylistMoreMenu = function(btn) {
+  const menu = btn.nextElementSibling;
+  const wasOpen = menu.classList.contains('open');
+  _closeAllPlaylistMoreMenus();
+  if (wasOpen) return;
+  const rect = btn.getBoundingClientRect();
+  menu.style.position = 'fixed';
+  menu.style.top = (rect.bottom + 4) + 'px';
+  menu.style.right = (window.innerWidth - rect.right) + 'px';
+  menu.style.bottom = 'auto';
+  menu.style.left = 'auto';
+  // Portal to <body> while open: inside the row it sits under an
+  // overflow-hidden wrapper within a scrollable list, and fixed-position
+  // elements there can get clipped or fail to receive clicks (see the same
+  // fix applied to the queue/search-result more-menus).
+  menu._home = btn.parentElement;
+  document.body.appendChild(menu);
+  menu.classList.add('open');
+};
+
+document.addEventListener('click', _closeAllPlaylistMoreMenus);
+// The menu is fixed-positioned at its row's on-screen coordinates when it
+// opens; scrolling the track list afterward moves the row but not the menu
+// (it doesn't scroll with the list once portaled to <body>), so it visually
+// drifts onto whatever row ends up underneath it. Closing on scroll avoids
+// that instead of trying to keep a fixed-position element live-repositioned.
+document.getElementById('playlist-detail-body').addEventListener('scroll', _closeAllPlaylistMoreMenus, { passive: true });
 
 let _playlistsData = { playlists: {}, liked_songs: [] };
 
@@ -163,23 +181,49 @@ function openPlaylistDetailModal(pl_id) {
       
       const trashIcon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="width: 100%; height: 100%;"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>`;
       const moreSvg = `<svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg>`;
-      
+      const queueAddSvg = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>`;
+      const playNextSvg = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>`;
+      const heartFilledSvg = `<svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>`;
+      const itemArg = `{video_id: '${escHtml(track.video_id)}', title: '${escHtml(track.title).replace(/'/g, "\\'")}', artist: '${escHtml(track.artist).replace(/'/g, "\\'")}', thumbnail: '${escHtml(track.thumbnail || '').replace(/'/g, "\\'")}', duration_ms: ${Number(track.duration_ms) || 0}}`;
+
+      // Liked Songs is a fixed system playlist: every track here is already
+      // liked, so the per-track "remove" action is a heart button (un-like)
+      // rather than the generic "Remove from playlist" menu item used for
+      // custom playlists -- clicking it does exactly what un-liking does
+      // elsewhere in the app.
+      const heartHtml = pl_id === 'liked'
+        ? `<button class="track-like-btn liked" type="button" title="Dislike" onclick="event.stopPropagation(); toggleLike(${itemArg}, this).then(() => { if (!_playlistsData.liked_songs.includes('${escHtml(track.video_id)}')) openPlaylistDetailModal('liked'); })">${heartFilledSvg}</button>`
+        : '';
+      const menuOptionsHtml = pl_id === 'liked'
+        ? `
+              <div class="result-menu-option" style="padding: 12px 16px; display: flex; align-items: center; cursor: pointer; transition: background 0.2s; font-size: 14px;" onclick="addToQueue(${itemArg}, 'next')" onmouseover="this.style.background='rgba(255,255,255,0.1)'" onmouseout="this.style.background='transparent'">
+                <div style="width: 18px; height: 18px; margin-right: 12px; display: flex;">${playNextSvg}</div>
+                Play next
+              </div>
+              <div class="result-menu-option" style="padding: 12px 16px; display: flex; align-items: center; cursor: pointer; transition: background 0.2s; font-size: 14px;" onclick="addToQueue(${itemArg}, 'last')" onmouseover="this.style.background='rgba(255,255,255,0.1)'" onmouseout="this.style.background='transparent'">
+                <div style="width: 18px; height: 18px; margin-right: 12px; display: flex;">${queueAddSvg}</div>
+                Add to queue
+              </div>`
+        : `
+              <div class="result-menu-option" style="padding: 12px 16px; display: flex; align-items: center; color: #ff4d4d; cursor: pointer; transition: background 0.2s; font-size: 14px;" onclick="event.stopPropagation(); removeFromPlaylist('${pl_id}', '${escHtml(track.uuid || track.video_id)}')" onmouseover="this.style.background='rgba(255,255,255,0.1)'" onmouseout="this.style.background='transparent'">
+                <div style="width: 18px; height: 18px; margin-right: 12px; display: flex;">${trashIcon}</div>
+                Remove from playlist
+              </div>`;
+
       html += `
         <div class="history-item" style="position: relative;">
           ${thumbHtml}
-          <div class="history-info" style="flex: 1; min-width: 0; cursor: pointer;" onclick="playResult({video_id: '${escHtml(track.video_id)}', title: '${escHtml(track.title).replace(/'/g, "\\'")}', artist: '${escHtml(track.artist).replace(/'/g, "\\'")}', thumbnail: '${escHtml(track.thumbnail || '').replace(/'/g, "\\'")}', duration_ms: ${Number(track.duration_ms) || 0}})">
+          <div class="history-info" style="flex: 1; min-width: 0; cursor: pointer;" onclick="playResult(${itemArg})">
             <div class="history-title" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${escHtml(track.title)}</div>
             <div class="history-artist" style="white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${escHtml(track.artist)}</div>
           </div>
+          ${heartHtml}
           <div class="playlist-more-container" style="position: relative; display: flex; align-items: center;">
             <button class="track-more-btn" type="button" title="More options" onclick="event.stopPropagation(); window.togglePlaylistMoreMenu(this)">
               ${moreSvg}
             </button>
-            <div class="playlist-more-menu" style="display: none; position: absolute; right: 8px; top: 100%; background: var(--bg-elevated, #2a2a2a); border: 1px solid var(--border, #444); border-radius: 8px; z-index: 100; min-width: 180px; box-shadow: 0 4px 12px rgba(0,0,0,0.5); overflow: hidden;">
-              <div class="result-menu-option" style="padding: 12px 16px; display: flex; align-items: center; color: #ff4d4d; cursor: pointer; transition: background 0.2s; font-size: 14px;" onclick="event.stopPropagation(); removeFromPlaylist('${pl_id}', '${pl_id === 'liked' ? escHtml(track.video_id) : escHtml(track.uuid || track.video_id)}')" onmouseover="this.style.background='rgba(255,255,255,0.1)'" onmouseout="this.style.background='transparent'">
-                <div style="width: 18px; height: 18px; margin-right: 12px; display: flex;">${trashIcon}</div>
-                Remove from playlist
-              </div>
+            <div class="playlist-more-menu" style="position: absolute; right: 8px; top: 100%; background: var(--bg-elevated, #2a2a2a); border: 1px solid var(--border, #444); border-radius: 8px; z-index: 100; min-width: 180px; box-shadow: 0 4px 12px rgba(0,0,0,0.5); overflow: hidden;">
+              ${menuOptionsHtml}
             </div>
           </div>
         </div>
@@ -200,22 +244,22 @@ function closePlaylistDetailModal() {
 document.getElementById('playlist-detail-more-btn').addEventListener('click', (e) => {
   e.stopPropagation();
   const menu = document.getElementById('playlist-detail-more-menu');
-  const wasOpen = menu.style.display === 'block';
-  menu.style.display = 'none';
+  const wasOpen = menu.classList.contains('open');
+  menu.classList.remove('open');
   if (!wasOpen) {
     const rect = e.currentTarget.getBoundingClientRect();
     menu.style.top = (rect.bottom + 4) + 'px';
     menu.style.right = (window.innerWidth - rect.right) + 'px';
     menu.style.left = 'auto';
-    menu.style.display = 'block';
+    menu.classList.add('open');
   }
 });
 document.addEventListener('click', () => {
-  document.getElementById('playlist-detail-more-menu').style.display = 'none';
+  document.getElementById('playlist-detail-more-menu').classList.remove('open');
 });
 
 document.getElementById('playlist-detail-rename-opt').addEventListener('click', () => {
-  document.getElementById('playlist-detail-more-menu').style.display = 'none';
+  document.getElementById('playlist-detail-more-menu').classList.remove('open');
   if (!_currentPlaylistDetailId) return;
   const pl = _playlistsData.playlists[_currentPlaylistDetailId];
   if (!pl) return;
@@ -280,7 +324,7 @@ function confirmDialog(message, opts) {
 }
 
 document.getElementById('playlist-detail-delete-opt').addEventListener('click', async () => {
-  document.getElementById('playlist-detail-more-menu').style.display = 'none';
+  document.getElementById('playlist-detail-more-menu').classList.remove('open');
   const pl_id = _currentPlaylistDetailId;
   if (!pl_id) return;
   const pl = _playlistsData.playlists[pl_id];

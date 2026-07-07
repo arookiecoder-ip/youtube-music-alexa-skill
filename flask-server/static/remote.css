@@ -811,19 +811,28 @@
   .queue-more-btn svg { width: 16px; height: 16px; }
 
   .queue-more-menu {
-    display: none;
+    display: block;
     position: fixed;
     background: var(--surface);
     border: 1px solid var(--border);
     z-index: 9999;
     min-width: 170px;
     box-shadow: 0 8px 24px rgba(0,0,0,.5);
-    animation: menuIn .15s ease-out;
+    opacity: 0;
+    visibility: hidden;
+    transform: translateY(-4px) scale(.98);
+    transition: opacity .12s ease, transform .12s ease, visibility .12s;
+    pointer-events: none;
   }
   .queue-more-menu.above {
     /* top/bottom set by JS */
   }
-  .queue-more-menu.open { display: block; }
+  .queue-more-menu.open {
+    opacity: 1;
+    visibility: visible;
+    transform: none;
+    pointer-events: auto;
+  }
   .queue-menu-option {
     display: flex;
     align-items: center;
@@ -1726,6 +1735,20 @@
   }
   .history-modal-close[hidden] { display: none; }
   .history-modal-close:hover { color: var(--text); }
+  .playlist-more-menu {
+    display: block;
+    opacity: 0;
+    visibility: hidden;
+    transform: translateY(-4px) scale(.98);
+    transition: opacity .12s ease, transform .12s ease, visibility .12s;
+    pointer-events: none;
+  }
+  .playlist-more-menu.open {
+    opacity: 1;
+    visibility: visible;
+    transform: none;
+    pointer-events: auto;
+  }
   .playlist-more-btn {
     border-radius: 50%;
     width: 32px;
@@ -2136,7 +2159,7 @@
   }
 
   /* ---- Search result: mobile queue-add icon & like icon ---- */
-  .result-queue-btn, .result-like-btn {
+  .result-queue-btn, .result-like-btn, .track-like-btn {
     flex: none;
     background: none;
     border: 1px solid var(--border);
@@ -2153,10 +2176,10 @@
     margin-right: 6px;
   }
   .result-queue-btn[hidden] { display: none; }
-  .result-queue-btn:hover, .result-like-btn:hover { color: var(--text); border-color: #444; }
-  .result-queue-btn:active, .result-like-btn:active { color: var(--accent); border-color: var(--accent); transform: scale(0.95); }
-  .result-like-btn.liked { color: var(--accent); border-color: var(--accent); }
-  .result-queue-btn svg, .result-like-btn svg { width: 16px; height: 16px; }
+  .result-queue-btn:hover, .result-like-btn:hover, .track-like-btn:hover { color: var(--text); border-color: #444; }
+  .result-queue-btn:active, .result-like-btn:active, .track-like-btn:active { color: var(--accent); border-color: var(--accent); transform: scale(0.95); }
+  .result-like-btn.liked, .track-like-btn.liked { color: var(--accent); border-color: var(--accent); }
+  .result-queue-btn svg, .result-like-btn svg, .track-like-btn svg { width: 16px; height: 16px; }
 
   /* ---- Search result: desktop more-options button ---- */
   .result-more-btn {
@@ -2202,23 +2225,28 @@
 
   /* ---- Search result: more-options dropdown menu ---- */
   .result-more-menu {
-    display: none;
+    display: block;
     position: fixed;
     background: var(--surface);
     border: 1px solid var(--border);
     z-index: 9999;
     min-width: 180px;
     box-shadow: 0 8px 24px rgba(0,0,0,.5);
-    animation: menuIn .15s ease-out;
+    opacity: 0;
+    visibility: hidden;
+    transform: translateY(-4px) scale(.98);
+    transition: opacity .12s ease, transform .12s ease, visibility .12s;
+    pointer-events: none;
   }
   .result-more-menu.above {
     /* top/bottom set by JS */
   }
-  @keyframes menuIn {
-    from { opacity: 0; transform: translateY(-4px); }
-    to { opacity: 1; transform: none; }
+  .result-more-menu.open {
+    opacity: 1;
+    visibility: visible;
+    transform: none;
+    pointer-events: auto;
   }
-  .result-more-menu.open { display: block; }
   .result-menu-option {
     display: flex;
     align-items: center;
@@ -2412,7 +2440,29 @@
     #playlists-modal-btn { display: none !important; }
     /* Desktop-only elements: hide on mobile */
     .result-more-btn { display: none !important; }
-    .queue-more-btn { display: none !important; }
+    /* .queue-more-btn stays visible on mobile now that the queue popup has
+       its own 3-dot menu (Play Radio / Like / Add to Playlist / Remove). */
+
+    /* Pin the GitHub footer to the bottom of the screen instead of leaving
+       it wherever page content happens to end, with dead space beneath it
+       when content is shorter than the viewport. */
+    .site-footer {
+      position: fixed;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      margin-top: 0;
+      padding: 10px 16px calc(10px + env(safe-area-inset-bottom, 0px));
+      background: var(--bg);
+      border-top: 1px solid var(--border);
+      z-index: 50;
+    }
+    /* The mini player already owns the bottom edge while browsing results;
+       don't stack the footer underneath/behind it. */
+    body.results-open .site-footer { display: none; }
+    /* Leave room at the bottom of the scrollable content so it doesn't end
+       up hidden behind the now-fixed footer. */
+    main { padding-bottom: 56px; }
   }
 
   /* Desktop: hide mobile-only elements */

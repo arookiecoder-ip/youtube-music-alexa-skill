@@ -1218,12 +1218,16 @@ function renderResults() {
 function _closeAllMoreMenus() {
   for (const m of document.querySelectorAll('.result-more-menu.open')) {
     m.classList.remove('open');
-    m.style.top = '';
-    m.style.bottom = '';
-    m.style.left = '';
-    m.style.right = '';
-    // Return a body-portaled menu to its row (see the open handler).
-    if (m._home && m.parentElement !== m._home) m._home.appendChild(m);
+    // See _closeAllQueueMenus: defer the position reset/reparent until the
+    // fade-out finishes so it doesn't jump to (0,0) mid-transition.
+    setTimeout(() => {
+      if (m.classList.contains('open')) return;
+      m.style.top = '';
+      m.style.bottom = '';
+      m.style.left = '';
+      m.style.right = '';
+      if (m._home && m.parentElement !== m._home) m._home.appendChild(m);
+    }, 150);
   }
   for (const b of document.querySelectorAll('.result-more-btn.open')) b.classList.remove('open');
   for (const w of document.querySelectorAll('.result-swipe-wrapper.menu-open')) w.classList.remove('menu-open');
@@ -2136,14 +2140,6 @@ function showQueue(queue, currentIndex) {
         : `<div class="queue-thumb"></div>`;
 
     const dragSvg = `<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/><circle cx="9" cy="10" r="1.5"/><circle cx="15" cy="10" r="1.5"/><circle cx="9" cy="15" r="1.5"/><circle cx="15" cy="15" r="1.5"/><circle cx="9" cy="20" r="1.5"/><circle cx="15" cy="20" r="1.5"/></svg>`;
-    const moreSvg = `<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg>`;
-
-    const isLiked = typeof _playlistsData !== 'undefined' && _playlistsData.liked_songs && _playlistsData.liked_songs.includes(item.video_id);
-    const likeSvg = isLiked
-      ? '<svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>'
-      : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>';
-    const likeText = isLiked ? "Dislike" : "Like";
-    const likeClass = isLiked ? "queue-menu-option liked" : "queue-menu-option";
 
     el.innerHTML = `
       <div class="queue-drag-handle" title="Drag to reorder">${dragSvg}</div>
@@ -2153,6 +2149,42 @@ function showQueue(queue, currentIndex) {
         <div class="queue-title">${escHtml(item.title)}</div>
         <div class="queue-artist">${escHtml(item.artist)}</div>
       </div>
+      ${_queueMoreMenuHtml(item)}
+    `;
+    if (sameUrl) el.querySelector('.queue-thumb-slot').replaceWith(reusableImg);
+
+    wrapper.appendChild(el);
+
+    // Tap on the item → play from queue
+    attachQueueItemTap(el, () => playFromQueue(item));
+
+    _wireQueueMoreMenu(el, item, i);
+
+    // Mobile: swipe gestures (like/delete)
+    _attachQueueSwipeGestures(wrapper, el, i, item, currentIndex);
+
+    // Drag-to-reorder (both mobile + desktop via the handle)
+    _attachQueueDragReorder(el, list, i);
+
+    newChildren.push(wrapper);
+  });
+  list.replaceChildren(...newChildren);
+  const active = list.querySelector('.active');
+  if (active) active.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+}
+
+// Builds the "3-dot" more-options button + dropdown for a queue row (used by
+// both the desktop inline queue and the mobile queue popup, which otherwise
+// only offered swipe gestures with no menu equivalent).
+function _queueMoreMenuHtml(item) {
+  const moreSvg = `<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg>`;
+  const isLiked = typeof _playlistsData !== 'undefined' && _playlistsData.liked_songs && _playlistsData.liked_songs.includes(item.video_id);
+  const likeSvg = isLiked
+    ? '<svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>'
+    : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>';
+  const likeText = isLiked ? "Dislike" : "Like";
+  const likeClass = isLiked ? "queue-menu-option liked" : "queue-menu-option";
+  return `
       <button class="queue-more-btn" type="button" title="More options">${moreSvg}</button>
       <div class="queue-more-menu">
         <div class="queue-menu-option" data-action="play-radio">
@@ -2175,100 +2207,87 @@ function showQueue(queue, currentIndex) {
           Remove from queue
         </div>
       </div>
-    `;
-    if (sameUrl) el.querySelector('.queue-thumb-slot').replaceWith(reusableImg);
+  `;
+}
 
-    wrapper.appendChild(el);
-
-    // Tap on the item → play from queue
-    attachQueueItemTap(el, () => playFromQueue(item));
-
-    // Desktop: 3-dot more-menu
-    const moreBtn = el.querySelector('.queue-more-btn');
-    const moreMenu = el.querySelector('.queue-more-menu');
-    // Prevent document click handler from closing menu when clicking inside it
-    moreMenu.addEventListener('click', (e) => e.stopPropagation());
-    moreBtn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      const wasOpen = moreMenu.classList.contains('open');
-      _closeAllQueueMenus();
-      if (!wasOpen) {
-        moreBtn.classList.add('open');
-        // Position the menu using fixed coords so it escapes any scrollable parent
-        const rect = moreBtn.getBoundingClientRect();
-        const menuHeight = 4 * 48; // approximate height of the four option rows
-        const spaceBelow = window.innerHeight - rect.bottom;
-        const openAbove = spaceBelow < menuHeight + 8;
-        moreMenu.style.left = '';
-        moreMenu.style.top = '';
-        moreMenu.style.bottom = '';
-        moreMenu.style.right = '';
-        if (openAbove) {
-          moreMenu.classList.add('above');
-          moreMenu.style.bottom = (window.innerHeight - rect.top + 4) + 'px';
-        } else {
-          moreMenu.classList.remove('above');
-          moreMenu.style.top = (rect.bottom + 4) + 'px';
-        }
-        // Align right edge of menu with right edge of button
-        const menuWidth = 170;
-        let left = rect.right - menuWidth;
-        if (left < 8) left = 8; // don't go off screen left
-        moreMenu.style.left = left + 'px';
-        moreMenu.classList.add('open');
-        // Portal the menu to <body> while open. Inside the row it sits under
-        // an overflow-hidden wrapper within a scrollable list, and Chromium's
-        // input hit-testing clips fixed elements there — the menu is visible
-        // but clicks land on the row below it. _closeAllQueueMenus returns it.
-        moreMenu._home = el;
-        document.body.appendChild(moreMenu);
+// Wires up a queue row's 3-dot menu (rendered via _queueMoreMenuHtml above).
+// `el` must contain a .queue-more-btn + .queue-more-menu pair; `index` is the
+// row's position at render time (removeFromQueue re-verifies by video_id
+// itself, so a stale index from before a reorder/removal is still safe).
+function _wireQueueMoreMenu(el, item, index) {
+  const moreBtn = el.querySelector('.queue-more-btn');
+  const moreMenu = el.querySelector('.queue-more-menu');
+  // Prevent document click handler from closing menu when clicking inside it
+  moreMenu.addEventListener('click', (e) => e.stopPropagation());
+  moreBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const wasOpen = moreMenu.classList.contains('open');
+    _closeAllQueueMenus();
+    if (!wasOpen) {
+      moreBtn.classList.add('open');
+      // Position the menu using fixed coords so it escapes any scrollable parent
+      const rect = moreBtn.getBoundingClientRect();
+      const menuHeight = 4 * 48; // approximate height of the four option rows
+      const spaceBelow = window.innerHeight - rect.bottom;
+      const openAbove = spaceBelow < menuHeight + 8;
+      moreMenu.style.left = '';
+      moreMenu.style.top = '';
+      moreMenu.style.bottom = '';
+      moreMenu.style.right = '';
+      if (openAbove) {
+        moreMenu.classList.add('above');
+        moreMenu.style.bottom = (window.innerHeight - rect.top + 4) + 'px';
+      } else {
+        moreMenu.classList.remove('above');
+        moreMenu.style.top = (rect.bottom + 4) + 'px';
       }
-    });
-    moreMenu.querySelector('[data-action="remove"]').addEventListener('click', (e) => {
-      e.stopPropagation();
-      _closeAllQueueMenus();
-      removeFromQueue(i, item.title, item.video_id);
-    });
-    moreMenu.querySelector('[data-action="save-playlist"]').addEventListener('click', (e) => {
-      e.stopPropagation();
-      _closeAllQueueMenus();
-      openAddToPlaylistModal(item);
-    });
-    moreMenu.querySelector('[data-action="play-radio"]').addEventListener('click', (e) => {
-      e.stopPropagation();
-      _closeAllQueueMenus();
-      // Plays this track fresh (not suppressing the server's radio-queue
-      // build), replacing the current queue with a new one seeded from it --
-      // same mechanism as playing any single result normally.
-      playResult(item);
-    });
-    const likeBtn = moreMenu.querySelector('[data-action="like"]');
-    likeBtn.addEventListener('click', async (e) => {
-      e.stopPropagation();
-      _closeAllQueueMenus();
-      if (typeof toggleLike === 'function') {
-        await toggleLike(item);
-        const isLikedNow = typeof _playlistsData !== 'undefined' && _playlistsData.liked_songs && _playlistsData.liked_songs.includes(item.video_id);
-        const likeSvgNow = isLikedNow 
-          ? '<svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>'
-          : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>';
-        likeBtn.innerHTML = `\n          ${likeSvgNow}\n          ${isLikedNow ? "Dislike" : "Like"}\n        `;
-        if (isLikedNow) likeBtn.classList.add('liked');
-        else likeBtn.classList.remove('liked');
-      }
-    });
-
-    // Mobile: swipe gestures (like/delete)
-    _attachQueueSwipeGestures(wrapper, el, i, item, currentIndex);
-
-    // Drag-to-reorder (both mobile + desktop via the handle)
-    _attachQueueDragReorder(el, list, i);
-
-    newChildren.push(wrapper);
+      // Align right edge of menu with right edge of button
+      const menuWidth = 170;
+      let left = rect.right - menuWidth;
+      if (left < 8) left = 8; // don't go off screen left
+      moreMenu.style.left = left + 'px';
+      moreMenu.classList.add('open');
+      // Portal the menu to <body> while open. Inside the row it sits under
+      // an overflow-hidden wrapper within a scrollable list, and Chromium's
+      // input hit-testing clips fixed elements there — the menu is visible
+      // but clicks land on the row below it. _closeAllQueueMenus returns it.
+      moreMenu._home = el;
+      document.body.appendChild(moreMenu);
+    }
   });
-  list.replaceChildren(...newChildren);
-  const active = list.querySelector('.active');
-  if (active) active.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  moreMenu.querySelector('[data-action="remove"]').addEventListener('click', (e) => {
+    e.stopPropagation();
+    _closeAllQueueMenus();
+    removeFromQueue(index, item.title, item.video_id);
+  });
+  moreMenu.querySelector('[data-action="save-playlist"]').addEventListener('click', (e) => {
+    e.stopPropagation();
+    _closeAllQueueMenus();
+    openAddToPlaylistModal(item);
+  });
+  moreMenu.querySelector('[data-action="play-radio"]').addEventListener('click', (e) => {
+    e.stopPropagation();
+    _closeAllQueueMenus();
+    // Plays this track fresh (not suppressing the server's radio-queue
+    // build), replacing the current queue with a new one seeded from it --
+    // same mechanism as playing any single result normally.
+    playResult(item);
+  });
+  const likeBtn = moreMenu.querySelector('[data-action="like"]');
+  likeBtn.addEventListener('click', async (e) => {
+    e.stopPropagation();
+    _closeAllQueueMenus();
+    if (typeof toggleLike === 'function') {
+      await toggleLike(item);
+      const isLikedNow = typeof _playlistsData !== 'undefined' && _playlistsData.liked_songs && _playlistsData.liked_songs.includes(item.video_id);
+      const likeSvgNow = isLikedNow
+        ? '<svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>'
+        : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>';
+      likeBtn.innerHTML = `\n          ${likeSvgNow}\n          ${isLikedNow ? "Dislike" : "Like"}\n        `;
+      if (isLikedNow) likeBtn.classList.add('liked');
+      else likeBtn.classList.remove('liked');
+    }
+  });
 }
 
 // The open menu is fixed-positioned and portaled to <body> (see the open
@@ -2279,17 +2298,25 @@ function showQueue(queue, currentIndex) {
 (function () {
   const list = document.getElementById('queue-list');
   if (list) list.addEventListener('scroll', () => _closeAllQueueMenus(), { passive: true });
+  const modalBody = document.getElementById('queue-modal-body');
+  if (modalBody) modalBody.addEventListener('scroll', () => _closeAllQueueMenus(), { passive: true });
 })();
 
 function _closeAllQueueMenus() {
   for (const m of document.querySelectorAll('.queue-more-menu.open')) {
     m.classList.remove('open');
-    m.style.top = '';
-    m.style.bottom = '';
-    m.style.left = '';
-    m.style.right = '';
-    // Return a body-portaled menu to its row (see the open handler).
-    if (m._home && m.parentElement !== m._home) m._home.appendChild(m);
+    // Wait for the fade-out transition to finish before resetting position
+    // and reparenting back to its row -- doing it immediately would yank the
+    // menu to a default (0,0) position mid-fade, flashing it in the wrong
+    // spot for a frame instead of just fading out in place.
+    setTimeout(() => {
+      if (m.classList.contains('open')) return; // reopened before the timeout fired
+      m.style.top = '';
+      m.style.bottom = '';
+      m.style.left = '';
+      m.style.right = '';
+      if (m._home && m.parentElement !== m._home) m._home.appendChild(m);
+    }, 150);
   }
   for (const b of document.querySelectorAll('.queue-more-btn.open')) b.classList.remove('open');
   for (const w of document.querySelectorAll('.queue-swipe-wrapper.menu-open')) w.classList.remove('menu-open');
@@ -3319,6 +3346,10 @@ function updateUrlBar() {
           </svg>
           Remove
         </div>
+        <div class="queue-like-underlay">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+          Like
+        </div>
       `;
       const el = document.createElement('div');
       el.className = 'queue-item' + (i === currentIndex ? ' active' : '');
@@ -3336,12 +3367,14 @@ function updateUrlBar() {
           <div class="queue-title">${escHtml(item.title)}</div>
           <div class="queue-artist">${escHtml(item.artist)}</div>
         </div>
+        ${_queueMoreMenuHtml(item)}
       `;
       wrapper.appendChild(el);
       attachQueueItemTap(el, () => {
         closeQueueModal();
         playFromQueue(item);
       });
+      _wireQueueMoreMenu(el, item, i);
       _attachQueueSwipeGestures(wrapper, el, i, item, currentIndex);
       _attachQueueDragReorder(el, modalBody, i);
       modalBody.appendChild(wrapper);

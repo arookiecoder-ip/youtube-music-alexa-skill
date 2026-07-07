@@ -488,7 +488,7 @@
         <button class="history-modal-close playlist-more-btn" id="playlist-detail-more-btn" title="More options">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg>
         </button>
-        <div class="playlist-more-menu" id="playlist-detail-more-menu" style="display:none; position:fixed; background: var(--bg-elevated, #2a2a2a); border: 1px solid var(--border, #444); border-radius: 8px; z-index: 100; min-width: 180px; box-shadow: 0 4px 12px rgba(0,0,0,0.5); overflow: hidden;">
+        <div class="playlist-more-menu" id="playlist-detail-more-menu" style="position:fixed; background: var(--bg-elevated, #2a2a2a); border: 1px solid var(--border, #444); border-radius: 8px; z-index: 100; min-width: 180px; box-shadow: 0 4px 12px rgba(0,0,0,0.5); overflow: hidden;">
           <div class="result-menu-option" id="playlist-detail-rename-opt" style="padding: 12px 16px; cursor: pointer;">Rename playlist</div>
           <div class="result-menu-option" id="playlist-detail-delete-opt" style="padding: 12px 16px; cursor: pointer; color:#ff4d4d;">Delete playlist</div>
         </div>
@@ -518,7 +518,7 @@
 
 <!-- Confirm Dialog (generic) -->
 <div class="history-modal-overlay" id="confirm-dialog-overlay">
-  <div class="history-modal" style="display:flex; flex-direction:column; max-width:380px; height:auto;">
+  <div class="history-modal" style="display:flex; flex-direction:column; max-width:min(380px, 92vw); height:auto;">
     <div class="history-modal-body" style="padding: 20px; display: flex; flex-direction: column;">
       <p id="confirm-dialog-message" style="margin: 0 0 20px; color: var(--text); font-size: .9rem; line-height: 1.5;"></p>
       <div style="display:flex; gap:10px; justify-content:flex-end;">
@@ -531,7 +531,7 @@
 
 <!-- Rename Playlist Modal -->
 <div class="history-modal-overlay" id="rename-playlist-overlay">
-  <div class="history-modal" style="display:flex; flex-direction:column; max-width:400px; height:auto;">
+  <div class="history-modal" style="display:flex; flex-direction:column; max-width:min(400px, 92vw); height:auto;">
     <div class="history-modal-header">
       <h3>Rename Playlist</h3>
       <div class="history-modal-header-actions">
@@ -578,7 +578,7 @@
 
 <!-- Import Playlist Modal -->
 <div class="history-modal-overlay" id="import-playlist-overlay">
-  <div class="history-modal" style="display:flex; flex-direction:column; max-width:400px; height:auto;">
+  <div class="history-modal" style="display:flex; flex-direction:column; max-width:min(400px, 92vw); height:auto;">
     <div class="history-modal-header">
       <h3>Import YouTube Playlist</h3>
       <div class="history-modal-header-actions">
