@@ -1670,10 +1670,39 @@ def _refresh_radio_queue(video_id):
                         fields['thumbnail'] = match.get('thumbnail')
             _update_now_playing(**fields)
             _prewarm_queue_audio(queue, idx)
+            # The radio API occasionally omits a thumbnail for a given
+            # recommendation (e.g. an alternate upload of a song that has one
+            # elsewhere in the same queue) -- patch those in the background so
+            # "Up Next" doesn't permanently show a blank banner for them.
+            missing = [q['video_id'] for q in queue if not q.get('thumbnail')][:5]
+            for vid in missing:
+                threading.Thread(target=_backfill_queue_thumbnail, args=(vid,), daemon=True).start()
             return True
     except Exception:
         traceback.print_exc()
     return False
+
+
+def _backfill_queue_thumbnail(video_id):
+    try:
+        metadata = _lookup_video_metadata(video_id)
+        thumb = _thumbnail_url((metadata or {}).get('thumbnail'))
+        if not thumb:
+            return
+        with _np_lock:
+            queue = list(_now_playing.get('queue') or [])
+            changed = False
+            for item in queue:
+                if item.get('video_id') == video_id and not item.get('thumbnail'):
+                    item['thumbnail'] = thumb
+                    changed = True
+            if changed:
+                _now_playing['queue'] = queue
+                _now_playing['updated_at'] = time.time()
+        if changed:
+            _notify_sse()
+    except Exception:
+        traceback.print_exc()
 
 
 # What the Echo most recently buffered via /proxy/ while another track was

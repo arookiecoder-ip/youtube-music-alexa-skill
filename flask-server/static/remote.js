@@ -1073,8 +1073,9 @@ function renderResults() {
     `;
 
     // Inner content
+    const isCurrent = item.video_id === _currentVideoId;
     const inner = document.createElement('div');
-    inner.className = 'result-item-inner' + (item.video_id === _currentVideoId ? ' active' : '');
+    inner.className = 'result-item-inner' + (isCurrent ? ' active' : '');
 
     const reusableImg = item.thumbnail && existingThumbsById.get(item.video_id);
     const sameUrl = reusableImg && reusableImg.src === item.thumbnail;
@@ -1101,14 +1102,14 @@ function renderResults() {
         <div class="result-artist">${escHtml(item.artist)}</div>
       </div>
       <button class="result-like-btn ${isLiked ? 'liked' : ''}" type="button" title="Like" data-vid="${escHtml(item.video_id)}">${heartSvg}</button>
-      <button class="result-queue-btn" type="button" title="Add to queue">${queueAddSvg}</button>
+      <button class="result-queue-btn" type="button" title="Add to queue" ${isCurrent ? 'hidden' : ''}>${queueAddSvg}</button>
       <button class="result-more-btn" type="button" title="More options">${moreSvg}</button>
       <div class="result-more-menu">
-        <div class="result-menu-option" data-action="play-next">
+        <div class="result-menu-option" data-action="play-next" ${isCurrent ? 'hidden' : ''}>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
           Play next
         </div>
-        <div class="result-menu-option" data-action="add-to-queue">
+        <div class="result-menu-option" data-action="add-to-queue" ${isCurrent ? 'hidden' : ''}>
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
           Add to queue
         </div>
@@ -1228,6 +1229,14 @@ function _closeAllMoreMenus() {
   for (const w of document.querySelectorAll('.result-swipe-wrapper.menu-open')) w.classList.remove('menu-open');
 }
 document.addEventListener('click', _closeAllMoreMenus);
+// Same staleness issue as the queue menu: the open menu is fixed-positioned
+// at its row's coordinates at open time, then portaled to <body>. Scrolling
+// the results list afterward moves the row but not the menu, so close it
+// instead of trying to keep it live-repositioned.
+(function () {
+  const list = document.getElementById('results-list');
+  if (list) list.addEventListener('scroll', () => _closeAllMoreMenus(), { passive: true });
+})();
 
 // Highlight the currently playing track in the visible results page.
 function updateResultsActive() {
@@ -2146,6 +2155,10 @@ function showQueue(queue, currentIndex) {
       </div>
       <button class="queue-more-btn" type="button" title="More options">${moreSvg}</button>
       <div class="queue-more-menu">
+        <div class="queue-menu-option" data-action="play-radio">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4.93 19.07A10 10 0 1 1 19.07 4.93 10 10 0 0 1 4.93 19.07z"/><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="M2 12h2"/><path d="M20 12h2"/></svg>
+          Play Radio
+        </div>
         <div class="${likeClass}" data-action="like">
           ${likeSvg}
           ${likeText}
@@ -2183,7 +2196,7 @@ function showQueue(queue, currentIndex) {
         moreBtn.classList.add('open');
         // Position the menu using fixed coords so it escapes any scrollable parent
         const rect = moreBtn.getBoundingClientRect();
-        const menuHeight = 3 * 48; // approximate height of the three option rows
+        const menuHeight = 4 * 48; // approximate height of the four option rows
         const spaceBelow = window.innerHeight - rect.bottom;
         const openAbove = spaceBelow < menuHeight + 8;
         moreMenu.style.left = '';
@@ -2221,6 +2234,14 @@ function showQueue(queue, currentIndex) {
       _closeAllQueueMenus();
       openAddToPlaylistModal(item);
     });
+    moreMenu.querySelector('[data-action="play-radio"]').addEventListener('click', (e) => {
+      e.stopPropagation();
+      _closeAllQueueMenus();
+      // Plays this track fresh (not suppressing the server's radio-queue
+      // build), replacing the current queue with a new one seeded from it --
+      // same mechanism as playing any single result normally.
+      playResult(item);
+    });
     const likeBtn = moreMenu.querySelector('[data-action="like"]');
     likeBtn.addEventListener('click', async (e) => {
       e.stopPropagation();
@@ -2249,6 +2270,16 @@ function showQueue(queue, currentIndex) {
   const active = list.querySelector('.active');
   if (active) active.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
 }
+
+// The open menu is fixed-positioned and portaled to <body> (see the open
+// handler above) at the coordinates of its row *at open time*. If the list
+// scrolls afterward, the row moves but the menu doesn't follow it -- it's
+// simplest and safest to just close it, rather than keep it live-repositioned
+// during scroll.
+(function () {
+  const list = document.getElementById('queue-list');
+  if (list) list.addEventListener('scroll', () => _closeAllQueueMenus(), { passive: true });
+})();
 
 function _closeAllQueueMenus() {
   for (const m of document.querySelectorAll('.queue-more-menu.open')) {
@@ -3311,7 +3342,7 @@ function updateUrlBar() {
         closeQueueModal();
         playFromQueue(item);
       });
-      _attachQueueSwipeDelete(wrapper, el, i, item, currentIndex);
+      _attachQueueSwipeGestures(wrapper, el, i, item, currentIndex);
       _attachQueueDragReorder(el, modalBody, i);
       modalBody.appendChild(wrapper);
     });
@@ -3429,6 +3460,33 @@ let _shuffleEnabled = false;
     }
   }, { passive: false });
 })();
+
+/* ---- Escape key: close whichever overlay is currently open ----
+   Every overlay (confirm dialogs, history/playlist modals, mini popup, queue
+   modal, sidebar) already closes itself on an outside click via its own
+   listener bound to `click` on the overlay element with `e.target === overlay`.
+   Dispatching a click on the overlay node itself (not its content) reuses
+   that exact listener instead of duplicating each modal's close logic here.
+   Ordered topmost-first so Escape closes one layer at a time when stacked
+   (e.g. a confirm dialog over the playlist detail modal). */
+document.addEventListener('keydown', (e) => {
+  if (e.key !== 'Escape') return;
+  const overlayIds = [
+    'confirm-signout', 'confirm-clear', 'confirm-clear-history', 'confirm-dialog-overlay',
+    'rename-playlist-overlay', 'import-playlist-overlay', 'add-to-playlist-overlay',
+    'playlist-detail-modal-overlay', 'playlists-modal-overlay', 'history-modal-overlay',
+    'mini-popup-overlay', 'queue-modal-overlay', 'sidebar-overlay',
+  ];
+  for (const id of overlayIds) {
+    const overlay = document.getElementById(id);
+    if (overlay && overlay.classList.contains('open')) {
+      overlay.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+      // Overlay's click handler checks e.target === overlay, which is true
+      // here since we dispatched directly on it -- one Escape closes one layer.
+      return;
+    }
+  }
+});
 
 /* ---- PWA: register the service worker so the app is installable ---- */
 if ('serviceWorker' in navigator) {
