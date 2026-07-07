@@ -2164,6 +2164,10 @@ def alexa_command():
         thumb = item.get('thumbnail', '')
         if isinstance(thumb, dict):
             thumb = thumb.get('url', '')
+        # Record right away so "Recently Played" updates immediately, instead
+        # of waiting for the Lambda webhook (which may lag or not fire for
+        # some playback flows) -- mirrors alexa_play_queue below.
+        _record_listen(video_id, item.get('title', ''), item.get('artist', ''), thumb)
         _update_now_playing(playing=False,
                             title=item.get('title', ''),
                             artist=item.get('artist', ''),

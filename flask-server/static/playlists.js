@@ -13,7 +13,13 @@ function _closeAllPlaylistMoreMenus() {
 };
 
 window.togglePlaylistMoreMenu = function(btn) {
-  const menu = btn.nextElementSibling;
+  // Once opened, the menu is portaled to <body> (see below) and is no longer
+  // btn.nextElementSibling -- if this same button is clicked again before the
+  // deferred reparent-back finishes, nextElementSibling would return whatever
+  // now sits next to the button (or null), not the menu. Remember it on the
+  // button itself instead of relying on DOM adjacency.
+  const menu = btn._menu || btn.nextElementSibling;
+  btn._menu = menu;
   const wasOpen = menu.classList.contains('open');
   _closeAllPlaylistMoreMenus();
   if (wasOpen) return;
@@ -164,6 +170,10 @@ function openPlaylistDetailModal(pl_id) {
   shuffleBtn.hidden = !pl.tracks || pl.tracks.length === 0;
 
   const body = document.getElementById('playlist-detail-body');
+  // Rebuilding the row markup below orphans any per-track menu still
+  // portaled to <body> from a previous render (its _home row no longer
+  // exists) -- drop those instead of leaving stray, unclickable nodes behind.
+  document.querySelectorAll('body > .playlist-more-menu').forEach(m => m.remove());
   if (!pl.tracks || pl.tracks.length === 0) {
     body.innerHTML = '<div class="history-modal-empty">Playlist is empty.</div>';
   } else {
@@ -190,9 +200,12 @@ function openPlaylistDetailModal(pl_id) {
       // liked, so the per-track "remove" action is a heart button (un-like)
       // rather than the generic "Remove from playlist" menu item used for
       // custom playlists -- clicking it does exactly what un-liking does
-      // elsewhere in the app.
+      // elsewhere in the app. Deliberately does NOT re-render/remove the row
+      // right away: the button just flips to "disliked" so an accidental tap
+      // is easy to undo (tap again to re-like) -- the row only disappears
+      // once the modal is closed and reopened, reflecting the real list.
       const heartHtml = pl_id === 'liked'
-        ? `<button class="track-like-btn liked" type="button" title="Dislike" onclick="event.stopPropagation(); toggleLike(${itemArg}, this).then(() => { if (!_playlistsData.liked_songs.includes('${escHtml(track.video_id)}')) openPlaylistDetailModal('liked'); })">${heartFilledSvg}</button>`
+        ? `<button class="track-like-btn liked" type="button" title="Dislike" onclick="event.stopPropagation(); toggleLike(${itemArg}, this)">${heartFilledSvg}</button>`
         : '';
       const menuOptionsHtml = pl_id === 'liked'
         ? `

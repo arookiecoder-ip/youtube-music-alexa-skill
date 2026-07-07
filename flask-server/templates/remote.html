@@ -516,8 +516,10 @@
   </div>
 </div>
 
-<!-- Confirm Dialog (generic) -->
-<div class="history-modal-overlay" id="confirm-dialog-overlay">
+<!-- Confirm Dialog (generic). Can be opened while another modal (e.g. Import
+     Playlist) is still open behind it -- needs a higher z-index than the
+     shared .history-modal-overlay default so it isn't hidden underneath. -->
+<div class="history-modal-overlay" id="confirm-dialog-overlay" style="z-index: 600;">
   <div class="history-modal" style="display:flex; flex-direction:column; max-width:min(380px, 92vw); height:auto;">
     <div class="history-modal-body" style="padding: 20px; display: flex; flex-direction: column;">
       <p id="confirm-dialog-message" style="margin: 0 0 20px; color: var(--text); font-size: .9rem; line-height: 1.5;"></p>
