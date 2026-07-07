@@ -3500,6 +3500,11 @@ def api_add_track(pl_id):
             data = _load_playlists()
             return jsonify({'ok': True, 'track': track, 'liked_songs': data["liked_songs"]})
 
+        existing = conn.execute(
+            "SELECT uuid FROM playlist_tracks WHERE playlist_id = ? AND video_id = ?", (pl_id, video_id)
+        ).fetchone()
+        if existing:
+            return jsonify({'error': 'Song is already in this playlist'}), 409
         conn.execute('''
             INSERT INTO playlist_tracks (uuid, playlist_id, video_id, title, artist, thumbnail_url, duration_ms, added_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -3508,7 +3513,7 @@ def api_add_track(pl_id):
         if not thumbnail:
             threading.Thread(target=_backfill_track_thumbnail, args=(pl_id, track_uuid, video_id), daemon=True).start()
         conn.commit()
-    
+
     return jsonify({'ok': True, 'track': track})
 
 @app.route("/api/playlists/<pl_id>/tracks/<track_uuid>", methods=["DELETE"])

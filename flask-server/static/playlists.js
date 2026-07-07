@@ -396,11 +396,21 @@ function openAddToPlaylistModal(item) {
     if (trackCount > 0 && pl.tracks[0].thumbnail) {
       thumbHtml = `<img class="queue-thumb loaded" src="${escHtml(pl.tracks[0].thumbnail)}" alt="">`;
     }
+    const existingTrack = (pl.tracks || []).find(t => t.video_id === item.video_id);
+    const iconHtml = existingTrack
+      ? `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--accent)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>`
+      : `<svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>`;
+    // Already saved: tapping removes it (and flips back to "+" instantly).
+    // Not saved yet: tapping adds it. Either way there's nothing to do if the
+    // membership state doesn't match what the user is trying to toggle.
+    const onclick = existingTrack
+      ? `removeFromPlaylistToggle('${escHtml(pl.id)}', '${escHtml(existingTrack.uuid || existingTrack.video_id)}')`
+      : `addToPlaylist('${escHtml(pl.id)}')`;
     html += `
-      <div style="padding: 12px; border-bottom: 1px solid var(--border); cursor: pointer; display:flex; align-items:center; gap:12px;" onclick="addToPlaylist('${escHtml(pl.id)}')">
+      <div style="padding: 12px; border-bottom: 1px solid var(--border); cursor: pointer; display:flex; align-items:center; gap:12px;" onclick="${onclick}">
          ${thumbHtml}
          <div style="flex:1; font-weight: 500;">${escHtml(pl.name)}</div>
-         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+         ${iconHtml}
       </div>
     `;
   });
@@ -438,35 +448,83 @@ async function createNewPlaylist() {
 
 async function addToPlaylist(pl_id) {
   if (!_currentItemToSave) return;
+  const item = _currentItemToSave;
+  // Optimistic placeholder so the row flips to a checkmark immediately; swapped
+  // for the server's real track (uuid, backfilled thumbnail, etc.) on success,
+  // or rolled back on failure.
+  const placeholder = { uuid: 'pending-' + Date.now(), video_id: item.video_id, title: item.title,
+    artist: item.artist, thumbnail: item.thumbnail, duration_ms: item.duration_ms };
+  _playlistsData.playlists[pl_id].tracks.push(placeholder);
+  if (document.getElementById('add-to-playlist-overlay').classList.contains('open')) {
+    openAddToPlaylistModal(item);
+  }
+  toast('Saved to playlist', 'ok');
   try {
-    const res = await api('/api/playlists/' + encodeURIComponent(pl_id) + '/tracks/', _currentItemToSave);
-    _playlistsData.playlists[pl_id].tracks.push(res.track);
-    toast('Saved to playlist', 'ok');
-    closeAddToPlaylistModal();
+    const res = await api('/api/playlists/' + encodeURIComponent(pl_id) + '/tracks/', item);
+    const idx = _playlistsData.playlists[pl_id].tracks.indexOf(placeholder);
+    if (idx !== -1) _playlistsData.playlists[pl_id].tracks[idx] = res.track;
   } catch (e) {
     console.error(e);
+    _playlistsData.playlists[pl_id].tracks = _playlistsData.playlists[pl_id].tracks.filter(t => t !== placeholder);
+    if (document.getElementById('add-to-playlist-overlay').classList.contains('open')) {
+      openAddToPlaylistModal(item);
+    }
     toast('Error saving to playlist: ' + (e.message || 'unknown'), 'error');
   }
 }
 
-async function removeFromPlaylist(pl_id, track_uuid) {
+async function removeFromPlaylistToggle(pl_id, track_uuid) {
+  const pl = _playlistsData.playlists[pl_id];
+  if (!pl) return;
+  const removedIdx = pl.tracks.findIndex(t => (t.uuid || t.video_id) === track_uuid);
+  const removedTrack = removedIdx !== -1 ? pl.tracks[removedIdx] : null;
+  pl.tracks = pl.tracks.filter(t => (t.uuid || t.video_id) !== track_uuid);
+  if (document.getElementById('add-to-playlist-overlay').classList.contains('open') && _currentItemToSave) {
+    openAddToPlaylistModal(_currentItemToSave);
+  }
+  toast('Removed from playlist', 'ok');
   try {
     await apiDelete('/api/playlists/' + encodeURIComponent(pl_id) + '/tracks/' + encodeURIComponent(track_uuid));
-    if (_playlistsData.playlists[pl_id]) {
-      // The "liked" playlist is keyed by video_id server-side (there's no
-      // per-track uuid concept for likes), while custom playlists are keyed
-      // by each track's own uuid -- match whichever identity was actually sent.
-      _playlistsData.playlists[pl_id].tracks = _playlistsData.playlists[pl_id].tracks.filter(t =>
-        pl_id === 'liked' ? t.video_id !== track_uuid : (t.uuid || t.video_id) !== track_uuid);
-      if (pl_id === 'liked') {
-        _playlistsData.liked_songs = _playlistsData.liked_songs.filter(vid => vid !== track_uuid);
-      }
-      if (document.getElementById('playlist-detail-modal-overlay').classList.contains('open')) {
-        openPlaylistDetailModal(pl_id);
-      }
-    }
-    toast('Removed from playlist', 'ok');
   } catch (e) {
+    if (removedTrack) pl.tracks.splice(removedIdx, 0, removedTrack);
+    if (document.getElementById('add-to-playlist-overlay').classList.contains('open') && _currentItemToSave) {
+      openAddToPlaylistModal(_currentItemToSave);
+    }
+    toast('Error removing song', 'error');
+  }
+}
+
+async function removeFromPlaylist(pl_id, track_uuid) {
+  const pl = _playlistsData.playlists[pl_id];
+  if (!pl) return;
+  // Optimistic: remove from the UI immediately and only fall back to
+  // restoring + an error toast if the server actually rejects it, instead of
+  // making the user wait out the round-trip before seeing anything happen.
+  const isLikedMatch = (t) => t.video_id === track_uuid;
+  const isPlaylistMatch = (t) => (t.uuid || t.video_id) === track_uuid;
+  const matchFn = pl_id === 'liked' ? isLikedMatch : isPlaylistMatch;
+  const removedIdx = pl.tracks.findIndex(matchFn);
+  const removedTrack = removedIdx !== -1 ? pl.tracks[removedIdx] : null;
+  pl.tracks = pl.tracks.filter(t => !matchFn(t));
+  let removedLikedIdx = -1;
+  if (pl_id === 'liked') {
+    removedLikedIdx = _playlistsData.liked_songs.indexOf(track_uuid);
+    if (removedLikedIdx !== -1) _playlistsData.liked_songs.splice(removedLikedIdx, 1);
+  }
+  if (document.getElementById('playlist-detail-modal-overlay').classList.contains('open')) {
+    openPlaylistDetailModal(pl_id);
+  }
+  toast('Removed from playlist', 'ok');
+
+  try {
+    await apiDelete('/api/playlists/' + encodeURIComponent(pl_id) + '/tracks/' + encodeURIComponent(track_uuid));
+  } catch (e) {
+    // Roll back: put the track back where it was and tell the user it failed.
+    if (removedTrack) pl.tracks.splice(removedIdx, 0, removedTrack);
+    if (pl_id === 'liked' && removedLikedIdx !== -1) _playlistsData.liked_songs.splice(removedLikedIdx, 0, track_uuid);
+    if (document.getElementById('playlist-detail-modal-overlay').classList.contains('open')) {
+      openPlaylistDetailModal(pl_id);
+    }
     toast('Error removing song', 'error');
   }
 }
