@@ -163,9 +163,24 @@ class AlexaRemote:
 
         # try to restore from the persisted cookie (written by the proxy login)
         os.makedirs(os.path.join(ALEXA_COOKIE_DIR, ".storage"), exist_ok=True)
+        # AlexaLogin's cookie file is keyed by email
+        # (.storage/alexa_media.<email>.cookies) — read back the email saved
+        # after the last successful proxy login (see _proxy_check) so this
+        # restore attempt looks for the right file instead of email="".
+        email = ""
+        try:
+            email_file = os.path.join(ALEXA_COOKIE_DIR, ".storage", "last_email.txt")
+            with open(email_file, encoding="utf-8") as f:
+                email = f.read().strip()
+        except FileNotFoundError:
+            pass
+        except Exception:
+            logger.exception("could not read persisted login email")
+        if not email:
+            return AlexaRemote.LOGIN_REQUIRED
         login = AlexaLogin(
             url=AMAZON_DOMAIN,
-            email="",
+            email=email,
             password="",
             outputpath=lambda name: os.path.join(ALEXA_COOKIE_DIR, name),
         )
@@ -175,17 +190,12 @@ class AlexaRemote:
                 await login.login(cookies=cookies)
         except Exception:
             logger.exception("restoring session from cookie failed")
-            print("[alexa] restoring session from cookie raised an exception (see traceback above)")
             await login.close()
             return AlexaRemote.LOGIN_REQUIRED
         if (login.status or {}).get("login_successful"):
             self._login = login
             self._login_checked_at = time.monotonic()
             return None
-        # No exception, but Amazon didn't accept the restored session — log
-        # what it actually said instead of failing silently.
-        print(f"[alexa] cookie restore did not yield a logged-in session; "
-              f"cookies_present={bool(cookies)} status={login.status!r}")
         await login.close()
         return AlexaRemote.LOGIN_REQUIRED
 
@@ -302,6 +312,19 @@ class AlexaRemote:
                 await self._proxy_login.save_cookiefile()
             except Exception:
                 logger.exception("could not persist proxy cookie (session still usable)")
+            else:
+                # AlexaLogin's cookie filename is keyed by email
+                # (.storage/alexa_media.<email>.cookies) — a restart has no
+                # way to know that email up front, so a restore attempt with
+                # email="" always looks for the wrong file and silently fails
+                # (see _ensure_login). Persist it here so restores can find
+                # the real cookie file.
+                try:
+                    email_file = os.path.join(ALEXA_COOKIE_DIR, ".storage", "last_email.txt")
+                    with open(email_file, "w", encoding="utf-8") as f:
+                        f.write(self._proxy_login.email)
+                except Exception:
+                    logger.exception("could not persist login email for restore")
             # adopt the proxy session as the live one and drop stale device cache
             if self._login and self._login is not self._proxy_login:
                 try:
