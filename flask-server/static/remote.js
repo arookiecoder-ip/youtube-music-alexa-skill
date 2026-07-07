@@ -3618,3 +3618,90 @@ if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('/service-worker.js').catch(() => {});
   });
 }
+
+/* ---- Hardware Volume Button Integration (Mobile) ---- */
+(function() {
+  const hwAudio = document.getElementById('hw-volume-audio');
+  if (!hwAudio) return;
+
+  let initialized = false;
+
+  // Browsers require a user interaction to start playing audio
+  const initAudio = () => {
+    if (initialized) return;
+    hwAudio.volume = 0.5;
+    hwAudio.play().then(() => {
+      initialized = true;
+      document.removeEventListener('click', initAudio);
+      document.removeEventListener('touchstart', initAudio);
+    }).catch(e => {
+      // If blocked, wait for the next interaction
+      console.warn("Hardware volume audio init failed:", e);
+    });
+  };
+
+  document.addEventListener('click', initAudio, { passive: true });
+  document.addEventListener('touchstart', initAudio, { passive: true });
+
+  let hwVolTimer;
+  
+  hwAudio.addEventListener('volumechange', () => {
+    const newVol = hwAudio.volume;
+    
+    // Ignore programmatic resets
+    if (Math.abs(newVol - 0.5) < 0.01) return;
+
+    // Calculate step: +5 for up, -5 for down
+    const diff = newVol > 0.5 ? 5 : -5;
+    
+    // Reset audio volume immediately
+    hwAudio.volume = 0.5;
+
+    const volumeEl = document.getElementById('volume');
+    if (!volumeEl) return;
+    
+    const currentAlexaVol = parseInt(volumeEl.value, 10);
+    if (isNaN(currentAlexaVol)) return;
+
+    const targetVol = Math.max(0, Math.min(100, currentAlexaVol + diff));
+
+    // Update the UI immediately
+    if (typeof syncVolume === 'function') {
+      volumeUserActive = true; // Tell sync logic we are actively driving volume
+      syncVolume(targetVol, true);
+      // Wait a bit before releasing the active lock
+      setTimeout(() => { volumeUserActive = false; }, 300);
+    }
+    
+    // Send the command
+    clearTimeout(hwVolTimer);
+    const mySeq = ++_volCommandSeq;
+    
+    hwVolTimer = setTimeout(() => {
+      const serial = typeof selectedSerial === 'function' ? selectedSerial() : null;
+      if (!serial) {
+        volumeUserActive = false;
+        volumeGraceUntil = 0;
+        return;
+      }
+      
+      volumeGraceUntil = Date.now() + VOLUME_GRACE_MS;
+      if (typeof toast === 'function') toast('Volume ' + targetVol + '\u2026');
+      
+      api('/alexa/command/', { serial, action: 'volume', value: targetVol })
+        .then(() => {
+          if (mySeq !== _volCommandSeq) return;
+          volumeUserActive = false;
+          volumeGraceUntil = Date.now() + VOLUME_GRACE_MS;
+          if (typeof toast === 'function') toast('Volume ' + targetVol, 'ok');
+        })
+        .catch(err => {
+          if (mySeq !== _volCommandSeq) return;
+          volumeUserActive = false;
+          volumeGraceUntil = 0;
+          if (typeof refreshVolume === 'function') refreshVolume(true);
+          if (typeof toast === 'function') toast(err.message, 'error');
+        });
+    }, 300);
+  });
+})();
