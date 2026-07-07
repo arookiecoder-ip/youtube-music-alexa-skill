@@ -175,12 +175,17 @@ class AlexaRemote:
                 await login.login(cookies=cookies)
         except Exception:
             logger.exception("restoring session from cookie failed")
+            print("[alexa] restoring session from cookie raised an exception (see traceback above)")
             await login.close()
             return AlexaRemote.LOGIN_REQUIRED
         if (login.status or {}).get("login_successful"):
             self._login = login
             self._login_checked_at = time.monotonic()
             return None
+        # No exception, but Amazon didn't accept the restored session — log
+        # what it actually said instead of failing silently.
+        print(f"[alexa] cookie restore did not yield a logged-in session; "
+              f"cookies_present={bool(cookies)} status={login.status!r}")
         await login.close()
         return AlexaRemote.LOGIN_REQUIRED
 
