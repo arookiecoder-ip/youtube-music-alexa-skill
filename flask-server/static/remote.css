@@ -2157,7 +2157,7 @@
     display: flex;
     align-items: center;
     gap: 12px;
-    padding: 10px 12px;
+    padding: 10px 6px;
     cursor: pointer;
     border-left: 3px solid transparent;
     transition: background .15s, border-color .15s;
@@ -2189,7 +2189,7 @@
     cursor: pointer;
     transition: color .15s, border-color .15s, transform .15s;
     border-radius: 50%;
-    margin-right: 6px;
+    margin-right: 0;
   }
   .result-queue-btn[hidden] { display: none; }
   .result-queue-btn:hover, .result-like-btn:hover { color: var(--text); border-color: #444; }
@@ -2220,7 +2220,7 @@
   .track-like-btn.liked { color: var(--accent); border-color: var(--accent); background: rgba(232, 89, 12, .1); }
   .track-like-btn svg { width: 16px; height: 16px; }
 
-  /* ---- Search result: desktop more-options button ---- */
+  /* ---- Search result: more-options button (all viewports) ---- */
   .result-more-btn {
     flex: none;
     background: none;
@@ -2478,8 +2478,11 @@
     /* Playlists is already reachable from the sidebar menu on mobile —
        don't duplicate it in the cramped header. */
     #playlists-modal-btn { display: none !important; }
-    /* Desktop-only elements: hide on mobile */
-    .result-more-btn { display: none !important; }
+    /* Swipe left/right on the row already exposes Play next / Add to queue
+       on mobile, so the standalone queue-add icon is a redundant tap target
+       here — show the same 3-dot "More options" menu desktop uses instead
+       (Play next / Add to queue / Save to Playlist). */
+    .result-queue-btn { display: none !important; }
     /* .queue-more-btn stays visible on mobile now that the queue popup has
        its own 3-dot menu (Play Radio / Like / Add to Playlist / Remove). */
 

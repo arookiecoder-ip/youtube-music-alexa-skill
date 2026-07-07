@@ -2177,6 +2177,11 @@ def alexa_command():
                             position_ms=0,
                             playback_confirmed=False,
                             queue_index=target_idx)
+        # Queued items added without a duration (e.g. synced playlist tracks
+        # that never had one) would otherwise show --:-- forever once they
+        # become current -- mirrors the same fallback in alexa_play_track.
+        if not int(item.get('duration_ms') or 0):
+            threading.Thread(target=_lookup_and_update_np, args=(video_id,), daemon=True).start()
         return jsonify({'ok': True, 'now_playing': item, 'queue_index': target_idx})
     resume_position_ms = None
     if action == 'play':
@@ -2311,6 +2316,14 @@ def alexa_state_event():
                     _record_listen(video_id, matched.get('title', ''),
                                    matched.get('artist', ''),
                                    _thumbnail_url(matched.get('thumbnail')))
+                # Queue items added without a duration (e.g. synced playlist
+                # tracks that never had one, or "play next"/"add to queue" from
+                # a source that only carried title/artist) would otherwise show
+                # --:-- forever once they become current -- look the real
+                # duration up in the background, same fallback as the
+                # not-in-queue branch below.
+                if not int(matched.get('duration_ms') or 0):
+                    threading.Thread(target=_lookup_and_update_np, args=(video_id,), daemon=True).start()
             else:
                 # queue_index=-1: this track isn't in the visible queue, so the
                 # old highlight is wrong until _refresh_radio_queue rebuilds it.
