@@ -8,6 +8,19 @@ from werkzeug.exceptions import HTTPException
 
 app = Flask(__name__)
 
+# YTDLP_COOKIES normally points at a read-only bind mount (protecting the
+# host's real cookie file from corruption) -- but yt-dlp always writes back
+# refreshed session cookies to whatever file --cookies points at, so every
+# invocation logged "OSError: Read-only file system" on exit even though
+# extraction itself succeeded. Copy to a writable path once at startup and
+# point every yt-dlp call there instead, so the host file stays untouched.
+_cookies_src = os.environ.get("YTDLP_COOKIES")
+if _cookies_src and os.path.isfile(_cookies_src) and not os.access(_cookies_src, os.W_OK):
+    import shutil
+    _cookies_writable = "/tmp/ytdlp_cookies.txt"
+    shutil.copyfile(_cookies_src, _cookies_writable)
+    os.environ["YTDLP_COOKIES"] = _cookies_writable
+
 # Signs the session cookie used by the web remote login. Set SECRET_KEY in the
 # environment so sessions survive restarts; otherwise a random one is generated
 # (logins reset on every restart, which is fine for a personal tool).
