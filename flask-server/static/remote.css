@@ -2217,7 +2217,7 @@
   }
   .track-like-btn:hover { color: var(--text); border-color: #444; }
   .track-like-btn:active { color: var(--accent); border-color: var(--accent); transform: scale(0.95); }
-  .track-like-btn.liked { color: var(--accent); border-color: var(--accent); }
+  .track-like-btn.liked { color: var(--accent); border-color: var(--accent); background: rgba(232, 89, 12, .1); }
   .track-like-btn svg { width: 16px; height: 16px; }
 
   /* ---- Search result: desktop more-options button ---- */
