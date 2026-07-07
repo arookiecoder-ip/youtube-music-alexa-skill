@@ -3462,7 +3462,6 @@ function updateUrlBar() {
       `;
       wrapper.appendChild(el);
       attachQueueItemTap(el, () => {
-        closeQueueModal();
         playFromQueue(item, i);
       });
       _wireQueueMoreMenu(el, item, i);
@@ -3621,87 +3620,99 @@ if ('serviceWorker' in navigator) {
 
 /* ---- Hardware Volume Button Integration (Mobile) ---- */
 (function() {
-  const hwAudio = document.getElementById('hw-volume-audio');
-  if (!hwAudio) return;
-
   let initialized = false;
-
-  // Browsers require a user interaction to start playing audio
+  let audioCtx;
+  let mediaElement;
+  let hwVolTimer;
+  
   const initAudio = () => {
     if (initialized) return;
-    hwAudio.volume = 0.5;
-    hwAudio.play().then(() => {
-      initialized = true;
-      document.removeEventListener('click', initAudio);
-      document.removeEventListener('touchstart', initAudio);
-    }).catch(e => {
-      // If blocked, wait for the next interaction
-      console.warn("Hardware volume audio init failed:", e);
+    initialized = true;
+
+    // Use a hidden video element playing a silent Web Audio stream
+    mediaElement = document.createElement('video');
+    mediaElement.setAttribute('playsinline', '');
+    mediaElement.setAttribute('loop', '');
+    mediaElement.style.display = 'none';
+    document.body.appendChild(mediaElement);
+
+    const AudioContext = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContext) return;
+    
+    audioCtx = new AudioContext();
+    const oscillator = audioCtx.createOscillator();
+    const gainNode = audioCtx.createGain();
+    gainNode.gain.value = 0; // complete silence
+    oscillator.connect(gainNode);
+    
+    const dest = audioCtx.createMediaStreamDestination();
+    gainNode.connect(dest);
+    oscillator.start();
+    
+    mediaElement.srcObject = dest.stream;
+    mediaElement.volume = 0.5;
+    
+    mediaElement.play().catch(e => {
+      console.warn("Hardware volume init failed:", e);
+      initialized = false; // allow retry on next interaction
     });
+    
+    mediaElement.addEventListener('volumechange', () => {
+      const newVol = mediaElement.volume;
+      if (Math.abs(newVol - 0.5) < 0.01) return;
+
+      const diff = newVol > 0.5 ? 5 : -5;
+      mediaElement.volume = 0.5;
+
+      const volumeEl = document.getElementById('volume');
+      if (!volumeEl) return;
+      
+      const currentAlexaVol = parseInt(volumeEl.value, 10);
+      if (isNaN(currentAlexaVol)) return;
+
+      const targetVol = Math.max(0, Math.min(100, currentAlexaVol + diff));
+
+      if (typeof syncVolume === 'function') {
+        volumeUserActive = true;
+        syncVolume(targetVol, true);
+        setTimeout(() => { volumeUserActive = false; }, 300);
+      }
+      
+      clearTimeout(hwVolTimer);
+      const mySeq = ++_volCommandSeq;
+      
+      hwVolTimer = setTimeout(() => {
+        const serial = typeof selectedSerial === 'function' ? selectedSerial() : null;
+        if (!serial) {
+          volumeUserActive = false;
+          volumeGraceUntil = 0;
+          return;
+        }
+        
+        volumeGraceUntil = Date.now() + VOLUME_GRACE_MS;
+        if (typeof toast === 'function') toast('Volume ' + targetVol + '\u2026');
+        
+        api('/alexa/command/', { serial, action: 'volume', value: targetVol })
+          .then(() => {
+            if (mySeq !== _volCommandSeq) return;
+            volumeUserActive = false;
+            volumeGraceUntil = Date.now() + VOLUME_GRACE_MS;
+            if (typeof toast === 'function') toast('Volume ' + targetVol, 'ok');
+          })
+          .catch(err => {
+            if (mySeq !== _volCommandSeq) return;
+            volumeUserActive = false;
+            volumeGraceUntil = 0;
+            if (typeof refreshVolume === 'function') refreshVolume(true);
+            if (typeof toast === 'function') toast(err.message, 'error');
+          });
+      }, 300);
+    });
+
+    document.removeEventListener('click', initAudio);
+    document.removeEventListener('touchstart', initAudio);
   };
 
   document.addEventListener('click', initAudio, { passive: true });
   document.addEventListener('touchstart', initAudio, { passive: true });
-
-  let hwVolTimer;
-  
-  hwAudio.addEventListener('volumechange', () => {
-    const newVol = hwAudio.volume;
-    
-    // Ignore programmatic resets
-    if (Math.abs(newVol - 0.5) < 0.01) return;
-
-    // Calculate step: +5 for up, -5 for down
-    const diff = newVol > 0.5 ? 5 : -5;
-    
-    // Reset audio volume immediately
-    hwAudio.volume = 0.5;
-
-    const volumeEl = document.getElementById('volume');
-    if (!volumeEl) return;
-    
-    const currentAlexaVol = parseInt(volumeEl.value, 10);
-    if (isNaN(currentAlexaVol)) return;
-
-    const targetVol = Math.max(0, Math.min(100, currentAlexaVol + diff));
-
-    // Update the UI immediately
-    if (typeof syncVolume === 'function') {
-      volumeUserActive = true; // Tell sync logic we are actively driving volume
-      syncVolume(targetVol, true);
-      // Wait a bit before releasing the active lock
-      setTimeout(() => { volumeUserActive = false; }, 300);
-    }
-    
-    // Send the command
-    clearTimeout(hwVolTimer);
-    const mySeq = ++_volCommandSeq;
-    
-    hwVolTimer = setTimeout(() => {
-      const serial = typeof selectedSerial === 'function' ? selectedSerial() : null;
-      if (!serial) {
-        volumeUserActive = false;
-        volumeGraceUntil = 0;
-        return;
-      }
-      
-      volumeGraceUntil = Date.now() + VOLUME_GRACE_MS;
-      if (typeof toast === 'function') toast('Volume ' + targetVol + '\u2026');
-      
-      api('/alexa/command/', { serial, action: 'volume', value: targetVol })
-        .then(() => {
-          if (mySeq !== _volCommandSeq) return;
-          volumeUserActive = false;
-          volumeGraceUntil = Date.now() + VOLUME_GRACE_MS;
-          if (typeof toast === 'function') toast('Volume ' + targetVol, 'ok');
-        })
-        .catch(err => {
-          if (mySeq !== _volCommandSeq) return;
-          volumeUserActive = false;
-          volumeGraceUntil = 0;
-          if (typeof refreshVolume === 'function') refreshVolume(true);
-          if (typeof toast === 'function') toast(err.message, 'error');
-        });
-    }, 300);
-  });
 })();
