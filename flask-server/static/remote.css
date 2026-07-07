@@ -1729,8 +1729,9 @@
     height: 32px;
     align-items: center;
     justify-content: center;
+    border: 1px solid var(--border);
   }
-  .playlist-more-btn:hover { background: var(--surface); }
+  .playlist-more-btn:hover { background: var(--surface); border-color: var(--accent); }
   .history-modal-body {
     flex: 1;
     overflow-y: auto;

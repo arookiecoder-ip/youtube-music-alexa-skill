@@ -176,7 +176,7 @@ function openPlaylistDetailModal(pl_id) {
               ${moreSvg}
             </button>
             <div class="playlist-more-menu" style="display: none; position: absolute; right: 8px; top: 100%; background: var(--bg-elevated, #2a2a2a); border: 1px solid var(--border, #444); border-radius: 8px; z-index: 100; min-width: 180px; box-shadow: 0 4px 12px rgba(0,0,0,0.5); overflow: hidden;">
-              <div class="result-menu-option" style="padding: 12px 16px; display: flex; align-items: center; color: #ff4d4d; cursor: pointer; transition: background 0.2s; font-size: 14px;" onclick="event.stopPropagation(); removeFromPlaylist('${pl_id}', '${track.uuid || track.video_id}')" onmouseover="this.style.background='rgba(255,255,255,0.1)'" onmouseout="this.style.background='transparent'">
+              <div class="result-menu-option" style="padding: 12px 16px; display: flex; align-items: center; color: #ff4d4d; cursor: pointer; transition: background 0.2s; font-size: 14px;" onclick="event.stopPropagation(); removeFromPlaylist('${pl_id}', '${pl_id === 'liked' ? escHtml(track.video_id) : escHtml(track.uuid || track.video_id)}')" onmouseover="this.style.background='rgba(255,255,255,0.1)'" onmouseout="this.style.background='transparent'">
                 <div style="width: 18px; height: 18px; margin-right: 12px; display: flex;">${trashIcon}</div>
                 Remove from playlist
               </div>
@@ -314,7 +314,12 @@ async function playPlaylist(pl_id, btn, shuffle) {
   try {
     const tracks = shuffle ? _shuffled(pl.tracks) : pl.tracks;
     const [first, ...rest] = tracks;
-    await playResult({ video_id: first.video_id, title: first.title, artist: first.artist, thumbnail: first.thumbnail, duration_ms: first.duration_ms });
+    // Suppress the server's auto radio-queue build for this first track --
+    // the rest of the playlist is about to be appended below, and without
+    // this the two race: the server can see a still-single-item queue and
+    // overwrite it with generated recommendations before our own queue_add
+    // calls land (see /alexa/play_queue/'s suppress_radio handling).
+    await playResult({ video_id: first.video_id, title: first.title, artist: first.artist, thumbnail: first.thumbnail, duration_ms: first.duration_ms }, rest.length > 0);
     if (rest.length) toast('Adding rest of “' + pl.name + '” to queue…');
     for (const track of rest) {
       // silent: this loop queues the rest of the playlist in bulk, so per-track
@@ -448,7 +453,14 @@ async function removeFromPlaylist(pl_id, track_uuid) {
   try {
     await apiDelete('/api/playlists/' + encodeURIComponent(pl_id) + '/tracks/' + encodeURIComponent(track_uuid));
     if (_playlistsData.playlists[pl_id]) {
-      _playlistsData.playlists[pl_id].tracks = _playlistsData.playlists[pl_id].tracks.filter(t => (t.uuid || t.video_id) !== track_uuid);
+      // The "liked" playlist is keyed by video_id server-side (there's no
+      // per-track uuid concept for likes), while custom playlists are keyed
+      // by each track's own uuid -- match whichever identity was actually sent.
+      _playlistsData.playlists[pl_id].tracks = _playlistsData.playlists[pl_id].tracks.filter(t =>
+        pl_id === 'liked' ? t.video_id !== track_uuid : (t.uuid || t.video_id) !== track_uuid);
+      if (pl_id === 'liked') {
+        _playlistsData.liked_songs = _playlistsData.liked_songs.filter(vid => vid !== track_uuid);
+      }
       if (document.getElementById('playlist-detail-modal-overlay').classList.contains('open')) {
         openPlaylistDetailModal(pl_id);
       }
@@ -463,7 +475,7 @@ async function syncPlaylist(pl_id, btnEl = null) {
   const btn = btnEl || document.getElementById('playlist-sync-btn');
   if (btn) {
     btn.disabled = true;
-    btn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" class="spin" style="width:16px;height:16px;"><path d="M21.5 2v6h-6M2.13 15.57a9 9 0 1 0 3.44-8.8L2.5 9M2.5 22v-6h6M21.87 8.43a9 9 0 1 0-3.44 8.8L21.5 15"/></svg>` + (btnEl ? '' : ' Syncing...');
+    btn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" class="spin" style="width:16px;height:16px;"><path d="M21 2v6h-6"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M3 22v-6h6"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/></svg>` + (btnEl ? '' : ' Syncing...');
   }
   
   try {
@@ -555,7 +567,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
       const submitBtn = document.getElementById('import-playlist-submit');
       submitBtn.disabled = true;
-      submitBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" class="spin" style="width:18px;height:18px;"><path d="M21.5 2v6h-6M2.13 15.57a9 9 0 1 0 3.44-8.8L2.5 9M2.5 22v-6h6M21.87 8.43a9 9 0 1 0-3.44 8.8L21.5 15"/></svg> Importing...`;
+      submitBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" class="spin" style="width:18px;height:18px;"><path d="M21 2v6h-6"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M3 22v-6h6"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/></svg> Importing...`;
 
       try {
         // name omitted — the server resolves the real YouTube playlist title.

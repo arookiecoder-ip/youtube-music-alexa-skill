@@ -2948,6 +2948,13 @@ def alexa_play_queue():
     body = request.get_json(silent=True) or {}
     serial = body.get("serial")
     video_id = body.get("video_id")
+    # Set by callers that are about to append more tracks right after this call
+    # (e.g. "Play All"/shuffle-play on a saved playlist) -- suppresses the
+    # auto radio-queue build below, which otherwise races the client's
+    # subsequent queue_add calls: seeing a still-single-item queue, it mistakes
+    # the playlist-in-progress for a bare single-track play and overwrites it
+    # with generated recommendations instead of the rest of the playlist.
+    suppress_radio = bool(body.get("suppress_radio"))
     if not serial or not video_id:
         return error_response('missing "serial" or "video_id"', 400)
     if not _valid_video_id(video_id):
@@ -3011,8 +3018,10 @@ def alexa_play_queue():
     # Build the "Up Next" radio queue for this track right away. When a song is
     # played from a recommendation/search it lands here with a single-item
     # queue; without this the UP NEXT panel stays empty until (and unless) the
-    # skill's started webhook happens to rebuild it.
-    threading.Thread(target=_refresh_radio_queue, args=(video_id,), daemon=True).start()
+    # skill's started webhook happens to rebuild it. Skipped when the caller
+    # is about to build a real queue itself (see suppress_radio above).
+    if not suppress_radio:
+        threading.Thread(target=_refresh_radio_queue, args=(video_id,), daemon=True).start()
     return jsonify({'ok': True, 'now_playing': {
         'title': item.get('title', ''),
         'artist': item.get('artist', ''),
@@ -3303,8 +3312,34 @@ def alexa_clear():
 
 # ---------- Playlists & Liked Songs ----------
 
+_last_thumbnail_backfill_sweep = 0.0
+
+def _sweep_missing_thumbnails():
+    """Older tracks can be stuck with no thumbnail (added back when the
+    caller's item had a blank one, before /tracks/ started backfilling new
+    additions itself). Patch a few of them up per sweep so the UI stops
+    showing the placeholder note icon for them, without hammering ytmusic on
+    every single page load."""
+    global _last_thumbnail_backfill_sweep
+    now = time.time()
+    if now - _last_thumbnail_backfill_sweep < 3600:
+        return
+    _last_thumbnail_backfill_sweep = now
+    with get_db() as conn:
+        rows = conn.execute(
+            "SELECT uuid, playlist_id, video_id FROM playlist_tracks "
+            "WHERE thumbnail_url IS NULL OR thumbnail_url = '' LIMIT 20"
+        ).fetchall()
+    for r in rows:
+        threading.Thread(
+            target=_backfill_track_thumbnail,
+            args=(r['playlist_id'], r['uuid'], r['video_id']),
+            daemon=True,
+        ).start()
+
 @app.route("/api/playlists/", methods=["GET"])
 def api_get_playlists():
+    threading.Thread(target=_sweep_missing_thumbnails, daemon=True).start()
     return jsonify(_load_playlists())
 
 @app.route("/api/playlists/", methods=["POST"])
@@ -3375,6 +3410,26 @@ def api_rename_playlist(pl_id):
         conn.commit()
     return jsonify({'ok': True, 'name': name})
 
+def _backfill_track_thumbnail(pl_id, track_uuid, video_id):
+    """The caller's item can carry a blank thumbnail (e.g. a queue entry whose
+    art hadn't loaded client-side yet when it was liked/saved) -- look the
+    real one up and patch the stored row so it isn't stuck showing the
+    placeholder note icon forever."""
+    try:
+        metadata = _lookup_video_metadata(video_id)
+        thumb = _thumbnail_url((metadata or {}).get('thumbnail'))
+        if not thumb:
+            return
+        with get_db() as conn:
+            conn.execute(
+                "UPDATE playlist_tracks SET thumbnail_url = ? WHERE uuid = ? AND (thumbnail_url IS NULL OR thumbnail_url = '')",
+                (thumb, track_uuid),
+            )
+            conn.commit()
+    except Exception:
+        traceback.print_exc()
+
+
 @app.route("/api/playlists/<pl_id>/tracks/", methods=["POST"])
 def api_add_track(pl_id):
     body = request.get_json(silent=True) or {}
@@ -3410,14 +3465,19 @@ def api_add_track(pl_id):
                 ''', (track_uuid, pl_id, video_id, title, artist, thumbnail, duration_ms, now))
                 conn.execute('UPDATE playlists SET updated_at = ? WHERE id = ?', (now, pl_id))
             conn.commit()
+            if not thumbnail:
+                stored_uuid = existing['uuid'] if existing else track_uuid
+                threading.Thread(target=_backfill_track_thumbnail, args=(pl_id, stored_uuid, video_id), daemon=True).start()
             data = _load_playlists()
             return jsonify({'ok': True, 'track': track, 'liked_songs': data["liked_songs"]})
-        
+
         conn.execute('''
             INSERT INTO playlist_tracks (uuid, playlist_id, video_id, title, artist, thumbnail_url, duration_ms, added_at)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ''', (track_uuid, pl_id, video_id, title, artist, thumbnail, duration_ms, now))
         conn.execute('UPDATE playlists SET updated_at = ? WHERE id = ?', (now, pl_id))
+        if not thumbnail:
+            threading.Thread(target=_backfill_track_thumbnail, args=(pl_id, track_uuid, video_id), daemon=True).start()
         conn.commit()
     
     return jsonify({'ok': True, 'track': track})

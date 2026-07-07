@@ -1379,7 +1379,7 @@ function _attachSwipeGesture(wrapper, inner, item) {
   }, { passive: true });
 }
 
-async function playResult(item) {
+async function playResult(item, suppressRadio) {
   const serial = selectedSerial();
   if (!serial) return;
   lastActionAt = Date.now();
@@ -1392,6 +1392,7 @@ async function playResult(item) {
       artist: item.artist,
       thumbnail: item.thumbnail,
       duration_ms: item.duration_ms,
+      suppress_radio: !!suppressRadio,
     });
     showNowPlaying(item);
     progress.resetPending(item.video_id);
