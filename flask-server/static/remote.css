@@ -1751,8 +1751,8 @@
   }
   .playlist-more-btn {
     border-radius: 50%;
-    width: 32px;
-    height: 32px;
+    width: 28px;
+    height: 28px;
     align-items: center;
     justify-content: center;
     border: 1px solid var(--border);

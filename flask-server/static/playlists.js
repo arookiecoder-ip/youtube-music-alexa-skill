@@ -177,8 +177,8 @@ function openPlaylistDetailModal(pl_id) {
   if (!pl.tracks || pl.tracks.length === 0) {
     body.innerHTML = '<div class="history-modal-empty">Playlist is empty.</div>';
   } else {
-    const trashIcon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="width: 100%; height: 100%;"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>`;
-    const moreSvg = `<svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg>`;
+    const trashIcon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>`;
+    const moreSvg = `<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg>`;
     const queueAddSvg = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>`;
     const playNextSvg = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>`;
     const heartFilledSvg = `<svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>`;
@@ -196,6 +196,22 @@ function openPlaylistDetailModal(pl_id) {
       // sidesteps that entirely.
       const item = { video_id: track.video_id, title: track.title, artist: track.artist,
         thumbnail: track.thumbnail || '', duration_ms: Number(track.duration_ms) || 0 };
+
+      // Swipe wrapper: reuses the exact same underlays/gesture handler as the
+      // search-results list (right = Play next, left = Add to queue) instead
+      // of a bespoke implementation, so the animation and thresholds match.
+      const wrapper = document.createElement('div');
+      wrapper.className = 'result-swipe-wrapper';
+      wrapper.innerHTML = `
+        <div class="result-swipe-underlay underlay-play-next">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+          Play next
+        </div>
+        <div class="result-swipe-underlay underlay-add-queue">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+          Add to queue
+        </div>
+      `;
 
       const row = document.createElement('div');
       row.className = 'history-item';
@@ -228,7 +244,6 @@ function openPlaylistDetailModal(pl_id) {
       artistEl.textContent = track.artist;
       info.appendChild(titleEl);
       info.appendChild(artistEl);
-      info.addEventListener('click', () => playResult(item));
       row.appendChild(info);
 
       // Liked Songs is a fixed system playlist: every track here is already
@@ -299,7 +314,17 @@ function openPlaylistDetailModal(pl_id) {
       moreContainer.appendChild(menu);
       row.appendChild(moreContainer);
 
-      list.appendChild(row);
+      // Tapping anywhere on the row plays it, same as clicking `info` used to
+      // -- attached via attachQueueItemTap (not a plain click listener) so it
+      // respects _swipeSuppressClick, which _attachSwipeGesture sets on this
+      // same `row` element after a committed swipe. Buttons inside the row
+      // (heart, more-menu) already stopPropagation in their own handlers, so
+      // this doesn't double-fire when one of those is clicked instead.
+      attachQueueItemTap(row, () => playResult(item));
+
+      wrapper.appendChild(row);
+      _attachSwipeGesture(wrapper, row, item);
+      list.appendChild(wrapper);
     });
 
     body.innerHTML = '';
