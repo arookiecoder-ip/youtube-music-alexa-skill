@@ -1631,12 +1631,19 @@ def _lookup_and_update_np(video_id):
         traceback.print_exc()
 
 
-def _refresh_radio_queue(video_id):
+def _refresh_radio_queue(video_id, force=False):
     """Populate recommendations for the web remote after playback is real.
 
     Lambda also expands the queue, but that update can arrive late or not at all
     if Alexa routing is flaky. The proxy/webhook path knows the current video id,
     so it can refresh the visible recommendations independently.
+
+    force=True skips the "queue already looks fine" shortcut below and always
+    rebuilds -- used by "Play Radio" on a track that's already sitting in the
+    current queue, where the whole point is to replace that queue with a fresh
+    one seeded from just this track (otherwise the shortcut kept the old queue
+    unchanged, so "Play Radio" silently did nothing but play the same track in
+    the same queue).
     """
     if not _valid_video_id(video_id):
         return False
@@ -1649,7 +1656,7 @@ def _refresh_radio_queue(video_id):
         # it. Otherwise it's left over from a previous play (e.g. an app play
         # followed by a fresh voice request) and must be rebuilt around the
         # new track.
-        if len(cur_queue) > 1 and any(q.get('video_id') == video_id for q in cur_queue):
+        if not force and len(cur_queue) > 1 and any(q.get('video_id') == video_id for q in cur_queue):
             return True
         playlist = asyncio.run(Supporting.get_radio_queue(video_id))
         if not playlist:
@@ -1676,7 +1683,7 @@ def _refresh_radio_queue(video_id):
         cur = _get_now_playing()
         cur_queue = cur.get('queue') or []
         queue_stale = not any(q.get('video_id') == video_id for q in cur_queue)
-        if cur.get('video_id') == video_id and (len(cur_queue) <= 1 or queue_stale):
+        if cur.get('video_id') == video_id and (force or len(cur_queue) <= 1 or queue_stale):
             fields = {'queue': queue, 'queue_index': idx}
             # If the now-playing track still has no duration (came from a
             # recommendation/chart with duration_ms=0), fill it from the radio
@@ -3051,6 +3058,12 @@ def alexa_play_queue():
     # the playlist-in-progress for a bare single-track play and overwrites it
     # with generated recommendations instead of the rest of the playlist.
     suppress_radio = bool(body.get("suppress_radio"))
+    # "Play Radio" on a track already sitting in the current queue: the whole
+    # point is to replace that queue with a fresh one seeded from just this
+    # track, so it must skip the "already in queue, reuse as-is" branch below
+    # (which otherwise left the old queue untouched and _refresh_radio_queue's
+    # own "queue already looks fine" shortcut then made the rebuild a no-op).
+    force_radio = bool(body.get("force_radio"))
     if not serial or not video_id:
         return error_response('missing "serial" or "video_id"', 400)
     if not _valid_video_id(video_id):
@@ -3067,14 +3080,15 @@ def alexa_play_queue():
     # between the client's last snapshot and this request) and only fall back
     # to the by-id search otherwise.
     item = None
-    try:
-        queue_index = int(body.get("queue_index"))
-    except (TypeError, ValueError):
-        queue_index = None
-    if queue_index is not None and 0 <= queue_index < len(queue) and queue[queue_index].get('video_id') == video_id:
-        item = queue[queue_index]
-    if item is None:
-        item = next((q for q in queue if q.get('video_id') == video_id), None)
+    if not force_radio:
+        try:
+            queue_index = int(body.get("queue_index"))
+        except (TypeError, ValueError):
+            queue_index = None
+        if queue_index is not None and 0 <= queue_index < len(queue) and queue[queue_index].get('video_id') == video_id:
+            item = queue[queue_index]
+        if item is None:
+            item = next((q for q in queue if q.get('video_id') == video_id), None)
     if not item:
         # The web remote's search results pass their metadata along, so a
         # fresh play doesn't need a blocking ytmusic lookup here.
@@ -3139,7 +3153,7 @@ def alexa_play_queue():
     # skill's started webhook happens to rebuild it. Skipped when the caller
     # is about to build a real queue itself (see suppress_radio above).
     if not suppress_radio:
-        threading.Thread(target=_refresh_radio_queue, args=(video_id,), daemon=True).start()
+        threading.Thread(target=_refresh_radio_queue, args=(video_id, force_radio), daemon=True).start()
     return jsonify({'ok': True, 'now_playing': {
         'title': item.get('title', ''),
         'artist': item.get('artist', ''),

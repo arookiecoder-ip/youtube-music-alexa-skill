@@ -15,6 +15,10 @@ let _currentThumbnail = '';     // thumbnail URL of the currently playing track
 let volumeUserActive = false;
 let volumeGraceUntil = 0;       // ignore server volume pushes until this time
 const VOLUME_GRACE_MS = 4000;   // covers the debounce + command round-trip
+// Bumped on every fresh volume command (main slider or mini-popup slider) so
+// a superseded in-flight request's .then()/.catch() can tell it's no longer
+// the latest and skip touching shared state -- see the two oninput handlers.
+let _volCommandSeq = 0;
 let lastVolumeRefreshAt = 0;
 let _hasTrack = false;          // a track (even optimistic) is loaded
 let _resultsOpen = false;       // search results panel is showing
@@ -474,10 +478,19 @@ const progress = (function () {
     dragging = false;
     _activeTrack.classList.remove('dragging');
     const target = Math.round(dragMs);
-    // Optimistically anchor locally so the bar stays put during the round-trip.
+    // Hold the bar at the target and do NOT tick yet -- the device hasn't
+    // actually moved to this position until the seek round-trips and the
+    // real PlaybackStarted webhook confirms it. Ticking immediately (as if
+    // already playing from `target`) made the bar visibly race ahead of the
+    // real audio, then snap back to `target` a beat later when the genuine
+    // confirmation landed. Mirrors the server, which also drops
+    // playing/playback_confirmed to false for the same window (see
+    // alexa_seek). syncLoop() naturally stops the RAF loop since `playing`
+    // is now false, so livePosition() just returns the frozen target.
     positionMs = target;
     anchorClientMs = Date.now();
-    syncLoop();   // resume ticking from the new anchor if playing
+    playing = false;
+    syncLoop();
     paint();
     const serial = deviceEl.value;
     if (!serial) { toast('Pick a device first.', 'error'); return; }
@@ -1122,6 +1135,10 @@ function renderResults() {
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
           Add to queue
         </div>
+        <div class="result-menu-option" data-action="play-radio">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4.93 19.07A10 10 0 1 1 19.07 4.93 10 10 0 0 1 4.93 19.07z"/><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="M2 12h2"/><path d="M20 12h2"/></svg>
+          Play Radio
+        </div>
         <div class="result-menu-option" data-action="save-playlist">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path><line x1="12" y1="11" x2="12" y2="17"></line><line x1="9" y1="14" x2="15" y2="14"></line></svg>
           Save to Playlist
@@ -1192,6 +1209,14 @@ function renderResults() {
       e.stopPropagation();
       _closeAllMoreMenus();
       addToQueue(item, 'last');
+    });
+    moreMenu.querySelector('[data-action="play-radio"]').addEventListener('click', (e) => {
+      e.stopPropagation();
+      _closeAllMoreMenus();
+      // force_radio=true: build a fresh queue seeded from this track instead
+      // of whatever queue currently exists (same as the queue's own Play
+      // Radio option).
+      playResult(item, false, true);
     });
     const saveOpt = moreMenu.querySelector('[data-action="save-playlist"]');
     if (saveOpt) {
@@ -1401,11 +1426,13 @@ function _attachSwipeGesture(wrapper, inner, item) {
   }, { passive: true });
 }
 
-async function playResult(item, suppressRadio) {
+async function playResult(item, suppressRadio, forceRadio) {
   const serial = selectedSerial();
   if (!serial) return;
   lastActionAt = Date.now();
-  toast('Playing \u201c' + item.title + '\u201d\u2026');
+  toast(forceRadio
+    ? 'Starting radio from \u201c' + item.title + '\u201d\u2026'
+    : 'Playing \u201c' + item.title + '\u201d\u2026');
   try {
     await api('/alexa/play_queue/', {
       serial,
@@ -1415,13 +1442,17 @@ async function playResult(item, suppressRadio) {
       thumbnail: item.thumbnail,
       duration_ms: item.duration_ms,
       suppress_radio: !!suppressRadio,
+      // "Play Radio" on a track already in the current queue: force a fresh
+      // queue seeded from just this track instead of silently reusing the
+      // existing one (see alexa_play_queue's force_radio handling).
+      force_radio: !!forceRadio,
     });
     showNowPlaying(item);
     progress.resetPending(item.video_id);
     isPlaying = true;
     lastActionIntent = true;
     syncPlayPause();
-    toast('Playing', 'ok');
+    toast(forceRadio ? 'Radio started' : 'Playing', 'ok');
     _lastQueueJson = '';
     setTimeout(pollNowPlaying, 3000);
   } catch (e) {
@@ -1525,6 +1556,11 @@ function syncModalScrollLock() {
     // Sync main slider visually
     volumeEl.value = e.target.value;
     clearTimeout(mpVolTimer);
+    // Same fix as the main slider's handler: a paused/resumed drag (touch
+    // input can fire in bursts) lets more than one debounced call survive,
+    // each sending its own real volume command whose confirmations can then
+    // arrive out of order. Only the most recent command's result may act.
+    const mySeq = ++_volCommandSeq;
     mpVolTimer = setTimeout(() => {
       const serial = selectedSerial();
       if (!serial) { volumeUserActive = false; volumeGraceUntil = 0; return; }
@@ -1533,12 +1569,14 @@ function syncModalScrollLock() {
       toast('Volume ' + value + '\u2026');
       api('/alexa/command/', { serial, action: 'volume', value })
         .then(() => {
+          if (mySeq !== _volCommandSeq) return;
           volumeUserActive = false;
           volumeGraceUntil = Date.now() + VOLUME_GRACE_MS;
           syncVolume(value, true);
           toast('Volume ' + value, 'ok');
         })
         .catch(err => {
+          if (mySeq !== _volCommandSeq) return;
           volumeUserActive = false;
           volumeGraceUntil = 0;    // let server truth restore the slider
           refreshVolume(true);
@@ -1849,6 +1887,15 @@ volumeEl.oninput = e => {
   volumeUserActive = true;
   volumeGraceUntil = Date.now() + VOLUME_GRACE_MS;
   clearTimeout(volTimer);
+  // Several separate quick clicks/taps (not one continuous drag) each land
+  // more than 220ms apart, so each one's timer fired independently and sent
+  // its OWN real /alexa/command/ volume call -- e.g. clicking 31, 32, 34, 21,
+  // 29 actually told the Echo to change volume 5 times in a row. Each of
+  // those real device changes takes a moment to execute and report back, and
+  // the confirmation webhooks can arrive out of order, so the slider visibly
+  // hopped through several past values before landing on the last one.
+  // Fix: only ever let the MOST RECENT command's result touch shared state.
+  const mySeq = ++_volCommandSeq;
   volTimer = setTimeout(() => {
     const serial = selectedSerial();
     if (!serial) {
@@ -1861,12 +1908,14 @@ volumeEl.oninput = e => {
     toast('Volume ' + e.target.value + '\u2026');
     api('/alexa/command/', { serial, action: 'volume', value })
       .then(() => {
+        if (mySeq !== _volCommandSeq) return; // superseded by a later click
         volumeUserActive = false;
         volumeGraceUntil = Date.now() + VOLUME_GRACE_MS;
         syncVolume(value, true);
         toast('Volume ' + value, 'ok');
       })
       .catch(err => {
+        if (mySeq !== _volCommandSeq) return; // superseded by a later click
         volumeUserActive = false;
         volumeGraceUntil = 0;      // let server truth restore the slider
         refreshVolume(true);
@@ -2277,10 +2326,11 @@ function _wireQueueMoreMenu(el, item, index) {
   moreMenu.querySelector('[data-action="play-radio"]').addEventListener('click', (e) => {
     e.stopPropagation();
     _closeAllQueueMenus();
-    // Plays this track fresh (not suppressing the server's radio-queue
-    // build), replacing the current queue with a new one seeded from it --
-    // same mechanism as playing any single result normally.
-    playResult(item);
+    // force_radio=true: this track is already sitting in the current queue
+    // (that's exactly why the menu item is here), so the normal "already in
+    // queue, just play it" path would leave the existing queue untouched.
+    // Force a fresh queue seeded from just this track instead.
+    playResult(item, false, true);
   });
   const likeBtn = moreMenu.querySelector('[data-action="like"]');
   likeBtn.addEventListener('click', async (e) => {
