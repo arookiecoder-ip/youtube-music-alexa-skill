@@ -1152,8 +1152,13 @@ function renderResults() {
 
     wrapper.appendChild(inner);
 
-    // Tap on the main area → play the result
-    attachQueueItemTap(inner, () => playResult(item));
+    // Tap on the main area → play the result. Highlight immediately so the
+    // tap feedback doesn't wait on the server round-trip in playResult.
+    attachQueueItemTap(inner, () => {
+      for (const other of list.querySelectorAll('.result-item-inner.active')) other.classList.remove('active');
+      inner.classList.add('active');
+      playResult(item);
+    });
 
     // Mobile: queue-add icon tap → add to queue (last)
     const qBtn = inner.querySelector('.result-queue-btn');
@@ -2148,6 +2153,22 @@ function showQueue(queue, currentIndex) {
   section.hidden = false;
   mainEl.classList.add('has-queue');
   requestAnimationFrame(() => section.classList.add('is-visible'));
+
+  // If the incoming queue is identical (same video_ids, same order) to what's
+  // already rendered, this call is just a confirmation echo of an optimistic
+  // update (add/reorder/remove) or an unrelated field changing upstream —
+  // don't tear down and rebuild every row for nothing (that full rebuild,
+  // including closing menus and re-creating drag handles, was the flicker).
+  // Just sync the active highlight and bail.
+  const existingIds = Array.from(list.children).map(w => w.dataset.videoId || '');
+  const incomingIds = queue.map(item => item.video_id || '');
+  const sameOrder = existingIds.length === incomingIds.length
+    && existingIds.every((id, i) => id === incomingIds[i]);
+  if (sameOrder) {
+    updateQueueActive(currentIndex);
+    return;
+  }
+
   _closeAllQueueMenus();
 
   // Rows are rebuilt fresh every time (listeners capture the row's index by
@@ -2218,8 +2239,14 @@ function showQueue(queue, currentIndex) {
 
     wrapper.appendChild(el);
 
-    // Tap on the item → play from queue
-    attachQueueItemTap(el, () => playFromQueue(item, i));
+    // Tap on the item → play from queue. Mark it active immediately so the
+    // "you tapped this" feedback shows right away instead of only after the
+    // server round-trip completes and playFromQueue's own re-render lands.
+    attachQueueItemTap(el, () => {
+      for (const other of list.querySelectorAll('.queue-item.active')) other.classList.remove('active');
+      el.classList.add('active');
+      playFromQueue(item, i);
+    });
 
     _wireQueueMoreMenu(el, item, i);
 
@@ -3424,11 +3451,25 @@ function updateUrlBar() {
       modalBody.innerHTML = '<div class="queue-modal-empty">No songs in queue</div>';
       return;
     }
+    // Same guard as showQueue: skip the full rebuild (and the image re-fetch
+    // flicker that comes with it) when this call is just confirming a queue
+    // that's already on screen in the same order.
+    const existingIds = Array.from(modalBody.children).map(w => w.dataset.videoId || '');
+    const incomingIds = queue.map(item => item.video_id || '');
+    const sameOrder = existingIds.length === incomingIds.length
+      && existingIds.every((id, i) => id === incomingIds[i]);
+    if (sameOrder) {
+      for (const el of modalBody.querySelectorAll('.queue-item')) {
+        el.classList.toggle('active', Number(el.dataset.index) === currentIndex);
+      }
+      return;
+    }
     modalBody.innerHTML = '';
     queue.forEach((item, i) => {
       const wrapper = document.createElement('div');
       wrapper.className = 'queue-swipe-wrapper';
       wrapper.dataset.index = String(i);
+      wrapper.dataset.videoId = item.video_id || '';
       wrapper.innerHTML = `
         <div class="queue-delete-underlay">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
@@ -3462,6 +3503,8 @@ function updateUrlBar() {
       `;
       wrapper.appendChild(el);
       attachQueueItemTap(el, () => {
+        for (const other of modalBody.querySelectorAll('.queue-item.active')) other.classList.remove('active');
+        el.classList.add('active');
         playFromQueue(item, i);
       });
       _wireQueueMoreMenu(el, item, i);
@@ -3617,102 +3660,3 @@ if ('serviceWorker' in navigator) {
     navigator.serviceWorker.register('/service-worker.js').catch(() => {});
   });
 }
-
-/* ---- Hardware Volume Button Integration (Mobile) ---- */
-(function() {
-  let initialized = false;
-  let audioCtx;
-  let mediaElement;
-  let hwVolTimer;
-  
-  const initAudio = () => {
-    if (initialized) return;
-    initialized = true;
-
-    // Use a hidden video element playing a silent Web Audio stream
-    mediaElement = document.createElement('video');
-    mediaElement.setAttribute('playsinline', '');
-    mediaElement.setAttribute('loop', '');
-    mediaElement.style.display = 'none';
-    document.body.appendChild(mediaElement);
-
-    const AudioContext = window.AudioContext || window.webkitAudioContext;
-    if (!AudioContext) return;
-    
-    audioCtx = new AudioContext();
-    const oscillator = audioCtx.createOscillator();
-    const gainNode = audioCtx.createGain();
-    gainNode.gain.value = 0; // complete silence
-    oscillator.connect(gainNode);
-    
-    const dest = audioCtx.createMediaStreamDestination();
-    gainNode.connect(dest);
-    oscillator.start();
-    
-    mediaElement.srcObject = dest.stream;
-    mediaElement.volume = 0.5;
-    
-    mediaElement.play().catch(e => {
-      console.warn("Hardware volume init failed:", e);
-      initialized = false; // allow retry on next interaction
-    });
-    
-    mediaElement.addEventListener('volumechange', () => {
-      const newVol = mediaElement.volume;
-      if (Math.abs(newVol - 0.5) < 0.01) return;
-
-      const diff = newVol > 0.5 ? 5 : -5;
-      mediaElement.volume = 0.5;
-
-      const volumeEl = document.getElementById('volume');
-      if (!volumeEl) return;
-      
-      const currentAlexaVol = parseInt(volumeEl.value, 10);
-      if (isNaN(currentAlexaVol)) return;
-
-      const targetVol = Math.max(0, Math.min(100, currentAlexaVol + diff));
-
-      if (typeof syncVolume === 'function') {
-        volumeUserActive = true;
-        syncVolume(targetVol, true);
-        setTimeout(() => { volumeUserActive = false; }, 300);
-      }
-      
-      clearTimeout(hwVolTimer);
-      const mySeq = ++_volCommandSeq;
-      
-      hwVolTimer = setTimeout(() => {
-        const serial = typeof selectedSerial === 'function' ? selectedSerial() : null;
-        if (!serial) {
-          volumeUserActive = false;
-          volumeGraceUntil = 0;
-          return;
-        }
-        
-        volumeGraceUntil = Date.now() + VOLUME_GRACE_MS;
-        if (typeof toast === 'function') toast('Volume ' + targetVol + '\u2026');
-        
-        api('/alexa/command/', { serial, action: 'volume', value: targetVol })
-          .then(() => {
-            if (mySeq !== _volCommandSeq) return;
-            volumeUserActive = false;
-            volumeGraceUntil = Date.now() + VOLUME_GRACE_MS;
-            if (typeof toast === 'function') toast('Volume ' + targetVol, 'ok');
-          })
-          .catch(err => {
-            if (mySeq !== _volCommandSeq) return;
-            volumeUserActive = false;
-            volumeGraceUntil = 0;
-            if (typeof refreshVolume === 'function') refreshVolume(true);
-            if (typeof toast === 'function') toast(err.message, 'error');
-          });
-      }, 300);
-    });
-
-    document.removeEventListener('click', initAudio);
-    document.removeEventListener('touchstart', initAudio);
-  };
-
-  document.addEventListener('click', initAudio, { passive: true });
-  document.addEventListener('touchstart', initAudio, { passive: true });
-})();
