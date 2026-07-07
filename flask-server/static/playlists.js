@@ -268,7 +268,11 @@ function openPlaylistDetailModal(pl_id) {
 
       const menu = document.createElement('div');
       menu.className = 'playlist-more-menu';
-      menu.style.cssText = 'position:absolute; right:8px; top:100%; background: var(--bg-elevated, #2a2a2a); border: 1px solid var(--border, #444); border-radius: 8px; z-index: 100; min-width: 180px; box-shadow: 0 4px 12px rgba(0,0,0,0.5); overflow: hidden;';
+      // z-index must clear .history-modal-overlay's 500: this menu gets
+      // portaled to <body> while open (a sibling of the modal overlay, not a
+      // descendant), so a lower z-index here renders it behind the still-open
+      // playlist detail modal instead of on top of it.
+      menu.style.cssText = 'position:absolute; right:8px; top:100%; background: var(--bg-elevated, #2a2a2a); border: 1px solid var(--border, #444); z-index: 9999; min-width: 180px; box-shadow: 0 4px 12px rgba(0,0,0,0.5); overflow: hidden;';
 
       function addMenuOption(iconHtml, label, danger, onClick) {
         const opt = document.createElement('div');
@@ -306,6 +310,12 @@ function openPlaylistDetailModal(pl_id) {
 
 function closePlaylistDetailModal() {
   document.getElementById('playlist-detail-modal-overlay').classList.remove('open');
+  // This menu lives inside .history-modal (never portaled to <body>, unlike
+  // the per-track ones) -- position:fixed on a descendant of an element being
+  // animated with `transform` resolves relative to that ancestor instead of
+  // the viewport, so leaving the menu open while the modal's close transition
+  // plays dragged it along, visibly shifting before it faded out.
+  document.getElementById('playlist-detail-more-menu').classList.remove('open');
 }
 
 document.getElementById('playlist-detail-more-btn').addEventListener('click', (e) => {
@@ -489,7 +499,12 @@ async function toggleLike(item, btnElement) {
       if (!_playlistsData.playlists.liked) {
          _playlistsData.playlists.liked = {id: 'liked', name: 'Liked Songs', updated_at: Date.now(), tracks: []};
       }
+      // Sort by added_at rather than just appending: the server may have
+      // restored the track's original timestamp (see _recent_unlike_added_at
+      // server-side) if this is an undo-relike shortly after un-liking, in
+      // which case it belongs back in its old spot, not at the end.
       _playlistsData.playlists.liked.tracks.push(res.track);
+      _playlistsData.playlists.liked.tracks.sort((a, b) => (a.added_at || 0) - (b.added_at || 0));
       if (btnElement) {
         btnElement.classList.add('liked');
         btnElement.title = "Dislike";
