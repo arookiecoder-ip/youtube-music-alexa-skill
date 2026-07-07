@@ -2156,7 +2156,7 @@ function showQueue(queue, currentIndex) {
     wrapper.appendChild(el);
 
     // Tap on the item → play from queue
-    attachQueueItemTap(el, () => playFromQueue(item));
+    attachQueueItemTap(el, () => playFromQueue(item, i));
 
     _wireQueueMoreMenu(el, item, i);
 
@@ -2757,7 +2757,7 @@ function escHtml(s) {
     .replace(/'/g, '&#39;');
 }
 
-async function playFromQueue(item) {
+async function playFromQueue(item, queueIndex) {
   const serial = selectedSerial();
   if (!serial) return;
   lastActionAt = Date.now();
@@ -2767,6 +2767,10 @@ async function playFromQueue(item) {
     // Pass along metadata so a song that isn't in the server's queue yet (e.g.
     // a recommendation tile) plays from the supplied title/artist/thumbnail
     // instead of a metadata lookup that can fail ("no longer available").
+    // queue_index disambiguates the same song appearing more than once in the
+    // queue -- without it the server matches by video_id alone and always
+    // jumps to that song's *first* occurrence, even when a later duplicate
+    // was the one actually clicked.
     const data = await api('/alexa/play_queue/', {
       serial,
       video_id: item.video_id,
@@ -2774,6 +2778,7 @@ async function playFromQueue(item) {
       artist: item.artist || '',
       thumbnail: (item.thumbnail && item.thumbnail.url) || item.thumbnail || '',
       duration_ms: item.duration_ms || 0,
+      queue_index: typeof queueIndex === 'number' ? queueIndex : undefined,
     });
     const npInfo = { video_id: item.video_id, title: item.title, artist: item.artist, thumbnail: item.thumbnail };
     showNowPlaying(npInfo);
@@ -3372,7 +3377,7 @@ function updateUrlBar() {
       wrapper.appendChild(el);
       attachQueueItemTap(el, () => {
         closeQueueModal();
-        playFromQueue(item);
+        playFromQueue(item, i);
       });
       _wireQueueMoreMenu(el, item, i);
       _attachQueueSwipeGestures(wrapper, el, i, item, currentIndex);

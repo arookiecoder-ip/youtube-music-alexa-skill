@@ -2995,7 +2995,23 @@ def alexa_play_queue():
 
     cur = _get_now_playing()
     queue = cur.get('queue') or []
-    item = next((q for q in queue if q.get('video_id') == video_id), None)
+    # A song can appear more than once in the queue (added twice, or a repeat
+    # elsewhere in a playlist). Matching by video_id alone always resolves to
+    # the *first* occurrence, so clicking a later duplicate would silently
+    # play/highlight the earlier one instead. When the client knows exactly
+    # which row was clicked, it passes queue_index -- use that (after
+    # confirming it still points at this video_id; the queue can shift
+    # between the client's last snapshot and this request) and only fall back
+    # to the by-id search otherwise.
+    item = None
+    try:
+        queue_index = int(body.get("queue_index"))
+    except (TypeError, ValueError):
+        queue_index = None
+    if queue_index is not None and 0 <= queue_index < len(queue) and queue[queue_index].get('video_id') == video_id:
+        item = queue[queue_index]
+    if item is None:
+        item = next((q for q in queue if q.get('video_id') == video_id), None)
     if not item:
         # The web remote's search results pass their metadata along, so a
         # fresh play doesn't need a blocking ytmusic lookup here.
@@ -3020,7 +3036,13 @@ def alexa_play_queue():
         queue = [item]
         target_idx = 0
     else:
-        target_idx = queue.index(item)
+        # queue.index(item) would resolve to the *first* dict-equal entry,
+        # which is exactly wrong for a repeated song -- reuse queue_index
+        # directly when that's how `item` was actually found above.
+        if queue_index is not None and 0 <= queue_index < len(queue) and queue[queue_index] is item:
+            target_idx = queue_index
+        else:
+            target_idx = queue.index(item)
 
     _ensure_audio_ready_for_play(video_id, wait=False)
     error = _dispatch_play_with_retry(serial, video_id)
