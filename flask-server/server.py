@@ -18,7 +18,7 @@ app = Flask(__name__)
 # extraction itself succeeded. Copy to a writable path once at startup and
 # point every yt-dlp call there instead, so the host file stays untouched.
 _cookies_src = os.environ.get("YTDLP_COOKIES")
-if _cookies_src and os.path.isfile(_cookies_src) and not os.access(_cookies_src, os.W_OK):
+if _cookies_src and os.path.isfile(_cookies_src):
     import shutil
     _cookies_writable = "/tmp/ytdlp_cookies.txt"
     shutil.copyfile(_cookies_src, _cookies_writable)
