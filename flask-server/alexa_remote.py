@@ -188,15 +188,18 @@ class AlexaRemote:
             cookies = await login.load_cookie()
             if cookies:
                 await login.login(cookies=cookies)
+            if (login.status or {}).get("login_successful"):
+                self._login = login
+                self._login_checked_at = time.monotonic()
+                return None
         except Exception:
             logger.exception("restoring session from cookie failed")
-            await login.close()
-            return AlexaRemote.LOGIN_REQUIRED
-        if (login.status or {}).get("login_successful"):
-            self._login = login
-            self._login_checked_at = time.monotonic()
-            return None
-        await login.close()
+        finally:
+            if self._login is not login:
+                try:
+                    await login.close()
+                except Exception:
+                    pass
         return AlexaRemote.LOGIN_REQUIRED
 
     # ---------- proxy login (interactive, browser-driven) ----------
@@ -390,7 +393,11 @@ class AlexaRemote:
             response = await AlexaAPI._static_request(
                 "get", self._login, "/api/devices-v2/device",
                 query={"cached": "false"})
-            devices, _ = await get_json_value(response, "devices", list)
+            try:
+                devices, _ = await get_json_value(response, "devices", list)
+            finally:
+                if hasattr(response, 'close'):
+                    response.close()
             if devices is not None:
                 return devices
         except Exception:
@@ -655,10 +662,14 @@ class AlexaRemote:
                    f"&screenWidth=480")
             raw = await api._get_request(uri)
             # _get_request returns aiohttp ClientResponse — parse the JSON body
-            if isinstance(raw, dict):
-                state = raw
-            elif hasattr(raw, 'json'):
-                state = await raw.json(content_type=None)
+            try:
+                if isinstance(raw, dict):
+                    state = raw
+                elif hasattr(raw, 'json'):
+                    state = await raw.json(content_type=None)
+            finally:
+                if hasattr(raw, 'close'):
+                    raw.close()
         except Exception:
             # Strategy 2: fallback to get_state()
             try:

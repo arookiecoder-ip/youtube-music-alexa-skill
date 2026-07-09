@@ -1272,7 +1272,7 @@ class Supporting:
             if path:
                 return path
             output = os.path.join(AUDIO_CACHE_DIR, f"{video_id}.%(ext)s")
-            clients = ["android_vr", "tv"]
+            clients = ["tv", "android_vr"]
             for client in clients:
                 result = subprocess.run(
                     Supporting.ytdlp_download_command(video_id, output, client=client),
