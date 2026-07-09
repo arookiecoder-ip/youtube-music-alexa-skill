@@ -9,6 +9,8 @@ let lastToastMsg = '';
 let lastToastKind = '';
 let lastActionAt = 0;           // timestamp of last user button press
 let lastActionIntent = null;    // isPlaying value the last user action explicitly set, or null
+let _lastPlaybackError = null;
+let _lastPlayAttemptVideoId = '';
 const GRACE_MS = 8000;          // don't let SSE override state for 8s after a user action
 let _currentVideoId = '';       // video_id of the currently playing track
 let _currentThumbnail = '';     // thumbnail URL of the currently playing track
@@ -64,7 +66,7 @@ function animatePlaySectionLayout(applyState) {
 }
 
 /* ---- toast ---- */
-function toast(msg, kind) {
+function toast(msg, kind, detail, playAttemptVideoId) {
   if (!msg) {
     toastEl.classList.remove('show');
     lastToastMsg = '';
@@ -72,18 +74,54 @@ function toast(msg, kind) {
     return;
   }
   kind = kind || 'info';
-  if (toastEl.classList.contains('show') && msg === lastToastMsg && kind === lastToastKind) return;
+  if (toastEl.classList.contains('show') && msg === lastToastMsg && kind === lastToastKind && !detail) return;
   lastToastMsg = msg;
   lastToastKind = kind;
-  toastEl.textContent = msg;
   toastEl.className = 'toast show ' + kind;
+  // Remove old extra children (close, detail, retry) before re-populating.
+  toastEl.querySelectorAll('.toast-close, .toast-detail, .toast-retry').forEach(function (el) { el.remove(); });
+  toastEl.querySelectorAll('.toast-primary').forEach(function (el) { el.remove(); });
+  // Primary line
+  var primary = document.createElement('span');
+  primary.className = 'toast-primary';
+  primary.textContent = msg;
+  toastEl.appendChild(primary);
+  // Detail line (persistent error)
+  if (detail) {
+    var detailEl = document.createElement('span');
+    detailEl.className = 'toast-detail';
+    detailEl.textContent = detail;
+    toastEl.appendChild(detailEl);
+  }
+  // Close button (persistent error only)
+  if (kind === 'error') {
+    var closeBtn = document.createElement('button');
+    closeBtn.className = 'toast-close';
+    closeBtn.innerHTML = '&times;';
+    closeBtn.onclick = function () { toast('', 'error'); };
+    toastEl.appendChild(closeBtn);
+  }
+  // Retry button (persistent playback error)
+  if (kind === 'error' && playAttemptVideoId) {
+    var retryBtn = document.createElement('button');
+    retryBtn.className = 'toast-retry';
+    retryBtn.textContent = 'Retry';
+    retryBtn.onclick = function () {
+      api('/alexa/play_queue/', { serial: deviceEl.value, video_id: playAttemptVideoId });
+    };
+    toastEl.appendChild(retryBtn);
+  }
   clearTimeout(toastTimer);
-  const delay = kind === 'error' ? 5000 : kind === 'ok' ? 2500 : 3500;
-  toastTimer = setTimeout(() => {
-    toastEl.classList.remove('show');
-    lastToastMsg = '';
-    lastToastKind = '';
-  }, delay);
+  if (detail) {
+    // Persistent error — skip auto-dismiss
+  } else {
+    var delay = kind === 'error' ? 5000 : kind === 'ok' ? 2500 : 3500;
+    toastTimer = setTimeout(function () {
+      toastEl.classList.remove('show');
+      lastToastMsg = '';
+      lastToastKind = '';
+    }, delay);
+  }
 }
 
 /* ---- play/pause state ---- */
@@ -530,10 +568,10 @@ async function api(path, body) {
     // Network-level failure: server unreachable, dropped connection, no internet.
     throw new Error('Can’t reach the server. Check your connection and try again.');
   }
-  if (res.status === 401) { showControls(false); throw new Error('Session expired'); }
+  if (res.status === 401) { toast('Session expired \u2014 please log in again.', 'error'); setTimeout(function () { window.location.href = '/login/'; }, 2000); throw new Error('Session expired'); }
   const json = await res.json().catch(() => ({}));
   if (!res.ok) {
-    // 502/503 mean the Echo (or Amazon) didn't take the command — say so
+    // 502/503 mean the Echo (or Discord) didn't take the command — say so
     // instead of a bare "HTTP 502".
     if (res.status === 502 || res.status === 503) {
       throw new Error(json.error || 'Device is offline or unreachable.');
@@ -665,7 +703,10 @@ function handleNpUpdate(np) {
   if (np.playback_error) {
     // Server gave up retrying a dropped play command (see
     // _watch_playback_confirmation) — stop showing "loading" and tell the user.
-    toast(np.playback_error, 'error');
+    var errType = (typeof np.playback_error === 'object') ? (np.playback_error.type || 'unknown') : 'unknown';
+    var errMsg = (typeof np.playback_error === 'object') ? (np.playback_error.message || '') : np.playback_error;
+    _lastPlaybackError = { type: errType, message: errMsg };
+    toast(errMsg, 'error', 'Error code: ' + errType + ' \u2014 ' + errMsg, _lastPlayAttemptVideoId);
     isPlaying = false;
     lastActionIntent = false;
     syncPlayPause();
@@ -879,6 +920,7 @@ async function playDirectLink(query) {
   try {
     const data = await api('/alexa/play/', { serial, query });
     const npInfo = data.now_playing || { title: query, artist: '', thumbnail: '' };
+    _lastPlayAttemptVideoId = data.video_id || npInfo.video_id;
     showNowPlaying(npInfo);
     // Hold the bar at 0:00 for the new track; it starts ticking only once the
     // server confirms playback (real anchor + duration via SSE/poll). For
@@ -1399,6 +1441,7 @@ async function playResult(item, suppressRadio, forceRadio) {
       // existing one (see alexa_play_queue's force_radio handling).
       force_radio: !!forceRadio,
     });
+    _lastPlayAttemptVideoId = item.video_id;
     showNowPlaying(item);
     progress.resetPending(item.video_id);
     isPlaying = true;
@@ -2824,6 +2867,7 @@ async function playFromQueue(item, queueIndex) {
       duration_ms: item.duration_ms || 0,
       queue_index: typeof queueIndex === 'number' ? queueIndex : undefined,
     });
+    _lastPlayAttemptVideoId = item.video_id;
     const npInfo = { video_id: item.video_id, title: item.title, artist: item.artist, thumbnail: item.thumbnail };
     showNowPlaying(npInfo);
     progress.resetPending(item.video_id);
@@ -2894,7 +2938,7 @@ async function apiDelete(path) {
   } catch (_) {
     throw new Error('Can’t reach the server. Check your connection and try again.');
   }
-  if (res.status === 401) { showControls(false); throw new Error('Session expired'); }
+  if (res.status === 401) { toast('Session expired \u2014 please log in again.', 'error'); setTimeout(function () { window.location.href = '/login/'; }, 2000); throw new Error('Session expired'); }
   const json = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(json.error || ('HTTP ' + res.status));
   return json;
@@ -2908,9 +2952,9 @@ async function apiPatch(path, body) {
       headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body || {}),
     });
   } catch (_) {
-    throw new Error('Can’t reach the server. Check your connection and try again.');
+    throw new Error('Can\u2019t reach the server. Check your connection and try again.');
   }
-  if (res.status === 401) { showControls(false); throw new Error('Session expired'); }
+  if (res.status === 401) { toast('Session expired \u2014 please log in again.', 'error'); setTimeout(function () { window.location.href = '/login/'; }, 2000); throw new Error('Session expired'); }
   const json = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(json.error || ('HTTP ' + res.status));
   return json;

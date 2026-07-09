@@ -640,6 +640,41 @@
   .toast.error { border-left: 3px solid var(--danger); color: var(--danger); }
   .toast.ok { border-left: 3px solid var(--ok); color: var(--ok); }
   .toast.info { border-left: 3px solid var(--accent); color: var(--text); }
+  .toast.error { white-space: normal; }
+  .toast-primary { display: block; }
+  .toast-detail {
+    display: block;
+    font-size: .7rem;
+    opacity: .6;
+    margin-top: 2px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .toast-close {
+    position: absolute;
+    top: 2px;
+    right: 6px;
+    background: none;
+    border: none;
+    color: inherit;
+    font-size: 1.1rem;
+    cursor: pointer;
+    padding: 0;
+    line-height: 1;
+  }
+  .toast-retry {
+    display: inline-block;
+    margin-top: 6px;
+    padding: 2px 10px;
+    font-size: .72rem;
+    border-radius: 12px;
+    border: 1px solid currentColor;
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+  }
+  .toast-retry:hover { opacity: .7; }
 
   /* ---- Queue ---- */
   /* Reveal wrapper: animates in only while a song is playing */
