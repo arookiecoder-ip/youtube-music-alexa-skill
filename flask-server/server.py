@@ -370,6 +370,7 @@ def require_api_key():
         return redirect('/login/')
     return None
 
+_last_prune = [0.0]
 _download_locks = {}
 _locks_guard = threading.Lock()
 # Bounds how many yt-dlp download subprocesses can run at once, independent of
@@ -1240,24 +1241,27 @@ class Supporting:
     def ensure_downloaded(video_id: str):
         if not _valid_video_id(video_id):
             return None
-        Supporting.prune_audio_cache()
+        now = time.time()
+        if now - _last_prune[0] > 60:
+            Supporting.prune_audio_cache()
+            _last_prune[0] = now
         with _download_semaphore:
             with _locks_guard:
                 lock = _download_locks.setdefault(video_id, threading.Lock())
             with lock:
-            path = Supporting.cached_audio_path(video_id)
-            if path:
-                return path
-            output = os.path.join(AUDIO_CACHE_DIR, f"{video_id}.%(ext)s")
-            clients = Supporting.get_ytdlp_clients()
-            for client in clients:
-                result = subprocess.run(
-                    Supporting.ytdlp_download_command(video_id, output, client=client),
-                    capture_output=True, text=True)
-                if result.returncode == 0:
-                    break
-                logger.error("yt-dlp download failed (%s client): %s", client, result.stderr.strip())
-            return Supporting.cached_audio_path(video_id)
+                path = Supporting.cached_audio_path(video_id)
+                if path:
+                    return path
+                output = os.path.join(AUDIO_CACHE_DIR, f"{video_id}.%(ext)s")
+                clients = Supporting.get_ytdlp_clients()
+                for client in clients:
+                    result = subprocess.run(
+                        Supporting.ytdlp_download_command(video_id, output, client=client),
+                        capture_output=True, text=True)
+                    if result.returncode == 0:
+                        break
+                    logger.error("yt-dlp download failed (%s client): %s", client, result.stderr.strip())
+                return Supporting.cached_audio_path(video_id)
 
     async def get_stream(video_id: str):
         if PUBLIC_BASE_URL:

@@ -4,6 +4,8 @@
 try:
     from api_key import API_KEY, DEFAULT_API_URL
 except ImportError:
+    import logging
+    logging.warning("api_key.py not found; API_KEY and DEFAULT_API_URL are empty")
     API_KEY = ""
     DEFAULT_API_URL = ""
 
