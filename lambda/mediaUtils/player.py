@@ -3,7 +3,7 @@ from ask_sdk_model import Response
 from ask_sdk_model.interfaces.audioplayer import PlayDirective, PlayBehavior, AudioItem, Stream, AudioItemMetadata, StopDirective
 from ask_sdk_core.handler_input import HandlerInput
 from ask_sdk_model.services.directive import (SendDirectiveRequest, Header, SpeakDirective)
-import logging, random, urllib3, json, data
+import logging, random, urllib3, json, data, difflib
 from ask_sdk_model.interfaces import display
 from urllib.parse import urlencode
 from xml.sax.saxutils import escape
@@ -203,12 +203,7 @@ def ssml_safe(text) -> str:
 def get_similarity(x: str, y: str):
     if not x or not y:
         return 0.0
-    x, y = x.lower(), y.lower()
-    intersection_cardinality = len(set.intersection(*[set(x), set(y)]))
-    union_cardinality = len(set.union(*[set(x), set(y)]))
-    if union_cardinality == 0:
-        return 0.0
-    return intersection_cardinality/float(union_cardinality)
+    return difflib.SequenceMatcher(None, x.lower(), y.lower()).ratio()
 
 
 class Attributes:
@@ -603,46 +598,19 @@ class Controller:
             playlist = Attributes.get_playlist(handler_input)
             if not playlist:
                 return False
-            last = playlist[-1]
+            seed = playlist[-1]
+            if not seed.video_id:
+                return False
+            radio, error = Api.get_radio(handler_input, seed.video_id)
+            if error or not radio:
+                logger.info(f'extend_radio_queue: no continuation ({error})')
+                return False
             have = {m.video_id for m in playlist if m.video_id}
-
-            # The playlist is usually itself a radio list, so the continuation
-            # seeded from its last track overlaps it heavily — after dedup
-            # nothing may be left, which used to end playback here. Try a few
-            # different seeds before giving up: the last track, then a couple
-            # of random earlier ones (each seeds a different radio thread).
-            seeds = [last]
-            if len(playlist) > 2:
-                seeds += random.sample(playlist[:-1], min(2, len(playlist) - 1))
             new_tracks = []
-            first_radio = None
-            for seed in seeds:
-                if not seed.video_id:
-                    continue
-                radio, error = Api.get_radio(handler_input, seed.video_id)
-                if error or not radio:
-                    logger.info(f'extend_radio_queue: no continuation from {seed.video_id} ({error})')
-                    continue
-                if first_radio is None:
-                    first_radio = radio
-                candidates, seen = [], set()
-                for m in radio:
-                    if m.video_id and m.video_id not in have and m.video_id not in seen:
-                        candidates.append(m)
-                        seen.add(m.video_id)
-                if candidates:
-                    new_tracks = candidates
-                    break
-            if not new_tracks and first_radio:
-                # Every recommendation was already played. Rather than ending
-                # the session, allow repeats — but keep the most recent tracks
-                # out so the same songs don't come straight back to back.
-                recent = {m.video_id for m in playlist[-5:] if m.video_id}
-                seen = set()
-                for m in first_radio:
-                    if m.video_id and m.video_id not in recent and m.video_id not in seen:
-                        new_tracks.append(m)
-                        seen.add(m.video_id)
+            for m in radio:
+                if m.video_id and m.video_id not in have:
+                    new_tracks.append(m)
+                    have.add(m.video_id)
             if not new_tracks:
                 logger.info('extend_radio_queue: nothing new to append')
                 return False

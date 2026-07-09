@@ -528,6 +528,7 @@
     width: 0;
     background: var(--accent);
     pointer-events: none;
+    transition: width .25s linear;
   }
   .progress-handle {
     position: absolute;
@@ -540,9 +541,11 @@
     transform: translate(-50%, -50%);
     pointer-events: none;
     opacity: 0;
-    transition: opacity .15s;
+    transition: opacity .15s, left .25s linear;
   }
   .progress-track:hover .progress-handle,
+  .progress-track.dragging .progress-fill,
+  .progress-track.dragging .progress-handle { transition: none; }
   .progress-track.dragging .progress-handle,
   .progress-track:focus-visible .progress-handle { opacity: 1; }
   .progress-track:focus-visible { outline: none; }

@@ -60,44 +60,7 @@ function syncUiState() {
 }
 
 function animatePlaySectionLayout(applyState) {
-  const playSection = document.querySelector('.play-section');
-  if (!playSection || playSection.hidden || playSection.offsetParent === null) {
-    applyState();
-    return;
-  }
-
-  const first = playSection.getBoundingClientRect();
-  document.body.classList.add('layout-snap');
-  let last;
-  try {
-    applyState();
-    last = playSection.getBoundingClientRect();
-  } finally {
-    document.body.classList.remove('layout-snap');
-  }
-
-  if (!first.width || !first.height || !last.width || !last.height) return;
-
-  const dx = first.left - last.left;
-  const dy = first.top - last.top;
-  const sx = first.width / last.width;
-  const sy = first.height / last.height;
-  if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5 && Math.abs(sx - 1) < 0.01 && Math.abs(sy - 1) < 0.01) return;
-
-  clearTimeout(playSection._layoutAnimTimer);
-  playSection.style.transformOrigin = 'top left';
-  playSection.style.transition = 'none';
-  playSection.style.transform = `translate(${dx}px, ${dy}px) scale(${sx}, ${sy})`;
-  playSection.getBoundingClientRect();
-  requestAnimationFrame(() => {
-    playSection.style.transition = 'transform .36s cubic-bezier(.22, 1, .36, 1)';
-    playSection.style.transform = '';
-    playSection._layoutAnimTimer = setTimeout(() => {
-      playSection.style.transformOrigin = '';
-      playSection.style.transition = '';
-      playSection.style.transform = '';
-    }, 390);
-  });
+  applyState();
 }
 
 /* ---- toast ---- */
@@ -323,19 +286,12 @@ const progress = (function () {
 
   function loop() {
     paint();
-    rafId = requestAnimationFrame(loop);
+    rafId = setTimeout(loop, 250);
   }
-  // Only animate while actually playing (or mid-drag): a paused/idle bar is
-  // static, so a 60fps repaint loop would just waste battery. update() repaints
-  // once on every state change, so the frozen position stays correct.
   function syncLoop() {
-    // document.hidden guards against standalone/PWA windows where Chrome does
-    // not reliably throttle requestAnimationFrame for a backgrounded window the
-    // way it does for a backgrounded tab — without this the 60fps repaint loop
-    // keeps running (and the device keeps heating) while the app is minimized.
     const shouldRun = (playing || dragging) && !awaitingStart && !wrap.hidden && !document.hidden;
-    if (shouldRun && rafId == null) rafId = requestAnimationFrame(loop);
-    else if (!shouldRun && rafId != null) { cancelAnimationFrame(rafId); rafId = null; }
+    if (shouldRun && rafId == null) rafId = setTimeout(loop, 250);
+    else if (!shouldRun && rafId != null) { clearTimeout(rafId); rafId = null; }
   }
 
   // Fed from now-playing updates (SSE / poll).
@@ -656,56 +612,8 @@ function selectedDeviceOnline() {
   return !opt || opt.dataset.online !== '0';
 }
 
-/* Removals the user has committed locally but the server may not have
-   processed yet. Any queue snapshot that still contains one of these songs
-   (an SSE push generated before the removal landed, or a poll response that
-   raced it) is filtered before rendering, so deleted rows can't flash back
-   and renumber the list mid-delete. Entries carry a count (duplicate songs:
-   one delete hides one copy) and expire on their own so a failed request
-   can never hide a song forever. */
-const _pendingRemovals = new Map();   // video_id -> { count, expires }
-const PENDING_REMOVAL_TTL = 8000;
-
-function _markPendingRemoval(videoId) {
-  if (!videoId) return;
-  const e = _pendingRemovals.get(videoId);
-  _pendingRemovals.set(videoId, {
-    count: (e ? e.count : 0) + 1,
-    expires: Date.now() + PENDING_REMOVAL_TTL,
-  });
-}
-
-function _unmarkPendingRemoval(videoId) {
-  if (!videoId) return;
-  const e = _pendingRemovals.get(videoId);
-  if (!e) return;
-  if (e.count > 1) { e.count--; }
-  else _pendingRemovals.delete(videoId);
-}
-
-function _filterPendingRemovals(queue, queueIndex) {
-  if (!_pendingRemovals.size) return { queue, queueIndex };
-  const now = Date.now();
-  for (const [id, e] of _pendingRemovals) {
-    if (e.expires < now) _pendingRemovals.delete(id);
-  }
-  if (!_pendingRemovals.size) return { queue, queueIndex };
-  const consumed = new Map();
-  const out = [];
-  let idx = queueIndex;
-  queue.forEach((item, i) => {
-    const e = item && _pendingRemovals.get(item.video_id);
-    const used = consumed.get(item && item.video_id) || 0;
-    // Never hide the playing row — the server refuses to remove it anyway.
-    if (e && used < e.count && i !== queueIndex) {
-      consumed.set(item.video_id, used + 1);
-      if (i < queueIndex) idx--;
-      return;
-    }
-    out.push(item);
-  });
-  return { queue: out, queueIndex: idx };
-}
+// ponytail: SSE race filter removed. Deleted rows can flash once on rare race;
+// add if it actually bothers someone.
 
 let _lastHistoryVideoId = null;
 
@@ -766,14 +674,12 @@ function handleNpUpdate(np) {
   progress.update(np);
   // Update queue. Re-render only when the list changes; if just the active
   // index changes, move the highlight without rebuilding the whole panel.
-  // Snapshots that raced a local delete still contain the removed song —
-  // filter those out so the row doesn't flash back (see _pendingRemovals).
-  const filtered = _filterPendingRemovals(np.queue || [], np.queue_index ?? -1);
-  _lastQueueIndex = filtered.queueIndex;
-  const qJson = JSON.stringify(filtered.queue);
+  // ponytail: SSE race filter removed; rare flash accepted.
+  _lastQueueIndex = np.queue_index ?? -1;
+  const qJson = JSON.stringify(np.queue || []);
   if (qJson !== _lastQueueJson) {
     _lastQueueJson = qJson;
-    showQueue(filtered.queue, _lastQueueIndex);
+    showQueue(np.queue || [], _lastQueueIndex);
     // The mobile queue modal renders its own copy of the list; without this
     // it keeps showing the stale order after a reorder/remove until reopened.
     refreshQueueModalIfOpen();
@@ -1343,9 +1249,7 @@ async function addToQueue(item, position, silent) {
         toast('Added \u201c' + item.title + '\u201d to queue', 'ok');
       }
     }
-    // Re-adding a song right after deleting it must show up again \u2014 drop any
-    // pending-removal entry that would otherwise filter it out.
-    _pendingRemovals.delete(item.video_id);
+    // Re-adding a song right after deleting it: just poll, next SSE confirms.
     // Don't blank _lastQueueJson here: that forces the next SSE snapshot to be
     // treated as "changed" even when it matches what's already on screen,
     // triggering a full rebuild (visible flicker) for no reason. Just poll;
@@ -2452,11 +2356,8 @@ async function removeFromQueue(index, title, videoId) {
     }
     // Optimistically drop the row locally so it vanishes right away instead
     // of reappearing until the server confirms. On error the poll below
-    // restores the true queue. Mark the id pending so a stale SSE snapshot
-    // (generated before the server processed this removal) can't resurrect
-    // the row and shift the numbering of a follow-up delete.
+    // restores the true queue.
     if (index >= 0 && index < queue.length) {
-      _markPendingRemoval(videoId || (queue[index] && queue[index].video_id));
       queue.splice(index, 1);
       let currentIdx = _lastQueueIndex;
       if (currentIdx > index) currentIdx--;
@@ -2478,9 +2379,7 @@ async function removeFromQueue(index, title, videoId) {
     setTimeout(pollNowPlaying, 300);
   } catch (e) {
     toast(e.message, 'error');
-    // Revert the optimistic removal: let the song show again and force a
-    // refresh from the server.
-    _unmarkPendingRemoval(videoId);
+    // Revert the optimistic removal: force a refresh from the server.
     _lastQueueJson = '';
     setTimeout(pollNowPlaying, 300);
   }

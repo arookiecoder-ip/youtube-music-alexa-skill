@@ -799,14 +799,6 @@ def _valid_video_id(video_id) -> bool:
     # TypeError on a non-string (a number here must fail the check, not 500).
     return isinstance(video_id, str) and bool(_VIDEO_ID_RE.match(video_id))
 
-_NUM_ONES = {'zero': 0, 'one': 1, 'two': 2, 'three': 3, 'four': 4, 'five': 5,
-             'six': 6, 'seven': 7, 'eight': 8, 'nine': 9, 'ten': 10,
-             'eleven': 11, 'twelve': 12, 'thirteen': 13, 'fourteen': 14,
-             'fifteen': 15, 'sixteen': 16, 'seventeen': 17, 'eighteen': 18,
-             'nineteen': 19}
-_NUM_TENS = {'twenty': 20, 'thirty': 30, 'forty': 40, 'fifty': 50,
-             'sixty': 60, 'seventy': 70, 'eighty': 80, 'ninety': 90}
-
 # words marking an alternate rendition; results carrying one get pushed down
 # the ranking — but only when the user asked for a plain song. If the request
 # itself names any rendition ("mashup", "cover"...), no penalty applies, since
@@ -847,53 +839,8 @@ class Supporting:
         return seconds * 1000
 
     @staticmethod
-    def digitize_numbers(text):
-        # Alexa transcribes numbers as words ("twenty twenty five"); YouTube
-        # titles use digits ("2025"). Converts number-word runs, merging
-        # year-style pairs (twenty + twenty five -> 2025, nineteen + ninety
-        # nine -> 1999, two thousand + five -> 2005).
-        out, nums = [], []
-
-        def flush():
-            merged, j = [], 0
-            while j < len(nums):
-                v, nxt = nums[j], nums[j + 1] if j + 1 < len(nums) else None
-                if nxt is not None and 10 <= v <= 99 and 0 <= nxt <= 99:
-                    merged.append(v * 100 + nxt); j += 2
-                elif nxt is not None and v >= 1000 and v % 1000 == 0 and nxt < 1000:
-                    merged.append(v + nxt); j += 2
-                else:
-                    merged.append(v); j += 1
-            out.extend(str(m) for m in merged)
-            nums.clear()
-
-        prev_tens = False
-        for word in re.split(r'[\s-]+', text):
-            lw = word.lower()
-            if lw in _NUM_TENS:
-                nums.append(_NUM_TENS[lw]); prev_tens = True
-            elif lw in _NUM_ONES:
-                if prev_tens and _NUM_ONES[lw] < 10:
-                    nums[-1] += _NUM_ONES[lw]
-                else:
-                    nums.append(_NUM_ONES[lw])
-                prev_tens = False
-            elif lw == 'hundred' and nums:
-                nums[-1] *= 100; prev_tens = False
-            elif lw == 'thousand' and nums:
-                nums[-1] *= 1000; prev_tens = False
-            else:
-                flush(); out.append(word); prev_tens = False
-        flush()
-        return ' '.join(out)
-
-    @staticmethod
     def query_variants(text):
-        variants = [text]
-        digitized = Supporting.digitize_numbers(text)
-        if digitized.lower() != text.lower():
-            variants.append(digitized)
-        return variants
+        return [text]
 
     @staticmethod
     def tokens(text):
