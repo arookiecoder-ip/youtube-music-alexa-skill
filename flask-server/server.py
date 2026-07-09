@@ -445,6 +445,7 @@ def _np_snapshot(serial=None):
         volume = s.get('volume')
     playback_error = s.get('playback_error')
     s['playback_error'] = None  # one-shot: clear once surfaced
+    logger.info("_np_snapshot: queue length %d", len(s.get('queue', [])))
     return {
         'playing': s['playing'], 'title': s['title'],
         'artist': s['artist'], 'thumbnail': s['thumbnail'],
@@ -1108,6 +1109,7 @@ class Supporting:
             for track in playlist_raw
             if _valid_video_id(track.get("videoId"))
         ]
+        logger.info("get_playlist_tracks: playlist %s returned %d tracks", playlist_id, len(playlist))
         return playlist or None
 
     @staticmethod

@@ -1,3 +1,4 @@
+
 .ask
 .vscode
 *.ipynb
@@ -8,3 +9,4 @@ HANDOFF.md
 .code-review-graph/
 .storage*.db
 lambda.zip
+.planning/
