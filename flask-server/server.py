@@ -1159,8 +1159,8 @@ class Supporting:
 
     def get_ytdlp_clients():
         if os.environ.get("YTDLP_COOKIES"):
-            return ["web", "tv", "default"]
-        return ["ios", "tv", "web", "default"]
+            return ["default", "tv", "web"]
+        return ["default", "ios", "tv", "web"]
 
     def resolve_direct_url(video_id: str):
         if not _valid_video_id(video_id):
