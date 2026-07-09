@@ -1160,12 +1160,12 @@ class Supporting:
     def resolve_direct_url(video_id: str):
         if not _valid_video_id(video_id):
             return None
-        # web_music client works most reliably in 2025-2026.
+        # android_vr requires no GVS PO token; falls back to tv if unavailable.
         # ejs:github lets yt-dlp fetch its JS challenge solver (needed for signature decryption)
         # "--" ends option parsing so an id can never be read as a flag.
         command = ["yt-dlp", "--get-url", "--no-playlist", "--quiet", "-f", "ba",
                    "--remote-components", "ejs:github",
-                   "--extractor-args", "youtube:player_client=web_music"]
+                   "--extractor-args", "youtube:player_client=android_vr"]
         po_token = os.environ.get("YTDLP_PO_TOKEN")
         if po_token:
             command += ["--extractor-args", f"youtube:po_token=mweb.gvs+{po_token}"]
@@ -1190,7 +1190,7 @@ class Supporting:
         fmt = "%(title)s\t%(uploader)s\t%(thumbnail)s\t%(duration)s"
         command = ["yt-dlp", "--no-playlist", "--quiet", "--no-warnings",
                    "--remote-components", "ejs:github",
-                   "--extractor-args", "youtube:player_client=web_music",
+                   "--extractor-args", "youtube:player_client=android_vr",
                    "--print", fmt]
         po_token = os.environ.get("YTDLP_PO_TOKEN")
         if po_token:
@@ -1240,18 +1240,18 @@ class Supporting:
                 pass
 
     def ytdlp_download_command(video_id: str, output, client: str = "tv"):
-        # web_music is the most reliable client in 2025-2026; tv/mweb are
-        # increasingly blocked or require PO tokens. YouTube's ad-skip forced
-        # sleep ("Sleeping N seconds as required by the site") fires on any
-        # monetized video regardless of client and is load-bearing: the
-        # googlevideo URL 403s if fetched before that timestamp.
+        # android_vr requires NO GVS PO token (per yt-dlp docs) and works well
+        # headless in Docker; it's the recommended default for server-side
+        # downloads. "Made for kids" videos aren't available on android_vr, but
+        # that's acceptable for a music skill. Falls back to tv if android_vr
+        # fails for a particular video.
         command = ["yt-dlp", "--no-playlist", "--quiet",
                    "-f", "140/bestaudio[ext=m4a]/bestaudio",
-                   "--remote-components", "ejs:github",
-                   "--extractor-args", f"youtube:player_client={client}"]
-        po_token = os.environ.get("YTDLP_PO_TOKEN")
-        if po_token:
+                   "--remote-components", "ejs:github"]
+        if po_token := os.environ.get("YTDLP_PO_TOKEN"):
             command += ["--extractor-args", f"youtube:po_token=mweb.gvs+{po_token}"]
+        else:
+            command += ["--extractor-args", "youtube:player_client=android_vr"]
         cookies = os.environ.get("YTDLP_COOKIES")
         if cookies:
             command += ["--cookies", cookies]
@@ -1261,9 +1261,6 @@ class Supporting:
     def ensure_downloaded(video_id: str):
         if not _valid_video_id(video_id):
             return None
-        # Direct googlevideo fetches 403 from this IP even with cookies + PO token,
-        # but yt-dlp's own download path (web_music client + PO token) works —
-        # so download server-side and serve the file.
         Supporting.prune_audio_cache()
         with _locks_guard:
             lock = _download_locks.setdefault(video_id, threading.Lock())
@@ -1272,19 +1269,14 @@ class Supporting:
             if path:
                 return path
             output = os.path.join(AUDIO_CACHE_DIR, f"{video_id}.%(ext)s")
-            with _download_semaphore:
+            clients = ["android_vr", "tv"]
+            for client in clients:
                 result = subprocess.run(
-                    Supporting.ytdlp_download_command(video_id, output, client="web_music"),
+                    Supporting.ytdlp_download_command(video_id, output, client=client),
                     capture_output=True, text=True)
-                if result.returncode != 0:
-                    # web_music occasionally can't extract (e.g. age-restricted)
-                    # — retry once with mweb + PO token.
-                    logger.error("yt-dlp download failed (web_music client): %s", result.stderr.strip())
-                    result = subprocess.run(
-                        Supporting.ytdlp_download_command(video_id, output, client="mweb"),
-                        capture_output=True, text=True)
-                    if result.returncode != 0:
-                        logger.error("yt-dlp download failed (mweb client): %s", result.stderr.strip())
+                if result.returncode == 0:
+                    break
+                logger.error("yt-dlp download failed (%s client): %s", client, result.stderr.strip())
             return Supporting.cached_audio_path(video_id)
 
     async def get_stream(video_id: str):
