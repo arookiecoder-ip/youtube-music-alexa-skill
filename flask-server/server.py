@@ -3564,14 +3564,16 @@ def _backfill_track_thumbnail(pl_id, track_uuid, video_id):
 # a brand new "like". Remember the original added_at briefly so a quick
 # undo-relike restores the song to its old spot instead of the newest one.
 _recent_unlike_added_at = {}   # video_id -> (added_at, expires_at)
+_recent_unlike_lock = threading.Lock()
 _RECENT_UNLIKE_TTL = 5 * 60
 
 def _pop_recent_unlike_added_at(video_id):
-    now = time.time()
-    for vid in [v for v, (_, exp) in _recent_unlike_added_at.items() if exp < now]:
-        del _recent_unlike_added_at[vid]
-    entry = _recent_unlike_added_at.pop(video_id, None)
-    return entry[0] if entry else None
+    with _recent_unlike_lock:
+        now = time.time()
+        for vid in [v for v, (_, exp) in list(_recent_unlike_added_at.items()) if exp < now]:
+            del _recent_unlike_added_at[vid]
+        entry = _recent_unlike_added_at.pop(video_id, None)
+        return entry[0] if entry else None
 
 
 @app.route("/api/playlists/<pl_id>/tracks/", methods=["POST"])
@@ -3641,7 +3643,8 @@ def api_remove_track(pl_id, track_uuid):
                 "SELECT added_at FROM playlist_tracks WHERE playlist_id = 'liked' AND video_id = ?", (track_uuid,)
             ).fetchone()
             if row:
-                _recent_unlike_added_at[track_uuid] = (row['added_at'], time.time() + _RECENT_UNLIKE_TTL)
+                with _recent_unlike_lock:
+                    _recent_unlike_added_at[track_uuid] = (row['added_at'], time.time() + _RECENT_UNLIKE_TTL)
             conn.execute("DELETE FROM playlist_tracks WHERE playlist_id = 'liked' AND video_id = ?", (track_uuid,))
             conn.execute('UPDATE playlists SET updated_at = ? WHERE id = ?', (time.time(), pl_id))
             conn.commit()
