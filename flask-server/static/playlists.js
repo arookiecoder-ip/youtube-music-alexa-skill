@@ -168,6 +168,7 @@ function openPlaylistDetailModal(pl_id) {
   playAllBtn.hidden = !pl.tracks || pl.tracks.length === 0;
   const shuffleBtn = document.getElementById('playlist-detail-shuffle-btn');
   shuffleBtn.hidden = !pl.tracks || pl.tracks.length === 0;
+  document.getElementById('playlist-detail-radio-btn').hidden = !pl.tracks || pl.tracks.length === 0;
 
   const body = document.getElementById('playlist-detail-body');
   // Rebuilding the row markup below orphans any per-track menu still
@@ -519,6 +520,19 @@ document.getElementById('playlist-detail-play-all-btn').addEventListener('click'
 
 document.getElementById('playlist-detail-shuffle-btn').addEventListener('click', (e) => {
   if (_currentPlaylistDetailId) playPlaylist(_currentPlaylistDetailId, e.currentTarget, true);
+});
+
+document.getElementById('playlist-detail-radio-btn').addEventListener('click', (e) => {
+  const pl_id = _currentPlaylistDetailId;
+  const pl = _playlistsData.playlists[pl_id];
+  if (!pl || !pl.tracks || pl.tracks.length === 0) return;
+  const shuffled = [...pl.tracks].sort(() => Math.random() - 0.5);
+  const seeds = shuffled.slice(0, 5);
+  closePlaylistDetailModal();
+  document.getElementById('playlists-modal-overlay').classList.remove('open');
+  if (seeds.length) {
+    playResult({ video_id: seeds[0].video_id, title: seeds[0].title, artist: seeds[0].artist, thumbnail: seeds[0].thumbnail, duration_ms: seeds[0].duration_ms }, false, true);
+  }
 });
 
 async function toggleLike(item, btnElement) {

@@ -1709,6 +1709,26 @@
   }
   .history-item:hover { background: #1a1a1a; }
   .history-item + .history-item { border-top: 1px solid var(--border); }
+  .history-date-header {
+    padding: 10px 20px 4px;
+    font-size: .7rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .12em;
+    color: var(--muted);
+  }
+  .play-count-badge {
+    display: inline-block;
+    margin-left: 6px;
+    padding: 0 5px;
+    font-size: .65rem;
+    font-weight: 700;
+    line-height: 1.5;
+    border-radius: 8px;
+    background: var(--accent);
+    color: #fff;
+    vertical-align: middle;
+  }
   /* Playlist tracks wrap each .history-item in a .result-swipe-wrapper (for
      the swipe-to-queue gesture), so adjacent rows are no longer direct
      .history-item siblings and the rule above stops matching between them.

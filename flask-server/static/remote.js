@@ -2884,8 +2884,9 @@ async function playFromQueue(item, queueIndex) {
       title: item.title || '',
       artist: item.artist || '',
       thumbnail_url: (item.thumbnail && item.thumbnail.url) || item.thumbnail || '',
+      play_count: 1,
     };
-    _historyCache = [optimisticEntry, ..._historyCache.filter(e => e.video_id !== item.video_id)].slice(0, 20);
+    _historyCache = [optimisticEntry, ..._historyCache.filter(e => e.video_id !== item.video_id)].slice(0, 100);
     syncHistoryTriggerVisibility();
     // If the modal is open, prepend the new row with a slide-in animation.
     const histOverlay = document.getElementById('history-modal-overlay');
@@ -2964,7 +2965,7 @@ async function apiPatch(path, body) {
 async function loadHistory() {
   if (!_loggedIn) return;
   try {
-    const history = await api('/history/?limit=20');
+    const history = await api('/history/?limit=100');
     const fresh = Array.isArray(history) ? history.filter(e => e && e.video_id) : [];
     const prevTopId = _historyCache.length ? _historyCache[0].video_id : null;
     const newTopId  = fresh.length ? fresh[0].video_id : null;
@@ -2997,6 +2998,20 @@ async function loadHistory() {
   }
 }
 
+function _historyDateBucket(now, playedAt) {
+  const today = new Date(now * 1000);
+  today.setHours(0, 0, 0, 0);
+  const todaySec = today.getTime() / 1000;
+  const yesterdayStart = todaySec - 86400;
+  const dayOfWeek = today.getDay();
+  const mondayOffset = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
+  const weekStart = todaySec - mondayOffset * 86400;
+  if (playedAt >= todaySec) return 'Today';
+  if (playedAt >= yesterdayStart) return 'Yesterday';
+  if (playedAt >= weekStart) return 'This Week';
+  return 'Older';
+}
+
 function syncHistoryTriggerVisibility() {
   const show = _loggedIn && _historyCache.length > 0;
   document.getElementById('history-modal-btn').hidden = !show;
@@ -3018,7 +3033,7 @@ function _buildHistoryRow(entry) {
     ${thumbHtml}
     <div class="queue-info">
       <div class="queue-title">${escHtml(entry.title || 'Unknown title')}</div>
-      <div class="queue-artist">${escHtml(entry.artist)}</div>
+      <div class="queue-artist">${escHtml(entry.artist)}${entry.play_count > 1 ? '<span class="play-count-badge">\u00d7' + entry.play_count + '</span>' : ''}</div>
     </div>
   `;
 
@@ -3040,15 +3055,28 @@ function renderHistoryModalList(history) {
   const body = document.getElementById('history-modal-body');
   const clearBtn = document.getElementById('clear-history-btn');
   const items = Array.isArray(history) ? history.filter(e => e && e.video_id) : [];
-
   clearBtn.hidden = items.length === 0;
   if (items.length === 0) {
     body.innerHTML = '<div class="history-modal-empty">No listening history yet</div>';
     return;
   }
+  const now = Date.now() / 1000;
+  const buckets = { 'Today': [], 'Yesterday': [], 'This Week': [], 'Older': [] };
+  for (const entry of items) {
+    const bucket = _historyDateBucket(now, entry.played_at);
+    buckets[bucket].push(entry);
+  }
   const list = document.createElement('div');
   list.className = 'history-list';
-  for (const entry of items) list.appendChild(_buildHistoryRow(entry));
+  for (const label of ['Today', 'Yesterday', 'This Week', 'Older']) {
+    const group = buckets[label];
+    if (!group.length) continue;
+    const header = document.createElement('div');
+    header.className = 'history-date-header';
+    header.textContent = label;
+    list.appendChild(header);
+    for (const entry of group) list.appendChild(_buildHistoryRow(entry));
+  }
   body.innerHTML = '';
   body.appendChild(list);
 }

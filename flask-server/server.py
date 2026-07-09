@@ -212,6 +212,28 @@ def init_db():
         # Ensure default 'liked' playlist exists
         conn.execute("INSERT OR IGNORE INTO playlists (id, name, updated_at) VALUES ('liked', 'Liked Songs', ?)", (time.time(),))
         
+        # Migrate history table from video_id PK to auto-increment id PK
+        try:
+            cur = conn.execute("PRAGMA table_info(history)")
+            cols = [row[1] for row in cur.fetchall()]
+            if 'id' in cols:
+                pass
+            else:
+                conn.execute('''CREATE TABLE IF NOT EXISTS history_new (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    video_id TEXT NOT NULL,
+                    title TEXT,
+                    artist TEXT,
+                    thumbnail_url TEXT,
+                    played_at REAL
+                )''')
+                conn.execute('''INSERT INTO history_new (video_id, title, artist, thumbnail_url, played_at)
+                    SELECT video_id, title, artist, thumbnail_url, played_at FROM history''')
+                conn.execute('DROP TABLE history')
+                conn.execute('ALTER TABLE history_new RENAME TO history')
+        except Exception:
+            logger.exception("history schema migration failed")
+
         # Migrations for existing databases
         try:
             conn.execute("ALTER TABLE playlists ADD COLUMN source_url TEXT")
@@ -244,7 +266,7 @@ def _ensure_db():
 
 def _load_history():
     with get_db() as conn:
-        rows = conn.execute('SELECT * FROM history ORDER BY played_at DESC LIMIT ?', (HISTORY_MAX,)).fetchall()
+        rows = conn.execute('SELECT video_id, title, artist, thumbnail_url, MAX(played_at) AS played_at, COUNT(*) AS play_count FROM (SELECT *, ROW_NUMBER() OVER (ORDER BY played_at DESC) - ROW_NUMBER() OVER (PARTITION BY video_id ORDER BY played_at DESC) AS grp FROM history) AS t GROUP BY video_id, grp ORDER BY MAX(played_at) DESC LIMIT ?', (HISTORY_MAX,)).fetchall()
         return [dict(r) for r in rows]
 
 def _record_listen(video_id, title, artist, thumbnail_url):
@@ -252,13 +274,13 @@ def _record_listen(video_id, title, artist, thumbnail_url):
         return
     with get_db() as conn:
         conn.execute('''
-            INSERT OR REPLACE INTO history (video_id, title, artist, thumbnail_url, played_at)
+            INSERT INTO history (video_id, title, artist, thumbnail_url, played_at)
             VALUES (?, ?, ?, ?, ?)
         ''', (video_id, title or '', artist or '', thumbnail_url or '', time.time()))
         
         conn.execute('''
-            DELETE FROM history WHERE video_id NOT IN (
-                SELECT video_id FROM history ORDER BY played_at DESC LIMIT ?
+            DELETE FROM history WHERE id NOT IN (
+                SELECT id FROM history ORDER BY played_at DESC LIMIT ?
             )
         ''', (HISTORY_MAX,))
         conn.commit()
