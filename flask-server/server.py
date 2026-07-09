@@ -230,8 +230,17 @@ def init_db():
         
         # (Data migration script removed per user request)
 
-# Initialize on import
-init_db()
+
+_db_initialized = False
+
+
+def _ensure_db():
+    """Lazy DB init on first request instead of at import time."""
+    global _db_initialized
+    if not _db_initialized:
+        init_db()
+        _db_initialized = True
+
 
 def _load_history():
     with get_db() as conn:
@@ -333,6 +342,7 @@ def _logged_in():
 
 @app.before_request
 def require_api_key():
+    _ensure_db()
     path = request.path.rstrip('/') or '/'
     if path in _PUBLIC_PATHS or any(request.path.startswith(p) for p in _PUBLIC_PREFIXES):
         return None
