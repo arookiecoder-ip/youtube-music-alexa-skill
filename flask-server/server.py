@@ -1226,9 +1226,10 @@ class Supporting:
         if not _valid_video_id(video_id):
             return None
         Supporting.prune_audio_cache()
-        with _locks_guard:
-            lock = _download_locks.setdefault(video_id, threading.Lock())
-        with lock:
+        with _download_semaphore:
+            with _locks_guard:
+                lock = _download_locks.setdefault(video_id, threading.Lock())
+            with lock:
             path = Supporting.cached_audio_path(video_id)
             if path:
                 return path
