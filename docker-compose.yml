@@ -7,6 +7,7 @@ services:
     environment:
       # Listen history and playlists must outlive the container; /tmp is ephemeral.
       - DB_FILE=/data/data.db
+      - YTDLP_COOKIES=/app/cookies.txt
     volumes:
       - ~/cookies.txt:/app/cookies.txt:ro
       - ytmusic_cache:/tmp/ytm_audio_cache
