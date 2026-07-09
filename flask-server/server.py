@@ -1160,11 +1160,19 @@ class Supporting:
     def resolve_direct_url(video_id: str):
         if not _valid_video_id(video_id):
             return None
-        # ios client requires a PO token since 2025; default clients (android_vr/tv) still work
+        # web_music client works most reliably in 2025-2026.
         # ejs:github lets yt-dlp fetch its JS challenge solver (needed for signature decryption)
         # "--" ends option parsing so an id can never be read as a flag.
         command = ["yt-dlp", "--get-url", "--no-playlist", "--quiet", "-f", "ba",
-                   "--remote-components", "ejs:github", "--", video_id]
+                   "--remote-components", "ejs:github",
+                   "--extractor-args", "youtube:player_client=web_music"]
+        po_token = os.environ.get("YTDLP_PO_TOKEN")
+        if po_token:
+            command += ["--extractor-args", f"youtube:po_token=mweb.gvs+{po_token}"]
+        cookies = os.environ.get("YTDLP_COOKIES")
+        if cookies:
+            command += ["--cookies", cookies]
+        command += ["--", video_id]
         result = subprocess.run(command, capture_output=True, text=True)
         if result.returncode != 0:
             logger.error("yt-dlp get-url failed: %s", result.stderr.strip())
@@ -1182,7 +1190,11 @@ class Supporting:
         fmt = "%(title)s\t%(uploader)s\t%(thumbnail)s\t%(duration)s"
         command = ["yt-dlp", "--no-playlist", "--quiet", "--no-warnings",
                    "--remote-components", "ejs:github",
+                   "--extractor-args", "youtube:player_client=web_music",
                    "--print", fmt]
+        po_token = os.environ.get("YTDLP_PO_TOKEN")
+        if po_token:
+            command += ["--extractor-args", f"youtube:po_token=mweb.gvs+{po_token}"]
         cookies = os.environ.get("YTDLP_COOKIES")
         if cookies:
             command += ["--cookies", cookies]
@@ -1228,17 +1240,18 @@ class Supporting:
                 pass
 
     def ytdlp_download_command(video_id: str, output, client: str = "tv"):
-        # tv has slightly less client-config/JS-challenge overhead than mweb
-        # (~1s). YouTube's ad-skip forced sleep ("Sleeping N seconds as
-        # required by the site") fires on any monetized video regardless of
-        # client (confirmed: mweb, tv, and web_music all hit it) and is NOT
-        # just yt-dlp being polite — it's load-bearing: the googlevideo URL
-        # 403s if fetched before that timestamp, confirmed by forcibly
-        # skipping the wait, so it's not something to bypass.
+        # web_music is the most reliable client in 2025-2026; tv/mweb are
+        # increasingly blocked or require PO tokens. YouTube's ad-skip forced
+        # sleep ("Sleeping N seconds as required by the site") fires on any
+        # monetized video regardless of client and is load-bearing: the
+        # googlevideo URL 403s if fetched before that timestamp.
         command = ["yt-dlp", "--no-playlist", "--quiet",
                    "-f", "140/bestaudio[ext=m4a]/bestaudio",
                    "--remote-components", "ejs:github",
                    "--extractor-args", f"youtube:player_client={client}"]
+        po_token = os.environ.get("YTDLP_PO_TOKEN")
+        if po_token:
+            command += ["--extractor-args", f"youtube:po_token=mweb.gvs+{po_token}"]
         cookies = os.environ.get("YTDLP_COOKIES")
         if cookies:
             command += ["--cookies", cookies]
@@ -1249,7 +1262,7 @@ class Supporting:
         if not _valid_video_id(video_id):
             return None
         # Direct googlevideo fetches 403 from this IP even with cookies + PO token,
-        # but yt-dlp's own download path (tv/mweb client + bgutil GVS token) works —
+        # but yt-dlp's own download path (web_music client + PO token) works —
         # so download server-side and serve the file.
         Supporting.prune_audio_cache()
         with _locks_guard:
@@ -1261,13 +1274,12 @@ class Supporting:
             output = os.path.join(AUDIO_CACHE_DIR, f"{video_id}.%(ext)s")
             with _download_semaphore:
                 result = subprocess.run(
-                    Supporting.ytdlp_download_command(video_id, output, client="tv"),
+                    Supporting.ytdlp_download_command(video_id, output, client="web_music"),
                     capture_output=True, text=True)
                 if result.returncode != 0:
-                    # tv occasionally can't extract a given video (e.g. some
-                    # age-restricted content) — retry once with mweb, the
-                    # previously proven-working client, before giving up.
-                    logger.error("yt-dlp download failed (tv client): %s", result.stderr.strip())
+                    # web_music occasionally can't extract (e.g. age-restricted)
+                    # — retry once with mweb + PO token.
+                    logger.error("yt-dlp download failed (web_music client): %s", result.stderr.strip())
                     result = subprocess.run(
                         Supporting.ytdlp_download_command(video_id, output, client="mweb"),
                         capture_output=True, text=True)
@@ -2464,13 +2476,21 @@ CHARTS_COUNTRY = os.environ.get("CHARTS_COUNTRY", "IN")
 
 # Well-known, durable YouTube Music videos used purely as radio *seeds* for the
 # cold-start fallback (only reached when there's no history AND charts failed).
-# Indian tracks so the fallback matches the expected audience rather than a
-# generic Western radio. get_radio_queue() (get_watch_playlist) is the same
+# Diverse mix of timeless global hits so at least some seeds work regardless of
+# region changes or takedowns. get_radio_queue() (get_watch_playlist) is the same
 # stable call used for real playback everywhere else in this app.
-#   - 1-YZS_TQhBc  Kesariya (Brahmastra)
-#   - RQf6ozD6EhE  Apna Bana Le (Bhediya)
-#   - lFhKQjxIsGw  Chaleya (Jawan)
-_FALLBACK_SEED_IDS = ['1-YZS_TQhBc', 'RQf6ozD6EhE', 'lFhKQjxIsGw']
+#   - dQw4w9WgXcQ  Rick Astley - Never Gonna Give You Up (global evergreen)
+#   - kXYiU_JCYtU  Nirvana - Smells Like Teen Spirit
+#   - fJ9rUzIMcZQ  Queen - Bohemian Rhapsody
+#   - OPf0YbXqDm0  Mark Ronson - Uptown Funk
+#   - 60ItHLz5WEA  Adele - Rolling in the Deep
+#   - JGwWNGJdvx8  Ed Sheeran - Shape of You
+#   - rhwO7C6jea8  Tones and I - Dance Monkey (global #1 in 56 countries)
+_FALLBACK_SEED_IDS = [
+    'dQw4w9WgXcQ', 'kXYiU_JCYtU', 'fJ9rUzIMcZQ',
+    'OPf0YbXqDm0', '60ItHLz5WEA', 'JGwWNGJdvx8',
+    'rhwO7C6jea8',
+]
 
 
 async def _get_fallback_queue(exclude_ids):

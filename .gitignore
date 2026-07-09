@@ -7,3 +7,4 @@ HANDOFF.md
 .env
 .code-review-graph/
 .storage*.db
+lambda.zip

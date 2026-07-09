@@ -1,6 +1,7 @@
 flask[async]
 ytmusicapi
 yt-dlp
+bgutil-ytdlp-pot-provider
 alexapy
 aiohttp
 waitress
