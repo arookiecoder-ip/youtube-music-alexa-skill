@@ -603,6 +603,9 @@ async function refreshVolume(force) {
 /* ---- now-playing via SSE (Server-Sent Events) ---- */
 let _lastQueueJson = '';
 let _lastQueueIndex = -1;
+let _rafQueuedData = null;
+let _rafQueuedIndex = -1;
+let _rafPending = false;
 let _evtSource = null;
 
 // The device list tags each option with data-online. When the selected Echo
@@ -672,19 +675,31 @@ function handleNpUpdate(np) {
   }
   // Drive the progress bar from the same state update.
   progress.update(np);
-  // Update queue. Re-render only when the list changes; if just the active
-  // index changes, move the highlight without rebuilding the whole panel.
-  // ponytail: SSE race filter removed; rare flash accepted.
+  // Update queue. RAF-coalesced: buffer the latest queue state, flush at most
+  // once per animation frame. Prevents flicker when consecutive SSE snapshots
+  // arrive mid-rebuild (playlist import triggers multiple _notify_sse calls).
   _lastQueueIndex = np.queue_index ?? -1;
-  const qJson = JSON.stringify(np.queue || []);
-  if (qJson !== _lastQueueJson) {
-    _lastQueueJson = qJson;
-    showQueue(np.queue || [], _lastQueueIndex);
-    // The mobile queue modal renders its own copy of the list; without this
-    // it keeps showing the stale order after a reorder/remove until reopened.
-    refreshQueueModalIfOpen();
+  if (np.queue) {
+    _rafQueuedData = np.queue;
+    _rafQueuedIndex = _lastQueueIndex;
+    if (!_rafPending) {
+      _rafPending = true;
+      requestAnimationFrame(() => {
+        _rafPending = false;
+        const qJson = JSON.stringify(_rafQueuedData);
+        if (qJson !== _lastQueueJson) {
+          _lastQueueJson = qJson;
+          showQueue(_rafQueuedData, _rafQueuedIndex);
+          refreshQueueModalIfOpen();
+        } else {
+          updateQueueActive(_rafQueuedIndex);
+        }
+      });
+    }
   } else {
-    updateQueueActive(_lastQueueIndex);
+    // np.queue is null/undefined — flush any pending RAF by calling showQueue
+    // with an empty array (existing behavior).
+    showQueue([], _lastQueueIndex);
   }
 }
 
