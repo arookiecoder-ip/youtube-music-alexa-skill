@@ -29,7 +29,7 @@ Alexa cloud ──► Alexa-hosted Lambda (Python, free tier, EU-Ireland)
               Flask server (port 5000, systemd)
               ├── ytmusicapi ── search / radio / playlists
 ├── yt-dlp ────── downloads audio into a local cache
-│        (web_music client, mweb fallback + cookies + bgutil PO token + deno)
+│        (android_vr client, tv fallback + cookies + deno)
               ├── /proxy/ ───── serves the cached audio file to the Echo
               └── web remote ── /remote/ UI + /alexa/* API (AlexaPy)
                        └── Amazon login proxy (aiohttp, port 5001,
@@ -39,17 +39,16 @@ Alexa cloud ──► Alexa-hosted Lambda (Python, free tier, EU-Ireland)
 **Why an audio proxy?** googlevideo stream URLs are IP-locked to the machine
 that resolved them — an Echo can never fetch them directly. Worse, on
 datacenter IPs even the resolving machine gets 403 on raw fetches; only
-yt-dlp's own download path (web_music client, falls back to mweb + GVS PO
-token) works. So the server downloads each track (~3 MB m4a) into a cache
-and serves the file itself, with Range support.
+yt-dlp's own download path (android_vr client, falls back to tv) works. So
+the server downloads each track (~3 MB m4a) into a cache and serves the file
+itself, with Range support.
 
 ### Components on the VPS
 
 | Piece                              | Role                                                                                |
 | ---------------------------------- | ----------------------------------------------------------------------------------- |
-| `~/ytm` venv                       | flask[async], ytmusicapi, yt-dlp, alexapy, bgutil-ytdlp-pot-provider  |
+| `~/ytm` venv                       | flask[async], ytmusicapi, yt-dlp, alexapy                           |
 | deno (`~/.deno`)                   | JS runtime yt-dlp needs to solve YouTube's challenges                               |
-| `bgutil-provider` Docker container | generates PO tokens (port 4416, auto-restarts) — plugin in requirements.txt handles this automatically in Docker |
 | `~/cookies.txt`                    | YouTube account cookies (throwaway account) — gets past the datacenter-IP bot check |
 | `ytmusic.service` (systemd)        | runs the Flask server with the env vars below                                       |
 | Caddy                              | HTTPS via sslip.io hostname + automatic Let's Encrypt; also fronts the login proxy  |
@@ -63,7 +62,7 @@ Core (`server.py`):
 | ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `PUBLIC_BASE_URL` | e.g. `https://<your-ip-with-dashes>.sslip.io`. When set, `audio_url` points to `/proxy/` and downloads are pre-warmed. Unset = dev mode (returns direct googlevideo URLs). |
 | `YTDLP_COOKIES`   | path to cookies.txt; passed to every yt-dlp call                                                                                                                     |
-| `YTDLP_PO_TOKEN`  | optional — if set, passed as GVS PO token to yt-dlp (`youtube:po_token=mweb.gvs+{token}`). Not needed if `bgutil-ytdlp-pot-provider` is installed (it auto-generates tokens) |
+| `YTDLP_PO_TOKEN`  | optional — if set, overrides the default `android_vr` client and passes this as the GVS PO token for `mweb` client instead (e.g. `youtube:po_token=mweb.gvs+{token}`) |
 | `API_KEY`         | shared secret; when set, all endpoints except privacy/terms and the login flow require `?key=` (or `X-Api-Key` header) **or** a valid web-remote session cookie. Must match `API_KEY` in `lambda/api_key.py`. |
 | `AUDIO_CACHE_DIR` | audio cache location (default `/tmp/ytm_audio_cache`)                                                                                                               |
 | `HISTORY_FILE`    | listening-history JSON file location for the web remote's Recently Listened / Recommended sections (default `/tmp/ytm_listen_history.json`) — see the Docker note below |
@@ -183,10 +182,10 @@ A mismatch here is the #1 cause of "401 everywhere" — see
 Note: the first song of a session takes ~7-8 s to start (audio downloads;
 YouTube enforces an ad-skip gate of ~4-5 s on monetized videos — this fires
 regardless of yt-dlp player client and isn't bypassable: the googlevideo URL
-403s if fetched before that window opens). The `web_music` client is the
-default; if it fails, it falls back to `mweb` with the PO token. Track-to-track
-transitions are instant — the next song is pre-downloaded while the current one
-plays.
+403s if fetched before that window opens). The `android_vr` client is the
+default (no GVS PO token required); if it fails, it falls back to `tv`.
+Track-to-track transitions are instant — the next song is pre-downloaded while
+the current one plays.
 
 ---
 
@@ -384,7 +383,7 @@ proxy directly, without Caddy).
 | Says "Playing X" but silence + `PlaybackFailed` in CloudWatch | `curl <PUBLIC_BASE_URL>/proxy/?video_id=J7p4bzqLvCw&key=<key>` from outside — should be 200 |
 | Server errors                                                 | `sudo journalctl -u ytmusic -f` on the VPS                                                  |
 | yt-dlp bot-check / "Sign in to confirm" errors return         | cookies expired → re-export + re-scp cookies.txt                                            |
-| yt-dlp HTTP 403 / "GVS PO Token not provided"                 | update yt-dlp (`pip install -U yt-dlp`); if still failing, verify `bgutil-ytdlp-pot-provider` is installed in the container |
+| yt-dlp HTTP 403 / "GVS PO Token not provided"                 | update yt-dlp (`pip install -U yt-dlp`); the `android_vr` client doesn't need PO tokens, but if it fails too, set `YTDLP_PO_TOKEN` to use `mweb` with a manual PO token instead |
 | HTTPS dead                                                    | `journalctl -u caddy` — cert renewals need ports 80/443 open                                |
 | 401 everywhere                                                | API_KEY mismatch between `lambda/api_key.py` and ytmusic.service                            |
 | `/remote/` shows `{"error":"unauthorized"}` instead of a login | login not enabled — set **both** `REMOTE_USER` and `REMOTE_PASSWORD` in ytmusic.service, then daemon-reload + restart |

@@ -1160,15 +1160,16 @@ class Supporting:
     def resolve_direct_url(video_id: str):
         if not _valid_video_id(video_id):
             return None
-        # android_vr requires no GVS PO token; falls back to tv if unavailable.
-        # ejs:github lets yt-dlp fetch its JS challenge solver (needed for signature decryption)
-        # "--" ends option parsing so an id can never be read as a flag.
+        # android_vr needs no GVS PO token but rejects cookies. Use tv when
+        # cookies are set. ejs:github lets yt-dlp fetch JS challenge solver.
+        has_cookies = bool(os.environ.get("YTDLP_COOKIES"))
+        client = "tv" if has_cookies else "android_vr"
+        extractor_args = [f"youtube:player_client={client}"]
+        if po_token := os.environ.get("YTDLP_PO_TOKEN"):
+            extractor_args.append(f"youtube:po_token=mweb.gvs+{po_token}")
         command = ["yt-dlp", "--get-url", "--no-playlist", "--quiet", "-f", "ba",
                    "--remote-components", "ejs:github",
-                   "--extractor-args", "youtube:player_client=android_vr"]
-        po_token = os.environ.get("YTDLP_PO_TOKEN")
-        if po_token:
-            command += ["--extractor-args", f"youtube:po_token=mweb.gvs+{po_token}"]
+                   "--extractor-args", ",".join(extractor_args)]
         cookies = os.environ.get("YTDLP_COOKIES")
         if cookies:
             command += ["--cookies", cookies]
@@ -1188,13 +1189,15 @@ class Supporting:
             return None
         # Tab-separated so a title containing the delimiter can't split fields.
         fmt = "%(title)s\t%(uploader)s\t%(thumbnail)s\t%(duration)s"
+        has_cookies = bool(os.environ.get("YTDLP_COOKIES"))
+        client = "tv" if has_cookies else "android_vr"
+        extractor_args = [f"youtube:player_client={client}"]
+        if po_token := os.environ.get("YTDLP_PO_TOKEN"):
+            extractor_args.append(f"youtube:po_token=mweb.gvs+{po_token}")
         command = ["yt-dlp", "--no-playlist", "--quiet", "--no-warnings",
                    "--remote-components", "ejs:github",
-                   "--extractor-args", "youtube:player_client=android_vr",
+                   "--extractor-args", ",".join(extractor_args),
                    "--print", fmt]
-        po_token = os.environ.get("YTDLP_PO_TOKEN")
-        if po_token:
-            command += ["--extractor-args", f"youtube:po_token=mweb.gvs+{po_token}"]
         cookies = os.environ.get("YTDLP_COOKIES")
         if cookies:
             command += ["--cookies", cookies]
@@ -1240,18 +1243,18 @@ class Supporting:
                 pass
 
     def ytdlp_download_command(video_id: str, output, client: str = "tv"):
-        # android_vr requires NO GVS PO token (per yt-dlp docs) and works well
-        # headless in Docker; it's the recommended default for server-side
-        # downloads. "Made for kids" videos aren't available on android_vr, but
-        # that's acceptable for a music skill. Falls back to tv if android_vr
-        # fails for a particular video.
+        # android_vr requires NO GVS PO token but also rejects cookies. When
+        # cookies are in use (YTDLP_COOKIES is set), use tv instead (which
+        # supports cookies and needs no PO token for GVS).
+        if client == "android_vr" and os.environ.get("YTDLP_COOKIES"):
+            client = "tv"
+        extractor_args = [f"youtube:player_client={client}"]
+        if po_token := os.environ.get("YTDLP_PO_TOKEN"):
+            extractor_args.append(f"youtube:po_token=mweb.gvs+{po_token}")
         command = ["yt-dlp", "--no-playlist", "--quiet",
                    "-f", "140/bestaudio[ext=m4a]/bestaudio",
-                   "--remote-components", "ejs:github"]
-        if po_token := os.environ.get("YTDLP_PO_TOKEN"):
-            command += ["--extractor-args", f"youtube:po_token=mweb.gvs+{po_token}"]
-        else:
-            command += ["--extractor-args", "youtube:player_client=android_vr"]
+                   "--remote-components", "ejs:github",
+                   "--extractor-args", ",".join(extractor_args)]
         cookies = os.environ.get("YTDLP_COOKIES")
         if cookies:
             command += ["--cookies", cookies]
