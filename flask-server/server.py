@@ -1974,7 +1974,7 @@ def _watch_playback_confirmation(video_id, resend):
         error = resend()
         if error:
             logger.error("[playback-watchdog] retry dispatch failed: %s", error)
-            _update_now_playing(playback_error=error)
+            _update_now_playing(playback_error={'type': 'dispatch_error', 'message': error})
             return
         if _wait_once():
             return
@@ -1982,7 +1982,7 @@ def _watch_playback_confirmation(video_id, resend):
             return
         logger.warning("[playback-watchdog] retry for %s also unconfirmed", video_id)
         _update_now_playing(
-            playback_error="Playback didn't start. Check the device and try again.")
+            playback_error={'type': 'timeout', 'message': "Playback didn't start. Check the device and try again."})
     except Exception:
         logger.exception("")
 
