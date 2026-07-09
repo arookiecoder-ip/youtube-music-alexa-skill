@@ -233,6 +233,18 @@ const progress = (function () {
   // Until this deadline, only accept a server anchor that agrees with the
   // local (sought) position.
   let localSeekUntil = 0;
+  let _inactivityTimer = null;
+  const _INACTIVITY_TIMEOUT_MS = 30000;
+
+  function resetInactivityTimer() {
+    clearTimeout(_inactivityTimer);
+    if (document.hidden) return;  // hidden already handled by syncLoop
+    _inactivityTimer = setTimeout(() => {
+      // No state change for 30s while visible — fully stop the loop.
+      // RAF will auto-restart on next track state change via update().
+      if (rafId != null) { clearTimeout(rafId); rafId = null; }
+    }, _INACTIVITY_TIMEOUT_MS);
+  }
 
   function fmt(ms) {
     if (!isFinite(ms) || ms < 0) ms = 0;
@@ -373,6 +385,7 @@ const progress = (function () {
     }
     syncLoop();
     paint();
+    resetInactivityTimer();
   }
 
   // Called on an optimistic play (GO button / queue click): show the bar reset
@@ -488,6 +501,16 @@ const progress = (function () {
     dragMs = target;
     dragging = true;
     endDrag();
+  });
+
+  document.addEventListener('visibilitychange', () => {
+    if (!document.hidden) {
+      // Tab became visible: restart loop + reset inactivity timer
+      syncLoop();
+      resetInactivityTimer();
+    } else {
+      clearTimeout(_inactivityTimer);
+    }
   });
 
   return { update, resetPending, livePosition, getDuration: () => durationMs, syncLoop };
