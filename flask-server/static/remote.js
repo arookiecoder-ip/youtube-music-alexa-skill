@@ -2088,6 +2088,10 @@ function showQueue(queue, currentIndex) {
     return;
   }
 
+  // Save scroll position before DOM rebuild (D-09). Restore after replaceChildren.
+  const savedScrollTop = list.scrollTop;
+  const prevPlayingId = currentIndex >= 0 && queue[currentIndex] ? queue[currentIndex].video_id : null;
+
   _closeAllQueueMenus();
 
   // Rows are rebuilt fresh every time (listeners capture the row's index by
@@ -2178,8 +2182,18 @@ function showQueue(queue, currentIndex) {
     newChildren.push(wrapper);
   });
   list.replaceChildren(...newChildren);
-  const active = list.querySelector('.active');
-  if (active) active.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+
+  // Restore scroll position unconditionally — user stays at browsing position.
+  list.scrollTop = savedScrollTop;
+
+  // Only scroll the active item into view if the currently-playing track
+  // changed (video_id changed). Otherwise the user's scroll position is
+  // preserved.
+  const newPlayingId = currentIndex >= 0 && queue[currentIndex] ? queue[currentIndex].video_id : null;
+  if (newPlayingId !== prevPlayingId) {
+    const active = list.querySelector('.active');
+    if (active) active.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  }
 }
 
 // Builds the "3-dot" more-options button + dropdown for a queue row (used by
