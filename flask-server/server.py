@@ -1501,7 +1501,7 @@ def proxy_stream():
         sys.stderr.flush()
     elif video_id != current_video_id:
         # Check if the new video_id is in our queue (instant metadata, no lookup needed)
-        queue = _now_playing.get('queue', [])
+        queue = _get_now_playing().get('queue', [])
         found_in_queue = False
         for i, item in enumerate(queue):
             if item.get('video_id') == video_id:
@@ -1528,7 +1528,7 @@ def proxy_stream():
     # Always look up duration if we don't have it yet. The queue and
     # find_stream_list paths set title/artist but never duration_ms, so
     # without this the progress bar has no total time.
-    if not _now_playing.get('duration_ms'):
+    if not _get_now_playing().get('duration_ms'):
         threading.Thread(target=_lookup_and_update_np, args=(video_id,), daemon=True).start()
     threading.Thread(target=_refresh_radio_queue, args=(video_id,), daemon=True).start()
     path = Supporting.ensure_downloaded(video_id)
@@ -2312,10 +2312,10 @@ def alexa_state_event():
             offset_in_ms = int(body.get('offset_in_ms') or 0)
         except (TypeError, ValueError):
             offset_in_ms = 0
-        same_track = video_id and video_id == _now_playing.get('video_id')
+        same_track = video_id and video_id == _get_now_playing().get('video_id')
         if video_id and not same_track:
             # New track: pull instant metadata from the queue if we have it.
-            queue = _now_playing.get('queue', [])
+            queue = _get_now_playing().get('queue', [])
             matched = next((item for item in queue if item.get('video_id') == video_id), None)
             if matched:
                 i = queue.index(matched)
