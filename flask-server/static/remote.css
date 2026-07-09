@@ -681,6 +681,8 @@
   .queue-section::-webkit-scrollbar-thumb { background: var(--border); }
 
   .queue-item {
+    content-visibility: auto;
+    contain-intrinsic-size: auto 80px;
     display: flex;
     align-items: center;
     gap: 12px;
