@@ -164,8 +164,7 @@ class PausePlaybackHandler(AbstractRequestHandler):
     
 class StopPlaybackHandler(AbstractRequestHandler):
     def can_handle(self, handler_input: HandlerInput) -> Response:
-        return (ask_utils.is_intent_name("AMAZON.StopIntent")(handler_input)
-                     or ask_utils.is_intent_name("AMAZON.CancelIntent")(handler_input))
+        return (ask_utils.is_intent_name("AMAZON.StopIntent")(handler_input))
 
     def handle(self, handler_input: HandlerInput) -> Response:
         logger.info("In StopPlaybackHandler")
@@ -409,8 +408,7 @@ class HelpIntentHandler(AbstractRequestHandler):
 
 class CancelOrStopIntentHandler(AbstractRequestHandler):
     def can_handle(self, handler_input: HandlerInput) -> Response:
-        return (ask_utils.is_intent_name("AMAZON.CancelIntent")(handler_input) or
-                ask_utils.is_intent_name("AMAZON.StopIntent")(handler_input))
+        return ask_utils.is_intent_name("AMAZON.CancelIntent")(handler_input)
 
     def handle(self, handler_input: HandlerInput) -> Response:
         speak_output = "Goodbye!"
