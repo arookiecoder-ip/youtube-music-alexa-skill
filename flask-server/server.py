@@ -883,6 +883,7 @@ class Supporting:
     def artist_text(track):
         return ' '.join(a.get('name') or '' for a in track.get('artists') or [])
 
+    @staticmethod
     async def get_radiolist(song_name: str):
         ytmusic = YTMusic()
         # "song by artist": boost results actually by that artist
@@ -1010,6 +1011,7 @@ class Supporting:
             })
         return out or None
 
+    @staticmethod
     async def get_artist(artist_name: str):
         ytmusic = YTMusic()
         search_results = await asyncio.to_thread(ytmusic.search, query=artist_name, filter='songs', ignore_spelling=True)
@@ -1035,6 +1037,7 @@ class Supporting:
             for track in search_results
         ]
 
+    @staticmethod
     async def get_album(album_name: str):
         ytmusic = YTMusic()
         search_results = await asyncio.to_thread(ytmusic.search, query=album_name, filter='albums', ignore_spelling=True)
@@ -1066,6 +1069,7 @@ class Supporting:
             for track in songs
         ]
     
+    @staticmethod
     async def get_playlist_tracks(playlist_id: str):
         """Normalized track list for a playlist id, or None if unreadable/empty.
         Unavailable tracks (no videoId) are dropped."""
@@ -1095,6 +1099,7 @@ class Supporting:
         ]
         return playlist or None
 
+    @staticmethod
     async def stream_playlist(playlist_id: str):
         playlist = await Supporting.get_playlist_tracks(playlist_id)
         if not playlist:
@@ -1256,6 +1261,7 @@ class Supporting:
         return {'audio_url': url}
 
 
+    @staticmethod
     async def find_stream_list(query: str, filter: str = 'songs'):
         if filter == 'songs':
             playlist = await Supporting.get_radiolist(query)
@@ -1274,12 +1280,14 @@ class Supporting:
             return None
         return {'song_info': {'metadata': playlist[0], 'stream': stream}, 'playlist': playlist}
 
+    @staticmethod
     def playlist_url_to_encoded_id(url):
         match = re.match(r"^[\w-]+", url.split('list=')[-1])
         if not match:
             return None
         return Supporting.encode_to_hex(match.group())
     
+    @staticmethod
     def encode_to_hex(string):
         return ''.join([hex(ord(c))[2:].zfill(2) for c in string])
 
