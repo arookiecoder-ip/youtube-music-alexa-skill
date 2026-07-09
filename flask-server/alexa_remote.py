@@ -143,64 +143,68 @@ class AlexaRemote:
         trip (see _LOGIN_RECHECK_TTL) so transport/volume commands stay snappy;
         pass force_check=True to re-validate immediately (e.g. after a command
         was rejected)."""
-        # already have a live session in memory?
-        if self._login:
-            fresh = (time.monotonic() - self._login_checked_at) < _LOGIN_RECHECK_TTL
-            if fresh and not force_check:
-                return None
+        if not hasattr(self, '_login_task_lock'):
+            self._login_task_lock = asyncio.Lock()
+            
+        async with self._login_task_lock:
+            # already have a live session in memory?
+            if self._login:
+                fresh = (time.monotonic() - self._login_checked_at) < _LOGIN_RECHECK_TTL
+                if fresh and not force_check:
+                    return None
+                try:
+                    if await self._login.test_loggedin():
+                        self._login_checked_at = time.monotonic()
+                        return None
+                except Exception:
+                    logger.exception("test_loggedin failed; will try the stored cookie")
+                try:
+                    await self._login.close()
+                except Exception:
+                    pass
+                self._login = None
+                self._login_checked_at = 0.0
+
+            # try to restore from the persisted cookie (written by the proxy login)
+            os.makedirs(os.path.join(ALEXA_COOKIE_DIR, ".storage"), exist_ok=True)
+            # AlexaLogin's cookie file is keyed by email
+            # (.storage/alexa_media.<email>.cookies) — read back the email saved
+            # after the last successful proxy login (see _proxy_check) so this
+            # restore attempt looks for the right file instead of email="".
+            email = ""
             try:
-                if await self._login.test_loggedin():
+                email_file = os.path.join(ALEXA_COOKIE_DIR, ".storage", "last_email.txt")
+                with open(email_file, encoding="utf-8") as f:
+                    email = f.read().strip()
+            except FileNotFoundError:
+                pass
+            except Exception:
+                logger.exception("could not read persisted login email")
+            if not email:
+                return AlexaRemote.LOGIN_REQUIRED
+            login = AlexaLogin(
+                url=AMAZON_DOMAIN,
+                email=email,
+                password="",
+                outputpath=lambda name: os.path.join(ALEXA_COOKIE_DIR, name),
+            )
+            try:
+                cookies = await login.load_cookie()
+                if cookies:
+                    await login.login(cookies=cookies)
+                if (login.status or {}).get("login_successful"):
+                    self._login = login
                     self._login_checked_at = time.monotonic()
                     return None
             except Exception:
-                logger.exception("test_loggedin failed; will try the stored cookie")
-            try:
-                await self._login.close()
-            except Exception:
-                pass
-            self._login = None
-            self._login_checked_at = 0.0
-
-        # try to restore from the persisted cookie (written by the proxy login)
-        os.makedirs(os.path.join(ALEXA_COOKIE_DIR, ".storage"), exist_ok=True)
-        # AlexaLogin's cookie file is keyed by email
-        # (.storage/alexa_media.<email>.cookies) — read back the email saved
-        # after the last successful proxy login (see _proxy_check) so this
-        # restore attempt looks for the right file instead of email="".
-        email = ""
-        try:
-            email_file = os.path.join(ALEXA_COOKIE_DIR, ".storage", "last_email.txt")
-            with open(email_file, encoding="utf-8") as f:
-                email = f.read().strip()
-        except FileNotFoundError:
-            pass
-        except Exception:
-            logger.exception("could not read persisted login email")
-        if not email:
+                logger.exception("restoring session from cookie failed")
+            finally:
+                if self._login is not login:
+                    try:
+                        await login.close()
+                    except Exception:
+                        pass
             return AlexaRemote.LOGIN_REQUIRED
-        login = AlexaLogin(
-            url=AMAZON_DOMAIN,
-            email=email,
-            password="",
-            outputpath=lambda name: os.path.join(ALEXA_COOKIE_DIR, name),
-        )
-        try:
-            cookies = await login.load_cookie()
-            if cookies:
-                await login.login(cookies=cookies)
-            if (login.status or {}).get("login_successful"):
-                self._login = login
-                self._login_checked_at = time.monotonic()
-                return None
-        except Exception:
-            logger.exception("restoring session from cookie failed")
-        finally:
-            if self._login is not login:
-                try:
-                    await login.close()
-                except Exception:
-                    pass
-        return AlexaRemote.LOGIN_REQUIRED
 
     # ---------- proxy login (interactive, browser-driven) ----------
     #

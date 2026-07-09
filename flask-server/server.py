@@ -1243,18 +1243,19 @@ class Supporting:
                 pass
 
     def ytdlp_download_command(video_id: str, output, client: str = "tv"):
-        # android_vr requires NO GVS PO token but also rejects cookies. When
-        # cookies are in use (YTDLP_COOKIES is set), use tv instead (which
-        # supports cookies and needs no PO token for GVS).
-        if client == "android_vr" and os.environ.get("YTDLP_COOKIES"):
-            client = "tv"
-        extractor_args = [f"youtube:player_client={client}"]
-        if po_token := os.environ.get("YTDLP_PO_TOKEN"):
-            extractor_args.append(f"youtube:po_token=mweb.gvs+{po_token}")
+        extractor_args = []
+        if client != "default":
+            if client == "android_vr" and os.environ.get("YTDLP_COOKIES"):
+                client = "tv"
+            extractor_args.append(f"youtube:player_client={client}")
+            if po_token := os.environ.get("YTDLP_PO_TOKEN"):
+                extractor_args.append(f"youtube:po_token=mweb.gvs+{po_token}")
+        
         command = ["yt-dlp", "--no-playlist", "--quiet",
                    "-f", "140/bestaudio[ext=m4a]/bestaudio",
-                   "--remote-components", "ejs:github",
-                   "--extractor-args", ",".join(extractor_args)]
+                   "--remote-components", "ejs:github"]
+        if extractor_args:
+            command.extend(["--extractor-args", ",".join(extractor_args)])
         cookies = os.environ.get("YTDLP_COOKIES")
         if cookies:
             command += ["--cookies", cookies]
@@ -1272,7 +1273,7 @@ class Supporting:
             if path:
                 return path
             output = os.path.join(AUDIO_CACHE_DIR, f"{video_id}.%(ext)s")
-            clients = ["tv", "android_vr"]
+            clients = ["ios", "tv", "web", "default"]
             for client in clients:
                 result = subprocess.run(
                     Supporting.ytdlp_download_command(video_id, output, client=client),
