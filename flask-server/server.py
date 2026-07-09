@@ -1157,28 +1157,38 @@ class Supporting:
             return None
         return {'song_info': {'metadata': playlist[0], 'stream': stream}, 'playlist': playlist}
 
+    def get_ytdlp_clients():
+        if os.environ.get("YTDLP_COOKIES"):
+            return ["web", "tv", "default"]
+        return ["ios", "tv", "web", "default"]
+
     def resolve_direct_url(video_id: str):
         if not _valid_video_id(video_id):
             return None
-        # android_vr needs no GVS PO token but rejects cookies. Use tv when
-        # cookies are set. ejs:github lets yt-dlp fetch JS challenge solver.
-        has_cookies = bool(os.environ.get("YTDLP_COOKIES"))
-        client = "tv" if has_cookies else "android_vr"
-        extractor_args = [f"youtube:player_client={client}"]
-        if po_token := os.environ.get("YTDLP_PO_TOKEN"):
-            extractor_args.append(f"youtube:po_token=mweb.gvs+{po_token}")
-        command = ["yt-dlp", "--get-url", "--no-playlist", "--quiet", "-f", "ba",
-                   "--remote-components", "ejs:github",
-                   "--extractor-args", ",".join(extractor_args)]
-        cookies = os.environ.get("YTDLP_COOKIES")
-        if cookies:
-            command += ["--cookies", cookies]
-        command += ["--", video_id]
-        result = subprocess.run(command, capture_output=True, text=True)
-        if result.returncode != 0:
-            logger.error("yt-dlp get-url failed: %s", result.stderr.strip())
-            return None
-        return result.stdout.strip()
+        
+        clients = Supporting.get_ytdlp_clients()
+        last_error = ""
+        for client in clients:
+            extractor_args = []
+            if client != "default":
+                extractor_args.append(f"youtube:player_client={client}")
+                if po_token := os.environ.get("YTDLP_PO_TOKEN"):
+                    extractor_args.append(f"youtube:po_token=mweb.gvs+{po_token}")
+            command = ["yt-dlp", "--get-url", "--no-playlist", "--quiet", "-f", "ba",
+                       "--remote-components", "ejs:github"]
+            if extractor_args:
+                command.extend(["--extractor-args", ",".join(extractor_args)])
+            cookies = os.environ.get("YTDLP_COOKIES")
+            if cookies:
+                command += ["--cookies", cookies]
+            command += ["--", video_id]
+            result = subprocess.run(command, capture_output=True, text=True)
+            if result.returncode == 0:
+                return result.stdout.strip()
+            last_error = result.stderr.strip()
+        
+        logger.error("yt-dlp get-url failed: %s", last_error)
+        return None
 
     def probe_metadata(video_id: str):
         """Best-effort title/artist/thumbnail/duration via yt-dlp, for videos
@@ -1189,24 +1199,29 @@ class Supporting:
             return None
         # Tab-separated so a title containing the delimiter can't split fields.
         fmt = "%(title)s\t%(uploader)s\t%(thumbnail)s\t%(duration)s"
-        has_cookies = bool(os.environ.get("YTDLP_COOKIES"))
-        client = "tv" if has_cookies else "android_vr"
-        extractor_args = [f"youtube:player_client={client}"]
-        if po_token := os.environ.get("YTDLP_PO_TOKEN"):
-            extractor_args.append(f"youtube:po_token=mweb.gvs+{po_token}")
-        command = ["yt-dlp", "--no-playlist", "--quiet", "--no-warnings",
-                   "--remote-components", "ejs:github",
-                   "--extractor-args", ",".join(extractor_args),
-                   "--print", fmt]
-        cookies = os.environ.get("YTDLP_COOKIES")
-        if cookies:
-            command += ["--cookies", cookies]
-        command += ["--", video_id]
-        try:
-            result = subprocess.run(command, capture_output=True, text=True, timeout=25)
-        except (subprocess.SubprocessError, OSError):
-            return None
-        if result.returncode != 0:
+        clients = Supporting.get_ytdlp_clients()
+        for client in clients:
+            extractor_args = []
+            if client != "default":
+                extractor_args.append(f"youtube:player_client={client}")
+                if po_token := os.environ.get("YTDLP_PO_TOKEN"):
+                    extractor_args.append(f"youtube:po_token=mweb.gvs+{po_token}")
+            command = ["yt-dlp", "--no-playlist", "--quiet", "--no-warnings",
+                       "--remote-components", "ejs:github",
+                       "--print", fmt]
+            if extractor_args:
+                command.extend(["--extractor-args", ",".join(extractor_args)])
+            cookies = os.environ.get("YTDLP_COOKIES")
+            if cookies:
+                command += ["--cookies", cookies]
+            command += ["--", video_id]
+            try:
+                result = subprocess.run(command, capture_output=True, text=True, timeout=25)
+                if result.returncode == 0:
+                    break
+            except (subprocess.SubprocessError, OSError):
+                pass
+        else:
             return None
         parts = (result.stdout.strip().split('\t') + ['', '', '', ''])[:4]
         title, uploader, thumbnail, duration = parts
@@ -1245,8 +1260,6 @@ class Supporting:
     def ytdlp_download_command(video_id: str, output, client: str = "tv"):
         extractor_args = []
         if client != "default":
-            if client == "android_vr" and os.environ.get("YTDLP_COOKIES"):
-                client = "tv"
             extractor_args.append(f"youtube:player_client={client}")
             if po_token := os.environ.get("YTDLP_PO_TOKEN"):
                 extractor_args.append(f"youtube:po_token=mweb.gvs+{po_token}")
@@ -1273,7 +1286,7 @@ class Supporting:
             if path:
                 return path
             output = os.path.join(AUDIO_CACHE_DIR, f"{video_id}.%(ext)s")
-            clients = ["ios", "tv", "web", "default"]
+            clients = Supporting.get_ytdlp_clients()
             for client in clients:
                 result = subprocess.run(
                     Supporting.ytdlp_download_command(video_id, output, client=client),
