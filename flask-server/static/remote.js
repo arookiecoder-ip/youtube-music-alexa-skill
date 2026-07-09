@@ -583,6 +583,7 @@ async function api(path, body) {
 
 /* ---- Sign-out confirmation ---- */
 async function doSignOut() {
+  // AUTH-01 confirmed: logout flow (header + sidebar + overlay + doSignOut) is complete.
   stopSSE();
   try {
     await api('/logout/', {});
