@@ -20,8 +20,11 @@
   function homeRowHtml(row) {
     const items = Array.isArray(row && row.items) ? row.items : [];
     const tilesHtml = items.map(function(item) {
-      if (!item || !item.videoId) return '';
-      const videoId = item.videoId || '';
+      // The main feed uses videoId; the recs-cache fallback row the server
+      // serves when the feed build fails uses video_id. Accept both so the
+      // fallback doesn't render as an empty page.
+      const videoId = (item && (item.videoId || item.video_id)) || '';
+      if (!videoId) return '';
       const title = item.title || '';
       const artist = item.artist || '';
       const thumbUrl = item.thumbnail || '';
@@ -78,7 +81,15 @@
       greet.hidden = false;
     }
     const rows = Array.isArray(data && data.rows) ? data.rows : [];
-    const rowsHtml = rows.map(homeRowHtml).join('');
+    let rowsHtml = rows.map(homeRowHtml).join('');
+    if (!rowsHtml) {
+      // Never leave the page silently blank: show why and offer a retry.
+      rowsHtml = '<div class="home-empty">' +
+        '<div class="home-empty-title">No recommendations right now</div>' +
+        '<div class="home-empty-sub">The feed could not be built. Play something or try again.</div>' +
+        '<button type="button" id="home-retry-btn" class="btn-accent">Try again</button>' +
+        '</div>';
+    }
     container.innerHTML = rowsHtml;
     container.hidden = false;
     showHomeSkeleton(false);
@@ -117,6 +128,13 @@
   const rows = document.getElementById('home-rows');
   if (rows) {
     rows.addEventListener('click', function(e) {
+      // Empty-state retry: reset the loaded flag and rebuild the feed
+      if (e.target.closest('#home-retry-btn')) {
+        state._homeLoaded = false;
+        loadHomeFeed();
+        return;
+      }
+
       // Like button: stop propagation so card play doesn't fire
       var likeBtn = e.target.closest('.result-like-btn');
       if (likeBtn) {

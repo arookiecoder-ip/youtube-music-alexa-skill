@@ -3410,10 +3410,22 @@ def get_home():
             logger.exception("home feed failed")
             if _home_cache['rows']:
                 return jsonify({'rows': _home_cache['rows']})
+            # Recs items use video_id (snake_case); the home feed contract is
+            # videoId. Normalize so the fallback row actually renders.
+            fallback_items = [
+                {
+                    'videoId': str(i.get('video_id') or ''),
+                    'title': str(i.get('title') or ''),
+                    'artist': str(i.get('artist') or ''),
+                    'thumbnail': str(i.get('thumbnail') or ''),
+                }
+                for i in _recs_cache.get('items', [])
+                if i.get('video_id')
+            ]
             return jsonify({
                 'rows': [{
                     'title': 'Recommended',
-                    'items': _recs_cache.get('items', []),
+                    'items': fallback_items,
                 }]
             })
         _home_cache['rows'] = rows

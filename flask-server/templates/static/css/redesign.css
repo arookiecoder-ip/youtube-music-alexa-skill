@@ -656,6 +656,30 @@ input[type=range]::-moz-range-thumb { border-radius: 50%; }
   .home-card .result-like-btn { opacity: 1; }
 }
 
+/* Empty home feed: friendly message + retry instead of a blank page */
+.home-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  text-align: center;
+  padding: 56px 24px;
+}
+.home-empty-title {
+  font-size: 1.05rem;
+  font-weight: 700;
+}
+.home-empty-sub {
+  font-size: .8rem;
+  color: var(--muted);
+  margin-bottom: 10px;
+}
+#home-retry-btn {
+  background: var(--accent-grad);
+  border: none;
+  padding: 10px 26px;
+}
+
 /* Idle hero */
 .idle-hero-text { color: #3d3d3d; }
 .idle-hero-accent {
