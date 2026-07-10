@@ -8,6 +8,8 @@ HANDOFF.md
 .env
 .code-review-graph/
 .storage*.db
+flask-server/api_key.txt
+flask-server/data.db
 lambda.zip
 .planning/
 AGENTS.md
