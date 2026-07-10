@@ -4499,9 +4499,6 @@ const VERSION = '__VERSION__';
 const STATIC_CACHE = 'mb-static-' + VERSION;
 const PAGE_CACHE = 'mb-pages-v1';
 const PRECACHE = [
-  '/static/remote.css',
-  '/static/remote.js',
-  '/static/playlists.js',
   '/static/icons/icon-192-any.png',
   '/static/icons/icon-512-any.png',
   '/static/icons/icon-192.png',
