@@ -4,3 +4,4 @@ yt-dlp
 alexapy
 aiohttp
 waitress
+qrcode

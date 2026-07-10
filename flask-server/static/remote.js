@@ -3980,12 +3980,31 @@ document.addEventListener('keydown', (e) => {
   const activeEl = document.getElementById('jam-active');
   const linkEl = document.getElementById('jam-link');
   const startBtn = document.getElementById('jam-start-btn');
+  const shareBtn = document.getElementById('jam-share-btn');
+  const qrBtn = document.getElementById('jam-qr-btn');
+  const qrPanel = document.getElementById('jam-qr-panel');
+  const qrImg = document.getElementById('jam-qr-img');
+  let jamQrObjectUrl = '';
+
+  function resetJamQr() {
+    if (jamQrObjectUrl) URL.revokeObjectURL(jamQrObjectUrl);
+    jamQrObjectUrl = '';
+    if (qrImg) qrImg.removeAttribute('src');
+    if (qrPanel) qrPanel.hidden = true;
+    if (qrBtn) qrBtn.textContent = 'Show QR';
+  }
 
   function renderJam(state) {
     const active = !!(state && state.active);
     inactiveEl.hidden = active;
     activeEl.hidden = !active;
-    if (active) linkEl.value = state.url || '';
+    if (active) {
+      if (linkEl.value !== (state.url || '')) resetJamQr();
+      linkEl.value = state.url || '';
+    } else {
+      linkEl.value = '';
+      resetJamQr();
+    }
   }
 
   async function openJamModal() {
@@ -4025,6 +4044,48 @@ document.addEventListener('keydown', (e) => {
       linkEl.focus();
       linkEl.select();
       toast('Press Ctrl+C to copy', 'error');
+    }
+  });
+
+  shareBtn.addEventListener('click', async () => {
+    const url = linkEl.value;
+    if (!url) return;
+    if (navigator.share) {
+      try {
+        await navigator.share({ title: 'Join my Music Box jam', text: 'Join my jam', url });
+        return;
+      } catch (e) {
+        if (e && e.name === 'AbortError') return;
+      }
+    }
+    try {
+      await navigator.clipboard.writeText(url);
+      toast('Share link copied', 'ok');
+    } catch (_) {
+      linkEl.focus();
+      linkEl.select();
+      toast('Press Ctrl+C to copy', 'error');
+    }
+  });
+
+  qrBtn.addEventListener('click', async () => {
+    if (!linkEl.value) return;
+    if (!qrPanel.hidden) {
+      qrPanel.hidden = true;
+      qrBtn.textContent = 'Show QR';
+      return;
+    }
+    try {
+      if (!jamQrObjectUrl) {
+        const res = await fetch('/alexa/jam/qr/', { credentials: 'same-origin', cache: 'no-store' });
+        if (!res.ok) throw new Error('Could not load QR code');
+        jamQrObjectUrl = URL.createObjectURL(await res.blob());
+        qrImg.src = jamQrObjectUrl;
+      }
+      qrPanel.hidden = false;
+      qrBtn.textContent = 'Hide QR';
+    } catch (e) {
+      toast(e.message || 'Could not load QR code', 'error');
     }
   });
 

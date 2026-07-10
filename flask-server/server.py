@@ -384,8 +384,9 @@ def _load_playlists():
 _PUBLIC_PATHS = ('/', '/privacy_policy', '/terms_of_use', '/login', '/logout', '/favicon.ico',
                  '/manifest.webmanifest', '/service-worker.js')
 # Public path prefixes (startswith match) — static assets (CSS, JS, icons),
-# plus jam join links (/jam/<token> — the token itself is the credential).
-_PUBLIC_PREFIXES = ('/static/', '/jam/')
+# plus jam join links (/j/<token> and legacy /jam/<token> — the token itself is
+# the credential).
+_PUBLIC_PREFIXES = ('/static/', '/j/', '/jam/')
 
 # Endpoints reachable with a logged-in web-remote session cookie (so the long
 # API key stays out of the browser URL). Everything here plus the remote page.
@@ -396,7 +397,8 @@ _SESSION_PATHS = ('/remote', '/alexa/status', '/alexa/init', '/alexa/devices', '
                   '/alexa/shuffle_queue', '/alexa/search', '/alexa/clear',
                   '/alexa/queue_add', '/alexa/queue_remove',
                   '/alexa/queue_reorder', '/history', '/recommendations',
-                  '/alexa/jam/start', '/alexa/jam/stop', '/alexa/jam/status')
+                  '/alexa/jam/start', '/alexa/jam/stop', '/alexa/jam/status',
+                  '/alexa/jam/qr')
 _SESSION_PREFIXES = ('/alexa/now_playing/', '/history/', '/api/playlists/', '/recommendations/')
 
 # API/device endpoints: the Alexa skill and web-remote JS hit these directly
@@ -539,7 +541,7 @@ def _jam_token_valid(token):
 
 def _jam_open():
     """Start a jam (revoking any previous one) and return its share token."""
-    token = secrets.token_urlsafe(24)
+    token = secrets.token_urlsafe(9)
     now = time.time()
     with get_db() as conn:
         conn.execute('DELETE FROM jam_tokens')
@@ -584,7 +586,7 @@ def _valid_key_supplied():
 
 def _jam_url(token):
     base = PUBLIC_BASE_URL or request.url_root.rstrip('/')
-    return f"{base}/jam/{token}"
+    return f"{base}/j/{token}"
 
 
 # What a jam guest may reach. Playback, search, queue manipulation and the
@@ -2576,6 +2578,27 @@ def jam_status():
     return jsonify({'active': True, 'url': _jam_url(token)})
 
 
+@app.route("/alexa/jam/qr/", methods=["GET"])
+def jam_qr():
+    token = _jam_active_token()
+    if not token:
+        return jsonify({'error': 'no active jam'}), 404
+    try:
+        import io
+        import qrcode
+        import qrcode.image.svg
+    except Exception:
+        logger.exception("qrcode package is unavailable")
+        return jsonify({'error': 'QR generation is unavailable'}), 503
+
+    img = qrcode.make(_jam_url(token), image_factory=qrcode.image.svg.SvgImage)
+    out = io.BytesIO()
+    img.save(out)
+    resp = Response(out.getvalue(), mimetype='image/svg+xml')
+    resp.headers['Cache-Control'] = 'no-store'
+    return resp
+
+
 _JAM_ENDED_HTML = """<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -2591,6 +2614,7 @@ _JAM_ENDED_HTML = """<!DOCTYPE html>
 <p>The link is no longer active. Ask the host for a new one.</p></div></body></html>"""
 
 
+@app.route("/j/<token>", methods=["GET"])
 @app.route("/jam/<token>", methods=["GET"])
 def jam_join(token):
     """Guest entry point. A valid token becomes a guest session cookie and the

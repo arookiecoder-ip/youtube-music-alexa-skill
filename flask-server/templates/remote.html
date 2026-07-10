@@ -807,10 +807,17 @@
         <p style="margin:0 0 12px; color: var(--muted); font-size: .85rem; line-height: 1.5;">
           Your jam is live. Share this link:
         </p>
-        <div style="display:flex; gap:8px; margin-bottom:16px;">
+        <div style="display:flex; gap:8px; margin-bottom:12px;">
           <input type="text" id="jam-link" readonly
                  style="flex:1; min-width:0; background:var(--surface); border:1px solid var(--border); color:var(--text); padding:8px 12px; border-radius:6px; font-size:.8rem;">
           <button class="btn-accent" id="jam-copy-btn" style="flex:none; padding:8px 14px;">Copy</button>
+        </div>
+        <div style="display:flex; gap:8px; margin-bottom:12px;">
+          <button class="btn-accent" id="jam-share-btn" style="flex:1; padding:8px 12px;">Share</button>
+          <button id="jam-qr-btn" style="flex:1; padding:8px 12px; font-weight:600; background:transparent; border:1px solid var(--border); color:var(--text); border-radius:6px; cursor:pointer;">Show QR</button>
+        </div>
+        <div id="jam-qr-panel" hidden style="margin:0 auto 16px; width:min(220px, 100%); padding:12px; background:#fff; border-radius:6px;">
+          <img id="jam-qr-img" alt="Jam QR code" style="display:block; width:100%; height:auto;">
         </div>
         <button id="jam-end-btn" style="width:100%; padding:10px; font-weight:600; background:transparent; border:1px solid #a33; color:#e66; border-radius:6px; cursor:pointer;">End Jam</button>
       </div>
