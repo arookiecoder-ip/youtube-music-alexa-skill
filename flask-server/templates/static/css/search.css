@@ -367,3 +367,35 @@
     body.results-open .toast { bottom: 24px; }
   }
 
+  /* ---- Search result: category tabs ---- */
+  .results-tabs {
+    display: flex;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: var(--space-2);
+  }
+  .results-tab {
+    flex: 1;
+    padding: var(--space-2) var(--space-3);
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
+    color: var(--muted);
+    font-size: var(--text-sm);
+    font-weight: 600;
+    cursor: pointer;
+    transition: color .15s, border-color .15s;
+    text-align: center;
+  }
+  .results-tab:hover { color: var(--text); }
+  .results-tab.active {
+    color: var(--text);
+    border-bottom-color: var(--accent);
+  }
+  .results-count {
+    font-size: var(--text-xs);
+    color: var(--muted);
+    padding: 0 var(--space-3) var(--space-2);
+  }
+  /* ponytail: category metadata reuses existing .result-title/.result-artist classes.
+     Artist/album/playlist rows get the same .result-swipe-wrapper structure but
+     with no action buttons (no play/queue/like/more). The thumbnail stays 48x48. */
