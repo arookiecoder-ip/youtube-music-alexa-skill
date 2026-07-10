@@ -12,7 +12,7 @@
   }
 
   function showHomeViews() {
-    setHidden('.play-section, .player-section, #recs-section, #home-section, #idle-hero', false);
+    setHidden('.play-section, .player-section, #home-section, #idle-hero', false);
     setHidden('#results-section, #queue-section', true);
   }
 

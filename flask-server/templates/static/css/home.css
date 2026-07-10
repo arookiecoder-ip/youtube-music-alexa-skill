@@ -48,6 +48,12 @@
   scroll-padding-inline: var(--space-4);
   scroll-snap-type: x proximity;
   -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+
+.home-row::-webkit-scrollbar,
+.home-row-skeleton::-webkit-scrollbar {
+  display: none;
 }
 
 .home-row[hidden],

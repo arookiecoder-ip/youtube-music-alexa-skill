@@ -387,7 +387,9 @@
   <!-- Recommended for you: full-width tile grid (direct child of main so it can
        span the viewport edge-to-edge, independent of .layout's width). Shown on
        blank state; skeleton tiles while loading. -->
-  <section class="needs-login recs-section" id="recs-section" hidden>
+  <!-- Dead code: superseded by the home feed below. Kept out of .needs-login
+       so login never reveals it; nothing calls loadRecommendations() anymore. -->
+  <section class="recs-section" id="recs-section" hidden>
     <div class="section-head">
       <div class="label">Recommended for you</div>
     </div>
