@@ -1,9 +1,44 @@
 (function() {
   'use strict';
 
+  function setHidden(selector, hidden) {
+    document.querySelectorAll(selector).forEach(function(el) {
+      el.hidden = hidden;
+    });
+  }
+
+  function hideAllViews() {
+    setHidden('.play-section, .player-section, #recs-section, #idle-hero, #results-section, #queue-section', true);
+  }
+
+  function showHomeViews() {
+    setHidden('.play-section, .player-section, #recs-section, #idle-hero', false);
+    setHidden('#results-section, #queue-section', true);
+  }
+
   var routes = {
     '#home': function() {
-      // Phase 4: no-op. Future phases add #artist, #playlist, #queue.
+      showHomeViews();
+    },
+    '#artist': function() {
+      // Phase 7 wires the artist view; this stub prevents page-reload fallback to #home.
+      hideAllViews();
+    },
+    '#playlist': function() {
+      var overlay = document.getElementById('playlists-modal-overlay');
+      if (overlay) {
+        overlay.classList.add('open');
+      }
+    },
+    '#queue': function() {
+      var queueSection = document.getElementById('queue-section');
+      var resultsSection = document.getElementById('results-section');
+      if (queueSection) {
+        queueSection.hidden = false;
+      }
+      if (resultsSection) {
+        resultsSection.hidden = true;
+      }
     },
   };
 
