@@ -4015,6 +4015,8 @@ document.addEventListener('keydown', (e) => {
   const activeEl = document.getElementById('jam-active');
   const linkEl = document.getElementById('jam-link');
   const startBtn = document.getElementById('jam-start-btn');
+  const jamBtn = document.getElementById('jam-btn');
+  const sidebarJamBtn = document.getElementById('sidebar-jam-btn');
   const shareBtn = document.getElementById('jam-share-btn');
   const qrBtn = document.getElementById('jam-qr-btn');
   const qrPanel = document.getElementById('jam-qr-panel');
@@ -4029,10 +4031,19 @@ document.addEventListener('keydown', (e) => {
     if (qrBtn) qrBtn.textContent = 'Show QR';
   }
 
+  function setJamLiveIndicator(active) {
+    [jamBtn, sidebarJamBtn].forEach((btn) => {
+      if (!btn) return;
+      btn.classList.toggle('jam-live', active);
+      btn.title = active ? 'Jam is live' : 'Jam';
+    });
+  }
+
   function renderJam(state) {
     const active = !!(state && state.active);
     inactiveEl.hidden = active;
     activeEl.hidden = !active;
+    if (state) setJamLiveIndicator(active);
     if (active) {
       if (linkEl.value !== (state.url || '')) resetJamQr();
       linkEl.value = state.url || '';
@@ -4050,8 +4061,8 @@ document.addEventListener('keydown', (e) => {
   }
   function closeJamModal() { overlay.classList.remove('open'); }
 
-  document.getElementById('jam-btn').addEventListener('click', openJamModal);
-  document.getElementById('sidebar-jam-btn').addEventListener('click', () => {
+  jamBtn.addEventListener('click', openJamModal);
+  sidebarJamBtn.addEventListener('click', () => {
     if (window._closeSidebar) window._closeSidebar();
     openJamModal();
   });
@@ -4132,6 +4143,10 @@ document.addEventListener('keydown', (e) => {
       toast(e.message, 'error');
     }
   });
+
+  api('/alexa/jam/status/')
+    .then(renderJam)
+    .catch(() => setJamLiveIndicator(false));
 })();
 
 /* ---- PWA: register the service worker so the app is installable ----

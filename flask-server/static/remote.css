@@ -2631,6 +2631,18 @@
 @keyframes spin { to { transform: rotate(360deg); } }
 .spin { animation: spin 1s linear infinite; }
 
+/* Owner-side live jam indicator */
+#jam-btn.jam-live,
+#sidebar-jam-btn.jam-live {
+  color: var(--ok) !important;
+  border-color: var(--ok) !important;
+}
+
+#jam-btn.jam-live svg,
+#sidebar-jam-btn.jam-live svg {
+  color: var(--ok);
+}
+
 /* ---- Jam guest mode ----
    Server-side the allow-list in require_api_key() is the real gate; these
    rules just remove every account-writing control from a guest's UI so
