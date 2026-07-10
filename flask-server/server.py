@@ -574,6 +574,13 @@ def _jam_guest():
     return _jam_token_valid(session.get('jam'))
 
 
+def _clear_stale_jam_cookie():
+    if session.get('jam') and not _jam_token_valid(session.get('jam')):
+        session.pop('jam', None)
+        return True
+    return False
+
+
 def _valid_key_supplied():
     """True when the request itself proves owner access via the API key. Used
     to avoid rendering the guest UI for an owner (key-in-URL scheme) who also
@@ -614,8 +621,8 @@ def require_api_key():
     if path in _PUBLIC_PATHS or any(request.path.startswith(p) for p in _PUBLIC_PREFIXES):
         return None
     if request.method in ('GET', 'HEAD') and path == '/remote':
-        if not _logged_in() and session.get('jam') and not _jam_guest():
-            return _no_store(app.make_response((_JAM_ENDED_HTML, 410)))
+        if not _logged_in():
+            _clear_stale_jam_cookie()
     # A valid session cookie authorizes the remote page and its /alexa/* calls.
     if _logged_in() and (path in _SESSION_PATHS or any(request.path.startswith(p) for p in _SESSION_PREFIXES)):
         # Mutating requests must be JSON. A cross-site HTML form or plain
@@ -2628,6 +2635,8 @@ def jam_join(token):
             session['jam'] = token
             session.permanent = False
         return redirect('/remote/' if not _remote_login_enabled() else '/')
+    if session.get('jam') == token or not _jam_guest():
+        session.pop('jam', None)
     return _no_store(app.make_response((_JAM_ENDED_HTML, 410)))
 
 
@@ -4398,7 +4407,7 @@ def root():
         return _no_store(app.make_response(render_template(
             "remote.html", asset_v=_STATIC_VERSION, jam_guest=True)))
     if session.get('jam'):
-        return _no_store(app.make_response((_JAM_ENDED_HTML, 410)))
+        session.pop('jam', None)
     return redirect('/login/')
 
 
