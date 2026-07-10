@@ -947,15 +947,28 @@ function stopSSE() {
 // One-shot fetch of the current now-playing state. SSE already pushes updates,
 // but after an action (play / next / prev) we nudge a refresh a few seconds
 // later to reliably catch the track transition.
+let _pollNowPlayingInFlight = false;
+let _pollNowPlayingRetry = false;
 async function pollNowPlaying() {
   const serial = deviceEl.value;
   if (!serial) return;
+  if (_pollNowPlayingInFlight) {
+    _pollNowPlayingRetry = true;
+    return;
+  }
+  _pollNowPlayingInFlight = true;
   try {
     const np = await api('/alexa/now_playing/?serial=' + encodeURIComponent(serial));
     handleNpUpdate(np);
     refreshVolume(false);
   } catch (_) {
     // Best-effort; SSE remains the primary update path.
+  } finally {
+    _pollNowPlayingInFlight = false;
+    if (_pollNowPlayingRetry) {
+      _pollNowPlayingRetry = false;
+      schedulePollNowPlaying(300);
+    }
   }
 }
 
@@ -982,6 +995,9 @@ document.addEventListener('visibilitychange', () => {
   }
 });
 window.addEventListener('pagehide', stopSSE);
+window.addEventListener('pageshow', () => {
+  if (deviceEl.value && !document.hidden) connectSSE();
+});
 window.addEventListener('focus', () => refreshVolume(false));
 
 deviceEl.addEventListener('change', () => {
