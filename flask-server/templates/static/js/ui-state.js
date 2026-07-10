@@ -24,6 +24,8 @@
     _hasTrack: false,
     _resultsOpen: false,
     _loggedIn: false,
+    _homeLoaded: false,
+    _homeLoading: false,
   }, window.__appState || {});
 
   function syncUiState() {
@@ -36,11 +38,11 @@
     document.body.classList.toggle('results-open', state._resultsOpen);
     if (mini) mini.classList.toggle('visible', state._resultsOpen && state._hasTrack);
     if (mainEl) mainEl.classList.toggle('idle', state._loggedIn && !state._hasTrack && !state._resultsOpen);
-    const recsSection = document.getElementById('recs-section');
-    if (recsSection) {
+    const homeSection = document.getElementById('home-section');
+    if (homeSection) {
       const shouldShow = state._loggedIn && !state._resultsOpen && !state._hasTrack;
-      if (shouldShow && !window._recsLoaded && window.loadRecommendations) window.loadRecommendations();
-      else recsSection.hidden = !shouldShow || !window._recsLoaded;
+      if (shouldShow && !state._homeLoaded && window.loadHomeFeed) window.loadHomeFeed();
+      else homeSection.hidden = !shouldShow || !state._homeLoaded;
     }
     if (!player) return;
     if (state._hasTrack) {
