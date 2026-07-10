@@ -50,7 +50,7 @@
       <h1>Music Box</h1>
     </div>
     <div class="header-actions">
-      <button class="needs-login header-history-btn" id="playlists-modal-btn" title="Playlists" hidden style="margin-right:8px;">
+      <button class="needs-login header-history-btn jam-owner-only" id="playlists-modal-btn" title="Playlists" hidden style="margin-right:8px;">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <line x1="8" y1="6" x2="21" y2="6"/>
           <line x1="8" y1="12" x2="21" y2="12"/>
@@ -70,7 +70,7 @@
         </svg>
         <span class="header-history-label">Jam</span>
       </button>
-      <button class="needs-login header-history-btn" id="history-modal-btn" title="Recently Listened" hidden>
+      <button class="needs-login header-history-btn jam-owner-only" id="history-modal-btn" title="Recently Listened" hidden>
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <circle cx="12" cy="12" r="9"/>
           <polyline points="12 7 12 12 15.5 14"/>
@@ -146,7 +146,7 @@
         </svg>
         Refresh Page
       </button>
-      <button class="needs-login" id="sidebar-playlists-btn" style="width:100%; display:inline-flex; align-items:center; justify-content:center; gap:8px; font-size:.75rem; font-weight:600; text-transform:uppercase; letter-spacing:.08em; color:var(--text); transition:color .15s; background: var(--surface); border: 1px solid var(--border); padding: 10px; border-radius: 6px;">
+      <button class="needs-login jam-owner-only" id="sidebar-playlists-btn" style="width:100%; display:inline-flex; align-items:center; justify-content:center; gap:8px; font-size:.75rem; font-weight:600; text-transform:uppercase; letter-spacing:.08em; color:var(--text); transition:color .15s; background: var(--surface); border: 1px solid var(--border); padding: 10px; border-radius: 6px;">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <line x1="8" y1="6" x2="21" y2="6"/>
           <line x1="8" y1="12" x2="21" y2="12"/>
@@ -366,7 +366,7 @@
   <!-- Recommended for you: full-width tile grid (direct child of main so it can
        span the viewport edge-to-edge, independent of .layout's width). Shown on
        blank state; skeleton tiles while loading. -->
-  <section class="needs-login recs-section" id="recs-section" hidden>
+  <section class="needs-login recs-section jam-owner-only" id="recs-section" hidden>
     <div class="section-head">
       <div class="label">Recommended for you</div>
     </div>

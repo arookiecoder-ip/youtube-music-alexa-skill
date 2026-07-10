@@ -503,10 +503,10 @@ def _logged_in():
 # Spotify-style "Jam": the owner mints a share link (/jam/<token>) from the
 # remote UI. Anyone opening it gets a guest session cookie tied to that token.
 # Guests can search, play, and control playback / the live queue, but every
-# account-mutating surface (likes, playlist create/edit/delete, history
-# delete, Amazon login) is refused server-side. Ending the jam deletes the
-# token row, which invalidates every guest cookie on their very next request
-# (and closes their SSE streams within one heartbeat).
+# private account surface (playlists, likes, listening history, recommendations,
+# Amazon login) is refused server-side. Ending the jam deletes the token row,
+# which invalidates every guest cookie on their very next request (and closes
+# their SSE streams within one heartbeat).
 JAM_MAX_AGE = float(os.environ.get("JAM_TTL_HOURS", "24")) * 3600  # auto-expiry safety net
 _valid_jams = None  # in-memory mirror of jam_tokens ({token: created_at}); None = not loaded
 _jams_lock = threading.Lock()
@@ -588,23 +588,20 @@ def _jam_url(token):
 
 
 # What a jam guest may reach. Playback, search, queue manipulation and the
-# remote page itself are fine; anything that writes account data is not.
+# remote page itself are fine; private account data is not.
 # Deliberately absent: /alexa/proxy_login + /alexa/proxy_check (Amazon auth),
 # /alexa/clear (wipes the owner's queue), /alexa/jam/* (owner-only controls),
-# playlist/history/like writes (handled by the read-only prefix check below).
+# /api/playlists/*, /history/*, /recommendations/*.
 _JAM_PATHS = ('/remote', '/alexa/status', '/alexa/init', '/alexa/devices',
               '/alexa/command', '/alexa/play', '/alexa/suggest',
               '/alexa/now_playing', '/alexa/seek', '/alexa/volume',
               '/alexa/play_queue', '/alexa/shuffle_queue', '/alexa/search',
               '/alexa/queue_add', '/alexa/queue_remove', '/alexa/queue_reorder')
-_JAM_READONLY_PREFIXES = ('/api/playlists/', '/history/', '/recommendations/')
 
 
 def _jam_request_allowed(path):
     """Allow-list for guest sessions; `path` is the trailing-slash-normalized
-    request path. Read-only surfaces additionally refuse mutating methods."""
-    if path in ('/history', '/recommendations') or request.path.startswith(_JAM_READONLY_PREFIXES):
-        return request.method in ('GET', 'HEAD', 'OPTIONS')
+    request path."""
     return path in _JAM_PATHS or request.path.startswith('/alexa/now_playing/')
 
 
@@ -614,6 +611,9 @@ def require_api_key():
     path = request.path.rstrip('/') or '/'
     if path in _PUBLIC_PATHS or any(request.path.startswith(p) for p in _PUBLIC_PREFIXES):
         return None
+    if request.method in ('GET', 'HEAD') and path == '/remote':
+        if not _logged_in() and session.get('jam') and not _jam_guest():
+            return _no_store(app.make_response((_JAM_ENDED_HTML, 410)))
     # A valid session cookie authorizes the remote page and its /alexa/* calls.
     if _logged_in() and (path in _SESSION_PATHS or any(request.path.startswith(p) for p in _SESSION_PREFIXES)):
         # Mutating requests must be JSON. A cross-site HTML form or plain
@@ -4373,6 +4373,8 @@ def root():
     if _jam_guest():
         return _no_store(app.make_response(render_template(
             "remote.html", asset_v=_STATIC_VERSION, jam_guest=True)))
+    if session.get('jam'):
+        return _no_store(app.make_response((_JAM_ENDED_HTML, 410)))
     return redirect('/login/')
 
 
