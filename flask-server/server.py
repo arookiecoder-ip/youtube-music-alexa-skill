@@ -1,4 +1,4 @@
-import asyncio, difflib, glob, hmac, itertools, json, os, random, secrets, sys, threading, time, re, subprocess, logging, copy, uuid
+import asyncio, difflib, glob, hashlib, hmac, itertools, json, os, random, secrets, sys, threading, time, re, subprocess, logging, copy, uuid
 from datetime import timedelta
 from urllib.parse import parse_qs, unquote, urlparse
 from ytmusicapi import YTMusic
@@ -34,7 +34,32 @@ app.config.update(
     SESSION_COOKIE_SECURE=os.environ.get("COOKIE_INSECURE") != "1",
     PERMANENT_SESSION_LIFETIME=timedelta(days=30),
     MAX_CONTENT_LENGTH=16 * 1024 * 1024,
+    # Static assets are safe to cache long-term: remote.html references them
+    # with a ?v=<fingerprint> that changes on every deploy (see
+    # _STATIC_VERSION), so browsers re-fetch exactly when the files change
+    # instead of revalidating on every page load.
+    SEND_FILE_MAX_AGE_DEFAULT=timedelta(days=7),
 )
+
+# Fingerprint of the front-end assets. Changing any static file changes this,
+# which (a) busts browser HTTP caches via the ?v= asset URLs and (b) byte-
+# changes the service worker source, making installed PWAs re-install it and
+# precache the fresh copies.
+def _compute_static_version():
+    static_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'static')
+    h = hashlib.sha1()
+    for root_dir, _, files in os.walk(static_dir):
+        for name in sorted(files):
+            path = os.path.join(root_dir, name)
+            try:
+                st = os.stat(path)
+            except OSError:
+                continue
+            rel = os.path.relpath(path, static_dir).replace(os.sep, '/')
+            h.update(f'{rel}:{st.st_mtime_ns}:{st.st_size};'.encode())
+    return h.hexdigest()[:12]
+
+_STATIC_VERSION = _compute_static_version()
 
 # Human login for the web remote. When both are set, /remote/ and the /alexa/*
 # endpoints accept a logged-in session cookie *instead of* the long ?key=, so
@@ -313,15 +338,23 @@ def _load_playlists():
                 "tracks": []
             }
         
-        tr_rows = conn.execute('SELECT * FROM playlist_tracks ORDER BY added_at ASC').fetchall()
+        # Newest additions first, matching YT Music's playlist view (a fresh
+        # save shows at the top). rowid ASC breaks the tie inside a sync batch
+        # (all rows share one added_at) so imported playlists keep their
+        # source order instead of reversing.
+        tr_rows = conn.execute('SELECT * FROM playlist_tracks ORDER BY added_at DESC, rowid ASC').fetchall()
         for t in tr_rows:
             pl_id = t['playlist_id']
             if pl_id in data["playlists"]:
                 track = dict(t)
                 track['thumbnail'] = track.pop('thumbnail_url')
                 data["playlists"][pl_id]["tracks"].append(track)
-                if pl_id == "liked":
-                    data["liked_songs"].append(track['video_id'])
+        # Liked Songs keeps its established oldest-first order: its client-side
+        # sort and the un-like/re-like timestamp restore both assume it.
+        liked = data["playlists"].get("liked")
+        if liked:
+            liked["tracks"].reverse()
+            data["liked_songs"] = [t['video_id'] for t in liked["tracks"]]
         return data
 
 
@@ -350,8 +383,8 @@ _SESSION_PREFIXES = ('/alexa/now_playing/', '/history/', '/api/playlists/', '/re
 # and need a machine-readable JSON error, never an HTML redirect, on failure.
 _API_PREFIXES = ('/alexa/', '/proxy/', '/get_stream/', '/get_radio/',
                   '/find_stream_list/', '/armed_play/', '/stream_video/',
-                  '/stream_playlist/', '/get_playlist_info/', '/history',
-                  '/recommendations', '/api/playlists/')
+                  '/stream_playlist/', '/get_playlist_info/', '/queue_tracks/',
+                  '/history', '/recommendations', '/api/playlists/')
 
 
 def _remote_login_enabled():
@@ -450,8 +483,30 @@ _REPOSITION_SUPPRESS_WINDOW = 5
 
 # ---------- SSE (Server-Sent Events) push ----------
 import queue as _queue_mod
+# q -> {'serial': str|None, 'qv': int|None (queue_version last sent with a
+# queue payload)}. qv lets _notify_sse omit the (potentially 1000-item) queue
+# from pushes when it hasn't changed since that subscriber last received it.
 _sse_subscribers = {}
 _sse_lock = threading.Lock()
+
+# Queue change detection for SSE diffing. Every code path that changes the
+# queue installs a *new* list object into _now_playing['queue'] (they all build
+# via list()/+/literal), so object identity is a reliable change signal — this
+# also catches the direct _now_playing['queue'] = ... writes that bypass
+# _update_now_playing. Holding a reference to the last-seen list prevents its
+# id from being reused by a successor allocation.
+_queue_seen_obj = None
+_queue_version = 0
+
+def _queue_version_locked():
+    """Current queue version, bumping it if the queue list was replaced.
+    Caller must hold _np_lock."""
+    global _queue_seen_obj, _queue_version
+    q = _now_playing.get('queue')
+    if q is not _queue_seen_obj:
+        _queue_seen_obj = q
+        _queue_version += 1
+    return _queue_version
 
 def _np_snapshot(serial=None):
     """Return the public-facing now-playing dict.
@@ -467,12 +522,12 @@ def _np_snapshot(serial=None):
         volume = s.get('volume')
     playback_error = s.get('playback_error')
     s['playback_error'] = None  # one-shot: clear once surfaced
-    logger.info("_np_snapshot: queue length %d", len(s.get('queue', [])))
     return {
         'playing': s['playing'], 'title': s['title'],
         'artist': s['artist'], 'thumbnail': s['thumbnail'],
         'video_id': s.get('video_id', ''),
         'queue': s.get('queue', []), 'queue_index': s.get('queue_index', -1),
+        'queue_version': _queue_version_locked(),
         'duration_ms': s.get('duration_ms', 0),
         'position_ms': _computed_position_ms(),
         'started_at': now,
@@ -510,15 +565,26 @@ def _notify_sse():
     # Snapshot (and clear the one-shot playback_error) once per broadcast, not
     # once per subscriber — otherwise only the first subscriber in the loop
     # would ever see a given error.
-    snapshots = {}
+    full = {}   # serial -> (json with queue, queue_version)
+    slim = {}   # serial -> json without the queue field
     dead = set()
-    for q, serial in subscribers:
-        if serial not in snapshots:
+    for q, sub in subscribers:
+        serial = sub.get('serial')
+        if serial not in full:
             with _np_lock:
-                snapshots[serial] = json.dumps(_np_snapshot(serial))
-        data = snapshots[serial]
+                snap = _np_snapshot(serial)
+            full[serial] = (json.dumps(snap), snap['queue_version'])
+            # Subscribers already at this queue_version get the payload without
+            # the queue: a long queue dominates the message size, and most
+            # pushes (progress heartbeats, volume) don't change it. The client
+            # keeps its last queue when the field is absent.
+            slim[serial] = json.dumps({k: v for k, v in snap.items() if k != 'queue'})
+        data, qv = full[serial]
+        if sub.get('qv') == qv:
+            data = slim[serial]
         try:
             q.put_nowait(data)
+            sub['qv'] = qv
         except Exception:
             dead.add(q)
     if dead:
@@ -585,7 +651,7 @@ def _sse_heartbeat_loop():
         except Exception:
             logger.exception("")
         with _sse_lock:
-            serials = {serial for serial in _sse_subscribers.values() if serial}
+            serials = {sub.get('serial') for sub in _sse_subscribers.values() if sub.get('serial')}
         with _np_lock:
             playing = _now_playing.get('playing')
         if serials and playing:
@@ -1359,10 +1425,37 @@ async def stream_playlist():
     playlist_id = request.args.get("id")
     if not playlist_id:
         return error_response('missing required parameter "id"', 400)
+    try:
+        limit = max(0, int(request.args.get("limit", 0) or 0))
+    except (TypeError, ValueError):
+        limit = 0
     response = await Supporting.stream_playlist(playlist_id)
     logger.info('Completed request in %.2f seconds.', time.time() - start_time)
     if response is None:
         return error_response('playlist not found or empty', 404)
+    # Mirror the full playlist into the web remote's queue so a voice-started
+    # playlist shows the real track list (and so /queue_tracks/ can serve the
+    # skill continuation batches beyond its window below).
+    try:
+        queue = []
+        for item in response['playlist']:
+            t = item.get('thumbnail')
+            thumb = t.get('url', '') if isinstance(t, dict) else (t if isinstance(t, str) else '')
+            queue.append({
+                'title': item.get('title', ''),
+                'artist': item.get('artist', ''),
+                'thumbnail': thumb,
+                'video_id': item.get('video_id', ''),
+                'duration_ms': item.get('duration_ms', 0),
+            })
+        _update_now_playing(queue=queue, queue_index=0)
+    except Exception:
+        logger.exception("stream_playlist: queue mirror failed")
+    # The skill persists its playlist copy to DynamoDB, where a 400KB item cap
+    # makes a 1000-track list fatal — it asks for a window (limit) and pages
+    # the rest through /queue_tracks/ as playback approaches the window's end.
+    if limit:
+        response = dict(response, playlist=response['playlist'][:limit])
     return jsonify(response)
 
 
@@ -1402,8 +1495,50 @@ async def stream_video():
     if not stream:
         return error_response('stream unavailable', 404)
     queue = _current_queue_for_video(video_id) or [metadata]
+    # Window the skill's copy around the requested track (DynamoDB 400KB item
+    # cap — see /stream_playlist/). The skill pages the rest via /queue_tracks/.
+    if len(queue) > _SKILL_QUEUE_WINDOW:
+        idx = next((i for i, item in enumerate(queue)
+                    if item.get('video_id') == video_id), 0)
+        start = max(0, idx - _SKILL_QUEUE_BEHIND)
+        queue = queue[start:start + _SKILL_QUEUE_WINDOW]
     logger.info('Completed stream_video in %.2f seconds.', time.time() - start_time)
     return jsonify({'song_info': {'metadata': metadata, 'stream': stream}, 'playlist': queue})
+
+
+# How much of a long queue the Alexa skill gets per response. The skill keeps a
+# sliding window in DynamoDB (400KB item cap) and fetches continuation batches
+# from /queue_tracks/ as playback nears the end of what it holds.
+_SKILL_QUEUE_WINDOW = 100
+_SKILL_QUEUE_BEHIND = 25
+
+
+@app.route("/queue_tracks/", methods=["GET"])
+def queue_tracks():
+    """Continuation batch for the skill's sliding playlist window: the tracks
+    that follow `after` (a video_id) in the web remote's current queue. Returns
+    an empty list when the video isn't in the queue any more (queue replaced by
+    a newer play) — the skill then falls back to radio continuation."""
+    after = request.args.get("after") or ''
+    try:
+        limit = min(200, max(1, int(request.args.get("limit", 75) or 75)))
+    except (TypeError, ValueError):
+        limit = 75
+    with _np_lock:
+        queue = list(_now_playing.get('queue') or [])
+    idx = next((i for i, item in enumerate(queue)
+                if item.get('video_id') == after), -1)
+    tracks = []
+    if idx >= 0:
+        for item in queue[idx + 1:idx + 1 + limit]:
+            tracks.append({
+                'title': item.get('title', ''),
+                'artist': item.get('artist', ''),
+                'video_id': item.get('video_id', ''),
+                'thumbnail': _thumbnail_metadata(item.get('thumbnail')),
+                'duration_ms': item.get('duration_ms', 0),
+            })
+    return jsonify({'tracks': tracks})
 
 
 @app.route("/get_radio/", methods=["GET"])
@@ -2043,7 +2178,7 @@ def login():
     if request.method == "GET":
         if _logged_in():
             return redirect('/')
-        return render_template("login.html", totp=_totp_enabled())
+        return _no_store(app.make_response(render_template("login.html", totp=_totp_enabled())))
 
     body = request.get_json(silent=True) or request.form
 
@@ -2083,10 +2218,20 @@ def login():
 
 @app.route("/logout/", methods=["POST", "GET"])
 def logout():
-    session.pop('remote_user', None)
+    # Clear the whole session (not just remote_user) so nothing — pending 2FA
+    # state included — survives a sign-out.
+    session.clear()
     if request.method == "GET":
         return redirect('/login/')
     return jsonify({'ok': True})
+
+
+def _no_store(resp):
+    """Auth-dependent HTML must never be served from any cache: a cached copy
+    of the logged-in page replays a 'still signed in' UI after the session is
+    gone (cleared site data, sign-out, expiry)."""
+    resp.headers['Cache-Control'] = 'no-store'
+    return resp
 
 
 @app.route("/remote/", methods=["GET"])
@@ -2096,7 +2241,7 @@ def remote_page():
     # key-in-URL scheme still serves here directly (see root()).
     if _remote_login_enabled():
         return redirect('/')
-    return render_template("remote.html")
+    return _no_store(app.make_response(render_template("remote.html", asset_v=_STATIC_VERSION)))
 
 
 @app.route("/alexa/status/", methods=["GET"])
@@ -2652,15 +2797,18 @@ def now_playing_stream():
     """SSE endpoint — pushes now-playing state to the browser in real time."""
     def generate():
         q = _queue_mod.Queue()
+        sub = {'serial': serial, 'qv': None}
         with _sse_lock:
-            _sse_subscribers[q] = serial
+            _sse_subscribers[q] = sub
         _ensure_heartbeat()  # start the periodic re-sync (idempotent)
         if serial:
             threading.Thread(target=_refresh_volume, args=(serial, True), daemon=True).start()
         try:
-            # Send current state immediately on connect
+            # Send current state immediately on connect (always with the queue)
             with _np_lock:
-                data = json.dumps(_np_snapshot(serial))
+                snap = _np_snapshot(serial)
+            sub['qv'] = snap['queue_version']
+            data = json.dumps(snap)
             yield f"data: {data}\n\n"
             while True:
                 try:
@@ -3792,7 +3940,7 @@ def root():
         # Key-in-URL scheme: keep the old path, a redirect would drop ?key=.
         return redirect('/remote/')
     if _logged_in():
-        return render_template("remote.html")
+        return _no_store(app.make_response(render_template("remote.html", asset_v=_STATIC_VERSION)))
     return redirect('/login/')
 
 
@@ -3839,12 +3987,17 @@ _MANIFEST = {
     "name": "Music Box Remote",
     "short_name": "Music Box",
     "description": "Control YouTube Music playback on your Alexa devices.",
+    "id": "/",
     "start_url": "/",
     "scope": "/",
     "display": "standalone",
+    # A tap on the icon should focus the already-running remote, not spawn a
+    # second window with its own SSE stream.
+    "launch_handler": {"client_mode": "navigate-existing"},
     "orientation": "portrait",
     "background_color": "#0a0a0a",
     "theme_color": "#0a0a0a",
+    "categories": ["music", "entertainment"],
     "icons": [
         {"src": "/static/icons/icon-192-any.png", "sizes": "192x192", "type": "image/png", "purpose": "any"},
         {"src": "/static/icons/icon-512-any.png", "sizes": "512x512", "type": "image/png", "purpose": "any"},
@@ -3859,21 +4012,107 @@ def manifest():
     return Response(json.dumps(_MANIFEST), mimetype="application/manifest+json")
 
 
-# Minimal service worker. A service worker is required for the browser to offer
-# installation. This one does no offline caching: the remote needs a live server
-# to reach Alexa anyway, and skipping a cache avoids serving stale HTML/JS after
-# an update. We deliberately register NO 'fetch' handler -- an empty one is a
-# no-op that forces the browser to wake the worker on every navigation (Chrome
-# warns about this); without it, requests take the default network path directly.
-_SERVICE_WORKER = """\
-self.addEventListener('install', (e) => self.skipWaiting());
-self.addEventListener('activate', (e) => e.waitUntil(self.clients.claim()));
+# Service worker: precaches the app shell assets under a cache versioned by
+# _STATIC_VERSION and serves them cache-first, so an installed PWA paints
+# without touching the network. Page navigations stay network-first (auth
+# redirects and fresh HTML must win) with the last good shell as an offline
+# fallback — combined with the localStorage state cache in remote.js, opening
+# the app offline still shows the last known player. API, SSE, and audio
+# proxy requests are never intercepted. Staleness is handled by versioning:
+# any static file change alters _STATIC_VERSION, byte-changing this source,
+# which makes the browser re-install the worker and precache fresh copies
+# (install fetches bypass the HTTP cache via cache: 'no-cache').
+_SERVICE_WORKER_TEMPLATE = """\
+const VERSION = '__VERSION__';
+const STATIC_CACHE = 'mb-static-' + VERSION;
+const PAGE_CACHE = 'mb-pages-v1';
+const PRECACHE = [
+  '/static/remote.css',
+  '/static/remote.js',
+  '/static/playlists.js',
+  '/static/icons/icon-192-any.png',
+  '/static/icons/icon-512-any.png',
+  '/static/icons/icon-192.png',
+  '/static/icons/icon-512.png',
+  '/favicon.ico',
+  '/manifest.webmanifest',
+];
+
+self.addEventListener('install', (e) => {
+  e.waitUntil((async () => {
+    const cache = await caches.open(STATIC_CACHE);
+    await Promise.allSettled(PRECACHE.map(
+      (u) => cache.add(new Request(u, { cache: 'no-cache' }))));
+    await self.skipWaiting();
+  })());
+});
+
+self.addEventListener('activate', (e) => {
+  e.waitUntil((async () => {
+    for (const key of await caches.keys()) {
+      if (key.startsWith('mb-static-') && key !== STATIC_CACHE) await caches.delete(key);
+    }
+    await self.clients.claim();
+  })());
+});
+
+const OFFLINE_HTML = '<!doctype html><meta charset="utf-8">'
+  + '<meta name="viewport" content="width=device-width,initial-scale=1">'
+  + '<title>Music Box</title>'
+  + '<body style="background:#0a0a0a;color:#eee;font-family:system-ui;display:grid;place-items:center;height:100vh;margin:0">'
+  + '<div style="text-align:center"><h1 style="font-weight:600">Offline</h1>'
+  + '<p>Music Box needs a connection to reach your speakers.</p></div>';
+
+self.addEventListener('fetch', (e) => {
+  const req = e.request;
+  if (req.method !== 'GET') return;
+  const url = new URL(req.url);
+  if (url.origin !== location.origin) return;
+
+  // App shell assets: cache-first from the versioned precache. ignoreSearch
+  // lets the ?v= cache-busted URLs the page uses hit the precached copies.
+  if (PRECACHE.includes(url.pathname)) {
+    e.respondWith((async () => {
+      const cached = await caches.match(req, { ignoreSearch: true });
+      if (cached) return cached;
+      const resp = await fetch(req);
+      if (resp.ok) (await caches.open(STATIC_CACHE)).put(req, resp.clone());
+      return resp;
+    })());
+    return;
+  }
+
+  // Page navigations: network-first, falling back to the last good shell.
+  if (req.mode === 'navigate') {
+    e.respondWith((async () => {
+      try {
+        const resp = await fetch(req);
+        // Auth redirect (302 to /login/ etc.) comes back opaque for
+        // navigations — hand it straight to the browser to follow. Never
+        // cache it, and never mask it with the cached logged-in shell.
+        if (resp.type === 'opaqueredirect' || resp.redirected) return resp;
+        if (resp.ok && resp.type === 'basic' && (url.pathname === '/' || url.pathname === '/remote/')) {
+          (await caches.open(PAGE_CACHE)).put(req, resp.clone());
+        }
+        return resp;
+      } catch (_) {
+        const cached = await caches.match(req, { ignoreSearch: true });
+        return cached || new Response(OFFLINE_HTML, { headers: { 'Content-Type': 'text/html' } });
+      }
+    })());
+  }
+  // Everything else (API, SSE stream, audio proxy) goes straight to the
+  // network — no respondWith, so the browser handles it natively.
+});
 """
+_SERVICE_WORKER = _SERVICE_WORKER_TEMPLATE.replace('__VERSION__', _STATIC_VERSION)
 
 
 @app.route("/service-worker.js")
 def service_worker():
     # Served from the origin root so its scope covers the whole site.
+    # no-cache: the browser revalidates this file on navigations, so a new
+    # _STATIC_VERSION rolls out to installed PWAs promptly.
     return Response(_SERVICE_WORKER, mimetype="application/javascript",
                     headers={"Cache-Control": "no-cache"})
 

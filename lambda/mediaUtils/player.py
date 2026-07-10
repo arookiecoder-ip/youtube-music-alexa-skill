@@ -17,6 +17,27 @@ logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 http = urllib3.PoolManager()
 
+# Sliding playlist window. The whole persisted state lives in one DynamoDB item
+# (hard 400KB cap), so the full 1000-track playlist can never be stored — a
+# playlist that size made every save throw and killed playback at the first
+# auto-advance. Instead we hold a bounded window of tracks and page the rest
+# from the server (/queue_tracks/, seeded by our last track's video_id) as
+# playback nears the window's end; trim_window drops already-played tracks
+# beyond a small "previous" allowance to keep the item bounded forever.
+_QUEUE_BATCH = 75        # tracks fetched per window request/extension
+_MAX_STORED_TRACKS = 150  # hard bound on tracks kept in DynamoDB
+_KEEP_BEHIND = 25        # played tracks kept for "previous" before trimming
+
+
+def _window_playlist(playlist: List, index: int) -> Tuple[List, int]:
+    """Clamp an incoming playlist to the storable window around index,
+    returning (windowed_playlist, adjusted_index). Defensive: the server
+    already windows its responses, but an older server returns everything."""
+    if len(playlist) <= _MAX_STORED_TRACKS:
+        return playlist, index
+    start = max(0, index - _KEEP_BEHIND)
+    return playlist[start:start + _MAX_STORED_TRACKS], index - start
+
 
 def _coerce_decimals(value):
     """Recursively convert DynamoDB's Decimal (boto3's persistence adapter
@@ -209,8 +230,20 @@ def get_similarity(x: str, y: str):
 class Attributes:
     @staticmethod
     def log_attributes(handler_input: HandlerInput):
-        persistent_attr = handler_input.attributes_manager.persistent_attributes
-        logger.info(f'persistent_attributes -> {persistent_attr}')
+        # Deliberately compact: dumping the full persistent attributes logged
+        # the entire stored playlist (hundreds of KB) on every play/enqueue.
+        try:
+            user_attr = Attributes.get_user_attributes(handler_input) or {}
+            playback_info = user_attr.get('playback_info') or {}
+            logger.info(
+                'attributes: playlist=%d index=%s play_order=%d offset_ms=%s enqueued=%s',
+                len(user_attr.get('playlist') or []),
+                playback_info.get('index'),
+                len(playback_info.get('play_order') or []),
+                playback_info.get('offset_in_ms'),
+                playback_info.get('next_stream_enqueued'))
+        except Exception:
+            pass
 
     @staticmethod
     def get_user_id(handler_input: HandlerInput) -> str:
@@ -418,7 +451,11 @@ class Api:
 
     @staticmethod
     def stream_playlist(handler_input: HandlerInput, playlist_id: str) -> Tuple[player_models.SongInfoList, Exception]:
-        response_json, error = Api._get_json(handler_input, 'stream_playlist', {'id': playlist_id})
+        # limit: ask for a window only — the full playlist can't be persisted
+        # (see the sliding-window notes at the top of this module). An older
+        # server ignores it; _window_playlist clamps that case on our side.
+        response_json, error = Api._get_json(handler_input, 'stream_playlist',
+                                             {'id': playlist_id, 'limit': _QUEUE_BATCH})
         if error: return None, error
         try:
             return from_dict(player_models.SongInfoList, response_json), None
@@ -471,6 +508,21 @@ class Api:
             return None, Exception(data.SERVICE_ISSUE)
 
     @staticmethod
+    def get_queue_tracks(handler_input: HandlerInput, after_video_id: str) -> Tuple[Optional[List[player_models.Metadata]], Optional[Exception]]:
+        """Continuation batch for the sliding playlist window: the tracks that
+        follow after_video_id in the server's current queue. Empty list when the
+        server's queue moved on (caller falls back to radio continuation)."""
+        response_json, error = Api._get_json(handler_input, 'queue_tracks',
+                                             {'after': after_video_id, 'limit': _QUEUE_BATCH})
+        if error: return None, error
+        try:
+            tracks = (response_json or {}).get('tracks') or []
+            return [from_dict(player_models.Metadata, t) for t in tracks], None
+        except Exception:
+            logger.exception('queue_tracks returned unexpected shape')
+            return None, Exception(data.SERVICE_ISSUE)
+
+    @staticmethod
     def get_armed_play(handler_input: HandlerInput) -> Tuple[Optional[Tuple[str, int]], Optional[Exception]]:
         """Fetch the video id the web remote armed for a direct play. Returns
         ((video_id, offset_ms), None) when one is pending, else (None, error).
@@ -514,6 +566,7 @@ class Controller:
             playlist = song_info_list.playlist
             song_info = song_info_list.song_info
 
+        playlist, _ = _window_playlist(playlist, 0)
         user_attr = Attributes.get_user_attributes(handler_input)
         Attributes.set_playlist(handler_input, playlist)
         user_attr['playback_info'] = {
@@ -538,6 +591,7 @@ class Controller:
         playlist = song_info_list.playlist or [song_info_list.song_info.metadata]
         song_info = song_info_list.song_info
         index = next((i for i, item in enumerate(playlist) if item.video_id == video_id), 0)
+        playlist, index = _window_playlist(playlist, index)
 
         user_attr = Attributes.get_user_attributes(handler_input)
         Attributes.set_playlist(handler_input, playlist)
@@ -587,13 +641,70 @@ class Controller:
             return False
 
     @staticmethod
+    def _append_tracks(handler_input: HandlerInput, new_tracks: List[player_models.Metadata]) -> bool:
+        """Append already-deduped tracks to playlist + play_order in place
+        (does not touch index or any already-played ordering). New tracks are
+        shuffled among themselves when shuffle is on."""
+        if not new_tracks:
+            return False
+        playlist = Attributes.get_playlist(handler_input)
+        base = len(playlist)
+        Attributes.set_playlist(handler_input, playlist + new_tracks)
+
+        playback_info = Attributes.get_playback_info(handler_input)
+        playback_setting = Attributes.get_playback_setting(handler_input)
+        new_indices = list(range(base, base + len(new_tracks)))
+        if playback_setting.get('shuffle'):
+            random.shuffle(new_indices)
+        playback_info['play_order'] = list(playback_info.get('play_order') or []) + new_indices
+        return True
+
+    @staticmethod
+    def _dedupe_against_playlist(playlist: List[player_models.Metadata],
+                                 candidates: List[player_models.Metadata]) -> List[player_models.Metadata]:
+        have = {m.video_id for m in playlist if m.video_id}
+        new_tracks = []
+        for m in candidates:
+            if m.video_id and m.video_id not in have:
+                new_tracks.append(m)
+                have.add(m.video_id)
+        return new_tracks
+
+    @staticmethod
+    def extend_queue(handler_input: HandlerInput) -> bool:
+        """Grow the playlist when playback reaches the end of the stored window.
+
+        Tries the server-queue continuation first (/queue_tracks/ after our
+        last track — this is how a windowed 1000-track playlist keeps playing
+        in order), then falls back to radio continuation. Trims already-played
+        tracks afterwards so the DynamoDB item stays bounded. Never raises.
+        Returns True iff new tracks were appended."""
+        grew = False
+        try:
+            playlist = Attributes.get_playlist(handler_input)
+            if playlist and playlist[-1].video_id:
+                tracks, error = Api.get_queue_tracks(handler_input, playlist[-1].video_id)
+                if error or not tracks:
+                    logger.info(f'extend_queue: no server-queue continuation ({error})')
+                else:
+                    grew = Controller._append_tracks(
+                        handler_input, Controller._dedupe_against_playlist(playlist, tracks))
+                    if grew:
+                        logger.info('extend_queue: extended from server queue')
+        except Exception:
+            logger.exception('extend_queue: server-queue continuation failed')
+        if not grew:
+            grew = Controller.extend_radio_queue(handler_input)
+        if grew:
+            Controller.trim_window(handler_input)
+        return grew
+
+    @staticmethod
     def extend_radio_queue(handler_input: HandlerInput) -> bool:
         """Grow the playlist with another batch of radio continuation once the
         end of the current queue is reached. Seeded from the last track already
         in the playlist so YT Music keeps the recommendation thread going.
-        Appends to playlist/play_order in place (does not touch index or any
-        already-played ordering). Never raises. Returns True iff new tracks
-        were appended."""
+        Never raises. Returns True iff new tracks were appended."""
         try:
             playlist = Attributes.get_playlist(handler_input)
             if not playlist:
@@ -605,38 +716,58 @@ class Controller:
             if error or not radio:
                 logger.info(f'extend_radio_queue: no continuation ({error})')
                 return False
-            have = {m.video_id for m in playlist if m.video_id}
-            new_tracks = []
-            for m in radio:
-                if m.video_id and m.video_id not in have:
-                    new_tracks.append(m)
-                    have.add(m.video_id)
+            new_tracks = Controller._dedupe_against_playlist(playlist, radio)
             if not new_tracks:
                 logger.info('extend_radio_queue: nothing new to append')
                 return False
-            # DynamoDB items are capped at 400KB; bound growth per extension
-            # and stop extending a runaway playlist.
-            new_tracks = new_tracks[:25]
-            if len(playlist) + len(new_tracks) > 400:
-                logger.warning('extend_radio_queue: playlist too large, not extending')
+            # Bound growth per extension; trim_window keeps the overall size in
+            # check, so radio can extend indefinitely.
+            if not Controller._append_tracks(handler_input, new_tracks[:25]):
                 return False
-
-            base = len(playlist)
-            extended_playlist = playlist + new_tracks
-            Attributes.set_playlist(handler_input, extended_playlist)
-
-            playback_info = Attributes.get_playback_info(handler_input)
-            playback_setting = Attributes.get_playback_setting(handler_input)
-            new_indices = list(range(base, len(extended_playlist)))
-            if playback_setting.get('shuffle'):
-                random.shuffle(new_indices)
-            playback_info['play_order'] = list(playback_info.get('play_order') or []) + new_indices
-
-            logger.info(f'extend_radio_queue: playlist now {len(extended_playlist)} tracks (+{len(new_tracks)})')
+            logger.info(f'extend_radio_queue: appended {len(new_tracks[:25])} tracks')
             return True
         except Exception:
             logger.exception('extend_radio_queue failed')
             return False
+
+    @staticmethod
+    def trim_window(handler_input: HandlerInput) -> None:
+        """Drop long-played tracks so the stored playlist never exceeds
+        _MAX_STORED_TRACKS (the whole persisted state must fit DynamoDB's 400KB
+        item cap). Keeps _KEEP_BEHIND already-played tracks for "previous".
+        Remaps play_order/index to the trimmed playlist. Never raises."""
+        try:
+            playback_info = Attributes.get_playback_info(handler_input)
+            playlist = Attributes.get_playlist(handler_input)
+            excess = len(playlist) - _MAX_STORED_TRACKS
+            if excess <= 0:
+                return
+            play_order = list(playback_info.get('play_order') or [])
+            index = int(playback_info.get('index', 0) or 0)
+            if len(play_order) != len(playlist):
+                # Inconsistent state (shouldn't happen): rebuild a sequential
+                # order rather than guessing which entries map where.
+                play_order = list(range(len(playlist)))
+                index = min(max(index, 0), len(playlist) - 1)
+            # Only play_order positions well behind the needle are trimmable.
+            drop_n = min(excess, max(0, index - _KEEP_BEHIND))
+            if drop_n <= 0:
+                return
+            dropped = set(play_order[:drop_n])
+            remap = {}
+            new_i = 0
+            for old_i in range(len(playlist)):
+                if old_i in dropped:
+                    continue
+                remap[old_i] = new_i
+                new_i += 1
+            Attributes.set_playlist(
+                handler_input, [m for i, m in enumerate(playlist) if i not in dropped])
+            playback_info['play_order'] = [remap[i] for i in play_order[drop_n:]]
+            playback_info['index'] = index - drop_n
+            logger.info(f'trim_window: dropped {drop_n} tracks, playlist now {new_i}')
+        except Exception:
+            logger.exception('trim_window failed')
 
     @staticmethod
     def play(
@@ -744,9 +875,10 @@ class Controller:
         next_index = (current_index + 1) % len(playlist)
 
         if next_index == 0 and not playback_setting.get("loop"):
-            if Controller.extend_radio_queue(handler_input):
+            if Controller.extend_queue(handler_input):
                 playlist = Attributes.get_playlist(handler_input)
-                next_index = current_index + 1
+                # extend_queue may have trimmed played tracks, shifting index.
+                next_index = playback_info.get("index", 0) + 1
             else:
                 if not is_playback:
                     handler_input.response_builder.speak(data.PLAYBACK_NEXT_END)

@@ -585,10 +585,21 @@ async function api(path, body) {
 async function doSignOut() {
   // AUTH-01 confirmed: logout flow (header + sidebar + overlay + doSignOut) is complete.
   stopSSE();
+  // Signed out: the cached devices/track belong to the ended session and must
+  // not instant-paint a logged-in UI on the next load.
+  try {
+    localStorage.removeItem(_CACHE_DEVICES_KEY);
+    localStorage.removeItem(_CACHE_NP_KEY);
+  } catch (_) {}
   try {
     await api('/logout/', {});
   } catch (_) { /* best-effort */ }
-  showControls(false);
+  // Drop the service worker's offline page shell too — it's a copy of the
+  // logged-in UI and must not be replayable after sign-out.
+  try { await caches.delete('mb-pages-v1'); } catch (_) {}
+  // Land on the sign-in page instead of exposing the remote's internal
+  // Amazon-connect section. replace() so Back can't return to the dead shell.
+  window.location.replace('/login/');
 }
 
 (function () {
@@ -668,6 +679,12 @@ let _lastQueueIndex = -1;
 let _rafQueuedData = null;
 let _rafQueuedIndex = -1;
 let _rafPending = false;
+// Long queues (1000+ tracks) are rendered lazily: only the first chunk of rows
+// is built, and more are appended as the user scrolls (sentinel + observer).
+// Building all 1000 rows (each with swipe/drag/menu listeners) per update is
+// what made the page lag on long playlists.
+const QUEUE_RENDER_CHUNK = 150;
+let _queueRenderLimit = QUEUE_RENDER_CHUNK;
 let _evtSource = null;
 
 // The device list tags each option with data-online. When the selected Echo
@@ -682,11 +699,71 @@ function selectedDeviceOnline() {
 
 let _lastHistoryVideoId = null;
 
+/* ---- Startup cache: instant paint on reload ----
+   The first real render is gated on /alexa/init/, which can take seconds when
+   the server has to re-validate its Amazon session (or queues behind another
+   Amazon call) — until then the page shows only the header/footer because the
+   preload class holds every section at opacity 0, so the player visibly "pops
+   in". Persist the last known devices + track and paint from that immediately
+   on load; the /alexa/init/ response reconciles when it lands. */
+const _CACHE_DEVICES_KEY = 'cachedDevices';
+const _CACHE_NP_KEY = 'cachedNowPlaying';
+let _paintedFromCache = false;
+
+let _npCacheKey = '';
+function _cacheNowPlaying(np) {
+  if (!np || !np.title) return;
+  // Skip the write unless something paint-relevant changed (this runs on
+  // every SSE push, including 8s heartbeats).
+  const key = (np.video_id || '') + ':' + (np.queue ? np.queue.length : 'nq') + ':' + (np.queue_index ?? -1);
+  if (key === _npCacheKey) return;
+  _npCacheKey = key;
+  try {
+    const slim = {
+      title: np.title, artist: np.artist || '', thumbnail: np.thumbnail || '',
+      video_id: np.video_id || '', duration_ms: np.duration_ms || 0,
+      // Never resume as "playing" from cache: the progress bar would tick for
+      // music that may have stopped. The live snapshot corrects this in a beat.
+      position_ms: 0, playing: false, playback_confirmed: false,
+      queue_index: np.queue_index ?? -1,
+    };
+    if (np.queue) {
+      // First rows are enough for the paint; the SSE connect snapshot brings
+      // the full queue right after.
+      slim.queue = np.queue.slice(0, 50);
+    } else {
+      // Queue omitted (SSE diffing: unchanged) — keep the previously cached one.
+      const prev = JSON.parse(localStorage.getItem(_CACHE_NP_KEY) || 'null');
+      if (prev && prev.queue) slim.queue = prev.queue;
+    }
+    localStorage.setItem(_CACHE_NP_KEY, JSON.stringify(slim));
+  } catch (_) {}
+}
+
+function restoreFromCache() {
+  try {
+    const devices = JSON.parse(localStorage.getItem(_CACHE_DEVICES_KEY) || 'null');
+    if (!devices || !devices.length) return;
+    _paintedFromCache = true;
+    // Reveals the sections (drops the preload class) and fills the device
+    // list; /alexa/init/ re-runs both with fresh data — or hides everything
+    // again if the Amazon session actually died.
+    showControls(true);
+    _applyDevices(devices, localStorage.getItem('selectedSerial') || '');
+    const np = JSON.parse(localStorage.getItem(_CACHE_NP_KEY) || 'null');
+    if (np && np.title) {
+      handleNpUpdate(np);
+      requestAnimationFrame(playStartupReveal);
+    }
+  } catch (_) {}
+}
+
 function handleNpUpdate(np) {
   // A real track change means the server just recorded a listen (on the
   // skill's 'started' webhook). Reload history after a short delay so the
   // JSON write — and the async metadata backfill — have time to land.
   const npVideoId = (np && np.video_id) || null;
+  _cacheNowPlaying(np);
   if (npVideoId && npVideoId !== _lastHistoryVideoId) {
     _lastHistoryVideoId = npVideoId;
     setTimeout(loadHistory, 1500);
@@ -744,7 +821,7 @@ function handleNpUpdate(np) {
   // once per animation frame. Prevents flicker when consecutive SSE snapshots
   // arrive mid-rebuild (playlist import triggers multiple _notify_sse calls).
   _lastQueueIndex = np.queue_index ?? -1;
-  if (np.queue) {
+  if (np.queue !== undefined && np.queue !== null) {
     _rafQueuedData = np.queue;
     _rafQueuedIndex = _lastQueueIndex;
     if (!_rafPending) {
@@ -762,9 +839,18 @@ function handleNpUpdate(np) {
       });
     }
   } else {
-    // np.queue is null/undefined — flush any pending RAF by calling showQueue
-    // with an empty array (existing behavior).
-    showQueue([], _lastQueueIndex);
+    // Queue field omitted: SSE diffing — the queue is unchanged since the
+    // last push that carried it (sending 1000 tracks on every progress/volume
+    // tick is what lagged the page). Just sync the active-row highlight,
+    // paging in rows first if playback advanced past the rendered window.
+    for (const id of ['queue-list', 'queue-modal-body']) {
+      const container = document.getElementById(id);
+      if (container && container._lazyQueue && _lastQueueIndex >= _renderedQueueRows(container).length) {
+        _appendLazyQueueRows(container, _lastQueueIndex + 11);
+      }
+    }
+    updateQueueActive(_lastQueueIndex);
+    updateQueueModalActive(_lastQueueIndex);
   }
 }
 
@@ -943,6 +1029,8 @@ async function playDirectLink(query) {
 document.getElementById('play-query').onclick = () => {
   const query = document.getElementById('query').value.trim();
   if (!query) { toast('Type something', 'error'); return; }
+  // Remember it for the search-history dropdown (no-op for pasted links).
+  if (typeof window._recordSearchHistory === 'function') window._recordSearchHistory(query);
   document.getElementById('query').blur();
   
   if (isYoutubeLinkLike(query)) {
@@ -1693,11 +1781,40 @@ async function doClearAll() {
   let activeIdx = -1;    // highlighted item (-1 = none)
   let debounceTimer = null;
   let seq = 0;           // request sequencer, drops stale responses
+  let showingHistory = false; // list currently shows recent searches, not live suggestions
 
   const searchSvg =
     '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" ' +
     'stroke="currentColor" stroke-width="2" stroke-linecap="round">' +
     '<circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></svg>';
+  const clockSvg =
+    '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" ' +
+    'stroke="currentColor" stroke-width="2" stroke-linecap="round">' +
+    '<circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15.5 14"/></svg>';
+
+  /* Recent searches, newest first. Shown (max 7) when the empty search bar is
+     focused; every submitted text search is recorded. */
+  const HISTORY_KEY = 'searchHistory';
+  const HISTORY_MAX_SHOWN = 7;
+  const HISTORY_MAX_STORED = 25;
+
+  function getHistory() {
+    try {
+      const a = JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]');
+      return Array.isArray(a) ? a.filter(h => typeof h === 'string') : [];
+    } catch (_) { return []; }
+  }
+
+  function recordSearch(q) {
+    q = (q || '').trim();
+    if (!q || isYoutubeLinkLike(q)) return;
+    // De-dupe case-insensitively so re-searching moves the entry to the top.
+    const hist = getHistory().filter(h => h.toLowerCase() !== q.toLowerCase());
+    hist.unshift(q);
+    try { localStorage.setItem(HISTORY_KEY, JSON.stringify(hist.slice(0, HISTORY_MAX_STORED))); } catch (_) {}
+  }
+  // The GO button handler lives outside this closure; let it record searches.
+  window._recordSearchHistory = recordSearch;
 
   function closeList() {
     // Cancel any pending debounce AND invalidate any in-flight request, so a
@@ -1709,6 +1826,7 @@ async function doClearAll() {
     listEl.innerHTML = '';
     items = [];
     activeIdx = -1;
+    showingHistory = false;
     input.setAttribute('aria-expanded', 'false');
   }
 
@@ -1719,14 +1837,38 @@ async function doClearAll() {
       const li = document.createElement('li');
       li.className = 'suggest-item' + (i === activeIdx ? ' active' : '');
       li.setAttribute('role', 'option');
-      li.innerHTML = searchSvg + '<span></span>';
+      li.innerHTML = (showingHistory ? clockSvg : searchSvg) + '<span></span>';
       li.querySelector('span').textContent = text;
       // mousedown (not click) so it fires before the input's blur
       li.addEventListener('mousedown', e => { e.preventDefault(); choose(i); });
       listEl.appendChild(li);
     });
+    if (showingHistory) {
+      const clearLi = document.createElement('li');
+      clearLi.className = 'suggest-clear-history';
+      clearLi.textContent = 'Clear search history';
+      clearLi.addEventListener('mousedown', e => {
+        e.preventDefault();
+        try { localStorage.removeItem(HISTORY_KEY); } catch (_) {}
+        closeList();
+        input.focus();
+      });
+      listEl.appendChild(clearLi);
+    }
     listEl.hidden = false;
     input.setAttribute('aria-expanded', 'true');
+  }
+
+  function showHistory() {
+    const hist = getHistory().slice(0, HISTORY_MAX_SHOWN);
+    if (!hist.length) { closeList(); return; }
+    // Invalidate any in-flight suggestion fetch so it can't overwrite history.
+    clearTimeout(debounceTimer);
+    seq++;
+    items = hist;
+    activeIdx = -1;
+    showingHistory = true;
+    render();
   }
 
   function choose(i) {
@@ -1744,19 +1886,19 @@ async function doClearAll() {
   clearBtn.addEventListener('mousedown', e => {
     e.preventDefault();
     input.value = '';
-    closeList();
     syncClearBtn();
     closeResults();   // also dismiss the results panel for this search
     input.focus();
+    showHistory();    // cleared + focused: offer recent searches
   });
   // Mobile: touchend fires instead of mousedown; mirror the same behaviour.
   clearBtn.addEventListener('touchend', e => {
     e.preventDefault();
     input.value = '';
-    closeList();
     syncClearBtn();
     closeResults();
     input.focus();
+    showHistory();
   });
   syncClearBtn();
 
@@ -1767,6 +1909,7 @@ async function doClearAll() {
       if (mySeq !== seq) return;            // a newer keystroke won
       items = (data.suggestions || []).slice(0, 8);
       activeIdx = -1;
+      showingHistory = false;
       render();
     } catch (_) {
       // Suggestions are best-effort; stay silent on failure.
@@ -1777,9 +1920,15 @@ async function doClearAll() {
     const q = input.value.trim();
     syncClearBtn();
     clearTimeout(debounceTimer);
-    // Don't suggest for links or empty input
-    if (!q || isYoutubeLinkLike(q)) { closeList(); return; }
+    // Empty box: fall back to recent searches; links get no suggestions.
+    if (!q) { showHistory(); return; }
+    if (isYoutubeLinkLike(q)) { closeList(); return; }
     debounceTimer = setTimeout(() => fetchSuggestions(q), 180);
+  });
+
+  // Clicking/tabbing into the empty search bar surfaces recent searches.
+  input.addEventListener('focus', () => {
+    if (!input.value.trim()) showHistory();
   });
 
   input.addEventListener('keydown', e => {
@@ -1974,6 +2123,9 @@ function _applyDevices(devices, preferSerial) {
     o.dataset.online = d.online ? '1' : '0';
     deviceEl.appendChild(o);
   }
+  // Remember the list so the next page load can paint the UI immediately
+  // instead of waiting for /alexa/init/ (see restoreFromCache).
+  try { localStorage.setItem(_CACHE_DEVICES_KEY, JSON.stringify(devices)); } catch (_) {}
   // Restore previously selected device if still present
   if (preferSerial && [...deviceEl.options].some(o => o.value === preferSerial)) {
     deviceEl.value = preferSerial;
@@ -2028,7 +2180,9 @@ async function initPage() {
     // Immediately render now-playing if we got it — no waiting for SSE
     if (data.now_playing) {
       handleNpUpdate(data.now_playing);
-      requestAnimationFrame(playStartupReveal);
+      // Skip the entrance animation when the cache already painted the player
+      // (replaying it would make the visible card flash a second time).
+      if (!_paintedFromCache) requestAnimationFrame(playStartupReveal);
     }
 
     // Open SSE stream (will push live updates going forward)
@@ -2088,7 +2242,8 @@ loginBtn.onclick = async () => {
   }
 };
 
-initPage();
+restoreFromCache();  // instant paint from the last session's state
+initPage();          // fresh truth from the server; reconciles the paint
 
 /* ---- queue display ---- */
 // Treats a press as a tap only if the pointer barely moved; otherwise the
@@ -2116,6 +2271,137 @@ function attachQueueItemTap(el, onTap) {
   });
 }
 
+/* ---- Lazy (windowed) queue rendering ----
+   Shared by the desktop queue list and the mobile queue modal. Only a window
+   of rows is materialized; a 1px sentinel after the last row pages in the next
+   chunk when scrolled near. Each container keeps its own state in
+   el._lazyQueue = { queue, currentIndex } and its own observer. */
+
+function _renderedQueueRows(container) {
+  return container.querySelectorAll(':scope > .queue-swipe-wrapper');
+}
+
+// Builds one queue row (wrapper + item + listeners). thumbsById, when given,
+// maps video_id -> already-loaded <img> to transplant so the browser never
+// re-fetches/re-decodes it (the re-fetch flash on every track change was the
+// visible flicker here). Rows capture their index by closure, so callers must
+// rebuild rows whose index changed (reorders) rather than reuse them.
+function _buildQueueRow(container, item, i, currentIndex, thumbsById) {
+  const id = item.video_id || '';
+  const wrapper = document.createElement('div');
+  wrapper.className = 'queue-swipe-wrapper';
+  wrapper.dataset.index = String(i);
+  wrapper.dataset.videoId = id;
+
+  // Swipe-to-delete underlay (mobile, hidden on desktop via CSS)
+  wrapper.innerHTML = `
+    <div class="queue-delete-underlay">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+        <path d="M3 6h18"/><path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2"/>
+        <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+      </svg>
+      Remove
+    </div>
+    <div class="queue-like-underlay">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+      Like
+    </div>
+  `;
+
+  const el = document.createElement('div');
+  el.className = 'queue-item' + (i === currentIndex ? ' active' : '');
+  el.dataset.index = String(i);
+
+  const thumbUrl = item.thumbnail || '';
+  const reusableImg = thumbsById && thumbUrl ? thumbsById.get(id) : null;
+  const sameUrl = reusableImg && reusableImg.src === thumbUrl;
+  // A placeholder marker <div> stands in for the thumb during innerHTML
+  // parsing; a transplantable already-loaded <img> replaces it right after.
+  const thumbHtml = sameUrl
+    ? `<div class="queue-thumb-slot"></div>`
+    : thumbUrl
+      ? `<img class="queue-thumb" src="${escHtml(thumbUrl)}" alt="" loading="lazy" onload="this.classList.add('loaded')">`
+      : `<div class="queue-thumb"></div>`;
+
+  const dragSvg = `<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/><circle cx="9" cy="10" r="1.5"/><circle cx="15" cy="10" r="1.5"/><circle cx="9" cy="15" r="1.5"/><circle cx="15" cy="15" r="1.5"/><circle cx="9" cy="20" r="1.5"/><circle cx="15" cy="20" r="1.5"/></svg>`;
+
+  el.innerHTML = `
+    <div class="queue-drag-handle" title="Drag to reorder">${dragSvg}</div>
+    <span class="queue-num">${i + 1}</span>
+    ${thumbHtml}
+    <div class="queue-info">
+      <div class="queue-title">${escHtml(item.title)}</div>
+      <div class="queue-artist">${escHtml(item.artist)}</div>
+    </div>
+    ${_queueMoreMenuHtml(item)}
+  `;
+  if (sameUrl) el.querySelector('.queue-thumb-slot').replaceWith(reusableImg);
+
+  wrapper.appendChild(el);
+
+  // Tap on the item → play from queue. Mark it active immediately so the
+  // "you tapped this" feedback shows right away instead of only after the
+  // server round-trip completes and playFromQueue's own re-render lands.
+  attachQueueItemTap(el, () => {
+    for (const other of container.querySelectorAll('.queue-item.active')) other.classList.remove('active');
+    el.classList.add('active');
+    playFromQueue(item, i);
+  });
+
+  _wireQueueMoreMenu(el, item, i);
+
+  // Mobile: swipe gestures (like/delete)
+  _attachQueueSwipeGestures(wrapper, el, i, item, currentIndex);
+
+  // Drag-to-reorder (both mobile + desktop via the handle)
+  _attachQueueDragReorder(el, container, i);
+
+  return wrapper;
+}
+
+function _appendLazyQueueRows(container, targetCount) {
+  const st = container._lazyQueue;
+  if (!st) return;
+  const start = _renderedQueueRows(container).length;
+  const end = Math.min(st.queue.length, Math.max(targetCount, start));
+  if (end > start) {
+    const frag = document.createDocumentFragment();
+    for (let i = start; i < end; i++) {
+      frag.appendChild(_buildQueueRow(container, st.queue[i], i, st.currentIndex, null));
+    }
+    const sentinel = container.querySelector(':scope > .queue-lazy-sentinel');
+    if (sentinel) container.insertBefore(frag, sentinel);
+    else container.appendChild(frag);
+    if (container.id === 'queue-list' && end > _queueRenderLimit) _queueRenderLimit = end;
+  }
+  _syncQueueSentinel(container);
+}
+
+function _syncQueueSentinel(container) {
+  const st = container._lazyQueue;
+  const total = st ? st.queue.length : 0;
+  let sentinel = container.querySelector(':scope > .queue-lazy-sentinel');
+  if (_renderedQueueRows(container).length >= total) {
+    if (sentinel) sentinel.remove();
+    return;
+  }
+  if (!sentinel) {
+    sentinel = document.createElement('div');
+    sentinel.className = 'queue-lazy-sentinel';
+    sentinel.style.height = '1px';
+  }
+  container.appendChild(sentinel); // (re)position after the last row
+  if (!container._lazyQueueObserver) {
+    container._lazyQueueObserver = new IntersectionObserver((entries) => {
+      if (entries.some((e) => e.isIntersecting)) {
+        _appendLazyQueueRows(container, _renderedQueueRows(container).length + QUEUE_RENDER_CHUNK);
+      }
+    }, { root: container, rootMargin: '600px' });
+  }
+  container._lazyQueueObserver.disconnect();
+  container._lazyQueueObserver.observe(sentinel);
+}
+
 function showQueue(queue, currentIndex) {
   const section = document.getElementById('queue-section');
   const list = document.getElementById('queue-list');
@@ -2127,6 +2413,7 @@ function showQueue(queue, currentIndex) {
     return;
   }
   if (!queue || queue.length <= 1) {
+    _queueRenderLimit = QUEUE_RENDER_CHUNK; // fresh queue starts a fresh window
     section.classList.remove('is-visible');
     clearTimeout(section._hideTimer);
     section._hideTimer = setTimeout(() => {
@@ -2140,18 +2427,32 @@ function showQueue(queue, currentIndex) {
   mainEl.classList.add('has-queue');
   requestAnimationFrame(() => section.classList.add('is-visible'));
 
-  // If the incoming queue is identical (same video_ids, same order) to what's
-  // already rendered, this call is just a confirmation echo of an optimistic
-  // update (add/reorder/remove) or an unrelated field changing upstream —
-  // don't tear down and rebuild every row for nothing (that full rebuild,
-  // including closing menus and re-creating drag handles, was the flicker).
-  // Just sync the active highlight and bail.
-  const existingIds = Array.from(list.children).map(w => w.dataset.videoId || '');
+  // Lazy window: only this many rows are materialized now; scrolling appends
+  // more (see _syncQueueSentinel). Always cover the active row so the
+  // highlight has a row to land on.
   const incomingIds = queue.map(item => item.video_id || '');
-  const sameOrder = existingIds.length === incomingIds.length
+  const renderLimit = Math.min(queue.length, Math.max(_queueRenderLimit, currentIndex + 11));
+  list._lazyQueue = { queue, currentIndex };
+
+  // If the rendered rows are exactly a prefix of the incoming queue (same
+  // video_ids, same order), this call is just a confirmation echo of an
+  // optimistic update (add/reorder/remove), an unrelated field changing
+  // upstream, or new tracks appended past the window — don't tear down and
+  // rebuild every row for nothing (that full rebuild, including closing menus
+  // and re-creating drag handles, was the flicker). Just sync the active
+  // highlight and let the sentinel page in any new tail.
+  const renderedRows = Array.from(_renderedQueueRows(list));
+  const existingIds = renderedRows.map(w => w.dataset.videoId || '');
+  const samePrefix = existingIds.length > 0
+    && existingIds.length <= incomingIds.length
     && existingIds.every((id, i) => id === incomingIds[i]);
-  if (sameOrder) {
+  if (samePrefix) {
+    if (currentIndex >= existingIds.length) {
+      // Playback advanced past the rendered window without a queue change.
+      _appendLazyQueueRows(list, currentIndex + 11);
+    }
     updateQueueActive(currentIndex);
+    _syncQueueSentinel(list);
     return;
   }
 
@@ -2164,91 +2465,20 @@ function showQueue(queue, currentIndex) {
   // Rows are rebuilt fresh every time (listeners capture the row's index by
   // closure, so reusing whole nodes across a reorder would leave them acting
   // on stale indices). But the <img> itself is transplanted from the old row
-  // when the same video_id already has one loaded at the same URL, so the
-  // browser never re-fetches/re-decodes it — that re-fetch flash on every
-  // track change was the visible flicker here.
+  // when the same video_id already has one loaded at the same URL (see
+  // _buildQueueRow), so the browser never re-fetches/re-decodes it.
   const existingThumbsById = new Map();
-  for (const w of list.children) {
+  for (const w of renderedRows) {
     const id = w.dataset.videoId || '';
     const img = w.querySelector('img.queue-thumb.loaded');
     if (id && img && !existingThumbsById.has(id)) existingThumbsById.set(id, img);
   }
   const newChildren = [];
-  queue.forEach((item, i) => {
-    const id = item.video_id || '';
-    const wrapper = document.createElement('div');
-    wrapper.className = 'queue-swipe-wrapper';
-    wrapper.dataset.index = String(i);
-    wrapper.dataset.videoId = id;
-
-    // Swipe-to-delete underlay (mobile, hidden on desktop via CSS)
-    wrapper.innerHTML = `
-      <div class="queue-delete-underlay">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-          <path d="M3 6h18"/><path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2"/>
-          <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
-        </svg>
-        Remove
-      </div>
-      <div class="queue-like-underlay">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
-        Like
-      </div>
-    `;
-
-    const el = document.createElement('div');
-    el.className = 'queue-item' + (i === currentIndex ? ' active' : '');
-    el.dataset.index = String(i);
-
-    const thumbUrl = item.thumbnail || '';
-    const reusableImg = thumbUrl && existingThumbsById.get(id);
-    const sameUrl = reusableImg && reusableImg.src === thumbUrl;
-    // A placeholder marker <div> stands in for the thumb during innerHTML
-    // parsing; if we can transplant an already-loaded <img> for this exact
-    // video_id + URL, it replaces the marker right after (see below) so the
-    // image never re-fetches. Otherwise a fresh <img> is used as before.
-    const thumbHtml = sameUrl
-      ? `<div class="queue-thumb-slot"></div>`
-      : thumbUrl
-        ? `<img class="queue-thumb" src="${escHtml(thumbUrl)}" alt="" loading="lazy" onload="this.classList.add('loaded')">`
-        : `<div class="queue-thumb"></div>`;
-
-    const dragSvg = `<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/><circle cx="9" cy="10" r="1.5"/><circle cx="15" cy="10" r="1.5"/><circle cx="9" cy="15" r="1.5"/><circle cx="15" cy="15" r="1.5"/><circle cx="9" cy="20" r="1.5"/><circle cx="15" cy="20" r="1.5"/></svg>`;
-
-    el.innerHTML = `
-      <div class="queue-drag-handle" title="Drag to reorder">${dragSvg}</div>
-      <span class="queue-num">${i + 1}</span>
-      ${thumbHtml}
-      <div class="queue-info">
-        <div class="queue-title">${escHtml(item.title)}</div>
-        <div class="queue-artist">${escHtml(item.artist)}</div>
-      </div>
-      ${_queueMoreMenuHtml(item)}
-    `;
-    if (sameUrl) el.querySelector('.queue-thumb-slot').replaceWith(reusableImg);
-
-    wrapper.appendChild(el);
-
-    // Tap on the item → play from queue. Mark it active immediately so the
-    // "you tapped this" feedback shows right away instead of only after the
-    // server round-trip completes and playFromQueue's own re-render lands.
-    attachQueueItemTap(el, () => {
-      for (const other of list.querySelectorAll('.queue-item.active')) other.classList.remove('active');
-      el.classList.add('active');
-      playFromQueue(item, i);
-    });
-
-    _wireQueueMoreMenu(el, item, i);
-
-    // Mobile: swipe gestures (like/delete)
-    _attachQueueSwipeGestures(wrapper, el, i, item, currentIndex);
-
-    // Drag-to-reorder (both mobile + desktop via the handle)
-    _attachQueueDragReorder(el, list, i);
-
-    newChildren.push(wrapper);
-  });
+  for (let i = 0; i < renderLimit; i++) {
+    newChildren.push(_buildQueueRow(list, queue[i], i, currentIndex, existingThumbsById));
+  }
   list.replaceChildren(...newChildren);
+  _syncQueueSentinel(list);
 
   // Restore scroll position unconditionally — user stays at browsing position.
   list.scrollTop = savedScrollTop;
@@ -2417,6 +2647,16 @@ document.addEventListener('click', _closeAllQueueMenus);
 function updateQueueActive(currentIndex) {
   const list = document.getElementById('queue-list');
   for (const el of list.querySelectorAll('.queue-item')) {
+    el.classList.toggle('active', Number(el.dataset.index) === currentIndex);
+  }
+}
+
+// Same highlight sync for the mobile queue modal — used when an SSE push
+// carries only a queue_index change (queue itself omitted as unchanged).
+function updateQueueModalActive(currentIndex) {
+  const modalBody = document.getElementById('queue-modal-body');
+  if (!modalBody) return;
+  for (const el of modalBody.querySelectorAll('.queue-item')) {
     el.classList.toggle('active', Number(el.dataset.index) === currentIndex);
   }
 }
@@ -3472,70 +3712,36 @@ function updateUrlBar() {
       currentIndex = _lastQueueIndex ?? -1;
     } catch (_) { queue = []; currentIndex = -1; }
     if (!queue.length) {
+      modalBody._lazyQueue = null;
       modalBody.innerHTML = '<div class="queue-modal-empty">No songs in queue</div>';
       return;
     }
+    // Lazy window, same as showQueue: only a chunk of rows is built; the
+    // sentinel pages in more as the user scrolls the modal.
+    const incomingIds = queue.map(item => item.video_id || '');
+    const renderLimit = Math.min(queue.length, Math.max(QUEUE_RENDER_CHUNK, currentIndex + 11));
+    modalBody._lazyQueue = { queue, currentIndex };
+
     // Same guard as showQueue: skip the full rebuild (and the image re-fetch
     // flicker that comes with it) when this call is just confirming a queue
     // that's already on screen in the same order.
-    const existingIds = Array.from(modalBody.children).map(w => w.dataset.videoId || '');
-    const incomingIds = queue.map(item => item.video_id || '');
-    const sameOrder = existingIds.length === incomingIds.length
+    const existingIds = Array.from(_renderedQueueRows(modalBody)).map(w => w.dataset.videoId || '');
+    const samePrefix = existingIds.length > 0
+      && existingIds.length <= incomingIds.length
       && existingIds.every((id, i) => id === incomingIds[i]);
-    if (sameOrder) {
-      for (const el of modalBody.querySelectorAll('.queue-item')) {
-        el.classList.toggle('active', Number(el.dataset.index) === currentIndex);
+    if (samePrefix) {
+      if (currentIndex >= existingIds.length) {
+        _appendLazyQueueRows(modalBody, currentIndex + 11);
       }
+      updateQueueModalActive(currentIndex);
+      _syncQueueSentinel(modalBody);
       return;
     }
     modalBody.innerHTML = '';
-    queue.forEach((item, i) => {
-      const wrapper = document.createElement('div');
-      wrapper.className = 'queue-swipe-wrapper';
-      wrapper.dataset.index = String(i);
-      wrapper.dataset.videoId = item.video_id || '';
-      wrapper.innerHTML = `
-        <div class="queue-delete-underlay">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-            <path d="M3 6h18"/><path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2"/>
-            <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
-          </svg>
-          Remove
-        </div>
-        <div class="queue-like-underlay">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
-          Like
-        </div>
-      `;
-      const el = document.createElement('div');
-      el.className = 'queue-item' + (i === currentIndex ? ' active' : '');
-      el.dataset.index = String(i);
-      const thumbUrl = item.thumbnail || '';
-      const thumbHtml = thumbUrl
-        ? `<img class="queue-thumb" src="${escHtml(thumbUrl)}" alt="" loading="lazy" onload="this.classList.add('loaded')">`
-        : `<div class="queue-thumb"></div>`;
-      const dragSvg = `<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/><circle cx="9" cy="10" r="1.5"/><circle cx="15" cy="10" r="1.5"/><circle cx="9" cy="15" r="1.5"/><circle cx="15" cy="15" r="1.5"/><circle cx="9" cy="20" r="1.5"/><circle cx="15" cy="20" r="1.5"/></svg>`;
-      el.innerHTML = `
-        <div class="queue-drag-handle" title="Drag to reorder">${dragSvg}</div>
-        <span class="queue-num">${i + 1}</span>
-        ${thumbHtml}
-        <div class="queue-info">
-          <div class="queue-title">${escHtml(item.title)}</div>
-          <div class="queue-artist">${escHtml(item.artist)}</div>
-        </div>
-        ${_queueMoreMenuHtml(item)}
-      `;
-      wrapper.appendChild(el);
-      attachQueueItemTap(el, () => {
-        for (const other of modalBody.querySelectorAll('.queue-item.active')) other.classList.remove('active');
-        el.classList.add('active');
-        playFromQueue(item, i);
-      });
-      _wireQueueMoreMenu(el, item, i);
-      _attachQueueSwipeGestures(wrapper, el, i, item, currentIndex);
-      _attachQueueDragReorder(el, modalBody, i);
-      modalBody.appendChild(wrapper);
-    });
+    for (let i = 0; i < renderLimit; i++) {
+      modalBody.appendChild(_buildQueueRow(modalBody, queue[i], i, currentIndex, null));
+    }
+    _syncQueueSentinel(modalBody);
     const active = modalBody.querySelector('.active');
     if (active) setTimeout(() => active.scrollIntoView({ block: 'nearest', behavior: 'smooth' }), 100);
   }

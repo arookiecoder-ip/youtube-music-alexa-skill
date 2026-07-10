@@ -986,6 +986,29 @@
   .suggest-item:hover,
   .suggest-item.active { background: #1a1a1a; }
   .suggest-item svg { flex: none; color: var(--muted); }
+  .suggest-clear-history {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 9px 12px;
+    font-size: .78rem;
+    color: var(--muted);
+    cursor: pointer;
+    border-top: 1px solid var(--border);
+  }
+  .suggest-clear-history:hover { color: var(--text); background: #1a1a1a; }
+
+  /* Freshly added playlist track: slides in at the top with a brief accent
+     glow, mirroring YT Music's newest-on-top add behavior. */
+  .result-swipe-wrapper.track-added-anim {
+    animation: trackAddedIn .9s ease;
+  }
+  @keyframes trackAddedIn {
+    0%   { opacity: 0; transform: translateY(-14px); background: rgba(232, 89, 12, .28); }
+    35%  { opacity: 1; transform: none; background: rgba(232, 89, 12, .28); }
+    100% { background: transparent; }
+  }
 
   /* ---- Footer ---- */
   .site-footer {

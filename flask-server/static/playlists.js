@@ -203,6 +203,15 @@ function openPlaylistDetailModal(pl_id) {
       // of a bespoke implementation, so the animation and thresholds match.
       const wrapper = document.createElement('div');
       wrapper.className = 'result-swipe-wrapper';
+      // Freshly added song: play the slide-in/glow entrance once (it sits at
+      // the top, like YT Music), then forget it so re-renders stay calm.
+      const trackKey = track.uuid || track.video_id;
+      if (_recentlyAddedTrackKeys.has(trackKey) || _recentlyAddedTrackKeys.has(track.video_id)) {
+        wrapper.classList.add('track-added-anim');
+        _recentlyAddedTrackKeys.delete(trackKey);
+        _recentlyAddedTrackKeys.delete(track.video_id);
+        wrapper.addEventListener('animationend', () => wrapper.classList.remove('track-added-anim'), { once: true });
+      }
       wrapper.innerHTML = `
         <div class="result-swipe-underlay underlay-play-next">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
@@ -643,30 +652,51 @@ async function createNewPlaylist() {
   nameInput.disabled = false;
 }
 
+// Track keys (uuid or video_id) of songs just added this session, so the
+// playlist detail view can play their "slid in at the top" animation the next
+// time it renders them (one-shot; consumed by openPlaylistDetailModal).
+const _recentlyAddedTrackKeys = new Set();
+
 async function addToPlaylist(pl_id) {
   if (!_currentItemToSave) return;
   const item = _currentItemToSave;
+  const plName = (_playlistsData.playlists[pl_id] || {}).name || 'playlist';
   // Optimistic placeholder so the row flips to a checkmark immediately; swapped
   // for the server's real track (uuid, backfilled thumbnail, etc.) on success,
-  // or rolled back on failure.
+  // or rolled back on failure. New songs go to the TOP, matching YT Music
+  // (and the newest-first order the server now returns).
   const placeholder = { uuid: 'pending-' + Date.now(), video_id: item.video_id, title: item.title,
     artist: item.artist, thumbnail: item.thumbnail, duration_ms: item.duration_ms };
-  _playlistsData.playlists[pl_id].tracks.push(placeholder);
+  _playlistsData.playlists[pl_id].tracks.unshift(placeholder);
+  _recentlyAddedTrackKeys.add(placeholder.video_id);
   if (document.getElementById('add-to-playlist-overlay').classList.contains('open')) {
     openAddToPlaylistModal(item);
   }
-  toast('Saved to playlist', 'ok');
+  _refreshOpenPlaylistDetail(pl_id);
+  toast('Added to “' + plName + '”', 'ok');
   try {
     const res = await api('/api/playlists/' + encodeURIComponent(pl_id) + '/tracks/', item);
     const idx = _playlistsData.playlists[pl_id].tracks.indexOf(placeholder);
     if (idx !== -1) _playlistsData.playlists[pl_id].tracks[idx] = res.track;
+    if (res.track && res.track.uuid) _recentlyAddedTrackKeys.add(res.track.uuid);
   } catch (e) {
     console.error(e);
     _playlistsData.playlists[pl_id].tracks = _playlistsData.playlists[pl_id].tracks.filter(t => t !== placeholder);
+    _recentlyAddedTrackKeys.delete(placeholder.video_id);
     if (document.getElementById('add-to-playlist-overlay').classList.contains('open')) {
       openAddToPlaylistModal(item);
     }
+    _refreshOpenPlaylistDetail(pl_id);
     toast('Error saving to playlist: ' + (e.message || 'unknown'), 'error');
+  }
+}
+
+// Re-render the playlist detail modal if it's currently showing pl_id, so an
+// add lands visibly (animated, at the top) without the user reopening it.
+function _refreshOpenPlaylistDetail(pl_id) {
+  if (_currentPlaylistDetailId === pl_id
+      && document.getElementById('playlist-detail-modal-overlay').classList.contains('open')) {
+    openPlaylistDetailModal(pl_id);
   }
 }
 

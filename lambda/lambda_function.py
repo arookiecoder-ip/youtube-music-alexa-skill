@@ -579,9 +579,13 @@ class PlaybackNearlyFinishedEventHandler(AbstractRequestHandler):
         enqueue_index = (current_index + 1) % len(playlist)
 
         if enqueue_index == 0 and not playback_setting.get("loop"):
-            if not player.Controller.extend_radio_queue(handler_input):
+            # Reached the end of the stored window: page in the next batch of
+            # the source playlist from the server (or radio continuation as a
+            # fallback). This may trim long-played tracks, shifting the index.
+            if not player.Controller.extend_queue(handler_input):
                 return handler_input.response_builder.response
             playlist = player.Attributes.get_playlist(handler_input)
+            current_index = playback_info.get("index", 0)
             enqueue_index = current_index + 1
 
         playback_info["next_stream_enqueued"] = True
@@ -752,6 +756,12 @@ class LoadPersistenceAttributesRequestInterceptor(AbstractRequestInterceptor):
                 if not thumbnail: continue
                 thumbnail['width'] = int(thumbnail['width'])  # Convert Decimal to int
                 thumbnail['height'] = int(thumbnail['height'])  # Convert Decimal to int
+
+            # Heal oversized legacy state: playlists persisted before the
+            # sliding window could hold hundreds of tracks, pushing the item
+            # toward DynamoDB's 400KB cap where every save fails. (No-op when
+            # already within bounds; never raises.)
+            player.Controller.trim_window(handler_input)
 
 class SavePersistenceAttributesResponseInterceptor(AbstractResponseInterceptor):
     def process(self, handler_input: HandlerInput, response):

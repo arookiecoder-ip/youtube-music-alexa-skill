@@ -13,7 +13,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Music Box">
 <link rel="apple-touch-icon" href="/static/icons/icon-192-any.png">
-<link rel="stylesheet" href="/static/remote.css">
+<link rel="stylesheet" href="/static/remote.css?v={{ asset_v }}">
 <style>
   body.preload .play-section,
   body.preload .player-section,
@@ -765,7 +765,7 @@
 <div class="toast" id="toast"></div>
 
 
-<script src="/static/remote.js"></script>
-<script src="/static/playlists.js"></script>
+<script src="/static/remote.js?v={{ asset_v }}"></script>
+<script src="/static/playlists.js?v={{ asset_v }}"></script>
 </body>
 </html>
