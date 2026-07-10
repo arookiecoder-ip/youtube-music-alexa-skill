@@ -4016,17 +4016,20 @@ def armed_play():
 
 @app.route("/alexa/search/", methods=["GET"])
 async def alexa_search():
-    """Full search results for the web remote's results page (thumbnail +
-    title + artist per row). Catalog songs first, then videos (mashups and
-    covers often exist only as videos), deduped by video id."""
+    """Categorized search results for the web remote's filter tabs."""
     query = (request.args.get("q") or "").strip()
     if not query:
         return error_response('missing required parameter "q"', 400)
 
-    def _collect_results(raw):
-        """Extract deduplicated result dicts from ytmusic raw responses."""
+    search_filters = ('songs', 'videos', 'artists', 'albums', 'playlists')
+
+    def _last_thumbnail(item):
+        thumbs = item.get('thumbnails') or []
+        return thumbs[-1].get('url', '') if thumbs else ''
+
+    def _collect_songs(raw_groups):
         results, seen = [], set()
-        for tracks in raw:
+        for tracks in raw_groups:
             if isinstance(tracks, BaseException) or not tracks:
                 continue
             for track in tracks:
@@ -4034,12 +4037,11 @@ async def alexa_search():
                 if not _valid_video_id(video_id) or video_id in seen:
                     continue
                 seen.add(video_id)
-                thumbs = track.get('thumbnails') or []
                 results.append({
                     'title': track.get('title') or '',
                     'artist': " and ".join(a.get('name') or '' for a in track.get('artists') or []),
                     'video_id': video_id,
-                    'thumbnail': thumbs[-1].get('url', '') if thumbs else '',
+                    'thumbnail': _last_thumbnail(track),
                     'duration_ms': Supporting.duration_ms(track),
                 })
                 if len(results) >= 50:
@@ -4048,6 +4050,65 @@ async def alexa_search():
                 break
         return results
 
+    def _collect_artists(raw):
+        results = []
+        if isinstance(raw, BaseException) or not raw:
+            return results
+        for item in raw:
+            results.append({
+                'name': item.get('artist') or '',
+                'thumbnail': _last_thumbnail(item),
+                'browse_id': item.get('browseId') or '',
+            })
+            if len(results) >= 50:
+                break
+        return results
+
+    def _collect_albums(raw):
+        results = []
+        if isinstance(raw, BaseException) or not raw:
+            return results
+        for item in raw:
+            results.append({
+                'title': item.get('title') or '',
+                'artist': item.get('artist') or '',
+                'year': item.get('year') or '',
+                'thumbnail': _last_thumbnail(item),
+                'browse_id': item.get('browseId') or '',
+                'playlist_id': item.get('playlistId') or '',
+            })
+            if len(results) >= 50:
+                break
+        return results
+
+    def _collect_playlists(raw):
+        results = []
+        if isinstance(raw, BaseException) or not raw:
+            return results
+        for item in raw:
+            results.append({
+                'title': item.get('title') or '',
+                'track_count': item.get('itemCount') or '',
+                'owner': item.get('author') or '',
+                'thumbnail': _last_thumbnail(item),
+                'browse_id': item.get('browseId') or '',
+            })
+            if len(results) >= 50:
+                break
+        return results
+
+    def _categorize(raw):
+        by_filter = dict(zip(search_filters, raw))
+        return {
+            'songs': _collect_songs([by_filter.get('songs'), by_filter.get('videos')]),
+            'artists': _collect_artists(by_filter.get('artists')),
+            'albums': _collect_albums(by_filter.get('albums')),
+            'playlists': _collect_playlists(by_filter.get('playlists')),
+        }
+
+    def _has_results(results):
+        return any(results[category] for category in ('songs', 'artists', 'albums', 'playlists'))
+
     ytmusic = YTMusic()
 
     # First try with spelling correction (ignore_spelling=False) so typos
@@ -4055,23 +4116,23 @@ async def alexa_search():
     raw = await asyncio.gather(
         *[asyncio.to_thread(ytmusic.search, query=query, filter=f,
                             ignore_spelling=False, limit=30)
-          for f in ('songs', 'videos')],
+          for f in search_filters],
         return_exceptions=True)
-    results = _collect_results(raw)
+    results = _categorize(raw)
 
     # If spelling-corrected search found nothing, retry with exact spelling
     # in case the user intentionally typed an unusual query.
-    if not results:
+    if not _has_results(results):
         raw = await asyncio.gather(
             *[asyncio.to_thread(ytmusic.search, query=query, filter=f,
                                 ignore_spelling=True, limit=30)
-              for f in ('songs', 'videos')],
+              for f in search_filters],
             return_exceptions=True)
-        results = _collect_results(raw)
+        results = _categorize(raw)
 
-    if not results:
+    if not _has_results(results):
         return error_response('no results found', 404)
-    return jsonify({'results': results})
+    return jsonify(results)
 
 
 
