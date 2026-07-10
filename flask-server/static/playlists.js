@@ -116,6 +116,7 @@ const _plCache = (() => {
 let _playlistsData = { playlists: {}, liked_songs: [] };
 
 async function loadPlaylists() {
+  if (window.JAM_GUEST) return;
   try {
     const data = await api('/api/playlists/?_=' + Date.now());
     if (data && data.playlists) {
@@ -921,7 +922,7 @@ async function syncPlaylist(pl_id, btnEl = null) {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
-  loadPlaylists();
+  if (!window.JAM_GUEST) loadPlaylists();
   
   const plBtn = document.getElementById('playlists-modal-btn');
   if (plBtn) plBtn.addEventListener('click', openPlaylistsModal);

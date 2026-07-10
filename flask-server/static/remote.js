@@ -46,7 +46,7 @@ function syncUiState() {
   // while a track is playing, preventing a massive empty screen void.
   const recsSection = document.getElementById('recs-section');
   if (recsSection) {
-    const shouldShow = _loggedIn && !_resultsOpen && !_hasTrack;
+    const shouldShow = _loggedIn && !window.JAM_GUEST && !_resultsOpen && !_hasTrack;
     if (shouldShow && !_recsLoaded) loadRecommendations();
     else recsSection.hidden = !shouldShow || !_recsLoaded;
   }
@@ -238,7 +238,7 @@ function checkLikedVersion(np) {
   const first = _lastLikedVersion === null;
   if (np.liked_version === _lastLikedVersion) return;
   _lastLikedVersion = np.liked_version;
-  if (first || typeof loadPlaylists !== 'function') return;
+  if (first || window.JAM_GUEST || typeof loadPlaylists !== 'function') return;
   loadPlaylists().then(() => refreshNpLikeButton()).catch(() => {});
 }
 
@@ -826,7 +826,7 @@ function handleNpUpdate(np) {
   const npVideoId = (np && np.video_id) || null;
   _cacheNowPlaying(np);
   checkLikedVersion(np);
-  if (npVideoId && npVideoId !== _lastHistoryVideoId) {
+  if (!window.JAM_GUEST && npVideoId && npVideoId !== _lastHistoryVideoId) {
     _lastHistoryVideoId = npVideoId;
     setTimeout(loadHistory, 1500);
     // NOTE: recommendations are intentionally NOT reset here — they stay cached
@@ -1096,7 +1096,7 @@ document.getElementById('play-query').onclick = () => {
   document.getElementById('query').blur();
   
   if (isYoutubeLinkLike(query)) {
-    if (query.includes('list=')) {
+    if (!window.JAM_GUEST && query.includes('list=')) {
       if (confirm('This looks like a playlist. Do you want to save it to your Playlists?')) {
         const name = prompt("Enter a name for this playlist:", "Imported Playlist");
         if (name) {
@@ -3272,7 +3272,7 @@ async function apiPatch(path, body) {
 }
 
 async function loadHistory() {
-  if (!_loggedIn) return;
+  if (!_loggedIn || window.JAM_GUEST) return;
   try {
     const history = await api('/history/?limit=100');
     const fresh = Array.isArray(history) ? history.filter(e => e && e.video_id) : [];
@@ -3458,7 +3458,7 @@ function showRecsSkeleton(show) {
 }
 
 async function loadRecommendations() {
-  if (!_loggedIn || _recsLoaded || _recsLoading) return;
+  if (!_loggedIn || window.JAM_GUEST || _recsLoaded || _recsLoading) return;
   _recsLoading = true;
   const section = document.getElementById('recs-section');
   section.hidden = !(!_hasTrack && !_resultsOpen);
