@@ -4168,13 +4168,3 @@ document.addEventListener('keydown', (e) => {
    may also carry a previously installed worker (e.g. it was the owner's
    browser once) whose cached shell would keep serving — unregister it. The
    owner's next normal page load simply re-registers. */
-if ('serviceWorker' in navigator && window.JAM_GUEST) {
-  navigator.serviceWorker.getRegistrations()
-    .then((regs) => regs.forEach((r) => r.unregister()))
-    .catch(() => {});
-}
-if ('serviceWorker' in navigator && !window.JAM_GUEST) {
-  window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/service-worker.js').catch(() => {});
-  });
-}
