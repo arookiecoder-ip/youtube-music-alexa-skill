@@ -4,8 +4,9 @@
   if (state._resultsOpen === undefined) state._resultsOpen = false;
   if (state._currentVideoId === undefined) state._currentVideoId = '';
   if (state._hasTrack === undefined) state._hasTrack = false;
-  if (state._searchResults === undefined) state._searchResults = [];
-  if (state._resultsPage === undefined) state._resultsPage = 0;
+  if (state._searchCategorized === undefined) state._searchCategorized = {};
+  if (state._activeCategory === undefined) state._activeCategory = 'songs';
+  if (state._resultsPage === undefined) state._resultsPage = {};
   if (state._searchSeq === undefined) state._searchSeq = 0;
 
 const RESULTS_PER_PAGE = 10;
@@ -16,12 +17,15 @@ async function runSearch(query) {
   try {
     const data = await api('/alexa/search/?q=' + encodeURIComponent(query));
     if (mySeq !== state._searchSeq) return;   // a newer search won
-    state._searchResults = data.results || [];
-    if (!state._searchResults.length) { toast('No results found.', 'error'); return; }
-    state._resultsPage = 0;
+    state._searchCategorized = data || {};
+    const totalItems = (data.songs?.length || 0) + (data.artists?.length || 0) + (data.albums?.length || 0) + (data.playlists?.length || 0);
+    if (!totalItems) { toast('No results found.', 'error'); return; }
+    state._resultsPage = { songs: 0, artists: 0, albums: 0, playlists: 0 };
+    state._activeCategory = 'songs';
+    document.querySelectorAll('.results-tab').forEach(t => t.classList.toggle('active', t.dataset.category === 'songs'));
     renderResults();
     openResults();
-    toast(state._searchResults.length + ' results', 'ok');
+    toast(totalItems + ' results', 'ok');
   } catch (e) {
     if (mySeq === state._searchSeq) toast(e.message, 'error');
   }
@@ -88,12 +92,30 @@ function closeResults() {
   }, 300);
 }
 
+function _categoryTitle(item, cat) {
+  if (cat === 'artists') return item.name || '';
+  if (cat === 'albums') return item.title || '';
+  if (cat === 'playlists') return item.title || '';
+  return '';
+}
+
+function _categorySubtitle(item, cat) {
+  if (cat === 'artists') return 'Artist';
+  if (cat === 'albums') return (item.artist || '') + (item.year ? ' - ' + item.year : '');
+  if (cat === 'playlists') return (item.track_count || '?') + ' tracks - ' + (item.owner || '');
+  return '';
+}
+
 function renderResults() {
   const list = document.getElementById('results-list');
-  const totalPages = Math.max(1, Math.ceil(state._searchResults.length / RESULTS_PER_PAGE));
-  state._resultsPage = Math.min(Math.max(0, state._resultsPage), totalPages - 1);
-  const start = state._resultsPage * RESULTS_PER_PAGE;
-  const pageItems = state._searchResults.slice(start, start + RESULTS_PER_PAGE);
+  const category = state._activeCategory;
+  const items = state._searchCategorized[category] || [];
+  const totalPages = Math.max(1, Math.ceil(items.length / RESULTS_PER_PAGE));
+  let page = state._resultsPage[category] || 0;
+  page = Math.min(Math.max(0, page), totalPages - 1);
+  state._resultsPage[category] = page;
+  const start = page * RESULTS_PER_PAGE;
+  const pageItems = items.slice(start, start + RESULTS_PER_PAGE);
   // Transplant already-loaded thumbnails for videos that also appear on the
   // new page (e.g. paging back and forth) so their <img> doesn't re-fetch
   // and flash blank/reload.
@@ -106,6 +128,7 @@ function renderResults() {
   // Close any open more-menu when re-rendering
   _closeAllMoreMenus();
   const newChildren = [];
+  if (category === 'songs') {
   pageItems.forEach((item) => {
     const wrapper = document.createElement('div');
     wrapper.className = 'result-swipe-wrapper';
@@ -275,11 +298,41 @@ function renderResults() {
 
     newChildren.push(wrapper);
   });
+  } else {
+    pageItems.forEach((item) => {
+      const wrapper = document.createElement('div');
+      wrapper.className = 'result-swipe-wrapper';
+      const inner = document.createElement('div');
+      inner.className = 'result-item-inner';
+      const thumbUrl = item.thumbnail || '';
+      inner.innerHTML = `
+        ${thumbUrl ? `<img class="result-thumb" src="${escHtml(thumbUrl)}" alt="" loading="lazy" onload="this.classList.add('loaded')">` : '<div class="result-thumb"></div>'}
+        <div class="result-info">
+          <div class="result-title">${escHtml(_categoryTitle(item, category))}</div>
+          <div class="result-artist">${escHtml(_categorySubtitle(item, category))}</div>
+        </div>
+      `;
+      wrapper.appendChild(inner);
+      newChildren.push(wrapper);
+    });
+  }
   list.replaceChildren(...newChildren);
+  updateCountLabel();
   document.getElementById('results-page-label').textContent =
-    'Page ' + (state._resultsPage + 1) + ' of ' + totalPages;
-  document.getElementById('results-prev').disabled = state._resultsPage <= 0;
-  document.getElementById('results-next').disabled = state._resultsPage >= totalPages - 1;
+    'Page ' + (page + 1) + ' of ' + totalPages;
+  document.getElementById('results-prev').disabled = page <= 0;
+  document.getElementById('results-next').disabled = page >= totalPages - 1;
+}
+
+function updateCountLabel() {
+  const cat = state._activeCategory;
+  const items = state._searchCategorized[cat] || [];
+  const allTotal = (state._searchCategorized.songs?.length || 0) +
+                   (state._searchCategorized.artists?.length || 0) +
+                   (state._searchCategorized.albums?.length || 0) +
+                   (state._searchCategorized.playlists?.length || 0);
+  const el = document.getElementById('results-count');
+  if (el) el.textContent = 'Showing ' + items.length + ' of ' + allTotal + ' results';
 }
 
 // Close all open more-menus
@@ -328,14 +381,26 @@ function scrollResultsToTop() {
   }
 }
 document.getElementById('results-prev').addEventListener('click', () => {
-  state._resultsPage--;
+  state._resultsPage[state._activeCategory]--;
   renderResults();
   scrollResultsToTop();
 });
 document.getElementById('results-next').addEventListener('click', () => {
-  state._resultsPage++;
+  state._resultsPage[state._activeCategory]++;
   renderResults();
   scrollResultsToTop();
+});
+document.querySelectorAll('.results-tab').forEach(tab => {
+  tab.addEventListener('click', () => {
+    const category = tab.dataset.category;
+    if (category === state._activeCategory) return;
+    state._activeCategory = category;
+    document.querySelectorAll('.results-tab').forEach(t => t.classList.remove('active'));
+    tab.classList.add('active');
+    renderResults();
+    updateCountLabel();
+    scrollResultsToTop();
+  });
 });
 document.getElementById('results-close').addEventListener('click', closeResults);
 
@@ -537,6 +602,7 @@ let _addToQueueBusy = false;
   window.openResults = openResults;
   window.closeResults = closeResults;
   window.renderResults = renderResults;
+  window.updateCountLabel = updateCountLabel;
   window.updateResultsActive = updateResultsActive;
   window.scrollResultsToTop = scrollResultsToTop;
   window._closeAllMoreMenus = _closeAllMoreMenus;
