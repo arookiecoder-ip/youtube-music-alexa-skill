@@ -1,5 +1,14 @@
 (function () {
   'use strict';
+  function escHtml(s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
   const state = window.__appState = window.__appState || {};
   if (state.isPlaying === undefined) state.isPlaying = false;
   if (state.lastActionAt === undefined) state.lastActionAt = 0;
@@ -67,11 +76,11 @@ function showNowPlaying(info) {
     _lastNpFingerprint = fp;
     np.classList.add('visible');
     document.getElementById('np-title').textContent = info.title;
-    document.getElementById('np-artist').textContent = info.artist || '';
+    document.getElementById('np-artist').innerHTML = (info.channelId ? '<span class="artist-name" data-channel-id="' + escHtml(info.channelId) + '">' + escHtml(info.artist) + '</span>' : escHtml(info.artist || ''));
     document.getElementById('mini-title').textContent = info.title;
     // Sync mini popup
     document.getElementById('mp-np-title').textContent = info.title;
-    document.getElementById('mp-np-artist').textContent = info.artist || '';
+    document.getElementById('mp-np-artist').innerHTML = (info.channelId ? '<span class="artist-name" data-channel-id="' + escHtml(info.channelId) + '">' + escHtml(info.artist) + '</span>' : escHtml(info.artist || ''));
     const art = document.getElementById('np-art');
     const mpArt = document.getElementById('mp-np-art');
     if (info.thumbnail) {

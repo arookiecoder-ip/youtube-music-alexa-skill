@@ -42,17 +42,19 @@
     contain-intrinsic-size: auto 80px;
     display: flex;
     align-items: center;
-    gap: var(--space-3);
-    padding: 10px var(--space-3);
+    gap: var(--card-gap);
+    padding: var(--card-padding-y) var(--card-padding-x);
     cursor: pointer;
     border-left: 3px solid transparent;
-    transition: background .15s, border-color .15s;
+    transition: background .15s, border-color .15s, transform .15s;
     background: var(--surface);
+    border-radius: var(--card-radius);
     position: relative;
     z-index: 1;
     touch-action: pan-y;
   }
   .queue-item:hover { background: #1a1a1a; }
+  .queue-item:active { transform: scale(.99); }
   .queue-item.active {
     border-left-color: var(--accent);
     background: #1a1a1a;
@@ -224,6 +226,7 @@
     object-fit: cover;
     background: var(--bg);
     border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
   }
   img.queue-thumb {
     opacity: 0;
@@ -234,14 +237,14 @@
   }
   .queue-info { flex: 1; min-width: 0; }
   .queue-title {
-    font-size: .78rem;
+    font-size: var(--text-base);
     font-weight: 600;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
   }
   .queue-artist {
-    font-size: .68rem;
+    font-size: var(--text-sm);
     color: var(--muted);
     margin-top: 2px;
     white-space: nowrap;

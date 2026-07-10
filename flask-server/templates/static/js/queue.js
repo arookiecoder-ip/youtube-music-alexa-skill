@@ -217,13 +217,23 @@ function _buildQueueRow(container, item, i, currentIndex, thumbsById) {
     ${thumbHtml}
     <div class="queue-info">
       <div class="queue-title">${escHtml(item.title)}</div>
-      <div class="queue-artist">${escHtml(item.artist)}</div>
+      <div class="queue-artist">${item.channelId ? '<span class="artist-name" data-channel-id="' + escHtml(item.channelId) + '">' + escHtml(item.artist) + '</span>' : escHtml(item.artist)}</div>
     </div>
     ${_queueMoreMenuHtml(item)}
   `;
   if (sameUrl) el.querySelector('.queue-thumb-slot').replaceWith(reusableImg);
 
   wrapper.appendChild(el);
+
+  // Artist name click: stop propagation to prevent parent row's play action
+  var an = el.querySelector('.artist-name');
+  if (an) {
+    an.addEventListener('click', function(e) {
+      e.stopPropagation();
+      var cid = this.getAttribute('data-channel-id');
+      if (cid) location.hash = '#artist/' + encodeURIComponent(cid);
+    });
+  }
 
   // Tap on the item → play from queue. Mark it active immediately so the
   // "you tapped this" feedback shows right away instead of only after the

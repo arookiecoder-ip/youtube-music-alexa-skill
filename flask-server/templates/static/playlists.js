@@ -143,6 +143,41 @@ function getPlaylistsList() {
   });
 }
 
+/* ── Build a 2×2 artwork collage HTML from up to 4 tracks ── */
+function _buildCollageHtml(tracks, isLiked) {
+  if (isLiked) {
+    return `
+      <div class="playlist-collage">
+        <div class="collage-placeholder"><svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18" style="color:var(--primary);"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg></div>
+        <div class="collage-placeholder"></div>
+        <div class="collage-placeholder"></div>
+        <div class="collage-placeholder"></div>
+      </div>`;
+  }
+  const valid = (tracks || []).filter(t => t && t.thumbnail);
+  let cells = '';
+  for (let i = 0; i < 4; i++) {
+    if (i < valid.length) {
+      cells += `<img src="${escHtml(valid[i].thumbnail)}" alt="" loading="lazy">`;
+    } else {
+      cells += `<div class="collage-placeholder"></div>`;
+    }
+  }
+  return `<div class="playlist-collage">${cells}</div>`;
+}
+
+function _formatUpdatedAt(ts) {
+  if (!ts) return '';
+  const d = new Date(ts * 1000);
+  const now = new Date();
+  const diffDays = Math.max(0, Math.floor((now - d) / (1000 * 60 * 60 * 24)));
+  if (diffDays === 0) return 'Today';
+  if (diffDays === 1) return 'Yesterday';
+  if (diffDays < 7) return diffDays + ' days ago';
+  if (diffDays < 30) return Math.floor(diffDays / 7) + ' weeks ago';
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+}
+
 function renderPlaylists() {
   const body = document.getElementById('playlists-modal-body');
   if (!body) return;
@@ -156,38 +191,21 @@ function renderPlaylists() {
   let html = '<div class="history-list">';
   lists.forEach((pl) => {
     const trackCount = (pl.tracks || []).length;
-    let thumbHtml = `
-      <div class="queue-thumb" style="display: flex; align-items: center; justify-content: center; background: rgba(255, 255, 255, 0.05);">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="width: 20px; height: 20px; color: var(--text-muted, #888);"><path d="M9 18V5l12-2v13"></path><circle cx="6" cy="18" r="3"></circle><circle cx="18" cy="16" r="3"></circle></svg>
-      </div>`;
+    const collageHtml = _buildCollageHtml(pl.tracks, pl.id === 'liked');
+    const desc = (pl.description || '').trim();
+    const updatedLabel = pl.updated_at ? 'Updated ' + _formatUpdatedAt(pl.updated_at) : '';
 
-    if (pl.id === 'liked') {
-      thumbHtml = `
-        <div class="queue-thumb" style="display: flex; align-items: center; justify-content: center; background: rgba(255, 255, 255, 0.05);">
-          <svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="width: 24px; height: 24px; color: var(--primary);"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
-        </div>`;
-    } else if (trackCount > 0 && pl.tracks[0].thumbnail) {
-      thumbHtml = `<img class="queue-thumb loaded" src="${escHtml(pl.tracks[0].thumbnail)}" alt="">`;
-    }
-
-    // Sync lives only in the playlist detail modal's header (for imported
-    // playlists) so every row here shows the same fixed set of controls.
-    const playIconHtml = trackCount > 0 ? `
-        <button class="clear-all-btn" title="Play playlist" style="padding: 4px 8px; margin-left: auto;" onclick="event.stopPropagation(); playPlaylist('${escHtml(pl.id)}', this)">
-          <svg viewBox="0 0 24 24" fill="currentColor" style="width:16px;height:16px;"><path d="M8 5v14l11-7z"/></svg>
-        </button>
-      ` : '';
+    const playSvg = `<svg viewBox="0 0 24 24" fill="currentColor" width="14" height="14"><path d="M8 5v14l11-7z"/></svg>`;
 
     html += `
-      <div class="history-item" onclick="openPlaylistDetailModal('${escHtml(pl.id)}')">
-        ${thumbHtml}
-        <div class="history-info" style="display: flex; flex-direction: row; align-items: center; justify-content: space-between; flex: 1;">
-          <div>
-            <div class="history-title">${escHtml(pl.name)}</div>
-            <div class="history-artist">${trackCount} ${trackCount === 1 ? 'song' : 'songs'}</div>
-          </div>
-          ${playIconHtml}
+      <div class="playlist-card" onclick="openPlaylistDetailModal('${escHtml(pl.id)}')">
+        ${collageHtml}
+        <div class="playlist-card-info">
+          <div class="playlist-card-name">${escHtml(pl.name)}</div>
+          <div class="playlist-card-meta">${trackCount} ${trackCount === 1 ? 'song' : 'songs'}${updatedLabel ? ' · ' + updatedLabel : ''}</div>
+          ${desc ? `<div class="playlist-card-desc">${escHtml(desc)}</div>` : ''}
         </div>
+        ${trackCount > 0 ? `<button class="playlist-card-play" onclick="event.stopPropagation(); playPlaylist('${escHtml(pl.id)}', this)">${playSvg}</button>` : ''}
       </div>
     `;
   });
@@ -213,6 +231,10 @@ function closePlaylistsModal() {
 let _currentPlaylistDetailId = null;
 
 async function openPlaylistDetailModal(pl_id) {
+  // Phase 12: Performance marker for profiling playlist detail render time
+  if (window.performance && performance.mark) {
+    performance.mark('playlist-detail-start');
+  }
   // Try IDB cache first — survives page reload for instant paint
   let pl = _playlistsData.playlists[pl_id];
   if (!pl) {
@@ -280,6 +302,7 @@ async function openPlaylistDetailModal(pl_id) {
 
     const wrapper = document.createElement('div');
     wrapper.className = 'result-swipe-wrapper';
+    wrapper.dataset.trackUuid = track.uuid || track.video_id || '';
     const trackKey = track.uuid || track.video_id;
     if (_recentlyAddedTrackKeys.has(trackKey) || _recentlyAddedTrackKeys.has(track.video_id)) {
       wrapper.classList.add('track-added-anim');
@@ -316,6 +339,16 @@ async function openPlaylistDetailModal(pl_id) {
       ph.style.cssText = 'display:flex; align-items:center; justify-content:center; background: rgba(255,255,255,0.05);';
       ph.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="width: 20px; height: 20px; color: var(--text-muted, #888);"><path d="M9 18V5l12-2v13"></path><circle cx="6" cy="18" r="3"></circle><circle cx="18" cy="16" r="3"></circle></svg>`;
       row.appendChild(ph);
+    }
+
+    // Liked Songs keeps its fixed oldest-first order — no drag handle there.
+    if (pl_id !== 'liked') {
+      const dragSvg = `<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/><circle cx="9" cy="10" r="1.5"/><circle cx="15" cy="10" r="1.5"/><circle cx="9" cy="15" r="1.5"/><circle cx="15" cy="15" r="1.5"/><circle cx="9" cy="20" r="1.5"/><circle cx="15" cy="20" r="1.5"/></svg>`;
+      const dragHandle = document.createElement('div');
+      dragHandle.className = 'playlist-drag-handle';
+      dragHandle.title = 'Drag to reorder';
+      dragHandle.innerHTML = dragSvg;
+      row.appendChild(dragHandle);
     }
 
     const info = document.createElement('div');
@@ -393,10 +426,30 @@ async function openPlaylistDetailModal(pl_id) {
 
       wrapper.appendChild(row);
       _attachSwipeGesture(wrapper, row, item);
+      if (pl_id !== 'liked') _attachPlaylistDragReorder(wrapper, list);
       return wrapper;
   };
 
+  // Build playlist hero: collage + description + metadata
+  const heroDiv = document.createElement('div');
+  heroDiv.className = 'playlist-detail-hero';
+  const updatedLabel = pl.updated_at ? 'Updated ' + _formatUpdatedAt(pl.updated_at) : '';
+  const trackLabel = (pl.tracks || []).length + ' ' + (((pl.tracks || []).length === 1) ? 'song' : 'songs');
+  const desc = (pl.description || '').trim();
+  heroDiv.innerHTML = `
+    ${_buildCollageHtml(pl.tracks, pl.id === 'liked')}
+    <div class="playlist-detail-hero-info">
+      <div class="playlist-detail-hero-meta">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="width:14px;height:14px;"><path d="M9 18V5l12-2v13"></path><circle cx="6" cy="18" r="3"></circle><circle cx="18" cy="16" r="3"></circle></svg>
+        ${trackLabel}
+        ${updatedLabel ? `<span>·</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="width:14px;height:14px;"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>${updatedLabel}` : ''}
+      </div>
+      ${desc ? `<div class="playlist-detail-hero-desc">${escHtml(desc)}</div>` : ''}
+    </div>
+  `;
+
   body.innerHTML = '';
+  body.appendChild(heroDiv);
   body.appendChild(list);
 
   // Chunked lazy rendering: render ~100 tracks at a time, then yield. An
@@ -458,6 +511,12 @@ async function openPlaylistDetailModal(pl_id) {
 
   // Render first chunk immediately (no yield needed — first 100 rows is fast)
   _appendTrackChunk();
+
+  // Phase 12: Performance marker — measure render-to-screen time
+  if (window.performance && performance.mark && performance.measure) {
+    performance.mark('playlist-detail-end');
+    try { performance.measure('playlist-detail-render', 'playlist-detail-start', 'playlist-detail-end'); } catch (_) {}
+  }
 }
 
 // Loads playlist track thumbnails progressively: IDB cache first, then
@@ -694,6 +753,7 @@ async function toggleLike(item, btnElement) {
         btnElement.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>`;
       }
       toast('Removed from Liked Songs', 'ok');
+      if (window.broadcastLikedUpdate) window.broadcastLikedUpdate();
     } else {
       const res = await api('/api/playlists/liked/tracks/', item);
       _playlistsData.liked_songs = res.liked_songs || [];
@@ -712,6 +772,7 @@ async function toggleLike(item, btnElement) {
         btnElement.innerHTML = `<svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>`;
       }
       toast('Added to Liked Songs', 'ok');
+      if (window.broadcastLikedUpdate) window.broadcastLikedUpdate();
     }
   } catch (e) {
     console.error(e);
@@ -887,6 +948,196 @@ async function removeFromPlaylist(pl_id, track_uuid) {
     }
     toast('Error removing song', 'error');
   }
+}
+
+/* ── Reorder playlist track (drag complete) ── */
+async function reorderPlaylistTrack(pl_id, fromIndex, toIndex) {
+  if (fromIndex === toIndex || !pl_id) return;
+  // Optimistically reorder local data
+  const pl = _playlistsData.playlists[pl_id];
+  if (pl && pl.tracks) {
+    const tracks = pl.tracks;
+    if (fromIndex >= 0 && fromIndex < tracks.length && toIndex >= 0 && toIndex < tracks.length) {
+      const [moved] = tracks.splice(fromIndex, 1);
+      tracks.splice(toIndex, 0, moved);
+    }
+  }
+  try {
+    await api('/api/playlists/' + encodeURIComponent(pl_id) + '/tracks/reorder/', { from_index: fromIndex, to_index: toIndex });
+    // Refresh the detail view with the new order
+    if (_currentPlaylistDetailId === pl_id
+        && document.getElementById('playlist-detail-modal-overlay').classList.contains('open')) {
+      // Reload playlists from server to get fresh timestamps
+      await loadPlaylists();
+      openPlaylistDetailModal(pl_id);
+    }
+  } catch (e) {
+    // Refresh on error to restore true order
+    await loadPlaylists();
+    if (_currentPlaylistDetailId === pl_id
+        && document.getElementById('playlist-detail-modal-overlay').classList.contains('open')) {
+      openPlaylistDetailModal(pl_id);
+    }
+    toast(e.message || 'Error reordering tracks', 'error');
+  }
+}
+
+/* ── Playlist track drag-to-reorder (mirrors queue's _attachQueueDragReorder) ── */
+var _playlistDragging = false;
+
+function _attachPlaylistDragReorder(wrapper, listEl) {
+  const handle = wrapper.querySelector('.playlist-drag-handle');
+  if (!handle) return;
+
+  let startY = 0, initialTop = 0, cloneEl = null, placeholder = null;
+  let currentOver = -1, fromIdx = -1;
+  let _scrollRafId = null, _scrollSpeed = 0, _scrollContainer = null;
+  const EDGE_ZONE = 50, MAX_SPEED = 12;
+
+  function getItemElements() {
+    return Array.from(listEl.querySelectorAll('.result-swipe-wrapper'));
+  }
+
+  function findScrollContainer() {
+    let node = listEl;
+    while (node && node !== document.body) {
+      const style = getComputedStyle(node);
+      if ((style.overflowY === 'auto' || style.overflowY === 'scroll') &&
+          node.scrollHeight > node.clientHeight) return node;
+      node = node.parentElement;
+    }
+    return null;
+  }
+
+  function startAutoScroll() {
+    if (_scrollRafId) return;
+    function tick() {
+      if (!_playlistDragging || !_scrollContainer || _scrollSpeed === 0) {
+        _scrollRafId = null; return;
+      }
+      _scrollContainer.scrollTop += _scrollSpeed;
+      _scrollRafId = requestAnimationFrame(tick);
+    }
+    _scrollRafId = requestAnimationFrame(tick);
+  }
+
+  function stopAutoScroll() {
+    if (_scrollRafId) { cancelAnimationFrame(_scrollRafId); _scrollRafId = null; }
+    _scrollSpeed = 0;
+  }
+
+  function updateAutoScroll(clientY) {
+    if (!_scrollContainer) return;
+    const rect = _scrollContainer.getBoundingClientRect();
+    const dTop = clientY - rect.top;
+    const dBot = rect.bottom - clientY;
+    if (dTop < EDGE_ZONE && _scrollContainer.scrollTop > 0) {
+      _scrollSpeed = -(MAX_SPEED * Math.max(0, Math.min(1, 1 - dTop / EDGE_ZONE)));
+      startAutoScroll();
+    } else if (dBot < EDGE_ZONE && _scrollContainer.scrollTop < _scrollContainer.scrollHeight - _scrollContainer.clientHeight) {
+      _scrollSpeed = MAX_SPEED * Math.max(0, Math.min(1, 1 - dBot / EDGE_ZONE));
+      startAutoScroll();
+    } else {
+      _scrollSpeed = 0;
+    }
+  }
+
+  function beginDrag(clientY) {
+    _playlistDragging = true;
+    document.body.classList.add('drag-lock');
+    startY = clientY;
+    // Derive the index from the DOM: chunked rendering and earlier reorders
+    // mean a render-time index would go stale.
+    fromIdx = getItemElements().indexOf(wrapper);
+    if (fromIdx < 0) { _playlistDragging = false; document.body.classList.remove('drag-lock'); return; }
+    const rect = handle.getBoundingClientRect();
+    // Use the wrapper's rect since it's the full row
+    const wrapRect = wrapper.getBoundingClientRect();
+    initialTop = wrapRect.top;
+
+    cloneEl = wrapper.cloneNode(true);
+    cloneEl.style.position = 'fixed';
+    cloneEl.style.left = wrapRect.left + 'px';
+    cloneEl.style.top = wrapRect.top + 'px';
+    cloneEl.style.width = wrapRect.width + 'px';
+    cloneEl.style.zIndex = '1000';
+    cloneEl.style.pointerEvents = 'none';
+    cloneEl.style.opacity = '.85';
+    cloneEl.style.boxShadow = '0 8px 32px rgba(0,0,0,.5)';
+    cloneEl.style.background = 'var(--surface)';
+    cloneEl.style.borderRadius = '8px';
+    document.body.appendChild(cloneEl);
+
+    wrapper.classList.add('dragging');
+    currentOver = fromIdx;
+    _scrollContainer = findScrollContainer();
+  }
+
+  function moveDrag(clientY) {
+    if (!_playlistDragging || !cloneEl) return;
+    const dy = clientY - startY;
+    cloneEl.style.top = (initialTop + dy) + 'px';
+    updateAutoScroll(clientY);
+
+    const items = getItemElements();
+    let targetIdx = fromIdx;
+    for (let i = 0; i < items.length; i++) {
+      const r = items[i].getBoundingClientRect();
+      if (clientY < r.top + r.height / 2) { targetIdx = i; break; }
+      targetIdx = i + 1;
+    }
+    targetIdx = Math.min(targetIdx, items.length - 1);
+    if (targetIdx !== currentOver) {
+      const old = listEl.querySelector('.queue-drop-placeholder');
+      if (old) old.remove();
+      placeholder = document.createElement('div');
+      placeholder.className = 'queue-drop-placeholder';
+      if (targetIdx < items.length) {
+        listEl.insertBefore(placeholder, items[targetIdx]);
+      } else {
+        listEl.appendChild(placeholder);
+      }
+      currentOver = targetIdx;
+    }
+  }
+
+  function endDrag() {
+    if (!_playlistDragging) return;
+    _playlistDragging = false;
+    document.body.classList.remove('drag-lock');
+    stopAutoScroll();
+    _scrollContainer = null;
+    wrapper.classList.remove('dragging');
+    if (cloneEl) { cloneEl.remove(); cloneEl = null; }
+    if (placeholder) { placeholder.remove(); placeholder = null; }
+
+    let toIdx = currentOver;
+    if (toIdx > fromIdx) toIdx -= 1;
+    toIdx = Math.max(0, Math.min(toIdx, getItemElements().length - 1));
+    if (toIdx !== fromIdx) {
+      reorderPlaylistTrack(_currentPlaylistDetailId, fromIdx, toIdx);
+    }
+    currentOver = -1;
+  }
+
+  handle.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    handle.setPointerCapture(e.pointerId);
+    beginDrag(e.clientY);
+  });
+  handle.addEventListener('pointermove', (e) => {
+    if (_playlistDragging) { e.preventDefault(); e.stopPropagation(); moveDrag(e.clientY); }
+  });
+  handle.addEventListener('pointerup', (e) => {
+    if (_playlistDragging) {
+      e.preventDefault(); e.stopPropagation();
+      try { handle.releasePointerCapture(e.pointerId); } catch (_) {}
+      endDrag();
+    }
+  });
+  handle.addEventListener('pointercancel', () => { if (_playlistDragging) endDrag(); });
+  handle.addEventListener('lostpointercapture', () => { if (_playlistDragging) endDrag(); });
 }
 
 async function syncPlaylist(pl_id, btnEl = null) {

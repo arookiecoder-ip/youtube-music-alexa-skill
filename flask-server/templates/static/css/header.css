@@ -196,11 +196,11 @@
   .history-item {
     display: flex;
     align-items: center;
-    gap: var(--space-3);
-    padding: 10px 20px;
+    gap: var(--card-gap);
+    padding: var(--card-padding-y) 20px;
     cursor: pointer;
     background: var(--surface);
-    transition: background .15s;
+    transition: background .15s, transform .15s, box-shadow .15s;
     /* Needed when used as a swipe wrapper's inner row (playlist tracks):
        without an explicit stacking position, the swipe underlay's z-index:1
        (set on the active side while swiping) can end up rendered above this
@@ -209,6 +209,7 @@
     z-index: 1;
   }
   .history-item:hover { background: #1a1a1a; }
+  .history-item:active { transform: scale(.99); }
   .history-item + .history-item { border-top: 1px solid var(--border); }
   .history-date-header {
     padding: 10px 20px var(--space-1);
@@ -255,11 +256,11 @@
     color: var(--muted);
   }
   .history-title {
-    font-size: .85rem;
+    font-size: var(--text-base);
     font-weight: 600;
   }
   .history-artist {
-    font-size: .72rem;
+    font-size: var(--text-sm);
     color: var(--muted);
     margin-top: 2px;
   }
@@ -289,6 +290,8 @@
     max-height: 80vh;
     background: var(--surface);
     border: 1px solid var(--border);
+    border-radius: var(--radius-lg);
+    overflow: hidden;
     display: flex;
     flex-direction: column;
     transform: translateY(12px) scale(.98);

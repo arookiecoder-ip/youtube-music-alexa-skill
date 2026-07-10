@@ -71,13 +71,43 @@ function _buildHistoryRow(entry) {
          </svg>
        </div>`;
 
+  var isLikedHistory = typeof _playlistsData !== 'undefined' && _playlistsData.liked_songs && _playlistsData.liked_songs.includes(entry.video_id);
+  var heartSvgHistory = isLikedHistory
+    ? '<svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>'
+    : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>';
   el.innerHTML = `
     ${thumbHtml}
     <div class="queue-info">
       <div class="queue-title">${escHtml(entry.title || 'Unknown title')}</div>
-      <div class="queue-artist">${escHtml(entry.artist)}${entry.play_count > 1 ? '<span class="play-count-badge">\u00d7' + entry.play_count + '</span>' : ''}</div>
+      <div class="queue-artist">${entry.channelId ? '<span class="artist-name" data-channel-id="' + escHtml(entry.channelId) + '">' + escHtml(entry.artist) + '</span>' : escHtml(entry.artist)}${entry.play_count > 1 ? '<span class="play-count-badge">\u00d7' + entry.play_count + '</span>' : ''}</div>
     </div>
+    <button class="result-like-btn history-like-btn${isLikedHistory ? ' liked' : ''}" type="button" title="${isLikedHistory ? 'Dislike' : 'Like'}">${heartSvgHistory}</button>
   `;
+
+  // Artist name click: stop propagation to prevent parent row's play action
+  var an = el.querySelector('.artist-name');
+  if (an) {
+    an.addEventListener('click', function(e) {
+      e.stopPropagation();
+      var cid = this.getAttribute('data-channel-id');
+      if (cid) location.hash = '#artist/' + encodeURIComponent(cid);
+    });
+  }
+
+  // Like button: stop propagation to prevent history item's play action
+  var historyLikeBtn = el.querySelector('.history-like-btn');
+  if (historyLikeBtn) {
+    historyLikeBtn.addEventListener('click', function(e) {
+      e.stopPropagation();
+      // History rows carry thumbnail_url; toggleLike expects .thumbnail.
+      if (typeof toggleLike === 'function') toggleLike({
+        video_id: entry.video_id,
+        title: entry.title || '',
+        artist: entry.artist || '',
+        thumbnail: entry.thumbnail_url || '',
+      }, this);
+    });
+  }
 
   // No per-row remove control by design — Clear (with confirmation) is the
   // only way to modify history from this popup.

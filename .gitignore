@@ -13,3 +13,5 @@ flask-server/data.db
 lambda.zip
 .planning/
 AGENTS.md
+tests/
+.claude/

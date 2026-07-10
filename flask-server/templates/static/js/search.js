@@ -173,7 +173,7 @@ function renderResults() {
       ${thumbHtml}
       <div class="result-info">
         <div class="result-title">${escHtml(item.title)}</div>
-        <div class="result-artist">${escHtml(item.artist)}</div>
+        <div class="result-artist">${item.channelId ? '<span class="artist-name" data-channel-id="' + escHtml(item.channelId) + '">' + escHtml(item.artist) + '</span>' : escHtml(item.artist)}</div>
       </div>
       <button class="result-like-btn ${isLiked ? 'liked' : ''}" type="button" title="Like" data-vid="${escHtml(item.video_id)}">${heartSvg}</button>
       <button class="result-queue-btn" type="button" title="Add to queue" ${isCurrent ? 'hidden' : ''}>${queueAddSvg}</button>
@@ -289,6 +289,18 @@ function renderResults() {
       likeBtn.addEventListener('click', (e) => {
         e.stopPropagation();
         toggleLike(item, likeBtn);
+      });
+    }
+
+    // Artist name click: navigate to artist page
+    var artistName = inner.querySelector('.artist-name');
+    if (artistName) {
+      artistName.addEventListener('click', function(e) {
+        e.stopPropagation();
+        var channelId = this.getAttribute('data-channel-id');
+        if (channelId) {
+          location.hash = '#artist/' + encodeURIComponent(channelId);
+        }
       });
     }
 

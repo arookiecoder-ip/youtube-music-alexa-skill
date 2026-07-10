@@ -91,7 +91,7 @@
   }
   .result-info { flex: 1; min-width: 0; }
   .result-title {
-    font-size: .82rem;
+    font-size: var(--text-base);
     font-weight: 600;
     white-space: nowrap;
     overflow: hidden;
@@ -149,16 +149,18 @@
     position: relative;
     display: flex;
     align-items: center;
-    gap: var(--space-3);
-    padding: 10px 6px;
+    gap: var(--card-gap);
+    padding: var(--card-padding-y) var(--card-padding-x);
     cursor: pointer;
     border-left: 3px solid transparent;
-    transition: background .15s, border-color .15s;
+    transition: background .15s, border-color .15s, transform .15s;
     background: var(--surface);
+    border-radius: var(--card-radius);
     z-index: 1;
     touch-action: pan-y;
   }
   .result-swipe-wrapper .result-item-inner:hover { background: #1a1a1a; }
+  .result-swipe-wrapper .result-item-inner:active { transform: scale(.99); }
   .result-swipe-wrapper .result-item-inner.active {
     border-left-color: var(--accent);
     background: #1a1a1a;
@@ -399,3 +401,17 @@
   /* ponytail: category metadata reuses existing .result-title/.result-artist classes.
      Artist/album/playlist rows get the same .result-swipe-wrapper structure but
      with no action buttons (no play/queue/like/more). The thumbnail stays 48x48. */
+
+/* ---- Artist-name link styling (clickable artist names across views) ---- */
+.artist-name {
+  cursor: pointer;
+  color: var(--text);
+  transition: color .15s;
+}
+.artist-name:hover {
+  color: var(--accent);
+}
+.artist-name:active {
+  color: var(--accent);
+  opacity: .8;
+}

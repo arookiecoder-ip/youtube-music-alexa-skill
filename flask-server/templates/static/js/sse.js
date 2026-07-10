@@ -18,6 +18,8 @@
   function handleNpUpdate(np) {
     const npVideoId = (np && np.video_id) || null;
     if (window._cacheNowPlaying) window._cacheNowPlaying(np);
+    // Broadcast to other tabs via PWA BroadcastChannel
+    if (window.broadcastNpUpdate && np && np.title) window.broadcastNpUpdate(np);
     if (window.checkLikedVersion) window.checkLikedVersion(np);
     if (!window.JAM_GUEST && npVideoId && npVideoId !== _lastHistoryVideoId) {
       _lastHistoryVideoId = npVideoId;
@@ -71,6 +73,8 @@
             window._lastQueueJson = qJson;
             if (window.showQueue) window.showQueue(_rafQueuedData, _rafQueuedIndex);
             refreshQueueModalIfOpen();
+            // Broadcast queue update to other tabs via PWA BroadcastChannel
+            if (window.broadcastQueueUpdate) window.broadcastQueueUpdate(_rafQueuedData, _rafQueuedIndex);
           } else if (window.updateQueueActive) {
             window.updateQueueActive(_rafQueuedIndex);
           }

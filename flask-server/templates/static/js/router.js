@@ -20,10 +20,6 @@
     '#home': function() {
       showHomeViews();
     },
-    '#artist': function() {
-      // Phase 7 wires the artist view; this stub prevents page-reload fallback to #home.
-      hideAllViews();
-    },
     '#playlist': function() {
       var overlay = document.getElementById('playlists-modal-overlay');
       if (overlay) {
@@ -42,12 +38,38 @@
     },
   };
 
+  function showArtistSection() {
+    var section = document.getElementById('artist-section');
+    if (section) {
+      setHidden('.play-section, .player-section, #recs-section, #home-section, #idle-hero, #results-section, #queue-section, #artist-section', true);
+      section.hidden = false;
+    }
+  }
+
   window.addEventListener('hashchange', function() {
     var hash = location.hash || '#home';
     if (routes[hash]) {
       routes[hash]();
+    } else if (hash.indexOf('#artist/') === 0) {
+      var channelId = decodeURIComponent(hash.slice('#artist/'.length));
+      if (!channelId) { location.hash = '#home'; return; }
+      showArtistSection();
+      if (window.loadArtist) window.loadArtist(channelId);
     } else {
       location.hash = '#home';
+    }
+  });
+
+  // Global delegated click handler: artist-name -> navigate to artist page
+  document.addEventListener('click', function(e) {
+    var target = e.target.closest('.artist-name');
+    if (target) {
+      e.preventDefault();
+      e.stopPropagation();
+      var channelId = target.getAttribute('data-channel-id');
+      if (channelId) {
+        location.hash = '#artist/' + encodeURIComponent(channelId);
+      }
     }
   });
 

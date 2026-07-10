@@ -147,3 +147,40 @@ def test_cache_hit(client):
 
     assert second == first
     assert FakeYTMusic.calls == 1
+
+
+# ---- Phase 12: Health endpoint tests ----
+
+
+def test_health_endpoint_returns_ok(client):
+    response = client.get("/api/health/", headers={"X-Api-Key": server.API_KEY})
+    assert response.status_code == 200
+    data = response.get_json()
+    assert data["status"] == "ok"
+
+
+def test_health_has_checks(client):
+    response = client.get("/api/health/", headers={"X-Api-Key": server.API_KEY})
+    data = response.get_json()
+    assert "checks" in data
+    checks = data["checks"]
+    assert "database" in checks
+    assert checks["database"] == "ok"
+    assert "queue" in checks
+    assert "sse_subscribers" in checks
+    assert isinstance(data["version"], str)
+    assert isinstance(data["uptime_seconds"], (int, float))
+
+
+def test_health_queue_shape(client):
+    response = client.get("/api/health/", headers={"X-Api-Key": server.API_KEY})
+    data = response.get_json()
+    queue = data["checks"]["queue"]
+    assert isinstance(queue["length"], int)
+    assert isinstance(queue["current_track"], bool)
+    assert isinstance(queue["playing"], bool)
+
+
+def test_health_missing_auth(client):
+    response = client.get("/api/health/")
+    assert response.status_code in (302, 401)  # redirect or unauthorized

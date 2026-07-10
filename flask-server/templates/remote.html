@@ -12,7 +12,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Music Box">
-<link rel="apple-touch-icon" href="/static/icons/icon-192-any.png">
+<link rel="apple-touch-icon" href="/static/icons/icon-192.svg">
 <style>
   body.preload .play-section,
   body.preload .player-section,
@@ -49,6 +49,8 @@
 <style>{% include "static/css/toast.css" %}</style>
 <style>{% include "static/css/recs.css" %}</style>
 <style>{% include "static/css/home.css" %}</style>
+<style>{% include "static/css/artist.css" %}</style>
+<style>{% include "static/css/playlist.css" %}</style>
 <style>{% include "static/css/footer.css" %}</style>
 </head>
 <body class="preload{{ ' jam-guest' if jam_guest else '' }}">
@@ -399,6 +401,30 @@
   <!-- Home feed: categorized recommendation rows (replaces recs on idle) -->
   <section class="needs-login home-section" id="home-section" hidden>
     <div class="home-rows" id="home-rows"></div>
+  </section>
+
+  <!-- Artist page: hero, top songs, albums, singles, related artists -->
+  <section id="artist-section" hidden>
+    <div id="artist-skeleton"></div>
+    <div id="artist-content" hidden>
+      <div id="artist-hero"></div>
+      <div id="artist-top-songs">
+        <div class="section-head"><div class="label">Top Songs</div></div>
+        <div id="artist-top-songs-list"></div>
+      </div>
+      <div class="hscroll-section" id="artist-albums">
+        <div class="section-head"><div class="label">Albums</div></div>
+        <div class="hscroll-track" id="artist-albums-track"></div>
+      </div>
+      <div class="hscroll-section" id="artist-singles">
+        <div class="section-head"><div class="label">Singles</div></div>
+        <div class="hscroll-track" id="artist-singles-track"></div>
+      </div>
+      <div class="hscroll-section" id="artist-related">
+        <div class="section-head"><div class="label">Related Artists</div></div>
+        <div class="hscroll-track" id="artist-related-track"></div>
+      </div>
+    </div>
   </section>
 
   <footer class="site-footer">
@@ -876,12 +902,15 @@
 <script>{% include "static/js/history.js" %}</script>
 <script>{% include "static/js/recs.js" %}</script>
 <script>{% include "static/js/home.js" %}</script>
+<script>{% include "static/js/artist.js" %}</script>
 <script>{% include "static/js/sw-register.js" %}</script>
+<script>{% include "static/js/pwa.js" %}</script>
 <script>{% include "static/playlists.js" %}</script>
 <script>
   (function () {
     if (window.restoreFromCache) window.restoreFromCache();
     if (window.initPage) window.initPage();
+    if (window._initPwa) window._initPwa();
     setTimeout(function () {
       document.body.classList.remove('preload');
     }, 5000);

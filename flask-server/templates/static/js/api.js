@@ -18,6 +18,49 @@
     return new Error('Session expired');
   }
 
+  // Phase 12: Extract error message from both old (string) and new (structured) envelope.
+  function _extractError(json) {
+    if (!json) return '';
+    var err = json.error;
+    if (typeof err === 'string') return err;
+    if (err && typeof err.message === 'string') return err.message;
+    return '';
+  }
+
+  // Generous: a cold /api/home build or a slow search can take >15s server-side.
+  var API_TIMEOUT_MS = 30000;
+
+  // v3.1: Shared error response handler — throws appropriate Error for 429, 502/503, and other statuses.
+  function _handleErrorResponse(res, json) {
+    var errMsg = _extractError(json);
+    if (res.status === 429) {
+      var retryAfter = res.headers.get('Retry-After');
+      var waitMsg = retryAfter ? ' Try again in ' + retryAfter + 's.' : '';
+      throw new Error(errMsg || ('Server is busy.' + waitMsg));
+    }
+    if (res.status === 502 || res.status === 503) {
+      throw new Error(errMsg || 'Device is offline or unreachable.');
+    }
+    throw new Error(errMsg || ('HTTP ' + res.status));
+  }
+
+  // Phase 12: Fetch helper with AbortController timeout.
+  function _fetchWithTimeout(url, opts) {
+    var controller = new AbortController();
+    var timer = setTimeout(function() { controller.abort(); }, API_TIMEOUT_MS);
+    return fetch(url, Object.assign({}, opts, { signal: controller.signal }))
+      .then(function(res) { clearTimeout(timer); return res; })
+      .catch(function(err) {
+        clearTimeout(timer);
+        if (err.name === 'AbortError') {
+          var timeoutErr = new Error('Request timed out. Check your connection and try again.');
+          timeoutErr._isTimeout = true;
+          throw timeoutErr;
+        }
+        throw err;
+      });
+  }
+
   async function api(path, body) {
     const opts = body === undefined
       ? { credentials: 'same-origin', cache: 'no-store' }
@@ -29,18 +72,15 @@
         };
     let res;
     try {
-      res = await fetch(path, opts);
-    } catch (_) {
-      throw new Error("Can't reach the server. Check your connection and try again.");
+      res = await _fetchWithTimeout(path, opts);
+    } catch (e) {
+      throw new Error(e._isTimeout
+        ? e.message
+        : "Can't reach the server. Check your connection and try again.");
     }
     if (res.status === 401) throw _onUnauthorized();
     const json = await res.json().catch(() => ({}));
-    if (!res.ok) {
-      if (res.status === 502 || res.status === 503) {
-        throw new Error(json.error || 'Device is offline or unreachable.');
-      }
-      throw new Error(json.error || ('HTTP ' + res.status));
-    }
+    if (!res.ok) _handleErrorResponse(res, json);
     return json;
   }
 
@@ -56,36 +96,40 @@
   async function apiDelete(path) {
     let res;
     try {
-      res = await fetch(path, {
+      res = await _fetchWithTimeout(path, {
         method: 'DELETE',
         credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
         body: '{}',
       });
-    } catch (_) {
-      throw new Error("Can't reach the server. Check your connection and try again.");
+    } catch (e) {
+      throw new Error(e._isTimeout
+        ? e.message
+        : "Can't reach the server. Check your connection and try again.");
     }
     if (res.status === 401) throw _onUnauthorized();
     const json = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(json.error || ('HTTP ' + res.status));
+    if (!res.ok) _handleErrorResponse(res, json);
     return json;
   }
 
   async function apiPatch(path, body) {
     let res;
     try {
-      res = await fetch(path, {
+      res = await _fetchWithTimeout(path, {
         method: 'PATCH',
         credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body || {}),
       });
-    } catch (_) {
-      throw new Error("Can't reach the server. Check your connection and try again.");
+    } catch (e) {
+      throw new Error(e._isTimeout
+        ? e.message
+        : "Can't reach the server. Check your connection and try again.");
     }
     if (res.status === 401) throw _onUnauthorized();
     const json = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(json.error || ('HTTP ' + res.status));
+    if (!res.ok) _handleErrorResponse(res, json);
     return json;
   }
 

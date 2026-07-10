@@ -9,6 +9,8 @@ from werkzeug.exceptions import HTTPException
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
 logger = logging.getLogger(__name__)
 
+_start_time_epoch = time.time()
+
 app = Flask(__name__)
 
 # YTDLP_COOKIES normally points at a read-only bind mount (protecting the
@@ -292,6 +294,11 @@ def init_db():
             conn.execute("ALTER TABLE playlist_tracks ADD COLUMN added_at REAL")
         except sqlite3.OperationalError:
             pass
+
+        try:
+            conn.execute("ALTER TABLE playlists ADD COLUMN description TEXT DEFAULT ''")
+        except sqlite3.OperationalError:
+            pass
         
         # (Data migration script removed per user request)
 
@@ -351,6 +358,7 @@ def _load_playlists():
             data["playlists"][pl_id] = {
                 "id": pl_id,
                 "name": r['name'],
+                "description": r['description'] or '',
                 "source_url": r['source_url'],
                 "updated_at": r['updated_at'],
                 "tracks": []
@@ -398,8 +406,9 @@ _SESSION_PATHS = ('/remote', '/alexa/status', '/alexa/init', '/alexa/devices', '
                   '/alexa/queue_add', '/alexa/queue_remove',
                   '/alexa/queue_reorder', '/history', '/recommendations',
                   '/alexa/jam/start', '/alexa/jam/stop', '/alexa/jam/status',
-                  '/alexa/jam/qr')
-_SESSION_PREFIXES = ('/alexa/now_playing/', '/history/', '/api/playlists/', '/recommendations/')
+                  '/alexa/jam/qr', '/api/home')
+_SESSION_PREFIXES = ('/alexa/now_playing/', '/history/', '/api/playlists/', '/recommendations/',
+                     '/api/artist/')
 
 # API/device endpoints: the Alexa skill and web-remote JS hit these directly
 # and need a machine-readable JSON error, never an HTML redirect, on failure.
@@ -658,6 +667,124 @@ def require_api_key():
         return redirect('/login/')
     return None
 
+
+# v3.1: Rate limit check - runs after auth but before the actual handler.
+@app.before_request
+def _check_rate_limit():
+    path = request.path.rstrip('/') or '/'
+    group = _rate_limit_group(path)
+    if group == 'static':
+        return None
+    max_req, window = _RATE_LIMITS.get(group, _RATE_LIMITS['default'])
+    if max_req <= 0:
+        return None
+    ip = request.remote_addr or 'unknown'
+    allowed, retry_after = _rate_limiter.check(ip, group, max_req, window)
+    if not allowed:
+        resp = jsonify({'error': {'code': 'rate_limited', 'message': f'Rate limit exceeded. Try again in {retry_after}s.'}})
+        resp.status_code = 429
+        resp.headers['Retry-After'] = str(retry_after)
+        logger.warning('[rate-limit] %s %s from %s exceeded (%s, retry-after=%s)',
+                       request.method, path, ip, group, retry_after)
+        return resp
+    return None
+
+# ---- v3.1: Rate limiter (sliding window, per-IP/endpoint) ----
+import collections
+import time as _time_mod
+
+
+# ---- v3.1: Retry helper for transient ytmusicapi / external failures ----
+def _with_retry(fn, max_retries=2, delay=1.0, backoff=2.0, exceptions=(Exception,)):
+    """Call fn with retry on transient failures. Returns (result, error)."""
+    last_error = None
+    for attempt in range(max_retries + 1):
+        try:
+            return fn(), None
+        except exceptions as e:
+            last_error = e
+            if attempt < max_retries:
+                _time_mod.sleep(delay * (backoff ** attempt))
+    return None, str(last_error) if last_error else 'unknown error'
+
+
+# v3.1: YTMusic session factory with caching per thread
+_YT_CACHE = {}
+_YT_CACHE_LOCK = threading.Lock()
+
+def _get_ytmusic():
+    """Get a cached YTMusic instance. Reuses per thread to avoid re-auth."""
+    tid = threading.get_ident()
+    with _YT_CACHE_LOCK:
+        inst = _YT_CACHE.get(tid)
+        if inst is None:
+            inst = YTMusic()
+            _YT_CACHE[tid] = inst
+        return inst
+
+
+def _yt_call(method, *args, timeout=15, **kwargs):
+    """Call a YTMusic method with retry. Returns (result, error)."""
+    yt = _get_ytmusic()
+    fn = getattr(yt, method, None)
+    if fn is None:
+        return None, f'unknown method: {method}'
+    return _with_retry(
+        lambda: fn(*args, **kwargs),
+        max_retries=1,
+        delay=0.5,
+        exceptions=(Exception,),
+    )
+
+
+class _RateLimiter:
+    """Sliding-window rate limiter. Limits requests per (ip, endpoint_group)
+    within a window of `window_seconds`. Returns (allowed, retry_after_seconds)."""
+    def __init__(self):
+        self._buckets = collections.defaultdict(list)
+        self._lock = threading.Lock()
+
+    def check(self, ip: str, group: str, max_requests: int, window_seconds: int = 60):
+        now = _time_mod.time()
+        key = (ip, group)
+        with self._lock:
+            bucket = self._buckets[key]
+            # Prune expired entries
+            cutoff = now - window_seconds
+            while bucket and bucket[0] < cutoff:
+                bucket.pop(0)
+            if len(bucket) >= max_requests:
+                retry_after = int(bucket[0] + window_seconds - now) + 1
+                return False, retry_after
+            bucket.append(now)
+            return True, 0
+
+_rate_limiter = _RateLimiter()
+
+# Rate limit config: (max_requests, window_seconds) per endpoint group
+_RATE_LIMITS = {
+    'api':      (120, 60),    # /alexa/*, /api/* - general API
+    'proxy':    (30, 60),     # /proxy/ - expensive audio downloads
+    'poll':     (200, 60),   # /alexa/now_playing/ - SSE-alike polling
+    'static':   (0, 0),       # No limit for static assets
+    'default':  (300, 60),    # Catch-all
+}
+
+def _rate_limit_group(path: str) -> str:
+    if path.startswith('/static/') or path in ('/manifest.webmanifest', '/service-worker.js'):
+        return 'static'
+    if path == '/proxy' or path.startswith('/proxy'):
+        return 'proxy'
+    # `path` arrives with its trailing slash already stripped, so match the
+    # bare endpoint (the SSE stream keeps its own suffix and stays in 'api').
+    if path.startswith('/alexa/now_playing') and 'stream' not in path:
+        return 'poll'
+    if path.startswith('/alexa/') or path.startswith('/api/'):
+        return 'api'
+    return 'default'
+
+
+
 _last_prune = [0.0]
 _download_locks = {}
 _locks_guard = threading.Lock()
@@ -667,6 +794,32 @@ _locks_guard = threading.Lock()
 # unbounded concurrent downloads of many different ids).
 _DOWNLOAD_CONCURRENCY = 4
 _download_semaphore = threading.Semaphore(_DOWNLOAD_CONCURRENCY)
+# v3.1: Download queue depth tracking
+_download_queue_depth = 0
+_download_queue_lock = threading.Lock()
+
+def _download_backpressure() -> bool:
+    """Check if the download queue is under backpressure.
+    Returns False when too many downloads are queued."""
+    with _download_queue_lock:
+        global _download_queue_depth
+        if _download_queue_depth > _DOWNLOAD_CONCURRENCY * 3:
+            return False
+    return True
+
+
+def _inc_download_depth():
+    global _download_queue_depth
+    with _download_queue_lock:
+        _download_queue_depth += 1
+
+
+def _dec_download_depth():
+    global _download_queue_depth
+    with _download_queue_lock:
+        if _download_queue_depth > 0:
+            _download_queue_depth -= 1
+
 _stream_list_cache = {}
 _stream_list_pending = {}
 _stream_list_cache_lock = threading.Lock()
@@ -948,7 +1101,7 @@ def _get_now_playing():
 def handle_alexa_unreachable(error):
     # Device offline / Amazon not responding: a clear 503 so the web remote can
     # show a useful message instead of a generic 500.
-    return jsonify({'error': str(error)}), 503
+    return jsonify({'error': {'code': 'device_unreachable', 'message': str(error)}}), 503
 
 
 @app.errorhandler(Exception)
@@ -956,11 +1109,60 @@ def handle_uncaught(error):
     if isinstance(error, HTTPException):
         return error
     logger.exception("")
-    return jsonify({'error': 'internal server error'}), 500
+    return jsonify({'error': {'code': 'internal_error', 'message': 'internal server error'}}), 500
 
 
-def error_response(message: str, status: int):
-    return jsonify({'error': message}), status
+def error_response(message: str, status: int, code: str = ''):
+    return jsonify({'error': {'code': code or _error_code_for_status(status), 'message': message}}), status
+
+
+def _error_code_for_status(status: int) -> str:
+    if status == 400: return 'bad_request'
+    if status == 401: return 'unauthorized'
+    if status == 403: return 'forbidden'
+    if status == 404: return 'not_found'
+    if status == 429: return 'rate_limited'
+    if status == 502: return 'bad_gateway'
+    if status == 503: return 'service_unavailable'
+    return 'error'
+
+
+# Phase 12: Request logging middleware -- logs method, path, status, duration for every request.
+@app.after_request
+def _log_request(response):
+    path = request.path
+    # Skip static files and SSE streams to keep logs readable
+    if path.startswith('/static/') or path == '/alexa/now_playing/stream':
+        return response
+    # _mark_start_time is skipped when an earlier before_request hook (auth,
+    # rate limit) short-circuits the request, so fall back gracefully.
+    duration = time.time() - getattr(request, '_start_time', time.time())
+    extra = ''
+    ct = response.content_type or ''
+    if ct.startswith('application/json') and response.status_code >= 400 and response.data:
+        try:
+            body = json.loads(response.data)
+            if isinstance(body.get('error'), dict):
+                code = body['error'].get('code', '')
+                if code:
+                    extra = f' code={code}'
+            elif isinstance(body.get('error'), str):
+                extra = f" msg={body['error'][:60]!r}"
+        except Exception:
+            pass
+    args = request.args.to_dict()
+    if 'key' in args:
+        args['key'] = '***'
+    logger.info('[%s] %s %s -> %s%s (%.1fms)', request.method, path,
+                args or '', response.status_code, extra,
+                duration * 1000)
+    return response
+
+
+# Phase 12: Set start_time on every request (consumed by _log_request).
+@app.before_request
+def _mark_start_time():
+    request._start_time = time.time()
 
 
 def _stream_list_cache_key(query: str, filter_name: str):
@@ -1300,7 +1502,7 @@ class Supporting:
         history yet). Country defaults to India so a cold start doesn't show a
         US Top-40 list; falls back to the global chart if 'IN' isn't supported
         by the installed ytmusicapi."""
-        ytmusic = YTMusic()
+        ytmusic = _get_ytmusic()
         charts = None
         for country in (CHARTS_COUNTRY, 'ZZ'):
             try:
@@ -1331,7 +1533,7 @@ class Supporting:
         for lazy queue expansion once playback has already started."""
         if not _valid_video_id(video_id):
             return None
-        ytmusic = YTMusic()
+        ytmusic = _get_ytmusic()
         try:
             radio_results = await asyncio.to_thread(
                 ytmusic.get_watch_playlist, videoId=video_id, radio=True)
@@ -1360,7 +1562,7 @@ class Supporting:
 
     @staticmethod
     async def get_artist(artist_name: str):
-        ytmusic = YTMusic()
+        ytmusic = _get_ytmusic()
         search_results = await asyncio.to_thread(ytmusic.search, query=artist_name, filter='songs', ignore_spelling=True)
         if not search_results:
             return None
@@ -1582,23 +1784,29 @@ class Supporting:
         if now - _last_prune[0] > 60:
             Supporting.prune_audio_cache()
             _last_prune[0] = now
-        with _download_semaphore:
-            with _locks_guard:
-                lock = _download_locks.setdefault(video_id, threading.Lock())
-            with lock:
-                path = Supporting.cached_audio_path(video_id)
-                if path:
-                    return path
-                output = os.path.join(AUDIO_CACHE_DIR, f"{video_id}.%(ext)s")
-                clients = Supporting.get_ytdlp_clients()
-                for client in clients:
-                    result = subprocess.run(
-                        Supporting.ytdlp_download_command(video_id, output, client=client),
-                        capture_output=True, text=True)
-                    if result.returncode == 0:
-                        break
-                    logger.error("yt-dlp download failed (%s client): %s", client, result.stderr.strip())
-                return Supporting.cached_audio_path(video_id)
+        # Track queue depth: increment BEFORE acquiring the semaphore so the
+        # counter reflects queued (waiting) + active downloads, not just active.
+        _inc_download_depth()
+        try:
+            with _download_semaphore:
+                with _locks_guard:
+                    lock = _download_locks.setdefault(video_id, threading.Lock())
+                with lock:
+                    path = Supporting.cached_audio_path(video_id)
+                    if path:
+                        return path
+                    output = os.path.join(AUDIO_CACHE_DIR, f"{video_id}.%(ext)s")
+                    clients = Supporting.get_ytdlp_clients()
+                    for client in clients:
+                        result = subprocess.run(
+                            Supporting.ytdlp_download_command(video_id, output, client=client),
+                            capture_output=True, text=True)
+                        if result.returncode == 0:
+                            break
+                        logger.error("yt-dlp download failed (%s client): %s", client, result.stderr.strip())
+                    return Supporting.cached_audio_path(video_id)
+        finally:
+            _dec_download_depth()
 
     async def get_stream(video_id: str):
         if PUBLIC_BASE_URL:
@@ -3049,6 +3257,144 @@ async def _build_home():
     return rows
 
 
+# Phase 12: Health check endpoint -- returns server status, DB connectivity, and uptime.
+@app.route("/api/health/", methods=["GET"])
+def api_health():
+    """Health check for monitoring and diagnostics. Returns server status,
+    database connectivity, queue health, and configuration info."""
+    status = 'ok'
+    checks = {}
+    
+    # DB connectivity check
+    try:
+        with get_db() as conn:
+            conn.execute('SELECT 1').fetchone()
+        checks['database'] = 'ok'
+    except Exception as e:
+        checks['database'] = f'error: {e}'
+        status = 'degraded'
+    
+    # Queue health
+    with _np_lock:
+        queue_len = len(_now_playing.get('queue') or [])
+        current_track = bool(_now_playing.get('video_id'))
+        playing = _now_playing.get('playing', False)
+    checks['queue'] = {
+        'length': queue_len,
+        'current_track': current_track,
+        'playing': playing,
+    }
+    
+    # SSE subscriber count
+    with _sse_lock:
+        sse_count = len(_sse_subscribers)
+    checks['sse_subscribers'] = sse_count
+    
+    # Audio cache
+    try:
+        cache_files = len(glob.glob(os.path.join(AUDIO_CACHE_DIR, '*')))
+        checks['audio_cache'] = {'files': cache_files, 'dir': AUDIO_CACHE_DIR}
+    except Exception:
+        checks['audio_cache'] = 'unavailable'
+    
+    return jsonify({
+        'status': status,
+        'version': _STATIC_VERSION,
+        'uptime_seconds': int(time.time() - _start_time_epoch),
+        'checks': checks,
+    })
+
+
+@app.route("/api/artist/<channel_id>", methods=["GET"])
+async def api_artist(channel_id):
+    if not channel_id.strip():
+        return error_response('invalid channel id', 400)
+    try:
+        ytmusic = _get_ytmusic()
+        raw = await asyncio.to_thread(ytmusic.get_artist, channel_id)
+    except Exception as e:
+        logger.exception("api_artist failed for %s", channel_id)
+        return error_response(str(e), 500)
+    if not raw or not raw.get('name'):
+        return error_response('artist not found', 404)
+    artist_info = {
+        'name': raw.get('name', ''),
+        'description': raw.get('description', ''),
+        'thumbnails': raw.get('thumbnails', []),
+        'subscribers': raw.get('subscribers', ''),
+    }
+    songs_raw = raw.get('songs', {}).get('results', []) or []
+    top_songs = []
+    for s in songs_raw:
+        vid = s.get('videoId')
+        if not vid:
+            continue
+        top_songs.append({
+            'title': s.get('title', ''),
+            'artist': " and ".join(a.get('name', '') for a in (s.get('artists') or [])),
+            'video_id': vid,
+            'thumbnail': s['thumbnails'][-1]['url'] if s.get('thumbnails') else None,
+            'duration_ms': Supporting.duration_ms(s),
+            'channelId': channel_id,
+        })
+        if len(top_songs) >= 5:
+            break
+    albums_raw = raw.get('albums', {}).get('results', []) or []
+    albums = []
+    for a in albums_raw:
+        bid = a.get('browseId')
+        if not bid:
+            continue
+        albums.append({
+            'title': a.get('title', ''),
+            'year': a.get('year', ''),
+            'thumbnail': a['thumbnails'][-1]['url'] if a.get('thumbnails') else None,
+            'browseId': bid,
+        })
+        if len(albums) >= 10:
+            break
+    singles_raw = raw.get('singles', {}).get('results', []) or []
+    singles = []
+    for s in singles_raw:
+        bid = s.get('browseId')
+        if not bid:
+            continue
+        singles.append({
+            'title': s.get('title', ''),
+            'year': s.get('year', ''),
+            'thumbnail': s['thumbnails'][-1]['url'] if s.get('thumbnails') else None,
+            'browseId': bid,
+        })
+        if len(singles) >= 10:
+            break
+    related_raw = raw.get('related', {}).get('results', []) or []
+    related = []
+    for r in related_raw:
+        bid = r.get('browseId')
+        if not bid:
+            continue
+        thumb = ''
+        if r.get('thumbnails'):
+            thumb = r['thumbnails'][-1].get('url', '')
+        related.append({
+            'title': r.get('title', ''),
+            'browseId': bid,
+            'subscribers': r.get('subscribers', ''),
+            'thumbnail': thumb,
+        })
+    return jsonify({
+        'artist': artist_info,
+        'topSongs': top_songs,
+        'albums': albums,
+        'albumsBrowseId': (raw.get('albums') or {}).get('browseId', ''),
+        'albumsParams': (raw.get('albums') or {}).get('params', ''),
+        'singles': singles,
+        'singlesBrowseId': (raw.get('singles') or {}).get('browseId', ''),
+        'singlesParams': (raw.get('singles') or {}).get('params', ''),
+        'related': related,
+    })
+
+
 @app.route("/api/home/", methods=["GET"])
 def get_home():
     force = request.args.get('refresh') == '1'
@@ -4043,6 +4389,7 @@ async def alexa_search():
                     'video_id': video_id,
                     'thumbnail': _last_thumbnail(track),
                     'duration_ms': Supporting.duration_ms(track),
+                    'channelId': (track.get('artists') or [{}])[0].get('id', ''),
                 })
                 if len(results) >= 50:
                     break
@@ -4198,6 +4545,7 @@ def api_get_playlists():
 def api_create_playlist():
     body = request.get_json(silent=True) or {}
     name = (body.get("name") or "").strip()
+    description = (body.get("description") or "").strip()
     source_url = body.get("source_url")
     if not name and source_url:
         # Import flow doesn't ask the user to type a name — use the real
@@ -4226,6 +4574,7 @@ def api_create_playlist():
     new_pl = {
         "id": pl_id,
         "name": name,
+        "description": description,
         "source_url": source_url,
         "updated_at": now,
         "tracks": []
@@ -4233,9 +4582,9 @@ def api_create_playlist():
     
     with get_db() as conn:
         conn.execute('''
-            INSERT INTO playlists (id, name, source_url, updated_at)
-            VALUES (?, ?, ?, ?)
-        ''', (pl_id, name, source_url, now))
+            INSERT INTO playlists (id, name, description, source_url, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+        ''', (pl_id, name, description, source_url, now))
         conn.commit()
         
     return jsonify(new_pl)
@@ -4255,12 +4604,25 @@ def api_rename_playlist(pl_id):
         return jsonify({'error': 'Cannot rename Liked Songs'}), 400
     body = request.get_json(silent=True) or {}
     name = str(body.get("name") or "").strip()
-    if not name:
+    description = str(body.get("description") or "").strip()
+    if not name and 'description' not in body:
         return jsonify({'error': 'Name required'}), 400
     with get_db() as conn:
-        conn.execute('UPDATE playlists SET name = ?, updated_at = ? WHERE id = ?', (name, time.time(), pl_id))
+        if not name:
+            # Description-only update: keep the current name.
+            row = conn.execute('SELECT name FROM playlists WHERE id = ?', (pl_id,)).fetchone()
+            if not row:
+                return jsonify({'error': 'Playlist not found'}), 404
+            name = row['name']
+        if 'description' in body:
+            conn.execute('UPDATE playlists SET name = ?, description = ?, updated_at = ? WHERE id = ?', (name, description, time.time(), pl_id))
+        else:
+            conn.execute('UPDATE playlists SET name = ?, updated_at = ? WHERE id = ?', (name, time.time(), pl_id))
         conn.commit()
-    return jsonify({'ok': True, 'name': name})
+    resp = {'ok': True, 'name': name}
+    if 'description' in body:
+        resp['description'] = description
+    return jsonify(resp)
 
 def _backfill_track_thumbnail(pl_id, track_uuid, video_id):
     """The caller's item can carry a blank thumbnail (e.g. a queue entry whose
@@ -4409,6 +4771,40 @@ def api_add_track(pl_id):
 
     return jsonify({'ok': True, 'track': track})
 
+@app.route("/api/playlists/<pl_id>/tracks/reorder/", methods=["POST"])
+def api_reorder_playlist_tracks(pl_id):
+    """Reorder tracks within a playlist by swapping their added_at timestamps."""
+    if pl_id == "liked":
+        return jsonify({'error': 'Cannot reorder Liked Songs (sorted by oldest first)'}), 400
+    body = request.get_json(silent=True) or {}
+    from_idx = body.get("from_index")
+    to_idx = body.get("to_index")
+    if not isinstance(from_idx, int) or not isinstance(to_idx, int):
+        return jsonify({'error': 'from_index and to_index required'}), 400
+    with get_db() as conn:
+        # Fetch all tracks ordered by added_at DESC, rowid ASC
+        rows = conn.execute(
+            'SELECT uuid, rowid FROM playlist_tracks WHERE playlist_id = ? ORDER BY added_at DESC, rowid ASC',
+            (pl_id,)
+        ).fetchall()
+        if not rows:
+            return jsonify({'error': 'Playlist has no tracks'}), 400
+        if from_idx < 0 or from_idx >= len(rows) or to_idx < 0 or to_idx >= len(rows):
+            return jsonify({'error': 'Index out of range'}), 400
+        uuids = [r['uuid'] for r in rows]
+        # Move the uuid from from_idx to to_idx
+        moved = uuids.pop(from_idx)
+        uuids.insert(to_idx, moved)
+        # Assign new added_at timestamps based on new order. Keep them all in
+        # the past (top = now, descending) so a track added right after the
+        # reorder (added_at = time.time()) still lands at the top of the list.
+        now = time.time()
+        for i, uuid in enumerate(uuids):
+            conn.execute('UPDATE playlist_tracks SET added_at = ? WHERE uuid = ?', (now - i, uuid))
+        conn.execute('UPDATE playlists SET updated_at = ? WHERE id = ?', (now, pl_id))
+        conn.commit()
+    return jsonify({'ok': True, 'updated_at': now})
+
 @app.route("/api/playlists/<pl_id>/tracks/<track_uuid>", methods=["DELETE"])
 def api_remove_track(pl_id, track_uuid):
     with get_db() as conn:
@@ -4430,6 +4826,8 @@ def api_remove_track(pl_id, track_uuid):
         conn.execute('UPDATE playlists SET updated_at = ? WHERE id = ?', (time.time(), pl_id))
         conn.commit()
     return jsonify({'ok': True})
+
+
 
 @app.route("/api/playlists/<pl_id>/sync/", methods=["POST"])
 def api_sync_playlist(pl_id):
@@ -4603,10 +5001,8 @@ _MANIFEST = {
     "theme_color": "#0a0a0a",
     "categories": ["music", "entertainment"],
     "icons": [
-        {"src": "/static/icons/icon-192-any.png", "sizes": "192x192", "type": "image/png", "purpose": "any"},
-        {"src": "/static/icons/icon-512-any.png", "sizes": "512x512", "type": "image/png", "purpose": "any"},
-        {"src": "/static/icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "maskable"},
-        {"src": "/static/icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable"},
+        {"src": "/static/icons/icon-192.svg", "sizes": "192x192", "type": "image/svg+xml", "purpose": "any"},
+        {"src": "/static/icons/icon-512.svg", "sizes": "512x512", "type": "image/svg+xml", "purpose": "any maskable"},
     ],
 }
 
@@ -4631,10 +5027,8 @@ const VERSION = '__VERSION__';
 const STATIC_CACHE = 'mb-static-' + VERSION;
 const PAGE_CACHE = 'mb-pages-v1';
 const PRECACHE = [
-  '/static/icons/icon-192-any.png',
-  '/static/icons/icon-512-any.png',
-  '/static/icons/icon-192.png',
-  '/static/icons/icon-512.png',
+  '/static/icons/icon-192.svg',
+  '/static/icons/icon-512.svg',
   '/favicon.ico',
   '/manifest.webmanifest',
 ];
@@ -4654,6 +5048,11 @@ self.addEventListener('activate', (e) => {
       if (key.startsWith('mb-static-') && key !== STATIC_CACHE) await caches.delete(key);
     }
     await self.clients.claim();
+    // Notify all clients about the update
+    const claimClients = await self.clients.matchAll();
+    claimClients.forEach(function(c) {
+      c.postMessage({ type: 'sw-update' });
+    });
   })());
 });
 
