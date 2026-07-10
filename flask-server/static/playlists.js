@@ -73,6 +73,46 @@ const _imgCache = (() => {
   };
 })();
 
+// ponytail: IndexedDB playlist cache — stores full playlist objects keyed by id
+const _plCache = (() => {
+  let db;
+  const _open = () => new Promise(resolve => {
+    if (db && db.name === 'playlists-db') return resolve(db);
+    const r = indexedDB.open('playlists-db', 1);
+    r.onupgradeneeded = () => r.result.createObjectStore('playlists');
+    r.onsuccess = () => { db = r.result; resolve(db); };
+    r.onerror = () => resolve(null);
+  });
+  const TTL = 5 * 60 * 1000;
+  return {
+    async get(key) {
+      const d = await _open();
+      if (!d) return null;
+      return new Promise(r => {
+        const tx = d.transaction('playlists');
+        tx.objectStore('playlists').get(key).onsuccess = e => {
+          const entry = e.target.result;
+          if (!entry) return r(null);
+          if (Date.now() - entry.cached_at > TTL) {
+            d.transaction('playlists', 'readwrite').objectStore('playlists').delete(key);
+            return r(null);
+          }
+          r(entry.data || null);
+        };
+      });
+    },
+    async set(key, data) {
+      const d = await _open();
+      if (!d) return;
+      try {
+        d.transaction('playlists', 'readwrite').objectStore('playlists').put(
+          { data, cached_at: Date.now() }, key
+        );
+      } catch (_) {}
+    }
+  };
+})();
+
 let _playlistsData = { playlists: {}, liked_songs: [] };
 
 async function loadPlaylists() {
@@ -80,6 +120,10 @@ async function loadPlaylists() {
     const data = await api('/api/playlists/?_=' + Date.now());
     if (data && data.playlists) {
       _playlistsData = data;
+      // Cache each playlist in IDB for instant re-opening after page reload
+      for (const [id, pl] of Object.entries(data.playlists)) {
+        _plCache.set(id, pl);
+      }
     }
   } catch (e) {
     console.error("Failed to load playlists", e);
@@ -168,7 +212,15 @@ function closePlaylistsModal() {
 let _currentPlaylistDetailId = null;
 
 async function openPlaylistDetailModal(pl_id) {
-  const pl = _playlistsData.playlists[pl_id];
+  // Try IDB cache first — survives page reload for instant paint
+  let pl = _playlistsData.playlists[pl_id];
+  if (!pl) {
+    const cached = await _plCache.get(pl_id);
+    if (cached) {
+      pl = cached;
+      _playlistsData.playlists[pl_id] = cached;
+    }
+  }
   if (!pl) return;
   _currentPlaylistDetailId = pl_id;
 
@@ -201,7 +253,12 @@ async function openPlaylistDetailModal(pl_id) {
   playAllBtn.hidden = !pl.tracks || pl.tracks.length === 0;
   const shuffleBtn = document.getElementById('playlist-detail-shuffle-btn');
   shuffleBtn.hidden = !pl.tracks || pl.tracks.length === 0;
-  document.getElementById('playlist-detail-radio-btn').hidden = !pl.tracks || pl.tracks.length === 0;
+  const radioBtn = document.getElementById('playlist-detail-radio-btn');
+  radioBtn.hidden = !pl.tracks || pl.tracks.length === 0;
+  // Start hidden for fade-in after chunked render completes
+  if (!playAllBtn.hidden) { playAllBtn.style.opacity = '0'; playAllBtn.style.transition = 'opacity .3s'; }
+  if (!shuffleBtn.hidden) { shuffleBtn.style.opacity = '0'; shuffleBtn.style.transition = 'opacity .3s'; }
+  if (!radioBtn.hidden) { radioBtn.style.opacity = '0'; radioBtn.style.transition = 'opacity .3s'; }
 
   document.querySelectorAll('body > .playlist-more-menu').forEach(m => m.remove());
   if (!pl.tracks || pl.tracks.length === 0) {
@@ -216,10 +273,18 @@ async function openPlaylistDetailModal(pl_id) {
 
   const list = document.createElement('div');
   list.className = 'history-list';
-
   const imgElements = [];
 
-  pl.tracks.forEach((track) => {
+  // Loading status: "Loading X/Y tracks..." shown until all chunks are rendered
+  const statusEl = document.createElement('div');
+  statusEl.className = 'history-modal-empty';
+  statusEl.id = 'playlist-loading-status';
+  statusEl.style.cssText = 'padding: 12px 20px; text-align: center; font-size: 0.85rem; color: var(--text-muted);';
+  statusEl.innerHTML = `Loading <span id="pl-load-count">0</span>/<span id="pl-load-total">${pl.tracks.length}</span> tracks...`;
+  list.appendChild(statusEl);
+
+  // Build one track row (extracted from the old forEach body)
+  const _buildTrackRow = (track, pl_id) => {
     const item = { video_id: track.video_id, title: track.title, artist: track.artist,
       thumbnail: track.thumbnail || '', duration_ms: Number(track.duration_ms) || 0 };
 
@@ -252,7 +317,6 @@ async function openPlaylistDetailModal(pl_id) {
       img.className = 'queue-thumb';
       img.alt = '';
       img.dataset.src = track.thumbnail;
-      // Placeholder until image loads
       img.style.background = 'rgba(255,255,255,0.05)';
       imgElements.push(img);
       row.appendChild(img);
@@ -279,14 +343,6 @@ async function openPlaylistDetailModal(pl_id) {
     info.appendChild(artistEl);
     row.appendChild(info);
 
-      // Liked Songs is a fixed system playlist: every track here is already
-      // liked, so the per-track "remove" action is a heart button (un-like)
-      // rather than the generic "Remove from playlist" menu item used for
-      // custom playlists -- clicking it does exactly what un-liking does
-      // elsewhere in the app. Deliberately does NOT re-render/remove the row
-      // right away: the button just flips to "disliked" so an accidental tap
-      // is easy to undo (tap again to re-like) -- the row only disappears
-      // once the modal is closed and reopened, reflecting the real list.
       if (pl_id === 'liked') {
         const heartBtn = document.createElement('button');
         heartBtn.className = 'track-like-btn liked';
@@ -316,15 +372,8 @@ async function openPlaylistDetailModal(pl_id) {
 
       const menu = document.createElement('div');
       menu.className = 'playlist-more-menu';
-      // z-index must clear .history-modal-overlay's 500: this menu gets
-      // portaled to <body> while open (a sibling of the modal overlay, not a
-      // descendant), so a lower z-index here renders it behind the still-open
-      // playlist detail modal instead of on top of it.
       menu.style.cssText = 'position:absolute; right:8px; top:100%; background: var(--surface); border: 1px solid var(--border); z-index: 9999; min-width: 170px; box-shadow: 0 8px 24px rgba(0,0,0,.5); overflow: hidden;';
 
-      // Reuses .queue-menu-option (not .result-menu-option) so this menu's
-      // icon size/color, spacing, and hover/danger styling exactly match the
-      // queue's identical 3-dot menu instead of drifting from it.
       function addMenuOption(iconHtml, label, danger, onClick) {
         const opt = document.createElement('div');
         opt.className = 'queue-menu-option' + (danger ? ' danger' : '');
@@ -339,10 +388,7 @@ async function openPlaylistDetailModal(pl_id) {
 
       addMenuOption(playNextSvg, 'Play next', false, () => addToQueue(item, 'next'));
       addMenuOption(queueAddSvg, 'Add to queue', false, () => addToQueue(item, 'last'));
-      if (pl_id === 'liked') {
-        // Liked Songs' per-track "remove" is the heart button above instead
-        // (un-like), not this menu -- see the heartBtn block above.
-      } else {
+      if (pl_id !== 'liked') {
         addMenuOption(trashIcon, 'Remove from playlist', true,
           () => removeFromPlaylist(pl_id, track.uuid || track.video_id));
       }
@@ -351,24 +397,79 @@ async function openPlaylistDetailModal(pl_id) {
       moreContainer.appendChild(menu);
       row.appendChild(moreContainer);
 
-      // Tapping anywhere on the row plays it, same as clicking `info` used to
-      // -- attached via attachQueueItemTap (not a plain click listener) so it
-      // respects _swipeSuppressClick, which _attachSwipeGesture sets on this
-      // same `row` element after a committed swipe. Buttons inside the row
-      // (heart, more-menu) already stopPropagation in their own handlers, so
-      // this doesn't double-fire when one of those is clicked instead.
       attachQueueItemTap(row, () => playResult(item));
 
       wrapper.appendChild(row);
       _attachSwipeGesture(wrapper, row, item);
-      list.appendChild(wrapper);
-    });
+      return wrapper;
+  };
 
   body.innerHTML = '';
   body.appendChild(list);
 
-  // Load images progressively from IDB cache or network
-  _loadPlaylistImages(imgElements);
+  // Chunked lazy rendering: render ~100 tracks at a time, then yield. An
+  // IntersectionObserver sentinel at the bottom of the rendered list triggers
+  // the next chunk when scrolled near. Same pattern as _appendLazyQueueRows in
+  // remote.js, but simpler (no drag-reorder, no SSE updates).
+  const CHUNK_SIZE = 100;
+  const total = pl.tracks.length;
+  let rendered = 0;
+  let sentinel = null;
+  let observer = null;
+
+  const _appendTrackChunk = () => {
+    const start = rendered;
+    const end = Math.min(start + CHUNK_SIZE, total);
+    const frag = document.createDocumentFragment();
+    for (let i = start; i < end; i++) {
+      frag.appendChild(_buildTrackRow(pl.tracks[i], pl_id));
+    }
+
+    if (sentinel && sentinel.parentNode) {
+      list.insertBefore(frag, sentinel);
+    } else {
+      list.appendChild(frag);
+    }
+
+    rendered = end;
+
+    // Update loading count
+    const countEl = document.getElementById('pl-load-count');
+    if (countEl) countEl.textContent = rendered;
+
+    if (rendered >= total) {
+      // All tracks rendered — clean up sentinel, observer, status
+      if (observer) observer.disconnect();
+      if (sentinel && sentinel.parentNode) sentinel.parentNode.removeChild(sentinel);
+      const statusEl = document.getElementById('playlist-loading-status');
+      if (statusEl) statusEl.remove();
+
+      // Fade in action buttons
+      if (!playAllBtn.hidden) playAllBtn.style.opacity = '1';
+      if (!shuffleBtn.hidden) shuffleBtn.style.opacity = '1';
+      if (!radioBtn.hidden) radioBtn.style.opacity = '1';
+
+      // Load images progressively after text rows are visible
+      _loadPlaylistImages(imgElements);
+    } else {
+      // Position sentinel after new rows and re-observe
+      if (!sentinel) {
+        sentinel = document.createElement('div');
+        sentinel.style.height = '1px';
+      }
+      list.appendChild(sentinel);
+      if (!observer) {
+        observer = new IntersectionObserver((entries) => {
+          if (entries.some(e => e.isIntersecting)) _appendTrackChunk();
+        }, { root: body, rootMargin: '400px' });
+      }
+      observer.disconnect();
+      observer.observe(sentinel);
+    }
+  };
+
+  // Render first chunk immediately (no yield needed — first 100 rows is fast)
+  _appendTrackChunk();
 }
 
 // Loads playlist track thumbnails progressively: IDB cache first, then
