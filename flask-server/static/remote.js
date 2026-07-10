@@ -747,6 +747,7 @@ let _rafPending = false;
 const QUEUE_RENDER_CHUNK = 150;
 let _queueRenderLimit = QUEUE_RENDER_CHUNK;
 let _evtSource = null;
+let _evtSourceSerial = '';
 
 // The device list tags each option with data-online. When the selected Echo
 // is offline it cannot be playing anything, whatever the server state says.
@@ -924,9 +925,11 @@ function refreshQueueModalIfOpen() {
 }
 
 function connectSSE() {
-  stopSSE();
   const serial = deviceEl.value;
   if (!serial) return;
+  if (_evtSource && _evtSourceSerial === serial) return;
+  stopSSE();
+  _evtSourceSerial = serial;
   _evtSource = new EventSource('/alexa/now_playing/stream?serial=' + encodeURIComponent(serial));
   _evtSource.onmessage = (e) => {
     try { handleNpUpdate(JSON.parse(e.data)); } catch (_) {}
@@ -938,6 +941,7 @@ function connectSSE() {
 
 function stopSSE() {
   if (_evtSource) { _evtSource.close(); _evtSource = null; }
+  _evtSourceSerial = '';
 }
 
 // One-shot fetch of the current now-playing state. SSE already pushes updates,
@@ -955,6 +959,20 @@ async function pollNowPlaying() {
   }
 }
 
+let _pollNowPlayingTimer = null;
+let _pollNowPlayingDueAt = 0;
+function schedulePollNowPlaying(delayMs) {
+  const dueAt = Date.now() + delayMs;
+  if (_pollNowPlayingTimer && _pollNowPlayingDueAt <= dueAt) return;
+  clearTimeout(_pollNowPlayingTimer);
+  _pollNowPlayingDueAt = dueAt;
+  _pollNowPlayingTimer = setTimeout(() => {
+    _pollNowPlayingTimer = null;
+    _pollNowPlayingDueAt = 0;
+    pollNowPlaying();
+  }, delayMs);
+}
+
 document.addEventListener('visibilitychange', () => {
   progress.syncLoop();
   if (document.hidden) stopSSE();
@@ -963,6 +981,7 @@ document.addEventListener('visibilitychange', () => {
     refreshVolume(true);
   }
 });
+window.addEventListener('pagehide', stopSSE);
 window.addEventListener('focus', () => refreshVolume(false));
 
 deviceEl.addEventListener('change', () => {
@@ -1082,7 +1101,7 @@ async function playDirectLink(query) {
     toast('Playing', 'ok');
     // Force queue refresh
     _lastQueueJson = '';
-    setTimeout(pollNowPlaying, 3000);
+    schedulePollNowPlaying(3000);
   } catch (e) {
     toast(e.message, 'error');
   }
@@ -1486,7 +1505,7 @@ async function addToQueue(item, position, silent) {
     // triggering a full rebuild (visible flicker) for no reason. Just poll;
     // the normal qJson !== _lastQueueJson check in updateNowPlaying will only
     // re-render if the confirmed queue actually differs.
-    setTimeout(pollNowPlaying, 500);
+    schedulePollNowPlaying(500);
   } catch (e) {
     if (!silent) toast(e.message, 'error');
     else throw e;
@@ -1600,7 +1619,7 @@ async function playResult(item, suppressRadio, forceRadio) {
     syncPlayPause();
     toast(forceRadio ? 'Radio started' : 'Playing', 'ok');
     _lastQueueJson = '';
-    setTimeout(pollNowPlaying, 3000);
+    schedulePollNowPlaying(3000);
   } catch (e) {
     toast(e.message, 'error');
   }
@@ -2071,11 +2090,11 @@ for (const btn of document.querySelectorAll('[data-action="previous"], [data-act
         // New track incoming: hold the bar at 0:00 until PlaybackStarted
         // confirms *this* video_id (not a stale push for the track we just left).
         progress.resetPending(data.now_playing && data.now_playing.video_id);
-        // Poll multiple times to catch the track transition
+        // Schedule one fallback poll; SSE remains the primary transition path.
         _lastQueueJson = '';
-        setTimeout(pollNowPlaying, 2000);
-        setTimeout(pollNowPlaying, 5000);
-        setTimeout(pollNowPlaying, 8000);
+        schedulePollNowPlaying(2000);
+        schedulePollNowPlaying(5000);
+        schedulePollNowPlaying(8000);
       })
       .catch(e => toast(e.message, 'error'))
       .finally(() => {
@@ -2755,7 +2774,7 @@ async function removeFromQueue(index, title, videoId) {
       if (index === -1) {
         // Already gone (removed from another view/tab): just resync.
         _lastQueueJson = '';
-        setTimeout(pollNowPlaying, 300);
+        schedulePollNowPlaying(300);
         return;
       }
     }
@@ -2781,12 +2800,12 @@ async function removeFromQueue(index, title, videoId) {
     // a rapid follow-up delete resolve its index against an empty queue and
     // silently no-op. The next SSE push / poll confirms the true state (with
     // the pending filter suppressing any stale copy of this song).
-    setTimeout(pollNowPlaying, 300);
+    schedulePollNowPlaying(300);
   } catch (e) {
     toast(e.message, 'error');
     // Revert the optimistic removal: force a refresh from the server.
     _lastQueueJson = '';
-    setTimeout(pollNowPlaying, 300);
+    schedulePollNowPlaying(300);
   }
 }
 
@@ -2821,11 +2840,11 @@ async function reorderQueue(fromIndex, toIndex) {
     // here — the optimistic reorder above already matches what the server will
     // report, and invalidating the cache forces a needless full rebuild (the
     // visible flicker) as soon as the confirming snapshot arrives.
-    setTimeout(pollNowPlaying, 500);
+    schedulePollNowPlaying(500);
   } catch (e) {
     // Revert on error: force refresh from server
     _lastQueueJson = '';
-    setTimeout(pollNowPlaying, 300);
+    schedulePollNowPlaying(300);
     toast(e.message, 'error');
   }
 }
@@ -2928,7 +2947,7 @@ function _attachQueueSwipeGestures(wrapper, el, index, item, currentIndex) {
       if (committedDelete) {
         if (liveIdx === -1) {
           _lastQueueJson = '';
-          setTimeout(pollNowPlaying, 300);
+          schedulePollNowPlaying(300);
         } else {
           toast('Can’t remove the playing track', 'error');
         }
@@ -3185,7 +3204,7 @@ async function playFromQueue(item, queueIndex) {
     lastActionIntent = true;
     syncPlayPause();
     toast('Playing', 'ok');
-    setTimeout(pollNowPlaying, 3000);
+    schedulePollNowPlaying(3000);
     // Optimistically prepend this song to history right away so "Recently
     // Played" shows it immediately without waiting for the server webhook.
     const optimisticEntry = {
@@ -3850,7 +3869,7 @@ let _shuffleEnabled = false;
         toast('Queue shuffled', 'ok');
         // Force queue UI refresh on next SSE update
         _lastQueueJson = '';
-        setTimeout(pollNowPlaying, 500);
+        schedulePollNowPlaying(500);
       } catch (e) {
         toast(e.message, 'error');
         _shuffleEnabled = false;
