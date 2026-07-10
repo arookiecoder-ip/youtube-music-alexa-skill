@@ -366,7 +366,7 @@
   <!-- Recommended for you: full-width tile grid (direct child of main so it can
        span the viewport edge-to-edge, independent of .layout's width). Shown on
        blank state; skeleton tiles while loading. -->
-  <section class="needs-login recs-section jam-owner-only" id="recs-section" hidden>
+  <section class="needs-login recs-section" id="recs-section" hidden>
     <div class="section-head">
       <div class="label">Recommended for you</div>
     </div>
@@ -816,6 +816,7 @@
           <button class="btn-accent" id="jam-share-btn" style="flex:1; padding:8px 12px;">Share</button>
           <button id="jam-qr-btn" style="flex:1; padding:8px 12px; font-weight:600; background:transparent; border:1px solid var(--border); color:var(--text); border-radius:6px; cursor:pointer;">Show QR</button>
         </div>
+        <button id="jam-refresh-btn" style="width:100%; padding:9px 12px; margin-bottom:12px; font-weight:600; background:transparent; border:1px solid var(--border); color:var(--text); border-radius:6px; cursor:pointer;">Refresh Link</button>
         <div id="jam-qr-panel" hidden style="margin:0 auto 16px; width:min(220px, 100%); padding:12px; background:#fff; border-radius:6px;">
           <img id="jam-qr-img" alt="Jam QR code" style="display:block; width:100%; height:auto;">
         </div>

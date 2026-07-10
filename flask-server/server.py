@@ -597,15 +597,17 @@ def _jam_url(token):
 
 
 # What a jam guest may reach. Playback, search, queue manipulation and the
-# remote page itself are fine; private account data is not.
+# remote page itself are fine; recommendations are allowed as a playable mix,
+# while private account data is not.
 # Deliberately absent: /alexa/proxy_login + /alexa/proxy_check (Amazon auth),
 # /alexa/clear (wipes the owner's queue), /alexa/jam/* (owner-only controls),
-# /api/playlists/*, /history/*, /recommendations/*.
+# /api/playlists/*, /history/*.
 _JAM_PATHS = ('/remote', '/alexa/status', '/alexa/init', '/alexa/devices',
               '/alexa/command', '/alexa/play', '/alexa/suggest',
               '/alexa/now_playing', '/alexa/seek', '/alexa/volume',
               '/alexa/play_queue', '/alexa/shuffle_queue', '/alexa/search',
-              '/alexa/queue_add', '/alexa/queue_remove', '/alexa/queue_reorder')
+              '/alexa/queue_add', '/alexa/queue_remove', '/alexa/queue_reorder',
+              '/recommendations')
 
 
 def _jam_request_allowed(path):
@@ -2527,7 +2529,10 @@ def logout():
     # accepted only from a JSON body (a cross-site form can't send one without
     # failing CORS preflight) and only from a currently-valid session.
     body = request.get_json(silent=True) or {}
-    if body.get('everywhere') and _logged_in():
+    owner_logged_in = _logged_in()
+    if owner_logged_in:
+        _jam_close_all()
+    if body.get('everywhere') and owner_logged_in:
         _sessions_close_all()
     elif session.get('sid'):
         _session_close(session['sid'])

@@ -46,7 +46,7 @@ function syncUiState() {
   // while a track is playing, preventing a massive empty screen void.
   const recsSection = document.getElementById('recs-section');
   if (recsSection) {
-    const shouldShow = _loggedIn && !window.JAM_GUEST && !_resultsOpen && !_hasTrack;
+    const shouldShow = _loggedIn && !_resultsOpen && !_hasTrack;
     if (shouldShow && !_recsLoaded) loadRecommendations();
     else recsSection.hidden = !shouldShow || !_recsLoaded;
   }
@@ -3493,7 +3493,7 @@ function showRecsSkeleton(show) {
 }
 
 async function loadRecommendations() {
-  if (!_loggedIn || window.JAM_GUEST || _recsLoaded || _recsLoading) return;
+  if (!_loggedIn || _recsLoaded || _recsLoading) return;
   _recsLoading = true;
   const section = document.getElementById('recs-section');
   section.hidden = !(!_hasTrack && !_resultsOpen);
@@ -4015,6 +4015,7 @@ document.addEventListener('keydown', (e) => {
   const activeEl = document.getElementById('jam-active');
   const linkEl = document.getElementById('jam-link');
   const startBtn = document.getElementById('jam-start-btn');
+  const refreshBtn = document.getElementById('jam-refresh-btn');
   const jamBtn = document.getElementById('jam-btn');
   const sidebarJamBtn = document.getElementById('sidebar-jam-btn');
   const shareBtn = document.getElementById('jam-share-btn');
@@ -4078,6 +4079,18 @@ document.addEventListener('keydown', (e) => {
       toast(e.message, 'error');
     } finally {
       startBtn.disabled = false;
+    }
+  });
+
+  refreshBtn.addEventListener('click', async () => {
+    refreshBtn.disabled = true;
+    try {
+      renderJam(await api('/alexa/jam/start/', {}));
+      toast('Jam link refreshed — old link revoked', 'ok');
+    } catch (e) {
+      toast(e.message, 'error');
+    } finally {
+      refreshBtn.disabled = false;
     }
   });
 
