@@ -2168,6 +2168,10 @@ def _dispatch_play_with_retry(serial, video_id, offset_ms=0):
 # How long a password-verified login has to enter its 2FA code before the
 # pending state expires and it must start over.
 _PENDING_TTL = 300  # seconds
+# Server-side pending store (keyed by random token, NOT the session cookie)
+# so concurrent requests from other tabs can't race and lose the state.
+_pending_store = {}
+_pending_lock = threading.Lock()
 
 
 @app.route("/login/", methods=["GET", "POST"])
@@ -2184,17 +2188,15 @@ def login():
 
     # Step 2: a password-verified session submitting its 2FA code.
     if body.get("step") == "totp":
-        pending_at = session.get('pending_at', 0)
-        if session.get('pending_user') != REMOTE_USER or (time.time() - pending_at) > _PENDING_TTL:
-            session.pop('pending_user', None)
-            session.pop('pending_at', None)
+        token = str(body.get("token") or "")
+        with _pending_lock:
+            pending = _pending_store.pop(token, None)
+        if not pending or pending.get('user') != REMOTE_USER or (time.time() - pending.get('at', 0)) > _PENDING_TTL:
             return error_response('login timed out, start again', 401)
         # str(): a JSON body can carry the 6-digit code as a number, and
         # .strip() on an int would 500 instead of failing the check cleanly.
         if not _totp_verify(str(body.get("code") or "").strip()):
             return error_response('invalid authentication code', 401)
-        session.pop('pending_user', None)
-        session.pop('pending_at', None)
         session['remote_user'] = REMOTE_USER
         session.permanent = True
         return jsonify({'ok': True})
@@ -2208,9 +2210,10 @@ def login():
         return error_response('invalid username or password', 401)
     if _totp_enabled():
         # Hold the verified identity briefly while the browser collects the code.
-        session['pending_user'] = REMOTE_USER
-        session['pending_at'] = int(time.time())
-        return jsonify({'ok': True, 'totp_required': True})
+        token = secrets.token_urlsafe(32)
+        with _pending_lock:
+            _pending_store[token] = {'user': REMOTE_USER, 'at': time.time()}
+        return jsonify({'ok': True, 'totp_required': True, 'token': token})
     session['remote_user'] = REMOTE_USER
     session.permanent = True
     return jsonify({'ok': True})

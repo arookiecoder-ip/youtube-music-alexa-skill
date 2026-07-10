@@ -274,6 +274,7 @@ stepCreds.addEventListener('submit', async (e) => {
       password: document.getElementById('password').value,
     });
     if (json.totp_required) {
+      window._loginToken = json.token;
       showStep(document.getElementById('step-code'));
     } else {
       location.href = '/';
@@ -294,7 +295,7 @@ if (TOTP) {
     setError('');
     codeBtn.disabled = true;
     try {
-      await post({ step: 'totp', code: document.getElementById('code').value.trim() });
+      await post({ step: 'totp', code: document.getElementById('code').value.trim(), token: window._loginToken });
       location.href = '/';
     } catch (err) {
       setError(err.message);

@@ -46,6 +46,33 @@ document.addEventListener('click', _closeAllPlaylistMoreMenus);
 // that instead of trying to keep a fixed-position element live-repositioned.
 document.getElementById('playlist-detail-body').addEventListener('scroll', _closeAllPlaylistMoreMenus, { passive: true });
 
+// ponytail: IndexedDB image cache — stores thumbnail blobs keyed by URL
+const _imgCache = (() => {
+  let db;
+  const _open = () => new Promise(resolve => {
+    if (db && db.name === 'thumbnails') return resolve(db);
+    const r = indexedDB.open('thumbnails', 1);
+    r.onupgradeneeded = () => r.result.createObjectStore('thumbs');
+    r.onsuccess = () => { db = r.result; resolve(db); };
+    r.onerror = () => resolve(null);
+  });
+  return {
+    async get(url) {
+      const d = await _open();
+      if (!d) return null;
+      return new Promise(r => {
+        const tx = d.transaction('thumbs');
+        tx.objectStore('thumbs').get(url).onsuccess = e => r(e.target.result || null);
+      });
+    },
+    async set(url, blob) {
+      const d = await _open();
+      if (!d) return;
+      try { d.transaction('thumbs', 'readwrite').objectStore('thumbs').put(blob, url); } catch (_) {}
+    }
+  };
+})();
+
 let _playlistsData = { playlists: {}, liked_songs: [] };
 
 async function loadPlaylists() {
@@ -140,12 +167,20 @@ function closePlaylistsModal() {
 
 let _currentPlaylistDetailId = null;
 
-function openPlaylistDetailModal(pl_id) {
+async function openPlaylistDetailModal(pl_id) {
   const pl = _playlistsData.playlists[pl_id];
   if (!pl) return;
   _currentPlaylistDetailId = pl_id;
 
+  // Show modal with title + loader immediately
   document.getElementById('playlist-detail-title').textContent = pl.name;
+  document.getElementById('playlists-modal-overlay').classList.add('open');
+  document.getElementById('playlist-detail-modal-overlay').classList.add('open');
+  const body = document.getElementById('playlist-detail-body');
+  body.innerHTML = '<div class="history-modal-empty" style="padding:40px; text-align:center;"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" class="spin" style="width:24px;height:24px;margin:0 auto 12px;"><path d="M21 2v6h-6"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M3 22v-6h6"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/></svg><div>Loading tracks...</div></div>';
+
+  // Yield so the loader paints before heavy DOM work
+  await new Promise(r => setTimeout(r, 0));
 
   const syncBtn = document.getElementById('playlist-sync-btn');
   if (pl.source_url) {
@@ -155,8 +190,6 @@ function openPlaylistDetailModal(pl_id) {
     syncBtn.hidden = true;
   }
 
-  // "Rename" isn't offered for Liked Songs (a fixed system playlist); delete
-  // is hidden for it in the same way the backend already refuses both.
   const moreBtn = document.getElementById('playlist-detail-more-btn');
   const renameOpt = document.getElementById('playlist-detail-rename-opt');
   const deleteOpt = document.getElementById('playlist-detail-delete-opt');
@@ -170,91 +203,81 @@ function openPlaylistDetailModal(pl_id) {
   shuffleBtn.hidden = !pl.tracks || pl.tracks.length === 0;
   document.getElementById('playlist-detail-radio-btn').hidden = !pl.tracks || pl.tracks.length === 0;
 
-  const body = document.getElementById('playlist-detail-body');
-  // Rebuilding the row markup below orphans any per-track menu still
-  // portaled to <body> from a previous render (its _home row no longer
-  // exists) -- drop those instead of leaving stray, unclickable nodes behind.
   document.querySelectorAll('body > .playlist-more-menu').forEach(m => m.remove());
   if (!pl.tracks || pl.tracks.length === 0) {
     body.innerHTML = '<div class="history-modal-empty">Playlist is empty.</div>';
-  } else {
-    const trashIcon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>`;
-    const moreSvg = `<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg>`;
-    const queueAddSvg = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>`;
-    const playNextSvg = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>`;
-    const heartFilledSvg = `<svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>`;
+    return;
+  }
+  const trashIcon = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="3 6 5 6 21 6"></polyline><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path></svg>`;
+  const moreSvg = `<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg>`;
+  const queueAddSvg = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>`;
+  const playNextSvg = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>`;
+  const heartFilledSvg = `<svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>`;
 
-    const list = document.createElement('div');
-    list.className = 'history-list';
+  const list = document.createElement('div');
+  list.className = 'history-list';
 
-    pl.tracks.forEach((track) => {
-      // Titles/artists from a synced YouTube playlist can contain quotes,
-      // backslashes, etc. -- building this row via string-interpolated
-      // onclick="..." attributes (as before) meant any such character could
-      // corrupt the attribute and silently break every button on the row with
-      // no console error. Building real DOM nodes and attaching real event
-      // listeners (passing `track` as a normal JS object, no serialization)
-      // sidesteps that entirely.
-      const item = { video_id: track.video_id, title: track.title, artist: track.artist,
-        thumbnail: track.thumbnail || '', duration_ms: Number(track.duration_ms) || 0 };
+  const imgElements = [];
 
-      // Swipe wrapper: reuses the exact same underlays/gesture handler as the
-      // search-results list (right = Play next, left = Add to queue) instead
-      // of a bespoke implementation, so the animation and thresholds match.
-      const wrapper = document.createElement('div');
-      wrapper.className = 'result-swipe-wrapper';
-      // Freshly added song: play the slide-in/glow entrance once (it sits at
-      // the top, like YT Music), then forget it so re-renders stay calm.
-      const trackKey = track.uuid || track.video_id;
-      if (_recentlyAddedTrackKeys.has(trackKey) || _recentlyAddedTrackKeys.has(track.video_id)) {
-        wrapper.classList.add('track-added-anim');
-        _recentlyAddedTrackKeys.delete(trackKey);
-        _recentlyAddedTrackKeys.delete(track.video_id);
-        wrapper.addEventListener('animationend', () => wrapper.classList.remove('track-added-anim'), { once: true });
-      }
-      wrapper.innerHTML = `
-        <div class="result-swipe-underlay underlay-play-next">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
-          Play next
-        </div>
-        <div class="result-swipe-underlay underlay-add-queue">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
-          Add to queue
-        </div>
-      `;
+  pl.tracks.forEach((track) => {
+    const item = { video_id: track.video_id, title: track.title, artist: track.artist,
+      thumbnail: track.thumbnail || '', duration_ms: Number(track.duration_ms) || 0 };
 
-      const row = document.createElement('div');
-      row.className = 'history-item';
-      row.style.position = 'relative';
+    const wrapper = document.createElement('div');
+    wrapper.className = 'result-swipe-wrapper';
+    const trackKey = track.uuid || track.video_id;
+    if (_recentlyAddedTrackKeys.has(trackKey) || _recentlyAddedTrackKeys.has(track.video_id)) {
+      wrapper.classList.add('track-added-anim');
+      _recentlyAddedTrackKeys.delete(trackKey);
+      _recentlyAddedTrackKeys.delete(track.video_id);
+      wrapper.addEventListener('animationend', () => wrapper.classList.remove('track-added-anim'), { once: true });
+    }
+    wrapper.innerHTML = `
+      <div class="result-swipe-underlay underlay-play-next">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+        Play next
+      </div>
+      <div class="result-swipe-underlay underlay-add-queue">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+        Add to queue
+      </div>
+    `;
 
-      if (track.thumbnail) {
-        const img = document.createElement('img');
-        img.className = 'queue-thumb loaded';
-        img.src = track.thumbnail;
-        img.alt = '';
-        row.appendChild(img);
-      } else {
-        const ph = document.createElement('div');
-        ph.className = 'queue-thumb';
-        ph.style.cssText = 'display:flex; align-items:center; justify-content:center; background: rgba(255,255,255,0.05);';
-        ph.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="width: 20px; height: 20px; color: var(--text-muted, #888);"><path d="M9 18V5l12-2v13"></path><circle cx="6" cy="18" r="3"></circle><circle cx="18" cy="16" r="3"></circle></svg>`;
-        row.appendChild(ph);
-      }
+    const row = document.createElement('div');
+    row.className = 'history-item';
+    row.style.position = 'relative';
 
-      const info = document.createElement('div');
-      info.className = 'history-info';
-      info.style.cssText = 'flex:1; min-width:0; cursor:pointer;';
-      const titleEl = document.createElement('div');
-      titleEl.className = 'history-title';
-      titleEl.style.cssText = 'white-space:nowrap; overflow:hidden; text-overflow:ellipsis;';
-      titleEl.textContent = track.title;
-      const artistEl = document.createElement('div');
-      artistEl.className = 'history-artist';
-      artistEl.style.cssText = 'white-space:nowrap; overflow:hidden; text-overflow:ellipsis;';
-      artistEl.textContent = track.artist;
-      info.appendChild(titleEl);
-      info.appendChild(artistEl);
-      row.appendChild(info);
+    if (track.thumbnail) {
+      const img = document.createElement('img');
+      img.className = 'queue-thumb';
+      img.alt = '';
+      img.dataset.src = track.thumbnail;
+      // Placeholder until image loads
+      img.style.background = 'rgba(255,255,255,0.05)';
+      imgElements.push(img);
+      row.appendChild(img);
+    } else {
+      const ph = document.createElement('div');
+      ph.className = 'queue-thumb';
+      ph.style.cssText = 'display:flex; align-items:center; justify-content:center; background: rgba(255,255,255,0.05);';
+      ph.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="width: 20px; height: 20px; color: var(--text-muted, #888);"><path d="M9 18V5l12-2v13"></path><circle cx="6" cy="18" r="3"></circle><circle cx="18" cy="16" r="3"></circle></svg>`;
+      row.appendChild(ph);
+    }
+
+    const info = document.createElement('div');
+    info.className = 'history-info';
+    info.style.cssText = 'flex:1; min-width:0; cursor:pointer;';
+    const titleEl = document.createElement('div');
+    titleEl.className = 'history-title';
+    titleEl.style.cssText = 'white-space:nowrap; overflow:hidden; text-overflow:ellipsis;';
+    titleEl.textContent = track.title;
+    const artistEl = document.createElement('div');
+    artistEl.className = 'history-artist';
+    artistEl.style.cssText = 'white-space:nowrap; overflow:hidden; text-overflow:ellipsis;';
+    artistEl.textContent = track.artist;
+    info.appendChild(titleEl);
+    info.appendChild(artistEl);
+    row.appendChild(info);
 
       // Liked Songs is a fixed system playlist: every track here is already
       // liked, so the per-track "remove" action is a heart button (un-like)
@@ -341,12 +364,46 @@ function openPlaylistDetailModal(pl_id) {
       list.appendChild(wrapper);
     });
 
-    body.innerHTML = '';
-    body.appendChild(list);
-  }
+  body.innerHTML = '';
+  body.appendChild(list);
 
-  document.getElementById('playlists-modal-overlay').classList.add('open');
-  document.getElementById('playlist-detail-modal-overlay').classList.add('open');
+  // Load images progressively from IDB cache or network
+  _loadPlaylistImages(imgElements);
+}
+
+// Loads playlist track thumbnails progressively: IDB cache first, then
+// network fetch+cache. Processes chunks between yields so names appear first.
+async function _loadPlaylistImages(imgs) {
+  const CHUNK = 8;
+  for (let i = 0; i < imgs.length; i += CHUNK) {
+    const chunk = imgs.slice(i, i + CHUNK);
+    await Promise.all(chunk.map(async img => {
+      const url = img.dataset.src;
+      if (!url) return;
+      try {
+        const cached = await _imgCache.get(url);
+        if (cached) {
+          img.src = URL.createObjectURL(cached);
+          img.classList.add('loaded');
+          return;
+        }
+      } catch (_) {}
+      // Network fallback with native lazy loading
+      img.loading = 'lazy';
+      img.src = url;
+      img.addEventListener('load', async () => {
+        img.classList.add('loaded');
+        // Cache the fetched blob for next time
+        try {
+          const res = await fetch(url);
+          const blob = await res.blob();
+          _imgCache.set(url, blob);
+        } catch (_) {}
+      }, { once: true });
+    }));
+    // Yield every chunk so the UI thread stays responsive
+    await new Promise(r => setTimeout(r, 0));
+  }
 }
 
 function _closePlaylistDetailMoreMenu() {
