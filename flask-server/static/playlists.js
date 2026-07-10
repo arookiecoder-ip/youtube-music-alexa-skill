@@ -253,12 +253,9 @@ async function openPlaylistDetailModal(pl_id) {
   playAllBtn.hidden = !pl.tracks || pl.tracks.length === 0;
   const shuffleBtn = document.getElementById('playlist-detail-shuffle-btn');
   shuffleBtn.hidden = !pl.tracks || pl.tracks.length === 0;
-  const radioBtn = document.getElementById('playlist-detail-radio-btn');
-  radioBtn.hidden = !pl.tracks || pl.tracks.length === 0;
   // Start hidden for fade-in after chunked render completes
   if (!playAllBtn.hidden) { playAllBtn.style.opacity = '0'; playAllBtn.style.transition = 'opacity .3s'; }
   if (!shuffleBtn.hidden) { shuffleBtn.style.opacity = '0'; shuffleBtn.style.transition = 'opacity .3s'; }
-  if (!radioBtn.hidden) { radioBtn.style.opacity = '0'; radioBtn.style.transition = 'opacity .3s'; }
 
   document.querySelectorAll('body > .playlist-more-menu').forEach(m => m.remove());
   if (!pl.tracks || pl.tracks.length === 0) {
@@ -274,14 +271,6 @@ async function openPlaylistDetailModal(pl_id) {
   const list = document.createElement('div');
   list.className = 'history-list';
   const imgElements = [];
-
-  // Loading status: "Loading X/Y tracks..." shown until all chunks are rendered
-  const statusEl = document.createElement('div');
-  statusEl.className = 'history-modal-empty';
-  statusEl.id = 'playlist-loading-status';
-  statusEl.style.cssText = 'padding: 12px 20px; text-align: center; font-size: 0.85rem; color: var(--text-muted);';
-  statusEl.innerHTML = `Loading <span id="pl-load-count">0</span>/<span id="pl-load-total">${pl.tracks.length}</span> tracks...`;
-  list.appendChild(statusEl);
 
   // Build one track row (extracted from the old forEach body)
   const _buildTrackRow = (track, pl_id) => {
@@ -388,7 +377,9 @@ async function openPlaylistDetailModal(pl_id) {
 
       addMenuOption(playNextSvg, 'Play next', false, () => addToQueue(item, 'next'));
       addMenuOption(queueAddSvg, 'Add to queue', false, () => addToQueue(item, 'last'));
-      if (pl_id !== 'liked') {
+      // Jam guests get play/queue options only — removing tracks writes the
+      // owner's playlist (and the server would 401 it anyway).
+      if (pl_id !== 'liked' && !window.JAM_GUEST) {
         addMenuOption(trashIcon, 'Remove from playlist', true,
           () => removeFromPlaylist(pl_id, track.uuid || track.video_id));
       }
@@ -420,6 +411,7 @@ async function openPlaylistDetailModal(pl_id) {
   const _appendTrackChunk = () => {
     const start = rendered;
     const end = Math.min(start + CHUNK_SIZE, total);
+    const imgStart = imgElements.length;
     const frag = document.createDocumentFragment();
     for (let i = start; i < end; i++) {
       frag.appendChild(_buildTrackRow(pl.tracks[i], pl_id));
@@ -433,24 +425,19 @@ async function openPlaylistDetailModal(pl_id) {
 
     rendered = end;
 
-    // Update loading count
-    const countEl = document.getElementById('pl-load-count');
-    if (countEl) countEl.textContent = rendered;
-
-    if (rendered >= total) {
-      // All tracks rendered — clean up sentinel, observer, status
-      if (observer) observer.disconnect();
-      if (sentinel && sentinel.parentNode) sentinel.parentNode.removeChild(sentinel);
-      const statusEl = document.getElementById('playlist-loading-status');
-      if (statusEl) statusEl.remove();
-
-      // Fade in action buttons
+    // First chunk on screen means the list is usable — show action buttons now
+    if (start === 0) {
       if (!playAllBtn.hidden) playAllBtn.style.opacity = '1';
       if (!shuffleBtn.hidden) shuffleBtn.style.opacity = '1';
-      if (!radioBtn.hidden) radioBtn.style.opacity = '1';
+    }
 
-      // Load images progressively after text rows are visible
-      _loadPlaylistImages(imgElements);
+    // Load thumbnails for the rows just added, not after the whole playlist
+    _loadPlaylistImages(imgElements.slice(imgStart));
+
+    if (rendered >= total) {
+      // All tracks rendered — clean up sentinel and observer
+      if (observer) observer.disconnect();
+      if (sentinel && sentinel.parentNode) sentinel.parentNode.removeChild(sentinel);
     } else {
       // Position sentinel after new rows and re-observe
       if (!sentinel) {
@@ -687,19 +674,6 @@ document.getElementById('playlist-detail-play-all-btn').addEventListener('click'
 
 document.getElementById('playlist-detail-shuffle-btn').addEventListener('click', (e) => {
   if (_currentPlaylistDetailId) playPlaylist(_currentPlaylistDetailId, e.currentTarget, true);
-});
-
-document.getElementById('playlist-detail-radio-btn').addEventListener('click', (e) => {
-  const pl_id = _currentPlaylistDetailId;
-  const pl = _playlistsData.playlists[pl_id];
-  if (!pl || !pl.tracks || pl.tracks.length === 0) return;
-  const shuffled = [...pl.tracks].sort(() => Math.random() - 0.5);
-  const seeds = shuffled.slice(0, 5);
-  closePlaylistDetailModal();
-  document.getElementById('playlists-modal-overlay').classList.remove('open');
-  if (seeds.length) {
-    playResult({ video_id: seeds[0].video_id, title: seeds[0].title, artist: seeds[0].artist, thumbnail: seeds[0].thumbnail, duration_ms: seeds[0].duration_ms }, false, true);
-  }
 });
 
 async function toggleLike(item, btnElement) {

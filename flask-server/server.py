@@ -221,6 +221,24 @@ def init_db():
             )
         ''')
         conn.execute('''
+            CREATE TABLE IF NOT EXISTS web_sessions (
+                sid TEXT PRIMARY KEY,
+                created_at REAL
+            )
+        ''')
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS kv (
+                k TEXT PRIMARY KEY,
+                v TEXT
+            )
+        ''')
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS jam_tokens (
+                token TEXT PRIMARY KEY,
+                created_at REAL
+            )
+        ''')
+        conn.execute('''
             CREATE TABLE IF NOT EXISTS playlist_tracks (
                 uuid TEXT PRIMARY KEY,
                 playlist_id TEXT,
@@ -365,8 +383,9 @@ def _load_playlists():
 # no ?key= and which contain no private data).
 _PUBLIC_PATHS = ('/', '/privacy_policy', '/terms_of_use', '/login', '/logout', '/favicon.ico',
                  '/manifest.webmanifest', '/service-worker.js')
-# Public path prefixes (startswith match) — static assets (CSS, JS, icons).
-_PUBLIC_PREFIXES = ('/static/',)
+# Public path prefixes (startswith match) — static assets (CSS, JS, icons),
+# plus jam join links (/jam/<token> — the token itself is the credential).
+_PUBLIC_PREFIXES = ('/static/', '/jam/')
 
 # Endpoints reachable with a logged-in web-remote session cookie (so the long
 # API key stays out of the browser URL). Everything here plus the remote page.
@@ -376,7 +395,8 @@ _SESSION_PATHS = ('/remote', '/alexa/status', '/alexa/init', '/alexa/devices', '
                   '/alexa/seek', '/alexa/volume', '/alexa/play_queue',
                   '/alexa/shuffle_queue', '/alexa/search', '/alexa/clear',
                   '/alexa/queue_add', '/alexa/queue_remove',
-                  '/alexa/queue_reorder', '/history', '/recommendations')
+                  '/alexa/queue_reorder', '/history', '/recommendations',
+                  '/alexa/jam/start', '/alexa/jam/stop', '/alexa/jam/status')
 _SESSION_PREFIXES = ('/alexa/now_playing/', '/history/', '/api/playlists/', '/recommendations/')
 
 # API/device endpoints: the Alexa skill and web-remote JS hit these directly
@@ -384,6 +404,7 @@ _SESSION_PREFIXES = ('/alexa/now_playing/', '/history/', '/api/playlists/', '/re
 _API_PREFIXES = ('/alexa/', '/proxy/', '/get_stream/', '/get_radio/',
                   '/find_stream_list/', '/armed_play/', '/stream_video/',
                   '/stream_playlist/', '/get_playlist_info/', '/queue_tracks/',
+                  '/play_genre/',
                   '/history', '/recommendations', '/api/playlists/')
 
 
@@ -391,8 +412,200 @@ def _remote_login_enabled():
     return bool(REMOTE_USER and REMOTE_PASSWORD)
 
 
+# Server-side registry of live web-remote sessions. The session cookie is a
+# signed client-side token, so on its own any copy of it stays valid until it
+# expires — even after "sign out". Each login mints a random sid recorded in
+# the web_sessions table; logout deletes the row, which invalidates every copy
+# of that cookie immediately. SQLite persistence means revocations (and live
+# sessions) survive restarts when SECRET_KEY is set.
+_SID_MAX_AGE = timedelta(days=30).total_seconds()  # mirrors PERMANENT_SESSION_LIFETIME
+_valid_sids = None  # in-memory mirror of web_sessions; None = not loaded yet
+_sids_lock = threading.Lock()
+
+
+def _sid_cache():
+    global _valid_sids
+    with _sids_lock:
+        if _valid_sids is None:
+            with get_db() as conn:
+                conn.execute('DELETE FROM web_sessions WHERE created_at < ?',
+                             (time.time() - _SID_MAX_AGE,))
+                rows = conn.execute('SELECT sid FROM web_sessions').fetchall()
+                conn.commit()
+            _valid_sids = {r['sid'] for r in rows}
+        return _valid_sids
+
+
+def _session_open():
+    """Record a new login and return its sid (store it in the cookie)."""
+    sid = secrets.token_urlsafe(32)
+    with get_db() as conn:
+        conn.execute('INSERT INTO web_sessions (sid, created_at) VALUES (?, ?)',
+                     (sid, time.time()))
+        conn.commit()
+    _sid_cache().add(sid)
+    return sid
+
+
+def _session_close(sid):
+    with get_db() as conn:
+        conn.execute('DELETE FROM web_sessions WHERE sid = ?', (sid,))
+        conn.commit()
+    _sid_cache().discard(sid)
+
+
+def _sessions_close_all():
+    """Sign out everywhere: invalidate every session cookie ever issued.
+    Also permanently closes the legacy-cookie adoption path in _logged_in()
+    — after this, a pre-sid cookie is revoked, not grandfathered."""
+    global _legacy_adoption_closed
+    with get_db() as conn:
+        conn.execute('DELETE FROM web_sessions')
+        conn.execute("INSERT OR REPLACE INTO kv (k, v) VALUES ('sessions_revoked_all', '1')")
+        conn.commit()
+    _sid_cache().clear()
+    _legacy_adoption_closed = True
+
+
+# Whether "sign out everywhere" has ever been used (None = not checked yet).
+# Once it has, cookies from before the sid upgrade must be treated as revoked
+# rather than adopted, or a stale legacy cookie would outlive the revocation.
+_legacy_adoption_closed = None
+
+
+def _legacy_adoption_allowed():
+    global _legacy_adoption_closed
+    if _legacy_adoption_closed is None:
+        with get_db() as conn:
+            row = conn.execute("SELECT v FROM kv WHERE k = 'sessions_revoked_all'").fetchone()
+        _legacy_adoption_closed = row is not None
+    return not _legacy_adoption_closed
+
+
 def _logged_in():
-    return _remote_login_enabled() and session.get('remote_user') == REMOTE_USER
+    if not (_remote_login_enabled() and session.get('remote_user') == REMOTE_USER):
+        return False
+    sid = session.get('sid')
+    if sid in _sid_cache():
+        return True
+    if sid is None and _legacy_adoption_allowed():
+        # Cookie issued before server-side sids existed. It carries the same
+        # signed remote_user that made it fully valid pre-upgrade, so adopt it:
+        # mint a sid now, making it revocable like every other session instead
+        # of forcing a one-time re-login on every device after deploy. Only
+        # until the first "sign out everywhere" — that must kill these too.
+        session['sid'] = _session_open()
+        return True
+    return False  # sid revoked (signed out here or everywhere)
+
+
+# ---- Jam (guest) sessions ----
+# Spotify-style "Jam": the owner mints a share link (/jam/<token>) from the
+# remote UI. Anyone opening it gets a guest session cookie tied to that token.
+# Guests can search, play, and control playback / the live queue, but every
+# account-mutating surface (likes, playlist create/edit/delete, history
+# delete, Amazon login) is refused server-side. Ending the jam deletes the
+# token row, which invalidates every guest cookie on their very next request
+# (and closes their SSE streams within one heartbeat).
+JAM_MAX_AGE = float(os.environ.get("JAM_TTL_HOURS", "24")) * 3600  # auto-expiry safety net
+_valid_jams = None  # in-memory mirror of jam_tokens ({token: created_at}); None = not loaded
+_jams_lock = threading.Lock()
+
+
+def _jam_cache():
+    global _valid_jams
+    with _jams_lock:
+        if _valid_jams is None:
+            with get_db() as conn:
+                conn.execute('DELETE FROM jam_tokens WHERE created_at < ?',
+                             (time.time() - JAM_MAX_AGE,))
+                rows = conn.execute('SELECT token, created_at FROM jam_tokens').fetchall()
+                conn.commit()
+            _valid_jams = {r['token']: r['created_at'] for r in rows}
+        return _valid_jams
+
+
+def _jam_token_valid(token):
+    if not token:
+        return False
+    created = _jam_cache().get(token)
+    if created is None:
+        return False
+    if time.time() - created > JAM_MAX_AGE:
+        _jam_close_all()  # expired: purge so guests are cut off, not just this check
+        return False
+    return True
+
+
+def _jam_open():
+    """Start a jam (revoking any previous one) and return its share token."""
+    token = secrets.token_urlsafe(24)
+    now = time.time()
+    with get_db() as conn:
+        conn.execute('DELETE FROM jam_tokens')
+        conn.execute('INSERT INTO jam_tokens (token, created_at) VALUES (?, ?)', (token, now))
+        conn.commit()
+    cache = _jam_cache()
+    cache.clear()
+    cache[token] = now
+    return token
+
+
+def _jam_close_all():
+    with get_db() as conn:
+        conn.execute('DELETE FROM jam_tokens')
+        conn.commit()
+    _jam_cache().clear()
+
+
+def _jam_active_token():
+    # Copy before iterating: _jam_open()/_jam_close_all() on another thread
+    # mutate the dict, which would raise RuntimeError mid-iteration.
+    for token, created in list(_jam_cache().items()):
+        if time.time() - created <= JAM_MAX_AGE:
+            return token
+    return None
+
+
+def _jam_guest():
+    """True when this request carries a guest cookie for a still-live jam."""
+    return _jam_token_valid(session.get('jam'))
+
+
+def _valid_key_supplied():
+    """True when the request itself proves owner access via the API key. Used
+    to avoid rendering the guest UI for an owner (key-in-URL scheme) who also
+    happens to carry a jam cookie from opening their own share link."""
+    if not API_KEY:
+        return False
+    supplied = request.args.get('key') or request.headers.get('X-Api-Key')
+    return hmac.compare_digest(supplied or "", API_KEY)
+
+
+def _jam_url(token):
+    base = PUBLIC_BASE_URL or request.url_root.rstrip('/')
+    return f"{base}/jam/{token}"
+
+
+# What a jam guest may reach. Playback, search, queue manipulation and the
+# remote page itself are fine; anything that writes account data is not.
+# Deliberately absent: /alexa/proxy_login + /alexa/proxy_check (Amazon auth),
+# /alexa/clear (wipes the owner's queue), /alexa/jam/* (owner-only controls),
+# playlist/history/like writes (handled by the read-only prefix check below).
+_JAM_PATHS = ('/remote', '/alexa/status', '/alexa/init', '/alexa/devices',
+              '/alexa/command', '/alexa/play', '/alexa/suggest',
+              '/alexa/now_playing', '/alexa/seek', '/alexa/volume',
+              '/alexa/play_queue', '/alexa/shuffle_queue', '/alexa/search',
+              '/alexa/queue_add', '/alexa/queue_remove', '/alexa/queue_reorder')
+_JAM_READONLY_PREFIXES = ('/api/playlists/', '/history/', '/recommendations/')
+
+
+def _jam_request_allowed(path):
+    """Allow-list for guest sessions; `path` is the trailing-slash-normalized
+    request path. Read-only surfaces additionally refuse mutating methods."""
+    if path in ('/history', '/recommendations') or request.path.startswith(_JAM_READONLY_PREFIXES):
+        return request.method in ('GET', 'HEAD', 'OPTIONS')
+    return path in _JAM_PATHS or request.path.startswith('/alexa/now_playing/')
 
 
 @app.before_request
@@ -408,6 +621,15 @@ def require_api_key():
         # triggering a CORS preflight that our lack of CORS headers would
         # fail, so this blocks classic CSRF against the cookie-authenticated
         # command endpoints without needing a token.
+        if request.method not in ('GET', 'HEAD', 'OPTIONS'):
+            if not (request.content_type or '').startswith('application/json'):
+                return jsonify({'error': 'unauthorized'}), 401
+        return None
+    # Jam guests: a valid guest cookie authorizes only the play/search/read
+    # subset in _jam_request_allowed. Same JSON-body CSRF rule as above.
+    # Checked after _logged_in() so the owner opening their own jam link
+    # keeps full access.
+    if _jam_guest() and _jam_request_allowed(path):
         if request.method not in ('GET', 'HEAD', 'OPTIONS'):
             if not (request.content_type or '').startswith('application/json'):
                 return jsonify({'error': 'unauthorized'}), 401
@@ -472,6 +694,19 @@ _now_playing = {
 _volume_by_serial = {}
 _np_lock = threading.Lock()
 
+# Version counter for the local Liked Songs playlist, included in SSE
+# snapshots. Open remotes re-fetch /api/playlists/ when it changes so a like
+# made elsewhere (voice command, another device) updates their heart icons
+# live instead of waiting for the next page load.
+_liked_version = 0
+
+
+def _bump_liked_version():
+    global _liked_version
+    with _np_lock:
+        _liked_version += 1
+    _notify_sse()
+
 # Seek/resume-with-offset dispatch arms position_ms just before triggering
 # playback (see alexa_seek and the 'play' action in alexa_command). The skill
 # then reports a PlaybackStarted for the same track at a low offset, which
@@ -534,6 +769,7 @@ def _np_snapshot(serial=None):
         'playback_confirmed': bool(s.get('playback_confirmed')),
         'volume': volume,
         'playback_error': playback_error,
+        'liked_version': _liked_version,
     }
 
 
@@ -1419,20 +1655,20 @@ async def get_playlist_info():
         return error_response('playlist not found', 404)
     return jsonify(response)
 
-@app.route("/stream_playlist/", methods=["GET"])
-async def stream_playlist():
-    start_time = time.time()
-    playlist_id = request.args.get("id")
-    if not playlist_id:
-        return error_response('missing required parameter "id"', 400)
+def _parse_limit_arg():
     try:
-        limit = max(0, int(request.args.get("limit", 0) or 0))
+        return max(0, int(request.args.get("limit", 0) or 0))
     except (TypeError, ValueError):
-        limit = 0
+        return 0
+
+
+async def _stream_playlist_payload(playlist_id, limit):
+    """Resolve a playlist into the skill's SongInfoList payload, mirroring the
+    full track list into the web remote's queue. Returns None when the playlist
+    is unknown/empty. Shared by /stream_playlist/ and /play_genre/."""
     response = await Supporting.stream_playlist(playlist_id)
-    logger.info('Completed request in %.2f seconds.', time.time() - start_time)
     if response is None:
-        return error_response('playlist not found or empty', 404)
+        return None
     # Mirror the full playlist into the web remote's queue so a voice-started
     # playlist shows the real track list (and so /queue_tracks/ can serve the
     # skill continuation batches beyond its window below).
@@ -1456,7 +1692,61 @@ async def stream_playlist():
     # the rest through /queue_tracks/ as playback approaches the window's end.
     if limit:
         response = dict(response, playlist=response['playlist'][:limit])
+    return response
+
+
+@app.route("/stream_playlist/", methods=["GET"])
+async def stream_playlist():
+    start_time = time.time()
+    playlist_id = request.args.get("id")
+    if not playlist_id:
+        return error_response('missing required parameter "id"', 400)
+    limit = _parse_limit_arg()
+    response = await _stream_playlist_payload(playlist_id, limit)
+    logger.info('Completed request in %.2f seconds.', time.time() - start_time)
+    if response is None:
+        return error_response('playlist not found or empty', 404)
     return jsonify(response)
+
+
+@app.route("/play_genre/", methods=["GET"])
+async def play_genre():
+    """Genre playback for the skill: search YT Music for a '<genre> music'
+    playlist and stream the best match (same payload shape as
+    /stream_playlist/). 404 when no usable playlist is found — the skill then
+    falls back to a plain song search."""
+    start_time = time.time()
+    genre = (request.args.get("genre") or '').strip()
+    if not genre:
+        return error_response('missing required parameter "genre"', 400)
+    limit = _parse_limit_arg()
+    ytmusic = YTMusic()
+    try:
+        results = await asyncio.to_thread(
+            ytmusic.search, query=f'{genre} music', filter='playlists', ignore_spelling=True)
+    except Exception:
+        logger.exception("play_genre: playlist search failed")
+        results = None
+    # Only try the first few hits, and stop starting new attempts once the
+    # time budget is spent: each attempt costs a full playlist fetch, and
+    # Alexa abandons the skill's request after ~8 seconds — a response that
+    # arrives later is thrown away, so 404-ing early lets the skill's plain
+    # song-search fallback still fit inside the window.
+    _GENRE_TIME_BUDGET = 5.0
+    for result in (results or [])[:3]:
+        if time.time() - start_time > _GENRE_TIME_BUDGET:
+            logger.warning('play_genre (%s): time budget exhausted, giving up', genre)
+            break
+        playlist_id = result.get('playlistId') or result.get('browseId') or ''
+        if playlist_id.startswith('VL'):
+            playlist_id = playlist_id[2:]
+        if not playlist_id:
+            continue
+        response = await _stream_playlist_payload(playlist_id, limit)
+        if response:
+            logger.info('Completed play_genre (%s) in %.2f seconds.', genre, time.time() - start_time)
+            return jsonify(response)
+    return error_response('no playlist found for that genre', 404)
 
 
 @app.route("/get_stream/", methods=["GET"])
@@ -2198,6 +2488,7 @@ def login():
         if not _totp_verify(str(body.get("code") or "").strip()):
             return error_response('invalid authentication code', 401)
         session['remote_user'] = REMOTE_USER
+        session['sid'] = _session_open()
         session.permanent = True
         return jsonify({'ok': True})
 
@@ -2215,12 +2506,22 @@ def login():
             _pending_store[token] = {'user': REMOTE_USER, 'at': time.time()}
         return jsonify({'ok': True, 'totp_required': True, 'token': token})
     session['remote_user'] = REMOTE_USER
+    session['sid'] = _session_open()
     session.permanent = True
     return jsonify({'ok': True})
 
 
 @app.route("/logout/", methods=["POST", "GET"])
 def logout():
+    # Revoke the sid server-side so every copy of this cookie dies now, not at
+    # its 30-day expiry. "everywhere" kills all sessions on all devices; it is
+    # accepted only from a JSON body (a cross-site form can't send one without
+    # failing CORS preflight) and only from a currently-valid session.
+    body = request.get_json(silent=True) or {}
+    if body.get('everywhere') and _logged_in():
+        _sessions_close_all()
+    elif session.get('sid'):
+        _session_close(session['sid'])
     # Clear the whole session (not just remote_user) so nothing — pending 2FA
     # state included — survives a sign-out.
     session.clear()
@@ -2244,7 +2545,66 @@ def remote_page():
     # key-in-URL scheme still serves here directly (see root()).
     if _remote_login_enabled():
         return redirect('/')
-    return _no_store(app.make_response(render_template("remote.html", asset_v=_STATIC_VERSION)))
+    return _no_store(app.make_response(render_template(
+        "remote.html", asset_v=_STATIC_VERSION,
+        jam_guest=_jam_guest() and not _valid_key_supplied())))
+
+
+# ---- Jam endpoints ----
+
+@app.route("/alexa/jam/start/", methods=["POST"])
+def jam_start():
+    """Owner-only (session or API key — guests can't reach /alexa/jam/*).
+    Mints a fresh share token; any previous jam is revoked in the same step."""
+    token = _jam_open()
+    return jsonify({'ok': True, 'active': True, 'url': _jam_url(token)})
+
+
+@app.route("/alexa/jam/stop/", methods=["POST"])
+def jam_stop():
+    """Revoke the jam. Every guest's next request 401s and their SSE stream
+    closes on its next tick — revocation is effectively immediate."""
+    _jam_close_all()
+    return jsonify({'ok': True, 'active': False})
+
+
+@app.route("/alexa/jam/status/", methods=["GET"])
+def jam_status():
+    token = _jam_active_token()
+    if not token:
+        return jsonify({'active': False})
+    return jsonify({'active': True, 'url': _jam_url(token)})
+
+
+_JAM_ENDED_HTML = """<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Jam ended</title>
+<style>
+  body { margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center;
+         background:#0a0a0a; color:#eee; font-family:system-ui,-apple-system,sans-serif; }
+  .card { text-align:center; padding:32px; }
+  .card h1 { font-size:1.3rem; margin:0 0 8px; }
+  .card p { color:#999; font-size:.9rem; margin:0; }
+</style></head>
+<body><div class="card"><h1>This jam has ended</h1>
+<p>The link is no longer active. Ask the host for a new one.</p></div></body></html>"""
+
+
+@app.route("/jam/<token>", methods=["GET"])
+def jam_join(token):
+    """Guest entry point. A valid token becomes a guest session cookie and the
+    browser lands on the remote (served in guest mode); a dead token gets a
+    plain 'jam ended' page. The cookie is non-permanent, so it dies with the
+    guest's browser session even if they never leave."""
+    if _jam_token_valid(token):
+        # Joining must not silently downgrade the owner's own session (login
+        # mode: session; key-in-URL mode: a valid ?key= on the link).
+        if not _logged_in() and not _valid_key_supplied():
+            session['jam'] = token
+            session.permanent = False
+        return redirect('/remote/' if not _remote_login_enabled() else '/')
+    return _no_store(app.make_response((_JAM_ENDED_HTML, 410)))
 
 
 @app.route("/alexa/status/", methods=["GET"])
@@ -2613,6 +2973,11 @@ def alexa_state_event():
 # back to YT Music's charts. Short cache so a refresh a few minutes later gets
 # a fresh mix, without re-hitting YouTube on every single page load.
 _RECS_CACHE_TTL = 3 * 60
+# Floor for forced rebuilds (?refresh=1): the web remote sends refresh=1 on
+# every page load, so several tabs/devices loading within a minute would each
+# fire their own 5-radio YT Music build (and stack up waitress threads behind
+# _recs_lock). Within this window a forced refresh serves the cache instead.
+_RECS_FORCE_MIN_INTERVAL = 60
 _recs_cache = {'built_at': 0, 'items': []}
 _recs_lock = threading.Lock()
 
@@ -2735,8 +3100,13 @@ def get_recommendations():
     # their own set of YT Music calls (this is a single-user tool, so a few
     # hundred ms of serialization here is a non-issue).
     with _recs_lock:
-        fresh_enough = (time.time() - _recs_cache['built_at']) < _RECS_CACHE_TTL
-        if fresh_enough and not force:
+        age = time.time() - _recs_cache['built_at']
+        fresh_enough = age < _RECS_CACHE_TTL
+        # A forced refresh still honors a short floor so page-load bursts
+        # (every client sends refresh=1) collapse into one rebuild. An empty
+        # cache is never served in place of a rebuild.
+        if fresh_enough and _recs_cache['items'] and (
+                not force or age < _RECS_FORCE_MIN_INTERVAL):
             return jsonify(_recs_cache['items'])
         try:
             items = asyncio.run(_build_recommendations())
@@ -2798,6 +3168,11 @@ def alexa_now_playing():
 def now_playing_stream():
     serial = request.args.get("serial")
     """SSE endpoint — pushes now-playing state to the browser in real time."""
+    # A jam guest's stream must die when the jam is revoked, not at whenever
+    # the browser next reconnects. Capture the token now (the request context
+    # is gone once streaming starts) and re-check it on every tick — the
+    # 25s keepalive bounds how long a revoked guest can keep this open.
+    jam_token = None if _logged_in() else session.get('jam')
     def generate():
         q = _queue_mod.Queue()
         sub = {'serial': serial, 'qv': None}
@@ -2814,6 +3189,8 @@ def now_playing_stream():
             data = json.dumps(snap)
             yield f"data: {data}\n\n"
             while True:
+                if jam_token is not None and not _jam_token_valid(jam_token):
+                    break  # jam revoked: close this guest's stream now
                 try:
                     data = q.get(timeout=25)
                     yield f"data: {data}\n\n"
@@ -3755,6 +4132,52 @@ def _pop_recent_unlike_added_at(video_id):
         return entry[0] if entry else None
 
 
+@app.route("/alexa/like/", methods=["GET"])
+def alexa_like():
+    """Voice "like this song": add a track to the local Liked Songs playlist
+    (the same one the website's heart button uses). Called by the Alexa skill
+    with the current track's metadata; falls back to the server's own
+    now-playing track when no video_id is supplied. GET because the skill's
+    API client only speaks key-authenticated GETs."""
+    video_id = (request.args.get('video_id') or '').strip()
+    title = request.args.get('title') or ''
+    artist = request.args.get('artist') or ''
+    thumbnail = request.args.get('thumbnail') or ''
+    try:
+        duration_ms = int(request.args.get('duration_ms') or 0)
+    except (TypeError, ValueError):
+        duration_ms = 0
+    if not video_id:
+        np = _get_now_playing()
+        video_id = np.get('video_id') or ''
+        title = title or np.get('title') or ''
+        artist = artist or np.get('artist') or ''
+        thumbnail = thumbnail or np.get('thumbnail') or ''
+        duration_ms = duration_ms or int(np.get('duration_ms') or 0)
+    if not video_id:
+        return error_response('nothing playing to like', 404)
+
+    now = time.time()
+    track_uuid = uuid.uuid4().hex
+    with get_db() as conn:
+        conn.execute("INSERT OR IGNORE INTO playlists (id, name, updated_at) VALUES ('liked', 'Liked Songs', ?)", (now,))
+        existing = conn.execute(
+            "SELECT uuid FROM playlist_tracks WHERE playlist_id = 'liked' AND video_id = ?", (video_id,)).fetchone()
+        if not existing:
+            conn.execute('''
+                INSERT INTO playlist_tracks (uuid, playlist_id, video_id, title, artist, thumbnail_url, duration_ms, added_at)
+                VALUES (?, 'liked', ?, ?, ?, ?, ?, ?)
+            ''', (track_uuid, video_id, title, artist, thumbnail, duration_ms, now))
+            conn.execute("UPDATE playlists SET updated_at = ? WHERE id = 'liked'", (now,))
+        conn.commit()
+    if not thumbnail:
+        stored_uuid = existing['uuid'] if existing else track_uuid
+        threading.Thread(target=_backfill_track_thumbnail, args=('liked', stored_uuid, video_id), daemon=True).start()
+    if not existing:
+        _bump_liked_version()
+    return jsonify({'ok': True, 'already_liked': bool(existing), 'video_id': video_id})
+
+
 @app.route("/api/playlists/<pl_id>/tracks/", methods=["POST"])
 def api_add_track(pl_id):
     body = request.get_json(silent=True) or {}
@@ -3795,6 +4218,8 @@ def api_add_track(pl_id):
             if not thumbnail:
                 stored_uuid = existing['uuid'] if existing else track_uuid
                 threading.Thread(target=_backfill_track_thumbnail, args=(pl_id, stored_uuid, video_id), daemon=True).start()
+            if not existing:
+                _bump_liked_version()
             data = _load_playlists()
             return jsonify({'ok': True, 'track': track, 'liked_songs': data["liked_songs"]})
 
@@ -3827,6 +4252,7 @@ def api_remove_track(pl_id, track_uuid):
             conn.execute("DELETE FROM playlist_tracks WHERE playlist_id = 'liked' AND video_id = ?", (track_uuid,))
             conn.execute('UPDATE playlists SET updated_at = ? WHERE id = ?', (time.time(), pl_id))
             conn.commit()
+            _bump_liked_version()
             data = _load_playlists()
             return jsonify({'ok': True, 'liked_songs': data["liked_songs"]})
             
@@ -3944,6 +4370,9 @@ def root():
         return redirect('/remote/')
     if _logged_in():
         return _no_store(app.make_response(render_template("remote.html", asset_v=_STATIC_VERSION)))
+    if _jam_guest():
+        return _no_store(app.make_response(render_template(
+            "remote.html", asset_v=_STATIC_VERSION, jam_guest=True)))
     return redirect('/login/')
 
 
@@ -4123,4 +4552,7 @@ def service_worker():
 # Main entry point
 if __name__ == "__main__":
     import waitress
-    waitress.serve(app, host="0.0.0.0", port=5000, threads=8)
+    # Each connected web-remote client pins one thread on the long-lived SSE
+    # stream (/alexa/now_playing/stream), so 8 threads starve quickly with a
+    # few tabs open — 16 leaves headroom for normal requests.
+    waitress.serve(app, host="0.0.0.0", port=5000, threads=16)

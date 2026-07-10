@@ -207,14 +207,7 @@ function showNowPlaying(info) {
     updateUrlBar();
   }
 
-  const likeBtn = document.getElementById('np-like-btn');
-  if (likeBtn && _currentVideoId && typeof _playlistsData !== 'undefined' && _playlistsData.liked_songs) {
-    const isLiked = _playlistsData.liked_songs.includes(_currentVideoId);
-    likeBtn.classList.toggle('liked', isLiked);
-    likeBtn.innerHTML = isLiked 
-      ? `<svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>`
-      : `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>`;
-  }
+  refreshNpLikeButton();
 
   const wasTrack = _hasTrack;
   _hasTrack = true;
@@ -222,6 +215,31 @@ function showNowPlaying(info) {
     syncUiState();
     updateResultsActive();
   }
+}
+
+function refreshNpLikeButton() {
+  const likeBtn = document.getElementById('np-like-btn');
+  if (likeBtn && _currentVideoId && typeof _playlistsData !== 'undefined' && _playlistsData.liked_songs) {
+    const isLiked = _playlistsData.liked_songs.includes(_currentVideoId);
+    likeBtn.classList.toggle('liked', isLiked);
+    likeBtn.innerHTML = isLiked
+      ? `<svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>`
+      : `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>`;
+  }
+}
+
+// Liked Songs changed somewhere else (voice "like this song", another open
+// device): the SSE snapshot carries a liked_version counter; on change,
+// re-fetch playlists so heart icons reflect the new state. null = baseline
+// not yet seen (the first snapshot must not trigger a refetch).
+let _lastLikedVersion = null;
+function checkLikedVersion(np) {
+  if (!np || np.liked_version === undefined) return;
+  const first = _lastLikedVersion === null;
+  if (np.liked_version === _lastLikedVersion) return;
+  _lastLikedVersion = np.liked_version;
+  if (first || typeof loadPlaylists !== 'function') return;
+  loadPlaylists().then(() => refreshNpLikeButton()).catch(() => {});
 }
 
 /* ---- Progress bar ----
@@ -555,6 +573,26 @@ const progress = (function () {
 })();
 
 /* ---- API ---- */
+// Shared 401 handling for api/apiDelete/apiPatch. For a jam guest a 401
+// usually means the host ended the jam (or it expired) — but it can also be
+// an endpoint guests simply aren't allowed to hit. Probe an always-allowed
+// endpoint to tell them apart: only a genuinely dead jam gets the
+// full-screen ended state; a mere permission refusal gets a toast.
+function _onUnauthorized() {
+  if (window.JAM_GUEST) {
+    fetch('/alexa/status/', { credentials: 'same-origin', cache: 'no-store' })
+      .then((r) => {
+        if (r.status === 401) showJamEnded();
+        else toast('That action isn’t available in a jam.', 'error');
+      })
+      .catch(() => { /* network hiccup: leave the UI alone */ });
+    return new Error('Not available in this jam');
+  }
+  toast('Session expired — please log in again.', 'error');
+  setTimeout(function () { window.location.href = '/login/'; }, 2000);
+  return new Error('Session expired');
+}
+
 async function api(path, body) {
   const opts = body === undefined
     ? { credentials: 'same-origin', cache: 'no-store' }
@@ -568,7 +606,7 @@ async function api(path, body) {
     // Network-level failure: server unreachable, dropped connection, no internet.
     throw new Error('Can’t reach the server. Check your connection and try again.');
   }
-  if (res.status === 401) { toast('Session expired \u2014 please log in again.', 'error'); setTimeout(function () { window.location.href = '/login/'; }, 2000); throw new Error('Session expired'); }
+  if (res.status === 401) throw _onUnauthorized();
   const json = await res.json().catch(() => ({}));
   if (!res.ok) {
     // 502/503 mean the Echo (or Discord) didn't take the command — say so
@@ -581,8 +619,24 @@ async function api(path, body) {
   return json;
 }
 
+/* ---- Jam guest: ended / leave ---- */
+function showJamEnded(title, msg) {
+  stopSSE();
+  const overlay = document.getElementById('jam-ended-overlay');
+  if (!overlay) return;
+  if (title) document.getElementById('jam-ended-title').textContent = title;
+  if (msg) document.getElementById('jam-ended-msg').textContent = msg;
+  overlay.style.display = 'flex';
+}
+
+async function leaveJam() {
+  stopSSE();
+  try { await api('/logout/', {}); } catch (_) { /* best-effort */ }
+  showJamEnded('You left the jam', 'Open the jam link again to rejoin while it’s still live.');
+}
+
 /* ---- Sign-out confirmation ---- */
-async function doSignOut() {
+async function doSignOut(everywhere) {
   // AUTH-01 confirmed: logout flow (header + sidebar + overlay + doSignOut) is complete.
   stopSSE();
   // Signed out: the cached devices/track belong to the ended session and must
@@ -592,7 +646,7 @@ async function doSignOut() {
     localStorage.removeItem(_CACHE_NP_KEY);
   } catch (_) {}
   try {
-    await api('/logout/', {});
+    await api('/logout/', everywhere ? { everywhere: true } : {});
   } catch (_) { /* best-effort */ }
   // Drop the service worker's offline page shell too — it's a copy of the
   // logged-in UI and must not be replayable after sign-out.
@@ -606,15 +660,22 @@ async function doSignOut() {
   const overlay = document.getElementById('confirm-signout');
   const cancelBtn = document.getElementById('confirm-signout-cancel');
   const yesBtn = document.getElementById('confirm-signout-yes');
+  const everywhereEl = document.getElementById('confirm-signout-everywhere');
 
-  function showConfirm() { overlay.classList.add('open'); }
+  function showConfirm() {
+    // Guests aren't signing out of an account — leaving the jam only drops
+    // their own guest cookie, so no confirmation (or "everywhere") needed.
+    if (window.JAM_GUEST) { leaveJam(); return; }
+    everywhereEl.checked = false;
+    overlay.classList.add('open');
+  }
   function hideConfirm() { overlay.classList.remove('open'); }
 
   document.getElementById('logout').onclick = () => showConfirm();
 
   cancelBtn.addEventListener('click', hideConfirm);
   overlay.addEventListener('click', (e) => { if (e.target === overlay) hideConfirm(); });
-  yesBtn.addEventListener('click', () => { hideConfirm(); doSignOut(); });
+  yesBtn.addEventListener('click', () => { const everywhere = everywhereEl.checked; hideConfirm(); doSignOut(everywhere); });
 
   // Expose for sidebar
   window._showSignOutConfirm = showConfirm;
@@ -764,6 +825,7 @@ function handleNpUpdate(np) {
   // JSON write — and the async metadata backfill — have time to land.
   const npVideoId = (np && np.video_id) || null;
   _cacheNowPlaying(np);
+  checkLikedVersion(np);
   if (npVideoId && npVideoId !== _lastHistoryVideoId) {
     _lastHistoryVideoId = npVideoId;
     setTimeout(loadHistory, 1500);
@@ -1921,7 +1983,14 @@ async function doClearAll() {
     syncClearBtn();
     clearTimeout(debounceTimer);
     // Empty box: fall back to recent searches; links get no suggestions.
-    if (!q) { showHistory(); return; }
+    // Only when the box is actually focused — synthetic input events (e.g.
+    // clearUiAfterPlaybackReset emptying the box after "Clear") must not
+    // pop the history dropdown open on an unfocused input.
+    if (!q) {
+      if (document.activeElement === input) showHistory();
+      else closeList();
+      return;
+    }
     if (isYoutubeLinkLike(q)) { closeList(); return; }
     debounceTimer = setTimeout(() => fetchSuggestions(q), 180);
   });
@@ -3180,7 +3249,7 @@ async function apiDelete(path) {
   } catch (_) {
     throw new Error('Can’t reach the server. Check your connection and try again.');
   }
-  if (res.status === 401) { toast('Session expired \u2014 please log in again.', 'error'); setTimeout(function () { window.location.href = '/login/'; }, 2000); throw new Error('Session expired'); }
+  if (res.status === 401) throw _onUnauthorized();
   const json = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(json.error || ('HTTP ' + res.status));
   return json;
@@ -3196,7 +3265,7 @@ async function apiPatch(path, body) {
   } catch (_) {
     throw new Error('Can\u2019t reach the server. Check your connection and try again.');
   }
-  if (res.status === 401) { toast('Session expired \u2014 please log in again.', 'error'); setTimeout(function () { window.location.href = '/login/'; }, 2000); throw new Error('Session expired'); }
+  if (res.status === 401) throw _onUnauthorized();
   const json = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(json.error || ('HTTP ' + res.status));
   return json;
@@ -3871,7 +3940,7 @@ document.addEventListener('keydown', (e) => {
     'confirm-signout', 'confirm-clear', 'confirm-clear-history', 'confirm-dialog-overlay',
     'rename-playlist-overlay', 'import-playlist-overlay', 'add-to-playlist-overlay',
     'playlist-detail-modal-overlay', 'playlists-modal-overlay', 'history-modal-overlay',
-    'mini-popup-overlay', 'queue-modal-overlay', 'sidebar-overlay',
+    'mini-popup-overlay', 'queue-modal-overlay', 'sidebar-overlay', 'jam-modal-overlay',
   ];
   for (const id of overlayIds) {
     const overlay = document.getElementById(id);
@@ -3884,8 +3953,103 @@ document.addEventListener('keydown', (e) => {
   }
 });
 
-/* ---- PWA: register the service worker so the app is installable ---- */
-if ('serviceWorker' in navigator) {
+/* ---- Jam (owner: start/share/end; guest: adapt the chrome) ---- */
+(function () {
+  const overlay = document.getElementById('jam-modal-overlay');
+  if (!overlay) return;
+
+  if (window.JAM_GUEST) {
+    // Guest chrome: sign-out buttons become "Leave Jam" (their click paths
+    // already route to leaveJam via showConfirm), plus a badge so guests know
+    // they're on someone else's box. Owner-only jam controls are CSS-hidden.
+    const logoutBtn = document.getElementById('logout');
+    if (logoutBtn) logoutBtn.textContent = 'Leave Jam';
+    const logoutSb = document.getElementById('logout-sidebar');
+    if (logoutSb) logoutSb.textContent = 'Leave Jam';
+    const brand = document.querySelector('.brand h1');
+    if (brand) {
+      const badge = document.createElement('span');
+      badge.className = 'jam-guest-badge';
+      badge.textContent = 'Jam';
+      brand.appendChild(badge);
+    }
+    return;
+  }
+
+  const inactiveEl = document.getElementById('jam-inactive');
+  const activeEl = document.getElementById('jam-active');
+  const linkEl = document.getElementById('jam-link');
+  const startBtn = document.getElementById('jam-start-btn');
+
+  function renderJam(state) {
+    const active = !!(state && state.active);
+    inactiveEl.hidden = active;
+    activeEl.hidden = !active;
+    if (active) linkEl.value = state.url || '';
+  }
+
+  async function openJamModal() {
+    overlay.classList.add('open');
+    renderJam(null); // assume inactive while loading; status corrects it
+    try { renderJam(await api('/alexa/jam/status/')); }
+    catch (e) { toast(e.message, 'error'); }
+  }
+  function closeJamModal() { overlay.classList.remove('open'); }
+
+  document.getElementById('jam-btn').addEventListener('click', openJamModal);
+  document.getElementById('sidebar-jam-btn').addEventListener('click', () => {
+    if (window._closeSidebar) window._closeSidebar();
+    openJamModal();
+  });
+  document.getElementById('jam-modal-close').addEventListener('click', closeJamModal);
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) closeJamModal(); });
+
+  startBtn.addEventListener('click', async () => {
+    startBtn.disabled = true;
+    try {
+      renderJam(await api('/alexa/jam/start/', {}));
+      toast('Jam started — share the link', 'ok');
+    } catch (e) {
+      toast(e.message, 'error');
+    } finally {
+      startBtn.disabled = false;
+    }
+  });
+
+  document.getElementById('jam-copy-btn').addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(linkEl.value);
+      toast('Link copied', 'ok');
+    } catch (_) {
+      // Clipboard API needs a secure context; fall back to select-for-copy.
+      linkEl.focus();
+      linkEl.select();
+      toast('Press Ctrl+C to copy', 'error');
+    }
+  });
+
+  document.getElementById('jam-end-btn').addEventListener('click', async () => {
+    try {
+      renderJam(await api('/alexa/jam/stop/', {}));
+      toast('Jam ended — guest access revoked', 'ok');
+    } catch (e) {
+      toast(e.message, 'error');
+    }
+  });
+})();
+
+/* ---- PWA: register the service worker so the app is installable ----
+   Not for jam guests: they're temporary visitors, and precaching a guest
+   copy of the shell would let it replay after the jam ends. A guest browser
+   may also carry a previously installed worker (e.g. it was the owner's
+   browser once) whose cached shell would keep serving — unregister it. The
+   owner's next normal page load simply re-registers. */
+if ('serviceWorker' in navigator && window.JAM_GUEST) {
+  navigator.serviceWorker.getRegistrations()
+    .then((regs) => regs.forEach((r) => r.unregister()))
+    .catch(() => {});
+}
+if ('serviceWorker' in navigator && !window.JAM_GUEST) {
   window.addEventListener('load', () => {
     navigator.serviceWorker.register('/service-worker.js').catch(() => {});
   });

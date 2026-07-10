@@ -187,27 +187,125 @@ class PreviousPlaybackHandler(AbstractRequestHandler):
         logger.info("In PreviousPlaybackHandler")
         return player.Controller.play_previous(handler_input, is_playback=player.Attributes.get_playback_info(handler_input).get('in_playback_session'))
 
+def _slot_int(slots, name):
+    """Numeric slot value as int, or None when absent/unparseable."""
+    slot = slots.get(name) if slots else None
+    value = getattr(slot, 'value', None)
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+def _current_offset_ms(handler_input: HandlerInput) -> int:
+    """Best-known playback position: Alexa reports the live AudioPlayer offset
+    in the request context while the skill's audio is playing; fall back to the
+    last persisted offset (updated on pause/stop) when it's absent."""
+    audio_player = handler_input.request_envelope.context.audio_player
+    if audio_player and audio_player.offset_in_milliseconds is not None:
+        return int(audio_player.offset_in_milliseconds)
+    playback_info = player.Attributes.get_playback_info(handler_input)
+    return int(playback_info.get('offset_in_ms', 0) or 0)
+
 class SeekIntentHandler(AbstractRequestHandler):
-    """Seek the current track to an absolute position (in seconds). Triggered by
-    the web remote's scrubber, which sends "ask music box to seek to N seconds"
-    as a spoken-style command (the same routing transport buttons use)."""
+    """Seek the current track to an absolute position. Triggered by voice
+    ("skip to 2 minutes 30 seconds") and by the web remote's scrubber, which
+    sends "ask music box to seek to N seconds" as a spoken-style command (the
+    same routing transport buttons use)."""
     def can_handle(self, handler_input):
         return ask_utils.is_intent_name("SeekIntent")(handler_input)
 
     def handle(self, handler_input: HandlerInput):
         logger.info("In SeekIntentHandler")
         slots = handler_input.request_envelope.request.intent.slots
-        seconds_raw = slots['seconds'].value if slots and slots.get('seconds') else None
-        try:
-            seconds = int(seconds_raw)
-        except (TypeError, ValueError):
-            return handler_input.response_builder.speak('Say a position in seconds to seek to.').response
+        minutes = _slot_int(slots, 'minutes')
+        seconds = _slot_int(slots, 'seconds')
+        if minutes is None and seconds is None:
+            return handler_input.response_builder.speak('Say a position to skip to, for example, "skip to 2 minutes 30 seconds".').response
+        total_seconds = (minutes or 0) * 60 + (seconds or 0)
         # Seek is only meaningful when something is playing; without a playlist
         # there is nothing to reposition.
         if not player.Attributes.get_playlist(handler_input):
             return handler_input.response_builder.speak(data.NOTHING_TO_RESUME).response
-        # App-initiated (silent): no spoken confirmation, just reposition audio.
-        return player.Controller.seek(handler_input, offset_in_ms=seconds * 1000, is_playback=True)
+        # Silent: no spoken confirmation, the audio jumping is feedback enough
+        # (and the web remote's scrubber relies on a speech-free response).
+        return player.Controller.seek(handler_input, offset_in_ms=total_seconds * 1000, is_playback=True)
+
+class RelativeSeekHandlerBase(AbstractRequestHandler):
+    """Shared logic for fast-forward/rewind: shift from the live playback
+    offset by the spoken amount (default 30 seconds)."""
+    direction = 1  # +1 forward, -1 back
+
+    def handle(self, handler_input: HandlerInput):
+        slots = handler_input.request_envelope.request.intent.slots
+        minutes = _slot_int(slots, 'minutes')
+        seconds = _slot_int(slots, 'seconds')
+        if minutes is None and seconds is None:
+            delta_seconds = 30
+        else:
+            delta_seconds = (minutes or 0) * 60 + (seconds or 0)
+        if not player.Attributes.get_playlist(handler_input):
+            return handler_input.response_builder.speak(data.NOTHING_TO_RESUME).response
+        new_offset = _current_offset_ms(handler_input) + self.direction * delta_seconds * 1000
+        # Fast-forwarding past the end would re-issue the stream at an offset
+        # beyond its length; do what the listener meant and go to the next
+        # track instead. Only when the duration is actually known.
+        metadata = player.Attributes.get_metadata_by_play_order(handler_input)
+        duration_ms = int(getattr(metadata, 'duration_ms', 0) or 0) if metadata else 0
+        if self.direction > 0 and duration_ms and new_offset >= duration_ms:
+            return player.Controller.play_next(handler_input, is_playback=True)
+        return player.Controller.seek(handler_input, offset_in_ms=max(0, new_offset), is_playback=True)
+
+class FastForwardIntentHandler(RelativeSeekHandlerBase):
+    direction = 1
+    def can_handle(self, handler_input):
+        return ask_utils.is_intent_name("FastForwardIntent")(handler_input)
+
+    def handle(self, handler_input: HandlerInput):
+        logger.info("In FastForwardIntentHandler")
+        return super().handle(handler_input)
+
+class RewindIntentHandler(RelativeSeekHandlerBase):
+    direction = -1
+    def can_handle(self, handler_input):
+        return ask_utils.is_intent_name("RewindIntent")(handler_input)
+
+    def handle(self, handler_input: HandlerInput):
+        logger.info("In RewindIntentHandler")
+        return super().handle(handler_input)
+
+class LikeSongIntentHandler(AbstractRequestHandler):
+    """Add the currently playing track to the web remote's Liked Songs
+    playlist (the server's local 'liked' playlist, shown on the website)."""
+    def can_handle(self, handler_input):
+        return ask_utils.is_intent_name("LikeSongIntent")(handler_input)
+
+    def handle(self, handler_input: HandlerInput):
+        logger.info("In LikeSongIntentHandler")
+        metadata = player.Attributes.get_metadata_by_play_order(handler_input)
+        if not metadata:
+            return handler_input.response_builder.speak('Nothing is playing right now, so there is no song to like.').response
+        response, error = player.Api.like_song(handler_input, metadata)
+        if error:
+            return handler_input.response_builder.speak(str(error)).response
+        title = player.ssml_safe(metadata.title)
+        if response.get('already_liked'):
+            return handler_input.response_builder.speak(f'{title} is already in your liked songs.').response
+        return handler_input.response_builder.speak(f'Added {title} to your liked songs.').response
+
+class PlayGenreIntentHandler(AbstractRequestHandler):
+    """Play music of a genre: the server finds a top '<genre> music' playlist
+    on YT Music and streams it (falls back to a plain song search)."""
+    def can_handle(self, handler_input):
+        return ask_utils.is_intent_name("PlayGenreIntent")(handler_input)
+
+    def handle(self, handler_input: HandlerInput):
+        logger.info("In PlayGenreIntentHandler")
+        slots = handler_input.request_envelope.request.intent.slots
+        genre = slots.get('genre').value if slots and slots.get('genre') else None
+        if not genre:
+            return handler_input.response_builder.speak('Say a genre to play, for example, "play some jazz music".').response
+        player.send_progressive_response(handler_input, f'Finding {player.ssml_safe(genre)} music...')
+        return player.Controller.fetch(handler_input, genre=genre, is_playback=False)
 
 class LoopOnHandler(AbstractRequestHandler):
     """Handler for setting the audio loop on."""
@@ -398,7 +496,7 @@ class HelpIntentHandler(AbstractRequestHandler):
         return ask_utils.is_intent_name("AMAZON.HelpIntent")(handler_input)
 
     def handle(self, handler_input: HandlerInput) -> Response:
-        speak_output = "You can say 'Play Looks like me' or 'Ask DJ to play Looks like me'. You can add or delete playlists by saying 'Add playlist' or 'Delete playlist'. To access saved playlists, say 'Start playlist Favourites' or 'What are my playlists?' to find saved playlists."
+        speak_output = "You can say 'Play Looks like me' or 'Ask DJ to play Looks like me'. You can say 'Play some jazz music' for a genre, 'Like this song' to save the current song, or 'Skip to 2 minutes 30 seconds' to jump within a song. You can add or delete playlists by saying 'Add playlist' or 'Delete playlist'. To access saved playlists, say 'Start playlist Favourites' or 'What are my playlists?' to find saved playlists."
         return (
             handler_input.response_builder
                 .speak(speak_output)
@@ -781,6 +879,10 @@ sb.add_request_handler(StopPlaybackHandler())
 sb.add_request_handler(NextPlaybackHandler())
 sb.add_request_handler(PreviousPlaybackHandler())
 sb.add_request_handler(SeekIntentHandler())
+sb.add_request_handler(FastForwardIntentHandler())
+sb.add_request_handler(RewindIntentHandler())
+sb.add_request_handler(LikeSongIntentHandler())
+sb.add_request_handler(PlayGenreIntentHandler())
 sb.add_request_handler(LoopOnHandler())
 sb.add_request_handler(LoopOffHandler())
 sb.add_request_handler(ShuffleOnHandler())

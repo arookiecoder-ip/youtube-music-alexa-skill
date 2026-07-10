@@ -1633,6 +1633,18 @@
     line-height: 1.5;
     margin-bottom: 22px;
   }
+  .confirm-option {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    font-size: .75rem;
+    color: var(--muted);
+    margin: -12px 0 18px;
+    cursor: pointer;
+    user-select: none;
+  }
+  .confirm-option input { accent-color: var(--danger); cursor: pointer; }
   .confirm-actions {
     display: flex;
     gap: 10px;
@@ -2618,3 +2630,37 @@
   }
 @keyframes spin { to { transform: rotate(360deg); } }
 .spin { animation: spin 1s linear infinite; }
+
+/* ---- Jam guest mode ----
+   Server-side the allow-list in require_api_key() is the real gate; these
+   rules just remove every account-writing control from a guest's UI so
+   nothing they can click will 401. */
+body.jam-guest #np-like-btn,
+body.jam-guest .result-like-btn,
+body.jam-guest .track-like-btn,
+body.jam-guest [data-action="like"],
+body.jam-guest [data-action="save-playlist"],
+body.jam-guest #import-playlist-btn,
+body.jam-guest #playlist-detail-more-btn,
+body.jam-guest #playlist-sync-btn,
+body.jam-guest #clear-history-btn,
+body.jam-guest #clear-all-btn,
+body.jam-guest #login-section,
+body.jam-guest .jam-owner-only {
+  display: none !important;
+}
+
+/* Guest badge next to the brand so guests know whose session they're in */
+.jam-guest-badge {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 10px;
+  padding: 2px 8px;
+  border: 1px solid var(--accent, #e8590c);
+  border-radius: 999px;
+  color: var(--accent, #e8590c);
+  font-size: .62rem;
+  font-weight: 700;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+}

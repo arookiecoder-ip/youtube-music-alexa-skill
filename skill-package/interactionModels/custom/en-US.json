@@ -194,17 +194,179 @@
             {
               "name": "seconds",
               "type": "AMAZON.NUMBER"
+            },
+            {
+              "name": "minutes",
+              "type": "AMAZON.NUMBER"
             }
           ],
           "samples": [
             "seek to {seconds} seconds",
             "seek to {seconds}",
             "go to {seconds} seconds",
-            "jump to {seconds} seconds"
+            "jump to {seconds} seconds",
+            "skip to {seconds} seconds",
+            "skip to {minutes} minutes",
+            "skip to {minutes} minutes {seconds} seconds",
+            "seek to {minutes} minutes",
+            "seek to {minutes} minutes {seconds} seconds",
+            "go to {minutes} minutes",
+            "go to {minutes} minutes {seconds} seconds",
+            "jump to {minutes} minutes",
+            "jump to {minutes} minutes {seconds} seconds"
+          ]
+        },
+        {
+          "name": "FastForwardIntent",
+          "slots": [
+            {
+              "name": "seconds",
+              "type": "AMAZON.NUMBER"
+            },
+            {
+              "name": "minutes",
+              "type": "AMAZON.NUMBER"
+            }
+          ],
+          "samples": [
+            "fast forward",
+            "skip ahead",
+            "fast forward {seconds} seconds",
+            "skip ahead {seconds} seconds",
+            "skip forward {seconds} seconds",
+            "go forward {seconds} seconds",
+            "forward {seconds} seconds",
+            "fast forward {minutes} minutes",
+            "skip ahead {minutes} minutes",
+            "skip forward {minutes} minutes",
+            "go forward {minutes} minutes",
+            "skip ahead {minutes} minutes {seconds} seconds",
+            "fast forward {minutes} minutes {seconds} seconds"
+          ]
+        },
+        {
+          "name": "RewindIntent",
+          "slots": [
+            {
+              "name": "seconds",
+              "type": "AMAZON.NUMBER"
+            },
+            {
+              "name": "minutes",
+              "type": "AMAZON.NUMBER"
+            }
+          ],
+          "samples": [
+            "rewind",
+            "go back",
+            "rewind {seconds} seconds",
+            "go back {seconds} seconds",
+            "skip back {seconds} seconds",
+            "back {seconds} seconds",
+            "rewind {minutes} minutes",
+            "go back {minutes} minutes",
+            "skip back {minutes} minutes",
+            "go back {minutes} minutes {seconds} seconds",
+            "rewind {minutes} minutes {seconds} seconds"
+          ]
+        },
+        {
+          "name": "LikeSongIntent",
+          "slots": [],
+          "samples": [
+            "like this song",
+            "like the song",
+            "like this",
+            "like the current song",
+            "i like this song",
+            "i love this song",
+            "love this song",
+            "add this song to liked songs",
+            "add this to liked songs",
+            "add this song to my liked songs",
+            "save this song",
+            "save this to liked songs"
+          ]
+        },
+        {
+          "name": "PlayGenreIntent",
+          "slots": [
+            {
+              "name": "genre",
+              "type": "GenreType"
+            }
+          ],
+          "samples": [
+            "play some {genre}",
+            "play some {genre} music",
+            "play some {genre} songs",
+            "play {genre} music",
+            "play {genre} songs",
+            "play genre {genre}",
+            "play the genre {genre}",
+            "start some {genre} music",
+            "put on some {genre}",
+            "put on some {genre} music",
+            "play me some {genre}"
           ]
         }
       ],
-      "types": []
+      "types": [
+        {
+          "name": "GenreType",
+          "values": [
+            { "name": { "value": "pop" } },
+            { "name": { "value": "rock" } },
+            { "name": { "value": "jazz" } },
+            { "name": { "value": "blues" } },
+            { "name": { "value": "classical" } },
+            { "name": { "value": "hip hop" } },
+            { "name": { "value": "rap" } },
+            { "name": { "value": "r and b", "synonyms": ["rhythm and blues", "r n b"] } },
+            { "name": { "value": "country" } },
+            { "name": { "value": "metal", "synonyms": ["heavy metal"] } },
+            { "name": { "value": "punk" } },
+            { "name": { "value": "indie" } },
+            { "name": { "value": "e d m", "synonyms": ["electronic dance music"] } },
+            { "name": { "value": "electronic" } },
+            { "name": { "value": "dance" } },
+            { "name": { "value": "house" } },
+            { "name": { "value": "techno" } },
+            { "name": { "value": "trance" } },
+            { "name": { "value": "dubstep" } },
+            { "name": { "value": "reggae" } },
+            { "name": { "value": "funk" } },
+            { "name": { "value": "disco" } },
+            { "name": { "value": "soul" } },
+            { "name": { "value": "gospel" } },
+            { "name": { "value": "folk" } },
+            { "name": { "value": "acoustic" } },
+            { "name": { "value": "instrumental" } },
+            { "name": { "value": "lo fi", "synonyms": ["lofi", "low fi"] } },
+            { "name": { "value": "chill", "synonyms": ["chill out"] } },
+            { "name": { "value": "ambient" } },
+            { "name": { "value": "k pop", "synonyms": ["kpop", "korean pop"] } },
+            { "name": { "value": "j pop", "synonyms": ["japanese pop"] } },
+            { "name": { "value": "bollywood", "synonyms": ["hindi", "hindi songs"] } },
+            { "name": { "value": "punjabi", "synonyms": ["bhangra"] } },
+            { "name": { "value": "tamil" } },
+            { "name": { "value": "telugu" } },
+            { "name": { "value": "devotional", "synonyms": ["bhajan", "bhajans"] } },
+            { "name": { "value": "sufi" } },
+            { "name": { "value": "ghazal", "synonyms": ["ghazals"] } },
+            { "name": { "value": "romantic", "synonyms": ["love songs"] } },
+            { "name": { "value": "sad", "synonyms": ["sad songs"] } },
+            { "name": { "value": "party" } },
+            { "name": { "value": "workout", "synonyms": ["gym"] } },
+            { "name": { "value": "retro", "synonyms": ["oldies", "old songs"] } },
+            { "name": { "value": "nineties", "synonyms": ["90s"] } },
+            { "name": { "value": "eighties", "synonyms": ["80s"] } },
+            { "name": { "value": "latin" } },
+            { "name": { "value": "afrobeats", "synonyms": ["afrobeat"] } },
+            { "name": { "value": "phonk" } }
+          ]
+        }
+      ]
     }
   }
 }

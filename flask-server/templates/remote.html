@@ -39,7 +39,8 @@
   }
 </style>
 </head>
-<body class="preload">
+<body class="preload{{ ' jam-guest' if jam_guest else '' }}">
+<script>window.JAM_GUEST = {{ 'true' if jam_guest else 'false' }};</script>
 <main class="idle">
   <header>
     <div class="brand">
@@ -59,6 +60,15 @@
           <line x1="3" y1="18" x2="3.01" y2="18"/>
         </svg>
         <span class="header-history-label">Playlists</span>
+      </button>
+      <button class="needs-login header-history-btn jam-owner-only" id="jam-btn" title="Jam" hidden style="margin-right:8px;">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+          <circle cx="9" cy="7" r="4"/>
+          <path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
+          <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+        </svg>
+        <span class="header-history-label">Jam</span>
       </button>
       <button class="needs-login header-history-btn" id="history-modal-btn" title="Recently Listened" hidden>
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -146,6 +156,15 @@
           <line x1="3" y1="18" x2="3.01" y2="18"/>
         </svg>
         Playlists
+      </button>
+      <button class="needs-login jam-owner-only" id="sidebar-jam-btn" style="width:100%; display:inline-flex; align-items:center; justify-content:center; gap:8px; font-size:.75rem; font-weight:600; text-transform:uppercase; letter-spacing:.08em; color:var(--text); transition:color .15s; background: var(--surface); border: 1px solid var(--border); padding: 10px; border-radius: 6px; margin-top: 12px;">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+          <circle cx="9" cy="7" r="4"/>
+          <path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
+          <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+        </svg>
+        Jam
       </button>
     </div>
     <div class="sidebar-signout">
@@ -401,6 +420,7 @@
     </div>
     <div class="confirm-title">Sign Out</div>
     <div class="confirm-message">Are you sure you want to sign out? Your current playback will continue on the device.</div>
+    <label class="confirm-option"><input type="checkbox" id="confirm-signout-everywhere"> Sign out on all devices</label>
     <div class="confirm-actions">
       <button class="confirm-cancel" id="confirm-signout-cancel">Cancel</button>
       <button class="confirm-proceed" id="confirm-signout-yes">Sign Out</button>
@@ -541,10 +561,6 @@
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/><polyline points="21 16 21 21 16 21"/><line x1="15" y1="15" x2="21" y2="21"/><line x1="4" y1="4" x2="9" y2="9"/>
         </svg>
-      </button>
-      <button class="btn-accent" id="playlist-detail-radio-btn" style="flex: 1; align-items:center; justify-content:center; gap:8px;" hidden>
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="2"/><path d="M12 2a10 10 0 0 0 0 20 10 10 0 0 0 0-20zm0 18a8 8 0 1 1 0-16 8 8 0 0 1 0 16z"/></svg>
-        Play Radio
       </button>
     </div>
     <div class="history-modal-body" id="playlist-detail-body">
@@ -759,6 +775,54 @@
         <input type="range" id="mp-volume" min="0" max="100" value="50">
       </div>
     </div>
+  </div>
+</div>
+
+<!-- Jam modal (owner): start a jam, share the link, end it -->
+<div class="history-modal-overlay" id="jam-modal-overlay">
+  <div class="history-modal" style="display:flex; flex-direction:column; max-width:min(420px, 92vw); height:auto;">
+    <div class="history-modal-header">
+      <h3>Jam</h3>
+      <div class="history-modal-header-actions">
+        <button class="history-modal-close" id="jam-modal-close" title="Close">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+            <line x1="18" y1="6" x2="6" y2="18"/>
+            <line x1="6" y1="6" x2="18" y2="18"/>
+          </svg>
+        </button>
+      </div>
+    </div>
+    <div class="history-modal-body" style="padding: 20px; display: flex; flex-direction: column; gap: 14px;">
+      <!-- Inactive state -->
+      <div id="jam-inactive">
+        <p style="margin:0 0 16px; color: var(--muted); font-size: .85rem; line-height: 1.5;">
+          Start a jam to get a share link. Anyone with the link can search and
+          play music on your devices, but can't like songs, edit playlists, or
+          touch your account. End the jam any time to cut off access instantly.
+        </p>
+        <button class="btn-accent" id="jam-start-btn" style="width:100%; padding:10px; font-weight:bold;">Start a Jam</button>
+      </div>
+      <!-- Active state -->
+      <div id="jam-active" hidden>
+        <p style="margin:0 0 12px; color: var(--muted); font-size: .85rem; line-height: 1.5;">
+          Your jam is live. Share this link:
+        </p>
+        <div style="display:flex; gap:8px; margin-bottom:16px;">
+          <input type="text" id="jam-link" readonly
+                 style="flex:1; min-width:0; background:var(--surface); border:1px solid var(--border); color:var(--text); padding:8px 12px; border-radius:6px; font-size:.8rem;">
+          <button class="btn-accent" id="jam-copy-btn" style="flex:none; padding:8px 14px;">Copy</button>
+        </div>
+        <button id="jam-end-btn" style="width:100%; padding:10px; font-weight:600; background:transparent; border:1px solid #a33; color:#e66; border-radius:6px; cursor:pointer;">End Jam</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Jam-ended overlay (guest): shown the moment the host revokes access -->
+<div id="jam-ended-overlay" style="display:none; position:fixed; inset:0; z-index:10000; background:var(--bg, #0a0a0a); align-items:center; justify-content:center;">
+  <div style="text-align:center; padding:32px;">
+    <h1 style="font-size:1.3rem; margin:0 0 8px; color:var(--text, #eee);" id="jam-ended-title">This jam has ended</h1>
+    <p style="color:var(--muted, #999); font-size:.9rem; margin:0;" id="jam-ended-msg">The host ended the session. Ask them for a new link to keep listening.</p>
   </div>
 </div>
 

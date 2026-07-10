@@ -523,6 +523,34 @@ class Api:
             return None, Exception(data.SERVICE_ISSUE)
 
     @staticmethod
+    def play_genre(handler_input: HandlerInput, genre: str) -> Tuple[Optional[player_models.SongInfoList], Optional[Exception]]:
+        """Ask the server for a genre queue (it searches YT Music for a top
+        '<genre> music' playlist and streams it). Same response shape as
+        stream_playlist, so the result plugs into Controller.play directly."""
+        response_json, error = Api._get_json(handler_input, 'play_genre',
+                                             {'genre': genre, 'limit': _QUEUE_BATCH})
+        if error: return None, error
+        try:
+            return from_dict(player_models.SongInfoList, response_json), None
+        except Exception:
+            logger.exception('play_genre returned unexpected shape')
+            return None, Exception(data.SERVICE_ISSUE)
+
+    @staticmethod
+    def like_song(handler_input: HandlerInput, metadata: player_models.Metadata) -> Tuple[Optional[Dict], Optional[Exception]]:
+        """Add a track to the web remote's Liked Songs playlist. Returns the
+        server's {'ok': ..., 'already_liked': ...} payload."""
+        params = {
+            'video_id': metadata.video_id,
+            'title': metadata.title or '',
+            'artist': metadata.artist or '',
+            'duration_ms': metadata.duration_ms or 0,
+        }
+        if metadata.thumbnail and metadata.thumbnail.url:
+            params['thumbnail'] = metadata.thumbnail.url
+        return Api._get_json(handler_input, 'alexa/like', params)
+
+    @staticmethod
     def get_armed_play(handler_input: HandlerInput) -> Tuple[Optional[Tuple[str, int]], Optional[Exception]]:
         """Fetch the video id the web remote armed for a direct play. Returns
         ((video_id, offset_ms), None) when one is pending, else (None, error).
@@ -549,13 +577,24 @@ class Controller:
 
     @staticmethod
     def fetch(
-        handler_input: HandlerInput, 
+        handler_input: HandlerInput,
         query: str = None,
-        playlist_id: str = None, 
-        filter: player_models.Filter = player_models.Filter.SONGS, 
+        playlist_id: str = None,
+        genre: str = None,
+        filter: player_models.Filter = player_models.Filter.SONGS,
         is_playback: bool = True
     ) -> Response:
-        if query:
+        if genre:
+            song_info_list, error = Api.play_genre(handler_input, genre)
+            if error:
+                # No suitable genre playlist (or older server without the
+                # endpoint): fall back to a plain song search for the genre.
+                song_info_list, error = Api.find_stream_list(
+                    handler_input, f'{genre} music', player_models.Filter.SONGS)
+            if error: return Controller.error_response(handler_input, error, is_playback)
+            playlist = song_info_list.playlist
+            song_info = song_info_list.song_info
+        elif query:
             song_info_list, error = Api.find_stream_list(handler_input, query, filter)
             if error: return Controller.error_response(handler_input, error, is_playback)
             playlist = song_info_list.playlist
