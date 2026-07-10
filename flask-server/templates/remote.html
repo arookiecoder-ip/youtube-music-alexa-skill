@@ -845,7 +845,21 @@
 <div class="toast" id="toast"></div>
 
 
-<script src="/static/remote.js?v={{ asset_v }}"></script>
-<script src="/static/playlists.js?v={{ asset_v }}"></script>
+<script>{% include "static/js/api.js" %}</script>
+<script>{% include "static/js/ui-state.js" %}</script>
+<script>{% include "static/js/cache.js" %}</script>
+<script>{% include "static/js/router.js" %}</script>
+<script>{% include "static/js/toast.js" %}</script>
+<script>{% include "static/js/device.js" %}</script>
+<script>{% include "static/js/sse.js" %}</script>
+<script>{% include "static/js/player.js" %}</script>
+<script>{% include "static/js/volume.js" %}</script>
+<script>{% include "static/js/queue.js" %}</script>
+<script>{% include "static/js/search.js" %}</script>
+<script>{% include "static/js/sidebar.js" %}</script>
+<script>{% include "static/js/history.js" %}</script>
+<script>{% include "static/js/recs.js" %}</script>
+<script>{% include "static/js/sw-register.js" %}</script>
+<script>{% include "static/playlists.js" %}</script>
 </body>
 </html>
