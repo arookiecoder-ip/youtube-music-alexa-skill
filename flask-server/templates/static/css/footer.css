@@ -1,0 +1,47 @@
+  /* ---- Footer ---- */
+
+  .site-footer {
+
+    display: flex;
+
+    align-items: center;
+
+    justify-content: center;
+
+    gap: 8px;
+
+    padding: 20px 0 24px;
+
+    width: 100%;
+
+    grid-column: 1 / -1;
+
+    margin-top: auto;
+
+  }
+
+  .site-footer a {
+
+    display: inline-flex;
+
+    align-items: center;
+
+    gap: 6px;
+
+    color: var(--muted);
+
+    text-decoration: none;
+
+    font-size: .7rem;
+
+    letter-spacing: .06em;
+
+    transition: color .15s;
+
+  }
+
+  .site-footer a:hover { color: var(--text); }
+
+  .site-footer svg { flex: none; }
+
+

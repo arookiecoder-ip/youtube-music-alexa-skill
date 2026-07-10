@@ -1,0 +1,399 @@
+  /* ---- Header ---- */
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding-bottom: 12px;
+    margin-bottom: 12px;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .brand { display: flex; align-items: center; gap: 14px; }
+
+  /* clamp() scales the icon down on narrow phones and up on wide screens
+     instead of a fixed size that looks oversized on small viewports. */
+  .eq-icon { display: flex; align-items: flex-end; gap: 3px; height: clamp(16px, 5vw, 22px); }
+  .eq-icon span {
+    display: block;
+    width: clamp(2px, .7vw, 3px);
+    background: var(--accent);
+    animation: eq 1.4s ease-in-out infinite;
+    transform-origin: bottom;
+  }
+  .eq-icon span:nth-child(1) { height: 35%; animation-delay: 0s; }
+  .eq-icon span:nth-child(2) { height: 75%; animation-delay: .15s; }
+  .eq-icon span:nth-child(3) { height: 50%; animation-delay: .35s; }
+  .eq-icon span:nth-child(4) { height: 90%; animation-delay: .1s; }
+  .eq-icon span:nth-child(5) { height: 60%; animation-delay: .25s; }
+
+  @keyframes eq {
+    0%, 100% { transform: scaleY(1); }
+    50% { transform: scaleY(.3); }
+  }
+
+  .brand h1 {
+    font-size: .85rem;
+    font-weight: 700;
+    letter-spacing: .14em;
+    text-transform: uppercase;
+  }
+
+  .btn-ghost {
+    background: none;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    padding: 6px 14px;
+    font-size: .7rem;
+    font-family: inherit;
+    cursor: pointer;
+    text-transform: uppercase;
+    letter-spacing: .1em;
+    transition: color .15s, border-color .15s;
+  }
+  .btn-ghost:hover { color: var(--text); border-color: #444; }
+
+  /* Right side of the header: device picker + sign out */
+  .header-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .device-section-inline {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .device-section-inline[hidden] { display: none !important; }
+  .device-section-inline .custom-select {
+    flex: none;
+    width: 140px;
+  }
+  .device-section-inline .custom-select-trigger {
+    padding: 7px 10px;
+    font-size: .78rem;
+  }
+  .device-section-inline #refresh {
+    padding: 7px 9px;
+  }
+  .device-section-inline #refresh svg { width: 14px; height: 14px; }
+
+  /* ---- Sign-out confirmation dialog ---- */
+  .confirm-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,.7);
+    z-index: 500;
+    justify-content: center;
+    align-items: center;
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+  }
+  .confirm-overlay.open { display: flex; }
+  .confirm-dialog {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    width: 320px;
+    max-width: 90vw;
+    padding: 28px 24px 20px;
+    animation: confirmIn .2s ease-out;
+    text-align: center;
+  }
+  @keyframes confirmIn {
+    from { opacity: 0; transform: scale(.95) translateY(-8px); }
+    to { opacity: 1; transform: none; }
+  }
+  .confirm-icon {
+    width: 44px;
+    height: 44px;
+    margin: 0 auto 16px;
+    border: 2px solid var(--danger);
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .confirm-icon svg { color: var(--danger); }
+  .confirm-title {
+    font-size: .9rem;
+    font-weight: 700;
+    margin-bottom: 8px;
+    color: var(--text);
+  }
+  .confirm-message {
+    font-size: .78rem;
+    color: var(--muted);
+    line-height: 1.5;
+    margin-bottom: 22px;
+  }
+  .confirm-option {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    font-size: .75rem;
+    color: var(--muted);
+    margin: -12px 0 18px;
+    cursor: pointer;
+    user-select: none;
+  }
+  .confirm-option input { accent-color: var(--danger); cursor: pointer; }
+  .confirm-actions {
+    display: flex;
+    gap: 10px;
+  }
+  .confirm-actions button {
+    flex: 1;
+    padding: 10px 16px;
+    font-size: .75rem;
+    font-weight: 600;
+    font-family: inherit;
+    text-transform: uppercase;
+    letter-spacing: .08em;
+    cursor: pointer;
+    border: 1px solid var(--border);
+    transition: background .15s, border-color .15s, color .15s;
+  }
+  .confirm-cancel {
+    background: var(--bg);
+    color: var(--text);
+  }
+  .confirm-cancel:hover { border-color: #444; }
+  .confirm-proceed {
+    background: var(--danger);
+    border-color: var(--danger);
+    color: #fff;
+  }
+  .confirm-proceed:hover { background: #c92a2a; border-color: #c92a2a; }
+
+  /* ---- Recently listened ---- */
+  /* Small header button (opens the history popup). */
+  .header-history-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 7px 12px;
+    background: none;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    font-family: inherit;
+    font-size: .68rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: .06em;
+    cursor: pointer;
+    transition: border-color .15s, color .15s;
+    white-space: nowrap;
+  }
+  .header-history-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .header-history-btn svg { flex: none; }
+  .header-history-btn[hidden] { display: none; }
+
+  .history-list {
+    display: flex;
+    flex-direction: column;
+  }
+  .history-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 20px;
+    cursor: pointer;
+    background: var(--surface);
+    transition: background .15s;
+    /* Needed when used as a swipe wrapper's inner row (playlist tracks):
+       without an explicit stacking position, the swipe underlay's z-index:1
+       (set on the active side while swiping) can end up rendered above this
+       row instead of behind it, hiding the whole row under a solid color. */
+    position: relative;
+    z-index: 1;
+  }
+  .history-item:hover { background: #1a1a1a; }
+  .history-item + .history-item { border-top: 1px solid var(--border); }
+  .history-date-header {
+    padding: 10px 20px 4px;
+    font-size: .7rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .12em;
+    color: var(--muted);
+  }
+  .play-count-badge {
+    display: inline-block;
+    margin-left: 6px;
+    padding: 0 5px;
+    font-size: .65rem;
+    font-weight: 700;
+    line-height: 1.5;
+    border-radius: 8px;
+    background: var(--accent);
+    color: #fff;
+    vertical-align: middle;
+  }
+  /* Playlist tracks wrap each .history-item in a .result-swipe-wrapper (for
+     the swipe-to-queue gesture), so adjacent rows are no longer direct
+     .history-item siblings and the rule above stops matching between them.
+     Without this, there's no border between rows -- and since the swipe
+     underlay sits at z-index:0 spanning the *entire* wrapper (not just
+     revealed during a drag), any gap between rows let its orange/green fill
+     show through as a stray colored line. */
+  .result-swipe-wrapper + .result-swipe-wrapper .history-item {
+    border-top: 1px solid var(--border);
+  }
+  /* New item slides in when added while the modal is open */
+  .history-item.history-item-new {
+    animation: historySlideIn .3s cubic-bezier(.22,1,.36,1) both;
+  }
+  @keyframes historySlideIn {
+    from { opacity: 0; transform: translateY(-10px); }
+    to   { opacity: 1; transform: none; }
+  }
+  .history-thumb-placeholder {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--muted);
+  }
+  .history-title {
+    font-size: .85rem;
+    font-weight: 600;
+  }
+  .history-artist {
+    font-size: .72rem;
+    color: var(--muted);
+    margin-top: 2px;
+  }
+
+  /* ---- Recently Listened modal (desktop + mobile â€” same markup, no
+     per-item remove control; Clear (with confirmation) is the only way to
+     modify history from here) ---- */
+  .history-modal-overlay {
+    display: flex;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,.7);
+    z-index: 500;
+    justify-content: center;
+    align-items: center;
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+    /* Smooth fade in/out instead of a hard display toggle. */
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity .25s ease, visibility .25s ease;
+  }
+  .history-modal-overlay.open { opacity: 1; visibility: visible; }
+  .history-modal {
+    width: 506px;
+    max-width: 92vw;
+    max-height: 80vh;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    transform: translateY(12px) scale(.98);
+    opacity: 0;
+    transition: transform .28s cubic-bezier(.22,1,.36,1), opacity .28s ease;
+  }
+  .history-modal-overlay.open .history-modal {
+    transform: none;
+    opacity: 1;
+  }
+  /* Playlist detail keeps a taller minimum so the Play All button/empty-state
+     don't leave it looking like a tiny collapsed box on short playlists. */
+  #playlist-detail-modal { min-height: 420px; }
+  .history-modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 16px 16px 16px 20px;
+    border-bottom: 1px solid var(--border);
+  }
+  .history-modal-header h3 {
+    font-size: .85rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .14em;
+    color: var(--text);
+  }
+  .history-modal-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .history-modal-close {
+    background: none;
+    border: none;
+    color: var(--muted);
+    padding: 4px;
+    cursor: pointer;
+    display: flex;
+  }
+  .history-modal-close[hidden] { display: none; }
+  .history-modal-close:hover { color: var(--text); }
+  .playlist-more-menu {
+    display: block;
+    opacity: 0;
+    visibility: hidden;
+    transform: translateY(-4px) scale(.98);
+    transition: opacity .12s ease, transform .12s ease, visibility .12s;
+    pointer-events: none;
+  }
+  .playlist-more-menu.open {
+    opacity: 1;
+    visibility: visible;
+    transform: none;
+    pointer-events: auto;
+  }
+  .playlist-more-btn {
+    border-radius: 50%;
+    width: 28px;
+    height: 28px;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid var(--border);
+  }
+  .playlist-more-btn:hover { background: var(--surface); border-color: var(--accent); }
+  .history-modal-body {
+    flex: 1;
+    overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+  }
+  .history-modal-body::-webkit-scrollbar { width: 4px; }
+  .history-modal-body::-webkit-scrollbar-thumb { background: var(--border); }
+  .history-modal-empty {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 40px 20px;
+    color: var(--muted);
+    font-size: .82rem;
+  }
+
+/* Owner-side live jam indicator */
+#jam-btn.jam-live,
+#sidebar-jam-btn.jam-live {
+  color: var(--ok) !important;
+  border-color: var(--ok) !important;
+}
+
+#jam-btn.jam-live svg,
+#sidebar-jam-btn.jam-live svg {
+  color: var(--ok);
+}
+
+/* Guest badge next to the brand so guests know whose session they're in */
+.jam-guest-badge {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 10px;
+  padding: 2px 8px;
+  border: 1px solid var(--accent, #e8590c);
+  border-radius: 999px;
+  color: var(--accent, #e8590c);
+  font-size: .62rem;
+  font-weight: 700;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+}

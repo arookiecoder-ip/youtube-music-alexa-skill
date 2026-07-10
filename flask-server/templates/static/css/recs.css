@@ -1,0 +1,292 @@
+  /* ---- Recommendations: full-width tile grid, no card chrome ---- */
+
+  .recs-section {
+
+    background: none;
+
+    border: none;
+
+    padding: 0;
+
+    margin-bottom: 0;
+
+  }
+
+  /* The grid area is a positioning context so the skeleton can overlay the
+
+     (loading) real grid â€” both occupy the same space instead of stacking. */
+
+  .recs-stack { position: relative; }
+
+  .recs-skeleton {
+
+    position: absolute;
+
+    left: 0;
+
+    right: 0;
+
+    top: 0;
+
+    z-index: 1;
+
+    background: var(--bg);
+
+  }
+
+  .recs-section .section-head {
+
+    padding: 0 16px;   /* aligns the label with the grid's left edge */
+
+  }
+
+  @media (min-width: 900px) {
+
+    .recs-section .section-head { padding: 0 40px; }
+
+  }
+
+  /* Mobile: exactly 3 columns. Desktop: auto-fill based on tile min-width.
+
+     JS trims the tile list to (cols Ã— rows) to fill the viewport without
+
+     scrolling. */
+
+  .recs-grid {
+
+    display: grid;
+
+    grid-template-columns: repeat(3, 1fr);
+
+    gap: 10px 10px;
+
+    padding: 0 12px;
+
+  }
+
+  .recs-grid[hidden] { display: none; }
+
+  @media (min-width: 900px) {
+
+    .recs-grid {
+
+      grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
+
+      gap: 22px 18px;
+
+      padding: 0 40px;
+
+    }
+
+  }
+
+  /* Recs section fades in with a delay so it appears only after the player's
+
+     0.3s exit animation completes â€” prevents the layout-shift flash. */
+
+  .recs-section:not([hidden]) {
+
+    animation: recsFadeIn .25s ease .32s both;
+
+  }
+
+  @keyframes recsFadeIn {
+
+    from { opacity: 0; }
+
+    to   { opacity: 1; }
+
+  }
+
+  .recs-tile {
+
+    display: flex;
+
+    flex-direction: column;
+
+    gap: 4px;
+
+    cursor: pointer;
+
+    background: none;
+
+    border: none;
+
+    min-width: 0;
+
+    /* Tile is always visible â€” text shows immediately while art loads. */
+
+    opacity: 1;
+
+    transform: none;
+
+  }
+
+  .recs-tile.is-ready {
+
+    opacity: 1;     /* kept for JS compat, tile already visible */
+
+    transform: none;
+
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+
+    .recs-tile { transition: opacity .2s ease; transform: none; }
+
+    .recs-tile.is-ready { transform: none; }
+
+  }
+
+  .recs-tile-art {
+
+    width: 100%;
+
+    aspect-ratio: 1 / 1;
+
+    background: var(--surface);
+
+    overflow: hidden;
+
+    display: flex;
+
+    align-items: center;
+
+    justify-content: center;
+
+    color: var(--muted);
+
+    /* Art fades in once loaded; starts dark so skeleton shimmer shows through. */
+
+    opacity: 0;
+
+    transition: opacity .35s ease,
+
+                transform .25s cubic-bezier(.22,1,.36,1),
+
+                box-shadow .25s ease;
+
+  }
+
+  .recs-tile.is-ready .recs-tile-art {
+
+    opacity: 1;
+
+  }
+
+  .recs-tile-art img {
+
+    width: 100%;
+
+    height: 100%;
+
+    object-fit: cover;
+
+    opacity: 0;
+
+    transition: opacity 0.3s ease;
+
+  }
+
+  .recs-tile-art img.loaded {
+
+    opacity: 1;
+
+  }
+
+  /* Hover lift only on real pointers â€” avoids the effect "sticking" after a
+
+     tap on touchscreens. Touch devices get a quick press feedback instead. */
+
+  @media (hover: hover) {
+
+    .recs-tile:hover .recs-tile-art {
+
+      transform: scale(1.04) translateY(-2px);
+
+      box-shadow: 0 8px 24px rgba(0,0,0,.5);
+
+    }
+
+  }
+
+  .recs-tile:active .recs-tile-art { transform: scale(.97); }
+
+  .recs-tile-title {
+
+    font-size: .65rem;
+
+    font-weight: 600;
+
+    color: var(--text);
+
+    line-height: 1.2;
+
+    white-space: nowrap;
+
+    overflow: hidden;
+
+    text-overflow: ellipsis;
+
+  }
+
+  .recs-tile-artist {
+
+    font-size: .58rem;
+
+    color: var(--muted);
+
+    white-space: nowrap;
+
+    overflow: hidden;
+
+    text-overflow: ellipsis;
+
+    margin-top: 0;
+
+  }
+
+
+  /* ---- Recommendations skeleton loader (same grid shape as real tiles) ---- */
+
+  .recs-skeleton[hidden] { display: none; }
+
+  .recs-skeleton-tile { cursor: default; }
+
+  .skeleton-block,
+
+  .skeleton-line {
+
+    background: linear-gradient(90deg, var(--border) 25%, #2a2a2a 37%, var(--border) 63%);
+
+    background-size: 400% 100%;
+
+    animation: skeletonShimmer 1.4s ease infinite;
+
+    border-radius: 3px;
+
+  }
+
+  .recs-skeleton .skeleton-block { width: 100%; aspect-ratio: 1 / 1; }
+
+  .skeleton-line { height: 9px; margin-top: 8px; }
+
+  .skeleton-line-title { width: 85%; }
+
+  .skeleton-line-artist { width: 55%; margin-top: 6px; }
+
+  @keyframes skeletonShimmer {
+
+    0% { background-position: 100% 50%; }
+
+    100% { background-position: 0 50%; }
+
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+
+    .skeleton-block, .skeleton-line { animation: none; }
+
+  }
+
+

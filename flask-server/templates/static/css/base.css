@@ -1,0 +1,601 @@
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  .preload * {
+    -webkit-transition: none !important;
+    -moz-transition: none !important;
+    -ms-transition: none !important;
+    -o-transition: none !important;
+    transition: none !important;
+  }
+  .layout-snap main,
+  .layout-snap .layout,
+  .layout-snap .play-section {
+    transition: none !important;
+  }
+  body.drag-lock {
+    overflow: hidden;
+    overscroll-behavior: none;
+    touch-action: none;
+  }
+  /* While a bottom-sheet (now-playing popup / queue modal) is open, the page
+     behind it must not scroll. No touch-action:none here â€” that would also
+     kill scrolling inside the sheets' own lists. */
+  body.modal-open {
+    overflow: hidden;
+    overscroll-behavior: none;
+  }
+
+  /* Remove default mobile tap highlight (blue flash) */
+  * {
+    -webkit-tap-highlight-color: transparent;
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+
+  /* Custom tap feedback for all interactive elements */
+  button:active,
+  a:active,
+  select:active,
+  .custom-select-trigger:active,
+  .custom-select-option:active,
+  .queue-item:active,
+  .suggest-item:active {
+    filter: brightness(1.3);
+    transition: filter 0s, transform 0s;
+  }
+
+  :root {
+    --bg: #0a0a0a;
+    --surface: #141414;
+    --border: #252525;
+    --text: #e8e8e8;
+    --muted: #666;
+    --accent: #e8590c;
+    --accent-hover: #f76707;
+    --danger: #e03131;
+    --ok: #2f9e44;
+    --space-1: 4px;
+    --space-2: 8px;
+    --space-3: 12px;
+    --space-4: 16px;
+    --space-5: 24px;
+    --space-6: 32px;
+    --radius-sm: 3px;
+    --radius-md: 6px;
+    --radius-lg: 12px;
+    --text-xs: 0.6rem;
+    --text-sm: 0.7rem;
+    --text-base: 0.88rem;
+    --text-lg: 1.1rem;
+    --text-xl: 1.3rem;
+  }
+
+  body {
+    font-family: -apple-system, 'Segoe UI', system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100dvh;
+    display: flex;
+    justify-content: center;
+    padding: 0 16px 0;
+    overscroll-behavior-y: contain;
+    /* The recommendations grid uses a 100vw full-bleed break-out; clip any
+       sub-pixel horizontal overflow it might introduce. */
+    overflow-x: hidden;
+    /* Reserve the scrollbar gutter permanently so it never appears/disappears
+       mid-transition and causes a sudden width shift (e.g. on clear). */
+    scrollbar-gutter: stable;
+  }
+
+  body::before {
+    content: '';
+    position: fixed;
+    top: 0; left: 0; right: 0;
+    height: 3px;
+    background: var(--accent);
+    z-index: 100;
+  }
+
+  main {
+    width: 100%;
+    max-width: 560px;
+    padding-top: 10px;
+    display: flex;
+    flex-direction: column;
+    min-height: 100dvh;
+  }
+
+  /* Desktop: when a song is playing, go two-column with queue on the right.
+     Until then, stay a single centered column. */
+  @media (min-width: 900px) {
+    main {
+      max-width: 920px;
+    }
+
+    body:has(main.has-queue),
+    body.results-open {
+      overflow: hidden;
+      padding-bottom: 12px;
+    }
+
+    main.has-queue,
+    body.results-open main {
+      max-width: 920px;
+      height: calc(100dvh - 12px);
+      display: flex;
+      flex-direction: column;
+      padding-top: 12px;
+      padding-bottom: 0;
+    }
+
+    main.has-queue header,
+    body.results-open main header {
+      padding-bottom: 12px;
+      margin-bottom: 12px;
+    }
+
+    main.has-queue .layout,
+    body.results-open .layout {
+      grid-template-columns: 1fr 1fr;
+      grid-template-rows: minmax(0, 1fr);
+      column-gap: 10px;
+      align-items: start;
+      align-content: start;
+      flex: 1 1 0;
+      min-height: 0;
+      overflow: hidden;
+    }
+
+    main.has-queue .site-footer,
+    body.results-open .site-footer {
+      flex: none;
+      margin-top: 0;
+      padding: 10px 0 12px;
+    }
+
+    main.has-queue section,
+    body.results-open main section {
+      padding: 14px 18px;
+      margin-bottom: 8px;
+    }
+
+    /* Left column: stacks its sections; its natural height sizes the grid row. */
+    main.has-queue .left-col,
+    body.results-open .left-col {
+      min-height: 0;
+    }
+    main.has-queue .left-col > section:last-child,
+    body.results-open .left-col > section:last-child { margin-bottom: 0; }
+
+    /* Queue: matches the left column's height and scrolls its list inside.
+       height:0 keeps the queue's own (tall) content from inflating the grid
+       row â€” the left column alone sizes the row â€” while min-height:100% makes
+       the queue fill that row. Net effect: queue height == left column height. */
+    main.has-queue #queue-section,
+    body.results-open #results-section {
+      grid-column: 2;
+      align-self: stretch;
+      display: flex;
+      flex-direction: column;
+      height: auto;
+      min-height: 0;
+      min-width: 0;
+      margin-bottom: 0;
+      overflow: hidden;
+    }
+  }
+
+  /* .left-col is only a layout wrapper â€” it must never look like a section. */
+  .left-col { display: contents; }
+  /* Desktop: .layout is always a CSS grid so column transitions are smooth
+     (no display:flexâ†”grid switching that causes flicker). */
+  @media (min-width: 900px) {
+    .layout {
+      display: grid;
+      grid-template-columns: 1fr 0fr;
+      column-gap: 0px;
+      overflow: hidden;
+      transition: grid-template-columns .4s cubic-bezier(.4, 0, .2, 1),
+                  column-gap .4s cubic-bezier(.4, 0, .2, 1),
+                  padding-top .4s cubic-bezier(.4, 0, .2, 1);
+    }
+    .left-col {
+      display: flex;
+      flex-direction: column;
+      align-items: center;          /* always center play-section */
+      grid-column: 1;
+      min-width: 0;
+    }
+    /* play-section smoothly animates its max-width while staying centered */
+    .play-section,
+    .player-section {
+      width: 100%;
+      max-width: 506px;
+      transition: max-width .4s cubic-bezier(.4, 0, .2, 1);
+    }
+  }
+
+  /* ---- Sections ---- */
+  section {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    padding: 16px 18px;
+    margin-bottom: 10px;
+  }
+
+  .label {
+    font-size: .6rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: .14em;
+    color: var(--muted);
+    margin-bottom: 10px;
+  }
+
+  .row { display: flex; gap: 8px; }
+
+  /* ---- Inputs ---- */
+  input, textarea, select {
+    -webkit-user-select: text;
+    user-select: text;
+  }
+  select, input[type=text] {
+    flex: 1;
+    min-width: 0;
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+    padding: 10px 12px;
+    font-size: .88rem;
+    font-family: inherit;
+    transition: border-color .15s;
+  }
+  select { cursor: pointer; -webkit-appearance: none; }
+  input::placeholder { color: #3e3e3e; }
+  select:focus, input:focus { outline: none; border-color: var(--accent); }
+
+  /* ---- Custom device dropdown ---- */
+  .custom-select {
+    flex: 1;
+    min-width: 0;
+    position: relative;
+  }
+  .custom-select select { display: none; }
+  .custom-select-trigger {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+    padding: 10px 12px;
+    font-size: .88rem;
+    font-family: inherit;
+    cursor: pointer;
+    transition: border-color .15s;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .custom-select-trigger:hover { border-color: #444; }
+  .custom-select.open .custom-select-trigger { border-color: var(--accent); }
+  .custom-select-trigger .cs-arrow {
+    flex: none;
+    margin-left: 8px;
+    transition: transform .2s;
+  }
+  .custom-select.open .cs-arrow { transform: rotate(180deg); }
+  .custom-select-menu {
+    display: none;
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    right: 0;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    z-index: 200;
+    max-height: 220px;
+    overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+    box-shadow: 0 8px 24px rgba(0,0,0,.5);
+  }
+  .custom-select.open .custom-select-menu { display: block; }
+  .custom-select-option {
+    display: flex;
+    align-items: center;
+    padding: 10px 12px;
+    font-size: .84rem;
+    color: var(--text);
+    cursor: pointer;
+    transition: background .1s;
+  }
+  .custom-select-option:hover { background: rgba(255,255,255,.06); }
+  .custom-select-option.selected {
+    color: var(--accent);
+    background: rgba(232, 89, 12, .08);
+  }
+  .custom-select-option .cs-dot {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    margin-right: 10px;
+    flex: none;
+  }
+  .custom-select-option .cs-dot.online { background: var(--ok); }
+  .custom-select-option .cs-dot.offline { background: var(--danger); }
+
+  /* ---- Buttons ---- */
+  button {
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+    padding: 10px 14px;
+    font-size: .88rem;
+    font-family: inherit;
+    cursor: pointer;
+    transition: border-color .18s ease, background .18s ease,
+                color .18s ease, transform .15s ease, box-shadow .18s ease;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+  }
+  button[hidden] { display: none; }
+  button:hover { border-color: #444; }
+  button:active { transform: scale(.96); filter: brightness(1.3); transition: transform 0s, filter 0s; }
+  button:disabled { opacity: .3; cursor: default; pointer-events: none; }
+  /* A disabled button showing a .spin icon (Sync/Import in progress) should
+     stay legible instead of fading to near-invisible like a plain disabled
+     button â€” the low opacity made the spinner look frozen/broken. */
+  button:disabled:has(.spin) { opacity: .7; }
+
+  .btn-accent {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #fff;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .1em;
+    font-size: .72rem;
+    padding: 10px 20px;
+  }
+  .btn-accent:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+  .play-all-btn { display: flex; }
+  .play-all-btn[hidden] { display: none; }
+  .shuffle-play-btn[hidden] { display: none; }
+
+  /* ---- Login section ---- */
+  #login-section {
+    width: 100%;
+  }
+  @media (min-width: 900px) {
+    #login-section {
+      width: min(100%, 560px);
+      align-self: center;
+    }
+  }
+  #login-section .hint {
+    font-size: .78rem;
+    color: var(--muted);
+    line-height: 1.5;
+    margin-bottom: 14px;
+  }
+  #login-section input {
+    width: 100%;
+    margin-bottom: 8px;
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+    padding: 10px 12px;
+    font-size: .88rem;
+    font-family: inherit;
+  }
+  #login-section input:focus { outline: none; border-color: var(--accent); }
+  #login-section input::placeholder { color: #3e3e3e; }
+
+  /* ---- Section head (label + clear-all button) ---- */
+  .section-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 10px;
+  }
+  .section-head .label { margin-bottom: 0; }
+  .clear-all-btn {
+    background: none;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    padding: 5px 10px;
+    font-size: .6rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: .1em;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+    transition: color .15s, border-color .15s;
+  }
+  .clear-all-btn[hidden] { display: none; }
+  .clear-all-btn:hover { color: var(--danger); border-color: var(--danger); }
+  .clear-all-btn svg { width: 12px; height: 12px; }
+
+  /* ---- Idle (nothing playing): search bar sits near the top (not
+     vertical-centered) on desktop, leaving room for the full-width
+     recommendations grid below without pushing it off-screen. ---- */
+  /* No flex:1 here â€” letting .layout grow to fill 100dvh is what left a big
+     empty gap between a short grid and the footer. It now takes only the
+     height its content needs, so the footer sits right after the grid. */
+  main.idle .layout {
+    flex: 0 0 auto;
+    display: flex;
+    flex-direction: column;
+    justify-content: flex-start;
+  }
+  @media (min-width: 900px) {
+    main.idle .layout {
+      display: grid;
+      grid-template-columns: 1fr 0fr;
+      align-content: start;
+      padding-top: 3vh;
+      overflow: visible;
+    }
+    /* idle already inherits align-items:center and play-section width from base rules */
+    main.idle #queue-section,
+    main.idle #results-section,
+    main.has-queue .recs-section,
+    body.results-open .recs-section {
+      display: none !important;
+    }
+  }
+  /* Recommendations span the full viewport width â€” skeleton and real grid
+     alike. The section is a direct child of <main> (which is horizontally
+     centered), so this canonical full-bleed reliably reaches both viewport
+     edges. */
+  .recs-section {
+    position: relative;
+    width: 100vw;
+    max-width: 100vw;
+    left: 50%;
+    margin-left: -50vw;
+    margin-right: -50vw;
+    margin-top: 24px;
+    box-sizing: border-box;
+  }
+  /* Let the footer sit right after the recommendations grid instead
+     of being pushed to the bottom of the 100dvh viewport (which left a big
+     black gap under a short grid). */
+  .site-footer {
+    margin-top: 32px;
+  }
+
+  /* ---- Idle hero text ---- */
+  .idle-hero {
+    text-align: center;
+    padding: 0 20px 0;
+    overflow: hidden;
+    max-height: 0;
+    opacity: 0;
+    transition: max-height .35s ease, opacity .25s ease, padding .35s ease;
+    pointer-events: none;
+  }
+  .idle-hero[hidden] { display: none !important; }
+  main.idle .idle-hero {
+    display: block;
+    max-height: 160px;
+    opacity: 1;
+    padding: 0 20px 20px;
+    pointer-events: auto;
+    transition: max-height .4s ease .1s, opacity .35s ease .15s, padding .4s ease .1s;
+  }
+  .idle-hero-line {
+    display: flex;
+    justify-content: center;
+    gap: 10px;
+  }
+  .idle-hero-text {
+    font-size: 1.8rem;
+    font-weight: 800;
+    line-height: 1.2;
+    letter-spacing: -.02em;
+    color: #333;
+    opacity: 0;
+    animation: heroFadeIn .5s ease forwards;
+  }
+  .idle-hero-text:nth-child(1) { animation-delay: .1s; }
+  .idle-hero-text:nth-child(2) { animation-delay: .25s; }
+  .idle-hero-text:nth-child(3) { animation-delay: .4s; }
+  .idle-hero-accent {
+    background: linear-gradient(135deg, var(--accent), #ff6a00);
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    background-clip: text;
+  }
+  .idle-hero-sub {
+    margin-top: 8px;
+    font-size: .72rem;
+    color: #444;
+    letter-spacing: .06em;
+    opacity: 0;
+    animation: heroFadeIn .5s ease forwards;
+    animation-delay: .55s;
+  }
+  @keyframes heroFadeIn {
+    from { opacity: 0; transform: translateY(6px); }
+    to { opacity: 1; transform: none; }
+  }
+  @media (min-width: 900px) {
+    .idle-hero-text { font-size: 2.4rem; }
+    .idle-hero-line { gap: 14px; }
+  }
+
+  /* ---- Mobile overrides ---- */
+  @media (max-width: 899px) {
+    .hamburger-btn { display: inline-flex; }
+    #logout { display: none; }
+    /* Hide the inline device section â€” it's in the sidebar now */
+    .device-section-inline { display: none !important; }
+    /* Hide inline queue â€” it's in the popup modal */
+    #queue-section { display: none !important; }
+    /* Every section carries a trailing margin-bottom for spacing between
+       sections, but the last visible one in .left-col has nothing below it
+       to space from â€” left in, that margin plus main's own footer-clearance
+       padding made the page taller than the viewport and scrollable even
+       though there was nothing at the bottom to scroll to. */
+    .left-col > section:last-child { margin-bottom: 0; }
+    /* Header history button: icon only on mobile to save header space */
+    .header-history-label { display: none; }
+    .header-history-btn { padding: 7px 9px; }
+    /* Playlists is already reachable from the sidebar menu on mobile â€”
+       don't duplicate it in the cramped header. */
+    #playlists-modal-btn { display: none !important; }
+    /* Swipe left/right on the row already exposes Play next / Add to queue
+       on mobile, so the standalone queue-add icon is a redundant tap target
+       here â€” show the same 3-dot "More options" menu desktop uses instead
+       (Play next / Add to queue / Save to Playlist). */
+    .result-queue-btn { display: none !important; }
+    /* .queue-more-btn stays visible on mobile now that the queue popup has
+       its own 3-dot menu (Play Radio / Like / Add to Playlist / Remove). */
+
+    /* The GitHub credit lives in the sidebar (.sidebar-footer) on mobile
+       instead â€” a fixed footer here either covered content or left the page
+       scrollable to reveal it, neither of which was wanted. */
+    .site-footer { display: none !important; }
+  }
+
+  /* Desktop: hide mobile-only elements */
+  @media (min-width: 900px) {
+    .hamburger-btn { display: none !important; }
+    .sidebar, .sidebar-overlay { display: none !important; }
+    .queue-modal-overlay { display: none !important; }
+    .mini-popup-overlay { display: none !important; }
+    .transport-actions .queue-modal-btn { display: none; }
+    /* The bottom mini player is a mobile affordance â€” never show it on PC;
+       the full player stays visible in the left column instead. */
+    .mini-player { display: none !important; }
+    /* Mobile-only elements: hide on desktop */
+    .result-queue-btn { display: none !important; }
+    .result-swipe-underlay { display: none !important; }
+    .queue-delete-underlay { display: none !important; }
+  }
+@keyframes spin { to { transform: rotate(360deg); } }
+.spin { animation: spin 1s linear infinite; }
+
+/* ---- Jam guest mode ----
+   Server-side the allow-list in require_api_key() is the real gate; these
+   rules just remove every account-writing control from a guest's UI so
+   nothing they can click will 401. */
+body.jam-guest #np-like-btn,
+body.jam-guest .result-like-btn,
+body.jam-guest .track-like-btn,
+body.jam-guest [data-action="like"],
+body.jam-guest [data-action="save-playlist"],
+body.jam-guest #import-playlist-btn,
+body.jam-guest #playlist-detail-more-btn,
+body.jam-guest #playlist-sync-btn,
+body.jam-guest #clear-history-btn,
+body.jam-guest #clear-all-btn,
+body.jam-guest #login-section,
+body.jam-guest .jam-owner-only {
+  display: none !important;
+}

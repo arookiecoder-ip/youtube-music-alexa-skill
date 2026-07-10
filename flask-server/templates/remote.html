@@ -13,7 +13,6 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Music Box">
 <link rel="apple-touch-icon" href="/static/icons/icon-192-any.png">
-<link rel="stylesheet" href="/static/remote.css?v={{ asset_v }}">
 <style>
   body.preload .play-section,
   body.preload .player-section,
@@ -38,6 +37,15 @@
     transition: opacity .25s ease;
   }
 </style>
+<style>{% include "static/css/base.css" %}</style>
+<style>{% include "static/css/header.css" %}</style>
+<style>{% include "static/css/player.css" %}</style>
+<style>{% include "static/css/queue.css" %}</style>
+<style>{% include "static/css/search.css" %}</style>
+<style>{% include "static/css/sidebar.css" %}</style>
+<style>{% include "static/css/toast.css" %}</style>
+<style>{% include "static/css/recs.css" %}</style>
+<style>{% include "static/css/footer.css" %}</style>
 </head>
 <body class="preload{{ ' jam-guest' if jam_guest else '' }}">
 <script>window.JAM_GUEST = {{ 'true' if jam_guest else 'false' }};</script>

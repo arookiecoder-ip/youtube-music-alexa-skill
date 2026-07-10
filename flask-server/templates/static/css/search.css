@@ -1,0 +1,369 @@
+  /* ---- Search suggestions ---- */
+  .search-wrap { position: relative; flex: 1; min-width: 0; }
+  .search-wrap > input { width: 100%; padding-right: 34px; }
+  .search-clear {
+    position: absolute;
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: 34px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: none;
+    border: none;
+    padding: 0;
+    color: var(--muted);
+    cursor: pointer;
+    transition: color .15s;
+  }
+  .search-clear:hover { color: var(--text); }
+  .search-clear[hidden] { display: none; }
+  .suggest-list {
+    position: absolute;
+    top: calc(100% + 4px);
+    left: 0;
+    right: 0;
+    z-index: 50;
+    list-style: none;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    max-height: 260px;
+    overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+    box-shadow: 0 8px 24px rgba(0,0,0,.5);
+  }
+  .suggest-list::-webkit-scrollbar { width: 4px; }
+  .suggest-list::-webkit-scrollbar-thumb { background: var(--border); }
+  .suggest-item {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 9px 12px;
+    font-size: .82rem;
+    cursor: pointer;
+    color: var(--text);
+  }
+  .suggest-item + .suggest-item { border-top: 1px solid var(--border); }
+  .suggest-item:hover,
+  .suggest-item.active { background: #1a1a1a; }
+  .suggest-item svg { flex: none; color: var(--muted); }
+  .suggest-clear-history {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 9px 12px;
+    font-size: .78rem;
+    color: var(--muted);
+    cursor: pointer;
+    border-top: 1px solid var(--border);
+  }
+  .suggest-clear-history:hover { color: var(--text); background: #1a1a1a; }
+
+  /* ---- Search results ---- */
+  #results-section {
+    opacity: 0;
+    transform: translateY(8px);
+    transition: opacity .28s ease, transform .28s ease;
+  }
+  #results-section.is-visible {
+    opacity: 1;
+    transform: none;
+  }
+  /* result-item styles now live in .result-swipe-wrapper / .result-item-inner above */
+  .result-item-inner:active { filter: brightness(1.3); transition: filter 0s; }
+  .result-thumb {
+    width: 48px;
+    height: 48px;
+    flex: none;
+    object-fit: cover;
+    background: var(--bg);
+    border: 1px solid var(--border);
+  }
+  img.result-thumb {
+    opacity: 0;
+    transition: opacity 0.3s ease;
+  }
+  img.result-thumb.loaded {
+    opacity: 1;
+  }
+  .result-info { flex: 1; min-width: 0; }
+  .result-title {
+    font-size: .82rem;
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .result-artist {
+    font-size: .7rem;
+    color: var(--muted);
+    margin-top: 2px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  /* ---- Search result: swipe underlay ---- */
+  .result-swipe-wrapper {
+    position: relative;
+    overflow: hidden;
+  }
+  .result-swipe-underlay {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    display: flex;
+    align-items: center;
+    padding: 0 18px;
+    font-size: .68rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .1em;
+    color: #fff;
+    white-space: nowrap;
+    pointer-events: none;
+    gap: 6px;
+    z-index: 0;
+  }
+  .result-swipe-wrapper.swiping-right .underlay-play-next,
+  .result-swipe-wrapper.swiping-left .underlay-add-queue { z-index: 1; }
+  .result-swipe-underlay svg { width: 16px; height: 16px; }
+  .result-swipe-underlay.underlay-play-next {
+    left: 0;
+    right: auto;
+    background: var(--ok);
+    justify-content: flex-start;
+    width: 100%;
+  }
+  .result-swipe-underlay.underlay-add-queue {
+    right: 0;
+    left: auto;
+    background: var(--accent);
+    justify-content: flex-end;
+    width: 100%;
+  }
+  .result-item-inner {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 6px;
+    cursor: pointer;
+    border-left: 3px solid transparent;
+    transition: background .15s, border-color .15s;
+    background: var(--surface);
+    z-index: 1;
+    touch-action: pan-y;
+  }
+  .result-swipe-wrapper .result-item-inner:hover { background: #1a1a1a; }
+  .result-swipe-wrapper .result-item-inner.active {
+    border-left-color: var(--accent);
+    background: #1a1a1a;
+  }
+  .result-swipe-wrapper + .result-swipe-wrapper .result-item-inner {
+    border-top: 1px solid var(--border);
+  }
+
+  /* ---- Search result: mobile queue-add icon & like icon ---- */
+  .result-queue-btn, .result-like-btn {
+    flex: none;
+    background: none;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    width: 34px;
+    height: 34px;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: color .15s, border-color .15s, transform .15s;
+    border-radius: 50%;
+    margin-right: 0;
+  }
+  .result-queue-btn[hidden] { display: none; }
+  .result-queue-btn:hover, .result-like-btn:hover { color: var(--text); border-color: #444; }
+  .result-queue-btn:active, .result-like-btn:active { color: var(--accent); border-color: var(--accent); transform: scale(0.95); }
+  .result-like-btn.liked { color: var(--accent); border-color: var(--accent); }
+  .result-queue-btn svg, .result-like-btn svg { width: 16px; height: 16px; }
+
+  /* Sized to match .np-like-btn (the main player's heart) rather than the
+     search-result icons above, per feedback that this one read too big. */
+  .track-like-btn {
+    flex: none;
+    background: none;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: color .15s, border-color .15s, transform .15s;
+    border-radius: 50%;
+    margin-right: 6px;
+  }
+  .track-like-btn:hover { color: var(--text); border-color: #444; }
+  .track-like-btn:active { color: var(--accent); border-color: var(--accent); transform: scale(0.95); }
+  .track-like-btn.liked { color: var(--accent); border-color: var(--accent); background: rgba(232, 89, 12, .1); }
+  .track-like-btn svg { width: 16px; height: 16px; }
+
+  /* ---- Search result: more-options button (all viewports) ---- */
+  .result-more-btn {
+    flex: none;
+    background: none;
+    border: 1px solid transparent;
+    color: var(--muted);
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: color .15s, border-color .15s, background .15s;
+    border-radius: 50%;
+    position: relative;
+  }
+  .result-more-btn:hover { color: var(--text); border-color: var(--border); background: var(--bg); }
+  .result-more-btn.open { color: var(--text); border-color: var(--border); background: var(--bg); }
+  .result-more-btn svg { width: 18px; height: 18px; }
+
+  /* ---- Search result: more-options dropdown menu ---- */
+  .result-more-menu {
+    display: block;
+    position: fixed;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    z-index: 9999;
+    min-width: 180px;
+    box-shadow: 0 8px 24px rgba(0,0,0,.5);
+    opacity: 0;
+    visibility: hidden;
+    transform: translateY(-4px) scale(.98);
+    transition: opacity .12s ease, transform .12s ease, visibility .12s;
+    pointer-events: none;
+  }
+  .result-more-menu.above {
+    /* top/bottom set by JS */
+  }
+  .result-more-menu.open {
+    opacity: 1;
+    visibility: visible;
+    transform: none;
+    pointer-events: auto;
+  }
+  .result-menu-option {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 14px;
+    font-size: .78rem;
+    color: var(--text);
+    cursor: pointer;
+    transition: background .1s;
+    white-space: nowrap;
+  }
+  .result-menu-option:hover { background: rgba(255,255,255,.06); }
+  .result-menu-option[hidden] { display: none; }
+  .result-menu-option + .result-menu-option { border-top: 1px solid var(--border); }
+  .result-menu-option svg { flex: none; width: 16px; height: 16px; color: var(--muted); }
+  .results-pager {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid var(--border);
+  }
+  .results-pager button {
+    flex: 1;
+    max-width: 120px;
+    padding: 8px 12px;
+    font-size: .7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: .08em;
+    color: var(--muted);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+  }
+  .results-pager button:hover { color: var(--text); }
+  .results-pager button svg { width: 12px; height: 12px; }
+  .results-page-label {
+    font-size: .68rem;
+    color: var(--muted);
+    letter-spacing: .08em;
+    font-variant-numeric: tabular-nums;
+    white-space: nowrap;
+  }
+  .results-close {
+    background: none;
+    border: none;
+    color: var(--muted);
+    padding: 4px;
+    cursor: pointer;
+    transition: color .15s;
+  }
+  .results-close:hover { color: var(--text); }
+
+  /* While results are open, the full player and queue give way to the
+     bottom mini player. */
+  body.results-open .player-section,
+  body.results-open #queue-section { display: none !important; }
+  body.results-open main { padding-bottom: 92px; }
+  /* Keep toasts visible above the bottom mini player */
+  body.results-open .toast { bottom: calc(92px + env(safe-area-inset-bottom, 0px)); }
+
+  /* Sticky search bar on mobile while results are open */
+  @media (max-width: 899px) {
+    body.results-open .needs-login:has(#play-query) {
+      position: sticky;
+      top: 0;
+      z-index: 40;
+      margin-bottom: 0;
+      border-bottom: none;
+      /* subtle blur-glass so content scrolling under it looks clean */
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      background: rgba(20, 20, 20, 0.92);
+    }
+  }
+
+  /* Desktop: results open in a right-hand column beside the controls,
+     mirroring the has-queue two-column layout. */
+  @media (min-width: 900px) {
+    /* The 92px mini-player clearance above is mobile-only; on desktop it made
+       main taller than the viewport, so any programmatic scroll (e.g. after
+       paging results) shoved the whole page upward. */
+    body.results-open main { padding-bottom: 0; }
+    body.results-open #results-section {
+      padding-bottom: 14px;
+    }
+    body.results-open .results-list {
+      flex: 1 1 auto;
+      height: auto;
+      min-height: 0;
+      max-height: none;
+      overflow-y: auto;
+      scrollbar-width: thin;
+      scrollbar-color: var(--border) transparent;
+    }
+    body.results-open .results-list::-webkit-scrollbar { width: 4px; }
+    body.results-open .results-list::-webkit-scrollbar-thumb { background: var(--border); }
+    /* Keep the full player in the left column; the bottom mini player is a
+       mobile-only affordance. */
+    body.results-open .player-section { display: block !important; }
+    body.results-open .player-section.is-collapsed { display: none !important; }
+    body.results-open .mini-player { display: none !important; }
+    body.results-open .toast { bottom: 24px; }
+  }
+

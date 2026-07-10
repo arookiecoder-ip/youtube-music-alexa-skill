@@ -1,0 +1,391 @@
+  /* ---- Queue ---- */
+  /* Reveal wrapper: animates in only while a song is playing */
+  #queue-section {
+    opacity: 0;
+    transform: translateY(8px);
+    transition: opacity .28s ease, transform .28s ease;
+    pointer-events: none;
+  }
+  #queue-section.is-visible {
+    opacity: 1;
+    /* transform: none (not translateY(0)) â€” any transform value would make
+       this section the containing block for the position:fixed 3-dot menu,
+       shoving its viewport-based coords into the scrolled/clipped list where
+       it's invisible. Mirrors #results-section.is-visible. */
+    transform: none;
+    pointer-events: auto;
+  }
+
+  .queue-section {
+    max-height: 400px;
+    overflow-y: auto;
+    overscroll-behavior: auto;
+    -webkit-overflow-scrolling: touch;
+    touch-action: pan-y;
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+  }
+  @media (min-width: 900px) {
+    main.has-queue .queue-section {
+      flex: 1 1 auto;
+      height: auto;
+      min-height: 0;
+      max-height: none;
+      overflow-y: auto;
+    }
+  }
+  .queue-section::-webkit-scrollbar { width: 4px; }
+  .queue-section::-webkit-scrollbar-thumb { background: var(--border); }
+
+  .queue-item {
+    content-visibility: auto;
+    contain-intrinsic-size: auto 80px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 12px;
+    cursor: pointer;
+    border-left: 3px solid transparent;
+    transition: background .15s, border-color .15s;
+    background: var(--surface);
+    position: relative;
+    z-index: 1;
+    touch-action: pan-y;
+  }
+  .queue-item:hover { background: #1a1a1a; }
+  .queue-item.active {
+    border-left-color: var(--accent);
+    background: #1a1a1a;
+  }
+  .queue-item + .queue-item {
+    border-top: 1px solid var(--border);
+  }
+
+  /* ---- Queue item: swipe-to-delete wrapper (mobile) ---- */
+  .queue-swipe-wrapper {
+    position: relative;
+    overflow: hidden;
+  }
+  /* Row with its 3-dot menu open: lift it above sibling rows (which all have
+     z-index:1 items) so the fixed-position menu isn't painted under the next
+     row. Set/removed by JS alongside the menu's .open class. */
+  .queue-swipe-wrapper.menu-open,
+  .result-swipe-wrapper.menu-open {
+    z-index: 30;
+  }
+  .queue-swipe-wrapper + .queue-swipe-wrapper .queue-item {
+    border-top: 1px solid var(--border);
+  }
+  .queue-swipe-wrapper .queue-item + .queue-item {
+    border-top: none;
+  }
+  .queue-like-underlay,
+  .queue-delete-underlay {
+    /* Hidden until an actual pull (.swiping-* set by JS) */
+    visibility: hidden;
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    right: 0;
+    left: 0;
+    display: flex;
+    align-items: center;
+    padding: 0 18px;
+    font-size: .68rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .1em;
+    color: #fff;
+    white-space: nowrap;
+    pointer-events: none;
+    gap: 6px;
+  }
+  .queue-like-underlay {
+    justify-content: flex-start;
+    background: var(--accent);
+  }
+  .queue-delete-underlay {
+    justify-content: flex-end;
+    background: var(--danger);
+  }
+  .queue-like-underlay svg,
+  .queue-delete-underlay svg { width: 16px; height: 16px; }
+  .queue-swipe-wrapper.swiping-right .queue-like-underlay,
+  .queue-swipe-wrapper.swiping-left .queue-delete-underlay { visibility: visible; }
+
+  /* ---- Queue item: drag-to-reorder ---- */
+  .queue-drag-handle {
+    flex: none;
+    width: 20px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    cursor: grab;
+    color: var(--muted);
+    padding: 4px 0;
+    touch-action: none;
+    opacity: .5;
+    transition: opacity .15s, color .15s;
+  }
+  .queue-drag-handle:hover { opacity: 1; color: var(--text); }
+  .queue-drag-handle:active { cursor: grabbing; }
+  .queue-drag-handle svg { width: 16px; height: 16px; }
+
+  .queue-item.dragging {
+    opacity: .5;
+    background: var(--bg);
+    box-shadow: 0 4px 16px rgba(0,0,0,.4);
+    z-index: 10;
+  }
+  .queue-item.hold-selected {
+    border-left-color: var(--danger);
+    background: rgba(224, 49, 49, .12);
+    box-shadow: 0 0 12px rgba(224, 49, 49, .25), inset 0 0 0 1px rgba(224, 49, 49, .2);
+    transform: scale(1.015);
+    transition: border-color .15s, background .15s, box-shadow .15s, transform .15s !important;
+  }
+  .queue-drop-placeholder {
+    height: 3px;
+    background: var(--accent);
+    margin: 0;
+    transition: none;
+  }
+
+  /* ---- Queue item: 3-dot more menu (desktop) ---- */
+  .queue-more-btn {
+    flex: none;
+    background: none;
+    border: 1px solid transparent;
+    color: var(--muted);
+    width: 28px;
+    height: 28px;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    transition: color .15s, border-color .15s, background .15s;
+    border-radius: 50%;
+    position: relative;
+    overflow: visible;
+  }
+  .queue-more-btn:hover { color: var(--text); border-color: var(--border); background: var(--bg); }
+  .queue-more-btn.open { color: var(--text); border-color: var(--border); background: var(--bg); }
+  .queue-more-btn svg { width: 16px; height: 16px; }
+
+  .queue-more-menu {
+    display: block;
+    position: fixed;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    z-index: 9999;
+    min-width: 170px;
+    box-shadow: 0 8px 24px rgba(0,0,0,.5);
+    opacity: 0;
+    visibility: hidden;
+    transform: translateY(-4px) scale(.98);
+    transition: opacity .12s ease, transform .12s ease, visibility .12s;
+    pointer-events: none;
+  }
+  .queue-more-menu.above {
+    /* top/bottom set by JS */
+  }
+  .queue-more-menu.open {
+    opacity: 1;
+    visibility: visible;
+    transform: none;
+    pointer-events: auto;
+  }
+  .queue-menu-option {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 14px;
+    font-size: .78rem;
+    color: var(--text);
+    cursor: pointer;
+    transition: background .1s;
+    white-space: nowrap;
+  }
+  .queue-menu-option:hover { background: rgba(255,255,255,.06); }
+  .queue-menu-option.danger { color: var(--danger); }
+  .queue-menu-option.danger:hover { background: rgba(224,49,49,.08); }
+  .queue-menu-option.liked { color: var(--accent); }
+  .queue-menu-option.liked:hover { background: rgba(243,125,34,.08); }
+  .queue-menu-option svg { flex: none; width: 16px; height: 16px; color: var(--muted); }
+  .queue-menu-option.danger svg { color: var(--danger); }
+  .queue-menu-option.liked svg { color: var(--accent); }
+
+  .queue-thumb {
+    width: 40px;
+    height: 40px;
+    flex: none;
+    object-fit: cover;
+    background: var(--bg);
+    border: 1px solid var(--border);
+  }
+  img.queue-thumb {
+    opacity: 0;
+    transition: opacity 0.3s ease;
+  }
+  img.queue-thumb.loaded {
+    opacity: 1;
+  }
+  .queue-info { flex: 1; min-width: 0; }
+  .queue-title {
+    font-size: .78rem;
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .queue-artist {
+    font-size: .68rem;
+    color: var(--muted);
+    margin-top: 2px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .queue-num {
+    font-size: .65rem;
+    color: var(--muted);
+    flex: none;
+    width: 18px;
+    text-align: right;
+  }
+  .queue-item.active .queue-num { color: var(--accent); }
+
+  /* Freshly added playlist track: slides in at the top with a brief accent
+     glow, mirroring YT Music's newest-on-top add behavior. */
+  .result-swipe-wrapper.track-added-anim {
+    animation: trackAddedIn .9s ease;
+  }
+  @keyframes trackAddedIn {
+    0%   { opacity: 0; transform: translateY(-14px); background: rgba(232, 89, 12, .28); }
+    35%  { opacity: 1; transform: none; background: rgba(232, 89, 12, .28); }
+    100% { background: transparent; }
+  }
+
+  /* ---- Queue popup modal (mobile) ---- */
+  .queue-modal-overlay {
+    display: flex;
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,.7);
+    z-index: 400;
+    justify-content: center;
+    align-items: flex-end;
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity .25s ease, visibility .25s ease;
+  }
+  .queue-modal-overlay.open {
+    opacity: 1;
+    visibility: visible;
+  }
+  .queue-modal {
+    width: 100%;
+    max-height: 75dvh;
+    background: var(--surface);
+    border-radius: 0;
+    display: flex;
+    flex-direction: column;
+    transform: translateY(100%);
+    transition: transform .3s cubic-bezier(.22,1,.36,1);
+    box-shadow: 0 -8px 32px rgba(0,0,0,.6);
+  }
+  .queue-modal-overlay.open .queue-modal {
+    transform: translateY(0);
+  }
+  .queue-modal-drag {
+    display: flex;
+    justify-content: center;
+    padding: 10px 0 6px;
+    cursor: grab;
+    touch-action: none;
+  }
+  .queue-modal-drag .drag-bar {
+    width: 40px;
+    height: 4px;
+    background: var(--muted);
+    opacity: .5;
+  }
+  .queue-modal-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 20px 12px;
+    border-bottom: 1px solid var(--border);
+    cursor: grab;
+    touch-action: none;
+  }
+  .queue-modal-header h3 {
+    font-size: .85rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .14em;
+    color: var(--text);
+  }
+  .queue-modal-close {
+    background: none;
+    border: none;
+    color: var(--muted);
+    padding: 4px;
+    cursor: pointer;
+  }
+  .queue-modal-close:hover { color: var(--text); }
+  .queue-modal-body {
+    flex: 1;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+    padding: 4px 0 env(safe-area-inset-bottom, 16px);
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+  }
+  .queue-modal-body::-webkit-scrollbar { width: 4px; }
+  .queue-modal-body::-webkit-scrollbar-thumb { background: var(--border); }
+  .queue-modal-empty {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 40px 20px;
+    color: var(--muted);
+    font-size: .82rem;
+  }
+
+  /* ---- Queue action button (mobile transport) ---- */
+  .transport-actions {
+    display: flex;
+    gap: 6px;
+    margin-top: 10px;
+  }
+  .transport-actions button {
+    flex: 1;
+    height: 42px;
+    padding: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    font-size: .68rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: .08em;
+    color: var(--muted);
+    background: var(--bg);
+    border: 1px solid var(--border);
+    cursor: pointer;
+    transition: color .15s, border-color .15s;
+  }
+  .transport-actions button:hover {
+    color: var(--text);
+    border-color: #444;
+  }
+  .transport-actions button svg {
+    width: 16px;
+    height: 16px;
+  }
+
