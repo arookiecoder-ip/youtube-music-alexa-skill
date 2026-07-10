@@ -861,5 +861,14 @@
 <script>{% include "static/js/recs.js" %}</script>
 <script>{% include "static/js/sw-register.js" %}</script>
 <script>{% include "static/playlists.js" %}</script>
+<script>
+  (function () {
+    if (window.restoreFromCache) window.restoreFromCache();
+    if (window.initPage) window.initPage();
+    setTimeout(function () {
+      document.body.classList.remove('preload');
+    }, 5000);
+  })();
+</script>
 </body>
 </html>

@@ -160,7 +160,7 @@
     }
     if (window.syncUiState) window.syncUiState();
 
-    if (_firstShow && loggedIn) {
+    if (_firstShow) {
       _firstShow = false;
       requestAnimationFrame(() => {
         requestAnimationFrame(() => {
