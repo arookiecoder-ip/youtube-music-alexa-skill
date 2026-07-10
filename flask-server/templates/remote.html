@@ -17,13 +17,15 @@
   body.preload .play-section,
   body.preload .player-section,
   body.preload #queue-section,
-  body.preload .recs-section {
+  body.preload .recs-section,
+  body.preload #home-section {
     opacity: 0;
   }
   body.preload .play-section,
   body.preload .player-section,
   body.preload #queue-section,
-  body.preload .recs-section {
+  body.preload .recs-section,
+  body.preload #home-section {
     animation: preloadPulse 2s ease-in-out infinite;
   }
   @keyframes preloadPulse {
@@ -33,7 +35,8 @@
   body:not(.preload) .play-section,
   body:not(.preload) .player-section,
   body:not(.preload) #queue-section,
-  body:not(.preload) .recs-section {
+  body:not(.preload) .recs-section,
+  body:not(.preload) #home-section {
     transition: opacity .25s ease;
   }
 </style>
@@ -45,6 +48,7 @@
 <style>{% include "static/css/sidebar.css" %}</style>
 <style>{% include "static/css/toast.css" %}</style>
 <style>{% include "static/css/recs.css" %}</style>
+<style>{% include "static/css/home.css" %}</style>
 <style>{% include "static/css/footer.css" %}</style>
 </head>
 <body class="preload{{ ' jam-guest' if jam_guest else '' }}">
@@ -383,6 +387,11 @@
       <!-- Skeleton tiles are injected by remote.js to match the real grid size -->
       <div class="recs-grid recs-skeleton" id="recs-skeleton" hidden></div>
     </div>
+  </section>
+
+  <!-- Home feed: categorized recommendation rows (replaces recs on idle) -->
+  <section class="needs-login home-section" id="home-section" hidden>
+    <div class="home-rows" id="home-rows"></div>
   </section>
 
   <footer class="site-footer">
@@ -859,6 +868,7 @@
 <script>{% include "static/js/sidebar.js" %}</script>
 <script>{% include "static/js/history.js" %}</script>
 <script>{% include "static/js/recs.js" %}</script>
+<script>{% include "static/js/home.js" %}</script>
 <script>{% include "static/js/sw-register.js" %}</script>
 <script>{% include "static/playlists.js" %}</script>
 <script>
