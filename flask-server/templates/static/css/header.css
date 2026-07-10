@@ -43,7 +43,7 @@
     border: 1px solid var(--border);
     color: var(--muted);
     padding: 6px 14px;
-    font-size: .7rem;
+    font-size: var(--text-sm);
     font-family: inherit;
     cursor: pointer;
     text-transform: uppercase;
@@ -95,7 +95,7 @@
     border: 1px solid var(--border);
     width: 320px;
     max-width: 90vw;
-    padding: 28px 24px 20px;
+    padding: 28px var(--space-5) 20px;
     animation: confirmIn .2s ease-out;
     text-align: center;
   }
@@ -106,7 +106,7 @@
   .confirm-icon {
     width: 44px;
     height: 44px;
-    margin: 0 auto 16px;
+    margin: 0 auto var(--space-4);
     border: 2px solid var(--danger);
     border-radius: 50%;
     display: flex;
@@ -130,7 +130,7 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    gap: 8px;
+    gap: var(--space-2);
     font-size: .75rem;
     color: var(--muted);
     margin: -12px 0 18px;
@@ -144,7 +144,7 @@
   }
   .confirm-actions button {
     flex: 1;
-    padding: 10px 16px;
+    padding: 10px var(--space-4);
     font-size: .75rem;
     font-weight: 600;
     font-family: inherit;
@@ -172,7 +172,7 @@
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    padding: 7px 12px;
+    padding: 7px var(--space-3);
     background: none;
     border: 1px solid var(--border);
     color: var(--muted);
@@ -196,7 +196,7 @@
   .history-item {
     display: flex;
     align-items: center;
-    gap: 12px;
+    gap: var(--space-3);
     padding: 10px 20px;
     cursor: pointer;
     background: var(--surface);
@@ -211,8 +211,8 @@
   .history-item:hover { background: #1a1a1a; }
   .history-item + .history-item { border-top: 1px solid var(--border); }
   .history-date-header {
-    padding: 10px 20px 4px;
-    font-size: .7rem;
+    padding: 10px 20px var(--space-1);
+    font-size: var(--text-sm);
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: .12em;
@@ -306,7 +306,7 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 16px 16px 16px 20px;
+    padding: var(--space-4) var(--space-4) var(--space-4) 20px;
     border-bottom: 1px solid var(--border);
   }
   .history-modal-header h3 {
@@ -325,7 +325,7 @@
     background: none;
     border: none;
     color: var(--muted);
-    padding: 4px;
+    padding: var(--space-1);
     cursor: pointer;
     display: flex;
   }
@@ -388,7 +388,7 @@
   display: inline-flex;
   align-items: center;
   margin-left: 10px;
-  padding: 2px 8px;
+  padding: 2px var(--space-2);
   border: 1px solid var(--accent, #e8590c);
   border-radius: 999px;
   color: var(--accent, #e8590c);

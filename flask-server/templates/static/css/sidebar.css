@@ -34,7 +34,7 @@
     transition: transform .3s cubic-bezier(.22,1,.36,1);
     display: flex;
     flex-direction: column;
-    padding: 24px 20px;
+    padding: var(--space-5) 20px;
     overflow-y: auto;
   }
   .sidebar.open { transform: translateX(0); }
@@ -58,7 +58,7 @@
     background: none;
     border: none;
     color: var(--muted);
-    padding: 4px;
+    padding: var(--space-1);
     cursor: pointer;
   }
   .sidebar-close:hover { color: var(--text); }
@@ -71,7 +71,7 @@
   }
   .sidebar-section .row {
     display: flex;
-    gap: 8px;
+    gap: var(--space-2);
   }
   .sidebar-section select {
     flex: 1;
@@ -79,8 +79,8 @@
     background: var(--bg);
     color: var(--text);
     border: 1px solid var(--border);
-    padding: 10px 12px;
-    font-size: .88rem;
+    padding: 10px var(--space-3);
+    font-size: var(--text-base);
     font-family: inherit;
   }
   .sidebar-section button {
@@ -88,7 +88,7 @@
     color: var(--text);
     border: 1px solid var(--border);
     padding: 10px 14px;
-    font-size: .88rem;
+    font-size: var(--text-base);
     font-family: inherit;
     cursor: pointer;
   }
@@ -127,7 +127,7 @@
     gap: 6px;
     color: var(--muted);
     text-decoration: none;
-    font-size: .7rem;
+    font-size: var(--text-sm);
     letter-spacing: .06em;
     transition: color .15s;
   }

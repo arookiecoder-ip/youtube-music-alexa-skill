@@ -31,7 +31,7 @@
   .np-info { flex: 1; min-width: 0; }
   .np-title {
     font-weight: 600;
-    font-size: .88rem;
+    font-size: var(--text-base);
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -53,7 +53,7 @@
     background: #2a2a2a;
     cursor: pointer;
     /* pad the hit area vertically without changing the visual bar height */
-    padding: 8px 0;
+    padding: var(--space-2) 0;
     background-clip: content-box;
     touch-action: none;
     /* translucent shadow so the empty track reads against the dark surface */
@@ -186,7 +186,7 @@
   .mini-popup-drag {
     display: flex;
     justify-content: center;
-    padding: 10px 0 4px;
+    padding: 10px 0 var(--space-1);
     cursor: grab;
     touch-action: none;
   }
@@ -201,10 +201,10 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: 4px 18px 10px;
+    padding: var(--space-1) 18px 10px;
   }
   .mini-popup-header h3 {
-    font-size: .7rem;
+    font-size: var(--text-sm);
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: .14em;
@@ -213,7 +213,7 @@
   .mini-popup-header-actions {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: var(--space-2);
   }
   .mini-popup-queue-btn {
     background: none;
@@ -229,7 +229,7 @@
     cursor: pointer;
     transition: color .15s, border-color .15s;
     border-radius: 4px;
-    font-size: .6rem;
+    font-size: var(--text-xs);
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: .08em;
@@ -240,7 +240,7 @@
     background: none;
     border: none;
     color: var(--muted);
-    padding: 4px;
+    padding: var(--space-1);
     cursor: pointer;
     transition: color .15s;
   }
@@ -288,7 +288,7 @@
   }
   .mini-popup-np-actions {
     display: flex;
-    gap: 4px;
+    gap: var(--space-1);
   }
   .mini-popup-np-actions button,
   .mp-ytm-btn {
@@ -319,7 +319,7 @@
     height: 4px;
     background: #2a2a2a;
     cursor: pointer;
-    padding: 8px 0;
+    padding: var(--space-2) 0;
     background-clip: content-box;
     touch-action: none;
     box-shadow: 0 1px 4px rgba(0,0,0,.55);
@@ -475,8 +475,8 @@
     bottom: 0;
     display: flex;
     align-items: center;
-    gap: 12px;
-    padding: 10px 16px calc(10px + env(safe-area-inset-bottom, 0px));
+    gap: var(--space-3);
+    padding: 10px var(--space-4) calc(10px + env(safe-area-inset-bottom, 0px));
     background: var(--surface);
     border-top: 1px solid var(--border);
     box-shadow: 0 -8px 24px rgba(0,0,0,.5);
