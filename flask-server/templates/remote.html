@@ -52,6 +52,7 @@
 <style>{% include "static/css/artist.css" %}</style>
 <style>{% include "static/css/playlist.css" %}</style>
 <style>{% include "static/css/footer.css" %}</style>
+<style>{% include "static/css/redesign.css" %}</style>
 </head>
 <body class="preload{{ ' jam-guest' if jam_guest else '' }}">
 <script>window.JAM_GUEST = {{ 'true' if jam_guest else 'false' }};</script>
@@ -131,6 +132,29 @@
         </svg>
       </button>
     </div>
+    <div class="sidebar-section sidebar-nav">
+      <button class="sidebar-nav-btn needs-login" id="nav-home-btn" hidden>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M3 10.5 12 3l9 7.5"/>
+          <path d="M5 9.5V21h5v-6h4v6h5V9.5"/>
+        </svg>
+        Home
+      </button>
+      <button class="sidebar-nav-btn needs-login" id="nav-search-btn" hidden>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
+          <circle cx="11" cy="11" r="7"/>
+          <line x1="21" y1="21" x2="16.2" y2="16.2"/>
+        </svg>
+        Search
+      </button>
+      <button class="sidebar-nav-btn needs-login jam-owner-only" id="nav-history-btn" hidden>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="9"/>
+          <polyline points="12 7 12 12 15.5 14"/>
+        </svg>
+        Recently Listened
+      </button>
+    </div>
     <div class="sidebar-section">
       <div class="label">Device</div>
       <div class="row">
@@ -151,17 +175,9 @@
       </button>
       </div>
     </div>
-    <div class="sidebar-section">
-      <button id="refresh-page-btn" onclick="location.reload()" style="width:100%; display:inline-flex; align-items:center; justify-content:center; gap:8px; font-size:.75rem; font-weight:600; text-transform:uppercase; letter-spacing:.08em; color:var(--muted); transition:color .15s, border-color .15s; margin-bottom: 12px; background: var(--surface); border: 1px solid var(--border); padding: 10px; border-radius: 6px;">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
-             stroke="currentColor" stroke-width="2.2" stroke-linecap="square">
-          <path d="M21 2v6h-6"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/>
-          <path d="M3 22v-6h6"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/>
-        </svg>
-        Refresh Page
-      </button>
-      <button class="needs-login jam-owner-only" id="sidebar-playlists-btn" style="width:100%; display:inline-flex; align-items:center; justify-content:center; gap:8px; font-size:.75rem; font-weight:600; text-transform:uppercase; letter-spacing:.08em; color:var(--text); transition:color .15s; background: var(--surface); border: 1px solid var(--border); padding: 10px; border-radius: 6px;">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+    <div class="sidebar-section sidebar-tools">
+      <button class="sidebar-nav-btn needs-login jam-owner-only" id="sidebar-playlists-btn" hidden>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <line x1="8" y1="6" x2="21" y2="6"/>
           <line x1="8" y1="12" x2="21" y2="12"/>
           <line x1="8" y1="18" x2="21" y2="18"/>
@@ -171,14 +187,22 @@
         </svg>
         Playlists
       </button>
-      <button class="needs-login jam-owner-only" id="sidebar-jam-btn" style="width:100%; display:inline-flex; align-items:center; justify-content:center; gap:8px; font-size:.75rem; font-weight:600; text-transform:uppercase; letter-spacing:.08em; color:var(--text); transition:color .15s; background: var(--surface); border: 1px solid var(--border); padding: 10px; border-radius: 6px; margin-top: 12px;">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <button class="sidebar-nav-btn needs-login jam-owner-only" id="sidebar-jam-btn" hidden>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
           <circle cx="9" cy="7" r="4"/>
           <path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
           <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
         </svg>
         Jam
+      </button>
+      <button class="sidebar-nav-btn" id="refresh-page-btn" onclick="location.reload()">
+        <svg viewBox="0 0 24 24" fill="none"
+             stroke="currentColor" stroke-width="2.2" stroke-linecap="square">
+          <path d="M21 2v6h-6"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/>
+          <path d="M3 22v-6h6"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/>
+        </svg>
+        Refresh Page
       </button>
     </div>
     <div class="sidebar-signout">
@@ -402,6 +426,7 @@
 
   <!-- Home feed: categorized recommendation rows (replaces recs on idle) -->
   <section class="needs-login home-section" id="home-section" hidden>
+    <div class="home-greeting" id="home-greeting" hidden></div>
     <div class="home-rows" id="home-rows"></div>
   </section>
 

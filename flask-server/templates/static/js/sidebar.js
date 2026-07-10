@@ -100,4 +100,50 @@
 })();
 
 
+/* ---- Nav rail (Home / Search / Recently Listened) ---- */
+(function () {
+  const navHome = document.getElementById('nav-home-btn');
+  const navSearch = document.getElementById('nav-search-btn');
+  const navHistory = document.getElementById('nav-history-btn');
+
+  function goHome() {
+    const resultsClose = document.getElementById('results-close');
+    if (state._resultsOpen && resultsClose) resultsClose.click();
+    if (location.hash && location.hash !== '#home') location.hash = '#home';
+    if (window._closeSidebar) window._closeSidebar();
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  if (navHome) navHome.addEventListener('click', goHome);
+
+  if (navSearch) navSearch.addEventListener('click', () => {
+    if (location.hash && location.hash !== '#home') location.hash = '#home';
+    if (window._closeSidebar) window._closeSidebar();
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    const query = document.getElementById('query');
+    if (query) query.focus();
+  });
+
+  if (navHistory) navHistory.addEventListener('click', () => {
+    if (window._closeSidebar) window._closeSidebar();
+    const headerBtn = document.getElementById('history-modal-btn');
+    if (headerBtn) headerBtn.click();
+  });
+})();
+
+
+/* ---- Mobile playbar: tapping the track info opens the full player sheet
+   (reuses the mini-player's click handler, which owns that popup). ---- */
+(function () {
+  const np = document.querySelector('.player-section .np');
+  if (!np) return;
+  np.addEventListener('click', (e) => {
+    if (e.target.closest('button, a')) return;
+    if (!window.matchMedia('(max-width: 899px)').matches) return;
+    const mini = document.getElementById('mini-player');
+    if (mini) mini.click();
+  });
+})();
+
+
 })();

@@ -40,7 +40,10 @@
     if (mainEl) mainEl.classList.toggle('idle', state._loggedIn && !state._hasTrack && !state._resultsOpen);
     const homeSection = document.getElementById('home-section');
     if (homeSection) {
-      const shouldShow = state._loggedIn && !state._resultsOpen && !state._hasTrack;
+      // The player is a fixed bottom bar now, so the home feed stays visible
+      // while a track plays; only search results or the artist page cover it.
+      const artistOpen = (location.hash || '').indexOf('#artist/') === 0;
+      const shouldShow = state._loggedIn && !state._resultsOpen && !artistOpen;
       if (shouldShow && !state._homeLoaded && window.loadHomeFeed) window.loadHomeFeed();
       else homeSection.hidden = !shouldShow || !state._homeLoaded;
     }

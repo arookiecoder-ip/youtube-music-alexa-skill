@@ -1,0 +1,842 @@
+/* ============================================================
+   Redesign: streaming-app shell
+   Loaded last — overrides the older card-stack layout with a
+   modern music-app shell: left nav rail (desktop), top search
+   bar, horizontal card shelves, and a fixed bottom player bar.
+   Palette is unchanged (same orange accent gradient).
+   ============================================================ */
+
+:root {
+  --rail-w: 236px;
+  --topbar-h: 64px;
+  --playbar-h: 88px;
+  --playbar-h-mobile: 104px;
+  --queue-w: 320px;
+  --accent-grad: linear-gradient(135deg, var(--accent), #ff6a00);
+  --shell-bg: #0d0d0d;
+  --pill-bg: #1c1c1c;
+  /* Softer, rounder look everywhere */
+  --card-radius: 12px;
+}
+
+/* Top brand line becomes a gradient */
+body::before {
+  background: var(--accent-grad);
+  z-index: 1000;
+}
+
+/* Warm tint bleeding down from the top of the page (behind the header) */
+main {
+  background-image: linear-gradient(180deg, rgba(232, 89, 12, .10), transparent 340px);
+}
+
+/* The old bottom mini player is fully replaced by the persistent playbar */
+.mini-player { display: none !important; }
+
+/* ---- Generic hidden guards (we change display on these below) ---- */
+.play-section[hidden],
+.player-section[hidden],
+#results-section[hidden],
+#queue-section[hidden],
+#home-section[hidden],
+.sidebar-nav-btn[hidden],
+.progress[hidden] { display: none !important; }
+
+/* ============================================================
+   Shell layout
+   ============================================================ */
+
+main {
+  width: 100%;
+  max-width: 100%;
+  padding: 0 var(--space-4);
+  padding-top: 4px;
+}
+
+@media (min-width: 900px) {
+  body {
+    display: block;
+    padding: 0;
+  }
+  main,
+  main.idle,
+  main.has-queue,
+  body.results-open main {
+    margin-left: var(--rail-w);
+    width: auto;
+    max-width: none;
+    height: auto;
+    min-height: 100dvh;
+    padding: 0 28px;
+    display: flex;
+    flex-direction: column;
+  }
+  /* The old layout locked the page and scrolled inner panels; the new shell
+     always uses the normal document scroll. */
+  body:has(main.has-queue),
+  body.results-open {
+    overflow: auto;
+    padding-bottom: 0;
+  }
+  main.has-queue .site-footer,
+  body.results-open .site-footer {
+    padding: 10px 0 var(--space-5);
+  }
+  /* Reserve room for the queue side panel while it is visible */
+  main:has(#queue-section.is-visible:not([hidden])) {
+    padding-right: calc(var(--queue-w) + 40px);
+  }
+}
+
+/* Kill the old two-column grid; content flows as one scrolling page. */
+.layout,
+main.idle .layout,
+main.has-queue .layout,
+body.results-open .layout {
+  display: block !important;
+  overflow: visible !important;
+  padding-top: 0 !important;
+  flex: none;
+}
+.left-col { display: block !important; }
+
+/* Reserve space for the fixed playbar whenever a track is loaded */
+main:has(.player-section.is-visible) {
+  padding-bottom: calc(var(--playbar-h-mobile) + 12px);
+}
+@media (min-width: 900px) {
+  main:has(.player-section.is-visible) {
+    padding-bottom: calc(var(--playbar-h) + 28px);
+  }
+  #queue-section { bottom: 16px; }
+  body:has(.player-section.is-visible) #queue-section {
+    bottom: calc(var(--playbar-h) + 16px);
+  }
+  body:has(.player-section.is-visible) .sidebar {
+    bottom: var(--playbar-h);
+  }
+}
+
+/* ============================================================
+   Top bar
+   ============================================================ */
+
+header {
+  border-bottom: none;
+  padding: 10px 0;
+  margin-bottom: 4px;
+}
+
+@media (min-width: 900px) {
+  header,
+  main.has-queue header,
+  body.results-open main header {
+    position: sticky;
+    top: 0;
+    z-index: 130;
+    height: calc(var(--topbar-h) + 3px);
+    margin: 0 -28px 4px;
+    padding: 3px 28px 0;
+    background: rgba(10, 10, 10, .78);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border-bottom: 1px solid rgba(255, 255, 255, .05);
+  }
+}
+
+.brand h1 {
+  background: var(--accent-grad);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  letter-spacing: .16em;
+}
+
+/* Icon-only round header buttons (labels shown as tooltips) */
+.header-history-label { display: none; }
+.header-history-btn {
+  border-radius: var(--radius-full);
+  padding: 8px 10px;
+}
+.header-history-btn:hover {
+  background: rgba(232, 89, 12, .08);
+}
+@media (min-width: 900px) {
+  /* Playlists + Jam live in the left rail on desktop */
+  #playlists-modal-btn, #jam-btn { display: none !important; }
+}
+
+.btn-ghost {
+  border-radius: var(--radius-full);
+  padding: 8px 16px;
+}
+@media (min-width: 900px) {
+  /* Sign out + history live in the left rail on desktop; hiding their header
+     copies clears room for the centered search pill. */
+  #logout, #history-modal-btn { display: none !important; }
+  .sidebar-header { display: none; }
+}
+
+.device-section-inline .custom-select-trigger {
+  border-radius: var(--radius-full);
+  background: var(--pill-bg);
+  border-color: transparent;
+  padding: 8px 14px;
+}
+.device-section-inline #refresh {
+  border-radius: var(--radius-full);
+  background: none;
+  border-color: transparent;
+}
+.device-section-inline #refresh:hover { border-color: var(--border); }
+.custom-select-menu {
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  background: #1b1b1b;
+  border-color: #2c2c2c;
+}
+
+/* ============================================================
+   Search bar (the old "Play" card becomes a search pill)
+   ============================================================ */
+
+.play-section,
+main.has-queue .play-section,
+body.results-open .play-section {
+  background: none !important;
+  border: none !important;
+  padding: 0 !important;
+  margin: 10px auto 14px;
+  width: 100%;
+  max-width: 620px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.play-section .section-head {
+  margin: 0;
+  order: 2;
+  flex: none;
+}
+.play-section .label { display: none; }
+.play-section .row {
+  flex: 1;
+  min-width: 0;
+  order: 1;
+  display: flex;
+  gap: 8px;
+}
+
+.search-wrap { position: relative; }
+.search-wrap::before {
+  content: '';
+  position: absolute;
+  left: 16px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 17px;
+  height: 17px;
+  pointer-events: none;
+  opacity: .75;
+  background: center / contain no-repeat
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23aaaaaa' stroke-width='2.2' stroke-linecap='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cline x1='21' y1='21' x2='16.2' y2='16.2'/%3E%3C/svg%3E");
+}
+.search-wrap input#query {
+  border-radius: var(--radius-full);
+  background: var(--pill-bg);
+  border: 1px solid transparent;
+  padding: 12px 42px 12px 44px;
+  font-size: .9rem;
+  transition: background .15s, border-color .15s, box-shadow .15s;
+}
+.search-wrap input#query:hover { background: #222; }
+.search-wrap input#query:focus {
+  background: #232323;
+  border-color: rgba(232, 89, 12, .55);
+  box-shadow: 0 0 0 3px rgba(232, 89, 12, .12);
+}
+
+#play-query {
+  border-radius: var(--radius-full);
+  background: var(--accent-grad);
+  border: none;
+  padding: 10px 22px;
+}
+
+.suggest-list {
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  background: #1b1b1b;
+  border: 1px solid #2c2c2c;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, .6);
+}
+
+.clear-all-btn { border-radius: var(--radius-full); }
+
+/* Wide screens: the search pill floats inside the top bar, dead center */
+@media (min-width: 1100px) {
+  .play-section {
+    position: fixed;
+    top: 3px;
+    left: calc(var(--rail-w) + (100vw - var(--rail-w)) / 2);
+    transform: translateX(-50%);
+    width: clamp(300px, 34vw, 560px);
+    height: var(--topbar-h);
+    margin: 0;
+    z-index: 135;
+  }
+}
+
+/* Mobile shell fixes */
+@media (max-width: 899px) {
+  /* body + main both padded 16px doubled the gutters; keep one */
+  body { padding: 0; }
+  /* Cascade fix: sidebar.css loads after base.css, so its unconditional
+     .hamburger-btn { display:none } was overriding base's mobile
+     display:inline-flex — the menu button never showed. Restore it here. */
+  .hamburger-btn { display: inline-flex; }
+}
+
+/* Sticky search on mobile so it's always one thumb away */
+@media (max-width: 899px) {
+  .play-section {
+    position: sticky;
+    top: 0;
+    z-index: 90;
+    margin: 0 calc(-1 * var(--space-4)) 10px;
+    width: auto;
+    max-width: none;
+    padding: 8px var(--space-4) 10px !important;
+    background: rgba(10, 10, 10, .88) !important;
+    backdrop-filter: blur(16px);
+    -webkit-backdrop-filter: blur(16px);
+  }
+}
+
+/* ============================================================
+   Left rail (desktop) / drawer (mobile)
+   ============================================================ */
+
+.sidebar .sidebar-nav-btn {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 14px;
+  background: none;
+  border: none;
+  color: var(--muted);
+  font-size: .88rem;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+  padding: 11px 12px;
+  border-radius: var(--radius-md);
+  transition: color .15s, background .15s;
+}
+.sidebar .sidebar-nav-btn:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, .06);
+  border: none;
+}
+.sidebar-nav-btn svg {
+  width: 19px;
+  height: 19px;
+  flex: none;
+}
+.sidebar-nav { margin-bottom: 12px; }
+.sidebar-nav .sidebar-nav-btn + .sidebar-nav-btn { margin-top: 2px; }
+.sidebar-tools { margin-bottom: 12px; }
+.sidebar-tools .sidebar-nav-btn + .sidebar-nav-btn { margin-top: 2px; }
+
+.sidebar-signout button { border-radius: var(--radius-md); }
+
+@media (min-width: 900px) {
+  .sidebar {
+    display: flex !important;
+    left: 0;
+    right: auto;
+    top: 3px;
+    width: var(--rail-w);
+    height: auto;
+    bottom: 0;
+    transform: none;
+    background: var(--shell-bg);
+    border-left: none;
+    border-right: 1px solid rgba(255, 255, 255, .06);
+    z-index: 140;
+    padding: 18px 14px;
+    transition: none;
+  }
+  .sidebar-overlay { display: none !important; }
+  .sidebar-close { display: none !important; }
+  .sidebar-header {
+    border-bottom: none;
+    margin-bottom: 14px;
+    padding-bottom: 0;
+  }
+  .sidebar-header h2 {
+    font-size: .68rem;
+    color: var(--muted);
+    letter-spacing: .2em;
+  }
+  /* Device picker lives in the top bar on desktop */
+  .sidebar-section:has(#device-sidebar-wrapper) { display: none; }
+}
+
+/* ============================================================
+   Bottom playbar (.player-section)
+   ============================================================ */
+
+.player-section,
+main.has-queue .player-section,
+body.results-open .player-section {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 220;
+  margin: 0;
+  max-width: none;
+  border: none;
+  border-top: 1px solid rgba(255, 255, 255, .07);
+  border-radius: 0;
+  background: rgba(14, 14, 14, .94);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  box-shadow: 0 -12px 40px rgba(0, 0, 0, .45);
+  display: grid;
+  align-items: center;
+  transform: translateY(24px);
+}
+.player-section.is-visible { transform: none; }
+.player-section.is-collapsed { display: none; }
+
+/* Now-playing cluster */
+.player-section .np {
+  border-bottom: none;
+  margin: 0;
+  padding: 0;
+  gap: 12px;
+  min-width: 0;
+}
+.player-section .np-art {
+  width: 52px;
+  height: 52px;
+  border-radius: var(--radius-md);
+  border: none;
+  background-color: #1e1e1e;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, .5);
+  overflow: hidden;
+}
+.player-section .np-title { font-size: .88rem; }
+.player-section .np-like-btn,
+.player-section .np-shuffle-btn,
+.player-section .np-ytm-btn {
+  border: none;
+  width: 34px;
+  height: 34px;
+}
+.player-section .np-like-btn:hover,
+.player-section .np-shuffle-btn:hover { background: rgba(255, 255, 255, .07); }
+.player-section .np-like-btn.liked,
+.player-section .np-shuffle-btn.shuffle-active { background: rgba(232, 89, 12, .14); }
+
+/* Transport */
+.player-section .transport {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+}
+.player-section .transport button {
+  width: 38px;
+  height: 38px;
+  padding: 0;
+  border: none;
+  background: none;
+  border-radius: var(--radius-full);
+  color: #cfcfcf;
+}
+.player-section .transport button:hover {
+  color: #fff;
+  background: rgba(255, 255, 255, .08);
+}
+.player-section .transport button svg { width: 18px; height: 18px; }
+.player-section .pp-btn,
+.player-section .pp-btn:hover {
+  width: 46px;
+  height: 46px;
+  background: var(--accent-grad);
+  color: #fff;
+  box-shadow: 0 4px 18px rgba(232, 89, 12, .35);
+}
+.player-section .pp-btn:hover { filter: brightness(1.08); }
+.player-section .pp-btn svg { width: 20px; height: 20px; }
+
+/* Progress */
+.player-section .progress { margin: 0; }
+.player-section .progress-track {
+  border-radius: var(--radius-full);
+  box-shadow: none;
+  background-color: rgba(255, 255, 255, .12);
+}
+.player-section .progress-fill {
+  background: var(--accent-grad);
+  border-radius: var(--radius-full);
+}
+.player-section .progress-times { margin-top: 2px; }
+
+/* Volume */
+.player-section .vol {
+  border-top: none;
+  margin: 0;
+  padding: 0;
+  gap: 10px;
+}
+input[type=range] { border-radius: var(--radius-full); }
+input[type=range]::-webkit-slider-thumb { border-radius: 50%; }
+input[type=range]::-moz-range-thumb { border-radius: 50%; }
+
+/* Desktop playbar: np | transport+progress | volume */
+@media (min-width: 900px) {
+  .player-section,
+  main.has-queue .player-section,
+  body.results-open .player-section {
+    grid-template-columns: minmax(220px, 26%) minmax(0, 1fr) minmax(160px, 26%);
+    grid-template-rows: auto auto;
+    grid-template-areas:
+      "np transport vol"
+      "np progress  vol";
+    gap: 4px 28px;
+    min-height: var(--playbar-h);
+    padding: 10px 24px calc(10px + env(safe-area-inset-bottom, 0px));
+  }
+  .player-section .np { grid-area: np; }
+  .player-section .transport { grid-area: transport; }
+  .player-section .progress {
+    grid-area: progress;
+    width: 100%;
+    max-width: 640px;
+    justify-self: center;
+  }
+  .player-section .vol {
+    grid-area: vol;
+    justify-self: end;
+    width: 100%;
+    max-width: 210px;
+  }
+  .player-section .transport-actions { display: none; }
+}
+
+/* Mobile playbar: floating compact card; tap the track info to open the
+   full-screen player sheet (wired in sidebar.js). */
+@media (max-width: 899px) {
+  .player-section,
+  main.has-queue .player-section {
+    left: 8px;
+    right: 8px;
+    bottom: calc(8px + env(safe-area-inset-bottom, 0px));
+    border: 1px solid rgba(255, 255, 255, .08);
+    border-radius: var(--radius-xl);
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      "np       transport"
+      "progress progress";
+    gap: 6px 8px;
+    padding: 10px 12px;
+  }
+  .player-section .np { cursor: pointer; }
+  .player-section .np { grid-area: np; }
+  .player-section .np-art { width: 44px; height: 44px; }
+  .player-section .np-shuffle-btn,
+  .player-section .np-ytm-btn { display: none !important; }
+  .player-section .transport { grid-area: transport; gap: 2px; }
+  .player-section .transport button { width: 38px; height: 38px; }
+  .player-section .pp-btn, .player-section .pp-btn:hover { width: 42px; height: 42px; }
+  .player-section .progress { grid-area: progress; }
+  .player-section .progress-times { display: none; }
+  .player-section .progress-track {
+    padding: 4px 0;
+    height: 3px;
+  }
+  .player-section .vol,
+  .player-section .transport-actions { display: none; }
+}
+@media (max-width: 420px) {
+  .player-section .transport button[data-action="previous"] { display: none; }
+}
+
+/* ============================================================
+   Home feed
+   ============================================================ */
+
+.home-greeting {
+  font-size: 1.7rem;
+  font-weight: 800;
+  letter-spacing: -.02em;
+  padding: 6px var(--space-4) 2px;
+}
+.home-greeting[hidden] { display: none; }
+@media (min-width: 900px) {
+  .home-greeting {
+    font-size: 2rem;
+    padding: 10px 40px 0;
+  }
+}
+
+.home-row-label {
+  text-transform: none;
+  font-size: 1.15rem;
+  font-weight: 800;
+  letter-spacing: -.01em;
+  color: var(--text);
+}
+.home-row-subtitle { font-size: .72rem; }
+@media (min-width: 900px) {
+  .home-row-label { font-size: 1.3rem; }
+}
+
+.home-card, .home-skeleton-card { flex-basis: 156px; position: relative; }
+@media (min-width: 900px) {
+  .home-card, .home-skeleton-card { flex-basis: 186px; }
+}
+.home-card-art {
+  border-radius: var(--card-radius);
+  position: relative;
+}
+/* Hover play badge */
+.home-card-art::after {
+  content: '';
+  position: absolute;
+  right: 8px;
+  bottom: 8px;
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  background: var(--accent-grad) center / 18px no-repeat
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='white'%3E%3Cpolygon points='8,5 19,12 8,19'/%3E%3C/svg%3E");
+  box-shadow: 0 6px 18px rgba(0, 0, 0, .55);
+  opacity: 0;
+  transform: translateY(6px);
+  transition: opacity .2s ease, transform .2s ease;
+  pointer-events: none;
+}
+@media (hover: hover) {
+  .home-card:hover .home-card-art::after {
+    opacity: 1;
+    transform: none;
+  }
+}
+/* Like button floats over the art's corner */
+.home-card .result-like-btn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  margin: 0;
+  width: 30px;
+  height: 30px;
+  border: none;
+  color: #fff;
+  background: rgba(0, 0, 0, .55);
+  backdrop-filter: blur(4px);
+  border-radius: 50%;
+  opacity: 0;
+  transition: opacity .18s ease;
+  z-index: 2;
+}
+.home-card .result-like-btn.liked {
+  opacity: 1;
+  color: var(--accent);
+}
+@media (hover: hover) {
+  .home-card:hover .result-like-btn { opacity: 1; }
+}
+@media (hover: none) {
+  .home-card .result-like-btn { opacity: 1; }
+}
+
+/* Idle hero */
+.idle-hero-text { color: #3d3d3d; }
+.idle-hero-accent {
+  background: var(--accent-grad);
+  -webkit-background-clip: text;
+  background-clip: text;
+}
+
+/* ============================================================
+   Search results
+   ============================================================ */
+
+#results-section,
+body.results-open #results-section {
+  background: none;
+  border: none;
+  padding: 0 0 24px;
+  margin: 0 auto;
+  width: 100%;
+  max-width: 860px;
+  display: block;
+  overflow: visible;
+  height: auto;
+}
+#results-section .section-head { padding: 0 2px; }
+#results-section .label {
+  font-size: 1.15rem;
+  font-weight: 800;
+  text-transform: none;
+  letter-spacing: -.01em;
+  color: var(--text);
+}
+.results-close { border-radius: var(--radius-full); }
+
+/* Category chips */
+.results-tabs {
+  display: flex;
+  gap: 8px;
+  border-bottom: none !important;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+.results-tab {
+  border-radius: var(--radius-full) !important;
+  border: none !important;
+  background: var(--pill-bg) !important;
+  color: var(--text) !important;
+  padding: 8px 16px !important;
+  font-size: .78rem !important;
+  font-weight: 600 !important;
+  text-transform: none !important;
+  letter-spacing: 0 !important;
+}
+.results-tab:hover { background: #262626 !important; }
+.results-tab.active {
+  background: var(--text) !important;
+  color: #000 !important;
+  font-weight: 700 !important;
+}
+
+.result-item-inner { border-radius: var(--radius-md); }
+.result-thumb, .result-thumb-slot { border-radius: 6px; overflow: hidden; }
+.results-pager button { border-radius: var(--radius-full); }
+
+/* ============================================================
+   Queue: right-side panel on desktop
+   ============================================================ */
+
+@media (min-width: 900px) {
+  #queue-section,
+  main.has-queue #queue-section {
+    position: fixed;
+    top: calc(var(--topbar-h) + 3px + 12px);
+    right: 16px;
+    width: var(--queue-w);
+    margin: 0;
+    z-index: 120;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    background: var(--shell-bg);
+    border: 1px solid rgba(255, 255, 255, .07);
+    border-radius: var(--radius-xl);
+    padding: var(--space-4) 14px;
+    height: auto;
+  }
+  #queue-section > .label {
+    font-size: .95rem;
+    font-weight: 800;
+    text-transform: none;
+    letter-spacing: 0;
+    color: var(--text);
+    padding: 0 6px;
+  }
+  #queue-section .queue-section {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+  }
+}
+
+.queue-item { border-radius: var(--radius-md); }
+.queue-thumb, .queue-thumb-slot { border-radius: 6px; }
+
+/* ============================================================
+   Login
+   ============================================================ */
+
+#login-section {
+  background: var(--shell-bg);
+  border: 1px solid rgba(255, 255, 255, .08);
+  border-radius: var(--radius-xl);
+  max-width: 420px;
+  margin: 10vh auto 0;
+  padding: 28px 26px;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, .5);
+}
+#login-section input { border-radius: var(--radius-md); }
+#login-section .btn-accent {
+  border-radius: var(--radius-full);
+  background: var(--accent-grad);
+  border: none;
+  padding: 12px 20px;
+}
+
+/* ============================================================
+   Modals & misc polish
+   ============================================================ */
+
+.history-modal {
+  border-radius: var(--radius-xl);
+  background: #151515;
+  border-color: rgba(255, 255, 255, .09);
+}
+.confirm-dialog { border-radius: var(--radius-xl); }
+.confirm-actions button { border-radius: var(--radius-full); }
+.btn-accent { border-radius: var(--radius-full); }
+.queue-modal { border-radius: var(--radius-xl) var(--radius-xl) 0 0; }
+.mini-popup { border-radius: var(--radius-xl) var(--radius-xl) 0 0; }
+.mini-popup-transport .pp-btn,
+.mini-popup-transport .pp-btn:hover {
+  background: var(--accent-grad);
+  border: none;
+}
+.mini-popup-transport button { border-radius: var(--radius-full); }
+.mini-popup-progress .progress-fill { background: var(--accent-grad); }
+.mini-popup-progress .progress-track,
+.mini-popup-progress .progress-fill { border-radius: var(--radius-full); }
+.toast { border-radius: var(--radius-lg); }
+/* Toasts float above the fixed playbar instead of underneath it */
+body:has(.player-section.is-visible) .toast {
+  bottom: calc(var(--playbar-h-mobile) + 20px);
+}
+@media (min-width: 900px) {
+  body:has(.player-section.is-visible) .toast {
+    bottom: calc(var(--playbar-h) + 24px);
+  }
+}
+
+/* Buttons across the app pick up soft corners */
+button { border-radius: var(--radius-md); }
+
+/* Thin dark scrollbars */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #333 transparent;
+}
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-thumb {
+  background: #333;
+  border-radius: var(--radius-full);
+}
+::-webkit-scrollbar-track { background: transparent; }
+
+/* Artist page sits centered like the rest of the content */
+#artist-section {
+  background: none;
+  border: none;
+  max-width: 1100px;
+  margin: 0 auto;
+  width: 100%;
+}

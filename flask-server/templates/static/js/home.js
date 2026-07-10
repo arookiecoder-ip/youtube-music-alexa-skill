@@ -71,6 +71,12 @@
     }
     const container = document.getElementById('home-rows');
     if (!container) return;
+    const greet = document.getElementById('home-greeting');
+    if (greet) {
+      const h = new Date().getHours();
+      greet.textContent = h < 5 ? 'Good night' : h < 12 ? 'Good morning' : h < 18 ? 'Good afternoon' : 'Good evening';
+      greet.hidden = false;
+    }
     const rows = Array.isArray(data && data.rows) ? data.rows : [];
     const rowsHtml = rows.map(homeRowHtml).join('');
     container.innerHTML = rowsHtml;
@@ -87,7 +93,8 @@
     if (!state._loggedIn || state._homeLoaded || state._homeLoading) return;
     state._homeLoading = true;
     const section = document.getElementById('home-section');
-    if (section) section.hidden = !(!state._hasTrack && !state._resultsOpen);
+    const artistOpen = (location.hash || '').indexOf('#artist/') === 0;
+    if (section) section.hidden = !!(state._resultsOpen || artistOpen);
     showHomeSkeleton(true);
     try {
       const data = await api('/api/home/?refresh=1');

@@ -41,7 +41,10 @@
   function showArtistSection() {
     var section = document.getElementById('artist-section');
     if (section) {
-      setHidden('.play-section, .player-section, #recs-section, #home-section, #idle-hero, #results-section, #queue-section, #artist-section', true);
+      // Search bar and bottom playbar are persistent shell chrome — they stay
+      // visible on the artist page; only the content views swap out.
+      setHidden('#recs-section, #home-section, #idle-hero, #results-section, #queue-section, #artist-section', true);
+      setHidden('.play-section, .player-section', false);
       section.hidden = false;
     }
   }
