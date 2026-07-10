@@ -3004,6 +3004,77 @@ def alexa_state_event():
 
 
 
+# ---- Home feed (categorized recommendation rows) ----
+_HOME_CACHE_TTL = 3 * 60
+_HOME_FORCE_MIN_INTERVAL = 60
+_home_cache = {'built_at': 0, 'rows': []}
+_home_lock = threading.Lock()
+
+
+def _normalize_home_item(item):
+    video_id = item.get('videoId')
+    if not video_id:
+        return None
+    artists = item.get('artists') or []
+    thumbnails = item.get('thumbnails') or []
+    return {
+        'videoId': str(video_id),
+        'title': str(item.get('title') or ''),
+        'artist': str((artists[0] or {}).get('name') or '') if artists else '',
+        'thumbnail': str((thumbnails[0] or {}).get('url') or '') if thumbnails else '',
+    }
+
+
+async def _build_home():
+    ytmusic = YTMusic()
+    try:
+        raw_rows = await asyncio.to_thread(ytmusic.get_home, limit=5)
+    except TypeError:
+        raw_rows = await asyncio.to_thread(ytmusic.get_home)
+    rows = []
+    for row in raw_rows or []:
+        items = [
+            normalized for normalized in (
+                _normalize_home_item(item)
+                for item in (row.get('contents') or [])
+            )
+            if normalized
+        ]
+        if not items:
+            continue
+        out = {'title': str(row.get('title') or ''), 'items': items}
+        if row.get('subtitle'):
+            out['subtitle'] = str(row.get('subtitle') or '')
+        rows.append(out)
+    return rows
+
+
+@app.route("/api/home/", methods=["GET"])
+def get_home():
+    force = request.args.get('refresh') == '1'
+    with _home_lock:
+        age = time.time() - _home_cache['built_at']
+        fresh_enough = age < _HOME_CACHE_TTL
+        if fresh_enough and _home_cache['rows'] and (
+                not force or age < _HOME_FORCE_MIN_INTERVAL):
+            return jsonify({'rows': _home_cache['rows']})
+        try:
+            rows = asyncio.run(_build_home())
+        except Exception:
+            logger.exception("home feed failed")
+            if _home_cache['rows']:
+                return jsonify({'rows': _home_cache['rows']})
+            return jsonify({
+                'rows': [{
+                    'title': 'Recommended',
+                    'items': _recs_cache.get('items', []),
+                }]
+            })
+        _home_cache['rows'] = rows
+        _home_cache['built_at'] = time.time()
+        return jsonify({'rows': rows})
+
+
 # ---- Blank-state recommendations (web remote) ----
 # Mixes radios seeded from a couple of randomly chosen recent history tracks,
 # shuffled, so the idle screen varies between visits instead of showing the
