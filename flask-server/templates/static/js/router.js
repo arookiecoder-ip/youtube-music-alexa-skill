@@ -8,11 +8,11 @@
   }
 
   function hideAllViews() {
-    setHidden('.play-section, .player-section, #recs-section, #idle-hero, #results-section, #queue-section', true);
+    setHidden('.play-section, .player-section, #recs-section, #home-section, #idle-hero, #results-section, #queue-section', true);
   }
 
   function showHomeViews() {
-    setHidden('.play-section, .player-section, #recs-section, #idle-hero', false);
+    setHidden('.play-section, .player-section, #recs-section, #home-section, #idle-hero', false);
     setHidden('#results-section, #queue-section', true);
   }
 
