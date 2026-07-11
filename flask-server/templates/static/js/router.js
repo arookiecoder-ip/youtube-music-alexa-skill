@@ -20,11 +20,14 @@
     '#home': function() {
       showHomeViews();
     },
-    '#playlist': function() {
-      var overlay = document.getElementById('playlists-modal-overlay');
-      if (overlay) {
-        overlay.classList.add('open');
-      }
+    '#playlists': function() {
+      if (window.openPlaylistsModal) window.openPlaylistsModal(true);
+    },
+    '#history': function() {
+      if (window.openHistoryPage) window.openHistoryPage(true);
+    },
+    '#now-playing': function() {
+      if (window._openMiniPopup) window._openMiniPopup(true);
     },
     '#queue': function() {
       var queueSection = document.getElementById('queue-section');
@@ -51,8 +54,12 @@
 
   window.addEventListener('hashchange', function() {
     var hash = location.hash || '#home';
+    if (hash !== '#now-playing' && window._closeMiniPopup) window._closeMiniPopup();
     if (routes[hash]) {
       routes[hash]();
+    } else if (hash.indexOf('#playlist/') === 0) {
+      var playlistId = decodeURIComponent(hash.slice('#playlist/'.length));
+      if (playlistId && window.openPlaylistDetailModal) window.openPlaylistDetailModal(playlistId, true);
     } else if (hash.indexOf('#artist/') === 0) {
       var channelId = decodeURIComponent(hash.slice('#artist/'.length));
       if (!channelId) { location.hash = '#home'; return; }

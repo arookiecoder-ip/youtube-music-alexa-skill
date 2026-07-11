@@ -344,7 +344,11 @@ body.results-open .play-section {
   }
   /* Text-only chrome has no icon form — hide it in the mini rail */
   body.rail-collapsed .sidebar-signout,
-  body.rail-collapsed .sidebar-footer { display: none; }
+  body.rail-collapsed .sidebar-footer,
+  body.rail-collapsed .sidebar-library,
+  body.rail-collapsed .sidebar-brand-mark,
+  body.rail-collapsed .sidebar-brand strong { display: none; }
+  body.rail-collapsed .sidebar-brand { justify-content: center; }
   /* Smooth open/close */
   main,
   main.idle,
@@ -406,6 +410,101 @@ body.results-open .play-section {
 
 .sidebar-signout button { border-radius: var(--radius-md); }
 
+.sidebar-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 42px;
+  margin-bottom: 14px;
+  padding: 0 4px;
+  color: var(--text);
+}
+.sidebar-brand strong {
+  font-size: .9rem;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.sidebar-rail-toggle {
+  width: 38px;
+  height: 38px;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 50% !important;
+  background: transparent !important;
+  color: var(--text) !important;
+}
+.sidebar-rail-toggle:hover { background: rgba(255,255,255,.09) !important; }
+.sidebar-rail-toggle svg { width: 21px; height: 21px; }
+.sidebar-brand-mark {
+  display: flex;
+  align-items: end;
+  gap: 2px;
+  height: 17px;
+}
+.sidebar-brand-mark span { width: 3px; border-radius: 2px; background: var(--primary); }
+.sidebar-brand-mark span:nth-child(1) { height: 7px; }
+.sidebar-brand-mark span:nth-child(2) { height: 13px; }
+.sidebar-brand-mark span:nth-child(3) { height: 10px; }
+.sidebar-brand-mark span:nth-child(4) { height: 16px; }
+
+.sidebar-library {
+  min-height: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  border-top: 1px solid rgba(255,255,255,.08);
+  padding-top: 18px;
+  overflow: hidden;
+}
+.sidebar-new-playlist {
+  width: 100%;
+  min-height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  margin-bottom: 12px;
+  padding: 8px 14px !important;
+  border: 0 !important;
+  border-radius: 999px !important;
+  background: rgba(255,255,255,.09) !important;
+  color: var(--text) !important;
+  font-weight: 700;
+}
+.sidebar-new-playlist:hover { background: rgba(255,255,255,.14) !important; }
+.sidebar-new-playlist svg { width: 21px; height: 21px; }
+.sidebar-playlist-list {
+  overflow-y: auto;
+  min-height: 0;
+  padding-right: 4px;
+  scrollbar-width: thin;
+}
+.sidebar-playlist-item {
+  display: block;
+  width: 100%;
+  padding: 8px 10px !important;
+  border: 0 !important;
+  border-radius: 8px !important;
+  background: transparent !important;
+  text-align: left;
+  color: var(--text) !important;
+}
+.sidebar-playlist-item:hover { background: rgba(255,255,255,.07) !important; }
+.sidebar-playlist-item strong,
+.sidebar-playlist-item span {
+  display: block;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.sidebar-playlist-item strong { font-size: .79rem; line-height: 1.3; }
+.sidebar-playlist-item span { margin-top: 2px; color: var(--muted); font-size: .68rem; }
+
 @media (min-width: 900px) {
   .sidebar {
     display: flex !important;
@@ -420,7 +519,7 @@ body.results-open .play-section {
     border-left: none;
     border-right: 1px solid rgba(255, 255, 255, .06);
     z-index: 140;
-    padding: 18px 14px;
+    padding: 10px 14px 16px;
     /* The mobile drawer's transform transition doesn't apply here; the rail
        animates its width when toggling the mini guide. */
     transition: width .25s ease;
@@ -429,9 +528,7 @@ body.results-open .play-section {
   .sidebar-overlay { display: none !important; }
   .sidebar-close { display: none !important; }
   .sidebar-header {
-    border-bottom: none;
-    margin-bottom: 14px;
-    padding-bottom: 0;
+    display: none;
   }
   .sidebar-header h2 {
     font-size: .68rem;
@@ -440,6 +537,15 @@ body.results-open .play-section {
   }
   /* Device picker lives in the top bar on desktop */
   .sidebar-section:has(#device-sidebar-wrapper) { display: none; }
+  header .rail-toggle-btn { visibility: hidden; pointer-events: none; }
+  .sidebar-tools #refresh-page-btn { display: none; }
+  .sidebar-signout { padding-top: 12px; }
+}
+
+@media (max-width: 899px) {
+  .sidebar-brand { display: none; }
+  .sidebar-library { overflow: visible; flex: none; }
+  .sidebar-playlist-list { max-height: 34vh; }
 }
 
 /* ============================================================
@@ -689,20 +795,96 @@ input[type=range]::-moz-range-thumb { border-radius: 50%; }
 }
 .player-section .player-expand-btn svg { width: 19px; height: 19px; }
 
-/* Expanded now-playing sheet: keep the bottom-sheet feel on mobile, but on
-   desktop it floats as a centered card instead of a full-width sheet. */
+/* Expanded now-playing: a routed desktop page inspired by YT Music. Mobile
+   keeps the compact draggable sheet from player.css. */
 @media (min-width: 900px) {
-  /* base.css blanket-hides the sheet on desktop; the redesign uses it as the
-     expanded player everywhere. Open/closed is still driven by the overlay's
-     visibility/opacity, so restoring display is safe. */
-  .mini-popup-overlay { display: flex !important; align-items: center; }
+  .mini-popup-overlay {
+    display: flex !important;
+    left: var(--rail-w);
+    top: calc(var(--topbar-h) + 3px);
+    right: 0;
+    bottom: var(--playbar-h);
+    align-items: stretch;
+    background: var(--bg, #0a0a0a);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    z-index: 210;
+    transition: left .25s ease, opacity .25s ease, visibility .25s ease;
+  }
   .mini-popup {
-    width: min(440px, 92vw);
-    max-height: 86dvh;
-    border: 1px solid rgba(255, 255, 255, .09);
-    border-radius: var(--radius-xl);
+    width: 100%;
+    height: 100%;
+    max-height: none;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+    transform: none;
   }
   .mini-popup-drag { display: none; }
+  .mini-popup-header {
+    width: min(1180px, 100%);
+    margin: 0 auto;
+    padding: 18px 32px 10px;
+    border: 0;
+    box-sizing: border-box;
+  }
+  .mini-popup-header h3 {
+    font-size: 1.25rem;
+    letter-spacing: -.01em;
+    text-transform: none;
+  }
+  .mini-popup-close { display: none; }
+  .mini-popup-queue-btn {
+    min-width: 100px;
+    justify-content: center;
+    border-radius: 999px;
+    background: rgba(255,255,255,.08);
+  }
+  .mini-popup-body {
+    width: min(1180px, 100%);
+    height: calc(100% - 70px);
+    margin: 0 auto;
+    padding: 18px 32px 32px;
+    display: grid;
+    grid-template-columns: minmax(360px, 1.25fr) minmax(320px, .85fr);
+    grid-template-rows: auto auto auto 1fr;
+    column-gap: clamp(48px, 7vw, 110px);
+    align-content: center;
+    box-sizing: border-box;
+  }
+  .mini-popup-np {
+    grid-column: 1;
+    grid-row: 1 / 5;
+    display: grid;
+    grid-template-columns: 1fr auto;
+    align-content: center;
+    gap: 18px 14px;
+    padding: 0;
+    border: 0;
+  }
+  .mini-popup-np .np-art {
+    grid-column: 1 / 3;
+    width: min(100%, 560px);
+    aspect-ratio: 1;
+    height: auto;
+    justify-self: center;
+    border: 0;
+    border-radius: 3px;
+    background-size: cover;
+    box-shadow: 0 20px 70px rgba(0,0,0,.45);
+  }
+  .mini-popup-np .np-info { align-self: center; }
+  .mini-popup-np .np-title { font-size: 1rem; }
+  .mini-popup-np .np-artist { font-size: .82rem; margin-top: 5px; }
+  .mini-popup-np-actions { align-self: center; }
+  .mini-popup-progress,
+  .mini-popup-transport,
+  .mini-popup-vol { grid-column: 2; }
+  .mini-popup-progress { margin: 0 0 18px; }
+  .mini-popup-transport { gap: 12px; }
+  .mini-popup-transport button { height: 54px; }
+  .mini-popup-vol { margin-top: 18px; }
 }
 
 /* ============================================================
@@ -1021,7 +1203,8 @@ button { border-radius: var(--radius-md); }
 
 @media (min-width: 900px) {
   #playlists-modal-overlay,
-  #playlist-detail-modal-overlay {
+  #playlist-detail-modal-overlay,
+  #history-modal-overlay {
     left: var(--rail-w);
     top: calc(var(--topbar-h) + 3px);
     right: 0;
@@ -1037,11 +1220,13 @@ button { border-radius: var(--radius-md); }
   /* While a playlist view is open it owns the scroll: freeze the page
      behind it so the wheel never scrolls the background view first. */
   body:has(#playlists-modal-overlay.open),
-  body:has(#playlist-detail-modal-overlay.open) {
+  body:has(#playlist-detail-modal-overlay.open),
+  body:has(#history-modal-overlay.open) {
     overflow: hidden;
   }
   #playlists-modal .history-modal-body,
-  #playlist-detail-modal .history-modal-body {
+  #playlist-detail-modal .history-modal-body,
+  #history-modal .history-modal-body {
     overscroll-behavior: contain;
   }
   /* Stop above the playbar only when the playbar is REALLY on screen.
@@ -1049,12 +1234,14 @@ button { border-radius: var(--radius-md); }
      exposed while the playbar was hidden (it can carry .is-visible
      together with [hidden]/.is-collapsed during transitions). */
   body:has(.player-section.is-visible:not(.is-collapsed):not([hidden])) #playlists-modal-overlay,
-  body:has(.player-section.is-visible:not(.is-collapsed):not([hidden])) #playlist-detail-modal-overlay {
+  body:has(.player-section.is-visible:not(.is-collapsed):not([hidden])) #playlist-detail-modal-overlay,
+  body:has(.player-section.is-visible:not(.is-collapsed):not([hidden])) #history-modal-overlay {
     bottom: var(--playbar-h);
   }
   #playlists-modal,
-  #playlist-detail-modal {
-    width: min(920px, 100%);
+  #playlist-detail-modal,
+  #history-modal {
+    width: 100%;
     max-width: none;
     height: 100%;
     max-height: none;
@@ -1065,16 +1252,36 @@ button { border-radius: var(--radius-md); }
     box-shadow: none;
   }
   #playlists-modal .history-modal-header,
-  #playlist-detail-modal .history-modal-header {
+  #playlist-detail-modal .history-modal-header,
+  #history-modal .history-modal-header {
     border-bottom: none;
-    padding-top: 18px;
+    width: min(1100px, 100%);
+    margin: 0 auto;
+    padding: 18px 32px;
+    box-sizing: border-box;
+  }
+  #playlists-modal .history-modal-body,
+  #playlist-detail-modal .history-modal-body,
+  #history-modal .history-modal-body {
+    width: min(1100px, 100%);
+    margin: 0 auto;
+    padding-left: 32px;
+    padding-right: 32px;
   }
   #playlists-modal .history-modal-header h3,
-  #playlist-detail-modal .history-modal-header h3 {
+  #playlist-detail-modal .history-modal-header h3,
+  #history-modal .history-modal-header h3 {
     text-transform: none;
     letter-spacing: -.01em;
     font-size: 1.3rem;
     font-weight: 800;
+  }
+  /* These are routed desktop pages, so they do not need modal close icons.
+     Keep the playlist-detail back arrow for navigating to the list. */
+  #playlists-modal-close,
+  #playlist-detail-close,
+  #history-modal-close {
+    display: none;
   }
 }
 
@@ -1106,3 +1313,103 @@ button { border-radius: var(--radius-md); }
 .player-section .transport button svg { width: 16px; height: 16px; }
 .player-section .pp-btn svg { width: 18px; height: 18px; }
 .player-section .vol input[type=range] { flex: 1; }
+
+/* YouTube Music-style persistent desktop playbar: transport at left, track
+   identity in the middle, and utility controls at right. */
+@media (min-width: 900px) {
+  .player-section,
+  main.has-queue .player-section,
+  body.results-open .player-section {
+    min-height: 72px;
+    padding: 5px 16px 4px;
+    grid-template-columns: 205px minmax(320px, 1fr) auto auto;
+    grid-template-areas: "transport np actions volume";
+    gap: 18px;
+    background: #202020;
+  }
+  .player-section .transport {
+    grid-area: transport;
+    justify-self: start;
+    gap: 8px;
+  }
+  .player-section .transport button,
+  .player-section .transport button[data-action="previous"] {
+    display: inline-flex;
+    width: 40px;
+    height: 40px;
+    color: #fff;
+  }
+  .player-section .transport button svg { width: 22px; height: 22px; }
+  .player-section .pp-btn,
+  .player-section .pp-btn:hover {
+    width: 52px;
+    height: 52px;
+    background: #4d4d4d;
+    border: 0;
+    color: #fff;
+  }
+  .player-section .pp-btn:hover { background: #5a5a5a; }
+  .player-section .pp-btn svg { width: 27px; height: 27px; }
+
+  .player-section .np {
+    grid-area: np;
+    justify-self: center;
+    width: min(560px, 100%);
+    gap: 13px;
+  }
+  .player-section .np-art {
+    width: 48px;
+    height: 48px;
+    border: 0;
+  }
+  .player-section .np-title { font-size: .92rem; color: #fff; }
+  .player-section .np-artist { font-size: .78rem; color: #aaa; }
+  .player-section .np-like-btn,
+  .player-section .np-shuffle-btn {
+    display: inline-flex;
+    width: 38px;
+    height: 38px;
+    border: 0;
+    background: transparent;
+    color: #eee;
+  }
+  .player-section .np-like-btn svg,
+  .player-section .np-shuffle-btn svg { width: 22px; height: 22px; }
+  .player-section .np-like-btn:hover,
+  .player-section .np-shuffle-btn:hover { background: rgba(255,255,255,.08); }
+
+  .player-section .player-actions {
+    grid-area: actions;
+    justify-self: end;
+    gap: 4px;
+  }
+  .player-section .np-ytm-btn,
+  .player-section .player-expand-btn {
+    width: 40px;
+    height: 40px;
+    border: 0;
+    color: #eee;
+  }
+  .player-section .np-ytm-btn svg,
+  .player-section .player-expand-btn svg { width: 22px; height: 22px; }
+
+  .player-section .vol {
+    display: flex;
+    grid-area: volume;
+    gap: 8px;
+    min-width: 154px;
+    color: #aaa;
+  }
+  .player-section .vol > svg { width: 23px; height: 23px; }
+  .player-section .queue-toggle-btn {
+    width: 40px;
+    height: 40px;
+    border: 0;
+    color: #eee;
+  }
+  .player-section .queue-toggle-btn svg { width: 22px; height: 22px; }
+  .player-section .vol input[type=range] { width: 72px; }
+  .player-section .progress-track,
+  .player-section .progress:hover .progress-track { height: 3px; }
+  .player-section .progress-fill { background: #ff0033; }
+}

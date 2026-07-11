@@ -130,6 +130,13 @@
   <!-- Mobile sidebar -->
   <div class="sidebar-overlay" id="sidebar-overlay"></div>
   <div class="sidebar" id="sidebar">
+    <div class="sidebar-brand">
+      <button class="sidebar-rail-toggle" id="sidebar-rail-toggle" title="Toggle sidebar" aria-label="Toggle sidebar">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+      </button>
+      <div class="sidebar-brand-mark"><span></span><span></span><span></span><span></span></div>
+      <strong>Music Box</strong>
+    </div>
     <div class="sidebar-header">
       <h2>Menu</h2>
       <button class="sidebar-close" id="sidebar-close" title="Close">
@@ -204,6 +211,13 @@
         </svg>
         <span class="nav-label">Refresh Page</span>
       </button>
+    </div>
+    <div class="sidebar-library jam-owner-only">
+      <button class="sidebar-new-playlist needs-login" id="sidebar-new-playlist-btn" hidden>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        <span>New playlist</span>
+      </button>
+      <div class="sidebar-playlist-list" id="sidebar-playlist-list"></div>
     </div>
     <div class="sidebar-signout">
       <button id="logout-sidebar">Sign Out</button>
@@ -549,12 +563,6 @@
           </svg>
           Clear
         </button>
-        <button class="history-modal-close" id="history-modal-close" title="Close">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-            <line x1="18" y1="6" x2="6" y2="18"/>
-            <line x1="6" y1="6" x2="18" y2="18"/>
-          </svg>
-        </button>
       </div>
     </div>
     <div class="history-modal-body" id="history-modal-body">
@@ -594,12 +602,6 @@
           </svg>
           Import
         </button>
-        <button class="history-modal-close" id="playlists-modal-close" title="Close">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-            <line x1="18" y1="6" x2="6" y2="18"/>
-            <line x1="6" y1="6" x2="18" y2="18"/>
-          </svg>
-        </button>
       </div>
     </div>
     <div class="history-modal-body" id="playlists-modal-body">
@@ -632,12 +634,6 @@
           <div class="queue-menu-option" id="playlist-detail-rename-opt">Rename playlist</div>
           <div class="queue-menu-option danger" id="playlist-detail-delete-opt">Delete playlist</div>
         </div>
-        <button class="history-modal-close" id="playlist-detail-close" title="Close">
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-            <line x1="18" y1="6" x2="6" y2="18"/>
-            <line x1="6" y1="6" x2="18" y2="18"/>
-          </svg>
-        </button>
       </div>
     </div>
     <div style="padding: 0 20px; display: flex; gap: 8px; margin-top: 12px;">

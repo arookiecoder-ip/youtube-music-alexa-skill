@@ -546,7 +546,11 @@ function syncModalScrollLock() {
   const mpVolume = document.getElementById('mp-volume');
   let _miniPopupOpen = false;
 
-  function openMiniPopup() {
+  function openMiniPopup(fromRoute) {
+    if (!fromRoute && window.matchMedia('(min-width: 900px)').matches) {
+      location.hash = '#now-playing';
+      return;
+    }
     if (_miniPopupOpen) return;
     _miniPopupOpen = true;
     // Sync volume from main slider
@@ -563,6 +567,7 @@ function syncModalScrollLock() {
     _miniPopupOpen = false;
     overlay.classList.remove('open');
     syncModalScrollLock();
+    if (location.hash === '#now-playing') location.hash = '#home';
   }
 
   // Tap on mini player: play/pause button stays functional, everything else opens popup
@@ -702,6 +707,7 @@ function syncModalScrollLock() {
   // Expose for external use
   window._openMiniPopup = openMiniPopup;
   window._closeMiniPopup = closeMiniPopup;
+  if (location.hash === '#now-playing') openMiniPopup(true);
 })();
 
 

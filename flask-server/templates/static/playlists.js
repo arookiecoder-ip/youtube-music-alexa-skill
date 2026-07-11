@@ -125,6 +125,7 @@ async function loadPlaylists() {
       for (const [id, pl] of Object.entries(data.playlists)) {
         _plCache.set(id, pl);
       }
+      renderSidebarPlaylists();
     }
   } catch (e) {
     console.error("Failed to load playlists", e);
@@ -213,7 +214,11 @@ function renderPlaylists() {
   body.innerHTML = html;
 }
 
-async function openPlaylistsModal() {
+async function openPlaylistsModal(fromRoute) {
+  if (!fromRoute && window.matchMedia('(min-width: 900px)').matches) {
+    location.hash = '#playlists';
+    return;
+  }
   const overlay = document.getElementById('playlists-modal-overlay');
   overlay.classList.add('open');
   const body = document.getElementById('playlists-modal-body');
@@ -226,11 +231,16 @@ async function openPlaylistsModal() {
 
 function closePlaylistsModal() {
   document.getElementById('playlists-modal-overlay').classList.remove('open');
+  if (location.hash === '#playlists') location.hash = '#home';
 }
 
 let _currentPlaylistDetailId = null;
 
-async function openPlaylistDetailModal(pl_id) {
+async function openPlaylistDetailModal(pl_id, fromRoute) {
+  if (!fromRoute && window.matchMedia('(min-width: 900px)').matches) {
+    location.hash = '#playlist/' + encodeURIComponent(pl_id);
+    return;
+  }
   // Phase 12: Performance marker for profiling playlist detail render time
   if (window.performance && performance.mark) {
     performance.mark('playlist-detail-start');
@@ -568,6 +578,24 @@ function _closePlaylistDetailMoreMenu() {
 function closePlaylistDetailModal() {
   document.getElementById('playlist-detail-modal-overlay').classList.remove('open');
   _closePlaylistDetailMoreMenu();
+  if (location.hash.indexOf('#playlist/') === 0) location.hash = '#playlists';
+}
+
+function renderSidebarPlaylists() {
+  const container = document.getElementById('sidebar-playlist-list');
+  if (!container) return;
+  const lists = getPlaylistsList();
+  container.innerHTML = lists.map(pl => `
+    <button class="sidebar-playlist-item" type="button" data-playlist-id="${escHtml(pl.id)}" title="${escHtml(pl.name)}">
+      <strong>${escHtml(pl.name)}</strong>
+      <span>${(pl.tracks || []).length} ${(pl.tracks || []).length === 1 ? 'song' : 'songs'}</span>
+    </button>`).join('');
+  container.querySelectorAll('.sidebar-playlist-item').forEach(btn => {
+    btn.addEventListener('click', () => {
+      if (window._closeSidebar) window._closeSidebar();
+      openPlaylistDetailModal(btn.dataset.playlistId);
+    });
+  });
 }
 
 document.getElementById('playlist-detail-more-btn').addEventListener('click', (e) => {
@@ -1270,6 +1298,8 @@ document.addEventListener('DOMContentLoaded', () => {
   
   const newPlBtn = document.getElementById('new-playlist-btn');
   if (newPlBtn) newPlBtn.addEventListener('click', createNewPlaylist);
+  const sidebarNewPlBtn = document.getElementById('sidebar-new-playlist-btn');
+  if (sidebarNewPlBtn) sidebarNewPlBtn.addEventListener('click', createNewPlaylist);
 
   // Close modals when clicking outside on the overlay
   const plOverlay = document.getElementById('playlists-modal-overlay');
@@ -1284,3 +1314,11 @@ document.addEventListener('DOMContentLoaded', () => {
   const importOverlayEl = document.getElementById('import-playlist-overlay');
   if (importOverlayEl) importOverlayEl.addEventListener('click', (e) => { if (e.target === importOverlayEl) importOverlayEl.classList.remove('open'); });
 });
+
+window.openPlaylistsModal = openPlaylistsModal;
+window.openPlaylistDetailModal = openPlaylistDetailModal;
+if (location.hash === '#playlists') {
+  openPlaylistsModal(true);
+} else if (location.hash.indexOf('#playlist/') === 0) {
+  openPlaylistDetailModal(decodeURIComponent(location.hash.slice('#playlist/'.length)), true);
+}

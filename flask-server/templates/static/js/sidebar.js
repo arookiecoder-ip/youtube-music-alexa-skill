@@ -117,8 +117,7 @@
 
   if (navHistory) navHistory.addEventListener('click', () => {
     if (window._closeSidebar) window._closeSidebar();
-    const headerBtn = document.getElementById('history-modal-btn');
-    if (headerBtn) headerBtn.click();
+    location.hash = '#history';
   });
 })();
 
@@ -127,12 +126,13 @@
    same button opens the drawer, replacing the old right-side hamburger. ---- */
 (function () {
   const btn = document.getElementById('rail-toggle-btn');
-  if (!btn) return;
+  const sidebarBtn = document.getElementById('sidebar-rail-toggle');
+  if (!btn && !sidebarBtn) return;
   const KEY = 'railCollapsed';
   try {
     if (localStorage.getItem(KEY) === '1') document.body.classList.add('rail-collapsed');
   } catch (_) {}
-  btn.addEventListener('click', () => {
+  function toggleRail() {
     if (window.matchMedia('(max-width: 899px)').matches) {
       // Mobile: the rail is a drawer — open it.
       const hamburger = document.getElementById('hamburger-btn');
@@ -141,7 +141,9 @@
     }
     const collapsed = document.body.classList.toggle('rail-collapsed');
     try { localStorage.setItem(KEY, collapsed ? '1' : '0'); } catch (_) {}
-  });
+  }
+  if (btn) btn.addEventListener('click', toggleRail);
+  if (sidebarBtn) sidebarBtn.addEventListener('click', toggleRail);
 })();
 
 

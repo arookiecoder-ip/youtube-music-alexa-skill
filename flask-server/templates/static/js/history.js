@@ -175,7 +175,11 @@ function clearHistory() {
   const closeBtn = document.getElementById('history-modal-close');
   const openBtn = document.getElementById('history-modal-btn');
 
-  function openHistoryModal() {
+  function openHistoryModal(fromRoute) {
+    if (!fromRoute && window.matchMedia('(min-width: 900px)').matches) {
+      location.hash = '#history';
+      return;
+    }
     // Render immediately from the pre-fetched cache — no fetch-on-click wait.
     renderHistoryModalList(state._historyCache);
     overlay.classList.add('open');
@@ -183,13 +187,16 @@ function clearHistory() {
 
   function closeHistoryModal() {
     overlay.classList.remove('open');
+    if (location.hash === '#history') location.hash = '#home';
   }
 
   openBtn.addEventListener('click', openHistoryModal);
-  closeBtn.addEventListener('click', closeHistoryModal);
+  if (closeBtn) closeBtn.addEventListener('click', closeHistoryModal);
   overlay.addEventListener('click', (e) => { if (e.target === overlay) closeHistoryModal(); });
 
   window._closeHistoryModal = closeHistoryModal;
+  window.openHistoryPage = openHistoryModal;
+  if (location.hash === '#history') openHistoryModal(true);
 })();
 
 (function () {
