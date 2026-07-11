@@ -290,11 +290,6 @@
           <line x1="4" y1="4" x2="9" y2="9"/>
         </svg>
       </button>
-      <a class="np-ytm-btn" id="np-url-toggle" href="#" target="_blank" rel="noopener" title="Open on YouTube Music" style="display:none">
-        <svg viewBox="0 0 24 24" fill="currentColor">
-          <path d="M12 0C5.376 0 0 5.376 0 12s5.376 12 12 12 12-5.376 12-12S18.624 0 12 0zm0 21.6c-5.292 0-9.6-4.308-9.6-9.6S6.708 2.4 12 2.4s9.6 4.308 9.6 9.6-4.308 9.6-9.6 9.6zM9.6 16.8l7.2-4.8-7.2-4.8v9.6z"/>
-        </svg>
-      </a>
     </div>
 
     <!-- Progress bar. Ticks locally; drag the handle to seek (fires on release). -->
@@ -331,6 +326,20 @@
         <svg viewBox="0 0 24 24" fill="currentColor">
           <polygon points="4,5 14,12 4,19"/>
           <rect x="17.5" y="5" width="2.5" height="14"/>
+        </svg>
+      </button>
+    </div>
+
+    <!-- Compact-bar right cluster: YT Music link + expand toggle -->
+    <div class="player-actions">
+      <a class="np-ytm-btn" id="np-url-toggle" href="#" target="_blank" rel="noopener" title="Open on YouTube Music" style="display:none">
+        <svg viewBox="0 0 24 24" fill="currentColor">
+          <path d="M12 0C5.376 0 0 5.376 0 12s5.376 12 12 12 12-5.376 12-12S18.624 0 12 0zm0 21.6c-5.292 0-9.6-4.308-9.6-9.6S6.708 2.4 12 2.4s9.6 4.308 9.6 9.6-4.308 9.6-9.6 9.6zM9.6 16.8l7.2-4.8-7.2-4.8v9.6z"/>
+        </svg>
+      </a>
+      <button class="player-expand-btn" id="player-expand-btn" title="Expand player">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="6 15 12 9 18 15"/>
         </svg>
       </button>
     </div>

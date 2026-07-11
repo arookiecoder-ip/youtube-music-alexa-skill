@@ -1083,6 +1083,63 @@ function scheduleHistoryRefresh() {
   syncBtn();
 })();
 
+/* ---- Queue bottom-sheet (mobile) ---- */
+// Renders into #queue-modal-body reusing the panel's row builder. Opened from
+// the expanded now-playing sheet; sse.js calls _renderQueueModal to keep it
+// fresh while open.
+(function () {
+  const overlay = document.getElementById('queue-modal-overlay');
+  const body = document.getElementById('queue-modal-body');
+  if (!overlay || !body) return;
+
+  function _queueSnapshot() {
+    // SSE writes window._lastQueueJson; optimistic edits write the appState
+    // copy. Prefer whichever is non-empty, matching what the user last saw.
+    try { return JSON.parse(window._lastQueueJson || state._lastQueueJson || '[]'); }
+    catch (_) { return []; }
+  }
+
+  function renderQueueModal() {
+    const queue = _queueSnapshot();
+    const idx = (typeof window._lastQueueIndex === 'number' && window._lastQueueIndex >= 0)
+      ? window._lastQueueIndex : state._lastQueueIndex;
+    if (!queue.length) {
+      const empty = document.createElement('div');
+      empty.className = 'queue-modal-empty';
+      empty.textContent = 'No songs in queue';
+      body.replaceChildren(empty);
+      return;
+    }
+    const limit = Math.min(queue.length, Math.max(QUEUE_RENDER_CHUNK, idx + 11));
+    body._lazyQueue = { queue, currentIndex: idx };
+    const rows = [];
+    for (let i = 0; i < limit; i++) rows.push(_buildQueueRow(body, queue[i], i, idx, new Map()));
+    body.replaceChildren(...rows);
+    _syncQueueSentinel(body);
+  }
+
+  function openQueueModal() {
+    renderQueueModal();
+    overlay.classList.add('open');
+    if (window.syncModalScrollLock) syncModalScrollLock();
+  }
+
+  function closeQueueModal() {
+    overlay.classList.remove('open');
+    if (window.syncModalScrollLock) syncModalScrollLock();
+  }
+
+  const closeBtn = document.getElementById('queue-modal-close');
+  if (closeBtn) closeBtn.addEventListener('click', closeQueueModal);
+  overlay.addEventListener('click', (e) => { if (e.target === overlay) closeQueueModal(); });
+  const openBtn = document.getElementById('queue-modal-btn');
+  if (openBtn) openBtn.addEventListener('click', openQueueModal);
+
+  window._renderQueueModal = renderQueueModal;
+  window._openQueueModal = openQueueModal;
+  window._closeQueueModal = closeQueueModal;
+})();
+
   window.addToQueue = addToQueue;
   window._attachSwipeGesture = _attachSwipeGesture;
   window.attachQueueItemTap = attachQueueItemTap;

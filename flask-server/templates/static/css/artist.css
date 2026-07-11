@@ -25,18 +25,6 @@
     font-size: var(--text-xl);
     font-weight: 700;
     color: var(--text);
-    margin-bottom: 4px;
-  }
-  #artist-hero .artist-hero-subs {
-    font-size: var(--text-sm);
-    color: var(--muted);
-  }
-  #artist-hero .artist-hero-desc {
-    font-size: var(--text-sm);
-    color: var(--muted);
-    margin-top: var(--space-2);
-    line-height: 1.4;
-    max-width: 400px;
   }
 
   /* ---- Artist page: top songs list ---- */
@@ -110,6 +98,10 @@
   .hscroll-track::-webkit-scrollbar { display: none; }
   .hscroll-card {
     flex: 0 0 140px;
+    /* min-width:auto would let the img's intrinsic width inflate the card
+       past its 140px basis, making every card a different size. */
+    min-width: 0;
+    width: 140px;
     scroll-snap-align: start;
     cursor: pointer;
     transition: transform .15s;

@@ -552,39 +552,25 @@ input[type=range] { border-radius: var(--radius-full); }
 input[type=range]::-webkit-slider-thumb { border-radius: 50%; }
 input[type=range]::-moz-range-thumb { border-radius: 50%; }
 
-/* Desktop playbar: np | transport+progress | volume */
+/* Desktop playbar: np | transport | actions (progress rides the top edge) */
 @media (min-width: 900px) {
   .player-section,
   main.has-queue .player-section,
   body.results-open .player-section {
-    grid-template-columns: minmax(220px, 26%) minmax(0, 1fr) minmax(160px, 26%);
-    grid-template-rows: auto auto;
-    grid-template-areas:
-      "np transport vol"
-      "np progress  vol";
-    gap: 4px 28px;
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+    grid-template-rows: auto;
+    grid-template-areas: "np transport actions";
+    gap: 0 20px;
     min-height: var(--playbar-h);
-    padding: 10px 24px calc(10px + env(safe-area-inset-bottom, 0px));
+    padding: 12px 24px calc(10px + env(safe-area-inset-bottom, 0px));
   }
   .player-section .np { grid-area: np; }
   .player-section .transport { grid-area: transport; }
-  .player-section .progress {
-    grid-area: progress;
-    width: 100%;
-    max-width: 640px;
-    justify-self: center;
-  }
-  .player-section .vol {
-    grid-area: vol;
-    justify-self: end;
-    width: 100%;
-    max-width: 210px;
-  }
-  .player-section .transport-actions { display: none; }
+  .player-section .player-actions { grid-area: actions; justify-self: end; }
 }
 
-/* Mobile playbar: floating compact card; tap the track info to open the
-   full-screen player sheet (wired in sidebar.js). */
+/* Mobile playbar: floating compact card; tap the track info or the expand
+   toggle to open the now-playing sheet (wired in player.js). */
 @media (max-width: 899px) {
   .player-section,
   main.has-queue .player-section {
@@ -593,32 +579,102 @@ input[type=range]::-moz-range-thumb { border-radius: 50%; }
     bottom: calc(8px + env(safe-area-inset-bottom, 0px));
     border: 1px solid rgba(255, 255, 255, .08);
     border-radius: var(--radius-xl);
-    grid-template-columns: minmax(0, 1fr) auto;
-    grid-template-areas:
-      "np       transport"
-      "progress progress";
-    gap: 6px 8px;
-    padding: 10px 12px;
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    grid-template-areas: "np transport actions";
+    gap: 0 6px;
+    padding: 12px 12px 10px;
   }
-  .player-section .np { cursor: pointer; }
   .player-section .np { grid-area: np; }
   .player-section .np-art { width: 44px; height: 44px; }
-  .player-section .np-shuffle-btn,
-  .player-section .np-ytm-btn { display: none !important; }
   .player-section .transport { grid-area: transport; gap: 2px; }
   .player-section .transport button { width: 38px; height: 38px; }
   .player-section .pp-btn, .player-section .pp-btn:hover { width: 42px; height: 42px; }
-  .player-section .progress { grid-area: progress; }
-  .player-section .progress-times { display: none; }
-  .player-section .progress-track {
-    padding: 4px 0;
-    height: 3px;
-  }
-  .player-section .vol,
-  .player-section .transport-actions { display: none; }
+  .player-section .player-actions { grid-area: actions; }
 }
-@media (max-width: 420px) {
-  .player-section .transport button[data-action="previous"] { display: none; }
+
+/* ---- Compact playbar (all sizes): only play/pause, next, YTM link and an
+   expand toggle stay on the bar. Everything else (prev, shuffle, like,
+   queue, volume) lives in the expanded now-playing sheet. ---- */
+.player-section .np-like-btn,
+.player-section .np-shuffle-btn,
+.player-section .vol,
+.player-section .transport-actions,
+.player-section .transport button[data-action="previous"] {
+  display: none !important;
+}
+/* Tapping the track info opens the expanded sheet */
+.player-section .np { cursor: pointer; }
+
+/* Progress: thin strip pinned along the playbar's top edge */
+.player-section .progress,
+.player-section .progress:hover {
+  grid-area: auto;
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  width: auto;
+  max-width: none;
+  margin: 0;
+  justify-self: stretch;
+}
+.player-section .progress-track,
+.player-section .progress:hover .progress-track {
+  height: 4px;
+  padding: 0;
+  border-radius: 0;
+}
+.player-section .progress-handle,
+.player-section .progress-times { display: none; }
+/* Keep the strip inside the bar's rounded corners (mobile card) */
+.player-section { overflow: hidden; }
+
+/* Right cluster: YTM link + expand toggle */
+.player-section .player-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.player-section .np-ytm-btn {
+  border: none;
+  width: 36px;
+  height: 36px;
+}
+.player-section .player-expand-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  background: none;
+  border: none;
+  border-radius: var(--radius-full);
+  color: var(--muted);
+  cursor: pointer;
+  transition: color .15s, background .15s;
+}
+.player-section .player-expand-btn:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, .08);
+}
+.player-section .player-expand-btn svg { width: 19px; height: 19px; }
+
+/* Expanded now-playing sheet: keep the bottom-sheet feel on mobile, but on
+   desktop it floats as a centered card instead of a full-width sheet. */
+@media (min-width: 900px) {
+  /* base.css blanket-hides the sheet on desktop; the redesign uses it as the
+     expanded player everywhere. Open/closed is still driven by the overlay's
+     visibility/opacity, so restoring display is safe. */
+  .mini-popup-overlay { display: flex !important; align-items: center; }
+  .mini-popup {
+    width: min(440px, 92vw);
+    max-height: 86dvh;
+    border: 1px solid rgba(255, 255, 255, .09);
+    border-radius: var(--radius-xl);
+  }
+  .mini-popup-drag { display: none; }
 }
 
 /* ============================================================
@@ -1002,15 +1058,8 @@ button { border-radius: var(--radius-md); }
   color: var(--text);
   text-decoration: underline;
 }
-.player-section .progress-track {
-  height: 5px;
-  transition: height .12s ease;
-}
-.player-section .progress:hover .progress-track { height: 7px; }
-.player-section .progress-times {
-  font-size: .66rem;
-  color: var(--muted);
-}
+.player-section .progress-track { transition: height .12s ease; }
+.player-section .progress:hover .progress-track { height: 6px; }
 .player-section .transport button svg { width: 16px; height: 16px; }
 .player-section .pp-btn svg { width: 18px; height: 18px; }
 .player-section .vol input[type=range] { flex: 1; }

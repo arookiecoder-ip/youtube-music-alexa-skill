@@ -23,7 +23,6 @@
         '<div class="artist-skeleton-hero">' +
           '<div class="skeleton-circle"></div>' +
           '<div class="skeleton-line skeleton-line-title"></div>' +
-          '<div class="skeleton-line skeleton-line-sm"></div>' +
         '</div>' +
         '<div class="artist-skeleton-song"><div class="skeleton-square"></div><div><div class="skeleton-line skeleton-line-title"></div><div class="skeleton-line skeleton-line-artist"></div></div></div>' +
         '<div class="artist-skeleton-song"><div class="skeleton-square"></div><div><div class="skeleton-line skeleton-line-title"></div><div class="skeleton-line skeleton-line-artist"></div></div></div>' +
@@ -79,9 +78,7 @@
     }
     container.innerHTML =
       (thumbHtml || '<div style="width:180px;height:180px;border-radius:50%;background:var(--surface);display:flex;align-items:center;justify-content:center;color:var(--muted);margin-bottom:var(--space-3)"><svg width="40" height="40" viewBox="0 0 24 24" fill="currentColor"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg></div>') +
-      '<div class="artist-hero-name">' + escHtml(artist.name || '') + '</div>' +
-      (artist.subscribers ? '<div class="artist-hero-subs">' + escHtml(artist.subscribers) + '</div>' : '') +
-      (artist.description ? '<div class="artist-hero-desc">' + escHtml(artist.description) + '</div>' : '');
+      '<div class="artist-hero-name">' + escHtml(artist.name || '') + '</div>';
   }
 
   function renderTopSongs(songs) {

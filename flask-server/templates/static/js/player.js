@@ -575,6 +575,19 @@ function syncModalScrollLock() {
     openMiniPopup();
   });
 
+  // Compact playbar: the expand toggle and the track-info cluster both open
+  // the full now-playing sheet. Buttons/links inside .np (like, artist link)
+  // keep their own behavior.
+  const expandBtn = document.getElementById('player-expand-btn');
+  if (expandBtn) expandBtn.addEventListener('click', openMiniPopup);
+  const npCluster = document.getElementById('now-playing');
+  if (npCluster) {
+    npCluster.addEventListener('click', (e) => {
+      if (e.target.closest('button, a, .artist-name')) return;
+      openMiniPopup();
+    });
+  }
+
   // Close popup
   closeBtn.addEventListener('click', closeMiniPopup);
   overlay.addEventListener('click', (e) => {
@@ -645,9 +658,16 @@ function syncModalScrollLock() {
     }, 300);
   };
 
-  // Queue button: open the existing queue modal
+  // Queue button: desktop shows the side panel (the bottom-sheet is
+  // display:none'd there), mobile opens the queue bottom-sheet on top.
   queueBtn.addEventListener('click', () => {
-    if (window._openQueueModal) window._openQueueModal();
+    if (window.matchMedia('(min-width: 900px)').matches) {
+      closeMiniPopup();
+      const t = document.getElementById('queue-toggle-btn');
+      if (t) t.click();
+    } else if (window._openQueueModal) {
+      window._openQueueModal();
+    }
   });
 
   // Drag-to-dismiss
