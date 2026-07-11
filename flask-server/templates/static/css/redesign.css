@@ -571,6 +571,9 @@ body.results-open .play-section {
 .sidebar-rail-toggle {
   width: 38px;
   height: 38px;
+  min-width: 38px;
+  min-height: 38px;
+  box-sizing: border-box;
   flex: none;
   display: inline-flex;
   align-items: center;
@@ -582,7 +585,7 @@ body.results-open .play-section {
   color: var(--text) !important;
 }
 .sidebar-rail-toggle:hover { background: rgba(255,255,255,.09) !important; }
-.sidebar-rail-toggle svg { width: 21px; height: 21px; }
+.sidebar-rail-toggle svg { width: 21px; height: 21px; min-width: 21px; min-height: 21px; flex: none; }
 .sidebar-brand-mark {
   display: flex;
   align-items: end;
@@ -591,6 +594,13 @@ body.results-open .play-section {
   min-width: 18px;
   flex: 0 0 18px;
   height: 17px;
+}
+.sidebar .sidebar-nav-btn svg {
+  width: 21px;
+  height: 21px;
+  min-width: 21px;
+  min-height: 21px;
+  flex: 0 0 21px;
 }
 .sidebar-brand-mark span {
   display: block;
@@ -670,7 +680,9 @@ body.results-open .play-section {
     background: transparent;
     border-left: none;
     border-right: 1px solid rgba(255, 255, 255, .06);
-    z-index: 140;
+    /* Above the sticky top bar so the wordmark can extend beyond the 72px
+       mini rail without being clipped by the header background. */
+    z-index: 260;
     padding: 10px 14px 16px;
     /* The mobile drawer's transform transition doesn't apply here; the rail
        animates its width when toggling the mini guide. */
@@ -974,15 +986,22 @@ body.now-playing-route .player-section .player-expand-btn svg {
   body.now-playing-route {
     overflow: hidden;
   }
+  body.now-playing-closing { overflow: hidden; }
   body.now-playing-route main {
     height: 100vh;
     min-height: 0;
     padding-bottom: 0;
     overflow: hidden;
   }
+  body.now-playing-closing main {
+    height: 100vh;
+    min-height: 0;
+    overflow: hidden;
+  }
   body.now-playing-route header {
     margin-bottom: 0;
     background: #101010;
+    transition: background-color .28s ease, margin .25s ease;
   }
   .mini-popup-overlay {
     display: flex !important;
@@ -1067,6 +1086,9 @@ body.now-playing-route .player-section .player-expand-btn svg {
   body.now-playing-route #queue-section,
   body.now-playing-route main.has-queue #queue-section {
     display: none !important;
+  }
+  body.home-route:not(.results-open):not(.header-scrolled) main header {
+    background: transparent;
   }
 }
 
@@ -1218,7 +1240,7 @@ body.now-playing-route .player-section .player-expand-btn svg {
 body.results-open #results-section {
   background: none;
   border: none;
-  padding: 0 0 24px;
+  padding: 0 0 96px;
   margin: 0 auto;
   width: 100%;
   max-width: none;
@@ -1406,11 +1428,15 @@ button { border-radius: var(--radius-md); }
   main.has-queue header,
   body.results-open main header {
     background: #101010;
+    transition: background-color .28s ease, margin .25s ease;
     backdrop-filter: none;
     -webkit-backdrop-filter: none;
     /* No contain:paint here — it clips absolutely-positioned descendants
        (device dropdown menu, profile menu) to the header's 67px box. The
        opaque background alone removes the backdrop-blur repaint cost. */
+  }
+  body.home-route:not(.results-open):not(.header-scrolled) main header {
+    background: transparent;
   }
 }
 
@@ -1798,10 +1824,31 @@ body.results-open .player-section {
   gap: 20px;
   padding: 32px 48px;
   overflow: hidden;
+  position: relative;
+  isolation: isolate;
+}
+.np-page-left::before {
+  content: '';
+  position: absolute;
+  inset: -70px;
+  z-index: -2;
+  background: var(--np-cover, none) center / cover no-repeat;
+  filter: blur(56px) saturate(1.35);
+  opacity: .72;
+  transform: scale(1.12);
+  transition: background-image .35s ease;
+}
+.np-page-left::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: linear-gradient(180deg, rgba(0,0,0,.18), rgba(0,0,0,.48) 58%, #050505 100%);
+  pointer-events: none;
 }
 
 .np-page-art {
-  width: min(360px, 100%);
+  width: min(430px, 82%, calc(100dvh - var(--topbar-h) - var(--playbar-h) - 150px));
   aspect-ratio: 1;
   border-radius: var(--card-radius);
   background: var(--surface) center / cover no-repeat;

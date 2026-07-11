@@ -338,6 +338,8 @@ async function openPlaylistDetailModal(pl_id, fromRoute) {
     row.className = 'history-item';
     row.style.position = 'relative';
 
+    const trackArt = document.createElement('div');
+    trackArt.className = 'playlist-track-art';
     if (track.thumbnail) {
       const img = document.createElement('img');
       img.className = 'queue-thumb';
@@ -345,14 +347,15 @@ async function openPlaylistDetailModal(pl_id, fromRoute) {
       img.dataset.src = track.thumbnail;
       img.style.background = 'rgba(255,255,255,0.05)';
       imgElements.push(img);
-      row.appendChild(img);
+      trackArt.appendChild(img);
     } else {
       const ph = document.createElement('div');
       ph.className = 'queue-thumb';
       ph.style.cssText = 'display:flex; align-items:center; justify-content:center; background: rgba(255,255,255,0.05);';
       ph.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="width: 20px; height: 20px; color: var(--text-muted, #888);"><path d="M9 18V5l12-2v13"></path><circle cx="6" cy="18" r="3"></circle><circle cx="18" cy="16" r="3"></circle></svg>`;
-      row.appendChild(ph);
+      trackArt.appendChild(ph);
     }
+    row.appendChild(trackArt);
 
     // Liked Songs keeps its fixed oldest-first order — no drag handle there.
     const info = document.createElement('div');
@@ -457,10 +460,10 @@ async function openPlaylistDetailModal(pl_id, fromRoute) {
       ${desc ? `<div class="playlist-detail-hero-desc">${escHtml(desc)}</div>` : ''}
       <div class="playlist-detail-hero-actions">
         <div class="playlist-hero-actions-left">
-          <button class="playlist-hero-play" type="button" title="Play all"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></button>
           ${pl.source_url ? `<button class="playlist-hero-sync" type="button" title="Sync playlist"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg></button>` : ''}
           ${pl_id !== 'liked' ? `<button class="playlist-hero-more" type="button" title="More options"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg></button>` : ''}
         </div>
+        <button class="playlist-hero-play" type="button" title="Play all"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></button>
         <div class="playlist-hero-actions-right">
           <button class="playlist-hero-shuffle" type="button" title="Shuffle play">${shuffleBtn.innerHTML}</button>
           ${pl.source_url ? `<button class="playlist-hero-share" type="button" title="Share playlist"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="m8.6 10.5 6.8-4M8.6 13.5l6.8 4"/></svg></button>` : ''}

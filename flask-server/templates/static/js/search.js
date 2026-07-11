@@ -434,8 +434,6 @@ document.querySelectorAll('.results-tab').forEach(tab => {
     scrollResultsToTop();
   });
 });
-document.getElementById('results-close').addEventListener('click', closeResults);
-
 /* ---- search suggestions ---- */
 (function () {
   const input = document.getElementById('query');

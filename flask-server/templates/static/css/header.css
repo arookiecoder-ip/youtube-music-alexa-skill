@@ -199,7 +199,7 @@
     gap: var(--card-gap);
     padding: var(--card-padding-y) 20px;
     cursor: pointer;
-    background: var(--surface);
+    background: transparent;
     transition: background .15s, transform .15s, box-shadow .15s;
     /* Needed when used as a swipe wrapper's inner row (playlist tracks):
        without an explicit stacking position, the swipe underlay's z-index:1

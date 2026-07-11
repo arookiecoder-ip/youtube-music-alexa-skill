@@ -68,7 +68,11 @@ function showNowPlaying(info) {
       }
       // Clear now-playing-section elements
       const npPageArt = document.getElementById('np-page-art');
-      if (npPageArt) { npPageArt.style.backgroundImage = ''; npPageArt.classList.remove('has-thumb'); }
+      if (npPageArt) {
+        npPageArt.style.backgroundImage = '';
+        npPageArt.classList.remove('has-thumb');
+        npPageArt.parentElement.style.removeProperty('--np-cover');
+      }
       const npPageTitle = document.getElementById('np-page-title');
       if (npPageTitle) npPageTitle.textContent = 'Nothing is playing';
       const npPageArtist = document.getElementById('np-page-artist');
@@ -117,7 +121,11 @@ function showNowPlaying(info) {
           miniArt.classList.add('has-thumb');
           mpArt.style.backgroundImage = url;
           mpArt.classList.add('has-thumb');
-          if (npPageArt) { npPageArt.style.backgroundImage = url; npPageArt.classList.add('has-thumb'); }
+          if (npPageArt) {
+            npPageArt.style.backgroundImage = url;
+            npPageArt.classList.add('has-thumb');
+            npPageArt.parentElement.style.setProperty('--np-cover', url);
+          }
         }
       };
       img.src = info.thumbnail;
@@ -128,7 +136,11 @@ function showNowPlaying(info) {
       miniArt.classList.remove('has-thumb');
       mpArt.style.backgroundImage = '';
       mpArt.classList.remove('has-thumb');
-      if (npPageArt) { npPageArt.style.backgroundImage = ''; npPageArt.classList.remove('has-thumb'); }
+      if (npPageArt) {
+        npPageArt.style.backgroundImage = '';
+        npPageArt.classList.remove('has-thumb');
+        npPageArt.parentElement.style.removeProperty('--np-cover');
+      }
     }
     // Track video_id for the URL button. Clear it when the new track's id is
     // unknown (optimistic plain-text play) so the "Open on YouTube Music"

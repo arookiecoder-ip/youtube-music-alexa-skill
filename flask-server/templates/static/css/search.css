@@ -323,16 +323,13 @@
   }
   .results-close:hover { color: var(--text); }
 
-  /* While results are open, the full player and queue give way to the
-     bottom mini player. */
-  body.results-open .player-section,
   body.results-open #queue-section { display: none !important; }
-  body.results-open main { padding-bottom: 92px; }
-  /* Keep toasts visible above the bottom mini player */
-  body.results-open .toast { bottom: calc(92px + env(safe-area-inset-bottom, 0px)); }
 
   /* Sticky search bar on mobile while results are open */
   @media (max-width: 899px) {
+    body.results-open .player-section { display: none !important; }
+    body.results-open main { padding-bottom: 92px; }
+    body.results-open .toast { bottom: calc(92px + env(safe-area-inset-bottom, 0px)); }
     body.results-open .needs-login:has(#play-query) {
       position: sticky;
       top: 0;
@@ -356,20 +353,9 @@
     body.results-open #results-section {
       padding-bottom: 14px;
     }
-    body.results-open .results-list {
-      flex: 1 1 auto;
-      height: auto;
-      min-height: 0;
-      max-height: none;
-      overflow-y: auto;
-      scrollbar-width: thin;
-      scrollbar-color: var(--border) transparent;
-    }
-    body.results-open .results-list::-webkit-scrollbar { width: 4px; }
-    body.results-open .results-list::-webkit-scrollbar-thumb { background: var(--border); }
-    /* Keep the full player in the left column; the bottom mini player is a
-       mobile-only affordance. */
-    body.results-open .player-section { display: block !important; }
+    body.results-open .results-list { height: auto; max-height: none; overflow: visible; }
+    /* Keep the persistent desktop player in its normal grid layout. */
+    body.results-open .player-section { display: grid !important; }
     body.results-open .player-section.is-collapsed { display: none !important; }
     body.results-open .mini-player { display: none !important; }
     body.results-open .toast { bottom: 24px; }

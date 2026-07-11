@@ -92,7 +92,17 @@
 
   function applyRoute(hash) {
     hash = hash || '#home';
+    var wasNowPlaying = document.body.classList.contains('now-playing-route');
+    var isClosingNowPlaying = wasNowPlaying && hash !== '#now-playing' &&
+      window.matchMedia('(min-width: 900px)').matches;
+    var routedNpSection = document.getElementById('now-playing-section');
+    if (routedNpSection && routedNpSection._closeTimer) {
+      clearTimeout(routedNpSection._closeTimer);
+      routedNpSection._closeTimer = null;
+    }
+    document.body.classList.toggle('home-route', hash === '#home');
     document.body.classList.toggle('now-playing-route', hash === '#now-playing');
+    document.body.classList.toggle('now-playing-closing', isClosingNowPlaying);
     document.body.classList.toggle('playlists-route', hash === '#playlists' || hash.indexOf('#playlist/') === 0);
     document.body.classList.toggle('history-route', hash === '#history');
 
@@ -111,7 +121,16 @@
     }
     if (hash !== '#now-playing') {
       var npSection = document.getElementById('now-playing-section');
-      if (npSection) npSection.hidden = true;
+      if (npSection && !isClosingNowPlaying) npSection.hidden = true;
+      if (npSection && isClosingNowPlaying) {
+        // Keep the layer rendered until its transform transition finishes.
+        npSection.hidden = false;
+        npSection._closeTimer = setTimeout(function() {
+          npSection.hidden = true;
+          npSection._closeTimer = null;
+          document.body.classList.remove('now-playing-closing');
+        }, 340);
+      }
       setHidden('#queue-section', true);
       var main = document.querySelector('main');
       if (main) main.classList.remove('has-queue');
@@ -222,6 +241,11 @@
   // Initial route: honor a legacy #hash bookmark once, then strip it from the
   // URL for good.
   window.__route = location.hash || '#home';
+  function syncHeaderScrollState() {
+    document.body.classList.toggle('header-scrolled', window.scrollY > 12);
+  }
+  window.addEventListener('scroll', syncHeaderScrollState, { passive: true });
+  syncHeaderScrollState();
   history.replaceState({ route: window.__route }, '', location.pathname + location.search);
   applyRoute(window.__route);
 })();

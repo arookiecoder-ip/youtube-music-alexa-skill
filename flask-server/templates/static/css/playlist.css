@@ -286,9 +286,11 @@
     font-size: .82rem;
     -webkit-line-clamp: 4;
   }
-  .playlist-detail-hero-actions { display: flex; width: 100%; align-items: center; justify-content: center; gap: 10px; margin-top: 7px; }
+  .playlist-detail-hero-actions { display: grid; width: 100%; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 10px; margin-top: 7px; }
   .playlist-hero-actions-left,
-  .playlist-hero-actions-right { display: contents; }
+  .playlist-hero-actions-right { display: flex; align-items: center; gap: 10px; }
+  .playlist-hero-actions-left { justify-content: flex-end; }
+  .playlist-hero-actions-right { justify-content: flex-start; }
   .playlist-detail-hero-actions button {
     width: 48px;
     height: 48px;
@@ -298,7 +300,7 @@
     padding: 0;
     border: 0;
     border-radius: 50%;
-    background: rgba(255,255,255,.1);
+    background: transparent;
     color: var(--text);
     cursor: pointer;
   }
@@ -308,6 +310,9 @@
     background: #fff;
     color: #080808;
   }
+  .playlist-detail-hero-actions button:not(.playlist-hero-play):hover,
+  .playlist-detail-hero-actions button:not(.playlist-hero-play):focus-visible { background: rgba(255,255,255,.1); }
+  .playlist-detail-hero-actions button:focus { outline: none; }
   .playlist-detail-hero-actions button:hover { transform: scale(1.04); }
   .playlist-detail-hero-actions svg { width: 25px; height: 25px; }
   #playlist-detail-modal #playlist-detail-body > .history-list {
@@ -333,4 +338,24 @@
   }
   #playlist-detail-modal .history-item:hover { background: rgba(255,255,255,.06); }
   #playlist-detail-modal .queue-thumb { width: 44px; height: 44px; border-radius: 4px; }
+  .playlist-track-art {
+    position: relative;
+    width: 44px;
+    height: 44px;
+    flex: 0 0 44px;
+    border-radius: 4px;
+    overflow: hidden;
+  }
+  .playlist-track-art::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    display: block;
+    background: rgba(0,0,0,.52) center / 25px no-repeat
+      url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='white'%3E%3Cpolygon points='8,5 19,12 8,19'/%3E%3C/svg%3E");
+    opacity: 0;
+    transition: opacity .16s ease;
+    pointer-events: none;
+  }
+  .playlist-track-art:hover::after { opacity: 1; }
 }
