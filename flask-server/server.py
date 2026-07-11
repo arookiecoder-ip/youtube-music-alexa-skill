@@ -3138,22 +3138,6 @@ _home_rebuild_lock = threading.Lock() # single flight
 async def _fetch_home_sources():
     sources = {}
 
-    with _history_lock:
-        history = _load_history()
-    if history:
-        sources['local_history'] = history
-
-    try:
-        pl_data = _load_playlists()
-        local_pl = list(pl_data.get('playlists', {}).values())
-        if local_pl:
-            sources['local_playlists'] = local_pl
-        liked = pl_data.get('liked_songs', [])
-        if liked:
-            sources['local_liked'] = liked
-    except Exception as e:
-        logger.warning(f"Failed to load local playlists for home: {e}")
-
     # Concurrently fetch ytmusic parts
     async def get_native_home():
         try:
@@ -3283,8 +3267,7 @@ async def _get_fallback_queue(exclude_ids):
 
 
 async def _build_recommendations():
-    with _history_lock:
-        history = _load_history()
+    history = []
     seen_ids = {e['video_id'] for e in history if e.get('video_id')}
     sys.stderr.write(f"[recs] history has {len(history)} entries\n")
 
@@ -4326,12 +4309,8 @@ async def alexa_search():
 
     def _activity_signals():
         """Build lightweight local preference signals for search ranking."""
-        with _history_lock:
-            history = _load_history()
-        try:
-            liked = ((_load_playlists().get('playlists') or {}).get('liked') or {}).get('tracks') or []
-        except Exception:
-            liked = []
+        history = []
+        liked = []
 
         video_scores, artist_scores = {}, collections.defaultdict(float)
         for position, track in enumerate(history):
