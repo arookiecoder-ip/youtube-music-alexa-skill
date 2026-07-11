@@ -46,10 +46,10 @@ function openResults() {
     const el = document.getElementById(id);
     if (el) el.hidden = true;
   });
-  // Same for the playlist views: they sit above the content area (z-210),
-  // so results rendered behind them would be invisible until manually closed.
-  for (const id of ['playlists-modal-overlay', 'playlist-detail-modal-overlay']) {
-    const ov = document.getElementById(id);
+  // Same for the playlist detail view: it sits above the content area (z-210),
+  // so results rendered behind it would be invisible until manually closed.
+  {
+    const ov = document.getElementById('playlist-detail-modal-overlay');
     if (ov) ov.classList.remove('open');
   }
   animatePlaySectionLayout(() => {
@@ -74,6 +74,8 @@ function closeResults() {
   section.classList.remove('is-visible');
   clearTimeout(section._showTimer);
   clearTimeout(section._hideTimer);
+  document.body.style.removeProperty('--search-theme-image');
+  document.body.classList.remove('search-art-themed');
 
   // If a queue will be restored, pre-add has-queue BEFORE removing results-open
   // so the grid columns stay at 1fr 1fr (no shrink-then-expand bounce).
@@ -153,7 +155,7 @@ function _createSongElement(item, existingThumbsById) {
       ${thumbHtml}
       <div class="result-info">
         <div class="result-title">${escHtml(item.title)}</div>
-        <div class="result-artist">${escHtml(item.artist)}</div>
+        <div class="result-artist">${window.artistLinksHtml(item.artist, item.channelId || item.channel_id || '')}</div>
       </div>
       <button class="result-like-btn ${isLiked ? 'liked' : ''}" type="button" title="Like" data-vid="${escHtml(item.video_id)}">${heartSvg}</button>
       <button class="result-queue-btn" type="button" title="Add to queue" ${isCurrent ? 'hidden' : ''}>${queueAddSvg}</button>
@@ -180,6 +182,10 @@ function _createSongElement(item, existingThumbsById) {
 
     if (sameUrl) inner.querySelector('.result-thumb-slot').replaceWith(reusableImg);
     wrapper.appendChild(inner);
+
+    // Artist clicks navigate independently instead of triggering the row's
+    // play action. The shared helper also resolves artists that lack an id.
+    if (window.wireArtistLinks) window.wireArtistLinks(inner);
 
     attachQueueItemTap(inner, () => {
       for (const other of wrapper.parentElement.querySelectorAll('.result-item-inner.active')) other.classList.remove('active');
@@ -393,6 +399,16 @@ function renderResults() {
     if (item.thumbnails && item.thumbnails.length) thumb = item.thumbnails[item.thumbnails.length - 1].url;
     
     const thumbHtml = thumb ? `<img src="${escHtml(thumb)}" alt="" loading="lazy">` : '';
+
+    // Let the search result artwork tint the whole upper shell, including the
+    // desktop header. CSS supplies dark overlays so controls stay readable.
+    if (thumb) {
+      document.body.style.setProperty('--search-theme-image', 'url(' + JSON.stringify(thumb) + ')');
+      document.body.classList.add('search-art-themed');
+    } else {
+      document.body.style.removeProperty('--search-theme-image');
+      document.body.classList.remove('search-art-themed');
+    }
     
     const artistStr = (item.artists && item.artists.length) ? item.artists.map(a => a.name).join(' and ') : (item.artist || '');
     let subtitle = '';
@@ -499,6 +515,7 @@ function renderResults() {
              video_id: song.videoId,
              title: song.title,
              artist: song.artist || (song.artists && song.artists.length ? song.artists.map(a=>a.name).join(' and ') : ''),
+             channelId: song.channelId || song.channel_id || (song.artists && song.artists[0] && (song.artists[0].id || song.artists[0].browseId)) || '',
              thumbnail: song.thumbnail || (song.thumbnails && song.thumbnails.length ? song.thumbnails[song.thumbnails.length-1].url : '')
           };
           const el = _createSongElement(songItem, existingThumbsById);
@@ -544,6 +561,7 @@ function renderResults() {
               video_id: song.videoId,
               title: song.title,
               artist: song.artist || (song.artists && song.artists.length ? song.artists.map(a=>a.name).join(' and ') : ''),
+              channelId: song.channelId || song.channel_id || (song.artists && song.artists[0] && (song.artists[0].id || song.artists[0].browseId)) || '',
               thumbnail: song.thumbnail || (song.thumbnails && song.thumbnails.length ? song.thumbnails[song.thumbnails.length-1].url : '')
            };
            list.appendChild(_createSongElement(songItem, existingThumbsById));

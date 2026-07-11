@@ -105,6 +105,7 @@
             ${desc.length > 150 ? '<div class="artist-hero-desc-more" id="artist-hero-more">MORE</div>' : ''}
           </div>
         ` : ''}
+        <div id="artist-top-songs-actions" class="artist-hero-actions"></div>
       </div>
     `;
 

@@ -4732,6 +4732,44 @@ async def alexa_search():
     def _has_results(results):
         return any(results[category] for category in ('songs', 'artists', 'albums', 'playlists'))
 
+    def _activity_signals():
+        """Build lightweight local preference signals for search ranking."""
+        with _history_lock:
+            history = _load_history()
+        try:
+            liked = ((_load_playlists().get('playlists') or {}).get('liked') or {}).get('tracks') or []
+        except Exception:
+            liked = []
+
+        video_scores, artist_scores = {}, collections.defaultdict(float)
+        for position, track in enumerate(history):
+            weight = max(1.0, 12.0 - position * 0.15) + min(float(track.get('play_count') or 1), 10.0)
+            video_id = track.get('video_id') or ''
+            if video_id:
+                video_scores[video_id] = max(video_scores.get(video_id, 0), weight)
+            for artist in re.split(r',|\s+and\s+|\s*&\s*', track.get('artist') or '', flags=re.I):
+                if artist.strip():
+                    artist_scores[artist.strip().casefold()] += weight
+        for track in liked:
+            video_id = track.get('video_id') or ''
+            if video_id:
+                video_scores[video_id] = video_scores.get(video_id, 0) + 25.0
+            for artist in re.split(r',|\s+and\s+|\s*&\s*', track.get('artist') or '', flags=re.I):
+                if artist.strip():
+                    artist_scores[artist.strip().casefold()] += 25.0
+        return video_scores, artist_scores
+
+    def _personalize(items, video_scores, artist_scores):
+        # Stable sort preserves YouTube Music relevance whenever activity gives
+        # two results the same score.
+        def score(item):
+            total = video_scores.get(item.get('video_id') or item.get('videoId') or '', 0)
+            primary_name = item.get('artist') or (item.get('name') if item.get('resultType') in (None, 'artist') else '') or ''
+            names = [primary_name] + [a.get('name') or '' for a in item.get('artists') or []]
+            total += sum(artist_scores.get(name.casefold(), 0) for name in names if name)
+            return total
+        return sorted(items, key=score, reverse=True)
+
     ytmusic = YTMusic()
 
     # First try with spelling correction (ignore_spelling=False) so typos
@@ -4772,6 +4810,7 @@ async def alexa_search():
             'playlistId': item.get('playlistId') or '',
             'thumbnail': _last_thumbnail(item),
             'artists': item.get('artists') or [],
+            'artist': item.get('artist') or '',
             'duration': item.get('duration') or '',
             'views': item.get('views') or '',
             'subscribers': item.get('subscribers') or '',
@@ -4782,6 +4821,28 @@ async def alexa_search():
         return cleaned
         
     results['all'] = [_clean_all_item(item) for item in all_raw]
+
+    # Unfiltered "Top result" entries occasionally omit their artist credit
+    # even though the filtered songs response contains the same track with
+    # complete metadata. Join that credit back in for the hero card.
+    songs_by_video = {song.get('video_id'): song for song in results['songs'] if song.get('video_id')}
+    songs_by_title = {(song.get('title') or '').casefold(): song for song in results['songs'] if song.get('title')}
+    for item in results['all']:
+        if item.get('resultType') not in ('song', 'video') or item.get('artist') or item.get('artists'):
+            continue
+        match = songs_by_video.get(item.get('videoId')) or songs_by_title.get((item.get('title') or '').casefold())
+        if match:
+            item['artist'] = match.get('artist') or ''
+            item['channelId'] = match.get('channelId') or ''
+    try:
+        video_scores, artist_scores = _activity_signals()
+        for category in ('songs', 'artists', 'albums'):
+            results[category] = _personalize(results[category], video_scores, artist_scores)
+        results['all'] = _personalize(results['all'], video_scores, artist_scores)
+    except Exception:
+        # Search must remain available even if local activity storage is
+        # temporarily unreadable.
+        logger.exception('search personalization failed')
     return jsonify(results)
 
 

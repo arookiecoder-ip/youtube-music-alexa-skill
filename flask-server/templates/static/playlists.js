@@ -195,61 +195,6 @@ function _formatUpdatedAt(ts) {
   return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 }
 
-function renderPlaylists() {
-  const body = document.getElementById('playlists-modal-body');
-  if (!body) return;
-  
-  const lists = getPlaylistsList();
-  if (lists.length === 0) {
-    body.innerHTML = '<div class="history-modal-empty">No playlists yet. Save some songs!</div>';
-    return;
-  }
-  
-  let html = '<div class="history-list">';
-  lists.forEach((pl) => {
-    const trackCount = (pl.tracks || []).length;
-    const collageHtml = _buildCollageHtml(pl.tracks, pl.id === 'liked');
-    const desc = (pl.description || '').trim();
-    const updatedLabel = pl.updated_at ? 'Updated ' + _formatUpdatedAt(pl.updated_at) : '';
-
-    const playSvg = `<svg viewBox="0 0 24 24" fill="currentColor" width="14" height="14"><path d="M8 5v14l11-7z"/></svg>`;
-
-    html += `
-      <div class="playlist-card" onclick="openPlaylistDetailModal('${escHtml(pl.id)}')">
-        ${collageHtml}
-        <div class="playlist-card-info">
-          <div class="playlist-card-name">${escHtml(pl.name)}</div>
-          <div class="playlist-card-meta">${trackCount} ${trackCount === 1 ? 'song' : 'songs'}${updatedLabel ? ' · ' + updatedLabel : ''}</div>
-          ${desc ? `<div class="playlist-card-desc">${escHtml(desc)}</div>` : ''}
-        </div>
-        ${trackCount > 0 ? `<button class="playlist-card-play" onclick="event.stopPropagation(); playPlaylist('${escHtml(pl.id)}', this)">${playSvg}</button>` : ''}
-      </div>
-    `;
-  });
-  html += '</div>';
-  body.innerHTML = html;
-}
-
-async function openPlaylistsModal(fromRoute) {
-  if (!fromRoute && window.matchMedia('(min-width: 900px)').matches) {
-    window.navigateTo('#playlists');
-    return;
-  }
-  const overlay = document.getElementById('playlists-modal-overlay');
-  overlay.classList.add('open');
-  const body = document.getElementById('playlists-modal-body');
-  if (body && (!getPlaylistsList().length)) {
-    body.innerHTML = '<div class="history-modal-empty">Loading...</div>';
-  }
-  await loadPlaylists();
-  renderPlaylists();
-}
-
-function closePlaylistsModal() {
-  document.getElementById('playlists-modal-overlay').classList.remove('open');
-  if (window.getRoute() === '#playlists') window.navigateTo('#home');
-}
-
 let _currentPlaylistDetailId = null;
 
 async function openPlaylistDetailModal(pl_id, fromRoute) {
@@ -286,7 +231,6 @@ async function openPlaylistDetailModal(pl_id, fromRoute) {
   }
   if (!pl) {
     try {
-      document.getElementById('playlists-modal-overlay').classList.add('open');
       document.getElementById('playlist-detail-modal-overlay').classList.add('open');
       const body = document.getElementById('playlist-detail-body');
       if (body) body.innerHTML = '<div class="history-modal-empty" style="padding:40px; text-align:center;"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" class="spin" style="width:24px;height:24px;margin:0 auto 12px;"><path d="M21 2v6h-6"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M3 22v-6h6"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/></svg><div>Loading external playlist...</div></div>';
@@ -307,7 +251,6 @@ async function openPlaylistDetailModal(pl_id, fromRoute) {
 
   // Show modal with title + loader immediately
   document.getElementById('playlist-detail-title').textContent = pl.name;
-  document.getElementById('playlists-modal-overlay').classList.add('open');
   document.getElementById('playlist-detail-modal-overlay').classList.add('open');
   const body = document.getElementById('playlist-detail-body');
   body.innerHTML = '<div class="history-modal-empty" style="padding:40px; text-align:center;"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" class="spin" style="width:24px;height:24px;margin:0 auto 12px;"><path d="M21 2v6h-6"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M3 22v-6h6"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/></svg><div>Loading tracks...</div></div>';
@@ -650,7 +593,7 @@ function _closePlaylistDetailMoreMenu() {
 function closePlaylistDetailModal() {
   document.getElementById('playlist-detail-modal-overlay').classList.remove('open');
   _closePlaylistDetailMoreMenu();
-  if (window.getRoute().indexOf('#playlist/') === 0) window.navigateTo('#playlists');
+  if (window.getRoute().indexOf('#playlist/') === 0) window.navigateTo('#home');
 }
 
 function renderSidebarPlaylists() {
@@ -789,7 +732,7 @@ document.getElementById('playlist-detail-delete-opt').addEventListener('click', 
     await apiDelete('/api/playlists/' + encodeURIComponent(pl_id));
     delete _playlistsData.playlists[pl_id];
     closePlaylistDetailModal();
-    renderPlaylists();
+    renderSidebarPlaylists();
     toast('Playlist deleted', 'ok');
   } catch (e) {
     toast(e.message || 'Error deleting playlist', 'error');
@@ -823,7 +766,6 @@ async function playPlaylist(pl_id, btn, shuffle) {
     // rest continues in the background below, so a long playlist doesn't
     // hold the user on this modal for several seconds.
     closePlaylistDetailModal();
-    document.getElementById('playlists-modal-overlay').classList.remove('open');
     if (rest.length) {
       toast('Adding rest of “' + pl.name + '” to queue…');
       (async () => {
@@ -988,7 +930,7 @@ async function createNewPlaylist() {
     );
     
     if (existing) {
-      await confirmDialog('You already imported "' + existing.name + '" from this playlist. Open it from the Playlists list, or use its Sync button to pull in new tracks.', { okLabel: 'OK', danger: false, alertOnly: true });
+      await confirmDialog('You already imported "' + existing.name + '" from this playlist. Open it from the sidebar, or use its Sync button to pull in new tracks.', { okLabel: 'OK', danger: false, alertOnly: true });
       nameInput.disabled = false;
       if (createBtn) createBtn.disabled = false;
       return;
@@ -1003,10 +945,9 @@ async function createNewPlaylist() {
       const res = await api('/api/playlists/', { source_url: name });
       _playlistsData.playlists[res.id] = res;
       await api('/api/playlists/' + res.id + '/sync/', {}, 'POST');
-      renderPlaylists();
+      renderSidebarPlaylists();
       setTimeout(async () => {
         await loadPlaylists();
-        renderPlaylists();
         renderSidebarPlaylists();
         toast('Playlist imported successfully', 'ok');
         closeAddToPlaylistModal();
@@ -1027,7 +968,6 @@ async function createNewPlaylist() {
   try {
     const res = await api('/api/playlists/', { name: name });
     _playlistsData.playlists[res.id] = res;
-    renderPlaylists();
     renderSidebarPlaylists();
     if (_currentItemToSave) {
       await addToPlaylist(res.id);
@@ -1351,8 +1291,6 @@ async function syncPlaylist(pl_id, btnEl = null) {
       await loadPlaylists();
       if (document.getElementById('playlist-detail-modal-overlay').classList.contains('open')) {
         openPlaylistDetailModal(pl_id);
-      } else {
-        renderPlaylists();
       }
       if (btn && !btnEl) {
         btn.disabled = false;
@@ -1395,26 +1333,7 @@ async function sharePlaylist(pl) {
 
 document.addEventListener('DOMContentLoaded', () => {
   if (!window.JAM_GUEST) loadPlaylists();
-  
-  const plBtn = document.getElementById('playlists-modal-btn');
-  if (plBtn) plBtn.addEventListener('click', openPlaylistsModal);
-  
-  const sidebarPlBtn = document.getElementById('sidebar-playlists-btn');
-  if (sidebarPlBtn) {
-    sidebarPlBtn.addEventListener('click', () => {
-      // Close sidebar first
-      const overlay = document.querySelector('.sidebar-overlay');
-      const sidebar = document.querySelector('.sidebar');
-      if (overlay) overlay.classList.remove('open');
-      if (sidebar) sidebar.classList.remove('open');
-      
-      openPlaylistsModal();
-    });
-  }
-  
-  const plClose = document.getElementById('playlists-modal-close');
-  if (plClose) plClose.addEventListener('click', closePlaylistsModal);
-  
+
   const importPlBtn = document.getElementById('import-playlist-btn');
   const importOverlay = document.getElementById('import-playlist-overlay');
   if (importOverlay) {
@@ -1456,7 +1375,7 @@ document.addEventListener('DOMContentLoaded', () => {
         (p) => p.source_url && extractPlaylistListId(p.source_url) === newListId
       );
       if (existing) {
-        await confirmDialog('You already imported "' + existing.name + '" from this playlist. Open it from the Playlists list, or use its Sync button to pull in new tracks.', { okLabel: 'OK', danger: false, alertOnly: true });
+        await confirmDialog('You already imported "' + existing.name + '" from this playlist. Open it from the sidebar, or use its Sync button to pull in new tracks.', { okLabel: 'OK', danger: false, alertOnly: true });
         return;
       }
 
@@ -1507,9 +1426,6 @@ document.addEventListener('DOMContentLoaded', () => {
   if (sidebarNewPlBtn) sidebarNewPlBtn.addEventListener('click', openCreatePlaylistModal);
 
   // Close modals when clicking outside on the overlay
-  const plOverlay = document.getElementById('playlists-modal-overlay');
-  if (plOverlay) plOverlay.addEventListener('click', (e) => { if (e.target === plOverlay) closePlaylistsModal(); });
-
   const detailOverlay = document.getElementById('playlist-detail-modal-overlay');
   if (detailOverlay) detailOverlay.addEventListener('click', (e) => { if (e.target === detailOverlay) closePlaylistDetailModal(); });
 
@@ -1520,10 +1436,7 @@ document.addEventListener('DOMContentLoaded', () => {
   if (importOverlayEl) importOverlayEl.addEventListener('click', (e) => { if (e.target === importOverlayEl) importOverlayEl.classList.remove('open'); });
 });
 
-window.openPlaylistsModal = openPlaylistsModal;
 window.openPlaylistDetailModal = openPlaylistDetailModal;
-if (window.getRoute() === '#playlists') {
-  openPlaylistsModal(true);
-} else if (window.getRoute().indexOf('#playlist/') === 0) {
+if (window.getRoute().indexOf('#playlist/') === 0) {
   openPlaylistDetailModal(decodeURIComponent(window.getRoute().slice('#playlist/'.length)), true);
 }

@@ -31,9 +31,6 @@
         showHomeViews();
       }
     },
-    '#playlists': function() {
-      if (window.openPlaylistsModal) window.openPlaylistsModal(true);
-    },
     '#history': function() {
       if (window.openHistoryPage) window.openHistoryPage(true);
     },
@@ -83,9 +80,26 @@
      legacy '#name' format so all existing comparisons still work. */
   window.__route = '#home';
   window.getRoute = function() { return window.__route || '#home'; };
+  function resetRouteScroll() {
+    // Most pages use the document scroller, while routed overlays and the
+    // expanded player own their scroll containers. Reset both so navigation
+    // never inherits the previous view's position.
+    window.scrollTo(0, 0);
+    document.documentElement.scrollTop = 0;
+    document.body.scrollTop = 0;
+    [
+      'main', 'results-section', 'results-list', 'artist-section',
+      'album-section', 'now-playing-section', 'playlist-detail-modal',
+      'playlist-detail-modal-overlay', 'history-modal', 'history-modal-overlay'
+    ].forEach(function(id) {
+      var el = id === 'main' ? document.querySelector('main') : document.getElementById(id);
+      if (el) el.scrollTop = 0;
+    });
+  }
   window.navigateTo = function(route) {
     route = route || '#home';
-    if (route !== window.__route) {
+    var changedRoute = route !== window.__route;
+    if (changedRoute) {
       // Remember where the expanded player was opened from so collapsing it
       // returns there (not blindly to #home, and without relying on
       // history.back() which is a no-op on a fresh session).
@@ -94,10 +108,16 @@
       history.pushState({ route: route }, '', location.pathname + location.search);
     }
     applyRoute(route);
+    if (changedRoute) {
+      resetRouteScroll();
+      requestAnimationFrame(resetRouteScroll);
+    }
   };
   window.addEventListener('popstate', function(e) {
     window.__route = (e.state && e.state.route) || '#home';
     applyRoute(window.__route);
+    resetRouteScroll();
+    requestAnimationFrame(resetRouteScroll);
   });
 
   function applyRoute(hash) {
@@ -113,7 +133,7 @@
     document.body.classList.toggle('home-route', hash === '#home');
     document.body.classList.toggle('now-playing-route', hash === '#now-playing');
     document.body.classList.toggle('now-playing-closing', isClosingNowPlaying);
-    document.body.classList.toggle('playlists-route', hash === '#playlists' || hash.indexOf('#playlist/') === 0);
+    document.body.classList.toggle('playlists-route', hash.indexOf('#playlist/') === 0);
     document.body.classList.toggle('history-route', hash === '#history');
     document.body.classList.toggle('artist-route', hash.indexOf('#artist/') === 0);
     document.body.classList.toggle('album-route', hash.indexOf('#album/') === 0);
@@ -121,10 +141,8 @@
     // Routed desktop pages reuse overlay markup, so explicitly dismiss layers
     // belonging to the previous route. Otherwise an invisible full-screen
     // layer can keep intercepting sidebar clicks after navigation.
-    if (hash !== '#playlists' && hash.indexOf('#playlist/') !== 0) {
-      var playlistsOverlay = document.getElementById('playlists-modal-overlay');
+    if (hash.indexOf('#playlist/') !== 0) {
       var detailOverlay = document.getElementById('playlist-detail-modal-overlay');
-      if (playlistsOverlay) playlistsOverlay.classList.remove('open');
       if (detailOverlay) detailOverlay.classList.remove('open');
     }
     if (hash !== '#history') {

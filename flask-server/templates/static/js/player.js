@@ -75,6 +75,7 @@ function showNowPlaying(info) {
         npPageArt.style.backgroundImage = '';
         npPageArt.classList.remove('has-thumb');
         npPageArt.parentElement.style.removeProperty('--np-cover');
+        document.body.style.removeProperty('--np-cover');
       }
       const npPageTitle = document.getElementById('np-page-title');
       if (npPageTitle) npPageTitle.textContent = 'Nothing is playing';
@@ -128,6 +129,7 @@ function showNowPlaying(info) {
             npPageArt.style.backgroundImage = url;
             npPageArt.classList.add('has-thumb');
             npPageArt.parentElement.parentElement.style.setProperty('--np-cover', url);
+            document.body.style.setProperty('--np-cover', url);
           }
         }
       };
@@ -143,6 +145,7 @@ function showNowPlaying(info) {
         npPageArt.style.backgroundImage = '';
         npPageArt.classList.remove('has-thumb');
         npPageArt.parentElement.parentElement.style.removeProperty('--np-cover');
+        document.body.style.removeProperty('--np-cover');
       }
     }
     // Track video_id for the URL button. Clear it when the new track's id is

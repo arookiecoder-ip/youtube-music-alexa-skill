@@ -13,7 +13,7 @@
      which is also the centre of the 76px strip (76/2 = 38). */
   --rail-w-mini: 76px;
   --topbar-h: 64px;
-  --playbar-h: 54px;
+  --playbar-h: 64px;
   --playbar-h-mobile: 104px;
   --queue-w: 320px;
   --accent-grad: linear-gradient(135deg, var(--accent), #ff6a00);
@@ -51,6 +51,30 @@ body {
 }
 main {
   background-image: linear-gradient(180deg, rgba(232, 89, 12, .10), transparent 340px);
+}
+
+/* Search artwork bleed. Use the same image across the results canvas and
+   sticky desktop header so they read as one themed surface. The heavy dark
+   gradients retain contrast while allowing the artwork palette through. */
+body.results-open.search-art-themed,
+body.results-open.search-art-themed main {
+  background-image:
+    linear-gradient(180deg, rgba(0, 0, 0, .30) 0, rgba(0, 0, 0, .82) 300px, #030303 560px),
+    var(--search-theme-image);
+  background-size: 100% 560px, 100% 560px;
+  background-position: top center;
+  background-repeat: no-repeat;
+}
+
+@media (min-width: 900px) {
+  body.results-open.search-art-themed main header {
+    background-image:
+      linear-gradient(180deg, rgba(0, 0, 0, .62), rgba(0, 0, 0, .42)),
+      var(--search-theme-image);
+    background-size: 100vw 560px;
+    background-position: top center;
+    background-repeat: no-repeat;
+  }
 }
 
 /* The old bottom mini player is fully replaced by the persistent playbar */
@@ -220,9 +244,19 @@ header {
 
 .device-section-inline .custom-select-trigger {
   border-radius: 0;
-  background: var(--pill-bg);
-  border-color: transparent;
+  background: transparent;
+  border-color: rgba(255, 255, 255, .22);
   padding: 8px 14px;
+  transition: background .15s, border-color .15s, box-shadow .15s;
+}
+.device-section-inline .custom-select-trigger:hover,
+.device-section-inline .custom-select:focus-within .custom-select-trigger,
+.device-section-inline .custom-select.open .custom-select-trigger {
+  background: var(--pill-bg);
+  border-color: rgba(255, 255, 255, .38);
+}
+.device-section-inline .custom-select.open .custom-select-trigger {
+  box-shadow: 0 0 0 3px rgba(232, 89, 12, .12);
 }
 .device-section-inline #refresh {
   border-radius: 0;
@@ -284,13 +318,16 @@ body.results-open .play-section {
 }
 .search-wrap input#query {
   border-radius: 0;
-  background: var(--pill-bg);
-  border: 1px solid transparent;
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, .22);
   padding: 12px 42px 12px 44px;
   font-size: .9rem;
   transition: background .15s, border-color .15s, box-shadow .15s;
 }
-.search-wrap input#query:hover { background: #222; }
+.search-wrap input#query:hover {
+  background: var(--pill-bg);
+  border-color: rgba(255, 255, 255, .38);
+}
 .search-wrap input#query:focus {
   background: #232323;
   border-color: rgba(232, 89, 12, .55);
@@ -914,8 +951,8 @@ body.results-open .player-section.is-visible { transform: none; }
   min-width: 0;
 }
 .player-section .np-art {
-  width: 52px;
-  height: 52px;
+  width: 56px;
+  height: 56px;
   border-radius: 0;
   border: none;
   background: none center / cover no-repeat;
@@ -1072,7 +1109,7 @@ input[type=range]::-moz-range-thumb { border-radius: 50%; }
     grid-template-areas: "np transport actions";
     gap: 0 20px;
     min-height: var(--playbar-h);
-    padding: 12px 24px calc(10px + env(safe-area-inset-bottom, 0px));
+    padding: 15px 24px calc(13px + env(safe-area-inset-bottom, 0px));
   }
   .player-section .np { grid-area: np; }
   .player-section .transport { grid-area: transport; }
@@ -1247,8 +1284,13 @@ body.now-playing-route .player-section .player-expand-btn svg {
 
   body.now-playing-route header {
     margin-bottom: 0;
-    background: #000;
-    transition: background-color .28s ease, margin .25s ease;
+    background-image:
+      linear-gradient(180deg, rgba(0, 0, 0, .58), rgba(0, 0, 0, .40)),
+      var(--np-cover, none);
+    background-size: 100vw 100vh;
+    background-position: top center;
+    background-repeat: no-repeat;
+    transition: background-image .35s ease, margin .25s ease;
   }
   .mini-popup-overlay {
     display: flex !important;
@@ -1742,7 +1784,6 @@ body.results-open .player-section {
    ============================================================ */
 
 @media (min-width: 900px) {
-  #playlists-modal-overlay,
   #playlist-detail-modal-overlay,
   #history-modal-overlay {
     left: var(--rail-w);
@@ -1758,19 +1799,16 @@ body.results-open .player-section {
     transition: left .25s ease;
   }
   /* Playlist/history are full pages, never shortened by stale playback state. */
-  body:not(.now-playing-route) #playlists-modal-overlay,
   body:not(.now-playing-route) #playlist-detail-modal-overlay,
   body:not(.now-playing-route) #history-modal-overlay {
     bottom: 0 !important;
   }
   /* While a playlist view is open it owns the scroll: freeze the page
      behind it so the wheel never scrolls the background view first. */
-  body:has(#playlists-modal-overlay.open),
   body:has(#playlist-detail-modal-overlay.open),
   body:has(#history-modal-overlay.open) {
     overflow: hidden;
   }
-  #playlists-modal .history-modal-body,
   #playlist-detail-modal .history-modal-body,
   #history-modal .history-modal-body {
     overscroll-behavior: contain;
@@ -1779,7 +1817,6 @@ body.results-open .player-section {
      Matching .is-visible alone left an 88px strip of the page behind
      exposed while the playbar was hidden (it can carry .is-visible
      together with [hidden]/.is-collapsed during transitions). */
-  body:has(.player-section.is-visible:not([hidden])) #playlists-modal-overlay,
   body:has(.player-section.is-visible:not([hidden])) #playlist-detail-modal-overlay,
   body:has(.player-section.is-visible:not([hidden])) #history-modal-overlay {
     /* !important: must beat the route-scoped `bottom: 0 !important` above.
@@ -1787,7 +1824,6 @@ body.results-open .player-section {
        visibility — any on-screen playbar means overlays stop at its top edge. */
     bottom: var(--playbar-h) !important;
   }
-  #playlists-modal,
   #playlist-detail-modal,
   #history-modal {
     width: 100%;
@@ -1800,7 +1836,6 @@ body.results-open .player-section {
     border-radius: 0;
     box-shadow: none;
   }
-  #playlists-modal .history-modal-header,
   #playlist-detail-modal .history-modal-header,
   #history-modal .history-modal-header {
     border-bottom: none;
@@ -1809,7 +1844,6 @@ body.results-open .player-section {
     padding: 18px 32px;
     box-sizing: border-box;
   }
-  #playlists-modal .history-modal-body,
   #playlist-detail-modal .history-modal-body,
   #history-modal .history-modal-body {
     width: min(1100px, 100%);
@@ -1817,7 +1851,6 @@ body.results-open .player-section {
     padding-left: 32px;
     padding-right: 32px;
   }
-  #playlists-modal .history-modal-header h3,
   #playlist-detail-modal .history-modal-header h3,
   #history-modal .history-modal-header h3 {
     text-transform: none;
@@ -1827,7 +1860,6 @@ body.results-open .player-section {
   }
   /* These are routed desktop pages, so they do not need modal close icons.
      Keep the playlist-detail back arrow for navigating to the list. */
-  #playlists-modal-close,
   #playlist-detail-close,
   #history-modal-close {
     display: none;
@@ -2275,7 +2307,7 @@ body.results-open .player-section {
   flex: 1;
   overflow-y: auto;
   overscroll-behavior: contain;
-  padding: 6px 0 120px;
+  padding: 6px 0 16px;
 }
 #np-queue-list::-webkit-scrollbar { width: 6px; }
 #np-queue-list::-webkit-scrollbar-track { background: transparent; }
