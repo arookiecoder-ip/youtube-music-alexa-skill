@@ -62,6 +62,8 @@ Core (`server.py`):
 | ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `PUBLIC_BASE_URL` | e.g. `https://<your-ip-with-dashes>.sslip.io`. When set, `audio_url` points to `/proxy/` and downloads are pre-warmed. Unset = dev mode (returns direct googlevideo URLs). |
 | `YTDLP_COOKIES`   | path to cookies.txt; passed to every yt-dlp call                                                                                                                     |
+| `YTMUSIC_AUTH_FILE` | optional path to a `headers_auth.json` or `oauth.json` for YT Music recommendations. Warning: DO NOT store this in a public repo; browser headers give full access. |
+| `YTMUSIC_OAUTH_CLIENT_ID` / `_SECRET` | optional OAuth client credentials if using OAuth rather than browser headers. |
 | `YTDLP_PO_TOKEN`  | optional — if set, overrides the default `android_vr` client and passes this as the GVS PO token for `mweb` client instead (e.g. `youtube:po_token=mweb.gvs+{token}`) |
 | `API_KEY`         | shared secret; when set, all endpoints except privacy/terms and the login flow require `?key=` (or `X-Api-Key` header) **or** a valid web-remote session cookie. Must match `API_KEY` in `lambda/api_key.py`. |
 | `AUDIO_CACHE_DIR` | audio cache location (default `/tmp/ytm_audio_cache`)                                                                                                               |
@@ -207,8 +209,8 @@ Features:
   stay in sync. Dragging the scrubber seeks on release (Alexa can only seek
   by restarting the stream at the new offset, so expect a brief re-buffer).
 - **Queue view** — the upcoming radio queue, tap any entry to jump to it,
-  plus a shuffle-queue button (keeps the current song in place). On mobile, 
-  swipe left to remove a song or swipe right to like it. On desktop, these 
+  plus a shuffle-queue button (keeps the current song in place). On mobile,
+  swipe left to remove a song or swipe right to like it. On desktop, these
   options are in the 3-dot menu.
 - **Pasted YouTube links** — a watch link plays directly (bypassing search);
   a watch link with a `list=` id queues the rest of that playlist, like
@@ -221,17 +223,18 @@ Features:
   dialog matching the rest of the UI (no browser `confirm()` popups). On
   mobile this section lives in the hamburger sidebar; on desktop it's in the
   main column.
-- **Playlists & Liked Songs** — save your favorite tracks! Click the heart on 
-  the main player or swipe right in the queue to instantly like a song. Create 
-  custom playlists, and even paste a YouTube playlist link to automatically 
+- **Playlists & Liked Songs** — save your favorite tracks! Click the heart on
+  the main player or swipe right in the queue to instantly like a song. Create
+  custom playlists, and even paste a YouTube playlist link to automatically
   sync and import all of its tracks into a custom playlist.
-- **Recommended for you** — shown only on the blank/idle screen, with a
-  shimmering skeleton while it loads. Mixes a "for you" radio (seeded from
-  your most-recent track) with a "discover" radio (seeded from an older
-  track), preferring songs you haven't already played; falls back to YT
-  Music's charts if you have no history yet, or if there isn't enough to mix.
-  Cached for 30 minutes server-side and invalidated whenever you clear your
-  history.
+- **Home feed** — shown only on the blank/idle screen, with a
+  shimmering skeleton while it loads. It displays your personalized YouTube Music
+  homepage (shortcuts, song grids, recommended albums/artists) directly fetched
+  via `ytmusicapi.get_home()`. It features multiple layouts and filter chips
+  (e.g., "Music", "Podcasts") mirroring the official YT Music app.
+  Cached for 30 minutes server-side. If `YTMUSIC_AUTH_FILE` is not provided, it
+  falls back to anonymous/local unauthenticated recommendations. Invalidated
+  whenever you clear your history.
 
 Access is gated by the **web-remote login**: with `REMOTE_USER` /
 `REMOTE_PASSWORD` set, you sign in once at `/login/` and a session cookie

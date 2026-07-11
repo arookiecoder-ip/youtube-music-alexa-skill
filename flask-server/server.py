@@ -1,7 +1,10 @@
 import asyncio, difflib, glob, hashlib, hmac, itertools, json, os, random, secrets, sys, threading, time, re, subprocess, logging, copy, uuid
 from datetime import timedelta
 from urllib.parse import parse_qs, unquote, urlparse
+
+import home_feed
 from ytmusicapi import YTMusic
+
 import alexa_remote
 from flask import Flask, request, render_template, jsonify, send_file, session, redirect, Response
 from werkzeug.exceptions import HTTPException
@@ -257,10 +260,10 @@ def init_db():
                 FOREIGN KEY(playlist_id) REFERENCES playlists(id) ON DELETE CASCADE
             )
         ''')
-        
+
         # Ensure default 'liked' playlist exists
         conn.execute("INSERT OR IGNORE INTO playlists (id, name, updated_at) VALUES ('liked', 'Liked Songs', ?)", (time.time(),))
-        
+
         # Migrate history table from video_id PK to auto-increment id PK
         try:
             cur = conn.execute("PRAGMA table_info(history)")
@@ -288,12 +291,12 @@ def init_db():
             conn.execute("ALTER TABLE playlists ADD COLUMN source_url TEXT")
         except sqlite3.OperationalError:
             pass # Column already exists
-            
+
         try:
             conn.execute("ALTER TABLE playlist_tracks ADD COLUMN duration_ms INTEGER")
         except sqlite3.OperationalError:
             pass
-            
+
         try:
             conn.execute("ALTER TABLE playlist_tracks ADD COLUMN added_at REAL")
         except sqlite3.OperationalError:
@@ -303,7 +306,7 @@ def init_db():
             conn.execute("ALTER TABLE playlists ADD COLUMN description TEXT DEFAULT ''")
         except sqlite3.OperationalError:
             pass
-        
+
         # (Data migration script removed per user request)
 
 
@@ -331,7 +334,7 @@ def _record_listen(video_id, title, artist, thumbnail_url):
             INSERT INTO history (video_id, title, artist, thumbnail_url, played_at)
             VALUES (?, ?, ?, ?, ?)
         ''', (video_id, title or '', artist or '', thumbnail_url or '', time.time()))
-        
+
         conn.execute('''
             DELETE FROM history WHERE id NOT IN (
                 SELECT id FROM history ORDER BY played_at DESC LIMIT ?
@@ -346,10 +349,10 @@ def _backfill_history_metadata(video_id, title, artist, thumbnail_url):
         row = conn.execute('SELECT title FROM history WHERE video_id = ?', (video_id,)).fetchone()
         if row and not row['title']:
             if thumbnail_url:
-                conn.execute('UPDATE history SET title = ?, artist = ?, thumbnail_url = ? WHERE video_id = ?', 
+                conn.execute('UPDATE history SET title = ?, artist = ?, thumbnail_url = ? WHERE video_id = ?',
                              (title, artist or '', thumbnail_url, video_id))
             else:
-                conn.execute('UPDATE history SET title = ?, artist = ? WHERE video_id = ?', 
+                conn.execute('UPDATE history SET title = ?, artist = ? WHERE video_id = ?',
                              (title, artist or '', video_id))
             conn.commit()
 
@@ -367,7 +370,7 @@ def _load_playlists():
                 "updated_at": r['updated_at'],
                 "tracks": []
             }
-        
+
         # Newest additions first, matching YT Music's playlist view (a fresh
         # save shows at the top). rowid ASC breaks the tie inside a sync batch
         # (all rows share one added_at) so imported playlists keep their
@@ -724,6 +727,32 @@ def _get_ytmusic():
         if inst is None:
             inst = YTMusic()
             _YT_CACHE[tid] = inst
+        return inst
+
+_YT_HOME_CACHE = {}
+_YT_HOME_CACHE_LOCK = threading.Lock()
+
+def _get_ytmusic_home():
+    """Get a cached YTMusic instance for home feed with optional auth."""
+    tid = threading.get_ident()
+    with _YT_HOME_CACHE_LOCK:
+        inst = _YT_HOME_CACHE.get(tid)
+        if inst is None:
+            auth_file = os.environ.get("YTMUSIC_AUTH_FILE")
+            oauth_client = os.environ.get("YTMUSIC_OAUTH_CLIENT_ID")
+            oauth_secret = os.environ.get("YTMUSIC_OAUTH_CLIENT_SECRET")
+            try:
+                if auth_file:
+                    if oauth_client and oauth_secret:
+                        inst = YTMusic(auth=auth_file, client_id=oauth_client, client_secret=oauth_secret)
+                    else:
+                        inst = YTMusic(auth=auth_file)
+                else:
+                    inst = YTMusic()
+            except Exception as e:
+                logger.warning(f"Failed to initialize authenticated YTMusic for home feed: {e}. Falling back to anonymous.")
+                inst = YTMusic()
+            _YT_HOME_CACHE[tid] = inst
         return inst
 
 
@@ -1621,7 +1650,7 @@ class Supporting:
             }
             for track in songs
         ]
-    
+
     @staticmethod
     async def get_playlist_tracks(playlist_id: str):
         """Normalized track list for a playlist id, or None if unreadable/empty.
@@ -1671,7 +1700,7 @@ class Supporting:
     def resolve_direct_url(video_id: str):
         if not _valid_video_id(video_id):
             return None
-        
+
         clients = Supporting.get_ytdlp_clients()
         last_error = ""
         for client in clients:
@@ -1692,7 +1721,7 @@ class Supporting:
             if result.returncode == 0:
                 return result.stdout.strip()
             last_error = result.stderr.strip()
-        
+
         logger.error("yt-dlp get-url failed: %s", last_error)
         return None
 
@@ -1769,7 +1798,7 @@ class Supporting:
             extractor_args.append(f"youtube:player_client={client}")
             if po_token := os.environ.get("YTDLP_PO_TOKEN"):
                 extractor_args.append(f"youtube:po_token=mweb.gvs+{po_token}")
-        
+
         command = ["yt-dlp", "--no-playlist", "--quiet",
                    "-f", "140/bestaudio[ext=m4a]/bestaudio",
                    "--remote-components", "ejs:github"]
@@ -1849,7 +1878,7 @@ class Supporting:
         if not match:
             return None
         return Supporting.encode_to_hex(match.group())
-    
+
     @staticmethod
     def encode_to_hex(string):
         return ''.join([hex(ord(c))[2:].zfill(2) for c in string])
@@ -1865,7 +1894,7 @@ class Supporting:
             return None
 
         return {'id': playlist_raw['id'], 'title': playlist_raw.get('title', 'Untitled')}
-    
+
 @app.route("/get_playlist_info/", methods=["GET"])
 async def get_playlist_info():
     start_time = time.time()
@@ -3231,470 +3260,105 @@ def alexa_state_event():
 
 # ---- Home feed (categorized recommendation rows) ----
 _HOME_CACHE_TTL = 3 * 60
-_HOME_FORCE_MIN_INTERVAL = 60
-_home_cache = {'built_at': 0, 'rows': []}
+_HOME_FORCE_MIN_INTERVAL = 30
+_home_cache = {'built_at': 0, 'data': None}
 _home_lock = threading.Lock()
+_home_rebuild_lock = threading.Lock() # single flight
 
+async def _fetch_home_sources():
+    sources = {}
 
-def _normalize_home_item(item):
-    video_id = item.get('videoId')
-    if not video_id:
-        return None
-    artists = item.get('artists') or []
-    thumbnails = item.get('thumbnails') or []
-    album = item.get('album') or {}
-    return {
-        'videoId': str(video_id),
-        'title': str(item.get('title') or ''),
-        'artist': str((artists[0] or {}).get('name') or '') if artists else '',
-        'thumbnail': str((thumbnails[0] or {}).get('url') or '') if thumbnails else '',
-        'channelId': str((artists[0] or {}).get('id') or '') if artists else '',
-        'albumId': str(album.get('id') or album.get('browseId') or ''),
-    }
-
-
-def _home_item(t):
-    """Normalize any local track shape (history rows use thumbnail_url, radio
-    queue items use video_id + a thumbnail dict, playlist tracks and feed
-    items use plain strings) to the home feed contract: videoId/title/artist/
-    thumbnail, all strings."""
-    if not isinstance(t, dict):
-        return None
-    vid = t.get('videoId') or t.get('video_id') or ''
-    if not vid:
-        return None
-    thumb = t.get('thumbnail') or t.get('thumbnail_url') or ''
-    if isinstance(thumb, dict):
-        thumb = thumb.get('url') or ''
-    return {
-        'videoId': str(vid),
-        'title': str(t.get('title') or ''),
-        'artist': str(t.get('artist') or ''),
-        'thumbnail': str(thumb),
-        # Local history/playlist rows do not consistently carry an `artists`
-        # array (some carry a plain string), so only read their normalized ids
-        # here. Feed items with artist arrays are handled by
-        # `_normalize_home_item` above.
-        'channelId': str(t.get('channelId') or t.get('channel_id') or
-                         t.get('artist_id') or ''),
-        'albumId': str(t.get('albumId') or t.get('album_id') or
-                       ((t.get('album') or {}).get('id') if isinstance(t.get('album'), dict) else '') or ''),
-    }
-
-
-def _home_row(title, tracks, subtitle='', limit=20, exclude=None, seen=None):
-    """Build one home row from any iterable of track dicts, deduped within the
-    row and against `exclude`. Returns None instead of an empty row. When
-    `seen` is given, the row's ids are added to it so later (discovery) rows
-    don't repeat tracks the personalized rows already show."""
-    items, ids = [], set()
-    for t in tracks or []:
-        it = _home_item(t)
-        if not it:
-            continue
-        vid = it['videoId']
-        if vid in ids or (exclude and vid in exclude):
-            continue
-        ids.add(vid)
-        items.append(it)
-        if len(items) >= limit:
-            break
-    if not items:
-        return None
-    if seen is not None:
-        seen.update(ids)
-    row = {'title': str(title), 'items': items}
-    if subtitle:
-        row['subtitle'] = str(subtitle)
-    return row
-
-
-async def _build_home():
-    """Personalized home feed. The old implementation served only
-    ytmusic.get_home() — an *unauthenticated* call, so every row was generic
-    charts with no relation to the user. The feed is now grounded in local
-    signals: listening history, history-seeded radios, and liked songs, with
-    at most two anonymous YT Music rows appended at the end for discovery."""
     with _history_lock:
         history = _load_history()
-
-    rows = []
-    used = set()
-
-    # 1. Listen again — straight from history (already newest-first).
-    row = _home_row('Listen again', history, subtitle='Your recent plays')
-    if row:
-        rows.append(row)
-
-    # 2. Made for you — the history-seeded radio mix (same engine that powered
-    #    the old idle recommendations grid).
     if history:
-        try:
-            mix = await _build_recommendations()
-        except Exception:
-            logger.exception("home: made-for-you mix failed")
-            mix = []
-        row = _home_row('Made for you', mix,
-                        subtitle='Fresh picks from your listening', seen=used)
-        if row:
-            rows.append(row)
+        sources['local_history'] = history
 
-    # 3. Because you listened to <song> — one radio row per random recent seed.
-    seeds = [e for e in history[:12] if e.get('video_id') and e.get('title')]
-    random.shuffle(seeds)
-    seeds = seeds[:2]
-    if seeds:
-        radios = await asyncio.gather(
-            *[Supporting.get_radio_queue(s['video_id']) for s in seeds],
-            return_exceptions=True)
-        for seed, radio in zip(seeds, radios):
-            if not isinstance(radio, list) or not radio:
-                continue
-            tracks = [t for t in radio
-                      if t and t.get('video_id') != seed['video_id']]
-            row = _home_row('Because you listened to ' + seed['title'],
-                            tracks, limit=15, exclude=used, seen=used)
-            if row:
-                rows.append(row)
-
-    # 4. Your liked songs — random sample from the local Liked Songs playlist.
     try:
-        liked = (_load_playlists()['playlists'].get('liked') or {}).get('tracks') or []
-    except Exception:
-        logger.exception("home: liked songs row failed")
-        liked = []
-    if liked:
-        liked = list(liked)
-        random.shuffle(liked)
-        row = _home_row('Your liked songs', liked, subtitle='Songs you saved')
-        if row:
-            rows.append(row)
-
-    # 5. Discovery — up to two anonymous YT Music rows, deduped against the
-    #    personalized rows above. On a cold start (no history, no likes) this
-    #    is the whole feed, matching the old behavior.
-    try:
-        ytmusic = YTMusic()
-        # limit counts *rows fetched*, not song rows: the anonymous feed leads
-        # with playlist/chart shelves that have no videoIds and get filtered
-        # out. At limit=4 it regularly yields zero playable rows — fetch more
-        # so a "Quick picks"-style songs shelf is actually included.
-        try:
-            raw_rows = await asyncio.to_thread(ytmusic.get_home, limit=8)
-        except TypeError:
-            raw_rows = await asyncio.to_thread(ytmusic.get_home)
-        added = 0
-        for raw in raw_rows or []:
-            items = [
-                normalized for normalized in (
-                    _normalize_home_item(item)
-                    for item in (raw.get('contents') or [])
-                )
-                if normalized
-            ]
-            row = _home_row(raw.get('title') or 'Discover', items,
-                            subtitle=raw.get('subtitle') or '', exclude=used)
-            if row:
-                rows.append(row)
-                added += 1
-            if added >= 2:
-                break
-    except Exception:
-        logger.exception("home: discovery rows failed")
-
-    # Last resort: charts / seeded-radio pool (what the old idle recs grid
-    # used) so a cold start with a playlist-only anonymous feed still renders.
-    if not rows:
-        try:
-            pool = await _build_recommendations()
-        except Exception:
-            logger.exception("home: recommendations fallback failed")
-            pool = []
-        row = _home_row('Recommended for you', pool, limit=40)
-        if row:
-            rows.append(row)
-
-    if not rows:
-        raise RuntimeError("home feed came out empty")
-    return rows
-
-
-# Phase 12: Health check endpoint -- returns server status, DB connectivity, and uptime.
-@app.route("/api/health/", methods=["GET"])
-def api_health():
-    """Health check for monitoring and diagnostics. Returns server status,
-    database connectivity, queue health, and configuration info."""
-    status = 'ok'
-    checks = {}
-    
-    # DB connectivity check
-    try:
-        with get_db() as conn:
-            conn.execute('SELECT 1').fetchone()
-        checks['database'] = 'ok'
+        pl_data = _load_playlists()
+        local_pl = list(pl_data.get('playlists', {}).values())
+        if local_pl:
+            sources['local_playlists'] = local_pl
+        liked = pl_data.get('liked_songs', [])
+        if liked:
+            sources['local_liked'] = liked
     except Exception as e:
-        checks['database'] = f'error: {e}'
-        status = 'degraded'
-    
-    # Queue health
-    with _np_lock:
-        queue_len = len(_now_playing.get('queue') or [])
-        current_track = bool(_now_playing.get('video_id'))
-        playing = _now_playing.get('playing', False)
-    checks['queue'] = {
-        'length': queue_len,
-        'current_track': current_track,
-        'playing': playing,
-    }
-    
-    # SSE subscriber count
-    with _sse_lock:
-        sse_count = len(_sse_subscribers)
-    checks['sse_subscribers'] = sse_count
-    
-    # Audio cache
-    try:
-        cache_files = len(glob.glob(os.path.join(AUDIO_CACHE_DIR, '*')))
-        checks['audio_cache'] = {'files': cache_files, 'dir': AUDIO_CACHE_DIR}
-    except Exception:
-        checks['audio_cache'] = 'unavailable'
-    
-    return jsonify({
-        'status': status,
-        'version': _STATIC_VERSION,
-        'uptime_seconds': int(time.time() - _start_time_epoch),
-        'checks': checks,
-    })
+        logger.warning(f"Failed to load local playlists for home: {e}")
 
+    # Concurrently fetch ytmusic parts
+    async def get_native_home():
+        try:
+            ytm = await asyncio.to_thread(_get_ytmusic_home)
+            return await asyncio.wait_for(asyncio.to_thread(ytm.get_home, limit=6), timeout=home_feed.SOURCE_TIMEOUTS['ytmusic_home'])
+        except Exception as e:
+            logger.warning(f"ytm_home failed: {e}")
+            return []
 
-def _get_artist_compat(ytmusic, channel_id):
-    """get_artist with a fallback for channels ytmusicapi cannot parse.
+    # Add other sources as needed here (library, explore, etc.) if auth is present
 
-    Plain user channels (no public YT Music content) are served with a
-    musicVisualHeaderRenderer header, which ytmusicapi's get_artist
-    (<= 1.12.1) does not handle and raises KeyError. Parse that header
-    manually so the artist page can render name/thumbnail instead of 500.
-    """
-    try:
-        return ytmusic.get_artist(channel_id)
-    except KeyError:
-        pass
-    browse_id = channel_id[4:] if channel_id.startswith("MPLA") else channel_id
-    response = ytmusic._send_request("browse", {"browseId": browse_id})
-    header = (response.get("header") or {}).get("musicVisualHeaderRenderer") or {}
-    title_runs = (header.get("title") or {}).get("runs") or []
-    name = title_runs[0].get("text", "") if title_runs else ""
-    if not name:
-        return None
-    thumbs = ((((header.get("foregroundThumbnail") or {})
-                .get("musicThumbnailRenderer") or {})
-               .get("thumbnail") or {})
-              .get("thumbnails")) or []
-    sub_btn = (header.get("subscriptionButton") or {}).get("subscribeButtonRenderer") or {}
-    sub_runs = (sub_btn.get("subscriberCountText") or {}).get("runs") or []
-    return {
-        "name": name,
-        "description": "",
-        "thumbnails": thumbs,
-        "subscribers": sub_runs[0].get("text", "") if sub_runs else "",
-    }
+    results = await asyncio.gather(get_native_home(), return_exceptions=True)
+    sources['ytm_home'] = results[0] if not isinstance(results[0], Exception) else []
 
-
-@app.route("/api/artist/<channel_id>", methods=["GET"])
-async def api_artist(channel_id):
-    if not channel_id.strip():
-        return error_response('invalid channel id', 400)
-    try:
-        ytmusic = _get_ytmusic()
-        raw = await asyncio.to_thread(_get_artist_compat, ytmusic, channel_id)
-    except Exception as e:
-        logger.exception("api_artist failed for %s", channel_id)
-        return error_response(str(e), 500)
-    if not raw or not raw.get('name'):
-        return error_response('artist not found', 404)
-    artist_info = {
-        'name': raw.get('name', ''),
-        'description': raw.get('description', ''),
-        'thumbnails': raw.get('thumbnails', []),
-        'subscribers': raw.get('subscribers', ''),
-    }
-    songs_raw = raw.get('songs', {}).get('results', []) or []
-    top_songs = []
-    for s in songs_raw:
-        vid = s.get('videoId')
-        if not vid:
-            continue
-        top_songs.append({
-            'title': s.get('title', ''),
-            'artist': " and ".join(a.get('name', '') for a in (s.get('artists') or [])),
-            'video_id': vid,
-            'thumbnail': s['thumbnails'][-1]['url'] if s.get('thumbnails') else None,
-            'duration_ms': Supporting.duration_ms(s),
-            'channelId': channel_id,
-        })
-    albums_raw = raw.get('albums', {}).get('results', []) or []
-    albums = []
-    for a in albums_raw:
-        bid = a.get('browseId')
-        if not bid:
-            continue
-        albums.append({
-            'title': a.get('title', ''),
-            'year': a.get('year', ''),
-            'thumbnail': a['thumbnails'][-1]['url'] if a.get('thumbnails') else None,
-            'browseId': bid,
-        })
-        if len(albums) >= 10:
-            break
-    singles_raw = raw.get('singles', {}).get('results', []) or []
-    singles = []
-    for s in singles_raw:
-        bid = s.get('browseId')
-        if not bid:
-            continue
-        singles.append({
-            'title': s.get('title', ''),
-            'year': s.get('year', ''),
-            'thumbnail': s['thumbnails'][-1]['url'] if s.get('thumbnails') else None,
-            'browseId': bid,
-        })
-        if len(singles) >= 10:
-            break
-    related_raw = raw.get('related', {}).get('results', []) or []
-    related = []
-    for r in related_raw:
-        bid = r.get('browseId')
-        if not bid:
-            continue
-        thumb = ''
-        if r.get('thumbnails'):
-            thumb = r['thumbnails'][-1].get('url', '')
-        related.append({
-            'title': r.get('title', ''),
-            'browseId': bid,
-            'subscribers': r.get('subscribers', ''),
-            'thumbnail': thumb,
-        })
-    return jsonify({
-        'artist': artist_info,
-        'topSongs': top_songs,
-        'topSongsBrowseId': (raw.get('songs') or {}).get('browseId', ''),
-        'topSongsParams': (raw.get('songs') or {}).get('params', ''),
-        'albums': albums,
-        'albumsBrowseId': (raw.get('albums') or {}).get('browseId', ''),
-        'albumsParams': (raw.get('albums') or {}).get('params', ''),
-        'singles': singles,
-        'singlesBrowseId': (raw.get('singles') or {}).get('browseId', ''),
-        'singlesParams': (raw.get('singles') or {}).get('params', ''),
-        'related': related,
-    })
-
-
-@app.route("/api/song/<video_id>/album", methods=["GET"])
-async def api_song_album(video_id):
-    """Resolve a song's album when feed/history data omitted its browse id."""
-    if not _valid_video_id(video_id):
-        return error_response('invalid video id', 400)
-    ytmusic = _get_ytmusic()
-
-    def _album_id(track):
-        album = track.get('album') or {}
-        return album.get('id') or album.get('browseId') or ''
-
-    candidates = []
-    try:
-        radio = await asyncio.to_thread(ytmusic.get_watch_playlist, videoId=video_id, limit=5)
-        candidates.extend((radio or {}).get('tracks') or [])
-    except Exception:
-        logger.exception("album lookup watch playlist failed for %s", video_id)
-    exact = [t for t in candidates if t.get('videoId') == video_id]
-
-    title = request.args.get('title', '').strip()
-    artist = request.args.get('artist', '').strip()
-    searched = []
-    # Video-variant ids (OMV/uploaded) often carry no album even when the
-    # song has one, so search by title/artist whenever the exact track
-    # lacks it — not only when the watch playlist misses the video.
-    if not any(_album_id(t) for t in exact):
-        query = ' '.join(filter(None, (title, artist)))
-        if query:
-            try:
-                searched = await asyncio.to_thread(ytmusic.search, query, 'songs', None, 10) or []
-            except Exception:
-                logger.exception("album lookup search failed for %s", video_id)
-
-    exact.extend(t for t in searched if t.get('videoId') == video_id)
-    title_lower = title.lower()
-    fuzzy = [t for t in searched
-             if title_lower and title_lower in (t.get('title') or '').lower()]
-    for track in exact + fuzzy + searched:
-        browse_id = _album_id(track)
-        if browse_id:
-            return jsonify({'browseId': browse_id})
-    return error_response('album not found for this song', 404)
-
-
-@app.route("/api/album/<browse_id>", methods=["GET"])
-async def api_album(browse_id):
-    if not browse_id.strip():
-        return error_response('invalid album id', 400)
-    try:
-        raw = await asyncio.to_thread(_get_ytmusic().get_album, browseId=browse_id)
-    except Exception as e:
-        logger.exception("api_album failed for %s", browse_id)
-        return error_response(str(e), 500)
-    if not raw or not raw.get('title'):
-        return error_response('album not found', 404)
-    artists = raw.get('artists') or []
-    tracks = []
-    for t in raw.get('tracks') or []:
-        vid = t.get('videoId')
-        if not vid:
-            continue
-        track_artists = t.get('artists') or artists
-        tracks.append({
-            'video_id': vid,
-            'title': t.get('title') or '',
-            'artist': ' and '.join(a.get('name') or '' for a in track_artists),
-            'channelId': (track_artists[0] or {}).get('id', '') if track_artists else '',
-            'thumbnail': (t.get('thumbnails') or raw.get('thumbnails') or [{}])[-1].get('url', ''),
-            'duration_ms': Supporting.duration_ms(t),
-        })
-    return jsonify({
-        'browseId': browse_id,
-        'title': raw.get('title') or '',
-        'year': raw.get('year') or '',
-        'description': raw.get('description') or '',
-        'thumbnail': (raw.get('thumbnails') or [{}])[-1].get('url', ''),
-        'artist': (artists[0] or {}).get('name', '') if artists else '',
-        'channelId': (artists[0] or {}).get('id', '') if artists else '',
-        'tracks': tracks,
-    })
-
+    return sources
 
 @app.route("/api/home/", methods=["GET"])
 def get_home():
     force = request.args.get('refresh') == '1'
+
     with _home_lock:
+        data = _home_cache['data']
         age = time.time() - _home_cache['built_at']
+
+    fresh_enough = age < _HOME_CACHE_TTL
+
+    if fresh_enough and data and (not force or age < _HOME_FORCE_MIN_INTERVAL):
+        return jsonify(data)
+
+    # Single flight rebuild
+    acquired = _home_rebuild_lock.acquire(blocking=False)
+    if not acquired:
+        # If we have stale data, serve it immediately while rebuild happens in background
+        if data:
+            stale_data = copy.deepcopy(data)
+            stale_data['stale'] = True
+            return jsonify(stale_data)
+        # Cold start, we must wait
+        _home_rebuild_lock.acquire()
+
+    try:
+        # Check cache again after acquiring lock in case it was built while waiting
+        with _home_lock:
+            data = _home_cache['data']
+            age = time.time() - _home_cache['built_at']
         fresh_enough = age < _HOME_CACHE_TTL
-        if fresh_enough and _home_cache['rows'] and (
-                not force or age < _HOME_FORCE_MIN_INTERVAL):
-            return jsonify({'rows': _home_cache['rows']})
-        try:
-            rows = asyncio.run(_build_home())
-        except Exception:
-            logger.exception("home feed failed")
-            if _home_cache['rows']:
-                return jsonify({'rows': _home_cache['rows']})
-            # Recs items use video_id + thumbnail dicts; _home_row normalizes
-            # them to the home feed contract so the fallback actually renders.
-            fallback = _home_row('Recommended', _recs_cache.get('items', []),
-                                 limit=40)
-            return jsonify({'rows': [fallback] if fallback else []})
-        _home_cache['rows'] = rows
-        _home_cache['built_at'] = time.time()
-        return jsonify({'rows': rows})
+        if fresh_enough and data and (not force or age < _HOME_FORCE_MIN_INTERVAL):
+            return jsonify(data)
+
+        sources = asyncio.run(_fetch_home_sources())
+        feed = home_feed.assemble_home_feed(sources)
+
+        with _home_lock:
+            _home_cache['data'] = feed
+            _home_cache['built_at'] = time.time()
+
+        return jsonify(feed)
+    except Exception as e:
+        logger.exception("home feed failed")
+        if data:
+            stale_data = copy.deepcopy(data)
+            stale_data['stale'] = True
+            stale_data['partial'] = True
+            return jsonify(stale_data)
+        # Empty cold start fallback
+        return jsonify({
+            "schemaVersion": home_feed.SCHEMA_VERSION,
+            "generatedAt": int(time.time()),
+            "partial": True,
+            "stale": False,
+            "filters": [{"id": "all", "label": "All"}],
+            "shelves": []
+        })
+    finally:
+        _home_rebuild_lock.release()
 
 
 # ---- Blank-state recommendations (web remote) ----
@@ -4330,6 +3994,42 @@ def alexa_shuffle_queue():
 @app.route("/alexa/play_queue/", methods=["POST"])
 def alexa_play_queue():
     body = request.get_json(silent=True) or {}
+
+    queue_items = body.get('queue_items')
+    if isinstance(queue_items, list):
+        if len(queue_items) > 100:
+            return error_response('queue_items exceeds 100', 400)
+
+        validated_items = []
+        for vid in queue_items:
+            if not isinstance(vid, str) or not vid:
+                return error_response('invalid videoId in queue_items', 400)
+            validated_items.append({
+                'video_id': vid,
+                'title': vid,
+                'artist': '',
+                'thumbnail': '',
+                'duration_ms': 0
+            })
+
+        if not validated_items:
+            return error_response('queue_items is empty', 400)
+
+        _update_now_playing(playing=False, queue=validated_items, queue_index=0)
+
+        serial = body.get("serial")
+        if serial:
+            _ensure_audio_ready_for_play(validated_items[0]['video_id'], wait=False)
+            error = _dispatch_play_with_retry(serial, validated_items[0]['video_id'])
+            if error:
+                return _device_dispatch_failed(error)
+
+        return jsonify({
+            'ok': True,
+            'queue': validated_items,
+            'queue_index': 0
+        })
+
     serial = body.get("serial")
     video_id = body.get("video_id")
     # Set by callers that are about to append more tracks right after this call
@@ -4799,7 +4499,7 @@ async def alexa_search():
 
     if not _has_results(results) and not all_raw:
         return error_response('no results found', 404)
-        
+
     def _clean_all_item(item):
         cleaned = {
             'category': item.get('category'),
@@ -4819,7 +4519,7 @@ async def alexa_search():
         if cleaned['resultType'] == 'artist' and cleaned['category'] == 'Top result' and not cleaned['browseId'] and cleaned['artists']:
             cleaned['browseId'] = cleaned['artists'][0].get('id') or ''
         return cleaned
-        
+
     results['all'] = [_clean_all_item(item) for item in all_raw]
 
     # Unfiltered "Top result" entries occasionally omit their artist credit
@@ -4934,7 +4634,7 @@ def api_create_playlist():
 
     pl_id = f"pl_{uuid.uuid4().hex}"
     now = time.time()
-    
+
     new_pl = {
         "id": pl_id,
         "name": name,
@@ -4943,14 +4643,14 @@ def api_create_playlist():
         "updated_at": now,
         "tracks": []
     }
-    
+
     with get_db() as conn:
         conn.execute('''
             INSERT INTO playlists (id, name, description, source_url, updated_at)
             VALUES (?, ?, ?, ?, ?)
         ''', (pl_id, name, description, source_url, now))
         conn.commit()
-        
+
     return jsonify(new_pl)
 
 @app.route("/api/playlists/<pl_id>", methods=["GET"])
@@ -4993,7 +4693,7 @@ async def api_get_playlist(pl_id):
         return error_response(str(e), 500)
     if not raw or not raw.get('id'):
         return error_response('playlist not found', 404)
-        
+
     tracks = []
     for t in raw.get('tracks') or []:
         vid = t.get('videoId')
@@ -5010,7 +4710,7 @@ async def api_get_playlist(pl_id):
             'duration_ms': Supporting.duration_ms(t),
             'uuid': vid,
         })
-        
+
     return jsonify({
         'id': raw.get('id'),
         'name': raw.get('title') or 'Untitled',
@@ -5166,7 +4866,7 @@ def api_add_track(pl_id):
         "duration_ms": duration_ms,
         "added_at": now
     }
-    
+
     with get_db() as conn:
         if pl_id == "liked":
             conn.execute("INSERT OR IGNORE INTO playlists (id, name, updated_at) VALUES ('liked', 'Liked Songs', ?)", (now,))
@@ -5252,7 +4952,7 @@ def api_remove_track(pl_id, track_uuid):
             _bump_liked_version()
             data = _load_playlists()
             return jsonify({'ok': True, 'liked_songs': data["liked_songs"]})
-            
+
         conn.execute("DELETE FROM playlist_tracks WHERE playlist_id = ? AND uuid = ?", (pl_id, track_uuid))
         conn.execute('UPDATE playlists SET updated_at = ? WHERE id = ?', (time.time(), pl_id))
         conn.commit()
@@ -5267,14 +4967,14 @@ def api_sync_playlist(pl_id):
             pl_row = conn.execute("SELECT * FROM playlists WHERE id = ?", (pl_id,)).fetchone()
             if not pl_row: return
             source_url = pl_row['source_url']
-            
+
         if not source_url: return
-        
+
         list_id = source_url
         if "list=" in source_url:
             q = parse_qs(urlparse(source_url).query)
             list_id = q.get("list", [None])[0] or source_url
-            
+
         try:
             new_tracks_raw = asyncio.run(Supporting.get_playlist_tracks(list_id))
         except Exception as e:
@@ -5286,12 +4986,12 @@ def api_sync_playlist(pl_id):
             # source playlist is now empty" and wiping every stored track.
             logger.warning("[sync] %s returned no data; skipping to avoid wiping tracks", list_id)
             return
-            
+
         now = time.time()
         new_tracks = []
         for track in new_tracks_raw:
             if not track.get("video_id"): continue
-            
+
             new_tracks.append({
                 "uuid": uuid.uuid4().hex,
                 "video_id": track["video_id"],
@@ -5301,7 +5001,7 @@ def api_sync_playlist(pl_id):
                 "duration_ms": track.get("duration_ms", 0),
                 "added_at": now
             })
-            
+
         with get_db() as conn:
             existing_rows = conn.execute("SELECT video_id FROM playlist_tracks WHERE playlist_id = ?", (pl_id,)).fetchall()
             existing_vids = {r['video_id'] for r in existing_rows}

@@ -400,7 +400,11 @@
 
   <!-- Home feed: categorized recommendation rows (replaces recs on idle) -->
   <section class="needs-login home-section" id="home-section" hidden>
-    <div class="home-greeting" id="home-greeting" hidden></div>
+    <div class="home-header-area">
+      <h2 class="home-greeting" id="home-greeting" hidden></h2>
+      <div id="home-filter-chips" class="home-filter-chips" hidden aria-label="Filters"></div>
+      <div id="home-status" class="home-status" aria-live="polite" hidden></div>
+    </div>
     <div class="home-rows" id="home-rows"></div>
   </section>
 
@@ -915,6 +919,7 @@
 <script>{% include "static/js/sidebar.js" %}</script>
 <script>{% include "static/js/history.js" %}</script>
 <script>{% include "static/js/recs.js" %}</script>
+<script>{% include "static/js/home-renderers.js" %}</script>
 <script>{% include "static/js/home.js" %}</script>
 <script>{% include "static/js/artist.js" %}</script>
 <script>{% include "static/js/album.js" %}</script>

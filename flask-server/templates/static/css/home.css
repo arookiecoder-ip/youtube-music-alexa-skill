@@ -1,56 +1,144 @@
-/* ---- Home feed: horizontal recommendation rows ---- */
+/* ---- Home feed: Resilient Recommendation Shelves ---- */
 
-.home-section {
+#home-section {
   background: none;
   border: none;
   padding: 0;
   margin-bottom: 0;
+  padding-bottom: 120px; /* Player clearance */
 }
 
-.home-section[hidden] {
+#home-section[hidden] {
   display: none;
 }
 
-/* Entrance fade. This restarts every time the router re-shows the section
-   (e.g. collapsing the now-playing overlay), so it must start immediately —
-   a delay with `both` fill holds the whole page at opacity 0 first, which
-   read as a blank flash. */
-.home-section:not([hidden]) {
-  animation: recsFadeIn .2s ease both;
+@media (prefers-reduced-motion: no-preference) {
+  #home-section:not([hidden]) {
+    animation: homeFadeIn .3s ease both;
+  }
+  @keyframes homeFadeIn {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
 }
 
-.home-row-container {
+/* Header Area */
+.home-header-area {
+  padding: var(--space-4) var(--space-4) var(--space-2);
+}
+@media (min-width: 900px) {
+  .home-header-area {
+    padding: var(--space-4) 40px var(--space-2);
+  }
+}
+
+.home-greeting {
+  font-size: 1.5rem;
+  font-weight: 700;
+  margin: 0 0 var(--space-3) 0;
+  color: var(--text);
+}
+
+.home-filter-chips {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  -webkit-overflow-scrolling: touch;
+  margin-bottom: var(--space-3);
+}
+.home-filter-chips::-webkit-scrollbar { display: none; }
+.home-filter-chip {
+  background: rgba(255, 255, 255, 0.1);
+  border: 1px solid transparent;
+  border-radius: 16px;
+  color: var(--text);
+  padding: 6px 16px;
+  font-size: 0.9rem;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.2s;
+}
+.home-filter-chip:hover, .home-filter-chip:focus-visible {
+  background: rgba(255, 255, 255, 0.2);
+}
+.home-filter-chip.selected {
+  background: var(--text);
+  color: var(--bg);
+  font-weight: 600;
+}
+
+.home-status {
+  font-size: 0.85rem;
+  color: var(--muted);
+  margin-bottom: var(--space-3);
+  padding: 8px 12px;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: var(--radius-sm);
+  display: inline-block;
+}
+
+/* Base Shelf */
+.home-shelf {
+  margin-bottom: var(--space-5);
   content-visibility: auto;
   contain-intrinsic-size: auto 300px;
 }
 
-.home-row-header {
+.home-shelf-header {
   display: flex;
   align-items: flex-end;
   justify-content: space-between;
   gap: 16px;
-  padding: var(--space-3) var(--space-4) var(--space-1);
+  padding: 0 var(--space-4) var(--space-2);
+}
+@media (min-width: 900px) {
+  .home-shelf-header { padding: 0 40px var(--space-2); }
 }
 
-.home-row-label {
-  color: var(--text);
-  font-size: var(--text-sm);
-  font-weight: 600;
-  letter-spacing: .06em;
-  line-height: 1.2;
-  text-transform: uppercase;
+.home-shelf-title-area {
+  display: flex;
+  flex-direction: column;
 }
-
-.home-row-subtitle {
+.home-shelf-subtitle {
   color: var(--muted);
   font-size: var(--text-2xs);
-  margin-top: 3px;
+  text-transform: uppercase;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  margin-bottom: 2px;
+}
+.home-shelf-title {
+  color: var(--text);
+  font-size: 1.25rem;
+  font-weight: 700;
+  margin: 0;
+  line-height: 1.2;
 }
 
-.home-row,
-.home-row-skeleton {
+.home-shelf-actions {
   display: flex;
-  gap: 12px;
+  gap: 8px;
+}
+.home-shelf-play-all {
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  color: var(--text);
+  border-radius: 16px;
+  padding: 4px 12px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.2s, border-color 0.2s;
+}
+.home-shelf-play-all:hover, .home-shelf-play-all:focus-visible {
+  background: rgba(255, 255, 255, 0.1);
+  border-color: rgba(255, 255, 255, 0.4);
+}
+
+.home-shelf-content {
+  display: flex;
+  gap: 16px;
   overflow-x: auto;
   padding: 0 var(--space-4) 8px;
   scroll-padding-inline: var(--space-4);
@@ -58,218 +146,313 @@
   -webkit-overflow-scrolling: touch;
   scrollbar-width: none;
 }
-
-.home-row::-webkit-scrollbar,
-.home-row-skeleton::-webkit-scrollbar {
-  display: none;
+@media (min-width: 900px) {
+  .home-shelf-content {
+    gap: 24px;
+    padding: 0 40px 8px;
+    scroll-padding-inline: 40px;
+  }
 }
+.home-shelf-content::-webkit-scrollbar { display: none; }
 
-.home-row[hidden],
-.home-row-skeleton[hidden] {
-  display: none;
-}
-
-.home-card,
-.home-skeleton-card {
-  flex: 0 0 140px;
-  min-width: 0;
-  scroll-snap-align: start;
-}
-
-.home-card {
-  background: none;
-  border: none;
-  cursor: pointer;
-  display: flex;
-  flex-direction: column;
-  gap: var(--space-1);
-  opacity: 1;
-  transform: none;
-}
-
-.home-card-art {
-  align-items: center;
-  aspect-ratio: 1 / 1;
-  background: var(--surface);
-  border-radius: var(--radius-sm);
-  color: var(--muted);
-  display: flex;
-  justify-content: center;
-  opacity: 1;
-  overflow: hidden;
+/* Base Item Properties */
+.home-item {
   position: relative;
-  transition:
-    opacity .3s ease,
-    transform .25s cubic-bezier(.22, 1, .36, 1),
-    box-shadow .25s ease;
-  width: 100%;
-}
-
-.home-card-art::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  background: rgba(0, 0, 0, 0);
+  cursor: pointer;
+  scroll-snap-align: start;
+  flex-shrink: 0;
+  border-radius: var(--radius-sm);
   transition: background 0.2s;
-  pointer-events: none;
-  z-index: 1;
 }
-.home-card:hover .home-card-art::after {
-  background: rgba(0, 0, 0, 0.4);
+.home-item:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
-
-.home-play-btn {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  width: 60px;
-  height: 60px;
-  background: none;
-  border-radius: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border: none;
-  cursor: pointer;
-  z-index: 2;
-  transform: translate(-50%, -50%);
-  opacity: 0;
-  transition: opacity 0.18s ease;
-  pointer-events: none;
-  box-shadow: none;
-}
-.home-play-btn svg {
-  width: 52px;
-  height: 52px;
-  fill: #ffffff;
-  display: block;
-  filter: drop-shadow(0 2px 8px rgba(0,0,0,0.7));
-}
-
-/* Reveal on card hover */
-.home-card:hover .home-play-btn {
-  opacity: 1;
-  pointer-events: auto;
-}
-/* Slightly shrink on click for press feedback */
-.home-play-btn:active {
-  transform: translate(-50%, -50%) scale(0.92) !important;
-}
-
-.home-card-art img {
-  height: 100%;
+.home-item-img {
   object-fit: cover;
-  opacity: 0;
-  transition: opacity .3s ease;
-  width: 100%;
+  background: var(--surface);
 }
-
-.home-card-art img.loaded {
-  opacity: 1;
-}
-
-.home-card .recs-tile-title {
-  margin-top: 5px;
-  font-size: .88rem;
-  font-weight: 700;
-  line-height: 1.35;
-  cursor: pointer;
-}
-.home-row-scroll-controls { display: flex; align-items: center; gap: 8px; margin-left: auto; }
-.home-row-scroll {
-  width: 34px;
-  height: 34px;
-  padding: 0;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  border: 0;
-  border-radius: 50%;
-  background: rgba(255,255,255,.09);
+.home-item-title {
   color: var(--text);
-  cursor: pointer;
-  transition: background .15s, opacity .15s;
-}
-.home-row-scroll:hover:not(:disabled) { background: rgba(255,255,255,.17); }
-.home-row-scroll:disabled { opacity: .28; cursor: default; }
-.home-row-scroll svg { width: 19px; height: 19px; }
-.home-card .recs-tile-artist {
-  width: 100%;
-  padding: 0;
-  border: 0;
-  background: none;
-  color: var(--muted);
-  font: inherit;
-  font-size: .82rem;
-  font-weight: 500;
-  line-height: 1.35;
-  text-align: left;
+  font-size: 0.9rem;
+  font-weight: 600;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+  line-height: 1.3;
 }
-/* Per-artist links inside the credit line stay muted like the line itself
-   (the global .artist-name rule would brighten them) until hovered */
-.home-card .recs-tile-artist .artist-name { color: inherit; cursor: pointer; }
-.home-card .recs-tile-artist .artist-name:hover { color: var(--text); text-decoration: underline; }
+.home-item-subtitle {
+  color: var(--muted);
+  font-size: 0.8rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-top: 2px;
+}
+.home-play-btn {
+  position: absolute;
+  background: rgba(0, 0, 0, 0.6);
+  border: none;
+  border-radius: 50%;
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.2s, transform 0.1s;
+  z-index: 2;
+}
+.home-item:hover .home-play-btn, .home-play-btn:focus-visible {
+  opacity: 1;
+}
+@media (hover: none) {
+  .home-play-btn { opacity: 1; background: rgba(0,0,0,0.4); } /* Always visible on touch if capable */
+}
+.home-play-btn:active {
+  transform: scale(0.9);
+}
 
-/* Like button on home feed cards */
-.home-card .result-like-btn {
-  width: 28px;
-  height: 28px;
-  margin-top: auto;
-  align-self: center;
+/* 1. Shortcuts */
+.home-layout-shortcuts .home-shelf-content {
+  display: grid;
+  grid-template-rows: repeat(2, 1fr);
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(180px, 1fr);
 }
-.home-card .result-like-btn svg {
-  width: 12px;
-  height: 12px;
+@media (max-width: 600px) {
+  .home-layout-shortcuts .home-shelf-content {
+    grid-template-rows: repeat(4, 1fr);
+    grid-auto-columns: 85vw;
+  }
+}
+.home-item-shortcut {
+  display: flex;
+  align-items: center;
+  background: rgba(255, 255, 255, 0.05);
+  border-radius: 4px;
+  overflow: hidden;
+  height: 56px;
+}
+.home-item-shortcut:hover, .home-item-shortcut:focus-within {
+  background: rgba(255, 255, 255, 0.1);
+}
+.home-item-shortcut .home-item-img {
+  width: 56px;
+  height: 56px;
+  flex-shrink: 0;
+}
+.home-item-shortcut .home-item-text {
+  padding: 0 12px;
+  flex: 1;
+  min-width: 0;
+}
+.home-item-shortcut .home-play-btn {
+  position: static;
+  opacity: 0;
+  width: 44px;
+  height: 44px;
+  margin-right: 6px;
+  background: transparent;
+  box-shadow: none;
+}
+.home-item-shortcut:hover .home-play-btn, .home-item-shortcut:focus-within .home-play-btn {
+  opacity: 1;
 }
 
-.home-skeleton-card {
-  cursor: default;
+/* 2. Song Grid */
+.home-layout-song_grid .home-shelf-content {
+  display: grid;
+  grid-template-rows: repeat(4, 1fr);
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(280px, 320px);
+}
+@media (max-width: 600px) {
+  .home-layout-song_grid .home-shelf-content {
+    grid-auto-columns: 85vw;
+  }
+}
+.home-item-song {
+  display: flex;
+  align-items: center;
+  padding: 8px 4px;
+  border-radius: 4px;
+}
+.home-item-song:hover, .home-item-song:focus-within {
+  background: rgba(255, 255, 255, 0.05);
+}
+.home-item-song .home-item-img {
+  width: 48px;
+  height: 48px;
+  border-radius: 4px;
+  flex-shrink: 0;
+}
+.home-item-song .home-item-text {
+  padding: 0 12px;
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+.home-item-song .home-play-btn {
+  position: absolute;
+  left: 4px; /* over the image */
+  width: 48px;
+  height: 48px;
+  border-radius: 4px;
 }
 
-.home-skeleton-card .skeleton-block {
+/* 3. Cards */
+.home-item-card {
+  width: 140px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+@media (min-width: 900px) {
+  .home-item-card { width: 174px; }
+}
+.home-item-card .home-item-img-wrapper {
+  position: relative;
+  width: 100%;
   aspect-ratio: 1 / 1;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+.home-item-card .home-item-img {
+  width: 100%;
+  height: 100%;
+}
+.home-item-card .home-play-btn {
+  width: 44px;
+  height: 44px;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+}
+.home-item-card:hover .home-play-btn:active { transform: translate(-50%, -50%) scale(0.9); }
+
+/* 4. Wide Cards */
+.home-item-wide-card {
+  width: 240px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+@media (min-width: 900px) {
+  .home-item-wide-card { width: 320px; }
+}
+.home-item-wide-card .home-item-img-wrapper {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+.home-item-wide-card .home-item-img {
+  width: 100%;
+  height: 100%;
+}
+.home-item-wide-card .home-play-btn {
+  width: 44px;
+  height: 44px;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+}
+.home-item-wide-card:hover .home-play-btn:active { transform: translate(-50%, -50%) scale(0.9); }
+.home-item-wide-card .home-item-subtitle {
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+/* 5. Circles */
+.home-item-circle {
+  width: 120px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  align-items: center;
+  text-align: center;
+}
+@media (min-width: 900px) {
+  .home-item-circle { width: 160px; }
+}
+.home-item-circle .home-item-img-wrapper {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  border-radius: 50%;
+  overflow: hidden;
+}
+.home-item-circle .home-item-img {
+  width: 100%;
+  height: 100%;
+}
+.home-item-circle .home-play-btn {
+  width: 44px;
+  height: 44px;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+}
+.home-item-circle:hover .home-play-btn:active { transform: translate(-50%, -50%) scale(0.9); }
+.home-item-circle .home-item-text {
   width: 100%;
 }
 
-@media (hover: hover) {
-  .home-card-art:hover {
-    box-shadow: 0 8px 24px rgba(0, 0, 0, .5);
-    transform: none;
-  }
+
+/* Empty state */
+.home-empty {
+  padding: 60px 20px;
+  text-align: center;
+}
+.home-empty-title {
+  font-size: 1.25rem;
+  font-weight: 600;
+  margin-bottom: 8px;
+}
+.home-empty-sub {
+  color: var(--muted);
+  font-size: 0.9rem;
+  margin-bottom: 24px;
 }
 
-/* No shrink on click — pressed feedback is a shadow + centered play icon
-   (see redesign.css) so the card keeps its size. */
-
-@media (prefers-reduced-motion: reduce) {
-  .home-section:not([hidden]) {
-    animation: none;
-  }
-
-  .home-card-art,
-  .home-card-art img {
-    transition: opacity .2s ease;
+/* Skeletons */
+.home-skeleton-shelf {
+  pointer-events: none;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .home-skeleton-card .skeleton-block, .home-skeleton-card .skeleton-line {
+    animation: skeletonPulse 1.5s ease-in-out infinite alternate;
   }
 }
-
+@keyframes skeletonPulse {
+  0% { opacity: 0.3; }
+  100% { opacity: 0.7; }
+}
+.home-skeleton-card {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 140px; /* Maps to cards by default */
+}
 @media (min-width: 900px) {
-  .home-row-header {
-    padding: var(--space-4) 40px var(--space-2);
-  }
-
-  .home-row,
-  .home-row-skeleton {
-    gap: 24px;
-    padding-left: 40px;
-    padding-right: 40px;
-    scroll-padding-inline: 40px;
-  }
-
-  .home-card,
-  .home-skeleton-card {
-    flex-basis: 174px;
-  }
+  .home-skeleton-card { width: 174px; }
 }
+.home-skeleton-card .skeleton-block {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  background: var(--surface);
+  border-radius: var(--radius-sm);
+}
+.home-skeleton-card .skeleton-line {
+  height: 14px;
+  background: var(--surface);
+  border-radius: 2px;
+}
+.home-skeleton-card .skeleton-line-title { width: 80%; }
+.home-skeleton-card .skeleton-line-artist { width: 60%; }

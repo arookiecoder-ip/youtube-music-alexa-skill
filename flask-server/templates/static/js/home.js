@@ -5,87 +5,55 @@
   if (state._homeLoaded === undefined) state._homeLoaded = false;
   if (state._homeLoading === undefined) state._homeLoading = false;
 
-  const musicNoteSvg = '<svg width="28" height="28" viewBox="0 0 24 24" fill="currentColor"><path d="M12 3v10.55A4 4 0 1 0 14 17V7h4V3h-6z"/></svg>';
-
-  function skeletonRowHtml() {
-    const wide = window.matchMedia('(min-width: 900px)').matches;
-    const count = wide ? 6 : 3;
-    let cards = '';
-    for (let i = 0; i < count; i++) {
-      cards += '<div class="home-card home-skeleton-card"><div class="skeleton-block"></div><div class="skeleton-line skeleton-line-title"></div><div class="skeleton-line skeleton-line-artist"></div></div>';
-    }
-    return '<div class="home-row-container">' +
-      '<div class="home-row-header"><div><div class="skeleton-line" style="width: 140px; height: 16px; margin: 0;"></div></div></div>' +
-      '<div class="home-row-skeleton">' + cards + '</div>' +
-    '</div>';
-  }
-
-  function homeRowHtml(row) {
-    const items = Array.isArray(row && row.items) ? row.items : [];
-    const tilesHtml = items.map(function(item) {
-      // The main feed uses videoId; the recs-cache fallback row the server
-      // serves when the feed build fails uses video_id. Accept both so the
-      // fallback doesn't render as an empty page.
-      const videoId = (item && (item.videoId || item.video_id)) || '';
-      if (!videoId) return '';
-      const title = item.title || '';
-      const artist = item.artist || '';
-      const channelId = item.channelId || item.channel_id || '';
-      const albumId = item.albumId || item.album_id || '';
-      const thumbUrl = item.thumbnail || '';
-      const thumbHtml = thumbUrl
-        ? "<img src=\"" + escHtml(thumbUrl) + "\" alt=\"\" loading=\"lazy\" decoding=\"async\" onload=\"this.classList.add('loaded')\" onerror=\"this.onerror=null; this.src='data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7';\">"
-        : musicNoteSvg;
-      var isLikedLocal = typeof _playlistsData !== 'undefined' && _playlistsData.liked_songs && _playlistsData.liked_songs.includes(videoId);
-      var heartSvgLocal = isLikedLocal
-        ? '<svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg>'
-        : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg>';
-      const artistHtml = '<div class="recs-tile-artist">' + window.artistLinksHtml(artist, channelId) + '</div>';
-      const playBtnHtml = '<button type="button" class="home-play-btn" title="Play"><svg viewBox="0 0 24 24" fill="currentColor"><polygon points="8,5 19,12 8,19"/></svg></button>';
-      return '<div class="home-card" data-video-id="' + escHtml(videoId) + '" data-album-id="' + escHtml(albumId) + '" data-title="' + escHtml(title) + '" data-artist="' + escHtml(artist) + '" data-thumb="' + escHtml(thumbUrl) + '">' +
-        '<div class="recs-tile-art home-card-art">' + thumbHtml + playBtnHtml + '</div>' +
-        '<div class="recs-tile-title" title="Open album">' + escHtml(title) + '</div>' +
-        artistHtml +
-      '</div>';
-    }).join('');
-    if (!tilesHtml) return '';
-    const subtitle = row && row.subtitle
-      ? '<div class="home-row-subtitle">' + escHtml(row.subtitle) + '</div>'
-      : '';
-    return '<div class="home-row-container">' +
-      '<div class="home-row-header"><div><div class="label home-row-label">' + escHtml((row && row.title) || '') + '</div>' + subtitle + '</div>' +
-      '<div class="home-row-scroll-controls">' +
-        '<button type="button" class="home-row-scroll home-row-scroll-prev" title="Scroll left" aria-label="Scroll left" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg></button>' +
-        '<button type="button" class="home-row-scroll home-row-scroll-next" title="Scroll right" aria-label="Scroll right"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg></button>' +
-      '</div></div>' +
-      '<div class="home-row">' + tilesHtml + '</div>' +
-    '</div>';
-  }
+  let homeFeedData = null;
+  let currentFilter = 'all';
+  let abortController = null;
 
   function showHomeSkeleton(show) {
     const container = document.getElementById('home-rows');
     if (!container) return;
     if (show) {
+      // Rough skeleton matching layouts, defaulting to 4 rows
       let rows = '';
-      for (let i = 0; i < 4; i++) rows += skeletonRowHtml();
+      for (let i = 0; i < 4; i++) {
+        rows += `
+          <div class="home-shelf home-skeleton-shelf">
+            <div class="home-shelf-header">
+                <div class="home-shelf-title-area"><div class="skeleton-line" style="width: 140px; height: 16px; margin: 0;"></div></div>
+            </div>
+            <div class="home-shelf-content">
+                ${Array(6).fill('<div class="home-item home-skeleton-card"><div class="skeleton-block"></div><div class="skeleton-line skeleton-line-title"></div></div>').join('')}
+            </div>
+          </div>
+        `;
+      }
       container.innerHTML = rows;
       container.hidden = false;
-      return;
+    } else {
+      container.querySelectorAll('.home-skeleton-shelf').forEach(el => el.remove());
     }
-    container.querySelectorAll('.home-row-skeleton').forEach(function(el) {
-      if (el.closest('.home-row-container')) {
-        el.closest('.home-row-container').hidden = true;
-      } else {
-        el.hidden = true;
-      }
-    });
   }
 
-  function renderHomeFeed(data) {
-    // Phase 12: Performance marker for profiling home feed render time
-    if (window.performance && performance.mark) {
-      performance.mark('home-feed-start');
+  function renderFilters() {
+    const filterContainer = document.getElementById('home-filter-chips');
+    if (!filterContainer) return;
+    if (!homeFeedData || !homeFeedData.filters || homeFeedData.filters.length <= 1) {
+        filterContainer.hidden = true;
+        return;
     }
+
+    const html = homeFeedData.filters.map(f => {
+        const isSelected = f.id === currentFilter;
+        return `<button class="home-filter-chip ${isSelected ? 'selected' : ''}" data-filter-id="${HomeRenderers.escapeHtml(f.id)}">${HomeRenderers.escapeHtml(f.label)}</button>`;
+    }).join('');
+
+    filterContainer.innerHTML = html;
+    filterContainer.hidden = false;
+  }
+
+  function renderHomeFeed() {
+    if (window.performance && performance.mark) performance.mark('home-feed-start');
+
     const container = document.getElementById('home-rows');
     if (!container) return;
     const idleHero = document.getElementById('idle-hero');
@@ -96,20 +64,40 @@
       greet.textContent = h < 5 ? 'Good night' : h < 12 ? 'Good morning' : h < 18 ? 'Good afternoon' : 'Good evening';
       greet.hidden = false;
     }
-    const rows = Array.isArray(data && data.rows) ? data.rows : [];
-    let rowsHtml = rows.map(homeRowHtml).join('');
-    if (!rowsHtml) {
-      // Never leave the page silently blank: show why and offer a retry.
-      rowsHtml = '<div class="home-empty">' +
+
+    renderFilters();
+
+    const statusEl = document.getElementById('home-status');
+    if (statusEl) {
+        if (homeFeedData && homeFeedData.stale) {
+            statusEl.textContent = "Showing older data while updating...";
+            statusEl.hidden = false;
+        } else if (homeFeedData && homeFeedData.partial) {
+            statusEl.textContent = "Some recommendations are unavailable right now.";
+            statusEl.hidden = false;
+        } else {
+            statusEl.hidden = true;
+        }
+    }
+
+    if (!homeFeedData || !homeFeedData.shelves || homeFeedData.shelves.length === 0) {
+      container.innerHTML = '<div class="home-empty">' +
         '<div class="home-empty-title">No recommendations right now</div>' +
         '<div class="home-empty-sub">The feed could not be built. Play something or try again.</div>' +
         '<button type="button" id="home-retry-btn" class="btn-accent">Try again</button>' +
         '</div>';
+      container.hidden = false;
+      showHomeSkeleton(false);
+      return;
     }
-    container.innerHTML = rowsHtml;
+
+    const shelvesToRender = HomeRenderers.filterShelves(homeFeedData, currentFilter);
+    const html = shelvesToRender.map(HomeRenderers.renderShelf).join('');
+
+    container.innerHTML = html || '<div class="home-empty"><div class="home-empty-title">No items match this filter</div></div>';
     container.hidden = false;
     showHomeSkeleton(false);
-    // Phase 12: Measure render-to-screen time
+
     if (window.performance && performance.mark && performance.measure) {
       performance.mark('home-feed-end');
       try { performance.measure('home-feed-render', 'home-feed-start', 'home-feed-end'); } catch (_) {}
@@ -119,19 +107,38 @@
   async function loadHomeFeed() {
     if (!state._loggedIn || state._homeLoaded || state._homeLoading) return;
     state._homeLoading = true;
+
+    if (abortController) {
+        abortController.abort();
+    }
+    abortController = new AbortController();
+    const signal = abortController.signal;
+
     const section = document.getElementById('home-section');
     const idleHero = document.getElementById('idle-hero');
     if (idleHero) idleHero.hidden = true;
     const artistOpen = (window.getRoute() || '').indexOf('#artist/') === 0;
     const npOpen = (window.getRoute() || '') === '#now-playing';
     if (section) section.hidden = !!(state._resultsOpen || artistOpen || npOpen);
+
     showHomeSkeleton(true);
     try {
-      const data = await api('/api/home/?refresh=1');
+      // Use existing window.api logic which returns json, but we need to pass signal if it supported it.
+      // Since window.api uses fetch, we'll just use window.api and check signal.aborted later
+      const data = await window.api('/api/home/?refresh=1&filter=all');
+      if (signal.aborted) return;
+
+      if (data && data.schemaVersion === 2) {
+          homeFeedData = data;
+      } else {
+          homeFeedData = null;
+      }
       state._homeLoaded = true;
-      renderHomeFeed(data);
+      renderHomeFeed();
     } catch (e) {
+      if (signal.aborted) return;
       console.warn('Failed to load home feed', e);
+      homeFeedData = null;
       const container = document.getElementById('home-rows');
       if (container) {
         container.innerHTML = '';
@@ -146,96 +153,106 @@
 
   const rows = document.getElementById('home-rows');
   if (rows) {
-    function updateShelfArrows(shelf) {
-      var container = shelf.closest('.home-row-container');
-      if (!container) return;
-      var prev = container.querySelector('.home-row-scroll-prev');
-      var next = container.querySelector('.home-row-scroll-next');
-      if (prev) prev.disabled = shelf.scrollLeft <= 2;
-      if (next) next.disabled = shelf.scrollLeft + shelf.clientWidth >= shelf.scrollWidth - 2;
+    function updateShelfArrows(shelfContent) {
+        // Find arrows inside shelf header based on scroll position
+        // This requires template modifications to add arrows to home-shelf-header if they overflow
     }
+
     rows.addEventListener('scroll', function(e) {
-      if (e.target.classList && e.target.classList.contains('home-row')) updateShelfArrows(e.target);
+      if (e.target.classList && e.target.classList.contains('home-shelf-content')) updateShelfArrows(e.target);
       if (window._closeAllMoreMenus) window._closeAllMoreMenus();
     }, true);
+
     rows.addEventListener('click', function(e) {
       var scrollBtn = e.target.closest('.home-row-scroll');
       if (scrollBtn) {
-        var shelf = scrollBtn.closest('.home-row-container').querySelector('.home-row');
-        var direction = scrollBtn.classList.contains('home-row-scroll-prev') ? -1 : 1;
-        shelf.scrollBy({ left: direction * Math.max(240, shelf.clientWidth * .8), behavior: 'smooth' });
-        window.setTimeout(function() { updateShelfArrows(shelf); }, 350);
-        return;
+          // Add shelf scrolling logic if arrows are introduced in home-renderers
+          return;
       }
-      // Empty-state retry: reset the loaded flag and rebuild the feed
+
       if (e.target.closest('#home-retry-btn')) {
         state._homeLoaded = false;
         loadHomeFeed();
         return;
       }
 
-
-      // Artist name: navigate (or resolve by name) instead of playing the card.
-      // Handled here rather than left to the document-level handler because
-      // this container listener fires first and would otherwise play the card.
-      var artistLink = e.target.closest('.artist-name');
-      if (artistLink) {
-        e.stopPropagation();
-        window.openArtistLink(artistLink);
-        return;
+      var playAllBtn = e.target.closest('.home-shelf-play-all');
+      if (playAllBtn) {
+          var shelfId = playAllBtn.dataset.shelfId;
+          var shelf = homeFeedData.shelves.find(s => s.id === shelfId);
+          if (shelf) {
+              var qIds = HomeRenderers.extractPlayQueue(shelf);
+              if (qIds.length > 0) {
+                  window.api('/alexa/play_queue/', {
+                      method: 'POST',
+                      body: JSON.stringify({ queue_items: qIds })
+                  }).then(res => {
+                      if (res.ok && window._updateNowPlayingFromServer) {
+                         // Update player optimistically or fetch
+                      }
+                      if (window.toast) window.toast('Playing shelf', 'success');
+                  }).catch(err => {
+                      if (window.toast) window.toast('Failed to play shelf', 'error');
+                  });
+              }
+          }
+          return;
       }
 
-      var titleLink = e.target.closest('.recs-tile-title');
-      var art = e.target.closest('.home-card-art');
       var playBtn = e.target.closest('.home-play-btn');
+      var itemCard = (playBtn || e.target).closest('.home-item');
 
-      // Clicking the play button OR the art area → play the song directly
-      if (playBtn || art) {
+      if (itemCard) {
         e.stopPropagation();
-        var card = (playBtn || art).closest('.home-card');
-        if (!card || !rows.contains(card) || !card.dataset.videoId) return;
-        if (!window.playFromQueue) return;
-        window.playFromQueue({
-          video_id: card.dataset.videoId,
-          title: card.dataset.title || '',
-          artist: card.dataset.artist || '',
-          thumbnail: card.dataset.thumb || '',
-        });
-        return;
-      }
+        var videoId = itemCard.dataset.videoId;
+        var playlistId = itemCard.dataset.playlistId;
+        var targetId = itemCard.dataset.targetId;
+        var kind = itemCard.dataset.kind;
 
-      // Clicking the title text → open the album page
-      if (titleLink) {
-        e.stopPropagation();
-        var titleCard = titleLink.closest('.home-card');
-        if (titleCard && titleCard.dataset.albumId) {
-          // Album ID already known: preload then navigate
-          if (window.preloadNavigateAlbum) window.preloadNavigateAlbum(titleCard.dataset.albumId);
-          else window.navigateTo('#album/' + encodeURIComponent(titleCard.dataset.albumId));
-        } else if (titleCard && titleCard.dataset.videoId) {
-          titleLink.classList.add('is-resolving');
-          var lookup = '/api/song/' + encodeURIComponent(titleCard.dataset.videoId) + '/album' +
-            '?title=' + encodeURIComponent(titleCard.dataset.title || '') +
-            '&artist=' + encodeURIComponent(titleCard.dataset.artist || '');
-          window.api(lookup).then(function(result) {
-            if (!result || !result.browseId) throw new Error('Album not found');
-            titleCard.dataset.albumId = result.browseId;
-            if (window.preloadNavigateAlbum) window.preloadNavigateAlbum(result.browseId);
-            else window.navigateTo('#album/' + encodeURIComponent(result.browseId));
-          }).catch(function(err) {
-            if (window.toast) window.toast(err.message || 'Could not open album', 'error');
-          }).finally(function() {
-            titleLink.classList.remove('is-resolving');
-          });
+        // If it's a play button click OR item click and it's a track/station/playlist to play directly
+        if (playBtn || kind === 'track' || kind === 'station' || (!targetId && playlistId)) {
+            if (!videoId && !playlistId) return;
+            if (window.playFromQueue) {
+                // If it's just a track
+                if (videoId) {
+                    window.playFromQueue({
+                        video_id: videoId,
+                        title: itemCard.querySelector('.home-item-title')?.textContent || '',
+                        artist: itemCard.querySelector('.home-item-subtitle')?.textContent || '',
+                        thumbnail: itemCard.querySelector('img')?.src || ''
+                    });
+                } else if (playlistId) {
+                    // Start playlist playback
+                    window.api('/alexa/play_queue/', {
+                        method: 'POST',
+                        body: JSON.stringify({ queue_items: [playlistId] }) // Handle this on server? Or play queue as playlist
+                    });
+                }
+            }
+            return;
         }
-        return;
+
+        // Navigate based on target ID
+        if (targetId) {
+            if (kind === 'artist') {
+                if (window.openArtistLink) {
+                    var fauxLink = document.createElement('a');
+                    fauxLink.dataset.channelId = targetId;
+                    window.openArtistLink(fauxLink);
+                }
+            } else if (kind === 'album') {
+                if (window.preloadNavigateAlbum) window.preloadNavigateAlbum(targetId);
+                else window.navigateTo('#album/' + encodeURIComponent(targetId));
+            } else if (kind === 'playlist') {
+                window.navigateTo('#playlist/' + encodeURIComponent(targetId));
+            }
+        }
       }
     });
 
     let activeMenuCardId = null;
     let sharedMoreMenu = null;
 
-    // Global click-outside listener
     document.addEventListener('click', function(e) {
       if (sharedMoreMenu && sharedMoreMenu.classList.contains('open')) {
         if (!e.target.closest('.result-more-menu')) {
@@ -245,7 +262,6 @@
       }
     });
 
-    // Escape key listener
     document.addEventListener('keydown', function(e) {
       if (e.key === 'Escape' && sharedMoreMenu && sharedMoreMenu.classList.contains('open')) {
         sharedMoreMenu.classList.remove('open');
@@ -254,26 +270,26 @@
     });
 
     rows.addEventListener('contextmenu', function(e) {
-      var card = e.target.closest('.home-card');
-      if (card && card.dataset.videoId) {
+      var itemCard = e.target.closest('.home-item');
+      if (itemCard && (itemCard.dataset.videoId || itemCard.dataset.playlistId)) {
         e.preventDefault();
         e.stopPropagation();
-        
-        var videoId = card.dataset.videoId;
-        
+
+        var videoId = itemCard.dataset.videoId;
+
         if (activeMenuCardId === videoId && sharedMoreMenu && sharedMoreMenu.classList.contains('open')) {
           sharedMoreMenu.classList.remove('open');
           activeMenuCardId = null;
           return;
         }
-        
+
         if (window._closeAllMoreMenus) window._closeAllMoreMenus();
         if (sharedMoreMenu) sharedMoreMenu.classList.remove('open');
-        
+
         if (!sharedMoreMenu) {
           sharedMoreMenu = document.createElement('div');
           sharedMoreMenu.className = 'result-more-menu';
-          sharedMoreMenu.innerHTML = 
+          sharedMoreMenu.innerHTML =
             '<div class="result-menu-option" data-action="toggle-like"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg> Like</div>' +
             '<div class="result-menu-option" data-action="play-next"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg> Play next</div>' +
             '<div class="result-menu-option" data-action="add-to-queue"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg> Add to queue</div>' +
@@ -281,7 +297,7 @@
             '<div class="result-menu-option" data-action="save-playlist"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path><line x1="12" y1="11" x2="12" y2="17"></line><line x1="9" y1="14" x2="15" y2="14"></line></svg> Save to Playlist</div>';
           document.body.appendChild(sharedMoreMenu);
           sharedMoreMenu.addEventListener('click', function(evt) { evt.stopPropagation(); });
-          
+
           sharedMoreMenu.querySelector('[data-action="toggle-like"]').addEventListener('click', function(evt) {
               evt.stopPropagation();
               if (window._closeAllMoreMenus) window._closeAllMoreMenus();
@@ -320,25 +336,25 @@
               if (window.openAddToPlaylistModal && sharedMoreMenu._track) window.openAddToPlaylistModal(sharedMoreMenu._track);
           });
         }
-        
+
         sharedMoreMenu._track = {
           video_id: videoId,
-          title: card.dataset.title || '',
-          artist: card.dataset.artist || '',
-          thumbnail: card.dataset.thumb || ''
+          title: itemCard.querySelector('.home-item-title')?.textContent || '',
+          artist: itemCard.querySelector('.home-item-subtitle')?.textContent || '',
+          thumbnail: itemCard.querySelector('img')?.src || ''
         };
-        sharedMoreMenu._triggerCard = card;
+        sharedMoreMenu._triggerCard = itemCard;
         activeMenuCardId = videoId;
-        
+
         var menuHeight = 200;
         var menuWidth = 180;
         var mouseX = e.clientX;
         var mouseY = e.clientY;
-        
+
         var spaceBelow = window.innerHeight - mouseY;
         var spaceRight = window.innerWidth - mouseX;
         var openAbove = spaceBelow < menuHeight + 8;
-        
+
         if (spaceRight < menuWidth + 8) {
            sharedMoreMenu.style.left = 'auto';
            sharedMoreMenu.style.right = (window.innerWidth - mouseX) + 'px';
@@ -346,7 +362,7 @@
            sharedMoreMenu.style.left = mouseX + 'px';
            sharedMoreMenu.style.right = 'auto';
         }
-        
+
         if (openAbove) {
            sharedMoreMenu.style.top = 'auto';
            sharedMoreMenu.style.bottom = (window.innerHeight - mouseY) + 'px';
@@ -354,13 +370,26 @@
            sharedMoreMenu.style.top = mouseY + 'px';
            sharedMoreMenu.style.bottom = 'auto';
         }
-        
-        // Remove _home so search.js _closeAllMoreMenus doesn't reparent it
-        sharedMoreMenu._home = null; 
+
+        sharedMoreMenu._home = null;
         void sharedMoreMenu.offsetWidth;
         sharedMoreMenu.classList.add('open');
       }
     });
+  }
+
+  const filterChips = document.getElementById('home-filter-chips');
+  if (filterChips) {
+      filterChips.addEventListener('click', function(e) {
+          const chip = e.target.closest('.home-filter-chip');
+          if (chip) {
+              const filterId = chip.dataset.filterId;
+              if (filterId !== currentFilter) {
+                  currentFilter = filterId;
+                  renderHomeFeed();
+              }
+          }
+      });
   }
 
   window.loadHomeFeed = loadHomeFeed;

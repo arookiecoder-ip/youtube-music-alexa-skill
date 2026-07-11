@@ -1259,13 +1259,6 @@ body.now-playing-route .player-section .player-expand-btn svg {
 
   body.now-playing-route header {
     margin-bottom: 0;
-    background-image:
-      linear-gradient(180deg, rgba(0, 0, 0, .58), rgba(0, 0, 0, .40)),
-      var(--np-cover, none);
-    background-size: 100vw 100vh;
-    background-position: top center;
-    background-repeat: no-repeat;
-    transition: background-image .35s ease, margin .25s ease;
   }
   .mini-popup-overlay {
     display: flex !important;
@@ -2103,7 +2096,10 @@ body.results-open .player-section {
 @media (min-width: 900px) {
   #now-playing-section {
     position: fixed;
-    top: calc(var(--topbar-h) + 3px);
+    /* Start the existing artwork bleed at the viewport edge so it continues
+       behind the transparent header. The page content is offset below; this
+       avoids painting a separate, mismatched copy of the cover in header. */
+    top: 0;
     left: var(--rail-w);
     right: 0;
     bottom: var(--playbar-h); /* stop exactly at the desktop playbar's top edge */
@@ -2135,7 +2131,13 @@ body.results-open .player-section {
   body.rail-collapsed.now-playing-route #now-playing-section {
     left: 0;
   }
-  .np-page { height: 100%; position: relative; isolation: isolate; overflow: hidden; }
+  .np-page {
+    height: 100%;
+    padding-top: calc(var(--topbar-h) + 3px);
+    position: relative;
+    isolation: isolate;
+    overflow: hidden;
+  }
 }
 
 /* ---- Left: album art + meta ---- */
