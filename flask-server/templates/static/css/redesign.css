@@ -291,10 +291,40 @@ body.results-open .play-section {
 @media (max-width: 899px) {
   /* body + main both padded 16px doubled the gutters; keep one */
   body { padding: 0; }
-  /* Cascade fix: sidebar.css loads after base.css, so its unconditional
-     .hamburger-btn { display:none } was overriding base's mobile
-     display:inline-flex — the menu button never showed. Restore it here. */
-  .hamburger-btn { display: inline-flex; }
+}
+
+/* The old right-side hamburger is replaced by the rail toggle next to the
+   brand (which opens the drawer on mobile). Keep the element for the toggle
+   to delegate to, but never show it. */
+.hamburger-btn { display: none !important; }
+
+/* Rail toggle: sits left of the brand, YT Music style */
+.rail-toggle-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  margin-right: 4px;
+  padding: 0;
+  background: none;
+  border: none;
+  border-radius: var(--radius-full);
+  color: var(--muted);
+  cursor: pointer;
+  transition: color .15s, background .15s;
+}
+.rail-toggle-btn:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, .08);
+}
+.rail-toggle-btn svg { width: 20px; height: 20px; }
+
+/* Collapsed rail (desktop): zero out the rail width so the whole shell —
+   main, top bar and search pill — reflows automatically. */
+@media (min-width: 900px) {
+  body.rail-collapsed { --rail-w: 0px; }
+  body.rail-collapsed .sidebar { display: none !important; }
 }
 
 /* Sticky search on mobile so it's always one thumb away */
@@ -494,6 +524,30 @@ body.results-open .player-section {
   padding: 0;
   gap: 10px;
 }
+/* Queue toggle inside the volume cluster (Spotify-style) */
+.queue-toggle-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  margin-right: 4px;
+  background: none;
+  border: none;
+  border-radius: var(--radius-full);
+  color: var(--muted);
+  cursor: pointer;
+  transition: color .15s, background .15s;
+}
+.queue-toggle-btn:hover {
+  color: var(--text);
+  background: rgba(255, 255, 255, .08);
+}
+.queue-toggle-btn.active { color: var(--accent); }
+.queue-toggle-btn.active:hover { background: rgba(232, 89, 12, .12); }
+.queue-toggle-btn svg { width: 18px; height: 18px; }
 input[type=range] { border-radius: var(--radius-full); }
 input[type=range]::-webkit-slider-thumb { border-radius: 50%; }
 input[type=range]::-moz-range-thumb { border-radius: 50%; }
@@ -864,3 +918,99 @@ button { border-radius: var(--radius-md); }
   margin: 0 auto;
   width: 100%;
 }
+
+/* ============================================================
+   Search results: artist rows are links to the artist page
+   ============================================================ */
+
+.result-item-link { cursor: pointer; }
+.result-thumb-round { border-radius: 50% !important; }
+
+/* ============================================================
+   Playlists as in-page views (desktop)
+   The playlists list and playlist detail reuse the modal markup,
+   but render inside the content area — no dark backdrop, no
+   floating card — so opening a playlist feels like navigating to
+   a page, the way YT Music and Spotify do it. Mobile keeps the
+   bottom-sheet/popup style.
+   ============================================================ */
+
+@media (min-width: 900px) {
+  #playlists-modal-overlay,
+  #playlist-detail-modal-overlay {
+    left: var(--rail-w);
+    top: calc(var(--topbar-h) + 3px);
+    right: 0;
+    bottom: 0;
+    background: var(--bg, #0a0a0a);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    align-items: stretch;
+    /* Below the playbar (220) so playback controls stay reachable */
+    z-index: 210;
+  }
+  body:has(.player-section.is-visible) #playlists-modal-overlay,
+  body:has(.player-section.is-visible) #playlist-detail-modal-overlay {
+    bottom: var(--playbar-h);
+  }
+  #playlists-modal,
+  #playlist-detail-modal {
+    width: min(920px, 100%);
+    max-width: none;
+    height: 100%;
+    max-height: none;
+    margin: 0 auto;
+    background: transparent;
+    border: none;
+    border-radius: 0;
+    box-shadow: none;
+  }
+  #playlists-modal .history-modal-header,
+  #playlist-detail-modal .history-modal-header {
+    border-bottom: none;
+    padding-top: 18px;
+  }
+  #playlists-modal .history-modal-header h3,
+  #playlist-detail-modal .history-modal-header h3 {
+    text-transform: none;
+    letter-spacing: -.01em;
+    font-size: 1.3rem;
+    font-weight: 800;
+  }
+}
+
+/* ============================================================
+   Playbar polish
+   ============================================================ */
+
+.player-section .np-info { min-width: 0; }
+.player-section .np-title {
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.player-section .np-artist {
+  color: var(--muted);
+  font-size: .76rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.player-section .np-artist .artist-name { cursor: pointer; }
+.player-section .np-artist .artist-name:hover {
+  color: var(--text);
+  text-decoration: underline;
+}
+.player-section .progress-track {
+  height: 5px;
+  transition: height .12s ease;
+}
+.player-section .progress:hover .progress-track { height: 7px; }
+.player-section .progress-times {
+  font-size: .66rem;
+  color: var(--muted);
+}
+.player-section .transport button svg { width: 16px; height: 16px; }
+.player-section .pp-btn svg { width: 18px; height: 18px; }
+.player-section .vol input[type=range] { flex: 1; }

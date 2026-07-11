@@ -56,6 +56,11 @@
     } else if (hash.indexOf('#artist/') === 0) {
       var channelId = decodeURIComponent(hash.slice('#artist/'.length));
       if (!channelId) { location.hash = '#home'; return; }
+      // Leave the search-results state properly (mini player, body class,
+      // _resultsOpen flag) instead of just hiding the section.
+      if (window.__appState && window.__appState._resultsOpen && window.closeResults) {
+        window.closeResults();
+      }
       showArtistSection();
       if (window.loadArtist) window.loadArtist(channelId);
     } else {

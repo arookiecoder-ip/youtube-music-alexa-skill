@@ -100,10 +100,9 @@
 })();
 
 
-/* ---- Nav rail (Home / Search / Recently Listened) ---- */
+/* ---- Nav rail (Home / Recently Listened) ---- */
 (function () {
   const navHome = document.getElementById('nav-home-btn');
-  const navSearch = document.getElementById('nav-search-btn');
   const navHistory = document.getElementById('nav-history-btn');
 
   function goHome() {
@@ -116,18 +115,32 @@
 
   if (navHome) navHome.addEventListener('click', goHome);
 
-  if (navSearch) navSearch.addEventListener('click', () => {
-    if (location.hash && location.hash !== '#home') location.hash = '#home';
-    if (window._closeSidebar) window._closeSidebar();
-    window.scrollTo({ top: 0, behavior: 'smooth' });
-    const query = document.getElementById('query');
-    if (query) query.focus();
-  });
-
   if (navHistory) navHistory.addEventListener('click', () => {
     if (window._closeSidebar) window._closeSidebar();
     const headerBtn = document.getElementById('history-modal-btn');
     if (headerBtn) headerBtn.click();
+  });
+})();
+
+
+/* ---- Rail toggle (desktop): collapse/expand the left sidebar. On mobile the
+   same button opens the drawer, replacing the old right-side hamburger. ---- */
+(function () {
+  const btn = document.getElementById('rail-toggle-btn');
+  if (!btn) return;
+  const KEY = 'railCollapsed';
+  try {
+    if (localStorage.getItem(KEY) === '1') document.body.classList.add('rail-collapsed');
+  } catch (_) {}
+  btn.addEventListener('click', () => {
+    if (window.matchMedia('(max-width: 899px)').matches) {
+      // Mobile: the rail is a drawer — open it.
+      const hamburger = document.getElementById('hamburger-btn');
+      if (hamburger) hamburger.click();
+      return;
+    }
+    const collapsed = document.body.classList.toggle('rail-collapsed');
+    try { localStorage.setItem(KEY, collapsed ? '1' : '0'); } catch (_) {}
   });
 })();
 

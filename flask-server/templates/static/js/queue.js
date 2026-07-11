@@ -11,6 +11,13 @@
   if (state._historyCache === undefined) state._historyCache = [];
   if (state._hasTrack === undefined) state._hasTrack = false;
   if (state._resultsOpen === undefined) state._resultsOpen = false;
+  // The Up Next panel is opt-in (opened from the playbar's queue button),
+  // like YT Music/Spotify — it must not sit on top of the home feed.
+  if (state._queueOpen === undefined) {
+    let saved = null;
+    try { saved = localStorage.getItem('queuePanelOpen'); } catch (_) {}
+    state._queueOpen = saved === '1';
+  }
 
 const QUEUE_RENDER_CHUNK = 150;
 
@@ -302,7 +309,7 @@ function showQueue(queue, currentIndex) {
   const section = document.getElementById('queue-section');
   const list = document.getElementById('queue-list');
   const mainEl = document.querySelector('main');
-  if (state._resultsOpen) {
+  if (state._resultsOpen || !state._queueOpen) {
     section.classList.remove('is-visible');
     section.hidden = true;
     mainEl.classList.remove('has-queue');
@@ -1059,6 +1066,22 @@ function scheduleHistoryRefresh() {
 
 /* ---- Recently listened ---- */
 // Server-side history, recorded when the skill confirms a real playback start.
+
+/* ---- Queue panel toggle (playbar button, desktop) ---- */
+(function () {
+  const btn = document.getElementById('queue-toggle-btn');
+  if (!btn) return;
+  function syncBtn() { btn.classList.toggle('active', !!state._queueOpen); }
+  btn.addEventListener('click', () => {
+    state._queueOpen = !state._queueOpen;
+    try { localStorage.setItem('queuePanelOpen', state._queueOpen ? '1' : '0'); } catch (_) {}
+    syncBtn();
+    let queue = [];
+    try { queue = JSON.parse(state._lastQueueJson || '[]'); } catch (_) {}
+    showQueue(queue, state._lastQueueIndex);
+  });
+  syncBtn();
+})();
 
   window.addToQueue = addToQueue;
   window._attachSwipeGesture = _attachSwipeGesture;

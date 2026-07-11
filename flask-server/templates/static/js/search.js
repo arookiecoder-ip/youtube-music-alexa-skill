@@ -173,7 +173,7 @@ function renderResults() {
       ${thumbHtml}
       <div class="result-info">
         <div class="result-title">${escHtml(item.title)}</div>
-        <div class="result-artist">${item.channelId ? '<span class="artist-name" data-channel-id="' + escHtml(item.channelId) + '">' + escHtml(item.artist) + '</span>' : escHtml(item.artist)}</div>
+        <div class="result-artist">${escHtml(item.artist)}</div>
       </div>
       <button class="result-like-btn ${isLiked ? 'liked' : ''}" type="button" title="Like" data-vid="${escHtml(item.video_id)}">${heartSvg}</button>
       <button class="result-queue-btn" type="button" title="Add to queue" ${isCurrent ? 'hidden' : ''}>${queueAddSvg}</button>
@@ -292,19 +292,6 @@ function renderResults() {
       });
     }
 
-    // Artist name click: navigate to artist page
-    var artistName = inner.querySelector('.artist-name');
-    if (artistName) {
-      artistName.addEventListener('click', function(e) {
-        e.stopPropagation();
-        var channelId = this.getAttribute('data-channel-id');
-        if (channelId) {
-          location.hash = '#artist/' + encodeURIComponent(channelId);
-        }
-      });
-    }
-
-
     // Mobile: attach swipe gesture
     _attachSwipeGesture(wrapper, inner, item);
 
@@ -317,13 +304,21 @@ function renderResults() {
       const inner = document.createElement('div');
       inner.className = 'result-item-inner';
       const thumbUrl = item.thumbnail || '';
+      const roundThumb = category === 'artists';
       inner.innerHTML = `
-        ${thumbUrl ? `<img class="result-thumb" src="${escHtml(thumbUrl)}" alt="" loading="lazy" onload="this.classList.add('loaded')">` : '<div class="result-thumb"></div>'}
+        ${thumbUrl ? `<img class="result-thumb${roundThumb ? ' result-thumb-round' : ''}" src="${escHtml(thumbUrl)}" alt="" loading="lazy" onload="this.classList.add('loaded')">` : '<div class="result-thumb"></div>'}
         <div class="result-info">
           <div class="result-title">${escHtml(_categoryTitle(item, category))}</div>
           <div class="result-artist">${escHtml(_categorySubtitle(item, category))}</div>
         </div>
       `;
+      // Artist rows open the artist page (nothing happened on click before).
+      if (category === 'artists' && item.browse_id) {
+        inner.classList.add('result-item-link');
+        inner.addEventListener('click', () => {
+          location.hash = '#artist/' + encodeURIComponent(item.browse_id);
+        });
+      }
       wrapper.appendChild(inner);
       newChildren.push(wrapper);
     });

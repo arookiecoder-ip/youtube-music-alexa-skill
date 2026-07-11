@@ -741,10 +741,14 @@ async function doClearAll() {
 }
 
 (function () {
+  // The standalone Clear button was removed from the search bar; the confirm
+  // dialog wiring only attaches if some entry point for it still exists.
   const overlay = document.getElementById('confirm-clear');
+  const trigger = document.getElementById('clear-all-btn');
+  if (!overlay || !trigger) return;
   const cancelBtn = document.getElementById('confirm-clear-cancel');
   const yesBtn = document.getElementById('confirm-clear-yes');
-  document.getElementById('clear-all-btn').addEventListener('click', () => overlay.classList.add('open'));
+  trigger.addEventListener('click', () => overlay.classList.add('open'));
   cancelBtn.addEventListener('click', () => overlay.classList.remove('open'));
   overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.classList.remove('open'); });
   yesBtn.addEventListener('click', () => { overlay.classList.remove('open'); doClearAll(); });

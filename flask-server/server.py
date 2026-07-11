@@ -3233,27 +3233,161 @@ def _normalize_home_item(item):
     }
 
 
-async def _build_home():
-    ytmusic = YTMusic()
-    try:
-        raw_rows = await asyncio.to_thread(ytmusic.get_home, limit=5)
-    except TypeError:
-        raw_rows = await asyncio.to_thread(ytmusic.get_home)
-    rows = []
-    for row in raw_rows or []:
-        items = [
-            normalized for normalized in (
-                _normalize_home_item(item)
-                for item in (row.get('contents') or [])
-            )
-            if normalized
-        ]
-        if not items:
+def _home_item(t):
+    """Normalize any local track shape (history rows use thumbnail_url, radio
+    queue items use video_id + a thumbnail dict, playlist tracks and feed
+    items use plain strings) to the home feed contract: videoId/title/artist/
+    thumbnail, all strings."""
+    if not isinstance(t, dict):
+        return None
+    vid = t.get('videoId') or t.get('video_id') or ''
+    if not vid:
+        return None
+    thumb = t.get('thumbnail') or t.get('thumbnail_url') or ''
+    if isinstance(thumb, dict):
+        thumb = thumb.get('url') or ''
+    return {
+        'videoId': str(vid),
+        'title': str(t.get('title') or ''),
+        'artist': str(t.get('artist') or ''),
+        'thumbnail': str(thumb),
+    }
+
+
+def _home_row(title, tracks, subtitle='', limit=20, exclude=None, seen=None):
+    """Build one home row from any iterable of track dicts, deduped within the
+    row and against `exclude`. Returns None instead of an empty row. When
+    `seen` is given, the row's ids are added to it so later (discovery) rows
+    don't repeat tracks the personalized rows already show."""
+    items, ids = [], set()
+    for t in tracks or []:
+        it = _home_item(t)
+        if not it:
             continue
-        out = {'title': str(row.get('title') or ''), 'items': items}
-        if row.get('subtitle'):
-            out['subtitle'] = str(row.get('subtitle') or '')
-        rows.append(out)
+        vid = it['videoId']
+        if vid in ids or (exclude and vid in exclude):
+            continue
+        ids.add(vid)
+        items.append(it)
+        if len(items) >= limit:
+            break
+    if not items:
+        return None
+    if seen is not None:
+        seen.update(ids)
+    row = {'title': str(title), 'items': items}
+    if subtitle:
+        row['subtitle'] = str(subtitle)
+    return row
+
+
+async def _build_home():
+    """Personalized home feed. The old implementation served only
+    ytmusic.get_home() — an *unauthenticated* call, so every row was generic
+    charts with no relation to the user. The feed is now grounded in local
+    signals: listening history, history-seeded radios, and liked songs, with
+    at most two anonymous YT Music rows appended at the end for discovery."""
+    with _history_lock:
+        history = _load_history()
+
+    rows = []
+    used = set()
+
+    # 1. Listen again — straight from history (already newest-first).
+    row = _home_row('Listen again', history, subtitle='Your recent plays')
+    if row:
+        rows.append(row)
+
+    # 2. Made for you — the history-seeded radio mix (same engine that powered
+    #    the old idle recommendations grid).
+    if history:
+        try:
+            mix = await _build_recommendations()
+        except Exception:
+            logger.exception("home: made-for-you mix failed")
+            mix = []
+        row = _home_row('Made for you', mix,
+                        subtitle='Fresh picks from your listening', seen=used)
+        if row:
+            rows.append(row)
+
+    # 3. Because you listened to <song> — one radio row per random recent seed.
+    seeds = [e for e in history[:12] if e.get('video_id') and e.get('title')]
+    random.shuffle(seeds)
+    seeds = seeds[:2]
+    if seeds:
+        radios = await asyncio.gather(
+            *[Supporting.get_radio_queue(s['video_id']) for s in seeds],
+            return_exceptions=True)
+        for seed, radio in zip(seeds, radios):
+            if not isinstance(radio, list) or not radio:
+                continue
+            tracks = [t for t in radio
+                      if t and t.get('video_id') != seed['video_id']]
+            row = _home_row('Because you listened to ' + seed['title'],
+                            tracks, limit=15, exclude=used, seen=used)
+            if row:
+                rows.append(row)
+
+    # 4. Your liked songs — random sample from the local Liked Songs playlist.
+    try:
+        liked = (_load_playlists()['playlists'].get('liked') or {}).get('tracks') or []
+    except Exception:
+        logger.exception("home: liked songs row failed")
+        liked = []
+    if liked:
+        liked = list(liked)
+        random.shuffle(liked)
+        row = _home_row('Your liked songs', liked, subtitle='Songs you saved')
+        if row:
+            rows.append(row)
+
+    # 5. Discovery — up to two anonymous YT Music rows, deduped against the
+    #    personalized rows above. On a cold start (no history, no likes) this
+    #    is the whole feed, matching the old behavior.
+    try:
+        ytmusic = YTMusic()
+        # limit counts *rows fetched*, not song rows: the anonymous feed leads
+        # with playlist/chart shelves that have no videoIds and get filtered
+        # out. At limit=4 it regularly yields zero playable rows — fetch more
+        # so a "Quick picks"-style songs shelf is actually included.
+        try:
+            raw_rows = await asyncio.to_thread(ytmusic.get_home, limit=8)
+        except TypeError:
+            raw_rows = await asyncio.to_thread(ytmusic.get_home)
+        added = 0
+        for raw in raw_rows or []:
+            items = [
+                normalized for normalized in (
+                    _normalize_home_item(item)
+                    for item in (raw.get('contents') or [])
+                )
+                if normalized
+            ]
+            row = _home_row(raw.get('title') or 'Discover', items,
+                            subtitle=raw.get('subtitle') or '', exclude=used)
+            if row:
+                rows.append(row)
+                added += 1
+            if added >= 2:
+                break
+    except Exception:
+        logger.exception("home: discovery rows failed")
+
+    # Last resort: charts / seeded-radio pool (what the old idle recs grid
+    # used) so a cold start with a playlist-only anonymous feed still renders.
+    if not rows:
+        try:
+            pool = await _build_recommendations()
+        except Exception:
+            logger.exception("home: recommendations fallback failed")
+            pool = []
+        row = _home_row('Recommended for you', pool, limit=40)
+        if row:
+            rows.append(row)
+
+    if not rows:
+        raise RuntimeError("home feed came out empty")
     return rows
 
 
@@ -3410,24 +3544,11 @@ def get_home():
             logger.exception("home feed failed")
             if _home_cache['rows']:
                 return jsonify({'rows': _home_cache['rows']})
-            # Recs items use video_id (snake_case); the home feed contract is
-            # videoId. Normalize so the fallback row actually renders.
-            fallback_items = [
-                {
-                    'videoId': str(i.get('video_id') or ''),
-                    'title': str(i.get('title') or ''),
-                    'artist': str(i.get('artist') or ''),
-                    'thumbnail': str(i.get('thumbnail') or ''),
-                }
-                for i in _recs_cache.get('items', [])
-                if i.get('video_id')
-            ]
-            return jsonify({
-                'rows': [{
-                    'title': 'Recommended',
-                    'items': fallback_items,
-                }]
-            })
+            # Recs items use video_id + thumbnail dicts; _home_row normalizes
+            # them to the home feed contract so the fallback actually renders.
+            fallback = _home_row('Recommended', _recs_cache.get('items', []),
+                                 limit=40)
+            return jsonify({'rows': [fallback] if fallback else []})
         _home_cache['rows'] = rows
         _home_cache['built_at'] = time.time()
         return jsonify({'rows': rows})
