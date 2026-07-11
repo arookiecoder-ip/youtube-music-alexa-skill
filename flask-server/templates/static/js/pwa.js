@@ -199,6 +199,16 @@
 
     // Listen for install prompt
     window.addEventListener('beforeinstallprompt', function(e) {
+      // Check if user dismissed recently (7 days)
+      try {
+        var dismissed = parseInt(localStorage.getItem('pwa-install-dismissed') || '0', 10);
+        if (Date.now() - dismissed < 7 * 24 * 60 * 60 * 1000) return;
+      } catch (_) {}
+      // Don't show on jam guest
+      if (window.JAM_GUEST) return;
+      // Don't show if already installed (display-mode: standalone)
+      if (window.matchMedia('(display-mode: standalone)').matches) return;
+
       e.preventDefault();
       _deferredPrompt = e;
       showInstallBanner();

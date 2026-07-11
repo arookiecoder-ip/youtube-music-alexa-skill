@@ -284,7 +284,7 @@ _SESSION_PATHS = ('/remote', '/alexa/status', '/alexa/init', '/alexa/devices', '
                   '/alexa/jam/qr', '/api/home', '/api/library',
                   '/alexa/like', '/api/liked_songs')
 _SESSION_PREFIXES = ('/alexa/now_playing/', '/history/', '/api/playlists/', '/recommendations/',
-                     '/api/artist/', '/api/album/', '/api/library/')
+                     '/api/artist/', '/api/album/', '/api/library/', '/api/explore/', '/api/home/')
 
 # API/device endpoints: the Alexa skill and web-remote JS hit these directly
 # and need a machine-readable JSON error, never an HTML redirect, on failure.
@@ -292,7 +292,7 @@ _API_PREFIXES = ('/alexa/', '/proxy/', '/get_stream/', '/get_radio/',
                   '/find_stream_list/', '/armed_play/', '/stream_video/',
                   '/stream_playlist/', '/get_playlist_info/', '/queue_tracks/',
                   '/play_genre/',
-                   '/history', '/recommendations', '/api/playlists/', '/api/album/', '/api/artist/')
+                   '/history', '/recommendations', '/api/playlists/', '/api/album/', '/api/artist/', '/api/explore/', '/api/home/')
 
 
 def _remote_login_enabled():
@@ -1538,9 +1538,12 @@ class Supporting:
                 # treat tracks beyond the cutoff as removed from the source.
                 search_results = await asyncio.to_thread(ytmusic.get_playlist, playlistId=playlist_id, limit=None)
         except Exception:
-            # ytmusicapi raises on unknown/private playlist ids; treat as not found
-            logger.exception("")
-            return None
+            try:
+                # Curated playlists (RDAMPL, RDTMAK) are watch playlists. get_playlist fails on them.
+                search_results = await asyncio.to_thread(ytmusic.get_watch_playlist, playlistId=playlist_id)
+            except Exception:
+                logger.exception("")
+                return None
         playlist_raw = (search_results or {}).get('tracks')
         if not playlist_raw:
             return None
@@ -4571,7 +4574,12 @@ async def api_get_library_playlist(pl_id):
                 'trackCount': len(tracks),
                 'tracks': tracks,
             })
-        info = await asyncio.to_thread(yt.get_playlist, pl_id, None)
+        try:
+            info = await asyncio.to_thread(yt.get_playlist, pl_id, None)
+        except Exception:
+            info = await asyncio.to_thread(yt.get_watch_playlist, playlistId=pl_id)
+            if 'title' not in info:
+                info['title'] = 'Curated Mix'
         return jsonify(info)
     except Exception as e:
         logger.error('[api/library/playlists/%s] failed: %s', pl_id, e)

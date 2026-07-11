@@ -116,7 +116,7 @@
         ? e.message
         : "Can't reach the server. Check your connection and try again.");
     }
-    if (res.status === 401) throw _onUnauthorized();
+    if (res.status === 401 || (res.redirected && res.url.includes('/login'))) throw _onUnauthorized();
     const json = await res.json().catch(() => ({}));
     if (!res.ok) _handleErrorResponse(res, json);
     return json;
@@ -145,7 +145,7 @@
         ? e.message
         : "Can't reach the server. Check your connection and try again.");
     }
-    if (res.status === 401) throw _onUnauthorized();
+    if (res.status === 401 || (res.redirected && res.url.includes('/login'))) throw _onUnauthorized();
     const json = await res.json().catch(() => ({}));
     if (!res.ok) _handleErrorResponse(res, json);
     return json;
@@ -165,7 +165,7 @@
         ? e.message
         : "Can't reach the server. Check your connection and try again.");
     }
-    if (res.status === 401) throw _onUnauthorized();
+    if (res.status === 401 || (res.redirected && res.url.includes('/login'))) throw _onUnauthorized();
     const json = await res.json().catch(() => ({}));
     if (!res.ok) _handleErrorResponse(res, json);
     return json;

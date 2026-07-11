@@ -120,7 +120,8 @@ function renderHistoryModalList(history) {
   const body = document.getElementById('history-modal-body');
   const clearBtn = document.getElementById('clear-history-btn');
   const items = Array.isArray(history) ? history.filter(e => e && e.video_id) : [];
-  clearBtn.hidden = items.length === 0;
+  if (clearBtn) clearBtn.hidden = items.length === 0;
+  if (!body) return;
   if (items.length === 0) {
     body.innerHTML = '<div class="history-modal-empty">No listening history yet</div>';
     return;

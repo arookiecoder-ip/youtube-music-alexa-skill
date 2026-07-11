@@ -3,6 +3,8 @@
   const state = window.__appState = window.__appState || {};
   if (state._loggedIn === undefined) state._loggedIn = false;
 
+  const escapeHtml = window.escHtml || (s => String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'));
+
   async function loadLibrary() {
     if (!state._loggedIn || window.JAM_GUEST || !window.IS_AUTHENTICATED) return;
     try {
@@ -14,7 +16,7 @@
           data.playlists.forEach(pl => {
             const btn = document.createElement('button');
             btn.className = 'sidebar-nav-btn playlist-nav-btn';
-            btn.innerHTML = `<div class="playlist-nav-name">${escapeHtml(pl.title)}</div>`;
+            btn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="sidebar-nav-icon"><path d="M9 18V5l12-2v13"></path><circle cx="6" cy="18" r="3"></circle><circle cx="18" cy="16" r="3"></circle></svg><span class="nav-label">${escapeHtml(pl.title)}</span>`;
             btn.onclick = () => {
               if (window._closeSidebar) window._closeSidebar();
               window.navigateTo('#playlist/' + encodeURIComponent(pl.playlistId));
@@ -28,13 +30,7 @@
     }
   }
 
-  window.addEventListener('hashchange', () => {
-    const hash = window.getRoute();
-    if (hash.startsWith('#playlist/')) {
-      const plId = decodeURIComponent(hash.substring(10));
-      openLibraryPlaylist(plId);
-    }
-  });
+
 
   async function openLibraryPlaylist(plId) {
     const overlay = document.getElementById('playlist-detail-modal-overlay');
@@ -88,7 +84,7 @@
       if (body) body.innerHTML = '<div style="padding:24px; color:var(--muted); text-align:center;">Failed to load playlist</div>';
     }
   }
-
+  window.openPlaylistDetailModal = openLibraryPlaylist;
   /* ---- New Playlist button (sidebar) ---- */
   (function () {
     const newBtn = document.getElementById('sidebar-new-playlist-btn');
