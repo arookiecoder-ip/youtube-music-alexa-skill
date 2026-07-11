@@ -3391,7 +3391,7 @@ async def get_history():
     if _get_ytmusic_home().auth_type == AuthType.UNAUTHORIZED:
         return jsonify({'error': 'Unauthorized'}), 401
     try:
-        history_raw = await run_in_executor(_get_ytmusic_home().get_history)
+        history_raw = await asyncio.to_thread(_get_ytmusic_home().get_history)
         mapped = []
         for item in history_raw:
             mapped.append({
@@ -3435,7 +3435,7 @@ async def alexa_like():
     if not video_id:
         return jsonify({'error': 'No video_id provided and nothing playing'}), 400
     try:
-        await run_in_executor(_get_ytmusic_home().rate_song, video_id, action)
+        await asyncio.to_thread(_get_ytmusic_home().rate_song, video_id, action)
         return jsonify({'ok': True, 'action': action, 'video_id': video_id})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -4499,7 +4499,7 @@ async def api_get_library():
     if _get_ytmusic_home().auth_type == AuthType.UNAUTHORIZED:
         return jsonify({'error': 'Unauthorized'}), 401
     try:
-        playlists = await run_in_executor(_get_ytmusic_home().get_library_playlists, 100)
+        playlists = await asyncio.to_thread(_get_ytmusic_home().get_library_playlists, 100)
         return jsonify({"playlists": playlists})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -4515,7 +4515,7 @@ async def api_create_library_playlist():
     if not name:
         return jsonify({'error': 'Name required'}), 400
     try:
-        pl_id = await run_in_executor(_get_ytmusic_home().create_playlist, name, description)
+        pl_id = await asyncio.to_thread(_get_ytmusic_home().create_playlist, name, description)
         return jsonify({"id": pl_id, "name": name, "description": description, "status": "created"})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -4528,7 +4528,7 @@ async def api_get_library_playlist(pl_id):
     if not pl_id.strip():
         return jsonify({'error': 'invalid playlist id'}), 400
     try:
-        info = await run_in_executor(_get_ytmusic_home().get_playlist, pl_id, None)
+        info = await asyncio.to_thread(_get_ytmusic_home().get_playlist, pl_id, None)
         return jsonify(info)
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -4539,7 +4539,7 @@ async def api_get_explore():
     if _get_ytmusic_home().auth_type == AuthType.UNAUTHORIZED:
         return jsonify({'error': 'Unauthorized'}), 401
     try:
-        explore = await run_in_executor(_get_ytmusic_home().get_explore)
+        explore = await asyncio.to_thread(_get_ytmusic_home().get_explore)
         return jsonify(explore)
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -4550,7 +4550,7 @@ async def api_get_search_suggestions():
     if not q:
         return jsonify([])
     try:
-        suggestions = await run_in_executor(_get_ytmusic_home().get_search_suggestions, q)
+        suggestions = await asyncio.to_thread(_get_ytmusic_home().get_search_suggestions, q)
         return jsonify(suggestions)
     except Exception as e:
         return jsonify({'error': str(e)}), 500
