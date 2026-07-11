@@ -176,4 +176,39 @@
   window.apiPatch = apiPatch;
   window.escHtml = escHtml;
   window._onUnauthorized = _onUnauthorized;
+
+  // Globally hide broken images
+  window.addEventListener('error', function(e) {
+    if (e.target && e.target.tagName === 'IMG') {
+      e.target.style.opacity = '0';
+    }
+  }, true);
+
+  // Fix protocol-relative URLs in API responses
+  function fixUrls(obj) {
+    if (!obj) return obj;
+    if (Array.isArray(obj)) {
+      for (let i = 0; i < obj.length; i++) obj[i] = fixUrls(obj[i]);
+    } else if (typeof obj === 'object') {
+      for (const k in obj) {
+        if (typeof obj[k] === 'string') {
+          if (obj[k].startsWith('//')) {
+            obj[k] = 'https:' + obj[k];
+          } else if (!obj[k].startsWith('http') && !obj[k].startsWith('/') && (obj[k].includes('googleusercontent.com') || obj[k].includes('ggpht.com'))) {
+            obj[k] = 'https://' + obj[k];
+          }
+        } else if (typeof obj[k] === 'object') {
+          obj[k] = fixUrls(obj[k]);
+        }
+      }
+    }
+    return obj;
+  }
+
+  // Wrap the original api to fix URLs
+  const originalApi = api;
+  window.api = async function(path, body) {
+    const json = await originalApi(path, body);
+    return fixUrls(json);
+  };
 })();
