@@ -147,22 +147,24 @@ function getPlaylistsList() {
 /* ── Build a 2×2 artwork collage HTML from up to 4 tracks ── */
 function _buildCollageHtml(tracks, isLiked) {
   if (isLiked) {
+    // Single full-tile like glyph — no 2x2 grid of empty cells
     return `
-      <div class="playlist-collage">
-        <div class="collage-placeholder"><svg viewBox="0 0 24 24" fill="currentColor" width="18" height="18" style="color:var(--primary);"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg></div>
-        <div class="collage-placeholder"></div>
-        <div class="collage-placeholder"></div>
-        <div class="collage-placeholder"></div>
+      <div class="playlist-collage playlist-collage-single">
+        <div class="collage-placeholder"><svg viewBox="0 0 24 24" fill="currentColor" style="color:var(--accent);"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg></div>
       </div>`;
   }
   const valid = (tracks || []).filter(t => t && t.thumbnail);
+  // Fewer than 4 covers: a single full-bleed image (or music-note tile) looks
+  // intentional; a mostly-empty 2x2 grid looks broken.
+  if (valid.length < 4) {
+    const cell = valid.length
+      ? `<img src="${escHtml(valid[0].thumbnail)}" alt="" loading="lazy">`
+      : `<div class="collage-placeholder"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 3v10.55A4 4 0 1 0 14 17V7h4V3h-6z"/></svg></div>`;
+    return `<div class="playlist-collage playlist-collage-single">${cell}</div>`;
+  }
   let cells = '';
   for (let i = 0; i < 4; i++) {
-    if (i < valid.length) {
-      cells += `<img src="${escHtml(valid[i].thumbnail)}" alt="" loading="lazy">`;
-    } else {
-      cells += `<div class="collage-placeholder"></div>`;
-    }
+    cells += `<img src="${escHtml(valid[i].thumbnail)}" alt="" loading="lazy">`;
   }
   return `<div class="playlist-collage">${cells}</div>`;
 }
@@ -299,7 +301,7 @@ async function openPlaylistDetailModal(pl_id, fromRoute) {
   const moreSvg = `<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg>`;
   const queueAddSvg = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>`;
   const playNextSvg = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>`;
-  const heartFilledSvg = `<svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>`;
+  const heartFilledSvg = `<svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg>`;
 
   const list = document.createElement('div');
   list.className = 'history-list';
@@ -399,6 +401,12 @@ async function openPlaylistDetailModal(pl_id, fromRoute) {
       moreBtn.title = 'More options';
       moreBtn.innerHTML = moreSvg;
       moreBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        window.togglePlaylistMoreMenu(moreBtn);
+      });
+      // Right-click anywhere on the row opens the same more-options menu
+      row.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
         e.stopPropagation();
         window.togglePlaylistMoreMenu(moreBtn);
       });
@@ -786,7 +794,7 @@ async function toggleLike(item, btnElement) {
       if (btnElement) {
         btnElement.classList.remove('liked');
         btnElement.title = "Like";
-        btnElement.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>`;
+        btnElement.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg>`;
       }
       toast('Removed from Liked Songs', 'ok');
       if (window.broadcastLikedUpdate) window.broadcastLikedUpdate();
@@ -805,7 +813,7 @@ async function toggleLike(item, btnElement) {
       if (btnElement) {
         btnElement.classList.add('liked');
         btnElement.title = "Dislike";
-        btnElement.innerHTML = `<svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>`;
+        btnElement.innerHTML = `<svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg>`;
       }
       toast('Added to Liked Songs', 'ok');
       if (window.broadcastLikedUpdate) window.broadcastLikedUpdate();

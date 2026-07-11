@@ -11,8 +11,12 @@
   display: none;
 }
 
+/* Entrance fade. This restarts every time the router re-shows the section
+   (e.g. collapsing the now-playing overlay), so it must start immediately —
+   a delay with `both` fill holds the whole page at opacity 0 first, which
+   read as a blank flash. */
 .home-section:not([hidden]) {
-  animation: recsFadeIn .25s ease .32s both;
+  animation: recsFadeIn .2s ease both;
 }
 
 .home-row-container {
@@ -129,8 +133,10 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.home-card .home-artist-link { cursor: pointer; }
-.home-card .home-artist-link:hover { color: var(--text); text-decoration: underline; }
+/* Per-artist links inside the credit line stay muted like the line itself
+   (the global .artist-name rule would brighten them) until hovered */
+.home-card .recs-tile-artist .artist-name { color: inherit; cursor: pointer; }
+.home-card .recs-tile-artist .artist-name:hover { color: var(--text); text-decoration: underline; }
 
 /* Like button on home feed cards */
 .home-card .result-like-btn {
@@ -160,9 +166,8 @@
   }
 }
 
-.home-card:active .home-card-art {
-  transform: scale(.97);
-}
+/* No shrink on click — pressed feedback is a shadow + centered play icon
+   (see redesign.css) so the card keeps its size. */
 
 @media (prefers-reduced-motion: reduce) {
   .home-section:not([hidden]) {

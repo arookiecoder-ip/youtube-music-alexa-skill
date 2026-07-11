@@ -147,16 +147,72 @@
     if (window.syncUiState) window.syncUiState();
   }
 
+  // ---- Artist links: multi-artist aware ----
+  // A track's stored channelId belongs to its primary (first-credited) artist,
+  // so a combined credit like "PDNY and Hydr and YDV" must not send every
+  // click to the first artist's page. artistLinksHtml splits the credit into
+  // one clickable span per artist: the first keeps the known channelId, the
+  // rest carry only their name and are resolved via search on click.
+  var ARTIST_SEP_RE = /(,\s*|\s*&\s*|\s+and\s+|\s*·\s*|\s+(?:feat\.?|ft\.?|featuring)\s+)/i;
+
+  window.artistLinksHtml = function(artist, channelId) {
+    var esc = window.escHtml;
+    var s = String(artist || '').trim();
+    if (!s) return '';
+    // split with a capture group keeps the separators at odd indices so the
+    // displayed text stays byte-for-byte what the metadata said
+    var parts = s.split(new RegExp(ARTIST_SEP_RE.source, 'gi'));
+    var first = true;
+    return parts.map(function(p, i) {
+      if (i % 2 === 1) return esc(p); // separator text, not clickable
+      if (!p) return '';
+      var attrs = ' data-artist-name="' + esc(p) + '"';
+      if (first && channelId) attrs += ' data-channel-id="' + esc(channelId) + '"';
+      first = false;
+      return '<span class="artist-name"' + attrs + '>' + esc(p) + '</span>';
+    }).join('');
+  };
+
+  // Navigate to an artist page from a .artist-name element. Falls back to a
+  // search lookup for artists that have no stored channel id (secondary
+  // credits, older history rows).
+  window.openArtistLink = function(el) {
+    var channelId = el.getAttribute('data-channel-id');
+    if (channelId) {
+      window.navigateTo('#artist/' + encodeURIComponent(channelId));
+      return;
+    }
+    var name = (el.getAttribute('data-artist-name') || el.textContent || '').trim();
+    if (!name) return;
+    window.api('/alexa/search/?q=' + encodeURIComponent(name)).then(function(result) {
+      var artists = (result && result.artists) || [];
+      var exact = artists.find(function(a) {
+        return (a.name || '').toLowerCase() === name.toLowerCase();
+      }) || artists[0];
+      if (exact && exact.browse_id) window.navigateTo('#artist/' + encodeURIComponent(exact.browse_id));
+      else if (window.toast) toast('Artist page unavailable', 'error');
+    }).catch(function() { if (window.toast) toast('Artist page unavailable', 'error'); });
+  };
+
+  // Binds artist-name clicks directly on the spans inside `container` so the
+  // click never bubbles up to the row's play-on-tap handler.
+  window.wireArtistLinks = function(container) {
+    container.querySelectorAll('.artist-name').forEach(function(an) {
+      an.addEventListener('click', function(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        window.openArtistLink(an);
+      });
+    });
+  };
+
   // Global delegated click handler: artist-name -> navigate to artist page
   document.addEventListener('click', function(e) {
     var target = e.target.closest('.artist-name');
     if (target) {
       e.preventDefault();
       e.stopPropagation();
-      var channelId = target.getAttribute('data-channel-id');
-      if (channelId) {
-        window.navigateTo('#artist/' + encodeURIComponent(channelId));
-      }
+      window.openArtistLink(target);
     }
   });
 

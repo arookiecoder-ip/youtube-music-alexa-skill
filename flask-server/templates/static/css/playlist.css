@@ -47,6 +47,16 @@
   color: var(--muted);
   background: rgba(255,255,255,.04);
 }
+/* Single-tile variant (Liked Songs glyph, or playlists with <4 covers):
+   one cell fills the whole square — no grid lines from empty cells. */
+.playlist-collage-single {
+  display: flex;
+  gap: 0;
+}
+.playlist-collage-single .collage-placeholder svg {
+  width: 42%;
+  height: 42%;
+}
 
 /* ── Playlist Card Info ── */
 .playlist-card-info {
@@ -315,7 +325,7 @@
     box-sizing: border-box;
     min-height: 58px;
     padding: 8px 10px;
-    border-bottom: 1px solid rgba(255,255,255,.07);
+    border-bottom: none;
     background: transparent;
   }
   #playlist-detail-modal .history-item:hover { background: rgba(255,255,255,.06); }

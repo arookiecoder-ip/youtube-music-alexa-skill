@@ -356,12 +356,16 @@ body.results-open .play-section {
     padding: 0;
     pointer-events: none;
   }
+  /* Stay in row layout when collapsed — flex-direction/justify-content flips
+     don't animate and made the icons jump on the first frame. The icon is
+     centered via symmetric padding instead: the mini rail's content box is
+     44px (72px - 2*14px rail padding) and the icon 21px, so 11.5px each side.
+     Padding and gap both interpolate, so the icon glides with the width. */
+  .sidebar .sidebar-nav-btn { transition: color .15s, background .15s, padding .25s ease, gap .25s ease; }
+  .sidebar .sidebar-nav-btn svg { transition: width .25s ease, height .25s ease; }
   body.rail-collapsed .sidebar .sidebar-nav-btn {
-    flex-direction: column;
-    justify-content: center;
-    align-items: center;
     gap: 0;
-    padding: 14px 0;
+    padding: 14px 11.5px;
   }
   
   /* Explicitly set properties to animate them cleanly (variable changes skip transitions in some browsers) */
@@ -378,27 +382,36 @@ body.results-open .play-section {
     width: 21px;
     height: 21px;
   }
-  /* Text-only chrome has no icon form — hide it in the mini rail */
+  /* Text-only chrome has no icon form — hide it in the mini rail. Fade it
+     out instead of display:none so it doesn't vanish a frame before the
+     width animation starts. */
+  .sidebar-signout,
+  .sidebar-footer,
+  .sidebar-library { transition: opacity .14s ease, visibility .14s; }
   body.rail-collapsed .sidebar-signout,
   body.rail-collapsed .sidebar-footer,
-  body.rail-collapsed .sidebar-library { display: none; }
-  /* In mini-guide mode stack the compact identity below the toggle. This keeps
-     Music Box recognizable without trying to squeeze the full horizontal logo
-     into the 72px rail. */
+  body.rail-collapsed .sidebar-library {
+    opacity: 0;
+    visibility: hidden;
+  }
+  /* In mini-guide mode only the toggle survives. Shrink the brand's width and
+     fade the logo/wordmark rather than display:none-ing them or reflowing to
+     a column — those changes are instant and made the toggle jump while the
+     rail was still animating. overflow:hidden lets the shrinking width clip
+     the fading logo/text. */
+  .sidebar-brand {
+    overflow: hidden;
+    transition: width .25s ease;
+  }
+  .sidebar-brand-mark,
+  .sidebar-brand strong { transition: opacity .14s ease; }
   body.rail-collapsed .sidebar-brand {
-    width: 100%;
-    height: 56px;
-    flex-direction: column;
-    justify-content: center;
-    align-items: center;
-    gap: 0;
+    width: 44px;
     padding: 0;
   }
-  body.rail-collapsed .sidebar-brand-mark {
-    display: none;
-  }
+  body.rail-collapsed .sidebar-brand-mark,
   body.rail-collapsed .sidebar-brand strong {
-    display: none;
+    opacity: 0;
   }
   /* Smooth open/close */
   main,
@@ -669,6 +682,9 @@ body.results-open .play-section {
   }
   /* Device picker lives in the top bar on desktop */
   .sidebar-section:has(#device-sidebar-wrapper) { display: none; }
+  /* With the device section hidden, nav and tools read as one group —
+     keep the same 2px rhythm between all nav buttons */
+  .sidebar-nav { margin-bottom: 2px; }
   header .rail-toggle-btn { visibility: hidden; pointer-events: none; }
   header > .brand { display: none; }
   .sidebar-tools #refresh-page-btn { display: none; }
@@ -898,6 +914,8 @@ input[type=range]::-moz-range-thumb { border-radius: 50%; }
 }
 .player-section .progress-handle,
 .player-section .progress-times { display: none; }
+/* Playbar timer is desktop-only (re-enabled in the ≥900px block) */
+.playbar-time { display: none; }
 /* Keep the strip inside the bar's rounded corners (mobile card) */
 .player-section { overflow: hidden; }
 
@@ -1080,6 +1098,30 @@ body.now-playing-route .player-section .player-expand-btn svg {
   border-radius: var(--card-radius);
   position: relative;
 }
+/* Pressed feedback: keep the card's size, darken the art with a shadow and
+   show a centered play icon while the pointer is down. Applies to home cards
+   and the recommendations tiles alike. */
+.recs-tile .recs-tile-art { position: relative; }
+.home-card-art::before,
+.recs-tile .recs-tile-art::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: rgba(0, 0, 0, .45) center / 46px no-repeat
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='white'%3E%3Cpolygon points='8,5 19,12 8,19'/%3E%3C/svg%3E");
+  opacity: 0;
+  transition: opacity .12s ease;
+  pointer-events: none;
+  z-index: 1;
+}
+.home-card:active .home-card-art::before,
+.recs-tile:active .recs-tile-art::before { opacity: 1; }
+.home-card:active .home-card-art,
+.recs-tile:active .recs-tile-art {
+  box-shadow: 0 10px 28px rgba(0, 0, 0, .65);
+}
+
 /* Hover play badge */
 .home-card-art::after {
   content: '';
@@ -1619,14 +1661,27 @@ body.results-open .player-section {
   .player-section .np-ytm-btn svg,
   .player-section .player-expand-btn svg { width: 22px; height: 22px; }
 
+  /* Icon sits at the right edge; the slider reveals to its LEFT on hover */
   .player-section .vol {
     display: flex;
+    flex-direction: row-reverse;
+    justify-content: flex-start;
     grid-area: volume;
     gap: 8px;
     min-width: 154px;
     color: #aaa;
   }
   .player-section .vol > svg { width: 23px; height: 23px; }
+  /* Elapsed / total timer beside the next button */
+  .player-section .playbar-time {
+    display: inline-flex;
+    align-items: center;
+    margin-left: 10px;
+    font-size: .78rem;
+    color: #aaa;
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+  }
   .player-section .queue-toggle-btn {
     width: 40px;
     height: 40px;
@@ -1819,7 +1874,18 @@ body.results-open .player-section {
 /* np-queue-list reuses the queue-item / queue-swipe-wrapper styles from queue.css */
 #np-queue-list .queue-delete-underlay,
 #np-queue-list .queue-like-underlay { display: none !important; }
-#np-queue-list .queue-swipe-wrapper { transform: none !important; touch-action: auto !important; }
+#np-queue-list .queue-swipe-wrapper { transform: none !important; touch-action: auto !important; margin: 0; }
+
+/* Flat YT Music-style rows in the UP NEXT list — no per-song card boxes */
+#np-queue-list .queue-item {
+  background: transparent;
+  border-radius: 0;
+  box-shadow: none;
+}
+#np-queue-list .queue-swipe-wrapper + .queue-swipe-wrapper .queue-item,
+#np-queue-list .queue-item + .queue-item { border-top: none; }
+#np-queue-list .queue-item:hover { background: rgba(255,255,255,.06); }
+#np-queue-list .queue-item.active { background: rgba(255,255,255,.08); }
 
 /* On mobile the now-playing page shows full-width art only */
 @media (max-width: 899px) {

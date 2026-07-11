@@ -192,7 +192,7 @@ function _buildQueueRow(container, item, i, currentIndex, thumbsById) {
       Remove
     </div>
     <div class="queue-like-underlay">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg>
       Like
     </div>
   `;
@@ -220,7 +220,7 @@ function _buildQueueRow(container, item, i, currentIndex, thumbsById) {
     ${thumbHtml}
     <div class="queue-info">
       <div class="queue-title">${escHtml(item.title)}</div>
-      <div class="queue-artist">${item.channelId ? '<span class="artist-name" data-channel-id="' + escHtml(item.channelId) + '">' + escHtml(item.artist) + '</span>' : escHtml(item.artist)}</div>
+      <div class="queue-artist">${window.artistLinksHtml(item.artist, item.channelId)}</div>
     </div>
     ${_queueMoreMenuHtml(item)}
   `;
@@ -228,15 +228,8 @@ function _buildQueueRow(container, item, i, currentIndex, thumbsById) {
 
   wrapper.appendChild(el);
 
-  // Artist name click: stop propagation to prevent parent row's play action
-  var an = el.querySelector('.artist-name');
-  if (an) {
-    an.addEventListener('click', function(e) {
-      e.stopPropagation();
-      var cid = this.getAttribute('data-channel-id');
-      if (cid) window.navigateTo('#artist/' + encodeURIComponent(cid));
-    });
-  }
+  // Artist name clicks: stop propagation to prevent parent row's play action
+  window.wireArtistLinks(el);
 
   // Tap on the item Ã¢â€ â€™ play from queue. Mark it active immediately so the
   // "you tapped this" feedback shows right away instead of only after the
@@ -366,8 +359,8 @@ function _queueMoreMenuHtml(item) {
   const moreSvg = `<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg>`;
   const isLiked = typeof _playlistsData !== 'undefined' && _playlistsData.liked_songs && _playlistsData.liked_songs.includes(item.video_id);
   const likeSvg = isLiked
-    ? '<svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>'
-    : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>';
+    ? '<svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg>'
+    : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg>';
   const likeText = isLiked ? "Dislike" : "Like";
   const likeClass = isLiked ? "queue-menu-option liked" : "queue-menu-option";
   return `
@@ -441,6 +434,12 @@ function _wireQueueMoreMenu(el, item, index) {
       document.body.appendChild(moreMenu);
     }
   });
+  // Right-click anywhere on the row opens the same more-options menu
+  el.addEventListener('contextmenu', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    moreBtn.click();
+  });
   moreMenu.querySelector('[data-action="remove"]').addEventListener('click', (e) => {
     e.stopPropagation();
     _closeAllQueueMenus();
@@ -468,8 +467,8 @@ function _wireQueueMoreMenu(el, item, index) {
       await toggleLike(item);
       const isLikedNow = typeof _playlistsData !== 'undefined' && _playlistsData.liked_songs && _playlistsData.liked_songs.includes(item.video_id);
       const likeSvgNow = isLikedNow
-        ? '<svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>'
-        : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>';
+        ? '<svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg>'
+        : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg>';
       likeBtn.innerHTML = `\n          ${likeSvgNow}\n          ${isLikedNow ? "Dislike" : "Like"}\n        `;
       if (isLikedNow) likeBtn.classList.add('liked');
       else likeBtn.classList.remove('liked');

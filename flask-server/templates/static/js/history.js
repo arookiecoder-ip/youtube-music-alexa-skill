@@ -73,26 +73,19 @@ function _buildHistoryRow(entry) {
 
   var isLikedHistory = typeof _playlistsData !== 'undefined' && _playlistsData.liked_songs && _playlistsData.liked_songs.includes(entry.video_id);
   var heartSvgHistory = isLikedHistory
-    ? '<svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>'
-    : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>';
+    ? '<svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg>'
+    : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg>';
   el.innerHTML = `
     ${thumbHtml}
     <div class="queue-info">
       <div class="queue-title">${escHtml(entry.title || 'Unknown title')}</div>
-      <div class="queue-artist">${entry.channelId ? '<span class="artist-name" data-channel-id="' + escHtml(entry.channelId) + '">' + escHtml(entry.artist) + '</span>' : escHtml(entry.artist)}${entry.play_count > 1 ? '<span class="play-count-badge">\u00d7' + entry.play_count + '</span>' : ''}</div>
+      <div class="queue-artist">${window.artistLinksHtml(entry.artist, entry.channelId)}${entry.play_count > 1 ? '<span class="play-count-badge">\u00d7' + entry.play_count + '</span>' : ''}</div>
     </div>
     <button class="result-like-btn history-like-btn${isLikedHistory ? ' liked' : ''}" type="button" title="${isLikedHistory ? 'Dislike' : 'Like'}">${heartSvgHistory}</button>
   `;
 
-  // Artist name click: stop propagation to prevent parent row's play action
-  var an = el.querySelector('.artist-name');
-  if (an) {
-    an.addEventListener('click', function(e) {
-      e.stopPropagation();
-      var cid = this.getAttribute('data-channel-id');
-      if (cid) window.navigateTo('#artist/' + encodeURIComponent(cid));
-    });
-  }
+  // Artist name clicks: stop propagation to prevent parent row's play action
+  window.wireArtistLinks(el);
 
   // Like button: stop propagation to prevent history item's play action
   var historyLikeBtn = el.querySelector('.history-like-btn');

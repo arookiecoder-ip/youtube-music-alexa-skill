@@ -92,11 +92,11 @@ function showNowPlaying(info) {
     _lastNpFingerprint = fp;
     np.classList.add('visible');
     document.getElementById('np-title').textContent = info.title;
-    document.getElementById('np-artist').innerHTML = (info.channelId ? '<span class="artist-name" data-channel-id="' + escHtml(info.channelId) + '">' + escHtml(info.artist) + '</span>' : escHtml(info.artist || ''));
+    document.getElementById('np-artist').innerHTML = window.artistLinksHtml(info.artist, info.channelId);
     document.getElementById('mini-title').textContent = info.title;
     // Sync mini popup
     document.getElementById('mp-np-title').textContent = info.title;
-    document.getElementById('mp-np-artist').innerHTML = (info.channelId ? '<span class="artist-name" data-channel-id="' + escHtml(info.channelId) + '">' + escHtml(info.artist) + '</span>' : escHtml(info.artist || ''));
+    document.getElementById('mp-np-artist').innerHTML = window.artistLinksHtml(info.artist, info.channelId);
     const art = document.getElementById('np-art');
     const mpArt = document.getElementById('mp-np-art');
     const npPageArt = document.getElementById('np-page-art');
@@ -104,9 +104,7 @@ function showNowPlaying(info) {
     const npPageArtist = document.getElementById('np-page-artist');
     if (npPageTitle) npPageTitle.textContent = info.title;
     if (npPageArtist) {
-      npPageArtist.innerHTML = (info.channelId
-        ? '<span class="artist-name" data-channel-id="' + escHtml(info.channelId) + '">' + escHtml(info.artist) + '</span>'
-        : escHtml(info.artist || ''));
+      npPageArtist.innerHTML = window.artistLinksHtml(info.artist, info.channelId);
     }
     if (info.thumbnail) {
       const url = 'url(' + info.thumbnail + ')';
@@ -155,14 +153,18 @@ function showNowPlaying(info) {
 }
 
 function refreshNpLikeButton() {
-  const likeBtn = document.getElementById('np-like-btn');
-  if (likeBtn && state._currentVideoId && typeof _playlistsData !== 'undefined' && _playlistsData.liked_songs) {
-    const isLiked = _playlistsData.liked_songs.includes(state._currentVideoId);
-    likeBtn.classList.toggle('liked', isLiked);
-    // Thumbs-up (like), filled when liked
-    likeBtn.innerHTML = isLiked
-      ? `<svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg>`
-      : `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg>`;
+  if (!state._currentVideoId || typeof _playlistsData === 'undefined' || !_playlistsData.liked_songs) return;
+  const isLiked = _playlistsData.liked_songs.includes(state._currentVideoId);
+  // Thumbs-up (like), filled when liked — playbar + now-playing page buttons
+  const svg = isLiked
+    ? `<svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg>`
+    : `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg>`;
+  for (const id of ['np-like-btn', 'np-page-like-btn']) {
+    const btn = document.getElementById(id);
+    if (!btn) continue;
+    btn.classList.toggle('liked', isLiked);
+    btn.title = isLiked ? 'Dislike' : 'Like';
+    btn.innerHTML = svg;
   }
 }
 
@@ -192,6 +194,8 @@ const progress = window.progress = (function () {
   const handle = document.getElementById('progress-handle');
   const elapsedEl = document.getElementById('progress-elapsed');
   const totalEl = document.getElementById('progress-total');
+  const barElapsedEl = document.getElementById('playbar-elapsed');
+  const barTotalEl = document.getElementById('playbar-total');
 
   let durationMs = 0;
   let positionMs = 0;    // anchor position (ms into the track)
@@ -273,6 +277,9 @@ const progress = window.progress = (function () {
     handle.style.left = pct + '%';
     elapsedEl.textContent = fmt(pos);
     totalEl.textContent = durationMs ? fmt(durationMs) : '--:--';
+    // Playbar timer (next to the transport buttons, desktop)
+    if (barElapsedEl) barElapsedEl.textContent = fmt(pos);
+    if (barTotalEl) barTotalEl.textContent = durationMs ? fmt(durationMs) : '--:--';
     track.setAttribute('aria-valuenow', String(Math.floor(pos / 1000)));
     track.setAttribute('aria-valuemax', String(Math.floor(visualMax / 1000)));
     // Mirror to mini popup progress
@@ -885,11 +892,26 @@ document.getElementById('shuffle-btn').addEventListener('click', async (e) => {
   });
   document.addEventListener('click', (e) => { if (!wrap.contains(e.target)) close(); });
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape') close(); });
+  // Shared by the "..." menu entry, the playbar thumb, and the now-playing
+  // page thumb. toggleLike updates the clicked button itself; refresh after
+  // so every like button reflects the new state.
+  function likeCurrentTrack(btn) {
+    if (!(state._currentTrack && state._currentTrack.video_id && typeof toggleLike === 'function')) return;
+    Promise.resolve(toggleLike(state._currentTrack, btn)).then(() => {
+      if (window.refreshNpLikeButton) window.refreshNpLikeButton();
+    });
+  }
   document.getElementById('np-menu-like').addEventListener('click', () => {
-    if (state._currentTrack && state._currentTrack.video_id && typeof toggleLike === 'function')
-      toggleLike(state._currentTrack, document.getElementById('np-like-btn'));
+    likeCurrentTrack(document.getElementById('np-like-btn'));
     close();
   });
+  for (const id of ['np-like-btn', 'np-page-like-btn']) {
+    const btn = document.getElementById(id);
+    if (btn) btn.addEventListener('click', (e) => {
+      e.stopPropagation(); // .np cluster click would toggle the player view
+      likeCurrentTrack(btn);
+    });
+  }
   document.getElementById('np-menu-playlist').addEventListener('click', () => {
     if (state._currentTrack && state._currentTrack.video_id && typeof openAddToPlaylistModal === 'function')
       openAddToPlaylistModal(state._currentTrack);

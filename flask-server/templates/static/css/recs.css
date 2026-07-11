@@ -210,7 +210,7 @@
 
   }
 
-  .recs-tile:active .recs-tile-art { transform: scale(.97); }
+  /* No shrink on click — pressed feedback lives in redesign.css */
 
   .recs-tile-title {
 

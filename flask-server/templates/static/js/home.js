@@ -34,11 +34,12 @@
         : musicNoteSvg;
       var isLikedLocal = typeof _playlistsData !== 'undefined' && _playlistsData.liked_songs && _playlistsData.liked_songs.includes(videoId);
       var heartSvgLocal = isLikedLocal
-        ? '<svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>'
-        : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>';
-      const artistHtml = artist
-        ? '<button class="recs-tile-artist home-artist-link" type="button" data-channel-id="' + escHtml(channelId) + '" data-artist-name="' + escHtml(artist) + '">' + escHtml(artist) + '</button>'
-        : '<div class="recs-tile-artist"></div>';
+        ? '<svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg>'
+        : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg>';
+      // A div of per-artist spans, not a <button>: the button's native
+      // text-align centering misaligned the artist under the left-aligned
+      // title, and a single button couldn't link each artist separately.
+      const artistHtml = '<div class="recs-tile-artist">' + window.artistLinksHtml(artist, channelId) + '</div>';
       return '<div class="home-card" data-video-id="' + escHtml(videoId) + '" data-title="' + escHtml(title) + '" data-artist="' + escHtml(artist) + '" data-thumb="' + escHtml(thumbUrl) + '">' +
         '<div class="recs-tile-art home-card-art">' + thumbHtml + '</div>' +
         '<div class="recs-tile-title">' + escHtml(title) + '</div>' +
@@ -161,26 +162,13 @@
         return;
       }
 
-      var artistLink = e.target.closest('.home-artist-link');
+      // Artist name: navigate (or resolve by name) instead of playing the card.
+      // Handled here rather than left to the document-level handler because
+      // this container listener fires first and would otherwise play the card.
+      var artistLink = e.target.closest('.artist-name');
       if (artistLink) {
         e.stopPropagation();
-        if (artistLink.dataset.channelId) {
-          window.navigateTo('#artist/' + encodeURIComponent(artistLink.dataset.channelId));
-          return;
-        }
-        // Older history rows may not have stored the artist channel id. Resolve
-        // it on demand so their artist labels still behave like real links.
-        var artistName = artistLink.dataset.artistName || '';
-        if (artistName) {
-          api('/alexa/search/?q=' + encodeURIComponent(artistName)).then(function(result) {
-            var artists = (result && result.artists) || [];
-            var exact = artists.find(function(a) {
-              return (a.name || '').toLowerCase() === artistName.toLowerCase();
-            }) || artists[0];
-            if (exact && exact.browse_id) window.navigateTo('#artist/' + encodeURIComponent(exact.browse_id));
-            else toast('Artist page unavailable', 'error');
-          }).catch(function() { toast('Artist page unavailable', 'error'); });
-        }
+        window.openArtistLink(artistLink);
         return;
       }
 
