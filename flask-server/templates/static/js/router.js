@@ -31,6 +31,9 @@
       // Show the dedicated now-playing page (album art + queue) in the main content area.
       // This replaces the old mini-popup overlay approach.
       hideAllViews();
+      // Search is persistent top-bar chrome on desktop, including while the
+      // expanded player is open.
+      setHidden('.play-section', false);
       setHidden('.player-section', false);
       var npSection = document.getElementById('now-playing-section');
       if (npSection) npSection.hidden = false;

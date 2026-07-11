@@ -186,10 +186,16 @@
     border-radius: 50%;
     margin-right: 0;
   }
+  /* Song-list likes use a bare glyph; the circular chrome adds visual noise
+     beside every row. */
+  .result-like-btn {
+    border: none;
+    background: transparent;
+  }
   .result-queue-btn[hidden] { display: none; }
-  .result-queue-btn:hover, .result-like-btn:hover { color: var(--text); border-color: #444; }
+  .result-queue-btn:hover, .result-like-btn:hover { color: var(--text); }
   .result-queue-btn:active, .result-like-btn:active { color: var(--accent); border-color: var(--accent); transform: scale(0.95); }
-  .result-like-btn.liked { color: var(--accent); border-color: var(--accent); }
+  .result-like-btn.liked { color: var(--accent); border-color: transparent; }
   .result-queue-btn svg, .result-like-btn svg { width: 16px; height: 16px; }
 
   /* Sized to match .np-like-btn (the main player's heart) rather than the

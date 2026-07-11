@@ -28,6 +28,7 @@
       const title = item.title || '';
       const artist = item.artist || '';
       const channelId = item.channelId || item.channel_id || '';
+      const albumId = item.albumId || item.album_id || '';
       const thumbUrl = item.thumbnail || '';
       const thumbHtml = thumbUrl
         ? "<img src=\"" + escHtml(thumbUrl) + "\" alt=\"\" loading=\"lazy\" decoding=\"async\" onload=\"this.classList.add('loaded')\">"
@@ -40,9 +41,9 @@
       // text-align centering misaligned the artist under the left-aligned
       // title, and a single button couldn't link each artist separately.
       const artistHtml = '<div class="recs-tile-artist">' + window.artistLinksHtml(artist, channelId) + '</div>';
-      return '<div class="home-card" data-video-id="' + escHtml(videoId) + '" data-title="' + escHtml(title) + '" data-artist="' + escHtml(artist) + '" data-thumb="' + escHtml(thumbUrl) + '">' +
+      return '<div class="home-card" data-video-id="' + escHtml(videoId) + '" data-album-id="' + escHtml(albumId) + '" data-title="' + escHtml(title) + '" data-artist="' + escHtml(artist) + '" data-thumb="' + escHtml(thumbUrl) + '">' +
         '<div class="recs-tile-art home-card-art">' + thumbHtml + '</div>' +
-        '<div class="recs-tile-title">' + escHtml(title) + '</div>' +
+        '<div class="recs-tile-title" title="Open album">' + escHtml(title) + '</div>' +
         artistHtml +
         '<button class="result-like-btn' + (isLikedLocal ? ' liked' : '') + '" type="button" title="' + (isLikedLocal ? 'Dislike' : 'Like') + '">' + heartSvgLocal + '</button>' +
       '</div>';
@@ -172,7 +173,18 @@
         return;
       }
 
-      var card = e.target.closest('.home-card');
+      var titleLink = e.target.closest('.recs-tile-title');
+      if (titleLink) {
+        e.stopPropagation();
+        var titleCard = titleLink.closest('.home-card');
+        if (titleCard && titleCard.dataset.albumId) {
+          window.navigateTo('#album/' + encodeURIComponent(titleCard.dataset.albumId));
+        }
+        return;
+      }
+
+      var art = e.target.closest('.home-card-art');
+      var card = art && art.closest('.home-card');
       if (!card || !rows.contains(card) || !card.dataset.videoId) return;
       if (!window.playFromQueue) return;
       window.playFromQueue({

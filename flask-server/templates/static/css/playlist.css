@@ -285,7 +285,9 @@
     font-size: .82rem;
     -webkit-line-clamp: 4;
   }
-  .playlist-detail-hero-actions { display: flex; align-items: center; justify-content: center; gap: 12px; margin-top: 7px; }
+  .playlist-detail-hero-actions { display: flex; width: 100%; align-items: center; justify-content: space-between; gap: 18px; margin-top: 7px; }
+  .playlist-hero-actions-left,
+  .playlist-hero-actions-right { display: flex; align-items: center; gap: 10px; }
   .playlist-detail-hero-actions button {
     width: 48px;
     height: 48px;

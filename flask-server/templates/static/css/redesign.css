@@ -760,7 +760,10 @@ body.results-open .player-section {
 .player-section .np-like-btn:hover,
 .player-section .np-shuffle-btn:hover { background: rgba(255, 255, 255, .07); }
 .player-section .np-like-btn.liked,
-.player-section .np-shuffle-btn.shuffle-active { background: rgba(232, 89, 12, .14); }
+.player-section .np-shuffle-btn.shuffle-active {
+  background: transparent;
+  color: var(--accent);
+}
 
 /* Transport */
 .player-section .transport {
@@ -1122,27 +1125,22 @@ body.now-playing-route .player-section .player-expand-btn svg {
   box-shadow: 0 10px 28px rgba(0, 0, 0, .65);
 }
 
-/* Hover play badge */
+/* YT Music-style artwork hover: darken the thumbnail and show one large,
+   centered play glyph without resizing the artwork. */
 .home-card-art::after {
   content: '';
   position: absolute;
-  right: 8px;
-  bottom: 8px;
-  width: 42px;
-  height: 42px;
-  border-radius: 50%;
-  background: var(--accent-grad) center / 18px no-repeat
+  inset: 0;
+  border-radius: inherit;
+  background: rgba(0, 0, 0, .42) center / 58px no-repeat
     url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='white'%3E%3Cpolygon points='8,5 19,12 8,19'/%3E%3C/svg%3E");
-  box-shadow: 0 6px 18px rgba(0, 0, 0, .55);
   opacity: 0;
-  transform: translateY(6px);
-  transition: opacity .2s ease, transform .2s ease;
+  transition: opacity .18s ease;
   pointer-events: none;
 }
 @media (hover: hover) {
-  .home-card:hover .home-card-art::after {
+  .home-card-art:hover::after {
     opacity: 1;
-    transform: none;
   }
 }
 /* Like button floats over the art's corner */
@@ -1602,22 +1600,24 @@ body.results-open .player-section {
   .player-section .transport button,
   .player-section .transport button[data-action="previous"] {
     display: inline-flex;
-    width: 40px;
-    height: 40px;
+    width: 44px;
+    height: 44px;
     color: #fff;
   }
-  .player-section .transport button svg { width: 22px; height: 22px; }
+  .player-section .transport button svg { width: 26px; height: 26px; }
   /* Play/pause: plain glyph (no circular chip), larger than prev/next */
   .player-section .pp-btn,
   .player-section .pp-btn:hover {
-    width: 56px;
-    height: 56px;
+    width: 58px;
+    height: 58px;
     background: transparent;
     border: 0;
     color: #fff;
+    box-shadow: none;
+    filter: none;
   }
-  .player-section .pp-btn:hover { filter: brightness(1.2); }
-  .player-section .pp-btn svg { width: 36px; height: 36px; }
+  .player-section .pp-btn:hover { filter: none; }
+  .player-section .pp-btn svg { width: 40px; height: 40px; }
 
   .player-section .np {
     grid-area: np;
@@ -1905,11 +1905,6 @@ body.results-open .player-section {
 main:has(#now-playing-section:not([hidden])) {
   padding-bottom: 0 !important;
 }
-/* Also suppress the extra horizontal padding that main adds on desktop,
-   since #now-playing-section bleeds to -28px already. */
-@media (min-width: 900px) {
-  main:has(#now-playing-section:not([hidden])) {
-    padding-left: 0;
-    padding-right: 0;
-  }
-}
+/* Keep main's horizontal padding on the routed player. The now-playing panel
+   is fixed to the viewport and does not need the old bleed compensation;
+   removing this padding shifts the header actions against the right edge. */

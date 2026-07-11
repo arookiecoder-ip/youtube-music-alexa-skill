@@ -465,14 +465,29 @@ async function openPlaylistDetailModal(pl_id, fromRoute) {
       </div>
       ${desc ? `<div class="playlist-detail-hero-desc">${escHtml(desc)}</div>` : ''}
       <div class="playlist-detail-hero-actions">
-        <button class="playlist-hero-play" type="button" title="Play all"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></button>
-        <button class="playlist-hero-shuffle" type="button" title="Shuffle">${shuffleBtn.innerHTML}</button>
+        <div class="playlist-hero-actions-left">
+          <button class="playlist-hero-play" type="button" title="Play all"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></button>
+          ${pl.source_url ? `<button class="playlist-hero-sync" type="button" title="Sync playlist"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg></button>` : ''}
+          <button class="playlist-hero-more" type="button" title="More options"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg></button>
+        </div>
+        <div class="playlist-hero-actions-right">
+          <button class="playlist-hero-shuffle" type="button" title="Shuffle play">${shuffleBtn.innerHTML}</button>
+          ${pl.source_url ? `<button class="playlist-hero-share" type="button" title="Share playlist"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="m8.6 10.5 6.8-4M8.6 13.5l6.8 4"/></svg></button>` : ''}
+        </div>
       </div>
     </div>
   `;
 
   heroDiv.querySelector('.playlist-hero-play').addEventListener('click', () => playAllBtn.click());
   heroDiv.querySelector('.playlist-hero-shuffle').addEventListener('click', () => shuffleBtn.click());
+  const heroSync = heroDiv.querySelector('.playlist-hero-sync');
+  if (heroSync) heroSync.addEventListener('click', () => syncPlaylist(pl_id, heroSync));
+  heroDiv.querySelector('.playlist-hero-more').addEventListener('click', (e) => {
+    e.stopPropagation();
+    _openPlaylistDetailMoreMenu(e.currentTarget);
+  });
+  const heroShare = heroDiv.querySelector('.playlist-hero-share');
+  if (heroShare) heroShare.addEventListener('click', () => sharePlaylist(pl));
 
   body.innerHTML = '';
   body.appendChild(heroDiv);
@@ -614,13 +629,12 @@ function renderSidebarPlaylists() {
   });
 }
 
-document.getElementById('playlist-detail-more-btn').addEventListener('click', (e) => {
-  e.stopPropagation();
+function _openPlaylistDetailMoreMenu(anchor) {
   const menu = document.getElementById('playlist-detail-more-menu');
   const wasOpen = menu.classList.contains('open');
   _closePlaylistDetailMoreMenu();
   if (!wasOpen) {
-    const rect = e.currentTarget.getBoundingClientRect();
+    const rect = anchor.getBoundingClientRect();
     menu.style.top = (rect.bottom + 4) + 'px';
     menu.style.right = (window.innerWidth - rect.right) + 'px';
     menu.style.left = 'auto';
@@ -634,6 +648,11 @@ document.getElementById('playlist-detail-more-btn').addEventListener('click', (e
     document.body.appendChild(menu);
     menu.classList.add('open');
   }
+}
+
+document.getElementById('playlist-detail-more-btn').addEventListener('click', (e) => {
+  e.stopPropagation();
+  _openPlaylistDetailMoreMenu(e.currentTarget);
 });
 document.addEventListener('click', () => {
   _closePlaylistDetailMoreMenu();
@@ -1240,6 +1259,31 @@ async function syncPlaylist(pl_id, btnEl = null) {
       btn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg> Sync`;
     }
     toast('Sync failed', 'error');
+  }
+}
+
+async function sharePlaylist(pl) {
+  const url = pl && pl.source_url;
+  if (!url) {
+    toast('This playlist does not have a shareable source link', 'error');
+    return;
+  }
+  const data = { title: pl.name || 'Playlist', text: pl.name || 'Playlist', url };
+  try {
+    if (navigator.share) {
+      await navigator.share(data);
+    } else {
+      await navigator.clipboard.writeText(url);
+      toast('Playlist link copied', 'ok');
+    }
+  } catch (e) {
+    if (e && e.name === 'AbortError') return;
+    try {
+      await navigator.clipboard.writeText(url);
+      toast('Playlist link copied', 'ok');
+    } catch (_) {
+      toast('Could not share playlist', 'error');
+    }
   }
 }
 

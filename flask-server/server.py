@@ -3225,12 +3225,14 @@ def _normalize_home_item(item):
         return None
     artists = item.get('artists') or []
     thumbnails = item.get('thumbnails') or []
+    album = item.get('album') or {}
     return {
         'videoId': str(video_id),
         'title': str(item.get('title') or ''),
         'artist': str((artists[0] or {}).get('name') or '') if artists else '',
         'thumbnail': str((thumbnails[0] or {}).get('url') or '') if thumbnails else '',
         'channelId': str((artists[0] or {}).get('id') or '') if artists else '',
+        'albumId': str(album.get('id') or album.get('browseId') or ''),
     }
 
 
@@ -3258,6 +3260,8 @@ def _home_item(t):
         # `_normalize_home_item` above.
         'channelId': str(t.get('channelId') or t.get('channel_id') or
                          t.get('artist_id') or ''),
+        'albumId': str(t.get('albumId') or t.get('album_id') or
+                       ((t.get('album') or {}).get('id') if isinstance(t.get('album'), dict) else '') or ''),
     }
 
 
