@@ -11,13 +11,9 @@
   if (state._historyCache === undefined) state._historyCache = [];
   if (state._hasTrack === undefined) state._hasTrack = false;
   if (state._resultsOpen === undefined) state._resultsOpen = false;
-  // The Up Next panel is opt-in (opened from the playbar's queue button),
-  // like YT Music/Spotify â€” it must not sit on top of the home feed.
-  if (state._queueOpen === undefined) {
-    let saved = null;
-    try { saved = localStorage.getItem('queuePanelOpen'); } catch (_) {}
-    state._queueOpen = saved === '1';
-  }
+  // Floating queue panel is retired — queue is embedded in the #now-playing page.
+  state._queueOpen = false;
+  try { localStorage.removeItem('queuePanelOpen'); } catch (_) {}
 
 const QUEUE_RENDER_CHUNK = 150;
 
@@ -242,7 +238,7 @@ function _buildQueueRow(container, item, i, currentIndex, thumbsById) {
     });
   }
 
-  // Tap on the item â†’ play from queue. Mark it active immediately so the
+  // Tap on the item Ã¢â€ â€™ play from queue. Mark it active immediately so the
   // "you tapped this" feedback shows right away instead of only after the
   // server round-trip completes and playFromQueue's own re-render lands.
   attachQueueItemTap(el, () => {
@@ -306,94 +302,18 @@ function _syncQueueSentinel(container) {
 }
 
 function showQueue(queue, currentIndex) {
+  // The floating #queue-section panel is retired.
+  // All queue display now lives in #np-queue-list inside #now-playing-section.
+  // Always hide the panel so it never overlaps homepage / search content.
   const section = document.getElementById('queue-section');
-  const list = document.getElementById('queue-list');
   const mainEl = document.querySelector('main');
-  // Show queue panel only when queueOpen and NOT on the now-playing page (that has its own #np-queue-list)
-  if (!state._queueOpen || state._resultsOpen || location.hash === '#now-playing') {
-    section.classList.remove('is-visible');
-    section.hidden = true;
-    mainEl.classList.remove('has-queue');
-    return;
-  }
-  if (!queue || queue.length <= 1) {
-    state._queueRenderLimit = QUEUE_RENDER_CHUNK; // fresh queue starts a fresh window
-    section.classList.remove('is-visible');
-    clearTimeout(section._hideTimer);
-    section._hideTimer = setTimeout(() => {
-      section.hidden = true;
-      mainEl.classList.remove('has-queue');
-    }, 300);
-    return;
-  }
-  clearTimeout(section._hideTimer);
-  section.hidden = false;
-  mainEl.classList.add('has-queue');
-  requestAnimationFrame(() => section.classList.add('is-visible'));
+  if (section) { section.classList.remove('is-visible'); section.hidden = true; }
+  if (mainEl) mainEl.classList.remove('has-queue');
 
-  // Lazy window: only this many rows are materialized now; scrolling appends
-  // more (see _syncQueueSentinel). Always cover the active row so the
-  // highlight has a row to land on.
-  const incomingIds = queue.map(item => item.video_id || '');
-  const renderLimit = Math.min(queue.length, Math.max(state._queueRenderLimit, currentIndex + 11));
-  list._lazyQueue = { queue, currentIndex };
-
-  // If the rendered rows are exactly a prefix of the incoming queue (same
-  // video_ids, same order), this call is just a confirmation echo of an
-  // optimistic update (add/reorder/remove), an unrelated field changing
-  // upstream, or new tracks appended past the window â€” don't tear down and
-  // rebuild every row for nothing (that full rebuild, including closing menus
-  // and re-creating drag handles, was the flicker). Just sync the active
-  // highlight and let the sentinel page in any new tail.
-  const renderedRows = Array.from(_renderedQueueRows(list));
-  const existingIds = renderedRows.map(w => w.dataset.videoId || '');
-  const samePrefix = existingIds.length > 0
-    && existingIds.length <= incomingIds.length
-    && existingIds.every((id, i) => id === incomingIds[i]);
-  if (samePrefix) {
-    if (currentIndex >= existingIds.length) {
-      // Playback advanced past the rendered window without a queue change.
-      _appendLazyQueueRows(list, currentIndex + 11);
-    }
-    updateQueueActive(currentIndex);
-    _syncQueueSentinel(list);
-    return;
-  }
-
-  // Save scroll position before DOM rebuild (D-09). Restore after replaceChildren.
-  const savedScrollTop = list.scrollTop;
-  const prevPlayingId = currentIndex >= 0 && queue[currentIndex] ? queue[currentIndex].video_id : null;
-
-  _closeAllQueueMenus();
-
-  // Rows are rebuilt fresh every time (listeners capture the row's index by
-  // closure, so reusing whole nodes across a reorder would leave them acting
-  // on stale indices). But the <img> itself is transplanted from the old row
-  // when the same video_id already has one loaded at the same URL (see
-  // _buildQueueRow), so the browser never re-fetches/re-decodes it.
-  const existingThumbsById = new Map();
-  for (const w of renderedRows) {
-    const id = w.dataset.videoId || '';
-    const img = w.querySelector('img.queue-thumb.loaded');
-    if (id && img && !existingThumbsById.has(id)) existingThumbsById.set(id, img);
-  }
-  const newChildren = [];
-  for (let i = 0; i < renderLimit; i++) {
-    newChildren.push(_buildQueueRow(list, queue[i], i, currentIndex, existingThumbsById));
-  }
-  list.replaceChildren(...newChildren);
-  _syncQueueSentinel(list);
-
-  // Restore scroll position unconditionally â€” user stays at browsing position.
-  list.scrollTop = savedScrollTop;
-
-  // Only scroll the active item into view if the currently-playing track
-  // changed (video_id changed). Otherwise the user's scroll position is
-  // preserved.
-  const newPlayingId = currentIndex >= 0 && queue[currentIndex] ? queue[currentIndex].video_id : null;
-  if (newPlayingId !== prevPlayingId) {
-    const active = list.querySelector('.active');
-    if (active) active.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  // Keep the now-playing page's inline queue in sync when visible.
+  const npSection = document.getElementById('now-playing-section');
+  if (npSection && !npSection.hidden && queue && queue.length > 0 && window.renderNpQueue) {
+    window.renderNpQueue(queue, currentIndex);
   }
 }
 
@@ -515,7 +435,7 @@ function _wireQueueMoreMenu(el, item, index) {
       moreMenu.classList.add('open');
       // Portal the menu to <body> while open. Inside the row it sits under
       // an overflow-hidden wrapper within a scrollable list, and Chromium's
-      // input hit-testing clips fixed elements there â€” the menu is visible
+      // input hit-testing clips fixed elements there Ã¢â‚¬â€ the menu is visible
       // but clicks land on the row below it. _closeAllQueueMenus returns it.
       moreMenu._home = el;
       document.body.appendChild(moreMenu);
@@ -597,7 +517,7 @@ function updateQueueActive(currentIndex) {
   }
 }
 
-// Same highlight sync for the mobile queue modal â€” used when an SSE push
+// Same highlight sync for the mobile queue modal Ã¢â‚¬â€ used when an SSE push
 // carries only a queue_index change (queue itself omitted as unchanged).
 function updateQueueModalActive(currentIndex) {
   const modalBody = document.getElementById('queue-modal-body');
@@ -695,7 +615,7 @@ async function reorderQueue(fromIndex, toIndex) {
   try {
     await api('/alexa/queue_reorder/', { from_index: fromIndex, to_index: toIndex });
     // Confirm with server data after a short delay. Don't blank state._lastQueueJson
-    // here â€” the optimistic reorder above already matches what the server will
+    // here Ã¢â‚¬â€ the optimistic reorder above already matches what the server will
     // report, and invalidating the cache forces a needless full rebuild (the
     // visible flicker) as soon as the confirming snapshot arrives.
     schedulePollNowPlaying(500);
@@ -807,7 +727,7 @@ function _attachQueueSwipeGestures(wrapper, el, index, item, currentIndex) {
           state._lastQueueJson = '';
           schedulePollNowPlaying(300);
         } else {
-          toast('Canâ€™t remove the playing track', 'error');
+          toast('CanÃ¢â‚¬â„¢t remove the playing track', 'error');
         }
       } else if (committedLike) {
         if (typeof toggleLike === 'function') toggleLike(item);
@@ -888,7 +808,7 @@ function _attachQueueDragReorder(el, listEl, originalIndex) {
     const distFromBottom = rect.bottom - clientY;
 
     if (distFromTop < EDGE_ZONE && _scrollContainer.scrollTop > 0) {
-      // Scroll up â€” speed increases as pointer gets closer to edge
+      // Scroll up Ã¢â‚¬â€ speed increases as pointer gets closer to edge
       const ratio = 1 - (distFromTop / EDGE_ZONE);
       _scrollSpeed = -(MAX_SPEED * Math.max(0, Math.min(1, ratio)));
       startAutoScroll();
@@ -975,7 +895,7 @@ function _attachQueueDragReorder(el, listEl, originalIndex) {
 
     // currentOver is an insertion index computed with the dragged item still
     // occupying its old slot. The server (and the optimistic splice) remove
-    // the item first, shifting everything below it up by one â€” so a downward
+    // the item first, shifting everything below it up by one Ã¢â‚¬â€ so a downward
     // move must drop the index by 1 or the item lands one slot too low.
     let toIdx = currentOver;
     if (toIdx > fromIdx) toIdx -= 1;
@@ -1112,19 +1032,19 @@ function scheduleHistoryRefresh() {
 // Server-side history, recorded when the skill confirms a real playback start.
 
 /* ---- Queue panel toggle (playbar button, desktop) ---- */
+/* The queue button navigates to the #now-playing page where the queue
+   is embedded as the right column. The old floating panel is gone. */
 (function () {
   const btn = document.getElementById('queue-toggle-btn');
   if (!btn) return;
-  function syncBtn() { btn.classList.toggle('active', !!state._queueOpen); }
   btn.addEventListener('click', () => {
-    state._queueOpen = !state._queueOpen;
-    try { localStorage.setItem('queuePanelOpen', state._queueOpen ? '1' : '0'); } catch (_) {}
-    syncBtn();
-    let queue = [];
-    try { queue = JSON.parse(state._lastQueueJson || '[]'); } catch (_) {}
-    showQueue(queue, state._lastQueueIndex);
+    // Navigate to the now-playing page — queue is built in as the right column.
+    if (state._hasTrack) {
+      location.hash = '#now-playing';
+    }
   });
-  syncBtn();
+  // Never highlight as "active" since floating panel no longer exists
+  btn.classList.remove('active');
 })();
 
 /* ---- Queue bottom-sheet (mobile) ---- */

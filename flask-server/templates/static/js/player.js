@@ -582,8 +582,13 @@ function syncModalScrollLock() {
       return;
     }
     // On desktop, navigate to the #now-playing page (in-page section, not overlay)
+    // or navigate back if we are already there (toggle behavior).
     if (window.matchMedia('(min-width: 900px)').matches) {
-      if (location.hash !== '#now-playing') location.hash = '#now-playing';
+      if (location.hash === '#now-playing') {
+        history.back(); // Collapse back to previous view
+      } else {
+        location.hash = '#now-playing'; // Expand
+      }
       return;
     }
     // Mobile: open the bottom sheet popup

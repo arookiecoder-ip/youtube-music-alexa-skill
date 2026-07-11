@@ -84,10 +84,10 @@ main {
   body.results-open .site-footer {
     padding: 10px 0 var(--space-5);
   }
-  /* Reserve room for the queue side panel while it is visible */
-  main:has(#queue-section.is-visible:not([hidden])) {
-    padding-right: calc(var(--queue-w) + 40px);
-  }
+  /* Queue side panel is deprecated — queue lives in the #now-playing page.
+     No right-padding reserved any more. */
+  /* Hard-hide: belt-and-suspenders so it never floats over any page. */
+  #queue-section { display: none !important; }
 }
 
 /* Kill the old two-column grid; content flows as one scrolling page. */
@@ -931,7 +931,14 @@ input[type=range]::-moz-range-thumb { border-radius: 50%; }
   color: var(--text);
   background: rgba(255, 255, 255, .08);
 }
-.player-section .player-expand-btn svg { width: 19px; height: 19px; }
+.player-section .player-expand-btn svg {
+  width: 19px;
+  height: 19px;
+  transition: transform 0.2s ease;
+}
+body.now-playing-route .player-section .player-expand-btn svg {
+  transform: rotate(180deg);
+}
 
 /* Expanded now-playing: a routed desktop page inspired by YT Music. Mobile
    keeps the compact draggable sheet from player.css. */
