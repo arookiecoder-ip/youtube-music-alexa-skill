@@ -122,8 +122,8 @@
   position: absolute;
   top: 50%;
   left: 50%;
-  width: 44px;
-  height: 44px;
+  width: 60px;
+  height: 60px;
   background: none;
   border-radius: 0;
   display: flex;
@@ -139,11 +139,11 @@
   box-shadow: none;
 }
 .home-play-btn svg {
-  width: 36px;
-  height: 36px;
+  width: 52px;
+  height: 52px;
   fill: #ffffff;
   display: block;
-  filter: drop-shadow(0 2px 6px rgba(0,0,0,0.6));
+  filter: drop-shadow(0 2px 8px rgba(0,0,0,0.7));
 }
 
 /* Reveal on card hover */

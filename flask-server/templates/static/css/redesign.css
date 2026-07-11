@@ -10,7 +10,7 @@
   --rail-w: 200px;
   --rail-w-mini: 56px;
   --topbar-h: 64px;
-  --playbar-h: 88px;
+  --playbar-h: 54px;
   --playbar-h-mobile: 104px;
   --queue-w: 320px;
   --accent-grad: linear-gradient(135deg, var(--accent), #ff6a00);
@@ -215,19 +215,19 @@ header {
 }
 
 .device-section-inline .custom-select-trigger {
-  border-radius: 10px;
+  border-radius: 0;
   background: var(--pill-bg);
   border-color: transparent;
   padding: 8px 14px;
 }
 .device-section-inline #refresh {
-  border-radius: 10px;
+  border-radius: 0;
   background: none;
   border-color: transparent;
 }
 .device-section-inline #refresh:hover { border-color: var(--border); }
 .custom-select-menu {
-  border-radius: 4px;
+  border-radius: 0;
   overflow: hidden;
   background: #1b1b1b;
   border-color: #2c2c2c;
@@ -279,7 +279,7 @@ body.results-open .play-section {
     url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23aaaaaa' stroke-width='2.2' stroke-linecap='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cline x1='21' y1='21' x2='16.2' y2='16.2'/%3E%3C/svg%3E");
 }
 .search-wrap input#query {
-  border-radius: 10px;
+  border-radius: 0;
   background: var(--pill-bg);
   border: 1px solid transparent;
   padding: 12px 42px 12px 44px;
@@ -297,24 +297,72 @@ body.results-open .play-section {
   display: none !important;
 }
 
+/* Suggestions / recent-searches dropdown — YT Music style: a rounded panel
+   hanging just under the pill, roomy rows, no hairline between items. */
 .suggest-list {
-  border-radius: var(--radius-lg);
-  overflow: hidden;
-  background: #1b1b1b;
-  border: 1px solid #2c2c2c;
+  top: calc(100% + 6px);
+  border-radius: 0;
+  overflow: hidden auto;
+  background: #212121;
+  border: 1px solid rgba(255, 255, 255, .08);
   box-shadow: 0 16px 40px rgba(0, 0, 0, .6);
+  max-height: 420px;
+  padding: 8px 0;
+}
+.suggest-item {
+  padding: 10px 16px;
+  gap: 14px;
+  font-size: .88rem;
+}
+.suggest-item + .suggest-item { border-top: none; }
+.suggest-item:hover,
+.suggest-item.active { background: rgba(255, 255, 255, .08); }
+.suggest-item > svg {
+  width: 16px;
+  height: 16px;
+  color: #aaa;
+}
+.suggest-item > span {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.suggest-item-remove {
+  width: 28px;
+  height: 28px;
+  color: #aaa;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .15s, color .15s, background .15s;
+  border-radius: 0;
+}
+.suggest-item:hover .suggest-item-remove,
+.suggest-item.active .suggest-item-remove {
+  opacity: 1;
+  pointer-events: auto;
+}
+.suggest-item-remove:hover {
+  color: #fff;
+  background: rgba(255, 255, 255, .12);
 }
 
 .clear-all-btn { border-radius: var(--radius-full); }
 
-/* Wide screens: the search pill floats inside the top bar, dead center */
+/* Wide screens: the search pill floats inside the top bar, dead center.
+   The has-queue/results-open variants MUST be listed too: the base group
+   above includes them at higher specificity, so a bare .play-section here
+   would lose and the pill would drop 10px and stretch to 620px the moment
+   search results opened (the "header breaks on search" bug). */
 @media (min-width: 900px) {
-  .play-section {
+  .play-section,
+  main.has-queue .play-section,
+  body.results-open .play-section {
     position: fixed;
     top: 3px;
     left: calc(var(--rail-w) + (100vw - var(--rail-w)) / 2);
     transform: translateX(-50%);
     width: clamp(300px, 34vw, 560px);
+    max-width: none;
     height: var(--topbar-h);
     margin: 0;
     z-index: 245;
@@ -528,7 +576,7 @@ body.results-open .play-section {
   border-radius: var(--radius-md);
   transition: color .15s, background .15s;
   min-height: 41px;
-  overflow: hidden;
+  overflow: visible;
 }
 .sidebar .sidebar-nav-btn .nav-label {
   white-space: nowrap;
@@ -581,7 +629,7 @@ body.results-open .play-section {
   justify-content: center;
   padding: 0;
   border: 1px solid rgba(255,255,255,.14);
-  border-radius: 50%;
+  border-radius: 0;
   background: rgba(255,255,255,.07);
   color: var(--text);
   cursor: pointer;
@@ -596,7 +644,7 @@ body.results-open .play-section {
   width: 230px;
   padding: 10px;
   border: 1px solid rgba(255,255,255,.12);
-  border-radius: 4px;
+  border-radius: 0;
   background: #202020;
   box-shadow: 0 14px 40px rgba(0,0,0,.55);
   opacity: 0;
@@ -845,7 +893,13 @@ body.results-open .player-section {
      context but not a new containing block in some browsers. */
   overflow: hidden;
 }
-.player-section.is-visible { transform: none; }
+/* Must also name the results-open/has-queue variants: the base group above
+   includes them, so a bare .player-section.is-visible loses the specificity
+   fight and the bar stays shifted 24px down (clipped at the viewport bottom)
+   while search results are open. */
+.player-section.is-visible,
+main.has-queue .player-section.is-visible,
+body.results-open .player-section.is-visible { transform: none; }
 .player-section.is-collapsed { display: none; }
 .player-section.is-blank .transport,
 .player-section.is-blank .progress,
@@ -868,7 +922,7 @@ body.results-open .player-section {
   height: 52px;
   border-radius: 0;
   border: none;
-  background: none;
+  background: none center / cover no-repeat;
   box-shadow: none;
   overflow: hidden;
   display: flex;
@@ -878,9 +932,11 @@ body.results-open .player-section {
 /* Override player.css redesigned-bar rule that adds border-radius with !important */
 .player-section.redesigned-bar .np-art {
   border-radius: 0 !important;
-  background: none !important;
   border: none !important;
   box-shadow: none !important;
+  background-size: cover !important;
+  background-position: center !important;
+  background-repeat: no-repeat !important;
 }
 /* Plain white icon when no art is loaded */
 .player-section .np-art svg {
@@ -930,15 +986,16 @@ body.results-open .player-section {
 .player-section .transport button svg { width: 18px; height: 18px; }
 .player-section .pp-btn,
 .player-section .pp-btn:hover {
-  width: 50px;
-  height: 50px;
-  background: #ffffff;
-  color: #000000;
+  width: 44px;
+  height: 44px;
+  background: none !important;
+  color: #ffffff !important;
   border: none;
-  box-shadow: 0 4px 18px rgba(255, 255, 255, .18);
+  box-shadow: none;
+  border-radius: 0 !important;
 }
-.player-section .pp-btn:hover { filter: brightness(0.92); }
-.player-section .pp-btn svg { width: 22px; height: 22px; }
+.player-section .pp-btn:hover { filter: none; opacity: 0.85; }
+.player-section .pp-btn svg { width: 28px; height: 28px; fill: #ffffff; color: #ffffff; }
 
 /* Progress */
 .player-section .progress { margin: 0; }
@@ -1067,13 +1124,13 @@ input[type=range]::-moz-range-thumb { border-radius: 50%; }
 .player-section #progress-elapsed,
 .player-section #progress-total { display: none !important; }
 
-/* Progress handle dot — hangs just below the thin top strip */
+/* Progress handle dot — centered on the thin top strip */
 .player-section .progress-handle {
   display: block;
   width: 13px;
   height: 13px;
-  top: 100%;
-  transform: translateX(-50%) translateY(-40%) scale(0.5);
+  top: 50%;
+  transform: translateX(-50%) translateY(-50%) scale(0.5);
   opacity: 0;
   background: #ffffff;
   box-shadow: 0 1px 6px rgba(0,0,0,0.5);
@@ -1084,22 +1141,24 @@ input[type=range]::-moz-range-thumb { border-radius: 50%; }
 .player-section .progress-track:hover .progress-handle,
 .player-section .progress-track.dragging .progress-handle {
   opacity: 1;
-  transform: translateX(-50%) translateY(-40%) scale(1);
+  transform: translateX(-50%) translateY(-50%) scale(1);
   transition: opacity 0.15s ease, transform 0.15s ease;
 }
-/* Playbar timer: hidden globally, shown inside the player bar as small muted text below the artist */
+/* Playbar timer: hidden globally, centered in the player bar */
 .playbar-time { display: none; }
 .player-section .playbar-time {
-  grid-area: time;
   display: block;
+  position: absolute;
+  bottom: 6px;
+  left: 50%;
+  transform: translateX(-50%);
   font-size: 0.68rem;
-  color: var(--muted);
-  opacity: 0.7;
-  margin-top: 1px;
+  color: rgba(255,255,255,0.45);
   font-variant-numeric: tabular-nums;
-  letter-spacing: 0.02em;
+  letter-spacing: 0.03em;
   white-space: nowrap;
   pointer-events: none;
+  z-index: 2;
 }
 /* NOTE: overflow:hidden is already set on .player-section base rule above;
    the duplicate here is intentionally removed to avoid specificity confusion. */
@@ -1413,6 +1472,14 @@ body.results-open #results-section {
   display: block;
   overflow: visible;
   height: auto;
+}
+/* YT Music centers search results in a readable column instead of letting
+   song rows stretch edge-to-edge on wide screens. */
+@media (min-width: 900px) {
+  #results-section,
+  body.results-open #results-section {
+    max-width: 880px;
+  }
 }
 #results-section .section-head { padding: 0 2px; }
 #results-section .label {
@@ -1812,7 +1879,7 @@ body.results-open .player-section {
 .player-section .progress-track { transition: height .12s ease; }
 .player-section .progress:hover .progress-track { height: 6px; }
 .player-section .transport button svg { width: 16px; height: 16px; }
-.player-section .pp-btn svg { width: 18px; height: 18px; }
+.player-section .pp-btn svg { width: 28px; height: 28px; fill: #ffffff; color: #ffffff; }
 .player-section .vol input[type=range] { flex: 1; }
 
 /* YouTube Music-style persistent desktop playbar: transport at left, track
@@ -1827,11 +1894,11 @@ body.results-open .player-section {
   main.has-queue .player-section,
   body.results-open .player-section {
     overflow: hidden;
-    height: 72px;
-    min-height: 72px;
+    height: 54px;
+    min-height: 54px;
     box-sizing: border-box;
     z-index: 240;
-    padding: 5px 16px 4px;
+    padding: 3px 16px 3px;
     grid-template-columns: 205px minmax(320px, 1fr) auto auto;
     /* Expand arrow cluster sits at the far right, after the volume */
     grid-template-areas: "transport np volume actions";
@@ -1922,15 +1989,20 @@ body.results-open .player-section {
     color: #aaa;
   }
   .player-section .vol > svg { width: 23px; height: 23px; }
-  /* Elapsed / total timer beside the next button */
+  /* Timer: inherit the absolute-center position from the global rule */
   .player-section .playbar-time {
-    display: inline-flex;
-    align-items: center;
-    margin-left: 10px;
-    font-size: .78rem;
-    color: #aaa;
+    display: block;
+    position: absolute;
+    bottom: 7px;
+    left: 50%;
+    transform: translateX(-50%);
+    margin: 0;
+    font-size: .75rem;
+    color: rgba(255,255,255,0.40);
     white-space: nowrap;
     font-variant-numeric: tabular-nums;
+    letter-spacing: 0.03em;
+    pointer-events: none;
   }
   .player-section .queue-toggle-btn {
     width: 40px;
