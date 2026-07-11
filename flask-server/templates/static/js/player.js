@@ -74,7 +74,7 @@ function showNowPlaying(info) {
       if (npPageArt) {
         npPageArt.style.backgroundImage = '';
         npPageArt.classList.remove('has-thumb');
-        npPageArt.parentElement.style.removeProperty('--np-cover');
+        npPageArt.closest('.np-page').style.removeProperty('--np-cover');
         document.body.style.removeProperty('--np-cover');
       }
       const npPageTitle = document.getElementById('np-page-title');
@@ -574,7 +574,7 @@ const progress = window.progress = (function () {
 // endpoint to tell them apart: only a genuinely dead jam gets the
 // full-screen ended state; a mere permission refusal gets a toast.
 
-async function playResult(item, suppressRadio, forceRadio) {
+async function playResult(item, suppressRadio, forceRadio, openPlaybackPage) {
   const serial = selectedSerial();
   if (!serial) return;
   state.lastActionAt = Date.now();
@@ -602,8 +602,8 @@ async function playResult(item, suppressRadio, forceRadio) {
     state.lastActionIntent = true;
     syncPlayPause();
     toast(forceRadio ? 'Radio started' : 'Playing', 'ok');
-    // Navigate to now-playing page on desktop
-    if (window.matchMedia('(min-width: 900px)').matches) window.navigateTo('#now-playing');
+    // Only search-result plays opt into opening the expanded playback page.
+    if (openPlaybackPage && window.matchMedia('(min-width: 900px)').matches) window.navigateTo('#now-playing');
     state._lastQueueJson = '';
     schedulePollNowPlaying(3000);
   } catch (e) {
@@ -703,6 +703,10 @@ function syncModalScrollLock() {
   if (npCluster) {
     npCluster.addEventListener('click', (e) => {
       if (e.target.closest('button, a, .artist-name')) return;
+      // The cluster lives inside .player-section, which also has an expand
+      // handler. Do not let one click toggle the route twice (open, then
+      // immediately close), which appears as a full-screen blink.
+      e.stopPropagation();
       openMiniPopup();
     });
   }

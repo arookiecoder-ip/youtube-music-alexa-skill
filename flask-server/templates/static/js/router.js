@@ -44,6 +44,18 @@
       setHidden('.player-section', false);
       var npSection = document.getElementById('now-playing-section');
       if (npSection) npSection.hidden = false;
+      // Re-apply the current track artwork whenever the page opens. Player
+      // updates can happen while this view is hidden, so the route must not
+      // fall back to the default app tint.
+      var npPage = npSection && npSection.querySelector('.np-page');
+      var currentThumb = window.__appState && window.__appState._currentThumbnail;
+      if (npPage) {
+        if (currentThumb) {
+          npPage.style.setProperty('--np-cover', 'url(' + JSON.stringify(currentThumb) + ')');
+        } else {
+          npPage.style.removeProperty('--np-cover');
+        }
+      }
       // Populate the in-page queue from the last known queue data
       if (window._lastQueueJson && window.renderNpQueue) {
         try {

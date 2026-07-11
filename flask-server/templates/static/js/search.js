@@ -13,10 +13,12 @@ const RESULTS_PER_PAGE = 10;
 
 async function runSearch(query) {
   const mySeq = ++state._searchSeq;
+  if (window.startTopProgress) window.startTopProgress();
   toast('Searching \u201c' + query + '\u201d\u2026');
   try {
     const data = await api('/alexa/search/?q=' + encodeURIComponent(query));
     if (mySeq !== state._searchSeq) return;   // a newer search won
+    if (window.completeTopProgress) window.completeTopProgress();
     state._searchCategorized = data || {};
     const totalItems = (data.songs?.length || 0) + (data.artists?.length || 0) + (data.albums?.length || 0) + (data.playlists?.length || 0);
     if (!totalItems) { toast('No results found.', 'error'); return; }
@@ -27,11 +29,23 @@ async function runSearch(query) {
     openResults();
     toast(totalItems + ' results', 'ok');
   } catch (e) {
-    if (mySeq === state._searchSeq) toast(e.message, 'error');
+    if (mySeq === state._searchSeq) {
+      if (window.abortTopProgress) window.abortTopProgress();
+      toast(e.message, 'error');
+    }
   }
 }
 
 function openResults() {
+  // Searching from the expanded player collapses that overlay first. Audio
+  // keeps playing through the persistent bottom playbar while results become
+  // the active content view.
+  if (window.getRoute && window.getRoute() === '#now-playing' && window.navigateTo) {
+    const returnRoute = window.__npReturnRoute && window.__npReturnRoute !== '#now-playing'
+      ? window.__npReturnRoute
+      : '#home';
+    window.navigateTo(returnRoute);
+  }
   const section = document.getElementById('results-section');
   // The queue column collapses while results are showing; the mini player
   // takes over at the bottom.
@@ -190,7 +204,7 @@ function _createSongElement(item, existingThumbsById) {
     attachQueueItemTap(inner, () => {
       for (const other of wrapper.parentElement.querySelectorAll('.result-item-inner.active')) other.classList.remove('active');
       inner.classList.add('active');
-      playResult(item);
+      playResult(item, false, false, true);
     });
 
     const qBtn = inner.querySelector('.result-queue-btn');
@@ -343,13 +357,13 @@ function renderResults() {
            if (type === 'album') {
                window.api('/api/album/' + encodeURIComponent(browseId)).then(function(albumData) {
                  if (albumData && albumData.tracks && albumData.tracks.length && window.playFromQueue) {
-                   window.playFromQueue(albumData.tracks[0], browseId);
+                   window.playFromQueue(albumData.tracks[0], browseId, true);
                  }
                });
            } else if (type === 'playlist') {
                window.api('/api/playlists/' + encodeURIComponent(browseId)).then(function(playlistData) {
                  if (playlistData && playlistData.tracks && playlistData.tracks.length && window.playFromQueue) {
-                   window.playFromQueue(playlistData.tracks[0], browseId);
+                   window.playFromQueue(playlistData.tracks[0], browseId, true);
                  }
                });
            }
@@ -400,16 +414,6 @@ function renderResults() {
     
     const thumbHtml = thumb ? `<img src="${escHtml(thumb)}" alt="" loading="lazy">` : '';
 
-    // Let the search result artwork tint the whole upper shell, including the
-    // desktop header. CSS supplies dark overlays so controls stay readable.
-    if (thumb) {
-      document.body.style.setProperty('--search-theme-image', 'url(' + JSON.stringify(thumb) + ')');
-      document.body.classList.add('search-art-themed');
-    } else {
-      document.body.style.removeProperty('--search-theme-image');
-      document.body.classList.remove('search-art-themed');
-    }
-    
     const artistStr = (item.artists && item.artists.length) ? item.artists.map(a => a.name).join(' and ') : (item.artist || '');
     let subtitle = '';
     if (item.resultType === 'artist') {
@@ -455,12 +459,12 @@ function renderResults() {
       card.querySelector('.top-result-shuffle').addEventListener('click', () => {
          window.api('/api/artist/' + encodeURIComponent(item.browseId)).then(function(artistData) {
             if (artistData && artistData.songs && artistData.songs.length && window.playFromQueue) {
-               window.playFromQueue(artistData.songs[Math.floor(Math.random() * artistData.songs.length)], 'shuffle');
+               window.playFromQueue(artistData.songs[Math.floor(Math.random() * artistData.songs.length)], 'shuffle', true);
             }
          });
       });
       card.querySelector('.top-result-radio').addEventListener('click', () => {
-         window.playResult({ video_id: topSongs[0]?.video_id || '' }, false, true);
+         window.playResult({ video_id: topSongs[0]?.video_id || '' }, false, true, true);
       });
     } else {
       // Non-artist top results: songs, videos, albums, playlists. YT Music
@@ -474,17 +478,17 @@ function renderResults() {
         if (item.resultType === 'album' && item.browseId) {
           window.api('/api/album/' + encodeURIComponent(item.browseId)).then(function (albumData) {
             if (albumData && albumData.tracks && albumData.tracks.length && window.playFromQueue) {
-              window.playFromQueue(albumData.tracks[0], item.browseId);
+              window.playFromQueue(albumData.tracks[0], item.browseId, true);
             }
           });
         } else if (item.resultType === 'playlist' && browseId) {
           window.api('/api/playlists/' + encodeURIComponent(browseId)).then(function (playlistData) {
             if (playlistData && playlistData.tracks && playlistData.tracks.length && window.playFromQueue) {
-              window.playFromQueue(playlistData.tracks[0], browseId);
+              window.playFromQueue(playlistData.tracks[0], browseId, true);
             }
           });
         } else if (playableId) {
-          window.playResult(playItem);
+          window.playResult(playItem, false, false, true);
         }
       }
 

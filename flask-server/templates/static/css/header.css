@@ -364,6 +364,10 @@
   .history-modal-body {
     flex: 1;
     overflow-y: auto;
+    /* Clamp wheel/touch scrolling at the first and last item. Without this,
+       extra input chains to the overlay/page and makes an exhausted playlist
+       appear to keep scrolling into empty space. */
+    overscroll-behavior-y: none;
     scrollbar-width: thin;
     scrollbar-color: var(--border) transparent;
   }

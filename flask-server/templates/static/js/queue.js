@@ -963,7 +963,7 @@ function escHtml(s) {
     .replace(/'/g, '&#39;');
 }
 
-async function playFromQueue(item, queueIndex) {
+async function playFromQueue(item, queueIndex, openPlaybackPage) {
   const serial = selectedSerial();
   if (!serial) return;
   state.lastActionAt = Date.now();
@@ -994,7 +994,7 @@ async function playFromQueue(item, queueIndex) {
     state.lastActionIntent = true;
     syncPlayPause();
     toast('Playing', 'ok');
-    if (window.matchMedia('(min-width: 900px)').matches) window.navigateTo('#now-playing');
+    if (openPlaybackPage && window.matchMedia('(min-width: 900px)').matches) window.navigateTo('#now-playing');
     schedulePollNowPlaying(3000);
     // Optimistically prepend this song to history right away so "Recently
     // Played" shows it immediately without waiting for the server webhook.

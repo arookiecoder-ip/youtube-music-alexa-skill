@@ -97,6 +97,11 @@
   }
 
   // ─── In-flight request tracking ───────────────────────────────────────────
+  // Shared request-progress hooks for non-navigation work such as search.
+  window.startTopProgress = _barStart;
+  window.completeTopProgress = _barComplete;
+  window.abortTopProgress = _barAbort;
+
   var _currentController = null; // AbortController for active preload
   var _currentRoute = null;      // Route string for the active preload
 
