@@ -34,6 +34,9 @@
     '#explore': function() {
       if (window.openExplorePage) window.openExplorePage();
     },
+    '#library': function() {
+      if (window.openLibraryPage) window.openLibraryPage();
+    },
     '#history': function() {
       if (window.openHistoryPage) window.openHistoryPage(true);
     },
@@ -106,7 +109,7 @@
       'main', 'results-section', 'results-list', 'artist-section',
       'album-section', 'now-playing-section', 'playlist-detail-modal',
       'playlist-detail-modal-overlay', 'history-modal', 'history-modal-overlay',
-      'explore-modal', 'explore-modal-overlay'
+      'explore-modal', 'explore-modal-overlay', 'library-modal', 'library-modal-overlay'
     ].forEach(function(id) {
       var el = id === 'main' ? document.querySelector('main') : document.getElementById(id);
       if (el) el.scrollTop = 0;
@@ -152,6 +155,7 @@
     document.body.classList.toggle('playlists-route', hash.indexOf('#playlist/') === 0);
     document.body.classList.toggle('history-route', hash === '#history');
     document.body.classList.toggle('explore-route', hash === '#explore');
+    document.body.classList.toggle('library-route', hash === '#library');
     document.body.classList.toggle('artist-route', hash.indexOf('#artist/') === 0);
     document.body.classList.toggle('album-route', hash.indexOf('#album/') === 0);
 
@@ -169,6 +173,10 @@
     if (hash !== '#explore') {
       var exploreOverlay = document.getElementById('explore-modal-overlay');
       if (exploreOverlay) exploreOverlay.classList.remove('open');
+    }
+    if (hash !== '#library') {
+      var libraryOverlay = document.getElementById('library-modal-overlay');
+      if (libraryOverlay) libraryOverlay.classList.remove('open');
     }
     if (hash !== '#now-playing') {
       var npSection = document.getElementById('now-playing-section');

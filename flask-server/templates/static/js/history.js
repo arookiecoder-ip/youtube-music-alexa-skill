@@ -196,7 +196,9 @@ function clearHistory() {
   const overlay = document.getElementById('confirm-clear-history');
   const cancelBtn = document.getElementById('confirm-clear-history-cancel');
   const yesBtn = document.getElementById('confirm-clear-history-yes');
-  document.getElementById('clear-history-btn').addEventListener('click', () => {
+  const clearBtn = document.getElementById('clear-history-btn');
+  if (!clearBtn || !overlay || !cancelBtn || !yesBtn) return;
+  clearBtn.addEventListener('click', () => {
     overlay.classList.add('open');
   });
   cancelBtn.addEventListener('click', () => overlay.classList.remove('open'));

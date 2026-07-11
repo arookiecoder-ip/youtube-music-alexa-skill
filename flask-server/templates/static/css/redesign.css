@@ -1649,12 +1649,16 @@ body.results-open #results-section {
 /* Playlist/history overlays own scrolling at every breakpoint. Keep the page
    beneath them fixed so reaching the final row cannot move the outer shell. */
 body:has(#playlist-detail-modal-overlay.open),
-body:has(#history-modal-overlay.open) {
+body:has(#history-modal-overlay.open),
+body:has(#explore-modal-overlay.open),
+body:has(#library-modal-overlay.open) {
   overflow: hidden;
   overscroll-behavior: none;
 }
 #playlist-detail-modal-overlay,
-#history-modal-overlay {
+#history-modal-overlay,
+#explore-modal-overlay,
+#library-modal-overlay {
   overscroll-behavior: none;
 }
 .confirm-dialog { border-radius: 4px; background: #1e1e1e !important; border: 1px solid rgba(255,255,255,.12) !important; }
@@ -1841,6 +1845,81 @@ body.results-open .player-section {
      Keep the playlist-detail back arrow for navigating to the list. */
   #playlist-detail-close,
   #history-modal-close {
+    display: none;
+  }
+
+  /* ============================================================
+     Explore & Library: full-page routed views on desktop
+     (same treatment as history-modal-overlay)
+     ============================================================ */
+  #explore-modal-overlay,
+  #library-modal-overlay {
+    left: var(--rail-w);
+    top: calc(var(--topbar-h) + 3px);
+    right: 0;
+    bottom: 0;
+    background: var(--bg, #0a0a0a);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    align-items: stretch;
+    z-index: 210;
+    transition: left .25s ease;
+  }
+  body:not(.now-playing-route) #explore-modal-overlay,
+  body:not(.now-playing-route) #library-modal-overlay {
+    bottom: 0 !important;
+  }
+  body:has(#explore-modal-overlay.open),
+  body:has(#library-modal-overlay.open) {
+    overflow: hidden;
+  }
+  #explore-modal .history-modal-body,
+  #library-modal .history-modal-body {
+    overscroll-behavior: contain;
+  }
+  body:has(.player-section.is-visible:not([hidden])) #explore-modal-overlay,
+  body:has(.player-section.is-visible:not([hidden])) #library-modal-overlay {
+    bottom: var(--playbar-h) !important;
+  }
+  #explore-modal,
+  #library-modal {
+    width: 100%;
+    max-width: none;
+    height: 100%;
+    max-height: none;
+    margin: 0 auto;
+    background: transparent;
+    border: none;
+    border-radius: 0;
+    box-shadow: none;
+  }
+  #explore-modal .history-modal-header,
+  #library-modal .history-modal-header {
+    border-bottom: none;
+    width: min(1100px, 100%);
+    margin: 0 auto;
+    padding: 18px 32px;
+    box-sizing: border-box;
+  }
+  #explore-modal .history-modal-body,
+  #library-modal .history-modal-body {
+    width: min(1100px, 100%);
+    margin: 0 auto;
+    padding-left: 32px;
+    padding-right: 32px;
+    overflow-y: auto;
+    flex: 1;
+  }
+  #explore-modal .history-modal-header h3,
+  #library-modal .history-modal-header h3 {
+    text-transform: none;
+    letter-spacing: -.01em;
+    font-size: 1.3rem;
+    font-weight: 800;
+  }
+  /* Close button hidden on desktop (navigate back to go home) */
+  #explore-modal-close,
+  #library-modal-close {
     display: none;
   }
 }
@@ -2383,3 +2462,292 @@ main:has(#now-playing-section:not([hidden])) {
   .album-hero { align-items: center; flex-direction: column; text-align: center; }
   .album-hero > img, .album-art-placeholder { width: min(72vw, 280px); height: auto; aspect-ratio: 1; }
 }
+
+/* ============================================================
+   Explore page — card grid
+   ============================================================ */
+
+.explore-section {
+  margin-bottom: 36px;
+}
+.explore-section-header {
+  margin-bottom: 14px;
+}
+.explore-section-title {
+  font-size: 1.05rem;
+  font-weight: 700;
+  letter-spacing: -.01em;
+  color: var(--text);
+  margin: 0;
+}
+.explore-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 16px;
+}
+@media (min-width: 700px) {
+  .explore-grid {
+    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+    gap: 20px;
+  }
+}
+.explore-card {
+  display: flex;
+  flex-direction: column;
+  border-radius: 10px;
+  overflow: hidden;
+  transition: background .15s, transform .15s;
+}
+.explore-card[style*="cursor"] {
+  cursor: pointer;
+}
+.explore-card[style*="cursor"]:hover {
+  background: rgba(255, 255, 255, .06);
+  transform: translateY(-2px);
+}
+.explore-card-art {
+  aspect-ratio: 1;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #1a1a1a;
+  margin-bottom: 8px;
+  flex-shrink: 0;
+}
+.explore-card-art img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  transition: opacity .2s;
+}
+.explore-thumb-placeholder {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #444;
+}
+.explore-thumb-placeholder svg { width: 36px; height: 36px; }
+.explore-card-info {
+  padding: 0 4px 8px;
+}
+.explore-card-title {
+  font-size: .82rem;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.explore-card-sub {
+  font-size: .72rem;
+  color: var(--muted);
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.explore-skeleton-card .explore-card-art .skeleton-block {
+  width: 100%;
+  height: 100%;
+  aspect-ratio: 1;
+}
+.explore-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 60px 20px;
+  color: var(--muted);
+  text-align: center;
+}
+.explore-empty svg { opacity: .4; }
+.explore-empty-title {
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--text);
+  margin: 0;
+}
+.explore-empty-sub {
+  font-size: .84rem;
+  max-width: 320px;
+  line-height: 1.5;
+}
+
+/* ============================================================
+   Library page — playlist card grid
+   ============================================================ */
+
+.library-section {
+  margin-bottom: 36px;
+}
+.library-section-header {
+  margin-bottom: 14px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.library-section-title {
+  font-size: 1.05rem;
+  font-weight: 700;
+  letter-spacing: -.01em;
+  color: var(--text);
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.library-count {
+  font-size: .75rem;
+  font-weight: 600;
+  color: var(--muted);
+  background: rgba(255,255,255,.09);
+  border-radius: 20px;
+  padding: 2px 9px;
+}
+.library-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 16px;
+}
+@media (min-width: 700px) {
+  .library-grid {
+    grid-template-columns: repeat(auto-fill, minmax(165px, 1fr));
+    gap: 20px;
+  }
+}
+.library-card {
+  display: flex;
+  flex-direction: column;
+  border-radius: 10px;
+  padding: 0;
+  overflow: hidden;
+  transition: background .15s, transform .15s;
+  cursor: pointer;
+}
+.library-card:hover {
+  background: rgba(255, 255, 255, .06);
+  transform: translateY(-2px);
+}
+.library-card:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.library-card-art {
+  aspect-ratio: 1;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #1a1a1a;
+  margin-bottom: 9px;
+  flex-shrink: 0;
+}
+.library-card-art img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  transition: opacity .2s;
+}
+.library-card-art-placeholder {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #444;
+}
+.library-card-art-placeholder svg { width: 36px; height: 36px; }
+.library-card-liked .library-card-art {
+  background: linear-gradient(135deg, #4a1a7a, #7a2d8f);
+}
+.library-card-liked .library-card-art-placeholder { color: rgba(255,255,255,.6); }
+.library-card-info {
+  padding: 0 4px 8px;
+}
+.library-card-title {
+  font-size: .82rem;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.library-card-sub {
+  font-size: .72rem;
+  color: var(--muted);
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.library-skeleton-card .library-card-art .skeleton-block {
+  width: 100%;
+  height: 100%;
+  aspect-ratio: 1;
+}
+.library-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 60px 20px;
+  color: var(--muted);
+  text-align: center;
+}
+.library-empty svg { opacity: .4; }
+.library-empty-title {
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--text);
+  margin: 0;
+}
+.library-empty-sub {
+  font-size: .84rem;
+  max-width: 320px;
+  line-height: 1.5;
+}
+
+/* ============================================================
+   Nav active-state highlights for all routed pages
+   ============================================================ */
+
+/* Home */
+body.home-route #nav-home-btn {
+  color: var(--text);
+  background: rgba(232, 89, 12, .1);
+}
+/* History */
+body.history-route #nav-history-btn {
+  color: var(--text);
+  background: rgba(232, 89, 12, .1);
+}
+/* Explore */
+body.explore-route #nav-explore-btn {
+  color: var(--text);
+  background: rgba(232, 89, 12, .1);
+}
+/* Library */
+body.library-route #nav-library-btn {
+  color: var(--text);
+  background: rgba(232, 89, 12, .1);
+}
+/* Shared accent bar on the left edge when active */
+body.home-route #nav-home-btn::before,
+body.history-route #nav-history-btn::before,
+body.explore-route #nav-explore-btn::before,
+body.library-route #nav-library-btn::before {
+  content: '';
+  position: absolute;
+  left: -14px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 3px;
+  height: 18px;
+  border-radius: 0 3px 3px 0;
+  background: var(--accent);
+}
+.sidebar .sidebar-nav-btn { position: relative; }
+

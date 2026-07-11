@@ -956,6 +956,7 @@ document.getElementById('shuffle-btn').addEventListener('click', async (e) => {
   const wrap = document.querySelector('.np-more-wrap');
   const button = document.getElementById('np-more-btn');
   const menu = document.getElementById('np-more-menu');
+  if (!wrap || !button || !menu) return;
   const close = () => { wrap.classList.remove('open'); button.setAttribute('aria-expanded', 'false'); };
   button.addEventListener('click', (e) => {
     e.stopPropagation();
@@ -974,7 +975,8 @@ document.getElementById('shuffle-btn').addEventListener('click', async (e) => {
       if (window.refreshNpLikeButton) window.refreshNpLikeButton();
     });
   }
-  document.getElementById('np-menu-like').addEventListener('click', () => {
+  const npMenuLike = document.getElementById('np-menu-like');
+  if (npMenuLike) npMenuLike.addEventListener('click', () => {
     likeCurrentTrack(document.getElementById('np-like-btn'));
     close();
   });
@@ -985,12 +987,14 @@ document.getElementById('shuffle-btn').addEventListener('click', async (e) => {
       likeCurrentTrack(btn);
     });
   }
-  document.getElementById('np-menu-playlist').addEventListener('click', () => {
+  const npMenuPlaylist = document.getElementById('np-menu-playlist');
+  if (npMenuPlaylist) npMenuPlaylist.addEventListener('click', () => {
     if (state._currentTrack && state._currentTrack.video_id && typeof openAddToPlaylistModal === 'function')
       openAddToPlaylistModal(state._currentTrack);
     close();
   });
-  document.getElementById('np-menu-radio').addEventListener('click', (e) => {
+  const npMenuRadio = document.getElementById('np-menu-radio');
+  if (npMenuRadio) npMenuRadio.addEventListener('click', (e) => {
     if (!state._currentTrack) { e.preventDefault(); return; }
     if (typeof playRadio === 'function') {
       playRadio(state._currentTrack);

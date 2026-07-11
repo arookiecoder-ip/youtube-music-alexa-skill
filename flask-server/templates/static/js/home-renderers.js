@@ -152,6 +152,9 @@
         return feed.shelves.filter(s => s.filters && s.filters.includes(filterId));
     };
 
+    // Expose as a global so playlists.js / explore.js can call escapeHtml() directly
+    if (typeof window !== 'undefined') window.escapeHtml = escapeHtml;
+
     return {
         escapeHtml,
         renderItem,

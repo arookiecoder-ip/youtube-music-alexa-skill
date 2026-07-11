@@ -99,6 +99,7 @@
   const navHome = document.getElementById('nav-home-btn');
   const navHistory = document.getElementById('nav-history-btn');
   const navExplore = document.getElementById('nav-explore-btn');
+  const navLibrary = document.getElementById('nav-library-btn');
 
   function goHome() {
     if (state._resultsOpen && window.closeResults) window.closeResults();
@@ -120,6 +121,12 @@
     if (state._resultsOpen && window.closeResults) window.closeResults();
     if (window._closeSidebar) window._closeSidebar();
     window.navigateTo('#explore');
+  });
+
+  if (navLibrary) navLibrary.addEventListener('click', () => {
+    if (state._resultsOpen && window.closeResults) window.closeResults();
+    if (window._closeSidebar) window._closeSidebar();
+    window.navigateTo('#library');
   });
 })();
 
