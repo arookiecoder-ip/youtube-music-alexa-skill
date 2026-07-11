@@ -586,18 +586,17 @@ if (nextBtn) {
     scrollResultsToTop();
   });
 }
-document.querySelectorAll('.results-tab').forEach(tab => {
-  tab.addEventListener('click', () => {
-    const category = tab.dataset.category;
-    if (category === state._activeCategory) return;
-    state._activeCategory = category;
-    document.querySelectorAll('.results-tab').forEach(t => t.classList.remove('active'));
-    tab.classList.add('active');
-    renderResults();
-    updateCountLabel();
-    scrollResultsToTop();
+  document.querySelectorAll('.results-tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      const category = tab.dataset.category;
+      if (category === state._activeCategory) return;
+      state._activeCategory = category;
+      document.querySelectorAll('.results-tab').forEach(t => t.classList.remove('active'));
+      tab.classList.add('active');
+      renderResults();
+      scrollResultsToTop();
+    });
   });
-});
 /* ---- search suggestions ---- */
 (function () {
   const input = document.getElementById('query');
@@ -791,7 +790,6 @@ document.querySelectorAll('.results-tab').forEach(tab => {
   window.openResults = openResults;
   window.closeResults = closeResults;
   window.renderResults = renderResults;
-  window.updateCountLabel = updateCountLabel;
   window.updateResultsActive = updateResultsActive;
   window.scrollResultsToTop = scrollResultsToTop;
   window._closeAllMoreMenus = _closeAllMoreMenus;

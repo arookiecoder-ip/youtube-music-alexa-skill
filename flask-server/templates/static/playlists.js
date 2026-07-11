@@ -270,6 +270,24 @@ async function openPlaylistDetailModal(pl_id, fromRoute) {
       _playlistsData.playlists[pl_id] = cached;
     }
   }
+  if (!pl) {
+    try {
+      document.getElementById('playlists-modal-overlay').classList.add('open');
+      document.getElementById('playlist-detail-modal-overlay').classList.add('open');
+      const body = document.getElementById('playlist-detail-body');
+      if (body) body.innerHTML = '<div class="history-modal-empty" style="padding:40px; text-align:center;"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" class="spin" style="width:24px;height:24px;margin:0 auto 12px;"><path d="M21 2v6h-6"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M3 22v-6h6"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/></svg><div>Loading external playlist...</div></div>';
+      
+      pl = await window.api('/api/playlists/' + encodeURIComponent(pl_id));
+      if (pl) {
+        _plCache.set(pl_id, pl);
+        _playlistsData.playlists[pl_id] = pl;
+      }
+    } catch (e) {
+      if (window.toast) window.toast('Playlist not found', 'error');
+      closePlaylistDetailModal();
+      return;
+    }
+  }
   if (!pl) return;
   _currentPlaylistDetailId = pl_id;
 

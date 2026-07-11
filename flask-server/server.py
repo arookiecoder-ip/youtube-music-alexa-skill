@@ -4826,6 +4826,44 @@ def api_create_playlist():
         
     return jsonify(new_pl)
 
+@app.route("/api/playlists/<pl_id>", methods=["GET"])
+async def api_get_playlist(pl_id):
+    if not pl_id.strip():
+        return error_response('invalid playlist id', 400)
+    try:
+        raw = await asyncio.to_thread(_get_ytmusic().get_playlist, playlistId=pl_id)
+    except Exception as e:
+        logger.exception("api_get_playlist failed for %s", pl_id)
+        return error_response(str(e), 500)
+    if not raw or not raw.get('id'):
+        return error_response('playlist not found', 404)
+        
+    tracks = []
+    for t in raw.get('tracks') or []:
+        vid = t.get('videoId')
+        if not vid:
+            continue
+        artist = ' and '.join(a.get('name') or '' for a in (t.get('artists') or []))
+        thumbs = t.get('thumbnails') or raw.get('thumbnails') or []
+        thumbnail = thumbs[-1].get('url', '') if thumbs else ''
+        tracks.append({
+            'video_id': vid,
+            'title': t.get('title') or '',
+            'artist': artist,
+            'thumbnail': thumbnail,
+            'duration_ms': Supporting.duration_ms(t),
+            'uuid': vid,
+        })
+        
+    return jsonify({
+        'id': raw.get('id'),
+        'name': raw.get('title') or 'Untitled',
+        'description': raw.get('description') or '',
+        'tracks': tracks,
+        'updated_at': time.time(),
+        'source_url': "https://music.youtube.com/playlist?list=" + raw.get('id'),
+    })
+
 @app.route("/api/playlists/<pl_id>", methods=["DELETE"])
 def api_delete_playlist(pl_id):
     if pl_id == "liked":

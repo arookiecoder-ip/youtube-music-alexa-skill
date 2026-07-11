@@ -363,17 +363,10 @@ body.results-open .play-section {
     padding: 0;
     pointer-events: none;
   }
-  /* Stay in row layout when collapsed — flex-direction/justify-content flips
-     don't animate and made the icons jump on the first frame. The icon is
-     centered via symmetric padding instead: the mini rail's content box is
-     28px (56px - 2*14px rail padding) and the icon 21px, so 3.5px each side.
-     Padding and gap both interpolate, so the icon glides with the width. */
-  .sidebar .sidebar-nav-btn { transition: color .15s, background .15s, padding .25s ease, gap .25s ease; }
-  .sidebar .sidebar-nav-btn svg { transition: width .25s ease, height .25s ease; }
-  body.rail-collapsed .sidebar .sidebar-nav-btn {
-    gap: 0;
-    padding: 14px 3.5px;
-  }
+  /* Stay in row layout when collapsed. Icons keep their exact original size and padding 
+     so they do not shift horizontally or vertically. Text hides via max-width. */
+  .sidebar .sidebar-nav-btn { transition: color .15s, background .15s; }
+  .sidebar .sidebar-nav-btn svg { flex-shrink: 0; }
   
   /* Explicitly set properties to animate them cleanly (variable changes skip transitions in some browsers) */
   body.rail-collapsed main,
@@ -384,10 +377,6 @@ body.results-open .play-section {
   }
   body.rail-collapsed .sidebar {
     width: var(--rail-w-mini);
-  }
-  body.rail-collapsed .sidebar .sidebar-nav-btn svg {
-    width: 21px;
-    height: 21px;
   }
   /* Text-only chrome has no icon form — hide it in the mini rail. Fade it
      out instead of display:none so it doesn't vanish a frame before the
@@ -403,38 +392,40 @@ body.results-open .play-section {
   body.rail-collapsed .sidebar-library { opacity: 1; visibility: visible; padding-top: 8px; border-top: 0; }
   body.rail-collapsed .sidebar-new-playlist-container { visibility: hidden !important; }
   body.rail-collapsed .sidebar-playlist-list { padding: 0; overflow-x: hidden; }
-  body.rail-collapsed .sidebar-playlist-item {
-    width: 28px;
-    height: 44px;
-    padding: 10px 2px !important;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    gap: 0;
+  /* Playlist items keep exact size/padding; only the text hides. */
+  .sidebar-playlist-item { overflow: hidden; }
+  .sidebar-playlist-copy {
+    transition: opacity .14s ease, max-width .25s ease, margin .25s ease;
+    max-width: 150px;
+    opacity: 1;
+    white-space: nowrap;
   }
-  body.rail-collapsed .sidebar-playlist-copy { display: none; }
-  /* In mini-guide mode only the toggle survives. Shrink the brand's width and
-     fade the logo/wordmark rather than display:none-ing them or reflowing to
-     a column — those changes are instant and made the toggle jump while the
-     rail was still animating. overflow:hidden lets the shrinking width clip
-     the fading logo/text. */
+  body.rail-collapsed .sidebar-playlist-copy { 
+    max-width: 0; 
+    opacity: 0; 
+    margin: 0; 
+    padding: 0;
+  }
+  /* Brand container keeps fixed height and padding. Text label hides smoothly via width/opacity. */
   .sidebar-brand {
-    overflow: visible;
+    overflow: hidden;
     transition: width .25s ease;
+    white-space: nowrap;
   }
-  .sidebar-brand-mark,
-  .sidebar-brand strong { transition: opacity .14s ease; }
+  .sidebar-brand strong { 
+    transition: opacity .14s ease, max-width .25s ease, margin .25s ease; 
+    max-width: 150px;
+    opacity: 1;
+    display: block;
+  }
   body.rail-collapsed .sidebar-brand {
-    padding: 12px 0;
-    width: 38px;
-    justify-content: center;
-    position: relative;
-  }
-  body.rail-collapsed .sidebar-brand-mark {
-    display: none !important;
+    width: var(--rail-w-mini);
   }
   body.rail-collapsed .sidebar-brand strong {
-    display: none !important;
+    max-width: 0;
+    opacity: 0;
+    margin: 0;
+    padding: 0;
   }
   /* Smooth open/close */
   main,

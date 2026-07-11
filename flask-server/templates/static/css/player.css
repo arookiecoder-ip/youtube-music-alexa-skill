@@ -568,3 +568,179 @@
   /* Make the mini player itself look tappable */
   .mini-player { cursor: pointer; }
 
+/* ---- Redesigned Bottom Bar (Desktop) ---- */
+@media (min-width: 900px) {
+  .player-section.redesigned-bar {
+    display: flex !important;
+    justify-content: space-between !important;
+    align-items: center !important;
+    background: #181818 !important;
+    box-shadow: 0 -4px 12px rgba(0,0,0,0.5) !important;
+    padding: 12px 24px !important;
+    min-height: 88px !important;
+    gap: 16px;
+  }
+  .redesigned-bar .player-left,
+  .redesigned-bar .player-right {
+    display: flex;
+    align-items: center;
+    flex: 1;
+  }
+  .redesigned-bar .player-right {
+    justify-content: flex-end;
+    gap: 8px;
+  }
+  .redesigned-bar .player-center {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    flex: 2;
+    gap: 8px;
+  }
+  .redesigned-bar .np { 
+    display: flex !important; 
+    border: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
+  }
+  .redesigned-bar .vol {
+    margin: 0 !important;
+    padding: 0 !important;
+    border: none !important;
+    width: 100px;
+  }
+}
+
+/* Base Redesign Styles (Both Desktop & Mobile) */
+.redesigned-bar .np-art {
+  border-radius: 6px !important;
+}
+.redesigned-bar .np-info {
+  margin-left: 14px;
+}
+.redesigned-bar .np-title {
+  font-weight: 600;
+}
+.redesigned-bar .np-artist {
+  color: var(--muted);
+}
+.redesigned-bar .ghost-btn {
+  background: transparent !important;
+  border: none !important;
+  color: var(--muted) !important;
+  cursor: pointer;
+  border-radius: 50% !important;
+  transition: all 0.2s;
+  display: flex !important;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+}
+.redesigned-bar .ghost-btn:hover {
+  color: var(--text) !important;
+  background: rgba(255, 255, 255, 0.08) !important;
+}
+.redesigned-bar .ghost-btn svg {
+  width: 20px;
+  height: 20px;
+}
+.redesigned-bar .pp-btn.dominant {
+  width: 48px !important;
+  height: 48px !important;
+  border-radius: 50% !important;
+  background: var(--accent) !important;
+  color: #000;
+  display: flex !important;
+  align-items: center;
+  justify-content: center;
+  transition: transform 0.1s;
+}
+.redesigned-bar .pp-btn.dominant:hover {
+  transform: scale(1.04);
+}
+.redesigned-bar .pp-btn.dominant svg {
+  width: 22px !important;
+  height: 22px !important;
+  fill: currentColor;
+}
+.redesigned-bar .transport {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+.redesigned-bar .progress {
+  display: flex !important;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  max-width: 600px;
+  margin: 0 !important;
+}
+.redesigned-bar .progress-track {
+  flex: 1;
+  height: 6px !important;
+  background: #333 !important;
+  border-radius: 3px;
+}
+.redesigned-bar .progress-fill {
+  background: var(--accent) !important;
+}
+.redesigned-bar #progress-elapsed,
+.redesigned-bar #progress-total {
+  font-size: 0.75rem;
+  color: var(--muted);
+  min-width: 35px;
+  text-align: center;
+}
+.redesigned-bar .np-more-wrap {
+  display: flex;
+  align-items: center;
+}
+
+/* Mobile Adjustments for Redesign */
+@media (max-width: 899px) {
+  .player-section.redesigned-bar {
+    display: flex !important;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 12px !important;
+  }
+  .redesigned-bar .player-left {
+    display: flex;
+    align-items: center;
+    flex: 1;
+    overflow: hidden;
+  }
+  .redesigned-bar .player-center {
+    display: flex;
+    align-items: center;
+  }
+  .redesigned-bar .player-center .progress {
+    display: none !important;
+  }
+  .redesigned-bar .player-center .transport button[data-action="previous"],
+  .redesigned-bar .player-center .transport button[data-action="next"] {
+    display: none !important;
+  }
+  .redesigned-bar .player-right {
+    display: flex;
+    align-items: center;
+  }
+  .redesigned-bar .player-right > *:not(.player-expand-btn) {
+    display: none !important;
+  }
+  .redesigned-bar .np {
+    border: none !important;
+    padding: 0 !important;
+    margin: 0 !important;
+  }
+  .redesigned-bar .np-art {
+    width: 40px !important;
+    height: 40px !important;
+  }
+  .redesigned-bar .pp-btn.dominant {
+    width: 40px !important;
+    height: 40px !important;
+  }
+}
