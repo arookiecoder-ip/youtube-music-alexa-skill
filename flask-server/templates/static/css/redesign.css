@@ -1362,7 +1362,7 @@ body.results-open .player-section {
   background: #111;
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
-  contain: layout paint;
+  /* No contain:paint — it clips the "..." more-menu that pops above the bar. */
 }
 
 /* Artist page sits centered like the rest of the content */
@@ -1547,7 +1547,8 @@ body.results-open .player-section {
     z-index: 240;
     padding: 5px 16px 4px;
     grid-template-columns: 205px minmax(320px, 1fr) auto auto;
-    grid-template-areas: "transport np actions volume";
+    /* Expand arrow cluster sits at the far right, after the volume */
+    grid-template-areas: "transport np volume actions";
     gap: 18px;
     background: #202020;
   }
@@ -1564,16 +1565,17 @@ body.results-open .player-section {
     color: #fff;
   }
   .player-section .transport button svg { width: 22px; height: 22px; }
+  /* Play/pause: plain glyph (no circular chip), larger than prev/next */
   .player-section .pp-btn,
   .player-section .pp-btn:hover {
-    width: 52px;
-    height: 52px;
-    background: #4d4d4d;
+    width: 56px;
+    height: 56px;
+    background: transparent;
     border: 0;
     color: #fff;
   }
-  .player-section .pp-btn:hover { background: #5a5a5a; }
-  .player-section .pp-btn svg { width: 27px; height: 27px; }
+  .player-section .pp-btn:hover { filter: brightness(1.2); }
+  .player-section .pp-btn svg { width: 36px; height: 36px; }
 
   .player-section .np {
     grid-area: np;
@@ -1632,7 +1634,14 @@ body.results-open .player-section {
     color: #eee;
   }
   .player-section .queue-toggle-btn svg { width: 22px; height: 22px; }
-  .player-section .vol input[type=range] { width: 72px; }
+  /* Volume slider stays hidden until the volume cluster is hovered/focused */
+  .player-section .vol input[type=range] {
+    width: 72px;
+    opacity: 0;
+    transition: opacity .15s ease;
+  }
+  .player-section .vol:hover input[type=range],
+  .player-section .vol input[type=range]:focus-visible { opacity: 1; }
   .player-section .progress-track,
   .player-section .progress:hover .progress-track { height: 3px; }
   .player-section .progress-fill { background: #ff0033; }
@@ -1656,30 +1665,36 @@ body.results-open .player-section {
   overflow: hidden;
 }
 
-/* Desktop: the now-playing view is an overlay layer that slides up over the
-   current page (YT Music style), pinned between the top bar and the playbar.
-   It must never sit in the document flow where home content can scroll it
-   into view. */
+/* Desktop: the now-playing view is an overlay layer that slides up from the
+   bottom over the current page (YT Music style), pinned between the top bar
+   and the playbar. It stays in the DOM (display overrides [hidden]) so both
+   the open and close slides can animate; body.now-playing-route — kept in
+   sync with the route by the router — drives the transition. */
 @media (min-width: 900px) {
   #now-playing-section {
     position: fixed;
     top: calc(var(--topbar-h) + 3px);
     left: var(--rail-w);
     right: 0;
-    bottom: var(--playbar-h);
+    bottom: 72px; /* matches the desktop playbar height, not --playbar-h */
     margin: 0;
+    border-radius: 0;
     z-index: 210;
     background: var(--bg, #0a0a0a);
-    animation: np-slide-up .28s ease;
-    /* Follows the rail as it collapses/expands */
-    transition: left .25s ease;
+    display: block !important;
+    visibility: hidden;
+    transform: translateY(103%);
+    pointer-events: none;
+    transition: transform .32s cubic-bezier(.22, 1, .36, 1),
+                visibility .32s,
+                left .25s ease; /* follows the rail as it collapses/expands */
+  }
+  body.now-playing-route #now-playing-section {
+    visibility: visible;
+    transform: none;
+    pointer-events: auto;
   }
   .np-page { height: 100%; }
-}
-
-@keyframes np-slide-up {
-  from { opacity: 0; transform: translateY(28px); }
-  to { opacity: 1; transform: none; }
 }
 
 /* ---- Left: album art + meta ---- */

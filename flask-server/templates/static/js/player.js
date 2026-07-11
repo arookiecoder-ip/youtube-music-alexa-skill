@@ -78,6 +78,10 @@ function showNowPlaying(info) {
       state._currentThumbnail = '';
       state._currentTrack = null;
       _lastNpFingerprint = '';
+      // Playback is gone — don't leave an empty expanded player on screen.
+      if (window.getRoute && window.getRoute() === '#now-playing') {
+        window.navigateTo(window.__npReturnRoute || '#home');
+      }
     }
     return;
   }
@@ -155,9 +159,10 @@ function refreshNpLikeButton() {
   if (likeBtn && state._currentVideoId && typeof _playlistsData !== 'undefined' && _playlistsData.liked_songs) {
     const isLiked = _playlistsData.liked_songs.includes(state._currentVideoId);
     likeBtn.classList.toggle('liked', isLiked);
+    // Thumbs-up (like), filled when liked
     likeBtn.innerHTML = isLiked
-      ? `<svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>`
-      : `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>`;
+      ? `<svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg>`
+      : `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg>`;
   }
 }
 
@@ -576,16 +581,17 @@ function syncModalScrollLock() {
   let _miniPopupOpen = false;
 
   function openMiniPopup(fromRoute) {
-    // Don't open the now-playing view when nothing is playing
+    // Nothing playing: never open — but if the view is somehow up (e.g. the
+    // queue ended while expanded), the toggle must still be able to close it.
     if (!state._hasTrack) {
-      if (fromRoute) window.navigateTo('#home');
+      if (fromRoute || window.getRoute() === '#now-playing') window.navigateTo('#home');
       return;
     }
-    // On desktop, navigate to the #now-playing page (in-page section, not overlay)
-    // or navigate back if we are already there (toggle behavior).
+    // On desktop, toggle the #now-playing overlay: expand, or collapse back
+    // to the view it was opened from.
     if (window.matchMedia('(min-width: 900px)').matches) {
       if (window.getRoute() === '#now-playing') {
-        history.back(); // Collapse back to previous view
+        window.navigateTo(window.__npReturnRoute || '#home'); // Collapse
       } else {
         window.navigateTo('#now-playing'); // Expand
       }

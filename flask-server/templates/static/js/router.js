@@ -73,6 +73,10 @@
   window.navigateTo = function(route) {
     route = route || '#home';
     if (route !== window.__route) {
+      // Remember where the expanded player was opened from so collapsing it
+      // returns there (not blindly to #home, and without relying on
+      // history.back() which is a no-op on a fresh session).
+      if (route === '#now-playing') window.__npReturnRoute = window.__route;
       window.__route = route;
       history.pushState({ route: route }, '', location.pathname + location.search);
     }
