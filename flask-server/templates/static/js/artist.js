@@ -163,11 +163,11 @@
         (sub ? '<div class="hscroll-card-sub">' + escHtml(sub) + '</div>' : '');
       if (type === 'artist' && item.browseId) {
         card.addEventListener('click', function() {
-          location.hash = '#artist/' + encodeURIComponent(item.browseId);
+          window.navigateTo('#artist/' + encodeURIComponent(item.browseId));
         });
       } else if (type === 'album' && item.browseId) {
         card.addEventListener('click', function() {
-          location.hash = '#album/' + encodeURIComponent(item.browseId);
+          window.navigateTo('#album/' + encodeURIComponent(item.browseId));
         });
       }
       track.appendChild(card);

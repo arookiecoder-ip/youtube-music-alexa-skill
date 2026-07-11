@@ -44,7 +44,7 @@ function openResults() {
   // hashchange, which would re-run the home route and hide these results.
   const artistSection = document.getElementById('artist-section');
   if (artistSection) artistSection.hidden = true;
-  if ((location.hash || '').indexOf('#artist/') === 0) {
+  if ((window.getRoute() || '').indexOf('#artist/') === 0) {
     history.replaceState(null, '', '#home');
   }
   // Same for the playlist views: they sit above the content area (z-210),
@@ -330,12 +330,12 @@ function renderResults() {
       if (category === 'artists' && item.browse_id) {
         inner.classList.add('result-item-link');
         inner.addEventListener('click', () => {
-          location.hash = '#artist/' + encodeURIComponent(item.browse_id);
+          window.navigateTo('#artist/' + encodeURIComponent(item.browse_id));
         });
       } else if (category === 'albums' && item.browse_id) {
         inner.classList.add('result-item-link');
         inner.addEventListener('click', () => {
-          location.hash = '#album/' + encodeURIComponent(item.browse_id);
+          window.navigateTo('#album/' + encodeURIComponent(item.browse_id));
         });
       }
       wrapper.appendChild(inner);

@@ -42,9 +42,10 @@
     if (homeSection) {
       // The player is a fixed bottom bar now, so the home feed stays visible
       // while a track plays; only search results or the artist page cover it.
-      const artistOpen = (location.hash || '').indexOf('#artist/') === 0;
-      const albumOpen = (location.hash || '').indexOf('#album/') === 0;
-      const shouldShow = state._loggedIn && !state._resultsOpen && !artistOpen && !albumOpen;
+      const artistOpen = (window.getRoute() || '').indexOf('#artist/') === 0;
+      const albumOpen = (window.getRoute() || '').indexOf('#album/') === 0;
+      const npOpen = (window.getRoute() || '') === '#now-playing';
+      const shouldShow = state._loggedIn && !state._resultsOpen && !artistOpen && !albumOpen && !npOpen;
       if (shouldShow && !state._homeLoaded && window.loadHomeFeed) window.loadHomeFeed();
       else homeSection.hidden = !shouldShow || !state._homeLoaded;
     }

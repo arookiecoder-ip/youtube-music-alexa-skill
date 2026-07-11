@@ -29,7 +29,7 @@
 
     var artistBtn = hero.querySelector('.album-artist-link');
     if (artistBtn) artistBtn.addEventListener('click', function () {
-      if (this.dataset.channelId) location.hash = '#artist/' + encodeURIComponent(this.dataset.channelId);
+      if (this.dataset.channelId) window.navigateTo('#artist/' + encodeURIComponent(this.dataset.channelId));
     });
     var playAll = hero.querySelector('.album-play-all');
     if (playAll && data.tracks && data.tracks.length) playAll.addEventListener('click', function () {

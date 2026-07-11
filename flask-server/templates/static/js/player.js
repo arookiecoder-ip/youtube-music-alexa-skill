@@ -541,7 +541,7 @@ async function playResult(item, suppressRadio, forceRadio) {
     syncPlayPause();
     toast(forceRadio ? 'Radio started' : 'Playing', 'ok');
     // Navigate to now-playing page on desktop
-    if (window.matchMedia('(min-width: 900px)').matches) location.hash = '#now-playing';
+    if (window.matchMedia('(min-width: 900px)').matches) window.navigateTo('#now-playing');
     state._lastQueueJson = '';
     schedulePollNowPlaying(3000);
   } catch (e) {
@@ -578,16 +578,16 @@ function syncModalScrollLock() {
   function openMiniPopup(fromRoute) {
     // Don't open the now-playing view when nothing is playing
     if (!state._hasTrack) {
-      if (fromRoute) location.hash = '#home';
+      if (fromRoute) window.navigateTo('#home');
       return;
     }
     // On desktop, navigate to the #now-playing page (in-page section, not overlay)
     // or navigate back if we are already there (toggle behavior).
     if (window.matchMedia('(min-width: 900px)').matches) {
-      if (location.hash === '#now-playing') {
+      if (window.getRoute() === '#now-playing') {
         history.back(); // Collapse back to previous view
       } else {
-        location.hash = '#now-playing'; // Expand
+        window.navigateTo('#now-playing'); // Expand
       }
       return;
     }
@@ -618,7 +618,7 @@ function syncModalScrollLock() {
     _miniPopupOpen = false;
     overlay.classList.remove('open');
     syncModalScrollLock();
-    if (location.hash === '#now-playing') location.hash = '#home';
+    if (window.getRoute() === '#now-playing') window.navigateTo('#home');
   }
 
   // Tap on mini player: play/pause button stays functional, everything else opens popup
@@ -758,7 +758,7 @@ function syncModalScrollLock() {
   // Expose for external use
   window._openMiniPopup = openMiniPopup;
   window._closeMiniPopup = closeMiniPopup;
-  if (location.hash === '#now-playing') openMiniPopup(true);
+  if (window.getRoute() === '#now-playing') openMiniPopup(true);
 })();
 
 

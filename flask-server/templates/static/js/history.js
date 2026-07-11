@@ -90,7 +90,7 @@ function _buildHistoryRow(entry) {
     an.addEventListener('click', function(e) {
       e.stopPropagation();
       var cid = this.getAttribute('data-channel-id');
-      if (cid) location.hash = '#artist/' + encodeURIComponent(cid);
+      if (cid) window.navigateTo('#artist/' + encodeURIComponent(cid));
     });
   }
 
@@ -177,7 +177,7 @@ function clearHistory() {
 
   function openHistoryModal(fromRoute) {
     if (!fromRoute && window.matchMedia('(min-width: 900px)').matches) {
-      location.hash = '#history';
+      window.navigateTo('#history');
       return;
     }
     // Render immediately from the pre-fetched cache — no fetch-on-click wait.
@@ -187,7 +187,7 @@ function clearHistory() {
 
   function closeHistoryModal() {
     overlay.classList.remove('open');
-    if (location.hash === '#history') location.hash = '#home';
+    if (window.getRoute() === '#history') window.navigateTo('#home');
   }
 
   openBtn.addEventListener('click', openHistoryModal);
@@ -196,7 +196,7 @@ function clearHistory() {
 
   window._closeHistoryModal = closeHistoryModal;
   window.openHistoryPage = openHistoryModal;
-  if (location.hash === '#history') openHistoryModal(true);
+  if (window.getRoute() === '#history') openHistoryModal(true);
 })();
 
 (function () {

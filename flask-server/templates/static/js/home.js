@@ -112,8 +112,9 @@
     const section = document.getElementById('home-section');
     const idleHero = document.getElementById('idle-hero');
     if (idleHero) idleHero.hidden = true;
-    const artistOpen = (location.hash || '').indexOf('#artist/') === 0;
-    if (section) section.hidden = !!(state._resultsOpen || artistOpen);
+    const artistOpen = (window.getRoute() || '').indexOf('#artist/') === 0;
+    const npOpen = (window.getRoute() || '') === '#now-playing';
+    if (section) section.hidden = !!(state._resultsOpen || artistOpen || npOpen);
     showHomeSkeleton(true);
     try {
       const data = await api('/api/home/?refresh=1');
@@ -164,7 +165,7 @@
       if (artistLink) {
         e.stopPropagation();
         if (artistLink.dataset.channelId) {
-          location.hash = '#artist/' + encodeURIComponent(artistLink.dataset.channelId);
+          window.navigateTo('#artist/' + encodeURIComponent(artistLink.dataset.channelId));
           return;
         }
         // Older history rows may not have stored the artist channel id. Resolve
@@ -176,7 +177,7 @@
             var exact = artists.find(function(a) {
               return (a.name || '').toLowerCase() === artistName.toLowerCase();
             }) || artists[0];
-            if (exact && exact.browse_id) location.hash = '#artist/' + encodeURIComponent(exact.browse_id);
+            if (exact && exact.browse_id) window.navigateTo('#artist/' + encodeURIComponent(exact.browse_id));
             else toast('Artist page unavailable', 'error');
           }).catch(function() { toast('Artist page unavailable', 'error'); });
         }

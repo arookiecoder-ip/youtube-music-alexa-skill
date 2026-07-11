@@ -117,7 +117,7 @@ function renderRecommendations(items) {
       an.addEventListener('click', function(e) {
         e.stopPropagation();
         var cid = this.getAttribute('data-channel-id');
-        if (cid) location.hash = '#artist/' + encodeURIComponent(cid);
+        if (cid) window.navigateTo('#artist/' + encodeURIComponent(cid));
       });
     }
 

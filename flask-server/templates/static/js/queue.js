@@ -234,7 +234,7 @@ function _buildQueueRow(container, item, i, currentIndex, thumbsById) {
     an.addEventListener('click', function(e) {
       e.stopPropagation();
       var cid = this.getAttribute('data-channel-id');
-      if (cid) location.hash = '#artist/' + encodeURIComponent(cid);
+      if (cid) window.navigateTo('#artist/' + encodeURIComponent(cid));
     });
   }
 
@@ -982,7 +982,7 @@ async function playFromQueue(item, queueIndex) {
     state.lastActionIntent = true;
     syncPlayPause();
     toast('Playing', 'ok');
-    if (window.matchMedia('(min-width: 900px)').matches) location.hash = '#now-playing';
+    if (window.matchMedia('(min-width: 900px)').matches) window.navigateTo('#now-playing');
     schedulePollNowPlaying(3000);
     // Optimistically prepend this song to history right away so "Recently
     // Played" shows it immediately without waiting for the server webhook.
@@ -1040,7 +1040,7 @@ function scheduleHistoryRefresh() {
   btn.addEventListener('click', () => {
     // Navigate to the now-playing page — queue is built in as the right column.
     if (state._hasTrack) {
-      location.hash = '#now-playing';
+      window.navigateTo('#now-playing');
     }
   });
   // Never highlight as "active" since floating panel no longer exists

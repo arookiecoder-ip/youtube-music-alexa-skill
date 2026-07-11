@@ -102,7 +102,7 @@
   function goHome() {
     const resultsClose = document.getElementById('results-close');
     if (state._resultsOpen && resultsClose) resultsClose.click();
-    if (location.hash !== '#home') location.hash = '#home';
+    if (window.getRoute() !== '#home') window.navigateTo('#home');
     else window.dispatchEvent(new Event('hashchange'));
     if (window._closeSidebar) window._closeSidebar();
     window.scrollTo({ top: 0, behavior: 'smooth' });
@@ -112,7 +112,7 @@
 
   if (navHistory) navHistory.addEventListener('click', () => {
     if (window._closeSidebar) window._closeSidebar();
-    location.hash = '#history';
+    window.navigateTo('#history');
   });
 })();
 

@@ -65,8 +65,26 @@
     }
   }
 
-  window.addEventListener('hashchange', function() {
-    var hash = location.hash || '#home';
+  /* Clean-URL routing: the current route lives in history.state (and the
+     window.__route mirror), never in the address bar. Route tokens keep the
+     legacy '#name' format so all existing comparisons still work. */
+  window.__route = '#home';
+  window.getRoute = function() { return window.__route || '#home'; };
+  window.navigateTo = function(route) {
+    route = route || '#home';
+    if (route !== window.__route) {
+      window.__route = route;
+      history.pushState({ route: route }, '', location.pathname + location.search);
+    }
+    applyRoute(route);
+  };
+  window.addEventListener('popstate', function(e) {
+    window.__route = (e.state && e.state.route) || '#home';
+    applyRoute(window.__route);
+  });
+
+  function applyRoute(hash) {
+    hash = hash || '#home';
     document.body.classList.toggle('now-playing-route', hash === '#now-playing');
     document.body.classList.toggle('playlists-route', hash === '#playlists' || hash.indexOf('#playlist/') === 0);
     document.body.classList.toggle('history-route', hash === '#history');
@@ -99,14 +117,14 @@
       if (playlistId && window.openPlaylistDetailModal) window.openPlaylistDetailModal(playlistId, true);
     } else if (hash.indexOf('#album/') === 0) {
       var albumId = decodeURIComponent(hash.slice('#album/'.length));
-      if (!albumId) { location.hash = '#home'; return; }
+      if (!albumId) { window.navigateTo('#home'); return; }
       hideAllViews();
       var albumSection = document.getElementById('album-section');
       if (albumSection) albumSection.hidden = false;
       if (window.loadAlbum) window.loadAlbum(albumId);
     } else if (hash.indexOf('#artist/') === 0) {
       var channelId = decodeURIComponent(hash.slice('#artist/'.length));
-      if (!channelId) { location.hash = '#home'; return; }
+      if (!channelId) { window.navigateTo('#home'); return; }
       // Leave the search-results state properly (mini player, body class,
       // _resultsOpen flag) instead of just hiding the section.
       if (window.__appState && window.__appState._resultsOpen && window.closeResults) {
@@ -115,14 +133,15 @@
       showArtistSection();
       if (window.loadArtist) window.loadArtist(channelId);
     } else {
-      location.hash = '#home';
+      window.navigateTo('#home');
+      return;
     }
 
     // View routing may set `hidden` on the persistent playbar. Reconcile the
     // shell after every route change so an already-playing track is restored
     // even when no new playback event arrives afterward.
     if (window.syncUiState) window.syncUiState();
-  });
+  }
 
   // Global delegated click handler: artist-name -> navigate to artist page
   document.addEventListener('click', function(e) {
@@ -132,11 +151,14 @@
       e.stopPropagation();
       var channelId = target.getAttribute('data-channel-id');
       if (channelId) {
-        location.hash = '#artist/' + encodeURIComponent(channelId);
+        window.navigateTo('#artist/' + encodeURIComponent(channelId));
       }
     }
   });
 
-  // Force initial route on page load.
-  window.dispatchEvent(new CustomEvent('hashchange'));
+  // Initial route: honor a legacy #hash bookmark once, then strip it from the
+  // URL for good.
+  window.__route = location.hash || '#home';
+  history.replaceState({ route: window.__route }, '', location.pathname + location.search);
+  applyRoute(window.__route);
 })();

@@ -1032,29 +1032,13 @@ body.now-playing-route .player-section .player-expand-btn svg {
   .mini-popup-transport,
   .mini-popup-vol { display: none; }
 
+  /* The floating #queue-section panel is retired — the queue lives inside
+     #now-playing-section (.np-page-right). Never force it visible here: a
+     display:flex !important would override the [hidden] attribute and stack
+     the stale panel over the now-playing view. */
   body.now-playing-route #queue-section,
   body.now-playing-route main.has-queue #queue-section {
-    display: flex !important;
-    top: calc(var(--topbar-h) + 3px);
-    right: 0;
-    bottom: 72px;
-    width: 38%;
-    height: auto;
-    padding: 34px 28px 18px;
-    border: 0;
-    border-left: 1px solid rgba(255,255,255,.08);
-    border-radius: 0;
-    background: #080808;
-    z-index: 225;
-    box-sizing: border-box;
-    overflow: hidden;
-  }
-  body.now-playing-route #queue-section > .label {
-    padding: 0 8px 14px;
-    border-bottom: 1px solid rgba(255,255,255,.14);
-    font-size: .82rem;
-    text-transform: uppercase;
-    letter-spacing: .04em;
+    display: none !important;
   }
 }
 
@@ -1357,7 +1341,9 @@ button { border-radius: var(--radius-md); }
     background: #101010;
     backdrop-filter: none;
     -webkit-backdrop-filter: none;
-    contain: paint;
+    /* No contain:paint here — it clips absolutely-positioned descendants
+       (device dropdown menu, profile menu) to the header's 67px box. The
+       opaque background alone removes the backdrop-blur repaint cost. */
   }
 }
 
@@ -1668,6 +1654,32 @@ body.results-open .player-section {
   display: flex;
   height: calc(100dvh - var(--topbar-h) - var(--playbar-h) - 8px);
   overflow: hidden;
+}
+
+/* Desktop: the now-playing view is an overlay layer that slides up over the
+   current page (YT Music style), pinned between the top bar and the playbar.
+   It must never sit in the document flow where home content can scroll it
+   into view. */
+@media (min-width: 900px) {
+  #now-playing-section {
+    position: fixed;
+    top: calc(var(--topbar-h) + 3px);
+    left: var(--rail-w);
+    right: 0;
+    bottom: var(--playbar-h);
+    margin: 0;
+    z-index: 210;
+    background: var(--bg, #0a0a0a);
+    animation: np-slide-up .28s ease;
+    /* Follows the rail as it collapses/expands */
+    transition: left .25s ease;
+  }
+  .np-page { height: 100%; }
+}
+
+@keyframes np-slide-up {
+  from { opacity: 0; transform: translateY(28px); }
+  to { opacity: 1; transform: none; }
 }
 
 /* ---- Left: album art + meta ---- */

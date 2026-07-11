@@ -38,7 +38,9 @@
       state().lastActionIntent = false;
       if (window.syncPlayPause) window.syncPlayPause();
     }
-    if (np.title && np.playing) {
+    // A paused track still has a title — keep showing it. Only a missing
+    // title means there is genuinely nothing to display.
+    if (np.title) {
       if (window.showNowPlaying) window.showNowPlaying(np);
       if (np.playing !== undefined) {
         const inGrace = (Date.now() - state().lastActionAt) < state().GRACE_MS;
