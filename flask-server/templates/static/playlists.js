@@ -613,8 +613,8 @@ function renderSidebarPlaylists() {
   const lists = getPlaylistsList();
   container.innerHTML = lists.map(pl => `
     <button class="sidebar-playlist-item" type="button" data-playlist-id="${escHtml(pl.id)}" title="${escHtml(pl.name)}">
-      <strong>${escHtml(pl.name)}</strong>
-      <span>${(pl.tracks || []).length} ${(pl.tracks || []).length === 1 ? 'song' : 'songs'}</span>
+      <svg class="sidebar-playlist-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><line x1="7" y1="8" x2="14" y2="8"/><line x1="7" y1="12" x2="12" y2="12"/><path d="m15 12 4 2.5-4 2.5z" fill="currentColor" stroke="none"/></svg>
+      <span class="sidebar-playlist-copy"><strong>${escHtml(pl.name)}</strong><span>${(pl.tracks || []).length} ${(pl.tracks || []).length === 1 ? 'song' : 'songs'}</span></span>
     </button>`).join('');
   container.querySelectorAll('.sidebar-playlist-item').forEach(btn => {
     btn.addEventListener('click', () => {

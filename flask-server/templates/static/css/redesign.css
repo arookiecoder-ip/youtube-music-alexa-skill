@@ -152,8 +152,10 @@ header {
     overflow: visible !important;
   }
   header .header-actions {
-    margin-left: auto;
-    position: relative;
+    margin-left: 0;
+    position: fixed;
+    top: 15px;
+    right: 28px;
     z-index: 250;
     overflow: visible;
   }
@@ -394,11 +396,23 @@ body.results-open .play-section {
   .sidebar-footer,
   .sidebar-library { transition: opacity .14s ease, visibility .14s; }
   body.rail-collapsed .sidebar-signout,
-  body.rail-collapsed .sidebar-footer,
-  body.rail-collapsed .sidebar-library {
+  body.rail-collapsed .sidebar-footer {
     opacity: 0;
     visibility: hidden;
   }
+  body.rail-collapsed .sidebar-library { opacity: 1; visibility: visible; padding-top: 8px; border-top: 0; }
+  body.rail-collapsed .sidebar-new-playlist-container { display: none !important; }
+  body.rail-collapsed .sidebar-playlist-list { padding: 0; overflow-x: visible; }
+  body.rail-collapsed .sidebar-playlist-item {
+    width: 44px;
+    height: 44px;
+    padding: 11.5px !important;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  body.rail-collapsed .sidebar-playlist-copy { display: none; }
+  body.rail-collapsed .sidebar-playlist-icon { display: block; }
   /* In mini-guide mode only the toggle survives. Shrink the brand's width and
      fade the logo/wordmark rather than display:none-ing them or reflowing to
      a column — those changes are instant and made the toggle jump while the
@@ -656,6 +670,8 @@ body.results-open .play-section {
   text-align: left;
   color: var(--text) !important;
 }
+.sidebar-playlist-icon { display: none; width: 21px; height: 21px; flex: 0 0 21px; }
+.sidebar-playlist-copy { display: block; min-width: 0; }
 .sidebar-playlist-item:hover { background: rgba(255,255,255,.07) !important; }
 .sidebar-playlist-item strong,
 .sidebar-playlist-item span {
@@ -1000,7 +1016,7 @@ body.now-playing-route .player-section .player-expand-btn svg {
   }
   body.now-playing-route header {
     margin-bottom: 0;
-    background: #101010;
+    background: #000;
     transition: background-color .28s ease, margin .25s ease;
   }
   .mini-popup-overlay {
@@ -1427,7 +1443,7 @@ button { border-radius: var(--radius-md); }
   header,
   main.has-queue header,
   body.results-open main header {
-    background: #101010;
+    background: #000;
     transition: background-color .28s ease, margin .25s ease;
     backdrop-filter: none;
     -webkit-backdrop-filter: none;
@@ -1442,7 +1458,7 @@ button { border-radius: var(--radius-md); }
 
 @media (max-width: 899px) {
   .play-section {
-    background: #101010 !important;
+    background: #000 !important;
     backdrop-filter: none;
     -webkit-backdrop-filter: none;
     contain: paint;
