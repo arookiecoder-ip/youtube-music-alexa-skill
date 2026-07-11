@@ -19,7 +19,17 @@
 
   var routes = {
     '#home': function() {
-      showHomeViews();
+      // Search results live on the #home route (searching never navigates).
+      // If they were open when another view (e.g. the expanded player) took
+      // over, restore them instead of the home feed — otherwise both stay
+      // hidden (_resultsOpen keeps syncUiState from showing home) and the
+      // page goes blank.
+      if (window.__appState && window.__appState._resultsOpen) {
+        setHidden('.play-section, #results-section', false);
+        setHidden('#home-section, #idle-hero, #queue-section, #artist-section, #album-section', true);
+      } else {
+        showHomeViews();
+      }
     },
     '#playlists': function() {
       if (window.openPlaylistsModal) window.openPlaylistsModal(true);

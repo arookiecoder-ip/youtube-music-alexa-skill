@@ -132,9 +132,9 @@
   border: none;
   cursor: pointer;
   z-index: 2;
-  transform: translate(-50%, -50%) scale(0.8);
+  transform: translate(-50%, -50%);
   opacity: 0;
-  transition: opacity 0.18s ease, transform 0.18s ease;
+  transition: opacity 0.18s ease;
   pointer-events: none;
   box-shadow: none;
 }
@@ -149,12 +149,11 @@
 /* Reveal on card hover */
 .home-card:hover .home-play-btn {
   opacity: 1;
-  transform: translate(-50%, -50%) scale(1);
   pointer-events: auto;
 }
 /* Slightly shrink on click for press feedback */
 .home-play-btn:active {
-  transform: translate(-50%, -50%) scale(0.88) !important;
+  transform: translate(-50%, -50%) scale(0.92) !important;
 }
 
 .home-card-art img {

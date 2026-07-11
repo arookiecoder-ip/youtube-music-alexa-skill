@@ -139,6 +139,17 @@ main:has(.player-section.is-visible) {
   body:has(.player-section.is-visible) .sidebar {
     bottom: calc(var(--playbar-h) + 4px);
   }
+  /* Player bar starts after the sidebar — keep in sync when rail collapses */
+  .player-section,
+  main.has-queue .player-section,
+  body.results-open .player-section {
+    transition: left .25s ease;
+  }
+  body.rail-collapsed .player-section,
+  body.rail-collapsed main.has-queue .player-section,
+  body.rail-collapsed.results-open .player-section {
+    left: var(--rail-w-mini);
+  }
 }
 
 /* ============================================================
@@ -330,11 +341,17 @@ body.results-open .play-section {
 .suggest-item-remove {
   width: 28px;
   height: 28px;
-  color: #aaa;
+  color: #ffffff !important;
   opacity: 0;
   pointer-events: none;
   transition: opacity .15s, color .15s, background .15s;
   border-radius: 0;
+}
+.suggest-item-remove svg {
+  stroke: #ffffff;
+  width: 16px;
+  height: 16px;
+  display: block;
 }
 .suggest-item:hover .suggest-item-remove,
 .suggest-item.active .suggest-item-remove {
@@ -342,8 +359,8 @@ body.results-open .play-section {
   pointer-events: auto;
 }
 .suggest-item-remove:hover {
-  color: #fff;
-  background: rgba(255, 255, 255, .12);
+  color: #fff !important;
+  background: rgba(255, 255, 255, .15);
 }
 
 .clear-all-btn { border-radius: var(--radius-full); }
@@ -564,7 +581,7 @@ body.results-open .play-section {
   width: 100%;
   align-items: center;
   justify-content: flex-start;
-  gap: 14px;
+  gap: 11px;
   background: none;
   border: none;
   color: var(--muted);
@@ -572,10 +589,10 @@ body.results-open .play-section {
   font-weight: 600;
   letter-spacing: 0;
   text-transform: none;
-  padding: 11px 12px;
+  padding: 8px 12px;
   border-radius: var(--radius-md);
   transition: color .15s, background .15s;
-  min-height: 41px;
+  min-height: 40px;
   overflow: visible;
 }
 .sidebar .sidebar-nav-btn .nav-label {
@@ -713,11 +730,11 @@ body.results-open .play-section {
   height: 17px;
 }
 .sidebar .sidebar-nav-btn svg {
-  width: 21px;
-  height: 21px;
-  min-width: 21px;
-  min-height: 21px;
-  flex: 0 0 21px;
+  width: 24px;
+  height: 24px;
+  min-width: 24px;
+  min-height: 24px;
+  flex: 0 0 24px;
 }
 .sidebar-brand-mark span {
   display: block;
@@ -769,9 +786,9 @@ body.results-open .play-section {
   align-items: center;
   gap: 11px;
   width: 100%;
-  padding: 8px 10px !important;
+  padding: 6px 12px !important;
   border: 0 !important;
-  border-radius: 8px !important;
+  border-radius: 4px !important;
   background: transparent !important;
   text-align: left;
   color: var(--text) !important;
@@ -947,7 +964,28 @@ body.results-open .player-section.is-visible { transform: none; }
 }
 /* Hide the icon once real art is present */
 .player-section .np-art.has-thumb svg { display: none; }
-.player-section .np-title { font-size: .88rem; }
+/* Timer sits on the same line as the song title inside the left cluster */
+.player-section .np-info {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-rows: auto auto;
+  grid-template-areas: "title time" "artist artist";
+  align-items: center;
+  gap: 0 8px;
+  min-width: 0;
+  max-width: 220px;
+  flex: 0 1 auto;
+}
+.player-section .np-title {
+  grid-area: title;
+  font-size: .88rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.player-section .np-artist {
+  grid-area: artist;
+}
 .player-section .np-like-btn,
 .player-section .np-shuffle-btn,
 .player-section .np-ytm-btn {
@@ -1144,21 +1182,20 @@ input[type=range]::-moz-range-thumb { border-radius: 50%; }
   transform: translateX(-50%) translateY(-50%) scale(1);
   transition: opacity 0.15s ease, transform 0.15s ease;
 }
-/* Playbar timer: hidden globally, centered in the player bar */
+/* Playbar timer: hidden globally, shown beside the song title in the left cluster */
 .playbar-time { display: none; }
 .player-section .playbar-time {
+  grid-area: time;
   display: block;
-  position: absolute;
-  bottom: 6px;
-  left: 50%;
-  transform: translateX(-50%);
+  position: static;
+  transform: none;
   font-size: 0.68rem;
-  color: rgba(255,255,255,0.45);
+  color: rgba(255,255,255,0.50);
   font-variant-numeric: tabular-nums;
   letter-spacing: 0.03em;
   white-space: nowrap;
   pointer-events: none;
-  z-index: 2;
+  flex: none;
 }
 /* NOTE: overflow:hidden is already set on .player-section base rule above;
    the duplicate here is intentionally removed to avoid specificity confusion. */
@@ -1173,6 +1210,14 @@ input[type=range]::-moz-range-thumb { border-radius: 50%; }
   border: none;
   width: 36px;
   height: 36px;
+  transform: none !important;
+  transition: color .15s, background .15s;
+}
+.player-section .np-ytm-btn:hover {
+  color: #ff0000 !important;
+  background: rgba(255, 0, 0, .1);
+  border-color: transparent !important;
+  transform: none !important;
 }
 .player-section .player-expand-btn {
   display: inline-flex;
@@ -1538,7 +1583,7 @@ body.results-open #results-section {
 }
 #results-section .result-like-btn:hover,
 #results-section .track-like-btn:hover { background: transparent; }
-.result-thumb, .result-thumb-slot { border-radius: 6px; overflow: hidden; }
+.result-thumb, .result-thumb-slot { border-radius: 0; overflow: hidden; }
 .results-pager button { border-radius: var(--radius-full); }
 
 /* ============================================================
@@ -1581,7 +1626,7 @@ body.results-open #results-section {
 }
 
 .queue-item { border-radius: var(--radius-md); }
-.queue-thumb, .queue-thumb-slot { border-radius: 6px; }
+.queue-thumb, .queue-thumb-slot { border-radius: 0; }
 
 /* ============================================================
    Login
@@ -1844,20 +1889,23 @@ body.results-open .player-section {
 .player-section .np-more-menu {
   display: none; position: absolute; right: 0; bottom: calc(100% + 10px); z-index: 500;
   min-width: 190px; padding: 6px; border: 1px solid rgba(255,255,255,.12);
-  border-radius: 10px; background: #282828; box-shadow: 0 12px 32px rgba(0,0,0,.55);
+  border-radius: 0; background: #282828; box-shadow: 0 12px 32px rgba(0,0,0,.55);
 }
 .player-section .np-more-wrap.open .np-more-menu { display: block; }
 .player-section .np-more-menu button,
 .player-section .np-more-menu a {
-  display: flex; align-items: center; gap: 10px; width: 100%; padding: 10px 12px; border: 0; border-radius: 7px;
-  background: transparent; color: #fff; font: inherit; text-align: left; text-decoration: none; cursor: pointer;
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  padding: 10px 12px; border: 0; border-radius: 0;
+  background: transparent; color: #fff;
+  font: inherit; font-size: .88rem;
+  text-align: left; text-decoration: none; cursor: pointer;
 }
 .player-section .np-more-menu button svg,
 .player-section .np-more-menu a svg {
   flex: none; width: 16px; height: 16px; color: var(--muted);
 }
 .player-section .np-more-menu button:hover,
-.player-section .np-more-menu a:hover { background: rgba(255,255,255,.1); }
+.player-section .np-more-menu a:hover { background: rgba(255,255,255,.08); }
 .player-section .np-title {
   font-weight: 700;
   white-space: nowrap;
@@ -1893,11 +1941,12 @@ body.results-open .player-section {
   .player-section,
   main.has-queue .player-section,
   body.results-open .player-section {
-    overflow: hidden;
+    overflow: visible;
     height: 54px;
     min-height: 54px;
     box-sizing: border-box;
-    z-index: 240;
+    z-index: 270;
+    left: var(--rail-w);
     padding: 3px 16px 3px;
     grid-template-columns: 205px minmax(320px, 1fr) auto auto;
     /* Expand arrow cluster sits at the far right, after the volume */
@@ -1989,16 +2038,14 @@ body.results-open .player-section {
     color: #aaa;
   }
   .player-section .vol > svg { width: 23px; height: 23px; }
-  /* Timer: inherit the absolute-center position from the global rule */
+  /* Timer: shown beside the song title (inherits grid-area: time from global rule) */
   .player-section .playbar-time {
     display: block;
-    position: absolute;
-    bottom: 7px;
-    left: 50%;
-    transform: translateX(-50%);
+    position: static;
+    transform: none;
     margin: 0;
-    font-size: .75rem;
-    color: rgba(255,255,255,0.40);
+    font-size: .72rem;
+    color: rgba(255,255,255,0.45);
     white-space: nowrap;
     font-variant-numeric: tabular-nums;
     letter-spacing: 0.03em;
