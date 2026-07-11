@@ -8,13 +8,12 @@
   }
 
   function hideAllViews() {
-    setHidden('.play-section, .player-section, #recs-section, #home-section, #idle-hero, #results-section, #queue-section, #artist-section, #album-section', true);
+    setHidden('.play-section, #recs-section, #home-section, #idle-hero, #results-section, #queue-section, #artist-section, #album-section', true);
   }
 
   function showHomeViews() {
     setHidden('.play-section, #home-section', false);
     setHidden('#idle-hero', true);
-    setHidden('.player-section', true);
     setHidden('#results-section, #queue-section, #artist-section, #album-section', true);
   }
 
@@ -54,7 +53,6 @@
       // visible on the artist page; only the content views swap out.
       setHidden('#recs-section, #home-section, #idle-hero, #results-section, #queue-section, #artist-section', true);
       setHidden('.play-section', false);
-      setHidden('.player-section', true);
       section.hidden = false;
     }
   }
@@ -79,7 +77,7 @@
       if (historyOverlay) historyOverlay.classList.remove('open');
     }
     if (hash !== '#now-playing') {
-      setHidden('.player-section, #queue-section', true);
+      setHidden('#queue-section', true);
       var main = document.querySelector('main');
       if (main) main.classList.remove('has-queue');
     }

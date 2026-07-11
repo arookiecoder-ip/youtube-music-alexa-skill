@@ -113,10 +113,9 @@ main:has(.player-section.is-visible) {
   body:has(.player-section.is-visible) #queue-section {
     bottom: calc(var(--playbar-h) + 16px);
   }
-  /* The rail always owns the full viewport height. The playbar layers above
-     it when visible instead of shrinking the navigation. */
+  /* The rail stops at the playbar so the transport controls do not overlap the rail. */
   body:has(.player-section.is-visible) .sidebar {
-    bottom: 0;
+    bottom: 72px;
   }
 }
 
@@ -140,16 +139,14 @@ header {
     height: calc(var(--topbar-h) + 3px);
     margin: 0 -28px 4px;
     padding: 3px 28px 0;
-    background: rgba(10, 10, 10, .78);
-    backdrop-filter: blur(20px);
-    -webkit-backdrop-filter: blur(20px);
-    border-bottom: 1px solid rgba(255, 255, 255, .05);
+    background: transparent;
+    border-bottom: none;
     overflow: visible !important;
   }
   header .header-actions {
     margin-left: auto;
     position: relative;
-    z-index: 150;
+    z-index: 250;
     overflow: visible;
   }
 }
@@ -271,10 +268,7 @@ body.results-open .play-section {
 }
 
 #play-query {
-  border-radius: var(--radius-full);
-  background: var(--accent-grad);
-  border: none;
-  padding: 10px 22px;
+  display: none !important;
 }
 
 .suggest-list {
@@ -288,7 +282,7 @@ body.results-open .play-section {
 .clear-all-btn { border-radius: var(--radius-full); }
 
 /* Wide screens: the search pill floats inside the top bar, dead center */
-@media (min-width: 1100px) {
+@media (min-width: 900px) {
   .play-section {
     position: fixed;
     top: 3px;
@@ -349,16 +343,33 @@ body.results-open .play-section {
     opacity: 1;
     overflow: hidden;
     white-space: nowrap;
-    transition: max-width .25s ease, opacity .14s ease;
+    transition: max-width .25s ease, opacity .14s ease, font-size .25s ease, margin .25s ease;
   }
   body.rail-collapsed .sidebar .nav-label {
-    max-width: 0;
-    opacity: 0;
+    max-width: 70px;
+    opacity: 1;
+    font-size: 0.65rem;
+    font-weight: normal;
+    margin-top: 4px;
+    text-align: center;
   }
   body.rail-collapsed .sidebar .sidebar-nav-btn {
+    flex-direction: column;
     justify-content: center;
+    align-items: center;
     gap: 0;
     padding: 12px 0;
+  }
+  
+  /* Explicitly set properties to animate them cleanly (variable changes skip transitions in some browsers) */
+  body.rail-collapsed main,
+  body.rail-collapsed main.idle,
+  body.rail-collapsed main.has-queue,
+  body.rail-collapsed.results-open main {
+    margin-left: var(--rail-w-mini);
+  }
+  body.rail-collapsed .sidebar {
+    width: var(--rail-w-mini);
   }
   body.rail-collapsed .sidebar .sidebar-nav-btn svg {
     width: 21px;
@@ -939,7 +950,7 @@ input[type=range]::-moz-range-thumb { border-radius: 50%; }
   }
   .mini-popup-overlay {
     display: flex !important;
-    left: var(--rail-w);
+    left: 0;
     top: calc(var(--topbar-h) + 3px);
     right: 0;
     bottom: 72px;
@@ -1527,10 +1538,7 @@ body.results-open .player-section {
 /* YouTube Music-style persistent desktop playbar: transport at left, track
    identity in the middle, and utility controls at right. */
 @media (min-width: 900px) {
-  body:not(.now-playing-route) .player-section,
-  body:not(.now-playing-route) #queue-section {
-    display: none !important;
-  }
+  /* Removing the incorrect display: none rule that hides the persistent playbar */
   body:not(.now-playing-route) main,
   body:not(.now-playing-route) main:has(.player-section.is-visible) {
     padding-bottom: 0;

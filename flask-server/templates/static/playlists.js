@@ -1324,7 +1324,63 @@ document.addEventListener('DOMContentLoaded', () => {
   const newPlBtn = document.getElementById('new-playlist-btn');
   if (newPlBtn) newPlBtn.addEventListener('click', createNewPlaylist);
   const sidebarNewPlBtn = document.getElementById('sidebar-new-playlist-btn');
-  if (sidebarNewPlBtn) sidebarNewPlBtn.addEventListener('click', openCreatePlaylistModal);
+  const sidebarNewPlForm = document.getElementById('sidebar-new-playlist-form');
+  const sidebarNewPlInput = document.getElementById('sidebar-new-playlist-input');
+  
+  if (sidebarNewPlBtn && sidebarNewPlForm && sidebarNewPlInput) {
+    sidebarNewPlBtn.addEventListener('click', () => {
+      if (sidebarNewPlForm.style.display === 'none') {
+        sidebarNewPlForm.style.display = 'block';
+        sidebarNewPlInput.focus();
+      } else {
+        sidebarNewPlForm.style.display = 'none';
+      }
+    });
+
+    sidebarNewPlInput.addEventListener('keydown', async (e) => {
+      if (e.key === 'Enter') {
+        const url = sidebarNewPlInput.value.trim();
+        if (!url) return;
+        
+        const extractId = (u) => {
+          try {
+            return new URL(u).searchParams.get('list') || u;
+          } catch (_) {
+            const m = u.match(/[?&]list=([\w-]+)/);
+            return m ? m[1] : u;
+          }
+        };
+
+        const newListId = extractId(url);
+        const existing = Object.values(_playlistsData.playlists).find(
+          (p) => p.source_url && extractId(p.source_url) === newListId
+        );
+        if (existing) {
+          toast('Playlist already imported', 'error');
+          return;
+        }
+        
+        sidebarNewPlInput.disabled = true;
+        toast('Importing playlist...', 'ok');
+        
+        try {
+          const res = await api('/api/playlists/', { source_url: url });
+          _playlistsData.playlists[res.id] = res;
+          await api('/api/playlists/' + res.id + '/sync/', {}, 'POST');
+          
+          await loadPlaylists();
+          renderPlaylists();
+          toast('Playlist imported successfully', 'ok');
+          sidebarNewPlInput.value = '';
+          sidebarNewPlForm.style.display = 'none';
+        } catch (err) {
+          toast(err.message || 'Error importing playlist', 'error');
+          console.error(err);
+        }
+        sidebarNewPlInput.disabled = false;
+      }
+    });
+  }
 
   // Close modals when clicking outside on the overlay
   const plOverlay = document.getElementById('playlists-modal-overlay');

@@ -41,6 +41,49 @@ function syncPlayPause() {
 
 /* ---- now-playing display (single element, no dual placeholder bug) ---- */
 // Last-rendered track fingerprint — used to skip redundant DOM writes.
+(function () {
+  'use strict';
+  function escHtml(s) {
+    return String(s == null ? '' : s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  }
+
+  const state = window.__appState = window.__appState || {};
+  if (state.isPlaying === undefined) state.isPlaying = false;
+  if (state.lastActionAt === undefined) state.lastActionAt = 0;
+  if (state.lastActionIntent === undefined) state.lastActionIntent = null;
+  if (state._lastPlayAttemptVideoId === undefined) state._lastPlayAttemptVideoId = '';
+  if (state.GRACE_MS === undefined) state.GRACE_MS = 8000;
+  if (state._currentVideoId === undefined) state._currentVideoId = '';
+  if (state._currentThumbnail === undefined) state._currentThumbnail = '';
+  if (state._hasTrack === undefined) state._hasTrack = false;
+  if (state._resultsOpen === undefined) state._resultsOpen = false;
+  if (state._searchResults === undefined) state._searchResults = [];
+  if (state._searchSeq === undefined) state._searchSeq = 0;
+  if (state._lastQueueJson === undefined) state._lastQueueJson = '';
+  if (state._lastQueueIndex === undefined) state._lastQueueIndex = -1;
+  if (state.volumeUserActive === undefined) state.volumeUserActive = false;
+  if (state.volumeGraceUntil === undefined) state.volumeGraceUntil = 0;
+  if (state.VOLUME_GRACE_MS === undefined) state.VOLUME_GRACE_MS = 4000;
+  if (state._volCommandSeq === undefined) state._volCommandSeq = 0;
+
+const deviceEl = document.getElementById('device');
+const volumeEl = document.getElementById('volume');
+
+function syncPlayPause() {
+  for (const btn of [document.getElementById('pp-btn'), document.getElementById('mini-pp'), document.getElementById('mp-pp-btn')]) {
+    btn.querySelector('.icon-play').style.display = state.isPlaying ? 'none' : '';
+    btn.querySelector('.icon-pause').style.display = state.isPlaying ? '' : 'none';
+    btn.title = state.isPlaying ? 'Pause' : 'Play';
+  }
+}
+
+/* ---- now-playing display (single element, no dual placeholder bug) ---- */
+// Last-rendered track fingerprint — used to skip redundant DOM writes.
 let _lastNpFingerprint = '';
 
 function showNowPlaying(info) {
@@ -49,26 +92,27 @@ function showNowPlaying(info) {
   if (!info || !info.title) {
     // Only update if we had a track before.
     if (state._hasTrack || _lastNpFingerprint) {
-      np.classList.remove('visible');
-      document.getElementById('mini-title').textContent = '';
+      np.classList.add('visible');
+      document.getElementById('np-title').textContent = 'Nothing is playing';
+      document.getElementById('np-artist').textContent = '';
+      document.getElementById('mini-title').textContent = 'Nothing is playing';
       miniArt.style.backgroundImage = '';
       miniArt.classList.remove('has-thumb');
       // Clear popup now-playing too
-      document.getElementById('mp-np-title').textContent = '';
+      document.getElementById('mp-np-title').textContent = 'Nothing is playing';
       document.getElementById('mp-np-artist').textContent = '';
       const mpArt = document.getElementById('mp-np-art');
       mpArt.style.backgroundImage = '';
       mpArt.classList.remove('has-thumb');
+      const art = document.getElementById('np-art');
+      if (art) {
+        art.style.backgroundImage = '';
+        art.classList.remove('has-thumb');
+      }
       state._hasTrack = false;
       state._currentVideoId = '';
       state._currentThumbnail = '';
       state._currentTrack = null;
-      _lastNpFingerprint = '';
-      updateUrlBar();
-      syncUiState();
-      updateResultsActive();
-    }
-    return;
   }
   // Fingerprint: skip all DOM work when nothing changed.
   const fp = (info.video_id || '') + '|' + info.title + '|' + (info.artist || '') + '|' + (info.thumbnail || '');

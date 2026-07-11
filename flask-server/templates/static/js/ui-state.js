@@ -43,28 +43,21 @@
       // The player is a fixed bottom bar now, so the home feed stays visible
       // while a track plays; only search results or the artist page cover it.
       const artistOpen = (location.hash || '').indexOf('#artist/') === 0;
-      const shouldShow = state._loggedIn && !state._resultsOpen && !artistOpen;
+      const albumOpen = (location.hash || '').indexOf('#album/') === 0;
+      const shouldShow = state._loggedIn && !state._resultsOpen && !artistOpen && !albumOpen;
       if (shouldShow && !state._homeLoaded && window.loadHomeFeed) window.loadHomeFeed();
       else homeSection.hidden = !shouldShow || !state._homeLoaded;
     }
     if (!player) return;
+    clearTimeout(player._hideTimer);
+    player.hidden = false;
+    player.classList.remove('is-collapsed');
+    requestAnimationFrame(() => player.classList.add('is-visible'));
+
     if (state._hasTrack) {
-      clearTimeout(player._hideTimer);
-      // Route changes use the native `hidden` attribute while swapping views.
-      // A playback update can arrive before or after that navigation, so the
-      // visibility classes alone are not sufficient: `[hidden]` always wins.
-      // Treat the current-track state as authoritative for this persistent
-      // shell playbar and explicitly restore it whenever a track exists.
-      player.hidden = false;
-      player.classList.remove('is-collapsed');
-      requestAnimationFrame(() => player.classList.add('is-visible'));
+      player.classList.remove('is-blank');
     } else {
-      player.classList.remove('is-visible');
-      clearTimeout(player._hideTimer);
-      player._hideTimer = setTimeout(() => {
-        player.classList.add('is-collapsed');
-        player.hidden = true;
-      }, 300);
+      player.classList.add('is-blank');
     }
   }
 

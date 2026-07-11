@@ -194,17 +194,6 @@
       </div>
     </div>
     <div class="sidebar-section sidebar-tools">
-      <button class="sidebar-nav-btn needs-login jam-owner-only" id="sidebar-playlists-btn" title="Playlists" hidden>
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <line x1="8" y1="6" x2="21" y2="6"/>
-          <line x1="8" y1="12" x2="21" y2="12"/>
-          <line x1="8" y1="18" x2="21" y2="18"/>
-          <line x1="3" y1="6" x2="3.01" y2="6"/>
-          <line x1="3" y1="12" x2="3.01" y2="12"/>
-          <line x1="3" y1="18" x2="3.01" y2="18"/>
-        </svg>
-        <span class="nav-label">Playlists</span>
-      </button>
       <button class="sidebar-nav-btn needs-login jam-owner-only" id="sidebar-jam-btn" title="Jam" hidden>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
@@ -224,10 +213,15 @@
       </button>
     </div>
     <div class="sidebar-library jam-owner-only">
-      <button class="sidebar-new-playlist needs-login" id="sidebar-new-playlist-btn" hidden>
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-        <span>New playlist</span>
-      </button>
+      <div class="sidebar-new-playlist-container needs-login" id="sidebar-new-playlist-container" hidden>
+        <button class="sidebar-new-playlist" id="sidebar-new-playlist-btn" style="width: 100%;">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          <span>New playlist</span>
+        </button>
+        <div id="sidebar-new-playlist-form" style="display:none; margin: 8px 16px 0;">
+          <input type="url" id="sidebar-new-playlist-input" placeholder="Paste YouTube playlist link..." style="width:100%; border-radius: var(--radius-sm); padding: 8px; background: var(--pill-bg); border: none; font-size: 0.85rem; color: var(--text);" autocomplete="off">
+        </div>
+      </div>
       <div class="sidebar-playlist-list" id="sidebar-playlist-list"></div>
     </div>
   </div>
