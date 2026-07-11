@@ -225,7 +225,9 @@
         var titleCard = (titleLink || art).closest('.home-card');
         var linkEl = titleLink || art;
         if (titleCard && titleCard.dataset.albumId) {
-          window.navigateTo('#album/' + encodeURIComponent(titleCard.dataset.albumId));
+          // Album ID already known: preload then navigate
+          if (window.preloadNavigateAlbum) window.preloadNavigateAlbum(titleCard.dataset.albumId);
+          else window.navigateTo('#album/' + encodeURIComponent(titleCard.dataset.albumId));
         } else if (titleCard && titleCard.dataset.videoId) {
           linkEl.classList.add('is-resolving');
           var lookup = '/api/song/' + encodeURIComponent(titleCard.dataset.videoId) + '/album' +
@@ -234,7 +236,9 @@
           window.api(lookup).then(function(result) {
             if (!result || !result.browseId) throw new Error('Album not found');
             titleCard.dataset.albumId = result.browseId;
-            window.navigateTo('#album/' + encodeURIComponent(result.browseId));
+            // Chain: now preload the album then navigate
+            if (window.preloadNavigateAlbum) window.preloadNavigateAlbum(result.browseId);
+            else window.navigateTo('#album/' + encodeURIComponent(result.browseId));
           }).catch(function(err) {
             if (window.toast) window.toast(err.message || 'Could not open album', 'error');
           }).finally(function() {

@@ -344,9 +344,16 @@ function renderResults() {
                });
            }
         } else {
-           if (type === 'artist') window.navigateTo('#artist/' + encodeURIComponent(item.browseId));
-           else if (type === 'album') window.navigateTo('#album/' + encodeURIComponent(item.browseId));
-           else if (type === 'playlist') window.navigateTo('#playlist/' + encodeURIComponent(item.browseId));
+           if (type === 'artist') {
+             if (window.preloadNavigateArtist) window.preloadNavigateArtist(item.browseId);
+             else window.navigateTo('#artist/' + encodeURIComponent(item.browseId));
+           } else if (type === 'album') {
+             if (window.preloadNavigateAlbum) window.preloadNavigateAlbum(item.browseId);
+             else window.navigateTo('#album/' + encodeURIComponent(item.browseId));
+           } else if (type === 'playlist') {
+             if (window.preloadNavigatePlaylist) window.preloadNavigatePlaylist(item.browseId);
+             else window.navigateTo('#playlist/' + encodeURIComponent(item.browseId));
+           }
         }
       });
       track.appendChild(card);
@@ -411,7 +418,8 @@ function renderResults() {
     if (item.resultType === 'artist' && item.browseId) {
       card.querySelector('.top-result-main').addEventListener('click', (e) => {
         if (!e.target.closest('button')) {
-          window.navigateTo('#artist/' + encodeURIComponent(item.browseId));
+          if (window.preloadNavigateArtist) window.preloadNavigateArtist(item.browseId);
+          else window.navigateTo('#artist/' + encodeURIComponent(item.browseId));
         }
       });
       card.querySelector('.top-result-shuffle').addEventListener('click', () => {

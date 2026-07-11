@@ -204,19 +204,25 @@
   window.openArtistLink = function(el) {
     var channelId = el.getAttribute('data-channel-id');
     if (channelId) {
-      window.navigateTo('#artist/' + encodeURIComponent(channelId));
+      if (window.preloadNavigateArtist) window.preloadNavigateArtist(channelId);
+      else window.navigateTo('#artist/' + encodeURIComponent(channelId));
       return;
     }
     var name = (el.getAttribute('data-artist-name') || el.textContent || '').trim();
     if (!name) return;
-    window.api('/alexa/search/?q=' + encodeURIComponent(name)).then(function(result) {
-      var artists = (result && result.artists) || [];
-      var exact = artists.find(function(a) {
-        return (a.name || '').toLowerCase() === name.toLowerCase();
-      }) || artists[0];
-      if (exact && exact.browse_id) window.navigateTo('#artist/' + encodeURIComponent(exact.browse_id));
-      else if (window.toast) toast('Artist page unavailable', 'error');
-    }).catch(function() { if (window.toast) toast('Artist page unavailable', 'error'); });
+    // Use the preload variant that resolves name → channelId → fetches artist data
+    if (window.preloadNavigateArtistByName) {
+      window.preloadNavigateArtistByName(name);
+    } else {
+      window.api('/alexa/search/?q=' + encodeURIComponent(name)).then(function(result) {
+        var artists = (result && result.artists) || [];
+        var exact = artists.find(function(a) {
+          return (a.name || '').toLowerCase() === name.toLowerCase();
+        }) || artists[0];
+        if (exact && exact.browse_id) window.navigateTo('#artist/' + encodeURIComponent(exact.browse_id));
+        else if (window.toast) toast('Artist page unavailable', 'error');
+      }).catch(function() { if (window.toast) toast('Artist page unavailable', 'error'); });
+    }
   };
 
   // Binds artist-name clicks directly on the spans inside `container` so the

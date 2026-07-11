@@ -54,7 +54,10 @@
 
     var artistBtn = hero.querySelector('.album-artist-link');
     if (artistBtn) artistBtn.addEventListener('click', function () {
-      if (this.dataset.channelId) window.navigateTo('#artist/' + encodeURIComponent(this.dataset.channelId));
+      if (this.dataset.channelId) {
+        if (window.preloadNavigateArtist) window.preloadNavigateArtist(this.dataset.channelId);
+        else window.navigateTo('#artist/' + encodeURIComponent(this.dataset.channelId));
+      }
     });
     var playAll = hero.querySelector('.album-play-all');
     if (playAll && data.tracks && data.tracks.length) playAll.addEventListener('click', function () {
@@ -173,10 +176,27 @@
   async function loadAlbum(browseId) {
     var hero = document.getElementById('album-hero');
     var list = document.getElementById('album-track-list');
+
+    // ── Preload-nav: consume cached data from navigateWithPreload ──
+    var route = '#album/' + encodeURIComponent(browseId);
+    var preloaded = window.consumePreload ? window.consumePreload(route) : null;
+    if (preloaded) {
+      cache[browseId] = preloaded;
+      render(preloaded);
+      return;
+    }
+
+    // ── In-module cache (back-navigation) ──
+    if (cache[browseId]) {
+      render(cache[browseId]);
+      return;
+    }
+
+    // ── Fallback: fetch on arrival (only when not using preload-nav) ──
     if (hero) hero.innerHTML = '<div class="history-modal-empty">Loading album…</div>';
     if (list) list.innerHTML = '';
     try {
-      var data = cache[browseId] || await window.api('/api/album/' + encodeURIComponent(browseId));
+      var data = await window.api('/api/album/' + encodeURIComponent(browseId));
       cache[browseId] = data;
       render(data);
     } catch (e) {

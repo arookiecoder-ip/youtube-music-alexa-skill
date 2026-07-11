@@ -254,15 +254,29 @@ let _currentPlaylistDetailId = null;
 
 async function openPlaylistDetailModal(pl_id, fromRoute) {
   if (!fromRoute && window.matchMedia('(min-width: 900px)').matches) {
-    window.navigateTo('#playlist/' + encodeURIComponent(pl_id));
+    // Use preload-nav so the playlist data is ready before the route change
+    if (window.preloadNavigatePlaylist) {
+      window.preloadNavigatePlaylist(pl_id);
+    } else {
+      window.navigateTo('#playlist/' + encodeURIComponent(pl_id));
+    }
     return;
   }
   // Phase 12: Performance marker for profiling playlist detail render time
   if (window.performance && performance.mark) {
     performance.mark('playlist-detail-start');
   }
+
+  // ── Preload-nav: consume cached data from navigateWithPreload ──
+  var route = '#playlist/' + encodeURIComponent(pl_id);
+  var preloaded = window.consumePreload ? window.consumePreload(route) : null;
+  if (preloaded) {
+    _playlistsData.playlists[pl_id] = preloaded;
+    _plCache.set(pl_id, preloaded).catch(function(){});
+  }
+
   // Try IDB cache first — survives page reload for instant paint
-  let pl = _playlistsData.playlists[pl_id];
+  let pl = preloaded || _playlistsData.playlists[pl_id];
   if (!pl) {
     const cached = await _plCache.get(pl_id);
     if (cached) {

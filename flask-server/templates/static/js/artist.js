@@ -35,6 +35,18 @@
 
   async function loadArtist(channelId) {
     if (state._artistLoading) return;
+
+    // ── Preload-nav: consume cached data from navigateWithPreload ──
+    var route = '#artist/' + encodeURIComponent(channelId);
+    var preloaded = window.consumePreload ? window.consumePreload(route) : null;
+    if (preloaded) {
+      state._currentChannelId = channelId;
+      state._cachedArtistData = preloaded;
+      showSkeleton(false);
+      renderAll(preloaded);
+      return;
+    }
+
     if (state._currentChannelId === channelId && state._cachedArtistData) {
       renderAll(state._cachedArtistData);
       return;
@@ -255,7 +267,8 @@
         (sub ? '<div class="hscroll-card-sub">' + escHtml(sub) + '</div>' : '');
       if (type === 'artist' && item.browseId) {
         card.addEventListener('click', function() {
-          window.navigateTo('#artist/' + encodeURIComponent(item.browseId));
+          if (window.preloadNavigateArtist) window.preloadNavigateArtist(item.browseId);
+          else window.navigateTo('#artist/' + encodeURIComponent(item.browseId));
         });
       } else if (type === 'album' && item.browseId) {
         card.addEventListener('click', function(e) {
@@ -270,7 +283,8 @@
               if (window.toast) window.toast('Could not play album', 'error');
             });
           } else {
-            window.navigateTo('#album/' + encodeURIComponent(item.browseId));
+            if (window.preloadNavigateAlbum) window.preloadNavigateAlbum(item.browseId);
+            else window.navigateTo('#album/' + encodeURIComponent(item.browseId));
           }
         });
       }

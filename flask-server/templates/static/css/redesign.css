@@ -31,7 +31,13 @@ body::before {
   z-index: 1000;
 }
 
-/* Warm tint bleeding down from the top of the page (behind the header) */
+/* Warm tint bleeding down from the top of the page (behind the header).
+   Applied to body so it also shows through the transparent collapsed rail
+   (main starts after margin-left and would otherwise leave the rail over
+   the flat #030303 body colour, appearing as a solid opaque black strip). */
+body {
+  background-image: linear-gradient(180deg, rgba(232, 89, 12, .10), transparent 340px);
+}
 main {
   background-image: linear-gradient(180deg, rgba(232, 89, 12, .10), transparent 340px);
 }
@@ -377,6 +383,13 @@ body.results-open .play-section {
   }
   body.rail-collapsed .sidebar {
     width: var(--rail-w-mini);
+    /* BUG 2 FIX: ensure collapsed rail has no opaque background so the
+       body warm-tint gradient bleeds through behind the icon strip. */
+    background: transparent;
+    /* Subtle blur gives icons just enough contrast over any background content
+       without re-introducing an opaque colour. */
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
   }
   /* Text-only chrome has no icon form — hide it in the mini rail. Fade it
      out instead of display:none so it doesn't vanish a frame before the
@@ -406,7 +419,9 @@ body.results-open .play-section {
     margin: 0; 
     padding: 0;
   }
-  /* Brand container keeps fixed height and padding. Text label hides smoothly via width/opacity. */
+  /* Brand container keeps fixed height and padding. Text label and the orange
+     EQ-bar mark both hide smoothly via opacity/max-width so nothing clips
+     through the overflow:hidden container and leaves a stray orange sliver. */
   .sidebar-brand {
     overflow: hidden;
     transition: width .25s ease;
@@ -418,6 +433,14 @@ body.results-open .play-section {
     opacity: 1;
     display: block;
   }
+  /* BUG 1 FIX: the brand-mark (orange EQ bars) must also transition out;
+     without this the mark partially clips through the overflow:hidden brand
+     container producing a stray orange sliver when the rail collapses. */
+  .sidebar-brand-mark {
+    transition: opacity .14s ease, max-width .25s ease, margin .25s ease;
+    max-width: 18px;
+    opacity: 1;
+  }
   body.rail-collapsed .sidebar-brand {
     width: var(--rail-w-mini);
   }
@@ -426,6 +449,12 @@ body.results-open .play-section {
     opacity: 0;
     margin: 0;
     padding: 0;
+  }
+  /* BUG 1 FIX: hide the mark in lockstep with the text label */
+  body.rail-collapsed .sidebar-brand-mark {
+    max-width: 0;
+    opacity: 0;
+    margin: 0;
   }
   /* Smooth open/close */
   main,
@@ -779,6 +808,11 @@ body.results-open .player-section {
   display: grid;
   align-items: center;
   transform: translateY(24px);
+  /* Contain the absolute-positioned progress strip inside the bar.
+     Without this, position:absolute children with top:0 can anchor
+     to the viewport when backdrop-filter creates a new stacking
+     context but not a new containing block in some browsers. */
+  overflow: hidden;
 }
 .player-section.is-visible { transform: none; }
 .player-section.is-collapsed { display: none; }
@@ -977,8 +1011,8 @@ input[type=range]::-moz-range-thumb { border-radius: 50%; }
 .player-section .progress-times { display: none; }
 /* Playbar timer is desktop-only (re-enabled in the ≥900px block) */
 .playbar-time { display: none; }
-/* Keep the strip inside the bar's rounded corners (mobile card) */
-.player-section { overflow: hidden; }
+/* NOTE: overflow:hidden is already set on .player-section base rule above;
+   the duplicate here is intentionally removed to avoid specificity confusion. */
 
 /* Right cluster: YTM link + expand toggle */
 .player-section .player-actions {
