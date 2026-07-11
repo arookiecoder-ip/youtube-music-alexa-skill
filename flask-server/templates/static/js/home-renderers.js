@@ -42,7 +42,7 @@
         
         let playBtnHtml = '';
         if (cap.play) {
-            playBtnHtml = `<button class="home-play-btn" aria-label="Play ${title}"><i class="material-icons">play_arrow</i></button>`;
+            playBtnHtml = `<button class="home-play-btn" aria-label="Play ${title}"><svg viewBox="0 0 24 24" fill="currentColor"><polygon points="7,4 20,12 7,20"/></svg></button>`;
         }
         
         if (layout === 'shortcuts') {
@@ -111,6 +111,17 @@
             playAllHtml = `<button class="home-shelf-play-all" data-shelf-id="${escapeHtml(shelf.id)}">Play all</button>`;
         }
         
+        let scrollBtnsHtml = `
+            <div class="home-shelf-scroll-btns">
+                <button class="home-scroll-btn home-scroll-left" aria-label="Scroll left">
+                    <svg viewBox="0 0 24 24" fill="currentColor"><path d="M15.41 16.59L10.83 12l4.58-4.59L14 6l-6 6 6 6 1.41-1.41z"/></svg>
+                </button>
+                <button class="home-scroll-btn home-scroll-right" aria-label="Scroll right">
+                    <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8.59 16.59L13.17 12 8.59 7.41 10 6l6 6-6 6-1.41-1.41z"/></svg>
+                </button>
+            </div>
+        `;
+        
         return `
             <div class="home-shelf home-layout-${layout}" data-shelf-id="${escapeHtml(shelf.id)}" data-layout="${layout}">
                 <div class="home-shelf-header">
@@ -120,6 +131,7 @@
                     </div>
                     <div class="home-shelf-actions">
                         ${playAllHtml}
+                        ${scrollBtnsHtml}
                     </div>
                 </div>
                 <div class="home-shelf-content">

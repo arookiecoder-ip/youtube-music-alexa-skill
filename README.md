@@ -164,6 +164,30 @@ openssl rand -base64 32 | tr -d '\n'
 A mismatch here is the #1 cause of "401 everywhere" — see
 [Troubleshooting](#troubleshooting).
 
+### YouTube Music Authentication
+
+The new **Home feed** (v2) displays your personalized YouTube Music homepage directly fetched via the unofficial API (`ytmusicapi`). Because this requires identifying who you are to YouTube, you must provide authentication credentials:
+
+- **Browser Headers (`headers_auth.json`)**: This provides the richest experience and is easiest to extract from a logged-in browser session, but it gives **full access** to your Google account. **Warning: DO NOT commit this file to a public repository.** If using this method, simply point `YTMUSIC_AUTH_FILE` to its location.
+  > **How to create `headers_auth.json`**:
+  > 1. Go to [music.youtube.com](https://music.youtube.com) and log in.
+  > 2. Open Developer Tools (F12) and go to the **Network** tab. Refresh the page.
+  > 3. Filter for `browse`, click the first request, and scroll down to **Request Headers**.
+  > 4. Copy the entire string next to the `cookie:` header.
+  > 5. Create a `headers_auth.json` file in your root folder:
+  >    ```json
+  >    {
+  >      "accept": "*/*",
+  >      "accept-language": "en-US,en;q=0.9",
+  >      "content-type": "application/json",
+  >      "cookie": "PASTE_YOUR_COOKIE_STRING_HERE",
+  >      "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+  >    }
+  >    ```
+- **OAuth (`oauth.json`)**: This is much safer as it uses delegated access, but it requires configuring a GCP project. If using OAuth, you must provide `YTMUSIC_OAUTH_CLIENT_ID` and `YTMUSIC_OAUTH_CLIENT_SECRET` in your environment variables, and generate an `oauth.json` file to point `YTMUSIC_AUTH_FILE` at.
+
+**Anonymous / Local Fallback**: If `YTMUSIC_AUTH_FILE` is left unset, the backend will gracefully fall back to fetching unauthenticated, regional recommendations directly from YouTube. You will see generic charts and trending shelves instead of your personalized playlists and shortcuts. Note: there is no Spotify integration; the home feed is powered purely by YouTube Music.
+
 ---
 
 ## Voice commands
@@ -361,7 +385,7 @@ Worst-case leak then exposes an account that can only control your speaker.
 | `/history/`          | GET      | `?limit=…` (default 20, max 100) → recently-listened tracks, newest first  |
 | `/history/`          | DELETE   | clears all listening history                                     |
 | `/history/<video_id>` | DELETE  | removes a single track from history                              |
-| `/recommendations/`  | GET      | `?refresh=1` to bypass the 30-minute cache → mixed personalized + discovery track list for the blank-state screen |
+| `/api/home/`         | GET      | `?refresh=1` & `?filter=all` to bypass the 30-minute cache → full v2 shelf hierarchy (shortcuts, cards, circles, song grids) |
 
 ---
 

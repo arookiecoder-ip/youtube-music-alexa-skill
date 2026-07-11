@@ -164,9 +164,20 @@
     }, true);
 
     rows.addEventListener('click', function(e) {
-      var scrollBtn = e.target.closest('.home-row-scroll');
-      if (scrollBtn) {
-          // Add shelf scrolling logic if arrows are introduced in home-renderers
+      var scrollLeftBtn = e.target.closest('.home-scroll-left');
+      var scrollRightBtn = e.target.closest('.home-scroll-right');
+      if (scrollLeftBtn || scrollRightBtn) {
+          var shelf = (scrollLeftBtn || scrollRightBtn).closest('.home-shelf');
+          if (shelf) {
+              var content = shelf.querySelector('.home-shelf-content');
+              if (content) {
+                  var scrollAmount = content.clientWidth * 0.8;
+                  content.scrollBy({
+                      left: scrollLeftBtn ? -scrollAmount : scrollAmount,
+                      behavior: 'smooth'
+                  });
+              }
+          }
           return;
       }
 

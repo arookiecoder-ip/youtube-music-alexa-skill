@@ -230,13 +230,19 @@ def normalize_local_playlist(item):
     pl_id = item.get("id")
     if not pl_id:
         return None
+        
+    thumbnail_url = ""
+    tracks = item.get("tracks", [])
+    if tracks and len(tracks) > 0:
+        thumbnail_url = tracks[0].get("thumbnail", "")
+
     return {
         "kind": "playlist",
         "key": f"local_playlist_{pl_id}",
         "title": item.get("name", ""),
         "subtitle": "Local Playlist",
-        "image": "",
-        "images": [],
+        "image": thumbnail_url,
+        "images": [{"url": thumbnail_url}] if thumbnail_url else [],
         "playlistId": pl_id,
         "target": _construct_target("playlist", pl_id),
         "play": _construct_play("playlist", playlist_id=pl_id),
@@ -254,7 +260,7 @@ def _build_shelf(shelf_id, title, layout, source_name, items, filters=None):
         return None
     items = items[:MAX_ITEMS_PER_SHELF]
     # actions
-    play_all = any(i.get('capabilities', {}).get('play') for i in items)
+    play_all = any(i.get('play', {}).get('videoId') for i in items)
     
     return {
         "id": shelf_id,
