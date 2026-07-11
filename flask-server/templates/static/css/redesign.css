@@ -401,7 +401,7 @@ body.results-open .play-section {
     visibility: hidden;
   }
   body.rail-collapsed .sidebar-library { opacity: 1; visibility: visible; padding-top: 8px; border-top: 0; }
-  body.rail-collapsed .sidebar-new-playlist-container { display: none !important; }
+  body.rail-collapsed .sidebar-new-playlist-container { visibility: hidden !important; }
   body.rail-collapsed .sidebar-playlist-list { padding: 0; overflow-x: hidden; }
   body.rail-collapsed .sidebar-playlist-item {
     width: 28px;
@@ -425,12 +425,17 @@ body.results-open .play-section {
   .sidebar-brand-mark,
   .sidebar-brand strong { transition: opacity .14s ease; }
   body.rail-collapsed .sidebar-brand {
-    width: 172px;
-    padding: 0 4px;
+    padding: 0;
+    margin: 0 auto 14px auto;
+    width: 38px;
+    min-height: 42px;
+    justify-content: center;
   }
   body.rail-collapsed .sidebar-brand-mark,
   body.rail-collapsed .sidebar-brand strong {
-    opacity: 1;
+    opacity: 0;
+    visibility: hidden;
+    position: absolute;
   }
   /* Smooth open/close */
   main,
@@ -1819,6 +1824,8 @@ body.results-open .player-section {
   display: flex;
   height: calc(100dvh - var(--topbar-h) - var(--playbar-h) - 8px);
   overflow: hidden;
+  position: relative;
+  isolation: isolate;
 }
 
 /* Desktop: the now-playing view is an overlay layer that slides up from the
@@ -1855,7 +1862,7 @@ body.results-open .player-section {
                 visibility 0s linear 0s,
                 left .25s ease;
   }
-  .np-page { height: 100%; }
+  .np-page { height: 100%; position: relative; isolation: isolate; overflow: hidden; }
 }
 
 /* ---- Left: album art + meta ---- */
@@ -1871,7 +1878,7 @@ body.results-open .player-section {
   position: relative;
   isolation: isolate;
 }
-.np-page-left::before {
+.np-page::before {
   content: '';
   position: absolute;
   inset: -70px;
@@ -1882,7 +1889,7 @@ body.results-open .player-section {
   transform: scale(1.12);
   transition: background-image .35s ease;
 }
-.np-page-left::after {
+.np-page::after {
   content: '';
   position: absolute;
   inset: 0;
@@ -1903,9 +1910,36 @@ body.results-open .player-section {
   color: var(--border);
   flex: none;
   transition: box-shadow .4s ease;
+  position: relative;
+  overflow: hidden;
+  cursor: pointer;
 }
-.np-page-art.has-thumb svg { display: none; }
+.np-page-art.has-thumb svg:not(.np-page-art-overlay svg) { display: none; }
 .np-page-art.has-thumb { box-shadow: 0 32px 80px rgba(0,0,0,.75); }
+
+.np-page-art-overlay {
+  position: absolute;
+  inset: 0;
+  background: rgba(0,0,0,0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  transition: opacity 0.2s ease, background 0.2s ease;
+  z-index: 10;
+}
+.np-page-art:hover .np-page-art-overlay {
+  opacity: 1;
+}
+.np-page-art-overlay svg {
+  width: 64px;
+  height: 64px;
+  color: #fff;
+  transition: transform 0.15s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+.np-page-art-overlay:active svg {
+  transform: scale(0.85);
+}
 
 .np-page-meta {
   text-align: center;

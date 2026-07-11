@@ -88,6 +88,39 @@
   .progress-track.dragging .progress-handle { transition: none; }
   .progress-track.dragging .progress-handle,
   .progress-track:focus-visible .progress-handle { opacity: 1; }
+
+  .progress-tooltip {
+    position: absolute;
+    bottom: calc(100% + 10px);
+    left: 0;
+    transform: translateX(-50%);
+    background: #333;
+    color: #fff;
+    padding: 4px 6px;
+    border-radius: 4px;
+    font-size: 11px;
+    font-weight: 500;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.15s;
+    white-space: nowrap;
+    z-index: 10;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.4);
+  }
+  .progress-track:hover .progress-tooltip,
+  .progress-track.dragging .progress-tooltip {
+    opacity: 1;
+  }
+  .progress-tooltip::after {
+    content: '';
+    position: absolute;
+    top: 100%;
+    left: 50%;
+    transform: translateX(-50%);
+    border-width: 4px;
+    border-style: solid;
+    border-color: #333 transparent transparent transparent;
+  }
   .progress-track:focus-visible { outline: none; }
   .progress-times {
     display: flex;

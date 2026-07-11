@@ -295,6 +295,7 @@
            aria-valuemin="0" aria-valuemax="0" aria-valuenow="0">
         <div class="progress-fill" id="progress-fill"></div>
         <div class="progress-handle" id="progress-handle"></div>
+        <div class="progress-tooltip" id="progress-tooltip">0:00</div>
       </div>
       <div class="progress-times">
         <span id="progress-elapsed">0:00</span>
@@ -367,31 +368,8 @@
   </section>
   </div><!-- /.left-col -->
 
-  <!-- Search results (paged, 10 per page) — right column on desktop -->
-  <section id="results-section" hidden>
-    <div class="section-head">
-      <div class="label">Results</div>
-    </div>
-    <div class="results-tabs" id="results-tabs">
-      <button class="results-tab active" data-category="songs">Songs</button>
-      <button class="results-tab" data-category="artists">Artists</button>
-      <button class="results-tab" data-category="albums">Albums</button>
-      <button class="results-tab" data-category="playlists">Playlists</button>
-    </div>
-    <div class="results-count" id="results-count"></div>
-    <div class="results-list" id="results-list"></div>
-    <div class="results-pager">
-      <button id="results-prev">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><polyline points="15 18 9 12 15 6"/></svg>
-        Prev
-      </button>
-      <span class="results-page-label" id="results-page-label"></span>
-      <button id="results-next">
-        Next
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><polyline points="9 18 15 12 9 6"/></svg>
-      </button>
-    </div>
-  </section>
+  <!-- Search results -->
+  <!-- Search results are injected directly here -->
 
   <!-- Queue -->
   <section class="needs-login" id="queue-section" hidden>
@@ -399,6 +377,14 @@
     <div class="queue-section" id="queue-list"></div>
   </section>
   </div><!-- /.layout -->
+
+  <!-- Search results (unified view) -->
+  <section id="results-section" hidden>
+    <div class="section-head">
+      <div class="label">Results</div>
+    </div>
+    <div class="results-list" id="results-list"></div>
+  </section>
 
   <!-- Recommended for you: full-width tile grid (direct child of main so it can
        span the viewport edge-to-edge, independent of .layout's width). Shown on
@@ -478,6 +464,10 @@
           <svg width="64" height="64" viewBox="0 0 24 24" fill="currentColor">
             <path d="M12 3v10.55A4 4 0 1 0 14 17V7h4V3h-6z"/>
           </svg>
+          <div class="np-page-art-overlay" id="np-page-art-overlay" title="Play/Pause">
+            <svg class="np-play-icon" viewBox="0 0 24 24" fill="currentColor"><polygon points="8,5 19,12 8,19"/></svg>
+            <svg class="np-pause-icon" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="5" width="4" height="14"/><rect x="14" y="5" width="4" height="14"/></svg>
+          </div>
         </div>
         <div class="np-page-meta">
           <div class="np-page-title" id="np-page-title">Nothing is playing</div>
@@ -831,6 +821,7 @@
         <div class="progress-track" id="mp-progress-track">
           <div class="progress-fill" id="mp-progress-fill"></div>
           <div class="progress-handle" id="mp-progress-handle"></div>
+          <div class="progress-tooltip" id="mp-progress-tooltip">0:00</div>
         </div>
         <div class="progress-times">
           <span id="mp-progress-elapsed">0:00</span>

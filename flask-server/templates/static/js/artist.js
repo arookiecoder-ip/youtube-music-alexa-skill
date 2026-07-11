@@ -70,15 +70,89 @@
   function renderHero(artist) {
     var container = document.getElementById('artist-hero');
     if (!container) return;
-    var thumbHtml = '';
     var thumbs = artist.thumbnails || [];
     var thumbUrl = thumbs.length ? (thumbs[thumbs.length - 1].url || '') : '';
+    
     if (thumbUrl) {
-      thumbHtml = '<img src="' + escHtml(thumbUrl) + '" alt="" loading="lazy">';
+      container.style.backgroundImage = 'url(' + escHtml(thumbUrl) + ')';
+      container.style.background = ''; // Allow CSS to handle background sizing
+      container.style.backgroundImage = 'url(' + escHtml(thumbUrl) + ')';
+    } else {
+      container.style.backgroundImage = 'none';
+      container.style.background = 'var(--surface)';
     }
-    container.innerHTML =
-      (thumbHtml || '<div style="width:180px;height:180px;border-radius:50%;background:var(--surface);display:flex;align-items:center;justify-content:center;color:var(--muted);margin-bottom:var(--space-3)"><svg width="40" height="40" viewBox="0 0 24 24" fill="currentColor"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg></div>') +
-      '<div class="artist-hero-name">' + escHtml(artist.name || '') + '</div>';
+
+    var desc = artist.description || '';
+    var subText = artist.subscribers || '';
+    
+    container.innerHTML = `
+      <div class="artist-hero-content">
+        <div class="artist-hero-name">${escHtml(artist.name || '')}</div>
+        ${desc ? `
+          <div class="artist-hero-desc-container">
+            <div class="artist-hero-desc collapsed" id="artist-hero-desc">${escHtml(desc)}</div>
+            ${desc.length > 150 ? '<div class="artist-hero-desc-more" id="artist-hero-more">MORE</div>' : ''}
+          </div>
+        ` : ''}
+        <div class="artist-hero-actions">
+          <button class="artist-action-btn primary" id="artist-btn-shuffle">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 3 21 3 21 8"></polyline><line x1="4" y1="20" x2="21" y2="3"></line><polyline points="21 16 21 21 16 21"></polyline><line x1="15" y1="15" x2="21" y2="21"></line><line x1="4" y1="4" x2="9" y2="9"></line></svg>
+            Shuffle
+          </button>
+          <button class="artist-action-btn secondary" id="artist-btn-mix">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="2"></circle><path d="M16.24 7.76a6 6 0 0 1 0 8.49m-8.48-.01a6 6 0 0 1 0-8.49m11.31-2.82a10 10 0 0 1 0 14.14m-14.14 0a10 10 0 0 1 0-14.14"></path></svg>
+            Mix
+          </button>
+          <button class="artist-action-menu">
+            <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg>
+          </button>
+        </div>
+      </div>
+    `;
+
+    var moreBtn = document.getElementById('artist-hero-more');
+    if (moreBtn) {
+      moreBtn.addEventListener('click', function() {
+        var d = document.getElementById('artist-hero-desc');
+        if (d.classList.contains('collapsed')) {
+          d.classList.remove('collapsed');
+          moreBtn.textContent = 'LESS';
+        } else {
+          d.classList.add('collapsed');
+          moreBtn.textContent = 'MORE';
+        }
+      });
+    }
+
+    var shuffleBtn = document.getElementById('artist-btn-shuffle');
+    if (shuffleBtn) {
+      shuffleBtn.addEventListener('click', function() {
+        if (!state._cachedArtistData || !state._cachedArtistData.topSongs || !state._cachedArtistData.topSongs.length) return;
+        var firstSong = state._cachedArtistData.topSongs[0];
+        if (state._cachedArtistData.topSongsBrowseId && window.playFromQueue) {
+          window.playFromQueue(firstSong, state._cachedArtistData.topSongsBrowseId);
+          setTimeout(function() {
+            window.api('/alexa/shuffle_queue/', {}).catch(function(){});
+            var mainShuffle = document.getElementById('shuffle-btn');
+            if (mainShuffle) mainShuffle.classList.add('shuffle-active');
+            if (window.toast) window.toast('Artist shuffled', 'ok');
+          }, 1500);
+        } else if (window.playResult) {
+          window.playResult(firstSong, false, true);
+        }
+      });
+    }
+
+    var mixBtn = document.getElementById('artist-btn-mix');
+    if (mixBtn) {
+      mixBtn.addEventListener('click', function() {
+        if (!state._cachedArtistData || !state._cachedArtistData.topSongs || !state._cachedArtistData.topSongs.length) return;
+        var firstSong = state._cachedArtistData.topSongs[0];
+        if (window.playResult) {
+          window.playResult(firstSong, false, true);
+        }
+      });
+    }
   }
 
   function renderTopSongs(songs, browseId) {

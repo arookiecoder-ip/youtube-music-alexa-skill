@@ -54,7 +54,7 @@
     touch-action: pan-y;
   }
   .queue-item:hover { background: #1a1a1a; }
-  .queue-item:active { transform: scale(.99); }
+  .queue-item:active { /* transform removed */ }
   .queue-item.active {
     border-left-color: var(--accent);
     background: #1a1a1a;

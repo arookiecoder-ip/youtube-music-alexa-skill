@@ -205,13 +205,31 @@
       }
 
       var titleLink = e.target.closest('.recs-tile-title');
-      if (titleLink) {
+      var art = e.target.closest('.home-card-art');
+      var playBtn = e.target.closest('.home-play-btn');
+
+      if (playBtn) {
         e.stopPropagation();
-        var titleCard = titleLink.closest('.home-card');
+        var card = playBtn.closest('.home-card');
+        if (!card || !rows.contains(card) || !card.dataset.videoId) return;
+        if (!window.playFromQueue) return;
+        window.playFromQueue({
+          video_id: card.dataset.videoId,
+          title: card.dataset.title || '',
+          artist: card.dataset.artist || '',
+          thumbnail: card.dataset.thumb || '',
+        });
+        return;
+      }
+
+      if (titleLink || art) {
+        e.stopPropagation();
+        var titleCard = (titleLink || art).closest('.home-card');
+        var linkEl = titleLink || art;
         if (titleCard && titleCard.dataset.albumId) {
           window.navigateTo('#album/' + encodeURIComponent(titleCard.dataset.albumId));
         } else if (titleCard && titleCard.dataset.videoId) {
-          titleLink.classList.add('is-resolving');
+          linkEl.classList.add('is-resolving');
           var lookup = '/api/song/' + encodeURIComponent(titleCard.dataset.videoId) + '/album' +
             '?title=' + encodeURIComponent(titleCard.dataset.title || '') +
             '&artist=' + encodeURIComponent(titleCard.dataset.artist || '');
@@ -222,22 +240,11 @@
           }).catch(function(err) {
             if (window.toast) window.toast(err.message || 'Could not open album', 'error');
           }).finally(function() {
-            titleLink.classList.remove('is-resolving');
+            linkEl.classList.remove('is-resolving');
           });
         }
         return;
       }
-
-      var art = e.target.closest('.home-card-art');
-      var card = art && art.closest('.home-card');
-      if (!card || !rows.contains(card) || !card.dataset.videoId) return;
-      if (!window.playFromQueue) return;
-      window.playFromQueue({
-        video_id: card.dataset.videoId,
-        title: card.dataset.title || '',
-        artist: card.dataset.artist || '',
-        thumbnail: card.dataset.thumb || '',
-      });
     });
   }
 

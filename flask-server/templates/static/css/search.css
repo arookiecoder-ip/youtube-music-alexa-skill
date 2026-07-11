@@ -160,7 +160,7 @@
     touch-action: pan-y;
   }
   .result-swipe-wrapper .result-item-inner:hover { background: #1a1a1a; }
-  .result-swipe-wrapper .result-item-inner:active { transform: scale(.99); }
+  .result-swipe-wrapper .result-item-inner:active { /* transform removed */ }
   .result-swipe-wrapper .result-item-inner.active {
     border-left-color: var(--accent);
     background: #1a1a1a;

@@ -113,42 +113,11 @@ function _categoryTitle(item, cat) {
   return '';
 }
 
-function _categorySubtitle(item, cat) {
-  if (cat === 'artists') return 'Artist';
-  if (cat === 'albums') return (item.artist || '') + (item.year ? ' - ' + item.year : '');
-  if (cat === 'playlists') return (item.track_count || '?') + ' tracks - ' + (item.owner || '');
-  return '';
-}
-
-function renderResults() {
-  const list = document.getElementById('results-list');
-  const category = state._activeCategory;
-  const items = state._searchCategorized[category] || [];
-  const totalPages = Math.max(1, Math.ceil(items.length / RESULTS_PER_PAGE));
-  let page = state._resultsPage[category] || 0;
-  page = Math.min(Math.max(0, page), totalPages - 1);
-  state._resultsPage[category] = page;
-  const start = page * RESULTS_PER_PAGE;
-  const pageItems = items.slice(start, start + RESULTS_PER_PAGE);
-  // Transplant already-loaded thumbnails for videos that also appear on the
-  // new page (e.g. paging back and forth) so their <img> doesn't re-fetch
-  // and flash blank/reload.
-  const existingThumbsById = new Map();
-  for (const w of list.children) {
-    const id = w.dataset.videoId || '';
-    const img = w.querySelector('img.result-thumb.loaded');
-    if (id && img && !existingThumbsById.has(id)) existingThumbsById.set(id, img);
-  }
-  // Close any open more-menu when re-rendering
-  _closeAllMoreMenus();
-  const newChildren = [];
-  if (category === 'songs') {
-  pageItems.forEach((item) => {
+function _createSongElement(item, existingThumbsById) {
     const wrapper = document.createElement('div');
     wrapper.className = 'result-swipe-wrapper';
     wrapper.dataset.videoId = item.video_id;
 
-    // Swipe underlays (mobile only, hidden via CSS on desktop)
     wrapper.innerHTML = `
       <div class="result-swipe-underlay underlay-play-next">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
@@ -160,12 +129,11 @@ function renderResults() {
       </div>
     `;
 
-    // Inner content
     const isCurrent = item.video_id === state._currentVideoId;
     const inner = document.createElement('div');
     inner.className = 'result-item-inner' + (isCurrent ? ' active' : '');
 
-    const reusableImg = item.thumbnail && existingThumbsById.get(item.video_id);
+    const reusableImg = item.thumbnail && existingThumbsById && existingThumbsById.get(item.video_id);
     const sameUrl = reusableImg && reusableImg.src === item.thumbnail;
     const thumbHtml = sameUrl
       ? `<div class="result-thumb-slot"></div>`
@@ -173,11 +141,9 @@ function renderResults() {
         ? `<img class="result-thumb" src="${escHtml(item.thumbnail)}" alt="" loading="lazy" onload="this.classList.add('loaded')">`
         : `<div class="result-thumb"></div>`;
 
-    // SVG icons for buttons (inline to avoid extra network requests)
     const queueAddSvg = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>`;
     const moreSvg = `<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg>`;
 
-    // Check if liked
     const isLiked = typeof _playlistsData !== 'undefined' && _playlistsData.liked_songs && _playlistsData.liked_songs.includes(item.video_id);
     const heartSvg = isLiked 
       ? `<svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg>`
@@ -213,28 +179,22 @@ function renderResults() {
     `;
 
     if (sameUrl) inner.querySelector('.result-thumb-slot').replaceWith(reusableImg);
-
     wrapper.appendChild(inner);
 
-    // Tap on the main area → play the result. Highlight immediately so the
-    // tap feedback doesn't wait on the server round-trip in playResult.
     attachQueueItemTap(inner, () => {
-      for (const other of list.querySelectorAll('.result-item-inner.active')) other.classList.remove('active');
+      for (const other of wrapper.parentElement.querySelectorAll('.result-item-inner.active')) other.classList.remove('active');
       inner.classList.add('active');
       playResult(item);
     });
 
-    // Mobile: queue-add icon tap → add to queue (last)
     const qBtn = inner.querySelector('.result-queue-btn');
     qBtn.addEventListener('click', (e) => {
       e.stopPropagation();
       addToQueue(item, 'last');
     });
 
-    // Desktop: more-options button
     const moreBtn = inner.querySelector('.result-more-btn');
     const moreMenu = inner.querySelector('.result-more-menu');
-    // Prevent document click handler from closing menu when clicking inside it
     moreMenu.addEventListener('click', (e) => e.stopPropagation());
     moreBtn.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -242,130 +202,157 @@ function renderResults() {
       _closeAllMoreMenus();
       if (!wasOpen) {
         moreBtn.classList.add('open');
-        // Position the menu using fixed coords so it escapes the swipe row's clipping
         const rect = moreBtn.getBoundingClientRect();
-        const menuHeight = 88; // approximate height of two option rows
+        const menuHeight = 88;
         const spaceBelow = window.innerHeight - rect.bottom;
         const openAbove = spaceBelow < menuHeight + 8;
         moreMenu.style.left = '';
-        moreMenu.style.top = '';
-        moreMenu.style.bottom = '';
-        moreMenu.style.right = '';
+        moreMenu.style.right = '40px';
         if (openAbove) {
-          moreMenu.classList.add('above');
+          moreMenu.style.top = 'auto';
           moreMenu.style.bottom = (window.innerHeight - rect.top + 4) + 'px';
         } else {
-          moreMenu.classList.remove('above');
           moreMenu.style.top = (rect.bottom + 4) + 'px';
+          moreMenu.style.bottom = 'auto';
         }
-        // Align right edge of menu with right edge of button
-        const menuWidth = 180;
-        let left = rect.right - menuWidth;
-        if (left < 8) left = 8;
-        moreMenu.style.left = left + 'px';
-        moreMenu.classList.add('open');
-        // Portal the menu to <body> while open (see queue menu note: fixed
-        // elements inside overflow-hidden rows in a scrollable list aren't
-        // reliably clickable in Chromium). _closeAllMoreMenus returns it.
-        moreMenu._home = inner;
+        moreMenu._home = wrapper;
         document.body.appendChild(moreMenu);
+        void moreMenu.offsetWidth;
+        moreMenu.classList.add('open');
       }
     });
-    // Right-click anywhere on the row opens the same more-options menu
-    inner.addEventListener('contextmenu', (e) => {
-      e.preventDefault();
-      e.stopPropagation();
-      moreBtn.click();
-    });
-    moreMenu.querySelector('[data-action="play-next"]').addEventListener('click', (e) => {
-      e.stopPropagation();
-      _closeAllMoreMenus();
-      addToQueue(item, 'next');
-    });
-    moreMenu.querySelector('[data-action="add-to-queue"]').addEventListener('click', (e) => {
-      e.stopPropagation();
-      _closeAllMoreMenus();
-      addToQueue(item, 'last');
-    });
-    moreMenu.querySelector('[data-action="play-radio"]').addEventListener('click', (e) => {
-      e.stopPropagation();
-      _closeAllMoreMenus();
-      // force_radio=true: build a fresh queue seeded from this track instead
-      // of whatever queue currently exists (same as the queue's own Play
-      // Radio option).
-      playResult(item, false, true);
-    });
-    const saveOpt = moreMenu.querySelector('[data-action="save-playlist"]');
-    if (saveOpt) {
-      saveOpt.addEventListener('click', (e) => {
-        e.stopPropagation();
-        _closeAllMoreMenus();
-        openAddToPlaylistModal(item);
-      });
+
+    return wrapper;
+}
+
+function renderResults() {
+  const list = document.getElementById('results-list');
+  const data = state._searchCategorized || {};
+  
+  const existingThumbsById = new Map();
+  for (const img of list.querySelectorAll('img.result-thumb.loaded')) {
+    const w = img.closest('.result-swipe-wrapper');
+    if (w && w.dataset.videoId && !existingThumbsById.has(w.dataset.videoId)) {
+      existingThumbsById.set(w.dataset.videoId, img);
     }
+  }
 
-    const likeBtn = inner.querySelector('.result-like-btn');
-    if (likeBtn) {
-      likeBtn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        toggleLike(item, likeBtn);
-      });
-    }
+  list.innerHTML = '';
+  _closeAllMoreMenus();
 
-    // Mobile: attach swipe gesture
-    _attachSwipeGesture(wrapper, inner, item);
+  const newChildren = [];
 
-    newChildren.push(wrapper);
-  });
-  } else {
-    pageItems.forEach((item) => {
-      const wrapper = document.createElement('div');
-      wrapper.className = 'result-swipe-wrapper';
-      const inner = document.createElement('div');
-      inner.className = 'result-item-inner';
-      const thumbUrl = item.thumbnail || '';
-      const roundThumb = category === 'artists';
-      inner.innerHTML = `
-        ${thumbUrl ? `<img class="result-thumb${roundThumb ? ' result-thumb-round' : ''}" src="${escHtml(thumbUrl)}" alt="" loading="lazy" onload="this.classList.add('loaded')">` : '<div class="result-thumb"></div>'}
-        <div class="result-info">
-          <div class="result-title">${escHtml(_categoryTitle(item, category))}</div>
-          <div class="result-artist">${escHtml(_categorySubtitle(item, category))}</div>
-        </div>
-      `;
-      // Artist rows open the artist page (nothing happened on click before).
-      if (category === 'artists' && item.browse_id) {
-        inner.classList.add('result-item-link');
-        inner.addEventListener('click', () => {
-          window.navigateTo('#artist/' + encodeURIComponent(item.browse_id));
-        });
-      } else if (category === 'albums' && item.browse_id) {
-        inner.classList.add('result-item-link');
-        inner.addEventListener('click', () => {
-          window.navigateTo('#album/' + encodeURIComponent(item.browse_id));
-        });
-      }
-      wrapper.appendChild(inner);
-      newChildren.push(wrapper);
+  if (data.songs && data.songs.length) {
+    const head = document.createElement('div');
+    head.className = 'section-head';
+    head.innerHTML = '<div class="label">Songs</div>';
+    list.appendChild(head);
+    
+    data.songs.slice(0, 10).forEach(item => {
+      list.appendChild(_createSongElement(item, existingThumbsById));
     });
   }
-  list.replaceChildren(...newChildren);
-  updateCountLabel();
-  document.getElementById('results-page-label').textContent =
-    'Page ' + (page + 1) + ' of ' + totalPages;
-  document.getElementById('results-prev').disabled = page <= 0;
-  document.getElementById('results-next').disabled = page >= totalPages - 1;
+
+  function renderSearchRow(title, items, type) {
+    if (!items || !items.length) return;
+    const section = document.createElement('div');
+    section.className = 'hscroll-section';
+    section.style.marginTop = 'var(--space-5)';
+    
+    section.innerHTML = `
+      <div class="section-head">
+        <div class="label">${escHtml(title)}</div>
+        <div class="hscroll-controls">
+          <button type="button" class="hscroll-scroll hscroll-scroll-prev" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg></button>
+          <button type="button" class="hscroll-scroll hscroll-scroll-next"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg></button>
+        </div>
+      </div>
+      <div class="hscroll-track"></div>
+    `;
+    
+    const track = section.querySelector('.hscroll-track');
+    const playBtnHtml = '<button type="button" class="hscroll-play-btn" title="Play"><svg viewBox="0 0 24 24" fill="currentColor"><polygon points="8,5 19,12 8,19"/></svg></button>';
+    const isAlbumOrPlaylist = type === 'album' || type === 'playlist';
+
+    items.forEach(item => {
+      const card = document.createElement('div');
+      card.className = 'hscroll-card';
+      if (type === 'artist') {
+        card.dataset.channelId = item.browseId;
+      } else if (type === 'album') {
+        card.dataset.albumId = item.browseId;
+        card.dataset.videoId = item.video_id || ''; // Wait, album has no video_id?
+      } else if (type === 'playlist') {
+        card.dataset.playlistId = item.browseId;
+      }
+      card.dataset.title = item.title || item.name || '';
+      
+      const thumb = item.thumbnails && item.thumbnails.length ? item.thumbnails[item.thumbnails.length - 1].url : item.thumbnail || '';
+      const thumbHtml = thumb ? `<img src="${escHtml(thumb)}" alt="" loading="lazy" onload="this.classList.add('loaded')">` : '';
+      
+      const subtitle = (item.artist || item.owner || item.year || '');
+      const subtitleHtml = subtitle ? `<div class="hscroll-card-artist">${escHtml(subtitle)}</div>` : '';
+      
+      const artClass = type === 'artist' ? 'hscroll-card-art round' : 'hscroll-card-art';
+
+      card.innerHTML = `
+        <div class="${artClass}">${thumbHtml}${isAlbumOrPlaylist ? playBtnHtml : ''}</div>
+        <div class="hscroll-card-title">${escHtml(item.title || item.name || '')}</div>
+        ${subtitleHtml}
+      `;
+
+      card.addEventListener('click', (e) => {
+        if (e.target.closest('.hscroll-play-btn') && isAlbumOrPlaylist) {
+           e.stopPropagation();
+           // Play it. If album/playlist, we need to fetch tracks and play first
+           // Or just use window.playFromQueue if it has video_id
+           // Wait, artist.js does this differently.
+           // For simplicity, just use the api lookup if it's an album
+           if (type === 'album') {
+               window.api('/api/album/' + encodeURIComponent(item.browseId)).then(function(albumData) {
+                 if (albumData && albumData.tracks && albumData.tracks.length && window.playFromQueue) {
+                   window.playFromQueue(albumData.tracks[0], item.browseId);
+                 }
+               });
+           } else if (type === 'playlist') {
+               window.api('/api/playlists/' + encodeURIComponent(item.browseId)).then(function(playlistData) {
+                 if (playlistData && playlistData.tracks && playlistData.tracks.length && window.playFromQueue) {
+                   window.playFromQueue(playlistData.tracks[0], item.browseId);
+                 }
+               });
+           }
+        } else {
+           if (type === 'artist') window.navigateTo('#artist/' + encodeURIComponent(item.browseId));
+           else if (type === 'album') window.navigateTo('#album/' + encodeURIComponent(item.browseId));
+           else if (type === 'playlist') window.navigateTo('#playlist/' + encodeURIComponent(item.browseId));
+        }
+      });
+      track.appendChild(card);
+    });
+
+    // Add scroll listeners
+    const btnPrev = section.querySelector('.hscroll-scroll-prev');
+    const btnNext = section.querySelector('.hscroll-scroll-next');
+    function updateHscrollBtns() {
+      const maxScroll = track.scrollWidth - track.clientWidth;
+      btnPrev.disabled = track.scrollLeft <= 5;
+      btnNext.disabled = track.scrollLeft >= maxScroll - 5;
+    }
+    track.addEventListener('scroll', updateHscrollBtns, { passive: true });
+    window.addEventListener('resize', updateHscrollBtns, { passive: true });
+    btnPrev.addEventListener('click', () => track.scrollBy({ left: -track.clientWidth * 0.8, behavior: 'smooth' }));
+    btnNext.addEventListener('click', () => track.scrollBy({ left: track.clientWidth * 0.8, behavior: 'smooth' }));
+    setTimeout(updateHscrollBtns, 100);
+
+    list.appendChild(section);
+  }
+
+  renderSearchRow('Artists', data.artists, 'artist');
+  renderSearchRow('Albums', data.albums, 'album');
+  renderSearchRow('Playlists', data.playlists, 'playlist');
 }
 
-function updateCountLabel() {
-  const cat = state._activeCategory;
-  const items = state._searchCategorized[cat] || [];
-  const allTotal = (state._searchCategorized.songs?.length || 0) +
-                   (state._searchCategorized.artists?.length || 0) +
-                   (state._searchCategorized.albums?.length || 0) +
-                   (state._searchCategorized.playlists?.length || 0);
-  const el = document.getElementById('results-count');
-  if (el) el.textContent = 'Showing ' + items.length + ' of ' + allTotal + ' results';
-}
+// Removing updateCountLabel completely, we don't need it.
 
 // Close all open more-menus
 function _closeAllMoreMenus() {

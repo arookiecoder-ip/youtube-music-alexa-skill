@@ -32,9 +32,12 @@ const deviceEl = document.getElementById('device');
 const volumeEl = document.getElementById('volume');
 
 function syncPlayPause() {
-  for (const btn of [document.getElementById('pp-btn'), document.getElementById('mini-pp'), document.getElementById('mp-pp-btn')]) {
-    btn.querySelector('.icon-play').style.display = state.isPlaying ? 'none' : '';
-    btn.querySelector('.icon-pause').style.display = state.isPlaying ? '' : 'none';
+  for (const btn of [document.getElementById('pp-btn'), document.getElementById('mini-pp'), document.getElementById('mp-pp-btn'), document.getElementById('np-page-art-overlay')]) {
+    if (!btn) continue;
+    const p = btn.querySelector('.icon-play');
+    if (p) p.style.display = state.isPlaying ? 'none' : '';
+    const pa = btn.querySelector('.icon-pause');
+    if (pa) pa.style.display = state.isPlaying ? '' : 'none';
     btn.title = state.isPlaying ? 'Pause' : 'Play';
   }
 }
@@ -124,7 +127,7 @@ function showNowPlaying(info) {
           if (npPageArt) {
             npPageArt.style.backgroundImage = url;
             npPageArt.classList.add('has-thumb');
-            npPageArt.parentElement.style.setProperty('--np-cover', url);
+            npPageArt.parentElement.parentElement.style.setProperty('--np-cover', url);
           }
         }
       };
@@ -139,7 +142,7 @@ function showNowPlaying(info) {
       if (npPageArt) {
         npPageArt.style.backgroundImage = '';
         npPageArt.classList.remove('has-thumb');
-        npPageArt.parentElement.style.removeProperty('--np-cover');
+        npPageArt.parentElement.parentElement.style.removeProperty('--np-cover');
       }
     }
     // Track video_id for the URL button. Clear it when the new track's id is
@@ -427,7 +430,6 @@ const progress = window.progress = (function () {
     syncLoop();
     paint();
   }
-
   // ---- drag to seek (fires on release) ----
   function seekLimitMs() {
     return durationMs || Math.max(FALLBACK_SEEK_MS, livePosition() + 60 * 1000);
@@ -439,6 +441,19 @@ const progress = window.progress = (function () {
     const frac = Math.min(1, Math.max(0, x / rect.width));
     return frac;
   }
+  function updateTooltip(e, tTrack) {
+    const tooltip = tTrack.querySelector('.progress-tooltip');
+    if (!tooltip) return;
+    const rect = tTrack.getBoundingClientRect();
+    const xClamped = Math.max(0, Math.min(rect.width, (e.touches ? e.touches[0].clientX : e.clientX) - rect.left));
+    const frac = xClamped / rect.width;
+    const ms = frac * seekLimitMs();
+    tooltip.style.left = xClamped + 'px';
+    tooltip.textContent = fmt(Math.round(ms));
+  }
+  function handleTooltipMove(e) {
+    updateTooltip(e, e.currentTarget);
+  }
   function beginDrag(e) {
     if (awaitingStart) return;
     // Track which progress-track was touched
@@ -447,12 +462,14 @@ const progress = window.progress = (function () {
     _activeTrack.classList.add('dragging');
     dragMs = posFromEvent(e) * seekLimitMs();
     paint();
+    updateTooltip(e, _activeTrack);
     e.preventDefault();
   }
   function moveDrag(e) {
     if (!dragging) return;
     dragMs = posFromEvent(e) * seekLimitMs();
     paint();
+    updateTooltip(e, _activeTrack);
     e.preventDefault();
   }
   async function endDrag(e) {
@@ -491,11 +508,15 @@ const progress = window.progress = (function () {
 
   track.addEventListener('mousedown', beginDrag);
   track.addEventListener('touchstart', beginDrag, { passive: false });
+  track.addEventListener('mousemove', handleTooltipMove);
+  track.addEventListener('touchmove', handleTooltipMove, { passive: true });
   // Also bind the mini popup progress track
   const mpTrack = document.getElementById('mp-progress-track');
   if (mpTrack) {
     mpTrack.addEventListener('mousedown', beginDrag);
     mpTrack.addEventListener('touchstart', beginDrag, { passive: false });
+    mpTrack.addEventListener('mousemove', handleTooltipMove);
+    mpTrack.addEventListener('touchmove', handleTooltipMove, { passive: true });
   }
   // Global move/end handlers work for both tracks
   window.addEventListener('mousemove', moveDrag);
@@ -872,6 +893,14 @@ document.getElementById('pp-btn').onclick = () => {
     })
     .catch(e => toast(e.message, 'error'));
 };
+
+const npArtOverlay = document.getElementById('np-page-art-overlay');
+if (npArtOverlay) {
+  npArtOverlay.onclick = (e) => {
+    e.stopPropagation();
+    document.getElementById('pp-btn').click();
+  };
+}
 
 document.getElementById('shuffle-btn').addEventListener('click', async (e) => {
   const btn = e.currentTarget;

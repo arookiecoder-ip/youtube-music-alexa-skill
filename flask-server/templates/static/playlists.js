@@ -538,7 +538,7 @@ async function openPlaylistDetailModal(pl_id, fromRoute) {
       if (!observer) {
         observer = new IntersectionObserver((entries) => {
           if (entries.some(e => e.isIntersecting)) _appendTrackChunk();
-        }, { root: body, rootMargin: '400px' });
+        }, { root: list, rootMargin: '400px' });
       }
       observer.disconnect();
       observer.observe(sentinel);

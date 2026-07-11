@@ -212,7 +212,7 @@
   /* Press feedback belongs to direct row clicks only. Clicking embedded
      controls (Like, More, artist links) must not shrink the whole song. */
   .history-item:active:not(:has(button:active)):not(:has(a:active)) {
-    transform: scale(.99);
+    /* transform removed to prevent right-click zoom animation */
   }
   .history-item + .history-item { border-top: none; }
   .history-date-header {
