@@ -184,11 +184,11 @@
   }
 
   :root {
-    --bg: #0a0a0a;
-    --surface: #141414;
-    --border: #252525;
-    --text: #e8e8e8;
-    --muted: #666;
+    --bg: #030303;
+    --surface: #212121;
+    --border: #3d3d3d;
+    --text: #ffffff;
+    --muted: #aaaaaa;
     --accent: #e8590c;
     --accent-hover: #f76707;
     --danger: #e03131;

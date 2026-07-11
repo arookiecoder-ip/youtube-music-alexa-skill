@@ -14,8 +14,8 @@
   --playbar-h-mobile: 104px;
   --queue-w: 320px;
   --accent-grad: linear-gradient(135deg, var(--accent), #ff6a00);
-  --shell-bg: #0d0d0d;
-  --pill-bg: #1c1c1c;
+  --shell-bg: #030303;
+  --pill-bg: #212121;
   /* Softer, rounder look everywhere */
   --card-radius: 12px;
 }
@@ -71,6 +71,7 @@ main {
     padding: 0 28px;
     display: flex;
     flex-direction: column;
+    transition: margin-left .25s ease;
   }
   /* The old layout locked the page and scrolled inner panels; the new shell
      always uses the normal document scroll. */
@@ -124,6 +125,8 @@ main:has(.player-section.is-visible) {
    ============================================================ */
 
 header {
+  position: relative;
+  z-index: 500;
   border-bottom: none;
   padding: 10px 0;
   margin-bottom: 4px;
@@ -346,19 +349,19 @@ body.results-open .play-section {
     transition: max-width .25s ease, opacity .14s ease, font-size .25s ease, margin .25s ease;
   }
   body.rail-collapsed .sidebar .nav-label {
-    max-width: 70px;
-    opacity: 1;
-    font-size: 0.65rem;
-    font-weight: normal;
-    margin-top: 4px;
-    text-align: center;
+    max-width: 0;
+    opacity: 0;
+    font-size: 0;
+    margin: 0;
+    padding: 0;
+    pointer-events: none;
   }
   body.rail-collapsed .sidebar .sidebar-nav-btn {
     flex-direction: column;
     justify-content: center;
     align-items: center;
     gap: 0;
-    padding: 12px 0;
+    padding: 14px 0;
   }
   
   /* Explicitly set properties to animate them cleanly (variable changes skip transitions in some browsers) */
@@ -384,25 +387,18 @@ body.results-open .play-section {
      into the 72px rail. */
   body.rail-collapsed .sidebar-brand {
     width: 100%;
-    height: 94px;
+    height: 56px;
     flex-direction: column;
     justify-content: center;
-    gap: 5px;
+    align-items: center;
+    gap: 0;
     padding: 0;
   }
   body.rail-collapsed .sidebar-brand-mark {
-    display: flex;
-    width: 24px;
-    height: 17px;
+    display: none;
   }
   body.rail-collapsed .sidebar-brand strong {
-    display: block;
-    max-width: 58px;
-    overflow: hidden;
-    font-size: .58rem;
-    line-height: 1;
-    letter-spacing: .01em;
-    white-space: nowrap;
+    display: none;
   }
   /* Smooth open/close */
   main,
@@ -651,7 +647,7 @@ body.results-open .play-section {
     height: auto;
     bottom: 0;
     transform: none;
-    background: var(--shell-bg);
+    background: transparent;
     border-left: none;
     border-right: 1px solid rgba(255, 255, 255, .06);
     z-index: 140;
@@ -712,6 +708,13 @@ body.results-open .player-section {
 }
 .player-section.is-visible { transform: none; }
 .player-section.is-collapsed { display: none; }
+.player-section.is-blank .transport,
+.player-section.is-blank .progress,
+.player-section.is-blank .player-actions,
+.player-section.is-blank .np-like-btn,
+.player-section.is-blank .np-shuffle-btn { opacity: 0.3; pointer-events: none; }
+.player-section.is-blank .np-art { background-color: var(--surface); display: flex; align-items: center; justify-content: center; }
+.player-section.is-blank .np-art::after { content: ''; width: 24px; height: 24px; background: currentColor; opacity: 0.2; mask: url('data:image/svg+xml,<svg viewBox="0 0 24 24"><path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"/></svg>') center/contain no-repeat; -webkit-mask: url('data:image/svg+xml,<svg viewBox="0 0 24 24"><path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"/></svg>') center/contain no-repeat; }
 
 /* Now-playing cluster */
 .player-section .np {
@@ -837,7 +840,7 @@ input[type=range]::-moz-range-thumb { border-radius: 50%; }
   }
   .player-section .np { grid-area: np; }
   .player-section .transport { grid-area: transport; }
-  .player-section .player-actions { grid-area: actions; justify-self: end; }
+  .player-section .vol { grid-area: actions; justify-self: end; }
 }
 
 /* Mobile playbar: floating compact card; tap the track info or the expand
@@ -860,17 +863,15 @@ input[type=range]::-moz-range-thumb { border-radius: 50%; }
   .player-section .transport { grid-area: transport; gap: 2px; }
   .player-section .transport button { width: 38px; height: 38px; }
   .player-section .pp-btn, .player-section .pp-btn:hover { width: 42px; height: 42px; }
-  .player-section .player-actions { grid-area: actions; }
+  .player-section .vol { display: none !important; }
+  .player-section .np-like-btn,
+  .player-section .np-shuffle-btn,
+  .player-section .transport button[data-action="previous"] {
+    display: none !important;
+  }
 }
 
-/* ---- Compact playbar (all sizes): only play/pause, next, YTM link and an
-   expand toggle stay on the bar. Everything else (prev, shuffle, like,
-   queue, volume) lives in the expanded now-playing sheet. ---- */
-.player-section .np-like-btn,
-.player-section .np-shuffle-btn,
-.player-section .vol,
-.player-section .transport-actions,
-.player-section .transport button[data-action="previous"] {
+.player-section .transport-actions {
   display: none !important;
 }
 /* Tapping the track info opens the expanded sheet */

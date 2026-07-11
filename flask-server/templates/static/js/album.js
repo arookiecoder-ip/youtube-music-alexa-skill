@@ -19,9 +19,11 @@
       '<button class="btn-accent album-play-all" type="button">Play all</button></div>';
 
     list.innerHTML = (data.tracks || []).map(function (track, index) {
+      var isSameArtist = !track.artist || track.artist === data.artist;
+      var artistSpan = isSameArtist ? '' : '<span>' + esc(track.artist) + '</span>';
       return '<button class="album-track" type="button" data-index="' + index + '">' +
         '<span class="album-track-number">' + (index + 1) + '</span>' +
-        '<span class="album-track-info"><strong>' + esc(track.title) + '</strong><span>' + esc(track.artist) + '</span></span>' +
+        '<span class="album-track-info"><strong>' + esc(track.title) + '</strong>' + artistSpan + '</span>' +
         '</button>';
     }).join('') || '<div class="history-modal-empty">This album has no playable tracks.</div>';
 
