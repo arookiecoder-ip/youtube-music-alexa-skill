@@ -145,18 +145,4 @@
 })();
 
 
-/* ---- Mobile playbar: tapping the track info opens the full player sheet
-   (reuses the mini-player's click handler, which owns that popup). ---- */
-(function () {
-  const np = document.querySelector('.player-section .np');
-  if (!np) return;
-  np.addEventListener('click', (e) => {
-    if (e.target.closest('button, a')) return;
-    if (!window.matchMedia('(max-width: 899px)').matches) return;
-    const mini = document.getElementById('mini-player');
-    if (mini) mini.click();
-  });
-})();
-
-
 })();

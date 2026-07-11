@@ -39,6 +39,14 @@ function openResults() {
   const queueSection = document.getElementById('queue-section');
   clearTimeout(section._hideTimer);
   clearTimeout(section._showTimer);
+  // Views swap, they don't stack (YT Music): searching from the artist page
+  // must hide it and drop the #artist/ hash. replaceState avoids firing
+  // hashchange, which would re-run the home route and hide these results.
+  const artistSection = document.getElementById('artist-section');
+  if (artistSection) artistSection.hidden = true;
+  if ((location.hash || '').indexOf('#artist/') === 0) {
+    history.replaceState(null, '', '#home');
+  }
   animatePlaySectionLayout(() => {
     state._resultsOpen = true;
     mainEl.classList.remove('has-queue');

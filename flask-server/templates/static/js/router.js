@@ -13,7 +13,7 @@
 
   function showHomeViews() {
     setHidden('.play-section, .player-section, #home-section, #idle-hero', false);
-    setHidden('#results-section, #queue-section', true);
+    setHidden('#results-section, #queue-section, #artist-section', true);
   }
 
   var routes = {

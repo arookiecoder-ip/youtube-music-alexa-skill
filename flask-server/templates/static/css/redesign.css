@@ -7,7 +7,8 @@
    ============================================================ */
 
 :root {
-  --rail-w: 236px;
+  --rail-w: 200px;
+  --rail-w-mini: 72px;
   --topbar-h: 64px;
   --playbar-h: 88px;
   --playbar-h-mobile: 104px;
@@ -164,6 +165,10 @@ header {
 @media (min-width: 900px) {
   /* Playlists + Jam live in the left rail on desktop */
   #playlists-modal-btn, #jam-btn { display: none !important; }
+  /* No refresh chrome on desktop (YT Music has none; F5 exists) — keep both
+     the header device-refresh icon and the rail's Refresh Page for mobile. */
+  .device-section-inline #refresh { display: none !important; }
+  #refresh-page-btn { display: none !important; }
 }
 
 .btn-ghost {
@@ -284,6 +289,8 @@ body.results-open .play-section {
     height: var(--topbar-h);
     margin: 0;
     z-index: 135;
+    /* Follows the rail as it collapses/expands */
+    transition: left .25s ease;
   }
 }
 
@@ -320,11 +327,29 @@ body.results-open .play-section {
 }
 .rail-toggle-btn svg { width: 20px; height: 20px; }
 
-/* Collapsed rail (desktop): zero out the rail width so the whole shell —
-   main, top bar and search pill — reflows automatically. */
+/* Collapsed rail (desktop): YT Music-style mini guide — the rail narrows to
+   an icon-only strip. Everything positioned off --rail-w (main, search pill,
+   overlays) reflows and animates with it. */
 @media (min-width: 900px) {
-  body.rail-collapsed { --rail-w: 0px; }
-  body.rail-collapsed .sidebar { display: none !important; }
+  body.rail-collapsed { --rail-w: var(--rail-w-mini); }
+  body.rail-collapsed .sidebar .nav-label { display: none; }
+  body.rail-collapsed .sidebar .sidebar-nav-btn {
+    justify-content: center;
+    gap: 0;
+    padding: 12px 0;
+  }
+  body.rail-collapsed .sidebar .sidebar-nav-btn svg {
+    width: 21px;
+    height: 21px;
+  }
+  /* Text-only chrome has no icon form — hide it in the mini rail */
+  body.rail-collapsed .sidebar-signout,
+  body.rail-collapsed .sidebar-footer { display: none; }
+  /* Smooth open/close */
+  main,
+  main.idle,
+  main.has-queue,
+  body.results-open main { transition: margin-left .25s ease; }
 }
 
 /* Sticky search on mobile so it's always one thumb away */
@@ -396,7 +421,10 @@ body.results-open .play-section {
     border-right: 1px solid rgba(255, 255, 255, .06);
     z-index: 140;
     padding: 18px 14px;
-    transition: none;
+    /* The mobile drawer's transform transition doesn't apply here; the rail
+       animates its width when toggling the mini guide. */
+    transition: width .25s ease;
+    overflow: hidden;
   }
   .sidebar-overlay { display: none !important; }
   .sidebar-close { display: none !important; }
@@ -1004,6 +1032,17 @@ button { border-radius: var(--radius-md); }
     align-items: stretch;
     /* Below the playbar (220) so playback controls stay reachable */
     z-index: 210;
+    transition: left .25s ease;
+  }
+  /* While a playlist view is open it owns the scroll: freeze the page
+     behind it so the wheel never scrolls the background view first. */
+  body:has(#playlists-modal-overlay.open),
+  body:has(#playlist-detail-modal-overlay.open) {
+    overflow: hidden;
+  }
+  #playlists-modal .history-modal-body,
+  #playlist-detail-modal .history-modal-body {
+    overscroll-behavior: contain;
   }
   body:has(.player-section.is-visible) #playlists-modal-overlay,
   body:has(.player-section.is-visible) #playlist-detail-modal-overlay {
