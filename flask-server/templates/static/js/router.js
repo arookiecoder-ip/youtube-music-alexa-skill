@@ -105,6 +105,8 @@
     document.body.classList.toggle('now-playing-closing', isClosingNowPlaying);
     document.body.classList.toggle('playlists-route', hash === '#playlists' || hash.indexOf('#playlist/') === 0);
     document.body.classList.toggle('history-route', hash === '#history');
+    document.body.classList.toggle('artist-route', hash.indexOf('#artist/') === 0);
+    document.body.classList.toggle('album-route', hash.indexOf('#album/') === 0);
 
     // Routed desktop pages reuse overlay markup, so explicitly dismiss layers
     // belonging to the previous route. Otherwise an invisible full-screen
@@ -145,6 +147,7 @@
       var albumId = decodeURIComponent(hash.slice('#album/'.length));
       if (!albumId) { window.navigateTo('#home'); return; }
       hideAllViews();
+      setHidden('.play-section', false);
       var albumSection = document.getElementById('album-section');
       if (albumSection) albumSection.hidden = false;
       if (window.loadAlbum) window.loadAlbum(albumId);

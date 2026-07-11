@@ -399,16 +399,22 @@ function scrollResultsToTop() {
     document.getElementById('results-section').scrollIntoView({ behavior: 'smooth', block: 'start' });
   }
 }
-document.getElementById('results-prev').addEventListener('click', () => {
-  state._resultsPage[state._activeCategory]--;
-  renderResults();
-  scrollResultsToTop();
-});
-document.getElementById('results-next').addEventListener('click', () => {
-  state._resultsPage[state._activeCategory]++;
-  renderResults();
-  scrollResultsToTop();
-});
+const prevBtn = document.getElementById('results-prev');
+if (prevBtn) {
+  prevBtn.addEventListener('click', () => {
+    state._resultsPage[state._activeCategory]--;
+    renderResults();
+    scrollResultsToTop();
+  });
+}
+const nextBtn = document.getElementById('results-next');
+if (nextBtn) {
+  nextBtn.addEventListener('click', () => {
+    state._resultsPage[state._activeCategory]++;
+    renderResults();
+    scrollResultsToTop();
+  });
+}
 document.querySelectorAll('.results-tab').forEach(tab => {
   tab.addEventListener('click', () => {
     const category = tab.dataset.category;

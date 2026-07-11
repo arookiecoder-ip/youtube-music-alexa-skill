@@ -428,14 +428,26 @@ body.results-open .play-section {
     padding: 0;
     margin: 0 auto 14px auto;
     width: 38px;
-    min-height: 42px;
+    min-height: 160px; /* Space for toggle + icon + vertical text */
     justify-content: center;
+    position: relative;
   }
-  body.rail-collapsed .sidebar-brand-mark,
-  body.rail-collapsed .sidebar-brand strong {
-    opacity: 0;
-    visibility: hidden;
+  body.rail-collapsed .sidebar-brand-mark {
+    opacity: 1;
+    visibility: visible;
     position: absolute;
+    top: 52px;
+  }
+  body.rail-collapsed .sidebar-brand strong {
+    opacity: 1;
+    visibility: visible;
+    position: absolute;
+    top: 86px;
+    writing-mode: vertical-rl;
+    transform: rotate(180deg);
+    font-size: 0.8rem;
+    letter-spacing: 0.1em;
+    color: var(--muted);
   }
   /* Smooth open/close */
   main,
@@ -1042,11 +1054,7 @@ body.now-playing-route .player-section .player-expand-btn svg {
     padding-bottom: 0;
     overflow: hidden;
   }
-  body.now-playing-closing main {
-    height: 100vh;
-    min-height: 0;
-    overflow: hidden;
-  }
+
   body.now-playing-route header {
     margin-bottom: 0;
     background: #000;
@@ -1136,7 +1144,9 @@ body.now-playing-route .player-section .player-expand-btn svg {
   body.now-playing-route main.has-queue #queue-section {
     display: none !important;
   }
-  body.home-route:not(.results-open):not(.header-scrolled) main header {
+  body.home-route:not(.results-open):not(.header-scrolled) main header,
+  body.artist-route:not(.results-open):not(.header-scrolled) main header,
+  body.album-route:not(.results-open):not(.header-scrolled) main header {
     background: transparent;
   }
 }
@@ -1484,7 +1494,9 @@ button { border-radius: var(--radius-md); }
        (device dropdown menu, profile menu) to the header's 67px box. The
        opaque background alone removes the backdrop-blur repaint cost. */
   }
-  body.home-route:not(.results-open):not(.header-scrolled) main header {
+  body.home-route:not(.results-open):not(.header-scrolled) main header,
+  body.artist-route:not(.results-open):not(.header-scrolled) main header,
+  body.album-route:not(.results-open):not(.header-scrolled) main header {
     background: transparent;
   }
 }
@@ -2069,3 +2081,42 @@ main:has(#now-playing-section:not([hidden])) {
 /* Keep main's horizontal padding on the routed player. The now-playing panel
    is fixed to the viewport and does not need the old bleed compensation;
    removing this padding shifts the header actions against the right edge. */
+
+/* ---- Album detail page ---- */
+#album-section { width: 100%; max-width: none; margin: 0; padding: 24px 32px 96px; background: transparent; border: 0; border-radius: 0; box-shadow: none; }
+#album-section[hidden] { display: none; }
+.album-back { border: 0; background: none; color: var(--muted); padding: 8px 0; cursor: pointer; }
+.album-back:hover { color: var(--text); }
+.album-hero { display: flex; align-items: end; gap: 30px; min-height: 280px; padding: 22px 0 34px; }
+.album-hero > img, .album-art-placeholder { width: 260px; height: 260px; flex: none; object-fit: cover; border-radius: 10px; background: var(--surface); box-shadow: 0 18px 50px rgba(0,0,0,.45); }
+.album-hero-info > span { color: var(--muted); font-size: .72rem; text-transform: uppercase; letter-spacing: .12em; }
+.album-hero-info h1 { margin: 8px 0 12px; font-size: clamp(2rem, 5vw, 4rem); line-height: 1; }
+.album-artist-link { border: 0; padding: 0; background: none; color: var(--text); font-weight: 700; cursor: pointer; }
+.album-artist-link:hover { text-decoration: underline; }
+.album-hero-info p { margin: 7px 0 20px; color: var(--muted); font-size: .8rem; }
+.album-description { max-width: 560px; color: var(--muted); font-size: .8rem; line-height: 1.5; }
+.album-play-all { min-width: 0; width: 54px; height: 54px; padding: 0; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; }
+.album-play-all svg { width: 25px; height: 25px; }
+.album-track-list { border-top: 1px solid rgba(255,255,255,.1); }
+.album-track { width: 100%; display: flex; align-items: center; gap: 16px; min-height: 56px; padding: 9px 14px; border: 0; background: transparent; color: var(--text); text-align: left; cursor: pointer; border-radius: 6px; }
+.album-track:hover { background: rgba(255,255,255,.055); }
+.album-track-number { width: 24px; color: var(--muted); text-align: center; }
+.album-track:hover .album-track-number { font-size: 0; }
+.album-track:hover .album-track-number::after { content: '▶'; color: var(--text); font-size: 13px; }
+.album-track-info { min-width: 0; flex: 1; }
+.album-track-info strong, .album-track-info span { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.album-track-info strong { font-size: .86rem; }
+.album-track-info span { margin-top: 3px; color: var(--muted); font-size: .72rem; }
+@media (min-width: 900px) {
+  #album-section { display: grid; grid-template-columns: minmax(260px, 340px) minmax(0, 1fr); grid-template-rows: auto 1fr; column-gap: clamp(44px, 6vw, 90px); align-items: start; padding-bottom: 160px; }
+  .album-back { grid-column: 1 / -1; }
+  .album-hero { flex-direction: column; align-items: center; text-align: center; min-height: 0; padding-top: 28px; }
+  .album-hero-info { display: flex; flex-direction: column; align-items: center; }
+  .album-hero-info h1 { font-size: clamp(2rem, 3.5vw, 3.2rem); }
+  .album-track-list { margin-top: 28px; }
+}
+@media (max-width: 700px) {
+  #album-section { padding: 18px 16px 140px; }
+  .album-hero { align-items: center; flex-direction: column; text-align: center; }
+  .album-hero > img, .album-art-placeholder { width: min(72vw, 280px); height: auto; aspect-ratio: 1; }
+}

@@ -441,10 +441,11 @@ const progress = window.progress = (function () {
     const frac = Math.min(1, Math.max(0, x / rect.width));
     return frac;
   }
-  function updateTooltip(e, tTrack) {
-    const tooltip = tTrack.querySelector('.progress-tooltip');
+  function updateTooltip(e, container) {
+    const tooltip = container.querySelector('.progress-tooltip');
     if (!tooltip) return;
-    const rect = tTrack.getBoundingClientRect();
+    const trackEl = container.classList.contains('progress-track') ? container : container.querySelector('.progress-track');
+    const rect = trackEl.getBoundingClientRect();
     const xClamped = Math.max(0, Math.min(rect.width, (e.touches ? e.touches[0].clientX : e.clientX) - rect.left));
     const frac = xClamped / rect.width;
     const ms = frac * seekLimitMs();
@@ -509,16 +510,21 @@ const progress = window.progress = (function () {
   if (track) {
     track.addEventListener('mousedown', beginDrag);
     track.addEventListener('touchstart', beginDrag, { passive: false });
-    track.addEventListener('mousemove', handleTooltipMove);
-    track.addEventListener('touchmove', handleTooltipMove, { passive: true });
+  }
+  if (wrap) {
+    wrap.addEventListener('mousemove', handleTooltipMove);
+    wrap.addEventListener('touchmove', handleTooltipMove, { passive: true });
   }
   // Also bind the mini popup progress track
   const mpTrack = document.getElementById('mp-progress-track');
+  const mpWrap = document.getElementById('mp-progress');
   if (mpTrack) {
     mpTrack.addEventListener('mousedown', beginDrag);
     mpTrack.addEventListener('touchstart', beginDrag, { passive: false });
-    mpTrack.addEventListener('mousemove', handleTooltipMove);
-    mpTrack.addEventListener('touchmove', handleTooltipMove, { passive: true });
+  }
+  if (mpWrap) {
+    mpWrap.addEventListener('mousemove', handleTooltipMove);
+    mpWrap.addEventListener('touchmove', handleTooltipMove, { passive: true });
   }
   // Global move/end handlers work for both tracks
   window.addEventListener('mousemove', moveDrag);

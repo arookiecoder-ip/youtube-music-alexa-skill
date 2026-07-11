@@ -13,21 +13,7 @@
     if (!hero || !list) return;
     hero.innerHTML =
       (data.thumbnail ? '<img src="' + esc(data.thumbnail) + '" alt="">' : '<div class="album-art-placeholder"></div>') +
-(function () {
-  'use strict';
-  var cache = {};
 
-  function esc(s) {
-    return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
-  }
-
-  function render(data) {
-    var hero = document.getElementById('album-hero');
-    var list = document.getElementById('album-track-list');
-    if (!hero || !list) return;
-    hero.innerHTML =
-      (data.thumbnail ? '<img src="' + esc(data.thumbnail) + '" alt="">' : '<div class="album-art-placeholder"></div>') +
       '<div class="album-hero-info"><span>Album</span><h1>' + esc(data.title) + '</h1>' +
       '<button class="album-artist-link" type="button" data-channel-id="' + esc(data.channelId) + '">' + esc(data.artist) + '</button>' +
       '<p>' + esc([data.year, (data.tracks || []).length + ' songs'].filter(Boolean).join(' · ')) + '</p>' +
@@ -42,11 +28,12 @@
     list.innerHTML = (data.tracks || []).map(function (track, index) {
       var isSameArtist = !track.artist || track.artist === data.artist;
       var artistSpan = isSameArtist ? '' : '<span>' + esc(track.artist) + '</span>';
-      var isLiked = typeof window._playlistsData !== 'undefined' && window._playlistsData.liked_songs && window._playlistsData.liked_songs.includes(track.video_id);
+      var vId = track.videoId || track.video_id;
+      var isLiked = typeof window._playlistsData !== 'undefined' && window._playlistsData.liked_songs && window._playlistsData.liked_songs.includes(vId);
       return '<div class="album-track" data-index="' + index + '">' +
         '<span class="album-track-number">' + (index + 1) + '</span>' +
         '<span class="album-track-info"><strong>' + esc(track.title) + '</strong>' + artistSpan + '</span>' +
-        '<button class="result-like-btn ' + (isLiked ? 'liked' : '') + '" type="button" title="Like" data-vid="' + esc(track.video_id) + '">' + (isLiked ? heartFilledSvg : heartSvg) + '</button>' +
+        '<button class="result-like-btn ' + (isLiked ? 'liked' : '') + '" type="button" title="Like" data-vid="' + esc(vId) + '">' + (isLiked ? heartFilledSvg : heartSvg) + '</button>' +
         '<button class="result-queue-btn" type="button" title="Add to queue">' + queueAddSvg + '</button>' +
         '<button class="result-more-btn" type="button" title="More options">' + moreSvg + '</button>' +
         '<div class="result-more-menu">' +
