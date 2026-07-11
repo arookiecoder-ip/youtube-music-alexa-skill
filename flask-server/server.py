@@ -245,14 +245,14 @@ def _ensure_db():
 
 def _record_listen(video_id, title, artist, thumbnail_url):
     from ytmusicapi.auth.types import AuthType
-    if not video_id or yt_auth.auth_type == AuthType.UNAUTHORIZED:
+    if not video_id or _get_ytmusic_home().auth_type == AuthType.UNAUTHORIZED:
         return
     def push_bg():
         try:
             # ytmusicapi add_history_item requires a song object with tracking parameters
-            song = yt_auth.get_song(video_id)
+            song = _get_ytmusic_home().get_song(video_id)
             if song:
-                yt_auth.add_history_item(song)
+                _get_ytmusic_home().add_history_item(song)
         except Exception as e:
             logger.error("Failed to push history for %s: %s", video_id, e)
     threading.Thread(target=push_bg, daemon=True).start()
@@ -2668,7 +2668,7 @@ def remote_page():
     if _remote_login_enabled():
         return redirect('/')
     from ytmusicapi.auth.types import AuthType
-    is_auth = (yt_auth.auth_type != AuthType.UNAUTHORIZED)
+    is_auth = (_get_ytmusic_home().auth_type != AuthType.UNAUTHORIZED)
     return _no_store(app.make_response(render_template(
         "remote.html", asset_v=_STATIC_VERSION,
         jam_guest=_jam_guest() and not _valid_key_supplied(), remote_username=REMOTE_USER,
@@ -3388,10 +3388,10 @@ def get_recommendations():
 @app.route("/history/", methods=["GET"])
 async def get_history():
     from ytmusicapi.auth.types import AuthType
-    if yt_auth.auth_type == AuthType.UNAUTHORIZED:
+    if _get_ytmusic_home().auth_type == AuthType.UNAUTHORIZED:
         return jsonify({'error': 'Unauthorized'}), 401
     try:
-        history_raw = await run_in_executor(yt_auth.get_history)
+        history_raw = await run_in_executor(_get_ytmusic_home().get_history)
         mapped = []
         for item in history_raw:
             mapped.append({
@@ -3412,7 +3412,7 @@ async def clear_history():
 @app.route("/history/<video_id>", methods=["DELETE"])
 async def remove_history_item(video_id):
     from ytmusicapi.auth.types import AuthType
-    if yt_auth.auth_type == AuthType.UNAUTHORIZED:
+    if _get_ytmusic_home().auth_type == AuthType.UNAUTHORIZED:
         return jsonify({'error': 'Unauthorized'}), 401
     try:
         # Note: removing a specific item from history requires the feedbackToken which get_history provides.
@@ -3424,7 +3424,7 @@ async def remove_history_item(video_id):
 @app.route("/alexa/like/", methods=["GET"])
 async def alexa_like():
     from ytmusicapi.auth.types import AuthType
-    if yt_auth.auth_type == AuthType.UNAUTHORIZED:
+    if _get_ytmusic_home().auth_type == AuthType.UNAUTHORIZED:
         return jsonify({'error': 'Unauthorized'}), 401
     video_id = request.args.get('video_id', '').strip()
     action = request.args.get('action', 'LIKE').upper() # LIKE, DISLIKE, INDIFFERENT
@@ -3435,7 +3435,7 @@ async def alexa_like():
     if not video_id:
         return jsonify({'error': 'No video_id provided and nothing playing'}), 400
     try:
-        await run_in_executor(yt_auth.rate_song, video_id, action)
+        await run_in_executor(_get_ytmusic_home().rate_song, video_id, action)
         return jsonify({'ok': True, 'action': action, 'video_id': video_id})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -4496,10 +4496,10 @@ def _sweep_missing_thumbnails():
 @app.route("/api/library/", methods=["GET"])
 async def api_get_library():
     from ytmusicapi.auth.types import AuthType
-    if yt_auth.auth_type == AuthType.UNAUTHORIZED:
+    if _get_ytmusic_home().auth_type == AuthType.UNAUTHORIZED:
         return jsonify({'error': 'Unauthorized'}), 401
     try:
-        playlists = await run_in_executor(yt_auth.get_library_playlists, 100)
+        playlists = await run_in_executor(_get_ytmusic_home().get_library_playlists, 100)
         return jsonify({"playlists": playlists})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -4507,7 +4507,7 @@ async def api_get_library():
 @app.route("/api/library/playlists/", methods=["POST"])
 async def api_create_library_playlist():
     from ytmusicapi.auth.types import AuthType
-    if yt_auth.auth_type == AuthType.UNAUTHORIZED:
+    if _get_ytmusic_home().auth_type == AuthType.UNAUTHORIZED:
         return jsonify({'error': 'Unauthorized'}), 401
     body = request.get_json(silent=True) or {}
     name = (body.get("name") or "").strip()
@@ -4515,7 +4515,7 @@ async def api_create_library_playlist():
     if not name:
         return jsonify({'error': 'Name required'}), 400
     try:
-        pl_id = await run_in_executor(yt_auth.create_playlist, name, description)
+        pl_id = await run_in_executor(_get_ytmusic_home().create_playlist, name, description)
         return jsonify({"id": pl_id, "name": name, "description": description, "status": "created"})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -4523,12 +4523,12 @@ async def api_create_library_playlist():
 @app.route("/api/library/playlists/<pl_id>", methods=["GET"])
 async def api_get_library_playlist(pl_id):
     from ytmusicapi.auth.types import AuthType
-    if yt_auth.auth_type == AuthType.UNAUTHORIZED:
+    if _get_ytmusic_home().auth_type == AuthType.UNAUTHORIZED:
         return jsonify({'error': 'Unauthorized'}), 401
     if not pl_id.strip():
         return jsonify({'error': 'invalid playlist id'}), 400
     try:
-        info = await run_in_executor(yt_auth.get_playlist, pl_id, None)
+        info = await run_in_executor(_get_ytmusic_home().get_playlist, pl_id, None)
         return jsonify(info)
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -4536,10 +4536,10 @@ async def api_get_library_playlist(pl_id):
 @app.route("/api/explore/", methods=["GET"])
 async def api_get_explore():
     from ytmusicapi.auth.types import AuthType
-    if yt_auth.auth_type == AuthType.UNAUTHORIZED:
+    if _get_ytmusic_home().auth_type == AuthType.UNAUTHORIZED:
         return jsonify({'error': 'Unauthorized'}), 401
     try:
-        explore = await run_in_executor(yt_auth.get_explore)
+        explore = await run_in_executor(_get_ytmusic_home().get_explore)
         return jsonify(explore)
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -4550,7 +4550,7 @@ async def api_get_search_suggestions():
     if not q:
         return jsonify([])
     try:
-        suggestions = await run_in_executor(yt_auth.get_search_suggestions, q)
+        suggestions = await run_in_executor(_get_ytmusic_home().get_search_suggestions, q)
         return jsonify(suggestions)
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -4590,7 +4590,7 @@ def root():
         # Key-in-URL scheme: keep the old path, a redirect would drop ?key=.
         return redirect('/remote/')
     from ytmusicapi.auth.types import AuthType
-    is_auth = (yt_auth.auth_type != AuthType.UNAUTHORIZED)
+    is_auth = (_get_ytmusic_home().auth_type != AuthType.UNAUTHORIZED)
     if _logged_in():
         return _no_store(app.make_response(render_template(
             "remote.html", asset_v=_STATIC_VERSION, remote_username=REMOTE_USER, is_authenticated=is_auth)))
