@@ -405,31 +405,37 @@ function _wireQueueMoreMenu(el, item, index) {
     _closeAllQueueMenus();
     if (!wasOpen) {
       moreBtn.classList.add('open');
-      // Position the menu using fixed coords so it escapes any scrollable parent
       const rect = moreBtn.getBoundingClientRect();
       const menuHeight = 4 * 48; // approximate height of the four option rows
-      const spaceBelow = window.innerHeight - rect.bottom;
-      const openAbove = spaceBelow < menuHeight + 8;
-      moreMenu.style.left = '';
-      moreMenu.style.top = '';
-      moreMenu.style.bottom = '';
-      moreMenu.style.right = '';
-      if (openAbove) {
-        moreMenu.classList.add('above');
-        moreMenu.style.bottom = (window.innerHeight - rect.top + 4) + 'px';
-      } else {
-        moreMenu.classList.remove('above');
-        moreMenu.style.top = (rect.bottom + 4) + 'px';
-      }
-      // Align right edge of menu with right edge of button
       const menuWidth = 170;
-      let left = rect.right - menuWidth;
-      if (left < 8) left = 8; // don't go off screen left
-      moreMenu.style.left = left + 'px';
+      
+      let x = e && e.clientX ? e.clientX : rect.right - menuWidth;
+      let y = e && e.clientY ? e.clientY : rect.bottom;
+      
+      const spaceBelow = window.innerHeight - y;
+      const spaceRight = window.innerWidth - x;
+      const openAbove = spaceBelow < menuHeight + 8;
+      
+      if (spaceRight < menuWidth + 8) {
+         moreMenu.style.left = 'auto';
+         moreMenu.style.right = (window.innerWidth - x) + 'px';
+      } else {
+         moreMenu.style.left = x + 'px';
+         moreMenu.style.right = 'auto';
+      }
+      
+      if (openAbove) {
+         moreMenu.style.top = 'auto';
+         moreMenu.style.bottom = (window.innerHeight - y + 4) + 'px';
+      } else {
+         moreMenu.style.top = (y + 4) + 'px';
+         moreMenu.style.bottom = 'auto';
+      }
+      
       moreMenu.classList.add('open');
       // Portal the menu to <body> while open. Inside the row it sits under
       // an overflow-hidden wrapper within a scrollable list, and Chromium's
-      // input hit-testing clips fixed elements there Ã¢â‚¬â€ the menu is visible
+      // input hit-testing clips fixed elements there Ã¢â‚¬â€  the menu is visible
       // but clicks land on the row below it. _closeAllQueueMenus returns it.
       moreMenu._home = el;
       document.body.appendChild(moreMenu);
@@ -439,7 +445,13 @@ function _wireQueueMoreMenu(el, item, index) {
   el.addEventListener('contextmenu', (e) => {
     e.preventDefault();
     e.stopPropagation();
-    moreBtn.click();
+    // Simulate a mouse click event with current cursor position
+    moreBtn.dispatchEvent(new MouseEvent('click', {
+      clientX: e.clientX,
+      clientY: e.clientY,
+      bubbles: true,
+      cancelable: true
+    }));
   });
   moreMenu.querySelector('[data-action="remove"]').addEventListener('click', (e) => {
     e.stopPropagation();

@@ -1207,7 +1207,7 @@ body.now-playing-route .player-section .player-expand-btn svg {
   position: absolute;
   inset: 0;
   border-radius: inherit;
-  background: rgba(0, 0, 0, .42) center / 58px no-repeat
+  background: rgba(0, 0, 0, .42) center / 46px no-repeat
     url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='white'%3E%3Cpolygon points='8,5 19,12 8,19'/%3E%3C/svg%3E");
   opacity: 0;
   transition: opacity .18s ease;

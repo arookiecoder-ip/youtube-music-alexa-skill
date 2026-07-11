@@ -164,6 +164,7 @@
     }
     rows.addEventListener('scroll', function(e) {
       if (e.target.classList && e.target.classList.contains('home-row')) updateShelfArrows(e.target);
+      if (window._closeAllMoreMenus) window._closeAllMoreMenus();
     }, true);
     rows.addEventListener('click', function(e) {
       var scrollBtn = e.target.closest('.home-row-scroll');
@@ -258,6 +259,15 @@
         e.stopPropagation();
         
         var moreMenu = card.querySelector('.result-more-menu');
+        if (!moreMenu) {
+          var allMenus = document.querySelectorAll('.result-more-menu');
+          for (var i = 0; i < allMenus.length; i++) {
+            if (allMenus[i]._home === card) {
+              moreMenu = allMenus[i];
+              break;
+            }
+          }
+        }
         if (!moreMenu) return;
 
         var wasOpen = moreMenu.classList.contains('open');
@@ -315,9 +325,19 @@
 
           moreMenu.classList.add('open');
           var menuHeight = 132;
+          var menuWidth = 160;
           var spaceBelow = window.innerHeight - e.clientY;
+          var spaceRight = window.innerWidth - e.clientX;
           var openAbove = spaceBelow < menuHeight + 8;
-          moreMenu.style.left = e.clientX + 'px';
+          
+          if (spaceRight < menuWidth + 8) {
+             moreMenu.style.left = 'auto';
+             moreMenu.style.right = (window.innerWidth - e.clientX) + 'px';
+          } else {
+             moreMenu.style.left = e.clientX + 'px';
+             moreMenu.style.right = 'auto';
+          }
+          
           if (openAbove) {
              moreMenu.style.top = 'auto';
              moreMenu.style.bottom = (window.innerHeight - e.clientY + 4) + 'px';
@@ -325,7 +345,6 @@
              moreMenu.style.top = (e.clientY + 4) + 'px';
              moreMenu.style.bottom = 'auto';
           }
-          moreMenu.style.right = 'auto';
           
           moreMenu._home = card;
           document.body.appendChild(moreMenu);

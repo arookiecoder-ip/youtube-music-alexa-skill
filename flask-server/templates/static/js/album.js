@@ -4,6 +4,7 @@
 
   function esc(s) {
     return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;')
+
       .replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
   }
 
@@ -11,6 +12,12 @@
     var hero = document.getElementById('album-hero');
     var list = document.getElementById('album-track-list');
     if (!hero || !list) return;
+    var albumScrollContainer = document.getElementById('album-track-list')?.parentElement;
+    if (albumScrollContainer) {
+      albumScrollContainer.addEventListener('scroll', function() {
+        if (window._closeAllMoreMenus) window._closeAllMoreMenus();
+      }, { passive: true });
+    }
     hero.innerHTML =
       (data.thumbnail ? '<img src="' + esc(data.thumbnail) + '" alt="">' : '<div class="album-art-placeholder"></div>') +
 
@@ -104,7 +111,36 @@
         row.addEventListener('contextmenu', function (e) {
           e.preventDefault();
           e.stopPropagation();
-          moreBtn.click();
+          var wasOpen = moreMenu.classList.contains('open');
+          if (window._closeAllMoreMenus) window._closeAllMoreMenus();
+          if (!wasOpen) {
+            moreBtn.classList.add('open');
+            var menuHeight = 132;
+            var menuWidth = 180;
+            var spaceBelow = window.innerHeight - e.clientY;
+            var spaceRight = window.innerWidth - e.clientX;
+            var openAbove = spaceBelow < menuHeight + 8;
+            
+            if (spaceRight < menuWidth + 8) {
+               moreMenu.style.left = 'auto';
+               moreMenu.style.right = (window.innerWidth - e.clientX) + 'px';
+            } else {
+               moreMenu.style.left = e.clientX + 'px';
+               moreMenu.style.right = 'auto';
+            }
+            
+            if (openAbove) {
+               moreMenu.style.top = 'auto';
+               moreMenu.style.bottom = (window.innerHeight - e.clientY + 4) + 'px';
+            } else {
+               moreMenu.style.top = (e.clientY + 4) + 'px';
+               moreMenu.style.bottom = 'auto';
+            }
+            
+            moreMenu.classList.add('open');
+            moreMenu._home = row;
+            document.body.appendChild(moreMenu);
+          }
         });
         var playNext = moreMenu.querySelector('[data-action="play-next"]');
         if (playNext) playNext.addEventListener('click', function (e) {

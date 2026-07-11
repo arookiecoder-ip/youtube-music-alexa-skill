@@ -124,30 +124,16 @@
   left: 50%;
   width: 48px;
   height: 48px;
-  background: rgba(0, 0, 0, 0.7);
+  background: transparent;
   border-radius: 50%;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: #fff;
-  opacity: 0;
-  transform: translate(-50%, -50%) scale(0.8);
-  transition: opacity 0.2s, transform 0.2s, background 0.2s;
+  display: block;
   border: none;
   cursor: pointer;
   z-index: 2;
+  transform: translate(-50%, -50%);
 }
 .home-play-btn svg {
-  width: 24px;
-  height: 24px;
-}
-.home-card:hover .home-play-btn {
-  opacity: 1;
-  transform: translate(-50%, -50%) scale(1);
-}
-.home-play-btn:hover {
-  background: rgba(0, 0, 0, 0.9);
-  transform: translate(-50%, -50%) scale(1.1);
+  display: none;
 }
 
 .home-card-art img {

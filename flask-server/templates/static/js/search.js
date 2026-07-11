@@ -203,17 +203,30 @@ function _createSongElement(item, existingThumbsById) {
       if (!wasOpen) {
         moreBtn.classList.add('open');
         const rect = moreBtn.getBoundingClientRect();
-        const menuHeight = 88;
-        const spaceBelow = window.innerHeight - rect.bottom;
+        const menuHeight = 132;
+        const menuWidth = 180;
+        
+        let x = e && e.clientX ? e.clientX : rect.right - menuWidth;
+        let y = e && e.clientY ? e.clientY : rect.bottom;
+        
+        const spaceBelow = window.innerHeight - y;
+        const spaceRight = window.innerWidth - x;
         const openAbove = spaceBelow < menuHeight + 8;
-        moreMenu.style.left = '';
-        moreMenu.style.right = '40px';
-        if (openAbove) {
-          moreMenu.style.top = 'auto';
-          moreMenu.style.bottom = (window.innerHeight - rect.top + 4) + 'px';
+        
+        if (spaceRight < menuWidth + 8) {
+           moreMenu.style.left = 'auto';
+           moreMenu.style.right = (window.innerWidth - x) + 'px';
         } else {
-          moreMenu.style.top = (rect.bottom + 4) + 'px';
-          moreMenu.style.bottom = 'auto';
+           moreMenu.style.left = x + 'px';
+           moreMenu.style.right = 'auto';
+        }
+        
+        if (openAbove) {
+           moreMenu.style.top = 'auto';
+           moreMenu.style.bottom = (window.innerHeight - y + 4) + 'px';
+        } else {
+           moreMenu.style.top = (y + 4) + 'px';
+           moreMenu.style.bottom = 'auto';
         }
         moreMenu._home = wrapper;
         document.body.appendChild(moreMenu);
@@ -525,6 +538,12 @@ function _closeAllMoreMenus() {
   for (const w of document.querySelectorAll('.result-swipe-wrapper.menu-open')) w.classList.remove('menu-open');
 }
 document.addEventListener('click', _closeAllMoreMenus);
+document.addEventListener('contextmenu', (e) => {
+  // Only close if right-clicking outside of any menu
+  if (!e.target.closest('.result-more-menu') && !e.target.closest('.queue-more-menu')) {
+    _closeAllMoreMenus();
+  }
+});
 // Same staleness issue as the queue menu: the open menu is fixed-positioned
 // at its row's coordinates at open time, then portaled to <body>. Scrolling
 // the results list afterward moves the row but not the menu, so close it
@@ -696,7 +715,6 @@ document.querySelectorAll('.results-tab').forEach(tab => {
     e.preventDefault();
     input.value = '';
     syncClearBtn();
-    closeResults();   // also dismiss the results panel for this search
     input.focus();
     showHistory();    // cleared + focused: offer recent searches
   });
@@ -705,7 +723,6 @@ document.querySelectorAll('.results-tab').forEach(tab => {
     e.preventDefault();
     input.value = '';
     syncClearBtn();
-    closeResults();
     input.focus();
     showHistory();
   });

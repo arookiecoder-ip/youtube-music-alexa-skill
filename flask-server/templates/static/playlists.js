@@ -12,12 +12,7 @@ function _closeAllPlaylistMoreMenus() {
   });
 };
 
-window.togglePlaylistMoreMenu = function(btn) {
-  // Once opened, the menu is portaled to <body> (see below) and is no longer
-  // btn.nextElementSibling -- if this same button is clicked again before the
-  // deferred reparent-back finishes, nextElementSibling would return whatever
-  // now sits next to the button (or null), not the menu. Remember it on the
-  // button itself instead of relying on DOM adjacency.
+window.togglePlaylistMoreMenu = function(btn, e) {
   const menu = btn._menu || btn.nextElementSibling;
   btn._menu = menu;
   const wasOpen = menu.classList.contains('open');
@@ -25,14 +20,33 @@ window.togglePlaylistMoreMenu = function(btn) {
   if (wasOpen) return;
   const rect = btn.getBoundingClientRect();
   menu.style.position = 'fixed';
-  menu.style.top = (rect.bottom + 4) + 'px';
-  menu.style.right = (window.innerWidth - rect.right) + 'px';
-  menu.style.bottom = 'auto';
-  menu.style.left = 'auto';
-  // Portal to <body> while open: inside the row it sits under an
-  // overflow-hidden wrapper within a scrollable list, and fixed-position
-  // elements there can get clipped or fail to receive clicks (see the same
-  // fix applied to the queue/search-result more-menus).
+  
+  const menuHeight = 132;
+  const menuWidth = 170;
+  
+  let x = e && e.clientX ? e.clientX : rect.right - menuWidth;
+  let y = e && e.clientY ? e.clientY : rect.bottom;
+  
+  const spaceBelow = window.innerHeight - y;
+  const spaceRight = window.innerWidth - x;
+  const openAbove = spaceBelow < menuHeight + 8;
+  
+  if (spaceRight < menuWidth + 8) {
+      menu.style.left = 'auto';
+      menu.style.right = (window.innerWidth - x) + 'px';
+  } else {
+      menu.style.left = x + 'px';
+      menu.style.right = 'auto';
+  }
+  
+  if (openAbove) {
+      menu.style.top = 'auto';
+      menu.style.bottom = (window.innerHeight - y + 4) + 'px';
+  } else {
+      menu.style.top = (y + 4) + 'px';
+      menu.style.bottom = 'auto';
+  }
+
   menu._home = btn.parentElement;
   document.body.appendChild(menu);
   menu.classList.add('open');
