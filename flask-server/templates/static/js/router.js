@@ -8,7 +8,7 @@
   }
 
   function hideAllViews() {
-    setHidden('.play-section, #recs-section, #home-section, #idle-hero, #results-section, #queue-section, #artist-section, #album-section', true);
+    setHidden('.play-section, #recs-section, #home-section, #idle-hero, #results-section, #queue-section, #artist-section, #album-section, #now-playing-section', true);
   }
 
   function showHomeViews() {
@@ -28,11 +28,19 @@
       if (window.openHistoryPage) window.openHistoryPage(true);
     },
     '#now-playing': function() {
-      // Now Playing owns the viewport. Do not leave Home/results underneath;
-      // they can peek through during resizing and keep the document scrollable.
+      // Show the dedicated now-playing page (album art + queue) in the main content area.
+      // This replaces the old mini-popup overlay approach.
       hideAllViews();
       setHidden('.player-section', false);
-      if (window._openMiniPopup) window._openMiniPopup(true);
+      var npSection = document.getElementById('now-playing-section');
+      if (npSection) npSection.hidden = false;
+      // Populate the in-page queue from the last known queue data
+      if (window._lastQueueJson && window.renderNpQueue) {
+        try {
+          var queue = JSON.parse(window._lastQueueJson);
+          window.renderNpQueue(queue, window._lastQueueIndex || 0);
+        } catch(_) {}
+      }
     },
     '#queue': function() {
       var queueSection = document.getElementById('queue-section');
@@ -77,6 +85,8 @@
       if (historyOverlay) historyOverlay.classList.remove('open');
     }
     if (hash !== '#now-playing') {
+      var npSection = document.getElementById('now-playing-section');
+      if (npSection) npSection.hidden = true;
       setHidden('#queue-section', true);
       var main = document.querySelector('main');
       if (main) main.classList.remove('has-queue');

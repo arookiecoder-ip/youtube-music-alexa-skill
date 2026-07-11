@@ -1644,3 +1644,172 @@ body.results-open .player-section {
   .player-section .progress:hover .progress-track { height: 3px; }
   .player-section .progress-fill { background: #ff0033; }
 }
+
+/* ============================================================
+   Now Playing page — YT Music style
+   Full-viewport two-column layout: large art (left) + queue (right)
+   Shown when navigating to #now-playing route.
+   ============================================================ */
+
+#now-playing-section {
+  padding: 0;
+  margin: 0 -28px; /* bleed to main edges */
+  display: block;
+}
+
+.np-page {
+  display: flex;
+  height: calc(100dvh - var(--topbar-h) - var(--playbar-h) - 8px);
+  overflow: hidden;
+}
+
+/* ---- Left: album art + meta ---- */
+.np-page-left {
+  flex: 0 0 55%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 20px;
+  padding: 32px 48px;
+  overflow: hidden;
+}
+
+.np-page-art {
+  width: min(360px, 100%);
+  aspect-ratio: 1;
+  border-radius: var(--card-radius);
+  background: var(--surface) center / cover no-repeat;
+  box-shadow: 0 24px 72px rgba(0,0,0,.65);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--border);
+  flex: none;
+  transition: box-shadow .4s ease;
+}
+.np-page-art.has-thumb svg { display: none; }
+.np-page-art.has-thumb { box-shadow: 0 32px 80px rgba(0,0,0,.75); }
+
+.np-page-meta {
+  text-align: center;
+  width: 100%;
+  max-width: 380px;
+}
+
+.np-page-title {
+  font-size: 1.3rem;
+  font-weight: 700;
+  line-height: 1.3;
+  margin-bottom: 6px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--text);
+}
+
+.np-page-artist {
+  font-size: .88rem;
+  color: var(--muted);
+  cursor: pointer;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: color .15s;
+}
+.np-page-artist:hover { color: var(--text); }
+.np-page-artist .artist-name { text-decoration: none; color: inherit; }
+.np-page-artist .artist-name:hover { text-decoration: underline; }
+
+.np-page-btns {
+  display: flex;
+  gap: 14px;
+  align-items: center;
+}
+
+.np-page-like-btn,
+.np-page-shuffle-btn {
+  width: 44px;
+  height: 44px;
+  border-radius: 50%;
+  background: none;
+  border: none;
+  color: var(--muted);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background .15s, color .15s;
+}
+.np-page-like-btn:hover,
+.np-page-shuffle-btn:hover {
+  background: rgba(255,255,255,.08);
+  color: var(--text);
+}
+.np-page-like-btn svg,
+.np-page-shuffle-btn svg { width: 22px; height: 22px; }
+.np-page-like-btn.liked { color: var(--accent); }
+.np-page-shuffle-btn.shuffle-active { color: var(--accent); background: rgba(232,89,12,.12); }
+
+/* ---- Right: queue ---- */
+.np-page-right {
+  flex: 0 0 45%;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid rgba(255,255,255,.07);
+  overflow: hidden;
+  background: rgba(255,255,255,.018);
+}
+
+.np-page-queue-head {
+  font-size: .7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .16em;
+  color: var(--muted);
+  padding: 22px 24px 10px;
+  flex: none;
+  border-bottom: 1px solid rgba(255,255,255,.06);
+}
+
+#np-queue-list {
+  flex: 1;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 6px 0 120px;
+}
+#np-queue-list::-webkit-scrollbar { width: 6px; }
+#np-queue-list::-webkit-scrollbar-track { background: transparent; }
+#np-queue-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+/* np-queue-list reuses the queue-item / queue-swipe-wrapper styles from queue.css */
+#np-queue-list .queue-delete-underlay,
+#np-queue-list .queue-like-underlay { display: none !important; }
+#np-queue-list .queue-swipe-wrapper { transform: none !important; touch-action: auto !important; }
+
+/* On mobile the now-playing page shows full-width art only */
+@media (max-width: 899px) {
+  .np-page { flex-direction: column; height: auto; overflow-y: auto; }
+  .np-page-left { flex: none; padding: 24px 20px; }
+  .np-page-right { flex: none; border-left: none; border-top: 1px solid rgba(255,255,255,.07); }
+  #now-playing-section { margin: 0 -16px; }
+}
+
+/* Disable the old mini-popup overlay on desktop — now-playing-section replaces it */
+@media (min-width: 900px) {
+  .mini-popup-overlay { display: none !important; }
+}
+
+/* When the now-playing page is shown, the np-page already uses exact viewport
+   height — suppress main's playbar padding so the page doesn't overflow. */
+main:has(#now-playing-section:not([hidden])) {
+  padding-bottom: 0 !important;
+}
+/* Also suppress the extra horizontal padding that main adds on desktop,
+   since #now-playing-section bleeds to -28px already. */
+@media (min-width: 900px) {
+  main:has(#now-playing-section:not([hidden])) {
+    padding-left: 0;
+    padding-right: 0;
+  }
+}

@@ -38,7 +38,7 @@
       state().lastActionIntent = false;
       if (window.syncPlayPause) window.syncPlayPause();
     }
-    if (np.title) {
+    if (np.title && np.playing) {
       if (window.showNowPlaying) window.showNowPlaying(np);
       if (np.playing !== undefined) {
         const inGrace = (Date.now() - state().lastActionAt) < state().GRACE_MS;
@@ -49,9 +49,14 @@
         }
       }
     } else {
-      if (window.showNowPlaying) window.showNowPlaying(null);
+      // Only clear the now-playing UI if we're not in a grace window where the
+      // user just issued a play command (Alexa confirmation still pending).
+      const inGrace = (Date.now() - state().lastActionAt) < state().GRACE_MS;
+      const expectingPlay = inGrace && state().lastActionIntent === true;
+      if (!expectingPlay) {
+        if (window.showNowPlaying) window.showNowPlaying(null);
+      }
       if (np.playing !== undefined) {
-        const inGrace = (Date.now() - state().lastActionAt) < state().GRACE_MS;
         const contradictsIntent = inGrace && state().lastActionIntent !== null && np.playing !== state().lastActionIntent;
         if (!contradictsIntent && !inGrace) {
           state().isPlaying = np.playing;
@@ -72,11 +77,20 @@
           if (qJson !== window._lastQueueJson) {
             window._lastQueueJson = qJson;
             if (window.showQueue) window.showQueue(_rafQueuedData, _rafQueuedIndex);
+            // Also update the inline queue on the now-playing page if visible
+            const npSection = document.getElementById('now-playing-section');
+            if (npSection && !npSection.hidden && window.renderNpQueue) {
+              window.renderNpQueue(_rafQueuedData, _rafQueuedIndex);
+            }
             refreshQueueModalIfOpen();
             // Broadcast queue update to other tabs via PWA BroadcastChannel
             if (window.broadcastQueueUpdate) window.broadcastQueueUpdate(_rafQueuedData, _rafQueuedIndex);
           } else if (window.updateQueueActive) {
             window.updateQueueActive(_rafQueuedIndex);
+            const npSection = document.getElementById('now-playing-section');
+            if (npSection && !npSection.hidden && window.renderNpQueue && window._lastQueueJson) {
+              try { window.renderNpQueue(JSON.parse(window._lastQueueJson), _rafQueuedIndex); } catch(_) {}
+            }
           }
         });
       }

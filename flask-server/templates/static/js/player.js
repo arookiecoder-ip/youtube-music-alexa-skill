@@ -66,10 +66,18 @@ function showNowPlaying(info) {
         art.style.backgroundImage = '';
         art.classList.remove('has-thumb');
       }
+      // Clear now-playing-section elements
+      const npPageArt = document.getElementById('np-page-art');
+      if (npPageArt) { npPageArt.style.backgroundImage = ''; npPageArt.classList.remove('has-thumb'); }
+      const npPageTitle = document.getElementById('np-page-title');
+      if (npPageTitle) npPageTitle.textContent = 'Nothing is playing';
+      const npPageArtist = document.getElementById('np-page-artist');
+      if (npPageArtist) npPageArtist.textContent = '';
       state._hasTrack = false;
       state._currentVideoId = '';
       state._currentThumbnail = '';
       state._currentTrack = null;
+      _lastNpFingerprint = '';
     }
     return;
   }
@@ -87,6 +95,15 @@ function showNowPlaying(info) {
     document.getElementById('mp-np-artist').innerHTML = (info.channelId ? '<span class="artist-name" data-channel-id="' + escHtml(info.channelId) + '">' + escHtml(info.artist) + '</span>' : escHtml(info.artist || ''));
     const art = document.getElementById('np-art');
     const mpArt = document.getElementById('mp-np-art');
+    const npPageArt = document.getElementById('np-page-art');
+    const npPageTitle = document.getElementById('np-page-title');
+    const npPageArtist = document.getElementById('np-page-artist');
+    if (npPageTitle) npPageTitle.textContent = info.title;
+    if (npPageArtist) {
+      npPageArtist.innerHTML = (info.channelId
+        ? '<span class="artist-name" data-channel-id="' + escHtml(info.channelId) + '">' + escHtml(info.artist) + '</span>'
+        : escHtml(info.artist || ''));
+    }
     if (info.thumbnail) {
       const url = 'url(' + info.thumbnail + ')';
       const img = new Image();
@@ -98,6 +115,7 @@ function showNowPlaying(info) {
           miniArt.classList.add('has-thumb');
           mpArt.style.backgroundImage = url;
           mpArt.classList.add('has-thumb');
+          if (npPageArt) { npPageArt.style.backgroundImage = url; npPageArt.classList.add('has-thumb'); }
         }
       };
       img.src = info.thumbnail;
@@ -108,6 +126,7 @@ function showNowPlaying(info) {
       miniArt.classList.remove('has-thumb');
       mpArt.style.backgroundImage = '';
       mpArt.classList.remove('has-thumb');
+      if (npPageArt) { npPageArt.style.backgroundImage = ''; npPageArt.classList.remove('has-thumb'); }
     }
     // Track video_id for the URL button. Clear it when the new track's id is
     // unknown (optimistic plain-text play) so the "Open on YouTube Music"
@@ -521,6 +540,7 @@ async function playResult(item, suppressRadio, forceRadio) {
     state.lastActionIntent = true;
     syncPlayPause();
     toast(forceRadio ? 'Radio started' : 'Playing', 'ok');
+    // Navigate to now-playing page on desktop
     if (window.matchMedia('(min-width: 900px)').matches) location.hash = '#now-playing';
     state._lastQueueJson = '';
     schedulePollNowPlaying(3000);
@@ -556,10 +576,17 @@ function syncModalScrollLock() {
   let _miniPopupOpen = false;
 
   function openMiniPopup(fromRoute) {
-    if (!fromRoute && window.matchMedia('(min-width: 900px)').matches) {
-      location.hash = '#now-playing';
+    // Don't open the now-playing view when nothing is playing
+    if (!state._hasTrack) {
+      if (fromRoute) location.hash = '#home';
       return;
     }
+    // On desktop, navigate to the #now-playing page (in-page section, not overlay)
+    if (window.matchMedia('(min-width: 900px)').matches) {
+      if (location.hash !== '#now-playing') location.hash = '#now-playing';
+      return;
+    }
+    // Mobile: open the bottom sheet popup
     if (_miniPopupOpen) return;
     _miniPopupOpen = true;
     // Sync volume from main slider

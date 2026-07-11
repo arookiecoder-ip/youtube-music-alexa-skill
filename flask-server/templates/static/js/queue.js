@@ -12,7 +12,7 @@
   if (state._hasTrack === undefined) state._hasTrack = false;
   if (state._resultsOpen === undefined) state._resultsOpen = false;
   // The Up Next panel is opt-in (opened from the playbar's queue button),
-  // like YT Music/Spotify — it must not sit on top of the home feed.
+  // like YT Music/Spotify â€” it must not sit on top of the home feed.
   if (state._queueOpen === undefined) {
     let saved = null;
     try { saved = localStorage.getItem('queuePanelOpen'); } catch (_) {}
@@ -242,7 +242,7 @@ function _buildQueueRow(container, item, i, currentIndex, thumbsById) {
     });
   }
 
-  // Tap on the item → play from queue. Mark it active immediately so the
+  // Tap on the item â†’ play from queue. Mark it active immediately so the
   // "you tapped this" feedback shows right away instead of only after the
   // server round-trip completes and playFromQueue's own re-render lands.
   attachQueueItemTap(el, () => {
@@ -309,7 +309,8 @@ function showQueue(queue, currentIndex) {
   const section = document.getElementById('queue-section');
   const list = document.getElementById('queue-list');
   const mainEl = document.querySelector('main');
-  if (location.hash !== '#now-playing' || state._resultsOpen || !state._queueOpen) {
+  // Show queue panel only when queueOpen and NOT on the now-playing page (that has its own #np-queue-list)
+  if (!state._queueOpen || state._resultsOpen || location.hash === '#now-playing') {
     section.classList.remove('is-visible');
     section.hidden = true;
     mainEl.classList.remove('has-queue');
@@ -340,7 +341,7 @@ function showQueue(queue, currentIndex) {
   // If the rendered rows are exactly a prefix of the incoming queue (same
   // video_ids, same order), this call is just a confirmation echo of an
   // optimistic update (add/reorder/remove), an unrelated field changing
-  // upstream, or new tracks appended past the window — don't tear down and
+  // upstream, or new tracks appended past the window â€” don't tear down and
   // rebuild every row for nothing (that full rebuild, including closing menus
   // and re-creating drag handles, was the flicker). Just sync the active
   // highlight and let the sentinel page in any new tail.
@@ -383,7 +384,7 @@ function showQueue(queue, currentIndex) {
   list.replaceChildren(...newChildren);
   _syncQueueSentinel(list);
 
-  // Restore scroll position unconditionally — user stays at browsing position.
+  // Restore scroll position unconditionally â€” user stays at browsing position.
   list.scrollTop = savedScrollTop;
 
   // Only scroll the active item into view if the currently-playing track
@@ -397,6 +398,46 @@ function showQueue(queue, currentIndex) {
 }
 
 window.showQueue = showQueue;
+
+// Render queue into the now-playing page's #np-queue-list.
+// Called by the router when navigating to #now-playing and by SSE updates.
+function renderNpQueue(queue, currentIndex) {
+  var list = document.getElementById('np-queue-list');
+  if (!list) return;
+  if (!queue || queue.length === 0) {
+    list.innerHTML = '<div style="padding:24px;color:var(--muted);font-size:.88rem">No queue</div>';
+    return;
+  }
+  var renderLimit = Math.min(queue.length, Math.max(state._queueRenderLimit || QUEUE_RENDER_CHUNK, currentIndex + 11));
+  list._lazyQueue = { queue: queue, currentIndex: currentIndex };
+  var existingThumbsById = new Map();
+  var existingRows = _renderedQueueRows(list);
+  existingRows.forEach(function(w) {
+    var id = w.dataset.videoId || '';
+    var img = w.querySelector('img.queue-thumb.loaded');
+    if (id && img && !existingThumbsById.has(id)) existingThumbsById.set(id, img);
+  });
+  var renderedArr = Array.from(existingRows);
+  var existingIds = renderedArr.map(function(w) { return w.dataset.videoId || ''; });
+  var incomingIds = queue.map(function(item) { return item.video_id || ''; });
+  var samePrefix = existingIds.length > 0
+    && existingIds.length <= incomingIds.length
+    && existingIds.every(function(id, i) { return id === incomingIds[i]; });
+  if (samePrefix) {
+    renderedArr.forEach(function(w, i) { w.classList.toggle('active', i === currentIndex); });
+    _syncQueueSentinel(list);
+    return;
+  }
+  var newChildren = [];
+  for (var i = 0; i < renderLimit; i++) {
+    newChildren.push(_buildQueueRow(list, queue[i], i, currentIndex, existingThumbsById));
+  }
+  list.replaceChildren.apply(list, newChildren);
+  _syncQueueSentinel(list);
+  var active = list.querySelector('.active');
+  if (active) requestAnimationFrame(function() { active.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); });
+}
+window.renderNpQueue = renderNpQueue;
 
 // Builds the "3-dot" more-options button + dropdown for a queue row (used by
 // both the desktop inline queue and the mobile queue popup, which otherwise
@@ -474,7 +515,7 @@ function _wireQueueMoreMenu(el, item, index) {
       moreMenu.classList.add('open');
       // Portal the menu to <body> while open. Inside the row it sits under
       // an overflow-hidden wrapper within a scrollable list, and Chromium's
-      // input hit-testing clips fixed elements there — the menu is visible
+      // input hit-testing clips fixed elements there â€” the menu is visible
       // but clicks land on the row below it. _closeAllQueueMenus returns it.
       moreMenu._home = el;
       document.body.appendChild(moreMenu);
@@ -556,7 +597,7 @@ function updateQueueActive(currentIndex) {
   }
 }
 
-// Same highlight sync for the mobile queue modal — used when an SSE push
+// Same highlight sync for the mobile queue modal â€” used when an SSE push
 // carries only a queue_index change (queue itself omitted as unchanged).
 function updateQueueModalActive(currentIndex) {
   const modalBody = document.getElementById('queue-modal-body');
@@ -654,7 +695,7 @@ async function reorderQueue(fromIndex, toIndex) {
   try {
     await api('/alexa/queue_reorder/', { from_index: fromIndex, to_index: toIndex });
     // Confirm with server data after a short delay. Don't blank state._lastQueueJson
-    // here — the optimistic reorder above already matches what the server will
+    // here â€” the optimistic reorder above already matches what the server will
     // report, and invalidating the cache forces a needless full rebuild (the
     // visible flicker) as soon as the confirming snapshot arrives.
     schedulePollNowPlaying(500);
@@ -766,7 +807,7 @@ function _attachQueueSwipeGestures(wrapper, el, index, item, currentIndex) {
           state._lastQueueJson = '';
           schedulePollNowPlaying(300);
         } else {
-          toast('Can’t remove the playing track', 'error');
+          toast('Canâ€™t remove the playing track', 'error');
         }
       } else if (committedLike) {
         if (typeof toggleLike === 'function') toggleLike(item);
@@ -847,7 +888,7 @@ function _attachQueueDragReorder(el, listEl, originalIndex) {
     const distFromBottom = rect.bottom - clientY;
 
     if (distFromTop < EDGE_ZONE && _scrollContainer.scrollTop > 0) {
-      // Scroll up — speed increases as pointer gets closer to edge
+      // Scroll up â€” speed increases as pointer gets closer to edge
       const ratio = 1 - (distFromTop / EDGE_ZONE);
       _scrollSpeed = -(MAX_SPEED * Math.max(0, Math.min(1, ratio)));
       startAutoScroll();
@@ -934,7 +975,7 @@ function _attachQueueDragReorder(el, listEl, originalIndex) {
 
     // currentOver is an insertion index computed with the dragged item still
     // occupying its old slot. The server (and the optimistic splice) remove
-    // the item first, shifting everything below it up by one — so a downward
+    // the item first, shifting everything below it up by one â€” so a downward
     // move must drop the index by 1 or the item lands one slot too low.
     let toIdx = currentOver;
     if (toIdx > fromIdx) toIdx -= 1;
@@ -1151,6 +1192,7 @@ function scheduleHistoryRefresh() {
   window._appendLazyQueueRows = _appendLazyQueueRows;
   window._syncQueueSentinel = _syncQueueSentinel;
   window.showQueue = showQueue;
+window.renderNpQueue = renderNpQueue;
   window._queueMoreMenuHtml = _queueMoreMenuHtml;
   window._wireQueueMoreMenu = _wireQueueMoreMenu;
   window._closeAllQueueMenus = _closeAllQueueMenus;
