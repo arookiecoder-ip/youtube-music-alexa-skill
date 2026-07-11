@@ -206,9 +206,10 @@
       var art = e.target.closest('.home-card-art');
       var playBtn = e.target.closest('.home-play-btn');
 
-      if (playBtn) {
+      // Clicking the play button OR the art area → play the song directly
+      if (playBtn || art) {
         e.stopPropagation();
-        var card = playBtn.closest('.home-card');
+        var card = (playBtn || art).closest('.home-card');
         if (!card || !rows.contains(card) || !card.dataset.videoId) return;
         if (!window.playFromQueue) return;
         window.playFromQueue({
@@ -220,29 +221,28 @@
         return;
       }
 
-      if (titleLink || art) {
+      // Clicking the title text → open the album page
+      if (titleLink) {
         e.stopPropagation();
-        var titleCard = (titleLink || art).closest('.home-card');
-        var linkEl = titleLink || art;
+        var titleCard = titleLink.closest('.home-card');
         if (titleCard && titleCard.dataset.albumId) {
           // Album ID already known: preload then navigate
           if (window.preloadNavigateAlbum) window.preloadNavigateAlbum(titleCard.dataset.albumId);
           else window.navigateTo('#album/' + encodeURIComponent(titleCard.dataset.albumId));
         } else if (titleCard && titleCard.dataset.videoId) {
-          linkEl.classList.add('is-resolving');
+          titleLink.classList.add('is-resolving');
           var lookup = '/api/song/' + encodeURIComponent(titleCard.dataset.videoId) + '/album' +
             '?title=' + encodeURIComponent(titleCard.dataset.title || '') +
             '&artist=' + encodeURIComponent(titleCard.dataset.artist || '');
           window.api(lookup).then(function(result) {
             if (!result || !result.browseId) throw new Error('Album not found');
             titleCard.dataset.albumId = result.browseId;
-            // Chain: now preload the album then navigate
             if (window.preloadNavigateAlbum) window.preloadNavigateAlbum(result.browseId);
             else window.navigateTo('#album/' + encodeURIComponent(result.browseId));
           }).catch(function(err) {
             if (window.toast) window.toast(err.message || 'Could not open album', 'error');
           }).finally(function() {
-            linkEl.classList.remove('is-resolving');
+            titleLink.classList.remove('is-resolving');
           });
         }
         return;
@@ -348,27 +348,28 @@
         sharedMoreMenu._triggerCard = card;
         activeMenuCardId = videoId;
         
-        var menuHeight = 132;
-        var menuWidth = 160;
-        var rect = card.getBoundingClientRect();
+        var menuHeight = 200;
+        var menuWidth = 180;
+        var mouseX = e.clientX;
+        var mouseY = e.clientY;
         
-        var spaceBelow = window.innerHeight - rect.bottom;
-        var spaceRight = window.innerWidth - rect.right;
+        var spaceBelow = window.innerHeight - mouseY;
+        var spaceRight = window.innerWidth - mouseX;
         var openAbove = spaceBelow < menuHeight + 8;
         
         if (spaceRight < menuWidth + 8) {
            sharedMoreMenu.style.left = 'auto';
-           sharedMoreMenu.style.right = (window.innerWidth - rect.right) + 'px';
+           sharedMoreMenu.style.right = (window.innerWidth - mouseX) + 'px';
         } else {
-           sharedMoreMenu.style.left = rect.left + 'px';
+           sharedMoreMenu.style.left = mouseX + 'px';
            sharedMoreMenu.style.right = 'auto';
         }
         
         if (openAbove) {
            sharedMoreMenu.style.top = 'auto';
-           sharedMoreMenu.style.bottom = (window.innerHeight - rect.top + 4) + 'px';
+           sharedMoreMenu.style.bottom = (window.innerHeight - mouseY) + 'px';
         } else {
-           sharedMoreMenu.style.top = (rect.bottom + 4) + 'px';
+           sharedMoreMenu.style.top = mouseY + 'px';
            sharedMoreMenu.style.bottom = 'auto';
         }
         

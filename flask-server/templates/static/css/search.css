@@ -325,9 +325,11 @@
 
   body.results-open #queue-section { display: none !important; }
 
-  /* Sticky search bar on mobile while results are open */
+  /* Sticky search bar on mobile while results are open.
+     IMPORTANT: Only hide the *non-redesigned* player-section on mobile;
+     the redesigned-bar is position:fixed and is independently managed. */
   @media (max-width: 899px) {
-    body.results-open .player-section { display: none !important; }
+    body.results-open .player-section:not(.redesigned-bar) { display: none !important; }
     body.results-open main { padding-bottom: 92px; }
     body.results-open .toast { bottom: calc(92px + env(safe-area-inset-bottom, 0px)); }
     body.results-open .needs-login:has(#play-query) {
@@ -354,8 +356,14 @@
       padding-bottom: 14px;
     }
     body.results-open .results-list { height: auto; max-height: none; overflow: visible; }
-    /* Keep the persistent desktop player in its normal grid layout. */
-    body.results-open .player-section { display: grid !important; }
+    /* Keep the persistent desktop player visible in its normal grid layout
+       (for non-redesigned variants). */
+    body.results-open .player-section:not(.redesigned-bar) { display: grid !important; }
+    /* FIX: The redesigned-bar uses display:flex (set in player.css).
+       Forcing display:grid !important here overrides that flex layout and
+       collapses the left/center/right columns — causing the distortion.
+       Restore flex for the redesigned-bar specifically. */
+    body.results-open .player-section.redesigned-bar { display: flex !important; }
     body.results-open .player-section.is-collapsed { display: none !important; }
     body.results-open .mini-player { display: none !important; }
     body.results-open .toast { bottom: 24px; }

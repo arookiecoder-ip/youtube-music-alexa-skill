@@ -371,8 +371,13 @@ body.results-open .play-section {
   }
   /* Stay in row layout when collapsed. Icons keep their exact original size and padding 
      so they do not shift horizontally or vertically. Text hides via max-width. */
-  .sidebar .sidebar-nav-btn { transition: color .15s, background .15s; }
+  .sidebar .sidebar-nav-btn { transition: color .15s, background .15s, justify-content .25s ease, padding .25s ease; }
   .sidebar .sidebar-nav-btn svg { flex-shrink: 0; }
+  /* Collapsed: center the icon perfectly inside the 56px strip */
+  body.rail-collapsed .sidebar .sidebar-nav-btn {
+    justify-content: center;
+    padding: 11px 0;
+  }
   
   /* Explicitly set properties to animate them cleanly (variable changes skip transitions in some browsers) */
   body.rail-collapsed main,
@@ -419,11 +424,17 @@ body.results-open .play-section {
     margin: 0; 
     padding: 0;
   }
-  /* Brand container keeps fixed height and padding. Text label and the orange
-     EQ-bar mark both hide smoothly via opacity/max-width so nothing clips
-     through the overflow:hidden container and leaves a stray orange sliver. */
+  /* Center playlist art in the 56px strip, kill the gap that causes clipping */
+  body.rail-collapsed .sidebar-playlist-item {
+    justify-content: center;
+    padding: 8px 0 !important;
+    gap: 0;
+  }
+  /* Brand container: allow overflow so the wordmark stays visible even when
+     the rail collapses to 56 px. The sidebar is overflow:visible on desktop
+     so the text safely floats past the narrow rail boundary. */
   .sidebar-brand {
-    overflow: hidden;
+    overflow: visible;
     transition: width .25s ease;
     white-space: nowrap;
   }
@@ -433,27 +444,31 @@ body.results-open .play-section {
     opacity: 1;
     display: block;
   }
-  /* BUG 1 FIX: the brand-mark (orange EQ bars) must also transition out;
-     without this the mark partially clips through the overflow:hidden brand
-     container producing a stray orange sliver when the rail collapses. */
   .sidebar-brand-mark {
     transition: opacity .14s ease, max-width .25s ease, margin .25s ease;
     max-width: 18px;
     opacity: 1;
   }
+  /* Collapsed: brand stays at its natural width — icon + text always visible.
+     The rail-toggle centers itself; the wordmark overflows past the 56 px rail
+     edge and sits above the content area at top-left (high z-index handles
+     stacking). */
   body.rail-collapsed .sidebar-brand {
-    width: var(--rail-w-mini);
+    width: auto;
+    justify-content: flex-start;
+    padding: 0 4px;
+    overflow: visible;
   }
+  /* Keep mark and text fully visible when collapsed */
   body.rail-collapsed .sidebar-brand strong {
-    max-width: 0;
-    opacity: 0;
+    max-width: 150px;
+    opacity: 1;
     margin: 0;
     padding: 0;
   }
-  /* BUG 1 FIX: hide the mark in lockstep with the text label */
   body.rail-collapsed .sidebar-brand-mark {
-    max-width: 0;
-    opacity: 0;
+    max-width: 18px;
+    opacity: 1;
     margin: 0;
   }
   /* Smooth open/close */
@@ -880,14 +895,15 @@ body.results-open .player-section {
 .player-section .transport button svg { width: 18px; height: 18px; }
 .player-section .pp-btn,
 .player-section .pp-btn:hover {
-  width: 46px;
-  height: 46px;
-  background: var(--accent-grad);
-  color: #fff;
-  box-shadow: 0 4px 18px rgba(232, 89, 12, .35);
+  width: 50px;
+  height: 50px;
+  background: #ffffff;
+  color: #000000;
+  border: none;
+  box-shadow: 0 4px 18px rgba(255, 255, 255, .18);
 }
-.player-section .pp-btn:hover { filter: brightness(1.08); }
-.player-section .pp-btn svg { width: 20px; height: 20px; }
+.player-section .pp-btn:hover { filter: brightness(0.92); }
+.player-section .pp-btn svg { width: 22px; height: 22px; }
 
 /* Progress */
 .player-section .progress { margin: 0; }
@@ -973,10 +989,8 @@ input[type=range]::-moz-range-thumb { border-radius: 50%; }
   .player-section .np-art { width: 44px; height: 44px; }
   .player-section .transport { grid-area: transport; gap: 2px; }
   .player-section .transport button { width: 38px; height: 38px; }
-  .player-section .pp-btn, .player-section .pp-btn:hover { width: 42px; height: 42px; }
+  .player-section .pp-btn, .player-section .pp-btn:hover { width: 46px; height: 46px; }
   .player-section .vol { display: none !important; }
-  .player-section .np-like-btn,
-  .player-section .np-shuffle-btn,
   .player-section .transport button[data-action="previous"] {
     display: none !important;
   }
@@ -1001,16 +1015,52 @@ input[type=range]::-moz-range-thumb { border-radius: 50%; }
   margin: 0;
   justify-self: stretch;
 }
-.player-section .progress-track,
-.player-section .progress:hover .progress-track {
+.player-section .progress-track {
   height: 4px;
   padding: 0;
   border-radius: 0;
+  transition: height 0.15s ease;
 }
-.player-section .progress-handle,
+/* Grow bar slightly on hover for tactile feel */
+.player-section .progress-track:hover,
+.player-section .progress-track.dragging {
+  height: 6px;
+}
+/* Hide the time labels flanking the top-strip bar */
 .player-section .progress-times { display: none; }
-/* Playbar timer is desktop-only (re-enabled in the ≥900px block) */
+
+/* Progress handle dot — repositioned to hang below the thin top strip so it
+   stays inside the overflow:hidden player section boundary */
+.player-section .progress-handle {
+  display: block;
+  width: 13px;
+  height: 13px;
+  top: 100%;                    /* sits just below the track bar */
+  transform: translateX(-50%) translateY(-40%) scale(0.5);
+  opacity: 0;
+  background: #ffffff;
+  box-shadow: 0 1px 6px rgba(0,0,0,0.5);
+  transition: opacity 0.15s ease, transform 0.15s ease;
+}
+.player-section .progress-track:hover .progress-handle,
+.player-section .progress-track.dragging .progress-handle {
+  opacity: 1;
+  transform: translateX(-50%) translateY(-40%) scale(1);
+  transition: opacity 0.15s ease, transform 0.15s ease;
+}
+/* Playbar timer: hidden globally, shown inside the player bar as small muted text below the artist */
 .playbar-time { display: none; }
+.player-section .playbar-time {
+  display: block;
+  font-size: 0.62rem;
+  color: var(--muted);
+  opacity: 0.7;
+  margin-top: 3px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  pointer-events: none;
+}
 /* NOTE: overflow:hidden is already set on .player-section base rule above;
    the duplicate here is intentionally removed to avoid specificity confusion. */
 

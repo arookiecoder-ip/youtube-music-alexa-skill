@@ -646,18 +646,19 @@
   height: 20px;
 }
 .redesigned-bar .pp-btn.dominant {
-  width: 48px !important;
-  height: 48px !important;
+  width: 50px !important;
+  height: 50px !important;
   border-radius: 50% !important;
-  background: var(--accent) !important;
-  color: #000;
+  background: #ffffff !important;
+  border: none !important;
+  color: #000000;
   display: flex !important;
   align-items: center;
   justify-content: center;
-  transition: transform 0.1s;
+  transition: filter 0.1s;
 }
 .redesigned-bar .pp-btn.dominant:hover {
-  transform: scale(1.04);
+  filter: brightness(0.92);
 }
 .redesigned-bar .pp-btn.dominant svg {
   width: 22px !important;
@@ -710,7 +711,7 @@
     display: flex;
     align-items: center;
     flex: 1;
-    overflow: hidden;
+    min-width: 0;
   }
   .redesigned-bar .player-center {
     display: flex;
@@ -740,7 +741,7 @@
     height: 40px !important;
   }
   .redesigned-bar .pp-btn.dominant {
-    width: 40px !important;
-    height: 40px !important;
+    width: 46px !important;
+    height: 46px !important;
   }
 }

@@ -687,15 +687,25 @@ function syncModalScrollLock() {
     openMiniPopup();
   });
 
-  // Compact playbar: the expand toggle and the track-info cluster both open
-  // the full now-playing sheet. Buttons/links inside .np (like, artist link)
-  // keep their own behavior.
+  // Compact playbar: the expand toggle, the track-info cluster, and any empty
+  // area of the player bar all open the full now-playing sheet.
+  // Buttons/links inside keep their own behavior.
   const expandBtn = document.getElementById('player-expand-btn');
   if (expandBtn) expandBtn.addEventListener('click', openMiniPopup);
   const npCluster = document.getElementById('now-playing');
   if (npCluster) {
     npCluster.addEventListener('click', (e) => {
       if (e.target.closest('button, a, .artist-name')) return;
+      openMiniPopup();
+    });
+  }
+  // Clicking any empty area of the player bar (transport row, progress strip, etc.)
+  // also opens the now-playing sheet, so the user can tap anywhere on the bar.
+  const playerBar = document.querySelector('.player-section');
+  if (playerBar) {
+    playerBar.addEventListener('click', (e) => {
+      // Let interactive elements (buttons, links, inputs, range sliders) keep their own click.
+      if (e.target.closest('button, a, input, [role="slider"], .progress-track')) return;
       openMiniPopup();
     });
   }
