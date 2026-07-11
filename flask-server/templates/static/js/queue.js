@@ -396,6 +396,8 @@ function showQueue(queue, currentIndex) {
   }
 }
 
+window.showQueue = showQueue;
+
 // Builds the "3-dot" more-options button + dropdown for a queue row (used by
 // both the desktop inline queue and the mobile queue popup, which otherwise
 // only offered swipe gestures with no menu equivalent).

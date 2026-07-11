@@ -62,6 +62,7 @@ function showNowPlaying(info) {
       state._hasTrack = false;
       state._currentVideoId = '';
       state._currentThumbnail = '';
+      state._currentTrack = null;
       _lastNpFingerprint = '';
       updateUrlBar();
       syncUiState();
@@ -110,6 +111,10 @@ function showNowPlaying(info) {
     // link never keeps pointing at the previous song.
     state._currentVideoId = info.video_id || '';
     state._currentThumbnail = info.thumbnail || '';
+    state._currentTrack = {
+      video_id: info.video_id || '', title: info.title || '', artist: info.artist || '',
+      thumbnail: info.thumbnail || '', channelId: info.channelId || ''
+    };
     updateUrlBar();
   }
 
@@ -561,6 +566,16 @@ function syncModalScrollLock() {
     mpShuffleBtn.classList.toggle('shuffle-active', mainShuffle.classList.contains('shuffle-active'));
     overlay.classList.add('open');
     syncModalScrollLock();
+    if (window.matchMedia('(min-width: 900px)').matches) {
+      if (!state._queueOpen) {
+        const queueToggle = document.getElementById('queue-toggle-btn');
+        if (queueToggle) queueToggle.click();
+      } else if (window.showQueue) {
+        let queue = [];
+        try { queue = JSON.parse(state._lastQueueJson || '[]'); } catch (_) {}
+        window.showQueue(queue, state._lastQueueIndex || 0);
+      }
+    }
   }
 
   function closeMiniPopup() {
@@ -797,6 +812,54 @@ document.getElementById('pp-btn').onclick = () => {
     })
     .catch(e => toast(e.message, 'error'));
 };
+
+document.getElementById('shuffle-btn').addEventListener('click', async (e) => {
+  const btn = e.currentTarget;
+  if (btn.disabled) return;
+  btn.disabled = true;
+  try {
+    await api('/alexa/shuffle_queue/', {});
+    btn.classList.add('shuffle-active');
+    state._lastQueueJson = '';
+    schedulePollNowPlaying(300);
+    toast('Queue shuffled', 'ok');
+  } catch (err) {
+    toast(err.message || 'Shuffle failed', 'error');
+  } finally {
+    btn.disabled = false;
+  }
+});
+
+/* ---- compact player more menu ---- */
+(function () {
+  const wrap = document.querySelector('.np-more-wrap');
+  const button = document.getElementById('np-more-btn');
+  const menu = document.getElementById('np-more-menu');
+  const close = () => { wrap.classList.remove('open'); button.setAttribute('aria-expanded', 'false'); };
+  button.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const open = !wrap.classList.contains('open');
+    close();
+    if (open) { wrap.classList.add('open'); button.setAttribute('aria-expanded', 'true'); }
+  });
+  document.addEventListener('click', (e) => { if (!wrap.contains(e.target)) close(); });
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') close(); });
+  document.getElementById('np-menu-like').addEventListener('click', () => {
+    if (state._currentTrack && state._currentTrack.video_id && typeof toggleLike === 'function')
+      toggleLike(state._currentTrack, document.getElementById('np-like-btn'));
+    close();
+  });
+  document.getElementById('np-menu-playlist').addEventListener('click', () => {
+    if (state._currentTrack && state._currentTrack.video_id && typeof openAddToPlaylistModal === 'function')
+      openAddToPlaylistModal(state._currentTrack);
+    close();
+  });
+  document.getElementById('np-menu-ytm').addEventListener('click', (e) => {
+    if (!state._currentVideoId) { e.preventDefault(); return; }
+    e.currentTarget.href = 'https://music.youtube.com/watch?v=' + encodeURIComponent(state._currentVideoId);
+    close();
+  });
+})();
 
 /* ---- prev / next ----
    Alexa processes each spoken command in turn (speech recognition + NLU +

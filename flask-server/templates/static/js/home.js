@@ -78,6 +78,8 @@
     }
     const container = document.getElementById('home-rows');
     if (!container) return;
+    const idleHero = document.getElementById('idle-hero');
+    if (idleHero) idleHero.hidden = true;
     const greet = document.getElementById('home-greeting');
     if (greet) {
       const h = new Date().getHours();
@@ -108,6 +110,8 @@
     if (!state._loggedIn || state._homeLoaded || state._homeLoading) return;
     state._homeLoading = true;
     const section = document.getElementById('home-section');
+    const idleHero = document.getElementById('idle-hero');
+    if (idleHero) idleHero.hidden = true;
     const artistOpen = (location.hash || '').indexOf('#artist/') === 0;
     if (section) section.hidden = !!(state._resultsOpen || artistOpen);
     showHomeSkeleton(true);

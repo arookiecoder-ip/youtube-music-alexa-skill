@@ -1,4 +1,6 @@
 /* ── Playlist Card (browsing list) ── */
+#add-to-playlist-overlay { z-index: 600; }
+
 .playlist-card {
   display: flex;
   align-items: center;
@@ -211,4 +213,102 @@
   .playlist-detail-hero-name {
     font-size: .95rem;
   }
+}
+
+/* Desktop playlist detail follows YT Music's two-column composition: the
+   playlist identity remains on the left while tracks scroll on the right. */
+@media (min-width: 900px) {
+  #playlist-detail-modal { position: relative; }
+  #playlist-detail-modal .history-modal-header {
+    position: absolute;
+    inset: 14px 20px auto;
+    width: auto;
+    padding: 0;
+    z-index: 3;
+    pointer-events: none;
+  }
+  #playlist-detail-modal .history-modal-header > * { pointer-events: auto; }
+  #playlist-detail-modal .history-modal-header h3 { display: none; }
+  #playlist-detail-modal .playlist-detail-actions { display: none; }
+  #playlist-detail-modal #playlist-detail-body {
+    width: min(1160px, 100%);
+    height: 100%;
+    margin: 0 auto;
+    padding: 64px 32px 28px;
+    display: grid;
+    grid-template-columns: 300px minmax(0, 1fr);
+    gap: clamp(44px, 6vw, 86px);
+    overflow: hidden;
+    box-sizing: border-box;
+  }
+  #playlist-detail-modal .playlist-detail-hero {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    align-self: center;
+    gap: 18px;
+    padding: 0;
+    text-align: center;
+  }
+  #playlist-detail-modal .playlist-detail-hero .playlist-collage {
+    width: 260px;
+    height: 260px;
+    border-radius: 10px;
+    box-shadow: 0 22px 60px rgba(0,0,0,.5);
+  }
+  #playlist-detail-modal .playlist-detail-hero-info {
+    width: 100%;
+    align-items: center;
+    gap: 9px;
+    padding: 0;
+  }
+  .playlist-detail-page-title {
+    margin: 0;
+    color: var(--text);
+    font-size: 1.65rem;
+    line-height: 1.15;
+  }
+  #playlist-detail-modal .playlist-detail-hero-meta { justify-content: center; }
+  #playlist-detail-modal .playlist-detail-hero-desc {
+    max-width: 290px;
+    font-size: .82rem;
+    -webkit-line-clamp: 4;
+  }
+  .playlist-detail-hero-actions { display: flex; align-items: center; justify-content: center; gap: 12px; margin-top: 7px; }
+  .playlist-detail-hero-actions button {
+    width: 48px;
+    height: 48px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    border: 0;
+    border-radius: 50%;
+    background: rgba(255,255,255,.1);
+    color: var(--text);
+    cursor: pointer;
+  }
+  .playlist-detail-hero-actions .playlist-hero-play {
+    width: 62px;
+    height: 62px;
+    background: #fff;
+    color: #080808;
+  }
+  .playlist-detail-hero-actions button:hover { transform: scale(1.04); }
+  .playlist-detail-hero-actions svg { width: 25px; height: 25px; }
+  #playlist-detail-modal #playlist-detail-body > .history-list {
+    min-width: 0;
+    height: 100%;
+    overflow-y: auto;
+    padding-right: 8px;
+  }
+  #playlist-detail-modal .result-swipe-wrapper { background: transparent; }
+  #playlist-detail-modal .history-item {
+    min-height: 58px;
+    padding: 8px 10px;
+    border-bottom: 1px solid rgba(255,255,255,.07);
+    background: transparent;
+  }
+  #playlist-detail-modal .history-item:hover { background: rgba(255,255,255,.06); }
+  #playlist-detail-modal .queue-thumb { width: 44px; height: 44px; border-radius: 4px; }
 }

@@ -3252,9 +3252,12 @@ def _home_item(t):
         'title': str(t.get('title') or ''),
         'artist': str(t.get('artist') or ''),
         'thumbnail': str(thumb),
+        # Local history/playlist rows do not consistently carry an `artists`
+        # array (some carry a plain string), so only read their normalized ids
+        # here. Feed items with artist arrays are handled by
+        # `_normalize_home_item` above.
         'channelId': str(t.get('channelId') or t.get('channel_id') or
-                         t.get('artist_id') or
-                         (((t.get('artists') or [{}])[0] or {}).get('id')) or ''),
+                         t.get('artist_id') or ''),
     }
 
 

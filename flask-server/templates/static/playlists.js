@@ -449,14 +449,22 @@ async function openPlaylistDetailModal(pl_id, fromRoute) {
   heroDiv.innerHTML = `
     ${_buildCollageHtml(pl.tracks, pl.id === 'liked')}
     <div class="playlist-detail-hero-info">
+      <h1 class="playlist-detail-page-title">${escHtml(pl.name)}</h1>
       <div class="playlist-detail-hero-meta">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="width:14px;height:14px;"><path d="M9 18V5l12-2v13"></path><circle cx="6" cy="18" r="3"></circle><circle cx="18" cy="16" r="3"></circle></svg>
         ${trackLabel}
         ${updatedLabel ? `<span>·</span><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" style="width:14px;height:14px;"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>${updatedLabel}` : ''}
       </div>
       ${desc ? `<div class="playlist-detail-hero-desc">${escHtml(desc)}</div>` : ''}
+      <div class="playlist-detail-hero-actions">
+        <button class="playlist-hero-play" type="button" title="Play all"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></button>
+        <button class="playlist-hero-shuffle" type="button" title="Shuffle">${shuffleBtn.innerHTML}</button>
+      </div>
     </div>
   `;
+
+  heroDiv.querySelector('.playlist-hero-play').addEventListener('click', () => playAllBtn.click());
+  heroDiv.querySelector('.playlist-hero-shuffle').addEventListener('click', () => shuffleBtn.click());
 
   body.innerHTML = '';
   body.appendChild(heroDiv);
@@ -811,6 +819,8 @@ async function toggleLike(item, btnElement) {
 let _currentItemToSave = null;
 function openAddToPlaylistModal(item) {
   _currentItemToSave = item;
+  const modalTitle = document.getElementById('add-to-playlist-title');
+  if (modalTitle) modalTitle.textContent = 'Save to Playlist';
   const listEl = document.getElementById('add-to-playlist-list');
   const lists = getPlaylistsList().filter(p => p.id !== 'liked');
   
@@ -853,6 +863,19 @@ function closeAddToPlaylistModal() {
   _currentItemToSave = null;
 }
 
+function openCreatePlaylistModal() {
+  _currentItemToSave = null;
+  const title = document.getElementById('add-to-playlist-title');
+  const list = document.getElementById('add-to-playlist-list');
+  const input = document.getElementById('new-playlist-name');
+  if (title) title.textContent = 'New Playlist';
+  if (list) list.innerHTML = '';
+  input.value = '';
+  input.disabled = false;
+  document.getElementById('add-to-playlist-overlay').classList.add('open');
+  requestAnimationFrame(() => input.focus());
+}
+
 async function createNewPlaylist() {
   const nameInput = document.getElementById('new-playlist-name');
   const name = nameInput.value.trim();
@@ -862,6 +885,8 @@ async function createNewPlaylist() {
   try {
     const res = await api('/api/playlists/', { name: name });
     _playlistsData.playlists[res.id] = res;
+    renderPlaylists();
+    renderSidebarPlaylists();
     if (_currentItemToSave) {
       await addToPlaylist(res.id);
     } else {
@@ -1299,7 +1324,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const newPlBtn = document.getElementById('new-playlist-btn');
   if (newPlBtn) newPlBtn.addEventListener('click', createNewPlaylist);
   const sidebarNewPlBtn = document.getElementById('sidebar-new-playlist-btn');
-  if (sidebarNewPlBtn) sidebarNewPlBtn.addEventListener('click', createNewPlaylist);
+  if (sidebarNewPlBtn) sidebarNewPlBtn.addEventListener('click', openCreatePlaylistModal);
 
   // Close modals when clicking outside on the overlay
   const plOverlay = document.getElementById('playlists-modal-overlay');

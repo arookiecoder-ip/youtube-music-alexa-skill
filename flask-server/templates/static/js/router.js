@@ -12,7 +12,8 @@
   }
 
   function showHomeViews() {
-    setHidden('.play-section, #home-section, #idle-hero', false);
+    setHidden('.play-section, #home-section', false);
+    setHidden('#idle-hero', true);
     setHidden('.player-section', true);
     setHidden('#results-section, #queue-section, #artist-section, #album-section', true);
   }

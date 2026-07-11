@@ -292,6 +292,16 @@
         <div class="np-title" id="np-title"></div>
         <div class="np-artist" id="np-artist"></div>
       </div>
+      <div class="np-more-wrap">
+        <button class="np-more-btn" id="np-more-btn" title="More options" aria-label="More options" aria-expanded="false">
+          <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg>
+        </button>
+        <div class="np-more-menu" id="np-more-menu" role="menu">
+          <button role="menuitem" id="np-menu-like">Like song</button>
+          <button role="menuitem" id="np-menu-playlist">Add to playlist</button>
+          <a role="menuitem" id="np-menu-ytm" href="#" target="_blank" rel="noopener">Open in YouTube Music</a>
+        </div>
+      </div>
       <button class="np-like-btn" id="np-like-btn" title="Like">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>
       </button>
@@ -642,7 +652,7 @@
         </div>
       </div>
     </div>
-    <div style="padding: 0 20px; display: flex; gap: 8px; margin-top: 12px;">
+    <div class="playlist-detail-actions">
       <button class="btn-accent play-all-btn" id="playlist-detail-play-all-btn" style="flex: 1; align-items:center; justify-content:center; gap:8px;" hidden>
         <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
         Play All
@@ -700,7 +710,7 @@
 <div class="history-modal-overlay" id="add-to-playlist-overlay">
   <div class="history-modal" style="display:flex; flex-direction:column;">
     <div class="history-modal-header">
-      <h3>Save to Playlist</h3>
+      <h3 id="add-to-playlist-title">Save to Playlist</h3>
       <div class="history-modal-header-actions">
         <button class="history-modal-close" id="add-to-playlist-close" title="Close">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
