@@ -40,9 +40,6 @@
       var heartSvgLocal = isLikedLocal
         ? '<svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg>'
         : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg>';
-      // A div of per-artist spans, not a <button>: the button's native
-      // text-align centering misaligned the artist under the left-aligned
-      // title, and a single button couldn't link each artist separately.
       const artistHtml = '<div class="recs-tile-artist">' + window.artistLinksHtml(artist, channelId) + '</div>';
       const playBtnHtml = '<button type="button" class="home-play-btn" title="Play"><svg viewBox="0 0 24 24" fill="currentColor"><polygon points="8,5 19,12 8,19"/></svg></button>';
       return '<div class="home-card" data-video-id="' + escHtml(videoId) + '" data-album-id="' + escHtml(albumId) + '" data-title="' + escHtml(title) + '" data-artist="' + escHtml(artist) + '" data-thumb="' + escHtml(thumbUrl) + '">' +
@@ -50,6 +47,13 @@
         '<div class="recs-tile-title" title="Open album">' + escHtml(title) + '</div>' +
         artistHtml +
         '<button class="result-like-btn' + (isLikedLocal ? ' liked' : '') + '" type="button" title="' + (isLikedLocal ? 'Dislike' : 'Like') + '">' + heartSvgLocal + '</button>' +
+        '<div class="result-more-menu">' +
+          '<div class="result-menu-option" data-action="toggle-like"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg> Like</div>' +
+          '<div class="result-menu-option" data-action="play-next"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg> Play next</div>' +
+          '<div class="result-menu-option" data-action="add-to-queue"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg> Add to queue</div>' +
+          '<div class="result-menu-option" data-action="play-radio"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4.93 19.07A10 10 0 1 1 19.07 4.93 10 10 0 0 1 4.93 19.07z"/><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="M2 12h2"/><path d="M20 12h2"/></svg> Play Radio</div>' +
+          '<div class="result-menu-option" data-action="save-playlist"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path><line x1="12" y1="11" x2="12" y2="17"></line><line x1="9" y1="14" x2="15" y2="14"></line></svg> Save to Playlist</div>' +
+        '</div>' +
       '</div>';
     }).join('');
     if (!tilesHtml) return '';
@@ -244,6 +248,90 @@
           });
         }
         return;
+      }
+    });
+
+    rows.addEventListener('contextmenu', function(e) {
+      var card = e.target.closest('.home-card');
+      if (card && card.dataset.videoId) {
+        e.preventDefault();
+        e.stopPropagation();
+        
+        var moreMenu = card.querySelector('.result-more-menu');
+        if (!moreMenu) return;
+
+        var wasOpen = moreMenu.classList.contains('open');
+        if (window._closeAllMoreMenus) window._closeAllMoreMenus();
+        
+        if (!wasOpen) {
+          var track = {
+            video_id: card.dataset.videoId,
+            title: card.dataset.title || '',
+            artist: card.dataset.artist || '',
+            thumbnail: card.dataset.thumb || ''
+          };
+          
+          if (!moreMenu.dataset.handlersBound) {
+            moreMenu.dataset.handlersBound = '1';
+            
+            var likeOpt = moreMenu.querySelector('[data-action="toggle-like"]');
+            if (likeOpt) likeOpt.addEventListener('click', function(evt) {
+                evt.stopPropagation();
+                if (window._closeAllMoreMenus) window._closeAllMoreMenus();
+                var cardLikeBtn = card.querySelector('.result-like-btn');
+                if (cardLikeBtn) cardLikeBtn.click();
+            });
+            
+            var playNext = moreMenu.querySelector('[data-action="play-next"]');
+            if (playNext) playNext.addEventListener('click', function(evt) {
+                evt.stopPropagation();
+                if (window._closeAllMoreMenus) window._closeAllMoreMenus();
+                if (window.addToQueue) window.addToQueue(track, 'next');
+            });
+            
+            var addQueue = moreMenu.querySelector('[data-action="add-to-queue"]');
+            if (addQueue) addQueue.addEventListener('click', function(evt) {
+                evt.stopPropagation();
+                if (window._closeAllMoreMenus) window._closeAllMoreMenus();
+                if (window.addToQueue) window.addToQueue(track, 'last');
+            });
+            
+            var playRadio = moreMenu.querySelector('[data-action="play-radio"]');
+            if (playRadio) playRadio.addEventListener('click', function(evt) {
+                evt.stopPropagation();
+                if (window._closeAllMoreMenus) window._closeAllMoreMenus();
+                if (window.playResult) window.playResult(track, false, true);
+            });
+            
+            var saveOpt = moreMenu.querySelector('[data-action="save-playlist"]');
+            if (saveOpt) saveOpt.addEventListener('click', function(evt) {
+                evt.stopPropagation();
+                if (window._closeAllMoreMenus) window._closeAllMoreMenus();
+                if (window.openAddToPlaylistModal) window.openAddToPlaylistModal(track);
+            });
+            
+            moreMenu.addEventListener('click', function(evt) { evt.stopPropagation(); });
+          }
+
+          moreMenu.classList.add('open');
+          var menuHeight = 132;
+          var spaceBelow = window.innerHeight - e.clientY;
+          var openAbove = spaceBelow < menuHeight + 8;
+          moreMenu.style.left = e.clientX + 'px';
+          if (openAbove) {
+             moreMenu.style.top = 'auto';
+             moreMenu.style.bottom = (window.innerHeight - e.clientY + 4) + 'px';
+          } else {
+             moreMenu.style.top = (e.clientY + 4) + 'px';
+             moreMenu.style.bottom = 'auto';
+          }
+          moreMenu.style.right = 'auto';
+          
+          moreMenu._home = card;
+          document.body.appendChild(moreMenu);
+          void moreMenu.offsetWidth;
+          moreMenu.classList.add('open');
+        }
       }
     });
   }

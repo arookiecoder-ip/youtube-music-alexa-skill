@@ -294,8 +294,7 @@
       padding-bottom: 12px;
     }
 
-    main.has-queue,
-    body.results-open main {
+    main.has-queue {
       max-width: 920px;
       height: calc(100dvh - 12px);
       display: flex;
@@ -345,10 +344,9 @@
 
     /* Queue: matches the left column's height and scrolls its list inside.
        height:0 keeps the queue's own (tall) content from inflating the grid
-       row â€” the left column alone sizes the row â€” while min-height:100% makes
+       row — the left column alone sizes the row — while min-height:100% makes
        the queue fill that row. Net effect: queue height == left column height. */
-    main.has-queue #queue-section,
-    body.results-open #results-section {
+    main.has-queue #queue-section {
       grid-column: 2;
       align-self: stretch;
       display: flex;

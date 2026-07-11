@@ -39,14 +39,13 @@ function openResults() {
   const queueSection = document.getElementById('queue-section');
   clearTimeout(section._hideTimer);
   clearTimeout(section._showTimer);
-  // Views swap, they don't stack (YT Music): searching from the artist page
-  // must hide it and drop the #artist/ hash. replaceState avoids firing
-  // hashchange, which would re-run the home route and hide these results.
-  const artistSection = document.getElementById('artist-section');
-  if (artistSection) artistSection.hidden = true;
-  if ((window.getRoute() || '').indexOf('#artist/') === 0) {
-    history.replaceState(null, '', '#home');
-  }
+  // Views swap, they don't stack. We hide the underlying page content so the search results
+  // behave as a standalone page instead of a side column or popup overlay.
+  const viewsToHide = ['home-section', 'recs-section', 'album-section', 'artist-section'];
+  viewsToHide.forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.hidden = true;
+  });
   // Same for the playlist views: they sit above the content area (z-210),
   // so results rendered behind them would be invisible until manually closed.
   for (const id of ['playlists-modal-overlay', 'playlist-detail-modal-overlay']) {
@@ -91,6 +90,7 @@ function closeResults() {
       state._resultsOpen = false;
       section.hidden = true;
       syncUiState();
+      if (typeof window.renderRoute === 'function') window.renderRoute();
       // Replay the player's reveal animation so enlarging from the mini player
       // slides the full player in instead of popping it.
       if (state._hasTrack) {
@@ -227,8 +227,34 @@ function _createSongElement(item, existingThumbsById) {
 
 function renderResults() {
   const list = document.getElementById('results-list');
+  const sectionHead = document.querySelector('#results-section .section-head');
   const data = state._searchCategorized || {};
   
+  if (!sectionHead.querySelector('.results-tabs')) {
+    sectionHead.innerHTML = `
+      <div class="results-tabs">
+        <button class="results-tab" data-category="all">All</button>
+        <button class="results-tab" data-category="songs">Songs</button>
+        <button class="results-tab" data-category="artists">Artists</button>
+        <button class="results-tab" data-category="albums">Albums</button>
+        <button class="results-tab" data-category="playlists">Playlists</button>
+      </div>
+    `;
+    sectionHead.querySelectorAll('.results-tab').forEach(tab => {
+      tab.addEventListener('click', () => {
+        const category = tab.dataset.category;
+        if (category === state._activeCategory) return;
+        state._activeCategory = category;
+        sectionHead.querySelectorAll('.results-tab').forEach(t => t.classList.remove('active'));
+        tab.classList.add('active');
+        renderResults();
+        document.getElementById('results-section').scrollTop = 0;
+      });
+    });
+  }
+  
+  sectionHead.querySelectorAll('.results-tab').forEach(t => t.classList.toggle('active', t.dataset.category === state._activeCategory));
+
   const existingThumbsById = new Map();
   for (const img of list.querySelectorAll('img.result-thumb.loaded')) {
     const w = img.closest('.result-swipe-wrapper');
@@ -239,19 +265,6 @@ function renderResults() {
 
   list.innerHTML = '';
   _closeAllMoreMenus();
-
-  const newChildren = [];
-
-  if (data.songs && data.songs.length) {
-    const head = document.createElement('div');
-    head.className = 'section-head';
-    head.innerHTML = '<div class="label">Songs</div>';
-    list.appendChild(head);
-    
-    data.songs.slice(0, 10).forEach(item => {
-      list.appendChild(_createSongElement(item, existingThumbsById));
-    });
-  }
 
   function renderSearchRow(title, items, type) {
     if (!items || !items.length) return;
@@ -281,7 +294,7 @@ function renderResults() {
         card.dataset.channelId = item.browseId;
       } else if (type === 'album') {
         card.dataset.albumId = item.browseId;
-        card.dataset.videoId = item.video_id || ''; // Wait, album has no video_id?
+        card.dataset.videoId = item.video_id || '';
       } else if (type === 'playlist') {
         card.dataset.playlistId = item.browseId;
       }
@@ -304,10 +317,6 @@ function renderResults() {
       card.addEventListener('click', (e) => {
         if (e.target.closest('.hscroll-play-btn') && isAlbumOrPlaylist) {
            e.stopPropagation();
-           // Play it. If album/playlist, we need to fetch tracks and play first
-           // Or just use window.playFromQueue if it has video_id
-           // Wait, artist.js does this differently.
-           // For simplicity, just use the api lookup if it's an album
            if (type === 'album') {
                window.api('/api/album/' + encodeURIComponent(item.browseId)).then(function(albumData) {
                  if (albumData && albumData.tracks && albumData.tracks.length && window.playFromQueue) {
@@ -330,7 +339,6 @@ function renderResults() {
       track.appendChild(card);
     });
 
-    // Add scroll listeners
     const btnPrev = section.querySelector('.hscroll-scroll-prev');
     const btnNext = section.querySelector('.hscroll-scroll-next');
     function updateHscrollBtns() {
@@ -347,10 +355,154 @@ function renderResults() {
     list.appendChild(section);
   }
 
-  renderSearchRow('Artists', data.artists, 'artist');
-  renderSearchRow('Albums', data.albums, 'album');
-  renderSearchRow('Playlists', data.playlists, 'playlist');
+  function renderTopResultCard(item, topSongs) {
+    const card = document.createElement('div');
+    card.className = 'top-result-card ' + (item.resultType === 'artist' ? 'is-artist' : 'is-song');
+    
+    let thumb = item.thumbnail || '';
+    if (item.thumbnails && item.thumbnails.length) thumb = item.thumbnails[item.thumbnails.length - 1].url;
+    
+    const thumbHtml = thumb ? `<img src="${escHtml(thumb)}" alt="" loading="lazy">` : '';
+    
+    let subtitle = '';
+    if (item.resultType === 'artist') {
+      subtitle = 'Artist' + (item.subscribers ? ' • ' + item.subscribers : '');
+    } else {
+      const artistStr = (item.artists && item.artists.length) ? item.artists.map(a => a.name).join(' and ') : item.artist;
+      subtitle = 'Song • ' + escHtml(artistStr || '') + (item.duration ? ' • ' + item.duration : '');
+    }
+    
+    let rightSide = '';
+    if (item.resultType === 'artist' && topSongs && topSongs.length) {
+       rightSide = `<div class="top-result-songs"></div>`;
+    }
+
+    card.innerHTML = `
+      <div class="top-result-main">
+        <div class="top-result-art ${item.resultType === 'artist' ? 'round' : ''}">${thumbHtml}</div>
+        <div class="top-result-info">
+          <div class="top-result-title">${escHtml(item.title || item.name || '')}</div>
+          <div class="top-result-subtitle">${subtitle}</div>
+          <div class="top-result-actions">
+            ${item.resultType === 'artist' 
+               ? `<button class="btn btn-primary top-result-shuffle"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="16 3 21 3 21 8"></polyline><line x1="4" y1="20" x2="21" y2="3"></line><polyline points="21 16 21 21 16 21"></polyline><line x1="15" y1="15" x2="21" y2="21"></line><line x1="4" y1="4" x2="9" y2="9"></line></svg> Shuffle</button>
+                  <button class="btn btn-secondary top-result-radio"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4.93 19.07A10 10 0 1 1 19.07 4.93 10 10 0 0 1 4.93 19.07z"/><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="M2 12h2"/><path d="M20 12h2"/></svg> Radio</button>`
+               : `<button class="btn btn-primary top-result-play"><svg viewBox="0 0 24 24" fill="currentColor"><polygon points="8,5 19,12 8,19"/></svg> Play</button>`
+            }
+          </div>
+        </div>
+      </div>
+      ${rightSide}
+    `;
+
+    if (item.resultType === 'artist' && item.browseId) {
+      card.querySelector('.top-result-main').addEventListener('click', (e) => {
+        if (!e.target.closest('button')) {
+          window.navigateTo('#artist/' + encodeURIComponent(item.browseId));
+        }
+      });
+      card.querySelector('.top-result-shuffle').addEventListener('click', () => {
+         window.api('/api/artist/' + encodeURIComponent(item.browseId)).then(function(artistData) {
+            if (artistData && artistData.songs && artistData.songs.length && window.playFromQueue) {
+               window.playFromQueue(artistData.songs[Math.floor(Math.random() * artistData.songs.length)], 'shuffle');
+            }
+         });
+      });
+      card.querySelector('.top-result-radio').addEventListener('click', () => {
+         window.playResult({ video_id: topSongs[0]?.video_id || '' }, false, true);
+      });
+    } else if (item.resultType === 'song') {
+      const playBtn = card.querySelector('.top-result-play');
+      if (playBtn) playBtn.addEventListener('click', () => window.playResult({
+        video_id: item.videoId, title: item.title, artist: item.artist, thumbnail: thumb
+      }));
+    }
+
+    if (rightSide) {
+       const songsContainer = card.querySelector('.top-result-songs');
+       topSongs.forEach(song => {
+          const songItem = {
+             video_id: song.videoId,
+             title: song.title,
+             artist: song.artist || (song.artists && song.artists.length ? song.artists.map(a=>a.name).join(' and ') : ''),
+             thumbnail: song.thumbnail || (song.thumbnails && song.thumbnails.length ? song.thumbnails[song.thumbnails.length-1].url : '')
+          };
+          const el = _createSongElement(songItem, existingThumbsById);
+          songsContainer.appendChild(el);
+       });
+    }
+    
+    return card;
+  }
+
+  if (state._activeCategory === 'all' && data.all && data.all.length) {
+     let topResult = null;
+     let topSongs = [];
+     let remaining = [];
+     
+     if (data.all[0].category === 'Top result' || data.all[0].resultType === 'artist' || data.all[0].resultType === 'song') {
+        topResult = data.all[0];
+        let idx = 1;
+        if (topResult.resultType === 'artist') {
+           while(idx < data.all.length && data.all[idx].resultType === 'song' && topSongs.length < 3) {
+              topSongs.push(data.all[idx]);
+              idx++;
+           }
+        }
+        remaining = data.all.slice(idx);
+     } else {
+        remaining = data.all;
+     }
+
+     if (topResult) {
+        list.appendChild(renderTopResultCard(topResult, topSongs));
+     }
+     
+     const songs = remaining.filter(i => i.resultType === 'song');
+     if (songs.length) {
+        const head = document.createElement('div');
+        head.className = 'section-head';
+        head.style.marginTop = 'var(--space-4)';
+        head.innerHTML = '<div class="label">Songs</div>';
+        list.appendChild(head);
+        songs.slice(0, 4).forEach(song => {
+           const songItem = {
+              video_id: song.videoId,
+              title: song.title,
+              artist: song.artist || (song.artists && song.artists.length ? song.artists.map(a=>a.name).join(' and ') : ''),
+              thumbnail: song.thumbnail || (song.thumbnails && song.thumbnails.length ? song.thumbnails[song.thumbnails.length-1].url : '')
+           };
+           list.appendChild(_createSongElement(songItem, existingThumbsById));
+        });
+     }
+     
+     const artists = remaining.filter(i => i.resultType === 'artist').map(a => ({
+         name: a.title, browseId: a.browseId, thumbnail: a.thumbnail || (a.thumbnails && a.thumbnails.length ? a.thumbnails[a.thumbnails.length-1].url : '')
+     }));
+     const albums = remaining.filter(i => i.resultType === 'album').map(a => ({
+         title: a.title, artist: a.artist || (a.artists && a.artists.length ? a.artists.map(ar=>ar.name).join(' and ') : ''), browseId: a.browseId, thumbnail: a.thumbnail || (a.thumbnails && a.thumbnails.length ? a.thumbnails[a.thumbnails.length-1].url : '')
+     }));
+     const playlists = remaining.filter(i => i.resultType === 'playlist').map(a => ({
+         title: a.title, browseId: a.browseId, thumbnail: a.thumbnail || (a.thumbnails && a.thumbnails.length ? a.thumbnails[a.thumbnails.length-1].url : '')
+     }));
+     
+     renderSearchRow('Artists', artists, 'artist');
+     renderSearchRow('Albums', albums, 'album');
+     renderSearchRow('Playlists', playlists, 'playlist');
+
+  } else if (state._activeCategory === 'songs' && data.songs && data.songs.length) {
+    data.songs.slice(0, 20).forEach(item => {
+      list.appendChild(_createSongElement(item, existingThumbsById));
+    });
+  } else if (state._activeCategory === 'artists') {
+    renderSearchRow('Artists', data.artists, 'artist');
+  } else if (state._activeCategory === 'albums') {
+    renderSearchRow('Albums', data.albums, 'album');
+  } else if (state._activeCategory === 'playlists') {
+    renderSearchRow('Playlists', data.playlists, 'playlist');
+  }
 }
+
 
 // Removing updateCountLabel completely, we don't need it.
 

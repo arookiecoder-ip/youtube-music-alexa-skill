@@ -4674,8 +4674,11 @@ async def alexa_search():
         *[asyncio.to_thread(ytmusic.search, query=query, filter=f,
                             ignore_spelling=False, limit=30)
           for f in search_filters],
+        asyncio.to_thread(ytmusic.search, query=query, filter=None,
+                          ignore_spelling=False, limit=20),
         return_exceptions=True)
-    results = _categorize(raw)
+    results = _categorize(raw[:-1])
+    all_raw = raw[-1] if not isinstance(raw[-1], BaseException) and raw[-1] else []
 
     # If spelling-corrected search found nothing, retry with exact spelling
     # in case the user intentionally typed an unusual query.
@@ -4684,11 +4687,35 @@ async def alexa_search():
             *[asyncio.to_thread(ytmusic.search, query=query, filter=f,
                                 ignore_spelling=True, limit=30)
               for f in search_filters],
+            asyncio.to_thread(ytmusic.search, query=query, filter=None,
+                              ignore_spelling=True, limit=20),
             return_exceptions=True)
-        results = _categorize(raw)
+        results = _categorize(raw[:-1])
+        all_raw = raw[-1] if not isinstance(raw[-1], BaseException) and raw[-1] else []
 
-    if not _has_results(results):
+    if not _has_results(results) and not all_raw:
         return error_response('no results found', 404)
+        
+    def _clean_all_item(item):
+        cleaned = {
+            'category': item.get('category'),
+            'resultType': item.get('resultType'),
+            'title': item.get('title') or item.get('artist') or '',
+            'videoId': item.get('videoId') or '',
+            'browseId': item.get('browseId') or '',
+            'playlistId': item.get('playlistId') or '',
+            'thumbnail': _last_thumbnail(item),
+            'artists': item.get('artists') or [],
+            'duration': item.get('duration') or '',
+            'views': item.get('views') or '',
+            'subscribers': item.get('subscribers') or '',
+        }
+        # For Top result artist, the channel ID is sometimes tucked inside the artists array
+        if cleaned['resultType'] == 'artist' and cleaned['category'] == 'Top result' and not cleaned['browseId'] and cleaned['artists']:
+            cleaned['browseId'] = cleaned['artists'][0].get('id') or ''
+        return cleaned
+        
+    results['all'] = [_clean_all_item(item) for item in all_raw]
     return jsonify(results)
 
 
