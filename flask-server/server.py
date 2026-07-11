@@ -12,6 +12,10 @@ logger = logging.getLogger(__name__)
 _start_time_epoch = time.time()
 
 app = Flask(__name__)
+# Under waitress (debug off) Jinja caches compiled templates in memory, so
+# edits to the CSS/JS inlined into remote.html via {% include %} never reach
+# the browser until the process restarts. Auto-reload re-renders on change.
+app.config["TEMPLATES_AUTO_RELOAD"] = True
 
 # YTDLP_COOKIES normally points at a read-only bind mount (protecting the
 # host's real cookie file from corruption) -- but yt-dlp always writes back
@@ -3056,6 +3060,19 @@ def alexa_seek():
     duration_ms = int(cur.get('duration_ms') or 0)
     if duration_ms > 0:
         position_ms = min(position_ms, max(0, duration_ms - 1000))
+    # Paused seek: since seeking works by re-issuing playback at an offset,
+    # dispatching here would un-pause the device. Instead just move the frozen
+    # anchor — resume ('play' in alexa_command) replays from
+    # _computed_position_ms(), which while paused is exactly this anchor, so
+    # playback picks up at the dragged position. playback_confirmed
+    # distinguishes truly-paused from a seek/resume still in flight
+    # (playing=False, confirmed=False), which must still dispatch.
+    if not cur.get('playing') and cur.get('playback_confirmed'):
+        with _np_lock:
+            _reset_progress(position_ms)
+            _now_playing['updated_at'] = time.time()
+        _notify_sse()
+        return jsonify({'ok': True, 'paused': True})
     # Arm the play with the seek offset before triggering. play_video_id sends a
     # short NLU-safe phrase and the skill reads the video id + offset back from
     # /armed_play/ — the offset is carried by the arm, not the phrase, so without
@@ -3450,13 +3467,46 @@ def api_health():
     })
 
 
+def _get_artist_compat(ytmusic, channel_id):
+    """get_artist with a fallback for channels ytmusicapi cannot parse.
+
+    Plain user channels (no public YT Music content) are served with a
+    musicVisualHeaderRenderer header, which ytmusicapi's get_artist
+    (<= 1.12.1) does not handle and raises KeyError. Parse that header
+    manually so the artist page can render name/thumbnail instead of 500.
+    """
+    try:
+        return ytmusic.get_artist(channel_id)
+    except KeyError:
+        pass
+    browse_id = channel_id[4:] if channel_id.startswith("MPLA") else channel_id
+    response = ytmusic._send_request("browse", {"browseId": browse_id})
+    header = (response.get("header") or {}).get("musicVisualHeaderRenderer") or {}
+    title_runs = (header.get("title") or {}).get("runs") or []
+    name = title_runs[0].get("text", "") if title_runs else ""
+    if not name:
+        return None
+    thumbs = ((((header.get("foregroundThumbnail") or {})
+                .get("musicThumbnailRenderer") or {})
+               .get("thumbnail") or {})
+              .get("thumbnails")) or []
+    sub_btn = (header.get("subscriptionButton") or {}).get("subscribeButtonRenderer") or {}
+    sub_runs = (sub_btn.get("subscriberCountText") or {}).get("runs") or []
+    return {
+        "name": name,
+        "description": "",
+        "thumbnails": thumbs,
+        "subscribers": sub_runs[0].get("text", "") if sub_runs else "",
+    }
+
+
 @app.route("/api/artist/<channel_id>", methods=["GET"])
 async def api_artist(channel_id):
     if not channel_id.strip():
         return error_response('invalid channel id', 400)
     try:
         ytmusic = _get_ytmusic()
-        raw = await asyncio.to_thread(ytmusic.get_artist, channel_id)
+        raw = await asyncio.to_thread(_get_artist_compat, ytmusic, channel_id)
     except Exception as e:
         logger.exception("api_artist failed for %s", channel_id)
         return error_response(str(e), 500)
@@ -3546,23 +3596,39 @@ async def api_song_album(video_id):
     if not _valid_video_id(video_id):
         return error_response('invalid video id', 400)
     ytmusic = _get_ytmusic()
+
+    def _album_id(track):
+        album = track.get('album') or {}
+        return album.get('id') or album.get('browseId') or ''
+
     candidates = []
     try:
         radio = await asyncio.to_thread(ytmusic.get_watch_playlist, videoId=video_id, limit=5)
         candidates.extend((radio or {}).get('tracks') or [])
     except Exception:
         logger.exception("album lookup watch playlist failed for %s", video_id)
-    if not any(t.get('videoId') == video_id for t in candidates):
-        query = ' '.join(filter(None, (request.args.get('title', ''), request.args.get('artist', '')))).strip()
+    exact = [t for t in candidates if t.get('videoId') == video_id]
+
+    title = request.args.get('title', '').strip()
+    artist = request.args.get('artist', '').strip()
+    searched = []
+    # Video-variant ids (OMV/uploaded) often carry no album even when the
+    # song has one, so search by title/artist whenever the exact track
+    # lacks it — not only when the watch playlist misses the video.
+    if not any(_album_id(t) for t in exact):
+        query = ' '.join(filter(None, (title, artist)))
         if query:
             try:
-                candidates.extend(await asyncio.to_thread(ytmusic.search, query, 'songs', None, 10) or [])
+                searched = await asyncio.to_thread(ytmusic.search, query, 'songs', None, 10) or []
             except Exception:
                 logger.exception("album lookup search failed for %s", video_id)
-    exact = [t for t in candidates if t.get('videoId') == video_id]
-    for track in exact + candidates:
-        album = track.get('album') or {}
-        browse_id = album.get('id') or album.get('browseId')
+
+    exact.extend(t for t in searched if t.get('videoId') == video_id)
+    title_lower = title.lower()
+    fuzzy = [t for t in searched
+             if title_lower and title_lower in (t.get('title') or '').lower()]
+    for track in exact + fuzzy + searched:
+        browse_id = _album_id(track)
         if browse_id:
             return jsonify({'browseId': browse_id})
     return error_response('album not found for this song', 404)

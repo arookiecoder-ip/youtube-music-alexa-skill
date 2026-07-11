@@ -498,8 +498,12 @@ const progress = window.progress = (function () {
     localSeekUntil = Date.now() + 8000;
     toast('Seeking to ' + fmt(target) + '\u2026');
     try {
-      await api('/alexa/seek/', { serial, position_ms: target });
-      toast('Seeked to ' + fmt(target), 'ok');
+      const res = await api('/alexa/seek/', { serial, position_ms: target });
+      // paused: the server only moved the frozen anchor (no playback dispatch);
+      // the track stays paused and resume will pick up from here.
+      toast(res && res.paused
+        ? 'Paused at ' + fmt(target) + ' — press play to resume here'
+        : 'Seeked to ' + fmt(target), 'ok');
     } catch (err) {
       // Seek failed: drop the hold so the next server push restores truth.
       localSeekUntil = 0;
@@ -704,8 +708,9 @@ function syncModalScrollLock() {
   const playerBar = document.querySelector('.player-section');
   if (playerBar) {
     playerBar.addEventListener('click', (e) => {
-      // Let interactive elements (buttons, links, inputs, range sliders) keep their own click.
-      if (e.target.closest('button, a, input, [role="slider"], .progress-track')) return;
+      // Let interactive elements (buttons, links, inputs, range sliders,
+      // artist-name spans) keep their own click.
+      if (e.target.closest('button, a, input, [role="slider"], .progress-track, .artist-name')) return;
       openMiniPopup();
     });
   }

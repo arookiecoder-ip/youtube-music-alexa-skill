@@ -576,26 +576,58 @@
     align-items: center !important;
     background: #181818 !important;
     box-shadow: 0 -4px 12px rgba(0,0,0,0.5) !important;
-    padding: 12px 24px !important;
-    min-height: 88px !important;
+    /* Compact YT Music-style bar: height comes from the shared --playbar-h
+       token (redesign.css) so the rail/overlays stop exactly at its edge. */
+    padding: 3px 16px !important;
+    height: var(--playbar-h, 54px) !important;
+    min-height: var(--playbar-h, 54px) !important;
+    box-sizing: border-box;
     gap: 16px;
   }
-  .redesigned-bar .player-left,
-  .redesigned-bar .player-right {
+  /* The left cluster hugs its content: with long song/artist names the text
+     block widens and pushes the like/radio/shuffle icons and the timer to
+     the right, up to a cap that stops clear of the transport, then the text
+     ellipsizes. The transport itself is absolutely centered in the bar so
+     it never moves regardless of how wide the clusters get. */
+  .player-section.redesigned-bar .player-left {
     display: flex;
     align-items: center;
-    flex: 1;
+    flex: 0 1 auto;
+    width: auto;
+    min-width: 0;
+    max-width: calc(50% - 130px);
   }
-  .redesigned-bar .player-right {
+  .player-section.redesigned-bar .player-right {
+    display: flex;
+    align-items: center;
+    flex: 0 0 auto;
+    margin-left: auto;
     justify-content: flex-end;
     gap: 8px;
   }
+  /* Center column stays a static, zero-width anchor point: the progress
+     strip inside it keeps anchoring to the bar itself (position: fixed
+     ancestor), and the transport is lifted out and pinned dead-center. */
   .redesigned-bar .player-center {
+    position: static;
     display: flex;
     flex-direction: column;
     align-items: center;
-    flex: 2;
+    flex: none;
     gap: 8px;
+  }
+  .player-section.redesigned-bar .player-center .transport {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+  }
+  /* Text block sizes to its content (title + timer) instead of greedily
+     grabbing all cluster space, so the icons sit right after the text and
+     travel with it. Shrinks (title ellipsizes) once the cluster cap hits. */
+  .player-section.redesigned-bar .np-info {
+    flex: 0 1 auto;
+    min-width: 0;
   }
   .redesigned-bar .np { 
     display: flex !important; 
@@ -645,25 +677,31 @@
   width: 20px;
   height: 20px;
 }
+/* Play/pause: plain white glyph, no filled chip behind it (YT Music style).
+   The old white 50px circle rendered as an empty oval because the glyph
+   inherited white fill from redesign.css — white on white. */
 .redesigned-bar .pp-btn.dominant {
-  width: 50px !important;
-  height: 50px !important;
+  width: 44px !important;
+  height: 44px !important;
   border-radius: 50% !important;
-  background: #ffffff !important;
+  background: transparent !important;
   border: none !important;
-  color: #000000;
+  box-shadow: none !important;
+  color: #ffffff;
   display: flex !important;
   align-items: center;
   justify-content: center;
-  transition: filter 0.1s;
+  transition: background 0.15s;
 }
 .redesigned-bar .pp-btn.dominant:hover {
-  filter: brightness(0.92);
+  filter: none;
+  background: rgba(255, 255, 255, 0.08) !important;
 }
 .redesigned-bar .pp-btn.dominant svg {
-  width: 22px !important;
-  height: 22px !important;
-  fill: currentColor;
+  width: 30px !important;
+  height: 30px !important;
+  fill: #ffffff;
+  color: #ffffff;
 }
 .redesigned-bar .transport {
   display: flex;

@@ -303,13 +303,16 @@ function renderResults() {
     items.forEach(item => {
       const card = document.createElement('div');
       card.className = 'hscroll-card';
+      // The "all" tab maps items to camelCase browseId; the category-tab
+      // endpoints return snake_case browse_id/playlist_id. Accept both.
+      const browseId = item.browseId || item.browse_id || item.playlistId || item.playlist_id || '';
       if (type === 'artist') {
-        card.dataset.channelId = item.browseId;
+        card.dataset.channelId = browseId;
       } else if (type === 'album') {
-        card.dataset.albumId = item.browseId;
+        card.dataset.albumId = browseId;
         card.dataset.videoId = item.video_id || '';
       } else if (type === 'playlist') {
-        card.dataset.playlistId = item.browseId;
+        card.dataset.playlistId = browseId;
       }
       card.dataset.title = item.title || item.name || '';
       
@@ -330,29 +333,36 @@ function renderResults() {
       card.addEventListener('click', (e) => {
         if (e.target.closest('.hscroll-play-btn') && isAlbumOrPlaylist) {
            e.stopPropagation();
+           if (!browseId) return;
            if (type === 'album') {
-               window.api('/api/album/' + encodeURIComponent(item.browseId)).then(function(albumData) {
+               window.api('/api/album/' + encodeURIComponent(browseId)).then(function(albumData) {
                  if (albumData && albumData.tracks && albumData.tracks.length && window.playFromQueue) {
-                   window.playFromQueue(albumData.tracks[0], item.browseId);
+                   window.playFromQueue(albumData.tracks[0], browseId);
                  }
                });
            } else if (type === 'playlist') {
-               window.api('/api/playlists/' + encodeURIComponent(item.browseId)).then(function(playlistData) {
+               window.api('/api/playlists/' + encodeURIComponent(browseId)).then(function(playlistData) {
                  if (playlistData && playlistData.tracks && playlistData.tracks.length && window.playFromQueue) {
-                   window.playFromQueue(playlistData.tracks[0], item.browseId);
+                   window.playFromQueue(playlistData.tracks[0], browseId);
                  }
                });
            }
         } else {
            if (type === 'artist') {
-             if (window.preloadNavigateArtist) window.preloadNavigateArtist(item.browseId);
-             else window.navigateTo('#artist/' + encodeURIComponent(item.browseId));
-           } else if (type === 'album') {
-             if (window.preloadNavigateAlbum) window.preloadNavigateAlbum(item.browseId);
-             else window.navigateTo('#album/' + encodeURIComponent(item.browseId));
-           } else if (type === 'playlist') {
-             if (window.preloadNavigatePlaylist) window.preloadNavigatePlaylist(item.browseId);
-             else window.navigateTo('#playlist/' + encodeURIComponent(item.browseId));
+             if (browseId) {
+               if (window.preloadNavigateArtist) window.preloadNavigateArtist(browseId);
+               else window.navigateTo('#artist/' + encodeURIComponent(browseId));
+             } else if (window.preloadNavigateArtistByName && (item.name || item.title)) {
+               // Some search results come back without a channel id; resolve
+               // the artist page by name instead of dropping the click.
+               window.preloadNavigateArtistByName(item.name || item.title);
+             }
+           } else if (type === 'album' && browseId) {
+             if (window.preloadNavigateAlbum) window.preloadNavigateAlbum(browseId);
+             else window.navigateTo('#album/' + encodeURIComponent(browseId));
+           } else if (type === 'playlist' && browseId) {
+             if (window.preloadNavigatePlaylist) window.preloadNavigatePlaylist(browseId);
+             else window.navigateTo('#playlist/' + encodeURIComponent(browseId));
            }
         }
       });
@@ -384,12 +394,16 @@ function renderResults() {
     
     const thumbHtml = thumb ? `<img src="${escHtml(thumb)}" alt="" loading="lazy">` : '';
     
+    const artistStr = (item.artists && item.artists.length) ? item.artists.map(a => a.name).join(' and ') : (item.artist || '');
     let subtitle = '';
     if (item.resultType === 'artist') {
       subtitle = 'Artist' + (item.subscribers ? ' • ' + item.subscribers : '');
+    } else if (item.resultType === 'album') {
+      subtitle = 'Album • ' + escHtml(artistStr);
+    } else if (item.resultType === 'playlist') {
+      subtitle = 'Playlist' + (artistStr ? ' • ' + escHtml(artistStr) : '');
     } else {
-      const artistStr = (item.artists && item.artists.length) ? item.artists.map(a => a.name).join(' and ') : item.artist;
-      subtitle = 'Song • ' + escHtml(artistStr || '') + (item.duration ? ' • ' + item.duration : '');
+      subtitle = 'Song • ' + escHtml(artistStr) + (item.duration ? ' • ' + item.duration : '');
     }
     
     let rightSide = '';
@@ -432,11 +446,50 @@ function renderResults() {
       card.querySelector('.top-result-radio').addEventListener('click', () => {
          window.playResult({ video_id: topSongs[0]?.video_id || '' }, false, true);
       });
-    } else if (item.resultType === 'song') {
+    } else {
+      // Non-artist top results: songs, videos, albums, playlists. YT Music
+      // frequently marks the top result as resultType 'video' even for music,
+      // so anything with a videoId is treated as playable.
+      const playableId = item.videoId || item.video_id || '';
+      const playItem = { video_id: playableId, title: item.title, artist: artistStr, thumbnail: thumb };
+      const browseId = item.browseId || item.playlistId || '';
+
+      function playTopResult() {
+        if (item.resultType === 'album' && item.browseId) {
+          window.api('/api/album/' + encodeURIComponent(item.browseId)).then(function (albumData) {
+            if (albumData && albumData.tracks && albumData.tracks.length && window.playFromQueue) {
+              window.playFromQueue(albumData.tracks[0], item.browseId);
+            }
+          });
+        } else if (item.resultType === 'playlist' && browseId) {
+          window.api('/api/playlists/' + encodeURIComponent(browseId)).then(function (playlistData) {
+            if (playlistData && playlistData.tracks && playlistData.tracks.length && window.playFromQueue) {
+              window.playFromQueue(playlistData.tracks[0], browseId);
+            }
+          });
+        } else if (playableId) {
+          window.playResult(playItem);
+        }
+      }
+
       const playBtn = card.querySelector('.top-result-play');
-      if (playBtn) playBtn.addEventListener('click', () => window.playResult({
-        video_id: item.videoId, title: item.title, artist: item.artist, thumbnail: thumb
-      }));
+      if (playBtn) playBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        playTopResult();
+      });
+
+      card.querySelector('.top-result-main').addEventListener('click', (e) => {
+        if (e.target.closest('button')) return;
+        if (item.resultType === 'album' && item.browseId) {
+          if (window.preloadNavigateAlbum) window.preloadNavigateAlbum(item.browseId);
+          else window.navigateTo('#album/' + encodeURIComponent(item.browseId));
+        } else if (item.resultType === 'playlist' && browseId) {
+          if (window.preloadNavigatePlaylist) window.preloadNavigatePlaylist(browseId);
+          else window.navigateTo('#playlist/' + encodeURIComponent(browseId));
+        } else {
+          playTopResult();
+        }
+      });
     }
 
     if (rightSide) {

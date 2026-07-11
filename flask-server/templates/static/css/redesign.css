@@ -8,7 +8,10 @@
 
 :root {
   --rail-w: 200px;
-  --rail-w-mini: 56px;
+  /* 76px keeps the icon column at the exact same x-position in both states:
+     14px rail padding + 12px button padding + half of the 24px icon = 38px,
+     which is also the centre of the 76px strip (76/2 = 38). */
+  --rail-w-mini: 76px;
   --topbar-h: 64px;
   --playbar-h: 54px;
   --playbar-h-mobile: 104px;
@@ -133,22 +136,12 @@ main:has(.player-section.is-visible) {
   body:has(.player-section.is-visible) #queue-section {
     bottom: calc(var(--playbar-h) + 16px);
   }
-  /* The rail stops at the playbar so the transport controls do not overlap the rail.
-     Use the actual playbar height variable (88 px) + a small gap instead of the
-     old hardcoded 72 px which was shorter than the bar and caused the overlap. */
+  /* YT Music style: the playbar spans the full viewport width and paints
+     above the rail; the rail simply stops at the bar's top edge so its
+     content never scrolls underneath. Rail state (open/collapsed) must not
+     affect the bar at all. */
   body:has(.player-section.is-visible) .sidebar {
-    bottom: calc(var(--playbar-h) + 4px);
-  }
-  /* Player bar starts after the sidebar — keep in sync when rail collapses */
-  .player-section,
-  main.has-queue .player-section,
-  body.results-open .player-section {
-    transition: left .25s ease;
-  }
-  body.rail-collapsed .player-section,
-  body.rail-collapsed main.has-queue .player-section,
-  body.rail-collapsed.results-open .player-section {
-    left: var(--rail-w-mini);
+    bottom: var(--playbar-h);
   }
 }
 
@@ -446,14 +439,10 @@ body.results-open .play-section {
   }
   /* Stay in row layout when collapsed. Icons keep their exact original size and padding 
      so they do not shift horizontally or vertically. Text hides via max-width. */
-  .sidebar .sidebar-nav-btn { transition: color .15s, background .15s, justify-content .25s ease, padding .25s ease; }
   .sidebar .sidebar-nav-btn svg { flex-shrink: 0; }
-  /* Collapsed: center the icon perfectly inside the 56px strip */
-  body.rail-collapsed .sidebar .sidebar-nav-btn {
-    justify-content: center;
-    padding: 11px 0;
-  }
-  
+  /* Collapsed: padding/justify-content stay identical to the expanded state,
+     so the icon never moves — only the label collapses via max-width. */
+
   /* Explicitly set properties to animate them cleanly (variable changes skip transitions in some browsers) */
   body.rail-collapsed main,
   body.rail-collapsed main.idle,
@@ -463,13 +452,12 @@ body.results-open .play-section {
   }
   body.rail-collapsed .sidebar {
     width: var(--rail-w-mini);
-    /* BUG 2 FIX: ensure collapsed rail has no opaque background so the
-       body warm-tint gradient bleeds through behind the icon strip. */
+    /* Collapsed rail blends into the page: no background, no blur band,
+       no divider — icons sit directly on the page background. */
     background: transparent;
-    /* Subtle blur gives icons just enough contrast over any background content
-       without re-introducing an opaque colour. */
-    backdrop-filter: blur(4px);
-    -webkit-backdrop-filter: blur(4px);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    border-right: none;
   }
   /* Text-only chrome has no icon form — hide it in the mini rail. Fade it
      out instead of display:none so it doesn't vanish a frame before the
@@ -482,9 +470,8 @@ body.results-open .play-section {
     opacity: 0;
     visibility: hidden;
   }
-  body.rail-collapsed .sidebar-library { opacity: 1; visibility: visible; padding-top: 8px; border-top: 0; }
   body.rail-collapsed .sidebar-new-playlist-container { visibility: hidden !important; }
-  body.rail-collapsed .sidebar-playlist-list { padding: 0; overflow-x: hidden; }
+  body.rail-collapsed .sidebar-playlist-list { overflow-x: hidden; }
   /* Playlist items keep exact size/padding; only the text hides. */
   .sidebar-playlist-item { overflow: hidden; }
   .sidebar-playlist-copy {
@@ -499,15 +486,10 @@ body.results-open .play-section {
     margin: 0; 
     padding: 0;
   }
-  /* Center playlist art in the 56px strip, kill the gap that causes clipping */
-  body.rail-collapsed .sidebar-playlist-item {
-    justify-content: center;
-    padding: 8px 0 !important;
-    gap: 0;
-  }
-  /* Brand container: allow overflow so the wordmark stays visible even when
-     the rail collapses to 56 px. The sidebar is overflow:visible on desktop
-     so the text safely floats past the narrow rail boundary. */
+  /* Playlist items keep the expanded padding/gap so the art never moves;
+     the zero-width copy hides past the strip via overflow:hidden. */
+  /* Brand row: mark and wordmark collapse like the nav labels so the
+     hamburger stays put and nothing pokes past the mini rail. */
   .sidebar-brand {
     overflow: visible;
     transition: width .25s ease;
@@ -524,29 +506,21 @@ body.results-open .play-section {
     max-width: 18px;
     opacity: 1;
   }
-  /* Collapsed: force the brand to its natural width so it overflows the 56 px
-     rail. width:auto on a flex child resolves to the container's inner width
-     (~28 px after rail padding), squashing the text. min-width + flex-shrink:0
-     escape that constraint. The sidebar's overflow:visible makes the overflow
-     show past the rail boundary. */
   body.rail-collapsed .sidebar-brand {
-    min-width: 172px;
-    width: auto;
-    flex-shrink: 0;
-    justify-content: flex-start;
-    padding: 0 4px;
-    overflow: visible;
+    width: 100%;
+    min-width: 0;
+    overflow: hidden;
   }
-  /* Keep mark and text fully visible when collapsed */
   body.rail-collapsed .sidebar-brand strong {
-    max-width: 150px;
-    opacity: 1;
+    max-width: 0;
+    opacity: 0;
     margin: 0;
     padding: 0;
   }
   body.rail-collapsed .sidebar-brand-mark {
-    max-width: 18px;
-    opacity: 1;
+    max-width: 0;
+    min-width: 0;
+    opacity: 0;
     margin: 0;
   }
   /* Smooth open/close */
@@ -605,6 +579,9 @@ body.results-open .play-section {
   background: rgba(255, 255, 255, .06);
   border: none;
 }
+body.rail-collapsed .sidebar .sidebar-nav-btn:hover {
+  background: none;
+}
 .sidebar-nav-btn svg {
   width: 19px;
   height: 19px;
@@ -623,7 +600,9 @@ body.results-open .play-section {
   gap: 10px;
   min-height: 42px;
   margin-bottom: 14px;
-  padding: 0 4px;
+  /* 5px left inset centres the 38px toggle on x=38 — the same axis as the
+     24px nav icons (12px button padding + half icon). */
+  padding: 0 5px;
   color: var(--text);
   width: 172px;
   flex: none;
@@ -1276,7 +1255,7 @@ body.now-playing-route .player-section .player-expand-btn svg {
     left: 0;
     top: calc(var(--topbar-h) + 3px);
     right: 0;
-    bottom: 72px;
+    bottom: var(--playbar-h);
     align-items: stretch;
     background: var(--bg, #0a0a0a);
     backdrop-filter: none;
@@ -1410,8 +1389,7 @@ body.now-playing-route .player-section .player-expand-btn svg {
   position: absolute;
   inset: 0;
   border-radius: inherit;
-  background: rgba(0, 0, 0, .45) center / 46px no-repeat
-    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='white'%3E%3Cpolygon points='8,5 19,12 8,19'/%3E%3C/svg%3E");
+  background: rgba(0, 0, 0, .45);
   opacity: 0;
   transition: opacity .12s ease;
   pointer-events: none;
@@ -1424,21 +1402,21 @@ body.now-playing-route .player-section .player-expand-btn svg {
   box-shadow: 0 10px 28px rgba(0, 0, 0, .65);
 }
 
-/* YT Music-style artwork hover: darken the thumbnail and show one large,
-   centered play glyph without resizing the artwork. */
+/* YT Music-style artwork hover: darken the thumbnail without resizing it.
+   The play glyph itself comes from .home-play-btn, so the overlay is
+   darkening only and follows the same card-level hover trigger. */
 .home-card-art::after {
   content: '';
   position: absolute;
   inset: 0;
   border-radius: inherit;
-  background: rgba(0, 0, 0, .42) center / 46px no-repeat
-    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='white'%3E%3Cpolygon points='8,5 19,12 8,19'/%3E%3C/svg%3E");
+  background: rgba(0, 0, 0, .42);
   opacity: 0;
   transition: opacity .18s ease;
   pointer-events: none;
 }
 @media (hover: hover) {
-  .home-card-art:hover::after {
+  .home-card:hover .home-card-art::after {
     opacity: 1;
   }
 }
@@ -1801,10 +1779,13 @@ body.results-open .player-section {
      Matching .is-visible alone left an 88px strip of the page behind
      exposed while the playbar was hidden (it can carry .is-visible
      together with [hidden]/.is-collapsed during transitions). */
-  body:has(.player-section.is-visible:not(.is-collapsed):not([hidden])) #playlists-modal-overlay,
-  body:has(.player-section.is-visible:not(.is-collapsed):not([hidden])) #playlist-detail-modal-overlay,
-  body:has(.player-section.is-visible:not(.is-collapsed):not([hidden])) #history-modal-overlay {
-    bottom: var(--playbar-h);
+  body:has(.player-section.is-visible:not([hidden])) #playlists-modal-overlay,
+  body:has(.player-section.is-visible:not([hidden])) #playlist-detail-modal-overlay,
+  body:has(.player-section.is-visible:not([hidden])) #history-modal-overlay {
+    /* !important: must beat the route-scoped `bottom: 0 !important` above.
+       The persistent desktop playbar keeps .is-collapsed, so we only key on
+       visibility — any on-screen playbar means overlays stop at its top edge. */
+    bottom: var(--playbar-h) !important;
   }
   #playlists-modal,
   #playlist-detail-modal,
@@ -1888,14 +1869,14 @@ body.results-open .player-section {
 .player-section .np-more-btn svg { width: 21px; height: 21px; }
 .player-section .np-more-menu {
   display: none; position: absolute; right: 0; bottom: calc(100% + 10px); z-index: 500;
-  min-width: 190px; padding: 6px; border: 1px solid rgba(255,255,255,.12);
+  min-width: 190px; padding: 4px 0; border: 1px solid rgba(255,255,255,.12);
   border-radius: 0; background: #282828; box-shadow: 0 12px 32px rgba(0,0,0,.55);
 }
 .player-section .np-more-wrap.open .np-more-menu { display: block; }
 .player-section .np-more-menu button,
 .player-section .np-more-menu a {
-  display: flex; align-items: center; gap: 10px; width: 100%;
-  padding: 10px 12px; border: 0; border-radius: 0;
+  display: flex; align-items: center; justify-content: flex-start; gap: 10px;
+  width: 100%; padding: 9px 14px; border: 0; border-radius: 0;
   background: transparent; color: #fff;
   font: inherit; font-size: .88rem;
   text-align: left; text-decoration: none; cursor: pointer;
@@ -1934,19 +1915,24 @@ body.results-open .player-section {
    identity in the middle, and utility controls at right. */
 @media (min-width: 900px) {
   /* Removing the incorrect display: none rule that hides the persistent playbar */
-  body:not(.now-playing-route) main,
-  body:not(.now-playing-route) main:has(.player-section.is-visible) {
+  body:not(.now-playing-route) main {
     padding-bottom: 0;
+  }
+  /* Whenever the fixed playbar is on screen, every document-scrolled view
+     (home, search results, artist, album) needs clearance below its last row
+     so content can scroll fully out from under the bar. */
+  body:not(.now-playing-route) main:has(.player-section.is-visible) {
+    padding-bottom: calc(var(--playbar-h) + 28px);
   }
   .player-section,
   main.has-queue .player-section,
   body.results-open .player-section {
     overflow: visible;
-    height: 54px;
-    min-height: 54px;
+    height: var(--playbar-h);
+    min-height: var(--playbar-h);
     box-sizing: border-box;
     z-index: 270;
-    left: var(--rail-w);
+    left: 0;
     padding: 3px 16px 3px;
     grid-template-columns: 205px minmax(320px, 1fr) auto auto;
     /* Expand arrow cluster sits at the far right, after the volume */
@@ -2102,7 +2088,7 @@ body.results-open .player-section {
     top: calc(var(--topbar-h) + 3px);
     left: var(--rail-w);
     right: 0;
-    bottom: 72px; /* matches the desktop playbar height, not --playbar-h */
+    bottom: var(--playbar-h); /* stop exactly at the desktop playbar's top edge */
     margin: 0;
     border-radius: 0;
     z-index: 210;
