@@ -97,11 +97,57 @@
   justify-content: center;
   opacity: 1;
   overflow: hidden;
+  position: relative;
   transition:
     opacity .3s ease,
     transform .25s cubic-bezier(.22, 1, .36, 1),
     box-shadow .25s ease;
   width: 100%;
+}
+
+.home-card-art::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0);
+  transition: background 0.2s;
+  pointer-events: none;
+  z-index: 1;
+}
+.home-card:hover .home-card-art::after {
+  background: rgba(0, 0, 0, 0.4);
+}
+
+.home-play-btn {
+  position: absolute;
+  bottom: 8px;
+  right: 8px;
+  width: 36px;
+  height: 36px;
+  background: rgba(0, 0, 0, 0.7);
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  opacity: 0;
+  transform: scale(0.8);
+  transition: opacity 0.2s, transform 0.2s, background 0.2s;
+  border: none;
+  cursor: pointer;
+  z-index: 2;
+}
+.home-play-btn svg {
+  width: 20px;
+  height: 20px;
+}
+.home-card:hover .home-play-btn {
+  opacity: 1;
+  transform: scale(1);
+}
+.home-play-btn:hover {
+  background: rgba(0, 0, 0, 0.9);
+  transform: scale(1.1);
 }
 
 .home-card-art img {

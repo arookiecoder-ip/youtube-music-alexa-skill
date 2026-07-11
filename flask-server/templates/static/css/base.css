@@ -17,6 +17,30 @@
     touch-action: none;
   }
 
+  /* ---- Global Progress Bar ---- */
+  .top-progress-bar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    height: 2px;
+    background-color: var(--accent);
+    z-index: 9999;
+    width: 0;
+    opacity: 0;
+    transition: width 0.2s ease, opacity 0.2s ease;
+    pointer-events: none;
+  }
+  .top-progress-bar.loading {
+    opacity: 1;
+    width: 70%;
+    transition: width 5s cubic-bezier(0, 0, 0, 1), opacity 0.2s ease;
+  }
+  .top-progress-bar.done {
+    opacity: 1;
+    width: 100%;
+    transition: width 0.3s ease, opacity 0.3s ease 0.3s;
+  }
+
   /* ---- Install banner (PWA) ---- */
   .install-banner {
     position: fixed;

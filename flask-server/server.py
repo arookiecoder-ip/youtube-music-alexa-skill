@@ -3482,8 +3482,6 @@ async def api_artist(channel_id):
             'duration_ms': Supporting.duration_ms(s),
             'channelId': channel_id,
         })
-        if len(top_songs) >= 5:
-            break
     albums_raw = raw.get('albums', {}).get('results', []) or []
     albums = []
     for a in albums_raw:
@@ -3530,6 +3528,8 @@ async def api_artist(channel_id):
     return jsonify({
         'artist': artist_info,
         'topSongs': top_songs,
+        'topSongsBrowseId': (raw.get('songs') or {}).get('browseId', ''),
+        'topSongsParams': (raw.get('songs') or {}).get('params', ''),
         'albums': albums,
         'albumsBrowseId': (raw.get('albums') or {}).get('browseId', ''),
         'albumsParams': (raw.get('albums') or {}).get('params', ''),

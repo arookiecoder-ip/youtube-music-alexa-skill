@@ -39,7 +39,6 @@
     transition: background .15s;
   }
   .artist-song-row:hover { background: #1a1a1a; }
-  .artist-song-row + .artist-song-row { border-top: 1px solid var(--border); }
   .artist-song-thumb {
     width: 40px;
     height: 40px;
@@ -82,10 +81,46 @@
   .artist-song-play-btn:active, .artist-song-like-btn:active { color: var(--accent); border-color: var(--accent); transform: scale(0.95); }
   .artist-song-like-btn.liked { color: var(--accent); border-color: var(--accent); }
   .artist-song-play-btn svg, .artist-song-like-btn svg { width: 14px; height: 14px; }
+  
+  .artist-view-all-container {
+    margin-top: var(--space-4);
+    text-align: center;
+  }
+  .artist-view-all-btn {
+    padding: 10px 24px;
+    border-radius: 99px;
+    background: rgba(255, 255, 255, 0.1);
+    color: var(--text);
+    border: none;
+    font-weight: 600;
+    font-size: .85rem;
+    cursor: pointer;
+    transition: background 0.2s, transform 0.2s;
+  }
+  .artist-view-all-btn:hover { background: rgba(255, 255, 255, 0.15); transform: scale(1.02); }
+  .artist-view-all-btn:active { transform: scale(0.98); }
 
   /* ---- Artist page: horizontal scroll sections ---- */
   .hscroll-section { margin-bottom: var(--space-5); }
-  .hscroll-section .section-head { margin-bottom: var(--space-3); }
+  .hscroll-section .section-head { margin-bottom: var(--space-3); display: flex; align-items: center; justify-content: space-between; }
+  .hscroll-controls { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+  .hscroll-scroll {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
+    border: 0;
+    background: transparent;
+    color: var(--text);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    padding: 0;
+    transition: background .15s, opacity .15s;
+  }
+  .hscroll-scroll:hover:not(:disabled) { background: rgba(255,255,255,.17); }
+  .hscroll-scroll:disabled { opacity: .28; cursor: default; }
+  .hscroll-scroll svg { width: 19px; height: 19px; }
   .hscroll-track {
     display: flex;
     gap: 12px;
@@ -104,11 +139,9 @@
     width: 140px;
     scroll-snap-align: start;
     cursor: pointer;
-    transition: transform .15s;
-  }
-  .hscroll-card:hover { transform: translateY(-2px); }
   .hscroll-card:active { transform: scale(.97); }
   .hscroll-card-art {
+    position: relative;
     width: 100%;
     aspect-ratio: 1 / 1;
     background: var(--surface);
@@ -118,6 +151,52 @@
     justify-content: center;
     color: var(--muted);
   }
+  .hscroll-card-art::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: rgba(0, 0, 0, 0);
+    transition: background 0.2s;
+    pointer-events: none;
+    z-index: 1;
+  }
+  .hscroll-card-art.round::after {
+    border-radius: 50%;
+  }
+  .hscroll-card:hover .hscroll-card-art::after {
+    background: rgba(0, 0, 0, 0.4);
+  }
+  .hscroll-play-btn {
+    position: absolute;
+    bottom: 8px;
+    right: 8px;
+    width: 36px;
+    height: 36px;
+    background: rgba(0, 0, 0, 0.7);
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #fff;
+    opacity: 0;
+    transform: scale(0.8);
+    transition: opacity 0.2s, transform 0.2s, background 0.2s;
+    border: none;
+    cursor: pointer;
+    z-index: 2;
+  }
+  .hscroll-play-btn svg {
+    width: 20px;
+    height: 20px;
+  }
+  .hscroll-card:hover .hscroll-play-btn {
+    opacity: 1;
+    transform: scale(1);
+  }
+  .hscroll-play-btn:hover {
+    background: rgba(0, 0, 0, 0.9);
+    transform: scale(1.1);
+  }
   .hscroll-card-art img {
     width: 100%;
     height: 100%;
@@ -126,7 +205,7 @@
     transition: opacity 0.3s ease;
   }
   .hscroll-card-art img.loaded { opacity: 1; }
-  .hscroll-card-art.round img { border-radius: 50%; }
+  .hscroll-card-art.round { border-radius: 50%; }
   .hscroll-card-title {
     font-size: .72rem;
     font-weight: 600;

@@ -199,15 +199,9 @@
      tap on touchscreens. Touch devices get a quick press feedback instead. */
 
   @media (hover: hover) {
-
     .recs-tile:hover .recs-tile-art {
-
-      transform: scale(1.04) translateY(-2px);
-
       box-shadow: 0 8px 24px rgba(0,0,0,.5);
-
     }
-
   }
 
   /* No shrink on click — pressed feedback lives in redesign.css */

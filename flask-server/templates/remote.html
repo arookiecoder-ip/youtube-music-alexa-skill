@@ -55,6 +55,7 @@
 <style>{% include "static/css/redesign.css" %}</style>
 </head>
 <body class="preload{{ ' jam-guest' if jam_guest else '' }}">
+<div id="top-progress-bar" class="top-progress-bar"></div>
 <script>window.JAM_GUEST = {{ 'true' if jam_guest else 'false' }};</script>
 <main class="idle">
   <header>
@@ -431,22 +432,40 @@
         <div id="artist-top-songs-list"></div>
       </div>
       <div class="hscroll-section" id="artist-albums">
-        <div class="section-head"><div class="label">Albums</div></div>
+        <div class="section-head">
+          <div class="label">Albums</div>
+          <div class="hscroll-controls">
+            <button type="button" class="hscroll-scroll hscroll-scroll-prev" title="Scroll left" aria-label="Scroll left" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg></button>
+            <button type="button" class="hscroll-scroll hscroll-scroll-next" title="Scroll right" aria-label="Scroll right"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg></button>
+          </div>
+        </div>
         <div class="hscroll-track" id="artist-albums-track"></div>
       </div>
       <div class="hscroll-section" id="artist-singles">
-        <div class="section-head"><div class="label">Singles</div></div>
+        <div class="section-head">
+          <div class="label">Singles</div>
+          <div class="hscroll-controls">
+            <button type="button" class="hscroll-scroll hscroll-scroll-prev" title="Scroll left" aria-label="Scroll left" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg></button>
+            <button type="button" class="hscroll-scroll hscroll-scroll-next" title="Scroll right" aria-label="Scroll right"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg></button>
+          </div>
+        </div>
         <div class="hscroll-track" id="artist-singles-track"></div>
       </div>
       <div class="hscroll-section" id="artist-related">
-        <div class="section-head"><div class="label">Related Artists</div></div>
+        <div class="section-head">
+          <div class="label">Related Artists</div>
+          <div class="hscroll-controls">
+            <button type="button" class="hscroll-scroll hscroll-scroll-prev" title="Scroll left" aria-label="Scroll left" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg></button>
+            <button type="button" class="hscroll-scroll hscroll-scroll-next" title="Scroll right" aria-label="Scroll right"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg></button>
+          </div>
+        </div>
         <div class="hscroll-track" id="artist-related-track"></div>
       </div>
     </div>
   </section>
 
   <section id="album-section" hidden>
-    <button class="album-back" id="album-back" type="button" title="Back"><span aria-hidden="true">&#8592;</span> Back</button>
+
     <div class="album-hero" id="album-hero"></div>
     <div class="album-track-list" id="album-track-list"></div>
   </section>
@@ -702,7 +721,6 @@
         <input type="text" id="new-playlist-name" placeholder="New Playlist Name" style="flex:1; background:var(--surface); border:1px solid var(--border); color:var(--text); padding:8px 12px; border-radius:6px;" autocomplete="off">
         <button class="btn-accent" id="new-playlist-btn">Create</button>
       </div>
-      <button type="button" id="create-import-btn" style="display:none; margin-bottom:16px; padding:10px; background:none; border:1px dashed var(--border); border-radius:6px; color:var(--muted); cursor:pointer; font-size:.85rem;">Or import from a YouTube playlist link</button>
       <div id="add-to-playlist-list" style="overflow-y:auto; flex:1;"></div>
     </div>
   </div>

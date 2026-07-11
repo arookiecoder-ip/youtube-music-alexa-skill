@@ -14,7 +14,10 @@
     for (let i = 0; i < count; i++) {
       cards += '<div class="home-card home-skeleton-card"><div class="skeleton-block"></div><div class="skeleton-line skeleton-line-title"></div><div class="skeleton-line skeleton-line-artist"></div></div>';
     }
-    return '<div class="home-row-skeleton">' + cards + '</div>';
+    return '<div class="home-row-container">' +
+      '<div class="home-row-header"><div><div class="skeleton-line" style="width: 140px; height: 16px; margin: 0;"></div></div></div>' +
+      '<div class="home-row-skeleton">' + cards + '</div>' +
+    '</div>';
   }
 
   function homeRowHtml(row) {
@@ -41,8 +44,9 @@
       // text-align centering misaligned the artist under the left-aligned
       // title, and a single button couldn't link each artist separately.
       const artistHtml = '<div class="recs-tile-artist">' + window.artistLinksHtml(artist, channelId) + '</div>';
+      const playBtnHtml = '<button type="button" class="home-play-btn" title="Play"><svg viewBox="0 0 24 24" fill="currentColor"><polygon points="8,5 19,12 8,19"/></svg></button>';
       return '<div class="home-card" data-video-id="' + escHtml(videoId) + '" data-album-id="' + escHtml(albumId) + '" data-title="' + escHtml(title) + '" data-artist="' + escHtml(artist) + '" data-thumb="' + escHtml(thumbUrl) + '">' +
-        '<div class="recs-tile-art home-card-art">' + thumbHtml + '</div>' +
+        '<div class="recs-tile-art home-card-art">' + thumbHtml + playBtnHtml + '</div>' +
         '<div class="recs-tile-title" title="Open album">' + escHtml(title) + '</div>' +
         artistHtml +
         '<button class="result-like-btn' + (isLikedLocal ? ' liked' : '') + '" type="button" title="' + (isLikedLocal ? 'Dislike' : 'Like') + '">' + heartSvgLocal + '</button>' +
@@ -73,7 +77,11 @@
       return;
     }
     container.querySelectorAll('.home-row-skeleton').forEach(function(el) {
-      el.hidden = true;
+      if (el.closest('.home-row-container')) {
+        el.closest('.home-row-container').hidden = true;
+      } else {
+        el.hidden = true;
+      }
     });
   }
 

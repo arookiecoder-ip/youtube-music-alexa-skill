@@ -61,7 +61,7 @@
   function renderAll(data) {
     if (!data || !data.artist) return;
     renderHero(data.artist);
-    renderTopSongs(data.topSongs);
+    renderTopSongs(data.topSongs, data.topSongsBrowseId);
     renderHscrollSection('artist-albums-track', data.albums, 'album');
     renderHscrollSection('artist-singles-track', data.singles, 'album');
     renderHscrollSection('artist-related-track', data.related, 'artist');
@@ -81,7 +81,7 @@
       '<div class="artist-hero-name">' + escHtml(artist.name || '') + '</div>';
   }
 
-  function renderTopSongs(songs) {
+  function renderTopSongs(songs, browseId) {
     var list = document.getElementById('artist-top-songs-list');
     if (!list) return;
     if (!songs || !songs.length) {
@@ -89,9 +89,11 @@
       return;
     }
     list.innerHTML = '';
+    
+    var displaySongs = songs.slice(0, 10);
     // let, not var: the click handlers below close over `item` per iteration.
-    for (let i = 0; i < songs.length; i++) {
-      let item = songs[i];
+    for (let i = 0; i < displaySongs.length; i++) {
+      let item = displaySongs[i];
       if (!item.video_id) continue;
       var row = document.createElement('div');
       row.className = 'artist-song-row';
@@ -121,6 +123,21 @@
         if (typeof toggleLike === 'function') toggleLike(item, this);
       });
       list.appendChild(row);
+    }
+
+    if (browseId || songs.length > 10) {
+      var viewAllContainer = document.createElement('div');
+      viewAllContainer.className = 'artist-view-all-container';
+      var viewAllBtn = document.createElement('button');
+      viewAllBtn.className = 'artist-view-all-btn';
+      viewAllBtn.textContent = 'View all';
+      viewAllBtn.addEventListener('click', function() {
+        if (browseId) {
+          window.navigateTo('#playlist/' + encodeURIComponent(browseId));
+        }
+      });
+      viewAllContainer.appendChild(viewAllBtn);
+      list.appendChild(viewAllContainer);
     }
   }
 
@@ -157,8 +174,9 @@
       var imgHtml = thumbUrl
         ? '<img src="' + escHtml(thumbUrl) + '" alt="" loading="lazy" onload="this.classList.add(\'loaded\')">'
         : '<svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>';
+      var playBtnHtml = (type === 'album') ? '<button type="button" class="hscroll-play-btn" title="Play"><svg viewBox="0 0 24 24" fill="currentColor"><polygon points="8,5 19,12 8,19"/></svg></button>' : '';
       card.innerHTML =
-        '<div class="hscroll-card-art' + (isRound ? ' round' : '') + '">' + imgHtml + '</div>' +
+        '<div class="hscroll-card-art' + (isRound ? ' round' : '') + '">' + imgHtml + playBtnHtml + '</div>' +
         '<div class="hscroll-card-title">' + escHtml(title) + '</div>' +
         (sub ? '<div class="hscroll-card-sub">' + escHtml(sub) + '</div>' : '');
       if (type === 'artist' && item.browseId) {
@@ -166,12 +184,55 @@
           window.navigateTo('#artist/' + encodeURIComponent(item.browseId));
         });
       } else if (type === 'album' && item.browseId) {
-        card.addEventListener('click', function() {
-          window.navigateTo('#album/' + encodeURIComponent(item.browseId));
+        card.addEventListener('click', function(e) {
+          if (e.target.closest('.hscroll-play-btn')) {
+            e.stopPropagation();
+            if (window.toast) window.toast('Loading album...', 'ok');
+            window.api('/api/album/' + encodeURIComponent(item.browseId)).then(function(albumData) {
+              if (albumData && albumData.tracks && albumData.tracks.length > 0 && window.playFromQueue) {
+                window.playFromQueue(albumData.tracks[0], 0);
+              }
+            }).catch(function() {
+              if (window.toast) window.toast('Could not play album', 'error');
+            });
+          } else {
+            window.navigateTo('#album/' + encodeURIComponent(item.browseId));
+          }
         });
       }
       track.appendChild(card);
     }
+    // Update initial arrow states after render
+    window.setTimeout(function() { updateHscrollArrows(track); }, 50);
+  }
+
+  function updateHscrollArrows(track) {
+    var container = track.closest('.hscroll-section');
+    if (!container) return;
+    var prev = container.querySelector('.hscroll-scroll-prev');
+    var next = container.querySelector('.hscroll-scroll-next');
+    if (prev) prev.disabled = track.scrollLeft <= 2;
+    if (next) next.disabled = track.scrollLeft + track.clientWidth >= track.scrollWidth - 2;
+  }
+
+  var artistSection = document.getElementById('artist-section');
+  if (artistSection) {
+    artistSection.addEventListener('scroll', function(e) {
+      if (e.target.classList && e.target.classList.contains('hscroll-track')) {
+        updateHscrollArrows(e.target);
+      }
+    }, true);
+
+    artistSection.addEventListener('click', function(e) {
+      var scrollBtn = e.target.closest('.hscroll-scroll');
+      if (scrollBtn) {
+        var track = scrollBtn.closest('.hscroll-section').querySelector('.hscroll-track');
+        if (!track) return;
+        var direction = scrollBtn.classList.contains('hscroll-scroll-prev') ? -1 : 1;
+        track.scrollBy({ left: direction * Math.max(240, track.clientWidth * .8), behavior: 'smooth' });
+        window.setTimeout(function() { updateHscrollArrows(track); }, 350);
+      }
+    });
   }
 
   window.loadArtist = loadArtist;

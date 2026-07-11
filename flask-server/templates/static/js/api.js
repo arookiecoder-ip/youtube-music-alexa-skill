@@ -44,14 +44,52 @@
     throw new Error(errMsg || ('HTTP ' + res.status));
   }
 
+  let _activeRequests = 0;
+  let _progressTimeout = null;
+
+  function _showProgress(url) {
+    if (url.includes('/alexa/status') || url.includes('/alexa/now_playing') || url.includes('/alexa/command') || url.includes('/alexa/jam/status') || url.includes('/alexa/volume') || url.includes('/alexa/seek')) return;
+    _activeRequests++;
+    if (_activeRequests === 1) {
+      const bar = document.getElementById('top-progress-bar');
+      if (bar) {
+        clearTimeout(_progressTimeout);
+        bar.classList.remove('done');
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            bar.classList.add('loading');
+          });
+        });
+      }
+    }
+  }
+
+  function _hideProgress(url) {
+    if (url.includes('/alexa/status') || url.includes('/alexa/now_playing') || url.includes('/alexa/command') || url.includes('/alexa/jam/status') || url.includes('/alexa/volume') || url.includes('/alexa/seek')) return;
+    _activeRequests = Math.max(0, _activeRequests - 1);
+    if (_activeRequests === 0) {
+      const bar = document.getElementById('top-progress-bar');
+      if (bar) {
+        bar.classList.remove('loading');
+        bar.classList.add('done');
+        _progressTimeout = setTimeout(() => {
+          bar.classList.remove('done');
+          bar.style.width = '0';
+        }, 400);
+      }
+    }
+  }
+
   // Phase 12: Fetch helper with AbortController timeout.
   function _fetchWithTimeout(url, opts) {
+    _showProgress(url);
     var controller = new AbortController();
     var timer = setTimeout(function() { controller.abort(); }, API_TIMEOUT_MS);
     return fetch(url, Object.assign({}, opts, { signal: controller.signal }))
-      .then(function(res) { clearTimeout(timer); return res; })
+      .then(function(res) { clearTimeout(timer); _hideProgress(url); return res; })
       .catch(function(err) {
         clearTimeout(timer);
+        _hideProgress(url);
         if (err.name === 'AbortError') {
           var timeoutErr = new Error('Request timed out. Check your connection and try again.');
           timeoutErr._isTimeout = true;

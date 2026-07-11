@@ -611,11 +611,24 @@ function renderSidebarPlaylists() {
   const container = document.getElementById('sidebar-playlist-list');
   if (!container) return;
   const lists = getPlaylistsList();
-  container.innerHTML = lists.map(pl => `
+  container.innerHTML = lists.map(pl => {
+    let artHtml = '';
+    if (pl.id === 'liked') {
+      artHtml = `<div class="sidebar-playlist-art is-liked"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg></div>`;
+    } else {
+      const valid = (pl.tracks || []).filter(t => t && t.thumbnail);
+      if (valid.length > 0) {
+        artHtml = `<div class="sidebar-playlist-art"><img src="${escHtml(valid[0].thumbnail)}" loading="lazy"></div>`;
+      } else {
+        artHtml = `<div class="sidebar-playlist-art"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><line x1="7" y1="8" x2="14" y2="8"/><line x1="7" y1="12" x2="12" y2="12"/><path d="m15 12 4 2.5-4 2.5z" fill="currentColor" stroke="none"/></svg></div>`;
+      }
+    }
+    return `
     <button class="sidebar-playlist-item" type="button" data-playlist-id="${escHtml(pl.id)}" title="${escHtml(pl.name)}">
-      <svg class="sidebar-playlist-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><line x1="7" y1="8" x2="14" y2="8"/><line x1="7" y1="12" x2="12" y2="12"/><path d="m15 12 4 2.5-4 2.5z" fill="currentColor" stroke="none"/></svg>
+      ${artHtml}
       <span class="sidebar-playlist-copy"><strong>${escHtml(pl.name)}</strong><span>${(pl.tracks || []).length} ${(pl.tracks || []).length === 1 ? 'song' : 'songs'}</span></span>
-    </button>`).join('');
+    </button>`;
+  }).join('');
   container.querySelectorAll('.sidebar-playlist-item').forEach(btn => {
     btn.addEventListener('click', () => {
       if (window._closeSidebar) window._closeSidebar();
@@ -896,8 +909,6 @@ function openCreatePlaylistModal() {
   const input = document.getElementById('new-playlist-name');
   if (title) title.textContent = 'New Playlist';
   if (list) list.innerHTML = '';
-  const importBtn = document.getElementById('create-import-btn');
-  if (importBtn) importBtn.style.display = '';
   input.value = '';
   input.disabled = false;
   document.getElementById('add-to-playlist-overlay').classList.add('open');
@@ -906,16 +917,67 @@ function openCreatePlaylistModal() {
 
 async function createNewPlaylist() {
   const nameInput = document.getElementById('new-playlist-name');
+  const createBtn = document.getElementById('new-playlist-btn');
   const name = nameInput.value.trim();
   if (!name) return;
-  // A pasted YouTube playlist link belongs in the import flow, not as a name.
+
+  nameInput.disabled = true;
+  if (createBtn) createBtn.disabled = true;
+
+  // If a YouTube playlist link is pasted, run the import flow inline.
   if (/(?:youtube\.com|youtu\.be|[?&]list=)/i.test(name)) {
-    closeAddToPlaylistModal();
-    if (window.openImportPlaylistModal) window.openImportPlaylistModal(name);
+    function extractPlaylistListId(url) {
+      try {
+        const u = new URL(url);
+        return u.searchParams.get('list') || url;
+      } catch (_) {
+        const m = url.match(/[?&]list=([\w-]+)/);
+        return m ? m[1] : url;
+      }
+    }
+
+    const newListId = extractPlaylistListId(name);
+    const existing = Object.values(_playlistsData.playlists).find(
+      (p) => p.source_url && extractPlaylistListId(p.source_url) === newListId
+    );
+    
+    if (existing) {
+      await confirmDialog('You already imported "' + existing.name + '" from this playlist. Open it from the Playlists list, or use its Sync button to pull in new tracks.', { okLabel: 'OK', danger: false, alertOnly: true });
+      nameInput.disabled = false;
+      if (createBtn) createBtn.disabled = false;
+      return;
+    }
+
+    const origHtml = createBtn ? createBtn.innerHTML : 'Create';
+    if (createBtn) {
+      createBtn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" class="spin" style="width:18px;height:18px;"><path d="M21 2v6h-6"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M3 22v-6h6"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/></svg>`;
+    }
+
+    try {
+      const res = await api('/api/playlists/', { source_url: name });
+      _playlistsData.playlists[res.id] = res;
+      await api('/api/playlists/' + res.id + '/sync/', {}, 'POST');
+      renderPlaylists();
+      setTimeout(async () => {
+        await loadPlaylists();
+        renderPlaylists();
+        renderSidebarPlaylists();
+        toast('Playlist imported successfully', 'ok');
+        closeAddToPlaylistModal();
+        if (createBtn) createBtn.innerHTML = origHtml;
+      }, 2500);
+    } catch (e) {
+      if (createBtn) {
+        createBtn.disabled = false;
+        createBtn.innerHTML = origHtml;
+      }
+      nameInput.disabled = false;
+      toast(e.message || 'Error importing playlist', 'error');
+    }
     return;
   }
 
-  nameInput.disabled = true;
+  // Normal creation flow
   try {
     const res = await api('/api/playlists/', { name: name });
     _playlistsData.playlists[res.id] = res;
@@ -931,6 +993,7 @@ async function createNewPlaylist() {
     toast('Error creating playlist', 'error');
   }
   nameInput.disabled = false;
+  if (createBtn) createBtn.disabled = false;
 }
 
 // Track keys (uuid or video_id) of songs just added this session, so the
@@ -1396,12 +1459,6 @@ document.addEventListener('DOMContentLoaded', () => {
   // import popup) — no inline form in the sidebar.
   const sidebarNewPlBtn = document.getElementById('sidebar-new-playlist-btn');
   if (sidebarNewPlBtn) sidebarNewPlBtn.addEventListener('click', openCreatePlaylistModal);
-
-  const createImportBtn = document.getElementById('create-import-btn');
-  if (createImportBtn) createImportBtn.addEventListener('click', () => {
-    closeAddToPlaylistModal();
-    if (window.openImportPlaylistModal) window.openImportPlaylistModal();
-  });
 
   // Close modals when clicking outside on the overlay
   const plOverlay = document.getElementById('playlists-modal-overlay');
