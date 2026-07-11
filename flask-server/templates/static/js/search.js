@@ -47,6 +47,12 @@ function openResults() {
   if ((location.hash || '').indexOf('#artist/') === 0) {
     history.replaceState(null, '', '#home');
   }
+  // Same for the playlist views: they sit above the content area (z-210),
+  // so results rendered behind them would be invisible until manually closed.
+  for (const id of ['playlists-modal-overlay', 'playlist-detail-modal-overlay']) {
+    const ov = document.getElementById(id);
+    if (ov) ov.classList.remove('open');
+  }
   animatePlaySectionLayout(() => {
     state._resultsOpen = true;
     mainEl.classList.remove('has-queue');

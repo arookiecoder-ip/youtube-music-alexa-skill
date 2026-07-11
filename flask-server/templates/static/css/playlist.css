@@ -83,8 +83,8 @@
 }
 .playlist-card-play {
   flex: none;
-  width: 32px;
-  height: 32px;
+  width: 44px;
+  height: 44px;
   border-radius: 50%;
   border: none;
   background: var(--accent);
@@ -102,6 +102,12 @@
 }
 .playlist-card-play:active {
   transform: scale(.92);
+}
+/* The inline 14px svg attrs made the glyph a barely-visible dot — CSS wins
+   over the attribute so the icon scales with the button. */
+.playlist-card-play svg {
+  width: 20px;
+  height: 20px;
 }
 
 /* ── Playlist Detail Hero (collage + metadata) ── */

@@ -1044,8 +1044,12 @@ button { border-radius: var(--radius-md); }
   #playlist-detail-modal .history-modal-body {
     overscroll-behavior: contain;
   }
-  body:has(.player-section.is-visible) #playlists-modal-overlay,
-  body:has(.player-section.is-visible) #playlist-detail-modal-overlay {
+  /* Stop above the playbar only when the playbar is REALLY on screen.
+     Matching .is-visible alone left an 88px strip of the page behind
+     exposed while the playbar was hidden (it can carry .is-visible
+     together with [hidden]/.is-collapsed during transitions). */
+  body:has(.player-section.is-visible:not(.is-collapsed):not([hidden])) #playlists-modal-overlay,
+  body:has(.player-section.is-visible:not(.is-collapsed):not([hidden])) #playlist-detail-modal-overlay {
     bottom: var(--playbar-h);
   }
   #playlists-modal,
