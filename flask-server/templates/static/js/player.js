@@ -506,10 +506,12 @@ const progress = window.progress = (function () {
     }
   }
 
-  track.addEventListener('mousedown', beginDrag);
-  track.addEventListener('touchstart', beginDrag, { passive: false });
-  track.addEventListener('mousemove', handleTooltipMove);
-  track.addEventListener('touchmove', handleTooltipMove, { passive: true });
+  if (track) {
+    track.addEventListener('mousedown', beginDrag);
+    track.addEventListener('touchstart', beginDrag, { passive: false });
+    track.addEventListener('mousemove', handleTooltipMove);
+    track.addEventListener('touchmove', handleTooltipMove, { passive: true });
+  }
   // Also bind the mini popup progress track
   const mpTrack = document.getElementById('mp-progress-track');
   if (mpTrack) {
@@ -525,17 +527,19 @@ const progress = window.progress = (function () {
   window.addEventListener('touchend', endDrag);
   // Keyboard: arrow keys nudge +/- 5s. If duration is unknown, use a temporary
   // seek window so the scrubber still works while metadata catches up.
-  track.addEventListener('keydown', (e) => {
-    let delta = 0;
-    if (e.key === 'ArrowRight') delta = 5000;
-    else if (e.key === 'ArrowLeft') delta = -5000;
-    else return;
-    e.preventDefault();
-    const target = Math.min(seekLimitMs(), Math.max(0, Math.round(livePosition()) + delta));
-    dragMs = target;
-    dragging = true;
-    endDrag();
-  });
+  if (track) {
+    track.addEventListener('keydown', (e) => {
+      let delta = 0;
+      if (e.key === 'ArrowRight') delta = 5000;
+      else if (e.key === 'ArrowLeft') delta = -5000;
+      else return;
+      e.preventDefault();
+      const target = Math.min(seekLimitMs(), Math.max(0, Math.round(livePosition()) + delta));
+      dragMs = target;
+      dragging = true;
+      endDrag();
+    });
+  }
 
   document.addEventListener('visibilitychange', () => {
     if (!document.hidden) {

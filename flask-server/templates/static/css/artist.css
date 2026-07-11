@@ -5,24 +5,39 @@
   #artist-top-songs, .hscroll-section {
     padding: 0 18px;
     max-width: 1400px;
+    margin: 0 auto;
   }
   #artist-skeleton[hidden] { display: none; }
   #artist-content[hidden] { display: none; }
   #artist-hero {
     position: relative;
-    width: 100%;
-    height: 400px;
+    width: auto;
+    margin-top: calc(-1 * (var(--topbar-h, 64px) + 7px));
+    margin-left: calc(-1 * var(--space-4, 16px));
+    margin-right: calc(-1 * var(--space-4, 16px));
+    height: calc(400px + var(--topbar-h, 64px) + 7px);
     display: flex;
     flex-direction: column;
     justify-content: flex-end;
     align-items: flex-start;
     padding: 32px 48px;
+    padding-top: calc(32px + var(--topbar-h, 64px) + 7px);
     margin-bottom: var(--space-5);
     background-size: cover;
     background-position: center 20%;
   }
+  @media (min-width: 900px) {
+    #artist-hero {
+      margin-left: -28px;
+      margin-right: -28px;
+    }
+  }
   @media (max-width: 768px) {
-    #artist-hero { height: 320px; padding: 24px; }
+    #artist-hero { 
+      height: calc(320px + var(--topbar-h, 64px) + 7px); 
+      padding: 24px; 
+      padding-top: calc(24px + var(--topbar-h, 64px) + 7px);
+    }
   }
   #artist-hero::before {
     content: '';
@@ -226,6 +241,7 @@
     width: 140px;
     scroll-snap-align: start;
     cursor: pointer;
+  }
   .hscroll-card:active { transform: scale(.97); }
   .hscroll-card-art {
     position: relative;
@@ -312,20 +328,32 @@
 
   /* ---- Artist page: skeleton loader ---- */
   #artist-skeleton .artist-skeleton-hero {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    gap: var(--space-3);
+    position: relative;
+    width: auto;
+    margin-top: calc(-1 * (var(--topbar-h, 64px) + 7px));
+    margin-left: calc(-1 * var(--space-4, 16px));
+    margin-right: calc(-1 * var(--space-4, 16px));
+    height: calc(400px + var(--topbar-h, 64px) + 7px);
     margin-bottom: var(--space-5);
-    padding: var(--space-4);
-  }
-  #artist-skeleton .artist-skeleton-hero .skeleton-circle {
-    width: 180px;
-    height: 180px;
-    border-radius: 50%;
     background: linear-gradient(90deg, var(--border) 25%, #2a2a2a 37%, var(--border) 63%);
     background-size: 400% 100%;
     animation: skeletonShimmer 1.4s ease infinite;
+  }
+  @media (min-width: 900px) {
+    #artist-skeleton .artist-skeleton-hero {
+      margin-left: -28px;
+      margin-right: -28px;
+    }
+  }
+  @media (max-width: 768px) {
+    #artist-skeleton .artist-skeleton-hero { 
+      height: calc(320px + var(--topbar-h, 64px) + 7px);
+    }
+  }
+  #artist-skeleton .artist-skeleton-songs-container {
+    padding: 0 18px;
+    max-width: 1400px;
+    margin: 0 auto;
   }
   #artist-skeleton .artist-skeleton-song {
     display: flex;
