@@ -203,7 +203,7 @@
   .track-like-btn {
     flex: none;
     background: none;
-    border: 1px solid var(--border);
+    border: none;
     color: var(--muted);
     width: 32px;
     height: 32px;
@@ -213,12 +213,12 @@
     justify-content: center;
     cursor: pointer;
     transition: color .15s, border-color .15s, transform .15s;
-    border-radius: 50%;
+    border-radius: 0;
     margin-right: 6px;
   }
-  .track-like-btn:hover { color: var(--text); border-color: #444; }
-  .track-like-btn:active { color: var(--accent); border-color: var(--accent); transform: scale(0.95); }
-  .track-like-btn.liked { color: var(--accent); border-color: var(--accent); background: rgba(232, 89, 12, .1); }
+  .track-like-btn:hover { color: var(--text); }
+  .track-like-btn:active { color: var(--accent); transform: scale(0.95); }
+  .track-like-btn.liked { color: var(--accent); background: transparent; }
   .track-like-btn svg { width: 16px; height: 16px; }
 
   /* ---- Search result: more-options button (all viewports) ---- */

@@ -3540,6 +3540,34 @@ async def api_artist(channel_id):
     })
 
 
+@app.route("/api/song/<video_id>/album", methods=["GET"])
+async def api_song_album(video_id):
+    """Resolve a song's album when feed/history data omitted its browse id."""
+    if not _valid_video_id(video_id):
+        return error_response('invalid video id', 400)
+    ytmusic = _get_ytmusic()
+    candidates = []
+    try:
+        radio = await asyncio.to_thread(ytmusic.get_watch_playlist, videoId=video_id, limit=5)
+        candidates.extend((radio or {}).get('tracks') or [])
+    except Exception:
+        logger.exception("album lookup watch playlist failed for %s", video_id)
+    if not any(t.get('videoId') == video_id for t in candidates):
+        query = ' '.join(filter(None, (request.args.get('title', ''), request.args.get('artist', '')))).strip()
+        if query:
+            try:
+                candidates.extend(await asyncio.to_thread(ytmusic.search, query, 'songs', None, 10) or [])
+            except Exception:
+                logger.exception("album lookup search failed for %s", video_id)
+    exact = [t for t in candidates if t.get('videoId') == video_id]
+    for track in exact + candidates:
+        album = track.get('album') or {}
+        browse_id = album.get('id') or album.get('browseId')
+        if browse_id:
+            return jsonify({'browseId': browse_id})
+    return error_response('album not found for this song', 404)
+
+
 @app.route("/api/album/<browse_id>", methods=["GET"])
 async def api_album(browse_id):
     if not browse_id.strip():

@@ -16,6 +16,7 @@
   try { localStorage.removeItem('queuePanelOpen'); } catch (_) {}
 
 const QUEUE_RENDER_CHUNK = 150;
+let _addToQueueBusy = false;
 
 async function addToQueue(item, position, silent) {
   if (_addToQueueBusy) return;

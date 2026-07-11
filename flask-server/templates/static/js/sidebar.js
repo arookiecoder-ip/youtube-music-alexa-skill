@@ -159,5 +159,22 @@
   });
 })();
 
+/* Logo/wordmark is a Home shortcut; the nested rail toggle keeps its own
+   independent action. */
+(function () {
+  const brand = document.getElementById('sidebar-brand-home');
+  if (!brand) return;
+  function goHome(e) {
+    if (e.target.closest('.sidebar-rail-toggle')) return;
+    if (window.navigateTo) window.navigateTo('#home');
+  }
+  brand.addEventListener('click', goHome);
+  brand.addEventListener('keydown', function (e) {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    e.preventDefault();
+    goHome(e);
+  });
+})();
+
 
 })();

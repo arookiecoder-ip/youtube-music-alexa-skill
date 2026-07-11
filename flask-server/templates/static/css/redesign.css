@@ -20,6 +20,11 @@
   --card-radius: 12px;
 }
 
+/* Keep the shell width stable when routed overlays lock body scrolling. The
+   reserved gutter prevents header/search controls shifting as the vertical
+   scrollbar disappears and returns. */
+html { scrollbar-gutter: stable; }
+
 /* Top brand line becomes a gradient */
 body::before {
   background: var(--accent-grad);
@@ -400,18 +405,18 @@ body.results-open .play-section {
      rail was still animating. overflow:hidden lets the shrinking width clip
      the fading logo/text. */
   .sidebar-brand {
-    overflow: hidden;
+    overflow: visible;
     transition: width .25s ease;
   }
   .sidebar-brand-mark,
   .sidebar-brand strong { transition: opacity .14s ease; }
   body.rail-collapsed .sidebar-brand {
-    width: 44px;
-    padding: 0;
+    width: 172px;
+    padding: 0 4px;
   }
   body.rail-collapsed .sidebar-brand-mark,
   body.rail-collapsed .sidebar-brand strong {
-    opacity: 0;
+    opacity: 1;
   }
   /* Smooth open/close */
   main,
@@ -492,6 +497,8 @@ body.results-open .play-section {
   width: 172px;
   flex: none;
 }
+.sidebar-brand-mark,
+.sidebar-brand strong { cursor: pointer; }
 .sidebar-brand strong {
   font-size: .9rem;
   letter-spacing: .12em;
@@ -1214,7 +1221,7 @@ body.results-open #results-section {
   padding: 0 0 24px;
   margin: 0 auto;
   width: 100%;
-  max-width: 860px;
+  max-width: none;
   display: block;
   overflow: visible;
   height: auto;
@@ -1255,7 +1262,27 @@ body.results-open #results-section {
   font-weight: 700 !important;
 }
 
-.result-item-inner { border-radius: var(--radius-md); }
+#results-section .result-swipe-wrapper { background: transparent; }
+#results-section .result-item-inner {
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  padding: 8px 10px;
+}
+#results-section .result-swipe-wrapper .result-item-inner:hover {
+  background: rgba(255, 255, 255, .045);
+}
+#results-section .result-swipe-wrapper + .result-swipe-wrapper .result-item-inner {
+  border-top: none;
+}
+#results-section .result-like-btn,
+#results-section .track-like-btn {
+  background: transparent;
+  border: none;
+  border-radius: 0;
+}
+#results-section .result-like-btn:hover,
+#results-section .track-like-btn:hover { background: transparent; }
 .result-thumb, .result-thumb-slot { border-radius: 6px; overflow: hidden; }
 .results-pager button { border-radius: var(--radius-full); }
 
@@ -1608,16 +1635,20 @@ body.results-open .player-section {
   /* Play/pause: plain glyph (no circular chip), larger than prev/next */
   .player-section .pp-btn,
   .player-section .pp-btn:hover {
+    flex: 0 0 58px;
     width: 58px;
     height: 58px;
+    box-sizing: border-box;
+    padding: 0;
     background: transparent;
     border: 0;
     color: #fff;
     box-shadow: none;
     filter: none;
+    transform: none;
   }
-  .player-section .pp-btn:hover { filter: none; }
-  .player-section .pp-btn svg { width: 40px; height: 40px; }
+  .player-section .pp-btn:hover { filter: none; transform: none; }
+  .player-section .pp-btn svg { flex: none; width: 40px; height: 40px; margin: 0; }
 
   .player-section .np {
     grid-area: np;
@@ -1740,14 +1771,19 @@ body.results-open .player-section {
     visibility: hidden;
     transform: translateY(103%);
     pointer-events: none;
+    will-change: transform;
+    backface-visibility: hidden;
     transition: transform .32s cubic-bezier(.22, 1, .36, 1),
-                visibility .32s,
+                visibility 0s linear .32s,
                 left .25s ease; /* follows the rail as it collapses/expands */
   }
   body.now-playing-route #now-playing-section {
     visibility: visible;
     transform: none;
     pointer-events: auto;
+    transition: transform .32s cubic-bezier(.22, 1, .36, 1),
+                visibility 0s linear 0s,
+                left .25s ease;
   }
   .np-page { height: 100%; }
 }

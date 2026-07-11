@@ -436,9 +436,6 @@ document.querySelectorAll('.results-tab').forEach(tab => {
 });
 document.getElementById('results-close').addEventListener('click', closeResults);
 
-/* ---- Add to queue ---- */
-let _addToQueueBusy = false;
-
 /* ---- search suggestions ---- */
 (function () {
   const input = document.getElementById('query');

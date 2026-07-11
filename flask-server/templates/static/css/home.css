@@ -25,6 +25,10 @@
 }
 
 .home-row-header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
   padding: var(--space-3) var(--space-4) var(--space-1);
 }
 
@@ -119,6 +123,24 @@
   line-height: 1.35;
   cursor: pointer;
 }
+.home-row-scroll-controls { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+.home-row-scroll {
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 50%;
+  background: rgba(255,255,255,.09);
+  color: var(--text);
+  cursor: pointer;
+  transition: background .15s, opacity .15s;
+}
+.home-row-scroll:hover:not(:disabled) { background: rgba(255,255,255,.17); }
+.home-row-scroll:disabled { opacity: .28; cursor: default; }
+.home-row-scroll svg { width: 19px; height: 19px; }
 .home-card .recs-tile-artist {
   width: 100%;
   padding: 0;

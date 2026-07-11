@@ -16,7 +16,8 @@
       '<div class="album-hero-info"><span>Album</span><h1>' + esc(data.title) + '</h1>' +
       '<button class="album-artist-link" type="button" data-channel-id="' + esc(data.channelId) + '">' + esc(data.artist) + '</button>' +
       '<p>' + esc([data.year, (data.tracks || []).length + ' songs'].filter(Boolean).join(' · ')) + '</p>' +
-      '<button class="btn-accent album-play-all" type="button">Play all</button></div>';
+      (data.description ? '<div class="album-description">' + esc(data.description) + '</div>' : '') +
+      '<button class="btn-accent album-play-all" type="button" title="Play all" aria-label="Play all"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></button></div>';
 
     list.innerHTML = (data.tracks || []).map(function (track, index) {
       var isSameArtist = !track.artist || track.artist === data.artist;

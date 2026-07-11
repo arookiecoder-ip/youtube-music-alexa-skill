@@ -53,7 +53,11 @@
       ? '<div class="home-row-subtitle">' + escHtml(row.subtitle) + '</div>'
       : '';
     return '<div class="home-row-container">' +
-      '<div class="home-row-header"><div class="label home-row-label">' + escHtml((row && row.title) || '') + '</div>' + subtitle + '</div>' +
+      '<div class="home-row-header"><div><div class="label home-row-label">' + escHtml((row && row.title) || '') + '</div>' + subtitle + '</div>' +
+      '<div class="home-row-scroll-controls">' +
+        '<button type="button" class="home-row-scroll home-row-scroll-prev" title="Scroll left" aria-label="Scroll left" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg></button>' +
+        '<button type="button" class="home-row-scroll home-row-scroll-next" title="Scroll right" aria-label="Scroll right"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg></button>' +
+      '</div></div>' +
       '<div class="home-row">' + tilesHtml + '</div>' +
     '</div>';
   }
@@ -138,7 +142,26 @@
 
   const rows = document.getElementById('home-rows');
   if (rows) {
+    function updateShelfArrows(shelf) {
+      var container = shelf.closest('.home-row-container');
+      if (!container) return;
+      var prev = container.querySelector('.home-row-scroll-prev');
+      var next = container.querySelector('.home-row-scroll-next');
+      if (prev) prev.disabled = shelf.scrollLeft <= 2;
+      if (next) next.disabled = shelf.scrollLeft + shelf.clientWidth >= shelf.scrollWidth - 2;
+    }
+    rows.addEventListener('scroll', function(e) {
+      if (e.target.classList && e.target.classList.contains('home-row')) updateShelfArrows(e.target);
+    }, true);
     rows.addEventListener('click', function(e) {
+      var scrollBtn = e.target.closest('.home-row-scroll');
+      if (scrollBtn) {
+        var shelf = scrollBtn.closest('.home-row-container').querySelector('.home-row');
+        var direction = scrollBtn.classList.contains('home-row-scroll-prev') ? -1 : 1;
+        shelf.scrollBy({ left: direction * Math.max(240, shelf.clientWidth * .8), behavior: 'smooth' });
+        window.setTimeout(function() { updateShelfArrows(shelf); }, 350);
+        return;
+      }
       // Empty-state retry: reset the loaded flag and rebuild the feed
       if (e.target.closest('#home-retry-btn')) {
         state._homeLoaded = false;
@@ -179,6 +202,20 @@
         var titleCard = titleLink.closest('.home-card');
         if (titleCard && titleCard.dataset.albumId) {
           window.navigateTo('#album/' + encodeURIComponent(titleCard.dataset.albumId));
+        } else if (titleCard && titleCard.dataset.videoId) {
+          titleLink.classList.add('is-resolving');
+          var lookup = '/api/song/' + encodeURIComponent(titleCard.dataset.videoId) + '/album' +
+            '?title=' + encodeURIComponent(titleCard.dataset.title || '') +
+            '&artist=' + encodeURIComponent(titleCard.dataset.artist || '');
+          window.api(lookup).then(function(result) {
+            if (!result || !result.browseId) throw new Error('Album not found');
+            titleCard.dataset.albumId = result.browseId;
+            window.navigateTo('#album/' + encodeURIComponent(result.browseId));
+          }).catch(function(err) {
+            if (window.toast) window.toast(err.message || 'Could not open album', 'error');
+          }).finally(function() {
+            titleLink.classList.remove('is-resolving');
+          });
         }
         return;
       }

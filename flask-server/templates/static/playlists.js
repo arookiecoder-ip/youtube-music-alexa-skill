@@ -302,6 +302,7 @@ async function openPlaylistDetailModal(pl_id, fromRoute) {
   const queueAddSvg = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>`;
   const playNextSvg = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>`;
   const heartFilledSvg = `<svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg>`;
+  const heartOutlineSvg = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg>`;
 
   const list = document.createElement('div');
   list.className = 'history-list';
@@ -354,15 +355,6 @@ async function openPlaylistDetailModal(pl_id, fromRoute) {
     }
 
     // Liked Songs keeps its fixed oldest-first order — no drag handle there.
-    if (pl_id !== 'liked') {
-      const dragSvg = `<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/><circle cx="9" cy="10" r="1.5"/><circle cx="15" cy="10" r="1.5"/><circle cx="9" cy="15" r="1.5"/><circle cx="15" cy="15" r="1.5"/><circle cx="9" cy="20" r="1.5"/><circle cx="15" cy="20" r="1.5"/></svg>`;
-      const dragHandle = document.createElement('div');
-      dragHandle.className = 'playlist-drag-handle';
-      dragHandle.title = 'Drag to reorder';
-      dragHandle.innerHTML = dragSvg;
-      row.appendChild(dragHandle);
-    }
-
     const info = document.createElement('div');
     info.className = 'history-info';
     info.style.cssText = 'flex:1; min-width:0; cursor:pointer;';
@@ -378,18 +370,18 @@ async function openPlaylistDetailModal(pl_id, fromRoute) {
     info.appendChild(artistEl);
     row.appendChild(info);
 
-      if (pl_id === 'liked') {
-        const heartBtn = document.createElement('button');
-        heartBtn.className = 'track-like-btn liked';
-        heartBtn.type = 'button';
-        heartBtn.title = 'Dislike';
-        heartBtn.innerHTML = heartFilledSvg;
-        heartBtn.addEventListener('click', (e) => {
-          e.stopPropagation();
-          toggleLike(item, heartBtn);
-        });
-        row.appendChild(heartBtn);
-      }
+      const isLiked = _playlistsData.liked_songs.includes(track.video_id);
+      const heartBtn = document.createElement('button');
+      heartBtn.className = 'track-like-btn' + (isLiked ? ' liked' : '');
+      heartBtn.type = 'button';
+      heartBtn.title = isLiked ? 'Dislike' : 'Like';
+      heartBtn.setAttribute('aria-label', heartBtn.title);
+      heartBtn.innerHTML = isLiked ? heartFilledSvg : heartOutlineSvg;
+      heartBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        toggleLike(item, heartBtn);
+      });
+      row.appendChild(heartBtn);
 
       const moreContainer = document.createElement('div');
       moreContainer.className = 'playlist-more-container';
@@ -444,7 +436,6 @@ async function openPlaylistDetailModal(pl_id, fromRoute) {
 
       wrapper.appendChild(row);
       _attachSwipeGesture(wrapper, row, item);
-      if (pl_id !== 'liked') _attachPlaylistDragReorder(wrapper, list);
       return wrapper;
   };
 
@@ -468,7 +459,7 @@ async function openPlaylistDetailModal(pl_id, fromRoute) {
         <div class="playlist-hero-actions-left">
           <button class="playlist-hero-play" type="button" title="Play all"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></button>
           ${pl.source_url ? `<button class="playlist-hero-sync" type="button" title="Sync playlist"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg></button>` : ''}
-          <button class="playlist-hero-more" type="button" title="More options"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg></button>
+          ${pl_id !== 'liked' ? `<button class="playlist-hero-more" type="button" title="More options"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg></button>` : ''}
         </div>
         <div class="playlist-hero-actions-right">
           <button class="playlist-hero-shuffle" type="button" title="Shuffle play">${shuffleBtn.innerHTML}</button>
@@ -482,10 +473,11 @@ async function openPlaylistDetailModal(pl_id, fromRoute) {
   heroDiv.querySelector('.playlist-hero-shuffle').addEventListener('click', () => shuffleBtn.click());
   const heroSync = heroDiv.querySelector('.playlist-hero-sync');
   if (heroSync) heroSync.addEventListener('click', () => syncPlaylist(pl_id, heroSync));
-  heroDiv.querySelector('.playlist-hero-more').addEventListener('click', (e) => {
-    e.stopPropagation();
-    _openPlaylistDetailMoreMenu(e.currentTarget);
-  });
+  const heroMore = heroDiv.querySelector('.playlist-hero-more');
+  if (heroMore) heroMore.addEventListener('click', (e) => {
+      e.stopPropagation();
+      _openPlaylistDetailMoreMenu(e.currentTarget);
+    });
   const heroShare = heroDiv.querySelector('.playlist-hero-share');
   if (heroShare) heroShare.addEventListener('click', () => sharePlaylist(pl));
 
@@ -813,6 +805,7 @@ async function toggleLike(item, btnElement) {
       if (btnElement) {
         btnElement.classList.remove('liked');
         btnElement.title = "Like";
+        btnElement.setAttribute('aria-label', 'Like');
         btnElement.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg>`;
       }
       toast('Removed from Liked Songs', 'ok');
@@ -832,6 +825,7 @@ async function toggleLike(item, btnElement) {
       if (btnElement) {
         btnElement.classList.add('liked');
         btnElement.title = "Dislike";
+        btnElement.setAttribute('aria-label', 'Dislike');
         btnElement.innerHTML = `<svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg>`;
       }
       toast('Added to Liked Songs', 'ok');

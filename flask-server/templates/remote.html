@@ -131,7 +131,7 @@
   <!-- Mobile sidebar -->
   <div class="sidebar-overlay" id="sidebar-overlay"></div>
   <div class="sidebar" id="sidebar">
-    <div class="sidebar-brand">
+    <div class="sidebar-brand" id="sidebar-brand-home" role="button" tabindex="0" title="Home" aria-label="Go to home">
       <button class="sidebar-rail-toggle" id="sidebar-rail-toggle" title="Toggle sidebar" aria-label="Toggle sidebar">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
       </button>
@@ -225,16 +225,6 @@
            autocomplete="current-password" style="margin-bottom:12px">
     <button class="btn-accent" id="login-btn" style="width:100%">Connect</button>
   </section>
-
-  <!-- Idle hero text (visible only when nothing is playing) -->
-  <div class="idle-hero needs-login" id="idle-hero" hidden>
-    <div class="idle-hero-line">
-      <div class="idle-hero-text">Search.</div>
-      <div class="idle-hero-text">Listen.</div>
-      <div class="idle-hero-text idle-hero-accent">Enjoy.</div>
-    </div>
-    <div class="idle-hero-sub">Your music, one search away</div>
-  </div>
 
   <!-- Play -->
   <section class="needs-login play-section" hidden>

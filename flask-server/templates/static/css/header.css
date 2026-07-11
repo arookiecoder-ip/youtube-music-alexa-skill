@@ -209,7 +209,11 @@
     z-index: 1;
   }
   .history-item:hover { background: rgba(255, 255, 255, .045); }
-  .history-item:active { transform: scale(.99); }
+  /* Press feedback belongs to direct row clicks only. Clicking embedded
+     controls (Like, More, artist links) must not shrink the whole song. */
+  .history-item:active:not(:has(button:active)):not(:has(a:active)) {
+    transform: scale(.99);
+  }
   .history-item + .history-item { border-top: none; }
   .history-date-header {
     padding: 10px 20px var(--space-1);
