@@ -355,7 +355,15 @@ body.results-open .play-section {
   body.rail-collapsed .sidebar-signout,
   body.rail-collapsed .sidebar-footer,
   body.rail-collapsed .sidebar-library { display: none; }
-  body.rail-collapsed .sidebar-brand { justify-content: flex-start; }
+  /* Full logo cannot fit beside the 38px toggle inside a 72px rail. Hide it
+     instead of leaving a clipped orange sliver/name, and center the toggle. */
+  body.rail-collapsed .sidebar-brand {
+    width: 100%;
+    justify-content: center;
+    padding: 0;
+  }
+  body.rail-collapsed .sidebar-brand-mark,
+  body.rail-collapsed .sidebar-brand strong { display: none; }
   /* Smooth open/close */
   main,
   main.idle,
@@ -399,6 +407,13 @@ body.results-open .play-section {
   padding: 11px 12px;
   border-radius: var(--radius-md);
   transition: color .15s, background .15s;
+  min-height: 41px;
+  overflow: hidden;
+}
+.sidebar .sidebar-nav-btn .nav-label {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: clip;
 }
 .sidebar .sidebar-nav-btn:hover {
   color: var(--text);
@@ -880,6 +895,19 @@ input[type=range]::-moz-range-thumb { border-radius: 50%; }
 /* Expanded now-playing: a routed desktop page inspired by YT Music. Mobile
    keeps the compact draggable sheet from player.css. */
 @media (min-width: 900px) {
+  body.now-playing-route {
+    overflow: hidden;
+  }
+  body.now-playing-route main {
+    height: 100vh;
+    min-height: 0;
+    padding-bottom: 0;
+    overflow: hidden;
+  }
+  body.now-playing-route header {
+    margin-bottom: 0;
+    background: #101010;
+  }
   .mini-popup-overlay {
     display: flex !important;
     left: var(--rail-w);
@@ -971,6 +999,7 @@ input[type=range]::-moz-range-thumb { border-radius: 50%; }
     background: #080808;
     z-index: 225;
     box-sizing: border-box;
+    overflow: hidden;
   }
   body.now-playing-route #queue-section > .label {
     padding: 0 8px 14px;
@@ -1481,7 +1510,10 @@ body.results-open .player-section {
   main.has-queue .player-section,
   body.results-open .player-section {
     overflow: visible;
+    height: 72px;
     min-height: 72px;
+    box-sizing: border-box;
+    z-index: 240;
     padding: 5px 16px 4px;
     grid-template-columns: 205px minmax(320px, 1fr) auto auto;
     grid-template-areas: "transport np actions volume";

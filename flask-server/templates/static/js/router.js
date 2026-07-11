@@ -29,6 +29,9 @@
       if (window.openHistoryPage) window.openHistoryPage(true);
     },
     '#now-playing': function() {
+      // Now Playing owns the viewport. Do not leave Home/results underneath;
+      // they can peek through during resizing and keep the document scrollable.
+      hideAllViews();
       setHidden('.player-section', false);
       if (window._openMiniPopup) window._openMiniPopup(true);
     },

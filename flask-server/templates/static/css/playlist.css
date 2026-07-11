@@ -219,6 +219,7 @@
    playlist identity remains on the left while tracks scroll on the right. */
 @media (min-width: 900px) {
   #playlist-detail-modal { position: relative; }
+  #playlist-detail-back { display: none !important; }
   #playlist-detail-modal .history-modal-header {
     position: absolute;
     inset: 14px 20px auto;
@@ -234,7 +235,7 @@
     width: min(1160px, 100%);
     height: 100%;
     margin: 0 auto;
-    padding: 64px 32px 28px;
+    padding: 34px 32px 28px;
     display: grid;
     grid-template-columns: 300px minmax(0, 1fr);
     gap: clamp(44px, 6vw, 86px);
@@ -245,14 +246,14 @@
     display: flex;
     flex-direction: column;
     align-items: center;
-    align-self: center;
+    align-self: start;
     gap: 18px;
     padding: 0;
     text-align: center;
   }
   #playlist-detail-modal .playlist-detail-hero .playlist-collage {
-    width: 260px;
-    height: 260px;
+    width: 210px;
+    height: 210px;
     border-radius: 10px;
     box-shadow: 0 22px 60px rgba(0,0,0,.5);
   }
@@ -302,8 +303,16 @@
     overflow-y: auto;
     padding-right: 8px;
   }
-  #playlist-detail-modal .result-swipe-wrapper { background: transparent; }
+  /* Track list is a flex column. Without flex:none, a long playlist shrinks
+     every wrapper to fit the viewport, crushing rows into thin lines. */
+  #playlist-detail-modal .result-swipe-wrapper {
+    flex: none;
+    min-height: 58px;
+    background: transparent;
+  }
   #playlist-detail-modal .history-item {
+    height: 58px;
+    box-sizing: border-box;
     min-height: 58px;
     padding: 8px 10px;
     border-bottom: 1px solid rgba(255,255,255,.07);
