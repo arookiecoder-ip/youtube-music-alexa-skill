@@ -663,6 +663,20 @@ if (nextBtn) {
     input.setAttribute('aria-expanded', 'false');
   }
 
+  const removeSvg =
+    '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" ' +
+    'stroke="currentColor" stroke-width="2.5" stroke-linecap="round">' +
+    '<path d="M18 6 6 18M6 6l12 12"/></svg>';
+
+  function removeHistoryEntry(text) {
+    const updated = getHistory().filter(h => h.toLowerCase() !== text.toLowerCase());
+    try { localStorage.setItem(HISTORY_KEY, JSON.stringify(updated)); } catch (_) {}
+    items = updated.slice(0, HISTORY_MAX_SHOWN);
+    if (!items.length) { closeList(); input.focus(); return; }
+    activeIdx = -1;
+    render();
+  }
+
   function render() {
     if (!items.length) { closeList(); return; }
     listEl.innerHTML = '';
@@ -674,20 +688,23 @@ if (nextBtn) {
       li.querySelector('span').textContent = text;
       // mousedown (not click) so it fires before the input's blur
       li.addEventListener('mousedown', e => { e.preventDefault(); choose(i); });
+
+      if (showingHistory) {
+        const removeBtn = document.createElement('button');
+        removeBtn.className = 'suggest-item-remove';
+        removeBtn.type = 'button';
+        removeBtn.setAttribute('aria-label', 'Remove ' + text + ' from history');
+        removeBtn.innerHTML = removeSvg;
+        removeBtn.addEventListener('mousedown', e => {
+          e.preventDefault();
+          e.stopPropagation();
+          removeHistoryEntry(text);
+        });
+        li.appendChild(removeBtn);
+      }
+
       listEl.appendChild(li);
     });
-    if (showingHistory) {
-      const clearLi = document.createElement('li');
-      clearLi.className = 'suggest-clear-history';
-      clearLi.textContent = 'Clear search history';
-      clearLi.addEventListener('mousedown', e => {
-        e.preventDefault();
-        try { localStorage.removeItem(HISTORY_KEY); } catch (_) {}
-        closeList();
-        input.focus();
-      });
-      listEl.appendChild(clearLi);
-    }
     listEl.hidden = false;
     input.setAttribute('aria-expanded', 'true');
   }

@@ -122,10 +122,10 @@
   position: absolute;
   top: 50%;
   left: 50%;
-  width: 48px;
-  height: 48px;
-  background: #ffffff;
-  border-radius: 50%;
+  width: 44px;
+  height: 44px;
+  background: none;
+  border-radius: 0;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -136,14 +136,14 @@
   opacity: 0;
   transition: opacity 0.18s ease, transform 0.18s ease;
   pointer-events: none;
-  box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+  box-shadow: none;
 }
 .home-play-btn svg {
-  width: 20px;
-  height: 20px;
-  fill: #000;
+  width: 36px;
+  height: 36px;
+  fill: #ffffff;
   display: block;
-  margin-left: 2px; /* optical center for play triangle */
+  filter: drop-shadow(0 2px 6px rgba(0,0,0,0.6));
 }
 
 /* Reveal on card hover */
@@ -154,7 +154,7 @@
 }
 /* Slightly shrink on click for press feedback */
 .home-play-btn:active {
-  transform: translate(-50%, -50%) scale(0.92) !important;
+  transform: translate(-50%, -50%) scale(0.88) !important;
 }
 
 .home-card-art img {

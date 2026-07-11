@@ -670,7 +670,7 @@ function renderSidebarPlaylists() {
       }
     }
     return `
-    <button class="sidebar-playlist-item" type="button" data-playlist-id="${escHtml(pl.id)}" title="${escHtml(pl.name)}">
+    <button class="sidebar-playlist-item" type="button" data-playlist-id="${escHtml(pl.id)}">
       ${artHtml}
       <span class="sidebar-playlist-copy"><strong>${escHtml(pl.name)}</strong><span>${(pl.tracks || []).length} ${(pl.tracks || []).length === 1 ? 'song' : 'songs'}</span></span>
     </button>`;

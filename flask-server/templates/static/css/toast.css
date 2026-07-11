@@ -14,13 +14,15 @@
 
     border: 1px solid var(--border);
 
-    padding: 10px 28px;
+    padding: 14px 32px;
 
-    font-size: .78rem;
+    font-size: .95rem;
 
     letter-spacing: .04em;
 
     color: var(--muted);
+
+    border-radius: 0;
 
     opacity: 0;
 
@@ -52,11 +54,11 @@
 
   }
 
-  .toast.error { border-left: 3px solid var(--danger); color: var(--danger); }
+  .toast.error { color: var(--danger); border: 1px solid var(--danger); }
 
-  .toast.ok { border-left: 3px solid var(--ok); color: var(--ok); }
+  .toast.ok { color: var(--ok); border: 1px solid var(--ok); }
 
-  .toast.info { border-left: 3px solid var(--accent); color: var(--text); }
+  .toast.info { color: var(--accent); border: 1px solid var(--accent); }
 
   .toast.error { white-space: normal; }
 

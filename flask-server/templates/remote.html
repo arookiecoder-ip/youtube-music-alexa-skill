@@ -132,8 +132,8 @@
   <!-- Mobile sidebar -->
   <div class="sidebar-overlay" id="sidebar-overlay"></div>
   <div class="sidebar" id="sidebar">
-    <div class="sidebar-brand" id="sidebar-brand-home" role="button" tabindex="0" title="Home" aria-label="Go to home">
-      <button class="sidebar-rail-toggle" id="sidebar-rail-toggle" title="Toggle sidebar" aria-label="Toggle sidebar">
+    <div class="sidebar-brand" id="sidebar-brand-home" role="button" tabindex="0" aria-label="Go to home">
+      <button class="sidebar-rail-toggle" id="sidebar-rail-toggle" aria-label="Toggle sidebar">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
       </button>
       <div class="sidebar-brand-mark"><span></span><span></span><span></span><span></span></div>
@@ -149,14 +149,14 @@
       </button>
     </div>
     <div class="sidebar-section sidebar-nav">
-      <button class="sidebar-nav-btn needs-login" id="nav-home-btn" title="Home" hidden>
+      <button class="sidebar-nav-btn needs-login" id="nav-home-btn" hidden>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M3 10.5 12 3l9 7.5"/>
           <path d="M5 9.5V21h5v-6h4v6h5V9.5"/>
         </svg>
         <span class="nav-label">Home</span>
       </button>
-      <button class="sidebar-nav-btn needs-login jam-owner-only" id="nav-history-btn" title="Recently Listened" hidden>
+      <button class="sidebar-nav-btn needs-login jam-owner-only" id="nav-history-btn" hidden>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <circle cx="12" cy="12" r="9"/>
           <polyline points="12 7 12 12 15.5 14"/>
@@ -185,7 +185,7 @@
       </div>
     </div>
     <div class="sidebar-section sidebar-tools">
-      <button class="sidebar-nav-btn needs-login jam-owner-only" id="sidebar-jam-btn" title="Jam" hidden>
+      <button class="sidebar-nav-btn needs-login jam-owner-only" id="sidebar-jam-btn" hidden>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
           <circle cx="9" cy="7" r="4"/>
@@ -194,7 +194,7 @@
         </svg>
         <span class="nav-label">Jam</span>
       </button>
-      <button class="sidebar-nav-btn" id="refresh-page-btn" title="Refresh Page" onclick="location.reload()">
+      <button class="sidebar-nav-btn" id="refresh-page-btn" onclick="location.reload()">
         <svg viewBox="0 0 24 24" fill="none"
              stroke="currentColor" stroke-width="2.2" stroke-linecap="square">
           <path d="M21 2v6h-6"/><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/>
@@ -335,26 +335,23 @@
         <input type="range" id="volume" min="0" max="100" value="50">
       </div>
       
-      <!-- Queue Modal btn -->
-      <button class="queue-modal-btn ghost-btn" id="queue-modal-btn" title="View Queue">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-          <line x1="8" y1="6" x2="21" y2="6"/>
-          <line x1="8" y1="12" x2="21" y2="12"/>
-          <line x1="8" y1="18" x2="21" y2="18"/>
-          <line x1="3" y1="6" x2="3.01" y2="6"/>
-          <line x1="3" y1="12" x2="3.01" y2="12"/>
-          <line x1="3" y1="18" x2="3.01" y2="18"/>
-        </svg>
-      </button>
+
+
 
       <div class="np-more-wrap">
         <button class="np-more-btn ghost-btn" id="np-more-btn" title="More options" aria-label="More options" aria-expanded="false">
           <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg>
         </button>
         <div class="np-more-menu" id="np-more-menu" role="menu">
-          <button role="menuitem" id="np-menu-like">Like song</button>
-          <button role="menuitem" id="np-menu-playlist">Add to playlist</button>
-          <a role="menuitem" id="np-menu-ytm" href="#" target="_blank" rel="noopener">Open in YouTube Music</a>
+          <button role="menuitem" id="np-menu-like" class="result-menu-option">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg> Like song
+          </button>
+          <button role="menuitem" id="np-menu-playlist" class="result-menu-option">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path><line x1="12" y1="11" x2="12" y2="17"></line><line x1="9" y1="14" x2="15" y2="14"></line></svg> Add to playlist
+          </button>
+          <button role="menuitem" id="np-menu-radio" class="result-menu-option">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4.93 19.07A10 10 0 1 1 19.07 4.93 10 10 0 0 1 4.93 19.07z"/><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="M2 12h2"/><path d="M20 12h2"/></svg> Play Radio
+          </button>
         </div>
       </div>
       

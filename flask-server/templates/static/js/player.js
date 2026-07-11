@@ -978,9 +978,11 @@ document.getElementById('shuffle-btn').addEventListener('click', async (e) => {
       openAddToPlaylistModal(state._currentTrack);
     close();
   });
-  document.getElementById('np-menu-ytm').addEventListener('click', (e) => {
-    if (!state._currentVideoId) { e.preventDefault(); return; }
-    e.currentTarget.href = 'https://music.youtube.com/watch?v=' + encodeURIComponent(state._currentVideoId);
+  document.getElementById('np-menu-radio').addEventListener('click', (e) => {
+    if (!state._currentTrack) { e.preventDefault(); return; }
+    if (typeof playRadio === 'function') {
+      playRadio(state._currentTrack);
+    }
     close();
   });
 })();

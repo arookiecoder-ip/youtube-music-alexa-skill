@@ -46,7 +46,6 @@
         '<div class="recs-tile-art home-card-art">' + thumbHtml + playBtnHtml + '</div>' +
         '<div class="recs-tile-title" title="Open album">' + escHtml(title) + '</div>' +
         artistHtml +
-        '<button class="result-like-btn' + (isLikedLocal ? ' liked' : '') + '" type="button" title="' + (isLikedLocal ? 'Dislike' : 'Like') + '">' + heartSvgLocal + '</button>' +
       '</div>';
     }).join('');
     if (!tilesHtml) return '';
@@ -175,22 +174,6 @@
         return;
       }
 
-      // Like button: stop propagation so card play doesn't fire
-      var likeBtn = e.target.closest('.result-like-btn');
-      if (likeBtn) {
-        e.stopPropagation();
-        var card = likeBtn.closest('.home-card');
-        if (card && card.dataset.videoId) {
-          var item = {
-            video_id: card.dataset.videoId,
-            title: card.dataset.title,
-            artist: card.dataset.artist,
-            thumbnail: card.dataset.thumb,
-          };
-          if (typeof toggleLike === 'function') toggleLike(item, likeBtn);
-        }
-        return;
-      }
 
       // Artist name: navigate (or resolve by name) instead of playing the card.
       // Handled here rather than left to the document-level handler because
@@ -304,9 +287,8 @@
               if (window._closeAllMoreMenus) window._closeAllMoreMenus();
               sharedMoreMenu.classList.remove('open');
               activeMenuCardId = null;
-              if (sharedMoreMenu._triggerCard) {
-                var cardLikeBtn = sharedMoreMenu._triggerCard.querySelector('.result-like-btn');
-                if (cardLikeBtn) cardLikeBtn.click();
+              if (sharedMoreMenu._track && typeof toggleLike === 'function') {
+                toggleLike(sharedMoreMenu._track, null);
               }
           });
           sharedMoreMenu.querySelector('[data-action="play-next"]').addEventListener('click', function(evt) {

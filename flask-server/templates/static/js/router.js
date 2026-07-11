@@ -131,11 +131,20 @@
           npSection.hidden = true;
           npSection._closeTimer = null;
           document.body.classList.remove('now-playing-closing');
+          // Belt-and-suspenders: restore scroll in case overflow got stuck.
+          document.documentElement.style.removeProperty('overflow');
+          document.body.style.removeProperty('overflow');
         }, 340);
       }
       setHidden('#queue-section', true);
       var main = document.querySelector('main');
       if (main) main.classList.remove('has-queue');
+    }
+    // Safety: when landing on home, always ensure scroll is not locked.
+    if (hash === '#home') {
+      document.body.classList.remove('now-playing-closing');
+      document.documentElement.style.removeProperty('overflow');
+      document.body.style.removeProperty('overflow');
     }
     if (hash !== '#now-playing' && window._closeMiniPopup) window._closeMiniPopup();
     if (routes[hash]) {

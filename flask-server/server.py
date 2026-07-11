@@ -4830,6 +4830,35 @@ def api_create_playlist():
 async def api_get_playlist(pl_id):
     if not pl_id.strip():
         return error_response('invalid playlist id', 400)
+
+    # ── 1. Check local SQLite database first ──────────────────────────────────
+    # Playlists created in the app (id starts with "pl_") live only in the DB.
+    # Liked Songs and imported playlists also live in the DB.
+    with get_db() as conn:
+        pl_row = conn.execute('SELECT * FROM playlists WHERE id = ?', (pl_id,)).fetchone()
+        if pl_row:
+            tracks_rows = conn.execute(
+                'SELECT * FROM playlist_tracks WHERE playlist_id = ? ORDER BY added_at DESC, rowid ASC',
+                (pl_id,)
+            ).fetchall()
+            tracks = []
+            for t in tracks_rows:
+                track = dict(t)
+                track['thumbnail'] = track.pop('thumbnail_url', '')
+                tracks.append(track)
+            # Liked Songs: oldest-first
+            if pl_id == 'liked':
+                tracks.reverse()
+            return jsonify({
+                'id': pl_row['id'],
+                'name': pl_row['name'] or 'Untitled',
+                'description': pl_row['description'] or '',
+                'tracks': tracks,
+                'updated_at': pl_row['updated_at'],
+                'source_url': pl_row['source_url'],
+            })
+
+    # ── 2. Not in local DB — try to fetch from YouTube Music ─────────────────
     try:
         raw = await asyncio.to_thread(_get_ytmusic().get_playlist, playlistId=pl_id)
     except Exception as e:

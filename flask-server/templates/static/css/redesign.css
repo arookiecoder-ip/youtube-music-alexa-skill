@@ -31,6 +31,14 @@ body::before {
   z-index: 1000;
 }
 
+/* Ensure global progress bar is visible over the brand line */
+.top-progress-bar {
+  height: 3px;
+  background: #fff;
+  box-shadow: 0 0 8px rgba(255, 255, 255, 0.8);
+  z-index: 10001;
+}
+
 /* Warm tint bleeding down from the top of the page (behind the header).
    Applied to body so it also shows through the transparent collapsed rail
    (main starts after margin-left and would otherwise leave the rail over
@@ -125,9 +133,11 @@ main:has(.player-section.is-visible) {
   body:has(.player-section.is-visible) #queue-section {
     bottom: calc(var(--playbar-h) + 16px);
   }
-  /* The rail stops at the playbar so the transport controls do not overlap the rail. */
+  /* The rail stops at the playbar so the transport controls do not overlap the rail.
+     Use the actual playbar height variable (88 px) + a small gap instead of the
+     old hardcoded 72 px which was shorter than the bar and caused the overlap. */
   body:has(.player-section.is-visible) .sidebar {
-    bottom: 72px;
+    bottom: calc(var(--playbar-h) + 4px);
   }
 }
 
@@ -205,19 +215,19 @@ header {
 }
 
 .device-section-inline .custom-select-trigger {
-  border-radius: var(--radius-full);
+  border-radius: 10px;
   background: var(--pill-bg);
   border-color: transparent;
   padding: 8px 14px;
 }
 .device-section-inline #refresh {
-  border-radius: var(--radius-full);
+  border-radius: 10px;
   background: none;
   border-color: transparent;
 }
 .device-section-inline #refresh:hover { border-color: var(--border); }
 .custom-select-menu {
-  border-radius: var(--radius-lg);
+  border-radius: 4px;
   overflow: hidden;
   background: #1b1b1b;
   border-color: #2c2c2c;
@@ -269,7 +279,7 @@ body.results-open .play-section {
     url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23aaaaaa' stroke-width='2.2' stroke-linecap='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cline x1='21' y1='21' x2='16.2' y2='16.2'/%3E%3C/svg%3E");
 }
 .search-wrap input#query {
-  border-radius: var(--radius-full);
+  border-radius: 10px;
   background: var(--pill-bg);
   border: 1px solid transparent;
   padding: 12px 42px 12px 44px;
@@ -449,12 +459,15 @@ body.results-open .play-section {
     max-width: 18px;
     opacity: 1;
   }
-  /* Collapsed: brand stays at its natural width — icon + text always visible.
-     The rail-toggle centers itself; the wordmark overflows past the 56 px rail
-     edge and sits above the content area at top-left (high z-index handles
-     stacking). */
+  /* Collapsed: force the brand to its natural width so it overflows the 56 px
+     rail. width:auto on a flex child resolves to the container's inner width
+     (~28 px after rail padding), squashing the text. min-width + flex-shrink:0
+     escape that constraint. The sidebar's overflow:visible makes the overflow
+     show past the rail boundary. */
   body.rail-collapsed .sidebar-brand {
+    min-width: 172px;
     width: auto;
+    flex-shrink: 0;
     justify-content: flex-start;
     padding: 0 4px;
     overflow: visible;
@@ -583,7 +596,7 @@ body.results-open .play-section {
   width: 230px;
   padding: 10px;
   border: 1px solid rgba(255,255,255,.12);
-  border-radius: 12px;
+  border-radius: 4px;
   background: #202020;
   box-shadow: 0 14px 40px rgba(0,0,0,.55);
   opacity: 0;
@@ -616,11 +629,14 @@ body.results-open .play-section {
   border: 0;
   border-top: 1px solid rgba(255,255,255,.1);
   background: transparent;
-  color: var(--text);
+  color: #e55;
+  font-weight: 600;
   text-align: left;
   cursor: pointer;
+  border-radius: 6px;
+  transition: background .15s, color .15s;
 }
-.profile-menu #logout:hover { background: rgba(255,255,255,.08); }
+.profile-menu #logout:hover { background: rgba(220,50,50,.15); color: #ff6b6b; }
 .sidebar-rail-toggle {
   width: 38px;
   height: 38px;
@@ -836,8 +852,8 @@ body.results-open .player-section {
 .player-section.is-blank .player-actions,
 .player-section.is-blank .np-like-btn,
 .player-section.is-blank .np-shuffle-btn { opacity: 0.3; pointer-events: none; }
-.player-section.is-blank .np-art { background-color: var(--surface); display: flex; align-items: center; justify-content: center; }
-.player-section.is-blank .np-art::after { content: ''; width: 24px; height: 24px; background: currentColor; opacity: 0.2; mask: url('data:image/svg+xml,<svg viewBox="0 0 24 24"><path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"/></svg>') center/contain no-repeat; -webkit-mask: url('data:image/svg+xml,<svg viewBox="0 0 24 24"><path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"/></svg>') center/contain no-repeat; }
+.player-section.is-blank .np-art { background: none; display: flex; align-items: center; justify-content: center; }
+.player-section.is-blank .np-art::after { display: none; }
 
 /* Now-playing cluster */
 .player-section .np {
@@ -850,12 +866,31 @@ body.results-open .player-section {
 .player-section .np-art {
   width: 52px;
   height: 52px;
-  border-radius: var(--radius-md);
+  border-radius: 0;
   border: none;
-  background-color: #1e1e1e;
-  box-shadow: 0 4px 16px rgba(0, 0, 0, .5);
+  background: none;
+  box-shadow: none;
   overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
+/* Override player.css redesigned-bar rule that adds border-radius with !important */
+.player-section.redesigned-bar .np-art {
+  border-radius: 0 !important;
+  background: none !important;
+  border: none !important;
+  box-shadow: none !important;
+}
+/* Plain white icon when no art is loaded */
+.player-section .np-art svg {
+  color: #ffffff;
+  width: 26px;
+  height: 26px;
+  flex: none;
+}
+/* Hide the icon once real art is present */
+.player-section .np-art.has-thumb svg { display: none; }
 .player-section .np-title { font-size: .88rem; }
 .player-section .np-like-btn,
 .player-section .np-shuffle-btn,
@@ -1026,22 +1061,26 @@ input[type=range]::-moz-range-thumb { border-radius: 50%; }
 .player-section .progress-track.dragging {
   height: 6px;
 }
-/* Hide the time labels flanking the top-strip bar */
-.player-section .progress-times { display: none; }
+/* Hide the flanking time labels (elapsed + total) inside the progress strip.
+   We keep only the playbar-time in the np-info cluster. */
+.player-section .progress-times,
+.player-section #progress-elapsed,
+.player-section #progress-total { display: none !important; }
 
-/* Progress handle dot — repositioned to hang below the thin top strip so it
-   stays inside the overflow:hidden player section boundary */
+/* Progress handle dot — hangs just below the thin top strip */
 .player-section .progress-handle {
   display: block;
   width: 13px;
   height: 13px;
-  top: 100%;                    /* sits just below the track bar */
+  top: 100%;
   transform: translateX(-50%) translateY(-40%) scale(0.5);
   opacity: 0;
   background: #ffffff;
   box-shadow: 0 1px 6px rgba(0,0,0,0.5);
   transition: opacity 0.15s ease, transform 0.15s ease;
 }
+/* Show handle whenever ANY part of the progress bar is hovered */
+.player-section .progress:hover .progress-handle,
 .player-section .progress-track:hover .progress-handle,
 .player-section .progress-track.dragging .progress-handle {
   opacity: 1;
@@ -1051,11 +1090,12 @@ input[type=range]::-moz-range-thumb { border-radius: 50%; }
 /* Playbar timer: hidden globally, shown inside the player bar as small muted text below the artist */
 .playbar-time { display: none; }
 .player-section .playbar-time {
+  grid-area: time;
   display: block;
-  font-size: 0.62rem;
+  font-size: 0.68rem;
   color: var(--muted);
   opacity: 0.7;
-  margin-top: 3px;
+  margin-top: 1px;
   font-variant-numeric: tabular-nums;
   letter-spacing: 0.02em;
   white-space: nowrap;
@@ -1110,6 +1150,11 @@ body.now-playing-route .player-section .player-expand-btn svg {
     overflow: hidden;
   }
   body.now-playing-closing { overflow: hidden; }
+  /* Safety: home route is always scrollable, even if now-playing-closing
+     was not cleaned up in time (rapid navigation, timer race, etc.). */
+  body.home-route {
+    overflow: auto !important;
+  }
   body.now-playing-route main {
     height: 100vh;
     min-height: 0;
@@ -1501,8 +1546,8 @@ body.results-open #results-section {
   background: #151515;
   border-color: rgba(255, 255, 255, .09);
 }
-.confirm-dialog { border-radius: var(--radius-xl); }
-.confirm-actions button { border-radius: var(--radius-full); }
+.confirm-dialog { border-radius: 4px; background: #1e1e1e !important; border: 1px solid rgba(255,255,255,.12) !important; }
+.confirm-actions button { border-radius: 6px; }
 .btn-accent { border-radius: var(--radius-full); }
 .queue-modal { border-radius: var(--radius-xl) var(--radius-xl) 0 0; }
 .mini-popup { border-radius: var(--radius-xl) var(--radius-xl) 0 0; }
@@ -1700,7 +1745,28 @@ body.results-open .player-section {
    Playbar polish
    ============================================================ */
 
-.player-section .np-info { min-width: 0; }
+.player-section .np-info {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto max-content 1fr;
+  grid-template-areas:
+    "title time ."
+    "artist artist artist";
+  align-items: center;
+  column-gap: 8px;
+}
+.player-section .np-title {
+  grid-area: title;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.player-section .np-artist {
+  grid-area: artist;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .player-section .np-more-wrap { position: relative; flex: none; }
 .player-section .np-more-btn {
   display: inline-flex; align-items: center; justify-content: center;
@@ -1709,15 +1775,19 @@ body.results-open .player-section {
 .player-section .np-more-btn:hover { background: rgba(255,255,255,.08); }
 .player-section .np-more-btn svg { width: 21px; height: 21px; }
 .player-section .np-more-menu {
-  display: none; position: absolute; left: 0; bottom: calc(100% + 10px); z-index: 500;
+  display: none; position: absolute; right: 0; bottom: calc(100% + 10px); z-index: 500;
   min-width: 190px; padding: 6px; border: 1px solid rgba(255,255,255,.12);
   border-radius: 10px; background: #282828; box-shadow: 0 12px 32px rgba(0,0,0,.55);
 }
 .player-section .np-more-wrap.open .np-more-menu { display: block; }
 .player-section .np-more-menu button,
 .player-section .np-more-menu a {
-  display: flex; width: 100%; padding: 10px 12px; border: 0; border-radius: 7px;
+  display: flex; align-items: center; gap: 10px; width: 100%; padding: 10px 12px; border: 0; border-radius: 7px;
   background: transparent; color: #fff; font: inherit; text-align: left; text-decoration: none; cursor: pointer;
+}
+.player-section .np-more-menu button svg,
+.player-section .np-more-menu a svg {
+  flex: none; width: 16px; height: 16px; color: var(--muted);
 }
 .player-section .np-more-menu button:hover,
 .player-section .np-more-menu a:hover { background: rgba(255,255,255,.1); }
@@ -1756,7 +1826,7 @@ body.results-open .player-section {
   .player-section,
   main.has-queue .player-section,
   body.results-open .player-section {
-    overflow: visible;
+    overflow: hidden;
     height: 72px;
     min-height: 72px;
     box-sizing: border-box;
