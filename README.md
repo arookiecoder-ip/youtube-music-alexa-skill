@@ -173,18 +173,23 @@ The new **Home feed** (v2) displays your personalized YouTube Music homepage dir
   > 1. Go to [music.youtube.com](https://music.youtube.com) and log in.
   > 2. Open Developer Tools (F12) and go to the **Network** tab. Refresh the page.
   > 3. Filter for `browse`, click the first request, and scroll down to **Request Headers**.
-  > 4. Copy the entire string next to the `cookie:` header.
-  > 5. Create a `headers_auth.json` file in your root folder (next to `docker-compose.yml`):
+  > 4. Copy the entire string next to the `cookie:` header AND the `authorization:` header.
+  > 5. **If you use a Brand Account:** Also copy the `x-goog-authuser` header (usually `1` or `2`).
+  > 6. Create a `headers_auth.json` file in your root folder (next to `docker-compose.yml`):
   >    ```json
   >    {
   >      "accept": "*/*",
   >      "accept-language": "en-US,en;q=0.9",
+  >      "authorization": "PASTE_YOUR_AUTHORIZATION_STRING_HERE",
   >      "content-type": "application/json",
   >      "cookie": "PASTE_YOUR_COOKIE_STRING_HERE",
+  >      "x-goog-authuser": "0_OR_1_OR_2",
+  >      "x-origin": "https://music.youtube.com",
   >      "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
   >    }
   >    ```
-  > 6. In your `.env` file or terminal, set the `YTMUSIC_AUTH_FILE` environment variable to point to this file before starting the server. For example: `YTMUSIC_AUTH_FILE=headers_auth.json`.
+  > *(Alternatively, run `docker exec -it ytmusic ytmusicapi browser` or `python -m ytmusicapi browser` to auto-generate this file from a cURL command)*
+  > 7. In your `.env` file or terminal, set the `YTMUSIC_AUTH_FILE` environment variable to point to this file before starting the server. For example: `YTMUSIC_AUTH_FILE=headers_auth.json`.
 - **OAuth (`oauth.json`)**: This is much safer as it uses delegated access, but it requires configuring a GCP project. If using OAuth, you must provide `YTMUSIC_OAUTH_CLIENT_ID` and `YTMUSIC_OAUTH_CLIENT_SECRET` in your environment variables, and generate an `oauth.json` file to point `YTMUSIC_AUTH_FILE` at.
 
 **Anonymous / Local Fallback**: If `YTMUSIC_AUTH_FILE` is left unset, the backend will gracefully fall back to fetching unauthenticated, regional recommendations directly from YouTube. You will see generic charts and trending shelves instead of your personalized playlists and shortcuts. Note: there is no Spotify integration; the home feed is powered purely by YouTube Music.

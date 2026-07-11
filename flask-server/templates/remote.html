@@ -56,7 +56,12 @@
 </head>
 <body class="preload{{ ' jam-guest' if jam_guest else '' }}">
 <div id="top-progress-bar" class="top-progress-bar"></div>
-<script>window.JAM_GUEST = {{ 'true' if jam_guest else 'false' }};</script>
+<script>
+  window.APP_VERSION = "{{ asset_v }}";
+  window.JAM_GUEST = {% if jam_guest %}true{% else %}false{% endif %};
+  window.REMOTE_USERNAME = "{{ remote_username }}";
+  window.IS_AUTHENTICATED = {% if is_authenticated %}true{% else %}false{% endif %};
+</script>
 <main class="idle">
   <header>
     <div class="brand">
@@ -156,12 +161,19 @@
         </svg>
         <span class="nav-label">Home</span>
       </button>
-      <button class="sidebar-nav-btn needs-login jam-owner-only" id="nav-history-btn" hidden>
+      <button class="sidebar-nav-btn needs-login jam-owner-only auth-only" id="nav-history-btn" hidden>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <circle cx="12" cy="12" r="9"/>
           <polyline points="12 7 12 12 15.5 14"/>
         </svg>
-        <span class="nav-label">Recently Listened</span>
+        <span class="nav-label">History</span>
+      </button>
+      <button class="sidebar-nav-btn needs-login jam-owner-only auth-only" id="nav-explore-btn" hidden>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="10"/>
+          <polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76"/>
+        </svg>
+        <span class="nav-label">Explore</span>
       </button>
     </div>
     <div class="sidebar-section">
@@ -203,7 +215,7 @@
         <span class="nav-label">Refresh Page</span>
       </button>
     </div>
-    <div class="sidebar-library jam-owner-only">
+    <div class="sidebar-library jam-owner-only auth-only">
       <div class="sidebar-new-playlist-container needs-login" id="sidebar-new-playlist-container" hidden>
         <button class="sidebar-new-playlist" id="sidebar-new-playlist-btn" style="width: 100%;">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
@@ -553,7 +565,28 @@
 
 <!-- Recently Listened popup (desktop + mobile). No per-row remove button by
      design — only Clear (which asks for confirmation via the dialog below). -->
-<div class="history-modal-overlay" id="history-modal-overlay">
+
+  <!-- Explore Modal -->
+  <div class="history-modal-overlay" id="explore-modal-overlay">
+    <div class="history-modal">
+      <div class="history-modal-header">
+        <h3>Explore</h3>
+        <div class="history-modal-header-actions">
+          <button class="history-modal-close" id="explore-modal-close" title="Close">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+              <line x1="18" y1="6" x2="6" y2="18"/>
+              <line x1="6" y1="6" x2="18" y2="18"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+      <div class="history-modal-body" id="explore-modal-body">
+        <div class="loading-spinner"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="history-modal-overlay" id="history-modal-overlay">
   <div class="history-modal" id="history-modal">
     <div class="history-modal-header">
       <h3>Recently Listened</h3>
@@ -923,6 +956,7 @@
 <script>{% include "static/js/home.js" %}</script>
 <script>{% include "static/js/artist.js" %}</script>
 <script>{% include "static/js/album.js" %}</script>
+<script>{% include "static/js/explore.js" %}</script>
 <script>{% include "static/js/sw-register.js" %}</script>
 <script>{% include "static/js/pwa.js" %}</script>
 <script>{% include "static/playlists.js" %}</script>

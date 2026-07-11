@@ -37,8 +37,8 @@
         }
       } else if (type === 'liked-update') {
         // Trigger a playlist refresh
-        if (!window.JAM_GUEST && window.loadPlaylists) {
-          setTimeout(window.loadPlaylists, 100);
+        if (!window.JAM_GUEST && window.loadLibrary) {
+          setTimeout(window.loadLibrary, 100);
         }
       } else if (type === 'tab-focus') {
         // Another tab was focused — refresh our now-playing state

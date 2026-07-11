@@ -196,8 +196,8 @@ function checkLikedVersion(np) {
   const first = _lastLikedVersion === null;
   if (np.liked_version === _lastLikedVersion) return;
   _lastLikedVersion = np.liked_version;
-  if (first || window.JAM_GUEST || typeof loadPlaylists !== 'function') return;
-  loadPlaylists().then(() => refreshNpLikeButton()).catch(() => {});
+  if (first || window.JAM_GUEST || typeof loadLibrary !== 'function') return;
+  loadLibrary().then(() => refreshNpLikeButton()).catch(() => {});
 }
 
 /* ---- Progress bar ----

@@ -150,6 +150,7 @@
   function showControls(loggedIn) {
     if (loginSection) loginSection.hidden = loggedIn;
     for (const el of document.querySelectorAll('.needs-login')) el.hidden = !loggedIn;
+    for (const el of document.querySelectorAll('.auth-only')) el.hidden = (!loggedIn || !window.IS_AUTHENTICATED);
     state()._loggedIn = !!loggedIn;
     if (!loggedIn && window.closeResults) window.closeResults();
     if (window.syncHistoryTriggerVisibility) window.syncHistoryTriggerVisibility();

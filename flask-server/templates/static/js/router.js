@@ -31,6 +31,9 @@
         showHomeViews();
       }
     },
+    '#explore': function() {
+      if (window.openExplorePage) window.openExplorePage();
+    },
     '#history': function() {
       if (window.openHistoryPage) window.openHistoryPage(true);
     },
@@ -102,7 +105,8 @@
     [
       'main', 'results-section', 'results-list', 'artist-section',
       'album-section', 'now-playing-section', 'playlist-detail-modal',
-      'playlist-detail-modal-overlay', 'history-modal', 'history-modal-overlay'
+      'playlist-detail-modal-overlay', 'history-modal', 'history-modal-overlay',
+      'explore-modal', 'explore-modal-overlay'
     ].forEach(function(id) {
       var el = id === 'main' ? document.querySelector('main') : document.getElementById(id);
       if (el) el.scrollTop = 0;
@@ -147,6 +151,7 @@
     document.body.classList.toggle('now-playing-closing', isClosingNowPlaying);
     document.body.classList.toggle('playlists-route', hash.indexOf('#playlist/') === 0);
     document.body.classList.toggle('history-route', hash === '#history');
+    document.body.classList.toggle('explore-route', hash === '#explore');
     document.body.classList.toggle('artist-route', hash.indexOf('#artist/') === 0);
     document.body.classList.toggle('album-route', hash.indexOf('#album/') === 0);
 
@@ -160,6 +165,10 @@
     if (hash !== '#history') {
       var historyOverlay = document.getElementById('history-modal-overlay');
       if (historyOverlay) historyOverlay.classList.remove('open');
+    }
+    if (hash !== '#explore') {
+      var exploreOverlay = document.getElementById('explore-modal-overlay');
+      if (exploreOverlay) exploreOverlay.classList.remove('open');
     }
     if (hash !== '#now-playing') {
       var npSection = document.getElementById('now-playing-section');

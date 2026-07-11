@@ -98,6 +98,7 @@
 (function () {
   const navHome = document.getElementById('nav-home-btn');
   const navHistory = document.getElementById('nav-history-btn');
+  const navExplore = document.getElementById('nav-explore-btn');
 
   function goHome() {
     if (state._resultsOpen && window.closeResults) window.closeResults();
@@ -113,6 +114,12 @@
     if (state._resultsOpen && window.closeResults) window.closeResults();
     if (window._closeSidebar) window._closeSidebar();
     window.navigateTo('#history');
+  });
+
+  if (navExplore) navExplore.addEventListener('click', () => {
+    if (state._resultsOpen && window.closeResults) window.closeResults();
+    if (window._closeSidebar) window._closeSidebar();
+    window.navigateTo('#explore');
   });
 })();
 
