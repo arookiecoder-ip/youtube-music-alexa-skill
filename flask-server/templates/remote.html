@@ -590,15 +590,6 @@
   <div class="history-modal" id="history-modal">
     <div class="history-modal-header">
       <h3>Recently Listened</h3>
-      <div class="history-modal-header-actions">
-        <button class="clear-all-btn" id="clear-history-btn" title="Clear listening history" hidden>
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-            <path d="M3 6h18"/><path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2"/>
-            <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
-          </svg>
-          Clear
-        </button>
-      </div>
     </div>
     <div class="history-modal-body" id="history-modal-body">
       <div class="history-modal-empty">Loading…</div>
@@ -725,6 +716,27 @@
         <button class="btn-accent" id="new-playlist-btn">Create</button>
       </div>
       <div id="add-to-playlist-list" style="overflow-y:auto; flex:1;"></div>
+    </div>
+  </div>
+</div>
+
+<!-- New Playlist Modal -->
+<div class="history-modal-overlay" id="new-playlist-overlay">
+  <div class="history-modal" style="display:flex; flex-direction:column; max-width:min(400px, 92vw); height:auto;">
+    <div class="history-modal-header">
+      <h3>New Playlist</h3>
+      <div class="history-modal-header-actions">
+        <button class="history-modal-close" id="new-playlist-overlay-close" title="Close">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+            <line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>
+          </svg>
+        </button>
+      </div>
+    </div>
+    <div class="history-modal-body" style="padding: 20px; display: flex; flex-direction: column; gap: 12px;">
+      <input type="text" id="new-playlist-overlay-name" placeholder="Playlist name" style="background:var(--surface); border:1px solid var(--border); color:var(--text); padding:10px 12px; border-radius:6px;" autocomplete="off">
+      <input type="text" id="new-playlist-overlay-desc" placeholder="Description (optional)" style="background:var(--surface); border:1px solid var(--border); color:var(--text); padding:10px 12px; border-radius:6px;" autocomplete="off">
+      <button class="btn-accent" id="new-playlist-overlay-create" style="padding:10px; font-weight:bold;">Create Playlist</button>
     </div>
   </div>
 </div>
@@ -960,6 +972,7 @@
 <script>{% include "static/js/sw-register.js" %}</script>
 <script>{% include "static/js/pwa.js" %}</script>
 <script>{% include "static/playlists.js" %}</script>
+<script>{% include "static/js/like.js" %}</script>
 <script>
   (function () {
     if (window.restoreFromCache) window.restoreFromCache();

@@ -155,6 +155,7 @@
     if (!loggedIn && window.closeResults) window.closeResults();
     if (window.syncHistoryTriggerVisibility) window.syncHistoryTriggerVisibility();
     if (loggedIn && window.loadHistory) window.loadHistory();
+    if (loggedIn && window.loadLibrary) window.loadLibrary();
     else {
       const recs = document.getElementById('recs-section');
       if (recs) recs.hidden = true;

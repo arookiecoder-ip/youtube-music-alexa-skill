@@ -281,9 +281,10 @@ _SESSION_PATHS = ('/remote', '/alexa/status', '/alexa/init', '/alexa/devices', '
                   '/alexa/queue_add', '/alexa/queue_remove',
                   '/alexa/queue_reorder', '/history', '/recommendations',
                   '/alexa/jam/start', '/alexa/jam/stop', '/alexa/jam/status',
-                  '/alexa/jam/qr', '/api/home')
+                  '/alexa/jam/qr', '/api/home', '/api/library',
+                  '/alexa/like', '/api/liked_songs')
 _SESSION_PREFIXES = ('/alexa/now_playing/', '/history/', '/api/playlists/', '/recommendations/',
-                     '/api/artist/', '/api/album/')
+                     '/api/artist/', '/api/album/', '/api/library/')
 
 # API/device endpoints: the Alexa skill and web-remote JS hit these directly
 # and need a machine-readable JSON error, never an HTML redirect, on failure.
@@ -291,7 +292,7 @@ _API_PREFIXES = ('/alexa/', '/proxy/', '/get_stream/', '/get_radio/',
                   '/find_stream_list/', '/armed_play/', '/stream_video/',
                   '/stream_playlist/', '/get_playlist_info/', '/queue_tracks/',
                   '/play_genre/',
-                  '/history', '/recommendations', '/api/playlists/', '/api/album/')
+                   '/history', '/recommendations', '/api/playlists/', '/api/album/', '/api/artist/')
 
 
 def _remote_login_enabled():
@@ -1522,13 +1523,20 @@ class Supporting:
     @staticmethod
     async def get_playlist_tracks(playlist_id: str):
         """Normalized track list for a playlist id, or None if unreadable/empty.
-        Unavailable tracks (no videoId) are dropped."""
-        ytmusic = YTMusic()
+        Unavailable tracks (no videoId) are dropped.
+        The special virtual playlist id 'LM' maps to the user's Liked Music,
+        which is not fetchable via get_playlist(); route it to get_liked_songs()."""
+        yt_home = _get_ytmusic_home()
         try:
-            # limit=None: fetch every track. The default limit=100 would make
-            # sync's now-playing deletion pass (see api_sync_playlist) wrongly
-            # treat tracks beyond the cutoff as removed from the source.
-            search_results = await asyncio.to_thread(ytmusic.get_playlist, playlistId=playlist_id, limit=None)
+            if playlist_id.upper() == 'LM':
+                raw = await asyncio.to_thread(yt_home.get_liked_songs, 1000)
+                search_results = raw
+            else:
+                ytmusic = YTMusic()
+                # limit=None: fetch every track. The default limit=100 would make
+                # sync's now-playing deletion pass (see api_sync_playlist) wrongly
+                # treat tracks beyond the cutoff as removed from the source.
+                search_results = await asyncio.to_thread(ytmusic.get_playlist, playlistId=playlist_id, limit=None)
         except Exception:
             # ytmusicapi raises on unknown/private playlist ids; treat as not found
             logger.exception("")
@@ -3404,24 +3412,56 @@ async def remove_history_item(video_id):
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-@app.route("/alexa/like/", methods=["GET"])
+@app.route("/alexa/like/", methods=["GET", "POST"])
 async def alexa_like():
     from ytmusicapi.auth.types import AuthType
-    if _get_ytmusic_home().auth_type == AuthType.UNAUTHORIZED:
+    yt = _get_ytmusic_home()
+    if yt.auth_type == AuthType.UNAUTHORIZED:
         return jsonify({'error': 'Unauthorized'}), 401
-    video_id = request.args.get('video_id', '').strip()
-    action = request.args.get('action', 'LIKE').upper() # LIKE, DISLIKE, INDIFFERENT
+    if request.method == "POST":
+        body = request.get_json(silent=True) or {}
+        video_id = (body.get('video_id') or '').strip()
+        action = (body.get('action') or 'LIKE').upper()
+    else:
+        video_id = request.args.get('video_id', '').strip()
+        action = request.args.get('action', 'LIKE').upper()
     if not video_id:
         with _np_lock:
             np = _get_now_playing()
             video_id = np.get('video_id') or ''
     if not video_id:
         return jsonify({'error': 'No video_id provided and nothing playing'}), 400
+    if action not in ('LIKE', 'DISLIKE', 'INDIFFERENT'):
+        return jsonify({'error': 'action must be LIKE, DISLIKE, or INDIFFERENT'}), 400
     try:
-        await asyncio.to_thread(_get_ytmusic_home().rate_song, video_id, action)
+        await asyncio.to_thread(yt.rate_song, video_id, action)
+        _bump_liked_version()
         return jsonify({'ok': True, 'action': action, 'video_id': video_id})
     except Exception as e:
+        logger.error('[alexa/like] rate_song failed video_id=%s: %s', video_id, e)
         return jsonify({'error': str(e)}), 500
+
+
+@app.route("/api/liked_songs/", methods=["GET"])
+async def api_get_liked_songs():
+    """Return a lightweight list of liked video IDs for the web remote's
+    heart-icon state. Uses the authenticated ytmusicapi instance so the
+    caller must have a valid session or API key."""
+    from ytmusicapi.auth.types import AuthType
+    yt = _get_ytmusic_home()
+    if yt.auth_type == AuthType.UNAUTHORIZED:
+        return jsonify({'liked_songs': []}), 200  # not an error; just no data
+    try:
+        raw = await asyncio.to_thread(yt.get_liked_songs, 1000)
+        video_ids = [
+            t.get('videoId') for t in (raw.get('tracks') or [])
+            if t.get('videoId')
+        ]
+        return jsonify({'liked_songs': video_ids})
+    except Exception as e:
+        logger.error('[api/liked_songs] failed: %s', e)
+        return jsonify({'liked_songs': []}), 200  # degrade gracefully
+
 
 @app.route("/alexa/now_playing/", methods=["GET"])
 def alexa_now_playing():
@@ -4502,15 +4542,189 @@ async def api_create_library_playlist():
 @app.route("/api/library/playlists/<pl_id>", methods=["GET"])
 async def api_get_library_playlist(pl_id):
     from ytmusicapi.auth.types import AuthType
-    if _get_ytmusic_home().auth_type == AuthType.UNAUTHORIZED:
+    yt = _get_ytmusic_home()
+    if yt.auth_type == AuthType.UNAUTHORIZED:
         return jsonify({'error': 'Unauthorized'}), 401
     if not pl_id.strip():
         return jsonify({'error': 'invalid playlist id'}), 400
     try:
-        info = await asyncio.to_thread(_get_ytmusic_home().get_playlist, pl_id, None)
+        # 'LM' is the special Liked Music virtual playlist — get_playlist() does
+        # not support it; use get_liked_songs() instead and normalize to the same
+        # shape the client expects ({title, trackCount, tracks}).
+        if pl_id.upper() == 'LM':
+            raw = await asyncio.to_thread(yt.get_liked_songs, 1000)
+            tracks = []
+            for t in (raw.get('tracks') or []):
+                video_id = t.get('videoId') or ''
+                if not video_id:
+                    continue
+                tracks.append({
+                    'videoId': video_id,
+                    'title': t.get('title') or '',
+                    'artists': t.get('artists') or [],
+                    'thumbnails': t.get('thumbnails') or [],
+                    'duration': t.get('duration') or '',
+                    'duration_seconds': t.get('duration_seconds') or 0,
+                })
+            return jsonify({
+                'title': raw.get('title') or 'Liked Music',
+                'trackCount': len(tracks),
+                'tracks': tracks,
+            })
+        info = await asyncio.to_thread(yt.get_playlist, pl_id, None)
         return jsonify(info)
     except Exception as e:
+        logger.error('[api/library/playlists/%s] failed: %s', pl_id, e)
         return jsonify({'error': str(e)}), 500
+
+@app.route("/api/album/<browse_id>", methods=["GET"])
+async def api_get_album(browse_id):
+    """Fetch album details by browseId (e.g. MPREb_...).
+    Returns a normalized dict the album.js render() function understands:
+      { title, artist, channelId, year, thumbnail, description, tracks }
+    Each track has: { videoId, title, artist, thumbnail, duration, duration_seconds }
+    """
+    from ytmusicapi.auth.types import AuthType
+    yt = _get_ytmusic_home()
+    if yt.auth_type == AuthType.UNAUTHORIZED:
+        return jsonify({'error': 'Unauthorized'}), 401
+    browse_id = (browse_id or '').strip()
+    if not browse_id:
+        return jsonify({'error': 'invalid browseId'}), 400
+    try:
+        raw = await asyncio.to_thread(yt.get_album, browse_id)
+    except Exception as e:
+        logger.error('[api/album/%s] failed: %s', browse_id, e)
+        return jsonify({'error': str(e)}), 500
+
+    # Normalise artist info
+    raw_artists = raw.get('artists') or []
+    artist_name = (raw_artists[0].get('name') or '') if raw_artists else ''
+    channel_id = (raw_artists[0].get('id') or '') if raw_artists else ''
+
+    # Normalise thumbnail
+    thumbs = raw.get('thumbnails') or []
+    thumbnail = thumbs[-1].get('url', '') if thumbs else ''
+
+    # Normalise tracks
+    tracks = []
+    for t in (raw.get('tracks') or []):
+        vid = t.get('videoId') or ''
+        if not vid:
+            continue
+        t_artists = t.get('artists') or []
+        t_artist = (t_artists[0].get('name') or '') if t_artists else artist_name
+        t_thumbs = t.get('thumbnails') or thumbs
+        t_thumb = t_thumbs[-1].get('url', '') if t_thumbs else thumbnail
+        tracks.append({
+            'videoId': vid,
+            'video_id': vid,
+            'title': t.get('title') or '',
+            'artist': t_artist,
+            'thumbnail': t_thumb,
+            'duration': t.get('duration') or '',
+            'duration_seconds': t.get('duration_seconds') or 0,
+        })
+
+    return jsonify({
+        'title': raw.get('title') or '',
+        'artist': artist_name,
+        'channelId': channel_id,
+        'year': str(raw.get('year') or ''),
+        'thumbnail': thumbnail,
+        'description': raw.get('description') or '',
+        'tracks': tracks,
+    })
+
+
+@app.route("/api/artist/<channel_id>", methods=["GET"])
+async def api_get_artist(channel_id):
+    """Fetch artist page by channelId (e.g. UCxxxxxxx).
+    Returns a normalized dict the artist.js renderAll() function understands:
+      { artist, topSongs, topSongsBrowseId, albums, singles, related }
+    artist   → raw get_artist() dict (name, description, subscribers, thumbnails)
+    topSongs → list of { video_id, title, artist, thumbnail }
+    albums / singles → list of { browseId, title, year, thumbnail }
+    related  → list of { browseId, title, subscribers, thumbnail }
+    """
+    from ytmusicapi.auth.types import AuthType
+    yt = _get_ytmusic_home()
+    if yt.auth_type == AuthType.UNAUTHORIZED:
+        return jsonify({'error': 'Unauthorized'}), 401
+    channel_id = (channel_id or '').strip()
+    if not channel_id:
+        return jsonify({'error': 'invalid channelId'}), 400
+    try:
+        raw = await asyncio.to_thread(yt.get_artist, channel_id)
+    except Exception as e:
+        logger.error('[api/artist/%s] failed: %s', channel_id, e)
+        return jsonify({'error': str(e)}), 500
+
+    artist_name = raw.get('name') or ''
+
+    # ── Top songs ──
+    songs_section = raw.get('songs') or {}
+    top_songs_browse_id = (songs_section.get('browseId') or
+                           songs_section.get('params') or '')
+    raw_songs = songs_section.get('results') or []
+    top_songs = []
+    for s in raw_songs:
+        vid = s.get('videoId') or ''
+        if not vid:
+            continue
+        s_artists = s.get('artists') or []
+        s_artist = (s_artists[0].get('name') or '') if s_artists else artist_name
+        s_thumbs = s.get('thumbnails') or []
+        s_thumb = s_thumbs[-1].get('url', '') if s_thumbs else ''
+        top_songs.append({
+            'video_id': vid,
+            'title': s.get('title') or '',
+            'artist': s_artist,
+            'thumbnail': s_thumb,
+        })
+
+    def _norm_releases(section):
+        """Normalise an albums/singles section into a list of card dicts."""
+        if not section:
+            return []
+        results = section.get('results') or []
+        out = []
+        for item in results:
+            bid = item.get('browseId') or ''
+            thumbs = item.get('thumbnails') or []
+            thumb = thumbs[-1].get('url', '') if thumbs else ''
+            out.append({
+                'browseId': bid,
+                'title': item.get('title') or '',
+                'year': str(item.get('year') or ''),
+                'thumbnail': thumb,
+            })
+        return out
+
+    # ── Related artists ──
+    related_section = raw.get('related') or {}
+    related_results = related_section.get('results') or []
+    related = []
+    for r in related_results:
+        bid = r.get('browseId') or ''
+        thumbs = r.get('thumbnails') or []
+        thumb = thumbs[-1].get('url', '') if thumbs else ''
+        related.append({
+            'browseId': bid,
+            'title': r.get('title') or '',
+            'subscribers': r.get('subscribers') or '',
+            'thumbnail': thumb,
+        })
+
+    return jsonify({
+        'artist': raw,
+        'topSongs': top_songs,
+        'topSongsBrowseId': top_songs_browse_id,
+        'albums': _norm_releases(raw.get('albums')),
+        'singles': _norm_releases(raw.get('singles')),
+        'related': related,
+    })
+
 
 @app.route("/api/explore/", methods=["GET"])
 async def api_get_explore():
@@ -4523,16 +4737,7 @@ async def api_get_explore():
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-@app.route("/api/search/suggestions/", methods=["GET"])
-async def api_get_search_suggestions():
-    q = request.args.get('q', '').strip()
-    if not q:
-        return jsonify([])
-    try:
-        suggestions = await asyncio.to_thread(_get_ytmusic_home().get_search_suggestions, q)
-        return jsonify(suggestions)
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
+
 
 @app.route("/alexa/suggest/", methods=["GET"])
 async def alexa_suggest():
@@ -4543,7 +4748,7 @@ async def alexa_suggest():
     if not query:
         return jsonify({'suggestions': []})
     try:
-        ytmusic = YTMusic()
+        ytmusic = _get_ytmusic_home()
         raw = await asyncio.to_thread(ytmusic.get_search_suggestions, query)
     except Exception as e:
         logger.error("[alexa/suggest] failed: %s", e)

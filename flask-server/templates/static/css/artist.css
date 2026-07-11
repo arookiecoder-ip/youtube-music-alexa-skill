@@ -228,10 +228,10 @@
   .hscroll-section .section-head { margin-bottom: var(--space-3); display: flex; align-items: center; justify-content: space-between; }
   .hscroll-controls { display: flex; align-items: center; gap: 8px; margin-left: auto; }
   .hscroll-scroll {
-    width: 32px;
-    height: 32px;
+    width: 40px;
+    height: 40px;
     border-radius: 50%;
-    border: 0;
+    border: 1.5px solid rgba(255,255,255,.55);
     background: transparent;
     color: var(--text);
     display: inline-flex;
@@ -239,11 +239,11 @@
     justify-content: center;
     cursor: pointer;
     padding: 0;
-    transition: background .15s, opacity .15s;
+    transition: background .15s, border-color .15s, opacity .15s;
   }
-  .hscroll-scroll:hover:not(:disabled) { background: rgba(255,255,255,.17); }
+  .hscroll-scroll:hover:not(:disabled) { background: rgba(255,255,255,.13); border-color: rgba(255,255,255,.9); }
   .hscroll-scroll:disabled { opacity: .28; cursor: default; }
-  .hscroll-scroll svg { width: 19px; height: 19px; }
+  .hscroll-scroll svg { width: 22px; height: 22px; }
   .hscroll-track {
     display: flex;
     gap: 12px;

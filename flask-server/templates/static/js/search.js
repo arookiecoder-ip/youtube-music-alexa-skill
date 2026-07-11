@@ -830,9 +830,9 @@ if (nextBtn) {
   async function fetchSuggestions(q) {
     const mySeq = ++seq;
     try {
-      const data = await window.api('/api/search/suggestions/?q=' + encodeURIComponent(q));
+      const data = await window.api('/alexa/suggest/?q=' + encodeURIComponent(q));
       if (mySeq !== seq) return;            // a newer keystroke won
-      items = (Array.isArray(data) ? data : (data.suggestions || [])).slice(0, 8);
+      items = (data.suggestions || []).slice(0, 8);
       activeIdx = -1;
       showingHistory = false;
       render();

@@ -39,23 +39,24 @@
   async function openLibraryPlaylist(plId) {
     const overlay = document.getElementById('playlist-detail-modal-overlay');
     if (overlay) overlay.classList.add('open');
-    const headerTitle = document.getElementById('playlist-detail-header-title');
-    const headerMeta = document.getElementById('playlist-detail-header-meta');
-    const list = document.getElementById('playlist-detail-tracks');
-    
-    if (headerTitle) headerTitle.textContent = 'Loading...';
-    if (headerMeta) headerMeta.textContent = '';
-    if (list) list.innerHTML = '<div class="loading-spinner"></div>';
-    
+    // Use the correct element IDs that exist in remote.html
+    const titleEl = document.getElementById('playlist-detail-title');
+    const body = document.getElementById('playlist-detail-body');
+
+    if (titleEl) titleEl.textContent = 'Loading...';
+    if (body) body.innerHTML = '<div class="loading-spinner"></div>';
+
     try {
       const pl = await window.api('/api/library/playlists/' + encodeURIComponent(plId));
-      if (headerTitle) headerTitle.textContent = pl.title || 'Playlist';
-      if (headerMeta && pl.trackCount) headerMeta.textContent = `${pl.trackCount} tracks`;
-      
-      if (list) {
-        list.innerHTML = '';
-        if (pl.tracks && pl.tracks.length > 0) {
-          pl.tracks.forEach(track => {
+      if (titleEl) titleEl.textContent = pl.title || 'Playlist';
+
+      if (body) {
+        body.innerHTML = '';
+        const tracks = pl.tracks || [];
+        if (tracks.length === 0) {
+          body.innerHTML = '<div style="padding:24px; color:var(--muted); text-align:center;">No tracks in this playlist</div>';
+        } else {
+          tracks.forEach(track => {
             const row = document.createElement('div');
             row.className = 'playlist-track-row';
             row.innerHTML = `
@@ -63,29 +64,106 @@
                 <img src="${track.thumbnails?.[0]?.url || '/static/default-art.png'}" class="playlist-track-thumb" loading="lazy" alt="art">
               </div>
               <div class="playlist-track-info">
-                <div class="playlist-track-title">${escapeHtml(track.title)}</div>
+                <div class="playlist-track-title">${escapeHtml(track.title || '')}</div>
                 <div class="playlist-track-artist">${escapeHtml(track.artists?.map(a => a.name).join(', ') || '')}</div>
               </div>
             `;
             row.onclick = () => {
-              if (window.playVideo) window.playVideo(track.videoId);
+              if (window.playResult) {
+                window.playResult({
+                  video_id: track.videoId,
+                  title: track.title,
+                  artist: track.artists?.map(a => a.name).join(', ') || '',
+                  thumbnail: track.thumbnails?.[0]?.url || ''
+                }, false, false, true);
+              }
             };
-            list.appendChild(row);
+            body.appendChild(row);
           });
         }
       }
     } catch (e) {
       console.warn('Failed to load playlist', e);
-      if (headerTitle) headerTitle.textContent = 'Error loading playlist';
-      if (list) list.innerHTML = '';
+      if (titleEl) titleEl.textContent = 'Error loading playlist';
+      if (body) body.innerHTML = '<div style="padding:24px; color:var(--muted); text-align:center;">Failed to load playlist</div>';
     }
   }
+
+  /* ---- New Playlist button (sidebar) ---- */
+  (function () {
+    const newBtn = document.getElementById('sidebar-new-playlist-btn');
+    const overlay = document.getElementById('new-playlist-overlay');
+    const closeBtn = document.getElementById('new-playlist-overlay-close');
+    const nameInput = document.getElementById('new-playlist-overlay-name');
+    const descInput = document.getElementById('new-playlist-overlay-desc');
+    const createBtn = document.getElementById('new-playlist-overlay-create');
+
+    if (!newBtn || !overlay) return;
+
+    function openModal() {
+      if (nameInput) nameInput.value = '';
+      if (descInput) descInput.value = '';
+      overlay.classList.add('open');
+      if (nameInput) setTimeout(() => nameInput.focus(), 80);
+    }
+
+    function closeModal() {
+      overlay.classList.remove('open');
+    }
+
+    newBtn.addEventListener('click', () => {
+      if (window._closeSidebar) window._closeSidebar();
+      openModal();
+    });
+
+    if (closeBtn) closeBtn.addEventListener('click', closeModal);
+
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) closeModal();
+    });
+
+    if (nameInput) {
+      nameInput.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') createBtn && createBtn.click();
+      });
+    }
+
+    if (createBtn) {
+      createBtn.addEventListener('click', async () => {
+        const name = (nameInput ? nameInput.value : '').trim();
+        if (!name) {
+          if (nameInput) nameInput.focus();
+          return;
+        }
+        const desc = (descInput ? descInput.value : '').trim();
+        createBtn.disabled = true;
+        createBtn.textContent = 'Creating…';
+        try {
+          await window.api('/api/library/playlists/', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name, description: desc })
+          });
+          closeModal();
+          if (window.showToast) window.showToast('Playlist "' + name + '" created');
+          // Refresh the sidebar playlist list
+          await loadLibrary();
+        } catch (e) {
+          console.error('Failed to create playlist', e);
+          if (window.showToast) window.showToast('Failed to create playlist');
+        } finally {
+          createBtn.disabled = false;
+          createBtn.textContent = 'Create Playlist';
+        }
+      });
+    }
+  })();
 
   // Load immediately if logged in, else device.js will call it when auth is verified.
   if (state._loggedIn && window.IS_AUTHENTICATED) {
     loadLibrary();
   }
-  
+
   // Attach to window so device.js can trigger it on login
   window.loadLibrary = loadLibrary;
 })();

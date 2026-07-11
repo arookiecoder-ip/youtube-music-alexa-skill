@@ -192,18 +192,38 @@
           var shelfId = playAllBtn.dataset.shelfId;
           var shelf = homeFeedData.shelves.find(s => s.id === shelfId);
           if (shelf) {
-              var qIds = HomeRenderers.extractPlayQueue(shelf);
-              if (qIds.length > 0) {
+              // Build a rich queue — carry title/artist/thumbnail so metadata
+              // is available without a blocking lookup later.
+              var queueItems = (shelf.items || [])
+                  .filter(i => i.capabilities && i.capabilities.play && i.play && i.play.videoId)
+                  .map(i => ({
+                      video_id: i.play.videoId,
+                      title: i.title || '',
+                      artist: i.subtitle || '',
+                      thumbnail: i.image || '',
+                      duration_ms: 0
+                  }));
+              if (queueItems.length > 0) {
+                  // Step 1: push the full queue to the server (no serial needed,
+                  // returns 200 even without a device selected).
                   window.api('/alexa/play_queue/', {
-                      method: 'POST',
-                      body: JSON.stringify({ queue_items: qIds })
-                  }).then(res => {
-                      if (res.ok && window._updateNowPlayingFromServer) {
-                         // Update player optimistically or fetch
+                      serial: window.selectedSerial ? window.selectedSerial() : '',
+                      queue_items: queueItems.map(i => i.video_id)
+                  }).then(() => {
+                      // Step 2: dispatch playback of the first song (handles
+                      // Alexa, progress bar, now-playing update, etc.).
+                      if (window.playFromQueue) {
+                          window.playFromQueue(queueItems[0], 0, false);
                       }
-                      if (window.toast) window.toast('Playing shelf', 'success');
                   }).catch(err => {
-                      if (window.toast) window.toast('Failed to play shelf', 'error');
+                      // 502 = Alexa device offline; the queue IS set on the
+                      // server so retrying later will work. Surface a softer msg.
+                      var msg = (err && err.message) || '';
+                      if (msg.includes('offline') || msg.includes('unreachable') || msg.includes('502')) {
+                          if (window.toast) window.toast('Queue loaded — device may be offline', 'warning');
+                      } else {
+                          if (window.toast) window.toast('Failed to play shelf', 'error');
+                      }
                   });
               }
           }
@@ -234,9 +254,9 @@
                     });
                 } else if (playlistId) {
                     // Start playlist playback
-                    window.api('/alexa/play_queue/', {
-                        method: 'POST',
-                        body: JSON.stringify({ queue_items: [playlistId] }) // Handle this on server? Or play queue as playlist
+                    window.api('/alexa/play/', {
+                        serial: window.selectedSerial ? window.selectedSerial() : '',
+                        query: 'https://music.youtube.com/playlist?list=' + playlistId
                     });
                 }
             }
