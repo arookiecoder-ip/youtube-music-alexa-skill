@@ -8,8 +8,10 @@ services:
       # Listen history and playlists must outlive the container; /tmp is ephemeral.
       - DB_FILE=/data/data.db
       - YTDLP_COOKIES=/app/cookies.txt
+      - YTMUSIC_AUTH_FILE=/app/headers_auth.json
     volumes:
       - ~/cookies.txt:/app/cookies.txt:ro
+      - ./headers_auth.json:/app/headers_auth.json:ro
       - ytmusic_cache:/tmp/ytm_audio_cache
       - ytmusic_data:/data
       # Amazon/Alexa login session cookie (see alexa_remote.py ALEXA_COOKIE_DIR).

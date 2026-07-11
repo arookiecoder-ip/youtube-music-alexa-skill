@@ -174,7 +174,7 @@ The new **Home feed** (v2) displays your personalized YouTube Music homepage dir
   > 2. Open Developer Tools (F12) and go to the **Network** tab. Refresh the page.
   > 3. Filter for `browse`, click the first request, and scroll down to **Request Headers**.
   > 4. Copy the entire string next to the `cookie:` header.
-  > 5. Create a `headers_auth.json` file in your root folder:
+  > 5. Create a `headers_auth.json` file in your root folder (next to `docker-compose.yml`):
   >    ```json
   >    {
   >      "accept": "*/*",
@@ -184,6 +184,7 @@ The new **Home feed** (v2) displays your personalized YouTube Music homepage dir
   >      "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
   >    }
   >    ```
+  > 6. In your `.env` file or terminal, set the `YTMUSIC_AUTH_FILE` environment variable to point to this file before starting the server. For example: `YTMUSIC_AUTH_FILE=headers_auth.json`.
 - **OAuth (`oauth.json`)**: This is much safer as it uses delegated access, but it requires configuring a GCP project. If using OAuth, you must provide `YTMUSIC_OAUTH_CLIENT_ID` and `YTMUSIC_OAUTH_CLIENT_SECRET` in your environment variables, and generate an `oauth.json` file to point `YTMUSIC_AUTH_FILE` at.
 
 **Anonymous / Local Fallback**: If `YTMUSIC_AUTH_FILE` is left unset, the backend will gracefully fall back to fetching unauthenticated, regional recommendations directly from YouTube. You will see generic charts and trending shelves instead of your personalized playlists and shortcuts. Note: there is no Spotify integration; the home feed is powered purely by YouTube Music.
