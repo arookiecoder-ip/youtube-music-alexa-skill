@@ -230,9 +230,6 @@ def init_db():
                 created_at REAL
             )
         ''')
-        except sqlite3.OperationalError:
-            pass
-
         # (Data migration script removed per user request)
 
 
