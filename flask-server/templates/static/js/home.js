@@ -27,6 +27,7 @@
       if (!videoId) return '';
       const title = item.title || '';
       const artist = item.artist || '';
+      const channelId = item.channelId || item.channel_id || '';
       const thumbUrl = item.thumbnail || '';
       const thumbHtml = thumbUrl
         ? "<img src=\"" + escHtml(thumbUrl) + "\" alt=\"\" loading=\"lazy\" decoding=\"async\" onload=\"this.classList.add('loaded')\">"
@@ -35,10 +36,13 @@
       var heartSvgLocal = isLikedLocal
         ? '<svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>'
         : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z"/></svg>';
+      const artistHtml = artist
+        ? '<button class="recs-tile-artist home-artist-link" type="button" data-channel-id="' + escHtml(channelId) + '" data-artist-name="' + escHtml(artist) + '">' + escHtml(artist) + '</button>'
+        : '<div class="recs-tile-artist"></div>';
       return '<div class="home-card" data-video-id="' + escHtml(videoId) + '" data-title="' + escHtml(title) + '" data-artist="' + escHtml(artist) + '" data-thumb="' + escHtml(thumbUrl) + '">' +
         '<div class="recs-tile-art home-card-art">' + thumbHtml + '</div>' +
         '<div class="recs-tile-title">' + escHtml(title) + '</div>' +
-        '<div class="recs-tile-artist">' + escHtml(artist) + '</div>' +
+        artistHtml +
         '<button class="result-like-btn' + (isLikedLocal ? ' liked' : '') + '" type="button" title="' + (isLikedLocal ? 'Dislike' : 'Like') + '">' + heartSvgLocal + '</button>' +
       '</div>';
     }).join('');
@@ -148,6 +152,29 @@
             thumbnail: card.dataset.thumb,
           };
           if (typeof toggleLike === 'function') toggleLike(item, likeBtn);
+        }
+        return;
+      }
+
+      var artistLink = e.target.closest('.home-artist-link');
+      if (artistLink) {
+        e.stopPropagation();
+        if (artistLink.dataset.channelId) {
+          location.hash = '#artist/' + encodeURIComponent(artistLink.dataset.channelId);
+          return;
+        }
+        // Older history rows may not have stored the artist channel id. Resolve
+        // it on demand so their artist labels still behave like real links.
+        var artistName = artistLink.dataset.artistName || '';
+        if (artistName) {
+          api('/alexa/search/?q=' + encodeURIComponent(artistName)).then(function(result) {
+            var artists = (result && result.artists) || [];
+            var exact = artists.find(function(a) {
+              return (a.name || '').toLowerCase() === artistName.toLowerCase();
+            }) || artists[0];
+            if (exact && exact.browse_id) location.hash = '#artist/' + encodeURIComponent(exact.browse_id);
+            else toast('Artist page unavailable', 'error');
+          }).catch(function() { toast('Artist page unavailable', 'error'); });
         }
         return;
       }

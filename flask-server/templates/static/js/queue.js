@@ -309,7 +309,7 @@ function showQueue(queue, currentIndex) {
   const section = document.getElementById('queue-section');
   const list = document.getElementById('queue-list');
   const mainEl = document.querySelector('main');
-  if (state._resultsOpen || !state._queueOpen) {
+  if (location.hash !== '#now-playing' || state._resultsOpen || !state._queueOpen) {
     section.classList.remove('is-visible');
     section.hidden = true;
     mainEl.classList.remove('has-queue');
@@ -1019,6 +1019,7 @@ async function playFromQueue(item, queueIndex) {
     state.lastActionIntent = true;
     syncPlayPause();
     toast('Playing', 'ok');
+    if (window.matchMedia('(min-width: 900px)').matches) location.hash = '#now-playing';
     schedulePollNowPlaying(3000);
     // Optimistically prepend this song to history right away so "Recently
     // Played" shows it immediately without waiting for the server webhook.

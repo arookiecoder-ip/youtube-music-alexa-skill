@@ -165,6 +165,10 @@
         card.addEventListener('click', function() {
           location.hash = '#artist/' + encodeURIComponent(item.browseId);
         });
+      } else if (type === 'album' && item.browseId) {
+        card.addEventListener('click', function() {
+          location.hash = '#album/' + encodeURIComponent(item.browseId);
+        });
       }
       track.appendChild(card);
     }

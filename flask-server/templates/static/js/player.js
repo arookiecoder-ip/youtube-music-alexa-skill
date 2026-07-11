@@ -513,6 +513,7 @@ async function playResult(item, suppressRadio, forceRadio) {
     state.lastActionIntent = true;
     syncPlayPause();
     toast(forceRadio ? 'Radio started' : 'Playing', 'ok');
+    if (window.matchMedia('(min-width: 900px)').matches) location.hash = '#now-playing';
     state._lastQueueJson = '';
     schedulePollNowPlaying(3000);
   } catch (e) {

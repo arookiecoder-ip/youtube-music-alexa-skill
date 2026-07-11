@@ -108,6 +108,30 @@
   opacity: 1;
 }
 
+.home-card .recs-tile-title {
+  margin-top: 5px;
+  font-size: .88rem;
+  font-weight: 700;
+  line-height: 1.35;
+}
+.home-card .recs-tile-artist {
+  width: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: .82rem;
+  font-weight: 500;
+  line-height: 1.35;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.home-card .home-artist-link { cursor: pointer; }
+.home-card .home-artist-link:hover { color: var(--text); text-decoration: underline; }
+
 /* Like button on home feed cards */
 .home-card .result-like-btn {
   width: 28px;
@@ -158,7 +182,7 @@
 
   .home-row,
   .home-row-skeleton {
-    gap: 16px;
+    gap: 24px;
     padding-left: 40px;
     padding-right: 40px;
     scroll-padding-inline: 40px;
@@ -166,6 +190,6 @@
 
   .home-card,
   .home-skeleton-card {
-    flex-basis: 180px;
+    flex-basis: 174px;
   }
 }

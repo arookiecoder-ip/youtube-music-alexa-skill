@@ -178,7 +178,7 @@ header {
 @media (min-width: 900px) {
   /* Sign out + history live in the left rail on desktop; hiding their header
      copies clears room for the centered search pill. */
-  #logout, #history-modal-btn { display: none !important; }
+  #history-modal-btn { display: none !important; }
   .sidebar-header { display: none; }
 }
 
@@ -345,10 +345,8 @@ body.results-open .play-section {
   /* Text-only chrome has no icon form — hide it in the mini rail */
   body.rail-collapsed .sidebar-signout,
   body.rail-collapsed .sidebar-footer,
-  body.rail-collapsed .sidebar-library,
-  body.rail-collapsed .sidebar-brand-mark,
-  body.rail-collapsed .sidebar-brand strong { display: none; }
-  body.rail-collapsed .sidebar-brand { justify-content: center; }
+  body.rail-collapsed .sidebar-library { display: none; }
+  body.rail-collapsed .sidebar-brand { justify-content: flex-start; }
   /* Smooth open/close */
   main,
   main.idle,
@@ -418,6 +416,8 @@ body.results-open .play-section {
   margin-bottom: 14px;
   padding: 0 4px;
   color: var(--text);
+  width: 172px;
+  flex: none;
 }
 .sidebar-brand strong {
   font-size: .9rem;
@@ -425,6 +425,69 @@ body.results-open .play-section {
   text-transform: uppercase;
   white-space: nowrap;
 }
+
+.profile-menu-wrap { position: relative; flex: none; }
+.profile-menu-trigger {
+  width: 38px;
+  height: 38px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid rgba(255,255,255,.14);
+  border-radius: 50%;
+  background: rgba(255,255,255,.07);
+  color: var(--text);
+  cursor: pointer;
+}
+.profile-menu-trigger:hover,
+.profile-menu-wrap.open .profile-menu-trigger { background: rgba(255,255,255,.13); }
+.profile-menu-trigger svg { width: 21px; height: 21px; }
+.profile-menu {
+  position: absolute;
+  top: calc(100% + 10px);
+  right: 0;
+  width: 230px;
+  padding: 10px;
+  border: 1px solid rgba(255,255,255,.12);
+  border-radius: 12px;
+  background: #202020;
+  box-shadow: 0 14px 40px rgba(0,0,0,.55);
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(-5px);
+  transition: opacity .15s, visibility .15s, transform .15s;
+  z-index: 500;
+}
+.profile-menu-wrap.open .profile-menu { opacity: 1; visibility: visible; transform: none; }
+.profile-menu-user { display: flex; align-items: center; gap: 11px; padding: 8px; }
+.profile-menu-avatar {
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  flex: none;
+  border-radius: 50%;
+  background: var(--primary);
+  color: #fff;
+  font-weight: 800;
+}
+.profile-menu-user span,
+.profile-menu-user strong { display: block; }
+.profile-menu-user span { color: var(--muted); font-size: .68rem; }
+.profile-menu-user strong { margin-top: 2px; font-size: .82rem; overflow: hidden; text-overflow: ellipsis; }
+.profile-menu #logout {
+  width: 100%;
+  margin-top: 8px;
+  padding: 10px 12px;
+  border: 0;
+  border-top: 1px solid rgba(255,255,255,.1);
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+.profile-menu #logout:hover { background: rgba(255,255,255,.08); }
 .sidebar-rail-toggle {
   width: 38px;
   height: 38px;
@@ -523,7 +586,7 @@ body.results-open .play-section {
     /* The mobile drawer's transform transition doesn't apply here; the rail
        animates its width when toggling the mini guide. */
     transition: width .25s ease;
-    overflow: hidden;
+    overflow: visible;
   }
   .sidebar-overlay { display: none !important; }
   .sidebar-close { display: none !important; }
@@ -538,6 +601,7 @@ body.results-open .play-section {
   /* Device picker lives in the top bar on desktop */
   .sidebar-section:has(#device-sidebar-wrapper) { display: none; }
   header .rail-toggle-btn { visibility: hidden; pointer-events: none; }
+  header > .brand { display: none; }
   .sidebar-tools #refresh-page-btn { display: none; }
   .sidebar-signout { padding-top: 12px; }
 }
@@ -1176,6 +1240,38 @@ button { border-radius: var(--radius-md); }
 }
 ::-webkit-scrollbar-track { background: transparent; }
 
+/* Scroll performance: fixed/sticky backdrop blur forces Chromium to repaint
+   the page behind these surfaces on every frame. Opaque fills preserve the
+   same dark chrome while letting the compositor reuse each layer. */
+@media (min-width: 900px) {
+  header,
+  main.has-queue header,
+  body.results-open main header {
+    background: #101010;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    contain: paint;
+  }
+}
+
+@media (max-width: 899px) {
+  .play-section {
+    background: #101010 !important;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    contain: paint;
+  }
+}
+
+.player-section,
+main.has-queue .player-section,
+body.results-open .player-section {
+  background: #111;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  contain: layout paint;
+}
+
 /* Artist page sits centered like the rest of the content */
 #artist-section {
   background: none;
@@ -1216,6 +1312,12 @@ button { border-radius: var(--radius-md); }
     /* Below the playbar (220) so playback controls stay reachable */
     z-index: 210;
     transition: left .25s ease;
+  }
+  /* Playlist/history are full pages, never shortened by stale playback state. */
+  body:not(.now-playing-route) #playlists-modal-overlay,
+  body:not(.now-playing-route) #playlist-detail-modal-overlay,
+  body:not(.now-playing-route) #history-modal-overlay {
+    bottom: 0 !important;
   }
   /* While a playlist view is open it owns the scroll: freeze the page
      behind it so the wheel never scrolls the background view first. */
@@ -1317,6 +1419,14 @@ button { border-radius: var(--radius-md); }
 /* YouTube Music-style persistent desktop playbar: transport at left, track
    identity in the middle, and utility controls at right. */
 @media (min-width: 900px) {
+  body:not(.now-playing-route) .player-section,
+  body:not(.now-playing-route) #queue-section {
+    display: none !important;
+  }
+  body:not(.now-playing-route) main,
+  body:not(.now-playing-route) main:has(.player-section.is-visible) {
+    padding-bottom: 0;
+  }
   .player-section,
   main.has-queue .player-section,
   body.results-open .player-section {

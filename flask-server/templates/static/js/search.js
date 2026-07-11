@@ -332,6 +332,11 @@ function renderResults() {
         inner.addEventListener('click', () => {
           location.hash = '#artist/' + encodeURIComponent(item.browse_id);
         });
+      } else if (category === 'albums' && item.browse_id) {
+        inner.classList.add('result-item-link');
+        inner.addEventListener('click', () => {
+          location.hash = '#album/' + encodeURIComponent(item.browse_id);
+        });
       }
       wrapper.appendChild(inner);
       newChildren.push(wrapper);

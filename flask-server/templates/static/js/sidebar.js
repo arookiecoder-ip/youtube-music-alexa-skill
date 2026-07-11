@@ -12,7 +12,6 @@
   const closeBtn = document.getElementById('sidebar-close');
   const deviceSidebar = document.getElementById('device-sidebar');
   const refreshSidebar = document.getElementById('refresh-sidebar');
-  const logoutSidebar = document.getElementById('logout-sidebar');
 
   // Sidebar custom dropdown elements
   const sbWrapper = document.getElementById('device-sidebar-wrapper');
@@ -89,11 +88,6 @@
     loadDevices(true);
   });
 
-  logoutSidebar.addEventListener('click', () => {
-    closeSidebar();
-    window._showSignOutConfirm();
-  });
-
   // Exposed so playing/removing a history row from inside the sidebar (mobile)
   // can close it, matching the sign-out button's behavior.
   window._closeSidebar = closeSidebar;
@@ -108,7 +102,8 @@
   function goHome() {
     const resultsClose = document.getElementById('results-close');
     if (state._resultsOpen && resultsClose) resultsClose.click();
-    if (location.hash && location.hash !== '#home') location.hash = '#home';
+    if (location.hash !== '#home') location.hash = '#home';
+    else window.dispatchEvent(new Event('hashchange'));
     if (window._closeSidebar) window._closeSidebar();
     window.scrollTo({ top: 0, behavior: 'smooth' });
   }
@@ -144,6 +139,24 @@
   }
   if (btn) btn.addEventListener('click', toggleRail);
   if (sidebarBtn) sidebarBtn.addEventListener('click', toggleRail);
+})();
+
+/* ---- Top-bar profile menu ---- */
+(function () {
+  const wrap = document.getElementById('profile-menu-wrap');
+  const trigger = document.getElementById('profile-menu-trigger');
+  const menu = document.getElementById('profile-menu');
+  if (!wrap || !trigger || !menu) return;
+  trigger.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const open = wrap.classList.toggle('open');
+    trigger.setAttribute('aria-expanded', String(open));
+  });
+  document.addEventListener('click', (e) => {
+    if (wrap.contains(e.target)) return;
+    wrap.classList.remove('open');
+    trigger.setAttribute('aria-expanded', 'false');
+  });
 })();
 
 

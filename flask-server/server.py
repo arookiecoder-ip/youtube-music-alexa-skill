@@ -408,7 +408,7 @@ _SESSION_PATHS = ('/remote', '/alexa/status', '/alexa/init', '/alexa/devices', '
                   '/alexa/jam/start', '/alexa/jam/stop', '/alexa/jam/status',
                   '/alexa/jam/qr', '/api/home')
 _SESSION_PREFIXES = ('/alexa/now_playing/', '/history/', '/api/playlists/', '/recommendations/',
-                     '/api/artist/')
+                     '/api/artist/', '/api/album/')
 
 # API/device endpoints: the Alexa skill and web-remote JS hit these directly
 # and need a machine-readable JSON error, never an HTML redirect, on failure.
@@ -416,7 +416,7 @@ _API_PREFIXES = ('/alexa/', '/proxy/', '/get_stream/', '/get_radio/',
                   '/find_stream_list/', '/armed_play/', '/stream_video/',
                   '/stream_playlist/', '/get_playlist_info/', '/queue_tracks/',
                   '/play_genre/',
-                  '/history', '/recommendations', '/api/playlists/')
+                  '/history', '/recommendations', '/api/playlists/', '/api/album/')
 
 
 def _remote_login_enabled():
@@ -2769,7 +2769,7 @@ def remote_page():
         return redirect('/')
     return _no_store(app.make_response(render_template(
         "remote.html", asset_v=_STATIC_VERSION,
-        jam_guest=_jam_guest() and not _valid_key_supplied())))
+        jam_guest=_jam_guest() and not _valid_key_supplied(), remote_username=REMOTE_USER)))
 
 
 # ---- Jam endpoints ----
@@ -3230,6 +3230,7 @@ def _normalize_home_item(item):
         'title': str(item.get('title') or ''),
         'artist': str((artists[0] or {}).get('name') or '') if artists else '',
         'thumbnail': str((thumbnails[0] or {}).get('url') or '') if thumbnails else '',
+        'channelId': str((artists[0] or {}).get('id') or '') if artists else '',
     }
 
 
@@ -3251,6 +3252,9 @@ def _home_item(t):
         'title': str(t.get('title') or ''),
         'artist': str(t.get('artist') or ''),
         'thumbnail': str(thumb),
+        'channelId': str(t.get('channelId') or t.get('channel_id') or
+                         t.get('artist_id') or
+                         (((t.get('artists') or [{}])[0] or {}).get('id')) or ''),
     }
 
 
@@ -3526,6 +3530,44 @@ async def api_artist(channel_id):
         'singlesBrowseId': (raw.get('singles') or {}).get('browseId', ''),
         'singlesParams': (raw.get('singles') or {}).get('params', ''),
         'related': related,
+    })
+
+
+@app.route("/api/album/<browse_id>", methods=["GET"])
+async def api_album(browse_id):
+    if not browse_id.strip():
+        return error_response('invalid album id', 400)
+    try:
+        raw = await asyncio.to_thread(_get_ytmusic().get_album, browseId=browse_id)
+    except Exception as e:
+        logger.exception("api_album failed for %s", browse_id)
+        return error_response(str(e), 500)
+    if not raw or not raw.get('title'):
+        return error_response('album not found', 404)
+    artists = raw.get('artists') or []
+    tracks = []
+    for t in raw.get('tracks') or []:
+        vid = t.get('videoId')
+        if not vid:
+            continue
+        track_artists = t.get('artists') or artists
+        tracks.append({
+            'video_id': vid,
+            'title': t.get('title') or '',
+            'artist': ' and '.join(a.get('name') or '' for a in track_artists),
+            'channelId': (track_artists[0] or {}).get('id', '') if track_artists else '',
+            'thumbnail': (t.get('thumbnails') or raw.get('thumbnails') or [{}])[-1].get('url', ''),
+            'duration_ms': Supporting.duration_ms(t),
+        })
+    return jsonify({
+        'browseId': browse_id,
+        'title': raw.get('title') or '',
+        'year': raw.get('year') or '',
+        'description': raw.get('description') or '',
+        'thumbnail': (raw.get('thumbnails') or [{}])[-1].get('url', ''),
+        'artist': (artists[0] or {}).get('name', '') if artists else '',
+        'channelId': (artists[0] or {}).get('id', '') if artists else '',
+        'tracks': tracks,
     })
 
 
@@ -5070,10 +5112,11 @@ def root():
         # Key-in-URL scheme: keep the old path, a redirect would drop ?key=.
         return redirect('/remote/')
     if _logged_in():
-        return _no_store(app.make_response(render_template("remote.html", asset_v=_STATIC_VERSION)))
+        return _no_store(app.make_response(render_template(
+            "remote.html", asset_v=_STATIC_VERSION, remote_username=REMOTE_USER)))
     if _jam_guest():
         return _no_store(app.make_response(render_template(
-            "remote.html", asset_v=_STATIC_VERSION, jam_guest=True)))
+            "remote.html", asset_v=_STATIC_VERSION, jam_guest=True, remote_username='Guest')))
     if session.get('jam'):
         session.pop('jam', None)
     return redirect('/login/')
