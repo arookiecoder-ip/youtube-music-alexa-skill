@@ -341,7 +341,20 @@ body.results-open .play-section {
    overlays) reflows and animates with it. */
 @media (min-width: 900px) {
   body.rail-collapsed { --rail-w: var(--rail-w-mini); }
-  body.rail-collapsed .sidebar .nav-label { display: none; }
+  /* Keep labels in the layout while the rail is moving. Removing them with
+     display:none on the first frame made the controls visibly jump before the
+     width animation began. */
+  .sidebar .nav-label {
+    max-width: 170px;
+    opacity: 1;
+    overflow: hidden;
+    white-space: nowrap;
+    transition: max-width .25s ease, opacity .14s ease;
+  }
+  body.rail-collapsed .sidebar .nav-label {
+    max-width: 0;
+    opacity: 0;
+  }
   body.rail-collapsed .sidebar .sidebar-nav-btn {
     justify-content: center;
     gap: 0;
@@ -355,15 +368,31 @@ body.results-open .play-section {
   body.rail-collapsed .sidebar-signout,
   body.rail-collapsed .sidebar-footer,
   body.rail-collapsed .sidebar-library { display: none; }
-  /* Full logo cannot fit beside the 38px toggle inside a 72px rail. Hide it
-     instead of leaving a clipped orange sliver/name, and center the toggle. */
+  /* In mini-guide mode stack the compact identity below the toggle. This keeps
+     Music Box recognizable without trying to squeeze the full horizontal logo
+     into the 72px rail. */
   body.rail-collapsed .sidebar-brand {
     width: 100%;
+    height: 94px;
+    flex-direction: column;
     justify-content: center;
+    gap: 5px;
     padding: 0;
   }
-  body.rail-collapsed .sidebar-brand-mark,
-  body.rail-collapsed .sidebar-brand strong { display: none; }
+  body.rail-collapsed .sidebar-brand-mark {
+    display: flex;
+    width: 24px;
+    height: 17px;
+  }
+  body.rail-collapsed .sidebar-brand strong {
+    display: block;
+    max-width: 58px;
+    overflow: hidden;
+    font-size: .58rem;
+    line-height: 1;
+    letter-spacing: .01em;
+    white-space: nowrap;
+  }
   /* Smooth open/close */
   main,
   main.idle,

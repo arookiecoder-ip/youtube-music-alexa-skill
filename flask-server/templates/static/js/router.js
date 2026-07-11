@@ -109,6 +109,11 @@
     } else {
       location.hash = '#home';
     }
+
+    // View routing may set `hidden` on the persistent playbar. Reconcile the
+    // shell after every route change so an already-playing track is restored
+    // even when no new playback event arrives afterward.
+    if (window.syncUiState) window.syncUiState();
   });
 
   // Global delegated click handler: artist-name -> navigate to artist page

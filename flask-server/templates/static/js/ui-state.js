@@ -50,12 +50,21 @@
     if (!player) return;
     if (state._hasTrack) {
       clearTimeout(player._hideTimer);
+      // Route changes use the native `hidden` attribute while swapping views.
+      // A playback update can arrive before or after that navigation, so the
+      // visibility classes alone are not sufficient: `[hidden]` always wins.
+      // Treat the current-track state as authoritative for this persistent
+      // shell playbar and explicitly restore it whenever a track exists.
+      player.hidden = false;
       player.classList.remove('is-collapsed');
       requestAnimationFrame(() => player.classList.add('is-visible'));
     } else {
       player.classList.remove('is-visible');
       clearTimeout(player._hideTimer);
-      player._hideTimer = setTimeout(() => player.classList.add('is-collapsed'), 300);
+      player._hideTimer = setTimeout(() => {
+        player.classList.add('is-collapsed');
+        player.hidden = true;
+      }, 300);
     }
   }
 
