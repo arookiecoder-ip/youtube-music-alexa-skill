@@ -614,14 +614,9 @@ def _get_ytmusic_home():
         inst = _YT_HOME_CACHE.get(tid)
         if inst is None:
             auth_file = os.environ.get("YTMUSIC_AUTH_FILE")
-            oauth_client = os.environ.get("YTMUSIC_OAUTH_CLIENT_ID")
-            oauth_secret = os.environ.get("YTMUSIC_OAUTH_CLIENT_SECRET")
             try:
                 if auth_file:
-                    if oauth_client and oauth_secret:
-                        inst = YTMusic(auth=auth_file, client_id=oauth_client, client_secret=oauth_secret)
-                    else:
-                        inst = YTMusic(auth=auth_file)
+                    inst = YTMusic(auth=auth_file)
                 else:
                     inst = YTMusic()
             except Exception as e:
