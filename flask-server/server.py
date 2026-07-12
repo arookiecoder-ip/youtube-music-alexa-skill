@@ -595,7 +595,7 @@ def _get_ytmusic_home():
     global _YT_HOME_CACHE_MTIME
     tid = threading.get_ident()
     with _YT_HOME_CACHE_LOCK:
-        auth_file = os.environ.get("YTMUSIC_AUTH_FILE")
+        auth_file = os.environ.get("YTMUSIC_AUTH_FILE") or "headers_auth.json"
         
         # Invalidate cache if auth file was modified (e.g., user updated cookies)
         current_mtime = 0
@@ -613,10 +613,17 @@ def _get_ytmusic_home():
 
         inst = _YT_HOME_CACHE.get(tid)
         if inst is None:
-            auth_file = os.environ.get("YTMUSIC_AUTH_FILE")
+            auth_file = os.environ.get("YTMUSIC_AUTH_FILE") or "headers_auth.json"
             try:
-                if auth_file:
-                    inst = YTMusic(auth=auth_file)
+                if auth_file and os.path.isfile(auth_file):
+                    client_id = os.environ.get("YTMUSIC_OAUTH_CLIENT_ID")
+                    client_secret = os.environ.get("YTMUSIC_OAUTH_CLIENT_SECRET")
+                    if client_id and client_secret:
+                        from ytmusicapi.auth.oauth.credentials import OAuthCredentials
+                        creds = OAuthCredentials(client_id, client_secret)
+                        inst = YTMusic(auth=auth_file, oauth_credentials=creds)
+                    else:
+                        inst = YTMusic(auth=auth_file)
                 else:
                     inst = YTMusic()
             except Exception as e:
@@ -2910,6 +2917,9 @@ def youtube_oauth_finish():
         from ytmusicapi.auth.oauth.token import RefreshingToken
         raw_token = creds.token_from_code(device_code)
         
+        if "refresh_token" not in raw_token:
+            return error_response("No refresh_token received. Please go to your Google Account permissions, revoke access for this app, and try again.", 500)
+            
         refresh_token_expires_in = raw_token.get("refresh_token_expires_in", raw_token.get("expires_in", 3600))
         ref_token = RefreshingToken(
             credentials=creds,
@@ -2936,9 +2946,11 @@ def youtube_oauth_finish():
             
         return jsonify({"success": True})
     except Exception as e:
+        if isinstance(e, KeyError):
+            logger.exception("oauth finish key error")
+            return error_response(f"Missing token key: {e}", 500)
         # 400 is expected if pending
         return error_response(str(e), 400)
-
 
 @app.route("/alexa/devices/", methods=["GET"])
 def alexa_devices():
