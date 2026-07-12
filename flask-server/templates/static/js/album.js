@@ -176,6 +176,8 @@
   async function loadAlbum(browseId) {
     var hero = document.getElementById('album-hero');
     var list = document.getElementById('album-track-list');
+    // Section stays hidden (from hideAllViews) until content is rendered.
+    // The preload progress bar provides loading feedback.
 
     // ── Preload-nav: consume cached data from navigateWithPreload ──
     var route = '#album/' + encodeURIComponent(browseId);
@@ -183,24 +185,30 @@
     if (preloaded) {
       cache[browseId] = preloaded;
       render(preloaded);
+      var s = document.getElementById('album-section');
+      if (s) s.hidden = false;
       return;
     }
 
     // ── In-module cache (back-navigation) ──
     if (cache[browseId]) {
       render(cache[browseId]);
+      var s = document.getElementById('album-section');
+      if (s) s.hidden = false;
       return;
     }
 
-    // ── Fallback: fetch on arrival (only when not using preload-nav) ──
-    if (hero) hero.innerHTML = '<div class="history-modal-empty">Loading album…</div>';
-    if (list) list.innerHTML = '';
+    // ── Fallback: fetch on arrival ──
     try {
       var data = await window.api('/api/album/' + encodeURIComponent(browseId));
       cache[browseId] = data;
       render(data);
+      var s = document.getElementById('album-section');
+      if (s) s.hidden = false;
     } catch (e) {
       if (hero) hero.innerHTML = '<div class="history-modal-empty">Could not load this album.</div>';
+      var s = document.getElementById('album-section');
+      if (s) s.hidden = false;
       if (window.toast) window.toast(e.message || 'Could not load album', 'error');
     }
   }

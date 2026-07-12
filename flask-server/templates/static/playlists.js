@@ -39,9 +39,7 @@
     const titleEl = document.getElementById('playlist-detail-title');
     const body = document.getElementById('playlist-detail-body');
 
-    if (titleEl) titleEl.textContent = 'Loading...';
-    if (body) body.innerHTML = '<div class="loading-spinner"></div>';
-
+    if (window._barStart) window._barStart();
     try {
       const pl = await window.api('/api/library/playlists/' + encodeURIComponent(plId));
       if (titleEl) titleEl.textContent = pl.title || 'Playlist';
@@ -115,7 +113,10 @@
       console.warn('Failed to load playlist', e);
       if (titleEl) titleEl.textContent = 'Error loading playlist';
       if (body) body.innerHTML = '<div style="padding:24px; color:var(--muted); text-align:center;">Failed to load playlist</div>';
+      if (window._barAbort) window._barAbort();
     }
+    if (window._barComplete) window._barComplete();
+    if (window._barDone) window._barDone();
   }
   window.openPlaylistDetailModal = openLibraryPlaylist;
   /* ---- New Playlist button (sidebar) ---- */

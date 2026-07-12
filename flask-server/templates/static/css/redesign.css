@@ -1691,6 +1691,7 @@ body.results-open #results-section {
   background: #151515;
   border-color: rgba(255, 255, 255, .09);
 }
+#playlist-detail-modal { background: transparent; }
 /* Playlist/history overlays own scrolling at every breakpoint. Keep the page
    beneath them fixed so reaching the final row cannot move the outer shell. */
 body:has(#playlist-detail-modal-overlay.open),
@@ -2902,3 +2903,170 @@ body.library-route #nav-library-btn::before {
 }
 .browser-auth-save:hover { background: var(--accent-hover); }
 .browser-auth-save:disabled { opacity: .55; cursor: wait; }
+
+/* ============================================================
+   Jam modal — YT Music-style session sharing
+   ============================================================ */
+
+.jam-body {
+  padding: 20px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.jam-desc {
+  margin: 0;
+  color: var(--muted);
+  font-size: .85rem;
+  line-height: 1.55;
+}
+
+.jam-link-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.jam-link-input {
+  flex: 1;
+  min-width: 0;
+  background: rgba(255,255,255,.06);
+  border: 1px solid rgba(255,255,255,.12);
+  color: var(--text);
+  padding: 10px 14px;
+  border-radius: var(--radius-md);
+  font-size: .82rem;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  outline: none;
+  transition: border-color .15s;
+}
+.jam-link-input:focus {
+  border-color: var(--accent);
+}
+
+.jam-btn-row {
+  display: flex;
+  gap: 8px;
+}
+
+.jam-btn {
+  flex: 1;
+  padding: 10px 12px;
+  font-weight: 600;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  font-family: inherit;
+  font-size: .82rem;
+  transition: background .12s, border-color .12s, color .12s, opacity .12s;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+.jam-btn:disabled {
+  opacity: .4;
+  cursor: default;
+  pointer-events: none;
+}
+
+.jam-btn-primary {
+  background: var(--accent);
+  border: 1px solid var(--accent);
+  color: #fff;
+}
+.jam-btn-primary:hover {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
+
+.jam-btn-secondary {
+  background: transparent;
+  border: 1px solid rgba(255,255,255,.18);
+  color: var(--text);
+}
+.jam-btn-secondary:hover {
+  border-color: rgba(255,255,255,.35);
+  background: rgba(255,255,255,.06);
+}
+
+.jam-btn-danger {
+  background: transparent;
+  border: 1px solid rgba(220, 60, 60, .45);
+  color: #e66;
+}
+.jam-btn-danger:hover {
+  background: rgba(255, 60, 60, .1);
+  border-color: #e66;
+}
+
+.jam-btn-full {
+  width: 100%;
+}
+
+.jam-qr-panel {
+  margin: 0 auto;
+  width: min(200px, 100%);
+  padding: 10px;
+  background: #fff;
+  border-radius: var(--radius-md);
+}
+
+.jam-qr-img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+/* Jam-ended overlay */
+#jam-ended-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  background: var(--bg, #0a0a0a);
+  align-items: center;
+  justify-content: center;
+  display: none;
+}
+
+.jam-ended-card {
+  text-align: center;
+  padding: 32px;
+  max-width: 360px;
+}
+
+.jam-ended-icon {
+  width: 56px;
+  height: 56px;
+  margin: 0 auto 20px;
+  border: 2px solid rgba(255,255,255,.15);
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+}
+
+.jam-ended-icon svg {
+  width: 26px;
+  height: 26px;
+}
+
+.jam-ended-title {
+  font-size: 1.25rem;
+  font-weight: 700;
+  margin: 0 0 10px;
+  color: var(--text);
+}
+
+.jam-ended-msg {
+  color: var(--muted);
+  font-size: .88rem;
+  margin: 0;
+  line-height: 1.55;
+}
+
+/* Jam modal width */
+#jam-modal {
+  max-width: min(420px, 92vw);
+}

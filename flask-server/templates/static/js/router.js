@@ -8,7 +8,7 @@
   }
 
   function hideAllViews() {
-    setHidden('.play-section, #recs-section, #home-section, #idle-hero, #results-section, #queue-section, #artist-section, #album-section, #now-playing-section', true);
+    setHidden('.play-section, #recs-section, #home-section, #idle-hero, #results-section, #queue-section, #artist-section, #album-section', true);
   }
 
   function showHomeViews() {
@@ -98,10 +98,34 @@
      legacy '#name' format so all existing comparisons still work. */
   window.__route = '#home';
   window.getRoute = function() { return window.__route || '#home'; };
+
+  var _scrollCache = {};
+  function _routeScrollId(route) {
+    if (!route) return null;
+    if (route.indexOf('#artist/') === 0) return 'artist-section';
+    if (route.indexOf('#album/') === 0) return 'album-section';
+    if (route === '#now-playing') return 'now-playing-section';
+    if (route === '#history') return 'history-modal';
+    if (route === '#explore') return 'explore-modal';
+    if (route === '#library') return 'library-modal';
+    if (route.indexOf('#playlist/') === 0) return 'playlist-detail-modal-overlay';
+    return 'main'; // #home, search results
+  }
+  function _saveScroll() {
+    var id = _routeScrollId(window.__route);
+    if (!id) return;
+    var el = document.getElementById(id) || document.querySelector(id);
+    if (el) _scrollCache[window.__route] = el.scrollTop;
+  }
+  function _restoreScroll() {
+    var id = _routeScrollId(window.__route);
+    if (!id) return;
+    if (_scrollCache[window.__route] != null) {
+      var el = document.getElementById(id) || document.querySelector(id);
+      if (el) el.scrollTop = _scrollCache[window.__route];
+    }
+  }
   function resetRouteScroll() {
-    // Most pages use the document scroller, while routed overlays and the
-    // expanded player own their scroll containers. Reset both so navigation
-    // never inherits the previous view's position.
     window.scrollTo(0, 0);
     document.documentElement.scrollTop = 0;
     document.body.scrollTop = 0;
@@ -119,9 +143,7 @@
     route = route || '#home';
     var changedRoute = route !== window.__route;
     if (changedRoute) {
-      // Remember where the expanded player was opened from so collapsing it
-      // returns there (not blindly to #home, and without relying on
-      // history.back() which is a no-op on a fresh session).
+      _saveScroll();
       if (route === '#now-playing') window.__npReturnRoute = window.__route;
       window.__route = route;
       history.pushState({ route: route }, '', location.pathname + location.search);
@@ -129,14 +151,17 @@
     applyRoute(route);
     if (changedRoute) {
       resetRouteScroll();
-      requestAnimationFrame(resetRouteScroll);
+      _restoreScroll();
+      requestAnimationFrame(_restoreScroll);
     }
   };
   window.addEventListener('popstate', function(e) {
+    _saveScroll();
     window.__route = (e.state && e.state.route) || '#home';
     applyRoute(window.__route);
     resetRouteScroll();
-    requestAnimationFrame(resetRouteScroll);
+    _restoreScroll();
+    requestAnimationFrame(_restoreScroll);
   });
 
   function applyRoute(hash) {
@@ -148,6 +173,11 @@
     if (routedNpSection && routedNpSection._closeTimer) {
       clearTimeout(routedNpSection._closeTimer);
       routedNpSection._closeTimer = null;
+    }
+    // Unhide the now-playing section BEFORE the body class toggles so the
+    // CSS transition has a visible start state (translateY(103%)) to animate from.
+    if (hash === '#now-playing' && routedNpSection) {
+      routedNpSection.hidden = false;
     }
     document.body.classList.toggle('home-route', hash === '#home');
     document.body.classList.toggle('now-playing-route', hash === '#now-playing');
@@ -202,6 +232,11 @@
       document.body.classList.remove('now-playing-closing');
       document.documentElement.style.removeProperty('overflow');
       document.body.style.removeProperty('overflow');
+      // Restore search results if they were open before navigating to sub-page
+      if (window.__appState && window.__appState._resultsOpen) {
+        var rs = document.getElementById('results-section');
+        if (rs) rs.hidden = false;
+      }
     }
     if (hash !== '#now-playing' && window._closeMiniPopup) window._closeMiniPopup();
     if (routes[hash]) {
@@ -214,17 +249,10 @@
       if (!albumId) { window.navigateTo('#home'); return; }
       hideAllViews();
       setHidden('.play-section', false);
-      var albumSection = document.getElementById('album-section');
-      if (albumSection) albumSection.hidden = false;
       if (window.loadAlbum) window.loadAlbum(albumId);
     } else if (hash.indexOf('#artist/') === 0) {
       var channelId = decodeURIComponent(hash.slice('#artist/'.length));
       if (!channelId) { window.navigateTo('#home'); return; }
-      // Leave the search-results state properly (mini player, body class,
-      // _resultsOpen flag) instead of just hiding the section.
-      if (window.__appState && window.__appState._resultsOpen && window.closeResults) {
-        window.closeResults();
-      }
       showArtistSection();
       if (window.loadArtist) window.loadArtist(channelId);
     } else {

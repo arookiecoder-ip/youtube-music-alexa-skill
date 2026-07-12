@@ -1,0 +1,438 @@
+/* ============================================================
+   Jam guest page — isolated from owner controls
+   ============================================================ */
+
+body.jam-guest {
+  padding: 0 var(--space-4);
+  background: var(--bg, #030303);
+}
+
+body.jam-guest main {
+  width: 100%;
+  max-width: 600px;
+  margin: 0 auto;
+  padding-top: 6px;
+  display: flex;
+  flex-direction: column;
+  min-height: 100dvh;
+}
+
+body.jam-guest #jam-main {
+  padding-bottom: calc(var(--playbar-h-mobile, 104px) + 20px);
+}
+
+/* Header */
+body.jam-guest header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 0 10px;
+  margin-bottom: 2px;
+  border-bottom: none;
+}
+
+.jam-header-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.jam-header-brand .eq-icon {
+  display: flex;
+  align-items: flex-end;
+  gap: 3px;
+  height: 16px;
+}
+.jam-header-brand .eq-icon span {
+  display: block;
+  width: 2.5px;
+  background: var(--accent);
+  animation: eq 1.4s ease-in-out infinite;
+  transform-origin: bottom;
+  border-radius: 2px;
+}
+.jam-header-brand .eq-icon span:nth-child(1) { height: 35%; animation-delay: 0s; }
+.jam-header-brand .eq-icon span:nth-child(2) { height: 75%; animation-delay: .15s; }
+.jam-header-brand .eq-icon span:nth-child(3) { height: 50%; animation-delay: .35s; }
+.jam-header-brand .eq-icon span:nth-child(4) { height: 90%; animation-delay: .1s; }
+.jam-header-brand .eq-icon span:nth-child(5) { height: 60%; animation-delay: .25s; }
+
+@keyframes eq {
+  0%, 100% { transform: scaleY(1); }
+  50% { transform: scaleY(.3); }
+}
+
+.jam-header-brand h1 {
+  font-size: .85rem;
+  font-weight: 700;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  background: linear-gradient(135deg, var(--accent), #ff6a00);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.jam-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.jam-leave-btn {
+  padding: 7px 14px;
+  font-size: .75rem;
+  font-weight: 600;
+  background: transparent;
+  border: 1px solid rgba(255,255,255,.18);
+  color: var(--muted);
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  transition: color .15s, border-color .15s, background .15s;
+}
+.jam-leave-btn:hover {
+  color: #e66;
+  border-color: rgba(220,60,60,.45);
+  background: rgba(255,60,60,.08);
+}
+
+/* Search */
+body.jam-guest .play-section {
+  background: none !important;
+  border: none !important;
+  padding: 0 !important;
+  margin: 0 0 12px;
+  width: 100%;
+  max-width: none;
+}
+body.jam-guest .play-section .search-wrap {
+  flex: 1;
+}
+body.jam-guest .play-section .search-wrap::before {
+  content: '';
+  position: absolute;
+  left: 14px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 16px;
+  height: 16px;
+  pointer-events: none;
+  opacity: .6;
+  background: center / contain no-repeat
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23aaaaaa' stroke-width='2.2' stroke-linecap='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cline x1='21' y1='21' x2='16.2' y2='16.2'/%3E%3C/svg%3E");
+}
+body.jam-guest .play-section input#query {
+  background: rgba(255,255,255,.06);
+  border: 1px solid rgba(255,255,255,.12);
+  border-radius: var(--radius-md);
+  padding: 11px 12px 11px 40px;
+  font-size: .88rem;
+  transition: border-color .15s, background .15s;
+}
+body.jam-guest .play-section input#query:focus {
+  border-color: var(--accent);
+  background: rgba(255,255,255,.08);
+  outline: none;
+}
+body.jam-guest #play-query {
+  display: none !important;
+}
+
+/* Player bar */
+body.jam-guest .player-section {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 220;
+  margin: 0;
+  border: none;
+  border-top: 1px solid rgba(255,255,255,.07);
+  background: rgba(14,14,14,.96);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  box-shadow: 0 -12px 40px rgba(0,0,0,.45);
+  display: block;
+  padding: 10px 16px calc(10px + env(safe-area-inset-bottom,0px));
+}
+
+.jam-player-inner {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+body.jam-guest .player-section .np {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  cursor: default;
+}
+
+body.jam-guest .player-section .np-art {
+  width: 44px;
+  height: 44px;
+  flex: none;
+  border-radius: 4px;
+  background: rgba(255,255,255,.06) center / cover no-repeat;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #666;
+}
+body.jam-guest .player-section .np-art.has-thumb svg { display: none; }
+body.jam-guest .player-section .np-info { flex: 1; min-width: 0; }
+body.jam-guest .player-section .np-title {
+  font-size: .85rem;
+  font-weight: 600;
+  color: #fff;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+body.jam-guest .player-section .np-artist {
+  font-size: .73rem;
+  color: #999;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-top: 2px;
+}
+body.jam-guest .playbar-time {
+  display: none;
+}
+body.jam-guest .player-section .playbar-time {
+  display: block;
+  font-size: .65rem;
+  color: rgba(255,255,255,.4);
+  font-variant-numeric: tabular-nums;
+  margin-top: 1px;
+}
+
+.jam-transport {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: none;
+}
+.jam-transport button {
+  width: 36px;
+  height: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  color: #ddd;
+  border-radius: 50%;
+  cursor: pointer;
+  transition: background .12s, color .12s;
+}
+.jam-transport button:hover { background: rgba(255,255,255,.08); color: #fff; }
+.jam-transport button svg { width: 16px; height: 16px; }
+.jam-transport .pp-btn { width: 42px; height: 42px; }
+.jam-transport .pp-btn svg { width: 24px; height: 24px; fill: #fff; color: #fff; }
+
+.jam-utils {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+}
+
+.jam-shuffle-btn {
+  width: 34px;
+  height: 34px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  color: #aaa;
+  border-radius: 50%;
+  cursor: pointer;
+  transition: color .15s, background .15s;
+}
+.jam-shuffle-btn:hover { color: #fff; background: rgba(255,255,255,.07); }
+.jam-shuffle-btn.shuffle-active { color: var(--accent); }
+
+body.jam-guest .vol {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: #aaa;
+}
+body.jam-guest .vol svg { width: 16px; height: 16px; flex: none; }
+body.jam-guest .vol input[type=range] {
+  width: 64px;
+  height: 4px;
+  -webkit-appearance: none;
+  appearance: none;
+  background: rgba(255,255,255,.15);
+  border-radius: 2px;
+  outline: none;
+  cursor: pointer;
+}
+body.jam-guest .vol input[type=range]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #fff;
+  border: none;
+  cursor: pointer;
+}
+body.jam-guest .vol input[type=range]::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #fff;
+  border: none;
+  cursor: pointer;
+}
+
+/* Progress bar */
+body.jam-guest .player-section .progress {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 3px;
+  margin: 0;
+}
+body.jam-guest .player-section .progress-track {
+  height: 3px;
+  border-radius: 0;
+  background: rgba(255,255,255,.1);
+}
+body.jam-guest .player-section .progress-fill {
+  background: linear-gradient(135deg, var(--accent), #ff6a00);
+  border-radius: 0;
+  height: 100%;
+}
+body.jam-guest .player-section .progress-handle { display: none; }
+body.jam-guest #progress-elapsed,
+body.jam-guest #progress-total { display: none; }
+
+/* Search results */
+body.jam-guest #results-section {
+  background: none;
+  border: none;
+  padding: 0 0 16px;
+  margin: 0;
+  width: 100%;
+  max-width: none;
+  display: block;
+}
+body.jam-guest #results-section .label {
+  font-size: .72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .14em;
+  color: var(--muted);
+  margin-bottom: 8px;
+}
+body.jam-guest .result-item-inner {
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  padding: 8px 8px;
+}
+body.jam-guest .result-swipe-wrapper + .result-swipe-wrapper .result-item-inner {
+  border-top: none;
+}
+body.jam-guest .result-item-inner:hover {
+  background: rgba(255,255,255,.045);
+}
+
+/* Queue */
+body.jam-guest #queue-section {
+  background: none;
+  border: none;
+  padding: 0 0 16px;
+  margin: 0;
+  width: 100%;
+  max-width: none;
+  display: block;
+}
+body.jam-guest #queue-section > .label {
+  font-size: .72rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: .14em;
+  color: var(--muted);
+  margin-bottom: 8px;
+}
+body.jam-guest .queue-item {
+  background: transparent;
+  border-radius: 0;
+}
+body.jam-guest .queue-item:hover { background: rgba(255,255,255,.045); }
+
+/* Jam-ended */
+#jam-ended-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  background: var(--bg, #0a0a0a);
+  align-items: center;
+  justify-content: center;
+  display: none;
+}
+
+.jam-ended-card {
+  text-align: center;
+  padding: 32px;
+  max-width: 360px;
+}
+
+.jam-ended-icon {
+  width: 56px;
+  height: 56px;
+  margin: 0 auto 20px;
+  border: 2px solid rgba(255,255,255,.15);
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+}
+
+.jam-ended-icon svg {
+  width: 26px;
+  height: 26px;
+}
+
+.jam-ended-title {
+  font-size: 1.25rem;
+  font-weight: 700;
+  margin: 0 0 10px;
+  color: var(--text);
+}
+
+.jam-ended-msg {
+  color: var(--muted);
+  font-size: .88rem;
+  margin: 0;
+  line-height: 1.55;
+}
+
+/* Toast */
+body.jam-guest .toast {
+  bottom: calc(var(--playbar-h-mobile, 104px) + 20px);
+}
+
+/* Skeleton loading */
+body.jam-guest .preload .player-section,
+body.jam-guest .preload #results-section,
+body.jam-guest .preload #queue-section {
+  opacity: 0;
+}
+
+@media (min-width: 600px) {
+  body.jam-guest {
+    padding: 0;
+  }
+}

@@ -629,7 +629,16 @@ def _get_ytmusic_home():
             auth_file = os.environ.get("YTMUSIC_AUTH_FILE") or "headers_auth.json"
             try:
                 if auth_file and os.path.isfile(auth_file):
-                    inst = YTMusic(auth=auth_file)
+                    import json as _json
+                    with open(auth_file, 'r') as _f:
+                        _raw = _f.read(512)
+                    if _raw.strip().startswith('{') and '"access_token"' in _raw:
+                        logger.warning("Stale OAuth token detected in %s — OAuth support removed, only browser headers work. Renaming to %s.deprecated", auth_file, auth_file)
+                        import shutil as _shutil
+                        _shutil.move(auth_file, auth_file + '.deprecated')
+                        inst = YTMusic()
+                    else:
+                        inst = YTMusic(auth=auth_file)
                 else:
                     inst = YTMusic()
             except Exception as e:
@@ -3537,7 +3546,7 @@ def get_recommendations():
 async def get_history():
     from ytmusicapi.auth.types import AuthType
     if _get_ytmusic_home().auth_type == AuthType.UNAUTHORIZED:
-        return jsonify({'error': 'YouTube Music authentication required. Please visit /setup/'}), 403
+        return jsonify([])
     try:
         history_raw = await asyncio.to_thread(_get_ytmusic_home().get_history)
     except Exception as e:
@@ -4713,15 +4722,13 @@ async def api_create_library_playlist():
 async def api_get_library_playlist(pl_id):
     from ytmusicapi.auth.types import AuthType
     yt = _get_ytmusic_home()
-    if yt.auth_type == AuthType.UNAUTHORIZED:
-        return jsonify({'error': 'YouTube Music authentication required. Please visit /setup/'}), 403
     if not pl_id.strip():
         return jsonify({'error': 'invalid playlist id'}), 400
     try:
-        # 'LM' is the special Liked Music virtual playlist — get_playlist() does
-        # not support it; use get_liked_songs() instead and normalize to the same
-        # shape the client expects ({title, trackCount, tracks}).
+        # 'LM' is the special Liked Music virtual playlist — requires auth.
         if pl_id.upper() == 'LM':
+            if yt.auth_type == AuthType.UNAUTHORIZED:
+                return jsonify({'error': 'YouTube Music authentication required. Please visit /setup/'}), 403
             try:
                 raw = await asyncio.to_thread(yt.get_liked_songs, 100)
             except Exception as liked_error:
@@ -4781,18 +4788,25 @@ async def api_get_album(browse_id):
       { title, artist, channelId, year, thumbnail, description, tracks }
     Each track has: { videoId, title, artist, thumbnail, duration, duration_seconds }
     """
-    from ytmusicapi.auth.types import AuthType
-    yt = _get_ytmusic_home()
-    if yt.auth_type == AuthType.UNAUTHORIZED:
-        return jsonify({'error': 'YouTube Music authentication required. Please visit /setup/'}), 403
     browse_id = (browse_id or '').strip()
     if not browse_id:
         return jsonify({'error': 'invalid browseId'}), 400
+    from ytmusicapi import YTMusic
+    yt = _get_ytmusic_home()
     try:
         raw = await asyncio.to_thread(yt.get_album, browse_id)
     except Exception as e:
-        logger.error('[api/album/%s] failed: %s', browse_id, e)
-        return jsonify({'error': str(e)}), 500
+        message = str(e)
+        if "invalid argument" in message.lower():
+            logger.warning("YouTube album browse unavailable; retrying anonymously: %s", message)
+            try:
+                raw = await asyncio.to_thread(YTMusic().get_album, browse_id)
+            except Exception as fallback_e:
+                logger.error('[api/album/%s] anonymous fallback failed: %s', browse_id, fallback_e)
+                return jsonify({'error': str(fallback_e)}), 500
+        else:
+            logger.error('[api/album/%s] failed: %s', browse_id, e)
+            return jsonify({'error': str(e)}), 500
 
     # Normalise artist info
     raw_artists = raw.get('artists') or []
@@ -4844,14 +4858,11 @@ async def api_get_artist(channel_id):
     albums / singles → list of { browseId, title, year, thumbnail }
     related  → list of { browseId, title, subscribers, thumbnail }
     """
-    from ytmusicapi.auth.types import AuthType
-    yt = _get_ytmusic_home()
-    if yt.auth_type == AuthType.UNAUTHORIZED:
-        return jsonify({'error': 'YouTube Music authentication required. Please visit /setup/'}), 403
     channel_id = (channel_id or '').strip()
     if not channel_id:
         return jsonify({'error': 'invalid channelId'}), 400
     from ytmusicapi import YTMusic
+    yt = _get_ytmusic_home()
     try:
         raw = await asyncio.to_thread(yt.get_artist, channel_id)
     except Exception as e:
@@ -4998,7 +5009,7 @@ def root():
             "remote.html", asset_v=_STATIC_VERSION, remote_username=REMOTE_USER, is_authenticated=is_auth)))
     if _jam_guest():
         return _no_store(app.make_response(render_template(
-            "remote.html", asset_v=_STATIC_VERSION, jam_guest=True, remote_username='Guest', is_authenticated=is_auth)))
+            "jam.html", asset_v=_STATIC_VERSION)))
     if session.get('jam'):
         session.pop('jam', None)
     return redirect('/login/')

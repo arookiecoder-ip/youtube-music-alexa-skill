@@ -89,7 +89,6 @@
     if (_loaded && !force) return;
 
     _loading = true;
-    body.innerHTML = renderSkeleton();
 
     try {
       const explore = await window.api('/api/explore/');

@@ -295,6 +295,12 @@
     });
   };
 
+  // ─── Expose bar controller for external view loaders (playlists, etc.) ──
+  window._barStart = _barStart;
+  window._barComplete = _barComplete;
+  window._barDone = _barDone;
+  window._barAbort = _barAbort;
+
   // ─── Expose cache for destination pages to consume ────────────────────────
   /**
    * consumePreload(route) — destination page calls this to get cached data.

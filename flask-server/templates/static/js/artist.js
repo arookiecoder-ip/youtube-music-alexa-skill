@@ -33,6 +33,18 @@
     content.hidden = show;
   }
 
+  function _preloadArtistImage(data) {
+    var thumbs = data && data.artist && data.artist.thumbnails || [];
+    var url = thumbs.length ? thumbs[thumbs.length - 1].url : '';
+    if (!url) return Promise.resolve();
+    return new Promise(function (resolve) {
+      var img = new Image();
+      img.onload = resolve;
+      img.onerror = resolve;
+      img.src = url;
+    });
+  }
+
   async function loadArtist(channelId) {
     if (state._artistLoading) return;
 
@@ -42,6 +54,7 @@
     if (preloaded) {
       state._currentChannelId = channelId;
       state._cachedArtistData = preloaded;
+      await _preloadArtistImage(preloaded);
       showSkeleton(false);
       renderAll(preloaded);
       return;
@@ -56,16 +69,16 @@
     // Drop the previous artist's data now: if this fetch fails, a retry must
     // not serve the old artist's page under the new channel id.
     state._cachedArtistData = null;
-    showSkeleton(true);
     try {
       var data = await window.api('/api/artist/' + encodeURIComponent(channelId));
       state._cachedArtistData = data;
+      await _preloadArtistImage(data);
+      showSkeleton(false);
       renderAll(data);
     } catch (e) {
       if (window.toast) window.toast(e.message, 'error');
     } finally {
       state._artistLoading = false;
-      showSkeleton(false);
     }
   }
 

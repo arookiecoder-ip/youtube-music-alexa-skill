@@ -83,7 +83,6 @@
     if (_loaded && !force) return;
 
     _loading = true;
-    body.innerHTML = renderSkeleton();
 
     try {
       const data = await window.api('/api/library/');
