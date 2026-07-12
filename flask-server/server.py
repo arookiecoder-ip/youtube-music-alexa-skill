@@ -4930,6 +4930,17 @@ async def api_get_explore():
         explore = await asyncio.to_thread(_get_ytmusic_home().get_explore)
         return jsonify(explore)
     except Exception as e:
+        message = str(e)
+        if "invalid argument" in message.lower():
+            # Some OAuth identities cannot call the Explore browse endpoint,
+            # but Explore itself is public. Retry without OAuth so new
+            # releases, moods, charts, and videos remain available.
+            logger.warning("YouTube OAuth explore browse unavailable; retrying anonymously: %s", message)
+            try:
+                explore = await asyncio.to_thread(YTMusic().get_explore)
+                return jsonify(explore)
+            except Exception as fallback_error:
+                logger.warning("Anonymous YouTube Explore fallback failed: %s", fallback_error)
         return jsonify({'error': str(e)}), 500
 
 
