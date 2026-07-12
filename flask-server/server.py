@@ -2916,9 +2916,28 @@ def youtube_oauth_finish():
     try:
         from ytmusicapi.auth.oauth.token import RefreshingToken
         raw_token = creds.token_from_code(device_code)
+
+        # Google's device-token endpoint reports protocol state as JSON instead
+        # of raising.  In particular, the first poll can still be pending even
+        # after the browser has rendered its "Device connected" page.  Treating
+        # that response as a missing refresh token makes a successful login look
+        # like a permanent failure and stops the browser from polling.
+        oauth_error = raw_token.get("error")
+        if oauth_error in ("authorization_pending", "slow_down"):
+            retry_after = 10 if oauth_error == "slow_down" else 5
+            return jsonify({
+                "success": False,
+                "pending": True,
+                "retry_after": retry_after,
+            })
+        if oauth_error:
+            oauth_message = raw_token.get("error_description") or oauth_error
+            logger.warning("YouTube OAuth token exchange failed: %s", oauth_error)
+            return error_response(oauth_message, 400)
         
         if "refresh_token" not in raw_token:
-            return error_response("No refresh_token received. Please go to your Google Account permissions, revoke access for this app, and try again.", 500)
+            logger.error("YouTube OAuth response omitted refresh_token; keys=%s", sorted(raw_token.keys()))
+            return error_response("Google completed authorization but did not issue a refresh token. Revoke this app at myaccount.google.com/permissions, then sign in again.", 502)
             
         refresh_token_expires_in = raw_token.get("refresh_token_expires_in", raw_token.get("expires_in", 3600))
         ref_token = RefreshingToken(
@@ -2933,7 +2952,16 @@ def youtube_oauth_finish():
         
         import json
         auth_file = os.environ.get("YTMUSIC_AUTH_FILE") or "headers_auth.json"
-            
+
+        if os.path.isdir(auth_file):
+            logger.error("YTMUSIC_AUTH_FILE points to a directory: %s", auth_file)
+            return error_response(
+                "YouTube OAuth storage is configured as a directory. Update YTMUSIC_AUTH_FILE to a writable file path and recreate the container.",
+                500,
+            )
+        auth_parent = os.path.dirname(os.path.abspath(auth_file))
+        os.makedirs(auth_parent, exist_ok=True)
+
         with open(auth_file, "w") as f:
             f.write(json.dumps(ref_token.as_dict()))
             

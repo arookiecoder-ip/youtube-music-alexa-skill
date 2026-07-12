@@ -263,10 +263,18 @@
   const ytOauthModalWrap = document.getElementById('youtube-oauth-modal-wrap');
   const ytOauthClose = document.getElementById('youtube-oauth-close');
   const ytOauthUserCode = document.getElementById('yt-oauth-user-code');
+  const ytOauthCopy = document.getElementById('yt-oauth-copy');
   const ytOauthLink = document.getElementById('yt-oauth-link');
   const ytOauthStatusText = document.getElementById('yt-oauth-status-text');
-  let oauthPollInterval = null;
+  let oauthPollTimer = null;
   let currentDeviceCode = null;
+
+  function closeOauthModal() {
+    ytOauthModalWrap.hidden = true;
+    if (oauthPollTimer) clearTimeout(oauthPollTimer);
+    oauthPollTimer = null;
+    currentDeviceCode = null;
+  }
 
   if (ytSigninBtn && ytOauthModalWrap) {
     ytSigninBtn.addEventListener('click', async () => {
@@ -285,23 +293,30 @@
         
         ytOauthModalWrap.hidden = false;
         
-        if (oauthPollInterval) clearInterval(oauthPollInterval);
-        oauthPollInterval = setInterval(async () => {
+        if (oauthPollTimer) clearTimeout(oauthPollTimer);
+        const pollForToken = async () => {
           if (!currentDeviceCode) return;
           try {
             const pollRes = await window.api('/api/youtube/oauth/finish', { device_code: currentDeviceCode });
             if (pollRes.success) {
-              clearInterval(oauthPollInterval);
+              oauthPollTimer = null;
+              currentDeviceCode = null;
               if (ytOauthStatusText) ytOauthStatusText.textContent = 'Success! Authenticated.';
               if (window.toast) window.toast('Successfully logged in to YouTube Music!');
               setTimeout(() => {
                 window.location.href = '/?refresh=1';
               }, 1500);
+              return;
             }
+            const retryMs = Math.max(3000, Number(pollRes.retry_after || 5) * 1000);
+            oauthPollTimer = setTimeout(pollForToken, retryMs);
           } catch (e) {
-            // Ignore polling errors
+            oauthPollTimer = null;
+            if (ytOauthStatusText) ytOauthStatusText.textContent = 'Error: ' + e.message;
+            if (window.toast) window.toast('Login failed: ' + e.message, 8000);
           }
-        }, 5000);
+        };
+        oauthPollTimer = setTimeout(pollForToken, 5000);
         
       } catch (err) {
         if (window.toast) window.toast('Failed to start OAuth: ' + err.message, 4000);
@@ -309,10 +324,36 @@
     });
     
     if (ytOauthClose) {
-      ytOauthClose.addEventListener('click', () => {
-        ytOauthModalWrap.hidden = true;
-        if (oauthPollInterval) clearInterval(oauthPollInterval);
-        currentDeviceCode = null;
+      ytOauthClose.addEventListener('click', closeOauthModal);
+    }
+
+    ytOauthModalWrap.addEventListener('click', (event) => {
+      if (event.target === ytOauthModalWrap) closeOauthModal();
+    });
+
+    document.addEventListener('keydown', (event) => {
+      if (event.key === 'Escape' && !ytOauthModalWrap.hidden) closeOauthModal();
+    });
+
+    if (ytOauthCopy) {
+      ytOauthCopy.addEventListener('click', async () => {
+        const code = ytOauthUserCode ? ytOauthUserCode.textContent.trim() : '';
+        if (!code || code === '----') return;
+        try {
+          await navigator.clipboard.writeText(code);
+        } catch (_) {
+          const input = document.createElement('textarea');
+          input.value = code;
+          input.style.position = 'fixed';
+          input.style.opacity = '0';
+          document.body.appendChild(input);
+          input.select();
+          document.execCommand('copy');
+          input.remove();
+        }
+        const label = ytOauthCopy.querySelector('span');
+        if (label) label.textContent = 'Copied';
+        setTimeout(() => { if (label) label.textContent = 'Copy'; }, 1500);
       });
     }
   }

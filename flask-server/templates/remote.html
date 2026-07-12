@@ -152,20 +152,23 @@
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
         </button>
       </div>
-      <div class="login-modal-body" style="text-align: center; padding: 24px;">
-        <p style="margin-bottom: 20px; color: rgba(255,255,255,0.7); line-height: 1.5;">Please go to Google's device login page and enter the code below to link your account securely.</p>
-        
-        <div style="background: rgba(255,255,255,0.05); padding: 20px; border-radius: 12px; margin-bottom: 25px; border: 1px dashed rgba(255,255,255,0.2);">
-          <span style="display: block; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 1.5px; color: rgba(255,255,255,0.5); margin-bottom: 8px;">Your Code</span>
-          <strong id="yt-oauth-user-code" style="font-size: 2.5rem; letter-spacing: 6px; color: var(--primary);">----</strong>
+      <div class="login-modal-body">
+        <p class="oauth-instructions">Open Google's device login page and enter this code to link your account.</p>
+
+        <div class="oauth-code-row">
+          <strong id="yt-oauth-user-code" class="oauth-user-code">----</strong>
+          <button id="yt-oauth-copy" class="oauth-copy-btn" type="button" aria-label="Copy authorization code" title="Copy code">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="1"/><path d="M5 15H4a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v1"/></svg>
+            <span>Copy</span>
+          </button>
         </div>
 
-        <a id="yt-oauth-link" href="#" target="_blank" style="display: inline-block; padding: 14px 28px; background: linear-gradient(135deg, var(--primary), #ff7e5f); color: #fff; text-decoration: none; border-radius: 10px; font-weight: bold; margin-bottom: 20px; box-shadow: 0 4px 15px rgba(255, 126, 95, 0.3); transition: transform 0.2s;">
+        <a id="yt-oauth-link" class="oauth-open-link" href="#" target="_blank" rel="noopener">
           Open Google Login
         </a>
-        
-        <p style="font-size: 0.85rem; color: rgba(255,255,255,0.6); display: flex; align-items: center; justify-content: center; gap: 8px;">
-          <span style="display: inline-block; width: 14px; height: 14px; border: 2px solid rgba(255,255,255,0.2); border-top-color: #fff; border-radius: 50%; animation: spin 1s linear infinite;"></span>
+
+        <p class="oauth-status">
+          <span class="oauth-spinner" aria-hidden="true"></span>
           <span id="yt-oauth-status-text">Waiting for authorization...</span>
         </p>
       </div>
