@@ -16,3 +16,4 @@ AGENTS.md
 tests/
 .claude/
 memory.md
+test_auth.json
