@@ -282,7 +282,8 @@ _SESSION_PATHS = ('/remote', '/alexa/status', '/alexa/init', '/alexa/devices', '
                   '/alexa/queue_reorder', '/history', '/recommendations',
                   '/alexa/jam/start', '/alexa/jam/stop', '/alexa/jam/status',
                   '/alexa/jam/qr', '/api/home', '/api/library',
-                  '/alexa/like', '/api/liked_songs')
+                  '/alexa/like', '/api/liked_songs', '/api/profile_status',
+                  '/alexa/amazon_signout')
 _SESSION_PREFIXES = ('/alexa/now_playing/', '/history/', '/api/playlists/', '/recommendations/',
                      '/api/artist/', '/api/album/', '/api/library/', '/api/explore/', '/api/home/')
 
