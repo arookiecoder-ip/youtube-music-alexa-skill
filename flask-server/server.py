@@ -3648,21 +3648,32 @@ async def get_history():
     from ytmusicapi.auth.types import AuthType
     if _get_ytmusic_home().auth_type == AuthType.UNAUTHORIZED:
         return jsonify({'error': 'YouTube Music authentication required. Please visit /setup/'}), 403
+    auth_file = os.environ.get("YTMUSIC_AUTH_FILE") or "headers_auth.json"
     try:
         history_raw = await asyncio.to_thread(_get_ytmusic_home().get_history)
-        mapped = []
-        for item in history_raw:
-            mapped.append({
-                "video_id": item.get("videoId"),
-                "title": item.get("title"),
-                "artist": ", ".join([a.get("name", "") for a in item.get("artists", [])]) if item.get("artists") else "",
-                "thumbnail_url": item.get("thumbnails", [{"url": ""}])[0].get("url") if item.get("thumbnails") else "",
-                "played_at": 0 # Not provided by ytmusicapi directly
-            })
-        return jsonify(mapped)
     except Exception as e:
-        logger.warning('[history] failed: %s', e)
-        return jsonify([])
+        message = str(e)
+        if "invalid argument" in message.lower():
+            logger.warning("YouTube OAuth history browse unavailable; retrying without OAuth: %s", message)
+            try:
+                yt_no_oauth = YTMusic(auth=auth_file)
+                history_raw = await asyncio.to_thread(yt_no_oauth.get_history)
+            except Exception as fe:
+                logger.warning('[history] fallback also failed: %s', fe)
+                return jsonify([])
+        else:
+            logger.warning('[history] failed: %s', e)
+            return jsonify([])
+    mapped = []
+    for item in history_raw:
+        mapped.append({
+            "video_id": item.get("videoId"),
+            "title": item.get("title"),
+            "artist": ", ".join([a.get("name", "") for a in item.get("artists", [])]) if item.get("artists") else "",
+            "thumbnail_url": item.get("thumbnails", [{"url": ""}])[0].get("url") if item.get("thumbnails") else "",
+            "played_at": 0 # Not provided by ytmusicapi directly
+        })
+    return jsonify(mapped)
 
 @app.route("/history/", methods=["DELETE"])
 async def clear_history():
