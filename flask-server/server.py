@@ -1589,6 +1589,11 @@ class Supporting:
                     extractor_args.append(f"youtube:po_token=mweb.gvs+{po_token}")
             command = ["yt-dlp", "--get-url", "--no-playlist", "--quiet", "-f", "ba",
                        "--remote-components", "ejs:github"]
+            cookies_file = os.environ.get("YTDLP_COOKIES_FILE", "cookies.txt")
+            if os.path.exists(cookies_file):
+                command.extend(["--cookies", cookies_file])
+            elif browser := os.environ.get("YTDLP_BROWSER"):
+                command.extend(["--cookies-from-browser", browser])
             if extractor_args:
                 command.extend(["--extractor-args", ",".join(extractor_args)])
             command += ["--", video_id]
@@ -1619,6 +1624,11 @@ class Supporting:
             command = ["yt-dlp", "--no-playlist", "--quiet", "--no-warnings",
                        "--remote-components", "ejs:github",
                        "--print", fmt]
+            cookies_file = os.environ.get("YTDLP_COOKIES_FILE", "cookies.txt")
+            if os.path.exists(cookies_file):
+                command.extend(["--cookies", cookies_file])
+            elif browser := os.environ.get("YTDLP_BROWSER"):
+                command.extend(["--cookies-from-browser", browser])
             if extractor_args:
                 command.extend(["--extractor-args", ",".join(extractor_args)])
             command += ["--", video_id]
@@ -1674,6 +1684,13 @@ class Supporting:
         command = ["yt-dlp", "--no-playlist", "--quiet",
                    "-f", "140/bestaudio[ext=m4a]/bestaudio",
                    "--remote-components", "ejs:github"]
+        
+        cookies_file = os.environ.get("YTDLP_COOKIES_FILE", "cookies.txt")
+        if os.path.exists(cookies_file):
+            command.extend(["--cookies", cookies_file])
+        elif browser := os.environ.get("YTDLP_BROWSER"):
+            command.extend(["--cookies-from-browser", browser])
+            
         if extractor_args:
             command.extend(["--extractor-args", ",".join(extractor_args)])
         command += ["-o", output, "--", video_id]
@@ -2825,15 +2842,15 @@ def profile_status():
     amazon_connected = bool(amazon_status.get("logged_in"))
     amazon_debug = f"logged_in={amazon_connected}, error={amazon_status.get('login_error')}"
     
-    # YouTube Header Auth
+    # YouTube Auth
     yt_home = _get_ytmusic_home()
     auth_type_str = str(getattr(yt_home, 'auth_type', 'UNAUTHORIZED'))
-    yt_header_auth_working = "UNAUTHORIZED" not in auth_type_str
+    yt_auth_working = "UNAUTHORIZED" not in auth_type_str
     headers_debug = f"auth_type={auth_type_str}"
     
     return jsonify({
         "amazon_connected": amazon_connected,
-        "youtube_header_auth_working": yt_header_auth_working,
+        "youtube_auth_working": yt_auth_working,
         "debug": {
             "amazon": amazon_debug,
             "headers": headers_debug

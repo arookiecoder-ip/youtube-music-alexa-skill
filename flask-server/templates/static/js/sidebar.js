@@ -182,9 +182,9 @@
         
         const ythEl = document.getElementById('status-yt-headers');
         if (ythEl) {
-          ythEl.textContent = status.youtube_header_auth_working ? 'Working' : 'Not Working';
-          ythEl.style.color = status.youtube_header_auth_working ? '#4ade80' : '#ff6b6b';
-          ythEl.style.backgroundColor = status.youtube_header_auth_working ? 'rgba(74, 222, 128, 0.1)' : 'rgba(255, 107, 107, 0.1)';
+          ythEl.textContent = status.youtube_auth_working ? 'Working' : 'Not Working';
+          ythEl.style.color = status.youtube_auth_working ? '#4ade80' : '#ff6b6b';
+          ythEl.style.backgroundColor = status.youtube_auth_working ? 'rgba(74, 222, 128, 0.1)' : 'rgba(255, 107, 107, 0.1)';
           if (status.debug && status.debug.headers) ythEl.title = status.debug.headers;
         }
         
@@ -193,7 +193,10 @@
         if (amzSignout) amzSignout.style.display = status.amazon_connected ? 'block' : 'none';
         if (amzSignin) amzSignin.style.display = status.amazon_connected ? 'none' : 'block';
         const ytSignin = document.getElementById('youtube-signin');
-        if (ytSignin) ytSignin.style.display = status.youtube_header_auth_working ? 'none' : 'block';
+        if (ytSignin) {
+          ytSignin.style.display = 'block';
+          ytSignin.textContent = status.youtube_auth_working ? 'Re-authenticate YouTube' : 'Sign in to YouTube';
+        }
         
       } catch (err) {
         console.error("Failed to load profile status", err);
