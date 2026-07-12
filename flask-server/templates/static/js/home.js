@@ -240,6 +240,14 @@
         var targetId = itemCard.dataset.targetId;
         var kind = itemCard.dataset.kind;
 
+        // YouTube exposes Liked Music as a station-like home card, but the
+        // card itself should open the user's Liked Music collection. Keep the
+        // overlaid play button's direct-play behavior unchanged.
+        if (playlistId === 'LM' && !playBtn) {
+            window.navigateTo('#playlist/LM');
+            return;
+        }
+
         // If it's a play button click OR item click and it's a track/station/playlist to play directly
         if (playBtn || kind === 'track' || kind === 'station' || (!targetId && playlistId)) {
             if (!videoId && !playlistId) return;
