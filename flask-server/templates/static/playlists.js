@@ -5,6 +5,22 @@
 
   const escapeHtml = window.escHtml || (s => String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'));
 
+  function imageUrl(value) {
+    if (!value) return '';
+    if (typeof value === 'string') return value;
+    if (Array.isArray(value)) {
+      for (let i = value.length - 1; i >= 0; i -= 1) {
+        const url = imageUrl(value[i]);
+        if (url) return url;
+      }
+      return '';
+    }
+    if (typeof value === 'object') {
+      return value.url || value.src || imageUrl(value.thumbnails) || imageUrl(value.images) || '';
+    }
+    return '';
+  }
+
   async function loadLibrary() {
     if (!state._loggedIn || window.JAM_GUEST || !window.IS_AUTHENTICATED) return;
     try {
@@ -39,27 +55,30 @@
     const titleEl = document.getElementById('playlist-detail-title');
     const body = document.getElementById('playlist-detail-body');
 
-    if (window._barStart) window._barStart();
+    const route = '#playlist/' + encodeURIComponent(plId);
+    const preloaded = window.consumePreload ? window.consumePreload(route) : null;
+    if (!preloaded && window._barStart) window._barStart();
     try {
-      const pl = await window.api('/api/library/playlists/' + encodeURIComponent(plId));
+      const pl = preloaded || await window.api('/api/library/playlists/' + encodeURIComponent(plId));
       if (titleEl) titleEl.textContent = pl.title || 'Playlist';
 
       if (body) {
         body.innerHTML = '';
         const tracks = pl.tracks || [];
         const title = pl.title || 'Playlist';
-        const playlistThumbs = pl.thumbnails || [];
-        const playlistCover = (playlistThumbs[playlistThumbs.length - 1] || {}).url || '';
+        // Prefer the playlist's own/default thumbnail. Some API responses use
+        // `thumbnail` while others use `thumbnails`; `image` is the fallback.
+        const playlistCover = imageUrl(pl.thumbnails) || imageUrl(pl.thumbnail);
+        const playlistImage = imageUrl(pl.image) || imageUrl(pl.images);
         const trackCoverUrls = tracks.slice(0, 4).map(track => {
-          const thumbs = track.thumbnails || [];
-          return (thumbs[thumbs.length - 1] || {}).url || '';
+          return imageUrl(track.thumbnails) || imageUrl(track.thumbnail) || imageUrl(track.image);
         }).filter(Boolean);
-        // Prefer the artwork YouTube assigned to the playlist. Only build a
-        // song-art collage when the playlist genuinely has no banner/cover.
-        const coverUrls = playlistCover ? [playlistCover] : trackCoverUrls;
-        const collage = coverUrls.length
-          ? `<div class="playlist-collage${coverUrls.length === 1 ? ' playlist-collage-single' : ''}">${coverUrls.map(url => `<img src="${escapeHtml(url)}" alt="" loading="lazy">`).join('')}</div>`
+        const fallbackCoverUrls = playlistImage ? [playlistImage] : trackCoverUrls;
+        const renderCollage = (urls, primary) => urls.length
+          ? `<div class="playlist-collage${urls.length === 1 ? ' playlist-collage-single' : ''}">${urls.map(url => `<img${primary ? ' data-playlist-primary-cover' : ''} src="${escapeHtml(url)}" alt="" loading="lazy">`).join('')}</div>`
           : `<div class="playlist-collage playlist-collage-single"><div class="collage-placeholder"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg></div></div>`;
+        const fallbackCollage = renderCollage(fallbackCoverUrls, false);
+        const collage = playlistCover ? renderCollage([playlistCover], true) : fallbackCollage;
 
         const hero = document.createElement('section');
         hero.className = 'playlist-detail-hero';
@@ -72,6 +91,16 @@
           </div>`;
         body.appendChild(hero);
 
+        // A present-but-expired YouTube thumbnail should fall back exactly as
+        // a missing thumbnail does, instead of leaving a broken image tile.
+        const primaryCover = hero.querySelector('[data-playlist-primary-cover]');
+        if (primaryCover) {
+          primaryCover.addEventListener('error', () => {
+            const cover = primaryCover.closest('.playlist-collage');
+            if (cover) cover.outerHTML = fallbackCollage;
+          }, { once: true });
+        }
+
         const list = document.createElement('div');
         list.className = 'history-list';
         if (tracks.length === 0) {
@@ -82,9 +111,11 @@
             wrapper.className = 'result-swipe-wrapper';
             const row = document.createElement('div');
             row.className = 'history-item';
-            const thumbs = track.thumbnails || [];
-            const thumbnail = (thumbs[thumbs.length - 1] || {}).url || '/static/default-art.png';
-            const artist = track.artists?.map(a => a.name).join(', ') || '';
+            const thumbnail = imageUrl(track.thumbnails) || imageUrl(track.thumbnail) || imageUrl(track.image) || '/static/default-art.png';
+            const artist = (Array.isArray(track.artists)
+              ? track.artists.map(a => typeof a === 'string' ? a : a && a.name).filter(Boolean).join(', ')
+              : '') || track.artist || '';
+            const videoId = track.videoId || track.video_id || '';
             row.innerHTML = `
               <div class="playlist-track-art"><img src="${escapeHtml(thumbnail)}" class="queue-thumb" loading="lazy" alt="" onload="this.classList.add('loaded')" onerror="this.style.opacity='1'"></div>
               <div class="queue-info">
@@ -94,7 +125,7 @@
             row.onclick = () => {
               if (window.playResult) {
                 window.playResult({
-                  video_id: track.videoId,
+                  video_id: videoId,
                   title: track.title,
                   artist,
                   thumbnail

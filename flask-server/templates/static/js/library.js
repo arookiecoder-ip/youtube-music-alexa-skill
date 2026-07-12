@@ -10,6 +10,22 @@
 
   const FALLBACK_IMG = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='4' fill='%231a1a1a'/%3E%3Cpath d='M12 3v10.55A4 4 0 1 0 14 17V7h4V3h-6z' fill='%23444'/%3E%3C/svg%3E";
 
+  function imageUrl(value) {
+    if (!value) return '';
+    if (typeof value === 'string') return value;
+    if (Array.isArray(value)) {
+      for (let i = value.length - 1; i >= 0; i -= 1) {
+        const url = imageUrl(value[i]);
+        if (url) return url;
+      }
+      return '';
+    }
+    if (typeof value === 'object') {
+      return value.url || value.src || imageUrl(value.thumbnails) || imageUrl(value.images) || '';
+    }
+    return '';
+  }
+
   function renderSkeleton() {
     let cards = '';
     for (let i = 0; i < 12; i++) {
@@ -30,8 +46,8 @@
   }
 
   function renderPlaylistCard(pl) {
-    const thumbs = pl.thumbnails || [];
-    const thumb = (thumbs[thumbs.length - 1] || {}).url || '';
+    const thumb = imageUrl(pl.thumbnails) || imageUrl(pl.thumbnail);
+    const fallbackImage = imageUrl(pl.image) || imageUrl(pl.images);
     const title = pl.title || pl.name || 'Untitled Playlist';
     const count = pl.count != null ? `${pl.count} songs` : (pl.trackCount != null ? `${pl.trackCount} songs` : '');
     const sub = count || pl.description || '';
@@ -43,8 +59,9 @@
     card.setAttribute('tabindex', '0');
     card.setAttribute('aria-label', esc(title));
 
-    const thumbHtml = thumb
-      ? `<img src="${esc(thumb)}" alt="${esc(title)}" loading="lazy" onerror="this.onerror=null;this.src='${FALLBACK_IMG}'">`
+    const displayedImage = thumb || fallbackImage;
+    const thumbHtml = displayedImage
+      ? `<img src="${esc(displayedImage)}" alt="${esc(title)}" loading="lazy">`
       : `<div class="library-card-art-placeholder">${isLiked
           ? `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg>`
           : `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>`
@@ -57,6 +74,19 @@
         ${sub ? `<div class="library-card-sub">${esc(sub)}</div>` : ''}
       </div>
     `;
+
+    const image = card.querySelector('.library-card-art img');
+    if (image) {
+      let triedFallback = false;
+      image.addEventListener('error', () => {
+        if (thumb && fallbackImage && !triedFallback) {
+          triedFallback = true;
+          image.src = fallbackImage;
+        } else {
+          image.src = FALLBACK_IMG;
+        }
+      });
+    }
 
     const playlistId = pl.playlistId || pl.id || '';
     function open() {

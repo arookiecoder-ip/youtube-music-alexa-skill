@@ -124,9 +124,14 @@
 
 /* ── Playlist Detail Hero (collage + metadata) ── */
 #playlist-detail-modal {
+  background: none !important;
+  border: 0 !important;
+  box-shadow: none !important;
+}
+
+#playlist-detail-modal #playlist-detail-body,
+#playlist-detail-modal .playlist-detail-hero {
   background: transparent;
-  border-color: transparent;
-  box-shadow: none;
 }
 
 .playlist-detail-hero {

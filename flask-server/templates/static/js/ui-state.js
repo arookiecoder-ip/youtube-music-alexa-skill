@@ -49,7 +49,15 @@
       if (shouldShow && !state._homeLoaded && window.loadHomeFeed) window.loadHomeFeed();
       else homeSection.hidden = !shouldShow || !state._homeLoaded;
     }
+    const jamHomeSection = document.getElementById('jam-home-section');
+    if (jamHomeSection) jamHomeSection.hidden = !!state._resultsOpen;
     if (!player) return;
+    if (window.JAM_GUEST && !state._hasTrack) {
+      player.classList.remove('is-visible');
+      player.classList.add('is-collapsed');
+      player.hidden = true;
+      return;
+    }
     clearTimeout(player._hideTimer);
     player.hidden = false;
     player.classList.remove('is-collapsed');

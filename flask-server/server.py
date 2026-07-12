@@ -491,24 +491,47 @@ def _jam_url(token):
     return f"{base}/j/{token}"
 
 
-# What a jam guest may reach. Playback, search, queue manipulation and the
-# remote page itself are fine; recommendations are allowed as a playable mix,
-# while private account data is not.
+# What a jam guest may reach. Keep this deliberately narrow: playback controls,
+# anonymous search, and the dedicated guest endpoints below. In particular,
+# never expose account status, device metadata, history-backed recommendations,
+# library data, or authenticated YouTube Music surfaces.
 # Deliberately absent: /alexa/proxy_login + /alexa/proxy_check (Amazon auth),
 # /alexa/clear (wipes the owner's queue), /alexa/jam/* (owner-only controls),
 # /api/playlists/*, /history/*.
-_JAM_PATHS = ('/remote', '/alexa/status', '/alexa/init', '/alexa/devices',
-              '/alexa/command', '/alexa/play', '/alexa/suggest',
+_JAM_PATHS = ('/remote', '/alexa/command', '/alexa/play', '/alexa/suggest',
               '/alexa/now_playing', '/alexa/seek', '/alexa/volume',
               '/alexa/play_queue', '/alexa/shuffle_queue', '/alexa/search',
-              '/alexa/queue_add', '/alexa/queue_remove', '/alexa/queue_reorder',
-              '/recommendations')
+              '/api/jam/session', '/api/jam/home', '/api/jam/leave')
 
 
 def _jam_request_allowed(path):
     """Allow-list for guest sessions; `path` is the trailing-slash-normalized
     request path."""
     return path in _JAM_PATHS or request.path.startswith('/alexa/now_playing/')
+
+
+def _jam_device_serial():
+    """Resolve the shared playback target server-side for a guest.
+
+    Device names and serials are personal account data, so the guest browser
+    receives only the opaque value ``jam`` and never the real device record.
+    """
+    devices, error = alexa_remote.remote.devices(refresh=False)
+    if error or not devices:
+        return None
+    return devices[0].get('serial')
+
+
+def _effective_serial(serial):
+    return _jam_device_serial() if _jam_guest() else serial
+
+
+def _jam_safe_now_playing(snapshot):
+    """Only expose media currently shared by the jam, never the host queue."""
+    safe = dict(snapshot or {})
+    safe.pop('queue', None)
+    safe.pop('queue_version', None)
+    return safe
 
 
 @app.before_request
@@ -2733,6 +2756,9 @@ def remote_page():
     # key-in-URL scheme still serves here directly (see root()).
     if _remote_login_enabled():
         return redirect('/')
+    if _jam_guest() and not _valid_key_supplied():
+        return _no_store(app.make_response(render_template(
+            'jam.html', asset_v=_STATIC_VERSION)))
     from ytmusicapi.auth.types import AuthType
     is_auth = (_get_ytmusic_home().auth_type != AuthType.UNAUTHORIZED)
     return _no_store(app.make_response(render_template(
@@ -2820,6 +2846,113 @@ def jam_join(token):
     if session.get('jam') == token or not _jam_guest():
         session.pop('jam', None)
     return _no_store(app.make_response((_JAM_ENDED_HTML, 410)))
+
+
+_jam_home_cache = {'built_at': 0, 'data': None}
+_jam_home_lock = threading.Lock()
+_JAM_HOME_TTL = 5 * 60
+
+
+def _jam_chart_items(raw_items):
+    items = []
+    for raw in raw_items or []:
+        item = home_feed.normalize_track(raw)
+        if not item:
+            continue
+        # Guest cards are intentionally play-only. They do not link into an
+        # artist, album, playlist, like, or library surface.
+        item['target'] = None
+        item['capabilities'] = {
+            'play': True,
+            'like': False,
+            'queue': False,
+            'playlist': False,
+        }
+        items.append(item)
+    return items[:24]
+
+
+def _build_jam_india_home():
+    """Build a public, anonymous, India-only discovery feed.
+
+    This never calls the authenticated YTMusic client and never reads local
+    history, likes, playlists, or any other host preference signal.
+    """
+    charts = _get_ytmusic().get_charts('IN') or {}
+    shelves = []
+    for key, shelf_id, title, layout in (
+            ('songs', 'india-top-songs', 'Top songs in India', 'cards'),
+            ('videos', 'india-music-videos', 'Popular music videos in India', 'wide_cards')):
+        section = charts.get(key) or {}
+        items = _jam_chart_items(section.get('items') or [])
+        if not items:
+            continue
+        shelves.append({
+            'id': shelf_id,
+            'title': title,
+            'subtitle': 'Anonymous recommendations · India',
+            'layout': layout,
+            'source': 'public_india_charts',
+            'actions': {'playAll': False, 'showAll': False},
+            'filters': ['all'],
+            'items': items,
+        })
+    return {
+        'schemaVersion': home_feed.SCHEMA_VERSION,
+        'generatedAt': int(time.time()),
+        'partial': False,
+        'stale': False,
+        'filters': [{'id': 'all', 'label': 'All'}],
+        'shelves': shelves,
+    }
+
+
+@app.route('/api/jam/session/', methods=['GET'])
+def jam_guest_session():
+    status = alexa_remote.remote.status()
+    serial = _jam_device_serial() if status.get('logged_in') else None
+    now_playing = None
+    if serial:
+        with _np_lock:
+            now_playing = _jam_safe_now_playing(_np_snapshot(serial))
+    return jsonify({
+        'status': {
+            'configured': bool(status.get('configured')),
+            'logged_in': bool(status.get('logged_in')),
+        },
+        'device_available': bool(serial),
+        'serial': 'jam' if serial else '',
+        'now_playing': now_playing,
+    })
+
+
+@app.route('/api/jam/home/', methods=['GET'])
+def jam_guest_home():
+    with _jam_home_lock:
+        age = time.time() - _jam_home_cache['built_at']
+        if _jam_home_cache['data'] is not None and age < _JAM_HOME_TTL:
+            return jsonify(_jam_home_cache['data'])
+        try:
+            data = _build_jam_india_home()
+        except Exception:
+            logger.exception('anonymous India jam feed failed')
+            data = _jam_home_cache['data'] or {
+                'schemaVersion': home_feed.SCHEMA_VERSION,
+                'generatedAt': int(time.time()),
+                'partial': True,
+                'stale': False,
+                'filters': [{'id': 'all', 'label': 'All'}],
+                'shelves': [],
+            }
+        _jam_home_cache['data'] = data
+        _jam_home_cache['built_at'] = time.time()
+        return jsonify(data)
+
+
+@app.route('/api/jam/leave/', methods=['POST'])
+def jam_guest_leave():
+    session.pop('jam', None)
+    return jsonify({'ok': True})
 
 
 @app.route("/alexa/status/", methods=["GET"])
@@ -2996,7 +3129,7 @@ def alexa_devices():
 
 @app.route("/alexa/volume/", methods=["GET"])
 def alexa_volume():
-    serial = request.args.get("serial")
+    serial = _effective_serial(request.args.get("serial"))
     if not serial:
         return error_response('missing "serial"', 400)
     volume, error = alexa_remote.remote.volume(serial)
@@ -3024,7 +3157,7 @@ def _device_dispatch_failed(error):
 @app.route("/alexa/command/", methods=["POST"])
 def alexa_command():
     body = request.get_json(silent=True) or {}
-    serial, action = body.get("serial"), body.get("action")
+    serial, action = _effective_serial(body.get("serial")), body.get("action")
     if not serial or not action:
         return error_response('missing "serial" or "action"', 400)
     if action in ('next', 'previous'):
@@ -3045,7 +3178,8 @@ def alexa_command():
         # Record right away so "Recently Played" updates immediately, instead
         # of waiting for the Lambda webhook (which may lag or not fire for
         # some playback flows) -- mirrors alexa_play_queue below.
-        _record_listen(video_id, item.get('title', ''), item.get('artist', ''), thumb)
+        if not _jam_guest():
+            _record_listen(video_id, item.get('title', ''), item.get('artist', ''), thumb)
         _update_now_playing(playing=False,
                             title=item.get('title', ''),
                             artist=item.get('artist', ''),
@@ -3113,7 +3247,7 @@ def alexa_seek():
     use. The skill's PlaybackStarted webhook then re-anchors the progress bar to
     the new offset; we also anchor optimistically here so the app updates now."""
     body = request.get_json(silent=True) or {}
-    serial = body.get("serial")
+    serial = _effective_serial(body.get("serial"))
     if not serial:
         return error_response('missing "serial"', 400)
     # Coerce inside the try: a JSON *string* like "12" for position_seconds
@@ -3644,18 +3778,20 @@ async def api_get_liked_songs():
 
 @app.route("/alexa/now_playing/", methods=["GET"])
 def alexa_now_playing():
-    serial = request.args.get("serial")
+    is_jam = _jam_guest()
+    serial = _effective_serial(request.args.get("serial"))
     if not serial:
         return error_response('missing "serial"', 400)
     # Same shape as the SSE payload (progress fields included) so the poll
     # fallback keeps the bar in sync just like the live stream does.
     with _np_lock:
-        return jsonify(_np_snapshot(serial))
+        snapshot = _np_snapshot(serial)
+        return jsonify(_jam_safe_now_playing(snapshot) if is_jam else snapshot)
 
 
 @app.route("/alexa/now_playing/stream")
 def now_playing_stream():
-    serial = request.args.get("serial")
+    serial = _effective_serial(request.args.get("serial"))
     """SSE endpoint — pushes now-playing state to the browser in real time."""
     # A jam guest's stream must die when the jam is revoked, not at whenever
     # the browser next reconnects. Capture the token now (the request context
@@ -3675,13 +3811,18 @@ def now_playing_stream():
             with _np_lock:
                 snap = _np_snapshot(serial)
             sub['qv'] = snap['queue_version']
-            data = json.dumps(snap)
+            data = json.dumps(_jam_safe_now_playing(snap) if jam_token is not None else snap)
             yield f"data: {data}\n\n"
             while True:
                 if jam_token is not None and not _jam_token_valid(jam_token):
                     break  # jam revoked: close this guest's stream now
                 try:
                     data = q.get(timeout=25)
+                    if jam_token is not None:
+                        try:
+                            data = json.dumps(_jam_safe_now_playing(json.loads(data)))
+                        except (TypeError, ValueError):
+                            continue
                     yield f"data: {data}\n\n"
                 except _queue_mod.Empty:
                     # Keepalive to prevent proxy / browser from closing
@@ -3827,7 +3968,8 @@ def _quick_song_lookup(query):
 async def alexa_play():
     body = request.get_json(silent=True) or {}
     # str(): a non-string JSON "query" would 500 on .strip() instead of 400.
-    serial, query = body.get("serial"), str(body.get("query") or "").strip()
+    serial = _effective_serial(body.get("serial"))
+    query = str(body.get("query") or "").strip()
     if not serial or not query:
         return error_response('missing "serial" or "query"', 400)
     logger.info("[alexa/play] query=%r serial=%s", query, serial)
@@ -4082,6 +4224,8 @@ def alexa_shuffle_queue():
     _update_now_playing(queue=queue, queue_index=new_index)
     # Re-trigger lazy pre-download in the new order
     _prewarm_queue_audio(queue, current_index=new_index, limit=4)
+    if _jam_guest():
+        return jsonify({'ok': True, 'queue_index': new_index})
     return jsonify({'ok': True, 'queue': queue, 'queue_index': new_index})
 
 
@@ -4111,7 +4255,7 @@ def alexa_play_queue():
 
         _update_now_playing(playing=False, queue=validated_items, queue_index=0)
 
-        serial = body.get("serial")
+        serial = _effective_serial(body.get("serial"))
         if serial:
             _ensure_audio_ready_for_play(validated_items[0]['video_id'], wait=False)
             error = _dispatch_play_with_retry(serial, validated_items[0]['video_id'])
@@ -4124,7 +4268,7 @@ def alexa_play_queue():
             'queue_index': 0
         })
 
-    serial = body.get("serial")
+    serial = _effective_serial(body.get("serial"))
     video_id = body.get("video_id")
     # Set by callers that are about to append more tracks right after this call
     # (e.g. "Play All"/shuffle-play on a saved playlist) -- suppresses the
@@ -4206,7 +4350,8 @@ def alexa_play_queue():
     # instead of waiting for the Lambda webhook (which may lag or not fire for
     # some playback flows).  _record_listen uses INSERT OR REPLACE, so a
     # duplicate call from the webhook is harmless.
-    _record_listen(video_id, item.get('title', ''), item.get('artist', ''), thumb)
+    if not _jam_guest():
+        _record_listen(video_id, item.get('title', ''), item.get('artist', ''), thumb)
     _update_now_playing(playing=False,
                         title=item.get('title', ''),
                         artist=item.get('artist', ''),
@@ -4633,6 +4778,14 @@ async def alexa_search():
         # Search must remain available even if local activity storage is
         # temporarily unreadable.
         logger.exception('search personalization failed')
+    if _jam_guest():
+        # The guest experience is deliberately song-only. Do not expose or
+        # link into account-adjacent artist, album, or playlist surfaces.
+        results['all'] = [item for item in results['all']
+                          if item.get('resultType') in ('song', 'video')]
+        results['artists'] = []
+        results['albums'] = []
+        results['playlists'] = []
     return jsonify(results)
 
 
@@ -4989,7 +5142,9 @@ async def alexa_suggest():
     if not query:
         return jsonify({'suggestions': []})
     try:
-        ytmusic = _get_ytmusic_home()
+        # Never use the host's authenticated YouTube Music session for a
+        # guest's suggestions.
+        ytmusic = _get_ytmusic() if _jam_guest() else _get_ytmusic_home()
         raw = await asyncio.to_thread(ytmusic.get_search_suggestions, query)
     except Exception as e:
         logger.error("[alexa/suggest] failed: %s", e)

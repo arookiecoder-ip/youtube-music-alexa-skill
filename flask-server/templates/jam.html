@@ -16,9 +16,11 @@
 <style>{% include "static/css/queue.css" %}</style>
 <style>{% include "static/css/search.css" %}</style>
 <style>{% include "static/css/toast.css" %}</style>
+<style>{% include "static/css/home.css" %}</style>
+<style>{% include "static/css/redesign.css" %}</style>
 <style>{% include "static/css/jam.css" %}</style>
 </head>
-<body class="jam-guest">
+<body class="jam-guest home-route">
 <div id="top-progress-bar" class="top-progress-bar"></div>
 <script>
   window.APP_VERSION = "{{ asset_v }}";
@@ -31,7 +33,7 @@
 
 <main id="jam-main">
   <header>
-    <div class="jam-header-brand">
+    <div class="brand jam-header-brand">
       <div class="eq-icon"><span></span><span></span><span></span><span></span><span></span></div>
       <h1>Music Box</h1>
     </div>
@@ -45,7 +47,7 @@
     <div class="row">
       <div class="search-wrap">
         <input type="text" id="query"
-               placeholder="Search for a song" autocomplete="off"
+               placeholder="Search songs" autocomplete="off"
                role="combobox" aria-expanded="false" aria-autocomplete="list"
                aria-controls="suggest-list">
         <button class="search-clear" id="query-clear" type="button"
@@ -61,10 +63,19 @@
     </div>
   </section>
 
+  <!-- Anonymous discovery only: public India charts, never host activity. -->
+  <section class="home-section jam-home-section" id="jam-home-section">
+    <div class="jam-home-intro">
+      <span>Anonymous · India</span>
+      <h2>Music for the jam</h2>
+      <p>Public Indian charts only. No host history, likes, playlists, or library data.</p>
+    </div>
+    <div class="home-rows" id="jam-home-rows"></div>
+  </section>
+
   <!-- Player -->
-  <section class="player-section" id="player-section">
-    <div class="jam-player-inner">
-      <div class="np" id="now-playing">
+  <section class="player-section redesigned-bar is-collapsed" id="player-section" hidden>
+      <div class="player-left np" id="now-playing">
         <div class="np-art" id="np-art">
           <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor">
             <path d="M12 3v10.55A4 4 0 1 0 14 17V7h4V3h-6z"/>
@@ -76,8 +87,8 @@
           <span class="playbar-time"><span id="playbar-elapsed">0:00</span> / <span id="playbar-total">--:--</span></span>
         </div>
       </div>
-
-      <div class="jam-transport">
+      <div class="player-center">
+      <div class="transport">
         <button data-action="previous" class="ghost-btn" title="Previous">
           <svg viewBox="0 0 24 24" fill="currentColor">
             <rect x="4" y="5" width="2.5" height="14"/>
@@ -100,8 +111,20 @@
           </svg>
         </button>
       </div>
+      <div class="progress" id="progress" hidden>
+        <span id="progress-elapsed">0:00</span>
+        <div class="progress-track" id="progress-track"
+             role="slider" aria-label="Seek" tabindex="0"
+             aria-valuemin="0" aria-valuemax="0" aria-valuenow="0">
+          <div class="progress-fill" id="progress-fill"></div>
+          <div class="progress-handle" id="progress-handle"></div>
+          <div class="progress-tooltip" id="progress-tooltip">0:00</div>
+        </div>
+        <span id="progress-total">0:00</span>
+      </div>
+      </div>
 
-      <div class="jam-utils">
+      <div class="player-right">
         <div class="vol">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" stroke="none">
             <path d="M3 9v6h4l5 5V4L7 9H3z"/>
@@ -110,7 +133,7 @@
           </svg>
           <input type="range" id="volume" min="0" max="100" value="50">
         </div>
-        <button class="jam-shuffle-btn" id="shuffle-btn" title="Shuffle">
+        <button class="np-shuffle-btn ghost-btn" id="shuffle-btn" title="Shuffle">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <polyline points="16 3 21 3 21 8"/>
             <line x1="4" y1="20" x2="21" y2="3"/>
@@ -120,18 +143,6 @@
           </svg>
         </button>
       </div>
-    </div>
-    <div class="progress" id="progress">
-      <span id="progress-elapsed">0:00</span>
-      <div class="progress-track" id="progress-track"
-           role="slider" aria-label="Seek" tabindex="0"
-           aria-valuemin="0" aria-valuemax="0" aria-valuenow="0">
-        <div class="progress-fill" id="progress-fill"></div>
-        <div class="progress-handle" id="progress-handle"></div>
-        <div class="progress-tooltip" id="progress-tooltip">0:00</div>
-      </div>
-      <span id="progress-total">0:00</span>
-    </div>
   </section>
 
   <!-- Search results -->
@@ -237,17 +248,16 @@
 
 <script>{% include "static/js/api.js" %}</script>
 <script>{% include "static/js/ui-state.js" %}</script>
-<script>{% include "static/js/cache.js" %}</script>
 <script>{% include "static/js/toast.js" %}</script>
 <script>{% include "static/js/player.js" %}</script>
 <script>{% include "static/js/volume.js" %}</script>
 <script>{% include "static/js/queue.js" %}</script>
 <script>{% include "static/js/search.js" %}</script>
 <script>{% include "static/js/sse.js" %}</script>
+<script>{% include "static/js/home-renderers.js" %}</script>
 <script>{% include "static/js/jam.js" %}</script>
 <script>
   (function () {
-    if (window.restoreFromCache) window.restoreFromCache();
     if (window.initJamPage) window.initJamPage();
     setTimeout(function () {
       document.body.classList.remove('preload');

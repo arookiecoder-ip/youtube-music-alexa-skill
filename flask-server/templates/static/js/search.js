@@ -23,8 +23,8 @@ async function runSearch(query) {
     const totalItems = (data.songs?.length || 0) + (data.artists?.length || 0) + (data.albums?.length || 0) + (data.playlists?.length || 0);
     if (!totalItems) { toast('No results found.', 'error'); return; }
     state._resultsPage = { songs: 0, artists: 0, albums: 0, playlists: 0 };
-    state._activeCategory = 'all';
-    document.querySelectorAll('.results-tab').forEach(t => t.classList.toggle('active', t.dataset.category === 'all'));
+    state._activeCategory = window.JAM_GUEST ? 'songs' : 'all';
+    document.querySelectorAll('.results-tab').forEach(t => t.classList.toggle('active', t.dataset.category === state._activeCategory));
     renderResults();
     openResults();
     toast(totalItems + ' results', 'ok');
@@ -55,7 +55,7 @@ function openResults() {
   clearTimeout(section._showTimer);
   // Views swap, they don't stack. We hide the underlying page content so the search results
   // behave as a standalone page instead of a side column or popup overlay.
-  const viewsToHide = ['home-section', 'recs-section', 'album-section', 'artist-section'];
+  const viewsToHide = ['home-section', 'jam-home-section', 'recs-section', 'album-section', 'artist-section'];
   viewsToHide.forEach(id => {
     const el = document.getElementById(id);
     if (el) el.hidden = true;
@@ -707,6 +707,7 @@ if (nextBtn) {
   const HISTORY_MAX_STORED = 25;
 
   function getHistory() {
+    if (window.JAM_GUEST) return [];
     try {
       const a = JSON.parse(localStorage.getItem(HISTORY_KEY) || '[]');
       return Array.isArray(a) ? a.filter(h => typeof h === 'string') : [];
@@ -714,6 +715,7 @@ if (nextBtn) {
   }
 
   function recordSearch(q) {
+    if (window.JAM_GUEST) return;
     q = (q || '').trim();
     if (!q || isYoutubeLinkLike(q)) return;
     // De-dupe case-insensitively so re-searching moves the entry to the top.
@@ -744,6 +746,7 @@ if (nextBtn) {
     '<path d="M18 6 6 18M6 6l12 12"/></svg>';
 
   function removeHistoryEntry(text) {
+    if (window.JAM_GUEST) return;
     const updated = getHistory().filter(h => h.toLowerCase() !== text.toLowerCase());
     try { localStorage.setItem(HISTORY_KEY, JSON.stringify(updated)); } catch (_) {}
     items = updated.slice(0, HISTORY_MAX_SHOWN);

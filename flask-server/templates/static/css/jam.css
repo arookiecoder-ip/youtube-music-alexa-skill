@@ -1,38 +1,49 @@
 /* ============================================================
-   Jam guest page — isolated from owner controls
+   Jam guest shell
+   Uses the same redesign tokens/components as the owner site, but without
+   navigation or private-account surfaces.
    ============================================================ */
 
 body.jam-guest {
-  padding: 0 var(--space-4);
-  background: var(--bg, #030303);
+  display: block;
+  padding: 0;
+  background: var(--shell-bg, #030303);
+  overflow-x: hidden;
 }
 
-body.jam-guest main {
+body.jam-guest::before { display: none; }
+
+body.jam-guest #jam-main,
+body.jam-guest #jam-main.idle,
+body.jam-guest.results-open #jam-main {
   width: 100%;
-  max-width: 600px;
-  margin: 0 auto;
-  padding-top: 6px;
-  display: flex;
-  flex-direction: column;
+  max-width: none;
   min-height: 100dvh;
+  margin: 0;
+  padding: 0 28px calc(var(--playbar-h, 64px) + 32px);
+  box-sizing: border-box;
+  background-image: linear-gradient(180deg, rgba(232, 89, 12, .10), transparent 340px);
 }
 
-body.jam-guest #jam-main {
-  padding-bottom: calc(var(--playbar-h-mobile, 104px) + 20px);
-}
-
-/* Header */
+/* Header: identical top-bar treatment, with a guest exit action in place of
+   account/device controls. */
 body.jam-guest header {
+  position: sticky;
+  top: 0;
+  z-index: 240;
+  height: calc(var(--topbar-h, 64px) + 3px);
+  margin: 0 -28px 4px;
+  padding: 3px 28px 0;
+  box-sizing: border-box;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 8px 0 10px;
-  margin-bottom: 2px;
-  border-bottom: none;
+  border: 0;
+  background: #000;
 }
 
-.jam-header-brand {
-  display: flex;
+body.jam-guest header > .jam-header-brand {
+  display: flex !important;
   align-items: center;
   gap: 10px;
 }
@@ -40,399 +51,253 @@ body.jam-guest header {
 .jam-header-brand .eq-icon {
   display: flex;
   align-items: flex-end;
-  gap: 3px;
-  height: 16px;
+  gap: 2px;
+  width: 18px;
+  height: 17px;
 }
+
 .jam-header-brand .eq-icon span {
   display: block;
-  width: 2.5px;
-  background: var(--accent);
-  animation: eq 1.4s ease-in-out infinite;
-  transform-origin: bottom;
+  width: 3px;
+  flex: 0 0 3px;
   border-radius: 2px;
+  background: var(--accent);
+  animation: jamEq 1.4s ease-in-out infinite;
+  transform-origin: bottom;
 }
-.jam-header-brand .eq-icon span:nth-child(1) { height: 35%; animation-delay: 0s; }
-.jam-header-brand .eq-icon span:nth-child(2) { height: 75%; animation-delay: .15s; }
-.jam-header-brand .eq-icon span:nth-child(3) { height: 50%; animation-delay: .35s; }
-.jam-header-brand .eq-icon span:nth-child(4) { height: 90%; animation-delay: .1s; }
-.jam-header-brand .eq-icon span:nth-child(5) { height: 60%; animation-delay: .25s; }
+.jam-header-brand .eq-icon span:nth-child(1) { height: 7px; }
+.jam-header-brand .eq-icon span:nth-child(2) { height: 13px; animation-delay: .15s; }
+.jam-header-brand .eq-icon span:nth-child(3) { height: 10px; animation-delay: .35s; }
+.jam-header-brand .eq-icon span:nth-child(4) { height: 16px; animation-delay: .1s; }
+.jam-header-brand .eq-icon span:nth-child(5) { height: 9px; animation-delay: .25s; }
 
-@keyframes eq {
+@keyframes jamEq {
   0%, 100% { transform: scaleY(1); }
-  50% { transform: scaleY(.3); }
+  50% { transform: scaleY(.35); }
 }
 
 .jam-header-brand h1 {
-  font-size: .85rem;
+  margin: 0;
+  font-size: .9rem;
   font-weight: 700;
-  letter-spacing: .14em;
+  line-height: 1;
+  letter-spacing: .12em;
   text-transform: uppercase;
-  background: linear-gradient(135deg, var(--accent), #ff6a00);
+  background: var(--accent-grad);
   -webkit-background-clip: text;
   background-clip: text;
   -webkit-text-fill-color: transparent;
 }
 
 .jam-header-actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+  position: fixed;
+  top: 15px;
+  right: 28px;
+  z-index: 250;
 }
 
 .jam-leave-btn {
-  padding: 7px 14px;
-  font-size: .75rem;
-  font-weight: 600;
+  min-height: 38px;
+  padding: 8px 15px;
+  border: 1px solid rgba(255, 255, 255, .22);
+  border-radius: 0;
   background: transparent;
-  border: 1px solid rgba(255,255,255,.18);
   color: var(--muted);
-  border-radius: var(--radius-md);
-  cursor: pointer;
-  transition: color .15s, border-color .15s, background .15s;
+  font-size: .76rem;
+  font-weight: 600;
 }
 .jam-leave-btn:hover {
-  color: #e66;
-  border-color: rgba(220,60,60,.45);
-  background: rgba(255,60,60,.08);
+  border-color: rgba(224, 49, 49, .65);
+  background: rgba(224, 49, 49, .08);
+  color: #ff8787;
 }
 
-/* Search */
-body.jam-guest .play-section {
-  background: none !important;
-  border: none !important;
-  padding: 0 !important;
-  margin: 0 0 12px;
+/* Centered top search, matching the owner shell but independent of --rail-w. */
+body.jam-guest .play-section,
+body.jam-guest.results-open .play-section {
+  left: 50vw;
+  width: clamp(300px, 34vw, 560px);
+  margin: 0;
+}
+
+body.jam-guest .search-wrap input#query {
+  border-radius: 0;
+}
+
+/* Public discovery feed. */
+body.jam-guest .jam-home-section {
+  display: block;
   width: 100%;
-  max-width: none;
+  margin: 0;
+  padding: 22px 0 34px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
 }
-body.jam-guest .play-section .search-wrap {
-  flex: 1;
+body.jam-guest .jam-home-section[hidden] { display: none !important; }
+
+.jam-home-intro {
+  padding: 8px 40px 18px;
 }
-body.jam-guest .play-section .search-wrap::before {
-  content: '';
-  position: absolute;
-  left: 14px;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 16px;
-  height: 16px;
-  pointer-events: none;
-  opacity: .6;
-  background: center / contain no-repeat
-    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23aaaaaa' stroke-width='2.2' stroke-linecap='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cline x1='21' y1='21' x2='16.2' y2='16.2'/%3E%3C/svg%3E");
+.jam-home-intro span {
+  display: block;
+  margin-bottom: 5px;
+  color: var(--accent);
+  font-size: .66rem;
+  font-weight: 700;
+  letter-spacing: .13em;
+  text-transform: uppercase;
 }
-body.jam-guest .play-section input#query {
-  background: rgba(255,255,255,.06);
-  border: 1px solid rgba(255,255,255,.12);
-  border-radius: var(--radius-md);
-  padding: 11px 12px 11px 40px;
-  font-size: .88rem;
-  transition: border-color .15s, background .15s;
+.jam-home-intro h2 {
+  margin: 0;
+  color: var(--text);
+  font-size: clamp(1.6rem, 3vw, 2.35rem);
+  line-height: 1.1;
+  letter-spacing: -.025em;
 }
-body.jam-guest .play-section input#query:focus {
-  border-color: var(--accent);
-  background: rgba(255,255,255,.08);
-  outline: none;
+.jam-home-intro p {
+  margin: 8px 0 0;
+  color: var(--muted);
+  font-size: .78rem;
 }
-body.jam-guest #play-query {
+
+body.jam-guest .home-item,
+body.jam-guest .home-item-img-wrapper,
+body.jam-guest .home-item-img,
+body.jam-guest .home-play-btn,
+body.jam-guest .home-skeleton-card .skeleton-block {
+  border-radius: 0;
+}
+
+.jam-home-loading,
+.jam-home-empty {
+  min-height: 220px;
+  display: grid;
+  place-items: center;
+  padding: 24px 40px;
+  color: var(--muted);
+  font-size: .86rem;
+  text-align: center;
+}
+
+/* Search stays song-only and exposes no account actions. */
+body.jam-guest #results-section {
+  width: min(1080px, 100%);
+  margin: 12px auto 0;
+  padding: 18px 0 32px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+body.jam-guest .result-like-btn,
+body.jam-guest .result-more-btn,
+body.jam-guest .result-queue-btn,
+body.jam-guest .queue-more-btn,
+body.jam-guest .result-swipe-underlay,
+body.jam-guest .result-category-card,
+body.jam-guest #queue-section {
   display: none !important;
 }
+body.jam-guest .results-tab:not([data-category="songs"]) { display: none !important; }
+body.jam-guest .result-item-inner {
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+body.jam-guest .result-item-inner:hover { background: rgba(255, 255, 255, .055); }
 
-/* Player bar */
-body.jam-guest .player-section {
-  position: fixed;
-  bottom: 0;
+/* The player markup now mirrors the main website's persistent playbar. */
+body.jam-guest .player-section,
+body.jam-guest.results-open .player-section {
   left: 0;
   right: 0;
-  z-index: 220;
+  bottom: 0;
+  max-width: none;
   margin: 0;
-  border: none;
-  border-top: 1px solid rgba(255,255,255,.07);
-  background: rgba(14,14,14,.96);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
-  box-shadow: 0 -12px 40px rgba(0,0,0,.45);
-  display: block;
-  padding: 10px 16px calc(10px + env(safe-area-inset-bottom,0px));
+  border-radius: 0;
+  background: #111;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
 }
-
-.jam-player-inner {
+body.jam-guest .player-section[hidden],
+body.jam-guest .player-section.is-collapsed { display: none !important; }
+body.jam-guest .player-right {
   display: flex;
   align-items: center;
-  gap: 12px;
-}
-
-body.jam-guest .player-section .np {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  align-items: center;
+  justify-content: flex-end;
   gap: 10px;
-  cursor: default;
 }
-
-body.jam-guest .player-section .np-art {
-  width: 44px;
-  height: 44px;
-  flex: none;
-  border-radius: 4px;
-  background: rgba(255,255,255,.06) center / cover no-repeat;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  color: #666;
-}
-body.jam-guest .player-section .np-art.has-thumb svg { display: none; }
-body.jam-guest .player-section .np-info { flex: 1; min-width: 0; }
-body.jam-guest .player-section .np-title {
-  font-size: .85rem;
-  font-weight: 600;
-  color: #fff;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-body.jam-guest .player-section .np-artist {
-  font-size: .73rem;
-  color: #999;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  margin-top: 2px;
-}
-body.jam-guest .playbar-time {
-  display: none;
-}
-body.jam-guest .player-section .playbar-time {
-  display: block;
-  font-size: .65rem;
-  color: rgba(255,255,255,.4);
-  font-variant-numeric: tabular-nums;
-  margin-top: 1px;
-}
-
-.jam-transport {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  flex: none;
-}
-.jam-transport button {
-  width: 36px;
-  height: 36px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: none;
-  border: none;
-  color: #ddd;
-  border-radius: 50%;
-  cursor: pointer;
-  transition: background .12s, color .12s;
-}
-.jam-transport button:hover { background: rgba(255,255,255,.08); color: #fff; }
-.jam-transport button svg { width: 16px; height: 16px; }
-.jam-transport .pp-btn { width: 42px; height: 42px; }
-.jam-transport .pp-btn svg { width: 24px; height: 24px; fill: #fff; color: #fff; }
-
-.jam-utils {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex: none;
-}
-
-.jam-shuffle-btn {
+body.jam-guest .np-shuffle-btn {
   width: 34px;
   height: 34px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: none;
-  border: none;
-  color: #aaa;
-  border-radius: 50%;
-  cursor: pointer;
-  transition: color .15s, background .15s;
-}
-.jam-shuffle-btn:hover { color: #fff; background: rgba(255,255,255,.07); }
-.jam-shuffle-btn.shuffle-active { color: var(--accent); }
-
-body.jam-guest .vol {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  color: #aaa;
-}
-body.jam-guest .vol svg { width: 16px; height: 16px; flex: none; }
-body.jam-guest .vol input[type=range] {
-  width: 64px;
-  height: 4px;
-  -webkit-appearance: none;
-  appearance: none;
-  background: rgba(255,255,255,.15);
-  border-radius: 2px;
-  outline: none;
-  cursor: pointer;
-}
-body.jam-guest .vol input[type=range]::-webkit-slider-thumb {
-  -webkit-appearance: none;
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-  background: #fff;
-  border: none;
-  cursor: pointer;
-}
-body.jam-guest .vol input[type=range]::-moz-range-thumb {
-  width: 12px;
-  height: 12px;
-  border-radius: 50%;
-  background: #fff;
-  border: none;
-  cursor: pointer;
-}
-
-/* Progress bar */
-body.jam-guest .player-section .progress {
-  position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  height: 3px;
-  margin: 0;
-}
-body.jam-guest .player-section .progress-track {
-  height: 3px;
+  padding: 0;
+  border: 0;
   border-radius: 0;
-  background: rgba(255,255,255,.1);
-}
-body.jam-guest .player-section .progress-fill {
-  background: linear-gradient(135deg, var(--accent), #ff6a00);
-  border-radius: 0;
-  height: 100%;
-}
-body.jam-guest .player-section .progress-handle { display: none; }
-body.jam-guest #progress-elapsed,
-body.jam-guest #progress-total { display: none; }
-
-/* Search results */
-body.jam-guest #results-section {
-  background: none;
-  border: none;
-  padding: 0 0 16px;
-  margin: 0;
-  width: 100%;
-  max-width: none;
-  display: block;
-}
-body.jam-guest #results-section .label {
-  font-size: .72rem;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: .14em;
-  color: var(--muted);
-  margin-bottom: 8px;
-}
-body.jam-guest .result-item-inner {
   background: transparent;
-  border: none;
-  border-radius: 0;
-  padding: 8px 8px;
-}
-body.jam-guest .result-swipe-wrapper + .result-swipe-wrapper .result-item-inner {
-  border-top: none;
-}
-body.jam-guest .result-item-inner:hover {
-  background: rgba(255,255,255,.045);
-}
-
-/* Queue */
-body.jam-guest #queue-section {
-  background: none;
-  border: none;
-  padding: 0 0 16px;
-  margin: 0;
-  width: 100%;
-  max-width: none;
-  display: block;
-}
-body.jam-guest #queue-section > .label {
-  font-size: .72rem;
-  font-weight: 600;
-  text-transform: uppercase;
-  letter-spacing: .14em;
   color: var(--muted);
-  margin-bottom: 8px;
 }
-body.jam-guest .queue-item {
-  background: transparent;
-  border-radius: 0;
-}
-body.jam-guest .queue-item:hover { background: rgba(255,255,255,.045); }
+body.jam-guest .np-shuffle-btn.shuffle-active { color: var(--accent); }
 
-/* Jam-ended */
+/* Guest-ending state. */
 #jam-ended-overlay {
   position: fixed;
   inset: 0;
   z-index: 10000;
-  background: var(--bg, #0a0a0a);
+  display: none;
   align-items: center;
   justify-content: center;
-  display: none;
+  background: var(--bg, #030303);
 }
-
-.jam-ended-card {
-  text-align: center;
-  padding: 32px;
-  max-width: 360px;
-}
-
+.jam-ended-card { max-width: 380px; padding: 32px; text-align: center; }
 .jam-ended-icon {
   width: 56px;
   height: 56px;
   margin: 0 auto 20px;
-  border: 2px solid rgba(255,255,255,.15);
-  border-radius: 50%;
   display: flex;
   align-items: center;
   justify-content: center;
+  border: 1px solid var(--border);
+  border-radius: 0;
   color: var(--muted);
 }
+.jam-ended-icon svg { width: 26px; height: 26px; }
+.jam-ended-title { margin: 0 0 10px; color: var(--text); font-size: 1.25rem; }
+.jam-ended-msg { margin: 0; color: var(--muted); font-size: .88rem; line-height: 1.55; }
 
-.jam-ended-icon svg {
-  width: 26px;
-  height: 26px;
-}
+body.jam-guest .toast { bottom: calc(var(--playbar-h-mobile, 104px) + 20px); }
 
-.jam-ended-title {
-  font-size: 1.25rem;
-  font-weight: 700;
-  margin: 0 0 10px;
-  color: var(--text);
-}
-
-.jam-ended-msg {
-  color: var(--muted);
-  font-size: .88rem;
-  margin: 0;
-  line-height: 1.55;
-}
-
-/* Toast */
-body.jam-guest .toast {
-  bottom: calc(var(--playbar-h-mobile, 104px) + 20px);
-}
-
-/* Skeleton loading */
-body.jam-guest .preload .player-section,
-body.jam-guest .preload #results-section,
-body.jam-guest .preload #queue-section {
-  opacity: 0;
-}
-
-@media (min-width: 600px) {
-  body.jam-guest {
-    padding: 0;
+@media (max-width: 899px) {
+  body.jam-guest #jam-main,
+  body.jam-guest #jam-main.idle,
+  body.jam-guest.results-open #jam-main {
+    padding: 0 16px calc(var(--playbar-h-mobile, 104px) + 24px);
   }
+  body.jam-guest header {
+    height: 60px;
+    margin: 0 -16px 4px;
+    padding: 3px 16px 0;
+  }
+  .jam-header-actions { position: static; }
+  body.jam-guest .play-section,
+  body.jam-guest.results-open .play-section {
+    position: relative;
+    top: auto;
+    left: auto;
+    transform: none;
+    width: 100%;
+    height: auto;
+    margin: 8px 0 16px;
+  }
+  .jam-home-intro { padding: 12px 16px 18px; }
+  .jam-home-intro p { max-width: 34rem; }
+  body.jam-guest .home-shelf-header { padding-inline: 16px; }
+  body.jam-guest .home-shelf-content { padding-inline: 16px; }
+  body.jam-guest .player-right { display: none; }
+}
+
+@media (max-width: 480px) {
+  .jam-header-brand h1 { font-size: .78rem; }
+  .jam-leave-btn { min-height: 34px; padding: 7px 10px; }
+  .jam-home-intro h2 { font-size: 1.55rem; }
+  .jam-home-intro p { line-height: 1.45; }
 }
