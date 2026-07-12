@@ -3661,7 +3661,7 @@ async def get_history():
             })
         return jsonify(mapped)
     except Exception as e:
-        logger.debug('[history] failed (likely unauthenticated): %s', e)
+        logger.warning('[history] failed: %s', e)
         return jsonify([])
 
 @app.route("/history/", methods=["DELETE"])
