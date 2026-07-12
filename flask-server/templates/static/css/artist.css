@@ -12,7 +12,11 @@
   #artist-hero {
     position: relative;
     width: auto;
-    margin-top: calc(-1 * (var(--topbar-h, 64px) + 7px));
+    /* Pull the artwork beneath the sticky shell header. A negative top margin
+       was swallowed by the nested artist containers in some layouts, leaving
+       a solid black header band instead of a continuous image. */
+    --artist-header-overlap: calc(var(--topbar-h, 64px) + 7px);
+    margin-top: 0;
     margin-left: calc(-1 * var(--space-4, 16px));
     margin-right: calc(-1 * var(--space-4, 16px));
     height: calc(400px + var(--topbar-h, 64px) + 7px);
@@ -22,7 +26,8 @@
     align-items: flex-start;
     padding: 32px 48px;
     padding-top: calc(32px + var(--topbar-h, 64px) + 7px);
-    margin-bottom: var(--space-5);
+    margin-bottom: calc(var(--space-5) - var(--artist-header-overlap));
+    transform: translateY(calc(-1 * var(--artist-header-overlap)));
     background-size: cover;
     background-position: center 20%;
   }
@@ -30,6 +35,14 @@
     #artist-hero {
       margin-left: -28px;
       margin-right: -28px;
+      transition: margin-left .25s ease, padding-left .25s ease;
+    }
+    /* The mini guide is transparent, so let the artist artwork continue to
+       the viewport edge beneath it. Keep the hero copy on the normal content
+       grid by adding the rail width back to its inner padding. */
+    body.rail-collapsed.artist-route #artist-hero {
+      margin-left: calc(-28px - var(--rail-w-mini));
+      padding-left: calc(48px + var(--rail-w-mini));
     }
   }
   @media (max-width: 768px) {

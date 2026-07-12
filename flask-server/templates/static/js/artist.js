@@ -197,6 +197,8 @@
       if (!item.video_id) continue;
       var row = document.createElement('div');
       row.className = 'artist-song-row';
+      row.dataset.videoId = item.video_id || '';
+      row._songContextTrack = item;
       var thumbUrl = item.thumbnail || '';
       var isLiked = typeof _playlistsData !== 'undefined' && _playlistsData.liked_songs && _playlistsData.liked_songs.includes(item.video_id);
       var heartSvg = isLiked

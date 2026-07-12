@@ -116,6 +116,13 @@
               ? track.artists.map(a => typeof a === 'string' ? a : a && a.name).filter(Boolean).join(', ')
               : '') || track.artist || '';
             const videoId = track.videoId || track.video_id || '';
+            wrapper.dataset.videoId = videoId;
+            wrapper._songContextTrack = {
+              video_id: videoId,
+              title: track.title || '',
+              artist,
+              thumbnail
+            };
             row.innerHTML = `
               <div class="playlist-track-art"><img src="${escapeHtml(thumbnail)}" class="queue-thumb" loading="lazy" alt="" onload="this.classList.add('loaded')" onerror="this.style.opacity='1'"></div>
               <div class="queue-info">

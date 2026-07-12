@@ -62,6 +62,13 @@ function syncHistoryTriggerVisibility() {
 function _buildHistoryRow(entry) {
   const el = document.createElement('div');
   el.className = 'history-item';
+  el.dataset.videoId = entry.video_id || '';
+  el._songContextTrack = {
+    video_id: entry.video_id || '',
+    title: entry.title || '',
+    artist: entry.artist || '',
+    thumbnail: entry.thumbnail_url || ''
+  };
 
   const thumbHtml = entry.thumbnail_url
     ? `<img class="queue-thumb" src="${escHtml(entry.thumbnail_url)}" alt="" loading="lazy" onload="this.classList.add('loaded')">`

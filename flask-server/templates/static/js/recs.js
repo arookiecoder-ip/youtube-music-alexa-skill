@@ -96,6 +96,13 @@ function renderRecommendations(items) {
     // finished loading (or failed), so no tile ever flashes as an empty/
     // half-loaded box. .is-ready is added per-tile below.
     el.className = 'recs-tile';
+    el.dataset.videoId = item.video_id;
+    el._songContextTrack = {
+      video_id: item.video_id,
+      title: item.title || '',
+      artist: item.artist || '',
+      thumbnail: thumbUrl
+    };
     const thumbHtml = thumbUrl
       ? `<img src="${escHtml(thumbUrl)}" alt="" loading="eager" onload="this.classList.add('loaded')">`
       : `<svg width="28" height="28" viewBox="0 0 24 24" fill="currentColor">

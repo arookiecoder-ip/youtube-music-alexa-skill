@@ -134,6 +134,14 @@
   background: transparent;
 }
 
+/* The hero is a <section>, so base.css gives it the generic card frame.
+   Playlist detail is a page layout, not a card: remove that inherited box. */
+#playlist-detail-modal .playlist-detail-hero {
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+}
+
 .playlist-detail-hero {
   display: flex;
   gap: 16px;

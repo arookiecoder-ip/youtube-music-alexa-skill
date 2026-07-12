@@ -641,13 +641,15 @@ function syncModalScrollLock() {
     // Nothing playing: never open — but if the view is somehow up (e.g. the
     // queue ended while expanded), the toggle must still be able to close it.
     if (!state._hasTrack) {
-      if (fromRoute || window.getRoute() === '#now-playing') window.navigateTo('#home');
+      if (fromRoute || (window.getRoute && window.getRoute() === '#now-playing')) {
+        if (window.navigateTo) window.navigateTo('#home');
+      }
       return;
     }
     // On desktop, toggle the #now-playing overlay: expand, or collapse back
     // to the view it was opened from.
     if (window.matchMedia('(min-width: 900px)').matches) {
-      if (window.getRoute() === '#now-playing') {
+      if (window.getRoute && window.getRoute() === '#now-playing') {
         window.navigateTo(window.__npReturnRoute || '#home'); // Collapse
       } else {
         window.navigateTo('#now-playing'); // Expand
@@ -681,7 +683,9 @@ function syncModalScrollLock() {
     _miniPopupOpen = false;
     overlay.classList.remove('open');
     syncModalScrollLock();
-    if (window.getRoute() === '#now-playing') window.navigateTo('#home');
+    if (window.getRoute && window.getRoute() === '#now-playing' && window.navigateTo) {
+      window.navigateTo('#home');
+    }
   }
 
   // Tap on mini player: play/pause button stays functional, everything else opens popup
@@ -814,7 +818,8 @@ function syncModalScrollLock() {
     popup.style.transition = 'none';
   }
   dragArea.addEventListener('touchstart', onDragStart, { passive: true });
-  popup.querySelector('.mini-popup-header').addEventListener('touchstart', onDragStart, { passive: true });
+  const popupHeader = popup.querySelector('.mini-popup-header');
+  if (popupHeader) popupHeader.addEventListener('touchstart', onDragStart, { passive: true });
 
   window.addEventListener('touchmove', (e) => {
     if (!dragging || !_miniPopupOpen) return;
@@ -836,7 +841,7 @@ function syncModalScrollLock() {
   // Expose for external use
   window._openMiniPopup = openMiniPopup;
   window._closeMiniPopup = closeMiniPopup;
-  if (window.getRoute() === '#now-playing') openMiniPopup(true);
+  if (window.getRoute && window.getRoute() === '#now-playing') openMiniPopup(true);
 })();
 
 

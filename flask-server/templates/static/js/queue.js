@@ -182,6 +182,7 @@ function _buildQueueRow(container, item, i, currentIndex, thumbsById) {
   wrapper.className = 'queue-swipe-wrapper';
   wrapper.dataset.index = String(i);
   wrapper.dataset.videoId = id;
+  wrapper._songContextTrack = item;
 
   // Swipe-to-delete underlay (mobile, hidden on desktop via CSS)
   wrapper.innerHTML = `

@@ -51,6 +51,13 @@
         var thumbnail = track.thumbnail || data.thumbnail || '/static/default-art.png';
         var wrapper = document.createElement('div');
         wrapper.className = 'result-swipe-wrapper';
+        wrapper.dataset.videoId = track.video_id || track.videoId || '';
+        wrapper._songContextTrack = {
+          video_id: track.video_id || track.videoId || '',
+          title: track.title || '',
+          artist: artist,
+          thumbnail: thumbnail
+        };
         var row = document.createElement('div');
         row.className = 'history-item album-track';
         row.innerHTML =

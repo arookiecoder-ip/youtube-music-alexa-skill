@@ -133,6 +133,7 @@ function _createSongElement(item, existingThumbsById) {
     const wrapper = document.createElement('div');
     wrapper.className = 'result-swipe-wrapper';
     wrapper.dataset.videoId = item.video_id;
+    wrapper._songContextTrack = item;
 
     wrapper.innerHTML = `
       <div class="result-swipe-underlay underlay-play-next">
@@ -415,6 +416,16 @@ function renderResults() {
     const thumbHtml = thumb ? `<img src="${escHtml(thumb)}" alt="" loading="lazy">` : '';
 
     const artistStr = (item.artists && item.artists.length) ? item.artists.map(a => a.name).join(' and ') : (item.artist || '');
+    const topVideoId = item.videoId || item.video_id || '';
+    if (topVideoId) {
+      card.dataset.videoId = topVideoId;
+      card._songContextTrack = {
+        video_id: topVideoId,
+        title: item.title || '',
+        artist: artistStr,
+        thumbnail: thumb
+      };
+    }
     let subtitle = '';
     if (item.resultType === 'artist') {
       subtitle = 'Artist' + (item.subscribers ? ' • ' + item.subscribers : '');
