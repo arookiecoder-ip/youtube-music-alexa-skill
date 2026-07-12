@@ -63,9 +63,9 @@
     color: var(--muted);
     cursor: pointer;
     border-radius: 50%;
-    opacity: 0;
+    opacity: 1;
     transition: opacity .15s, color .15s, background .15s;
-    pointer-events: none;
+    pointer-events: auto;
   }
   .suggest-item:hover .suggest-item-remove,
   .suggest-item.active .suggest-item-remove {
@@ -206,7 +206,7 @@
   }
   .result-queue-btn[hidden] { display: none; }
   .result-queue-btn:hover, .result-like-btn:hover { color: var(--text); }
-  .result-queue-btn:active, .result-like-btn:active { color: var(--accent); border-color: var(--accent); transform: scale(0.95); }
+  .result-queue-btn:active, .result-like-btn:active { color: var(--accent); border-color: var(--accent); }
   .result-like-btn.liked { color: var(--accent); border-color: transparent; }
   .result-queue-btn svg, .result-like-btn svg { width: 16px; height: 16px; }
 
@@ -229,7 +229,7 @@
     margin-right: 6px;
   }
   .track-like-btn:hover { color: var(--text); }
-  .track-like-btn:active { color: var(--accent); transform: scale(0.95); }
+  .track-like-btn:active { color: var(--accent); }
   .track-like-btn.liked { color: var(--accent); background: transparent; }
   .track-like-btn svg { width: 16px; height: 16px; }
 
@@ -427,6 +427,11 @@
   color: var(--accent);
   opacity: .8;
 }
+.top-result-subtitle .artist-name { color: inherit; }
+.top-result-subtitle .artist-name:hover {
+  color: var(--text);
+  text-decoration: underline;
+}
 
 /* ---- Top Result Card ---- */
 .top-result-card {
@@ -507,9 +512,6 @@
   cursor: pointer;
   border: none;
   transition: transform 0.1s, opacity 0.2s;
-}
-.top-result-actions .btn:active {
-  transform: scale(0.96);
 }
 .top-result-actions .btn-primary {
   background: var(--text);

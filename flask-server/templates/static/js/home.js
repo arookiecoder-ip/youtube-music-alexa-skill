@@ -9,6 +9,16 @@
   let currentFilter = 'all';
   let abortController = null;
 
+  function updateShelfArrows(shelfContent) {
+    const shelf = shelfContent && shelfContent.closest('.home-shelf');
+    if (!shelf) return;
+    const maxScroll = Math.max(0, shelfContent.scrollWidth - shelfContent.clientWidth);
+    const left = shelf.querySelector('.home-scroll-left');
+    const right = shelf.querySelector('.home-scroll-right');
+    if (left) left.disabled = shelfContent.scrollLeft <= 2;
+    if (right) right.disabled = shelfContent.scrollLeft >= maxScroll - 2;
+  }
+
   function showHomeSkeleton(show) {
     const container = document.getElementById('home-rows');
     if (!container) return;
@@ -97,6 +107,7 @@
     container.innerHTML = html || '<div class="home-empty"><div class="home-empty-title">No items match this filter</div></div>';
     container.hidden = false;
     showHomeSkeleton(false);
+    container.querySelectorAll('.home-shelf-content').forEach(updateShelfArrows);
 
     if (window.performance && performance.mark && performance.measure) {
       performance.mark('home-feed-end');
@@ -153,11 +164,6 @@
 
   const rows = document.getElementById('home-rows');
   if (rows) {
-    function updateShelfArrows(shelfContent) {
-        // Find arrows inside shelf header based on scroll position
-        // This requires template modifications to add arrows to home-shelf-header if they overflow
-    }
-
     rows.addEventListener('scroll', function(e) {
       if (e.target.classList && e.target.classList.contains('home-shelf-content')) updateShelfArrows(e.target);
       if (window._closeAllMoreMenus) window._closeAllMoreMenus();
@@ -176,6 +182,7 @@
                       left: scrollLeftBtn ? -scrollAmount : scrollAmount,
                       behavior: 'smooth'
                   });
+                  updateShelfArrows(content);
               }
           }
           return;
@@ -230,6 +237,10 @@
           return;
       }
 
+      // Let the router's delegated artist-link handler own this click. If it
+      // reaches the card handler, the song starts playing before navigation.
+      if (e.target.closest('.artist-name')) return;
+
       var playBtn = e.target.closest('.home-play-btn');
       var itemCard = (playBtn || e.target).closest('.home-item');
 
@@ -244,7 +255,8 @@
         // card itself should open the user's Liked Music collection. Keep the
         // overlaid play button's direct-play behavior unchanged.
         if (playlistId === 'LM' && !playBtn) {
-            window.navigateTo('#playlist/LM');
+            if (window.preloadNavigatePlaylist) window.preloadNavigatePlaylist('LM');
+            else window.navigateTo('#playlist/LM');
             return;
         }
 
@@ -283,7 +295,8 @@
                 if (window.preloadNavigateAlbum) window.preloadNavigateAlbum(targetId);
                 else window.navigateTo('#album/' + encodeURIComponent(targetId));
             } else if (kind === 'playlist') {
-                window.navigateTo('#playlist/' + encodeURIComponent(targetId));
+                if (window.preloadNavigatePlaylist) window.preloadNavigatePlaylist(targetId);
+                else window.navigateTo('#playlist/' + encodeURIComponent(targetId));
             }
         }
       }
@@ -414,6 +427,10 @@
         void sharedMoreMenu.offsetWidth;
         sharedMoreMenu.classList.add('open');
       }
+    });
+
+    window.addEventListener('resize', function() {
+      rows.querySelectorAll('.home-shelf-content').forEach(updateShelfArrows);
     });
   }
 

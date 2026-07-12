@@ -13,8 +13,8 @@
      which is also the centre of the 76px strip (76/2 = 38). */
   --rail-w-mini: 76px;
   --topbar-h: 64px;
-  --playbar-h: 64px;
-  --playbar-h-mobile: 104px;
+  --playbar-h: 72px;
+  --playbar-h-mobile: 112px;
   --queue-w: 320px;
   --accent-grad: linear-gradient(135deg, var(--accent), #ff6a00);
   --shell-bg: #030303;
@@ -22,6 +22,77 @@
   /* Softer, rounder look everywhere */
   --card-radius: 12px;
 }
+
+/* One crisp like glyph everywhere. The old inline thumbs-up path collapses
+   into a flag-like shape at 12–22px, and dozens of duplicated copies made it
+   impossible to fix consistently. Keep their state/handlers, hide only the
+   malformed artwork, and render a shared heart from CSS. */
+:is(
+  .np-like-btn,
+  .np-page-like-btn,
+  .result-like-btn,
+  .track-like-btn,
+  .artist-song-like-btn,
+  .queue-like-underlay,
+  [data-action="toggle-like"],
+  [data-action="like"],
+  #np-menu-like,
+  .library-card-liked .library-card-art-placeholder
+) {
+  --like-icon-size: 16px;
+  --like-icon: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2024%2024'%3E%3Cpath%20d='M20.84%204.61a5.5%205.5%200%200%200-7.78%200L12%205.67l-1.06-1.06a5.5%205.5%200%200%200-7.78%207.78L12%2021.23l8.84-8.84a5.5%205.5%200%200%200%200-7.78Z'%20fill='none'%20stroke='white'%20stroke-width='2'%20stroke-linecap='round'%20stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+:is(
+  .np-like-btn,
+  .np-page-like-btn,
+  .result-like-btn,
+  .track-like-btn,
+  .artist-song-like-btn,
+  .queue-like-underlay,
+  [data-action="toggle-like"],
+  [data-action="like"],
+  #np-menu-like,
+  .library-card-liked .library-card-art-placeholder
+) > svg {
+  display: none !important;
+}
+:is(
+  .np-like-btn,
+  .np-page-like-btn,
+  .result-like-btn,
+  .track-like-btn,
+  .artist-song-like-btn,
+  .queue-like-underlay,
+  [data-action="toggle-like"],
+  [data-action="like"],
+  #np-menu-like,
+  .library-card-liked .library-card-art-placeholder
+)::before {
+  content: '';
+  display: block;
+  flex: none;
+  width: var(--like-icon-size);
+  height: var(--like-icon-size);
+  background: currentColor;
+  -webkit-mask: var(--like-icon) center / contain no-repeat;
+  mask: var(--like-icon) center / contain no-repeat;
+}
+:is(
+  .np-like-btn.liked,
+  .np-page-like-btn.liked,
+  .result-like-btn.liked,
+  .track-like-btn.liked,
+  .artist-song-like-btn.liked,
+  [data-action="like"].liked,
+  .library-card-liked .library-card-art-placeholder
+) {
+  --like-icon: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2024%2024'%3E%3Cpath%20d='M20.84%204.61a5.5%205.5%200%200%200-7.78%200L12%205.67l-1.06-1.06a5.5%205.5%200%200%200-7.78%207.78L12%2021.23l8.84-8.84a5.5%205.5%200%200%200%200-7.78Z'%20fill='white'/%3E%3C/svg%3E");
+}
+.player-section .np-like-btn,
+.np-page-like-btn { --like-icon-size: 22px; }
+.artist-song-like-btn { --like-icon-size: 14px; }
+.recs-like-btn { --like-icon-size: 12px; }
+.library-card-liked .library-card-art-placeholder { --like-icon-size: 36px; }
 
 /* Keep the shell width stable when routed overlays lock body scrolling. The
    reserved gutter prevents header/search controls shifting as the vertical
@@ -351,8 +422,8 @@ body.results-open .play-section {
   width: 28px;
   height: 28px;
   color: #ffffff !important;
-  opacity: 0;
-  pointer-events: none;
+  opacity: 1;
+  pointer-events: auto;
   transition: opacity .15s, color .15s, background .15s;
   border-radius: 0;
 }
@@ -1389,7 +1460,6 @@ body.now-playing-route .player-section .player-expand-btn svg {
   body.now-playing-route main.has-queue #queue-section {
     display: none !important;
   }
-  body.home-route:not(.results-open):not(.header-scrolled) main header,
   body.artist-route:not(.results-open):not(.header-scrolled) main header,
   body.album-route:not(.results-open):not(.header-scrolled) main header {
     background: transparent;
@@ -1762,10 +1832,19 @@ button { border-radius: var(--radius-md); }
        (device dropdown menu, profile menu) to the header's 67px box. The
        opaque background alone removes the backdrop-blur repaint cost. */
   }
-  body.home-route:not(.results-open):not(.header-scrolled) main header,
   body.artist-route:not(.results-open):not(.header-scrolled) main header,
   body.album-route:not(.results-open):not(.header-scrolled) main header {
     background: transparent;
+  }
+  /* Home owns the warm shell tint, including its sticky header. Keep this
+     route-specific so artist artwork and now-playing retain their own bleed. */
+  body.home-route:not(.results-open) main header {
+    background-color: var(--shell-bg);
+    background-image: linear-gradient(
+      180deg,
+      rgba(232, 89, 12, .10) 0,
+      transparent 340px
+    );
   }
 }
 
@@ -2337,9 +2416,6 @@ body.results-open .player-section {
   color: #fff;
   transition: transform 0.15s cubic-bezier(0.34, 1.56, 0.64, 1);
 }
-.np-page-art-overlay:active svg {
-  transform: scale(0.85);
-}
 
 .np-page-meta {
   text-align: center;
@@ -2548,7 +2624,6 @@ main:has(#now-playing-section:not([hidden])) {
 }
 .explore-card[style*="cursor"]:hover {
   background: rgba(255, 255, 255, .06);
-  transform: translateY(-2px);
 }
 .explore-card-art {
   aspect-ratio: 1;
@@ -2674,7 +2749,6 @@ main:has(#now-playing-section:not([hidden])) {
 }
 .library-card:hover {
   background: rgba(255, 255, 255, .06);
-  transform: translateY(-2px);
 }
 .library-card:focus-visible {
   outline: 2px solid var(--accent);

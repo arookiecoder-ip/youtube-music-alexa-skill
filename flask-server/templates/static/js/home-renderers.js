@@ -25,10 +25,21 @@
         return ''; // Fallback
     };
 
+    const renderSubtitle = (item) => {
+        const artists = Array.isArray(item.artists) ? item.artists.filter(a => a && a.name) : [];
+        if (!artists.length) return escapeHtml(item.subtitle || '');
+        const artistHtml = artists.map(a => {
+            const id = a.id ? ` data-channel-id="${escapeHtml(a.id)}"` : '';
+            return `<span class="artist-name" data-artist-name="${escapeHtml(a.name)}"${id}>${escapeHtml(a.name)}</span>`;
+        }).join(', ');
+        const album = item.album ? ` • ${escapeHtml(item.album)}` : '';
+        return artistHtml + album;
+    };
+
     const renderItem = (item, layout) => {
         if (!item) return '';
         const title = escapeHtml(item.title || 'Unknown');
-        const subtitle = escapeHtml(item.subtitle || '');
+        const subtitle = renderSubtitle(item);
         const image = getImageUrl(item);
         
         const play = item.play || {};

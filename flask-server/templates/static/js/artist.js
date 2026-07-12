@@ -4,6 +4,9 @@
   if (state._artistLoading === undefined) state._artistLoading = false;
   if (state._currentChannelId === undefined) state._currentChannelId = null;
   if (state._cachedArtistData === undefined) state._cachedArtistData = null;
+  if (!state._artistCache) state._artistCache = Object.create(null);
+  if (state._artistLoadToken === undefined) state._artistLoadToken = 0;
+  if (state._renderedArtistChannelId === undefined) state._renderedArtistChannelId = null;
 
   function escHtml(s) {
     return String(s == null ? '' : s)
@@ -12,6 +15,21 @@
       .replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;')
       .replace(/'/g, '&#39;');
+  }
+
+  function artistCreditsHtml(item) {
+    var artists = Array.isArray(item.artists) ? item.artists.filter(function(artist) {
+      return artist && artist.name;
+    }) : [];
+    if (artists.length) {
+      return artists.map(function(artist) {
+        var id = artist.id ? ' data-channel-id="' + escHtml(artist.id) + '"' : '';
+        return '<span class="artist-name" data-artist-name="' + escHtml(artist.name) + '"' + id + '>' +
+          escHtml(artist.name) + '</span>';
+      }).join(', ');
+    }
+    if (window.artistLinksHtml) return window.artistLinksHtml(item.artist || '', item.channelId || '');
+    return escHtml(item.artist || '');
   }
 
   function showSkeleton(show) {
@@ -34,51 +52,79 @@
   }
 
   function _preloadArtistImage(data) {
+    if (data && data.__heroReady) return Promise.resolve();
     var thumbs = data && data.artist && data.artist.thumbnails || [];
     var url = thumbs.length ? thumbs[thumbs.length - 1].url : '';
     if (!url) return Promise.resolve();
     return new Promise(function (resolve) {
+      var settled = false;
       var img = new Image();
-      img.onload = resolve;
-      img.onerror = resolve;
+      var timer = setTimeout(done, 8000);
+      function done() {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        img.onload = null;
+        img.onerror = null;
+        resolve();
+      }
+      img.onload = done;
+      img.onerror = done;
       img.src = url;
     });
   }
 
   async function loadArtist(channelId) {
-    if (state._artistLoading) return;
-
     // ── Preload-nav: consume cached data from navigateWithPreload ──
     var route = '#artist/' + encodeURIComponent(channelId);
+    var token = ++state._artistLoadToken;
     var preloaded = window.consumePreload ? window.consumePreload(route) : null;
-    if (preloaded) {
-      state._currentChannelId = channelId;
-      state._cachedArtistData = preloaded;
-      await _preloadArtistImage(preloaded);
+    var cached = preloaded || state._artistCache[channelId] || null;
+    var sameArtistVisible = state._renderedArtistChannelId === channelId && state._cachedArtistData;
+
+    function requestIsCurrent() {
+      return token === state._artistLoadToken &&
+        (!window.getRoute || window.getRoute() === route);
+    }
+
+    // One DOM tree serves every artist. Hide the old tree before any await,
+    // otherwise routing can paint the previous banner while new data loads.
+    if (!sameArtistVisible || preloaded) showSkeleton(true);
+    state._artistLoading = true;
+    state._currentChannelId = channelId;
+    if (cached) {
+      await _preloadArtistImage(cached);
+      if (!requestIsCurrent()) {
+        if (token === state._artistLoadToken) state._artistLoading = false;
+        return;
+      }
+      cached.__heroReady = true;
+      state._artistCache[channelId] = cached;
+      state._cachedArtistData = cached;
+      renderAll(cached);
+      state._renderedArtistChannelId = channelId;
       showSkeleton(false);
-      renderAll(preloaded);
+      state._artistLoading = false;
       return;
     }
 
-    if (state._currentChannelId === channelId && state._cachedArtistData) {
-      renderAll(state._cachedArtistData);
-      return;
-    }
-    state._artistLoading = true;
-    state._currentChannelId = channelId;
     // Drop the previous artist's data now: if this fetch fails, a retry must
     // not serve the old artist's page under the new channel id.
     state._cachedArtistData = null;
     try {
       var data = await window.api('/api/artist/' + encodeURIComponent(channelId));
-      state._cachedArtistData = data;
       await _preloadArtistImage(data);
-      showSkeleton(false);
+      if (!requestIsCurrent()) return;
+      data.__heroReady = true;
+      state._artistCache[channelId] = data;
+      state._cachedArtistData = data;
       renderAll(data);
+      state._renderedArtistChannelId = channelId;
+      showSkeleton(false);
     } catch (e) {
-      if (window.toast) window.toast(e.message, 'error');
+      if (requestIsCurrent() && window.toast) window.toast(e.message, 'error');
     } finally {
-      state._artistLoading = false;
+      if (token === state._artistLoadToken) state._artistLoading = false;
     }
   }
 
@@ -200,18 +246,21 @@
       row.dataset.videoId = item.video_id || '';
       row._songContextTrack = item;
       var thumbUrl = item.thumbnail || '';
+      var artistCredits = artistCreditsHtml(item);
       var isLiked = typeof _playlistsData !== 'undefined' && _playlistsData.liked_songs && _playlistsData.liked_songs.includes(item.video_id);
       var heartSvg = isLiked
         ? '<svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg>'
         : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg>';
+      var moreSvg = '<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg>';
       row.innerHTML =
         (thumbUrl ? '<img class="artist-song-thumb" src="' + escHtml(thumbUrl) + '" alt="" loading="lazy" onload="this.classList.add(\'loaded\')">' : '<div class="artist-song-thumb"></div>') +
         '<div class="artist-song-info">' +
           '<div class="artist-song-title">' + escHtml(item.title) + '</div>' +
-          '<div class="artist-song-artist">' + escHtml(item.artist) + '</div>' +
+          '<div class="artist-song-artist">' + artistCredits + '</div>' +
         '</div>' +
         '<button class="artist-song-play-btn" title="Play"><svg viewBox="0 0 24 24" fill="currentColor"><polygon points="8,5 19,12 8,19"/></svg></button>' +
-        '<button class="artist-song-like-btn' + (isLiked ? ' liked' : '') + '" title="Like">' + heartSvg + '</button>';
+        '<button class="artist-song-like-btn' + (isLiked ? ' liked' : '') + '" title="Like">' + heartSvg + '</button>' +
+        '<button class="result-more-btn artist-song-more-btn" type="button" title="More options">' + moreSvg + '</button>';
       // Play button
       row.querySelector('.artist-song-play-btn').addEventListener('click', function(e) {
         e.stopPropagation();
@@ -224,6 +273,11 @@
         e.stopPropagation();
         if (typeof toggleLike === 'function') toggleLike(item, this);
       });
+      row.querySelector('.artist-song-more-btn').addEventListener('click', function(e) {
+        e.stopPropagation();
+        if (window.openSongContextMenu) window.openSongContextMenu(e, item);
+      });
+      if (window.wireArtistLinks) window.wireArtistLinks(row);
       list.appendChild(row);
     }
 
@@ -235,7 +289,8 @@
       viewAllBtn.textContent = 'View all';
       viewAllBtn.addEventListener('click', function() {
         if (browseId) {
-          window.navigateTo('#playlist/' + encodeURIComponent(browseId));
+          if (window.preloadNavigatePlaylist) window.preloadNavigatePlaylist(browseId);
+          else window.navigateTo('#playlist/' + encodeURIComponent(browseId));
         }
       });
       viewAllContainer.appendChild(viewAllBtn);
@@ -315,8 +370,9 @@
     if (!container) return;
     var prev = container.querySelector('.hscroll-scroll-prev');
     var next = container.querySelector('.hscroll-scroll-next');
+    var maxScroll = Math.max(0, track.scrollWidth - track.clientWidth);
     if (prev) prev.disabled = track.scrollLeft <= 2;
-    if (next) next.disabled = track.scrollLeft + track.clientWidth >= track.scrollWidth - 2;
+    if (next) next.disabled = track.scrollLeft >= maxScroll - 2;
   }
 
   var artistSection = document.getElementById('artist-section');
@@ -336,6 +392,9 @@
         track.scrollBy({ left: direction * Math.max(240, track.clientWidth * .8), behavior: 'smooth' });
         window.setTimeout(function() { updateHscrollArrows(track); }, 350);
       }
+    });
+    window.addEventListener('resize', function() {
+      artistSection.querySelectorAll('.hscroll-track').forEach(updateHscrollArrows);
     });
   }
 

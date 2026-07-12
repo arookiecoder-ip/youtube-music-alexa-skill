@@ -12,7 +12,12 @@
   }
 
   function showHomeViews() {
-    setHidden('.play-section, #home-section', false);
+    var state = window.__appState;
+    var homeReady = !!(state && state._loggedIn && state._homeLoaded);
+    var homeSection = document.getElementById('home-section');
+    if (homeReady && homeSection) homeSection.classList.add('home-cached');
+    setHidden('.play-section', false);
+    setHidden('#home-section', !homeReady);
     setHidden('#idle-hero', true);
     setHidden('#results-section, #queue-section, #artist-section, #album-section', true);
   }
@@ -174,6 +179,10 @@
       clearTimeout(routedNpSection._closeTimer);
       routedNpSection._closeTimer = null;
     }
+    if (routedNpSection && routedNpSection._closeCleanup) {
+      routedNpSection.removeEventListener('transitionend', routedNpSection._closeCleanup);
+      routedNpSection._closeCleanup = null;
+    }
     // Unhide the now-playing section BEFORE the body class toggles so the
     // CSS transition has a visible start state (translateY(103%)) to animate from.
     if (hash === '#now-playing' && routedNpSection) {
@@ -214,14 +223,22 @@
       if (npSection && isClosingNowPlaying) {
         // Keep the layer rendered until its transform transition finishes.
         npSection.hidden = false;
-        npSection._closeTimer = setTimeout(function() {
+        var finishClose = function(event) {
+          if (event && (event.target !== npSection || event.propertyName !== 'transform')) return;
+          if (npSection._closeTimer) clearTimeout(npSection._closeTimer);
+          npSection.removeEventListener('transitionend', finishClose);
           npSection.hidden = true;
           npSection._closeTimer = null;
+          npSection._closeCleanup = null;
           document.body.classList.remove('now-playing-closing');
           // Belt-and-suspenders: restore scroll in case overflow got stuck.
           document.documentElement.style.removeProperty('overflow');
           document.body.style.removeProperty('overflow');
-        }, 340);
+        };
+        npSection._closeCleanup = finishClose;
+        npSection.addEventListener('transitionend', finishClose);
+        // Fallback for reduced motion, background tabs, or interrupted CSS.
+        npSection._closeTimer = setTimeout(finishClose, 450);
       }
       setHidden('#queue-section', true);
       var main = document.querySelector('main');
@@ -229,7 +246,9 @@
     }
     // Safety: when landing on home, always ensure scroll is not locked.
     if (hash === '#home') {
-      document.body.classList.remove('now-playing-closing');
+      // Do not clear the close class here: it is the state that drives the
+      // slide-out. transitionend owns cleanup when returning from playback.
+      if (!isClosingNowPlaying) document.body.classList.remove('now-playing-closing');
       document.documentElement.style.removeProperty('overflow');
       document.body.style.removeProperty('overflow');
       // Restore search results if they were open before navigating to sub-page

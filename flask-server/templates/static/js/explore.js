@@ -10,18 +10,34 @@
 
   const FALLBACK_IMG = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%23333'%3E%3Crect width='24' height='24' rx='4' fill='%231a1a1a'/%3E%3Cpath d='M12 3v10.55A4 4 0 1 0 14 17V7h4V3h-6z' fill='%23444'/%3E%3C/svg%3E";
 
+  function imageUrl(value) {
+    if (!value) return '';
+    if (typeof value === 'string') return value;
+    if (Array.isArray(value)) {
+      for (let i = value.length - 1; i >= 0; i -= 1) {
+        const url = imageUrl(value[i]);
+        if (url) return url;
+      }
+      return '';
+    }
+    if (typeof value === 'object') {
+      return value.url || value.src || imageUrl(value.thumbnails) ||
+        imageUrl(value.thumbnail) || imageUrl(value.images) || imageUrl(value.image) || '';
+    }
+    return '';
+  }
+
   function imgWithFallback(url, alt) {
     const safe = escHtml(url || '');
     const safeAlt = escHtml(alt || '');
     if (!url) return `<div class="explore-thumb-placeholder"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M12 3v10.55A4 4 0 1 0 14 17V7h4V3h-6z"/></svg></div>`;
-    return `<img src="${safe}" alt="${safeAlt}" loading="lazy" onerror="this.onerror=null;this.src='${FALLBACK_IMG}'">`;
+    return `<img src="${safe}" alt="${safeAlt}" loading="lazy" onload="this.style.opacity='1'" onerror="this.onerror=null;this.style.opacity='1';this.src='${FALLBACK_IMG}'">`;
   }
 
   // ── render helpers ─────────────────────────────────────────────────────────
   function renderCard(item, onClick) {
-    const thumbs = item.thumbnails || item.thumbnail || [];
-    const thumbArr = Array.isArray(thumbs) ? thumbs : [thumbs];
-    const thumb = (thumbArr[thumbArr.length - 1] || {}).url || (typeof thumbs === 'string' ? thumbs : '');
+    const thumb = imageUrl(item.thumbnails) || imageUrl(item.thumbnail) ||
+      imageUrl(item.images) || imageUrl(item.image);
     const title = item.title || item.name || 'Unknown';
     const sub = item.description || item.subtitle || item.artists?.[0]?.name || item.year || '';
 
@@ -111,7 +127,8 @@
           if (item.type === 'Album' || item.browseId?.startsWith('MPREb')) {
             window.navigateTo('#album/' + encodeURIComponent(id));
           } else {
-            window.navigateTo('#playlist/' + encodeURIComponent(id));
+            if (window.preloadNavigatePlaylist) window.preloadNavigatePlaylist(id);
+            else window.navigateTo('#playlist/' + encodeURIComponent(id));
           }
         });
         if (sec) { body.appendChild(sec); hasContent = true; }
@@ -125,7 +142,8 @@
           if (window._closeSidebar) window._closeSidebar();
           const id = item.playlistId || item.browseId || '';
           if (!id) return;
-          window.navigateTo('#playlist/' + encodeURIComponent(id));
+          if (window.preloadNavigatePlaylist) window.preloadNavigatePlaylist(id);
+          else window.navigateTo('#playlist/' + encodeURIComponent(id));
         });
         if (sec) { body.appendChild(sec); hasContent = true; }
       }
@@ -138,7 +156,8 @@
           const id = item.params || item.playlistId || item.browseId || '';
           if (!id) return;
           // Mood params use browse not playlist
-          window.navigateTo('#playlist/' + encodeURIComponent(id));
+          if (window.preloadNavigatePlaylist) window.preloadNavigatePlaylist(id);
+          else window.navigateTo('#playlist/' + encodeURIComponent(id));
         });
         if (sec) { body.appendChild(sec); hasContent = true; }
       }
@@ -150,7 +169,8 @@
           if (window._closeSidebar) window._closeSidebar();
           const id = item.playlistId || item.browseId || '';
           if (!id) return;
-          window.navigateTo('#playlist/' + encodeURIComponent(id));
+          if (window.preloadNavigatePlaylist) window.preloadNavigatePlaylist(id);
+          else window.navigateTo('#playlist/' + encodeURIComponent(id));
         });
         if (sec) { body.appendChild(sec); hasContent = true; }
       }
@@ -164,7 +184,10 @@
           const sec = renderSection(label, explore[key], (item) => () => {
             if (window._closeSidebar) window._closeSidebar();
             const id = item.playlistId || item.browseId || item.albumId || '';
-            if (id) window.navigateTo('#playlist/' + encodeURIComponent(id));
+            if (id) {
+              if (window.preloadNavigatePlaylist) window.preloadNavigatePlaylist(id);
+              else window.navigateTo('#playlist/' + encodeURIComponent(id));
+            }
           });
           if (sec) { body.appendChild(sec); hasContent = true; }
         }

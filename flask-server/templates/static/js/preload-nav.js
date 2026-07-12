@@ -169,6 +169,59 @@
     });
   }
 
+  function _imageUrl(value) {
+    if (!value) return '';
+    if (typeof value === 'string') return value;
+    if (Array.isArray(value)) {
+      for (var i = value.length - 1; i >= 0; i -= 1) {
+        var arrayUrl = _imageUrl(value[i]);
+        if (arrayUrl) return arrayUrl;
+      }
+      return '';
+    }
+    return value.url || value.src || _imageUrl(value.thumbnails) || _imageUrl(value.images) || '';
+  }
+
+  function _preloadImage(url, signal) {
+    if (!url) return Promise.resolve();
+    return new Promise(function (resolve) {
+      var settled = false;
+      var img = new Image();
+      var timer = setTimeout(done, 8000);
+      function done() {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        img.onload = null;
+        img.onerror = null;
+        if (signal) signal.removeEventListener('abort', done);
+        resolve();
+      }
+      img.onload = done;
+      img.onerror = done;
+      if (signal) signal.addEventListener('abort', done, { once: true });
+      img.src = url;
+    });
+  }
+
+  function _prepareArtistHero(data, signal) {
+    var url = _imageUrl(data && data.artist && data.artist.thumbnails);
+    return _preloadImage(url, signal).then(function () {
+      if (data) data.__heroReady = true;
+    });
+  }
+
+  function _preparePlaylistHero(data, signal) {
+    var cover = _imageUrl(data && data.thumbnails) || _imageUrl(data && data.thumbnail);
+    var image = _imageUrl(data && data.image) || _imageUrl(data && data.images);
+    var urls = cover || image ? [cover || image] : (data && data.tracks || []).slice(0, 4).map(function (track) {
+      return _imageUrl(track.thumbnails) || _imageUrl(track.thumbnail) || _imageUrl(track.image);
+    }).filter(Boolean);
+    return Promise.all(urls.map(function (url) { return _preloadImage(url, signal); })).then(function () {
+      if (data) data.__heroReady = true;
+    });
+  }
+
   // ─── Core: navigateWithPreload ─────────────────────────────────────────────
   /**
    * navigateWithPreload(route, fetchFn)
@@ -178,7 +231,7 @@
    *           data will be stored in window.__preloadCache[route]
    *           pass null to navigate immediately without prefetching
    */
-  window.navigateWithPreload = function (route, fetchFn) {
+  window.navigateWithPreload = function (route, fetchFn, readyFn) {
     if (!route) return;
 
     // If this exact route is already cached, navigate instantly
@@ -204,6 +257,9 @@
     _currentRoute = route;
 
     fetchFn(controller.signal).then(function (data) {
+      if (typeof readyFn !== 'function') return data;
+      return readyFn(data, controller.signal).then(function () { return data; });
+    }).then(function (data) {
       // Guard: if another click came in while we were fetching, ignore this
       if (_currentRoute !== route || _currentController !== controller) return;
 
@@ -248,7 +304,7 @@
     var route = '#artist/' + encodeURIComponent(channelId);
     window.navigateWithPreload(route, function (signal) {
       return _fetchArtist(channelId, signal);
-    });
+    }, _prepareArtistHero);
   };
 
   window.preloadNavigateArtistByName = function (name) {
@@ -269,6 +325,8 @@
       _currentController = controller; // keep same controller
       _currentRoute = route;
       return _fetchArtist(channelId, controller.signal).then(function (data) {
+        return _prepareArtistHero(data, controller.signal).then(function () { return data; });
+      }).then(function (data) {
         if (_currentRoute !== route || _currentController !== controller) return;
         window.__preloadCache[route] = data;
         _barComplete();
@@ -294,13 +352,12 @@
     var route = '#playlist/' + encodeURIComponent(plId);
     window.navigateWithPreload(route, function (signal) {
       return _fetchPlaylist(plId, signal);
-    });
+    }, _preparePlaylistHero);
   };
 
   // ─── Expose bar controller for external view loaders (playlists, etc.) ──
   window._barStart = _barStart;
   window._barComplete = _barComplete;
-  window._barDone = _barDone;
   window._barAbort = _barAbort;
 
   // ─── Expose cache for destination pages to consume ────────────────────────

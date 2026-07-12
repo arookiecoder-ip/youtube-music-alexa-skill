@@ -60,7 +60,14 @@ def normalize_track(item):
         return None
 
     title = _get_text(item.get("title"))
-    artists_text = ", ".join(_get_text(a.get("name")) for a in item.get("artists", []) if a.get("name"))
+    artists = [
+        {
+            "name": _get_text(a.get("name")),
+            "id": a.get("id") or a.get("browseId") or ""
+        }
+        for a in item.get("artists", []) if a.get("name")
+    ]
+    artists_text = ", ".join(a["name"] for a in artists)
     album_text = _get_text(item.get("album", {}).get("name")) if item.get("album") else ""
     
     subtitle_parts = [p for p in (artists_text, album_text) if p]
@@ -71,6 +78,8 @@ def normalize_track(item):
         "key": f"track_{video_id}",
         "title": title,
         "subtitle": subtitle,
+        "artists": artists,
+        "album": album_text,
         "image": _get_best_thumbnail(item.get("thumbnails")),
         "images": item.get("thumbnails", []),
         "videoId": video_id,
@@ -92,13 +101,21 @@ def normalize_album(item):
         return None
 
     title = _get_text(item.get("title"))
-    subtitle = ", ".join(_get_text(a.get("name")) for a in item.get("artists", []) if a.get("name"))
+    artists = [
+        {
+            "name": _get_text(a.get("name")),
+            "id": a.get("id") or a.get("browseId") or ""
+        }
+        for a in item.get("artists", []) if a.get("name")
+    ]
+    subtitle = ", ".join(a["name"] for a in artists)
 
     return {
         "kind": "album",
         "key": f"album_{browse_id}",
         "title": title,
         "subtitle": subtitle,
+        "artists": artists,
         "image": _get_best_thumbnail(item.get("thumbnails")),
         "images": item.get("thumbnails", []),
         "browseId": browse_id,
@@ -195,6 +212,22 @@ def normalize_station(item):
             "playlist": False
         }
     }
+
+def normalize_home_item(item):
+    """Normalize one item from YT Music's potentially mixed home shelves."""
+    if not item or not isinstance(item, dict):
+        return None
+    if item.get("videoId"):
+        return normalize_track(item)
+    if item.get("browseId") and "subscribers" in item:
+        return normalize_artist(item)
+    if item.get("browseId"):
+        return normalize_album(item)
+    if item.get("playlistId"):
+        if item.get("playlistId", "").startswith("RD"):
+            return normalize_station(item)
+        return normalize_playlist(item)
+    return None
 
 def normalize_local_history(item):
     if not item or not isinstance(item, dict):
@@ -325,23 +358,24 @@ def assemble_home_feed(sources):
             if not contents:
                 continue
             
-            # Identify kind from first item
-            first = contents[0]
-            if 'videoId' in first and 'playlistId' in first and first.get('playlistId', '').startswith('RD'):
-                layout, normalizer = 'cards', normalize_station
-            elif 'videoId' in first:
-                layout, normalizer = 'song_grid', normalize_track
-            elif 'browseId' in first and first.get('type') == 'Album':
-                layout, normalizer = 'cards', normalize_album
-            elif 'playlistId' in first:
-                layout, normalizer = 'cards', normalize_playlist
-            elif 'browseId' in first and 'subscribers' in first:
-                layout, normalizer = 'circles', normalize_artist
+            # Home shelves can mix tracks, playlists and stations (notably
+            # "Listen again"). Normalize each item independently, then choose
+            # a layout that can represent every entity in the shelf.
+            normalized_contents = [normalize_home_item(item) for item in contents]
+            normalized_contents = [item for item in normalized_contents if item]
+            kinds = {item['kind'] for item in normalized_contents}
+            if kinds == {'track'}:
+                layout = 'song_grid'
+            elif kinds == {'artist'}:
+                layout = 'circles'
             else:
-                layout, normalizer = 'song_grid', normalize_track # fallback
-                
+                layout = 'cards'
+
             shelf_id = hashlib.md5(title.encode('utf-8')).hexdigest()[:8]
-            add_shelf(f"ytm_{shelf_id}", title, layout, 'ytmusic_home', contents, normalizer)
+            add_shelf(
+                f"ytm_{shelf_id}", title, layout, 'ytmusic_home',
+                normalized_contents, lambda item: item
+            )
 
     
     # filters formatting

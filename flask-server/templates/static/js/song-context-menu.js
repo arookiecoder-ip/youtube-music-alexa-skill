@@ -9,9 +9,7 @@
     '.history-item',
     '.queue-swipe-wrapper[data-video-id]',
     '.result-swipe-wrapper[data-video-id]',
-    '.top-result-card[data-video-id]',
-    '#now-playing',
-    '.np-page-left'
+    '.top-result-card[data-video-id]'
   ].join(',');
 
   const icon = {
@@ -83,24 +81,39 @@
     menu.querySelector('[data-action="add-to-queue"]').hidden = !!window.JAM_GUEST;
     menu.querySelector('[data-action="save-playlist"]').hidden = !!window.JAM_GUEST;
 
-    menu.style.left = event.clientX + 'px';
+    let x = event.clientX;
+    let y = event.clientY;
+    if ((!x && !y) && event.currentTarget && event.currentTarget.getBoundingClientRect) {
+      const buttonRect = event.currentTarget.getBoundingClientRect();
+      x = buttonRect.right;
+      y = buttonRect.bottom;
+    }
+    menu.style.left = x + 'px';
     menu.style.right = 'auto';
-    menu.style.top = event.clientY + 'px';
+    menu.style.top = y + 'px';
     menu.style.bottom = 'auto';
     menu.classList.add('open');
 
     const rect = menu.getBoundingClientRect();
     if (rect.right > window.innerWidth - 8) {
       menu.style.left = 'auto';
-      menu.style.right = Math.max(8, window.innerWidth - event.clientX) + 'px';
+      menu.style.right = Math.max(8, window.innerWidth - x) + 'px';
     }
     if (rect.bottom > window.innerHeight - 8) {
       menu.style.top = 'auto';
-      menu.style.bottom = Math.max(8, window.innerHeight - event.clientY) + 'px';
+      menu.style.bottom = Math.max(8, window.innerHeight - y) + 'px';
     }
   }
 
   document.addEventListener('contextmenu', function (event) {
+    // The main now-playing banner is a playback control, not a song-list row.
+    // Suppress both the custom actions menu and the browser image menu there.
+    if (event.target.closest('#now-playing, .np-page-left')) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      closeMenu();
+      return;
+    }
     if (event.target.closest('.result-more-menu, .queue-more-menu')) return;
     const root = event.target.closest(ROOT_SELECTOR);
     if (!root) {

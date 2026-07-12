@@ -19,7 +19,7 @@
     margin-top: 0;
     margin-left: calc(-1 * var(--space-4, 16px));
     margin-right: calc(-1 * var(--space-4, 16px));
-    height: calc(400px + var(--topbar-h, 64px) + 7px);
+    height: calc(420px + var(--topbar-h, 64px) + 7px);
     display: flex;
     flex-direction: column;
     justify-content: flex-end;
@@ -47,7 +47,7 @@
   }
   @media (max-width: 768px) {
     #artist-hero { 
-      height: calc(320px + var(--topbar-h, 64px) + 7px); 
+      height: calc(340px + var(--topbar-h, 64px) + 7px);
       padding: 24px; 
       padding-top: calc(24px + var(--topbar-h, 64px) + 7px);
     }
@@ -85,7 +85,7 @@
     }
   }
   .artist-hero-name {
-    font-size: clamp(2.5rem, 6vw, 4.5rem);
+    font-size: clamp(2.75rem, 6.25vw, 4.75rem);
     font-weight: 800;
     color: #fff;
     margin-bottom: 12px;
@@ -135,7 +135,6 @@
     border: none;
     transition: transform 0.2s, background 0.2s;
   }
-  .artist-action-btn:active { transform: scale(0.96); }
   .artist-action-btn.primary {
     background: #fff;
     color: #000;
@@ -214,7 +213,12 @@
     border-radius: 50%;
   }
   .artist-song-play-btn:hover, .artist-song-like-btn:hover { color: var(--text); border-color: #444; }
-  .artist-song-play-btn:active, .artist-song-like-btn:active { color: var(--accent); border-color: var(--accent); transform: scale(0.95); }
+  .artist-song-artist .artist-name { color: inherit; }
+  .artist-song-artist .artist-name:hover {
+    color: var(--text);
+    text-decoration: underline;
+  }
+  .artist-song-play-btn:active, .artist-song-like-btn:active { color: var(--accent); border-color: var(--accent); }
   .artist-song-like-btn.liked { color: var(--accent); border-color: var(--accent); }
   .artist-song-play-btn svg, .artist-song-like-btn svg { width: 14px; height: 14px; }
   
@@ -234,7 +238,6 @@
     transition: background 0.2s, transform 0.2s;
   }
   .artist-view-all-btn:hover { background: rgba(255, 255, 255, 0.15); transform: scale(1.02); }
-  .artist-view-all-btn:active { transform: scale(0.98); }
 
   /* ---- Artist page: horizontal scroll sections ---- */
   .hscroll-section { margin-bottom: var(--space-5); }
@@ -277,7 +280,6 @@
     scroll-snap-align: start;
     cursor: pointer;
   }
-  .hscroll-card:active { transform: scale(.97); }
   .hscroll-card-art {
     position: relative;
     width: 100%;

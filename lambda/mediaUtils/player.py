@@ -512,12 +512,20 @@ class Api:
         """Continuation batch for the sliding playlist window: the tracks that
         follow after_video_id in the server's current queue. Empty list when the
         server's queue moved on (caller falls back to radio continuation)."""
-        response_json, error = Api._get_json(handler_input, 'queue_tracks',
-                                             {'after': after_video_id, 'limit': _QUEUE_BATCH})
+        playback_info = Attributes.get_playback_info(handler_input)
+        params = {'after': after_video_id, 'limit': _QUEUE_BATCH}
+        if playback_info.get('queue_id'):
+            params['queue_id'] = playback_info['queue_id']
+            params['offset'] = max(0, int(playback_info.get('queue_offset', 0) or 0))
+        response_json, error = Api._get_json(handler_input, 'queue_tracks', params)
         if error: return None, error
         try:
             tracks = (response_json or {}).get('tracks') or []
-            return [from_dict(player_models.Metadata, t) for t in tracks], None
+            parsed = [from_dict(player_models.Metadata, t) for t in tracks]
+            if parsed and response_json.get('next_offset') is not None:
+                playback_info['queue_offset'] = max(
+                    0, int(response_json.get('next_offset') or 0))
+            return parsed, None
         except Exception:
             logger.exception('queue_tracks returned unexpected shape')
             return None, Exception(data.SERVICE_ISSUE)
@@ -612,7 +620,9 @@ class Controller:
             'index': 0,
             'offset_in_ms': 0,
             'play_order': [l for l in range(0, len(playlist))],
-            'stream_url': song_info.stream.audio_url
+            'stream_url': song_info.stream.audio_url,
+            'queue_id': song_info_list.queue_id,
+            'queue_offset': max(0, int(song_info_list.next_offset or 0)),
         }
         Attributes.set_play_order(handler_input)
         return Controller.play(handler_input, song_info, is_playback)

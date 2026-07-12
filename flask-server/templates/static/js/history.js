@@ -125,9 +125,7 @@ function _buildHistoryRow(entry) {
 
 function renderHistoryModalList(history) {
   const body = document.getElementById('history-modal-body');
-  const clearBtn = document.getElementById('clear-history-btn');
   const items = Array.isArray(history) ? history.filter(e => e && e.video_id) : [];
-  if (clearBtn) clearBtn.hidden = items.length === 0;
   if (!body) return;
   if (items.length === 0) {
     body.innerHTML = '<div class="history-modal-empty">No listening history yet</div>';
@@ -152,23 +150,6 @@ function renderHistoryModalList(history) {
   }
   body.innerHTML = '';
   body.appendChild(list);
-}
-
-async function doClearHistory() {
-  try {
-    await apiDelete('/history/');
-    state._historyCache = [];
-    renderHistoryModalList([]);
-    syncHistoryTriggerVisibility();
-    window._closeHistoryModal();
-    toast('History cleared', 'ok');
-  } catch (e) {
-    toast(e.message, 'error');
-  }
-}
-
-function clearHistory() {
-  return doClearHistory();
 }
 
 (function () {
@@ -200,26 +181,10 @@ function clearHistory() {
   if (window.getRoute() === '#history') openHistoryModal(true);
 })();
 
-(function () {
-  const overlay = document.getElementById('confirm-clear-history');
-  const cancelBtn = document.getElementById('confirm-clear-history-cancel');
-  const yesBtn = document.getElementById('confirm-clear-history-yes');
-  const clearBtn = document.getElementById('clear-history-btn');
-  if (!clearBtn || !overlay || !cancelBtn || !yesBtn) return;
-  clearBtn.addEventListener('click', () => {
-    overlay.classList.add('open');
-  });
-  cancelBtn.addEventListener('click', () => overlay.classList.remove('open'));
-  overlay.addEventListener('click', (e) => { if (e.target === overlay) overlay.classList.remove('open'); });
-  yesBtn.addEventListener('click', () => { overlay.classList.remove('open'); doClearHistory(); });
-})();
-
 /* ---- Recommendations (blank-state, mixed history + discovery) ---- */
 
   window.loadHistory = loadHistory;
   window.renderHistoryModalList = renderHistoryModalList;
   window.syncHistoryTriggerVisibility = syncHistoryTriggerVisibility;
   window._buildHistoryRow = _buildHistoryRow;
-  window.doClearHistory = doClearHistory;
-  window.clearHistory = clearHistory;
 })();

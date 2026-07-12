@@ -786,6 +786,15 @@ _stream_list_pending = {}
 _stream_list_cache_lock = threading.Lock()
 _STREAM_LIST_CACHE_TTL = 120
 
+# Playlist expansion is one of the slowest YT Music calls and Alexa can retry a
+# request while the first invocation is still running. Coalesce those retries
+# and retain the normalized result briefly; otherwise a large playlist causes
+# several identical full-list fetches and competing queue installs.
+_playlist_tracks_cache = {}
+_playlist_tracks_pending = {}
+_playlist_tracks_cache_lock = threading.Lock()
+_PLAYLIST_TRACKS_CACHE_TTL = 300
+
 # ---------- server-side now-playing state ----------
 # Amazon's /api/np/player returns empty data for custom-skill audio, so we
 # track the state ourselves. Every stream goes through /proxy/, so we capture
@@ -1585,40 +1594,92 @@ class Supporting:
         Unavailable tracks (no videoId) are dropped.
         The special virtual playlist id 'LM' maps to the user's Liked Music,
         which is not fetchable via get_playlist(); route it to get_liked_songs()."""
+        playlist_id = (playlist_id or '').strip()
+        if not playlist_id:
+            return None
+
+        cache_key = playlist_id.upper() if playlist_id.upper() == 'LM' else playlist_id
+        now = time.time()
+        with _playlist_tracks_cache_lock:
+            cached = _playlist_tracks_cache.get(cache_key)
+            if cached and cached[0] >= now:
+                return cached[1]
+            if cached:
+                _playlist_tracks_cache.pop(cache_key, None)
+            pending = _playlist_tracks_pending.get(cache_key)
+            if pending is None:
+                pending = threading.Event()
+                _playlist_tracks_pending[cache_key] = pending
+                owns_fetch = True
+            else:
+                owns_fetch = False
+
+        if not owns_fetch:
+            # Never block the request's asyncio loop while another worker owns
+            # the upstream call. The timeout is defensive: a failed/killed
+            # worker must not strand every later request for this playlist.
+            await asyncio.to_thread(pending.wait, 15)
+            with _playlist_tracks_cache_lock:
+                cached = _playlist_tracks_cache.get(cache_key)
+                if cached and cached[0] >= time.time():
+                    return cached[1]
+            return None
+
         yt_home = _get_ytmusic_home()
         try:
-            if playlist_id.upper() == 'LM':
-                raw = await asyncio.to_thread(yt_home.get_liked_songs, 1000)
-                search_results = raw
-            else:
-                ytmusic = YTMusic()
-                # limit=None: fetch every track. The default limit=100 would make
-                # sync's now-playing deletion pass (see api_sync_playlist) wrongly
-                # treat tracks beyond the cutoff as removed from the source.
-                search_results = await asyncio.to_thread(ytmusic.get_playlist, playlistId=playlist_id, limit=None)
-        except Exception:
             try:
-                # Curated playlists (RDAMPL, RDTMAK) are watch playlists. get_playlist fails on them.
-                search_results = await asyncio.to_thread(ytmusic.get_watch_playlist, playlistId=playlist_id)
+                if cache_key == 'LM':
+                    search_results = await asyncio.to_thread(yt_home.get_liked_songs, 1000)
+                else:
+                    ytmusic = YTMusic()
+                    # limit=None: fetch every track. The default limit=100 would
+                    # truncate large playlists and break continuation paging.
+                    search_results = await asyncio.to_thread(
+                        ytmusic.get_playlist, playlistId=playlist_id, limit=None)
             except Exception:
-                logger.exception("")
+                try:
+                    # Curated playlists (RDAMPL, RDTMAK) are watch playlists.
+                    search_results = await asyncio.to_thread(
+                        YTMusic().get_watch_playlist, playlistId=playlist_id)
+                except Exception:
+                    logger.exception("get_playlist_tracks: playlist %s failed", playlist_id)
+                    return None
+
+            playlist_raw = (search_results or {}).get('tracks')
+            if not playlist_raw:
                 return None
-        playlist_raw = (search_results or {}).get('tracks')
-        if not playlist_raw:
-            return None
-        playlist = [
-            {
-                'title': track.get("title") or '',
-                'artist': " and ".join([artist["name"] for artist in track.get("artists", [])]),
-                'video_id': track.get("videoId"),
-                'thumbnail': track['thumbnails'][-1] if track.get('thumbnails') else None,
-                'duration_ms': Supporting.duration_ms(track),
-            }
-            for track in playlist_raw
-            if _valid_video_id(track.get("videoId"))
-        ]
-        logger.info("get_playlist_tracks: playlist %s returned %d tracks", playlist_id, len(playlist))
-        return playlist or None
+            playlist = [
+                {
+                    'title': track.get("title") or '',
+                    'artist': " and ".join(
+                        artist.get("name") or '' for artist in track.get("artists", [])
+                        if artist.get("name")
+                    ),
+                    'video_id': track.get("videoId"),
+                    'thumbnail': track['thumbnails'][-1] if track.get('thumbnails') else None,
+                    'duration_ms': Supporting.duration_ms(track),
+                }
+                for track in playlist_raw
+                if _valid_video_id(track.get("videoId"))
+            ]
+            result = playlist or None
+            if result:
+                with _playlist_tracks_cache_lock:
+                    _playlist_tracks_cache[cache_key] = (
+                        time.time() + _PLAYLIST_TRACKS_CACHE_TTL, result)
+                    # Bound memory even if a client probes many playlist ids.
+                    if len(_playlist_tracks_cache) > 32:
+                        oldest = min(_playlist_tracks_cache,
+                                     key=lambda key: _playlist_tracks_cache[key][0])
+                        if oldest != cache_key:
+                            _playlist_tracks_cache.pop(oldest, None)
+            logger.info("get_playlist_tracks: playlist %s returned %d tracks",
+                        playlist_id, len(playlist))
+            return result
+        finally:
+            with _playlist_tracks_cache_lock:
+                _playlist_tracks_pending.pop(cache_key, None)
+            pending.set()
 
     @staticmethod
     async def stream_playlist(playlist_id: str):
@@ -1898,8 +1959,12 @@ async def _stream_playlist_payload(playlist_id, limit):
     # The skill persists its playlist copy to DynamoDB, where a 400KB item cap
     # makes a 1000-track list fatal — it asks for a window (limit) and pages
     # the rest through /queue_tracks/ as playback approaches the window's end.
+    full_length = len(response['playlist'])
     if limit:
         response = dict(response, playlist=response['playlist'][:limit])
+    response = dict(response,
+                    queue_id=playlist_id,
+                    next_offset=min(limit, full_length) if limit else full_length)
     return response
 
 
@@ -2012,7 +2077,7 @@ _SKILL_QUEUE_BEHIND = 25
 
 
 @app.route("/queue_tracks/", methods=["GET"])
-def queue_tracks():
+async def queue_tracks():
     """Continuation batch for the skill's sliding playlist window: the tracks
     that follow `after` (a video_id) in the web remote's current queue. Returns
     an empty list when the video isn't in the queue any more (queue replaced by
@@ -2022,10 +2087,27 @@ def queue_tracks():
         limit = min(200, max(1, int(request.args.get("limit", 75) or 75)))
     except (TypeError, ValueError):
         limit = 75
+    queue_id = (request.args.get("queue_id") or '').strip()
+    try:
+        offset = max(0, int(request.args.get("offset", 0) or 0))
+    except (TypeError, ValueError):
+        offset = 0
+
+    # A playlist cursor is stable even when the web queue changes and when a
+    # song appears more than once. Prefer it over searching the global queue by
+    # video id, which can loop back to the first duplicate or page the wrong
+    # user's/newer play.
+    if queue_id:
+        playlist = await Supporting.get_playlist_tracks(queue_id)
+        if playlist is None:
+            return jsonify({'tracks': [], 'next_offset': offset})
+        batch = playlist[offset:offset + limit]
+        return jsonify({'tracks': batch, 'next_offset': offset + len(batch)})
+
     with _np_lock:
         queue = list(_now_playing.get('queue') or [])
-    idx = next((i for i, item in enumerate(queue)
-                if item.get('video_id') == after), -1)
+    idx = next((i for i in range(len(queue) - 1, -1, -1)
+                if queue[i].get('video_id') == after), -1)
     tracks = []
     if idx >= 0:
         for item in queue[idx + 1:idx + 1 + limit]:
@@ -2036,7 +2118,7 @@ def queue_tracks():
                 'thumbnail': _thumbnail_metadata(item.get('thumbnail')),
                 'duration_ms': item.get('duration_ms', 0),
             })
-    return jsonify({'tracks': tracks})
+    return jsonify({'tracks': tracks, 'next_offset': offset + len(tracks)})
 
 
 @app.route("/get_radio/", methods=["GET"])
@@ -4736,15 +4818,19 @@ async def alexa_search():
         return error_response('no results found', 404)
 
     def _clean_all_item(item):
+        artists = item.get('artists') or []
+        artist_name = item.get('artist') or item.get('name') or (
+            artists[0].get('name') if artists else ''
+        )
         cleaned = {
             'category': item.get('category'),
             'resultType': item.get('resultType'),
-            'title': item.get('title') or item.get('artist') or '',
+            'title': item.get('title') or (artist_name if item.get('resultType') == 'artist' else ''),
             'videoId': item.get('videoId') or '',
             'browseId': item.get('browseId') or '',
             'playlistId': item.get('playlistId') or '',
             'thumbnail': _last_thumbnail(item),
-            'artists': item.get('artists') or [],
+            'artists': artists,
             'artist': item.get('artist') or '',
             'duration': item.get('duration') or '',
             'views': item.get('views') or '',
@@ -5056,13 +5142,22 @@ async def api_get_artist(channel_id):
         if not vid:
             continue
         s_artists = s.get('artists') or []
-        s_artist = (s_artists[0].get('name') or '') if s_artists else artist_name
+        normalized_artists = [
+            {
+                'name': artist.get('name') or '',
+                'id': artist.get('id') or artist.get('browseId') or '',
+            }
+            for artist in s_artists if artist.get('name')
+        ]
+        s_artist = ', '.join(artist['name'] for artist in normalized_artists) or artist_name
         s_thumbs = s.get('thumbnails') or []
         s_thumb = s_thumbs[-1].get('url', '') if s_thumbs else ''
         top_songs.append({
             'video_id': vid,
             'title': s.get('title') or '',
             'artist': s_artist,
+            'artists': normalized_artists,
+            'channelId': normalized_artists[0]['id'] if normalized_artists else channel_id,
             'thumbnail': s_thumb,
         })
 

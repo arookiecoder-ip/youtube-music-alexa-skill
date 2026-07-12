@@ -18,9 +18,6 @@
   transform: translateY(-1px);
   box-shadow: 0 4px 16px rgba(0,0,0,.3);
 }
-.playlist-card:active {
-  transform: translateY(0);
-}
 
 /* ── 2×2 Collage Thumbnail Grid ── */
 .playlist-collage {
@@ -111,9 +108,6 @@
 }
 .playlist-card:hover .playlist-card-play {
   opacity: 1;
-}
-.playlist-card-play:active {
-  transform: scale(.92);
 }
 /* The inline 14px svg attrs made the glyph a barely-visible dot — CSS wins
    over the attribute so the icon scales with the button. */

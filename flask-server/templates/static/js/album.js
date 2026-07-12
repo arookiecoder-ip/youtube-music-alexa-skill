@@ -18,6 +18,26 @@
     return fallback || '';
   }
 
+  function songActions(track) {
+    var liked = window._playlistsData && window._playlistsData.liked_songs &&
+      window._playlistsData.liked_songs.includes(track.video_id);
+    var like = '<svg viewBox="0 0 24 24" fill="' + (liked ? 'currentColor' : 'none') + '" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg>';
+    var more = '<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg>';
+    return '<button class="result-like-btn' + (liked ? ' liked' : '') + '" type="button" title="Like" data-vid="' + esc(track.video_id) + '">' + like + '</button>' +
+      '<button class="result-more-btn" type="button" title="More options">' + more + '</button>';
+  }
+
+  function wireSongActions(row, track) {
+    row.querySelector('.result-like-btn').addEventListener('click', function (event) {
+      event.stopPropagation();
+      if (window.toggleLike) window.toggleLike(track, this);
+    });
+    row.querySelector('.result-more-btn').addEventListener('click', function (event) {
+      event.stopPropagation();
+      if (window.openSongContextMenu) window.openSongContextMenu(event, track);
+    });
+  }
+
   function render(data) {
     var hero = document.getElementById('album-hero');
     var list = document.getElementById('album-track-list');
@@ -60,13 +80,15 @@
         };
         var row = document.createElement('div');
         row.className = 'history-item album-track';
+        var contextTrack = wrapper._songContextTrack;
         row.innerHTML =
           '<div class="playlist-track-art"><img src="' + esc(thumbnail) + '" class="queue-thumb" loading="lazy" alt="" onload="this.classList.add(\'loaded\')" onerror="this.style.opacity=\'1\'"></div>' +
           '<div class="queue-info"><div class="queue-title">' + esc(track.title || '') + '</div>' +
-          '<div class="queue-artist">' + esc(artist) + '</div></div>';
+          '<div class="queue-artist">' + esc(artist) + '</div></div>' + songActions(contextTrack);
         row.addEventListener('click', function () {
           if (window.playFromQueue) window.playFromQueue(track, index);
         });
+        wireSongActions(row, contextTrack);
         wrapper.appendChild(row);
         list.appendChild(wrapper);
       });

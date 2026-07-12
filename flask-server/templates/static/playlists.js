@@ -21,6 +21,51 @@
     return '';
   }
 
+  function preloadPlaylistHero(pl) {
+    if (!pl || pl.__heroReady) return Promise.resolve();
+    const cover = imageUrl(pl.thumbnails) || imageUrl(pl.thumbnail);
+    const image = imageUrl(pl.image) || imageUrl(pl.images);
+    const urls = (cover || image) ? [cover || image] : (pl.tracks || []).slice(0, 4).map(track => {
+      return imageUrl(track.thumbnails) || imageUrl(track.thumbnail) || imageUrl(track.image);
+    }).filter(Boolean);
+    return Promise.all(urls.map(url => new Promise(resolve => {
+      const img = new Image();
+      let settled = false;
+      const timer = setTimeout(done, 8000);
+      function done() {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        img.onload = null;
+        img.onerror = null;
+        resolve();
+      }
+      img.onload = done;
+      img.onerror = done;
+      img.src = url;
+    }))).then(() => { pl.__heroReady = true; });
+  }
+
+  function songActions(track) {
+    const liked = window._playlistsData && window._playlistsData.liked_songs &&
+      window._playlistsData.liked_songs.includes(track.video_id);
+    const like = `<svg viewBox="0 0 24 24" fill="${liked ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg>`;
+    const more = '<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg>';
+    return `<button class="result-like-btn${liked ? ' liked' : ''}" type="button" title="Like" data-vid="${escapeHtml(track.video_id)}">${like}</button>` +
+      `<button class="result-more-btn" type="button" title="More options">${more}</button>`;
+  }
+
+  function wireSongActions(row, track) {
+    row.querySelector('.result-like-btn').addEventListener('click', function (event) {
+      event.stopPropagation();
+      if (window.toggleLike) window.toggleLike(track, this);
+    });
+    row.querySelector('.result-more-btn').addEventListener('click', function (event) {
+      event.stopPropagation();
+      if (window.openSongContextMenu) window.openSongContextMenu(event, track);
+    });
+  }
+
   async function loadLibrary() {
     if (!state._loggedIn || window.JAM_GUEST || !window.IS_AUTHENTICATED) return;
     try {
@@ -31,11 +76,17 @@
         if (data.playlists && data.playlists.length > 0) {
           data.playlists.forEach(pl => {
             const btn = document.createElement('button');
-            btn.className = 'sidebar-nav-btn playlist-nav-btn';
-            btn.innerHTML = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="sidebar-nav-icon"><path d="M9 18V5l12-2v13"></path><circle cx="6" cy="18" r="3"></circle><circle cx="18" cy="16" r="3"></circle></svg><span class="nav-label">${escapeHtml(pl.title)}</span>`;
+            const cover = imageUrl(pl.thumbnails) || imageUrl(pl.thumbnail) || imageUrl(pl.image);
+            const isLiked = pl.playlistId === 'LM';
+            btn.className = 'sidebar-playlist-item';
+            btn.innerHTML = `<span class="sidebar-playlist-art${isLiked ? ' is-liked' : ''}">${cover
+              ? `<img src="${escapeHtml(cover)}" alt="" loading="lazy">`
+              : `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"></path><circle cx="6" cy="18" r="3"></circle><circle cx="18" cy="16" r="3"></circle></svg>`
+            }</span><span class="sidebar-playlist-copy"><strong>${escapeHtml(pl.title)}</strong><span>${escapeHtml(pl.description || 'Playlist')}</span></span>`;
             btn.onclick = () => {
               if (window._closeSidebar) window._closeSidebar();
-              window.navigateTo('#playlist/' + encodeURIComponent(pl.playlistId));
+              if (window.preloadNavigatePlaylist) window.preloadNavigatePlaylist(pl.playlistId);
+              else window.navigateTo('#playlist/' + encodeURIComponent(pl.playlistId));
             };
             container.appendChild(btn);
           });
@@ -50,16 +101,18 @@
 
   async function openLibraryPlaylist(plId) {
     const overlay = document.getElementById('playlist-detail-modal-overlay');
-    if (overlay) overlay.classList.add('open');
     // Use the correct element IDs that exist in remote.html
     const titleEl = document.getElementById('playlist-detail-title');
     const body = document.getElementById('playlist-detail-body');
 
     const route = '#playlist/' + encodeURIComponent(plId);
     const preloaded = window.consumePreload ? window.consumePreload(route) : null;
-    if (!preloaded && window._barStart) window._barStart();
+    const ownsProgress = !preloaded;
+    if (ownsProgress && window._barStart) window._barStart();
     try {
       const pl = preloaded || await window.api('/api/library/playlists/' + encodeURIComponent(plId));
+      await preloadPlaylistHero(pl);
+      if (overlay) overlay.classList.add('open');
       if (titleEl) titleEl.textContent = pl.title || 'Playlist';
 
       if (body) {
@@ -123,12 +176,13 @@
               artist,
               thumbnail
             };
+            const contextTrack = wrapper._songContextTrack;
             row.innerHTML = `
               <div class="playlist-track-art"><img src="${escapeHtml(thumbnail)}" class="queue-thumb" loading="lazy" alt="" onload="this.classList.add('loaded')" onerror="this.style.opacity='1'"></div>
               <div class="queue-info">
                 <div class="queue-title">${escapeHtml(track.title || '')}</div>
                 <div class="queue-artist">${escapeHtml(artist)}</div>
-              </div>`;
+              </div>${songActions(contextTrack)}`;
             row.onclick = () => {
               if (window.playResult) {
                 window.playResult({
@@ -139,6 +193,7 @@
                 }, false, false, true);
               }
             };
+            wireSongActions(row, contextTrack);
             wrapper.appendChild(row);
             list.appendChild(wrapper);
           });
@@ -153,8 +208,7 @@
       if (body) body.innerHTML = '<div style="padding:24px; color:var(--muted); text-align:center;">Failed to load playlist</div>';
       if (window._barAbort) window._barAbort();
     }
-    if (window._barComplete) window._barComplete();
-    if (window._barDone) window._barDone();
+    if (ownsProgress && window._barComplete) window._barComplete();
   }
   window.openPlaylistDetailModal = openLibraryPlaylist;
   /* ---- New Playlist button (sidebar) ---- */

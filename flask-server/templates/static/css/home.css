@@ -20,6 +20,11 @@
     from { opacity: 0; transform: translateY(10px); }
     to { opacity: 1; transform: translateY(0); }
   }
+  /* Once Home has rendered, route restoration must not replay its first-load
+     entrance animation and make cached content look like a reload. */
+  #home-section.home-cached:not([hidden]) {
+    animation: none;
+  }
 }
 
 /* Header Area */
@@ -190,6 +195,11 @@
   text-overflow: ellipsis;
   margin-top: 2px;
 }
+.home-item-subtitle .artist-name { color: inherit; }
+.home-item-subtitle .artist-name:hover {
+  color: var(--text);
+  text-decoration: underline;
+}
 .home-play-btn {
   position: absolute;
   background: rgba(0, 0, 0, 0.6);
@@ -209,9 +219,6 @@
 }
 @media (hover: none) {
   .home-play-btn { opacity: 1; background: rgba(0,0,0,0.4); } /* Always visible on touch if capable */
-}
-.home-play-btn:active {
-  transform: scale(0.9);
 }
 
 /* 1. Shortcuts */
@@ -278,7 +285,7 @@
 .home-item-song {
   display: flex;
   align-items: center;
-  padding: 4px 8px;
+  padding: 4px 0;
   border-radius: 4px;
 }
 .home-item-song:hover, .home-item-song:focus-within {
@@ -300,7 +307,7 @@
 }
 .home-item-song .home-play-btn {
   position: absolute;
-  left: 4px; /* over the image */
+  left: 0; /* over the image */
   width: 48px;
   height: 48px;
   border-radius: 4px;
@@ -336,7 +343,6 @@
   right: 8px;
   transform: none;
 }
-.home-item-card:hover .home-play-btn:active { transform: scale(0.9); }
 
 /* 4. Wide Cards */
 .home-item-wide-card {
@@ -368,7 +374,6 @@
   right: 8px;
   transform: none;
 }
-.home-item-wide-card:hover .home-play-btn:active { transform: scale(0.9); }
 .home-item-wide-card .home-item-subtitle {
   white-space: normal;
   display: -webkit-box;
@@ -406,7 +411,6 @@
   left: 50%;
   transform: translate(-50%, -50%);
 }
-.home-item-circle:hover .home-play-btn:active { transform: translate(-50%, -50%) scale(0.9); }
 .home-item-circle .home-item-text {
   width: 100%;
 }
@@ -491,6 +495,10 @@
 }
 .home-scroll-btn:hover {
   background: rgba(255, 255, 255, 0.1);
+}
+.home-scroll-btn:disabled {
+  opacity: .28;
+  cursor: default;
 }
 .home-scroll-btn svg {
   width: 20px;

@@ -78,7 +78,9 @@
     const image = card.querySelector('.library-card-art img');
     if (image) {
       let triedFallback = false;
+      image.addEventListener('load', () => { image.style.opacity = '1'; });
       image.addEventListener('error', () => {
+        image.style.opacity = '1';
         if (thumb && fallbackImage && !triedFallback) {
           triedFallback = true;
           image.src = fallbackImage;
@@ -92,7 +94,8 @@
     function open() {
       if (!playlistId) return;
       if (window._closeSidebar) window._closeSidebar();
-      window.navigateTo('#playlist/' + encodeURIComponent(playlistId));
+      if (window.preloadNavigatePlaylist) window.preloadNavigatePlaylist(playlistId);
+      else window.navigateTo('#playlist/' + encodeURIComponent(playlistId));
     }
     card.addEventListener('click', open);
     card.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); } });

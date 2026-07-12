@@ -37,14 +37,10 @@ async function runSearch(query) {
 }
 
 function openResults() {
-  // Searching from the expanded player collapses that overlay first. Audio
-  // keeps playing through the persistent bottom playbar while results become
-  // the active content view.
-  if (window.getRoute && window.getRoute() === '#now-playing' && window.navigateTo) {
-    const returnRoute = window.__npReturnRoute && window.__npReturnRoute !== '#now-playing'
-      ? window.__npReturnRoute
-      : '#home';
-    window.navigateTo(returnRoute);
+  // Search results live on the Home route. Return there from every routed
+  // surface so its overlay closes before results become visible.
+  if (window.getRoute && window.navigateTo && window.getRoute() !== '#home') {
+    window.navigateTo('#home');
   }
   const section = document.getElementById('results-section');
   // The queue column collapses while results are showing; the mini player
@@ -394,8 +390,9 @@ function renderResults() {
     const btnNext = section.querySelector('.hscroll-scroll-next');
     function updateHscrollBtns() {
       const maxScroll = track.scrollWidth - track.clientWidth;
+      const boundedMaxScroll = Math.max(0, maxScroll);
       btnPrev.disabled = track.scrollLeft <= 5;
-      btnNext.disabled = track.scrollLeft >= maxScroll - 5;
+      btnNext.disabled = track.scrollLeft >= boundedMaxScroll - 5;
     }
     track.addEventListener('scroll', updateHscrollBtns, { passive: true });
     window.addEventListener('resize', updateHscrollBtns, { passive: true });
@@ -415,7 +412,15 @@ function renderResults() {
     
     const thumbHtml = thumb ? `<img src="${escHtml(thumb)}" alt="" loading="lazy">` : '';
 
-    const artistStr = (item.artists && item.artists.length) ? item.artists.map(a => a.name).join(' and ') : (item.artist || '');
+    const topArtists = Array.isArray(item.artists) ? item.artists.filter(a => a && a.name) : [];
+    const artistStr = topArtists.length ? topArtists.map(a => a.name).join(' and ') : (item.artist || '');
+    const artistCredits = topArtists.length
+      ? topArtists.map(a => {
+          const artistId = a.id || a.browseId || a.channelId || '';
+          const idAttr = artistId ? ` data-channel-id="${escHtml(artistId)}"` : '';
+          return `<span class="artist-name" data-artist-name="${escHtml(a.name)}"${idAttr}>${escHtml(a.name)}</span>`;
+        }).join(' and ')
+      : (window.artistLinksHtml ? window.artistLinksHtml(artistStr, item.channelId || item.channel_id || '') : escHtml(artistStr));
     const topVideoId = item.videoId || item.video_id || '';
     if (topVideoId) {
       card.dataset.videoId = topVideoId;
@@ -430,11 +435,11 @@ function renderResults() {
     if (item.resultType === 'artist') {
       subtitle = 'Artist' + (item.subscribers ? ' • ' + item.subscribers : '');
     } else if (item.resultType === 'album') {
-      subtitle = 'Album • ' + escHtml(artistStr);
+      subtitle = 'Album • ' + artistCredits;
     } else if (item.resultType === 'playlist') {
-      subtitle = 'Playlist' + (artistStr ? ' • ' + escHtml(artistStr) : '');
+      subtitle = 'Playlist' + (artistStr ? ' • ' + artistCredits : '');
     } else {
-      subtitle = 'Song • ' + escHtml(artistStr) + (item.duration ? ' • ' + item.duration : '');
+      subtitle = 'Song • ' + artistCredits + (item.duration ? ' • ' + escHtml(item.duration) : '');
     }
     
     let rightSide = '';
@@ -446,7 +451,7 @@ function renderResults() {
       <div class="top-result-main">
         <div class="top-result-art ${item.resultType === 'artist' ? 'round' : ''}">${thumbHtml}</div>
         <div class="top-result-info">
-          <div class="top-result-title">${escHtml(item.title || item.name || '')}</div>
+          <div class="top-result-title">${escHtml(item.title || item.name || (item.resultType === 'artist' ? artistStr : ''))}</div>
           <div class="top-result-subtitle">${subtitle}</div>
           <div class="top-result-actions">
             ${item.resultType === 'artist' 
@@ -510,7 +515,7 @@ function renderResults() {
       });
 
       card.querySelector('.top-result-main').addEventListener('click', (e) => {
-        if (e.target.closest('button')) return;
+        if (e.target.closest('button, .artist-name')) return;
         if (item.resultType === 'album' && item.browseId) {
           if (window.preloadNavigateAlbum) window.preloadNavigateAlbum(item.browseId);
           else window.navigateTo('#album/' + encodeURIComponent(item.browseId));
