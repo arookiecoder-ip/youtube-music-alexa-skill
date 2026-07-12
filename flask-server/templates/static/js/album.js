@@ -84,10 +84,11 @@
         row.innerHTML =
           '<div class="playlist-track-art"><img src="' + esc(thumbnail) + '" class="queue-thumb" loading="lazy" alt="" onload="this.classList.add(\'loaded\')" onerror="this.style.opacity=\'1\'"></div>' +
           '<div class="queue-info"><div class="queue-title">' + esc(track.title || '') + '</div>' +
-          '<div class="queue-artist">' + esc(artist) + '</div></div>' + songActions(contextTrack);
+          '<div class="queue-artist">' + window.artistLinksHtml(artist, track.channelId || track.channel_id || '') + '</div></div>' + songActions(contextTrack);
         row.addEventListener('click', function () {
           if (window.playFromQueue) window.playFromQueue(track, index);
         });
+        if (window.wireArtistLinks) window.wireArtistLinks(row);
         wireSongActions(row, contextTrack);
         wrapper.appendChild(row);
         list.appendChild(wrapper);

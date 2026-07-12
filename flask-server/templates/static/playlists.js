@@ -165,9 +165,14 @@
             const row = document.createElement('div');
             row.className = 'history-item';
             const thumbnail = imageUrl(track.thumbnails) || imageUrl(track.thumbnail) || imageUrl(track.image) || '/static/default-art.png';
-            const artist = (Array.isArray(track.artists)
-              ? track.artists.map(a => typeof a === 'string' ? a : a && a.name).filter(Boolean).join(', ')
-              : '') || track.artist || '';
+            const artistParts = (Array.isArray(track.artists)
+              ? track.artists.map(a => typeof a === 'string' ? a : a && a.name).filter(Boolean)
+              : []) || [];
+            const artist = artistParts.length ? artistParts.join(', ') : (track.artist || '');
+            // Extract the first artist's channel ID from the raw array.
+            // ytmusicapi returns artist objects with both .name and .id.
+            const firstArtistId = (Array.isArray(track.artists) && track.artists[0] && track.artists[0].id)
+              || track.channelId || track.channel_id || '';
             const videoId = track.videoId || track.video_id || '';
             wrapper.dataset.videoId = videoId;
             wrapper._songContextTrack = {
@@ -181,7 +186,7 @@
               <div class="playlist-track-art"><img src="${escapeHtml(thumbnail)}" class="queue-thumb" loading="lazy" alt="" onload="this.classList.add('loaded')" onerror="this.style.opacity='1'"></div>
               <div class="queue-info">
                 <div class="queue-title">${escapeHtml(track.title || '')}</div>
-                <div class="queue-artist">${escapeHtml(artist)}</div>
+                <div class="queue-artist">${window.artistLinksHtml(artist, firstArtistId)}</div>
               </div>${songActions(contextTrack)}`;
             row.onclick = () => {
               if (window.playResult) {
@@ -193,6 +198,7 @@
                 }, false, false, true);
               }
             };
+            if (window.wireArtistLinks) window.wireArtistLinks(row);
             wireSongActions(row, contextTrack);
             wrapper.appendChild(row);
             list.appendChild(wrapper);

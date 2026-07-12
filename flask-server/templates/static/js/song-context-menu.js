@@ -17,12 +17,14 @@
     next: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>',
     add: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>',
     radio: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4.93 19.07A10 10 0 1 1 19.07 4.93 10 10 0 0 1 4.93 19.07z"/><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2"/></svg>',
-    save: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><line x1="12" y1="11" x2="12" y2="17"/><line x1="9" y1="14" x2="15" y2="14"/></svg>'
+    save: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/><line x1="12" y1="11" x2="12" y2="17"/><line x1="9" y1="14" x2="15" y2="14"/></svg>',
+    play: '<svg viewBox="0 0 24 24" fill="currentColor"><polygon points="7,4 20,12 7,20"/></svg>'
   };
 
   const menu = document.createElement('div');
   menu.className = 'result-more-menu song-context-menu';
   menu.innerHTML =
+    '<div class="result-menu-option" data-action="play" hidden>' + icon.play + '<span>Play</span></div>' +
     '<div class="result-menu-option" data-action="toggle-like">' + icon.like + '<span>Like</span></div>' +
     '<div class="result-menu-option" data-action="play-next">' + icon.next + '<span>Play next</span></div>' +
     '<div class="result-menu-option" data-action="add-to-queue">' + icon.add + '<span>Add to queue</span></div>' +
@@ -74,12 +76,23 @@
       window._playlistsData.liked_songs.includes(track.video_id);
     menu.querySelector('[data-action="toggle-like"] span').textContent = liked ? 'Dislike' : 'Like';
 
-    // Jam guests only retain the server-authorized radio action. They never
-    // receive account-writing or host-queue mutation controls.
-    menu.querySelector('[data-action="toggle-like"]').hidden = !!window.JAM_GUEST;
-    menu.querySelector('[data-action="play-next"]').hidden = !!window.JAM_GUEST;
-    menu.querySelector('[data-action="add-to-queue"]').hidden = !!window.JAM_GUEST;
-    menu.querySelector('[data-action="save-playlist"]').hidden = !!window.JAM_GUEST;
+    // For station cards, only show Play — hide everything else
+    const isStation = track._isStation;
+    menu.querySelector('[data-action="play"]').hidden = !isStation;
+    if (isStation) {
+      menu.querySelector('[data-action="toggle-like"]').hidden = true;
+      menu.querySelector('[data-action="play-next"]').hidden = true;
+      menu.querySelector('[data-action="add-to-queue"]').hidden = true;
+      menu.querySelector('[data-action="play-radio"]').hidden = true;
+      menu.querySelector('[data-action="save-playlist"]').hidden = true;
+    } else {
+      // Jam guests only retain the server-authorized radio action. They never
+      // receive account-writing or host-queue mutation controls.
+      menu.querySelector('[data-action="toggle-like"]').hidden = !!window.JAM_GUEST;
+      menu.querySelector('[data-action="play-next"]').hidden = !!window.JAM_GUEST;
+      menu.querySelector('[data-action="add-to-queue"]').hidden = !!window.JAM_GUEST;
+      menu.querySelector('[data-action="save-playlist"]').hidden = !!window.JAM_GUEST;
+    }
 
     let x = event.clientX;
     let y = event.clientY;
@@ -122,6 +135,8 @@
     }
     const track = trackFrom(root);
     if (!track.video_id) return;
+    // Tag station cards so the menu knows to only show Play
+    track._isStation = root.dataset.kind === 'station';
     event.preventDefault();
     event.stopImmediatePropagation();
     openMenu(event, track);
@@ -145,6 +160,9 @@
         break;
       case 'play-radio':
         if (typeof window.playResult === 'function') window.playResult(track, false, true);
+        break;
+      case 'play':
+        if (typeof window.playResult === 'function') window.playResult(track, false, false);
         break;
       case 'save-playlist':
         if (typeof window.openAddToPlaylistModal === 'function') window.openAddToPlaylistModal(track);

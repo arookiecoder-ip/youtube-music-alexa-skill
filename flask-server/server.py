@@ -4981,7 +4981,7 @@ async def api_get_library_playlist(pl_id):
             if yt.auth_type == AuthType.UNAUTHORIZED:
                 return jsonify({'error': 'YouTube Music authentication required. Please visit /setup/'}), 403
             try:
-                raw = await asyncio.to_thread(yt.get_liked_songs, 100)
+                raw = await asyncio.to_thread(yt.get_liked_songs, 5000)
             except Exception as liked_error:
                 if "invalid argument" in str(liked_error).lower():
                     logger.warning("YouTube Liked Music browse unavailable: %s", liked_error)

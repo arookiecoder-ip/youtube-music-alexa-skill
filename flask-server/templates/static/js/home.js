@@ -328,8 +328,10 @@
         e.stopPropagation();
 
         var videoId = itemCard.dataset.videoId;
+        var playlistId = itemCard.dataset.playlistId || '';
+        var cardId = videoId || playlistId;
 
-        if (activeMenuCardId === videoId && sharedMoreMenu && sharedMoreMenu.classList.contains('open')) {
+        if (activeMenuCardId === cardId && sharedMoreMenu && sharedMoreMenu.classList.contains('open')) {
           sharedMoreMenu.classList.remove('open');
           activeMenuCardId = null;
           return;
@@ -342,6 +344,8 @@
           sharedMoreMenu = document.createElement('div');
           sharedMoreMenu.className = 'result-more-menu';
           sharedMoreMenu.innerHTML =
+            '<div class="result-menu-option" data-action="shuffle-play" hidden><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/><polyline points="21 16 21 21 16 21"/><line x1="15" y1="15" x2="21" y2="21"/><line x1="4" y1="4" x2="9" y2="9"/></svg> Shuffle play</div>' +
+            '<div class="result-menu-option" data-action="play-home" hidden><svg viewBox="0 0 24 24" fill="currentColor"><polygon points="7,4 20,12 7,20"/></svg> Play</div>' +
             '<div class="result-menu-option" data-action="toggle-like"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg> Like</div>' +
             '<div class="result-menu-option" data-action="play-next"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg> Play next</div>' +
             '<div class="result-menu-option" data-action="add-to-queue"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg> Add to queue</div>' +
@@ -387,16 +391,57 @@
               activeMenuCardId = null;
               if (window.openAddToPlaylistModal && sharedMoreMenu._track) window.openAddToPlaylistModal(sharedMoreMenu._track);
           });
+          sharedMoreMenu.querySelector('[data-action="play-home"]').addEventListener('click', function(evt) {
+              evt.stopPropagation();
+              if (window._closeAllMoreMenus) window._closeAllMoreMenus();
+              sharedMoreMenu.classList.remove('open');
+              activeMenuCardId = null;
+              var t = sharedMoreMenu._track;
+              if (t && t._playlistId && window.playFromQueue) {
+                window.api('/alexa/play/', {
+                  serial: window.selectedSerial ? window.selectedSerial() : '',
+                  query: 'https://music.youtube.com/playlist?list=' + t._playlistId
+                });
+              }
+          });
+          sharedMoreMenu.querySelector('[data-action="shuffle-play"]').addEventListener('click', function(evt) {
+              evt.stopPropagation();
+              if (window._closeAllMoreMenus) window._closeAllMoreMenus();
+              sharedMoreMenu.classList.remove('open');
+              activeMenuCardId = null;
+              var t = sharedMoreMenu._track;
+              if (t && t._playlistId) {
+                window.api('/alexa/play/', {
+                  serial: window.selectedSerial ? window.selectedSerial() : '',
+                  query: 'https://music.youtube.com/playlist?list=' + t._playlistId
+                }).then(function() {
+                  return window.api('/alexa/shuffle_queue/', {});
+                }).catch(function() {});
+              }
+          });
         }
 
+        var playlistId = itemCard.dataset.playlistId || '';
+        var isPlaylist = !!playlistId;
         sharedMoreMenu._track = {
           video_id: videoId,
           title: itemCard.querySelector('.home-item-title')?.textContent || '',
           artist: itemCard.querySelector('.home-item-subtitle')?.textContent || '',
-          thumbnail: itemCard.querySelector('img')?.src || ''
+          thumbnail: itemCard.querySelector('img')?.src || '',
+          _playlistId: playlistId
         };
         sharedMoreMenu._triggerCard = itemCard;
-        activeMenuCardId = videoId;
+        activeMenuCardId = cardId;
+
+        // For playlist / Liked Songs cards, only show Shuffle play + Play
+        // For regular tracks, show the 5 standard options
+        sharedMoreMenu.querySelector('[data-action="shuffle-play"]').hidden = !isPlaylist;
+        sharedMoreMenu.querySelector('[data-action="play-home"]').hidden = !isPlaylist;
+        sharedMoreMenu.querySelector('[data-action="toggle-like"]').hidden = isPlaylist;
+        sharedMoreMenu.querySelector('[data-action="play-next"]').hidden = isPlaylist;
+        sharedMoreMenu.querySelector('[data-action="add-to-queue"]').hidden = isPlaylist;
+        sharedMoreMenu.querySelector('[data-action="play-radio"]').hidden = isPlaylist;
+        sharedMoreMenu.querySelector('[data-action="save-playlist"]').hidden = isPlaylist;
 
         var menuHeight = 200;
         var menuWidth = 180;

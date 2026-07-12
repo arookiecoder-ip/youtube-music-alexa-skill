@@ -559,6 +559,8 @@ body.results-open .play-section {
   }
   body.rail-collapsed .sidebar-new-playlist-container { visibility: hidden !important; }
   body.rail-collapsed .sidebar-playlist-list { overflow-x: hidden; }
+body.rail-collapsed .sidebar-playlist-list::-webkit-scrollbar { display: none; }
+body.rail-collapsed .sidebar-playlist-list { scrollbar-width: none; }
   /* Playlist items keep exact size/padding; only the text hides. */
   .sidebar-playlist-item { overflow: hidden; }
   .sidebar-playlist-copy {
@@ -1361,6 +1363,21 @@ body.now-playing-route .player-section .player-expand-btn svg {
     overflow: hidden;
   }
   body.now-playing-closing { overflow: hidden; }
+  /* During the close animation, keep main locked at the same size it had
+     while the overlay was open. Without this, removing now-playing-route
+     lets main go from height:100vh back to height:auto instantly — the
+     content reflow is visible behind the sliding overlay as a jump. */
+  body.now-playing-closing main {
+    height: 100vh;
+    min-height: 0;
+    padding-bottom: 0;
+    overflow: hidden;
+  }
+  /* Keep the now-playing section above underlying overlays (playlist, history,
+     etc.) that share z-index 210, so the close slide always paints on top. */
+  body.now-playing-closing #now-playing-section {
+    z-index: 211;
+  }
   /* Safety: home route is always scrollable, even if now-playing-closing
      was not cleaned up in time (rapid navigation, timer race, etc.). */
   body.home-route {

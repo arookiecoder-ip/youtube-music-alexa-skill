@@ -144,6 +144,90 @@
       if (el) el.scrollTop = 0;
     });
   }
+  // Close the now-playing overlay without re-applying the underlying route.
+  // navigateTo() would re-run the return route's handler (e.g., re-fetching
+  // playlist data), but the overlay should just slide away and leave the page
+  // underneath exactly as it was.
+  window.closeNowPlayingOverlay = function() {
+    if (!document.body.classList.contains('now-playing-route')) return;
+    var npSection = document.getElementById('now-playing-section');
+    var returnRoute = window.__npReturnRoute || '#home';
+
+    // Update route state without triggering applyRoute
+    window.__route = returnRoute;
+    history.replaceState({ route: returnRoute }, '', location.pathname + location.search);
+
+    // Restore the return route's body classes
+    document.body.classList.toggle('home-route', returnRoute === '#home');
+    document.body.classList.toggle('playlists-route', returnRoute.indexOf('#playlist/') === 0);
+    document.body.classList.toggle('artist-route', returnRoute.indexOf('#artist/') === 0);
+    document.body.classList.toggle('album-route', returnRoute.indexOf('#album/') === 0);
+    document.body.classList.toggle('history-route', returnRoute === '#history');
+    document.body.classList.toggle('explore-route', returnRoute === '#explore');
+    document.body.classList.toggle('library-route', returnRoute === '#library');
+
+    // applyRoute('#now-playing') hid the return route's content (hideAllViews +
+    // removed 'open' from overlay elements). Restore visibility without
+    // re-running route handlers so no data is re-fetched.
+    if (returnRoute === '#home') {
+      var state = window.__appState;
+      if (state && state._resultsOpen) {
+        setHidden('.play-section, #results-section', false);
+        setHidden('#home-section, #idle-hero, #queue-section, #artist-section, #album-section', true);
+      } else {
+        showHomeViews();
+      }
+    } else if (returnRoute.indexOf('#playlist/') === 0) {
+      var po = document.getElementById('playlist-detail-modal-overlay');
+      if (po) po.classList.add('open');
+    } else if (returnRoute === '#history') {
+      var ho = document.getElementById('history-modal-overlay');
+      if (ho) ho.classList.add('open');
+    } else if (returnRoute === '#explore') {
+      var eo = document.getElementById('explore-modal-overlay');
+      if (eo) eo.classList.add('open');
+    } else if (returnRoute === '#library') {
+      var lo = document.getElementById('library-modal-overlay');
+      if (lo) lo.classList.add('open');
+    } else if (returnRoute.indexOf('#artist/') === 0) {
+      showArtistSection();
+    } else if (returnRoute.indexOf('#album/') === 0) {
+      setHidden('#recs-section, #home-section, #idle-hero, #results-section, #queue-section, #artist-section', true);
+      setHidden('.play-section', false);
+      var albumSection = document.getElementById('album-section');
+      if (albumSection) albumSection.hidden = false;
+    }
+
+    // Trigger the closing slide-out animation
+    document.body.classList.remove('now-playing-route');
+    document.body.classList.add('now-playing-closing');
+
+    // Clean up queue panel state
+    var queueSection = document.getElementById('queue-section');
+    if (queueSection) queueSection.hidden = true;
+    var main = document.querySelector('main');
+    if (main) main.classList.remove('has-queue');
+
+    if (npSection) {
+      if (npSection._closeTimer) clearTimeout(npSection._closeTimer);
+      if (npSection._closeCleanup) npSection.removeEventListener('transitionend', npSection._closeCleanup);
+      var finishClose = function(event) {
+        if (event && (event.target !== npSection || event.propertyName !== 'transform')) return;
+        if (npSection._closeTimer) clearTimeout(npSection._closeTimer);
+        npSection.removeEventListener('transitionend', finishClose);
+        npSection.hidden = true;
+        npSection._closeTimer = null;
+        npSection._closeCleanup = null;
+        document.body.classList.remove('now-playing-closing');
+        document.documentElement.style.removeProperty('overflow');
+        document.body.style.removeProperty('overflow');
+      };
+      npSection._closeCleanup = finishClose;
+      npSection.addEventListener('transitionend', finishClose);
+      npSection._closeTimer = setTimeout(finishClose, 450);
+    }
+  };
+
   window.navigateTo = function(route) {
     route = route || '#home';
     var changedRoute = route !== window.__route;
@@ -187,6 +271,7 @@
     // CSS transition has a visible start state (translateY(103%)) to animate from.
     if (hash === '#now-playing' && routedNpSection) {
       routedNpSection.hidden = false;
+      void routedNpSection.offsetHeight;
     }
     document.body.classList.toggle('home-route', hash === '#home');
     document.body.classList.toggle('now-playing-route', hash === '#now-playing');

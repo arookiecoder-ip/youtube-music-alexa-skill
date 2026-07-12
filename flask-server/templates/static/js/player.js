@@ -88,7 +88,7 @@ function showNowPlaying(info) {
       _lastNpFingerprint = '';
       // Playback is gone — don't leave an empty expanded player on screen.
       if (window.getRoute && window.getRoute() === '#now-playing') {
-        window.navigateTo(window.__npReturnRoute || '#home');
+        window.closeNowPlayingOverlay();
       }
     }
     return;
@@ -650,7 +650,7 @@ function syncModalScrollLock() {
     // to the view it was opened from.
     if (window.matchMedia('(min-width: 900px)').matches) {
       if (window.getRoute && window.getRoute() === '#now-playing') {
-        window.navigateTo(window.__npReturnRoute || '#home'); // Collapse
+        window.closeNowPlayingOverlay(); // Collapse
       } else {
         window.navigateTo('#now-playing'); // Expand
       }
