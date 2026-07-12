@@ -61,7 +61,8 @@ Core (`server.py`):
 | Var               | Purpose                                                                                                                                                              |
 | ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `PUBLIC_BASE_URL` | e.g. `https://<your-ip-with-dashes>.sslip.io`. When set, `audio_url` points to `/proxy/` and downloads are pre-warmed. Unset = dev mode (returns direct googlevideo URLs). |
-| `YTDLP_COOKIES`   | path to cookies.txt; passed to every yt-dlp call                                                                                                                     |
+| `YTDLP_COOKIES_FILE` | optional path to a `cookies.txt` file (Netscape format). Passed to every yt-dlp call to bypass YouTube bot detection (502 errors). Default is `cookies.txt` in the server root. |
+| `YTDLP_BROWSER`   | optional. If running on Windows/macOS/desktop Linux, set to `chrome`, `edge`, `firefox`, or `brave` to have yt-dlp automatically extract your live browser cookies to bypass bot detection. (Does not work in Docker). |
 | `YTMUSIC_AUTH_FILE` | optional path to a `headers_auth.json` or `oauth.json` for YT Music recommendations. Warning: DO NOT store this in a public repo; browser headers give full access. |
 | `YTMUSIC_OAUTH_CLIENT_ID` / `_SECRET` | optional OAuth client credentials if using OAuth rather than browser headers. |
 | `YTDLP_PO_TOKEN`  | optional — if set, overrides the default `android_vr` client and passes this as the GVS PO token for `mweb` client instead (e.g. `youtube:po_token=mweb.gvs+{token}`) |
@@ -166,33 +167,18 @@ A mismatch here is the #1 cause of "401 everywhere" — see
 
 ### YouTube Music Authentication
 
-The new **Home feed** (v2) displays your personalized YouTube Music homepage directly fetched via the unofficial API (`ytmusicapi`). Because this requires identifying who you are to YouTube, you must provide authentication credentials:
+The system uses **two entirely separate authentication mechanisms** for its two different backend engines:
 
-- **Browser Headers (`headers_auth.json`)**: This provides the richest experience and is easiest to extract from a logged-in browser session, but it gives **full access** to your Google account. **Warning: DO NOT commit this file to a public repository.** If using this method, simply point `YTMUSIC_AUTH_FILE` to its location.
-  > **How to create `headers_auth.json`**:
-  > 1. Go to [music.youtube.com](https://music.youtube.com) and log in.
-  > 2. Open Developer Tools (F12) and go to the **Network** tab. Refresh the page.
-  > 3. Filter for `browse`, click the first request, and scroll down to **Request Headers**.
-  > 4. Copy the entire string next to the `cookie:` header AND the `authorization:` header.
-  > 5. **If you use a Brand Account:** Also copy the `x-goog-authuser` header (usually `1` or `2`).
-  > 6. Create a `headers_auth.json` file in your root folder (next to `docker-compose.yml`):
-  >    ```json
-  >    {
-  >      "accept": "*/*",
-  >      "accept-language": "en-US,en;q=0.9",
-  >      "authorization": "PASTE_YOUR_AUTHORIZATION_STRING_HERE",
-  >      "content-type": "application/json",
-  >      "cookie": "PASTE_YOUR_COOKIE_STRING_HERE",
-  >      "x-goog-authuser": "0_OR_1_OR_2",
-  >      "x-origin": "https://music.youtube.com",
-  >      "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-  >    }
-  >    ```
-  > *(Alternatively, run `docker exec -it ytmusic ytmusicapi browser` or `python -m ytmusicapi browser` to auto-generate this file from a cURL command)*
-  > 7. In your `.env` file or terminal, set the `YTMUSIC_AUTH_FILE` environment variable to point to this file before starting the server. For example: `YTMUSIC_AUTH_FILE=headers_auth.json`.
-- **OAuth (`oauth.json`)**: This is much safer as it uses delegated access, but it requires configuring a GCP project. If using OAuth, you must provide `YTMUSIC_OAUTH_CLIENT_ID` and `YTMUSIC_OAUTH_CLIENT_SECRET` in your environment variables, and generate an `oauth.json` file to point `YTMUSIC_AUTH_FILE` at.
+**1. The Interface (`ytmusicapi`)**
+This powers your personalized Home feed, playlists, history, and search results. It requires you to tell YouTube who you are.
+- **OAuth (`oauth.json`)**: This is the recommended and safest method. In the Web Remote, click the Profile icon and sign in to YouTube via the pop-up modal. It will generate an `oauth.json` automatically. (If deploying headless, you can also run `python -m ytmusicapi oauth` locally).
+- **Browser Headers (`headers_auth.json`)**: An older alternative. Set `YTMUSIC_AUTH_FILE=headers_auth.json`. **Warning:** DO NOT commit this to a public repo as it grants full Google account access. 
+- **Anonymous Fallback**: If no authentication is provided, the UI gracefully falls back to generic charts and trending shelves instead of personalized content.
 
-**Anonymous / Local Fallback**: If `YTMUSIC_AUTH_FILE` is left unset, the backend will gracefully fall back to fetching unauthenticated, regional recommendations directly from YouTube. You will see generic charts and trending shelves instead of your personalized playlists and shortcuts. Note: there is no Spotify integration; the home feed is powered purely by YouTube Music.
+**2. The Downloader (`yt-dlp`)**
+This is the engine that physically downloads the audio streams. It **cannot use OAuth**. Without standard browser cookies, YouTube will eventually flag it as a bot and block your server IP (causing 502 Bad Gateway errors).
+- **Automated extraction**: If you run the server directly on your desktop (not Docker), set `YTDLP_BROWSER=chrome` (or `edge`, `firefox`) in your `.env`. The backend will magically extract your live cookies when needed.
+- **Manual extraction (`cookies.txt`)**: Use a browser extension like "Get cookies.txt LOCALLY" to export your YouTube cookies. Save it as `cookies.txt` in your server folder (or point `YTDLP_COOKIES_FILE` to it). This is **mandatory** for Docker deployments.
 
 ---
 

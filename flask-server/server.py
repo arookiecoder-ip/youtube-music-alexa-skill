@@ -1591,7 +1591,11 @@ class Supporting:
                        "--remote-components", "ejs:github"]
             cookies_file = os.environ.get("YTDLP_COOKIES_FILE", "cookies.txt")
             if os.path.exists(cookies_file):
-                command.extend(["--cookies", cookies_file])
+                import tempfile
+                import shutil
+                tmp_cookies = os.path.join(tempfile.gettempdir(), "yt_dlp_cookies.txt")
+                shutil.copy2(cookies_file, tmp_cookies)
+                command.extend(["--cookies", tmp_cookies])
             elif browser := os.environ.get("YTDLP_BROWSER"):
                 command.extend(["--cookies-from-browser", browser])
             if extractor_args:
@@ -1626,7 +1630,11 @@ class Supporting:
                        "--print", fmt]
             cookies_file = os.environ.get("YTDLP_COOKIES_FILE", "cookies.txt")
             if os.path.exists(cookies_file):
-                command.extend(["--cookies", cookies_file])
+                import tempfile
+                import shutil
+                tmp_cookies = os.path.join(tempfile.gettempdir(), "yt_dlp_cookies.txt")
+                shutil.copy2(cookies_file, tmp_cookies)
+                command.extend(["--cookies", tmp_cookies])
             elif browser := os.environ.get("YTDLP_BROWSER"):
                 command.extend(["--cookies-from-browser", browser])
             if extractor_args:
@@ -1687,7 +1695,11 @@ class Supporting:
         
         cookies_file = os.environ.get("YTDLP_COOKIES_FILE", "cookies.txt")
         if os.path.exists(cookies_file):
-            command.extend(["--cookies", cookies_file])
+            import tempfile
+            import shutil
+            tmp_cookies = os.path.join(tempfile.gettempdir(), "yt_dlp_cookies.txt")
+            shutil.copy2(cookies_file, tmp_cookies)
+            command.extend(["--cookies", tmp_cookies])
         elif browser := os.environ.get("YTDLP_BROWSER"):
             command.extend(["--cookies-from-browser", browser])
             
