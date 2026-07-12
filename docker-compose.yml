@@ -8,7 +8,7 @@ services:
       # Listen history and playlists must outlive the container; /tmp is ephemeral.
       - DB_FILE=/data/data.db
       - YTDLP_COOKIES=/app/cookies.txt
-      # OAuth is created by the web UI, so it must live on the writable,
+      # Auth file is created by the web UI, so it must live on the writable,
       # persistent data volume (not in a read-only bind mount).
       - YTMUSIC_AUTH_FILE=/data/headers_auth.json
     volumes:

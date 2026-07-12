@@ -282,8 +282,8 @@ _SESSION_PATHS = ('/remote', '/alexa/status', '/alexa/init', '/alexa/devices', '
                   '/alexa/jam/start', '/alexa/jam/stop', '/alexa/jam/status',
                   '/alexa/jam/qr', '/api/home', '/api/library',
                   '/alexa/like', '/api/liked_songs', '/api/profile_status',
-                  '/alexa/amazon_signout', '/api/youtube/oauth/start', '/api/youtube/oauth/finish',
-                  '/api/youtube/browser-auth')
+'/alexa/amazon_signout',
+                   '/api/youtube/browser-auth')
 _SESSION_PREFIXES = ('/alexa/now_playing/', '/history/', '/api/playlists/', '/recommendations/',
                      '/api/artist/', '/api/album/', '/api/library/', '/api/explore/', '/api/home/')
 
@@ -629,14 +629,7 @@ def _get_ytmusic_home():
             auth_file = os.environ.get("YTMUSIC_AUTH_FILE") or "headers_auth.json"
             try:
                 if auth_file and os.path.isfile(auth_file):
-                    client_id = os.environ.get("YTMUSIC_OAUTH_CLIENT_ID")
-                    client_secret = os.environ.get("YTMUSIC_OAUTH_CLIENT_SECRET")
-                    if client_id and client_secret:
-                        from ytmusicapi.auth.oauth.credentials import OAuthCredentials
-                        creds = OAuthCredentials(client_id, client_secret)
-                        inst = YTMusic(auth=auth_file, oauth_credentials=creds)
-                    else:
-                        inst = YTMusic(auth=auth_file)
+                    inst = YTMusic(auth=auth_file)
                 else:
                     inst = YTMusic()
             except Exception as e:
@@ -2896,115 +2889,12 @@ def profile_status():
         }
     })
 
-_OAUTH_CREDENTIALS_CACHE = {}
-_OAUTH_CACHE_LOCK = threading.Lock()
 
-@app.route("/api/youtube/oauth/start", methods=["POST"])
-def youtube_oauth_start():
-    client_id = os.environ.get("YTMUSIC_OAUTH_CLIENT_ID")
-    client_secret = os.environ.get("YTMUSIC_OAUTH_CLIENT_SECRET")
-    
-    if not client_id or not client_secret:
-        return error_response("YouTube OAuth Client ID and Secret are missing in your environment configuration.", 400)
-        
-    try:
-        from ytmusicapi.auth.oauth.credentials import OAuthCredentials
-        creds = OAuthCredentials(client_id, client_secret)
-        code = creds.get_code()
-        
-        with _OAUTH_CACHE_LOCK:
-            _OAUTH_CREDENTIALS_CACHE[code["device_code"]] = creds
-            
-        return jsonify(code)
-    except Exception as e:
-        logger.exception("Failed to start YT OAuth")
-        return error_response(str(e), 500)
-
-@app.route("/api/youtube/oauth/finish", methods=["POST"])
-def youtube_oauth_finish():
-    body = request.get_json(silent=True) or {}
-    device_code = body.get("device_code")
-    if not device_code:
-        return error_response("missing device_code", 400)
-    
-    with _OAUTH_CACHE_LOCK:
-        creds = _OAUTH_CREDENTIALS_CACHE.get(device_code)
-    
-    if not creds:
-        return error_response("Invalid or expired device_code", 400)
-    
-    try:
-        from ytmusicapi.auth.oauth.token import RefreshingToken
-        raw_token = creds.token_from_code(device_code)
-
-        # Google's device-token endpoint reports protocol state as JSON instead
-        # of raising.  In particular, the first poll can still be pending even
-        # after the browser has rendered its "Device connected" page.  Treating
-        # that response as a missing refresh token makes a successful login look
-        # like a permanent failure and stops the browser from polling.
-        oauth_error = raw_token.get("error")
-        if oauth_error in ("authorization_pending", "slow_down"):
-            retry_after = 10 if oauth_error == "slow_down" else 5
-            return jsonify({
-                "success": False,
-                "pending": True,
-                "retry_after": retry_after,
-            })
-        if oauth_error:
-            oauth_message = raw_token.get("error_description") or oauth_error
-            logger.warning("YouTube OAuth token exchange failed: %s", oauth_error)
-            return error_response(oauth_message, 400)
-        
-        if "refresh_token" not in raw_token:
-            logger.error("YouTube OAuth response omitted refresh_token; keys=%s", sorted(raw_token.keys()))
-            return error_response("Google completed authorization but did not issue a refresh token. Revoke this app at myaccount.google.com/permissions, then sign in again.", 502)
-            
-        refresh_token_expires_in = raw_token.get("refresh_token_expires_in", raw_token.get("expires_in", 3600))
-        ref_token = RefreshingToken(
-            credentials=creds,
-            access_token=raw_token["access_token"],
-            refresh_token=raw_token["refresh_token"],
-            scope=raw_token.get("scope", ""),
-            token_type=raw_token.get("token_type", "Bearer"),
-            expires_in=refresh_token_expires_in,
-        )
-        ref_token.update(raw_token)
-        
-        import json
-        auth_file = os.environ.get("YTMUSIC_AUTH_FILE") or "headers_auth.json"
-
-        if os.path.isdir(auth_file):
-            logger.error("YTMUSIC_AUTH_FILE points to a directory: %s", auth_file)
-            return error_response(
-                "YouTube OAuth storage is configured as a directory. Update YTMUSIC_AUTH_FILE to a writable file path and recreate the container.",
-                500,
-            )
-        auth_parent = os.path.dirname(os.path.abspath(auth_file))
-        os.makedirs(auth_parent, exist_ok=True)
-
-        with open(auth_file, "w") as f:
-            f.write(json.dumps(ref_token.as_dict()))
-            
-        # Invalidate caches
-        global _YT_HOME_CACHE_MTIME
-        _YT_HOME_CACHE_MTIME = 0
-            
-        with _OAUTH_CACHE_LOCK:
-            _OAUTH_CREDENTIALS_CACHE.pop(device_code, None)
-            
-        return jsonify({"success": True})
-    except Exception as e:
-        if isinstance(e, KeyError):
-            logger.exception("oauth finish key error")
-            return error_response(f"Missing token key: {e}", 500)
-        # 400 is expected if pending
-        return error_response(str(e), 400)
 
 
 @app.route("/api/youtube/browser-auth", methods=["POST"])
 def youtube_browser_auth():
-    """Import YouTube Music browser request headers for endpoints that Google
-    does not expose reliably through custom-client OAuth."""
+    """Import YouTube Music browser request headers."""
     body = request.get_json(silent=True) or {}
     headers_raw = body.get("headers")
     if not isinstance(headers_raw, str) or not headers_raw.strip():
@@ -3648,22 +3538,11 @@ async def get_history():
     from ytmusicapi.auth.types import AuthType
     if _get_ytmusic_home().auth_type == AuthType.UNAUTHORIZED:
         return jsonify({'error': 'YouTube Music authentication required. Please visit /setup/'}), 403
-    auth_file = os.environ.get("YTMUSIC_AUTH_FILE") or "headers_auth.json"
     try:
         history_raw = await asyncio.to_thread(_get_ytmusic_home().get_history)
     except Exception as e:
-        message = str(e)
-        if "invalid argument" in message.lower():
-            logger.warning("YouTube OAuth history browse unavailable; retrying without OAuth: %s", message)
-            try:
-                yt_no_oauth = YTMusic(auth=auth_file)
-                history_raw = await asyncio.to_thread(yt_no_oauth.get_history)
-            except Exception as fe:
-                logger.warning('[history] fallback also failed: %s', fe)
-                return jsonify([])
-        else:
-            logger.warning('[history] failed: %s', e)
-            return jsonify([])
+        logger.warning('[history] failed (YouTube blocks this without valid browser headers): %s', e)
+        return jsonify([])
     mapped = []
     for item in history_raw:
         mapped.append({
@@ -4800,14 +4679,10 @@ async def api_get_library():
         playlists = await asyncio.to_thread(_get_ytmusic_home().get_library_playlists, 100)
         return jsonify({"playlists": playlists})
     except Exception as e:
-        # Google currently rejects some OAuth-authenticated browse endpoints
-        # with INVALID_ARGUMENT even though token-backed history, likes, and
-        # playlist reads work normally.  Keep Library useful in that partial-
-        # support state: LM is handled by api_get_library_playlist() through
-        # get_liked_songs(), which is supported by the same token.
+        # Browser-header auth may reject some browse endpoints; show LM fallback.
         message = str(e)
         if "invalid argument" in message.lower():
-            logger.warning("YouTube OAuth library browse unavailable; showing Liked Music fallback: %s", message)
+            logger.warning("YouTube library browse unavailable; showing Liked Music fallback: %s", message)
             return jsonify({
                 "playlists": [{
                     "playlistId": "LM",
@@ -4851,13 +4726,13 @@ async def api_get_library_playlist(pl_id):
                 raw = await asyncio.to_thread(yt.get_liked_songs, 100)
             except Exception as liked_error:
                 if "invalid argument" in str(liked_error).lower():
-                    logger.warning("YouTube OAuth Liked Music browse unavailable: %s", liked_error)
+                    logger.warning("YouTube Liked Music browse unavailable: %s", liked_error)
                     return jsonify({
                         'title': 'Liked Music',
                         'trackCount': 0,
                         'tracks': [],
                         'partial': True,
-                        'message': 'YouTube does not expose Liked Music to this OAuth account.',
+                        'message': 'YouTube does not expose Liked Music with current auth.',
                     })
                 raise
             tracks = []
@@ -4882,7 +4757,7 @@ async def api_get_library_playlist(pl_id):
             info = await asyncio.to_thread(yt.get_playlist, pl_id, None)
         except Exception as browse_err:
             if "invalid argument" in str(browse_err).lower():
-                logger.warning("YouTube OAuth playlist browse unavailable; retrying anonymously: %s", browse_err)
+                logger.warning("YouTube playlist browse unavailable; retrying anonymously: %s", browse_err)
                 try:
                     info = await asyncio.to_thread(YTMusic().get_playlist, pl_id, None)
                     return jsonify(info)
@@ -4982,7 +4857,7 @@ async def api_get_artist(channel_id):
     except Exception as e:
         message = str(e)
         if "invalid argument" in message.lower():
-            logger.warning("YouTube OAuth artist browse unavailable; retrying anonymously: %s", message)
+            logger.warning("YouTube artist browse unavailable; retrying anonymously: %s", message)
             try:
                 raw = await asyncio.to_thread(YTMusic().get_artist, channel_id)
             except Exception as fallback_e:
@@ -5069,10 +4944,10 @@ async def api_get_explore():
     except Exception as e:
         message = str(e)
         if "invalid argument" in message.lower():
-            # Some OAuth identities cannot call the Explore browse endpoint,
-            # but Explore itself is public. Retry without OAuth so new
+            # Some auth identities cannot call the Explore browse endpoint,
+            # but Explore itself is public. Retry anonymously so new
             # releases, moods, charts, and videos remain available.
-            logger.warning("YouTube OAuth explore browse unavailable; retrying anonymously: %s", message)
+            logger.warning("YouTube explore browse unavailable; retrying anonymously: %s", message)
             try:
                 explore = await asyncio.to_thread(YTMusic().get_explore)
                 return jsonify(explore)

@@ -233,10 +233,9 @@
         
         const ythEl = document.getElementById('status-yt-headers');
         if (ythEl) {
-          const limitedOauth = status.youtube_auth_working && String(status.youtube_auth_type || '').includes('OAUTH');
-          ythEl.textContent = limitedOauth ? 'OAuth (Limited)' : (status.youtube_auth_working ? 'Working' : 'Not Working');
-          ythEl.style.color = limitedOauth ? '#f59f00' : (status.youtube_auth_working ? '#4ade80' : '#ff6b6b');
-          ythEl.style.backgroundColor = limitedOauth ? 'rgba(245, 159, 0, 0.12)' : (status.youtube_auth_working ? 'rgba(74, 222, 128, 0.1)' : 'rgba(255, 107, 107, 0.1)');
+          ythEl.textContent = status.youtube_auth_working ? 'Working' : 'Not Working';
+          ythEl.style.color = status.youtube_auth_working ? '#4ade80' : '#ff6b6b';
+          ythEl.style.backgroundColor = status.youtube_auth_working ? 'rgba(74, 222, 128, 0.1)' : 'rgba(255, 107, 107, 0.1)';
           if (status.debug && status.debug.headers) ythEl.title = status.debug.headers;
         }
         
@@ -244,11 +243,6 @@
         const amzSignin = document.getElementById('amazon-signin');
         if (amzSignout) amzSignout.style.display = status.amazon_connected ? 'block' : 'none';
         if (amzSignin) amzSignin.style.display = status.amazon_connected ? 'none' : 'block';
-        const ytSignin = document.getElementById('youtube-signin');
-        if (ytSignin) {
-          ytSignin.style.display = 'block';
-          ytSignin.textContent = status.youtube_auth_working ? 'Re-authenticate YouTube' : 'Sign in to YouTube';
-        }
         
       } catch (err) {
         console.error("Failed to load profile status", err);
@@ -309,104 +303,4 @@
 })();
 })();
 
-/* ---- YouTube OAuth Modal ---- */
-(function () {
-  const ytSigninBtn = document.getElementById('youtube-signin');
-  const ytOauthModalWrap = document.getElementById('youtube-oauth-modal-wrap');
-  const ytOauthClose = document.getElementById('youtube-oauth-close');
-  const ytOauthUserCode = document.getElementById('yt-oauth-user-code');
-  const ytOauthCopy = document.getElementById('yt-oauth-copy');
-  const ytOauthLink = document.getElementById('yt-oauth-link');
-  const ytOauthStatusText = document.getElementById('yt-oauth-status-text');
-  let oauthPollTimer = null;
-  let currentDeviceCode = null;
 
-  function closeOauthModal() {
-    ytOauthModalWrap.hidden = true;
-    if (oauthPollTimer) clearTimeout(oauthPollTimer);
-    oauthPollTimer = null;
-    currentDeviceCode = null;
-  }
-
-  if (ytSigninBtn && ytOauthModalWrap) {
-    ytSigninBtn.addEventListener('click', async () => {
-      const wrap = document.getElementById('profile-menu-wrap');
-      if (wrap) wrap.classList.remove('open');
-      
-      try {
-        if (window.toast) window.toast('Starting YouTube OAuth...', 2000);
-        const res = await window.api('/api/youtube/oauth/start', {});
-        if (res.error) throw new Error(res.error);
-        
-        currentDeviceCode = res.device_code;
-        if (ytOauthUserCode) ytOauthUserCode.textContent = res.user_code;
-        if (ytOauthLink) ytOauthLink.href = res.verification_url + '?user_code=' + res.user_code;
-        if (ytOauthStatusText) ytOauthStatusText.textContent = 'Waiting for authorization...';
-        
-        ytOauthModalWrap.hidden = false;
-        
-        if (oauthPollTimer) clearTimeout(oauthPollTimer);
-        const pollForToken = async () => {
-          if (!currentDeviceCode) return;
-          try {
-            const pollRes = await window.api('/api/youtube/oauth/finish', { device_code: currentDeviceCode });
-            if (pollRes.success) {
-              oauthPollTimer = null;
-              currentDeviceCode = null;
-              if (ytOauthStatusText) ytOauthStatusText.textContent = 'Success! Authenticated.';
-              if (window.toast) window.toast('Successfully logged in to YouTube Music!');
-              setTimeout(() => {
-                window.location.href = '/?refresh=1';
-              }, 1500);
-              return;
-            }
-            const retryMs = Math.max(3000, Number(pollRes.retry_after || 5) * 1000);
-            oauthPollTimer = setTimeout(pollForToken, retryMs);
-          } catch (e) {
-            oauthPollTimer = null;
-            if (ytOauthStatusText) ytOauthStatusText.textContent = 'Error: ' + e.message;
-            if (window.toast) window.toast('Login failed: ' + e.message, 8000);
-          }
-        };
-        oauthPollTimer = setTimeout(pollForToken, 5000);
-        
-      } catch (err) {
-        if (window.toast) window.toast('Failed to start OAuth: ' + err.message, 4000);
-      }
-    });
-    
-    if (ytOauthClose) {
-      ytOauthClose.addEventListener('click', closeOauthModal);
-    }
-
-    ytOauthModalWrap.addEventListener('click', (event) => {
-      if (event.target === ytOauthModalWrap) closeOauthModal();
-    });
-
-    document.addEventListener('keydown', (event) => {
-      if (event.key === 'Escape' && !ytOauthModalWrap.hidden) closeOauthModal();
-    });
-
-    if (ytOauthCopy) {
-      ytOauthCopy.addEventListener('click', async () => {
-        const code = ytOauthUserCode ? ytOauthUserCode.textContent.trim() : '';
-        if (!code || code === '----') return;
-        try {
-          await navigator.clipboard.writeText(code);
-        } catch (_) {
-          const input = document.createElement('textarea');
-          input.value = code;
-          input.style.position = 'fixed';
-          input.style.opacity = '0';
-          document.body.appendChild(input);
-          input.select();
-          document.execCommand('copy');
-          input.remove();
-        }
-        const label = ytOauthCopy.querySelector('span');
-        if (label) label.textContent = 'Copied';
-        setTimeout(() => { if (label) label.textContent = 'Copy'; }, 1500);
-      });
-    }
-  }
-})();

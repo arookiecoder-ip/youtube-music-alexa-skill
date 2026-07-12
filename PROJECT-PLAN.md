@@ -48,7 +48,7 @@ stream-URL extraction.
    upload `skill-package/interactionModels/custom/en-IN.json`, deploy `lambda/` code.
 3. **Wire them together**: start ngrok, set the API URL via the voice command,
    play a song end-to-end on the Echo.
-4. **Personal library**: authenticate ytmusicapi (browser OAuth) so "my playlists",
+4. **Personal library**: authenticate ytmusicapi (browser auth) so "my playlists",
    likes, and personalized home feed work — upstream only supports public playlists.
 5. **Phone remote**: extend the Flask server with a control API + simple PWA page;
    use an Alexa remote-control library to push playback to the Echo from anywhere

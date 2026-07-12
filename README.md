@@ -63,8 +63,7 @@ Core (`server.py`):
 | `PUBLIC_BASE_URL` | e.g. `https://<your-ip-with-dashes>.sslip.io`. When set, `audio_url` points to `/proxy/` and downloads are pre-warmed. Unset = dev mode (returns direct googlevideo URLs). |
 | `YTDLP_COOKIES_FILE` | optional path to a `cookies.txt` file (Netscape format). Passed to every yt-dlp call to bypass YouTube bot detection (502 errors). Default is `cookies.txt` in the server root. |
 | `YTDLP_BROWSER`   | optional. If running on Windows/macOS/desktop Linux, set to `chrome`, `edge`, `firefox`, or `brave` to have yt-dlp automatically extract your live browser cookies to bypass bot detection. (Does not work in Docker). |
-| `YTMUSIC_AUTH_FILE` | optional path to a `headers_auth.json` or `oauth.json` for YT Music recommendations. Warning: DO NOT store this in a public repo; browser headers give full access. |
-| `YTMUSIC_OAUTH_CLIENT_ID` / `_SECRET` | optional OAuth client credentials if using OAuth rather than browser headers. |
+| `YTMUSIC_AUTH_FILE` | optional path to a browser headers JSON file for YT Music recommendations. Warning: DO NOT store this in a public repo; browser headers give full access. |
 | `YTDLP_PO_TOKEN`  | optional — if set, overrides the default `android_vr` client and passes this as the GVS PO token for `mweb` client instead (e.g. `youtube:po_token=mweb.gvs+{token}`) |
 | `API_KEY`         | shared secret; when set, all endpoints except privacy/terms and the login flow require `?key=` (or `X-Api-Key` header) **or** a valid web-remote session cookie. Must match `API_KEY` in `lambda/api_key.py`. |
 | `AUDIO_CACHE_DIR` | audio cache location (default `/tmp/ytm_audio_cache`)                                                                                                               |
@@ -171,12 +170,11 @@ The system uses **two entirely separate authentication mechanisms** for its two 
 
 **1. The Interface (`ytmusicapi`)**
 This powers your personalized Home feed, playlists, history, and search results. It requires you to tell YouTube who you are.
-- **Browser Headers (`headers_auth.json`)**: Recommended when you need personalized Home, Library, Liked Music, History, and Explore. In the Web Remote, open the Profile menu and choose **Fix personalized YouTube data**, then follow the guided import. **Warning:** never commit or share this file; it grants access to your YouTube Music session.
-- **OAuth (`oauth.json`)**: The Profile menu's Google device-login flow is safer and may support history, likes, and account actions, but Google can reject personalized browse endpoints with `INVALID_ARGUMENT` for custom OAuth clients. Use the browser-header flow if personalized pages are empty.
+- **Browser Headers (`headers_auth.json`)**: Powers personalized Home, Library, Liked Music, History, and Explore. In the Web Remote, open the Profile menu and choose **Fix personalized YouTube data**, then follow the guided import. **Warning:** never commit or share this file; it grants access to your YouTube Music session.
 - **Anonymous Fallback**: If no authentication is provided, the UI gracefully falls back to generic charts and trending shelves instead of personalized content.
 
 **2. The Downloader (`yt-dlp`)**
-This is the engine that physically downloads the audio streams. It **cannot use OAuth**. Without standard browser cookies, YouTube will eventually flag it as a bot and block your server IP (causing 502 Bad Gateway errors).
+This is the engine that physically downloads the audio streams. Without standard browser cookies, YouTube will eventually flag it as a bot and block your server IP (causing 502 Bad Gateway errors).
 - **Automated extraction**: If you run the server directly on your desktop (not Docker), set `YTDLP_BROWSER=chrome` (or `edge`, `firefox`) in your `.env`. The backend will magically extract your live cookies when needed.
 - **Manual extraction (`cookies.txt`)**: Use a browser extension like "Get cookies.txt LOCALLY" to export your YouTube cookies. Save it as `cookies.txt` in your server folder (or point `YTDLP_COOKIES_FILE` to it). This is **mandatory** for Docker deployments.
 
