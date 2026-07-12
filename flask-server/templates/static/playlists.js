@@ -49,34 +49,62 @@
       if (body) {
         body.innerHTML = '';
         const tracks = pl.tracks || [];
+        const title = pl.title || 'Playlist';
+        const coverUrls = tracks.slice(0, 4).map(track => {
+          const thumbs = track.thumbnails || [];
+          return (thumbs[thumbs.length - 1] || {}).url || '';
+        }).filter(Boolean);
+        const collage = coverUrls.length
+          ? `<div class="playlist-collage${coverUrls.length === 1 ? ' playlist-collage-single' : ''}">${coverUrls.map(url => `<img src="${escapeHtml(url)}" alt="" loading="lazy">`).join('')}</div>`
+          : `<div class="playlist-collage playlist-collage-single"><div class="collage-placeholder"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg></div></div>`;
+
+        const hero = document.createElement('section');
+        hero.className = 'playlist-detail-hero';
+        hero.innerHTML = `${collage}
+          <div class="playlist-detail-hero-info">
+            <h2 class="playlist-detail-page-title playlist-detail-hero-name">${escapeHtml(title)}</h2>
+            ${pl.description ? `<div class="playlist-detail-hero-desc">${escapeHtml(pl.description)}</div>` : ''}
+            <div class="playlist-detail-hero-meta">${tracks.length} ${tracks.length === 1 ? 'song' : 'songs'}</div>
+            ${tracks.length ? `<div class="playlist-detail-hero-actions"><span class="playlist-hero-actions-left"></span><button class="playlist-hero-play" type="button" aria-label="Play ${escapeHtml(title)}"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></button><span class="playlist-hero-actions-right"></span></div>` : ''}
+          </div>`;
+        body.appendChild(hero);
+
+        const list = document.createElement('div');
+        list.className = 'history-list';
         if (tracks.length === 0) {
-          body.innerHTML = '<div style="padding:24px; color:var(--muted); text-align:center;">No tracks in this playlist</div>';
+          list.innerHTML = '<div style="padding:24px; color:var(--muted); text-align:center;">No tracks in this playlist</div>';
         } else {
           tracks.forEach(track => {
+            const wrapper = document.createElement('div');
+            wrapper.className = 'result-swipe-wrapper';
             const row = document.createElement('div');
-            row.className = 'playlist-track-row';
+            row.className = 'history-item';
+            const thumbs = track.thumbnails || [];
+            const thumbnail = (thumbs[thumbs.length - 1] || {}).url || '/static/default-art.png';
+            const artist = track.artists?.map(a => a.name).join(', ') || '';
             row.innerHTML = `
-              <div class="playlist-track-thumb-container">
-                <img src="${track.thumbnails?.[0]?.url || '/static/default-art.png'}" class="playlist-track-thumb" loading="lazy" alt="art">
-              </div>
-              <div class="playlist-track-info">
-                <div class="playlist-track-title">${escapeHtml(track.title || '')}</div>
-                <div class="playlist-track-artist">${escapeHtml(track.artists?.map(a => a.name).join(', ') || '')}</div>
-              </div>
-            `;
+              <div class="playlist-track-art"><img src="${escapeHtml(thumbnail)}" class="queue-thumb" loading="lazy" alt=""></div>
+              <div class="queue-info">
+                <div class="queue-title">${escapeHtml(track.title || '')}</div>
+                <div class="queue-artist">${escapeHtml(artist)}</div>
+              </div>`;
             row.onclick = () => {
               if (window.playResult) {
                 window.playResult({
                   video_id: track.videoId,
                   title: track.title,
-                  artist: track.artists?.map(a => a.name).join(', ') || '',
-                  thumbnail: track.thumbnails?.[0]?.url || ''
+                  artist,
+                  thumbnail
                 }, false, false, true);
               }
             };
-            body.appendChild(row);
+            wrapper.appendChild(row);
+            list.appendChild(wrapper);
           });
+          const heroPlay = hero.querySelector('.playlist-hero-play');
+          if (heroPlay) heroPlay.addEventListener('click', () => list.querySelector('.history-item')?.click());
         }
+        body.appendChild(list);
       }
     } catch (e) {
       console.warn('Failed to load playlist', e);
