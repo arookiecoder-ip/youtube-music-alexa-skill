@@ -2831,19 +2831,31 @@ def alexa_amazon_signout():
 @app.route("/api/profile_status/", methods=["GET"])
 def profile_status():
     """Returns auth statuses for Amazon and YouTube."""
-    from ytmusicapi.auth.types import AuthType
+    # Amazon
+    amazon_status = alexa_remote.remote.status()
+    amazon_connected = bool(amazon_status.get("logged_in"))
+    amazon_debug = f"logged_in={amazon_connected}, error={amazon_status.get('login_error')}"
     
-    amazon_connected = alexa_remote.remote.is_logged_in()
-    
+    # YouTube Cookies
     cookies_file = os.environ.get("YTDLP_COOKIES")
     yt_cookies_working = bool(cookies_file and os.path.isfile(cookies_file) and os.path.getsize(cookies_file) > 0)
+    cookies_debug = f"file={cookies_file}, exists={os.path.isfile(cookies_file) if cookies_file else False}, size={os.path.getsize(cookies_file) if cookies_file and os.path.isfile(cookies_file) else 0}"
     
-    yt_header_auth_working = _get_ytmusic_home().auth_type != AuthType.UNAUTHORIZED
+    # YouTube Header Auth
+    yt_home = _get_ytmusic_home()
+    auth_type_str = str(getattr(yt_home, 'auth_type', 'UNAUTHORIZED'))
+    yt_header_auth_working = "UNAUTHORIZED" not in auth_type_str
+    headers_debug = f"auth_type={auth_type_str}"
     
     return jsonify({
         "amazon_connected": amazon_connected,
         "youtube_cookies_working": yt_cookies_working,
-        "youtube_header_auth_working": yt_header_auth_working
+        "youtube_header_auth_working": yt_header_auth_working,
+        "debug": {
+            "amazon": amazon_debug,
+            "cookies": cookies_debug,
+            "headers": headers_debug
+        }
     })
 
 

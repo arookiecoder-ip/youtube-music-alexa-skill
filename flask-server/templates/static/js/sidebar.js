@@ -174,18 +174,21 @@
         if (amzEl) {
           amzEl.textContent = status.amazon_connected ? 'Connected' : 'Disconnected';
           amzEl.style.color = status.amazon_connected ? 'var(--text-color)' : '#ff4a4a';
+          if (status.debug && status.debug.amazon) amzEl.title = status.debug.amazon;
         }
         
         const ytcEl = document.getElementById('status-yt-cookies');
         if (ytcEl) {
           ytcEl.textContent = status.youtube_cookies_working ? 'Working' : 'Not Working';
           ytcEl.style.color = status.youtube_cookies_working ? 'var(--text-color)' : '#ff4a4a';
+          if (status.debug && status.debug.cookies) ytcEl.title = status.debug.cookies;
         }
         
         const ythEl = document.getElementById('status-yt-headers');
         if (ythEl) {
           ythEl.textContent = status.youtube_header_auth_working ? 'Working' : 'Not Working';
           ythEl.style.color = status.youtube_header_auth_working ? 'var(--text-color)' : '#ff4a4a';
+          if (status.debug && status.debug.headers) ythEl.title = status.debug.headers;
         }
         
         const amzSignout = document.getElementById('amazon-signout');
