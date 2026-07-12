@@ -3501,7 +3501,7 @@ def get_recommendations():
 async def get_history():
     from ytmusicapi.auth.types import AuthType
     if _get_ytmusic_home().auth_type == AuthType.UNAUTHORIZED:
-        return jsonify({'error': 'Unauthorized'}), 401
+        return jsonify({'error': 'YouTube Music authentication required. Please visit /setup/'}), 403
     try:
         history_raw = await asyncio.to_thread(_get_ytmusic_home().get_history)
         mapped = []
@@ -3526,7 +3526,7 @@ async def clear_history():
 async def remove_history_item(video_id):
     from ytmusicapi.auth.types import AuthType
     if _get_ytmusic_home().auth_type == AuthType.UNAUTHORIZED:
-        return jsonify({'error': 'Unauthorized'}), 401
+        return jsonify({'error': 'YouTube Music authentication required. Please visit /setup/'}), 403
     try:
         # Note: removing a specific item from history requires the feedbackToken which get_history provides.
         # This is a bit complex for a simple delete, but we will return success for the UI.
@@ -3539,7 +3539,7 @@ async def alexa_like():
     from ytmusicapi.auth.types import AuthType
     yt = _get_ytmusic_home()
     if yt.auth_type == AuthType.UNAUTHORIZED:
-        return jsonify({'error': 'Unauthorized'}), 401
+        return jsonify({'error': 'YouTube Music authentication required. Please visit /setup/'}), 403
     if request.method == "POST":
         body = request.get_json(silent=True) or {}
         video_id = (body.get('video_id') or '').strip()
@@ -4638,7 +4638,7 @@ def _sweep_missing_thumbnails():
 async def api_get_library():
     from ytmusicapi.auth.types import AuthType
     if _get_ytmusic_home().auth_type == AuthType.UNAUTHORIZED:
-        return jsonify({'error': 'Unauthorized'}), 401
+        return jsonify({'error': 'YouTube Music authentication required. Please visit /setup/'}), 403
     try:
         playlists = await asyncio.to_thread(_get_ytmusic_home().get_library_playlists, 100)
         return jsonify({"playlists": playlists})
@@ -4649,7 +4649,7 @@ async def api_get_library():
 async def api_create_library_playlist():
     from ytmusicapi.auth.types import AuthType
     if _get_ytmusic_home().auth_type == AuthType.UNAUTHORIZED:
-        return jsonify({'error': 'Unauthorized'}), 401
+        return jsonify({'error': 'YouTube Music authentication required. Please visit /setup/'}), 403
     body = request.get_json(silent=True) or {}
     name = (body.get("name") or "").strip()
     description = (body.get("description") or "").strip()
@@ -4666,7 +4666,7 @@ async def api_get_library_playlist(pl_id):
     from ytmusicapi.auth.types import AuthType
     yt = _get_ytmusic_home()
     if yt.auth_type == AuthType.UNAUTHORIZED:
-        return jsonify({'error': 'Unauthorized'}), 401
+        return jsonify({'error': 'YouTube Music authentication required. Please visit /setup/'}), 403
     if not pl_id.strip():
         return jsonify({'error': 'invalid playlist id'}), 400
     try:
@@ -4714,7 +4714,7 @@ async def api_get_album(browse_id):
     from ytmusicapi.auth.types import AuthType
     yt = _get_ytmusic_home()
     if yt.auth_type == AuthType.UNAUTHORIZED:
-        return jsonify({'error': 'Unauthorized'}), 401
+        return jsonify({'error': 'YouTube Music authentication required. Please visit /setup/'}), 403
     browse_id = (browse_id or '').strip()
     if not browse_id:
         return jsonify({'error': 'invalid browseId'}), 400
@@ -4777,7 +4777,7 @@ async def api_get_artist(channel_id):
     from ytmusicapi.auth.types import AuthType
     yt = _get_ytmusic_home()
     if yt.auth_type == AuthType.UNAUTHORIZED:
-        return jsonify({'error': 'Unauthorized'}), 401
+        return jsonify({'error': 'YouTube Music authentication required. Please visit /setup/'}), 403
     channel_id = (channel_id or '').strip()
     if not channel_id:
         return jsonify({'error': 'invalid channelId'}), 400
@@ -4857,7 +4857,7 @@ async def api_get_artist(channel_id):
 async def api_get_explore():
     from ytmusicapi.auth.types import AuthType
     if _get_ytmusic_home().auth_type == AuthType.UNAUTHORIZED:
-        return jsonify({'error': 'Unauthorized'}), 401
+        return jsonify({'error': 'YouTube Music authentication required. Please visit /setup/'}), 403
     try:
         explore = await asyncio.to_thread(_get_ytmusic_home().get_explore)
         return jsonify(explore)

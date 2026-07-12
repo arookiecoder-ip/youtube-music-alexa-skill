@@ -246,6 +246,7 @@
   .hscroll-scroll svg { width: 22px; height: 22px; }
   .hscroll-track {
     display: flex;
+    flex-wrap: nowrap;
     gap: 12px;
     overflow-x: auto;
     scroll-snap-type: x mandatory;
