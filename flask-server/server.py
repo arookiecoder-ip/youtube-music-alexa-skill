@@ -42,17 +42,29 @@ app.config.update(
 # changes the service worker source, making installed PWAs re-install it and
 # precache the fresh copies.
 def _compute_static_version():
-    static_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'static')
+    app_dir = os.path.dirname(os.path.abspath(__file__))
+    asset_dirs = (
+        os.path.join(app_dir, 'static'),
+        # The main UI bundles are Jinja includes under templates/static.  They
+        # must participate in the fingerprint too; otherwise CSS/JS-only
+        # deploys keep the previous service-worker/page-cache version.
+        os.path.join(app_dir, 'templates', 'static'),
+    )
     h = hashlib.sha1()
-    for root_dir, _, files in os.walk(static_dir):
-        for name in sorted(files):
-            path = os.path.join(root_dir, name)
-            try:
-                st = os.stat(path)
-            except OSError:
-                continue
-            rel = os.path.relpath(path, static_dir).replace(os.sep, '/')
-            h.update(f'{rel}:{st.st_mtime_ns}:{st.st_size};'.encode())
+    for asset_dir in asset_dirs:
+        for root_dir, dirs, files in os.walk(asset_dir):
+            dirs.sort()
+            for name in sorted(files):
+                path = os.path.join(root_dir, name)
+                try:
+                    with open(path, 'rb') as asset:
+                        payload = asset.read()
+                except OSError:
+                    continue
+                rel = os.path.relpath(path, app_dir).replace(os.sep, '/')
+                h.update(rel.encode())
+                h.update(b'\0')
+                h.update(payload)
     return h.hexdigest()[:12]
 
 _STATIC_VERSION = _compute_static_version()
@@ -5032,7 +5044,7 @@ def manifest():
 _SERVICE_WORKER_TEMPLATE = """\
 const VERSION = '__VERSION__';
 const STATIC_CACHE = 'mb-static-' + VERSION;
-const PAGE_CACHE = 'mb-pages-v1';
+const PAGE_CACHE = 'mb-pages-' + VERSION;
 const PRECACHE = [
   '/static/icons/icon-192.svg',
   '/static/icons/icon-512.svg',
@@ -5053,6 +5065,7 @@ self.addEventListener('activate', (e) => {
   e.waitUntil((async () => {
     for (const key of await caches.keys()) {
       if (key.startsWith('mb-static-') && key !== STATIC_CACHE) await caches.delete(key);
+      if (key.startsWith('mb-pages-') && key !== PAGE_CACHE) await caches.delete(key);
     }
     await self.clients.claim();
     // Notify all clients about the update
