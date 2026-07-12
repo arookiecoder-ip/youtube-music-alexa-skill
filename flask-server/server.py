@@ -1,4 +1,4 @@
-import asyncio, difflib, glob, hashlib, hmac, itertools, json, os, random, secrets, sys, threading, time, re, subprocess, logging, copy, uuid, tempfile
+import asyncio, difflib, glob, hashlib, hmac, itertools, json, os, random, secrets, sys, threading, time, re, subprocess, logging, copy, uuid, tempfile, shlex
 from datetime import timedelta
 from urllib.parse import parse_qs, unquote, urlparse
 
@@ -3006,6 +3006,37 @@ def youtube_browser_auth():
     if len(headers_raw) > 128 * 1024:
         return error_response("Headers input is too large.", 413)
 
+    # Chrome exposes a reliable "Copy as cURL (bash)" action. Convert its
+    # -H/--header and -b/--cookie arguments into the raw format expected by
+    # ytmusicapi, while continuing to accept manually copied raw headers.
+    normalized_headers = headers_raw
+    if headers_raw.lstrip().lower().startswith("curl "):
+        try:
+            tokens = shlex.split(headers_raw.replace("\\\n", " "), posix=True)
+        except ValueError as e:
+            return error_response(f"Could not parse copied cURL request: {e}", 400)
+        extracted = []
+        i = 1
+        while i < len(tokens):
+            token = tokens[i]
+            if token in ("-H", "--header") and i + 1 < len(tokens):
+                extracted.append(tokens[i + 1])
+                i += 2
+                continue
+            if token.startswith("--header="):
+                extracted.append(token.split("=", 1)[1])
+            elif token in ("-b", "--cookie") and i + 1 < len(tokens):
+                extracted.append("cookie: " + tokens[i + 1])
+                i += 2
+                continue
+            elif token.startswith("--cookie="):
+                extracted.append("cookie: " + token.split("=", 1)[1])
+            i += 1
+        normalized_headers = "\n".join(extracted)
+
+    if "x-goog-authuser:" not in normalized_headers.lower():
+        normalized_headers += "\nx-goog-authuser: 0"
+
     auth_file = os.environ.get("YTMUSIC_AUTH_FILE") or "headers_auth.json"
     if os.path.isdir(auth_file):
         return error_response("YTMUSIC_AUTH_FILE must be a writable file path, not a directory.", 500)
@@ -3015,7 +3046,7 @@ def youtube_browser_auth():
     os.close(fd)
     try:
         from ytmusicapi.auth.browser import setup_browser
-        setup_browser(filepath=temp_path, headers_raw=headers_raw)
+        setup_browser(filepath=temp_path, headers_raw=normalized_headers)
         candidate = YTMusic(auth=temp_path)
         candidate.get_account_info()
         os.replace(temp_path, auth_file)
