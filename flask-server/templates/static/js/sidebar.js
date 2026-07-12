@@ -192,7 +192,6 @@
         const amzSignin = document.getElementById('amazon-signin');
         if (amzSignout) amzSignout.style.display = status.amazon_connected ? 'block' : 'none';
         if (amzSignin) amzSignin.style.display = status.amazon_connected ? 'none' : 'block';
-
         const ytSignin = document.getElementById('youtube-signin');
         if (ytSignin) ytSignin.style.display = status.youtube_header_auth_working ? 'none' : 'block';
         
@@ -252,6 +251,11 @@
     goHome(e);
   });
   
+})();
+})();
+
+/* ---- YouTube OAuth Modal ---- */
+(function () {
   const ytSigninBtn = document.getElementById('youtube-signin');
   const ytOauthModalWrap = document.getElementById('youtube-oauth-modal-wrap');
   const ytOauthClose = document.getElementById('youtube-oauth-close');
@@ -272,9 +276,9 @@
         if (res.error) throw new Error(res.error);
         
         currentDeviceCode = res.device_code;
-        ytOauthUserCode.textContent = res.user_code;
-        ytOauthLink.href = res.verification_url + '?user_code=' + res.user_code;
-        ytOauthStatusText.textContent = 'Waiting for authorization...';
+        if (ytOauthUserCode) ytOauthUserCode.textContent = res.user_code;
+        if (ytOauthLink) ytOauthLink.href = res.verification_url + '?user_code=' + res.user_code;
+        if (ytOauthStatusText) ytOauthStatusText.textContent = 'Waiting for authorization...';
         
         ytOauthModalWrap.hidden = false;
         
@@ -285,7 +289,7 @@
             const pollRes = await window.api('/api/youtube/oauth/finish', { device_code: currentDeviceCode });
             if (pollRes.success) {
               clearInterval(oauthPollInterval);
-              ytOauthStatusText.textContent = 'Success! Authenticated.';
+              if (ytOauthStatusText) ytOauthStatusText.textContent = 'Success! Authenticated.';
               if (window.toast) window.toast('Successfully logged in to YouTube Music!');
               setTimeout(() => {
                 window.location.href = '/?refresh=1';
@@ -309,9 +313,4 @@
       });
     }
   }
-
-});
-})();
-
-
 })();
