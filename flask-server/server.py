@@ -20,19 +20,6 @@ app = Flask(__name__)
 # the browser until the process restarts. Auto-reload re-renders on change.
 app.config["TEMPLATES_AUTO_RELOAD"] = True
 
-# YTDLP_COOKIES normally points at a read-only bind mount (protecting the
-# host's real cookie file from corruption) -- but yt-dlp always writes back
-# refreshed session cookies to whatever file --cookies points at, so every
-# invocation logged "OSError: Read-only file system" on exit even though
-# extraction itself succeeded. Copy to a writable path once at startup and
-# point every yt-dlp call there instead, so the host file stays untouched.
-_cookies_src = os.environ.get("YTDLP_COOKIES")
-if _cookies_src and os.path.isfile(_cookies_src):
-    import shutil
-    _cookies_writable = "/tmp/ytdlp_cookies.txt"
-    shutil.copyfile(_cookies_src, _cookies_writable)
-    os.environ["YTDLP_COOKIES"] = _cookies_writable
-
 # Signs the session cookie used by the web remote login. Set SECRET_KEY in the
 # environment so sessions survive restarts; otherwise a random one is generated
 # (logins reset on every restart, which is fine for a personal tool).
@@ -283,7 +270,7 @@ _SESSION_PATHS = ('/remote', '/alexa/status', '/alexa/init', '/alexa/devices', '
                   '/alexa/jam/start', '/alexa/jam/stop', '/alexa/jam/status',
                   '/alexa/jam/qr', '/api/home', '/api/library',
                   '/alexa/like', '/api/liked_songs', '/api/profile_status',
-                  '/alexa/amazon_signout')
+                  '/alexa/amazon_signout', '/api/youtube/oauth/start', '/api/youtube/oauth/finish')
 _SESSION_PREFIXES = ('/alexa/now_playing/', '/history/', '/api/playlists/', '/recommendations/',
                      '/api/artist/', '/api/album/', '/api/library/', '/api/explore/', '/api/home/')
 
@@ -601,11 +588,29 @@ def _get_ytmusic():
 
 _YT_HOME_CACHE = {}
 _YT_HOME_CACHE_LOCK = threading.Lock()
+_YT_HOME_CACHE_MTIME = 0
 
 def _get_ytmusic_home():
-    """Get a cached YTMusic instance for home feed with optional auth."""
+    """Get a cached YTMusic instance for home feed with optional auth. Reloads if auth file changes."""
+    global _YT_HOME_CACHE_MTIME
     tid = threading.get_ident()
     with _YT_HOME_CACHE_LOCK:
+        auth_file = os.environ.get("YTMUSIC_AUTH_FILE")
+        
+        # Invalidate cache if auth file was modified (e.g., user updated cookies)
+        current_mtime = 0
+        if auth_file and os.path.isfile(auth_file):
+            current_mtime = os.path.getmtime(auth_file)
+            
+        if current_mtime > _YT_HOME_CACHE_MTIME:
+            _YT_HOME_CACHE.clear()
+            _YT_HOME_CACHE_MTIME = current_mtime
+            
+            # Also clear the home feed cache so they see new results immediately
+            with _home_lock:
+                _home_cache['data'] = None
+                _home_cache['built_at'] = 0
+
         inst = _YT_HOME_CACHE.get(tid)
         if inst is None:
             auth_file = os.environ.get("YTMUSIC_AUTH_FILE")
@@ -1573,8 +1578,6 @@ class Supporting:
         return {'song_info': {'metadata': playlist[0], 'stream': stream}, 'playlist': playlist}
 
     def get_ytdlp_clients():
-        if os.environ.get("YTDLP_COOKIES"):
-            return ["default", "tv", "web"]
         return ["default", "ios", "tv", "web"]
 
     def resolve_direct_url(video_id: str):
@@ -1593,9 +1596,6 @@ class Supporting:
                        "--remote-components", "ejs:github"]
             if extractor_args:
                 command.extend(["--extractor-args", ",".join(extractor_args)])
-            cookies = os.environ.get("YTDLP_COOKIES")
-            if cookies:
-                command += ["--cookies", cookies]
             command += ["--", video_id]
             result = subprocess.run(command, capture_output=True, text=True)
             if result.returncode == 0:
@@ -1626,9 +1626,6 @@ class Supporting:
                        "--print", fmt]
             if extractor_args:
                 command.extend(["--extractor-args", ",".join(extractor_args)])
-            cookies = os.environ.get("YTDLP_COOKIES")
-            if cookies:
-                command += ["--cookies", cookies]
             command += ["--", video_id]
             try:
                 result = subprocess.run(command, capture_output=True, text=True, timeout=25)
@@ -1684,9 +1681,6 @@ class Supporting:
                    "--remote-components", "ejs:github"]
         if extractor_args:
             command.extend(["--extractor-args", ",".join(extractor_args)])
-        cookies = os.environ.get("YTDLP_COOKIES")
-        if cookies:
-            command += ["--cookies", cookies]
         command += ["-o", output, "--", video_id]
         return command
 
@@ -2836,11 +2830,6 @@ def profile_status():
     amazon_connected = bool(amazon_status.get("logged_in"))
     amazon_debug = f"logged_in={amazon_connected}, error={amazon_status.get('login_error')}"
     
-    # YouTube Cookies
-    cookies_file = os.environ.get("YTDLP_COOKIES")
-    yt_cookies_working = bool(cookies_file and os.path.isfile(cookies_file) and os.path.getsize(cookies_file) > 0)
-    cookies_debug = f"file={cookies_file}, exists={os.path.isfile(cookies_file) if cookies_file else False}, size={os.path.getsize(cookies_file) if cookies_file and os.path.isfile(cookies_file) else 0}"
-    
     # YouTube Header Auth
     yt_home = _get_ytmusic_home()
     auth_type_str = str(getattr(yt_home, 'auth_type', 'UNAUTHORIZED'))
@@ -2849,14 +2838,82 @@ def profile_status():
     
     return jsonify({
         "amazon_connected": amazon_connected,
-        "youtube_cookies_working": yt_cookies_working,
         "youtube_header_auth_working": yt_header_auth_working,
         "debug": {
             "amazon": amazon_debug,
-            "cookies": cookies_debug,
             "headers": headers_debug
         }
     })
+
+_OAUTH_CREDENTIALS_CACHE = {}
+_OAUTH_CACHE_LOCK = threading.Lock()
+
+@app.route("/api/youtube/oauth/start", methods=["POST"])
+def youtube_oauth_start():
+    client_id = os.environ.get("YTMUSIC_OAUTH_CLIENT_ID")
+    client_secret = os.environ.get("YTMUSIC_OAUTH_CLIENT_SECRET")
+    
+    if not client_id or not client_secret:
+        return error_response("YouTube OAuth Client ID and Secret are missing in your environment configuration.", 400)
+        
+    try:
+        from ytmusicapi.auth.oauth.credentials import OAuthCredentials
+        creds = OAuthCredentials(client_id, client_secret)
+        code = creds.get_code()
+        
+        with _OAUTH_CACHE_LOCK:
+            _OAUTH_CREDENTIALS_CACHE[code["device_code"]] = creds
+            
+        return jsonify(code)
+    except Exception as e:
+        logger.exception("Failed to start YT OAuth")
+        return error_response(str(e), 500)
+
+@app.route("/api/youtube/oauth/finish", methods=["POST"])
+def youtube_oauth_finish():
+    body = request.get_json(silent=True) or {}
+    device_code = body.get("device_code")
+    if not device_code:
+        return error_response("missing device_code", 400)
+    
+    with _OAUTH_CACHE_LOCK:
+        creds = _OAUTH_CREDENTIALS_CACHE.get(device_code)
+    
+    if not creds:
+        return error_response("Invalid or expired device_code", 400)
+    
+    try:
+        from ytmusicapi.auth.oauth.token import RefreshingToken
+        raw_token = creds.token_from_code(device_code)
+        
+        refresh_token_expires_in = raw_token.get("refresh_token_expires_in", raw_token.get("expires_in", 3600))
+        ref_token = RefreshingToken(
+            credentials=creds,
+            access_token=raw_token["access_token"],
+            refresh_token=raw_token["refresh_token"],
+            scope=raw_token.get("scope", ""),
+            token_type=raw_token.get("token_type", "Bearer"),
+            expires_in=refresh_token_expires_in,
+        )
+        ref_token.update(raw_token)
+        
+        import json
+        auth_file = os.environ.get("YTMUSIC_AUTH_FILE") or "headers_auth.json"
+            
+        with open(auth_file, "w") as f:
+            f.write(json.dumps(ref_token.as_dict()))
+            
+        # Invalidate caches
+        global _YT_HOME_CACHE_MTIME
+        _YT_HOME_CACHE_MTIME = 0
+            
+        with _OAUTH_CACHE_LOCK:
+            _OAUTH_CREDENTIALS_CACHE.pop(device_code, None)
+            
+        return jsonify({"success": True})
+    except Exception as e:
+        # 400 is expected if pending
+        return error_response(str(e), 400)
 
 
 @app.route("/alexa/devices/", methods=["GET"])

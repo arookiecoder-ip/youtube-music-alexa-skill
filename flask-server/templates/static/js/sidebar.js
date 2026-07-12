@@ -173,21 +173,18 @@
         const amzEl = document.getElementById('status-amazon');
         if (amzEl) {
           amzEl.textContent = status.amazon_connected ? 'Connected' : 'Disconnected';
-          amzEl.style.color = status.amazon_connected ? 'var(--text-color)' : '#ff4a4a';
+          amzEl.style.color = status.amazon_connected ? '#4ade80' : '#ff6b6b';
+          amzEl.style.backgroundColor = status.amazon_connected ? 'rgba(74, 222, 128, 0.1)' : 'rgba(255, 107, 107, 0.1)';
           if (status.debug && status.debug.amazon) amzEl.title = status.debug.amazon;
         }
         
-        const ytcEl = document.getElementById('status-yt-cookies');
-        if (ytcEl) {
-          ytcEl.textContent = status.youtube_cookies_working ? 'Working' : 'Not Working';
-          ytcEl.style.color = status.youtube_cookies_working ? 'var(--text-color)' : '#ff4a4a';
-          if (status.debug && status.debug.cookies) ytcEl.title = status.debug.cookies;
-        }
+
         
         const ythEl = document.getElementById('status-yt-headers');
         if (ythEl) {
           ythEl.textContent = status.youtube_header_auth_working ? 'Working' : 'Not Working';
-          ythEl.style.color = status.youtube_header_auth_working ? 'var(--text-color)' : '#ff4a4a';
+          ythEl.style.color = status.youtube_header_auth_working ? '#4ade80' : '#ff6b6b';
+          ythEl.style.backgroundColor = status.youtube_header_auth_working ? 'rgba(74, 222, 128, 0.1)' : 'rgba(255, 107, 107, 0.1)';
           if (status.debug && status.debug.headers) ythEl.title = status.debug.headers;
         }
         
@@ -195,6 +192,9 @@
         const amzSignin = document.getElementById('amazon-signin');
         if (amzSignout) amzSignout.style.display = status.amazon_connected ? 'block' : 'none';
         if (amzSignin) amzSignin.style.display = status.amazon_connected ? 'none' : 'block';
+
+        const ytSignin = document.getElementById('youtube-signin');
+        if (ytSignin) ytSignin.style.display = status.youtube_header_auth_working ? 'none' : 'block';
         
       } catch (err) {
         console.error("Failed to load profile status", err);
@@ -251,6 +251,66 @@
     e.preventDefault();
     goHome(e);
   });
+  
+  const ytSigninBtn = document.getElementById('youtube-signin');
+  const ytOauthModalWrap = document.getElementById('youtube-oauth-modal-wrap');
+  const ytOauthClose = document.getElementById('youtube-oauth-close');
+  const ytOauthUserCode = document.getElementById('yt-oauth-user-code');
+  const ytOauthLink = document.getElementById('yt-oauth-link');
+  const ytOauthStatusText = document.getElementById('yt-oauth-status-text');
+  let oauthPollInterval = null;
+  let currentDeviceCode = null;
+
+  if (ytSigninBtn && ytOauthModalWrap) {
+    ytSigninBtn.addEventListener('click', async () => {
+      const wrap = document.getElementById('profile-menu-wrap');
+      if (wrap) wrap.classList.remove('open');
+      
+      try {
+        if (window.toast) window.toast('Starting YouTube OAuth...', 2000);
+        const res = await window.api('/api/youtube/oauth/start', {});
+        if (res.error) throw new Error(res.error);
+        
+        currentDeviceCode = res.device_code;
+        ytOauthUserCode.textContent = res.user_code;
+        ytOauthLink.href = res.verification_url + '?user_code=' + res.user_code;
+        ytOauthStatusText.textContent = 'Waiting for authorization...';
+        
+        ytOauthModalWrap.hidden = false;
+        
+        if (oauthPollInterval) clearInterval(oauthPollInterval);
+        oauthPollInterval = setInterval(async () => {
+          if (!currentDeviceCode) return;
+          try {
+            const pollRes = await window.api('/api/youtube/oauth/finish', { device_code: currentDeviceCode });
+            if (pollRes.success) {
+              clearInterval(oauthPollInterval);
+              ytOauthStatusText.textContent = 'Success! Authenticated.';
+              if (window.toast) window.toast('Successfully logged in to YouTube Music!');
+              setTimeout(() => {
+                window.location.href = '/?refresh=1';
+              }, 1500);
+            }
+          } catch (e) {
+            // Ignore polling errors
+          }
+        }, 5000);
+        
+      } catch (err) {
+        if (window.toast) window.toast('Failed to start OAuth: ' + err.message, 4000);
+      }
+    });
+    
+    if (ytOauthClose) {
+      ytOauthClose.addEventListener('click', () => {
+        ytOauthModalWrap.hidden = true;
+        if (oauthPollInterval) clearInterval(oauthPollInterval);
+        currentDeviceCode = null;
+      });
+    }
+  }
+
+});
 })();
 
 
