@@ -123,6 +123,12 @@
 }
 
 /* ── Playlist Detail Hero (collage + metadata) ── */
+#playlist-detail-modal {
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+}
+
 .playlist-detail-hero {
   display: flex;
   gap: 16px;
