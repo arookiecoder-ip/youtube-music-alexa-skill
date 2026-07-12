@@ -161,11 +161,71 @@
   const trigger = document.getElementById('profile-menu-trigger');
   const menu = document.getElementById('profile-menu');
   if (!wrap || !trigger || !menu) return;
-  trigger.addEventListener('click', (e) => {
+  trigger.addEventListener('click', async (e) => {
     e.stopPropagation();
     const open = wrap.classList.toggle('open');
     trigger.setAttribute('aria-expanded', String(open));
+    
+    if (open && window.api) {
+      try {
+        const status = await window.api('/api/profile_status/');
+        
+        const amzEl = document.getElementById('status-amazon');
+        if (amzEl) {
+          amzEl.textContent = status.amazon_connected ? 'Connected' : 'Disconnected';
+          amzEl.style.color = status.amazon_connected ? 'var(--text-color)' : '#ff4a4a';
+        }
+        
+        const ytcEl = document.getElementById('status-yt-cookies');
+        if (ytcEl) {
+          ytcEl.textContent = status.youtube_cookies_working ? 'Working' : 'Not Working';
+          ytcEl.style.color = status.youtube_cookies_working ? 'var(--text-color)' : '#ff4a4a';
+        }
+        
+        const ythEl = document.getElementById('status-yt-headers');
+        if (ythEl) {
+          ythEl.textContent = status.youtube_header_auth_working ? 'Working' : 'Not Working';
+          ythEl.style.color = status.youtube_header_auth_working ? 'var(--text-color)' : '#ff4a4a';
+        }
+        
+        const amzSignout = document.getElementById('amazon-signout');
+        const amzSignin = document.getElementById('amazon-signin');
+        if (amzSignout) amzSignout.style.display = status.amazon_connected ? 'block' : 'none';
+        if (amzSignin) amzSignin.style.display = status.amazon_connected ? 'none' : 'block';
+        
+      } catch (err) {
+        console.error("Failed to load profile status", err);
+      }
+    }
   });
+  
+  const amzSignoutBtn = document.getElementById('amazon-signout');
+  if (amzSignoutBtn) {
+    amzSignoutBtn.addEventListener('click', async () => {
+      try {
+        if (window.api) {
+          await window.api('/alexa/amazon_signout/', {});
+          if (window.toast) window.toast('Signed out of Amazon');
+          window.location.reload();
+        }
+      } catch (e) {
+        console.error(e);
+      }
+    });
+  }
+
+  const amzSigninBtn = document.getElementById('amazon-signin');
+  if (amzSigninBtn) {
+    amzSigninBtn.addEventListener('click', () => {
+      wrap.classList.remove('open');
+      const emailInput = document.getElementById('login-email');
+      if (emailInput) {
+        document.getElementById('login-section').scrollIntoView({ behavior: 'smooth' });
+        setTimeout(() => emailInput.focus(), 300);
+      }
+    });
+  }
+  
   document.addEventListener('click', (e) => {
     if (wrap.contains(e.target)) return;
     wrap.classList.remove('open');

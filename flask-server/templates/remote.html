@@ -121,7 +121,14 @@
             <div class="profile-menu-avatar">{{ (remote_username or 'U')[:1]|upper }}</div>
             <div><span>Signed in as</span><strong>{{ remote_username or 'User' }}</strong></div>
           </div>
-          <button id="logout" type="button">Sign out</button>
+          <div class="profile-menu-status" style="padding: 12px; border-bottom: 1px solid var(--border-color); font-size: 13px; line-height: 1.5; color: var(--text-muted);">
+            <div><strong>Amazon:</strong> <span id="status-amazon" style="color: var(--text-color);">Checking...</span></div>
+            <div><strong>YT Cookies:</strong> <span id="status-yt-cookies" style="color: var(--text-color);">Checking...</span></div>
+            <div><strong>YT Header Auth:</strong> <span id="status-yt-headers" style="color: var(--text-color);">Checking...</span></div>
+          </div>
+          <button id="amazon-signin" type="button" style="display: none;">Sign in to Amazon</button>
+          <button id="amazon-signout" type="button" style="display: none; color: #ff4a4a;">Sign out of Amazon</button>
+          <button id="logout" type="button">Sign out of Web Remote</button>
         </div>
       </div>
       <button class="hamburger-btn" id="hamburger-btn" title="Menu">

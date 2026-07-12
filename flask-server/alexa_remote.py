@@ -373,6 +373,22 @@ class AlexaRemote:
         alexa_proxy_login's 'force' check)."""
         return self._login is not None
 
+    def logout(self):
+        """Sign out of Amazon and clear saved session cookies."""
+        self._run(self._logout())
+
+    async def _logout(self):
+        import shutil
+        if os.path.exists(ALEXA_COOKIE_DIR):
+            try:
+                shutil.rmtree(ALEXA_COOKIE_DIR)
+            except Exception as e:
+                logger.error("Failed to delete Amazon cookie dir: %s", e)
+        self._login = None
+        self._login_checked_at = 0.0
+        if self._proxy_runner:
+            await self._stop_proxy()
+
     async def _status(self):
         error = await self._ensure_login()
         return {"configured": bool(PROXY_PUBLIC_BASE_URL),

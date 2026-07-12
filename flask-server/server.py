@@ -254,7 +254,7 @@ def _record_listen(video_id, title, artist, thumbnail_url):
             if song:
                 _get_ytmusic_home().add_history_item(song)
         except Exception as e:
-            logger.error("Failed to push history for %s: %s", video_id, e)
+            logger.debug("Failed to push history for %s (likely unauthenticated): %s", video_id, e)
     threading.Thread(target=push_bg, daemon=True).start()
 
 
@@ -2821,6 +2821,30 @@ def alexa_proxy_check():
     """Poll whether the browser has finished the proxy login."""
     return jsonify(alexa_remote.remote.proxy_check())
 
+@app.route("/alexa/amazon_signout/", methods=["POST"])
+def alexa_amazon_signout():
+    """Sign out of Amazon account."""
+    alexa_remote.remote.logout()
+    return jsonify({"success": True})
+
+@app.route("/api/profile_status/", methods=["GET"])
+def profile_status():
+    """Returns auth statuses for Amazon and YouTube."""
+    from ytmusicapi.auth.types import AuthType
+    
+    amazon_connected = alexa_remote.remote.is_logged_in()
+    
+    cookies_file = os.environ.get("YTDLP_COOKIES")
+    yt_cookies_working = bool(cookies_file and os.path.isfile(cookies_file) and os.path.getsize(cookies_file) > 0)
+    
+    yt_header_auth_working = _get_ytmusic_home().auth_type != AuthType.UNAUTHORIZED
+    
+    return jsonify({
+        "amazon_connected": amazon_connected,
+        "youtube_cookies_working": yt_cookies_working,
+        "youtube_header_auth_working": yt_header_auth_working
+    })
+
 
 @app.route("/alexa/devices/", methods=["GET"])
 def alexa_devices():
@@ -3397,7 +3421,8 @@ async def get_history():
             })
         return jsonify(mapped)
     except Exception as e:
-        return jsonify({'error': str(e)}), 500
+        logger.debug('[history] failed (likely unauthenticated): %s', e)
+        return jsonify([])
 
 @app.route("/history/", methods=["DELETE"])
 async def clear_history():
@@ -3462,7 +3487,7 @@ async def api_get_liked_songs():
         ]
         return jsonify({'liked_songs': video_ids})
     except Exception as e:
-        logger.error('[api/liked_songs] failed: %s', e)
+        logger.debug('[api/liked_songs] failed (likely unauthenticated): %s', e)
         return jsonify({'liked_songs': []}), 200  # degrade gracefully
 
 
