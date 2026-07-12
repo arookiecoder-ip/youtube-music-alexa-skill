@@ -50,10 +50,15 @@
         body.innerHTML = '';
         const tracks = pl.tracks || [];
         const title = pl.title || 'Playlist';
-        const coverUrls = tracks.slice(0, 4).map(track => {
+        const playlistThumbs = pl.thumbnails || [];
+        const playlistCover = (playlistThumbs[playlistThumbs.length - 1] || {}).url || '';
+        const trackCoverUrls = tracks.slice(0, 4).map(track => {
           const thumbs = track.thumbnails || [];
           return (thumbs[thumbs.length - 1] || {}).url || '';
         }).filter(Boolean);
+        // Prefer the artwork YouTube assigned to the playlist. Only build a
+        // song-art collage when the playlist genuinely has no banner/cover.
+        const coverUrls = playlistCover ? [playlistCover] : trackCoverUrls;
         const collage = coverUrls.length
           ? `<div class="playlist-collage${coverUrls.length === 1 ? ' playlist-collage-single' : ''}">${coverUrls.map(url => `<img src="${escapeHtml(url)}" alt="" loading="lazy">`).join('')}</div>`
           : `<div class="playlist-collage playlist-collage-single"><div class="collage-placeholder"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg></div></div>`;
@@ -83,7 +88,7 @@
             const thumbnail = (thumbs[thumbs.length - 1] || {}).url || '/static/default-art.png';
             const artist = track.artists?.map(a => a.name).join(', ') || '';
             row.innerHTML = `
-              <div class="playlist-track-art"><img src="${escapeHtml(thumbnail)}" class="queue-thumb" loading="lazy" alt=""></div>
+              <div class="playlist-track-art"><img src="${escapeHtml(thumbnail)}" class="queue-thumb" loading="lazy" alt="" onload="this.classList.add('loaded')" onerror="this.style.opacity='1'"></div>
               <div class="queue-info">
                 <div class="queue-title">${escapeHtml(track.title || '')}</div>
                 <div class="queue-artist">${escapeHtml(artist)}</div>
