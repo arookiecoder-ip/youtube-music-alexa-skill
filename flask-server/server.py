@@ -4742,7 +4742,19 @@ async def api_get_library_playlist(pl_id):
         # not support it; use get_liked_songs() instead and normalize to the same
         # shape the client expects ({title, trackCount, tracks}).
         if pl_id.upper() == 'LM':
-            raw = await asyncio.to_thread(yt.get_liked_songs, 1000)
+            try:
+                raw = await asyncio.to_thread(yt.get_liked_songs, 100)
+            except Exception as liked_error:
+                if "invalid argument" in str(liked_error).lower():
+                    logger.warning("YouTube OAuth Liked Music browse unavailable: %s", liked_error)
+                    return jsonify({
+                        'title': 'Liked Music',
+                        'trackCount': 0,
+                        'tracks': [],
+                        'partial': True,
+                        'message': 'YouTube does not expose Liked Music to this OAuth account.',
+                    })
+                raise
             tracks = []
             for t in (raw.get('tracks') or []):
                 video_id = t.get('videoId') or ''
