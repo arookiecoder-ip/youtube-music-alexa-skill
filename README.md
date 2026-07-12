@@ -171,8 +171,8 @@ The system uses **two entirely separate authentication mechanisms** for its two 
 
 **1. The Interface (`ytmusicapi`)**
 This powers your personalized Home feed, playlists, history, and search results. It requires you to tell YouTube who you are.
-- **OAuth (`oauth.json`)**: This is the recommended and safest method. In the Web Remote, click the Profile icon and sign in to YouTube via the pop-up modal. It will generate an `oauth.json` automatically. (If deploying headless, you can also run `python -m ytmusicapi oauth` locally).
-- **Browser Headers (`headers_auth.json`)**: An older alternative. Set `YTMUSIC_AUTH_FILE=headers_auth.json`. **Warning:** DO NOT commit this to a public repo as it grants full Google account access. 
+- **Browser Headers (`headers_auth.json`)**: Recommended when you need personalized Home, Library, Liked Music, History, and Explore. In the Web Remote, open the Profile menu and choose **Fix personalized YouTube data**, then follow the guided import. **Warning:** never commit or share this file; it grants access to your YouTube Music session.
+- **OAuth (`oauth.json`)**: The Profile menu's Google device-login flow is safer and may support history, likes, and account actions, but Google can reject personalized browse endpoints with `INVALID_ARGUMENT` for custom OAuth clients. Use the browser-header flow if personalized pages are empty.
 - **Anonymous Fallback**: If no authentication is provided, the UI gracefully falls back to generic charts and trending shelves instead of personalized content.
 
 **2. The Downloader (`yt-dlp`)**

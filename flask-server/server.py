@@ -1,4 +1,4 @@
-import asyncio, difflib, glob, hashlib, hmac, itertools, json, os, random, secrets, sys, threading, time, re, subprocess, logging, copy, uuid
+import asyncio, difflib, glob, hashlib, hmac, itertools, json, os, random, secrets, sys, threading, time, re, subprocess, logging, copy, uuid, tempfile
 from datetime import timedelta
 from urllib.parse import parse_qs, unquote, urlparse
 
@@ -282,7 +282,8 @@ _SESSION_PATHS = ('/remote', '/alexa/status', '/alexa/init', '/alexa/devices', '
                   '/alexa/jam/start', '/alexa/jam/stop', '/alexa/jam/status',
                   '/alexa/jam/qr', '/api/home', '/api/library',
                   '/alexa/like', '/api/liked_songs', '/api/profile_status',
-                  '/alexa/amazon_signout', '/api/youtube/oauth/start', '/api/youtube/oauth/finish')
+                  '/alexa/amazon_signout', '/api/youtube/oauth/start', '/api/youtube/oauth/finish',
+                  '/api/youtube/browser-auth')
 _SESSION_PREFIXES = ('/alexa/now_playing/', '/history/', '/api/playlists/', '/recommendations/',
                      '/api/artist/', '/api/album/', '/api/library/', '/api/explore/', '/api/home/')
 
@@ -2882,6 +2883,7 @@ def profile_status():
     return jsonify({
         "amazon_connected": amazon_connected,
         "youtube_auth_working": yt_auth_working,
+        "youtube_auth_type": auth_type_str,
         "debug": {
             "amazon": amazon_debug,
             "headers": headers_debug
@@ -2991,6 +2993,47 @@ def youtube_oauth_finish():
             return error_response(f"Missing token key: {e}", 500)
         # 400 is expected if pending
         return error_response(str(e), 400)
+
+
+@app.route("/api/youtube/browser-auth", methods=["POST"])
+def youtube_browser_auth():
+    """Import YouTube Music browser request headers for endpoints that Google
+    does not expose reliably through custom-client OAuth."""
+    body = request.get_json(silent=True) or {}
+    headers_raw = body.get("headers")
+    if not isinstance(headers_raw, str) or not headers_raw.strip():
+        return error_response("Paste the request headers from a music.youtube.com /browse request.", 400)
+    if len(headers_raw) > 128 * 1024:
+        return error_response("Headers input is too large.", 413)
+
+    auth_file = os.environ.get("YTMUSIC_AUTH_FILE") or "headers_auth.json"
+    if os.path.isdir(auth_file):
+        return error_response("YTMUSIC_AUTH_FILE must be a writable file path, not a directory.", 500)
+    auth_parent = os.path.dirname(os.path.abspath(auth_file))
+    os.makedirs(auth_parent, exist_ok=True)
+    fd, temp_path = tempfile.mkstemp(prefix="ytmusic-browser-", suffix=".json", dir=auth_parent)
+    os.close(fd)
+    try:
+        from ytmusicapi.auth.browser import setup_browser
+        setup_browser(filepath=temp_path, headers_raw=headers_raw)
+        candidate = YTMusic(auth=temp_path)
+        candidate.get_account_info()
+        os.replace(temp_path, auth_file)
+
+        global _YT_HOME_CACHE_MTIME
+        with _YT_HOME_CACHE_LOCK:
+            _YT_HOME_CACHE.clear()
+            _YT_HOME_CACHE_MTIME = os.path.getmtime(auth_file)
+        with _home_lock:
+            _home_cache['data'] = None
+            _home_cache['built_at'] = 0
+        return jsonify({"success": True})
+    except Exception as e:
+        logger.warning("YouTube browser-header import failed: %s", e)
+        return error_response(str(e), 400)
+    finally:
+        if os.path.exists(temp_path):
+            os.unlink(temp_path)
 
 @app.route("/alexa/devices/", methods=["GET"])
 def alexa_devices():

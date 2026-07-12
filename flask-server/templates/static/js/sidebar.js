@@ -93,6 +93,57 @@
   window._closeSidebar = closeSidebar;
 })();
 
+/* ---- YouTube browser-header authentication ---- */
+(function () {
+  const openBtn = document.getElementById('youtube-browser-auth');
+  const modal = document.getElementById('youtube-browser-auth-modal-wrap');
+  const closeBtn = document.getElementById('youtube-browser-auth-close');
+  const saveBtn = document.getElementById('youtube-browser-auth-save');
+  const input = document.getElementById('youtube-browser-headers');
+  const status = document.getElementById('youtube-browser-auth-status');
+  if (!openBtn || !modal || !saveBtn || !input) return;
+
+  function close() {
+    modal.hidden = true;
+    input.value = '';
+    if (status) status.textContent = '';
+  }
+
+  openBtn.addEventListener('click', () => {
+    const profile = document.getElementById('profile-menu-wrap');
+    if (profile) profile.classList.remove('open');
+    modal.hidden = false;
+    input.focus();
+  });
+  if (closeBtn) closeBtn.addEventListener('click', close);
+  modal.addEventListener('click', (event) => { if (event.target === modal) close(); });
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && !modal.hidden) close();
+  });
+
+  saveBtn.addEventListener('click', async () => {
+    const headers = input.value.trim();
+    if (!headers) {
+      if (status) status.textContent = 'Paste the request headers first.';
+      return;
+    }
+    saveBtn.disabled = true;
+    saveBtn.textContent = 'Validating…';
+    if (status) status.textContent = 'Checking headers with YouTube Music…';
+    try {
+      await window.api('/api/youtube/browser-auth', { headers });
+      input.value = '';
+      if (status) status.textContent = 'Connected. Reloading your personalized data…';
+      window.location.href = '/?refresh=1';
+    } catch (error) {
+      if (status) status.textContent = error.message || 'Could not validate these headers.';
+    } finally {
+      saveBtn.disabled = false;
+      saveBtn.textContent = 'Save and reconnect';
+    }
+  });
+})();
+
 
 /* ---- Nav rail (Home / Recently Listened) ---- */
 (function () {
@@ -182,9 +233,10 @@
         
         const ythEl = document.getElementById('status-yt-headers');
         if (ythEl) {
-          ythEl.textContent = status.youtube_auth_working ? 'Working' : 'Not Working';
-          ythEl.style.color = status.youtube_auth_working ? '#4ade80' : '#ff6b6b';
-          ythEl.style.backgroundColor = status.youtube_auth_working ? 'rgba(74, 222, 128, 0.1)' : 'rgba(255, 107, 107, 0.1)';
+          const limitedOauth = status.youtube_auth_working && String(status.youtube_auth_type || '').includes('OAUTH');
+          ythEl.textContent = limitedOauth ? 'OAuth (Limited)' : (status.youtube_auth_working ? 'Working' : 'Not Working');
+          ythEl.style.color = limitedOauth ? '#f59f00' : (status.youtube_auth_working ? '#4ade80' : '#ff6b6b');
+          ythEl.style.backgroundColor = limitedOauth ? 'rgba(245, 159, 0, 0.12)' : (status.youtube_auth_working ? 'rgba(74, 222, 128, 0.1)' : 'rgba(255, 107, 107, 0.1)');
           if (status.debug && status.debug.headers) ythEl.title = status.debug.headers;
         }
         

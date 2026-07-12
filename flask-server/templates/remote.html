@@ -128,6 +128,7 @@
           <button id="amazon-signin" type="button" style="display: none;">Sign in to Amazon</button>
           <button id="amazon-signout" type="button" style="display: none;">Sign out of Amazon</button>
           <button id="youtube-signin" type="button" style="display: none;">Sign in to YouTube</button>
+          <button id="youtube-browser-auth" type="button">Fix personalized YouTube data</button>
           <button id="logout" type="button">Sign out of Web Remote</button>
         </div>
       </div>
@@ -171,6 +172,26 @@
           <span class="oauth-spinner" aria-hidden="true"></span>
           <span id="yt-oauth-status-text">Waiting for authorization...</span>
         </p>
+      </div>
+    </div>
+  </div>
+  <div class="login-modal-wrap" id="youtube-browser-auth-modal-wrap" hidden>
+    <div class="login-modal browser-auth-modal" role="dialog" aria-modal="true" aria-labelledby="youtube-browser-auth-title">
+      <div class="login-modal-header">
+        <h2 id="youtube-browser-auth-title">Connect personalized YouTube Music</h2>
+        <button class="login-modal-close" id="youtube-browser-auth-close" type="button" aria-label="Close">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
+        </button>
+      </div>
+      <div class="login-modal-body">
+        <ol class="browser-auth-steps">
+          <li>Open <strong>music.youtube.com</strong> while signed in.</li>
+          <li>Open Developer Tools → Network, then click Library.</li>
+          <li>Select a <strong>browse</strong> request and copy its request headers.</li>
+        </ol>
+        <textarea id="youtube-browser-headers" class="browser-auth-input" rows="8" spellcheck="false" autocomplete="off" placeholder="Paste request headers here…"></textarea>
+        <button id="youtube-browser-auth-save" class="browser-auth-save" type="button">Save and reconnect</button>
+        <p id="youtube-browser-auth-status" class="oauth-status"></p>
       </div>
     </div>
   </div>
