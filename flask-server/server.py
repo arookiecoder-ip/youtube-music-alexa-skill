@@ -2878,6 +2878,12 @@ def profile_status():
     yt_home = _get_ytmusic_home()
     auth_type_str = str(getattr(yt_home, 'auth_type', 'UNAUTHORIZED'))
     yt_auth_working = "UNAUTHORIZED" not in auth_type_str
+    if yt_auth_working and "BROWSER" in auth_type_str:
+        try:
+            yt_home.get_account_info()
+        except Exception:
+            yt_auth_working = False
+            auth_type_str = "UNAUTHORIZED"
     headers_debug = f"auth_type={auth_type_str}"
     
     return jsonify({
@@ -3400,6 +3406,20 @@ async def _fetch_home_sources():
             return await asyncio.wait_for(asyncio.to_thread(ytm.get_home, limit=6), timeout=home_feed.SOURCE_TIMEOUTS['ytmusic_home'])
         except Exception as e:
             logger.warning(f"ytm_home failed: {e}")
+            try:
+                ytm = await asyncio.to_thread(_get_ytmusic)
+                charts = await asyncio.wait_for(asyncio.to_thread(ytm.get_charts, CHARTS_COUNTRY), timeout=10)
+                if not charts:
+                    charts = await asyncio.wait_for(asyncio.to_thread(ytm.get_charts, 'ZZ'), timeout=10)
+                shelves = []
+                for key, label in [('daily', 'Daily Charts'), ('weekly', 'Weekly Charts'), ('videos', 'Trending'), ('artists', 'Top Artists')]:
+                    items = charts.get(key, [])
+                    if items:
+                        shelves.append({'title': label, 'contents': items})
+                if shelves:
+                    return shelves
+            except Exception as fallback_e:
+                logger.warning(f"charts fallback failed: {fallback_e}")
             return []
 
     # Add other sources as needed here (library, explore, etc.) if auth is present
@@ -4849,7 +4869,17 @@ async def api_get_library_playlist(pl_id):
             })
         try:
             info = await asyncio.to_thread(yt.get_playlist, pl_id, None)
-        except Exception:
+        except Exception as browse_err:
+            if "invalid argument" in str(browse_err).lower():
+                logger.warning("YouTube OAuth playlist browse unavailable; retrying anonymously: %s", browse_err)
+                try:
+                    info = await asyncio.to_thread(YTMusic().get_playlist, pl_id, None)
+                    return jsonify(info)
+                except Exception:
+                    info = await asyncio.to_thread(YTMusic().get_watch_playlist, playlistId=pl_id)
+                    if 'title' not in info:
+                        info['title'] = 'Curated Mix'
+                    return jsonify(info)
             info = await asyncio.to_thread(yt.get_watch_playlist, playlistId=pl_id)
             if 'title' not in info:
                 info['title'] = 'Curated Mix'
@@ -4935,11 +4965,21 @@ async def api_get_artist(channel_id):
     channel_id = (channel_id or '').strip()
     if not channel_id:
         return jsonify({'error': 'invalid channelId'}), 400
+    from ytmusicapi import YTMusic
     try:
         raw = await asyncio.to_thread(yt.get_artist, channel_id)
     except Exception as e:
-        logger.error('[api/artist/%s] failed: %s', channel_id, e)
-        return jsonify({'error': str(e)}), 500
+        message = str(e)
+        if "invalid argument" in message.lower():
+            logger.warning("YouTube OAuth artist browse unavailable; retrying anonymously: %s", message)
+            try:
+                raw = await asyncio.to_thread(YTMusic().get_artist, channel_id)
+            except Exception as fallback_e:
+                logger.error('[api/artist/%s] anonymous fallback failed: %s', channel_id, fallback_e)
+                return jsonify({'error': str(fallback_e)}), 500
+        else:
+            logger.error('[api/artist/%s] failed: %s', channel_id, e)
+            return jsonify({'error': str(e)}), 500
 
     artist_name = raw.get('name') or ''
 

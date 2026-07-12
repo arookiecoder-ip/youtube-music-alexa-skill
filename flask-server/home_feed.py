@@ -260,7 +260,7 @@ def _build_shelf(shelf_id, title, layout, source_name, items, filters=None):
         return None
     items = items[:MAX_ITEMS_PER_SHELF]
     # actions
-    play_all = any(i.get('play', {}).get('videoId') for i in items)
+    play_all = any((i.get('play') or {}).get('videoId') for i in items)
     
     return {
         "id": shelf_id,
