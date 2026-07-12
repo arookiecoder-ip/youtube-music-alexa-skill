@@ -4695,6 +4695,22 @@ async def api_get_library():
         playlists = await asyncio.to_thread(_get_ytmusic_home().get_library_playlists, 100)
         return jsonify({"playlists": playlists})
     except Exception as e:
+        # Google currently rejects some OAuth-authenticated browse endpoints
+        # with INVALID_ARGUMENT even though token-backed history, likes, and
+        # playlist reads work normally.  Keep Library useful in that partial-
+        # support state: LM is handled by api_get_library_playlist() through
+        # get_liked_songs(), which is supported by the same token.
+        message = str(e)
+        if "invalid argument" in message.lower():
+            logger.warning("YouTube OAuth library browse unavailable; showing Liked Music fallback: %s", message)
+            return jsonify({
+                "playlists": [{
+                    "playlistId": "LM",
+                    "title": "Liked Music",
+                    "description": "Your liked songs",
+                }],
+                "partial": True,
+            })
         return jsonify({'error': str(e)}), 500
 
 @app.route("/api/library/playlists/", methods=["POST"])
