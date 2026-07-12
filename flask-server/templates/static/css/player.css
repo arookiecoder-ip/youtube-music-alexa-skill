@@ -195,12 +195,12 @@
     justify-content: center;
     align-items: flex-end;
     opacity: 0;
-    visibility: hidden;
-    transition: opacity .25s ease, visibility .25s ease;
+    pointer-events: none;
+    transition: opacity .25s ease;
   }
   .mini-popup-overlay.open {
     opacity: 1;
-    visibility: visible;
+    pointer-events: auto;
   }
   .mini-popup {
     width: 100%;
@@ -279,19 +279,19 @@
   }
   .mini-popup-close:hover { color: var(--text); }
   .mini-popup-body {
-    padding: 0 18px 18px;
+    padding: var(--space-3) 18px 24px;
     overflow-y: auto;
     overscroll-behavior: contain;
     -webkit-overflow-scrolling: touch;
-    padding-bottom: calc(18px + env(safe-area-inset-bottom, 0px));
+    padding-bottom: calc(24px + env(safe-area-inset-bottom, 0px));
   }
   /* Now playing inside popup */
   .mini-popup-np {
     display: flex;
     align-items: center;
-    gap: 14px;
-    padding-bottom: 14px;
-    margin-bottom: 14px;
+    gap: 16px;
+    padding: 0 0 18px;
+    margin-bottom: 4px;
     border-bottom: 1px solid var(--border);
     animation: mpNpIn .3s ease-out;
   }
@@ -300,8 +300,9 @@
     to { opacity: 1; transform: none; }
   }
   .mini-popup-np .np-art {
-    width: 52px;
-    height: 52px;
+    width: 64px;
+    height: 64px;
+    border-radius: 6px;
   }
   .mini-popup-np .np-info { flex: 1; min-width: 0; }
   .mini-popup-np .np-title {

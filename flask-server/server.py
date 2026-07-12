@@ -229,6 +229,15 @@ def init_db():
                 created_at REAL
             )
         ''')
+        conn.execute('''
+            CREATE TABLE IF NOT EXISTS playlist_tracks (
+                uuid TEXT PRIMARY KEY,
+                playlist_id TEXT NOT NULL,
+                video_id TEXT NOT NULL,
+                thumbnail_url TEXT DEFAULT '',
+                UNIQUE(playlist_id, video_id)
+            )
+        ''')
         # (Data migration script removed per user request)
 
 
@@ -598,6 +607,10 @@ def _get_ytmusic():
             inst = YTMusic()
             _YT_CACHE[tid] = inst
         return inst
+
+# Home-feed cache (defined before _get_ytmusic_home which references it)
+_home_cache = {'built_at': 0, 'data': None}
+_home_lock = threading.Lock()
 
 _YT_HOME_CACHE = {}
 _YT_HOME_CACHE_LOCK = threading.Lock()
@@ -2342,7 +2355,8 @@ def _backfill_queue_thumbnail(video_id):
                     changed = True
             if changed:
                 _now_playing['queue'] = queue
-                _now_playing['updated_at'] = time.time()
+                _notify_sse()
+        _now_playing['updated_at'] = time.time()
         if changed:
             _notify_sse()
     except Exception:
@@ -3291,8 +3305,6 @@ def alexa_state_event():
 # ---- Home feed (categorized recommendation rows) ----
 _HOME_CACHE_TTL = 3 * 60
 _HOME_FORCE_MIN_INTERVAL = 30
-_home_cache = {'built_at': 0, 'data': None}
-_home_lock = threading.Lock()
 _home_rebuild_lock = threading.Lock() # single flight
 
 async def _fetch_home_sources():
