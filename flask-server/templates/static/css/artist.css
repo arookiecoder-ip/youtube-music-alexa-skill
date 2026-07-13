@@ -12,16 +12,9 @@
     border-radius: 0;
     box-shadow: none;
   }
-  /* "View all" is a full artist-song page, not a panel above the compact
-     player. Keep playback running, but do not paint the fixed bar over this
-     route. */
+  /* The full artist-song page uses the shared fixed playbar and its document
+     clearance, just like every other routed view. */
   @media (min-width: 900px) {
-    body.artist-songs-route .player-section {
-      display: none !important;
-    }
-    body.artist-songs-route main {
-      padding-bottom: 0 !important;
-    }
     body.artist-songs-route #artist-songs-section {
       min-height: calc(100dvh - var(--topbar-h, 64px));
     }

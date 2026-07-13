@@ -324,7 +324,10 @@ function renderResults() {
     `;
     
     const track = section.querySelector('.hscroll-track');
-    const playBtnHtml = '<button type="button" class="hscroll-play-btn" title="Play"><svg viewBox="0 0 24 24" fill="currentColor"><polygon points="8,5 19,12 8,19"/></svg></button>';
+    const albumPlayBtnHtml = '<button type="button" class="hscroll-play-btn" title="Play"><svg viewBox="0 0 24 24" fill="currentColor"><polygon points="8,5 19,12 8,19"/></svg></button>';
+    // Keep playlist cards visually and behaviorally aligned with homepage
+    // playlist tiles instead of the search-specific album play treatment.
+    const playlistPlayBtnHtml = '<button type="button" class="home-play-btn search-playlist-play" title="Play"><svg class="home-play-glyph" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><polygon points="7,4 20,12 7,20"/></svg></button>';
     const isAlbumOrPlaylist = type === 'album' || type === 'playlist';
 
     items.forEach(item => {
@@ -352,13 +355,13 @@ function renderResults() {
       const artClass = type === 'artist' ? 'hscroll-card-art round' : 'hscroll-card-art';
 
       card.innerHTML = `
-        <div class="${artClass}">${thumbHtml}${isAlbumOrPlaylist ? playBtnHtml : ''}</div>
+        <div class="${artClass}">${thumbHtml}${type === 'album' ? albumPlayBtnHtml : type === 'playlist' ? playlistPlayBtnHtml : ''}</div>
         <div class="hscroll-card-title">${escHtml(item.title || item.name || '')}</div>
         ${subtitleHtml}
       `;
 
       card.addEventListener('click', (e) => {
-        if (e.target.closest('.hscroll-play-btn') && isAlbumOrPlaylist) {
+        if (e.target.closest('.hscroll-play-btn, .search-playlist-play') && isAlbumOrPlaylist) {
            e.stopPropagation();
            if (!browseId) return;
            if (type === 'album') {

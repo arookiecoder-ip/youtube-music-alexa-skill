@@ -2083,6 +2083,39 @@ body.results-open #results-section {
   color: #000;
   transform: translateY(0) scale(1.08);
 }
+
+/* Search playlist cards reuse the homepage playlist hover treatment: a
+   consistent dark artwork overlay and the same centered play glyph/control. */
+#results-section .hscroll-card[data-playlist-id] .hscroll-card-art::after {
+  background: rgba(0, 0, 0, .45);
+  opacity: 0;
+  transition: opacity .18s ease;
+}
+#results-section .hscroll-card[data-playlist-id]:hover .hscroll-card-art::after,
+#results-section .hscroll-card[data-playlist-id]:focus-within .hscroll-card-art::after {
+  opacity: 1;
+}
+#results-section .hscroll-card[data-playlist-id] .search-playlist-play {
+  width: 44px;
+  height: 44px;
+  top: 50%;
+  left: 50%;
+  right: auto;
+  bottom: auto;
+  background: rgba(0, 0, 0, .6);
+  transform: translate(-50%, -50%) scale(.8);
+  transition: opacity .2s, transform .1s;
+}
+#results-section .hscroll-card[data-playlist-id]:hover .search-playlist-play,
+#results-section .hscroll-card[data-playlist-id]:focus-within .search-playlist-play {
+  opacity: 1;
+  transform: translate(-50%, -50%) scale(1);
+}
+#results-section .hscroll-card[data-playlist-id] .search-playlist-play:hover,
+#results-section .hscroll-card[data-playlist-id] .search-playlist-play:focus-visible {
+  background: rgba(0, 0, 0, .6);
+  transform: translate(-50%, -50%) scale(1.08);
+}
 #results-section .result-like-btn,
 #results-section .track-like-btn {
   background: transparent;
