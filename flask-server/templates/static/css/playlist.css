@@ -205,6 +205,10 @@
   word-break: normal;
   hyphens: auto;
 }
+.playlist-detail-hero-name:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
 .playlist-detail-hero-desc {
   font-size: .78rem;
   color: var(--muted);

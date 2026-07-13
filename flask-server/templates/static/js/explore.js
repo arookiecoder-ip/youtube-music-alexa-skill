@@ -172,8 +172,8 @@
       <div class="explore-section-header">
         <h2 class="explore-section-title">${escHtml(title)}</h2>
         <div class="explore-scroll-btns">
-          <button class="explore-scroll-btn explore-scroll-left" type="button" aria-label="Scroll ${escHtml(title)} left"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg></button>
-          <button class="explore-scroll-btn explore-scroll-right" type="button" aria-label="Scroll ${escHtml(title)} right"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg></button>
+          <button class="home-scroll-btn explore-scroll-btn explore-scroll-left" type="button" aria-label="Scroll ${escHtml(title)} left"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg></button>
+          <button class="home-scroll-btn explore-scroll-btn explore-scroll-right" type="button" aria-label="Scroll ${escHtml(title)} right"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg></button>
         </div>
       </div>`;
     const grid = document.createElement('div');
@@ -212,9 +212,25 @@
     content.className = 'home-shelf-content';
     playableSongs.forEach(song => {
       const title = song.title || 'Unknown';
-      const artist = subtitle(song);
+      const artists = Array.isArray(song.artists) ? song.artists.filter(Boolean) : [];
+      const artistNames = artists.map(artist => typeof artist === 'string' ? artist : artist.name).filter(Boolean);
+      const artistIds = artists.map(artist => typeof artist === 'object'
+        ? (artist.id || artist.browseId || artist.channelId || artist.channel_id || '')
+        : '');
+      const artist = artistNames.length ? artistNames.join(', ') : subtitle(song);
+      const fallbackArtistId = song.artistId || song.artist_id || song.channelId || song.channel_id || '';
+      const artistHtml = window.artistLinksHtml
+        ? window.artistLinksHtml(artist, artistIds.some(Boolean) ? artistIds : fallbackArtistId)
+        : escHtml(artist);
       const thumbnail = imageUrl(song.thumbnails) || imageUrl(song.thumbnail) || FALLBACK_IMG;
-      const track = { video_id: song.videoId || song.video_id, title: title, artist: artist, thumbnail: thumbnail };
+      const track = {
+        video_id: song.videoId || song.video_id,
+        title: title,
+        artist: artist,
+        thumbnail: thumbnail,
+        artist_id: artistIds.find(Boolean) || fallbackArtistId,
+        channelId: artistIds.find(Boolean) || fallbackArtistId
+      };
       const row = document.createElement('article');
       row.className = 'home-item home-item-song';
       row.dataset.videoId = track.video_id;
@@ -224,8 +240,9 @@
       row.setAttribute('aria-label', `Play ${title}`);
       row.innerHTML = `
         <img src="${escHtml(thumbnail)}" alt="${escHtml(title)}" class="home-item-img mood-song-image" loading="eager" decoding="async" onload="this.classList.add('is-loaded')" onerror="this.onerror=null;this.src='${FALLBACK_IMG}';this.classList.add('is-loaded')">
-        <div class="home-item-text"><div class="home-item-title">${escHtml(title)}</div><div class="home-item-subtitle">${escHtml(artist)}</div></div>
+        <div class="home-item-text"><div class="home-item-title">${escHtml(title)}</div><div class="home-item-subtitle">${artistHtml}</div></div>
         <button class="home-play-btn" type="button" aria-label="Play ${escHtml(title)}"><svg class="home-play-glyph" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><polygon points="7,4 20,12 7,20"/></svg></button>`;
+      if (window.wireArtistLinks) window.wireArtistLinks(row);
       const play = event => {
         event.preventDefault();
         event.stopPropagation();
@@ -306,48 +323,84 @@
       <div class="explore-section-header explore-mood-header">
         <h2 class="explore-section-title">Moods and genres</h2>
         <div class="explore-mood-controls">
-          <button class="explore-mood-arrow" type="button" aria-label="Previous moods and genres">‹</button>
-          <button class="explore-mood-arrow" type="button" aria-label="Next moods and genres">›</button>
+          <button class="home-scroll-btn explore-mood-arrow" type="button" aria-label="Previous moods and genres"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="15 18 9 12 15 6"/></svg></button>
+          <button class="home-scroll-btn explore-mood-arrow" type="button" aria-label="Next moods and genres"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="9 18 15 12 9 6"/></svg></button>
         </div>
       </div>`;
-    const grid = document.createElement('div');
+    const viewport = document.createElement('div');
+    viewport.className = 'explore-mood-viewport';
+    let grid = document.createElement('div');
     grid.className = 'explore-mood-grid';
-    section.appendChild(grid);
+    viewport.appendChild(grid);
+    section.appendChild(viewport);
     let start = 0;
+    let sliding = false;
     const visibleItems = 24;
     // The grid is row-major, so advancing one item moves the visible tiles
     // by one visual column. Do not jump a whole row on every arrow click.
     const columnStep = 1;
-    const renderPage = (direction) => {
-      grid.replaceChildren();
-      moods.slice(start, start + visibleItems).forEach((mood, index) => {
+    const fillGrid = (target, pageStart) => {
+      moods.slice(pageStart, pageStart + visibleItems).forEach((mood, index) => {
         const button = document.createElement('button');
         button.className = 'explore-mood-card';
         button.type = 'button';
-        button.style.setProperty('--mood-accent', MOOD_ACCENTS[(start + index) % MOOD_ACCENTS.length]);
+        button.style.setProperty('--mood-accent', MOOD_ACCENTS[(pageStart + index) % MOOD_ACCENTS.length]);
         button.textContent = mood.title || 'Mood';
         button.addEventListener('click', () => {
           if (window.preloadNavigateMood) window.preloadNavigateMood(mood.params, mood.title || 'Moods and genres');
           else window.navigateTo('#mood/' + encodeURIComponent(mood.params) + '?title=' + encodeURIComponent(mood.title || 'Moods and genres'));
         });
-        grid.appendChild(button);
+        target.appendChild(button);
       });
+    };
+    const updateArrows = () => {
       const arrows = section.querySelectorAll('.explore-mood-arrow');
       const maxStart = Math.max(0, moods.length - visibleItems);
       arrows[0].disabled = start === 0;
       arrows[1].disabled = start >= maxStart;
-      if (direction) {
-        grid.classList.remove('mood-grid-slide-left', 'mood-grid-slide-right');
-        requestAnimationFrame(() => grid.classList.add(direction === 'next' ? 'mood-grid-slide-left' : 'mood-grid-slide-right'));
-      }
+    };
+    const renderPage = () => {
+      grid.replaceChildren();
+      fillGrid(grid, start);
+      updateArrows();
+    };
+    const slidePage = (direction) => {
+      const maxStart = Math.max(0, moods.length - visibleItems);
+      const nextStart = direction === 'next'
+        ? Math.min(maxStart, start + columnStep)
+        : Math.max(0, start - columnStep);
+      if (sliding || nextStart === start) return;
+      sliding = true;
+      start = nextStart;
+      const arrows = section.querySelectorAll('.explore-mood-arrow');
+      arrows.forEach(arrow => { arrow.disabled = true; });
+
+      const outgoing = grid;
+      const incoming = document.createElement('div');
+      incoming.className = 'explore-mood-grid mood-grid-incoming ' +
+        (direction === 'next' ? 'mood-grid-enter-right' : 'mood-grid-enter-left');
+      fillGrid(incoming, start);
+      viewport.style.height = outgoing.getBoundingClientRect().height + 'px';
+      viewport.appendChild(incoming);
+
+      requestAnimationFrame(() => {
+        outgoing.classList.add(direction === 'next' ? 'mood-grid-exit-left' : 'mood-grid-exit-right');
+        incoming.classList.remove(direction === 'next' ? 'mood-grid-enter-right' : 'mood-grid-enter-left');
+      });
+      window.setTimeout(() => {
+        outgoing.remove();
+        incoming.classList.remove('mood-grid-incoming');
+        viewport.style.height = '';
+        grid = incoming;
+        sliding = false;
+        updateArrows();
+      }, 300);
     };
     section.querySelectorAll('.explore-mood-arrow')[0].addEventListener('click', () => {
-      start = Math.max(0, start - columnStep);
-      renderPage('previous');
+      slidePage('previous');
     });
     section.querySelectorAll('.explore-mood-arrow')[1].addEventListener('click', () => {
-      start = Math.min(Math.max(0, moods.length - visibleItems), start + columnStep);
-      renderPage('next');
+      slidePage('next');
     });
     renderPage();
     body.appendChild(section);
@@ -441,6 +494,5 @@
   window.openMoodPage = openMoodPage;
   document.addEventListener('click', event => {
     if (event.target.closest('#explore-modal-close')) window.navigateTo('#home');
-    if (event.target.closest('#mood-modal-close')) window.navigateTo('#explore');
   });
 }());

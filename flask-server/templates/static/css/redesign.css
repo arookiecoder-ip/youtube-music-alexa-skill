@@ -656,6 +656,11 @@ body.results-open .play-section {
     -webkit-backdrop-filter: none;
     border-right: none;
   }
+  /* Artwork can bleed behind the mini rail on Home, Artist, and the full
+     player. Every other page uses a stable black rail instead. */
+  body.rail-collapsed:not(.home-route):not(.artist-route):not(.now-playing-route) .sidebar {
+    background: #000;
+  }
   /* Text-only chrome has no icon form — hide it in the mini rail. Fade it
      out instead of display:none so it doesn't vanish a frame before the
      width animation starts. */
@@ -736,9 +741,8 @@ body.rail-collapsed .sidebar-playlist-list { scrollbar-width: none; }
   }
   body.rail-collapsed .sidebar-rail-toggle {
     position: absolute;
-    /* Rail has 14px inset; a 5px local offset puts this 38px-wide button
-       on the exact 38px centerline used by every collapsed nav icon. */
-    left: 5px;
+    /* Match the collapsed nav-icon centerline. */
+    left: 12px;
     margin: 0;
     transform: none;
   }
@@ -1600,6 +1604,16 @@ body.now-playing-route .player-section .player-expand-btn svg {
     transform: none !important;
     transition: none !important;
   }
+  /* The compact playbar remains the stable layer below the expanded player.
+     Pin its rendered state during both directions of the overlay handoff so
+     it cannot briefly re-enter the base opacity/translate animation. */
+  body.now-playing-route .player-section.is-visible,
+  body.now-playing-closing .player-section.is-visible {
+    opacity: 1 !important;
+    visibility: visible !important;
+    will-change: opacity, transform;
+    backface-visibility: hidden;
+  }
   body.now-playing-route main {
     height: auto;
     min-height: 0;
@@ -1765,6 +1779,8 @@ body.now-playing-route .player-section .player-expand-btn svg {
 .home-item-wide-card[data-kind="playlist"] .home-item-img-wrapper::after,
 .home-item-card[data-kind="album"] .home-item-img-wrapper::after,
 .home-item-wide-card[data-kind="album"] .home-item-img-wrapper::after,
+.home-item-card[data-kind="artist"] .home-item-img-wrapper::after,
+.home-item-wide-card[data-kind="artist"] .home-item-img-wrapper::after,
 .home-item-circle[data-kind="album"] .home-item-img-wrapper::after,
 .home-item-circle[data-kind="artist"] .home-item-img-wrapper::after,
 .home-item-card[data-kind="station"] .home-item-img-wrapper::after,
@@ -1784,6 +1800,8 @@ body.now-playing-route .player-section .player-expand-btn svg {
 .home-item-wide-card[data-kind="playlist"]:hover .home-item-img-wrapper::after,
 .home-item-card[data-kind="album"]:hover .home-item-img-wrapper::after,
 .home-item-wide-card[data-kind="album"]:hover .home-item-img-wrapper::after,
+.home-item-card[data-kind="artist"]:hover .home-item-img-wrapper::after,
+.home-item-wide-card[data-kind="artist"]:hover .home-item-img-wrapper::after,
 .home-item-circle[data-kind="album"]:hover .home-item-img-wrapper::after,
 .home-item-circle[data-kind="artist"]:hover .home-item-img-wrapper::after,
 .home-item-card[data-kind="station"]:hover .home-item-img-wrapper::after,
@@ -1793,6 +1811,8 @@ body.now-playing-route .player-section .player-expand-btn svg {
 /* Album and artist entities open their pages; hover only darkens artwork. */
 .home-item-card[data-kind="album"] .home-play-btn,
 .home-item-wide-card[data-kind="album"] .home-play-btn,
+.home-item-card[data-kind="artist"] .home-play-btn,
+.home-item-wide-card[data-kind="artist"] .home-play-btn,
 .home-item-circle[data-kind="album"] .home-play-btn,
 .home-item-circle[data-kind="artist"] .home-play-btn {
   display: none !important;
@@ -2524,9 +2544,6 @@ body.results-open .player-section {
   #library-modal-close {
     display: none;
   }
-  /* A mood page is a child route of Explore, so it keeps an explicit back
-     control even where the top-level routed pages hide their close action. */
-  #mood-modal-close { display: flex; }
 }
 
 /* ============================================================
@@ -3185,10 +3202,6 @@ main:has(#now-playing-section:not([hidden])) {
   scroll-snap-align: start;
 }
 @media (min-width: 900px) { .explore-grid { gap: 24px; } .explore-card { flex-basis: 174px; } }
-.explore-card:hover,
-.explore-card:focus-within {
-  background: rgba(255, 255, 255, .06);
-}
 .explore-card:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
@@ -3377,9 +3390,6 @@ main:has(#now-playing-section:not([hidden])) {
   transition: background .2s;
   cursor: pointer;
 }
-.library-card:hover {
-  background: rgba(255, 255, 255, .06);
-}
 .library-card:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
@@ -3399,6 +3409,22 @@ main:has(#now-playing-section:not([hidden])) {
   object-fit: cover;
   display: block;
   transition: opacity .2s;
+}
+/* Artist cards navigate to a profile, so match the rest of the app: a quiet
+   artwork dim on hover, no play affordance, and no layout-shifting transform. */
+.library-card-artist .library-card-art::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  background: rgba(0, 0, 0, .45);
+  opacity: 0;
+  transition: opacity .18s ease;
+}
+.library-card-artist:hover .library-card-art::after,
+.library-card-artist:focus-visible .library-card-art::after {
+  opacity: 1;
 }
 .library-card-art-placeholder {
   width: 100%;
@@ -3850,20 +3876,17 @@ body.library-route #nav-library-btn::before {
   display: grid;
   grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 16px 24px;
+  transition: transform .28s ease-out, opacity .28s ease-out;
+  will-change: transform, opacity;
 }
-.explore-mood-grid.mood-grid-slide-left { animation: moodRowSlideLeft .28s ease-out; }
-.explore-mood-grid.mood-grid-slide-right { animation: moodRowSlideRight .28s ease-out; }
-@keyframes moodRowSlideLeft {
-  from { opacity: .4; transform: translateX(36px); }
-  to { opacity: 1; transform: translateX(0); }
-}
-@keyframes moodRowSlideRight {
-  from { opacity: .4; transform: translateX(-36px); }
-  to { opacity: 1; transform: translateX(0); }
-}
+.explore-mood-viewport { position: relative; overflow: hidden; }
+.explore-mood-grid.mood-grid-incoming { position: absolute; inset: 0; width: 100%; }
+.explore-mood-grid.mood-grid-enter-right { opacity: .4; transform: translateX(36px); }
+.explore-mood-grid.mood-grid-enter-left { opacity: .4; transform: translateX(-36px); }
+.explore-mood-grid.mood-grid-exit-left { opacity: .4; transform: translateX(-36px); }
+.explore-mood-grid.mood-grid-exit-right { opacity: .4; transform: translateX(36px); }
 @media (prefers-reduced-motion: reduce) {
-  .explore-mood-grid.mood-grid-slide-left,
-  .explore-mood-grid.mood-grid-slide-right { animation: none; }
+  .explore-mood-grid { transition: none; }
 }
 .explore-mood-header {
   display: flex;
@@ -3883,37 +3906,6 @@ body.library-route #nav-library-btn::before {
   box-shadow: none;
 }
 .explore-mood-controls { display: flex; align-items: center; gap: 16px; }
-.explore-mood-arrow {
-  color: var(--text);
-  font: inherit;
-  font-weight: 700;
-  cursor: pointer;
-}
-.explore-mood-arrow {
-  display: grid;
-  place-items: center;
-  width: 38px;
-  height: 38px;
-  padding: 0 0 3px;
-  border: 1px solid rgba(255,255,255,.28);
-  border-radius: 50%;
-  background: transparent;
-  font-size: 1.8rem;
-  font-weight: 300;
-  line-height: 1;
-}
-.explore-mood-arrow:hover:not(:disabled),
-.explore-mood-arrow:focus-visible:not(:disabled) {
-  border-color: var(--text);
-  background: rgba(255,255,255,.08);
-}
-.explore-mood-arrow:disabled {
-  opacity: .3;
-  color: var(--muted);
-  border-color: rgba(255,255,255,.1);
-  cursor: default;
-  pointer-events: none;
-}
 .explore-mood-card {
   min-height: 48px;
   padding: 11px 14px 11px 18px;

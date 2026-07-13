@@ -95,8 +95,12 @@
   }
 
   function navigateTrackArtist(track) {
+    // Some Explore tracks omit their artist channel ID, so resolving it takes
+    // a network request. Start feedback in this menu click, not afterwards.
+    if (window.startTopProgress) window.startTopProgress();
     return resolveArtistId(track).then(function (artistId) {
       if (!artistId) {
+        if (window.abortTopProgress) window.abortTopProgress();
         if (typeof window.toast === 'function') window.toast('Artist unavailable for this song', 'error');
         return false;
       }

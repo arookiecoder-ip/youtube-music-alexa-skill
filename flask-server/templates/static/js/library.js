@@ -200,6 +200,9 @@
         artistGrid.className = 'library-grid';
         artists.forEach(a => {
           const card = renderPlaylistCard({ _artistId: a.channel_id, title: a.name || 'Artist', thumbnail: a.thumbnail, description: 'Artist' });
+          // Artists open a profile rather than start playback.  Mark them so
+          // their hover treatment matches artist cards across the app.
+          card.classList.add('library-card-artist');
           artistGrid.appendChild(card);
         });
         artistSection.appendChild(artistGrid);

@@ -172,6 +172,7 @@
     document.body.classList.toggle('home-route', returnRoute === '#home');
     document.body.classList.toggle('playlists-route', returnRoute.indexOf('#playlist/') === 0);
     document.body.classList.toggle('artist-route', returnRoute.indexOf('#artist/') === 0);
+    document.body.classList.toggle('artist-songs-route', /\/songs$/.test(returnRoute));
     document.body.classList.toggle('album-route', returnRoute.indexOf('#album/') === 0);
     document.body.classList.toggle('history-route', returnRoute === '#history');
     document.body.classList.toggle('explore-route', returnRoute === '#explore');
@@ -205,6 +206,8 @@
     } else if (returnRoute === '#library') {
       var lo = document.getElementById('library-modal-overlay');
       if (lo) lo.classList.add('open');
+    } else if (returnRoute.indexOf('#artist/') === 0 && /\/songs$/.test(returnRoute)) {
+      showArtistSongsSection();
     } else if (returnRoute.indexOf('#artist/') === 0) {
       showArtistSection();
     } else if (returnRoute.indexOf('#album/') === 0) {
@@ -275,7 +278,10 @@
       history.pushState({ route: route }, '', location.pathname + location.search);
     }
     applyRoute(route);
-    if (changedRoute) {
+    // The full player is a fixed overlay over the current page. Resetting all
+    // view scroll positions here also resets the artist page underneath it,
+    // which makes the artist background visibly jump before the overlay lands.
+    if (changedRoute && route !== '#now-playing') {
       resetRouteScroll();
       _restoreScroll();
       requestAnimationFrame(_restoreScroll);
@@ -285,9 +291,11 @@
     _saveScroll();
     window.__route = (e.state && e.state.route) || '#home';
     applyRoute(window.__route);
-    resetRouteScroll();
-    _restoreScroll();
-    requestAnimationFrame(_restoreScroll);
+    if (window.__route !== '#now-playing') {
+      resetRouteScroll();
+      _restoreScroll();
+      requestAnimationFrame(_restoreScroll);
+    }
   });
 
   function applyRoute(hash) {
@@ -322,6 +330,7 @@
     document.body.classList.toggle('mood-route', hash.indexOf('#mood/') === 0);
     document.body.classList.toggle('library-route', hash === '#library');
     document.body.classList.toggle('artist-route', hash.indexOf('#artist/') === 0);
+    document.body.classList.toggle('artist-songs-route', /\/songs$/.test(hash));
     document.body.classList.toggle('album-route', hash.indexOf('#album/') === 0);
 
     // Routed desktop pages reuse overlay markup, so explicitly dismiss layers

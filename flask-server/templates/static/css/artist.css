@@ -12,6 +12,20 @@
     border-radius: 0;
     box-shadow: none;
   }
+  /* "View all" is a full artist-song page, not a panel above the compact
+     player. Keep playback running, but do not paint the fixed bar over this
+     route. */
+  @media (min-width: 900px) {
+    body.artist-songs-route .player-section {
+      display: none !important;
+    }
+    body.artist-songs-route main {
+      padding-bottom: 0 !important;
+    }
+    body.artist-songs-route #artist-songs-section {
+      min-height: calc(100dvh - var(--topbar-h, 64px));
+    }
+  }
   #artist-songs-content[hidden] { display: none; }
   .artist-songs-page-head { display: flex; align-items: center; gap: 16px; margin: 0 0 28px; }
   .artist-songs-page-head h1 { margin: 3px 0 0; font-size: clamp(1.75rem, 3vw, 2.5rem); }
@@ -309,10 +323,10 @@
   .hscroll-section .section-head { margin-bottom: var(--space-3); display: flex; align-items: center; justify-content: space-between; }
   .hscroll-controls { display: flex; align-items: center; gap: 8px; margin-left: auto; }
   .hscroll-scroll {
-    width: 40px;
-    height: 40px;
+    width: 32px;
+    height: 32px;
     border-radius: 50%;
-    border: 1.5px solid rgba(255,255,255,.55);
+    border: 1px solid rgba(255,255,255,.2);
     background: transparent;
     color: var(--text);
     display: inline-flex;
@@ -320,11 +334,11 @@
     justify-content: center;
     cursor: pointer;
     padding: 0;
-    transition: background .15s, border-color .15s, opacity .15s;
+    transition: background .2s;
   }
-  .hscroll-scroll:hover:not(:disabled) { background: rgba(255,255,255,.13); border-color: rgba(255,255,255,.9); }
+  .hscroll-scroll:hover:not(:disabled) { background: rgba(255,255,255,.1); }
   .hscroll-scroll:disabled { opacity: .28; cursor: default; }
-  .hscroll-scroll svg { width: 22px; height: 22px; }
+  .hscroll-scroll svg { width: 20px; height: 20px; }
   .hscroll-track {
     display: flex;
     flex-wrap: nowrap;
