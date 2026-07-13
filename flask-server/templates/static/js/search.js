@@ -324,7 +324,7 @@ function renderResults() {
     `;
     
     const track = section.querySelector('.hscroll-track');
-    const albumPlayBtnHtml = '<button type="button" class="hscroll-play-btn" title="Play"><svg viewBox="0 0 24 24" fill="currentColor"><polygon points="8,5 19,12 8,19"/></svg></button>';
+    const albumPlayBtnHtml = '<button type="button" class="hscroll-play-btn home-play-btn search-album-play" title="Play"><svg class="home-play-glyph" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><polygon points="7,4 20,12 7,20"/></svg></button>';
     // Keep playlist cards visually and behaviorally aligned with homepage
     // playlist tiles instead of the search-specific album play treatment.
     const playlistPlayBtnHtml = '<button type="button" class="home-play-btn search-playlist-play" title="Play"><svg class="home-play-glyph" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><polygon points="7,4 20,12 7,20"/></svg></button>';

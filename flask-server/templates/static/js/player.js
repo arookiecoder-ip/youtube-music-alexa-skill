@@ -60,6 +60,40 @@ function syncPlayPause() {
 // Last-rendered track fingerprint — used to skip redundant DOM writes.
 let _lastNpFingerprint = '';
 
+function upgradeLowResNowPlayingArt(info, fingerprint, artwork, npPageArt) {
+  if (!info.video_id || typeof window.api !== 'function') return Promise.resolve(false);
+
+  return window.api('/api/track/' + encodeURIComponent(info.video_id) + '/artwork')
+    .then((result) => {
+      const highResUrl = result && result.thumbnail;
+      if (!highResUrl || highResUrl === info.thumbnail || _lastNpFingerprint !== fingerprint) return false;
+
+      return new Promise((resolve) => {
+        const highResImage = new Image();
+        highResImage.onload = () => {
+          if (_lastNpFingerprint !== fingerprint) return resolve(false);
+          const url = 'url(' + highResUrl + ')';
+          artwork.forEach((el) => {
+            el.style.backgroundImage = url;
+            el.classList.remove('image-loading');
+          });
+          if (npPageArt) {
+            const npPage = npPageArt.closest('.np-page');
+            npPage.style.setProperty('--np-cover', url);
+            npPage.classList.remove('image-loading');
+            document.body.style.setProperty('--np-cover', url);
+          }
+          state._currentThumbnail = highResUrl;
+          if (state._currentTrack) state._currentTrack.thumbnail = highResUrl;
+          resolve(true);
+        };
+        highResImage.onerror = () => resolve(false);
+        highResImage.src = highResUrl;
+      });
+    })
+    .catch(() => false);
+}
+
 function showNowPlaying(info) {
   const np = document.getElementById('now-playing');
   const miniArt = document.getElementById('mini-art');
@@ -88,7 +122,9 @@ function showNowPlaying(info) {
       if (npPageArt) {
         npPageArt.style.backgroundImage = '';
         npPageArt.classList.remove('has-thumb', 'image-loading');
-        npPageArt.closest('.np-page').style.removeProperty('--np-cover');
+        const npPage = npPageArt.closest('.np-page');
+        npPage.style.removeProperty('--np-cover');
+        npPage.classList.remove('image-loading');
         document.body.style.removeProperty('--np-cover');
       }
       const npPageTitle = document.getElementById('np-page-title');
@@ -140,17 +176,35 @@ function showNowPlaying(info) {
         el.classList.add('has-thumb', 'image-loading');
       });
       if (npPageArt) {
-        npPageArt.parentElement.parentElement.style.setProperty('--np-cover', url);
+        const npPage = npPageArt.closest('.np-page');
+        npPage.style.setProperty('--np-cover', url);
+        npPage.classList.add('image-loading');
         document.body.style.setProperty('--np-cover', url);
       }
       const img = new Image();
       img.onload = () => {
-        if (_lastNpFingerprint === fp) {
+        if (_lastNpFingerprint !== fp) return;
+        // Small shelf thumbnails look hazy when enlarged in the player. Keep
+        // the preview blurred while the server resolves the track's best art.
+        const isLowResolution = img.naturalWidth < 640 || img.naturalHeight < 640;
+        if (!isLowResolution) {
           artwork.forEach((el) => el.classList.remove('image-loading'));
+          if (npPageArt) npPageArt.closest('.np-page').classList.remove('image-loading');
+          return;
         }
+        upgradeLowResNowPlayingArt(info, fp, artwork, npPageArt)
+          .then((upgraded) => {
+            if (!upgraded && _lastNpFingerprint === fp) {
+              artwork.forEach((el) => el.classList.remove('image-loading'));
+              if (npPageArt) npPageArt.closest('.np-page').classList.remove('image-loading');
+            }
+          });
       };
       img.onerror = () => {
-        if (_lastNpFingerprint === fp) artwork.forEach((el) => el.classList.remove('image-loading'));
+        if (_lastNpFingerprint === fp) {
+          artwork.forEach((el) => el.classList.remove('image-loading'));
+          if (npPageArt) npPageArt.closest('.np-page').classList.remove('image-loading');
+        }
       };
       img.src = info.thumbnail;
     } else {
@@ -163,7 +217,9 @@ function showNowPlaying(info) {
       if (npPageArt) {
         npPageArt.style.backgroundImage = '';
         npPageArt.classList.remove('has-thumb', 'image-loading');
-        npPageArt.parentElement.parentElement.style.removeProperty('--np-cover');
+        const npPage = npPageArt.closest('.np-page');
+        npPage.style.removeProperty('--np-cover');
+        npPage.classList.remove('image-loading');
         document.body.style.removeProperty('--np-cover');
       }
     }

@@ -485,6 +485,10 @@
               } finally {
                 loading.classList.remove('visible');
                 loadingTracks = false;
+                // Appending moves the sentinel down, which can suppress its
+                // next observer edge. Re-check after releasing the lock so a
+                // list already at the bottom continues loading.
+                requestAnimationFrame(loadWhenNearEnd);
               }
             };
             const loadWhenNearEnd = () => {

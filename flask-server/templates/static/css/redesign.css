@@ -1746,13 +1746,15 @@ body.now-playing-route .player-section .player-expand-btn svg {
   /* Transparent so the blurred album art continues behind the header. */
   body.artist-route:not(.header-scrolled) main header,
   body.album-route:not(.results-open):not(.header-scrolled) main header,
-  body.now-playing-route:not(.results-open):not(.header-scrolled) main header,
+  /* The expanded player is a fixed artwork layer. Its header must stay
+     transparent even when the page behind it was previously scrolled. */
+  body.now-playing-route:not(.results-open) main header,
   body.home-route:not(.results-open):not(.header-scrolled) main header {
     background: transparent;
   }
   body.artist-route:not(.header-scrolled) main header::before,
   body.album-route:not(.results-open):not(.header-scrolled) main header::before,
-  body.now-playing-route:not(.results-open):not(.header-scrolled) main header::before,
+  body.now-playing-route:not(.results-open) main header::before,
   body.home-route:not(.results-open):not(.header-scrolled) main header::before {
     background-color: transparent;
     border-bottom-color: transparent;
@@ -2085,7 +2087,7 @@ body.results-open #results-section {
 }
 
 /* Search playlist cards reuse the homepage playlist hover treatment: a
-   consistent dark artwork overlay and the same centered play glyph/control. */
+   consistent dark artwork overlay and bottom-right play glyph/control. */
 #results-section .hscroll-card[data-playlist-id] .hscroll-card-art::after {
   background: rgba(0, 0, 0, .45);
   opacity: 0;
@@ -2098,23 +2100,42 @@ body.results-open #results-section {
 #results-section .hscroll-card[data-playlist-id] .search-playlist-play {
   width: 44px;
   height: 44px;
-  top: 50%;
-  left: 50%;
-  right: auto;
-  bottom: auto;
+  top: auto;
+  left: auto;
+  right: 8px;
+  bottom: 8px;
   background: rgba(0, 0, 0, .6);
-  transform: translate(-50%, -50%) scale(.8);
+  transform: none;
   transition: opacity .2s, transform .1s;
 }
 #results-section .hscroll-card[data-playlist-id]:hover .search-playlist-play,
 #results-section .hscroll-card[data-playlist-id]:focus-within .search-playlist-play {
   opacity: 1;
-  transform: translate(-50%, -50%) scale(1);
+  transform: none;
 }
 #results-section .hscroll-card[data-playlist-id] .search-playlist-play:hover,
 #results-section .hscroll-card[data-playlist-id] .search-playlist-play:focus-visible {
   background: rgba(0, 0, 0, .6);
-  transform: translate(-50%, -50%) scale(1.08);
+  transform: scale(1.08);
+}
+/* Albums keep their established bottom-right placement while sharing the
+   homepage card control's dark treatment and reveal motion. */
+#results-section .search-album-play {
+  background: rgba(0, 0, 0, .6);
+  color: #fff;
+  transform: none;
+  transition: opacity .2s, transform .1s;
+}
+#results-section .hscroll-card:hover .search-album-play,
+#results-section .hscroll-card:focus-within .search-album-play {
+  opacity: 1;
+  transform: none;
+}
+#results-section .search-album-play:hover,
+#results-section .search-album-play:focus-visible {
+  background: rgba(0, 0, 0, .6);
+  color: #fff;
+  transform: scale(1.08);
 }
 #results-section .result-like-btn,
 #results-section .track-like-btn {
@@ -2275,7 +2296,7 @@ button { border-radius: var(--radius-md); }
      returns automatically when the user scrolls (header-scrolled). */
   body.artist-route:not(.header-scrolled) main header,
   body.album-route:not(.results-open):not(.header-scrolled) main header,
-  body.now-playing-route:not(.results-open):not(.header-scrolled) main header,
+  body.now-playing-route:not(.results-open) main header,
   body.home-route:not(.results-open):not(.header-scrolled) main header {
     background: transparent;
   }
@@ -2906,12 +2927,15 @@ body.results-open .player-section {
   inset: -70px;
   z-index: -2;
   background: var(--np-cover, none) center / cover no-repeat;
-  /* Large full-screen blur is repainted while the player panel slides. Keep
-     the artwork atmosphere without stalling open/close on modest GPUs. */
-  filter: blur(28px) saturate(1.25);
+  filter: saturate(1.25);
   opacity: .72;
   transform: scale(1.12);
-  transition: background-image .35s ease;
+  transition: background-image .35s ease, filter .5s ease;
+}
+/* A low-resolution artwork preview is intentionally soft; the player clears
+   this state only after its full-quality replacement has decoded. */
+.np-page.image-loading::before {
+  filter: blur(28px) saturate(1.25);
 }
 .np-page::after {
   content: '';
