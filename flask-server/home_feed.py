@@ -60,15 +60,23 @@ def normalize_track(item):
         return None
 
     title = _get_text(item.get("title"))
+    raw_artists = item.get("artists") or item.get("artist") or []
+    if isinstance(raw_artists, dict):
+        raw_artists = [raw_artists]
     artists = [
         {
             "name": _get_text(a.get("name")),
-            "id": a.get("id") or a.get("browseId") or ""
+            "id": a.get("id") or a.get("browseId") or a.get("channelId") or ""
         }
-        for a in item.get("artists", []) if a.get("name")
+        for a in raw_artists if isinstance(a, dict) and a.get("name")
     ]
     artists_text = ", ".join(a["name"] for a in artists)
-    album_text = _get_text(item.get("album", {}).get("name")) if item.get("album") else ""
+    album = item.get("album") or {}
+    if isinstance(album, str):
+        album = {"name": album}
+    album_text = _get_text(album.get("name")) if album else ""
+    album_id = album.get("id") or album.get("browseId") or ""
+    artist_id = artists[0]["id"] if artists else ""
     
     subtitle_parts = [p for p in (artists_text, album_text) if p]
     subtitle = " \u2022 ".join(subtitle_parts)
@@ -80,7 +88,9 @@ def normalize_track(item):
         "subtitle": subtitle,
         "artists": artists,
         "album": album_text,
-        "albumId": (item.get("album") or {}).get("id") or (item.get("album") or {}).get("browseId") or "",
+        "albumId": album_id,
+        "artistId": artist_id,
+        "channelId": artist_id,
         "image": _get_best_thumbnail(item.get("thumbnails")),
         "images": item.get("thumbnails", []),
         "videoId": video_id,

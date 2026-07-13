@@ -65,7 +65,8 @@
     const videoId = isNowPlaying
       ? state._currentVideoId
       : root.dataset.videoId || root.closest('[data-video-id]')?.dataset.videoId || '';
-    const albumId = root.dataset.albumId || root.dataset.albumBrowseId || '';
+    const albumId = root.dataset.albumId || root.dataset.albumBrowseId ||
+      (root.dataset.kind === 'album' ? root.dataset.targetId : '');
     const artistId = root.dataset.channelId || root.dataset.artistId || '';
     return {
       video_id: videoId || '',

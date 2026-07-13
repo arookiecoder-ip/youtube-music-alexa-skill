@@ -1,5 +1,8 @@
 (function() {
   'use strict';
+  var playerTrace = function(event, details) {
+    if (window.__playerDebugLog) window.__playerDebugLog(event, details);
+  };
 
   function setHidden(selector, hidden) {
     document.querySelectorAll(selector).forEach(function(el) {
@@ -149,6 +152,7 @@
   // playlist data), but the overlay should just slide away and leave the page
   // underneath exactly as it was.
   window.closeNowPlayingOverlay = function() {
+    playerTrace('close:called');
     if (!document.body.classList.contains('now-playing-route')) return;
     var npSection = document.getElementById('now-playing-section');
     var returnRoute = window.__npReturnRoute || '#home';
@@ -201,6 +205,7 @@
 
     // Trigger the closing slide-out animation
     document.body.classList.add('now-playing-closing');
+    playerTrace('close:closing-class-added');
 
     // Clean up queue panel state
     var queueSection = document.getElementById('queue-section');
@@ -216,6 +221,7 @@
         if (event && (event.target !== npSection || event.propertyName !== 'transform')) return;
         if (npSection._closeTimer) clearTimeout(npSection._closeTimer);
         npSection.removeEventListener('transitionend', finishClose);
+        playerTrace('close:finished', { property: event && event.propertyName });
 
         // Animation complete: only cleanup remains. The underlying page is
         // already visible (restored before the animation started).
@@ -272,6 +278,7 @@
     var wasNowPlaying = document.body.classList.contains('now-playing-route');
     var isClosingNowPlaying = wasNowPlaying && hash !== '#now-playing' &&
       window.matchMedia('(min-width: 900px)').matches;
+    playerTrace('route:apply', { hash: hash, wasNowPlaying: wasNowPlaying, isClosingNowPlaying: isClosingNowPlaying });
     var routedNpSection = document.getElementById('now-playing-section');
     if (routedNpSection && routedNpSection._closeTimer) {
       clearTimeout(routedNpSection._closeTimer);
@@ -328,6 +335,7 @@
           if (event && (event.target !== npSection || event.propertyName !== 'transform')) return;
           if (npSection._closeTimer) clearTimeout(npSection._closeTimer);
           npSection.removeEventListener('transitionend', finishClose);
+          playerTrace('route:close-finished', { property: event && event.propertyName });
           var closingMain = document.querySelector('main');
           if (closingMain) {
             closingMain.style.transition = 'none';

@@ -1,5 +1,6 @@
 (function () {
   'use strict';
+  const playerTrace = (event, details) => window.__playerDebugLog && window.__playerDebugLog(event, details);
   function escHtml(s) {
     return String(s == null ? '' : s)
       .replace(/&/g, '&amp;')
@@ -638,6 +639,7 @@ function syncModalScrollLock() {
   let _miniPopupOpen = false;
 
   function openMiniPopup(fromRoute) {
+    playerTrace('mini:open-request', { fromRoute: !!fromRoute, desktop: window.matchMedia('(min-width: 900px)').matches });
     // Nothing playing: never open — but if the view is somehow up (e.g. the
     // queue ended while expanded), the toggle must still be able to close it.
     if (!state._hasTrack) {
@@ -650,8 +652,10 @@ function syncModalScrollLock() {
     // to the view it was opened from.
     if (window.matchMedia('(min-width: 900px)').matches) {
       if (window.getRoute && window.getRoute() === '#now-playing') {
+        playerTrace('mini:desktop-close-full');
         window.closeNowPlayingOverlay(); // Collapse
       } else {
+        playerTrace('mini:desktop-open-full');
         window.navigateTo('#now-playing'); // Expand
       }
       return;
@@ -679,6 +683,7 @@ function syncModalScrollLock() {
   }
 
   function closeMiniPopup() {
+    playerTrace('mini:close-popup');
     if (!_miniPopupOpen) return;
     _miniPopupOpen = false;
     overlay.classList.remove('open');

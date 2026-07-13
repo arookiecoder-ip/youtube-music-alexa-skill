@@ -47,10 +47,17 @@
         const videoId = play.videoId ? escapeHtml(play.videoId) : '';
         const playlistId = play.playlistId ? escapeHtml(play.playlistId) : '';
         const kind = escapeHtml(item.kind || 'unknown');
-        const targetId = item.target ? escapeHtml(item.target.id || '') : '';
+        // Keep the browse id on the card even when a target was omitted by a
+        // shelf provider.  Track cards use the album id for title navigation.
+        const targetId = item.target ? (item.target.id || '') :
+            (item.browseId || item.playlistId || item.targetId || '');
         
-        const albumId = item.albumId || item.album_id || '';
-        const dataAttrs = `data-kind="${kind}" data-video-id="${videoId}" data-playlist-id="${playlistId}" data-target-id="${targetId}" data-album-id="${escapeHtml(albumId)}"`;
+        const albumId = item.albumId || item.album_id ||
+            (item.album && typeof item.album === 'object' && (item.album.id || item.album.browseId)) || '';
+        const artistId = item.channelId || item.channel_id || item.artistId || item.artist_id ||
+            (Array.isArray(item.artists) && item.artists[0] &&
+                (item.artists[0].id || item.artists[0].browseId || item.artists[0].channelId)) || '';
+        const dataAttrs = `data-kind="${kind}" data-video-id="${videoId}" data-playlist-id="${playlistId}" data-target-id="${escapeHtml(targetId)}" data-album-id="${escapeHtml(albumId)}" data-channel-id="${escapeHtml(artistId)}"`;
         
         let playBtnHtml = '';
         if (cap.play) {

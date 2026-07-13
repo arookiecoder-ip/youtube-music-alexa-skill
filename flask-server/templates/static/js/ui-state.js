@@ -28,8 +28,38 @@
     _homeLoading: false,
   }, window.__appState || {});
 
+  // Player lifecycle trace. Run window.dumpPlayerDebugLogs() in the console
+  // after reproducing the flicker to export the last 300 state changes.
+  window.__playerDebugLog = window.__playerDebugLog || function(event, details) {
+    const main = document.querySelector('main');
+    const np = document.getElementById('now-playing-section');
+    const mini = document.getElementById('mini-player');
+    const bar = document.querySelector('.player-section');
+    const record = {
+      t: Math.round(performance.now()), event,
+      route: window.__route || location.hash || '#home',
+      body: document.body.className,
+      mainQueue: !!(main && main.classList.contains('has-queue')),
+      player: bar && { hidden: bar.hidden, visible: bar.classList.contains('is-visible'), collapsed: bar.classList.contains('is-collapsed') },
+      nowPlaying: np && { hidden: np.hidden, visibility: getComputedStyle(np).visibility, transform: getComputedStyle(np).transform },
+      mini: mini && { visible: mini.classList.contains('visible'), display: getComputedStyle(mini).display },
+      hasTrack: !!window.__appState._hasTrack,
+      ...(details || {})
+    };
+    window.__playerDebugRecords = (window.__playerDebugRecords || []).concat(record).slice(-300);
+    console.debug('[PLAYER-TRACE]', record);
+    return record;
+  };
+  window.dumpPlayerDebugLogs = function() {
+    const logs = window.__playerDebugRecords || [];
+    console.table(logs.map((r, i) => ({ i, t: r.t, event: r.event, route: r.route, body: r.body, queue: r.mainQueue, player: r.player && (r.player.hidden ? 'hidden' : r.player.visible ? 'visible' : 'shown'), np: r.nowPlaying && r.nowPlaying.transform, mini: r.mini && r.mini.visible })));
+    return logs;
+  };
+  window.__playerDebugLog('ui-state-ready');
+
   function syncUiState() {
     const state = window.__appState;
+    window.__playerDebugLog('sync:start');
     const mainEl = document.querySelector('main');
     const player = document.querySelector('.player-section');
     const mini = document.getElementById('mini-player');
@@ -62,7 +92,11 @@
     clearTimeout(player._hideTimer);
     player.hidden = false;
     player.classList.remove('is-collapsed');
-    requestAnimationFrame(() => player.classList.add('is-visible'));
+    requestAnimationFrame(() => {
+      player.classList.add('is-visible');
+      window.__playerDebugLog('sync:player-visible-rAF');
+    });
+    window.__playerDebugLog('sync:player-queued-visible');
 
     if (state._hasTrack) {
       player.classList.remove('is-blank');
