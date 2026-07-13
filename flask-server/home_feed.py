@@ -55,7 +55,7 @@ def _construct_play(kind, video_id=None, playlist_id=None):
 def normalize_track(item):
     if not item or not isinstance(item, dict):
         return None
-    video_id = item.get("videoId")
+    video_id = item.get("videoId") or item.get("video_id")
     if not video_id:
         return None
 
@@ -228,7 +228,9 @@ def normalize_home_item(item):
     """Normalize one item from YT Music's potentially mixed home shelves."""
     if not item or not isinstance(item, dict):
         return None
-    if item.get("videoId"):
+    # Different home sources use both ytmusicapi's videoId and the app's
+    # normalized video_id.  Song identity must win over playlist metadata.
+    if item.get("videoId") or item.get("video_id") or item.get("type") in {"song", "track"}:
         return normalize_track(item)
     if item.get("browseId") and "subscribers" in item:
         return normalize_artist(item)

@@ -98,7 +98,7 @@
   color: var(--accent);
 }
 .player-section .np-like-btn,
-.np-page-like-btn { --like-icon-size: 30px; }
+.np-page-like-btn { --like-icon-size: 20px; }
 .artist-song-like-btn { --like-icon-size: 14px; }
 .artist-song-like-btn {
   border-color: transparent !important;
@@ -655,8 +655,9 @@ body.rail-collapsed .sidebar-playlist-list { scrollbar-width: none; }
     width: 100%;
     min-width: 0;
     overflow: hidden;
-    padding-left: 15px;
-    padding-right: 15px;
+    padding-left: 0;
+    padding-right: 0;
+    justify-content: center;
   }
   body.rail-collapsed .sidebar-brand strong {
     max-width: 0;
@@ -798,7 +799,7 @@ body.rail-collapsed .sidebar .sidebar-nav-btn:hover {
   z-index: 1000;
 }
 .profile-menu-wrap.open .profile-menu { opacity: 1; visibility: visible; transform: none; }
-.profile-menu-user { display: flex; align-items: center; gap: 12px; padding: 4px 4px 12px; border-bottom: 1px solid var(--border); }
+.profile-menu-user { display: flex; align-items: center; gap: 12px; padding: 4px 0 12px; border-bottom: 1px solid var(--border); }
 .profile-menu-avatar {
   width: 54px;
   height: 54px;
@@ -818,7 +819,7 @@ body.rail-collapsed .sidebar .sidebar-nav-btn:hover {
 .profile-menu-user strong { font-size: 1rem; font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; }
 
 .profile-menu-status {
-  padding: 12px 4px;
+  padding: 12px 0;
   border-bottom: 1px solid var(--border);
   font-size: 0.85rem;
   line-height: 1.6;
@@ -1984,7 +1985,7 @@ body:has(#library-modal-overlay.open) {
 .mini-popup-progress .progress-fill { background: var(--accent-grad); }
 .mini-popup-progress .progress-track,
 .mini-popup-progress .progress-fill { border-radius: var(--radius-full); }
-.toast { border-radius: var(--radius-full); }
+.toast { border-radius: 4px; }
 /* Toasts float above the fixed playbar instead of underneath it */
 body:has(.player-section.is-visible) .toast {
   bottom: calc(var(--playbar-h-mobile) + 20px);

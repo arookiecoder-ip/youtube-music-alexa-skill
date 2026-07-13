@@ -83,6 +83,21 @@
     const jamHomeSection = document.getElementById('jam-home-section');
     if (jamHomeSection) jamHomeSection.hidden = !!state._resultsOpen;
     if (!player) return;
+    const routeNowPlaying = (window.getRoute && window.getRoute() === '#now-playing') ||
+      document.body.classList.contains('now-playing-route') ||
+      document.body.classList.contains('now-playing-closing');
+    // The bottom player must remain a stable layer while the full player is
+    // opening/closing. Re-queuing its visibility animation here causes a
+    // one-frame flicker during route synchronization.
+    if (routeNowPlaying) {
+      clearTimeout(player._hideTimer);
+      player.hidden = false;
+      player.classList.remove('is-collapsed');
+      player.classList.add('is-visible');
+      player.classList.toggle('is-blank', !state._hasTrack);
+      window.__playerDebugLog('sync:player-locked-during-now-playing');
+      return;
+    }
     if (window.JAM_GUEST && !state._hasTrack) {
       player.classList.remove('is-visible');
       player.classList.add('is-collapsed');

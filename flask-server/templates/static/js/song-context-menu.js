@@ -53,11 +53,11 @@
   function trackFrom(root) {
     if (root._songContextTrack) {
       const track = Object.assign({}, root._songContextTrack);
-      if (!track.album_id && root.dataset.albumId) track.album_id = root.dataset.albumId;
+      if (!track.album_id) track.album_id = track.albumId || track.album_browse_id || root.dataset.albumId || root.dataset.albumBrowseId || '';
       if (!track.album_id && track.album && typeof track.album === 'object') {
         track.album_id = track.album.id || track.album.browseId || '';
       }
-      if (!track.artist_id) track.artist_id = track.channel_id || track.artistId || '';
+      if (!track.artist_id) track.artist_id = track.channel_id || track.channelId || track.artistId || '';
       return track;
     }
     const state = window.__appState || {};
@@ -231,8 +231,24 @@
   });
 
   document.addEventListener('click', function (event) {
+    // A song title is a catalog link everywhere in the app.  Keep artwork,
+    // play buttons, and row actions as playback controls.
+    const title = event.target.closest('.home-item-title, .recs-tile-title, .artist-song-title, .queue-title, .result-title, .top-result-title');
+    if (title && !event.target.closest('button, .artist-name')) {
+      const root = title.closest(ROOT_SELECTOR);
+      if (root) {
+        const track = trackFrom(root);
+        if (track.video_id && track.album_id) {
+          event.preventDefault();
+          event.stopImmediatePropagation();
+          if (window.preloadNavigateAlbum) window.preloadNavigateAlbum(track.album_id);
+          else if (window.navigateTo) window.navigateTo('#album/' + encodeURIComponent(track.album_id));
+          return;
+        }
+      }
+    }
     if (!event.target.closest('.song-context-menu')) closeMenu();
-  });
+  }, true);
   document.addEventListener('keydown', function (event) {
     if (event.key === 'Escape') closeMenu();
   });

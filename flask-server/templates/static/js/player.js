@@ -925,7 +925,13 @@ document.getElementById('pp-btn').onclick = () => {
   state.lastActionAt = Date.now();
   const action = state.isPlaying ? 'pause' : 'play';
   toast((action === 'pause' ? 'Pausing' : 'Resuming') + '\u2026');
+  // Update the visual state immediately.  Waiting for the device response
+  // leaves the banner showing the old glyph during the overlay animation and
+  // can make both play/pause icons flash in sequence.
+  const previousPlaying = state.isPlaying;
+  state.isPlaying = action === 'play';
   state.lastActionIntent = action === 'play';
+  syncPlayPause();
   api('/alexa/command/', { serial, action })
     .then(() => {
       state.isPlaying = action === 'play';
@@ -933,7 +939,12 @@ document.getElementById('pp-btn').onclick = () => {
       syncPlayPause();
       toast(action === 'pause' ? 'Paused' : 'Resumed', 'ok');
     })
-    .catch(e => toast(e.message, 'error'));
+    .catch(e => {
+      state.isPlaying = previousPlaying;
+      state.lastActionIntent = previousPlaying;
+      syncPlayPause();
+      toast(e.message, 'error');
+    });
 };
 
 const npPageArt = document.getElementById('np-page-art');
