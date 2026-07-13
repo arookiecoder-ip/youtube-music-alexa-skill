@@ -494,8 +494,7 @@ body.results-open .play-section {
   main.has-queue .play-section,
   body.results-open .play-section {
     position: fixed;
-    /* Keep the rail between the fixed header and the persistent player. */
-    top: 78px;
+    top: 14px;
     left: calc(var(--rail-w) + (100vw - var(--rail-w)) / 2);
     transform: translateX(-50%);
     width: clamp(300px, 34vw, 560px);
@@ -1013,7 +1012,8 @@ body.rail-collapsed .sidebar .sidebar-nav-btn:hover {
     display: flex !important;
     left: 0;
     right: auto;
-    top: 3px;
+    /* Keep the rail between the fixed header and the persistent player. */
+    top: calc(var(--topbar-h) + 3px);
     width: var(--rail-w);
     transition: width .25s ease, background .25s ease, border-color .25s ease;
     height: auto;
