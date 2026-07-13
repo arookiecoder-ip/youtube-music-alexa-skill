@@ -267,7 +267,12 @@
         _openPlaylistId = plId;
       }
       await preloadPlaylistHero(pl);
-      if (overlay) overlay.classList.add('open');
+      if (overlay) {
+        // Keep the identity of the rendered page so the router can bring the
+        // same overlay back instantly on browser Back before any refresh.
+        overlay.dataset.playlistId = String(plId);
+        overlay.classList.add('open');
+      }
       if (titleEl) titleEl.textContent = pl.title || 'Playlist';
 
       if (body) {
@@ -350,6 +355,9 @@
         if (tracks.length === 0) {
           list.innerHTML = '<div style="padding:24px; color:var(--muted); text-align:center;">No tracks in this playlist</div>';
         } else {
+          // Kept as the final child while paging. Rows must be inserted before
+          // it so the observer always follows the real end of the playlist.
+          let loading = null;
           const appendTracks = (batch, startIndex) => {
             batch.forEach((track, index) => {
             const wrapper = document.createElement('div');
@@ -442,7 +450,8 @@
             if (window.wireArtistLinks) window.wireArtistLinks(row);
             wireSongActions(row, contextTrack);
             wrapper.appendChild(row);
-            list.appendChild(wrapper);
+            if (loading) list.insertBefore(wrapper, loading);
+            else list.appendChild(wrapper);
             });
             if (window.syncTrackPlaybackIndicators) window.syncTrackPlaybackIndicators();
           };
@@ -452,7 +461,7 @@
           // larger declared track count. The count is authoritative for
           // keeping the continuation loader alive.
           if (pl.has_more || trackCount > tracks.length) {
-            const loading = document.createElement('div');
+            loading = document.createElement('div');
             loading.className = 'playlist-loading-indicator';
             loading.innerHTML = '<span class="playlist-loading-spinner" aria-hidden="true"></span><span>Loading more songs…</span>';
             list.appendChild(loading);
@@ -473,7 +482,11 @@
               try {
                 const page = await window.api('/api/library/playlists/' + encodeURIComponent(plId) + '?offset=' + nextOffset + '&limit=' + PLAYLIST_PAGE_SIZE);
                 const batch = page.tracks || [];
+                // Prevent scroll anchoring from following the loading marker
+                // as it moves down. The rows currently in view must stay put.
+                const scrollTopBeforeAppend = scrollRoot ? scrollRoot.scrollTop : 0;
                 appendTracks(batch, nextOffset);
+                if (scrollRoot) scrollRoot.scrollTop = scrollTopBeforeAppend;
                 observeLazyImages(list);
                 const returnedNextOffset = Number(page.next_offset) || (nextOffset + batch.length);
                 const declaredTotal = Number(page.trackCount) || 0;

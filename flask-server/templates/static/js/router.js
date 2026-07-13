@@ -421,6 +421,13 @@
       routes[hash]();
     } else if (hash.indexOf('#playlist/') === 0) {
       var playlistId = decodeURIComponent(hash.slice('#playlist/'.length));
+      // On browser Back, the playlist markup is still in the overlay. Restore
+      // that exact page synchronously while its data refreshes so Home never
+      // flashes between an artist and the previous playlist.
+      var playlistOverlay = document.getElementById('playlist-detail-modal-overlay');
+      if (playlistOverlay && playlistOverlay.dataset.playlistId === String(playlistId)) {
+        playlistOverlay.classList.add('open');
+      }
       // Playlist detail is an overlay-style page. Clear the previous content
       // first so an artist banner cannot remain visible behind the mini rail.
       hideAllViews();
@@ -429,8 +436,13 @@
     } else if (hash.indexOf('#album/') === 0) {
       var albumId = decodeURIComponent(hash.slice('#album/'.length));
       if (!albumId) { window.navigateTo('#home'); return; }
+      var albumSection = document.getElementById('album-section');
+      var restoreAlbum = albumSection && albumSection.dataset.albumId === String(albumId);
       hideAllViews();
       setHidden('.play-section', false);
+      // Preserve the previous album's rendered frame during Back navigation;
+      // loadAlbum will replace it only if fresh data is needed.
+      if (restoreAlbum) albumSection.hidden = false;
       if (window.loadAlbum) window.loadAlbum(albumId);
     } else if (hash.indexOf('#mood/') === 0) {
       var moodRouteValue = hash.slice('#mood/'.length);

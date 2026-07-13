@@ -12,6 +12,16 @@
   display: none;
 }
 
+/* A collapsed rail is only an icon strip and Home intentionally bleeds behind
+   it. Offset the feed by half that strip so shelves are centered in the
+   viewport rather than in the remaining space to the rail's right. */
+@media (min-width: 900px) {
+  body.rail-collapsed.home-route #home-section {
+    margin-left: -38px;
+    margin-right: 38px;
+  }
+}
+
 @media (prefers-reduced-motion: no-preference) {
   #home-section:not([hidden]) {
     animation: homeFadeIn .3s ease both;

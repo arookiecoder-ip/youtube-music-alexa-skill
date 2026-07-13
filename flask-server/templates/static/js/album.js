@@ -214,7 +214,12 @@
     }
 
     var section = document.getElementById('album-section');
-    if (section) section.hidden = false;
+    if (section) {
+      // Lets the router restore this exact already-rendered album immediately
+      // when browser Back returns from an artist page.
+      section.dataset.albumId = String(browseId);
+      section.hidden = false;
+    }
   }
 
   window.loadAlbum = loadAlbum;

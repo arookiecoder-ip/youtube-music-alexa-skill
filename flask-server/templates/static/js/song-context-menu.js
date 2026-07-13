@@ -324,7 +324,10 @@
     // A song title is a catalog link everywhere in the app.  Keep artwork,
     // play buttons, and row actions as playback controls.
     const title = event.target.closest('.home-item-title, .recs-tile-title, .artist-song-title, .queue-title, .result-title, .top-result-title');
-    if (title && !event.target.closest('button, .artist-name')) {
+    // Queue rows are playback controls: their own click handler selects and
+    // plays the queued track. Do not let the generic catalog-title shortcut
+    // intercept a queue title during capture and send the user to its album.
+    if (title && !event.target.closest('button, .artist-name, .queue-swipe-wrapper')) {
       const root = title.closest(ROOT_SELECTOR);
       if (root) {
         const track = trackFrom(root);

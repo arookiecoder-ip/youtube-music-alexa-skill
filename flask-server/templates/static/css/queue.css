@@ -212,12 +212,12 @@
   }
   .queue-menu-option:hover { background: rgba(255,255,255,.06); }
   .queue-menu-option[hidden] { display: none; }
-  .queue-menu-option.danger { color: var(--danger); }
-  .queue-menu-option.danger:hover { background: rgba(224,49,49,.08); }
+  .queue-menu-option.danger { background: var(--danger); color: #fff; }
+  .queue-menu-option.danger:hover { background: #c92a2a; }
   .queue-menu-option.liked { color: var(--accent); }
   .queue-menu-option.liked:hover { background: rgba(243,125,34,.08); }
   .queue-menu-option svg { flex: none; width: 16px; height: 16px; color: var(--muted); }
-  .queue-menu-option.danger svg { color: var(--danger); }
+  .queue-menu-option.danger svg { color: #fff; }
   .queue-menu-option.liked svg { color: var(--accent); }
 
   .queue-thumb {

@@ -12,11 +12,18 @@
     border-radius: 0;
     box-shadow: none;
   }
-  /* The full artist-song page uses the shared fixed playbar and its document
-     clearance, just like every other routed view. */
+  /* Artist and View All are browsing views: do not surface the persistent
+     player over their content. Playback continues in the background. */
+  body.artist-route:not(.now-playing-route):not(.now-playing-closing) .player-section {
+    display: none !important;
+  }
+  body.artist-route:not(.now-playing-route):not(.now-playing-closing) main:has(.player-section.is-visible) {
+    padding-bottom: var(--space-5) !important;
+  }
   @media (min-width: 900px) {
     body.artist-songs-route #artist-songs-section {
       min-height: calc(100dvh - var(--topbar-h, 64px));
+      padding-bottom: var(--space-5);
     }
   }
   #artist-songs-content[hidden] { display: none; }

@@ -65,6 +65,7 @@
   transition: opacity .16s ease;
 }
 .playlist-loading-indicator.visible { opacity: 1; }
+.playlist-loading-indicator { overflow-anchor: none; }
 .playlist-loading-spinner {
   width: 14px;
   height: 14px;

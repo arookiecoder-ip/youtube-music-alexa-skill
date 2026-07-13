@@ -59,6 +59,11 @@ function syncPlayPause() {
 /* ---- now-playing display (single element, no dual placeholder bug) ---- */
 // Last-rendered track fingerprint — used to skip redundant DOM writes.
 let _lastNpFingerprint = '';
+// Keep the sharp foreground artwork and the first ambient-preview artwork
+// separately. A repeated now-playing update must not replay the blur simply
+// because the server sent the original small thumbnail again.
+const _resolvedNowPlayingArt = new Map();
+const _ambientNowPlayingArt = new Map();
 
 function upgradeLowResNowPlayingArt(info, fingerprint, artwork, npPageArt) {
   if (!info.video_id || typeof window.api !== 'function') return Promise.resolve(false);
@@ -79,10 +84,12 @@ function upgradeLowResNowPlayingArt(info, fingerprint, artwork, npPageArt) {
           });
           if (npPageArt) {
             const npPage = npPageArt.closest('.np-page');
-            npPage.style.setProperty('--np-cover', url);
+            // The page backdrop deliberately stays on the first preview that
+            // arrived for this track. Upgrading only the foreground artwork
+            // avoids a distracting full-screen background change mid-play.
             npPage.classList.remove('image-loading');
-            document.body.style.setProperty('--np-cover', url);
           }
+          _resolvedNowPlayingArt.set(info.video_id, highResUrl);
           state._currentThumbnail = highResUrl;
           if (state._currentTrack) state._currentTrack.thumbnail = highResUrl;
           resolve(true);
@@ -166,21 +173,32 @@ function showNowPlaying(info) {
       npPageArtist.innerHTML = window.artistLinksHtml(info.artist, info.channelId);
     }
     if (info.thumbnail) {
-      const url = 'url(' + info.thumbnail + ')';
+      const cachedHighRes = info.video_id && _resolvedNowPlayingArt.get(info.video_id);
+      const displayThumbnail = cachedHighRes || info.thumbnail;
+      if (info.video_id && !_ambientNowPlayingArt.has(info.video_id)) {
+        _ambientNowPlayingArt.set(info.video_id, info.thumbnail);
+      }
+      const ambientThumbnail = (info.video_id && _ambientNowPlayingArt.get(info.video_id)) || info.thumbnail;
+      const url = 'url(' + displayThumbnail + ')';
+      const ambientUrl = 'url(' + ambientThumbnail + ')';
       const artwork = [art, miniArt, mpArt, npPageArt].filter(Boolean);
       // Show the incoming cover immediately as a soft preview. Once the
       // browser finishes decoding it, remove the blur instead of popping a
       // sharp image into an empty square.
       artwork.forEach((el) => {
         el.style.backgroundImage = url;
-        el.classList.add('has-thumb', 'image-loading');
+        el.classList.toggle('image-loading', !cachedHighRes);
+        el.classList.add('has-thumb');
       });
       if (npPageArt) {
         const npPage = npPageArt.closest('.np-page');
-        npPage.style.setProperty('--np-cover', url);
-        npPage.classList.add('image-loading');
-        document.body.style.setProperty('--np-cover', url);
+        npPage.style.setProperty('--np-cover', ambientUrl);
+        npPage.classList.toggle('image-loading', !cachedHighRes);
+        document.body.style.setProperty('--np-cover', ambientUrl);
       }
+      // The HD image was decoded during an earlier playback update. It is
+      // already safe to paint sharply, so do not briefly blur it again.
+      if (!cachedHighRes) {
       const img = new Image();
       img.onload = () => {
         if (_lastNpFingerprint !== fp) return;
@@ -188,6 +206,7 @@ function showNowPlaying(info) {
         // the preview blurred while the server resolves the track's best art.
         const isLowResolution = img.naturalWidth < 640 || img.naturalHeight < 640;
         if (!isLowResolution) {
+          if (info.video_id) _resolvedNowPlayingArt.set(info.video_id, info.thumbnail);
           artwork.forEach((el) => el.classList.remove('image-loading'));
           if (npPageArt) npPageArt.closest('.np-page').classList.remove('image-loading');
           return;
@@ -207,6 +226,7 @@ function showNowPlaying(info) {
         }
       };
       img.src = info.thumbnail;
+      }
     } else {
       art.style.backgroundImage = '';
       art.classList.remove('has-thumb', 'image-loading');
@@ -227,10 +247,10 @@ function showNowPlaying(info) {
     // unknown (optimistic plain-text play) so the "Open on YouTube Music"
     // link never keeps pointing at the previous song.
     state._currentVideoId = info.video_id || '';
-    state._currentThumbnail = info.thumbnail || '';
+    state._currentThumbnail = (info.video_id && _resolvedNowPlayingArt.get(info.video_id)) || info.thumbnail || '';
     state._currentTrack = {
       video_id: info.video_id || '', title: info.title || '', artist: info.artist || '',
-      thumbnail: info.thumbnail || '', channelId: info.channelId || '',
+      thumbnail: state._currentThumbnail, channelId: info.channelId || '',
       artist_id: info.artist_id || info.artistId || info.channelId || '',
       album_id: info.album_id || info.albumId || info.album_browse_id || ''
     };

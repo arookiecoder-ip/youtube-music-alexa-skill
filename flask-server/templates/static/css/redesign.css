@@ -1659,6 +1659,14 @@ body.now-playing-route .player-section .player-expand-btn svg {
   body.now-playing-closing .player-section {
     transform: none !important;
     transition: none !important;
+    /* The bar sits above the sliding artwork layer. Its usual translucent
+       backdrop would sample that moving layer, making the mini player look
+       as though it flickers while the sheet closes. Freeze it as an opaque
+       composited surface for the handoff. */
+    background: #0e0e0e !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+    contain: paint;
   }
   /* The compact playbar remains the stable layer below the expanded player.
      Pin its rendered state during both directions of the overlay handoff so
@@ -2948,7 +2956,9 @@ body.results-open .player-section {
   inset: -70px;
   z-index: -2;
   background: var(--np-cover, none) center / cover no-repeat;
-  filter: saturate(1.25);
+  /* Keep the ambient artwork deliberately abstract so it supports, rather
+     than competes with, the sharp cover and queue content. */
+  filter: blur(42px) saturate(1.25);
   opacity: .72;
   transform: scale(1.12);
   transition: background-image .35s ease, filter .5s ease;
@@ -2956,7 +2966,7 @@ body.results-open .player-section {
 /* A low-resolution artwork preview is intentionally soft; the player clears
    this state only after its full-quality replacement has decoded. */
 .np-page.image-loading::before {
-  filter: blur(28px) saturate(1.25);
+  filter: blur(56px) saturate(1.25);
 }
 .np-page::after {
   content: '';
