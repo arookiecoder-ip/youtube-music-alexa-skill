@@ -80,19 +80,24 @@
   function syncUiState() {
     const state = window.__appState;
     window.__playerDebugLog('sync:start');
+    const route = window.getRoute ? (window.getRoute() || '') : '';
+    // Search results are retained while visiting an artist/album so Back can
+    // restore them, but their shell class must only style the visible #home
+    // route. Leaving results-open on an artist route forces the header black
+    // and blocks the hero artwork from bleeding underneath it.
+    const resultsVisible = !!state._resultsOpen && route === '#home';
     const mainEl = document.querySelector('main');
     const player = document.querySelector('.player-section');
     const mini = document.getElementById('mini-player');
     const clearBtn = document.getElementById('clear-all-btn');
     if (clearBtn) clearBtn.hidden = !(state._hasTrack || state._resultsOpen);
-    document.body.classList.toggle('results-open', state._resultsOpen);
-    if (mini) mini.classList.toggle('visible', state._resultsOpen && state._hasTrack);
-    if (mainEl) mainEl.classList.toggle('idle', state._loggedIn && !state._hasTrack && !state._resultsOpen);
+    document.body.classList.toggle('results-open', resultsVisible);
+    if (mini) mini.classList.toggle('visible', resultsVisible && state._hasTrack);
+    if (mainEl) mainEl.classList.toggle('idle', route === '#home' && state._loggedIn && !state._hasTrack && !resultsVisible);
     const homeSection = document.getElementById('home-section');
     if (homeSection) {
       // The player is a fixed bottom bar now, so the home feed stays visible
       // while a track plays; only search results or the artist page cover it.
-      const route = window.getRoute ? (window.getRoute() || '') : '';
       const artistOpen = route.indexOf('#artist/') === 0;
       const albumOpen = route.indexOf('#album/') === 0;
       const npOpen = route === '#now-playing';

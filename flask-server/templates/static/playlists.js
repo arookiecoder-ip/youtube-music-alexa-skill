@@ -332,7 +332,9 @@
                 const name = typeof a === 'string' ? a : (a && a.name);
                 if (name) {
                   artistParts.push(name);
-                  artistChannelIds.push((a && a.id) || '');
+                  // Personal-playlist responses can call this browse/channel id
+                  // `browseId` or `channelId` instead of `id`.
+                  artistChannelIds.push((a && (a.id || a.browseId || a.channelId || a.channel_id)) || '');
                 }
               });
             }
@@ -341,7 +343,8 @@
             const album = track.album && typeof track.album === 'object' ? track.album : {};
             const albumId = track.album_id || track.albumId || album.id || album.browseId || '';
             const artistId = track.artist_id || track.channel_id || track.artistId ||
-              (Array.isArray(track.artists) && track.artists[0] && track.artists[0].id) || '';
+              (Array.isArray(track.artists) && track.artists[0] &&
+                (track.artists[0].id || track.artists[0].browseId || track.artists[0].channelId || track.artists[0].channel_id)) || '';
             wrapper.dataset.videoId = videoId;
             wrapper.dataset.albumId = albumId;
             wrapper._songContextTrack = {

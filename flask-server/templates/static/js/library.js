@@ -114,7 +114,9 @@
   let _loading = false;
 
   async function loadLibrary(force) {
-    if (!state._loggedIn || window.JAM_GUEST || !window.IS_AUTHENTICATED) return;
+    // Subscribed artists are stored by this app, not YouTube Music. They must
+    // still render when login-state hydration has not completed yet.
+    if (window.JAM_GUEST) return;
 
     const body = document.getElementById('library-modal-body');
     if (!body) return;
@@ -125,9 +127,16 @@
     _loading = true;
 
     try {
-      const data = await window.api('/api/library/');
       const subscribedData = await window.api('/api/subscribed_artists/');
       state._subscribedArtists = subscribedData.artists || [];
+      // YouTube library can fail independently (expired YT session, guest
+      // account, etc.); keep local subscribed artists visible regardless.
+      let data = { playlists: [] };
+      try {
+        data = await window.api('/api/library/');
+      } catch (e) {
+        console.warn('[library] YouTube playlists unavailable', e);
+      }
       _loaded = true;
 
       body.innerHTML = '';

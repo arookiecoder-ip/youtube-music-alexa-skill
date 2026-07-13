@@ -270,10 +270,12 @@
     transform: translate(-50%, -50%);
     z-index: 2;
   }
-  .queue-item.active.playing .queue-thumb { filter: brightness(.45); }
-  .queue-item.active.playing .queue-playing-bars { display: flex; }
-  /* Playback indicator now lives on the now-playing artwork. */
-  .queue-item.active.playing .queue-title::before {
+  .queue-item.active .queue-thumb { filter: brightness(.45); }
+  .queue-item.active .queue-playing-bars { display: flex; }
+  .queue-item.active:not(.playing) .queue-playing-bars i {
+    animation-play-state: paused;
+  }
+  .queue-item.active .queue-title::before {
     display: none;
   }
   .queue-artist .artist-name {

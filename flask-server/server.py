@@ -5390,6 +5390,79 @@ async def api_get_album(browse_id):
     })
 
 
+def _normalize_artist_song_results(raw_songs, artist_name='', channel_id=''):
+    """Normalize artist preview or full-playlist tracks for the web remote."""
+    if isinstance(artist_name, dict):
+        artist_name = artist_name.get('name') or ''
+    elif not isinstance(artist_name, str):
+        artist_name = str(artist_name or '')
+    songs = []
+    for song in raw_songs or []:
+        video_id = song.get('videoId') or song.get('video_id') or ''
+        if not video_id:
+            continue
+        raw_artists = song.get('artists') or []
+        artists = [
+            {
+                'name': artist.get('name') or '',
+                'id': artist.get('id') or artist.get('browseId') or '',
+            }
+            for artist in raw_artists
+            if isinstance(artist, dict) and artist.get('name')
+        ]
+        credit = ', '.join(artist['name'] for artist in artists) or artist_name
+        thumbnails = song.get('thumbnails') or []
+        thumbnail = thumbnails[-1].get('url', '') if thumbnails else ''
+        album = song.get('album') or {}
+        songs.append({
+            'video_id': video_id,
+            'title': song.get('title') or '',
+            'artist': credit,
+            'artists': artists,
+            'channelId': artists[0]['id'] if artists else channel_id,
+            'thumbnail': thumbnail,
+            'album': album,
+            'duration': song.get('duration') or '',
+            'duration_seconds': song.get('duration_seconds') or 0,
+        })
+    return songs
+
+
+@app.route("/api/artist/<channel_id>/songs", methods=["GET"])
+async def api_get_artist_songs(channel_id):
+    """Fetch the complete songs list referenced by get_artist().songs.browseId."""
+    channel_id = (channel_id or '').strip()
+    browse_id = (request.args.get('browse_id') or '').strip()
+    if not channel_id:
+        return jsonify({'error': 'invalid channelId'}), 400
+    if not re.fullmatch(r'[A-Za-z0-9_-]{3,200}', browse_id):
+        return jsonify({'error': 'invalid songs browseId'}), 400
+
+    clients = [_get_ytmusic_home()]
+    try:
+        clients.append(YTMusic())
+    except Exception as error:
+        logger.warning('[api/artist/%s/songs] anonymous client unavailable: %s', channel_id, error)
+    last_error = None
+    for client in clients:
+        try:
+            playlist = await asyncio.to_thread(client.get_playlist, browse_id, None)
+            songs = _normalize_artist_song_results(
+                (playlist or {}).get('tracks') or [],
+                (playlist or {}).get('author') or '',
+                channel_id,
+            )
+            return jsonify({
+                'browseId': browse_id,
+                'songs': songs,
+                'trackCount': (playlist or {}).get('trackCount') or len(songs),
+            })
+        except Exception as error:
+            last_error = error
+            logger.warning('[api/artist/%s/songs] playlist fetch failed: %s', channel_id, error)
+    return jsonify({'error': str(last_error or 'songs unavailable')}), 500
+
+
 @app.route("/api/artist/<channel_id>", methods=["GET"])
 async def api_get_artist(channel_id):
     """Fetch artist page by channelId (e.g. UCxxxxxxx).
@@ -5424,33 +5497,12 @@ async def api_get_artist(channel_id):
 
     # ── Top songs ──
     songs_section = raw.get('songs') or {}
-    top_songs_browse_id = (songs_section.get('browseId') or
-                           songs_section.get('params') or '')
-    raw_songs = songs_section.get('results') or []
-    top_songs = []
-    for s in raw_songs:
-        vid = s.get('videoId') or ''
-        if not vid:
-            continue
-        s_artists = s.get('artists') or []
-        normalized_artists = [
-            {
-                'name': artist.get('name') or '',
-                'id': artist.get('id') or artist.get('browseId') or '',
-            }
-            for artist in s_artists if artist.get('name')
-        ]
-        s_artist = ', '.join(artist['name'] for artist in normalized_artists) or artist_name
-        s_thumbs = s.get('thumbnails') or []
-        s_thumb = s_thumbs[-1].get('url', '') if s_thumbs else ''
-        top_songs.append({
-            'video_id': vid,
-            'title': s.get('title') or '',
-            'artist': s_artist,
-            'artists': normalized_artists,
-            'channelId': normalized_artists[0]['id'] if normalized_artists else channel_id,
-            'thumbnail': s_thumb,
-        })
+    # ytmusicapi documents browseId as the playlist ID for the complete list.
+    # `params` is an internal browse continuation and cannot be sent to
+    # get_playlist().
+    top_songs_browse_id = songs_section.get('browseId') or ''
+    top_songs = _normalize_artist_song_results(
+        songs_section.get('results') or [], artist_name, channel_id)
 
     def _norm_releases(section):
         """Normalise an albums/singles section into a list of card dicts."""
@@ -5501,20 +5553,42 @@ async def api_get_explore():
     if _get_ytmusic_home().auth_type == AuthType.UNAUTHORIZED:
         return jsonify({'error': 'YouTube Music authentication required. Please visit /setup/'}), 403
     try:
-        explore = await asyncio.to_thread(_get_ytmusic_home().get_explore)
-        return jsonify(explore)
+        # Explore is a recommendation surface: pair public discovery shelves
+        # with the authenticated account's native Home shelves.  get_home is
+        # personalized by YouTube Music (history, subscriptions and likes)
+        # while get_explore supplies the current charts, moods and releases.
+        ytm = _get_ytmusic_home()
+        account_home, explore = await asyncio.gather(
+            asyncio.to_thread(ytm.get_home, limit=8),
+            asyncio.to_thread(ytm.get_explore),
+            return_exceptions=True,
+        )
+        if isinstance(explore, Exception):
+            raise explore
+        if isinstance(account_home, Exception):
+            logger.warning("Personalized Explore shelves unavailable: %s", account_home)
+            account_home = []
+        personal_shelves = []
+        for shelf in account_home or []:
+            if not isinstance(shelf, dict):
+                continue
+            items = shelf.get('contents') or []
+            title = shelf.get('title') or ''
+            if title and items:
+                personal_shelves.append({'title': title, 'items': items})
+            if len(personal_shelves) >= 5:
+                break
+        return jsonify({
+            'personalized': True,
+            'personal_shelves': personal_shelves,
+            'discovery': explore or {},
+        })
     except Exception as e:
         message = str(e)
         if "invalid argument" in message.lower():
-            # Some auth identities cannot call the Explore browse endpoint,
-            # but Explore itself is public. Retry anonymously so new
-            # releases, moods, charts, and videos remain available.
-            logger.warning("YouTube explore browse unavailable; retrying anonymously: %s", message)
-            try:
-                explore = await asyncio.to_thread(YTMusic().get_explore)
-                return jsonify(explore)
-            except Exception as fallback_error:
-                logger.warning("Anonymous YouTube Explore fallback failed: %s", fallback_error)
+            # Keep Explore account-scoped. Returning an error is preferable to
+            # quietly replacing a user's recommendations with anonymous data.
+            logger.warning("Authenticated YouTube Explore request failed: %s", message)
         return jsonify({'error': str(e)}), 500
 
 

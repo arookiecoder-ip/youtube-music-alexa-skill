@@ -6,6 +6,8 @@
   if (state._homeLoading === undefined) state._homeLoading = false;
 
   let homeFeedData = null;
+  let renderedShelves = [];
+  let deferredShelfObserver = null;
   let currentFilter = 'all';
   let abortController = null;
 
@@ -61,6 +63,83 @@
     filterContainer.hidden = false;
   }
 
+  function addReleaseTypeShelves(shelves) {
+    const result = (shelves || []).slice();
+    const seen = new Set(result.map(shelf => shelf.id));
+    const groups = [
+      ['singles', 'Singles', item => item.kind === 'track' && /^single(?:\s|$)/i.test(item.subtitle || '')],
+      ['albums', 'Albums', item => item.kind === 'album'],
+      ['playlists', 'Playlists', item => item.kind === 'playlist']
+    ];
+    groups.forEach(([id, title, matches]) => {
+      if (seen.has('home-' + id)) return;
+      const items = [];
+      const itemKeys = new Set();
+      (shelves || []).forEach(shelf => (shelf.items || []).forEach(item => {
+        if (matches(item) && !itemKeys.has(item.key)) {
+          itemKeys.add(item.key);
+          items.push(item);
+        }
+      }));
+      if (items.length) {
+        result.push({
+          id: 'home-' + id,
+          title: title,
+          subtitle: '',
+          layout: 'cards',
+          source: 'home-categories',
+          actions: { playAll: false, showAll: false },
+          filters: ['all'],
+          items: items.slice(0, 20)
+        });
+      }
+    });
+    return result;
+  }
+
+  function deferredShelfMarkup(shelf) {
+    const esc = HomeRenderers.escapeHtml;
+    const cards = Array(6).fill('<div class="home-item home-skeleton-card"><div class="skeleton-block"></div><div class="skeleton-line skeleton-line-title"></div><div class="skeleton-line skeleton-line-artist"></div></div>').join('');
+    return `<section class="home-shelf home-skeleton-shelf home-shelf-deferred" data-deferred-shelf-id="${esc(shelf.id)}">
+      <div class="home-shelf-header"><div class="home-shelf-title-area"><h2 class="home-shelf-title">${esc(shelf.title || '')}</h2></div></div>
+      <div class="home-shelf-content home-shelf-deferred-content" aria-busy="true">${cards}</div>
+    </section>`;
+  }
+
+  function renderShelvesWhenVisible(container, shelves) {
+    if (deferredShelfObserver) deferredShelfObserver.disconnect();
+    const shelfById = new Map(shelves.map(shelf => [String(shelf.id), shelf]));
+    container.innerHTML = shelves.map(deferredShelfMarkup).join('');
+
+    const render = shell => {
+      if (!shell || shell.dataset.rendered) return;
+      const shelf = shelfById.get(shell.dataset.deferredShelfId);
+      if (!shelf) return;
+      shell.dataset.rendered = 'true';
+      const holder = document.createElement('div');
+      holder.innerHTML = HomeRenderers.renderShelf(shelf).trim();
+      const rendered = holder.firstElementChild;
+      if (!rendered) return;
+      shell.replaceWith(rendered);
+      rendered.querySelectorAll('.home-shelf-content').forEach(updateShelfArrows);
+      if (window.syncTrackPlaybackIndicators) window.syncTrackPlaybackIndicators();
+    };
+
+    const pending = Array.from(container.querySelectorAll('.home-shelf-deferred'));
+    if (!('IntersectionObserver' in window)) {
+      pending.forEach(render);
+      return;
+    }
+    deferredShelfObserver = new IntersectionObserver(entries => {
+      entries.forEach(entry => {
+        if (!entry.isIntersecting) return;
+        deferredShelfObserver.unobserve(entry.target);
+        render(entry.target);
+      });
+    }, { root: null, rootMargin: '240px 0px' });
+    pending.forEach(shelf => deferredShelfObserver.observe(shelf));
+  }
+
   function renderHomeFeed() {
     if (window.performance && performance.mark) performance.mark('home-feed-start');
 
@@ -101,14 +180,14 @@
       return;
     }
 
-    const shelvesToRender = HomeRenderers.filterShelves(homeFeedData, currentFilter);
-    const html = shelvesToRender.map(HomeRenderers.renderShelf).join('');
-
-    container.innerHTML = html || '<div class="home-empty"><div class="home-empty-title">No items match this filter</div></div>';
+    renderedShelves = addReleaseTypeShelves(HomeRenderers.filterShelves(homeFeedData, currentFilter));
+    if (renderedShelves.length) {
+      renderShelvesWhenVisible(container, renderedShelves);
+    } else {
+      container.innerHTML = '<div class="home-empty"><div class="home-empty-title">No items match this filter</div></div>';
+    }
     container.hidden = false;
     showHomeSkeleton(false);
-    container.querySelectorAll('.home-shelf-content').forEach(updateShelfArrows);
-    if (window.syncTrackPlaybackIndicators) window.syncTrackPlaybackIndicators();
 
     if (window.performance && performance.mark && performance.measure) {
       performance.mark('home-feed-end');
@@ -198,7 +277,7 @@
       var playAllBtn = e.target.closest('.home-shelf-play-all');
       if (playAllBtn) {
           var shelfId = playAllBtn.dataset.shelfId;
-          var shelf = homeFeedData.shelves.find(s => s.id === shelfId);
+          var shelf = renderedShelves.find(s => s.id === shelfId);
           if (shelf) {
               // Build a rich queue — carry title/artist/thumbnail so metadata
               // is available without a blocking lookup later.

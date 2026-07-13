@@ -35,6 +35,27 @@
   }
 
   // ── render helpers ─────────────────────────────────────────────────────────
+  function openExploreMenu(event, item, onClick) {
+    event.preventDefault();
+    event.stopPropagation();
+    const id = item.videoId || item.video_id || item.browseId || item.playlistId || item.albumId;
+    const menu = document.createElement('div');
+    menu.className = 'explore-context-menu';
+    menu.innerHTML = `<button data-action="open">Open</button><button data-action="play">Play now</button><button data-action="queue">Add to queue</button>`;
+    document.body.appendChild(menu);
+    const x = Math.min(event.clientX, window.innerWidth - 190), y = Math.min(event.clientY, window.innerHeight - 150);
+    menu.style.left = Math.max(8, x) + 'px'; menu.style.top = Math.max(8, y) + 'px';
+    const close = () => { menu.remove(); document.removeEventListener('click', close); };
+    menu.addEventListener('click', function (e) {
+      const action = e.target.dataset.action;
+      if (action === 'open' && onClick) onClick();
+      if (action === 'play' && item.video_id && window.playResult) window.playResult(item, false, true);
+      if (action === 'queue' && item.video_id && window.addToQueue) window.addToQueue(item);
+      close();
+    });
+    setTimeout(() => document.addEventListener('click', close), 0);
+  }
+
   function renderCard(item, onClick) {
     const thumb = imageUrl(item.thumbnails) || imageUrl(item.thumbnail) ||
       imageUrl(item.images) || imageUrl(item.image);
@@ -44,13 +65,15 @@
     const card = document.createElement('div');
     card.className = 'explore-card';
     card.innerHTML = `
-      <div class="explore-card-art">${imgWithFallback(thumb, title)}</div>
+      <div class="explore-card-art">${imgWithFallback(thumb, title)}<span class="explore-card-play" aria-hidden="true">▶</span><button class="explore-card-more" type="button" aria-label="More options">•••</button></div>
       <div class="explore-card-info">
         <div class="explore-card-title">${escHtml(title)}</div>
         ${sub ? `<div class="explore-card-sub">${escHtml(sub)}</div>` : ''}
       </div>
     `;
     if (onClick) card.addEventListener('click', onClick);
+    card.addEventListener('contextmenu', e => openExploreMenu(e, item, onClick));
+    card.querySelector('.explore-card-more').addEventListener('click', e => openExploreMenu(e, item, onClick));
     if (onClick) card.style.cursor = 'pointer';
     return card;
   }
@@ -60,6 +83,7 @@
 
     const section = document.createElement('div');
     section.className = 'explore-section';
+    section.dataset.exploreKey = title.toLowerCase().replace(/[^a-z]+/g, '_').replace(/^_|_$/g, '');
 
     const header = document.createElement('div');
     header.className = 'explore-section-header';
@@ -77,7 +101,7 @@
   }
 
   function renderSkeleton() {
-    let html = '';
+    let html = '<div class="explore-loading-status" role="status" aria-live="polite"><span class="explore-loading-dot"></span>Personalizing your Explore feed</div>';
     for (let s = 0; s < 3; s++) {
       html += `<div class="explore-section">
         <div class="explore-section-header">
@@ -105,6 +129,9 @@
     if (_loaded && !force) return;
 
     _loading = true;
+    // Render synchronously, before the authenticated account request starts.
+    // window.api owns the global top-progress bar for this request.
+    body.innerHTML = renderSkeleton();
 
     try {
       const explore = await window.api('/api/explore/');
@@ -116,9 +143,49 @@
       }
 
       let hasContent = false;
+      // The server wraps authenticated, account-specific Home shelves with
+      // discovery data. Keep the legacy shape as a fallback for old servers.
+      const discovery = explore.discovery || explore;
+      const openRecommendedItem = (item) => () => {
+        const videoId = item.videoId || item.video_id || '';
+        if (videoId && window.playResult) {
+          window.playResult(Object.assign({}, item, { video_id: videoId }), false, true);
+          return;
+        }
+        const id = item.playlistId || item.browseId || item.albumId || '';
+        if (!id) return;
+        if (item.type === 'Album' || String(id).startsWith('MPREb')) window.navigateTo('#album/' + encodeURIComponent(id));
+        else if (window.preloadNavigatePlaylist) window.preloadNavigatePlaylist(id);
+        else window.navigateTo('#playlist/' + encodeURIComponent(id));
+      };
+      const quick = document.createElement('div');
+      quick.className = 'explore-quick-nav';
+      [['For you','for_you'],['New releases','new_releases'],['Charts','charts'],['Moods & genres','moods'],['Podcasts','podcasts']].forEach(([label, key]) => {
+        const button = document.createElement('button');
+        button.className = 'explore-quick-card';
+        button.innerHTML = `<span class="explore-quick-icon">${key === 'charts' ? '↗' : key === 'moods' ? '◉' : key === 'podcasts' ? '◌' : '✦'}</span><span>${label}</span>`;
+        button.addEventListener('click', () => {
+          const target = body.querySelector(`[data-explore-key="${key}"]`) || body.querySelector(`[data-explore-key*="${key}"]`);
+          if (target) target.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          else if (window.toast) window.toast(`${label} is not available for this account yet`, 'info');
+        });
+        quick.appendChild(button);
+      });
+      body.appendChild(quick);
+
+      // These shelves are generated by the active YouTube Music account and
+      // change with its listening history, likes and subscriptions.
+      (explore.personal_shelves || []).forEach((shelf, index) => {
+        const sec = renderSection(shelf.title || 'Recommended for you', shelf.items || [], openRecommendedItem);
+        if (sec) {
+          sec.dataset.exploreKey = index === 0 ? 'for_you' : 'personal_' + index;
+          body.appendChild(sec);
+          hasContent = true;
+        }
+      });
 
       // ── New Releases ───────────────────────────────────────────────────────
-      const newReleases = explore.new_releases || explore.newReleases || [];
+      const newReleases = discovery.new_releases || discovery.newReleases || [];
       if (newReleases.length) {
         const sec = renderSection('New Releases', newReleases, (item) => () => {
           if (window._closeSidebar) window._closeSidebar();
@@ -135,9 +202,9 @@
       }
 
       // ── Playlists / Featured ───────────────────────────────────────────────
-      const playlists = explore.playlists || explore.featured || [];
+      const playlists = discovery.playlists || discovery.featured || [];
       if (playlists.length) {
-        const label = explore.featured ? 'Featured Playlists' : 'Playlists';
+        const label = discovery.featured ? 'Featured Playlists' : 'Playlists';
         const sec = renderSection(label, playlists, (item) => () => {
           if (window._closeSidebar) window._closeSidebar();
           const id = item.playlistId || item.browseId || '';
@@ -149,7 +216,7 @@
       }
 
       // ── Moods & Genres ─────────────────────────────────────────────────────
-      const moods = explore.moods || explore.genres || [];
+      const moods = discovery.moods || discovery.genres || discovery.moods_and_genres || [];
       if (moods.length) {
         const sec = renderSection('Moods & Genres', moods, (item) => () => {
           if (window._closeSidebar) window._closeSidebar();
@@ -163,7 +230,7 @@
       }
 
       // ── Charts ─────────────────────────────────────────────────────────────
-      const charts = explore.charts || explore.trending || [];
+      const charts = discovery.charts || discovery.trending || [];
       if (charts.length) {
         const sec = renderSection('Charts', charts, (item) => () => {
           if (window._closeSidebar) window._closeSidebar();
@@ -176,12 +243,13 @@
       }
 
       // ── Fallback: catch-all unknown keys ───────────────────────────────────
-      if (!hasContent) {
+      {
         // Try to render whatever arrays the API returned
-        const keys = Object.keys(explore).filter(k => Array.isArray(explore[k]) && explore[k].length > 0);
+        const knownKeys = new Set(['new_releases', 'newReleases', 'playlists', 'featured', 'moods', 'genres', 'moods_and_genres', 'charts', 'trending']);
+        const keys = Object.keys(discovery).filter(k => !knownKeys.has(k) && Array.isArray(discovery[k]) && discovery[k].length > 0);
         for (const key of keys) {
           const label = key.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
-          const sec = renderSection(label, explore[key], (item) => () => {
+          const sec = renderSection(label, discovery[key], (item) => () => {
             if (window._closeSidebar) window._closeSidebar();
             const id = item.playlistId || item.browseId || item.albumId || '';
             if (id) {

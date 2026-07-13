@@ -427,7 +427,7 @@
     return parts.map(function(p, i) {
       if (i % 2 === 1) return esc(p); // separator text, not clickable
       if (!p) return '';
-      var attrs = ' data-artist-name="' + esc(p) + '"';
+      var attrs = ' data-artist-name="' + esc(p.trim()) + '"';
       var cid = channelIds[artistIdx];
       if (cid) attrs += ' data-channel-id="' + esc(cid) + '"';
       artistIdx++;

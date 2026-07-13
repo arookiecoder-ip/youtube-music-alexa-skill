@@ -1638,13 +1638,13 @@ body.now-playing-route .player-section .player-expand-btn svg {
     display: none !important;
   }
   /* Transparent so the blurred album art continues behind the header. */
-  body.artist-route:not(.results-open):not(.header-scrolled) main header,
+  body.artist-route:not(.header-scrolled) main header,
   body.album-route:not(.results-open):not(.header-scrolled) main header,
   body.now-playing-route:not(.results-open):not(.header-scrolled) main header,
   body.home-route:not(.results-open):not(.header-scrolled) main header {
     background: transparent;
   }
-  body.artist-route:not(.results-open):not(.header-scrolled) main header::before,
+  body.artist-route:not(.header-scrolled) main header::before,
   body.album-route:not(.results-open):not(.header-scrolled) main header::before,
   body.now-playing-route:not(.results-open):not(.header-scrolled) main header::before,
   body.home-route:not(.results-open):not(.header-scrolled) main header::before {
@@ -1705,6 +1705,8 @@ body.now-playing-route .player-section .player-expand-btn svg {
 .home-item-wide-card[data-kind="track"] .home-item-img-wrapper::after,
 .home-item-card[data-kind="playlist"] .home-item-img-wrapper::after,
 .home-item-wide-card[data-kind="playlist"] .home-item-img-wrapper::after,
+.home-item-card[data-kind="album"] .home-item-img-wrapper::after,
+.home-item-wide-card[data-kind="album"] .home-item-img-wrapper::after,
 .home-item-card[data-kind="station"] .home-item-img-wrapper::after,
 .home-item-wide-card[data-kind="station"] .home-item-img-wrapper::after {
   content: '';
@@ -1720,6 +1722,8 @@ body.now-playing-route .player-section .player-expand-btn svg {
 .home-item-wide-card[data-kind="track"]:hover .home-item-img-wrapper::after,
 .home-item-card[data-kind="playlist"]:hover .home-item-img-wrapper::after,
 .home-item-wide-card[data-kind="playlist"]:hover .home-item-img-wrapper::after,
+.home-item-card[data-kind="album"]:hover .home-item-img-wrapper::after,
+.home-item-wide-card[data-kind="album"]:hover .home-item-img-wrapper::after,
 .home-item-card[data-kind="station"]:hover .home-item-img-wrapper::after,
 .home-item-wide-card[data-kind="station"]:hover .home-item-img-wrapper::after {
   opacity: 1;
@@ -1750,6 +1754,8 @@ body.now-playing-route .player-section .player-expand-btn svg {
 #playlist-detail-modal .history-item .queue-artist .artist-name {
   position: relative;
   display: inline-block;
+  cursor: pointer;
+  z-index: 1;
   text-decoration: none;
 }
 #playlist-detail-modal .history-item:hover .queue-artist .artist-name {
@@ -2103,7 +2109,7 @@ button { border-radius: var(--radius-md); }
   /* Transparent header so content (artist hero, now-playing blurred art,
      body warm gradient) bleeds behind the sticky top bar. Opaque black
      returns automatically when the user scrolls (header-scrolled). */
-  body.artist-route:not(.results-open):not(.header-scrolled) main header,
+  body.artist-route:not(.header-scrolled) main header,
   body.album-route:not(.results-open):not(.header-scrolled) main header,
   body.now-playing-route:not(.results-open):not(.header-scrolled) main header,
   body.home-route:not(.results-open):not(.header-scrolled) main header {
@@ -2755,22 +2761,6 @@ body.results-open .player-section {
   opacity: 1;
   animation: npArtIconPop .52s cubic-bezier(.22, 1, .36, 1) forwards;
 }
-.np-page-playing-indicator {
-  position: absolute; left: 18px; bottom: 18px; z-index: 11;
-  display: none; align-items: end; gap: 4px; height: 24px;
-  padding: 7px 9px; border-radius: 999px; background: rgba(0,0,0,.58);
-}
-.np-page-art.playing .np-page-playing-indicator { display: inline-flex; }
-.np-page-playing-indicator i {
-  display: block; width: 4px; height: 10px; border-radius: 2px;
-  background: var(--accent); animation: npPagePlayingPulse .9s ease-in-out infinite alternate;
-}
-.np-page-playing-indicator i:nth-child(2) { height: 17px; animation-delay: -.3s; }
-.np-page-playing-indicator i:nth-child(3) { height: 13px; animation-delay: -.6s; }
-@keyframes npPagePlayingPulse {
-  from { transform: scaleY(.45); opacity: .55; }
-  to { transform: scaleY(1); opacity: 1; }
-}
 @keyframes npArtOverlayFade {
   0% { opacity: 1; }
   100% { opacity: 0; }
@@ -2957,8 +2947,11 @@ main:has(#now-playing-section:not([hidden])) {
    ============================================================ */
 
 .explore-section {
-  margin-bottom: 36px;
+  margin-bottom: 42px;
 }
+.explore-loading-status { display:flex; align-items:center; gap:9px; margin:0 0 26px; color:var(--muted); font-size:.88rem; font-weight:600; }
+.explore-loading-dot { width:8px; height:8px; border-radius:50%; background:var(--accent); animation:explorePulse 1s ease-in-out infinite; }
+@keyframes explorePulse { 50% { opacity:.35; transform:scale(.7); } }
 .explore-section-header {
   margin-bottom: 14px;
 }
@@ -2981,17 +2974,20 @@ main:has(#now-playing-section:not([hidden])) {
   }
 }
 .explore-card {
+  position: relative;
   display: flex;
   flex-direction: column;
   border-radius: 10px;
   overflow: hidden;
-  transition: background .15s, transform .15s;
+  transition: background .18s, transform .18s;
+  flex: 0 0 clamp(150px, 18vw, 210px);
 }
 .explore-card[style*="cursor"] {
   cursor: pointer;
 }
 .explore-card[style*="cursor"]:hover {
   background: rgba(255, 255, 255, .06);
+  transform: translateY(-4px);
 }
 .explore-card-art {
   aspect-ratio: 1;
@@ -3000,6 +2996,7 @@ main:has(#now-playing-section:not([hidden])) {
   background: #1a1a1a;
   margin-bottom: 8px;
   flex-shrink: 0;
+  position: relative;
 }
 .explore-card-art img {
   width: 100%;
@@ -3017,6 +3014,18 @@ main:has(#now-playing-section:not([hidden])) {
   color: #444;
 }
 .explore-thumb-placeholder svg { width: 36px; height: 36px; }
+.explore-card-play { position:absolute; right:10px; bottom:10px; width:34px; height:34px; display:grid; place-items:center; border-radius:50%; background:var(--accent-grad); color:#fff; opacity:0; transform:translateY(5px); transition:opacity .18s,transform .18s; font-size:13px; }
+.explore-card:hover .explore-card-play { opacity:1; transform:translateY(0); }
+.explore-card-more { position:absolute; top:8px; right:8px; width:30px; height:30px; border:0; border-radius:50%; background:rgba(0,0,0,.65); color:#fff; opacity:0; transition:opacity .18s; }
+.explore-card:hover .explore-card-more, .explore-card-more:focus-visible { opacity:1; }
+.explore-quick-nav { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:14px; margin-bottom:42px; }
+.explore-quick-card { display:flex; align-items:center; gap:12px; min-height:68px; padding:0 18px; border:1px solid rgba(255,255,255,.08); background:#242424; color:var(--text); font-weight:750; font-size:.95rem; text-align:left; transition:transform .18s,background .18s; }
+.explore-quick-card:hover { transform:translateY(-3px); background:#2d2d2d; }
+.explore-quick-icon { color:var(--accent); font-size:1.35rem; }
+.explore-context-menu { position:fixed; z-index:10000; min-width:170px; padding:6px; border:1px solid rgba(255,255,255,.12); border-radius:12px; background:#202020; box-shadow:0 18px 45px rgba(0,0,0,.5); }
+.explore-context-menu button { display:block; width:100%; padding:10px 12px; border:0; background:transparent; color:var(--text); text-align:left; font-size:.88rem; }
+.explore-context-menu button:hover { background:rgba(255,255,255,.1); }
+@media (max-width:620px) { .explore-quick-nav { grid-template-columns:repeat(2,1fr); } .explore-quick-card { min-height:58px; padding:0 12px; } }
 .explore-card-info {
   padding: 0 4px 8px;
 }

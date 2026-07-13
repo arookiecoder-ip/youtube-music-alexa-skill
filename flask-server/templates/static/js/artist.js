@@ -1,6 +1,7 @@
 (function () {
   'use strict';
   const state = window.__appState = window.__appState || {};
+  const pageConfig = window.ARTIST_PAGE_CONFIG || { hero: { descriptionLimit: 150 } };
   if (state._artistLoading === undefined) state._artistLoading = false;
   if (state._currentChannelId === undefined) state._currentChannelId = null;
   if (state._cachedArtistData === undefined) state._cachedArtistData = null;
@@ -74,6 +75,23 @@
     });
   }
 
+  async function ensureExpandedTopSongs(channelId, data) {
+    if (!data || data.__allTopSongsLoaded) return;
+    var browseId = data.topSongsBrowseId || '';
+    if (!browseId || !window.api) {
+      data.__allTopSongsLoaded = true;
+      return;
+    }
+    var result = await window.api(
+      '/api/artist/' + encodeURIComponent(channelId) + '/songs?browse_id=' +
+      encodeURIComponent(browseId)
+    );
+    if (result && Array.isArray(result.songs) && result.songs.length) {
+      data.topSongs = result.songs;
+    }
+    data.__allTopSongsLoaded = true;
+  }
+
   async function loadArtist(channelId, topSongsOnly) {
     if (!state._subscribedArtists && window.api) {
       try {
@@ -99,6 +117,15 @@
     state._artistLoading = true;
     state._currentChannelId = channelId;
     if (cached) {
+      if (topSongsOnly) {
+        try {
+          await ensureExpandedTopSongs(channelId, cached);
+        } catch (e) {
+          if (requestIsCurrent() && window.toast) {
+            window.toast(e.message || 'Unable to load all songs', 'error');
+          }
+        }
+      }
       await _preloadArtistImage(cached);
       if (!requestIsCurrent()) {
         if (token === state._artistLoadToken) state._artistLoading = false;
@@ -119,6 +146,15 @@
     state._cachedArtistData = null;
     try {
       var data = await window.api('/api/artist/' + encodeURIComponent(channelId));
+      if (topSongsOnly) {
+        try {
+          await ensureExpandedTopSongs(channelId, data);
+        } catch (e) {
+          if (requestIsCurrent() && window.toast) {
+            window.toast(e.message || 'Unable to load all songs', 'error');
+          }
+        }
+      }
       await _preloadArtistImage(data);
       if (!requestIsCurrent()) return;
       data.__heroReady = true;
@@ -164,7 +200,10 @@
 
     var desc = artist.description || '';
     var subText = artist.subscribers || '';
-    var channelId = artist.channelId || artist.channel_id || state._currentChannelId || '';
+    // get_artist responses may omit channelId; route state still contains the
+    // ID used to load this page. Keep other common API names as fallbacks.
+    var channelId = artist.channelId || artist.channel_id || artist.id ||
+      artist.browseId || artist.browse_id || state._currentChannelId || '';
     var subscribed = !!(state._subscribedArtists || []).find(function (a) { return a.channel_id === channelId; });
     
     container.innerHTML = `
@@ -173,7 +212,7 @@
         ${desc ? `
           <div class="artist-hero-desc-container">
             <div class="artist-hero-desc collapsed" id="artist-hero-desc">${escHtml(desc)}</div>
-            ${desc.length > 150 ? '<div class="artist-hero-desc-more" id="artist-hero-more">MORE</div>' : ''}
+            ${desc.length > (pageConfig.hero.descriptionLimit || 150) ? '<div class="artist-hero-desc-more" id="artist-hero-more">MORE</div>' : ''}
           </div>
         ` : ''}
         <div id="artist-top-songs-actions" class="artist-hero-actions"></div>
@@ -243,7 +282,10 @@
 
     var subscribeBtn = document.getElementById('artist-btn-subscribe');
     if (subscribeBtn) subscribeBtn.addEventListener('click', async function() {
-      if (!channelId || !window.api) return;
+      if (!channelId || !window.api) {
+        if (window.toast) window.toast('Artist ID unavailable', 'error');
+        return;
+      }
       var isSubscribed = subscribeBtn.getAttribute('aria-pressed') === 'true';
       var body = { channel_id: channelId, name: artist.name || '', thumbnail: thumbUrl };
       try {
@@ -328,9 +370,17 @@
       viewAllBtn.className = 'artist-view-all-btn';
       viewAllBtn.textContent = 'View all';
       viewAllBtn.addEventListener('click', function() {
+        var channelId = state._currentChannelId;
         if (browseId) {
-          var channelId = state._currentChannelId;
-          if (channelId && window.navigateArtistTopSongs) window.navigateArtistTopSongs(channelId);
+          if (channelId && window.navigateArtistTopSongs) {
+            window.navigateArtistTopSongs(channelId);
+          } else if (channelId && window.navigateTo) {
+            window.navigateTo('#artist/' + encodeURIComponent(channelId) + '?view=top-songs');
+          }
+        } else {
+          // Some artist payloads already contain more than the preview limit
+          // without exposing a browseId. Expand those rows in place.
+          renderTopSongs(songs, '', true);
         }
       });
       viewAllContainer.appendChild(viewAllBtn);
