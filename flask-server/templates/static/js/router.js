@@ -206,8 +206,9 @@
     // Clean up queue panel state
     var queueSection = document.getElementById('queue-section');
     if (queueSection) queueSection.hidden = true;
-    var main = document.querySelector('main');
-    if (main) main.classList.remove('has-queue');
+    // Keep the two-column shell stable until the now-playing layer has
+    // finished sliding away; removing this immediately animates the layout
+    // underneath the closing layer and visibly pushes the page.
 
     if (npSection) {
       if (npSection._closeTimer) clearTimeout(npSection._closeTimer);
@@ -219,10 +220,14 @@
 
         // Animation complete: only cleanup remains. The underlying page is
         // already visible (restored before the animation started).
+        var closingMain = document.querySelector('main');
+        if (closingMain) closingMain.classList.remove('has-queue');
         npSection.hidden = true;
         npSection._closeTimer = null;
         npSection._closeCleanup = null;
-        document.body.classList.remove('now-playing-closing');
+        requestAnimationFrame(function () {
+          document.body.classList.remove('now-playing-closing');
+        });
         document.documentElement.style.removeProperty('overflow');
         document.body.style.removeProperty('overflow');
       };
@@ -316,10 +321,14 @@
           if (event && (event.target !== npSection || event.propertyName !== 'transform')) return;
           if (npSection._closeTimer) clearTimeout(npSection._closeTimer);
           npSection.removeEventListener('transitionend', finishClose);
+          var closingMain = document.querySelector('main');
+          if (closingMain) closingMain.classList.remove('has-queue');
           npSection.hidden = true;
           npSection._closeTimer = null;
           npSection._closeCleanup = null;
-          document.body.classList.remove('now-playing-closing');
+          requestAnimationFrame(function () {
+            document.body.classList.remove('now-playing-closing');
+          });
           // Belt-and-suspenders: restore scroll in case overflow got stuck.
           document.documentElement.style.removeProperty('overflow');
           document.body.style.removeProperty('overflow');
@@ -330,8 +339,10 @@
         npSection._closeTimer = setTimeout(finishClose, 450);
       }
       setHidden('#queue-section', true);
-      var main = document.querySelector('main');
-      if (main) main.classList.remove('has-queue');
+      if (!isClosingNowPlaying) {
+        var main = document.querySelector('main');
+        if (main) main.classList.remove('has-queue');
+      }
     }
     // Safety: when landing on home, always ensure scroll is not locked.
     if (hash === '#home') {

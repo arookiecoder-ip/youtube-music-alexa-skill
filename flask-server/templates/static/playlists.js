@@ -395,6 +395,14 @@
           if (heroShare) heroShare.addEventListener('click', async () => {
             if (shareMuted) return;
             const url = window.location.href;
+            if (navigator.share) {
+              try {
+                await navigator.share({ title: title, text: `Listen to ${title}`, url: url });
+                return;
+              } catch (e) {
+                if (e && e.name === 'AbortError') return;
+              }
+            }
             let copied = false;
             try {
               if (navigator.clipboard && navigator.clipboard.writeText) {

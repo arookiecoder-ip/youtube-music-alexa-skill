@@ -10,19 +10,23 @@
 
     transform: translateX(-50%) translateY(16px);
 
-    background: var(--surface);
+    background: rgba(24, 18, 16, .96);
 
-    border: 1px solid var(--border);
+    border: 1px solid rgba(255, 255, 255, .14);
 
-    padding: 14px 32px;
+    padding: 13px 22px;
 
-    font-size: .95rem;
+    font-size: .84rem;
 
-    letter-spacing: .04em;
+    font-weight: 500;
 
-    color: var(--muted);
+    letter-spacing: .01em;
 
-    border-radius: 0;
+    color: var(--text);
+
+    border-radius: var(--radius-full, 999px);
+
+    box-shadow: 0 10px 30px rgba(0, 0, 0, .45), 0 0 0 1px rgba(255, 116, 32, .06);
 
     opacity: 0;
 
@@ -54,11 +58,11 @@
 
   }
 
-  .toast.error { color: var(--danger); border: 1px solid var(--danger); }
+  .toast.error { color: #ffb4a8; border-color: rgba(255, 112, 92, .7); }
 
-  .toast.ok { color: var(--ok); border: 1px solid var(--ok); }
+  .toast.ok { color: #ffd0ad; border-color: rgba(255, 126, 48, .75); }
 
-  .toast.info { color: var(--accent); border: 1px solid var(--accent); }
+  .toast.info { color: var(--text); border-color: rgba(255, 126, 48, .75); }
 
   .toast.error { white-space: normal; }
 
@@ -116,11 +120,11 @@
 
     font-size: .72rem;
 
-    border-radius: var(--radius-lg);
+    border-radius: var(--radius-full, 999px);
 
-    border: 1px solid currentColor;
+    border: 1px solid rgba(255, 126, 48, .7);
 
-    background: transparent;
+    background: rgba(255, 126, 48, .12);
 
     color: inherit;
 

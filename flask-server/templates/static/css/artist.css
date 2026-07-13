@@ -197,6 +197,14 @@
     overflow: hidden;
     text-overflow: ellipsis;
   }
+  .artist-song-album {
+    font-size: .68rem;
+    color: var(--muted);
+    opacity: .8;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
   .artist-song-play-btn, .artist-song-like-btn {
     flex: none;
     background: none;
@@ -361,6 +369,10 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+  .related-artist-card .hscroll-card-title,
+  .related-artist-card .hscroll-card-sub {
+    text-align: center;
   }
 
   /* ---- Artist page: skeleton loader ---- */

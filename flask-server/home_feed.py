@@ -294,7 +294,13 @@ def _build_shelf(shelf_id, title, layout, source_name, items, filters=None):
         return None
     items = items[:MAX_ITEMS_PER_SHELF]
     # actions
-    play_all = any((i.get('play') or {}).get('videoId') for i in items)
+    # Bulk playback is only meaningful for a homogeneous track shelf. Mixed
+    # shelves can contain playlist/album cards whose play target is a whole
+    # collection, so showing "Play all" there is misleading.
+    play_all = bool(items) and all(
+        i.get('kind') == 'track' and (i.get('play') or {}).get('videoId')
+        for i in items
+    )
     
     return {
         "id": shelf_id,

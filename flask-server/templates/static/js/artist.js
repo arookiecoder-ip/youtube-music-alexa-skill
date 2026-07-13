@@ -245,8 +245,14 @@
       row.className = 'artist-song-row';
       row.dataset.videoId = item.video_id || '';
       row._songContextTrack = item;
+      if (!row._songContextTrack.artist_id) {
+        row._songContextTrack.artist_id = item.channel_id || item.artistId ||
+          (Array.isArray(item.artists) && item.artists[0] && item.artists[0].id) || '';
+      }
       var thumbUrl = item.thumbnail || '';
       var artistCredits = artistCreditsHtml(item);
+      var albumName = typeof item.album === 'string' ? item.album :
+        (item.album && item.album.name) || item.album_name || '';
       var isLiked = typeof _playlistsData !== 'undefined' && _playlistsData.liked_songs && _playlistsData.liked_songs.includes(item.video_id);
       var heartSvg = isLiked
         ? '<svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg>'
@@ -257,6 +263,7 @@
         '<div class="artist-song-info">' +
           '<div class="artist-song-title">' + escHtml(item.title) + '</div>' +
           '<div class="artist-song-artist">' + artistCredits + '</div>' +
+          (albumName ? '<div class="artist-song-album">' + escHtml(albumName) + '</div>' : '') +
         '</div>' +
         '<button class="artist-song-play-btn" title="Play"><svg viewBox="0 0 24 24" fill="currentColor"><polygon points="8,5 19,12 8,19"/></svg></button>' +
         '<button class="artist-song-like-btn' + (isLiked ? ' liked' : '') + '" title="Like">' + heartSvg + '</button>' +
@@ -312,7 +319,7 @@
     for (let i = 0; i < items.length; i++) {
       let item = items[i];
       var card = document.createElement('div');
-      card.className = 'hscroll-card';
+      card.className = 'hscroll-card' + (type === 'artist' ? ' related-artist-card' : '');
       var thumbUrl = '';
       var isRound = false;
       var title = '';

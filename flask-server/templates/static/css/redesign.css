@@ -98,8 +98,24 @@
   color: var(--accent);
 }
 .player-section .np-like-btn,
-.np-page-like-btn { --like-icon-size: 22px; }
+.np-page-like-btn { --like-icon-size: 30px; }
 .artist-song-like-btn { --like-icon-size: 14px; }
+.artist-song-like-btn.liked {
+  border-color: transparent !important;
+  background: transparent !important;
+}
+.artist-song-row .artist-song-play-btn {
+  opacity: 0;
+  transform: scale(.72);
+  pointer-events: none;
+  transition: opacity .18s ease, transform .18s ease, color .15s, border-color .15s;
+}
+.artist-song-row:hover .artist-song-play-btn,
+.artist-song-row:focus-within .artist-song-play-btn {
+  opacity: 1;
+  transform: scale(1);
+  pointer-events: auto;
+}
 .recs-like-btn { --like-icon-size: 12px; }
 .library-card-liked .library-card-art-placeholder { --like-icon-size: 36px; }
 
@@ -760,8 +776,8 @@ body.rail-collapsed .sidebar .sidebar-nav-btn:hover {
 .profile-menu-wrap.open .profile-menu { opacity: 1; visibility: visible; transform: none; }
 .profile-menu-user { display: flex; align-items: center; gap: 12px; padding: 4px 4px 12px; border-bottom: 1px solid var(--border); }
 .profile-menu-avatar {
-  width: 44px;
-  height: 44px;
+  width: 54px;
+  height: 54px;
   display: grid;
   place-items: center;
   flex: none;
@@ -1160,7 +1176,7 @@ body.results-open .player-section.is-visible { transform: none; }
   border-radius: 0 !important;
 }
 .player-section .pp-btn:hover { filter: none; opacity: 0.85; }
-.player-section .pp-btn svg { width: 28px; height: 28px; fill: #ffffff; color: #ffffff; }
+.player-section .pp-btn svg { width: 32px; height: 32px; fill: #ffffff; color: #ffffff; }
 
 /* Progress */
 .player-section .progress { margin: 0; }
@@ -1223,6 +1239,16 @@ input[type=range]::-moz-range-thumb { border-radius: 50%; }
     padding: 15px 24px calc(13px + env(safe-area-inset-bottom, 0px));
   }
   .player-section .np { grid-area: np; }
+  .player-section .transport {
+    grid-area: transport;
+    justify-self: center;
+    min-width: 158px;
+  }
+  /* Give long song and artist names room before the like/shuffle controls.
+     The center transport remains fixed by the three-column grid. */
+  .player-section .np-info {
+    max-width: min(420px, 34vw);
+  }
   .player-section .transport { grid-area: transport; }
   .player-section .vol { grid-area: actions; justify-self: end; }
 }
@@ -1408,6 +1434,18 @@ body.now-playing-route .player-section .player-expand-btn svg {
   body.now-playing-closing main header {
     transition: none !important;
   }
+  /* The closing layer is the only thing allowed to animate. Freeze every
+     underlying section/card/layout transition during the handoff. */
+  body.now-playing-closing main > :not(#now-playing-section),
+  body.now-playing-closing main > :not(#now-playing-section) * {
+    transition: none !important;
+    animation: none !important;
+  }
+  body.now-playing-closing .layout,
+  body.now-playing-closing .play-section,
+  body.now-playing-closing .player-section:not(#now-playing-section) {
+    transition: none !important;
+  }
   body.now-playing-route main {
     height: 100vh;
     min-height: 0;
@@ -1544,6 +1582,46 @@ body.now-playing-route .player-section .player-expand-btn svg {
 .home-card, .home-skeleton-card { flex-basis: 156px; position: relative; }
 @media (min-width: 900px) {
   .home-card, .home-skeleton-card { flex-basis: 186px; }
+}
+/* Artist entities use portrait artwork, not album/playlist tiles. Keep the
+   homepage consistent with the Related Artists section. */
+.home-item[data-kind="artist"] .home-item-img-wrapper,
+.home-item[data-kind="artist"] .home-item-img {
+  border-radius: 50%;
+}
+.home-item[data-kind="artist"] .home-item-img-wrapper {
+  overflow: hidden;
+}
+.home-item[data-kind="artist"] .home-item-text {
+  text-align: center;
+}
+/* Card songs use the same focused hover treatment as playlist rows: dim the
+   artwork and reveal the play control in the exact center. */
+.home-item-card .home-item-img-wrapper::after,
+.home-item-wide-card .home-item-img-wrapper::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, .45);
+  opacity: 0;
+  transition: opacity .18s ease;
+  pointer-events: none;
+}
+.home-item-card:hover .home-item-img-wrapper::after,
+.home-item-wide-card:hover .home-item-img-wrapper::after {
+  opacity: 1;
+}
+.home-item-card .home-play-btn,
+.home-item-wide-card .home-play-btn {
+  top: 50%;
+  left: 50%;
+  right: auto;
+  bottom: auto;
+  transform: translate(-50%, -50%) scale(.8);
+}
+.home-item-card:hover .home-play-btn,
+.home-item-wide-card:hover .home-play-btn {
+  transform: translate(-50%, -50%) scale(1);
 }
 .home-card-art {
   border-radius: var(--card-radius);
@@ -1836,7 +1914,7 @@ body:has(#library-modal-overlay.open) {
 .mini-popup-progress .progress-fill { background: var(--accent-grad); }
 .mini-popup-progress .progress-track,
 .mini-popup-progress .progress-fill { border-radius: var(--radius-full); }
-.toast { border-radius: var(--radius-lg); }
+.toast { border-radius: var(--radius-full); }
 /* Toasts float above the fixed playbar instead of underneath it */
 body:has(.player-section.is-visible) .toast {
   bottom: calc(var(--playbar-h-mobile) + 20px);
@@ -3367,8 +3445,8 @@ body.library-route #nav-library-btn::before {
 
 #album-section .history-item {
   box-sizing: border-box;
-  min-height: 58px;
-  padding: 7px 10px;
+  min-height: 76px;
+  padding: 9px 10px;
   border-bottom: 0;
   border-radius: 6px;
   background: transparent;
@@ -3380,13 +3458,13 @@ body.library-route #nav-library-btn::before {
 
 #album-section .playlist-track-art,
 #album-section .queue-thumb {
-  width: 44px;
-  height: 44px;
+  width: 60px;
+  height: 60px;
 }
 
 #album-section .playlist-track-art {
   position: relative;
-  flex: 0 0 44px;
+  flex: 0 0 60px;
   overflow: hidden;
   border-radius: 4px;
 }
@@ -3404,6 +3482,46 @@ body.library-route #nav-library-btn::before {
 
 #album-section .album-track:hover .playlist-track-art::after {
   opacity: 1;
+}
+
+#album-section .result-like-btn,
+#album-section .result-more-btn {
+  width: 42px;
+  height: 42px;
+  min-width: 42px;
+}
+#album-section .result-like-btn::before,
+#album-section .result-more-btn::before {
+  width: 20px;
+  height: 20px;
+}
+#album-section .result-like-btn > svg,
+#album-section .result-more-btn > svg {
+  width: 20px;
+  height: 20px;
+}
+#playlist-detail-modal .history-item {
+  min-height: 76px;
+  padding: 9px 10px;
+}
+#playlist-detail-modal .playlist-track-art,
+#playlist-detail-modal .queue-thumb {
+  width: 60px;
+  height: 60px;
+}
+#playlist-detail-modal .playlist-track-art { flex-basis: 60px; }
+#playlist-detail-modal .result-like-btn,
+#playlist-detail-modal .result-more-btn {
+  width: 42px;
+  height: 42px;
+  min-width: 42px;
+}
+#playlist-detail-modal .result-like-btn::before,
+#playlist-detail-modal .result-more-btn::before,
+#playlist-detail-modal .result-like-btn > svg,
+#playlist-detail-modal .result-more-btn > svg {
+  width: 20px;
+  height: 20px;
 }
 
 @media (max-width: 480px) {

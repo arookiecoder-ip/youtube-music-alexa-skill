@@ -260,6 +260,17 @@
             return;
         }
 
+        // Station cards should open their browsable station/playlist view on
+        // card click. Keep the explicit overlay Play button as direct play.
+        if (kind === 'station' && !playBtn) {
+            var stationId = targetId || playlistId;
+            if (stationId) {
+                if (window.preloadNavigatePlaylist) window.preloadNavigatePlaylist(stationId);
+                else window.navigateTo('#playlist/' + encodeURIComponent(stationId));
+            }
+            return;
+        }
+
         // If it's a play button click OR item click and it's a track/station/playlist to play directly
         if (playBtn || kind === 'track' || kind === 'station' || (!targetId && playlistId)) {
             if (!videoId && !playlistId) return;
