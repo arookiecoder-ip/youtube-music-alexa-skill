@@ -126,8 +126,14 @@
     };
 
     const pending = Array.from(container.querySelectorAll('.home-shelf-deferred'));
+    // The opening viewport must never depend on IntersectionObserver. Some
+    // browser/WebView combinations defer its first callback until after a
+    // scroll, leaving Home apparently blank even though data has arrived.
+    // Render the first two shelves synchronously; lower shelves remain lazy.
+    pending.slice(0, 2).forEach(render);
+    const deferred = Array.from(container.querySelectorAll('.home-shelf-deferred'));
     if (!('IntersectionObserver' in window)) {
-      pending.forEach(render);
+      deferred.forEach(render);
       return;
     }
     deferredShelfObserver = new IntersectionObserver(entries => {
@@ -137,7 +143,7 @@
         render(entry.target);
       });
     }, { root: null, rootMargin: '240px 0px' });
-    pending.forEach(shelf => deferredShelfObserver.observe(shelf));
+    deferred.forEach(shelf => deferredShelfObserver.observe(shelf));
   }
 
   function renderHomeFeed() {
