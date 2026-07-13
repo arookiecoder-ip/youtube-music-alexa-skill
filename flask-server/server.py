@@ -842,10 +842,6 @@ _playlist_tracks_pending = {}
 _playlist_tracks_cache_lock = threading.Lock()
 _PLAYLIST_TRACKS_CACHE_TTL = 300
 
-_library_playlist_page_cache = {}
-_library_playlist_page_cache_lock = threading.Lock()
-_LIBRARY_PLAYLIST_PAGE_CACHE_TTL = 180
-
 # ---------- server-side now-playing state ----------
 # Amazon's /api/np/player returns empty data for custom-skill audio, so we
 # track the state ourselves. Every stream goes through /proxy/, so we capture
@@ -5212,34 +5208,15 @@ async def api_get_library_playlist(pl_id):
             result['has_more'] = next_offset < fetched_count or next_offset < total
             return result
 
-        cache_key = pl_id.upper() if pl_id.upper() == 'LM' else pl_id
-        with _library_playlist_page_cache_lock:
-            cached = _library_playlist_page_cache.get(cache_key)
-            if cached and cached[0] >= time.time():
-                return jsonify(page_response(cached[1]))
-            if cached:
-                _library_playlist_page_cache.pop(cache_key, None)
-
-        def cache_full_playlist(info):
-            with _library_playlist_page_cache_lock:
-                _library_playlist_page_cache[cache_key] = (
-                    time.time() + _LIBRARY_PLAYLIST_PAGE_CACHE_TTL, info)
-                if len(_library_playlist_page_cache) > 16:
-                    oldest = min(_library_playlist_page_cache,
-                                 key=lambda key: _library_playlist_page_cache[key][0])
-                    if oldest != cache_key:
-                        _library_playlist_page_cache.pop(oldest, None)
-            return info
-
         # 'LM' is the special Liked Music virtual playlist — requires auth.
         if pl_id.upper() == 'LM':
             if yt.auth_type == AuthType.UNAUTHORIZED:
                 return jsonify({'error': 'YouTube Music authentication required. Please visit /setup/'}), 403
             try:
-                # Follow every continuation: a bounded request can stop at an
-                # upstream browse page and falsely signal the end of a large
-                # playlist.
-                raw = await asyncio.to_thread(yt.get_liked_songs, None)
+                # Fetch only enough of the continuation chain for this page;
+                # later scrolls extend the prefix as needed.
+                fetch_limit = page_offset + page_limit + 1
+                raw = await asyncio.to_thread(yt.get_liked_songs, fetch_limit)
             except Exception as liked_error:
                 if "invalid argument" in str(liked_error).lower():
                     logger.warning("YouTube Liked Music browse unavailable: %s", liked_error)
@@ -5264,28 +5241,29 @@ async def api_get_library_playlist(pl_id):
                     'duration': t.get('duration') or '',
                     'duration_seconds': t.get('duration_seconds') or 0,
                 })
-            return jsonify(page_response(cache_full_playlist({
+            return jsonify(page_response({
                 'title': raw.get('title') or 'Liked Music',
                 'trackCount': raw.get('trackCount') or len(tracks),
                 'tracks': tracks,
-            })))
+            }))
         try:
-            info = await asyncio.to_thread(yt.get_playlist, pl_id, None)
+            fetch_limit = page_offset + page_limit + 1
+            info = await asyncio.to_thread(yt.get_playlist, pl_id, fetch_limit)
         except Exception as browse_err:
             if "invalid argument" in str(browse_err).lower():
                 logger.warning("YouTube playlist browse unavailable; retrying anonymously: %s", browse_err)
                 try:
-                    info = await asyncio.to_thread(YTMusic().get_playlist, pl_id, None)
-                    return jsonify(page_response(cache_full_playlist(info)))
+                    info = await asyncio.to_thread(YTMusic().get_playlist, pl_id, fetch_limit)
+                    return jsonify(page_response(info))
                 except Exception:
                     info = await asyncio.to_thread(YTMusic().get_watch_playlist, playlistId=pl_id)
                     if 'title' not in info:
                         info['title'] = 'Curated Mix'
-                    return jsonify(page_response(cache_full_playlist(info)))
+                    return jsonify(page_response(info))
             info = await asyncio.to_thread(yt.get_watch_playlist, playlistId=pl_id)
             if 'title' not in info:
                 info['title'] = 'Curated Mix'
-        return jsonify(page_response(cache_full_playlist(info)))
+        return jsonify(page_response(info))
     except Exception as e:
         logger.error('[api/library/playlists/%s] failed: %s', pl_id, e)
         return jsonify({'error': str(e)}), 500

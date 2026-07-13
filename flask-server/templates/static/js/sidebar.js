@@ -153,22 +153,36 @@
   const navLibrary = document.getElementById('nav-library-btn');
 
   function goHome() {
+    const alreadyHome = window.getRoute && window.getRoute() === '#home';
+    // An active Home item is intentionally inert: do not reapply the route,
+    // dispatch a synthetic hashchange, or reset the user's scroll position.
+    if (alreadyHome && !state._resultsOpen) {
+      if (window._closeSidebar) window._closeSidebar();
+      return;
+    }
     if (state._resultsOpen && window.closeResults) window.closeResults();
-    if (window.getRoute() !== '#home') window.navigateTo('#home');
-    else window.dispatchEvent(new Event('hashchange'));
+    if (!alreadyHome) window.navigateTo('#home');
     if (window._closeSidebar) window._closeSidebar();
-    window.scrollTo({ top: 0, behavior: 'smooth' });
+    if (!alreadyHome) window.scrollTo({ top: 0, behavior: 'smooth' });
   }
 
   if (navHome) navHome.addEventListener('click', goHome);
 
   if (navHistory) navHistory.addEventListener('click', () => {
+    if (window.getRoute && window.getRoute() === '#history') {
+      if (window._closeSidebar) window._closeSidebar();
+      return;
+    }
     if (state._resultsOpen && window.closeResults) window.closeResults();
     if (window._closeSidebar) window._closeSidebar();
     window.navigateTo('#history');
   });
 
   if (navExplore) navExplore.addEventListener('click', () => {
+    if (window.getRoute && window.getRoute() === '#explore') {
+      if (window._closeSidebar) window._closeSidebar();
+      return;
+    }
     if (state._resultsOpen && window.closeResults) window.closeResults();
     if (window._closeSidebar) window._closeSidebar();
     if (window.preloadNavigateExplore) window.preloadNavigateExplore();
@@ -176,6 +190,10 @@
   });
 
   if (navLibrary) navLibrary.addEventListener('click', () => {
+    if (window.getRoute && window.getRoute() === '#library') {
+      if (window._closeSidebar) window._closeSidebar();
+      return;
+    }
     if (state._resultsOpen && window.closeResults) window.closeResults();
     if (window._closeSidebar) window._closeSidebar();
     if (window.preloadNavigateLibrary) window.preloadNavigateLibrary();

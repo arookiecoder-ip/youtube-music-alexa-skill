@@ -5,6 +5,7 @@
   var _openPlaylistId = null;  // currently open playlist detail plId
   const libraryPlaylistIds = new Set();
   const trackMetadataRequests = new Map();
+  const PLAYLIST_PAGE_SIZE = 100;
 
   const escapeHtml = window.escHtml || (s => String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'));
 
@@ -248,7 +249,7 @@
           // Always request the first page explicitly. The server can then
           // return a continuation signal for very large playlists (including
           // Liked Music) instead of silently returning its first browse page.
-          pl = await window.api('/api/library/playlists/' + encodeURIComponent(plId) + '?offset=0&limit=30');
+          pl = await window.api('/api/library/playlists/' + encodeURIComponent(plId) + '?offset=0&limit=' + PLAYLIST_PAGE_SIZE);
           isLibrary = true;
         } catch (e1) {
           const status = e1 && (e1.status || (e1.response && e1.response.status));
@@ -447,7 +448,10 @@
           };
           appendTracks(tracks, 0);
           observeLazyImages(list);
-          if (pl.has_more) {
+          // Some YouTube Music browse responses omit `has_more` despite a
+          // larger declared track count. The count is authoritative for
+          // keeping the continuation loader alive.
+          if (pl.has_more || trackCount > tracks.length) {
             const loading = document.createElement('div');
             loading.className = 'playlist-loading-indicator';
             loading.innerHTML = '<span class="playlist-loading-spinner" aria-hidden="true"></span><span>Loading more songs…</span>';
@@ -467,12 +471,15 @@
               loadingTracks = true;
               loading.classList.add('visible');
               try {
-                const page = await window.api('/api/library/playlists/' + encodeURIComponent(plId) + '?offset=' + nextOffset + '&limit=30');
+                const page = await window.api('/api/library/playlists/' + encodeURIComponent(plId) + '?offset=' + nextOffset + '&limit=' + PLAYLIST_PAGE_SIZE);
                 const batch = page.tracks || [];
                 appendTracks(batch, nextOffset);
                 observeLazyImages(list);
-                nextOffset = Number(page.next_offset) || (nextOffset + batch.length);
-                if (!page.has_more || !batch.length) {
+                const returnedNextOffset = Number(page.next_offset) || (nextOffset + batch.length);
+                const declaredTotal = Number(page.trackCount) || 0;
+                const pageHasMore = page.has_more || returnedNextOffset < declaredTotal;
+                nextOffset = returnedNextOffset;
+                if (!pageHasMore || !batch.length) {
                   cleanupPagination();
                   return;
                 }

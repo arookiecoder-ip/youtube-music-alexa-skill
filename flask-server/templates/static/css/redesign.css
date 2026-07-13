@@ -1177,6 +1177,10 @@ body.rail-collapsed .sidebar .sidebar-nav-btn:hover {
 }
 
 @media (max-width: 899px) {
+  /* Align the header toggle with the icon column in the mobile rail. The
+     wordmark keeps its current position; only the hamburger moves onto that
+     shared 40px axis. */
+  .rail-toggle-btn { transform: translateX(10px); }
   .sidebar-brand { display: none; }
   .sidebar-library { overflow: visible; flex: none; }
   .sidebar-playlist-list { max-height: 34vh; }
@@ -1607,6 +1611,23 @@ body.now-playing-route .player-section .player-expand-btn svg {
                 left .25s ease;
     transform: translateY(103%) !important;
     pointer-events: none;
+  }
+  /* The return route is restored before the player sheet slides down, while
+     `now-playing-route` remains set for the animation. Reapply the returned
+     page's opaque chrome during that overlap so the rail and header do not
+     briefly show the player/home backdrop and then flash dark at cleanup. */
+  body.rail-collapsed.now-playing-closing:not(.home-route):not(.artist-route) .sidebar {
+    background: #000;
+    border-right-color: var(--border);
+  }
+  body.now-playing-closing.header-scrolled main header,
+  body.now-playing-closing:not(.home-route):not(.artist-route):not(.album-route) main header {
+    background: #000;
+  }
+  body.now-playing-closing.header-scrolled main header::before,
+  body.now-playing-closing:not(.home-route):not(.artist-route):not(.album-route) main header::before {
+    background-color: #000;
+    border-bottom-color: rgba(255, 255, 255, .08);
   }
   /* Safety: home route is always scrollable, even if now-playing-closing
      was not cleaned up in time (rapid navigation, timer race, etc.). */
@@ -2976,7 +2997,6 @@ body.results-open .player-section {
    empty control group instead of showing non-functional navigation arrows. */
 @supports selector(.hscroll-controls:has(button)) {
   .hscroll-controls:not(:has(.hscroll-scroll:not(:disabled))),
-  .home-shelf-scroll-btns:not(:has(.home-scroll-btn:not(:disabled))),
   .explore-scroll-btns:not(:has(.explore-scroll-btn:not(:disabled))) {
     display: none !important;
   }
