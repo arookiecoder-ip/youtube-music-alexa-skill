@@ -151,6 +151,18 @@
     });
   }
 
+  function _fetchMood(params, title, signal) {
+    return fetch('/api/explore/moods/?params=' + encodeURIComponent(params) +
+      '&title=' + encodeURIComponent(title || 'music'), {
+      credentials: 'same-origin',
+      cache: 'no-store',
+      signal: signal,
+    }).then(function (r) {
+      if (!r.ok) throw new Error('Could not load this genre');
+      return r.json();
+    });
+  }
+
   function _fetchArtistByName(name, signal) {
     return fetch('/alexa/search/?q=' + encodeURIComponent(name), {
       credentials: 'same-origin',
@@ -353,6 +365,15 @@
     window.navigateWithPreload(route, function (signal) {
       return _fetchPlaylist(plId, signal);
     }, _preparePlaylistHero);
+  };
+
+  window.preloadNavigateMood = function (params, title) {
+    if (!params) return;
+    var route = '#mood/' + encodeURIComponent(params) + '?title=' +
+      encodeURIComponent(title || 'Moods and genres');
+    window.navigateWithPreload(route, function (signal) {
+      return _fetchMood(params, title, signal);
+    });
   };
 
   // ─── Expose bar controller for external view loaders (playlists, etc.) ──

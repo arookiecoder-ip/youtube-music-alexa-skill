@@ -5590,14 +5590,33 @@ async def api_get_explore_moods():
             return_exceptions=True,
         )
         if isinstance(playlists, Exception):
-            raise playlists
+            # YouTube occasionally serves a renderer that older ytmusicapi
+            # releases cannot parse (for example musicTwoRowItemRenderer).
+            # Do not make the entire mood page unavailable: a focused playlist
+            # search is a useful, stable fallback for that category.
+            logger.warning("Mood playlist parser failed; using search fallback: %s", playlists)
+            try:
+                playlists = await asyncio.to_thread(
+                    ytm.search, f'{title or "music"} music', 'playlists', None, 24
+                )
+            except Exception as playlist_search_error:
+                logger.warning("Mood playlist fallback failed: %s", playlist_search_error)
+                playlists = []
         if isinstance(songs, Exception):
             logger.warning("Mood song lookup failed: %s", songs)
             songs = []
         if isinstance(albums, Exception):
             logger.warning("Mood album lookup failed: %s", albums)
             albums = []
-        return jsonify({'playlists': playlists or [], 'songs': songs or [], 'albums': albums or []})
+        # Normalize discovery playlists to the same public card schema used by
+        # Home and the Library.  The client can now use one playlist route and
+        # preload path regardless of whether a playlist came from the library,
+        # Home, search, or a mood category.
+        normalized_playlists = [
+            normalized for normalized in (home_feed.normalize_playlist(item) for item in (playlists or []))
+            if normalized
+        ]
+        return jsonify({'playlists': normalized_playlists, 'songs': songs or [], 'albums': albums or []})
     except Exception as e:
         logger.warning("Explore mood lookup failed: %s", e)
         return jsonify({'error': str(e)}), 500

@@ -61,7 +61,7 @@
     openItem(item);
   }
 
-  function renderCard(item) {
+  function renderCard(item, eager) {
     const title = item.title || item.name || 'Unknown';
     const thumb = imageUrl(item.thumbnails) || imageUrl(item.thumbnail) || imageUrl(item.images) || imageUrl(item.image);
     const card = document.createElement('article');
@@ -71,7 +71,7 @@
     card.setAttribute('aria-label', `Open ${title}`);
     card.innerHTML = `
       <div class="explore-card-art">
-        <img src="${escHtml(thumb || FALLBACK_IMG)}" alt="${escHtml(title)}" loading="lazy" onerror="this.onerror=null;this.src='${FALLBACK_IMG}'">
+        <img src="${escHtml(thumb || FALLBACK_IMG)}" alt="${escHtml(title)}" class="explore-card-image" loading="${eager ? 'eager' : 'lazy'}" decoding="async" onload="this.classList.add('is-loaded')" onerror="this.onerror=null;this.src='${FALLBACK_IMG}';this.classList.add('is-loaded')">
         <button class="home-play-btn explore-card-play" type="button" aria-label="Play ${escHtml(title)}">
           <svg class="home-play-glyph" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><polygon points="7,4 20,12 7,20"/></svg>
         </button>
@@ -146,7 +146,7 @@
       row.setAttribute('role', 'button');
       row.setAttribute('aria-label', `Play ${title}`);
       row.innerHTML = `
-        <img src="${escHtml(thumbnail)}" alt="${escHtml(title)}" class="home-item-img" loading="lazy" onerror="this.onerror=null;this.src='${FALLBACK_IMG}'">
+        <img src="${escHtml(thumbnail)}" alt="${escHtml(title)}" class="home-item-img mood-song-image" loading="eager" decoding="async" onload="this.classList.add('is-loaded')" onerror="this.onerror=null;this.src='${FALLBACK_IMG}';this.classList.add('is-loaded')">
         <div class="home-item-text"><div class="home-item-title">${escHtml(title)}</div><div class="home-item-subtitle">${escHtml(artist)}</div></div>
         <button class="home-play-btn" type="button" aria-label="Play ${escHtml(title)}"><svg class="home-play-glyph" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><polygon points="7,4 20,12 7,20"/></svg></button>`;
       const play = event => {
@@ -184,20 +184,22 @@
     section.innerHTML = `
       <div class="explore-section-header">
         <h2 class="explore-section-title">${escHtml(title || 'Featured playlists')}</h2>
-        <div class="explore-scroll-btns">
-          <button class="explore-scroll-btn featured-left" type="button" aria-label="Previous featured playlists"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg></button>
-          <button class="explore-scroll-btn featured-right" type="button" aria-label="Next featured playlists"><svg viewBox="0 0 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg></button>
+        <div class="home-shelf-scroll-btns">
+          <button class="home-scroll-btn featured-left" type="button" aria-label="Previous featured playlists"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg></button>
+          <button class="home-scroll-btn featured-right" type="button" aria-label="Next featured playlists"><svg viewBox="0 0 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg></button>
         </div>
       </div>`;
     const grid = document.createElement('div');
     grid.className = 'explore-grid explore-grid--featured';
     section.appendChild(grid);
     let start = 0;
-    const pageSize = 12;
+    const visibleItems = 12;
+    const rowSize = () => window.matchMedia('(max-width: 620px)').matches ? 2 :
+      (window.matchMedia('(max-width: 1050px)').matches ? 4 : 6);
     const renderPage = direction => {
       grid.replaceChildren();
-      playlists.slice(start, start + pageSize).forEach(item => grid.appendChild(renderCard(item)));
-      const maxStart = Math.max(0, playlists.length - pageSize);
+      playlists.slice(start, start + visibleItems).forEach(item => grid.appendChild(renderCard(item, true)));
+      const maxStart = Math.max(0, playlists.length - visibleItems);
       section.querySelector('.featured-left').disabled = start === 0;
       section.querySelector('.featured-right').disabled = start >= maxStart;
       if (direction) {
@@ -206,11 +208,11 @@
       }
     };
     section.querySelector('.featured-left').addEventListener('click', () => {
-      start = Math.max(0, start - pageSize);
+      start = Math.max(0, start - rowSize());
       renderPage('previous');
     });
     section.querySelector('.featured-right').addEventListener('click', () => {
-      start = Math.min(Math.max(0, playlists.length - pageSize), start + pageSize);
+      start = Math.min(Math.max(0, playlists.length - visibleItems), start + rowSize());
       renderPage('next');
     });
     renderPage();
@@ -247,7 +249,8 @@
         button.style.setProperty('--mood-accent', MOOD_ACCENTS[(start + index) % MOOD_ACCENTS.length]);
         button.textContent = mood.title || 'Mood';
         button.addEventListener('click', () => {
-          window.navigateTo('#mood/' + encodeURIComponent(mood.params) + '?title=' + encodeURIComponent(mood.title || 'Moods and genres'));
+          if (window.preloadNavigateMood) window.preloadNavigateMood(mood.params, mood.title || 'Moods and genres');
+          else window.navigateTo('#mood/' + encodeURIComponent(mood.params) + '?title=' + encodeURIComponent(mood.title || 'Moods and genres'));
         });
         grid.appendChild(button);
       });
@@ -273,13 +276,6 @@
     return true;
   }
 
-  function moodLoadingPlaceholder(title) {
-    return `<div class="mood-page-loading" role="status" aria-live="polite">
-      <div class="explore-loading-status">Loading ${escHtml(title)}…</div>
-      <div class="mood-page-skeleton-grid">${Array(12).fill('<div class="mood-page-skeleton"><div></div><span></span><span></span></div>').join('')}</div>
-    </div>`;
-  }
-
   async function openMoodPage(params, title) {
     const overlay = document.getElementById('mood-modal-overlay');
     const body = document.getElementById('mood-modal-body');
@@ -287,9 +283,10 @@
     if (!overlay || !body || !params) return;
     overlay.classList.add('open');
     heading.textContent = title || 'Moods and genres';
-    body.innerHTML = moodLoadingPlaceholder(title || 'Moods and genres');
+    const route = '#mood/' + encodeURIComponent(params) + '?title=' + encodeURIComponent(title || 'Moods and genres');
+    const cached = window.consumePreload ? window.consumePreload(route) : null;
     try {
-      const result = await window.api('/api/explore/moods/?params=' + encodeURIComponent(params) + '&title=' + encodeURIComponent(title || 'music'));
+      const result = cached || await window.api('/api/explore/moods/?params=' + encodeURIComponent(params) + '&title=' + encodeURIComponent(title || 'music'));
       body.innerHTML = '';
       const hasSongs = renderMoodSongs(body, result.songs || []);
       const hasPlaylists = renderFeaturedPlaylists(body, result.playlists || [], 'Featured playlists');
@@ -298,14 +295,15 @@
         body.innerHTML = '<div class="explore-empty">No playlists are available for this mood or genre right now.</div>';
       }
     } catch (error) {
-      body.innerHTML = `<div class="explore-empty"><div>Couldn’t load ${escHtml(title || 'this mood')}.</div><button type="button" class="btn-accent mood-retry">Try again</button></div>`;
-      body.querySelector('.mood-retry').addEventListener('click', () => openMoodPage(params, title));
+      if (window.toast) window.toast(`Couldn’t load ${title || 'this genre'}.`, 'error');
+      window.navigateTo('#explore');
     }
   }
 
   function renderQuickNav(body, available) {
     const sections = [['New releases', 'new_releases'], ['Charts', 'charts'], ['Trending', 'trending'], ['Moods & genres', 'moods']]
       .filter(([, key]) => available.has(key));
+    const icons = { new_releases: '✦', charts: '↗', trending: '⚡', moods: '◉' };
     if (!sections.length) return;
     const nav = document.createElement('nav');
     nav.className = 'explore-quick-nav';
@@ -313,7 +311,7 @@
       const button = document.createElement('button');
       button.className = 'explore-quick-card';
       button.type = 'button';
-      button.textContent = label;
+      button.innerHTML = `<span class="explore-quick-icon" aria-hidden="true">${icons[key]}</span><span>${escHtml(label)}</span>`;
       button.addEventListener('click', () => body.querySelector(`[data-explore-key="${key}"]`).scrollIntoView({ behavior: 'smooth', block: 'start' }));
       nav.appendChild(button);
     });

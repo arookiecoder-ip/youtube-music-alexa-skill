@@ -1750,8 +1750,8 @@ body.now-playing-route .player-section .player-expand-btn svg {
 .home-item-wide-card[data-kind="track"]:hover .home-play-btn {
   transform: translate(-50%, -50%) scale(1);
 }
-/* Playlist/song row artist links reveal an animated underline with the row
-   hover, making the artist target visible without underlining the whole row. */
+/* Playlist/song row artist links underline only when the artist name itself
+   is hovered, so the row's playback hover never implies a link target. */
 #playlist-detail-modal .history-item .queue-artist .artist-name {
   position: relative;
   display: inline-block;
@@ -1759,7 +1759,7 @@ body.now-playing-route .player-section .player-expand-btn svg {
   z-index: 1;
   text-decoration: none;
 }
-#playlist-detail-modal .history-item:hover .queue-artist .artist-name {
+#playlist-detail-modal .history-item .queue-artist .artist-name:hover {
   color: var(--text);
 }
 #playlist-detail-modal .history-item .queue-artist .artist-name::after {
@@ -1772,7 +1772,7 @@ body.now-playing-route .player-section .player-expand-btn svg {
   background: currentColor;
   transition: width .2s ease;
 }
-#playlist-detail-modal .history-item:hover .queue-artist .artist-name::after {
+#playlist-detail-modal .history-item .queue-artist .artist-name:hover::after {
   width: 100%;
 }
 .home-card-art {
@@ -2372,7 +2372,13 @@ body.results-open .player-section {
     padding: 18px 32px;
     box-sizing: border-box;
   }
-  #library-modal .history-modal-header { width: min(1500px, 100%); }
+  #library-modal .history-modal-header {
+    width: min(1500px, 100%);
+    margin: 0 auto;
+    padding: 18px 32px;
+    box-sizing: border-box;
+    border-bottom: 0;
+  }
   #explore-modal .history-modal-body {
     width: min(1500px, 100%);
     margin: 0 auto;
@@ -3049,6 +3055,7 @@ main:has(#now-playing-section:not([hidden])) {
   position: relative;
   display: flex;
   flex-direction: column;
+  min-width: 0;
   border-radius: var(--radius-sm);
   overflow: visible;
   cursor: pointer;
@@ -3074,13 +3081,29 @@ main:has(#now-playing-section:not([hidden])) {
   flex-shrink: 0;
   position: relative;
 }
+.explore-card-art::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, .38);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .2s ease;
+}
 .explore-card-art img {
   width: 100%;
   height: 100%;
   object-fit: cover;
   display: block;
-  transition: opacity .2s;
+  opacity: 0;
+  transition: opacity .2s ease;
 }
+.explore-card-art img.is-loaded { opacity: 1; }
+.mood-song-image {
+  opacity: 0;
+  transition: opacity .2s ease;
+}
+.mood-song-image.is-loaded { opacity: 1; }
 .explore-thumb-placeholder {
   width: 100%;
   height: 100%;
@@ -3104,6 +3127,8 @@ main:has(#now-playing-section:not([hidden])) {
 .explore-card-play.home-play-btn:focus-visible {
   opacity: 1;
 }
+.explore-card:hover .explore-card-art::after,
+.explore-card:focus-within .explore-card-art::after { opacity: 1; }
 .explore-scroll-btns { display: none; gap: 8px; }
 @media (min-width: 900px) { .explore-scroll-btns { display: flex; } }
 .explore-scroll-btn {
@@ -3189,6 +3214,7 @@ main:has(#now-playing-section:not([hidden])) {
   margin-bottom: 14px;
   display: flex;
   align-items: center;
+  justify-content: center;
   gap: 12px;
 }
 .library-section-title {
@@ -3212,7 +3238,7 @@ main:has(#now-playing-section:not([hidden])) {
 .library-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, 140px);
-  justify-content: start;
+  justify-content: center;
   gap: 16px;
 }
 @media (min-width: 700px) {
@@ -3224,7 +3250,7 @@ main:has(#now-playing-section:not([hidden])) {
 .library-card {
   display: flex;
   flex-direction: column;
-  border-radius: 10px;
+  border-radius: 0;
   padding: 0;
   overflow: visible;
   transition: background .2s;
@@ -3240,7 +3266,7 @@ main:has(#now-playing-section:not([hidden])) {
 .library-card-art {
   position: relative;
   aspect-ratio: 1;
-  border-radius: 8px;
+  border-radius: 0;
   overflow: hidden;
   background: #1a1a1a;
   margin-bottom: 9px;
@@ -3727,8 +3753,6 @@ body.library-route #nav-library-btn::before {
 .explore-section--moods .explore-section-title {
   font-size: 1.7rem;
   font-weight: 800;
-  text-decoration: underline;
-  text-underline-offset: 4px;
 }
 .explore-section--moods {
   padding: 0;
@@ -3774,7 +3798,7 @@ body.library-route #nav-library-btn::before {
   padding: 11px 14px 11px 18px;
   border: 0;
   border-left: 6px solid var(--mood-accent);
-  border-radius: 8px;
+  border-radius: 0;
   background: #2b2b2b;
   color: var(--text);
   font: inherit;
@@ -3787,6 +3811,15 @@ body.library-route #nav-library-btn::before {
 .explore-mood-card:hover,
 .explore-mood-card:focus-visible {
   background: #3a3a3a;
+}
+
+/* Explore uses square media and content tiles. Keep circular navigation controls intact. */
+.explore-card,
+.explore-card-art,
+.explore-quick-card,
+.explore-context-menu,
+.explore-mood-card {
+  border-radius: 0;
 }
 @media (max-width: 1050px) {
   .explore-mood-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
@@ -3812,6 +3845,13 @@ body.library-route #nav-library-btn::before {
 
 /* Dedicated mood/genre viewport loading state. The shared API helper drives
    the global progress bar while these cards reserve the final page geometry. */
+.mood-songs-shelf {
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
 .mood-page-loading { padding-top: 8px; }
 .mood-page-skeleton-grid {
   display: grid;

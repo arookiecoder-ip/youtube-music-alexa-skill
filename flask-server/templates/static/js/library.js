@@ -172,9 +172,6 @@
       // ── Header with count ──────────────────────────────────────────────────
       const header = document.createElement('div');
       header.className = 'library-section';
-      header.innerHTML = `<div class="library-section-header">
-        <h2 class="library-section-title">Playlists <span class="library-count">${playlists.length}</span></h2>
-      </div>`;
       const grid = document.createElement('div');
       grid.className = 'library-grid';
       header.appendChild(grid);
