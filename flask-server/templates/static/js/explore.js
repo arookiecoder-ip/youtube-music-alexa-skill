@@ -34,7 +34,8 @@
     const id = item.browseId || item.playlistId || item.albumId || item.audioPlaylistId;
     if (!id) return;
     if (item.type === 'Album' || String(id).startsWith('MPREb')) {
-      window.navigateTo('#album/' + encodeURIComponent(id));
+      if (window.preloadNavigateAlbum) window.preloadNavigateAlbum(id);
+      else window.navigateTo('#album/' + encodeURIComponent(id));
     } else if (window.preloadNavigatePlaylist) {
       window.preloadNavigatePlaylist(id);
     } else {
@@ -92,11 +93,127 @@
     const section = document.createElement('section');
     section.className = 'explore-section';
     section.dataset.exploreKey = key;
-    section.innerHTML = `<div class="explore-section-header"><h2 class="explore-section-title">${escHtml(title)}</h2></div>`;
+    section.innerHTML = `
+      <div class="explore-section-header">
+        <h2 class="explore-section-title">${escHtml(title)}</h2>
+        <div class="explore-scroll-btns">
+          <button class="explore-scroll-btn explore-scroll-left" type="button" aria-label="Scroll ${escHtml(title)} left"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg></button>
+          <button class="explore-scroll-btn explore-scroll-right" type="button" aria-label="Scroll ${escHtml(title)} right"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg></button>
+        </div>
+      </div>`;
     const grid = document.createElement('div');
     grid.className = 'explore-grid';
     items.forEach(item => grid.appendChild(renderCard(item)));
     section.appendChild(grid);
+    const left = section.querySelector('.explore-scroll-left');
+    const right = section.querySelector('.explore-scroll-right');
+    const updateScrollButtons = () => {
+      const maxScroll = Math.max(0, grid.scrollWidth - grid.clientWidth);
+      left.disabled = grid.scrollLeft <= 1;
+      right.disabled = grid.scrollLeft >= maxScroll - 1;
+    };
+    left.addEventListener('click', () => grid.scrollBy({ left: -Math.max(240, grid.clientWidth * .8), behavior: 'smooth' }));
+    right.addEventListener('click', () => grid.scrollBy({ left: Math.max(240, grid.clientWidth * .8), behavior: 'smooth' }));
+    grid.addEventListener('scroll', updateScrollButtons, { passive: true });
+    requestAnimationFrame(updateScrollButtons);
+    body.appendChild(section);
+    return true;
+  }
+
+  function renderMoodSongs(body, songs) {
+    const playableSongs = (songs || []).filter(song => song && (song.videoId || song.video_id));
+    if (!playableSongs.length) return false;
+    const shelf = document.createElement('section');
+    shelf.className = 'home-shelf home-layout-song_grid mood-songs-shelf';
+    shelf.innerHTML = `
+      <div class="home-shelf-header">
+        <div class="home-shelf-title-area"><h2 class="home-shelf-title">Songs</h2></div>
+        <div class="home-shelf-scroll-btns">
+          <button class="home-scroll-btn mood-songs-left" type="button" aria-label="Scroll songs left"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg></button>
+          <button class="home-scroll-btn mood-songs-right" type="button" aria-label="Scroll songs right"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg></button>
+        </div>
+      </div>`;
+    const content = document.createElement('div');
+    content.className = 'home-shelf-content';
+    playableSongs.forEach(song => {
+      const title = song.title || 'Unknown';
+      const artist = subtitle(song);
+      const thumbnail = imageUrl(song.thumbnails) || imageUrl(song.thumbnail) || FALLBACK_IMG;
+      const track = { video_id: song.videoId || song.video_id, title: title, artist: artist, thumbnail: thumbnail };
+      const row = document.createElement('article');
+      row.className = 'home-item home-item-song';
+      row.tabIndex = 0;
+      row.setAttribute('role', 'button');
+      row.setAttribute('aria-label', `Play ${title}`);
+      row.innerHTML = `
+        <img src="${escHtml(thumbnail)}" alt="${escHtml(title)}" class="home-item-img" loading="lazy" onerror="this.onerror=null;this.src='${FALLBACK_IMG}'">
+        <div class="home-item-text"><div class="home-item-title">${escHtml(title)}</div><div class="home-item-subtitle">${escHtml(artist)}</div></div>
+        <button class="home-play-btn" type="button" aria-label="Play ${escHtml(title)}"><svg class="home-play-glyph" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><polygon points="7,4 20,12 7,20"/></svg></button>`;
+      const play = event => {
+        event.preventDefault();
+        event.stopPropagation();
+        if (window.playResult) window.playResult(track, false, true);
+      };
+      row.addEventListener('click', play);
+      row.addEventListener('keydown', event => {
+        if (event.key === 'Enter' || event.key === ' ') play(event);
+      });
+      row.querySelector('.home-play-btn').addEventListener('click', play);
+      content.appendChild(row);
+    });
+    shelf.appendChild(content);
+    const left = shelf.querySelector('.mood-songs-left');
+    const right = shelf.querySelector('.mood-songs-right');
+    const updateButtons = () => {
+      const maxScroll = Math.max(0, content.scrollWidth - content.clientWidth);
+      left.disabled = content.scrollLeft <= 1;
+      right.disabled = content.scrollLeft >= maxScroll - 1;
+    };
+    left.addEventListener('click', () => content.scrollBy({ left: -Math.max(280, content.clientWidth * .8), behavior: 'smooth' }));
+    right.addEventListener('click', () => content.scrollBy({ left: Math.max(280, content.clientWidth * .8), behavior: 'smooth' }));
+    content.addEventListener('scroll', updateButtons, { passive: true });
+    requestAnimationFrame(updateButtons);
+    body.appendChild(shelf);
+    return true;
+  }
+
+  function renderFeaturedPlaylists(body, playlists, title) {
+    if (!Array.isArray(playlists) || !playlists.length) return false;
+    const section = document.createElement('section');
+    section.className = 'explore-section mood-featured-playlists';
+    section.innerHTML = `
+      <div class="explore-section-header">
+        <h2 class="explore-section-title">${escHtml(title || 'Featured playlists')}</h2>
+        <div class="explore-scroll-btns">
+          <button class="explore-scroll-btn featured-left" type="button" aria-label="Previous featured playlists"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg></button>
+          <button class="explore-scroll-btn featured-right" type="button" aria-label="Next featured playlists"><svg viewBox="0 0 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg></button>
+        </div>
+      </div>`;
+    const grid = document.createElement('div');
+    grid.className = 'explore-grid explore-grid--featured';
+    section.appendChild(grid);
+    let start = 0;
+    const pageSize = 12;
+    const renderPage = direction => {
+      grid.replaceChildren();
+      playlists.slice(start, start + pageSize).forEach(item => grid.appendChild(renderCard(item)));
+      const maxStart = Math.max(0, playlists.length - pageSize);
+      section.querySelector('.featured-left').disabled = start === 0;
+      section.querySelector('.featured-right').disabled = start >= maxStart;
+      if (direction) {
+        grid.classList.remove('featured-slide-left', 'featured-slide-right');
+        requestAnimationFrame(() => grid.classList.add(direction === 'next' ? 'featured-slide-left' : 'featured-slide-right'));
+      }
+    };
+    section.querySelector('.featured-left').addEventListener('click', () => {
+      start = Math.max(0, start - pageSize);
+      renderPage('previous');
+    });
+    section.querySelector('.featured-right').addEventListener('click', () => {
+      start = Math.min(Math.max(0, playlists.length - pageSize), start + pageSize);
+      renderPage('next');
+    });
+    renderPage();
     body.appendChild(section);
     return true;
   }
@@ -110,7 +227,6 @@
       <div class="explore-section-header explore-mood-header">
         <h2 class="explore-section-title">Moods and genres</h2>
         <div class="explore-mood-controls">
-          <button class="explore-mood-more" type="button">More</button>
           <button class="explore-mood-arrow" type="button" aria-label="Previous moods and genres">‹</button>
           <button class="explore-mood-arrow" type="button" aria-label="Next moods and genres">›</button>
         </div>
@@ -118,12 +234,13 @@
     const grid = document.createElement('div');
     grid.className = 'explore-mood-grid';
     section.appendChild(grid);
-    let page = 0;
-    const pageSize = 24;
-    const renderPage = () => {
-      const start = page * pageSize;
+    let start = 0;
+    const visibleItems = 24;
+    const rowSize = () => window.matchMedia('(max-width: 620px)').matches ? 2 :
+      (window.matchMedia('(max-width: 1050px)').matches ? 4 : 6);
+    const renderPage = (direction) => {
       grid.replaceChildren();
-      moods.slice(start, start + pageSize).forEach((mood, index) => {
+      moods.slice(start, start + visibleItems).forEach((mood, index) => {
         const button = document.createElement('button');
         button.className = 'explore-mood-card';
         button.type = 'button';
@@ -134,23 +251,22 @@
         });
         grid.appendChild(button);
       });
-      const canPage = moods.length > pageSize;
-      section.querySelector('.explore-mood-more').disabled = !canPage;
       const arrows = section.querySelectorAll('.explore-mood-arrow');
-      arrows[0].disabled = !canPage;
-      arrows[1].disabled = !canPage;
+      const maxStart = Math.max(0, moods.length - visibleItems);
+      arrows[0].disabled = start === 0;
+      arrows[1].disabled = start >= maxStart;
+      if (direction) {
+        grid.classList.remove('mood-grid-slide-left', 'mood-grid-slide-right');
+        requestAnimationFrame(() => grid.classList.add(direction === 'next' ? 'mood-grid-slide-left' : 'mood-grid-slide-right'));
+      }
     };
-    section.querySelector('.explore-mood-more').addEventListener('click', () => {
-      page = page === 0 ? 1 : 0;
-      renderPage();
-    });
     section.querySelectorAll('.explore-mood-arrow')[0].addEventListener('click', () => {
-      page = page > 0 ? page - 1 : Math.ceil(moods.length / pageSize) - 1;
-      renderPage();
+      start = Math.max(0, start - rowSize());
+      renderPage('previous');
     });
     section.querySelectorAll('.explore-mood-arrow')[1].addEventListener('click', () => {
-      page = page < Math.ceil(moods.length / pageSize) - 1 ? page + 1 : 0;
-      renderPage();
+      start = Math.min(Math.max(0, moods.length - visibleItems), start + rowSize());
+      renderPage('next');
     });
     renderPage();
     body.appendChild(section);
@@ -173,9 +289,12 @@
     heading.textContent = title || 'Moods and genres';
     body.innerHTML = moodLoadingPlaceholder(title || 'Moods and genres');
     try {
-      const result = await window.api('/api/explore/moods/?params=' + encodeURIComponent(params));
+      const result = await window.api('/api/explore/moods/?params=' + encodeURIComponent(params) + '&title=' + encodeURIComponent(title || 'music'));
       body.innerHTML = '';
-      if (!renderSection(body, title || 'Moods and genres', result.playlists || [], 'mood-playlists')) {
+      const hasSongs = renderMoodSongs(body, result.songs || []);
+      const hasPlaylists = renderFeaturedPlaylists(body, result.playlists || [], 'Featured playlists');
+      const hasAlbums = renderFeaturedPlaylists(body, result.albums || [], 'Albums');
+      if (!hasSongs && !hasPlaylists && !hasAlbums) {
         body.innerHTML = '<div class="explore-empty">No playlists are available for this mood or genre right now.</div>';
       }
     } catch (error) {
@@ -215,7 +334,6 @@
       if (renderSection(body, 'New releases', explore.new_releases, 'new_releases')) available.add('new_releases');
       if (renderSection(body, 'Top songs', explore.top_songs && explore.top_songs.items, 'charts')) available.add('charts');
       if (renderSection(body, 'Trending', explore.trending && explore.trending.items, 'trending')) available.add('trending');
-      if (renderSection(body, 'New music videos', explore.new_videos, 'new_videos')) available.add('new_videos');
       if (renderMoodSection(body, explore.moods_and_genres)) available.add('moods');
       renderQuickNav(body, available);
       if (!available.size) body.innerHTML = '<div class="explore-empty">Nothing to explore right now. Please try again later.</div>';

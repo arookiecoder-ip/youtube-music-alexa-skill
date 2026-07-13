@@ -2356,22 +2356,48 @@ body.results-open .player-section {
     border-radius: 0;
     box-shadow: none;
   }
-  #explore-modal .history-modal-header,
-  #mood-modal .history-modal-header,
-  #library-modal .history-modal-header {
+  #explore-modal .history-modal-header {
     border-bottom: none;
-    width: min(1100px, 100%);
+    /* The overlay already begins after the desktop rail. Fill that remaining
+       viewport instead of keeping Explore artificially narrow. */
+    width: min(1500px, 100%);
     margin: 0 auto;
     padding: 18px 32px;
     box-sizing: border-box;
   }
-  #explore-modal .history-modal-body,
-  #mood-modal .history-modal-body,
-  #library-modal .history-modal-body {
-    width: min(1100px, 100%);
+  #mood-modal .history-modal-header {
+    width: 100%;
+    max-width: none;
+    margin: 0;
+    padding: 18px 32px;
+    box-sizing: border-box;
+  }
+  #library-modal .history-modal-header { width: min(1500px, 100%); }
+  #explore-modal .history-modal-body {
+    width: min(1500px, 100%);
     margin: 0 auto;
     padding-left: 32px;
     padding-right: 32px;
+    box-sizing: border-box;
+    overflow-y: auto;
+    flex: 1;
+  }
+  #mood-modal .history-modal-body {
+    width: 100%;
+    max-width: none;
+    margin: 0;
+    padding-left: 32px;
+    padding-right: 32px;
+    box-sizing: border-box;
+    overflow-y: auto;
+    flex: 1;
+  }
+  #library-modal .history-modal-body {
+    width: min(1500px, 100%);
+    margin: 0 auto;
+    padding-left: 32px;
+    padding-right: 32px;
+    box-sizing: border-box;
     overflow-y: auto;
     flex: 1;
   }
@@ -2962,11 +2988,20 @@ main:has(#now-playing-section:not([hidden])) {
 
 .explore-section {
   margin-bottom: 42px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
 }
 .explore-loading-status { display:flex; align-items:center; gap:9px; margin:0 0 26px; color:var(--muted); font-size:.88rem; font-weight:600; }
 .explore-loading-dot { width:8px; height:8px; border-radius:50%; background:var(--accent); animation:explorePulse 1s ease-in-out infinite; }
 @keyframes explorePulse { 50% { opacity:.35; transform:scale(.7); } }
 .explore-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
   margin-bottom: 14px;
 }
 .explore-section-title {
@@ -2977,15 +3012,38 @@ main:has(#now-playing-section:not([hidden])) {
   margin: 0;
 }
 .explore-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  display: flex;
   gap: 16px;
+  overflow-x: auto;
+  padding: 0 0 8px;
+  scroll-snap-type: x proximity;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
 }
-@media (min-width: 700px) {
-  .explore-grid {
-    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
-    gap: 20px;
-  }
+.explore-grid::-webkit-scrollbar { display: none; }
+.explore-grid--featured {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 28px 24px;
+  overflow: hidden;
+  padding-bottom: 0;
+}
+.explore-grid--featured .explore-card { flex: auto; }
+.explore-grid--featured.featured-slide-left { animation: featuredSlideLeft .28s ease-out; }
+.explore-grid--featured.featured-slide-right { animation: featuredSlideRight .28s ease-out; }
+@keyframes featuredSlideLeft {
+  from { opacity: .4; transform: translateX(36px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+@keyframes featuredSlideRight {
+  from { opacity: .4; transform: translateX(-36px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+@media (max-width: 1050px) {
+  .explore-grid--featured { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 24px 18px; }
+}
+@media (max-width: 620px) {
+  .explore-grid--featured { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px 12px; }
 }
 .explore-card {
   position: relative;
@@ -2995,8 +3053,10 @@ main:has(#now-playing-section:not([hidden])) {
   overflow: visible;
   cursor: pointer;
   transition: background .2s;
-  flex: 0 0 clamp(150px, 18vw, 210px);
+  flex: 0 0 140px;
+  scroll-snap-align: start;
 }
+@media (min-width: 900px) { .explore-grid { gap: 24px; } .explore-card { flex-basis: 174px; } }
 .explore-card:hover,
 .explore-card:focus-within {
   background: rgba(255, 255, 255, .06);
@@ -3044,9 +3104,28 @@ main:has(#now-playing-section:not([hidden])) {
 .explore-card-play.home-play-btn:focus-visible {
   opacity: 1;
 }
+.explore-scroll-btns { display: none; gap: 8px; }
+@media (min-width: 900px) { .explore-scroll-btns { display: flex; } }
+.explore-scroll-btn {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid rgba(255,255,255,.2);
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+.explore-scroll-btn:hover:not(:disabled) { background: rgba(255,255,255,.1); }
+.explore-scroll-btn:disabled { opacity: .28; cursor: default; }
+.explore-scroll-btn svg { width: 20px; height: 20px; }
 .explore-quick-nav { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:14px; margin-bottom:42px; }
-.explore-quick-card { display:flex; align-items:center; gap:12px; min-height:68px; padding:0 18px; border:1px solid rgba(255,255,255,.08); border-radius:var(--radius-sm); background:#242424; color:var(--text); font-weight:750; font-size:.95rem; text-align:left; cursor:pointer; transition:transform .18s,background .18s; }
-.explore-quick-card:hover { transform:translateY(-3px); background:#2d2d2d; }
+.explore-quick-card { display:flex; align-items:center; gap:12px; min-height:68px; padding:0 18px; border:1px solid rgba(255,255,255,.08); border-radius:var(--radius-sm); background:#242424; color:var(--text); font-weight:750; font-size:.95rem; text-align:left; cursor:pointer; transition:background .18s, border-color .18s; }
+.explore-quick-card:hover,
+.explore-quick-card:focus-visible { background:#161616; border-color:rgba(255,255,255,.18); }
 .explore-quick-icon { color:var(--accent); font-size:1.35rem; }
 .explore-context-menu { position:fixed; z-index:10000; min-width:170px; padding:6px; border:1px solid rgba(255,255,255,.12); border-radius:12px; background:#202020; box-shadow:0 18px 45px rgba(0,0,0,.5); }
 .explore-context-menu button { display:block; width:100%; padding:10px 12px; border:0; background:transparent; color:var(--text); text-align:left; font-size:.88rem; }
@@ -3132,13 +3211,14 @@ main:has(#now-playing-section:not([hidden])) {
 }
 .library-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  grid-template-columns: repeat(auto-fill, 140px);
+  justify-content: start;
   gap: 16px;
 }
 @media (min-width: 700px) {
   .library-grid {
-    grid-template-columns: repeat(auto-fill, minmax(165px, 1fr));
-    gap: 20px;
+    grid-template-columns: repeat(auto-fill, 174px);
+    gap: 24px;
   }
 }
 .library-card {
@@ -3146,8 +3226,8 @@ main:has(#now-playing-section:not([hidden])) {
   flex-direction: column;
   border-radius: 10px;
   padding: 0;
-  overflow: hidden;
-  transition: background .15s, transform .15s;
+  overflow: visible;
+  transition: background .2s;
   cursor: pointer;
 }
 .library-card:hover {
@@ -3158,6 +3238,7 @@ main:has(#now-playing-section:not([hidden])) {
   outline-offset: 2px;
 }
 .library-card-art {
+  position: relative;
   aspect-ratio: 1;
   border-radius: 8px;
   overflow: hidden;
@@ -3606,10 +3687,36 @@ body.library-route #nav-library-btn::before {
   width: 240px;
   height: 240px;
 }
+.library-card-play.home-play-btn {
+  width: 44px;
+  height: 44px;
+  right: 8px;
+  bottom: 8px;
+  left: auto;
+  top: auto;
+  transform: none;
+}
+.library-card:hover .library-card-play.home-play-btn,
+.library-card:focus-within .library-card-play.home-play-btn,
+.library-card-play.home-play-btn:focus-visible { opacity: 1; }
 .explore-mood-grid {
   display: grid;
   grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 16px 24px;
+}
+.explore-mood-grid.mood-grid-slide-left { animation: moodRowSlideLeft .28s ease-out; }
+.explore-mood-grid.mood-grid-slide-right { animation: moodRowSlideRight .28s ease-out; }
+@keyframes moodRowSlideLeft {
+  from { opacity: .4; transform: translateX(36px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+@keyframes moodRowSlideRight {
+  from { opacity: .4; transform: translateX(-36px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .explore-mood-grid.mood-grid-slide-left,
+  .explore-mood-grid.mood-grid-slide-right { animation: none; }
 }
 .explore-mood-header {
   display: flex;
@@ -3623,21 +3730,19 @@ body.library-route #nav-library-btn::before {
   text-decoration: underline;
   text-underline-offset: 4px;
 }
+.explore-section--moods {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
 .explore-mood-controls { display: flex; align-items: center; gap: 16px; }
-.explore-mood-more,
 .explore-mood-arrow {
   color: var(--text);
   font: inherit;
   font-weight: 700;
   cursor: pointer;
-}
-.explore-mood-more {
-  min-width: 66px;
-  height: 38px;
-  padding: 0 16px;
-  border: 1px solid rgba(255,255,255,.35);
-  border-radius: 99px;
-  background: transparent;
 }
 .explore-mood-arrow {
   display: grid;
@@ -3652,15 +3757,18 @@ body.library-route #nav-library-btn::before {
   font-weight: 300;
   line-height: 1;
 }
-.explore-mood-more:hover,
-.explore-mood-more:focus-visible,
 .explore-mood-arrow:hover:not(:disabled),
 .explore-mood-arrow:focus-visible:not(:disabled) {
   border-color: var(--text);
   background: rgba(255,255,255,.08);
 }
-.explore-mood-arrow:disabled,
-.explore-mood-more:disabled { opacity: .35; cursor: default; }
+.explore-mood-arrow:disabled {
+  opacity: .3;
+  color: var(--muted);
+  border-color: rgba(255,255,255,.1);
+  cursor: default;
+  pointer-events: none;
+}
 .explore-mood-card {
   min-height: 48px;
   padding: 11px 14px 11px 18px;
@@ -3674,12 +3782,11 @@ body.library-route #nav-library-btn::before {
   font-weight: 700;
   text-align: left;
   cursor: pointer;
-  transition: transform .18s, background .18s;
+  transition: background .18s;
 }
 .explore-mood-card:hover,
 .explore-mood-card:focus-visible {
   background: #3a3a3a;
-  transform: translateY(-2px);
 }
 @media (max-width: 1050px) {
   .explore-mood-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
@@ -3688,7 +3795,6 @@ body.library-route #nav-library-btn::before {
   .explore-mood-header { align-items: flex-start; }
   .explore-section--moods .explore-section-title { font-size: 1.35rem; }
   .explore-mood-controls { gap: 8px; }
-  .explore-mood-more { display: none; }
   .explore-mood-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 }
 .explore-back-button {
@@ -3927,19 +4033,29 @@ body.library-route #nav-library-btn::before {
 .explore-card.album-card .explore-card-title,
 .top-result-card.is-album .top-result-title {
   cursor: pointer;
-  text-decoration: none;
+  text-decoration-line: underline;
+  text-decoration-color: transparent;
   text-underline-offset: 3px;
   text-decoration-thickness: 1px;
+  transition: text-decoration-color .2s ease;
 }
-.home-item[data-kind="album"]:hover .home-item-title,
-.home-item[data-kind="album"]:focus-within .home-item-title,
-.hscroll-card.album-card:hover .hscroll-card-title,
-.hscroll-card.album-card:focus-within .hscroll-card-title,
-.explore-card.album-card:hover .explore-card-title,
-.explore-card.album-card:focus-within .explore-card-title,
-.top-result-card.is-album:hover .top-result-title,
-.top-result-card.is-album:focus-within .top-result-title {
-  text-decoration: underline;
+.home-item-card .home-item-title,
+.home-item-wide-card .home-item-title,
+.home-item-song .home-item-title,
+.explore-card .explore-card-title {
+  cursor: pointer;
+  text-decoration-line: underline;
+  text-decoration-color: transparent;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+  transition: text-decoration-color .2s ease;
+}
+.home-item-card .home-item-title:hover,
+.home-item-wide-card .home-item-title:hover,
+.home-item-song .home-item-title:hover,
+.hscroll-card.album-card .hscroll-card-title:hover,
+.explore-card .explore-card-title:hover {
+  text-decoration-color: currentColor;
 }
 
 @media (max-width: 480px) {

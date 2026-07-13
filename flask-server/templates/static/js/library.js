@@ -52,6 +52,8 @@
     const count = pl.count != null ? `${pl.count} songs` : (pl.trackCount != null ? `${pl.trackCount} songs` : '');
     const sub = count || pl.description || '';
     const isLiked = pl.playlistId === 'LM' || pl.id === 'LM';
+    const playlistId = pl.playlistId || pl.id || '';
+    const artistId = pl._artistId || '';
 
     const card = document.createElement('div');
     card.className = 'library-card' + (isLiked ? ' library-card-liked' : '');
@@ -68,7 +70,7 @@
         }</div>`;
 
     card.innerHTML = `
-      <div class="library-card-art">${thumbHtml}</div>
+      <div class="library-card-art">${thumbHtml}${playlistId && !artistId ? `<button class="home-play-btn library-card-play" type="button" aria-label="Play ${esc(title)}"><svg class="home-play-glyph" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><polygon points="7,4 20,12 7,20"/></svg></button>` : ''}</div>
       <div class="library-card-info">
         <div class="library-card-title">${esc(title)}</div>
         ${sub ? `<div class="library-card-sub">${esc(sub)}</div>` : ''}
@@ -90,8 +92,6 @@
       });
     }
 
-    const playlistId = pl.playlistId || pl.id || '';
-    const artistId = pl._artistId || '';
     function open() {
       if (artistId) {
         if (window._closeSidebar) window._closeSidebar();
@@ -103,6 +103,19 @@
       if (window._closeSidebar) window._closeSidebar();
       if (window.preloadNavigatePlaylist) window.preloadNavigatePlaylist(playlistId);
       else window.navigateTo('#playlist/' + encodeURIComponent(playlistId));
+    }
+    const playButton = card.querySelector('.library-card-play');
+    if (playButton) {
+      playButton.addEventListener('click', (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        if (window.api) {
+          window.api('/alexa/play/', {
+            serial: window.selectedSerial ? window.selectedSerial() : '',
+            query: 'https://music.youtube.com/playlist?list=' + playlistId
+          });
+        }
+      });
     }
     card.addEventListener('click', open);
     card.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); open(); } });

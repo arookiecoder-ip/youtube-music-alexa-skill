@@ -5578,11 +5578,26 @@ async def api_get_explore_moods():
         return jsonify({'error': 'YouTube Music authentication required. Please visit /setup/'}), 403
 
     params = (request.args.get('params') or '').strip()
+    title = (request.args.get('title') or '').strip()[:100]
     if not params:
         return jsonify({'error': 'A mood or genre is required.'}), 400
     try:
-        playlists = await asyncio.to_thread(_get_ytmusic_home().get_mood_playlists, params)
-        return jsonify({'playlists': playlists or []})
+        ytm = _get_ytmusic_home()
+        playlists, songs, albums = await asyncio.gather(
+            asyncio.to_thread(ytm.get_mood_playlists, params),
+            asyncio.to_thread(ytm.search, f'{title or "music"} music', 'songs', None, 15),
+            asyncio.to_thread(ytm.search, f'{title or "music"} music', 'albums', None, 12),
+            return_exceptions=True,
+        )
+        if isinstance(playlists, Exception):
+            raise playlists
+        if isinstance(songs, Exception):
+            logger.warning("Mood song lookup failed: %s", songs)
+            songs = []
+        if isinstance(albums, Exception):
+            logger.warning("Mood album lookup failed: %s", albums)
+            albums = []
+        return jsonify({'playlists': playlists or [], 'songs': songs or [], 'albums': albums or []})
     except Exception as e:
         logger.warning("Explore mood lookup failed: %s", e)
         return jsonify({'error': str(e)}), 500
