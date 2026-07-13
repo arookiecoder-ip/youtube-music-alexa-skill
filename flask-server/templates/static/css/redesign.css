@@ -83,6 +83,8 @@
   .result-like-btn.liked,
   .track-like-btn.liked,
   .artist-song-like-btn.liked,
+  [data-action="toggle-like"].liked,
+  #np-menu-like.liked,
   [data-action="like"].liked,
   .library-card-liked .library-card-art-placeholder
 ) {
@@ -105,6 +107,10 @@
    reserved gutter prevents header/search controls shifting as the vertical
    scrollbar disappears and returns. */
 html { scrollbar-gutter: stable; }
+/* Keep the content width identical while modal/player layers toggle page
+   scrolling. Without a reserved gutter the scrollbar appears/disappears and
+   the homepage or playlist visibly jumps sideways during close animations. */
+body { scrollbar-gutter: stable; }
 
 /* The old permanent orange brand line added visual noise. */
 body::before {
@@ -1392,8 +1398,15 @@ body.now-playing-route .player-section .player-expand-btn svg {
   }
   /* Safety: home route is always scrollable, even if now-playing-closing
      was not cleaned up in time (rapid navigation, timer race, etc.). */
-  body.home-route {
+  body.home-route:not(.now-playing-closing) {
     overflow: auto !important;
+  }
+  /* Do not animate the shell while the now-playing sheet is sliding away.
+     Changing route classes during that animation otherwise interpolates the
+     rail/content geometry and makes the page appear to lurch sideways. */
+  body.now-playing-closing main,
+  body.now-playing-closing main header {
+    transition: none !important;
   }
   body.now-playing-route main {
     height: 100vh;
@@ -3289,8 +3302,15 @@ body.library-route #nav-library-btn::before {
 }
 
 #album-section .album-hero .playlist-collage {
-  width: 120px;
-  height: 120px;
+  width: 240px;
+  height: 240px;
+}
+
+/* Use a proper large collection cover for playlists, albums, singles, and
+   Liked Music. Keep the shared hero dimensions in sync across all routes. */
+.playlist-detail-hero > .playlist-collage {
+  width: 240px;
+  height: 240px;
 }
 
 #album-section .playlist-detail-hero-info {
@@ -3382,7 +3402,7 @@ body.library-route #nav-library-btn::before {
   pointer-events: none;
 }
 
-#album-section .playlist-track-art:hover::after {
+#album-section .album-track:hover .playlist-track-art::after {
   opacity: 1;
 }
 
@@ -3421,8 +3441,8 @@ body.library-route #nav-library-btn::before {
   }
 
   #album-section .album-hero .playlist-collage {
-    width: 210px;
-    height: 210px;
+    width: 240px;
+    height: 240px;
     border-radius: 10px;
     box-shadow: 0 22px 60px rgba(0,0,0,.5);
   }

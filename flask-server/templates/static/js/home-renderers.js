@@ -49,7 +49,8 @@
         const kind = escapeHtml(item.kind || 'unknown');
         const targetId = item.target ? escapeHtml(item.target.id || '') : '';
         
-        const dataAttrs = `data-kind="${kind}" data-video-id="${videoId}" data-playlist-id="${playlistId}" data-target-id="${targetId}"`;
+        const albumId = item.albumId || item.album_id || '';
+        const dataAttrs = `data-kind="${kind}" data-video-id="${videoId}" data-playlist-id="${playlistId}" data-target-id="${targetId}" data-album-id="${escapeHtml(albumId)}"`;
         
         let playBtnHtml = '';
         if (cap.play) {

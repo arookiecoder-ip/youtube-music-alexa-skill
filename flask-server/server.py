@@ -4802,6 +4802,7 @@ async def alexa_search():
                     'thumbnail': _last_thumbnail(track),
                     'duration_ms': Supporting.duration_ms(track),
                     'channelId': (track.get('artists') or [{}])[0].get('id', ''),
+                    'album_id': (track.get('album') or {}).get('id') or (track.get('album') or {}).get('browseId') or '',
                 })
                 if len(results) >= 50:
                     break
@@ -5240,6 +5241,7 @@ async def api_get_album(browse_id):
         })
 
     return jsonify({
+        'browseId': browse_id,
         'title': raw.get('title') or '',
         'artist': artist_name,
         'channelId': channel_id,

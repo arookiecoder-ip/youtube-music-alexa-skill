@@ -80,6 +80,7 @@ def normalize_track(item):
         "subtitle": subtitle,
         "artists": artists,
         "album": album_text,
+        "albumId": (item.get("album") or {}).get("id") or (item.get("album") or {}).get("browseId") or "",
         "image": _get_best_thumbnail(item.get("thumbnails")),
         "images": item.get("thumbnails", []),
         "videoId": video_id,

@@ -95,12 +95,12 @@
     }))).then(() => { pl.__heroReady = true; });
   }
 
-  function songActions(track) {
-    const liked = window._playlistsData && window._playlistsData.liked_songs &&
-      window._playlistsData.liked_songs.includes(track.video_id);
+  function songActions(track, forceLiked) {
+    const liked = !!forceLiked || (window._playlistsData && window._playlistsData.liked_songs &&
+      window._playlistsData.liked_songs.includes(track.video_id));
     const like = `<svg viewBox="0 0 24 24" fill="${liked ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg>`;
     const more = '<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg>';
-    return `<button class="result-like-btn${liked ? ' liked' : ''}" type="button" title="Like" data-vid="${escapeHtml(track.video_id)}">${like}</button>` +
+    return `<button class="result-like-btn${liked ? ' liked' : ''}" type="button" title="${liked ? 'Dislike' : 'Like'}" data-vid="${escapeHtml(track.video_id)}">${like}</button>` +
       `<button class="result-more-btn" type="button" title="More options">${more}</button>`;
   }
 
@@ -131,7 +131,7 @@
             btn.innerHTML = `<span class="sidebar-playlist-art${isLiked ? ' is-liked' : ''}">${cover
               ? `<img src="${escapeHtml(cover)}" alt="" loading="lazy">`
               : `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"></path><circle cx="6" cy="18" r="3"></circle><circle cx="18" cy="16" r="3"></circle></svg>`
-            }</span><span class="sidebar-playlist-copy"><strong>${escapeHtml(pl.title)}</strong><span>${escapeHtml(pl.description || 'Playlist')}</span></span>`;
+            }</span><span class="sidebar-playlist-copy"><strong>${escapeHtml(pl.title)}</strong></span>`;
             btn.onclick = () => {
               if (window._closeSidebar) window._closeSidebar();
               if (window.preloadNavigatePlaylist) window.preloadNavigatePlaylist(pl.playlistId);
@@ -175,7 +175,9 @@
       let isLibrary = false;
       let isCurated = false;
       if (pl) {
-        isLibrary = pl.isLibraryPlaylist === true;
+        // Liked Music is the virtual library playlist and preload responses
+        // do not always include the library marker.
+        isLibrary = pl.isLibraryPlaylist === true || plId.toUpperCase() === 'LM';
         isCurated = !isLibrary && _isCuratedPlaylist(pl);
       } else {
         try {
@@ -215,7 +217,10 @@
           ? `<div class="playlist-collage${urls.length === 1 ? ' playlist-collage-single' : ''}">${urls.map(url => `<img${primary ? ' data-playlist-primary-cover' : ''} src="${escapeHtml(url)}" alt="" loading="lazy">`).join('')}</div>`
           : `<div class="playlist-collage playlist-collage-single"><div class="collage-placeholder"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg></div></div>`;
         const fallbackCollage = renderCollage(fallbackCoverUrls, false);
-        const collage = playlistCover ? renderCollage([playlistCover], true) : fallbackCollage;
+        const isLikedPlaylist = plId.toUpperCase() === 'LM';
+        const likedBanner = `<div class="playlist-collage playlist-collage-single liked-playlist-banner" aria-label="Liked Music"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg></div>`;
+        const collage = playlistCover ? renderCollage([playlistCover], true)
+          : (isLikedPlaylist && !fallbackCoverUrls.length ? likedBanner : fallbackCollage);
 
         const hero = document.createElement('section');
         hero.className = 'playlist-detail-hero';
@@ -233,21 +238,20 @@
         // playlist identity).
         const shuffleBtn = `<button class="playlist-hero-btn playlist-hero-shuffle" type="button" title="Shuffle" aria-label="Shuffle"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/><polyline points="21 16 21 21 16 21"/><line x1="15" y1="15" x2="21" y2="21"/><line x1="4" y1="4" x2="9" y2="9"/></svg></button>`;
         const playNextBtn = `<button class="playlist-hero-btn playlist-hero-play-next" type="button" title="Play next" aria-label="Play next"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg></button>`;
-        const shareBtn = `<button class="playlist-hero-btn playlist-hero-share" type="button" title="Share" aria-label="Share"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg></button>`;
+        const shareMuted = isCurated || isLikedPlaylist;
+        const shareBtn = `<button class="playlist-hero-btn playlist-hero-share${shareMuted ? ' is-muted' : ''}" type="button" title="${shareMuted ? 'Sharing unavailable for this playlist' : 'Share'}" aria-label="${shareMuted ? 'Sharing unavailable for this playlist' : 'Share'}"${shareMuted ? ' aria-disabled="true"' : ''}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg></button>`;
         // The "more" button uses the same id as the previous header copy so
         // the existing rename / delete wiring in this file (and the inline
         // listener below) attaches to the new button. The id is shared
         // intentionally — only one #playlist-detail-more-btn exists at a time.
-        const moreBtn = `<button class="playlist-hero-btn playlist-hero-more" id="playlist-detail-more-btn" type="button" title="More options" aria-label="More options"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg></button>`;
+        const moreBtn = `<button class="playlist-hero-btn playlist-hero-more${isLibrary ? '' : ' is-muted'}" id="playlist-detail-more-btn" type="button" title="${isLibrary ? 'More options' : 'Options unavailable for this playlist'}" aria-label="${isLibrary ? 'More options' : 'Options unavailable for this playlist'}"${isLibrary ? '' : ' aria-disabled="true"'}><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg></button>`;
         // Build the right-hand action span based on playlist type:
         // - Library: Share + More (rename/delete menu)
         // - Public (other user): Share only — can't edit someone else's playlist
         // - Curated (YT Music): empty — read-only, no useful Share either
         // Conditional HTML (not CSS hiding) keeps the DOM clean: no
         // display:none buttons to focus via keyboard or click via dev tools.
-        const actionsRightHtml = isLibrary
-          ? shareBtn + moreBtn
-          : (isCurated ? '' : shareBtn);
+        const actionsRightHtml = shareBtn + moreBtn;
         // Wrap secondary actions in the existing left/right flex spans so the
         // 1fr-auto-1fr grid stays valid (Play sits in the auto column).
         const actionsRow = `<div class="playlist-detail-hero-actions"><div class="playlist-hero-actions-left">${shuffleBtn}${playNextBtn}</div><button class="playlist-hero-play" type="button" aria-label="Play ${escapeHtml(title)}"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></button><div class="playlist-hero-actions-right">${actionsRightHtml}</div></div>`;
@@ -313,7 +317,7 @@
                 <div class="queue-artist">${window.artistLinksHtml(artist, artistChannelIds.length ? artistChannelIds : (track.channelId || track.channel_id || ''))}</div>
               </div>
               ${trackDuration ? `<div class="playlist-track-duration">${escapeHtml(trackDuration)}</div>` : ''}
-              ${songActions(contextTrack)}`;
+              ${songActions(contextTrack, plId.toUpperCase() === 'LM')}`;
             row.onclick = () => {
               if (window.playResult) {
                 window.playResult({
@@ -368,6 +372,7 @@
             heroMore.addEventListener('click', function (e) {
               e.stopPropagation();
               e.preventDefault();
+              if (!isLibrary) return;
               const menu = document.getElementById('playlist-detail-more-menu');
               if (!menu) return;
               if (menu.classList.contains('open')) {
@@ -388,6 +393,7 @@
           // clipboard API support.
           const heroShare = hero.querySelector('.playlist-hero-share');
           if (heroShare) heroShare.addEventListener('click', async () => {
+            if (shareMuted) return;
             const url = window.location.href;
             let copied = false;
             try {
@@ -406,8 +412,8 @@
               try { copied = document.execCommand('copy'); } catch (e) { copied = false; }
               document.body.removeChild(tmp);
             }
-            if (window.showToast) {
-              window.showToast(copied ? 'Link copied to clipboard' : 'Could not copy link', copied ? 'ok' : 'error');
+            if (window.toast) {
+              window.toast(copied ? 'Link copied to clipboard' : 'Could not copy link', copied ? 'ok' : 'error');
             }
           });
         }

@@ -39,6 +39,7 @@
   }
 
   function render(data) {
+    var currentAlbumId = data.browseId || data.browse_id || data.albumId || '';
     var hero = document.getElementById('album-hero');
     var list = document.getElementById('album-track-list');
     if (!hero || !list) return;
@@ -97,7 +98,8 @@
           video_id: track.video_id || track.videoId || '',
           title: track.title || '',
           artist: artist,
-          thumbnail: thumbnail
+          thumbnail: thumbnail,
+          album_id: currentAlbumId
         };
         var row = document.createElement('div');
         row.className = 'history-item album-track';

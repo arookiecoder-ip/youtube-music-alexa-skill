@@ -54,6 +54,14 @@
   width: 42%;
   height: 42%;
 }
+.liked-playlist-banner {
+  background: linear-gradient(135deg, #c64bdb, #6b3fd1 55%, #293b9b);
+  color: #fff;
+}
+.liked-playlist-banner svg {
+  width: 42%;
+  height: 42%;
+}
 
 /* ── Playlist Card Info ── */
 .playlist-card-info {
@@ -217,6 +225,10 @@
 .playlist-hero-play-next:hover,
 .playlist-hero-share:hover,
 .playlist-hero-more:hover { background: rgba(255, 255, 255, .1); }
+.playlist-hero-more.is-muted { color: rgba(255, 255, 255, .35); cursor: default; }
+.playlist-hero-more.is-muted:hover { background: transparent; }
+.playlist-hero-share.is-muted { color: rgba(255, 255, 255, .35); cursor: default; }
+.playlist-hero-share.is-muted:hover { background: transparent; }
 .playlist-hero-shuffle:focus,
 .playlist-hero-play-next:focus,
 .playlist-hero-share:focus,
@@ -441,5 +453,5 @@
     transition: opacity .16s ease;
     pointer-events: none;
   }
-  .playlist-track-art:hover::after { opacity: 1; }
+  .history-item:hover .playlist-track-art::after { opacity: 1; }
 }
