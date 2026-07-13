@@ -261,9 +261,10 @@
         const hero = document.createElement('section');
         hero.className = 'playlist-detail-hero';
         // Compute total duration once so the meta line can show e.g. "12 songs • 47 minutes"
-        const totalSeconds = tracks.reduce((sum, t) => sum + (Number(t.duration_seconds) || 0), 0);
+        const totalSeconds = pl.has_more ? (Number(pl.totalDurationSeconds) || 0) : tracks.reduce((sum, t) => sum + (Number(t.duration_seconds) || 0), 0);
         const totalDuration = formatTotalDuration(totalSeconds);
-        const metaParts = [`${tracks.length} ${tracks.length === 1 ? 'song' : 'songs'}`];
+        const trackCount = Number(pl.trackCount) || tracks.length;
+        const metaParts = [`${trackCount} ${trackCount === 1 ? 'song' : 'songs'}`];
         if (totalDuration) metaParts.push(totalDuration);
         // Shuffle, Play next, Share, More in the existing left/right action spans
         // so the 1fr-auto-1fr grid keeps Play centered. Icons are tiny so they
@@ -315,7 +316,8 @@
         if (tracks.length === 0) {
           list.innerHTML = '<div style="padding:24px; color:var(--muted); text-align:center;">No tracks in this playlist</div>';
         } else {
-          tracks.forEach((track, index) => {
+          const appendTracks = (batch, startIndex) => {
+            batch.forEach((track, index) => {
             const wrapper = document.createElement('div');
             wrapper.className = 'result-swipe-wrapper';
             const row = document.createElement('div');
@@ -354,8 +356,14 @@
             const contextTrack = wrapper._songContextTrack;
             const trackDuration = formatTrackDuration(track);
             row.innerHTML = `
-              <div class="playlist-track-num">${index + 1}</div>
-              <div class="playlist-track-art"><img data-src="${escapeHtml(thumbnail)}" class="queue-thumb" loading="lazy" alt="" onload="this.classList.add('loaded')" onerror="this.style.opacity='1'"></div>
+              <div class="playlist-track-num">${startIndex + index + 1}</div>
+              <div class="playlist-track-art">
+                <img data-src="${escapeHtml(thumbnail)}" class="queue-thumb" loading="lazy" alt="" onload="this.classList.add('loaded')" onerror="this.style.opacity='1'">
+                <span class="playlist-track-playback-indicator" aria-hidden="true">
+                  <svg class="playlist-track-play-glyph" viewBox="0 0 24 24" fill="currentColor"><polygon points="7,4 20,12 7,20"/></svg>
+                  <span class="music-bars"><i></i><i></i><i></i><i></i><i></i></span>
+                </span>
+              </div>
               <div class="queue-info">
                 <div class="queue-title">${escapeHtml(track.title || '')}</div>
                 <div class="queue-artist">${window.artistLinksHtml(artist, artistChannelIds.length ? artistChannelIds : (track.channelId || track.channel_id || ''))}</div>
@@ -376,20 +384,41 @@
             wireSongActions(row, contextTrack);
             wrapper.appendChild(row);
             list.appendChild(wrapper);
-          });
+            });
+            if (window.syncTrackPlaybackIndicators) window.syncTrackPlaybackIndicators();
+          };
+          appendTracks(tracks, 0);
           observeLazyImages(list);
-          if (tracks.length > 20) {
+          if (pl.has_more) {
             const loading = document.createElement('div');
             loading.className = 'playlist-loading-indicator';
             loading.innerHTML = '<span class="playlist-loading-spinner" aria-hidden="true"></span><span>Loading more songs…</span>';
             list.appendChild(loading);
+            let nextOffset = Number(pl.next_offset) || tracks.length;
+            let loadingTracks = false;
             const loadingObserver = new IntersectionObserver(function (entries) {
-              entries.forEach(function (entry) {
-                if (!entry.isIntersecting) return;
+              entries.forEach(async function (entry) {
+                if (!entry.isIntersecting || loadingTracks) return;
+                loadingTracks = true;
                 loading.classList.add('visible');
-                setTimeout(function () { loading.classList.remove('visible'); }, 450);
+                try {
+                  const page = await window.api('/api/library/playlists/' + encodeURIComponent(plId) + '?offset=' + nextOffset + '&limit=30');
+                  const batch = page.tracks || [];
+                  appendTracks(batch, nextOffset);
+                  observeLazyImages(list);
+                  nextOffset = Number(page.next_offset) || (nextOffset + batch.length);
+                  if (!page.has_more || !batch.length) {
+                    loadingObserver.disconnect();
+                    loading.remove();
+                  }
+                } catch (e) {
+                  if (window.toast) window.toast('Could not load more songs', 'error');
+                } finally {
+                  loading.classList.remove('visible');
+                  loadingTracks = false;
+                }
               });
-            }, { rootMargin: '160px 0px' });
+            }, { root: list.closest('.history-modal-body'), rootMargin: '160px 0px' });
             loadingObserver.observe(loading);
           }
           const heroPlay = hero.querySelector('.playlist-hero-play');

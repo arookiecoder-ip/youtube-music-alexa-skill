@@ -1259,6 +1259,19 @@ def _thumbnail_metadata(thumbnail):
     return {'url': url, 'width': 0, 'height': 0}
 
 
+_GENERIC_ARTIST_LABELS = frozenset({
+    'release', 'releases', 'album', 'song', 'music', 'video',
+})
+
+
+def _clean_artist_credit(value):
+    """Return a real artist credit, not a generic YouTube metadata label."""
+    artist = str(value or '').strip()
+    if artist.endswith(' - Topic'):
+        artist = artist[:-len(' - Topic')].strip()
+    return '' if artist.casefold() in _GENERIC_ARTIST_LABELS else artist
+
+
 def _metadata_from_queue(video_id):
     cur = _get_now_playing()
     for item in cur.get('queue') or []:
@@ -1284,9 +1297,7 @@ def _lookup_video_metadata(video_id):
         info = ytmusic.get_song(video_id)
         details = (info or {}).get('videoDetails') or {}
         title = details.get('title') or ''
-        author = details.get('author') or ''
-        if author.endswith(' - Topic'):
-            author = author[:-len(' - Topic')]
+        author = _clean_artist_credit(details.get('author'))
         thumbs = details.get('thumbnail', {}).get('thumbnails', [])
         thumb = thumbs[-1] if thumbs else None
         try:
@@ -2370,9 +2381,7 @@ def _lookup_and_update_np(video_id):
         info = ytmusic.get_song(video_id)
         details = (info or {}).get('videoDetails') or {}
         title = details.get('title') or ''
-        author = details.get('author') or ''
-        if author.endswith(' - Topic'):
-            author = author[:-len(' - Topic')]
+        author = _clean_artist_credit(details.get('author'))
         thumb = ''
         thumbs = details.get('thumbnail', {}).get('thumbnails', [])
         if thumbs:
@@ -2401,18 +2410,26 @@ def _lookup_and_update_np(video_id):
             # The lookup can be slow; if the track changed while it ran, writing
             # these fields would revert now_playing to the previous song (wrong
             # card + progress reset) even though the queue moved on. Drop it.
-            if _get_now_playing().get('video_id') != video_id:
+            current = _get_now_playing()
+            if current.get('video_id') != video_id:
                 sys.stderr.write(f"[np] lookup discarded (track changed): {video_id}\n")
                 sys.stderr.flush()
                 return
-            # Only attach duration; the video_id/title/etc. were already set by
-            # the caller. Passing duration_ms here (without video_id) updates it
-            # in place without re-triggering the track-change reset.
-            fields = {'title': title, 'artist': author, 'video_id': video_id}
+            # Playlist/search metadata is more authoritative than videoDetails.
+            # Its `author` field identifies the uploader/channel and can contain
+            # a generic label such as "Release" instead of the recording artist.
+            # Preserve known metadata and use the lookup only to fill blanks.
+            fields = {'video_id': video_id}
+            if not current.get('title') or current.get('title') == video_id:
+                fields['title'] = title
+            current_artist = str(current.get('artist') or '').strip()
+            lookup_artist = _clean_artist_credit(author)
+            if not current_artist and lookup_artist:
+                fields['artist'] = lookup_artist
             # Don't overwrite an already-known thumbnail with a blank one just
             # because this particular lookup came back without one (ytmusicapi
             # occasionally returns an empty thumbnails list transiently).
-            if thumb:
+            if thumb and not current.get('thumbnail'):
                 fields['thumbnail'] = thumb
             if duration_ms:
                 fields['duration_ms'] = duration_ms
@@ -5122,12 +5139,41 @@ async def api_get_library_playlist(pl_id):
     if not pl_id.strip():
         return jsonify({'error': 'invalid playlist id'}), 400
     try:
+        try:
+            page_limit = min(100, max(1, int(request.args.get('limit', 0) or 0)))
+        except (TypeError, ValueError):
+            page_limit = 0
+        try:
+            page_offset = max(0, int(request.args.get('offset', 0) or 0))
+        except (TypeError, ValueError):
+            page_offset = 0
+
+        def page_response(info):
+            """Keep playlist payloads small when browser pagination is requested."""
+            if not page_limit:
+                return info
+            result = dict(info or {})
+            all_tracks = list(result.get('tracks') or [])
+            fetched_count = len(all_tracks)
+            reported_count = result.get('trackCount') or result.get('track_count') or 0
+            try:
+                total = max(fetched_count, int(reported_count))
+            except (TypeError, ValueError):
+                total = fetched_count
+            result['tracks'] = all_tracks[page_offset:page_offset + page_limit]
+            result['trackCount'] = total
+            next_offset = page_offset + len(result['tracks'])
+            result['next_offset'] = next_offset
+            result['has_more'] = next_offset < fetched_count or next_offset < total
+            return result
+
         # 'LM' is the special Liked Music virtual playlist — requires auth.
         if pl_id.upper() == 'LM':
             if yt.auth_type == AuthType.UNAUTHORIZED:
                 return jsonify({'error': 'YouTube Music authentication required. Please visit /setup/'}), 403
             try:
-                raw = await asyncio.to_thread(yt.get_liked_songs, 5000)
+                fetch_limit = page_offset + page_limit + 1 if page_limit else 5000
+                raw = await asyncio.to_thread(yt.get_liked_songs, fetch_limit)
             except Exception as liked_error:
                 if "invalid argument" in str(liked_error).lower():
                     logger.warning("YouTube Liked Music browse unavailable: %s", liked_error)
@@ -5152,28 +5198,29 @@ async def api_get_library_playlist(pl_id):
                     'duration': t.get('duration') or '',
                     'duration_seconds': t.get('duration_seconds') or 0,
                 })
-            return jsonify({
+            return jsonify(page_response({
                 'title': raw.get('title') or 'Liked Music',
-                'trackCount': len(tracks),
+                'trackCount': raw.get('trackCount') or len(tracks),
                 'tracks': tracks,
-            })
+            }))
         try:
-            info = await asyncio.to_thread(yt.get_playlist, pl_id, None)
+            fetch_limit = page_offset + page_limit + 1 if page_limit else None
+            info = await asyncio.to_thread(yt.get_playlist, pl_id, fetch_limit)
         except Exception as browse_err:
             if "invalid argument" in str(browse_err).lower():
                 logger.warning("YouTube playlist browse unavailable; retrying anonymously: %s", browse_err)
                 try:
-                    info = await asyncio.to_thread(YTMusic().get_playlist, pl_id, None)
-                    return jsonify(info)
+                    info = await asyncio.to_thread(YTMusic().get_playlist, pl_id, fetch_limit)
+                    return jsonify(page_response(info))
                 except Exception:
                     info = await asyncio.to_thread(YTMusic().get_watch_playlist, playlistId=pl_id)
                     if 'title' not in info:
                         info['title'] = 'Curated Mix'
-                    return jsonify(info)
+                    return jsonify(page_response(info))
             info = await asyncio.to_thread(yt.get_watch_playlist, playlistId=pl_id)
             if 'title' not in info:
                 info['title'] = 'Curated Mix'
-        return jsonify(info)
+        return jsonify(page_response(info))
     except Exception as e:
         logger.error('[api/library/playlists/%s] failed: %s', pl_id, e)
         return jsonify({'error': str(e)}), 500

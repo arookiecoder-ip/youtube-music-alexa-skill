@@ -141,7 +141,7 @@
   function _fetchPlaylist(plId, signal) {
     // One detail endpoint handles library, Liked Music and public/curated
     // playlists, including the anonymous fallback for public mixes.
-    return fetch('/api/library/playlists/' + encodeURIComponent(plId), {
+    return fetch('/api/library/playlists/' + encodeURIComponent(plId) + '?offset=0&limit=30', {
       credentials: 'same-origin',
       cache: 'no-store',
       signal: signal,

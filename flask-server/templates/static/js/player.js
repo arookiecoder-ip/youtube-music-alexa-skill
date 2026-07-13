@@ -34,7 +34,9 @@ const volumeEl = document.getElementById('volume');
 
 function syncTrackPlaybackIndicators() {
   const currentId = state._currentVideoId || '';
-  for (const card of document.querySelectorAll('.home-item[data-video-id]')) {
+  for (const card of document.querySelectorAll(
+    '.home-item[data-video-id], .result-swipe-wrapper[data-video-id]'
+  )) {
     const isCurrent = !!currentId && card.dataset.videoId === currentId;
     card.classList.toggle('current-track', isCurrent);
     card.classList.toggle('playing', isCurrent && state.isPlaying);

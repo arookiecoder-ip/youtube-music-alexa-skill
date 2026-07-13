@@ -7,7 +7,10 @@
   if (state._lastPlayAttemptVideoId === undefined) state._lastPlayAttemptVideoId = '';
   if (state._lastQueueJson === undefined) state._lastQueueJson = '';
   if (state._lastQueueIndex === undefined) state._lastQueueIndex = -1;
-  if (state._queueRenderLimit === undefined) state._queueRenderLimit = 150;
+  // Rendering hundreds of interactive rows while the now-playing page slides
+  // in blocks the animation. Start with a viewport-sized window; the sentinel
+  // appends later chunks as the user scrolls.
+  if (state._queueRenderLimit === undefined) state._queueRenderLimit = 30;
   if (state._historyCache === undefined) state._historyCache = [];
   if (state._hasTrack === undefined) state._hasTrack = false;
   if (state._resultsOpen === undefined) state._resultsOpen = false;
@@ -15,7 +18,7 @@
   state._queueOpen = false;
   try { localStorage.removeItem('queuePanelOpen'); } catch (_) {}
 
-const QUEUE_RENDER_CHUNK = 150;
+const QUEUE_RENDER_CHUNK = 30;
 let _addToQueueBusy = false;
 
 async function addToQueue(item, position, silent) {

@@ -1702,17 +1702,26 @@ body.now-playing-route .player-section .player-expand-btn svg {
 /* Card songs use the same focused hover treatment as playlist rows: dim the
    artwork and reveal the play control in the exact center. */
 .home-item-card[data-kind="track"] .home-item-img-wrapper::after,
-.home-item-wide-card[data-kind="track"] .home-item-img-wrapper::after {
+.home-item-wide-card[data-kind="track"] .home-item-img-wrapper::after,
+.home-item-card[data-kind="playlist"] .home-item-img-wrapper::after,
+.home-item-wide-card[data-kind="playlist"] .home-item-img-wrapper::after,
+.home-item-card[data-kind="station"] .home-item-img-wrapper::after,
+.home-item-wide-card[data-kind="station"] .home-item-img-wrapper::after {
   content: '';
   position: absolute;
   inset: 0;
   background: rgba(0, 0, 0, .45);
   opacity: 0;
+  z-index: 1;
   transition: opacity .18s ease;
   pointer-events: none;
 }
 .home-item-card[data-kind="track"]:hover .home-item-img-wrapper::after,
-.home-item-wide-card[data-kind="track"]:hover .home-item-img-wrapper::after {
+.home-item-wide-card[data-kind="track"]:hover .home-item-img-wrapper::after,
+.home-item-card[data-kind="playlist"]:hover .home-item-img-wrapper::after,
+.home-item-wide-card[data-kind="playlist"]:hover .home-item-img-wrapper::after,
+.home-item-card[data-kind="station"]:hover .home-item-img-wrapper::after,
+.home-item-wide-card[data-kind="station"]:hover .home-item-img-wrapper::after {
   opacity: 1;
 }
 .home-item-card[data-kind="track"] .home-play-btn,
@@ -2684,7 +2693,9 @@ body.results-open .player-section {
   inset: -70px;
   z-index: -2;
   background: var(--np-cover, none) center / cover no-repeat;
-  filter: blur(56px) saturate(1.35);
+  /* Large full-screen blur is repainted while the player panel slides. Keep
+     the artwork atmosphere without stalling open/close on modest GPUs. */
+  filter: blur(28px) saturate(1.25);
   opacity: .72;
   transform: scale(1.12);
   transition: background-image .35s ease;
@@ -3686,7 +3697,40 @@ body.library-route #nav-library-btn::before {
   width: 60px;
   height: 60px;
 }
-#playlist-detail-modal .playlist-track-art { flex-basis: 60px; }
+#playlist-detail-modal .playlist-track-art {
+  position: relative;
+  flex: 0 0 60px;
+  overflow: hidden;
+  border-radius: 4px;
+}
+.playlist-track-playback-indicator {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  background: rgba(0,0,0,.52);
+  opacity: 0;
+  transition: opacity .16s ease;
+  pointer-events: none;
+}
+.playlist-track-play-glyph {
+  display: block;
+  width: 25px;
+  height: 25px;
+}
+.playlist-track-playback-indicator .music-bars { display: none; }
+.result-swipe-wrapper:hover .playlist-track-playback-indicator,
+.result-swipe-wrapper:focus-within .playlist-track-playback-indicator,
+.result-swipe-wrapper.current-track.playing .playlist-track-playback-indicator {
+  opacity: 1;
+}
+.result-swipe-wrapper.current-track.playing .playlist-track-play-glyph { display: none; }
+.result-swipe-wrapper.current-track.playing .playlist-track-playback-indicator .music-bars {
+  display: flex;
+}
 #playlist-detail-modal .result-like-btn,
 #playlist-detail-modal .result-more-btn {
   width: 42px;

@@ -64,14 +64,23 @@
     var actionsRowHtml = tracks.length
       ? '<div class="playlist-detail-hero-actions"><div class="playlist-hero-actions-left">' + shuffleBtnHtml + playNextBtnHtml + '</div><button class="playlist-hero-play album-play-all" type="button" aria-label="Play ' + esc(title) + '"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></button><div class="playlist-hero-actions-right">' + shareBtnHtml + moreBtnHtml + '</div></div>'
       : '';
+    var heroArtistIds = Array.isArray(data.artists)
+      ? data.artists.map(function(artist) {
+          return artist && (artist.id || artist.browseId || artist.channelId) || '';
+        })
+      : (data.channelId ? [data.channelId] : []);
+    var heroArtistHtml = data.artist && window.artistLinksHtml
+      ? window.artistLinksHtml(data.artist, heroArtistIds)
+      : esc(data.artist || '');
     hero.innerHTML = cover +
       '<div class="playlist-detail-hero-info">' +
         '<h1 class="playlist-detail-page-title playlist-detail-hero-name">' + esc(title) + '</h1>' +
-        (data.artist ? '<button class="album-artist-link" type="button" data-channel-id="' + esc(data.channelId) + '">' + esc(data.artist) + '</button>' : '') +
+        (data.artist ? '<div class="album-artist-link">' + heroArtistHtml + '</div>' : '') +
         (data.description ? '<div class="playlist-detail-hero-desc">' + esc(data.description) + '</div>' : '') +
         '<div class="playlist-detail-hero-meta">' + esc(meta) + '</div>' +
         actionsRowHtml +
       '</div>';
+    if (window.wireArtistLinks) window.wireArtistLinks(hero);
 
     list.className = 'album-track-list history-list';
     list.innerHTML = '';
@@ -106,7 +115,9 @@
         row.className = 'history-item album-track';
         var contextTrack = wrapper._songContextTrack;
         row.innerHTML =
-          '<div class="playlist-track-art"><img src="' + esc(thumbnail) + '" class="queue-thumb" loading="lazy" alt="" onload="this.classList.add(\'loaded\')" onerror="this.style.opacity=\'1\'"></div>' +
+          '<div class="playlist-track-art"><img src="' + esc(thumbnail) + '" class="queue-thumb" loading="lazy" alt="" onload="this.classList.add(\'loaded\')" onerror="this.style.opacity=\'1\'">' +
+          '<span class="playlist-track-playback-indicator" aria-hidden="true"><svg class="playlist-track-play-glyph" viewBox="0 0 24 24" fill="currentColor"><polygon points="7,4 20,12 7,20"/></svg>' +
+          '<span class="music-bars"><i></i><i></i><i></i><i></i><i></i></span></span></div>' +
           '<div class="queue-info"><div class="queue-title">' + esc(track.title || '') + '</div>' +
           '<div class="queue-artist">' + window.artistLinksHtml(artist, artistChannelIds.length ? artistChannelIds : (track.channelId || track.channel_id || '')) + '</div></div>' + songActions(contextTrack);
         row.addEventListener('click', function () {
@@ -117,15 +128,9 @@
         wrapper.appendChild(row);
         list.appendChild(wrapper);
       });
+      if (window.syncTrackPlaybackIndicators) window.syncTrackPlaybackIndicators();
     }
 
-    var artistButton = hero.querySelector('.album-artist-link');
-    if (artistButton) artistButton.addEventListener('click', function () {
-      if (this.dataset.channelId) {
-        if (window.preloadNavigateArtist) window.preloadNavigateArtist(this.dataset.channelId);
-        else window.navigateTo('#artist/' + encodeURIComponent(this.dataset.channelId));
-      }
-    });
     var playAll = hero.querySelector('.album-play-all');
     if (playAll) playAll.addEventListener('click', function () {
       var firstRow = list.querySelector('.history-item');
