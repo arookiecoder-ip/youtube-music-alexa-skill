@@ -182,16 +182,16 @@ function showNowPlaying(info) {
       const url = 'url(' + displayThumbnail + ')';
       const ambientUrl = 'url(' + ambientThumbnail + ')';
       const artwork = [art, miniArt, mpArt, npPageArt].filter(Boolean);
-      // Show the incoming cover immediately as a soft preview. Once the
-      // browser finishes decoding it, remove the blur instead of popping a
-      // sharp image into an empty square.
+      // Compact player artwork must stay sharp. Only the large full-player
+      // cover uses the soft preview while its HD replacement is fetched.
       artwork.forEach((el) => {
         el.style.backgroundImage = url;
-        el.classList.toggle('image-loading', !cachedHighRes);
+        el.classList.remove('image-loading');
         el.classList.add('has-thumb');
       });
       if (npPageArt) {
         const npPage = npPageArt.closest('.np-page');
+        npPageArt.classList.toggle('image-loading', !cachedHighRes);
         npPage.style.setProperty('--np-cover', ambientUrl);
         npPage.classList.toggle('image-loading', !cachedHighRes);
         document.body.style.setProperty('--np-cover', ambientUrl);
