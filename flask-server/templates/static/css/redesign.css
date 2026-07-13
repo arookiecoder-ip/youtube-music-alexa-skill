@@ -607,7 +607,9 @@ img[data-image-ready="true"] {
 /* The old right-side hamburger is replaced by the rail toggle next to the
    brand (which opens the drawer on mobile). Keep the element for the toggle
    to delegate to, but never show it. */
-.hamburger-btn { display: none !important; }
+@media (min-width: 900px) {
+  .hamburger-btn { display: none !important; }
+}
 
 /* Rail toggle: sits left of the brand, YT Music style */
 .rail-toggle-btn {
@@ -1457,9 +1459,7 @@ input[type=range]::-moz-range-thumb { border-radius: 50%; }
   .player-section .transport button { width: 38px; height: 38px; }
   .player-section .pp-btn, .player-section .pp-btn:hover { width: 46px; height: 46px; }
   .player-section .vol { display: none !important; }
-  .player-section .transport button[data-action="previous"] {
-    display: none !important;
-  }
+  /* Previous stays available on touch; next/previous must be symmetric. */
 }
 
 .player-section .transport-actions {
@@ -3162,10 +3162,35 @@ body.results-open .player-section {
 
 /* On mobile the now-playing page shows full-width art only */
 @media (max-width: 899px) {
-  .np-page { flex-direction: column; height: auto; overflow-y: auto; }
-  .np-page-left { flex: none; padding: 24px 20px; }
-  .np-page-right { flex: none; border-left: none; border-top: 1px solid rgba(255,255,255,.07); }
-  #now-playing-section { margin: 0 -16px; }
+  #now-playing-section {
+    margin: 0;
+    min-height: 100dvh;
+    padding-top: env(safe-area-inset-top, 0px);
+    padding-bottom: calc(var(--playbar-h-mobile, 104px) + env(safe-area-inset-bottom, 0px));
+  }
+  .np-page { flex-direction: column; min-height: 100dvh; height: auto; overflow: visible; }
+  .np-page-left { flex: none; padding: 24px 20px; gap: 20px; }
+  .np-page-art { width: min(82vw, 430px); }
+  .np-page-right {
+    flex: none;
+    min-height: 280px;
+    max-height: 60dvh;
+    border-left: none;
+    border-top: 1px solid rgba(255,255,255,.07);
+  }
+  #np-queue-list { min-height: 220px; -webkit-overflow-scrolling: touch; }
+
+  /* Touch has no hover state: expose controls that desktop reveals on hover. */
+  .np-more-wrap,
+  .queue-more-btn,
+  .playlist-card-play,
+  .artist-play-btn,
+  .home-play-btn { opacity: 1; }
+
+  .player-section button,
+  .queue-more-btn,
+  .np-page-like-btn,
+  .np-page-shuffle-btn { min-width: 44px; min-height: 44px; }
 }
 
 /* Disable the old mini-popup overlay on desktop — now-playing-section replaces it */

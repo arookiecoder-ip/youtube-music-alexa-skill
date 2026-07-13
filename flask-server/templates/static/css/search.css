@@ -344,16 +344,15 @@
     body.results-open .player-section:not(.redesigned-bar) { display: none !important; }
     body.results-open main { padding-bottom: 92px; }
     body.results-open .toast { bottom: calc(92px + env(safe-area-inset-bottom, 0px)); }
-    body.results-open .needs-login:has(#play-query) {
+    body.results-open .needs-login:has(#play-query),
+    body.results-open .play-section {
       position: sticky;
       top: 0;
       z-index: 40;
       margin-bottom: 0;
       border-bottom: none;
-      /* subtle blur-glass so content scrolling under it looks clean */
-      backdrop-filter: blur(8px);
-      -webkit-backdrop-filter: blur(8px);
-      background: rgba(20, 20, 20, 0.92);
+      background: #141414;
+      contain: paint;
     }
   }
 

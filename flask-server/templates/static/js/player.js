@@ -113,9 +113,12 @@ function showNowPlaying(info) {
       document.getElementById('mini-title').textContent = 'Nothing is playing';
       miniArt.style.backgroundImage = '';
       miniArt.classList.remove('has-thumb', 'image-loading');
-      // Clear popup now-playing too
-      document.getElementById('mp-np-title').textContent = 'Nothing is playing';
-      document.getElementById('mp-np-artist').textContent = '';
+      // Legacy mobile popup has been retired. Keep this null-safe for Jam's
+      // deliberately small shell and for stale cached markup during upgrades.
+      const mpTitle = document.getElementById('mp-np-title');
+      const mpArtist = document.getElementById('mp-np-artist');
+      if (mpTitle) mpTitle.textContent = 'Nothing is playing';
+      if (mpArtist) mpArtist.textContent = '';
       const mpArt = document.getElementById('mp-np-art');
       mpArt.style.backgroundImage = '';
       mpArt.classList.remove('has-thumb', 'image-loading');
@@ -160,9 +163,10 @@ function showNowPlaying(info) {
     document.getElementById('np-title').textContent = info.title;
     document.getElementById('np-artist').innerHTML = window.artistLinksHtml(info.artist, info.channelId);
     document.getElementById('mini-title').textContent = info.title;
-    // Sync mini popup
-    document.getElementById('mp-np-title').textContent = info.title;
-    document.getElementById('mp-np-artist').innerHTML = window.artistLinksHtml(info.artist, info.channelId);
+    const mpTitle = document.getElementById('mp-np-title');
+    const mpArtist = document.getElementById('mp-np-artist');
+    if (mpTitle) mpTitle.textContent = info.title;
+    if (mpArtist) mpArtist.innerHTML = window.artistLinksHtml(info.artist, info.channelId);
     const art = document.getElementById('np-art');
     const mpArt = document.getElementById('mp-np-art');
     const npPageArt = document.getElementById('np-page-art');
@@ -747,6 +751,14 @@ function syncModalScrollLock() {
       }
       return;
     }
+    // One expanded-player path at every viewport. The legacy bottom sheet is
+    // retained in cached templates for compatibility, but is never opened.
+    if (window.getRoute && window.getRoute() === '#now-playing') {
+      if (!fromRoute && window.closeNowPlayingOverlay) window.closeNowPlayingOverlay();
+    } else if (window.navigateTo) {
+      window.navigateTo('#now-playing');
+    }
+    return;
     // On desktop, toggle the #now-playing overlay: expand, or collapse back
     // to the view it was opened from.
     if (window.matchMedia('(min-width: 900px)').matches) {

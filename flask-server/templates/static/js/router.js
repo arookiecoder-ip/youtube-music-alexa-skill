@@ -68,10 +68,14 @@
         }
       }
       // Populate the in-page queue from the last known queue data
-      if (window._lastQueueJson && window.renderNpQueue) {
+      var queueJson = window._lastQueueJson || (window.__appState && window.__appState._lastQueueJson);
+      if (queueJson && window.renderNpQueue) {
         try {
-          var queue = JSON.parse(window._lastQueueJson);
-          window.renderNpQueue(queue, window._lastQueueIndex || 0);
+          var queue = JSON.parse(queueJson);
+          var queueIndex = typeof window._lastQueueIndex === 'number'
+            ? window._lastQueueIndex
+            : ((window.__appState && window.__appState._lastQueueIndex) || 0);
+          window.renderNpQueue(queue, queueIndex);
         } catch(_) {}
       }
     },

@@ -716,6 +716,15 @@
 
   /* ---- Mobile overrides ---- */
   @media (max-width: 899px) {
+    body {
+      padding-bottom: env(safe-area-inset-bottom, 0px);
+    }
+    .install-banner {
+      padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+    }
+    .update-toast {
+      bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+    }
     .hamburger-btn { display: inline-flex; }
     #logout { display: none; }
     /* Hide the inline device section â€” it's in the sidebar now */
