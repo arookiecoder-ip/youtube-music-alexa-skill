@@ -6,6 +6,7 @@
   const FALLBACK_IMG = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%23444'%3E%3Cpath d='M12 3v10.55A4 4 0 1 0 14 17V7h4V3h-6z'/%3E%3C/svg%3E";
   let loaded = false;
   let loading = false;
+  let cardContextMenu = null;
 
   function escHtml(value) {
     return String(value || '').replace(/&/g, '&amp;').replace(/</g, '&lt;')
@@ -61,6 +62,51 @@
     openItem(item);
   }
 
+  function closeCardContextMenu() {
+    if (cardContextMenu) cardContextMenu.classList.remove('open');
+  }
+
+  function openCardContextMenu(event, item) {
+    event.preventDefault();
+    event.stopPropagation();
+    if (window._closeAllMoreMenus) window._closeAllMoreMenus();
+    if (!cardContextMenu) {
+      cardContextMenu = document.createElement('div');
+      cardContextMenu.className = 'result-more-menu explore-context-menu';
+      cardContextMenu.innerHTML =
+        '<button type="button" class="result-menu-option" data-action="play"><svg viewBox="0 0 24 24" fill="currentColor"><polygon points="7,4 20,12 7,20"/></svg><span>Play</span></button>' +
+        '<button type="button" class="result-menu-option" data-action="open"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg><span>Open playlist</span></button>';
+      document.body.appendChild(cardContextMenu);
+      cardContextMenu.addEventListener('click', menuEvent => {
+        const action = menuEvent.target.closest('[data-action]');
+        const target = cardContextMenu._item;
+        if (!action || !target) return;
+        menuEvent.stopPropagation();
+        closeCardContextMenu();
+        if (action.dataset.action === 'play') playItem({ stopPropagation() {} }, target);
+        if (action.dataset.action === 'open') openItem(target);
+      });
+    }
+    const id = item.browseId || item.playlistId || item.albumId || item.audioPlaylistId || '';
+    const isAlbum = item.type === 'Album' || String(id).startsWith('MPREb');
+    cardContextMenu._item = item;
+    cardContextMenu.querySelector('[data-action="open"] span').textContent = isAlbum ? 'Open album' : 'Open playlist';
+    cardContextMenu.style.left = event.clientX + 'px';
+    cardContextMenu.style.right = 'auto';
+    cardContextMenu.style.top = event.clientY + 'px';
+    cardContextMenu.style.bottom = 'auto';
+    cardContextMenu.classList.add('open');
+    const rect = cardContextMenu.getBoundingClientRect();
+    if (rect.right > window.innerWidth - 8) {
+      cardContextMenu.style.left = 'auto';
+      cardContextMenu.style.right = Math.max(8, window.innerWidth - event.clientX) + 'px';
+    }
+    if (rect.bottom > window.innerHeight - 8) {
+      cardContextMenu.style.top = 'auto';
+      cardContextMenu.style.bottom = Math.max(8, window.innerHeight - event.clientY) + 'px';
+    }
+  }
+
   function renderCard(item, eager) {
     const title = item.title || item.name || 'Unknown';
     const thumb = imageUrl(item.thumbnails) || imageUrl(item.thumbnail) || imageUrl(item.images) || imageUrl(item.image);
@@ -83,6 +129,24 @@
     card.addEventListener('click', () => openItem(item));
     card.addEventListener('keydown', event => {
       if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openItem(item); }
+    });
+    card.addEventListener('contextmenu', event => {
+      const videoId = item.videoId || item.video_id;
+      if (videoId && window.openSongContextMenu) {
+        const track = Object.assign({}, item, {
+          video_id: videoId,
+          title: title,
+          artist: subtitle(item),
+          thumbnail: thumb || '',
+          album_id: item.albumId || item.album_id || '',
+          artist_id: item.channelId || item.channel_id || item.artistId || ''
+        });
+        event.preventDefault();
+        event.stopPropagation();
+        window.openSongContextMenu(event, track);
+      } else {
+        openCardContextMenu(event, item);
+      }
     });
     card.querySelector('.explore-card-play').addEventListener('click', event => playItem(event, item));
     return card;
@@ -142,6 +206,8 @@
       const track = { video_id: song.videoId || song.video_id, title: title, artist: artist, thumbnail: thumbnail };
       const row = document.createElement('article');
       row.className = 'home-item home-item-song';
+      row.dataset.videoId = track.video_id;
+      row._songContextTrack = track;
       row.tabIndex = 0;
       row.setAttribute('role', 'button');
       row.setAttribute('aria-label', `Play ${title}`);
@@ -289,9 +355,14 @@
       const result = cached || await window.api('/api/explore/moods/?params=' + encodeURIComponent(params) + '&title=' + encodeURIComponent(title || 'music'));
       body.innerHTML = '';
       const hasSongs = renderMoodSongs(body, result.songs || []);
-      const hasPlaylists = renderFeaturedPlaylists(body, result.playlists || [], 'Featured playlists');
+      const hasFeaturedPlaylists = renderFeaturedPlaylists(
+        body, result.featured_playlists || result.playlists || [], 'Featured playlists'
+      );
+      const hasCommunityPlaylists = renderFeaturedPlaylists(
+        body, result.community_playlists || [], 'Community playlists'
+      );
       const hasAlbums = renderFeaturedPlaylists(body, result.albums || [], 'Albums');
-      if (!hasSongs && !hasPlaylists && !hasAlbums) {
+      if (!hasSongs && !hasFeaturedPlaylists && !hasCommunityPlaylists && !hasAlbums) {
         body.innerHTML = '<div class="explore-empty">No playlists are available for this mood or genre right now.</div>';
       }
     } catch (error) {
@@ -323,9 +394,10 @@
     const body = document.getElementById('explore-modal-body');
     if (!body) return;
     loading = true;
-    body.innerHTML = '<div class="explore-loading-status" role="status">Loading Explore…</div>';
+    const preloaded = !force && window.consumePreload && window.consumePreload('#explore');
+    if (!preloaded) body.innerHTML = '<div class="loading-spinner" role="status" aria-label="Loading"></div>';
     try {
-      const explore = await window.api('/api/explore/');
+      const explore = preloaded || await window.api('/api/explore/');
       if (!explore || typeof explore !== 'object') throw new Error('Empty response');
       body.innerHTML = '';
       const available = new Set();

@@ -198,7 +198,13 @@
   font-weight: 700;
   color: var(--text);
   line-height: 1.3;
-  word-wrap: break-word;
+  /* Playlist names come from users and can be both long and unbroken. Keep
+     the title within its hero instead of forcing horizontal overflow. */
+  max-width: 100%;
+  white-space: normal;
+  overflow-wrap: anywhere;
+  word-break: normal;
+  hyphens: auto;
 }
 .playlist-detail-hero-desc {
   font-size: .78rem;

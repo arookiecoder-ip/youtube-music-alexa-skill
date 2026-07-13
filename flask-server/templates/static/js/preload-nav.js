@@ -138,6 +138,31 @@
     });
   }
 
+  function _fetchArtistSongs(channelId, signal) {
+    // The full-song page needs both the artist shell and its expanded song
+    // shelf. Fetch them before routing so it can render immediately.
+    var cached = window.__appState && window.__appState._artistCache &&
+      window.__appState._artistCache[channelId];
+    var artistPromise = cached ? Promise.resolve(cached) : _fetchArtist(channelId, signal);
+    return artistPromise.then(function (data) {
+      if (!data || data.__allTopSongsLoaded || !data.topSongsBrowseId) {
+        if (data) data.__allTopSongsLoaded = true;
+        return data;
+      }
+      return fetch('/api/artist/' + encodeURIComponent(channelId) + '/songs?browse_id=' +
+        encodeURIComponent(data.topSongsBrowseId), {
+          credentials: 'same-origin', cache: 'no-store', signal: signal,
+        }).then(function (response) {
+          if (!response.ok) throw new Error('Could not load artist songs');
+          return response.json();
+        }).then(function (result) {
+          if (result && Array.isArray(result.songs) && result.songs.length) data.topSongs = result.songs;
+          data.__allTopSongsLoaded = true;
+          return data;
+        });
+    });
+  }
+
   function _fetchPlaylist(plId, signal) {
     // One detail endpoint handles library, Liked Music and public/curated
     // playlists, including the anonymous fallback for public mixes.
@@ -160,6 +185,38 @@
     }).then(function (r) {
       if (!r.ok) throw new Error('Could not load this genre');
       return r.json();
+    });
+  }
+
+  function _fetchExplore(signal) {
+    return fetch('/api/explore/', {
+      credentials: 'same-origin',
+      cache: 'no-store',
+      signal: signal,
+    }).then(function (r) {
+      if (!r.ok) throw new Error('Could not load Explore');
+      return r.json();
+    });
+  }
+
+  function _fetchLibrary(signal) {
+    function getJson(path) {
+      return fetch(path, {
+        credentials: 'same-origin',
+        cache: 'no-store',
+        signal: signal,
+      }).then(function (r) {
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return r.json();
+      });
+    }
+
+    // Keep local subscriptions when YouTube Music access has expired.
+    return Promise.all([
+      getJson('/api/subscribed_artists/'),
+      getJson('/api/library/').catch(function () { return { playlists: [] }; }),
+    ]).then(function (results) {
+      return { subscribedData: results[0], libraryData: results[1] };
     });
   }
 
@@ -319,6 +376,14 @@
     }, _prepareArtistHero);
   };
 
+  window.preloadNavigateArtistSongs = function (channelId) {
+    if (!channelId) return;
+    var route = '#artist/' + encodeURIComponent(channelId) + '/songs';
+    window.navigateWithPreload(route, function (signal) {
+      return _fetchArtistSongs(channelId, signal);
+    });
+  };
+
   window.preloadNavigateArtistByName = function (name) {
     if (!name) return;
     // We don't know the final route yet; fetch resolves the channelId first
@@ -374,6 +439,14 @@
     window.navigateWithPreload(route, function (signal) {
       return _fetchMood(params, title, signal);
     });
+  };
+
+  window.preloadNavigateExplore = function () {
+    window.navigateWithPreload('#explore', _fetchExplore);
+  };
+
+  window.preloadNavigateLibrary = function () {
+    window.navigateWithPreload('#library', _fetchLibrary);
   };
 
   // ─── Expose bar controller for external view loaders (playlists, etc.) ──

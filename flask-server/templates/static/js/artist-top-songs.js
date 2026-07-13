@@ -2,7 +2,8 @@
   'use strict';
 
   window.navigateArtistTopSongs = function (channelId) {
-    if (!channelId || !window.navigateTo) return;
-    window.navigateTo('#artist/' + encodeURIComponent(channelId) + '/songs');
+    if (!channelId) return;
+    if (window.preloadNavigateArtistSongs) window.preloadNavigateArtistSongs(channelId);
+    else if (window.navigateTo) window.navigateTo('#artist/' + encodeURIComponent(channelId) + '/songs');
   };
 })();

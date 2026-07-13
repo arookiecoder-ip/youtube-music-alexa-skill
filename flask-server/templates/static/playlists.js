@@ -4,6 +4,7 @@
   if (state._loggedIn === undefined) state._loggedIn = false;
   var _openPlaylistId = null;  // currently open playlist detail plId
   const libraryPlaylistIds = new Set();
+  const trackMetadataRequests = new Map();
 
   const escapeHtml = window.escHtml || (s => String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'));
 
@@ -141,6 +142,35 @@
     });
   }
 
+  function resolveTrackMetadata(videoId) {
+    if (!videoId || !window.api) return Promise.resolve({});
+    if (!trackMetadataRequests.has(videoId)) {
+      trackMetadataRequests.set(videoId, window.api('/api/album/resolve/' + encodeURIComponent(videoId))
+        .catch(() => ({})));
+    }
+    return trackMetadataRequests.get(videoId);
+  }
+
+  function openResolvedAlbum(track) {
+    if (!track) return;
+    const navigate = albumId => {
+      if (!albumId) {
+        if (window.toast) window.toast('Album unavailable for this song', 'error');
+        return;
+      }
+      if (window.preloadNavigateAlbum) window.preloadNavigateAlbum(albumId);
+      else window.navigateTo('#album/' + encodeURIComponent(albumId));
+    };
+    if (track.album_id) {
+      navigate(track.album_id);
+      return;
+    }
+    resolveTrackMetadata(track.video_id).then(details => {
+      track.album_id = details.album_id || '';
+      navigate(track.album_id);
+    });
+  }
+
   async function loadLibrary() {
     if (!state._loggedIn || window.JAM_GUEST || !window.IS_AUTHENTICATED) return;
     try {
@@ -274,7 +304,7 @@
         // live in the header (now moved here so the menu is closer to the
         // playlist identity).
         const shuffleBtn = `<button class="playlist-hero-btn playlist-hero-shuffle" type="button" title="Shuffle" aria-label="Shuffle"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/><polyline points="21 16 21 21 16 21"/><line x1="15" y1="15" x2="21" y2="21"/><line x1="4" y1="4" x2="9" y2="9"/></svg></button>`;
-        const playNextBtn = `<button class="playlist-hero-btn playlist-hero-play-next" type="button" title="Play next" aria-label="Play next"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg></button>`;
+        const playNextBtn = `<button class="playlist-hero-btn playlist-hero-play-next" type="button" title="Play next" aria-label="Play next"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M4 5v14l11-7L4 5zm13 0v14h3V5h-3z"/></svg></button>`;
         const shareMuted = isCurated || isLikedPlaylist;
         const shareBtn = `<button class="playlist-hero-btn playlist-hero-share${shareMuted ? ' is-muted' : ''}" type="button" title="${shareMuted ? 'Sharing unavailable for this playlist' : 'Share'}" aria-label="${shareMuted ? 'Sharing unavailable for this playlist' : 'Share'}"${shareMuted ? ' aria-disabled="true"' : ''}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg></button>`;
         // The "more" button uses the same id as the previous header copy so
@@ -383,6 +413,28 @@
                 }, false, false, true);
               }
             };
+            const titleNode = row.querySelector('.queue-title');
+            if (titleNode) titleNode.addEventListener('click', event => {
+              event.preventDefault();
+              event.stopPropagation();
+              openResolvedAlbum(contextTrack);
+            });
+            // Playlist payloads occasionally label an unknown artist as
+            // "Song". Resolve the canonical music metadata in the background
+            // and replace that placeholder without delaying page rendering.
+            if (!artist || artist.trim().toLowerCase() === 'song') {
+              resolveTrackMetadata(videoId).then(details => {
+                if (!details.artist) return;
+                contextTrack.artist = details.artist;
+                contextTrack.artist_id = details.artist_id || contextTrack.artist_id || '';
+                contextTrack.album_id = details.album_id || contextTrack.album_id || '';
+                const artistNode = row.querySelector('.queue-artist');
+                if (artistNode) artistNode.innerHTML = window.artistLinksHtml(
+                  details.artist, details.artist_id || ''
+                );
+                if (window.wireArtistLinks) window.wireArtistLinks(row);
+              });
+            }
             if (window.wireArtistLinks) window.wireArtistLinks(row);
             wireSongActions(row, contextTrack);
             wrapper.appendChild(row);

@@ -140,15 +140,21 @@
     _loading = true;
 
     try {
-      const subscribedData = await window.api('/api/subscribed_artists/');
+      const preloaded = !force && window.consumePreload && window.consumePreload('#library');
+      if (!preloaded) body.innerHTML = renderSkeleton();
+      const subscribedData = preloaded
+        ? preloaded.subscribedData
+        : await window.api('/api/subscribed_artists/');
       state._subscribedArtists = subscribedData.artists || [];
       // YouTube library can fail independently (expired YT session, guest
       // account, etc.); keep local subscribed artists visible regardless.
-      let data = { playlists: [] };
-      try {
-        data = await window.api('/api/library/');
-      } catch (e) {
-        console.warn('[library] YouTube playlists unavailable', e);
+      let data = preloaded ? preloaded.libraryData : { playlists: [] };
+      if (!preloaded) {
+        try {
+          data = await window.api('/api/library/');
+        } catch (e) {
+          console.warn('[library] YouTube playlists unavailable', e);
+        }
       }
       _loaded = true;
 

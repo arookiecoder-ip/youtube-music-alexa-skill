@@ -45,12 +45,17 @@
         const play = item.play || {};
         const cap = item.capabilities || {};
         const videoId = play.videoId ? escapeHtml(play.videoId) : '';
-        const playlistId = play.playlistId ? escapeHtml(play.playlistId) : '';
         const kind = escapeHtml(item.kind || 'unknown');
         // Keep the browse id on the card even when a target was omitted by a
         // shelf provider.  Track cards use the album id for title navigation.
         const targetId = item.target ? (item.target.id || '') :
             (item.browseId || item.playlistId || item.targetId || '');
+        // Playlist shelves often provide only a browse/target ID rather than
+        // play.playlistId. The card's context menu needs the same canonical
+        // ID as its normal click navigation.
+        const playlistId = escapeHtml(play.playlistId ||
+            ((item.kind === 'playlist' || item.kind === 'station') &&
+              (item.playlistId || item.browseId || item.targetId || targetId)) || '');
         
         const albumId = item.albumId || item.album_id || item.albumBrowseId || item.album_browse_id ||
             (item.album && typeof item.album === 'object' && (item.album.id || item.album.browseId)) || '';

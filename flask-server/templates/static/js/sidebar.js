@@ -171,13 +171,15 @@
   if (navExplore) navExplore.addEventListener('click', () => {
     if (state._resultsOpen && window.closeResults) window.closeResults();
     if (window._closeSidebar) window._closeSidebar();
-    window.navigateTo('#explore');
+    if (window.preloadNavigateExplore) window.preloadNavigateExplore();
+    else window.navigateTo('#explore');
   });
 
   if (navLibrary) navLibrary.addEventListener('click', () => {
     if (state._resultsOpen && window.closeResults) window.closeResults();
     if (window._closeSidebar) window._closeSidebar();
-    window.navigateTo('#library');
+    if (window.preloadNavigateLibrary) window.preloadNavigateLibrary();
+    else window.navigateTo('#library');
   });
 })();
 
@@ -302,5 +304,4 @@
   
 })();
 })();
-
 

@@ -133,7 +133,7 @@ function _createSongElement(item, existingThumbsById) {
 
     wrapper.innerHTML = `
       <div class="result-swipe-underlay underlay-play-next">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+        <svg viewBox="0 0 24 24" fill="currentColor"><path d="M4 5v14l11-7L4 5zm13 0v14h3V5h-3z"/></svg>
         Play next
       </div>
       <div class="result-swipe-underlay underlay-add-queue">
@@ -175,7 +175,7 @@ function _createSongElement(item, existingThumbsById) {
       <button class="result-more-btn" type="button" title="More options">${moreSvg}</button>
       <div class="result-more-menu">
         <div class="result-menu-option" data-action="play-next" ${isCurrent ? 'hidden' : ''}>
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+          <svg viewBox="0 0 24 24" fill="currentColor"><path d="M4 5v14l11-7L4 5zm13 0v14h3V5h-3z"/></svg>
           Play next
         </div>
         <div class="result-menu-option" data-action="add-to-queue" ${isCurrent ? 'hidden' : ''}>

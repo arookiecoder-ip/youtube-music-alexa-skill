@@ -5275,36 +5275,48 @@ async def api_resolve_track_album(video_id):
         track = next((t for t in tracks if t.get('videoId') == video_id), None)
         if track is None and tracks:
             track = tracks[0]
+        watch_artists = (track or {}).get('artists') or []
+        watch_artist = {
+            'artist_id': (watch_artists[0].get('id') or watch_artists[0].get('browseId') or '') if watch_artists else '',
+            'artist': watch_artists[0].get('name') or '' if watch_artists else '',
+        }
         album = (track or {}).get('album') or {}
         album_id = album.get('id') or album.get('browseId') or ''
         if album_id:
-            artists = (track or {}).get('artists') or []
             return {
                 'album_id': album_id,
                 'album': album.get('name') or '',
-                'artist_id': (artists[0].get('id') or artists[0].get('browseId') or '') if artists else '',
+                **watch_artist,
             }
 
         # Some watch responses omit album context. Search the catalog using
         # the canonical title/author, then require the same video ID.
         song = client.get_song(video_id) or {}
         details = song.get('videoDetails') or {}
+        fallback_artist = watch_artist
+        if not fallback_artist['artist'] and details.get('author'):
+            fallback_artist = {'artist_id': '', 'artist': details['author']}
         query = ' '.join(filter(None, (details.get('title'), details.get('author')))).strip()
         if not query:
-            return None
+            return fallback_artist if fallback_artist['artist'] else None
         results = client.search(query, filter='songs', ignore_spelling=True) or []
         match = next((item for item in results if item.get('videoId') == video_id), None)
         if not match:
-            return None
+            return fallback_artist if fallback_artist['artist'] else None
         album = match.get('album') or {}
         album_id = album.get('id') or album.get('browseId') or ''
         if not album_id:
-            return None
+            artists = match.get('artists') or []
+            return {
+                'artist_id': (artists[0].get('id') or artists[0].get('browseId') or '') if artists else fallback_artist['artist_id'],
+                'artist': artists[0].get('name') or '' if artists else fallback_artist['artist'],
+            }
         artists = match.get('artists') or []
         return {
             'album_id': album_id,
             'album': album.get('name') or '',
             'artist_id': (artists[0].get('id') or artists[0].get('browseId') or '') if artists else '',
+            'artist': artists[0].get('name') or '' if artists else '',
         }
 
     clients = [_get_ytmusic_home()]
@@ -5480,11 +5492,51 @@ async def api_get_artist(channel_id):
         return jsonify({'error': 'invalid channelId'}), 400
     from ytmusicapi import YTMusic
     yt = _get_ytmusic_home()
+
+    def parse_visual_header_artist(source_client):
+        """Adapt YouTube's newer visual artist header for ytmusicapi 1.12.
+
+        The library currently only parses musicImmersiveHeaderRenderer. Some
+        artist pages now return musicVisualHeaderRenderer with identical page
+        shelves, which otherwise raises KeyError and turns a valid page into
+        an HTTP 500.
+        """
+        from copy import deepcopy
+        from types import MethodType
+
+        response = source_client._send_request('browse', {'browseId': channel_id})
+        visual_header = (response.get('header') or {}).get('musicVisualHeaderRenderer')
+        if not visual_header:
+            raise KeyError('musicVisualHeaderRenderer')
+        adapted = deepcopy(response)
+        header = dict(visual_header)
+        # ytmusicapi's old parser looks for thumbnail.musicThumbnailRenderer;
+        # the visual header exposes the same data as foregroundThumbnail.
+        if not header.get('thumbnail') and header.get('foregroundThumbnail'):
+            header['thumbnail'] = header['foregroundThumbnail']
+        adapted.setdefault('header', {})['musicImmersiveHeaderRenderer'] = header
+
+        # Parse with a throwaway client so the shared authenticated client is
+        # never monkey-patched while concurrent requests are in flight.
+        parser_client = YTMusic()
+        parser_client._send_request = MethodType(
+            lambda self, endpoint, body, *args, **kwargs: adapted,
+            parser_client,
+        )
+        return parser_client.get_artist(channel_id)
+
     try:
         raw = await asyncio.to_thread(yt.get_artist, channel_id)
     except Exception as e:
         message = str(e)
-        if "invalid argument" in message.lower():
+        if 'musicImmersiveHeaderRenderer' in message:
+            logger.info('[api/artist/%s] adapting musicVisualHeaderRenderer', channel_id)
+            try:
+                raw = await asyncio.to_thread(parse_visual_header_artist, yt)
+            except Exception as fallback_e:
+                logger.error('[api/artist/%s] visual-header fallback failed: %s', channel_id, fallback_e)
+                return jsonify({'error': str(fallback_e)}), 500
+        elif "invalid argument" in message.lower():
             logger.warning("YouTube artist browse unavailable; retrying anonymously: %s", message)
             try:
                 raw = await asyncio.to_thread(YTMusic().get_artist, channel_id)
@@ -5583,25 +5635,29 @@ async def api_get_explore_moods():
         return jsonify({'error': 'A mood or genre is required.'}), 400
     try:
         ytm = _get_ytmusic_home()
-        playlists, songs, albums = await asyncio.gather(
+        featured_playlists, community_playlists, songs, albums = await asyncio.gather(
             asyncio.to_thread(ytm.get_mood_playlists, params),
+            asyncio.to_thread(ytm.search, f'{title or "music"} music', 'playlists', None, 24),
             asyncio.to_thread(ytm.search, f'{title or "music"} music', 'songs', None, 15),
             asyncio.to_thread(ytm.search, f'{title or "music"} music', 'albums', None, 12),
             return_exceptions=True,
         )
-        if isinstance(playlists, Exception):
+        if isinstance(featured_playlists, Exception):
             # YouTube occasionally serves a renderer that older ytmusicapi
             # releases cannot parse (for example musicTwoRowItemRenderer).
             # Do not make the entire mood page unavailable: a focused playlist
             # search is a useful, stable fallback for that category.
-            logger.warning("Mood playlist parser failed; using search fallback: %s", playlists)
+            logger.warning("Mood playlist parser failed; using search fallback: %s", featured_playlists)
             try:
-                playlists = await asyncio.to_thread(
+                featured_playlists = await asyncio.to_thread(
                     ytm.search, f'{title or "music"} music', 'playlists', None, 24
                 )
             except Exception as playlist_search_error:
                 logger.warning("Mood playlist fallback failed: %s", playlist_search_error)
-                playlists = []
+                featured_playlists = []
+        if isinstance(community_playlists, Exception):
+            logger.warning("Mood community playlist lookup failed: %s", community_playlists)
+            community_playlists = []
         if isinstance(songs, Exception):
             logger.warning("Mood song lookup failed: %s", songs)
             songs = []
@@ -5612,11 +5668,27 @@ async def api_get_explore_moods():
         # Home and the Library.  The client can now use one playlist route and
         # preload path regardless of whether a playlist came from the library,
         # Home, search, or a mood category.
-        normalized_playlists = [
-            normalized for normalized in (home_feed.normalize_playlist(item) for item in (playlists or []))
+        normalized_featured_playlists = [
+            normalized for normalized in (home_feed.normalize_playlist(item) for item in (featured_playlists or []))
             if normalized
         ]
-        return jsonify({'playlists': normalized_playlists, 'songs': songs or [], 'albums': albums or []})
+        featured_ids = {
+            playlist.get('playlistId') or playlist.get('id') or playlist.get('browseId')
+            for playlist in normalized_featured_playlists
+        }
+        normalized_community_playlists = [
+            normalized for normalized in (home_feed.normalize_playlist(item) for item in (community_playlists or []))
+            if normalized and (normalized.get('playlistId') or normalized.get('id') or normalized.get('browseId')) not in featured_ids
+        ]
+        return jsonify({
+            # Keep playlists for older clients while the UI moves to the
+            # explicit shelves below.
+            'playlists': normalized_featured_playlists,
+            'featured_playlists': normalized_featured_playlists,
+            'community_playlists': normalized_community_playlists,
+            'songs': songs or [],
+            'albums': albums or [],
+        })
     except Exception as e:
         logger.warning("Explore mood lookup failed: %s", e)
         return jsonify({'error': str(e)}), 500

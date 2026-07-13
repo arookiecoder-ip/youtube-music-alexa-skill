@@ -52,16 +52,11 @@
     content.hidden = show;
   }
 
-  function showArtistSongsSkeleton(show) {
-    var skeleton = document.getElementById('artist-songs-skeleton');
+  function showArtistSongsLoading(show) {
     var content = document.getElementById('artist-songs-content');
-    if (!skeleton || !content) return;
-    if (show) {
-      skeleton.innerHTML = '<div class="artist-songs-skeleton-head"></div><div class="artist-skeleton-songs-container">' +
-        '<div class="artist-skeleton-song"><div class="skeleton-square"></div><div><div class="skeleton-line skeleton-line-title"></div><div class="skeleton-line skeleton-line-artist"></div></div></div>'.repeat(6) +
-        '</div>';
-    }
-    skeleton.hidden = !show;
+    if (!content) return;
+    // The destination stays blank while its top progress bar preloads; this
+    // prevents the artist page from briefly turning into a modal-like card.
     content.hidden = show;
   }
 
@@ -190,9 +185,15 @@
     renderHscrollSection('artist-albums-track', data.albums, 'album');
     renderHscrollSection('artist-singles-track', data.singles, 'album');
     renderHscrollSection('artist-related-track', data.related, 'artist');
+    var sectionItems = {
+      'artist-albums': data.albums,
+      'artist-singles': data.singles,
+      'artist-related': data.related
+    };
     ['artist-albums', 'artist-singles', 'artist-related'].forEach(function (id) {
       var section = document.getElementById(id);
-      if (section) section.hidden = !!topSongsOnly;
+      // Do not leave a heading and arrow controls for an empty shelf.
+      if (section) section.hidden = !!topSongsOnly || !Array.isArray(sectionItems[id]) || !sectionItems[id].length;
     });
   }
 
@@ -201,10 +202,6 @@
     var title = document.getElementById('artist-songs-title');
     if (title) title.textContent = data.artist.name || 'Songs';
     renderTopSongs(data.topSongs || [], '', true, 'artist-songs-list');
-    var back = document.getElementById('artist-songs-back');
-    if (back) back.onclick = function() {
-      if (window.navigateTo) window.navigateTo('#artist/' + encodeURIComponent(state._currentChannelId));
-    };
   }
 
   function renderHero(artist) {
@@ -508,20 +505,26 @@
     var token = ++state._artistLoadToken;
     state._artistLoading = true;
     state._currentChannelId = channelId;
-    showArtistSongsSkeleton(true);
+    var preloaded = window.consumePreload ? window.consumePreload(route) : null;
+    var cached = preloaded || state._artistCache[channelId] || null;
+    var needsFetch = !preloaded && (!cached || !cached.__allTopSongsLoaded);
+    if (needsFetch && window.startTopProgress) window.startTopProgress();
+    showArtistSongsLoading(true);
     function requestIsCurrent() {
       return token === state._artistLoadToken && (!window.getRoute || window.getRoute() === route);
     }
     try {
-      var data = state._artistCache[channelId] || await window.api('/api/artist/' + encodeURIComponent(channelId));
+      var data = cached || await window.api('/api/artist/' + encodeURIComponent(channelId));
       await ensureExpandedTopSongs(channelId, data);
       if (!requestIsCurrent()) return;
       state._artistCache[channelId] = data;
       state._cachedArtistData = data;
       renderArtistSongsPage(data);
-      showArtistSongsSkeleton(false);
+      showArtistSongsLoading(false);
+      if (needsFetch && window.completeTopProgress) window.completeTopProgress();
     } catch (e) {
       if (requestIsCurrent() && window.toast) window.toast(e.message || 'Unable to load songs', 'error');
+      if (needsFetch && window.abortTopProgress) window.abortTopProgress();
     } finally {
       if (token === state._artistLoadToken) state._artistLoading = false;
     }

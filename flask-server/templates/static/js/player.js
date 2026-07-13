@@ -170,7 +170,9 @@ function showNowPlaying(info) {
     state._currentThumbnail = info.thumbnail || '';
     state._currentTrack = {
       video_id: info.video_id || '', title: info.title || '', artist: info.artist || '',
-      thumbnail: info.thumbnail || '', channelId: info.channelId || ''
+      thumbnail: info.thumbnail || '', channelId: info.channelId || '',
+      artist_id: info.artist_id || info.artistId || info.channelId || '',
+      album_id: info.album_id || info.albumId || info.album_browse_id || ''
     };
     updateUrlBar();
     syncTrackPlaybackIndicators();
@@ -198,7 +200,9 @@ function refreshNpLikeButton() {
     if (!btn) continue;
     btn.classList.toggle('liked', isLiked);
     btn.title = isLiked ? 'Dislike' : 'Like';
-    btn.innerHTML = svg;
+    btn.innerHTML = id === 'np-menu-like'
+      ? svg + `<span>${isLiked ? 'Dislike' : 'Like'}</span>`
+      : svg;
   }
 }
 
@@ -1034,6 +1038,46 @@ document.getElementById('shuffle-btn').addEventListener('click', async (e) => {
   if (npMenuPlaylist) npMenuPlaylist.addEventListener('click', () => {
     if (state._currentTrack && state._currentTrack.video_id && typeof openAddToPlaylistModal === 'function')
       openAddToPlaylistModal(state._currentTrack);
+    close();
+  });
+  function resolveCurrentTrackDetails() {
+    const track = state._currentTrack;
+    if (!track || !track.video_id) return Promise.resolve(null);
+    if (track.album_id && track.artist_id) return Promise.resolve(track);
+    if (typeof window.api !== 'function') return Promise.resolve(track);
+    return window.api('/api/album/resolve/' + encodeURIComponent(track.video_id))
+      .then((details) => {
+        if (details) {
+          track.album_id = track.album_id || details.album_id || '';
+          track.artist_id = track.artist_id || details.artist_id || '';
+        }
+        return track;
+      })
+      .catch(() => track);
+  }
+  const npMenuAlbum = document.getElementById('np-menu-album');
+  if (npMenuAlbum) npMenuAlbum.addEventListener('click', () => {
+    resolveCurrentTrackDetails().then((track) => {
+      if (!track || !track.album_id) {
+        if (window.toast) window.toast('Album unavailable for this song', 'error');
+        return;
+      }
+      if (window.preloadNavigateAlbum) window.preloadNavigateAlbum(track.album_id);
+      else if (window.navigateTo) window.navigateTo('#album/' + encodeURIComponent(track.album_id));
+    });
+    close();
+  });
+  const npMenuArtist = document.getElementById('np-menu-artist');
+  if (npMenuArtist) npMenuArtist.addEventListener('click', () => {
+    resolveCurrentTrackDetails().then((track) => {
+      const artistId = track && (track.artist_id || track.channelId);
+      if (!artistId) {
+        if (window.toast) window.toast('Artist unavailable for this song', 'error');
+        return;
+      }
+      if (window.preloadNavigateArtist) window.preloadNavigateArtist(artistId);
+      else if (window.navigateTo) window.navigateTo('#artist/' + encodeURIComponent(artistId));
+    });
     close();
   });
   const npMenuRadio = document.getElementById('np-menu-radio');
