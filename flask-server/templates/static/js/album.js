@@ -49,7 +49,7 @@
     var meta = [data.year, tracks.length + (tracks.length === 1 ? ' song' : ' songs')]
       .filter(Boolean).join(' \u00b7 ');
     var cover = data.thumbnail
-      ? '<div class="playlist-collage playlist-collage-single"><img src="' + esc(data.thumbnail) + '" alt="" loading="eager"></div>'
+      ? '<div class="playlist-collage playlist-collage-single"><img src="' + esc(data.thumbnail) + '" alt="" loading="lazy"></div>'
       : '<div class="playlist-collage playlist-collage-single"><div class="collage-placeholder"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg></div></div>';
 
     hero.className = 'album-hero playlist-detail-hero';

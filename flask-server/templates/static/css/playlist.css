@@ -54,6 +54,27 @@
   width: 42%;
   height: 42%;
 }
+.playlist-loading-indicator {
+  min-height: 42px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: .75rem;
+  opacity: 0;
+  transition: opacity .16s ease;
+}
+.playlist-loading-indicator.visible { opacity: 1; }
+.playlist-loading-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(255,255,255,.2);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: playlist-loading-spin .7s linear infinite;
+}
+@keyframes playlist-loading-spin { to { transform: rotate(360deg); } }
 .liked-playlist-banner {
   background: linear-gradient(135deg, #c64bdb, #6b3fd1 55%, #293b9b);
   color: #fff;

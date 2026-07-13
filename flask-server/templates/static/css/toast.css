@@ -24,7 +24,7 @@
 
     color: var(--text);
 
-    border-radius: var(--radius-full, 999px);
+    border-radius: 6px;
 
     box-shadow: 0 10px 30px rgba(0, 0, 0, .45), 0 0 0 1px rgba(255, 116, 32, .06);
 

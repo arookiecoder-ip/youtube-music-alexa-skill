@@ -7,7 +7,7 @@
    ============================================================ */
 
 :root {
-  --rail-w: 200px;
+  --rail-w: 224px;
   /* 76px keeps the icon column at the exact same x-position in both states:
      14px rail padding + 12px button padding + half of the 24px icon = 38px,
      which is also the centre of the 76px strip (76/2 = 38). */
@@ -100,20 +100,24 @@
 .player-section .np-like-btn,
 .np-page-like-btn { --like-icon-size: 30px; }
 .artist-song-like-btn { --like-icon-size: 14px; }
+.artist-song-like-btn {
+  border-color: transparent !important;
+  background: transparent !important;
+}
 .artist-song-like-btn.liked {
   border-color: transparent !important;
   background: transparent !important;
 }
 .artist-song-row .artist-song-play-btn {
   opacity: 0;
-  transform: scale(.72);
+  transform: translateY(-50%) scale(.72);
   pointer-events: none;
   transition: opacity .18s ease, transform .18s ease, color .15s, border-color .15s;
 }
 .artist-song-row:hover .artist-song-play-btn,
 .artist-song-row:focus-within .artist-song-play-btn {
   opacity: 1;
-  transform: scale(1);
+  transform: translateY(-50%) scale(1);
   pointer-events: auto;
 }
 .recs-like-btn { --like-icon-size: 12px; }
@@ -609,6 +613,24 @@ body.rail-collapsed .sidebar-playlist-list { scrollbar-width: none; }
     margin: 0; 
     padding: 0;
   }
+  /* Keep the hover tile centered on the artwork in the mini rail. The
+     expanded row's full-width hit area otherwise leaves the highlight
+     visibly offset from the thumbnail after the label collapses. */
+  body.rail-collapsed .sidebar-playlist-item {
+    width: 40px;
+    margin: 0 auto;
+    padding: 6px 8px !important;
+    justify-content: center;
+    border-radius: 4px !important;
+  }
+  body.rail-collapsed .sidebar .sidebar-nav-btn {
+    width: 40px;
+    margin-left: auto;
+    margin-right: auto;
+    padding-left: 8px;
+    padding-right: 8px;
+    justify-content: center;
+  }
   /* Playlist items keep the expanded padding/gap so the art never moves;
      the zero-width copy hides past the strip via overflow:hidden. */
   /* Brand row: mark and wordmark collapse like the nav labels so the
@@ -633,6 +655,8 @@ body.rail-collapsed .sidebar-playlist-list { scrollbar-width: none; }
     width: 100%;
     min-width: 0;
     overflow: hidden;
+    padding-left: 15px;
+    padding-right: 15px;
   }
   body.rail-collapsed .sidebar-brand strong {
     max-width: 0;
@@ -725,7 +749,7 @@ body.rail-collapsed .sidebar .sidebar-nav-btn:hover {
   margin-bottom: 14px;
   /* 5px left inset centres the 38px toggle on x=38 — the same axis as the
      24px nav icons (12px button padding + half icon). */
-  padding: 0 5px;
+  padding: 0 15px;
   color: var(--text);
   width: 172px;
   flex: none;
@@ -1173,7 +1197,14 @@ body.results-open .player-section.is-visible { transform: none; }
   color: #ffffff !important;
   border: none;
   box-shadow: none;
-  border-radius: 0 !important;
+  border-radius: 50% !important;
+  outline: none !important;
+  aspect-ratio: 1 / 1;
+}
+.player-section .pp-btn:focus,
+.player-section .pp-btn:focus-visible {
+  outline: none !important;
+  box-shadow: none !important;
 }
 .player-section .pp-btn:hover { filter: none; opacity: 0.85; }
 .player-section .pp-btn svg { width: 32px; height: 32px; fill: #ffffff; color: #ffffff; }
@@ -1421,6 +1452,13 @@ body.now-playing-route .player-section .player-expand-btn svg {
      etc.) that share z-index 210, so the close slide always paints on top. */
   body.now-playing-closing #now-playing-section {
     z-index: 211;
+    /* Animate only the now-playing layer while the underlying route remains
+       locked in its existing layout. */
+    transition: transform .32s cubic-bezier(.22, 1, .36, 1),
+                visibility 0s linear .32s,
+                left .25s ease;
+    transform: translateY(103%) !important;
+    pointer-events: none;
   }
   /* Safety: home route is always scrollable, even if now-playing-closing
      was not cleaned up in time (rapid navigation, timer race, etc.). */
@@ -1597,8 +1635,8 @@ body.now-playing-route .player-section .player-expand-btn svg {
 }
 /* Card songs use the same focused hover treatment as playlist rows: dim the
    artwork and reveal the play control in the exact center. */
-.home-item-card .home-item-img-wrapper::after,
-.home-item-wide-card .home-item-img-wrapper::after {
+.home-item-card[data-kind="track"] .home-item-img-wrapper::after,
+.home-item-wide-card[data-kind="track"] .home-item-img-wrapper::after {
   content: '';
   position: absolute;
   inset: 0;
@@ -1607,21 +1645,53 @@ body.now-playing-route .player-section .player-expand-btn svg {
   transition: opacity .18s ease;
   pointer-events: none;
 }
-.home-item-card:hover .home-item-img-wrapper::after,
-.home-item-wide-card:hover .home-item-img-wrapper::after {
+.home-item-card[data-kind="track"]:hover .home-item-img-wrapper::after,
+.home-item-wide-card[data-kind="track"]:hover .home-item-img-wrapper::after {
   opacity: 1;
 }
-.home-item-card .home-play-btn,
-.home-item-wide-card .home-play-btn {
+.home-item-card[data-kind="track"] .home-play-btn,
+.home-item-wide-card[data-kind="track"] .home-play-btn {
+  width: 58px;
+  height: 58px;
+  background: transparent;
+  border: none;
   top: 50%;
   left: 50%;
   right: auto;
   bottom: auto;
   transform: translate(-50%, -50%) scale(.8);
 }
-.home-item-card:hover .home-play-btn,
-.home-item-wide-card:hover .home-play-btn {
+.home-item-card[data-kind="track"] .home-play-btn svg,
+.home-item-wide-card[data-kind="track"] .home-play-btn svg {
+  width: 38px;
+  height: 38px;
+}
+.home-item-card[data-kind="track"]:hover .home-play-btn,
+.home-item-wide-card[data-kind="track"]:hover .home-play-btn {
   transform: translate(-50%, -50%) scale(1);
+}
+/* Playlist/song row artist links reveal an animated underline with the row
+   hover, making the artist target visible without underlining the whole row. */
+#playlist-detail-modal .history-item .queue-artist .artist-name {
+  position: relative;
+  display: inline-block;
+  text-decoration: none;
+}
+#playlist-detail-modal .history-item:hover .queue-artist .artist-name {
+  color: var(--text);
+}
+#playlist-detail-modal .history-item .queue-artist .artist-name::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  bottom: -1px;
+  width: 0;
+  height: 1px;
+  background: currentColor;
+  transition: width .2s ease;
+}
+#playlist-detail-modal .history-item:hover .queue-artist .artist-name::after {
+  width: 100%;
 }
 .home-card-art {
   border-radius: var(--card-radius);
@@ -2558,9 +2628,9 @@ body.results-open .player-section {
 }
 
 .np-page-art {
-  width: min(430px, 82%, calc(100dvh - var(--topbar-h) - var(--playbar-h) - 150px));
+  width: min(450px, 84%, calc(100dvh - var(--topbar-h) - var(--playbar-h) - 140px));
   aspect-ratio: 1;
-  border-radius: var(--card-radius);
+  border-radius: 0;
   background: var(--surface) center / cover no-repeat;
   box-shadow: 0 24px 72px rgba(0,0,0,.65);
   display: flex;
@@ -2584,17 +2654,34 @@ body.results-open .player-section {
   align-items: center;
   justify-content: center;
   opacity: 0;
-  transition: opacity 0.2s ease, background 0.2s ease;
+  pointer-events: none;
   z-index: 10;
-}
-.np-page-art:hover .np-page-art-overlay {
-  opacity: 1;
 }
 .np-page-art-overlay svg {
   width: 64px;
   height: 64px;
   color: #fff;
-  transition: transform 0.15s cubic-bezier(0.34, 1.56, 0.64, 1);
+  opacity: 0;
+  transform: scale(.55);
+}
+.np-page-art-overlay.flash {
+  opacity: 1;
+  background: rgba(0,0,0,.12);
+  animation: npArtOverlayFade .52s ease-out forwards;
+}
+.np-page-art-overlay.flash svg {
+  opacity: 1;
+  animation: npArtIconPop .52s cubic-bezier(.22, 1, .36, 1) forwards;
+}
+@keyframes npArtOverlayFade {
+  0% { opacity: 1; }
+  100% { opacity: 0; }
+}
+@keyframes npArtIconPop {
+  0% { opacity: 0; transform: scale(.55); }
+  22% { opacity: 1; transform: scale(1.18); }
+  55% { opacity: 1; transform: scale(1); }
+  100% { opacity: 0; transform: scale(1.3); }
 }
 
 .np-page-meta {

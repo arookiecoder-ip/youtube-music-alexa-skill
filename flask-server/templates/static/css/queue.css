@@ -211,6 +211,7 @@
     white-space: nowrap;
   }
   .queue-menu-option:hover { background: rgba(255,255,255,.06); }
+  .queue-menu-option[hidden] { display: none; }
   .queue-menu-option.danger { color: var(--danger); }
   .queue-menu-option.danger:hover { background: rgba(224,49,49,.08); }
   .queue-menu-option.liked { color: var(--accent); }
@@ -250,6 +251,28 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+  .queue-item.active.playing .queue-title::before {
+    content: '▮▮▮';
+    display: inline-block;
+    margin-right: 8px;
+    color: var(--accent);
+    font-size: .62em;
+    letter-spacing: 1px;
+    animation: queuePlayingPulse 1s ease-in-out infinite;
+    vertical-align: 1px;
+  }
+  @keyframes queuePlayingPulse {
+    0%, 100% { opacity: .45; transform: scaleY(.65); }
+    50% { opacity: 1; transform: scaleY(1); }
+  }
+  .queue-artist .artist-name {
+    cursor: pointer;
+    color: inherit;
+  }
+  .queue-artist .artist-name:hover {
+    color: var(--text);
+    text-decoration: underline;
   }
   .queue-num {
     font-size: .65rem;

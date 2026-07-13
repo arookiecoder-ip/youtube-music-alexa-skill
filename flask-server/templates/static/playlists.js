@@ -3,8 +3,34 @@
   const state = window.__appState = window.__appState || {};
   if (state._loggedIn === undefined) state._loggedIn = false;
   var _openPlaylistId = null;  // currently open playlist detail plId
+  const libraryPlaylistIds = new Set();
 
   const escapeHtml = window.escHtml || (s => String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'));
+
+  function observeLazyImages(root) {
+    if (!root) return;
+    const images = root.querySelectorAll('img[data-src]');
+    if (!images.length) return;
+    const load = function (img) {
+      const src = img.getAttribute('data-src');
+      if (!src) return;
+      img.src = src;
+      img.removeAttribute('data-src');
+    };
+    if (!('IntersectionObserver' in window)) {
+      images.forEach(load);
+      return;
+    }
+    const scrollRoot = root.closest('.history-modal-body') || null;
+    const observer = new IntersectionObserver(function (entries, obs) {
+      entries.forEach(function (entry) {
+        if (!entry.isIntersecting) return;
+        load(entry.target);
+        obs.unobserve(entry.target);
+      });
+    }, { root: scrollRoot, rootMargin: '120px 0px' });
+    images.forEach(function (img) { observer.observe(img); });
+  }
 
   function imageUrl(value) {
     if (!value) return '';
@@ -119,6 +145,10 @@
     if (!state._loggedIn || window.JAM_GUEST || !window.IS_AUTHENTICATED) return;
     try {
       const data = await api('/api/library/');
+      (data.playlists || []).forEach(function (playlist) {
+        const id = playlist.playlistId || playlist.id;
+        if (id) libraryPlaylistIds.add(String(id));
+      });
       const container = document.getElementById('sidebar-playlist-list');
       if (container) {
         container.innerHTML = '';
@@ -128,6 +158,8 @@
             const cover = imageUrl(pl.thumbnails) || imageUrl(pl.thumbnail) || imageUrl(pl.image);
             const isLiked = pl.playlistId === 'LM';
             btn.className = 'sidebar-playlist-item';
+            btn.title = pl.title || 'Playlist';
+            btn.setAttribute('aria-label', pl.title || 'Playlist');
             btn.innerHTML = `<span class="sidebar-playlist-art${isLiked ? ' is-liked' : ''}">${cover
               ? `<img src="${escapeHtml(cover)}" alt="" loading="lazy">`
               : `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18V5l12-2v13"></path><circle cx="6" cy="18" r="3"></circle><circle cx="18" cy="16" r="3"></circle></svg>`
@@ -177,8 +209,10 @@
       if (pl) {
         // Liked Music is the virtual library playlist and preload responses
         // do not always include the library marker.
-        isLibrary = pl.isLibraryPlaylist === true || plId.toUpperCase() === 'LM';
-        isCurated = !isLibrary && _isCuratedPlaylist(pl);
+        isCurated = _isCuratedPlaylist(pl);
+        isLibrary = plId.toUpperCase() === 'LM'
+          || pl.isLibraryPlaylist === true
+          || libraryPlaylistIds.has(String(plId));
       } else {
         try {
           pl = await window.api('/api/library/playlists/' + encodeURIComponent(plId));
@@ -191,10 +225,11 @@
           isCurated = _isCuratedPlaylist(pl);
         }
       }
-      // Only library playlists support rename/delete. Public/curated
+      const canEditPlaylist = isLibrary && !isCurated && plId.toUpperCase() !== 'LM';
+      // Only personal library playlists support rename/delete. Public/curated
       // playlists have no useful More menu, so the button isn't rendered
       // and the rename/delete handlers stay no-ops (they check this var).
-      if (isLibrary) {
+      if (canEditPlaylist) {
         _openPlaylistId = plId;
       }
       await preloadPlaylistHero(pl);
@@ -218,9 +253,10 @@
           : `<div class="playlist-collage playlist-collage-single"><div class="collage-placeholder"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg></div></div>`;
         const fallbackCollage = renderCollage(fallbackCoverUrls, false);
         const isLikedPlaylist = plId.toUpperCase() === 'LM';
-        const likedBanner = `<div class="playlist-collage playlist-collage-single liked-playlist-banner" aria-label="Liked Music"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg></div>`;
-        const collage = playlistCover ? renderCollage([playlistCover], true)
-          : (isLikedPlaylist && !fallbackCoverUrls.length ? likedBanner : fallbackCollage);
+        const likedBanner = `<div class="playlist-collage playlist-collage-single liked-playlist-banner" aria-label="Liked Music"><svg viewBox="0 0 24 24" fill="white" stroke="white" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 1 2-1.7l1.38-9a2 2 0 0 1-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg></div>`;
+        const collage = isLikedPlaylist
+          ? likedBanner
+          : (playlistCover ? renderCollage([playlistCover], true) : fallbackCollage);
 
         const hero = document.createElement('section');
         hero.className = 'playlist-detail-hero';
@@ -244,7 +280,7 @@
         // the existing rename / delete wiring in this file (and the inline
         // listener below) attaches to the new button. The id is shared
         // intentionally — only one #playlist-detail-more-btn exists at a time.
-        const moreBtn = `<button class="playlist-hero-btn playlist-hero-more${isLibrary ? '' : ' is-muted'}" id="playlist-detail-more-btn" type="button" title="${isLibrary ? 'More options' : 'Options unavailable for this playlist'}" aria-label="${isLibrary ? 'More options' : 'Options unavailable for this playlist'}"${isLibrary ? '' : ' aria-disabled="true"'}><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg></button>`;
+        const moreBtn = `<button class="playlist-hero-btn playlist-hero-more${canEditPlaylist ? '' : ' is-muted'}" id="playlist-detail-more-btn" type="button" title="${canEditPlaylist ? 'More options' : 'Options unavailable for this playlist'}" aria-label="${canEditPlaylist ? 'More options' : 'Options unavailable for this playlist'}"${canEditPlaylist ? '' : ' aria-disabled="true"'}><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg></button>`;
         // Build the right-hand action span based on playlist type:
         // - Library: Share + More (rename/delete menu)
         // - Public (other user): Share only — can't edit someone else's playlist
@@ -300,18 +336,26 @@
             }
             const artist = artistParts.length ? artistParts.join(', ') : (track.artist || '');
             const videoId = track.videoId || track.video_id || '';
+            const album = track.album && typeof track.album === 'object' ? track.album : {};
+            const albumId = track.album_id || track.albumId || album.id || album.browseId || '';
+            const artistId = track.artist_id || track.channel_id || track.artistId ||
+              (Array.isArray(track.artists) && track.artists[0] && track.artists[0].id) || '';
             wrapper.dataset.videoId = videoId;
+            wrapper.dataset.albumId = albumId;
             wrapper._songContextTrack = {
               video_id: videoId,
               title: track.title || '',
               artist,
-              thumbnail
+              thumbnail,
+              album_id: albumId,
+              album: album,
+              artist_id: artistId
             };
             const contextTrack = wrapper._songContextTrack;
             const trackDuration = formatTrackDuration(track);
             row.innerHTML = `
               <div class="playlist-track-num">${index + 1}</div>
-              <div class="playlist-track-art"><img src="${escapeHtml(thumbnail)}" class="queue-thumb" loading="lazy" alt="" onload="this.classList.add('loaded')" onerror="this.style.opacity='1'"></div>
+              <div class="playlist-track-art"><img data-src="${escapeHtml(thumbnail)}" class="queue-thumb" loading="lazy" alt="" onload="this.classList.add('loaded')" onerror="this.style.opacity='1'"></div>
               <div class="queue-info">
                 <div class="queue-title">${escapeHtml(track.title || '')}</div>
                 <div class="queue-artist">${window.artistLinksHtml(artist, artistChannelIds.length ? artistChannelIds : (track.channelId || track.channel_id || ''))}</div>
@@ -333,6 +377,21 @@
             wrapper.appendChild(row);
             list.appendChild(wrapper);
           });
+          observeLazyImages(list);
+          if (tracks.length > 20) {
+            const loading = document.createElement('div');
+            loading.className = 'playlist-loading-indicator';
+            loading.innerHTML = '<span class="playlist-loading-spinner" aria-hidden="true"></span><span>Loading more songs…</span>';
+            list.appendChild(loading);
+            const loadingObserver = new IntersectionObserver(function (entries) {
+              entries.forEach(function (entry) {
+                if (!entry.isIntersecting) return;
+                loading.classList.add('visible');
+                setTimeout(function () { loading.classList.remove('visible'); }, 450);
+              });
+            }, { rootMargin: '160px 0px' });
+            loadingObserver.observe(loading);
+          }
           const heroPlay = hero.querySelector('.playlist-hero-play');
           if (heroPlay) heroPlay.addEventListener('click', () => list.querySelector('.history-item')?.click());
           // Shuffle plays the same first track but with the device's shuffle
@@ -372,7 +431,7 @@
             heroMore.addEventListener('click', function (e) {
               e.stopPropagation();
               e.preventDefault();
-              if (!isLibrary) return;
+              if (!canEditPlaylist) return;
               const menu = document.getElementById('playlist-detail-more-menu');
               if (!menu) return;
               if (menu.classList.contains('open')) {

@@ -91,7 +91,14 @@
     }
 
     const playlistId = pl.playlistId || pl.id || '';
+    const artistId = pl._artistId || '';
     function open() {
+      if (artistId) {
+        if (window._closeSidebar) window._closeSidebar();
+        if (window.preloadNavigateArtist) window.preloadNavigateArtist(artistId);
+        else window.navigateTo('#artist/' + encodeURIComponent(artistId));
+        return;
+      }
       if (!playlistId) return;
       if (window._closeSidebar) window._closeSidebar();
       if (window.preloadNavigatePlaylist) window.preloadNavigatePlaylist(playlistId);
@@ -119,13 +126,16 @@
 
     try {
       const data = await window.api('/api/library/');
+      const subscribedData = await window.api('/api/subscribed_artists/');
+      state._subscribedArtists = subscribedData.artists || [];
       _loaded = true;
 
       body.innerHTML = '';
 
       const playlists = (data && data.playlists) || [];
 
-      if (!playlists.length) {
+      const subscribedArtists = state._subscribedArtists || [];
+      if (!playlists.length && !subscribedArtists.length) {
         body.innerHTML = `<div class="library-empty">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="52" height="52">
             <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"/>
@@ -151,6 +161,21 @@
       playlists.forEach(pl => {
         grid.appendChild(renderPlaylistCard(pl));
       });
+
+      const artists = subscribedArtists;
+      if (artists.length) {
+        const artistSection = document.createElement('div');
+        artistSection.className = 'library-section';
+        artistSection.innerHTML = `<div class="library-section-header"><h2 class="library-section-title">Subscribed artists <span class="library-count">${artists.length}</span></h2></div>`;
+        const artistGrid = document.createElement('div');
+        artistGrid.className = 'library-grid';
+        artists.forEach(a => {
+          const card = renderPlaylistCard({ _artistId: a.channel_id, title: a.name || 'Artist', thumbnail: a.thumbnail, description: 'Artist' });
+          artistGrid.appendChild(card);
+        });
+        artistSection.appendChild(artistGrid);
+        body.appendChild(artistSection);
+      }
 
     } catch (e) {
       console.warn('[library] Failed to load', e);

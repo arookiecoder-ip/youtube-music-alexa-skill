@@ -200,7 +200,6 @@
     }
 
     // Trigger the closing slide-out animation
-    document.body.classList.remove('now-playing-route');
     document.body.classList.add('now-playing-closing');
 
     // Clean up queue panel state
@@ -221,12 +220,18 @@
         // Animation complete: only cleanup remains. The underlying page is
         // already visible (restored before the animation started).
         var closingMain = document.querySelector('main');
-        if (closingMain) closingMain.classList.remove('has-queue');
+        if (closingMain) {
+          closingMain.style.transition = 'none';
+          closingMain.classList.remove('has-queue');
+        }
         npSection.hidden = true;
         npSection._closeTimer = null;
         npSection._closeCleanup = null;
         requestAnimationFrame(function () {
-          document.body.classList.remove('now-playing-closing');
+          document.body.classList.remove('now-playing-route', 'now-playing-closing');
+          if (closingMain) {
+            requestAnimationFrame(function () { closingMain.style.removeProperty('transition'); });
+          }
         });
         document.documentElement.style.removeProperty('overflow');
         document.body.style.removeProperty('overflow');
@@ -283,7 +288,9 @@
       void routedNpSection.offsetHeight;
     }
     document.body.classList.toggle('home-route', hash === '#home');
-    document.body.classList.toggle('now-playing-route', hash === '#now-playing');
+    // Keep the expanded route alive during close so its fixed layer can
+    // animate independently; remove it only after the transition completes.
+    document.body.classList.toggle('now-playing-route', hash === '#now-playing' || isClosingNowPlaying);
     document.body.classList.toggle('now-playing-closing', isClosingNowPlaying);
     document.body.classList.toggle('playlists-route', hash.indexOf('#playlist/') === 0);
     document.body.classList.toggle('history-route', hash === '#history');
@@ -322,12 +329,18 @@
           if (npSection._closeTimer) clearTimeout(npSection._closeTimer);
           npSection.removeEventListener('transitionend', finishClose);
           var closingMain = document.querySelector('main');
-          if (closingMain) closingMain.classList.remove('has-queue');
+          if (closingMain) {
+            closingMain.style.transition = 'none';
+            closingMain.classList.remove('has-queue');
+          }
           npSection.hidden = true;
           npSection._closeTimer = null;
           npSection._closeCleanup = null;
           requestAnimationFrame(function () {
-            document.body.classList.remove('now-playing-closing');
+            document.body.classList.remove('now-playing-route', 'now-playing-closing');
+            if (closingMain) {
+              requestAnimationFrame(function () { closingMain.style.removeProperty('transition'); });
+            }
           });
           // Belt-and-suspenders: restore scroll in case overflow got stuck.
           document.documentElement.style.removeProperty('overflow');
@@ -370,10 +383,13 @@
       setHidden('.play-section', false);
       if (window.loadAlbum) window.loadAlbum(albumId);
     } else if (hash.indexOf('#artist/') === 0) {
-      var channelId = decodeURIComponent(hash.slice('#artist/'.length));
+      var artistRouteValue = hash.slice('#artist/'.length);
+      var artistQueryIndex = artistRouteValue.indexOf('?');
+      var artistTopSongsOnly = artistQueryIndex !== -1 && artistRouteValue.slice(artistQueryIndex + 1) === 'view=top-songs';
+      var channelId = decodeURIComponent(artistQueryIndex === -1 ? artistRouteValue : artistRouteValue.slice(0, artistQueryIndex));
       if (!channelId) { window.navigateTo('#home'); return; }
       showArtistSection();
-      if (window.loadArtist) window.loadArtist(channelId);
+      if (window.loadArtist) window.loadArtist(channelId, artistTopSongsOnly);
     } else {
       window.navigateTo('#home');
       return;

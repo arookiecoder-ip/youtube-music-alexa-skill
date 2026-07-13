@@ -77,7 +77,21 @@
     const deviceEl = document.getElementById('device');
     loadJamHome();
     try {
-      const data = await window.api('/api/jam/session/');
+      // The join redirect sets the guest cookie immediately before loading
+      // this page. A reverse proxy/browser can race that first API request,
+      // so retry the session handshake before declaring the host unreachable.
+      let data;
+      let lastError;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          data = await window.api('/api/jam/session/');
+          break;
+        } catch (error) {
+          lastError = error;
+          if (attempt < 2) await new Promise(resolve => setTimeout(resolve, 800 * (attempt + 1)));
+        }
+      }
+      if (!data) throw lastError || new Error('Jam session handshake failed');
       const status = data.status || {};
       if (!status.configured || !status.logged_in) {
         showJamEnded('Jam unavailable', 'The host\'s server is not fully configured.');
@@ -102,9 +116,11 @@
       if (window.connectSSE) window.connectSSE();
       if (window.refreshVolume) window.refreshVolume(true);
       if (window.syncUiState) window.syncUiState();
-    } catch (_) {
+    } catch (error) {
       showJamEnded('Connection failed',
-        'Could not reach the host. Check that the server is running.');
+        error && error.message
+          ? error.message
+          : 'Could not reach the host. Check that the server is running.');
     }
   }
 

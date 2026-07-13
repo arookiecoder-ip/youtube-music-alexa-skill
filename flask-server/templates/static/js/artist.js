@@ -74,9 +74,15 @@
     });
   }
 
-  async function loadArtist(channelId) {
+  async function loadArtist(channelId, topSongsOnly) {
+    if (!state._subscribedArtists && window.api) {
+      try {
+        var subscriptionData = await window.api('/api/subscribed_artists/');
+        state._subscribedArtists = subscriptionData.artists || [];
+      } catch (e) { state._subscribedArtists = []; }
+    }
     // ── Preload-nav: consume cached data from navigateWithPreload ──
-    var route = '#artist/' + encodeURIComponent(channelId);
+    var route = '#artist/' + encodeURIComponent(channelId) + (topSongsOnly ? '?view=top-songs' : '');
     var token = ++state._artistLoadToken;
     var preloaded = window.consumePreload ? window.consumePreload(route) : null;
     var cached = preloaded || state._artistCache[channelId] || null;
@@ -101,7 +107,7 @@
       cached.__heroReady = true;
       state._artistCache[channelId] = cached;
       state._cachedArtistData = cached;
-      renderAll(cached);
+      renderAll(cached, topSongsOnly);
       state._renderedArtistChannelId = channelId;
       showSkeleton(false);
       state._artistLoading = false;
@@ -118,7 +124,7 @@
       data.__heroReady = true;
       state._artistCache[channelId] = data;
       state._cachedArtistData = data;
-      renderAll(data);
+      renderAll(data, topSongsOnly);
       state._renderedArtistChannelId = channelId;
       showSkeleton(false);
     } catch (e) {
@@ -128,13 +134,17 @@
     }
   }
 
-  function renderAll(data) {
+  function renderAll(data, topSongsOnly) {
     if (!data || !data.artist) return;
     renderHero(data.artist);
-    renderTopSongs(data.topSongs, data.topSongsBrowseId);
+    renderTopSongs(data.topSongs, data.topSongsBrowseId, topSongsOnly);
     renderHscrollSection('artist-albums-track', data.albums, 'album');
     renderHscrollSection('artist-singles-track', data.singles, 'album');
     renderHscrollSection('artist-related-track', data.related, 'artist');
+    ['artist-albums', 'artist-singles', 'artist-related'].forEach(function (id) {
+      var section = document.getElementById(id);
+      if (section) section.hidden = !!topSongsOnly;
+    });
   }
 
   function renderHero(artist) {
@@ -154,6 +164,8 @@
 
     var desc = artist.description || '';
     var subText = artist.subscribers || '';
+    var channelId = artist.channelId || artist.channel_id || state._currentChannelId || '';
+    var subscribed = !!(state._subscribedArtists || []).find(function (a) { return a.channel_id === channelId; });
     
     container.innerHTML = `
       <div class="artist-hero-content">
@@ -178,6 +190,9 @@
         <button class="artist-action-btn secondary" id="artist-btn-mix">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="2"></circle><path d="M16.24 7.76a6 6 0 0 1 0 8.49m-8.48-.01a6 6 0 0 1 0-8.49m11.31-2.82a10 10 0 0 1 0 14.14m-14.14 0a10 10 0 0 1 0-14.14"></path></svg>
           Mix
+        </button>
+        <button class="artist-action-btn secondary" id="artist-btn-subscribe" aria-pressed="${subscribed}">
+          ${subscribed ? 'Subscribed' : 'Subscribe'}
         </button>
       `;
     }
@@ -225,9 +240,27 @@
         }
       });
     }
+
+    var subscribeBtn = document.getElementById('artist-btn-subscribe');
+    if (subscribeBtn) subscribeBtn.addEventListener('click', async function() {
+      if (!channelId || !window.api) return;
+      var isSubscribed = subscribeBtn.getAttribute('aria-pressed') === 'true';
+      var body = { channel_id: channelId, name: artist.name || '', thumbnail: thumbUrl };
+      try {
+        var result = await window.api('/api/subscribed_artists/', {
+          method: isSubscribed ? 'DELETE' : 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body)
+        });
+        state._subscribedArtists = result.artists || [];
+        subscribeBtn.setAttribute('aria-pressed', String(!isSubscribed));
+        subscribeBtn.textContent = isSubscribed ? 'Subscribe' : 'Subscribed';
+        if (window.toast) window.toast(isSubscribed ? 'Unsubscribed' : 'Artist subscribed', 'ok');
+      } catch (e) { if (window.toast) window.toast(e.message || 'Unable to update subscription', 'error'); }
+    });
   }
 
-  function renderTopSongs(songs, browseId) {
+  function renderTopSongs(songs, browseId, topSongsOnly) {
     var list = document.getElementById('artist-top-songs-list');
     if (!list) return;
     if (!songs || !songs.length) {
@@ -236,7 +269,7 @@
     }
     list.innerHTML = '';
     
-    var displaySongs = songs.slice(0, 10);
+    var displaySongs = topSongsOnly ? songs : songs.slice(0, 10);
     // let, not var: the click handlers below close over `item` per iteration.
     for (let i = 0; i < displaySongs.length; i++) {
       let item = displaySongs[i];
@@ -288,7 +321,7 @@
       list.appendChild(row);
     }
 
-    if (browseId || songs.length > 10) {
+    if (!topSongsOnly && (browseId || songs.length > 10)) {
       var viewAllContainer = document.createElement('div');
       viewAllContainer.className = 'artist-view-all-container';
       var viewAllBtn = document.createElement('button');
@@ -296,8 +329,8 @@
       viewAllBtn.textContent = 'View all';
       viewAllBtn.addEventListener('click', function() {
         if (browseId) {
-          if (window.preloadNavigatePlaylist) window.preloadNavigatePlaylist(browseId);
-          else window.navigateTo('#playlist/' + encodeURIComponent(browseId));
+          var channelId = state._currentChannelId;
+          if (channelId && window.navigateArtistTopSongs) window.navigateArtistTopSongs(channelId);
         }
       });
       viewAllContainer.appendChild(viewAllBtn);

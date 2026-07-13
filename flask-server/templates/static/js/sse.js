@@ -66,11 +66,19 @@
         }
       }
     }
+    if (window.updateQueuePlaying) window.updateQueuePlaying(state().isPlaying);
     if (window.progress) window.progress.update(np);
     window._lastQueueIndex = np.queue_index ?? -1;
     if (np.queue !== undefined && np.queue !== null) {
       _rafQueuedData = np.queue;
-      _rafQueuedIndex = window._lastQueueIndex;
+      // queue_index can arrive from an older SSE/poll response than the
+      // now-playing track. Prefer the track identity whenever it is present;
+      // this prevents the highlight from sticking to a different song after
+      // playback changes.
+      var resolvedIndex = npVideoId ? np.queue.findIndex(function (item) {
+        return item && item.video_id === npVideoId;
+      }) : -1;
+      _rafQueuedIndex = resolvedIndex >= 0 ? resolvedIndex : window._lastQueueIndex;
       if (!_rafPending) {
         _rafPending = true;
         requestAnimationFrame(() => {
@@ -97,6 +105,16 @@
         });
       }
     } else {
+      // Queue omitted means only playback state changed. Resolve the active
+      // row by the latest known video id as well, rather than trusting a
+      // possibly stale queue_index from the device.
+      if (npVideoId && window._lastQueueJson) {
+        try {
+          var knownQueue = JSON.parse(window._lastQueueJson);
+          var knownIndex = knownQueue.findIndex(function (item) { return item && item.video_id === npVideoId; });
+          if (knownIndex >= 0) window._lastQueueIndex = knownIndex;
+        } catch (_) {}
+      }
       for (const id of ['queue-list', 'queue-modal-body']) {
         const container = document.getElementById(id);
         if (container && container._lazyQueue && window._renderedQueueRows &&

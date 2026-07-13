@@ -931,10 +931,17 @@ document.getElementById('pp-btn').onclick = () => {
     .catch(e => toast(e.message, 'error'));
 };
 
-const npArtOverlay = document.getElementById('np-page-art-overlay');
-if (npArtOverlay) {
-  npArtOverlay.onclick = (e) => {
+const npPageArt = document.getElementById('np-page-art');
+if (npPageArt) {
+  npPageArt.onclick = (e) => {
     e.stopPropagation();
+    const overlay = document.getElementById('np-page-art-overlay');
+    if (overlay) {
+      overlay.classList.remove('flash');
+      void overlay.offsetWidth;
+      overlay.classList.add('flash');
+      setTimeout(() => overlay.classList.remove('flash'), 520);
+    }
     document.getElementById('pp-btn').click();
   };
 }

@@ -290,6 +290,7 @@ _SESSION_PATHS = ('/remote', '/alexa/status', '/alexa/init', '/alexa/devices', '
                   '/alexa/queue_reorder', '/history', '/recommendations',
                   '/alexa/jam/start', '/alexa/jam/stop', '/alexa/jam/status',
                   '/alexa/jam/qr', '/api/home', '/api/library',
+                  '/api/subscribed_artists',
                   '/alexa/like', '/api/liked_songs', '/api/profile_status',
 '/alexa/amazon_signout',
                    '/api/youtube/browser-auth')
@@ -5068,6 +5069,35 @@ async def api_get_library():
                 "partial": True,
             })
         return jsonify({'error': str(e)}), 500
+
+@app.route("/api/subscribed_artists/", methods=["GET", "POST", "DELETE"])
+def api_subscribed_artists():
+    """Persist the artists followed by the web remote user."""
+    _ensure_db()
+    key = 'subscribed_artists'
+    with get_db() as conn:
+        row = conn.execute('SELECT v FROM kv WHERE k = ?', (key,)).fetchone()
+        artists = json.loads(row['v']) if row and row['v'] else []
+        if not isinstance(artists, list):
+            artists = []
+        if request.method == 'GET':
+            return jsonify({'artists': artists})
+        body = request.get_json(silent=True) or {}
+        channel_id = str(body.get('channel_id') or body.get('id') or '').strip()
+        if not channel_id:
+            return jsonify({'error': 'channel_id is required'}), 400
+        if request.method == 'POST':
+            entry = {
+                'channel_id': channel_id,
+                'name': str(body.get('name') or '').strip(),
+                'thumbnail': str(body.get('thumbnail') or '').strip(),
+            }
+            artists = [a for a in artists if a.get('channel_id') != channel_id]
+            artists.insert(0, entry)
+        else:
+            artists = [a for a in artists if a.get('channel_id') != channel_id]
+        conn.execute('INSERT OR REPLACE INTO kv (k, v) VALUES (?, ?)', (key, json.dumps(artists)))
+    return jsonify({'artists': artists})
 
 @app.route("/api/library/playlists/", methods=["POST"])
 async def api_create_library_playlist():

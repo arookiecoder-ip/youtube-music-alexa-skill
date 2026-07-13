@@ -251,6 +251,17 @@
         var targetId = itemCard.dataset.targetId;
         var kind = itemCard.dataset.kind;
 
+        // A song title navigates to its album; artwork and the explicit play
+        // button retain their normal direct-play behavior.
+        if (e.target.closest('.home-item-title') && kind === 'track') {
+            var songAlbumId = itemCard.dataset.albumId;
+            if (songAlbumId) {
+                if (window.preloadNavigateAlbum) window.preloadNavigateAlbum(songAlbumId);
+                else window.navigateTo('#album/' + encodeURIComponent(songAlbumId));
+                return;
+            }
+        }
+
         // YouTube exposes Liked Music as a station-like home card, but the
         // card itself should open the user's Liked Music collection. Keep the
         // overlaid play button's direct-play behavior unchanged.

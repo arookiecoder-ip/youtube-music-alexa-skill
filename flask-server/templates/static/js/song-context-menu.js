@@ -31,8 +31,8 @@
     '<div class="result-menu-option" data-action="play-next">' + icon.next + '<span>Play next</span></div>' +
     '<div class="result-menu-option" data-action="add-to-queue">' + icon.add + '<span>Add to queue</span></div>' +
     '<div class="result-menu-option" data-action="play-radio">' + icon.radio + '<span>Play Radio</span></div>' +
-    '<div class="result-menu-option" data-action="open-album">' + icon.album + '<span>Open album</span></div>' +
-    '<div class="result-menu-option" data-action="open-artist">' + icon.artist + '<span>Open artist</span></div>' +
+    '<div class="result-menu-option" data-action="open-album">' + icon.album + '<span>Go to album</span></div>' +
+    '<div class="result-menu-option" data-action="open-artist">' + icon.artist + '<span>Go to artist</span></div>' +
     '<div class="result-menu-option" data-action="save-playlist">' + icon.save + '<span>Save to Playlist</span></div>';
   document.body.appendChild(menu);
 
@@ -66,12 +66,14 @@
       ? state._currentVideoId
       : root.dataset.videoId || root.closest('[data-video-id]')?.dataset.videoId || '';
     const albumId = root.dataset.albumId || root.dataset.albumBrowseId || '';
+    const artistId = root.dataset.channelId || root.dataset.artistId || '';
     return {
       video_id: videoId || '',
       title: text(root, ['.home-item-title', '.recs-tile-title', '.artist-song-title', '.queue-title', '.result-title', '.top-result-title', '.np-title', '.np-page-title']),
       artist: text(root, ['.home-item-subtitle', '.recs-tile-artist', '.artist-song-artist', '.queue-artist', '.result-artist', '.top-result-subtitle', '.np-artist', '.np-page-artist']),
       thumbnail: isNowPlaying ? (state._currentThumbnail || '') : image(root),
-      album_id: albumId
+      album_id: albumId,
+      artist_id: artistId
     };
   }
 
@@ -113,6 +115,12 @@
       menu.querySelector('[data-action="save-playlist"]').hidden = !!window.JAM_GUEST;
     }
 
+    // Keep the menu tied to the row/button that opened it.  The queue and
+    // result lists can scroll in their own containers, so a fixed menu needs
+    // to be repositioned as the source row moves.
+    menu._anchor = event.currentTarget && event.currentTarget.getBoundingClientRect
+      ? event.currentTarget
+      : event.target;
     let x = event.clientX;
     let y = event.clientY;
     if ((!x && !y) && event.currentTarget && event.currentTarget.getBoundingClientRect) {
@@ -134,6 +142,26 @@
     if (rect.bottom > window.innerHeight - 8) {
       menu.style.top = 'auto';
       menu.style.bottom = Math.max(8, window.innerHeight - y) + 'px';
+    }
+  }
+
+  function repositionMenu() {
+    if (!menu.classList.contains('open') || !menu._anchor) return;
+    const anchor = menu._anchor.getBoundingClientRect();
+    const x = anchor.right;
+    const y = anchor.bottom;
+    menu.style.left = x + 'px';
+    menu.style.right = 'auto';
+    menu.style.top = y + 'px';
+    menu.style.bottom = 'auto';
+    const rect = menu.getBoundingClientRect();
+    if (rect.right > window.innerWidth - 8) {
+      menu.style.left = 'auto';
+      menu.style.right = Math.max(8, window.innerWidth - x) + 'px';
+    }
+    if (rect.bottom > window.innerHeight - 8) {
+      menu.style.top = 'auto';
+      menu.style.bottom = Math.max(8, window.innerHeight - anchor.top) + 'px';
     }
   }
 
@@ -208,7 +236,7 @@
     if (event.key === 'Escape') closeMenu();
   });
   window.addEventListener('blur', closeMenu);
-  window.addEventListener('scroll', closeMenu, true);
+  window.addEventListener('scroll', repositionMenu, true);
 
   window.openSongContextMenu = openMenu;
   window.closeSongContextMenu = closeMenu;

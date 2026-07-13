@@ -200,7 +200,7 @@ function _buildQueueRow(container, item, i, currentIndex, thumbsById) {
   `;
 
   const el = document.createElement('div');
-  el.className = 'queue-item' + (i === currentIndex ? ' active' : '');
+  el.className = 'queue-item' + (i === currentIndex ? ' active' : '') + (i === currentIndex && state.isPlaying ? ' playing' : '');
   el.dataset.index = String(i);
 
   const thumbUrl = item.thumbnail || '';
@@ -229,6 +229,12 @@ function _buildQueueRow(container, item, i, currentIndex, thumbsById) {
   if (sameUrl) el.querySelector('.queue-thumb-slot').replaceWith(reusableImg);
 
   wrapper.appendChild(el);
+
+  // Removing the active track would stop the current playback.
+  if (i === currentIndex) {
+    const removeOption = el.querySelector('.queue-more-menu [data-action="remove"]');
+    if (removeOption) removeOption.hidden = true;
+  }
 
   // Artist name clicks: stop propagation to prevent parent row's play action
   window.wireArtistLinks(el);
@@ -339,7 +345,7 @@ function renderNpQueue(queue, currentIndex) {
     && existingIds.length <= incomingIds.length
     && existingIds.every(function(id, i) { return id === incomingIds[i]; });
   if (samePrefix) {
-    renderedArr.forEach(function(w, i) { w.classList.toggle('active', i === currentIndex); });
+    renderedArr.forEach(function(w, i) { w.classList.toggle('active', i === currentIndex); w.classList.toggle('playing', i === currentIndex && state.isPlaying); });
     _syncQueueSentinel(list);
     return;
   }
@@ -380,6 +386,14 @@ function _queueMoreMenuHtml(item) {
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path><line x1="12" y1="11" x2="12" y2="17"></line><line x1="9" y1="14" x2="15" y2="14"></line></svg>
           Add to Playlist
         </div>
+        <div class="queue-menu-option" data-action="open-album">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="12" cy="12" r="4"/><circle cx="12" cy="12" r="1" fill="currentColor"/></svg>
+          Go to album
+        </div>
+        <div class="queue-menu-option" data-action="open-artist">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.6-7 8-7s8 3 8 7"/></svg>
+          Go to artist
+        </div>
         <div class="queue-menu-option danger" data-action="remove">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
             <path d="M3 6h18"/><path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2"/>
@@ -407,7 +421,7 @@ function _wireQueueMoreMenu(el, item, index) {
     if (!wasOpen) {
       moreBtn.classList.add('open');
       const rect = moreBtn.getBoundingClientRect();
-      const menuHeight = 4 * 48; // approximate height of the four option rows
+      const menuHeight = 6 * 48; // approximate height of the six option rows
       const menuWidth = 170;
       
       let x = e && e.clientX ? e.clientX : rect.right - menuWidth;
@@ -473,6 +487,22 @@ function _wireQueueMoreMenu(el, item, index) {
     // Force a fresh queue seeded from just this track instead.
     playResult(item, false, true);
   });
+  moreMenu.querySelector('[data-action="open-album"]').addEventListener('click', (e) => {
+    e.stopPropagation();
+    _closeAllQueueMenus();
+    const albumId = item.album_id || item.albumId || item.album_browse_id || '';
+    if (!albumId) return;
+    if (window.preloadNavigateAlbum) window.preloadNavigateAlbum(albumId);
+    else if (window.navigateTo) window.navigateTo('#album/' + encodeURIComponent(albumId));
+  });
+  moreMenu.querySelector('[data-action="open-artist"]').addEventListener('click', (e) => {
+    e.stopPropagation();
+    _closeAllQueueMenus();
+    const artistId = item.artist_id || item.channelId || item.channel_id || item.artistId || '';
+    if (!artistId) return;
+    if (window.preloadNavigateArtist) window.preloadNavigateArtist(artistId);
+    else if (window.navigateTo) window.navigateTo('#artist/' + encodeURIComponent(artistId));
+  });
   const likeBtn = moreMenu.querySelector('[data-action="like"]');
   likeBtn.addEventListener('click', async (e) => {
     e.stopPropagation();
@@ -525,9 +555,17 @@ document.addEventListener('click', _closeAllQueueMenus);
 
 function updateQueueActive(currentIndex) {
   const list = document.getElementById('queue-list');
+  if (!list) return;
   for (const el of list.querySelectorAll('.queue-item')) {
     el.classList.toggle('active', Number(el.dataset.index) === currentIndex);
+    el.classList.toggle('playing', Number(el.dataset.index) === currentIndex && state.isPlaying);
   }
+}
+
+function updateQueuePlaying(isPlaying) {
+  state.isPlaying = !!isPlaying;
+  const active = document.querySelectorAll('.queue-item.active');
+  active.forEach(el => el.classList.toggle('playing', state.isPlaying));
 }
 
 // Same highlight sync for the mobile queue modal Ã¢â‚¬â€ used when an SSE push
@@ -537,6 +575,7 @@ function updateQueueModalActive(currentIndex) {
   if (!modalBody) return;
   for (const el of modalBody.querySelectorAll('.queue-item')) {
     el.classList.toggle('active', Number(el.dataset.index) === currentIndex);
+    el.classList.toggle('playing', Number(el.dataset.index) === currentIndex && state.isPlaying);
   }
 }
 
@@ -1130,6 +1169,7 @@ window.renderNpQueue = renderNpQueue;
   window._wireQueueMoreMenu = _wireQueueMoreMenu;
   window._closeAllQueueMenus = _closeAllQueueMenus;
   window.updateQueueActive = updateQueueActive;
+  window.updateQueuePlaying = updateQueuePlaying;
   window.updateQueueModalActive = updateQueueModalActive;
   window._liveQueueIndexOf = _liveQueueIndexOf;
   window.removeFromQueue = removeFromQueue;
