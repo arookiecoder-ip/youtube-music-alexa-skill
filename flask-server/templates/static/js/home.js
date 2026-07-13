@@ -108,6 +108,7 @@
     container.hidden = false;
     showHomeSkeleton(false);
     container.querySelectorAll('.home-shelf-content').forEach(updateShelfArrows);
+    if (window.syncTrackPlaybackIndicators) window.syncTrackPlaybackIndicators();
 
     if (window.performance && performance.mark && performance.measure) {
       performance.mark('home-feed-end');

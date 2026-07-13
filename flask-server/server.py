@@ -5213,6 +5213,67 @@ async def api_delete_library_playlist(pl_id):
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
+@app.route("/api/album/resolve/<video_id>", methods=["GET"])
+async def api_resolve_track_album(video_id):
+    """Resolve a track's album browse ID when a shelf omitted album data."""
+    video_id = (video_id or '').strip()
+    if not _valid_video_id(video_id):
+        return jsonify({'error': 'invalid videoId'}), 400
+
+    def resolve(client):
+        watch = client.get_watch_playlist(videoId=video_id, limit=25) or {}
+        tracks = watch.get('tracks') or []
+        track = next((t for t in tracks if t.get('videoId') == video_id), None)
+        if track is None and tracks:
+            track = tracks[0]
+        album = (track or {}).get('album') or {}
+        album_id = album.get('id') or album.get('browseId') or ''
+        if album_id:
+            artists = (track or {}).get('artists') or []
+            return {
+                'album_id': album_id,
+                'album': album.get('name') or '',
+                'artist_id': (artists[0].get('id') or artists[0].get('browseId') or '') if artists else '',
+            }
+
+        # Some watch responses omit album context. Search the catalog using
+        # the canonical title/author, then require the same video ID.
+        song = client.get_song(video_id) or {}
+        details = song.get('videoDetails') or {}
+        query = ' '.join(filter(None, (details.get('title'), details.get('author')))).strip()
+        if not query:
+            return None
+        results = client.search(query, filter='songs', ignore_spelling=True) or []
+        match = next((item for item in results if item.get('videoId') == video_id), None)
+        if not match:
+            return None
+        album = match.get('album') or {}
+        album_id = album.get('id') or album.get('browseId') or ''
+        if not album_id:
+            return None
+        artists = match.get('artists') or []
+        return {
+            'album_id': album_id,
+            'album': album.get('name') or '',
+            'artist_id': (artists[0].get('id') or artists[0].get('browseId') or '') if artists else '',
+        }
+
+    clients = [_get_ytmusic_home()]
+    try:
+        from ytmusicapi import YTMusic
+        clients.append(YTMusic())
+    except Exception:
+        pass
+    for client in clients:
+        try:
+            resolved = await asyncio.to_thread(resolve, client)
+            if resolved:
+                return jsonify(resolved)
+        except Exception as exc:
+            logger.warning('[api/album/resolve/%s] lookup failed: %s', video_id, exc)
+    return jsonify({'error': 'album unavailable'}), 404
+
+
 @app.route("/api/album/<browse_id>", methods=["GET"])
 async def api_get_album(browse_id):
     """Fetch album details by browseId (e.g. MPREb_...).

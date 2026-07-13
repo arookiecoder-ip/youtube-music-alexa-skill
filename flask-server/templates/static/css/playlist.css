@@ -78,6 +78,8 @@
 .liked-playlist-banner {
   background: linear-gradient(135deg, #c64bdb, #6b3fd1 55%, #293b9b);
   color: #fff;
+  align-items: center;
+  justify-content: center;
 }
 .liked-playlist-banner svg {
   width: 42%;

@@ -36,6 +36,38 @@
     '<div class="result-menu-option" data-action="save-playlist">' + icon.save + '<span>Save to Playlist</span></div>';
   document.body.appendChild(menu);
 
+  const albumResolutionCache = new Map();
+
+  function resolveAlbumId(track, root) {
+    if (track.album_id) return Promise.resolve(track.album_id);
+    if (!track.video_id || typeof window.api !== 'function') return Promise.resolve('');
+    if (!albumResolutionCache.has(track.video_id)) {
+      const request = window.api('/api/album/resolve/' + encodeURIComponent(track.video_id))
+        .then(function (data) { return (data && data.album_id) || ''; })
+        .catch(function () { return ''; });
+      albumResolutionCache.set(track.video_id, request);
+    }
+    return albumResolutionCache.get(track.video_id).then(function (albumId) {
+      if (albumId) {
+        track.album_id = albumId;
+        if (root) root.dataset.albumId = albumId;
+      }
+      return albumId;
+    });
+  }
+
+  function navigateTrackAlbum(track, root) {
+    return resolveAlbumId(track, root).then(function (albumId) {
+      if (!albumId) {
+        if (typeof window.toast === 'function') window.toast('Album unavailable for this song', 'error');
+        return false;
+      }
+      if (window.preloadNavigateAlbum) window.preloadNavigateAlbum(albumId);
+      else if (window.navigateTo) window.navigateTo('#album/' + encodeURIComponent(albumId));
+      return true;
+    });
+  }
+
   function text(root, selectors) {
     for (const selector of selectors) {
       const element = root.querySelector(selector);
@@ -100,7 +132,7 @@
     // For station cards, only show Play — hide everything else
     const isStation = track._isStation;
     const albumOption = menu.querySelector('[data-action="open-album"]');
-    albumOption.hidden = !track.album_id;
+    albumOption.hidden = !track.album_id && !track.video_id;
     menu.querySelector('[data-action="open-artist"]').hidden = !track.artist_id;
     menu.querySelector('[data-action="play"]').hidden = !isStation;
     if (isStation) {
@@ -218,10 +250,7 @@
         if (typeof window.openAddToPlaylistModal === 'function') window.openAddToPlaylistModal(track);
         break;
       case 'open-album':
-        if (track.album_id) {
-          if (window.preloadNavigateAlbum) window.preloadNavigateAlbum(track.album_id);
-          else if (window.navigateTo) window.navigateTo('#album/' + encodeURIComponent(track.album_id));
-        }
+        navigateTrackAlbum(track, null);
         break;
       case 'open-artist':
         if (track.artist_id) {
@@ -240,11 +269,10 @@
       const root = title.closest(ROOT_SELECTOR);
       if (root) {
         const track = trackFrom(root);
-        if (track.video_id && track.album_id) {
+        if (track.video_id) {
           event.preventDefault();
           event.stopImmediatePropagation();
-          if (window.preloadNavigateAlbum) window.preloadNavigateAlbum(track.album_id);
-          else if (window.navigateTo) window.navigateTo('#album/' + encodeURIComponent(track.album_id));
+          navigateTrackAlbum(track, root);
           return;
         }
       }

@@ -32,6 +32,15 @@
 const deviceEl = document.getElementById('device');
 const volumeEl = document.getElementById('volume');
 
+function syncTrackPlaybackIndicators() {
+  const currentId = state._currentVideoId || '';
+  for (const card of document.querySelectorAll('.home-item[data-video-id]')) {
+    const isCurrent = !!currentId && card.dataset.videoId === currentId;
+    card.classList.toggle('current-track', isCurrent);
+    card.classList.toggle('playing', isCurrent && state.isPlaying);
+  }
+}
+
 function syncPlayPause() {
   for (const btn of [document.getElementById('pp-btn'), document.getElementById('mini-pp'), document.getElementById('mp-pp-btn'), document.getElementById('np-page-art-overlay')]) {
     if (!btn) continue;
@@ -41,6 +50,8 @@ function syncPlayPause() {
     if (pa) pa.style.display = state.isPlaying ? '' : 'none';
     btn.title = state.isPlaying ? 'Pause' : 'Play';
   }
+  syncTrackPlaybackIndicators();
+  if (window.updateQueuePlaying) window.updateQueuePlaying(state.isPlaying);
 }
 
 /* ---- now-playing display (single element, no dual placeholder bug) ---- */
@@ -86,6 +97,7 @@ function showNowPlaying(info) {
       state._currentVideoId = '';
       state._currentThumbnail = '';
       state._currentTrack = null;
+      syncTrackPlaybackIndicators();
       _lastNpFingerprint = '';
       // Playback is gone — don't leave an empty expanded player on screen.
       if (window.getRoute && window.getRoute() === '#now-playing') {
@@ -159,6 +171,7 @@ function showNowPlaying(info) {
       thumbnail: info.thumbnail || '', channelId: info.channelId || ''
     };
     updateUrlBar();
+    syncTrackPlaybackIndicators();
   }
 
   refreshNpLikeButton();
@@ -1132,6 +1145,7 @@ function updateUrlBar() {
 
   window.syncPlayPause = syncPlayPause;
   window.showNowPlaying = showNowPlaying;
+  window.syncTrackPlaybackIndicators = syncTrackPlaybackIndicators;
   window.refreshNpLikeButton = refreshNpLikeButton;
   window.checkLikedVersion = checkLikedVersion;
   window.playResult = playResult;

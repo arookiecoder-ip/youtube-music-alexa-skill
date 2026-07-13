@@ -252,6 +252,26 @@
     overflow: hidden;
     text-overflow: ellipsis;
   }
+  .queue-thumb-wrap {
+    position: relative;
+    width: 40px;
+    height: 40px;
+    flex: none;
+  }
+  .queue-thumb-wrap .queue-thumb {
+    width: 100%;
+    height: 100%;
+  }
+  .queue-playing-bars {
+    display: none;
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 2;
+  }
+  .queue-item.active.playing .queue-thumb { filter: brightness(.45); }
+  .queue-item.active.playing .queue-playing-bars { display: flex; }
   /* Playback indicator now lives on the now-playing artwork. */
   .queue-item.active.playing .queue-title::before {
     display: none;

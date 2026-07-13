@@ -98,7 +98,7 @@
   color: var(--accent);
 }
 .player-section .np-like-btn,
-.np-page-like-btn { --like-icon-size: 20px; }
+.np-page-like-btn { --like-icon-size: 28px; }
 .artist-song-like-btn { --like-icon-size: 14px; }
 .artist-song-like-btn {
   border-color: transparent !important;
@@ -151,10 +151,13 @@ body::before {
    (main starts after margin-left and would otherwise leave the rail over
    the flat #030303 body colour, appearing as a solid opaque black strip). */
 body {
-  background-image: linear-gradient(180deg, rgba(232, 89, 12, .10), transparent 340px);
+  /* One viewport-wide tint. Two 10% overlays previously stacked over main
+     (roughly 19% combined) but only one covered the rail/header-left cell,
+     producing a vertical dark seam beside the hamburger. */
+  background-image: linear-gradient(180deg, rgba(232, 89, 12, .19), transparent 340px);
 }
 main {
-  background-image: linear-gradient(180deg, rgba(232, 89, 12, .10), transparent 340px);
+  background-image: none;
 }
 
 /* The old bottom mini player is fully replaced by the persistent playbar */
@@ -278,6 +281,19 @@ header {
     background: transparent;
     border-bottom: none;
     overflow: visible !important;
+  }
+  /* Paint the header across the rail column too. The header DOM lives inside
+     main (which starts after the rail), but visually this must be one full
+     viewport row above both the sidebar and page content. */
+  header::before {
+    content: '';
+    position: absolute;
+    inset: 0 0 0 calc(-1 * var(--rail-w));
+    z-index: -1;
+    background-color: #000;
+    border-bottom: 1px solid rgba(255, 255, 255, .08);
+    pointer-events: none;
+    transition: left .25s ease, background-color .28s ease, border-color .28s ease;
   }
   header .header-actions {
     margin-left: 0;
@@ -494,16 +510,16 @@ body.results-open .play-section {
   main.has-queue .play-section,
   body.results-open .play-section {
     position: fixed;
-    top: 14px;
-    left: calc(var(--rail-w) + (100vw - var(--rail-w)) / 2);
+    top: 1px;
+    left: 50vw;
     transform: translateX(-50%);
     width: clamp(300px, 34vw, 560px);
     max-width: none;
     height: var(--topbar-h);
     margin: 0;
     z-index: 245;
-    /* Follows the rail as it collapses/expands */
-    transition: left .25s ease;
+    /* Header control: remains centered in the viewport while the rail moves. */
+    transition: none;
   }
 }
 
@@ -621,6 +637,7 @@ body.rail-collapsed .sidebar-playlist-list { scrollbar-width: none; }
     width: 40px;
     margin: 0 auto;
     padding: 6px 8px !important;
+    gap: 0;
     justify-content: center;
     border-radius: 4px !important;
   }
@@ -630,6 +647,7 @@ body.rail-collapsed .sidebar-playlist-list { scrollbar-width: none; }
     margin-right: auto;
     padding-left: 8px;
     padding-right: 8px;
+    gap: 0;
     justify-content: center;
   }
   /* Playlist items keep the expanded padding/gap so the art never moves;
@@ -1019,7 +1037,7 @@ body.rail-collapsed .sidebar .sidebar-nav-btn:hover {
     height: auto;
     bottom: 0;
     transform: none;
-    background: transparent;
+    background: var(--bg, #030303);
     border-left: none;
     border-right: 1px solid rgba(255, 255, 255, .06);
     /* Above the sticky top bar so the wordmark can extend beyond the 72px
@@ -1050,7 +1068,13 @@ body.rail-collapsed .sidebar .sidebar-nav-btn:hover {
      only.  Keeping one source for these controls prevents two competing
      icon/text positions during rail transitions. */
   header .rail-toggle-btn { visibility: visible; pointer-events: auto; }
-  header > .brand { display: flex; }
+  header > .brand {
+    display: flex;
+    position: fixed;
+    top: 13px;
+    left: 12px;
+    z-index: 250;
+  }
   .sidebar-brand { display: none; }
   .sidebar-tools #refresh-page-btn { display: none; }
   .sidebar-signout { padding-top: 12px; }
@@ -1619,6 +1643,13 @@ body.now-playing-route .player-section .player-expand-btn svg {
   body.now-playing-route:not(.results-open):not(.header-scrolled) main header,
   body.home-route:not(.results-open):not(.header-scrolled) main header {
     background: transparent;
+  }
+  body.artist-route:not(.results-open):not(.header-scrolled) main header::before,
+  body.album-route:not(.results-open):not(.header-scrolled) main header::before,
+  body.now-playing-route:not(.results-open):not(.header-scrolled) main header::before,
+  body.home-route:not(.results-open):not(.header-scrolled) main header::before {
+    background-color: transparent;
+    border-bottom-color: transparent;
   }
 }
 
@@ -2456,9 +2487,10 @@ body.results-open .player-section {
   /* Play/pause: plain glyph (no circular chip), larger than prev/next */
   .player-section .pp-btn,
   .player-section .pp-btn:hover {
-    flex: 0 0 58px;
-    width: 58px;
-    height: 58px;
+    flex: 0 0 44px;
+    width: 44px;
+    height: 44px;
+    border-radius: 50%;
     box-sizing: border-box;
     padding: 0;
     background: transparent;
@@ -2619,6 +2651,10 @@ body.results-open .player-section {
      track bleed remains seamless behind the icons. */
   body.rail-collapsed.now-playing-route #now-playing-section {
     left: 0;
+  }
+  body.rail-collapsed.now-playing-route .sidebar {
+    background: transparent;
+    border-right-color: transparent;
   }
   .np-page {
     height: 100%;

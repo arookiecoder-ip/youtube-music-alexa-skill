@@ -219,7 +219,10 @@ function _buildQueueRow(container, item, i, currentIndex, thumbsById) {
   el.innerHTML = `
     <div class="queue-drag-handle" title="Drag to reorder">${dragSvg}</div>
     <span class="queue-num">${i + 1}</span>
-    ${thumbHtml}
+    <div class="queue-thumb-wrap">
+      ${thumbHtml}
+      <span class="music-bars queue-playing-bars" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
+    </div>
     <div class="queue-info">
       <div class="queue-title">${escHtml(item.title)}</div>
       <div class="queue-artist">${window.artistLinksHtml(item.artist, item.channelId)}</div>
