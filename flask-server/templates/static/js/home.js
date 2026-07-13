@@ -314,6 +314,22 @@
       }
     });
 
+    // Close the context menu when the user scrolls the page or resizes.
+    // The _closeAllMoreMenus call in the home-rows scroll handler only
+    // catches scrolls inside the shelf containers — not the document body.
+    window.addEventListener('scroll', function() {
+      if (sharedMoreMenu && sharedMoreMenu.classList.contains('open')) {
+        sharedMoreMenu.classList.remove('open');
+        activeMenuCardId = null;
+      }
+    }, { passive: true });
+    window.addEventListener('resize', function() {
+      if (sharedMoreMenu && sharedMoreMenu.classList.contains('open')) {
+        sharedMoreMenu.classList.remove('open');
+        activeMenuCardId = null;
+      }
+    });
+
     document.addEventListener('keydown', function(e) {
       if (e.key === 'Escape' && sharedMoreMenu && sharedMoreMenu.classList.contains('open')) {
         sharedMoreMenu.classList.remove('open');
@@ -401,6 +417,8 @@
                 window.api('/alexa/play/', {
                   serial: window.selectedSerial ? window.selectedSerial() : '',
                   query: 'https://music.youtube.com/playlist?list=' + t._playlistId
+                }).catch(function() {
+                  if (window.toast) window.toast('Failed to start playlist', 'error');
                 });
               }
           });
@@ -415,8 +433,20 @@
                   serial: window.selectedSerial ? window.selectedSerial() : '',
                   query: 'https://music.youtube.com/playlist?list=' + t._playlistId
                 }).then(function() {
-                  return window.api('/alexa/shuffle_queue/', {});
-                }).catch(function() {});
+                  // Give the device time to confirm playback before shuffling.
+                  // Without this delay the shuffle command interrupts the
+                  // device while it's still buffering the first track,
+                  // causing a "stopped" event and a broken queue.
+                  setTimeout(function() {
+                    window.api('/alexa/shuffle_queue/', {}).then(function() {
+                      var mainShuffle = document.getElementById('shuffle-btn');
+                      if (mainShuffle) mainShuffle.classList.add('shuffle-active');
+                      if (window.toast) window.toast('Queue shuffled', 'ok');
+                    }).catch(function() {});
+                  }, 2000);
+                }).catch(function() {
+                  if (window.toast) window.toast('Failed to start playlist', 'error');
+                });
               }
           });
         }

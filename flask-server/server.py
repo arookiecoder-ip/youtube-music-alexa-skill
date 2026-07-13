@@ -755,6 +755,52 @@ _locks_guard = threading.Lock()
 # unbounded concurrent downloads of many different ids).
 _DOWNLOAD_CONCURRENCY = 4
 _download_semaphore = threading.Semaphore(_DOWNLOAD_CONCURRENCY)
+
+# Permanently-unavailable video ids (deleted, privated, etc.). Keyed by
+# video_id -> timestamp so they expire after a TTL (in case a video is
+# restored or the original yt-dlp error was transient after all).
+_dead_video_ids = {}
+_dead_video_ids_lock = threading.Lock()
+_DEAD_VIDEO_TTL = 3600  # 1 hour
+
+# yt-dlp stderr strings that mean the video does not exist / can never be
+# downloaded (as opposed to transient network/auth/rate-limit errors).
+_VIDEO_UNAVAILABLE_ERRORS = [
+    'Video unavailable',
+    'This video is not available',
+    'Private video',
+    'This video is private',
+    'This video has been removed',
+    'Sign in to confirm',               # age-restricted without cookies
+]
+
+
+def _is_video_permanently_unavailable(stderr: str) -> bool:
+    """True when the yt-dlp error indicates the video itself is dead (deleted,
+    privated, etc.), as opposed to a transient network or rate-limit issue."""
+    if not stderr:
+        return False
+    return any(err in stderr for err in _VIDEO_UNAVAILABLE_ERRORS)
+
+
+def _mark_video_dead(video_id: str):
+    with _dead_video_ids_lock:
+        _dead_video_ids[video_id] = time.time()
+        # Bound memory: drop oldest entries when the set grows large.
+        if len(_dead_video_ids) > 500:
+            oldest = min(_dead_video_ids, key=_dead_video_ids.get)
+            del _dead_video_ids[oldest]
+
+
+def _is_dead_video(video_id: str) -> bool:
+    with _dead_video_ids_lock:
+        ts = _dead_video_ids.get(video_id)
+        if ts is None:
+            return False
+        if time.time() - ts > _DEAD_VIDEO_TTL:
+            del _dead_video_ids[video_id]
+            return False
+        return True
 # v3.1: Download queue depth tracking
 _download_queue_depth = 0
 _download_queue_lock = threading.Lock()
@@ -1830,6 +1876,11 @@ class Supporting:
     def ensure_downloaded(video_id: str):
         if not _valid_video_id(video_id):
             return None
+        # Check the dead-video cache first — skip the yt-dlp subprocess
+        # entirely for videos known to be permanently unavailable.
+        if _is_dead_video(video_id):
+            logger.warning("yt-dlp: %s is known-dead, skipping download", video_id)
+            return None
         now = time.time()
         if now - _last_prune[0] > 60:
             Supporting.prune_audio_cache()
@@ -1847,13 +1898,24 @@ class Supporting:
                         return path
                     output = os.path.join(AUDIO_CACHE_DIR, f"{video_id}.%(ext)s")
                     clients = Supporting.get_ytdlp_clients()
+                    permanently_dead = False
                     for client in clients:
                         result = subprocess.run(
                             Supporting.ytdlp_download_command(video_id, output, client=client),
                             capture_output=True, text=True)
                         if result.returncode == 0:
                             break
-                        logger.error("yt-dlp download failed (%s client): %s", client, result.stderr.strip())
+                        stderr = result.stderr.strip()
+                        logger.error("yt-dlp download failed (%s client): %s", client, stderr)
+                        # If any client reports the video itself is gone,
+                        # don't bother trying other clients — the video doesn't
+                        # exist, and retrying won't help.
+                        if _is_video_permanently_unavailable(stderr):
+                            permanently_dead = True
+                            break
+                    if permanently_dead:
+                        _mark_video_dead(video_id)
+                        logger.warning("yt-dlp: %s marked as permanently unavailable", video_id)
                     return Supporting.cached_audio_path(video_id)
         finally:
             _dec_download_depth()
@@ -2669,7 +2731,7 @@ def _download_in_progress(video_id):
     return bool(lock and lock.locked())
 
 
-def _watch_playback_confirmation(video_id, resend):
+def _watch_playback_confirmation(serial, video_id, resend):
     """Background watchdog: retries `resend()` once if `video_id` isn't
     confirmed playing within PLAYBACK_CONFIRM_TIMEOUT. `resend` is a zero-arg
     callable that re-arms and resends the play command; it should return an
@@ -2707,6 +2769,20 @@ def _watch_playback_confirmation(video_id, resend):
             return
         if not _still_relevant():
             return
+        # If the video is known to be permanently unavailable, don't bother
+        # resending — the retry would hit the same dead video. Instead,
+        # try to skip to the next track in the queue right away.
+        if _is_dead_video(video_id):
+            logger.warning("[playback-watchdog] %s is known-dead, skipping instead of retry", video_id)
+            _promote_next_track('watchdog skipped dead video', position_ms=0)
+            # Also dispatch the promoted track so the device actually plays it.
+            cur = _get_now_playing()
+            next_vid = cur.get('video_id', '')
+            if next_vid and serial:
+                threading.Thread(
+                    target=_dispatch_play_with_retry,
+                    args=(serial, next_vid, 0), daemon=True).start()
+            return
         logger.warning("[playback-watchdog] no confirmation for %s in %ss, retrying once", video_id, PLAYBACK_CONFIRM_TIMEOUT)
         error = resend()
         if error:
@@ -2738,7 +2814,7 @@ def _dispatch_play_with_retry(serial, video_id, offset_ms=0):
     if error:
         return error
     threading.Thread(
-        target=_watch_playback_confirmation, args=(video_id, _send), daemon=True
+        target=_watch_playback_confirmation, args=(serial, video_id, _send), daemon=True
     ).start()
     return None
 
@@ -3407,6 +3483,45 @@ def alexa_state_event():
             _now_playing['playing'] = False
             _now_playing['updated_at'] = time.time()
         _notify_sse()
+        # If the current track was never confirmed and is known to be
+        # permanently unavailable (deleted/privated video), try to skip to the
+        # next track in the queue instead of leaving playback in a wedged state.
+        cur = _get_now_playing()
+        cur_vid = cur.get('video_id', '')
+        if cur_vid and not cur.get('playback_confirmed') and _is_dead_video(cur_vid):
+            queue = cur.get('queue') or []
+            idx = cur.get('queue_index', -1)
+            serial = body.get('serial')
+            # Find the next non-dead track in the queue and dispatch it.
+            # Don't use _promote_next_track here — it advances queue_index by
+            # exactly 1, which is wrong when multiple consecutive tracks are
+            # dead (the queue walk found a track several positions ahead).
+            for offset in range(1, len(queue) + 1):
+                next_idx = (idx + offset) % len(queue)
+                next_item = queue[next_idx]
+                next_vid = next_item.get('video_id', '')
+                if next_vid and not _is_dead_video(next_vid):
+                    logger.info(
+                        "[np] dead-video skip: %s→%s (%s)",
+                        cur_vid, next_vid, next_item.get('title', '?'))
+                    _update_now_playing(
+                        playing=False,
+                        title=next_item.get('title', ''),
+                        artist=next_item.get('artist', ''),
+                        thumbnail=next_item.get('thumbnail', ''),
+                        video_id=next_vid,
+                        duration_ms=next_item.get('duration_ms', 0),
+                        queue_index=next_idx,
+                        position_ms=0)
+                    if serial:
+                        threading.Thread(
+                            target=_dispatch_play_with_retry,
+                            args=(serial, next_vid, 0), daemon=True).start()
+                    break
+            else:
+                logger.warning(
+                    "[np] dead-video skip: no playable track found after %s",
+                    cur_vid)
     elif event == 'started':
         video_id = body.get('video_id', '')
         if video_id and not _valid_video_id(video_id):
@@ -5032,6 +5147,41 @@ async def api_get_library_playlist(pl_id):
         logger.error('[api/library/playlists/%s] failed: %s', pl_id, e)
         return jsonify({'error': str(e)}), 500
 
+@app.route("/api/library/playlists/<pl_id>", methods=["PATCH"])
+async def api_rename_library_playlist(pl_id):
+    """Rename a library playlist."""
+    from ytmusicapi.auth.types import AuthType
+    if _get_ytmusic_home().auth_type == AuthType.UNAUTHORIZED:
+        return jsonify({'error': 'YouTube Music authentication required. Please visit /setup/'}), 403
+    pl_id = (pl_id or '').strip()
+    if not pl_id:
+        return jsonify({'error': 'invalid playlist id'}), 400
+    body = request.get_json(silent=True) or {}
+    title = (body.get('title') or '').strip()
+    description = (body.get('description') or '').strip()
+    if not title:
+        return jsonify({'error': 'Name required'}), 400
+    try:
+        await asyncio.to_thread(_get_ytmusic_home().edit_playlist, pl_id, title=title, description=description or None)
+        return jsonify({'id': pl_id, 'title': title, 'status': 'renamed'})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
+@app.route("/api/library/playlists/<pl_id>", methods=["DELETE"])
+async def api_delete_library_playlist(pl_id):
+    """Delete a library playlist."""
+    from ytmusicapi.auth.types import AuthType
+    if _get_ytmusic_home().auth_type == AuthType.UNAUTHORIZED:
+        return jsonify({'error': 'YouTube Music authentication required. Please visit /setup/'}), 403
+    pl_id = (pl_id or '').strip()
+    if not pl_id:
+        return jsonify({'error': 'invalid playlist id'}), 400
+    try:
+        await asyncio.to_thread(_get_ytmusic_home().delete_playlist, pl_id)
+        return jsonify({'id': pl_id, 'status': 'deleted'})
+    except Exception as e:
+        return jsonify({'error': str(e)}), 500
+
 @app.route("/api/album/<browse_id>", methods=["GET"])
 async def api_get_album(browse_id):
     """Fetch album details by browseId (e.g. MPREb_...).
@@ -5083,6 +5233,7 @@ async def api_get_album(browse_id):
             'video_id': vid,
             'title': t.get('title') or '',
             'artist': t_artist,
+            'artists': t_artists,
             'thumbnail': t_thumb,
             'duration': t.get('duration') or '',
             'duration_seconds': t.get('duration_seconds') or 0,

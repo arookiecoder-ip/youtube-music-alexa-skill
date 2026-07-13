@@ -166,9 +166,10 @@
     document.body.classList.toggle('explore-route', returnRoute === '#explore');
     document.body.classList.toggle('library-route', returnRoute === '#library');
 
-    // applyRoute('#now-playing') hid the return route's content (hideAllViews +
-    // removed 'open' from overlay elements). Restore visibility without
-    // re-running route handlers so no data is re-fetched.
+    // Restore visibility of the underlying page NOW, before the slide-down
+    // animation starts. The overlay is on top (position:fixed, z-index:210)
+    // so the user won't see any layout jumps — they just see the previous
+    // page already rendered behind the sliding overlay.
     if (returnRoute === '#home') {
       var state = window.__appState;
       if (state && state._resultsOpen) {
@@ -215,6 +216,9 @@
         if (event && (event.target !== npSection || event.propertyName !== 'transform')) return;
         if (npSection._closeTimer) clearTimeout(npSection._closeTimer);
         npSection.removeEventListener('transitionend', finishClose);
+
+        // Animation complete: only cleanup remains. The underlying page is
+        // already visible (restored before the animation started).
         npSection.hidden = true;
         npSection._closeTimer = null;
         npSection._closeCleanup = null;
@@ -378,20 +382,24 @@
   // rest carry only their name and are resolved via search on click.
   var ARTIST_SEP_RE = /(,\s*|\s*&\s*|\s+and\s+|\s*·\s*|\s+(?:feat\.?|ft\.?|featuring)\s+)/i;
 
-  window.artistLinksHtml = function(artist, channelId) {
+  window.artistLinksHtml = function(artist, channelIds) {
     var esc = window.escHtml;
     var s = String(artist || '').trim();
     if (!s) return '';
+    // Normalise: a single channelId string → array, so the same position-
+    // based lookup works for both old callers and new array-aware callers.
+    if (!Array.isArray(channelIds)) channelIds = channelIds ? [channelIds] : [];
     // split with a capture group keeps the separators at odd indices so the
     // displayed text stays byte-for-byte what the metadata said
     var parts = s.split(new RegExp(ARTIST_SEP_RE.source, 'gi'));
-    var first = true;
+    var artistIdx = 0;
     return parts.map(function(p, i) {
       if (i % 2 === 1) return esc(p); // separator text, not clickable
       if (!p) return '';
       var attrs = ' data-artist-name="' + esc(p) + '"';
-      if (first && channelId) attrs += ' data-channel-id="' + esc(channelId) + '"';
-      first = false;
+      var cid = channelIds[artistIdx];
+      if (cid) attrs += ' data-channel-id="' + esc(cid) + '"';
+      artistIdx++;
       return '<span class="artist-name"' + attrs + '>' + esc(p) + '</span>';
     }).join('');
   };

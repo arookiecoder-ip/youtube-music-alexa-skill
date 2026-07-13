@@ -86,7 +86,14 @@
   [data-action="like"].liked,
   .library-card-liked .library-card-art-placeholder
 ) {
+  /* Solid-fill heart: the white fill in the SVG mask makes the entire heart
+     visible, so the `background: currentColor` underneath (orange) shows
+     through the whole shape — i.e. a solid orange heart, not an outline.
+     The orange `color` is set right here (not just in scattered per-button
+     rules below) so every liked button is guaranteed to be solid orange
+     regardless of which CSS rule the cascade picks for the mask swap. */
   --like-icon: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2024%2024'%3E%3Cpath%20d='M20.84%204.61a5.5%205.5%200%200%200-7.78%200L12%205.67l-1.06-1.06a5.5%205.5%200%200%200-7.78%207.78L12%2021.23l8.84-8.84a5.5%205.5%200%200%200%200-7.78Z'%20fill='white'/%3E%3C/svg%3E");
+  color: var(--accent);
 }
 .player-section .np-like-btn,
 .np-page-like-btn { --like-icon-size: 22px; }
@@ -414,6 +421,11 @@ body.results-open .play-section {
   color: #aaa;
 }
 .suggest-item > span {
+  /* flex:1 + min-width:0 are required for the ellipsis to fire inside a flex
+     parent; without them a long entry pushes the row wider than the dropdown
+     and overflow:hidden on .suggest-list clips the X button off-screen. */
+  flex: 1;
+  min-width: 0;
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
@@ -1477,8 +1489,11 @@ body.now-playing-route .player-section .player-expand-btn svg {
   body.now-playing-route main.has-queue #queue-section {
     display: none !important;
   }
+  /* Transparent so the blurred album art continues behind the header. */
   body.artist-route:not(.results-open):not(.header-scrolled) main header,
-  body.album-route:not(.results-open):not(.header-scrolled) main header {
+  body.album-route:not(.results-open):not(.header-scrolled) main header,
+  body.now-playing-route:not(.results-open):not(.header-scrolled) main header,
+  body.home-route:not(.results-open):not(.header-scrolled) main header {
     background: transparent;
   }
 }
@@ -1849,19 +1864,14 @@ button { border-radius: var(--radius-md); }
        (device dropdown menu, profile menu) to the header's 67px box. The
        opaque background alone removes the backdrop-blur repaint cost. */
   }
+  /* Transparent header so content (artist hero, now-playing blurred art,
+     body warm gradient) bleeds behind the sticky top bar. Opaque black
+     returns automatically when the user scrolls (header-scrolled). */
   body.artist-route:not(.results-open):not(.header-scrolled) main header,
-  body.album-route:not(.results-open):not(.header-scrolled) main header {
+  body.album-route:not(.results-open):not(.header-scrolled) main header,
+  body.now-playing-route:not(.results-open):not(.header-scrolled) main header,
+  body.home-route:not(.results-open):not(.header-scrolled) main header {
     background: transparent;
-  }
-  /* Home owns the warm shell tint, including its sticky header. Keep this
-     route-specific so artist artwork and now-playing retain their own bleed. */
-  body.home-route:not(.results-open) main header {
-    background-color: var(--shell-bg);
-    background-image: linear-gradient(
-      180deg,
-      rgba(232, 89, 12, .10) 0,
-      transparent 340px
-    );
   }
 }
 
@@ -1989,6 +1999,68 @@ body.results-open .player-section {
   #history-modal-close {
     display: none;
   }
+
+  /* ------------------------------------------------------------
+     Playlist Detail — YT Music-style two-column layout
+     The body becomes the scroll container (overflow-y: auto) and
+     the hero sticks to the top of the scroll viewport so the
+     playlist identity stays in view as the user scrolls a long
+     track list. The track list itself is no longer its own scroll
+     region — it just grows with the body.
+
+     Scoped to #playlist-detail-modal so this does not touch the
+     Album page (which shares a few class names with the hero).
+     ------------------------------------------------------------ */
+  #playlist-detail-modal #playlist-detail-body {
+    /* Fill the available height under the header so we have a
+       scroll viewport. The header (position:absolute above) and
+       the body stack as siblings inside the modal. */
+    height: 100%;
+    /* The body owns the scroll now. The previous "overflow: hidden"
+       + right-column "overflow-y: auto" combination prevented any
+       ancestor from being a sticky anchor, which forced the left
+       column to scroll out of view with the right column. */
+    overflow-y: auto;
+    overflow-x: hidden;
+    display: grid;
+    /* Slightly wider / more flexible left rail — YT Music uses ~340px
+       for a playlist summary; 360px here leaves room for the
+       "N songs • X minutes" meta line to breathe. */
+    grid-template-columns: minmax(320px, 360px) minmax(0, 1fr);
+    gap: clamp(28px, 4vw, 56px);
+    padding: 24px 32px 32px;
+    align-items: start;     /* hero is its own height; track list grows below */
+  }
+  /* The track list used to be the scroll container. Letting it grow
+     with the body means the grid row stretches to fit it, and that
+     stretch is what gives the hero room to stick. */
+  #playlist-detail-modal #playlist-detail-body > .history-list {
+    min-width: 0;
+    height: auto;
+    overflow: visible;
+    padding-right: 0;
+  }
+  /* The hero now sticks to the top of the body's scroll viewport. The
+     absolute header sits at top:14px with a height of var(--topbar-h)+3
+     (~67px), so it occupies the 14–81px band of the modal. Sticking at
+     calc(var(--topbar-h) + 24px) keeps the hero's top edge below the
+     header (with a small breathing gap) so the back button and 3-dot
+     menu never sit on top of the artwork. */
+  #playlist-detail-modal .playlist-detail-hero {
+    position: sticky;
+    top: calc(var(--topbar-h) + 24px);
+    align-self: start;
+    max-height: calc(100dvh - var(--topbar-h) - 48px);
+    overflow-y: auto;       /* scroll inside the rail if metadata is very long */
+  }
+  /* The 3-dot "more" button (rename / delete) used to live in the header
+     here, but moved down into the playlist hero's action row so the menu
+     is reachable without scrolling back to the page top. The header
+     actions div now only contains the Sync button (which is [hidden]
+     by default and toggled by JS), so we can let the original mobile-
+     only visibility rules stand — the desktop rule that un-hid the
+     header actions was removed in the same change that moved the more
+     button. */
 
   /* ============================================================
      Explore & Library: full-page routed views on desktop
@@ -3385,6 +3457,9 @@ body.library-route #nav-library-btn::before {
     align-items: center;
     gap: 10px;
     margin-top: 7px;
+    /* Match the playlist hero: give the hover-scaled Play button room so
+       it doesn't clip and trigger a horizontal scrollbar. */
+    padding: 4px 0;
   }
 
   #album-section .album-play-all {

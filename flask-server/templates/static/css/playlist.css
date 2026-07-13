@@ -193,8 +193,74 @@
   opacity: .6;
 }
 
-/* ── Playlist track drag-to-reorder ── */
-.playlist-drag-handle {
+/* ── Secondary action buttons (Shuffle / Play next / Share / More) flanking
+     Play. The Play button keeps the 62×62 white-circle treatment; the rest
+     sit at 44×44 with a transparent background and a soft hover. ── */
+.playlist-hero-shuffle,
+.playlist-hero-play-next,
+.playlist-hero-share,
+.playlist-hero-more {
+  width: 44px;
+  height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  transition: background .15s, color .15s, transform .15s;
+}
+.playlist-hero-shuffle:hover,
+.playlist-hero-play-next:hover,
+.playlist-hero-share:hover,
+.playlist-hero-more:hover { background: rgba(255, 255, 255, .1); }
+.playlist-hero-shuffle:focus,
+.playlist-hero-play-next:focus,
+.playlist-hero-share:focus,
+.playlist-hero-more:focus { outline: none; }
+.playlist-hero-shuffle:active,
+.playlist-hero-play-next:active,
+.playlist-hero-share:active,
+.playlist-hero-more:active { transform: scale(.94); }
+.playlist-hero-shuffle svg,
+.playlist-hero-play-next svg,
+.playlist-hero-share svg,
+.playlist-hero-more svg { width: 22px; height: 22px; }
+
+/* ── Track row: number cell + duration cell sit on the row's left/right
+     edges so title + artist can use the full middle space. ── */
+.playlist-track-num {
+  flex: 0 0 28px;
+  width: 28px;
+  text-align: right;
+  font-size: .85rem;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  /* Pad to match the song-action buttons' visual weight on the right edge */
+  padding-right: 4px;
+}
+.playlist-track-duration {
+  flex: none;
+  font-size: .78rem;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  margin-left: 12px;
+  /* Equal breathing room before the like / more buttons */
+  margin-right: 6px;
+  min-width: 42px;
+  text-align: right;
+}
+/* When a row is the currently-playing track, the num + duration sit at full
+   text colour instead of muted, so the whole row reads as "active" at a
+   glance. Scoped to the playlist detail body to avoid leaking into the
+   album page, which has its own active-row treatment. */
+#playlist-detail-modal .history-item.active .playlist-track-num,
+#playlist-detail-modal .history-item.active .playlist-track-duration {
+  color: var(--text);
+}
   flex: none;
   width: 20px;
   display: flex;
@@ -299,7 +365,12 @@
     font-size: .82rem;
     -webkit-line-clamp: 4;
   }
-  .playlist-detail-hero-actions { display: grid; width: 100%; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 10px; margin-top: 7px; }
+  .playlist-detail-hero-actions { display: grid; width: 100%; grid-template-columns: 1fr auto 1fr; align-items: center; gap: 10px; margin-top: 7px; padding: 4px 0; }
+  /* The padding above gives the hover-scaled (transform: scale(1.04)) Play
+     button room to grow in every direction without overflowing the grid
+     cell. Without it, a 62px button growing 4% (~2.5px) would clip against
+     the cell's bottom edge and trigger a horizontal scrollbar on the hero
+     column. */
   .playlist-hero-actions-left,
   .playlist-hero-actions-right { display: flex; align-items: center; gap: 10px; }
   .playlist-hero-actions-left { justify-content: flex-end; }

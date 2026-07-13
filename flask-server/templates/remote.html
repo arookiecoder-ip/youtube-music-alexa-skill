@@ -669,9 +669,9 @@
           </svg>
           Sync
         </button>
-        <button class="history-modal-close playlist-more-btn" id="playlist-detail-more-btn" title="More options">
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg>
-        </button>
+        <!-- The rename / delete menu moved down into the playlist hero
+             (rendered by playlists.js). The menu div stays so the existing
+             rename / delete wiring in playlists.js still has a target by id. -->
         <div class="playlist-more-menu" id="playlist-detail-more-menu" style="position:fixed; background: var(--surface); border: 1px solid var(--border); z-index: 9999; min-width: 170px; box-shadow: 0 8px 24px rgba(0,0,0,.5); overflow: hidden;">
           <div class="queue-menu-option" id="playlist-detail-rename-opt">Rename playlist</div>
           <div class="queue-menu-option danger" id="playlist-detail-delete-opt">Delete playlist</div>

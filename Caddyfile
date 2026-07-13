@@ -7,8 +7,8 @@
 # of sharing /alexa/proxy/* below), add a second site block instead:
 #   alexa.aibosscentral.digital {
 #       reverse_proxy ytmusic:5001
-#   }
-<your-ip-with-dashes>.sslip.io {
+# 
+alexa.aibosscentral.digital {
     handle /alexa/proxy/* {
         reverse_proxy ytmusic:5001
     }
