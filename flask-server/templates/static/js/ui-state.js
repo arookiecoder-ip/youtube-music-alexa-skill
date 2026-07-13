@@ -57,6 +57,26 @@
   };
   window.__playerDebugLog('ui-state-ready');
 
+  function installPlayerMutationTrace() {
+    const targets = [document.querySelector('.player-section'), document.getElementById('now-playing-section'), document.getElementById('mini-player')].filter(Boolean);
+    targets.forEach(function(el) {
+      const label = el.id || el.className;
+      let last = '';
+      const report = function(reason) {
+        const rect = el.getBoundingClientRect();
+        const value = [el.hidden, el.className, Math.round(rect.top), Math.round(rect.bottom), Math.round(rect.height), getComputedStyle(el).transform].join('|');
+        if (value === last) return;
+        last = value;
+        window.__playerDebugLog('mutation:' + label, { reason: reason, rect: { top: rect.top, bottom: rect.bottom, height: rect.height }, className: el.className, hidden: el.hidden });
+      };
+      new MutationObserver(function() { report('mutation'); }).observe(el, { attributes: true, attributeFilter: ['class', 'hidden', 'style'] });
+      if (window.ResizeObserver) new ResizeObserver(function() { report('resize'); }).observe(el);
+      report('initial');
+    });
+  }
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', installPlayerMutationTrace, { once: true });
+  else installPlayerMutationTrace();
+
   function syncUiState() {
     const state = window.__appState;
     window.__playerDebugLog('sync:start');

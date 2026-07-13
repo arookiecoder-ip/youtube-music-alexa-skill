@@ -2674,6 +2674,22 @@ body.results-open .player-section {
   opacity: 1;
   animation: npArtIconPop .52s cubic-bezier(.22, 1, .36, 1) forwards;
 }
+.np-page-playing-indicator {
+  position: absolute; left: 18px; bottom: 18px; z-index: 11;
+  display: none; align-items: end; gap: 4px; height: 24px;
+  padding: 7px 9px; border-radius: 999px; background: rgba(0,0,0,.58);
+}
+.np-page-art.playing .np-page-playing-indicator { display: inline-flex; }
+.np-page-playing-indicator i {
+  display: block; width: 4px; height: 10px; border-radius: 2px;
+  background: var(--accent); animation: npPagePlayingPulse .9s ease-in-out infinite alternate;
+}
+.np-page-playing-indicator i:nth-child(2) { height: 17px; animation-delay: -.3s; }
+.np-page-playing-indicator i:nth-child(3) { height: 13px; animation-delay: -.6s; }
+@keyframes npPagePlayingPulse {
+  from { transform: scaleY(.45); opacity: .55; }
+  to { transform: scaleY(1); opacity: 1; }
+}
 @keyframes npArtOverlayFade {
   0% { opacity: 1; }
   100% { opacity: 0; }

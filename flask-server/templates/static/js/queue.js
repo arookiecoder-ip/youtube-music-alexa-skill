@@ -566,6 +566,8 @@ function updateQueuePlaying(isPlaying) {
   state.isPlaying = !!isPlaying;
   const active = document.querySelectorAll('.queue-item.active');
   active.forEach(el => el.classList.toggle('playing', state.isPlaying));
+  const npPageArt = document.getElementById('np-page-art');
+  if (npPageArt) npPageArt.classList.toggle('playing', state.isPlaying);
 }
 
 // Same highlight sync for the mobile queue modal Ã¢â‚¬â€ used when an SSE push

@@ -252,19 +252,9 @@
     overflow: hidden;
     text-overflow: ellipsis;
   }
+  /* Playback indicator now lives on the now-playing artwork. */
   .queue-item.active.playing .queue-title::before {
-    content: '▮▮▮';
-    display: inline-block;
-    margin-right: 8px;
-    color: var(--accent);
-    font-size: .62em;
-    letter-spacing: 1px;
-    animation: queuePlayingPulse 1s ease-in-out infinite;
-    vertical-align: 1px;
-  }
-  @keyframes queuePlayingPulse {
-    0%, 100% { opacity: .45; transform: scaleY(.65); }
-    50% { opacity: 1; transform: scaleY(1); }
+    display: none;
   }
   .queue-artist .artist-name {
     cursor: pointer;
