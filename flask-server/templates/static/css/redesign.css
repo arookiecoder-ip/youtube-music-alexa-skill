@@ -494,7 +494,8 @@ body.results-open .play-section {
   main.has-queue .play-section,
   body.results-open .play-section {
     position: fixed;
-    top: 3px;
+    /* Keep the rail between the fixed header and the persistent player. */
+    top: 78px;
     left: calc(var(--rail-w) + (100vw - var(--rail-w)) / 2);
     transform: translateX(-50%);
     width: clamp(300px, 34vw, 560px);
