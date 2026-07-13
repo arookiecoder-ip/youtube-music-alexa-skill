@@ -67,7 +67,9 @@ function _buildHistoryRow(entry) {
     video_id: entry.video_id || '',
     title: entry.title || '',
     artist: entry.artist || '',
-    thumbnail: entry.thumbnail_url || ''
+    thumbnail: entry.thumbnail_url || '',
+    duration: entry.duration || '',
+    duration_seconds: entry.duration_seconds || 0
   };
 
   const thumbHtml = entry.thumbnail_url
@@ -79,6 +81,7 @@ function _buildHistoryRow(entry) {
        </div>`;
 
   var isLikedHistory = typeof _playlistsData !== 'undefined' && _playlistsData.liked_songs && _playlistsData.liked_songs.includes(entry.video_id);
+  var duration = window.formatTrackDuration ? window.formatTrackDuration(entry) : '';
   var heartSvgHistory = isLikedHistory
     ? '<svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg>'
     : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg>';
@@ -88,6 +91,7 @@ function _buildHistoryRow(entry) {
       <div class="queue-title">${escHtml(entry.title || 'Unknown title')}</div>
       <div class="queue-artist">${window.artistLinksHtml(entry.artist, entry.channelId)}${entry.play_count > 1 ? '<span class="play-count-badge">\u00d7' + entry.play_count + '</span>' : ''}</div>
     </div>
+    ${duration ? `<span class="track-duration">${escHtml(duration)}</span>` : ''}
     <button class="result-like-btn history-like-btn${isLikedHistory ? ' liked' : ''}" type="button" title="${isLikedHistory ? 'Dislike' : 'Like'}">${heartSvgHistory}</button>
   `;
 

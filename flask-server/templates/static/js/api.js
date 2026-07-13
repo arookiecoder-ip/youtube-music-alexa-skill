@@ -131,14 +131,32 @@
       .replace(/'/g, '&#39;');
   }
 
-  async function apiDelete(path) {
+  // Catalog endpoints expose length in different shapes. Keep every song row
+  // consistent: prefer the ready-to-display string, otherwise format seconds.
+  window.formatTrackDuration = function(track) {
+    if (!track) return '';
+    var value = track.duration || track.length || '';
+    if (typeof value === 'string' && /^\d{1,2}:\d{2}(?::\d{2})?$/.test(value.trim())) return value.trim();
+    var seconds = Number(track.duration_seconds || track.lengthSeconds || 0);
+    if (!seconds && track.duration_ms) seconds = Number(track.duration_ms) / 1000;
+    seconds = Math.floor(seconds || 0);
+    if (!seconds) return '';
+    var hours = Math.floor(seconds / 3600);
+    var minutes = Math.floor((seconds % 3600) / 60);
+    var secs = seconds % 60;
+    return hours
+      ? hours + ':' + String(minutes).padStart(2, '0') + ':' + String(secs).padStart(2, '0')
+      : minutes + ':' + String(secs).padStart(2, '0');
+  };
+
+  async function apiDelete(path, body) {
     let res;
     try {
       res = await _fetchWithTimeout(path, {
         method: 'DELETE',
         credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
-        body: '{}',
+        body: JSON.stringify(body || {}),
       });
     } catch (e) {
       throw new Error(e._isTimeout

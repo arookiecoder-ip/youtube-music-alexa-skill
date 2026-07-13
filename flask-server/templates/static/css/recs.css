@@ -241,11 +241,19 @@
   }
 
   /* Like button on recs tiles */
+  .recs-tile-actions {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    margin-top: 4px;
+  }
+  .recs-tile-actions .track-duration { min-width: auto; }
   .recs-tile .recs-like-btn {
     align-self: center;
     width: 28px;
     height: 28px;
-    margin-top: 4px;
+    margin-top: 0;
   }
   .recs-tile .recs-like-btn svg {
     width: 12px;

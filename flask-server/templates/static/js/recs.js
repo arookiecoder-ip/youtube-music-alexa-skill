@@ -109,6 +109,7 @@ function renderRecommendations(items) {
            <path d="M12 3v10.55A4 4 0 1 0 14 17V7h4V3h-6z"/>
          </svg>`;
     var isLikedTile = typeof _playlistsData !== 'undefined' && _playlistsData.liked_songs && _playlistsData.liked_songs.includes(item.video_id);
+    var duration = window.formatTrackDuration ? window.formatTrackDuration(item) : '';
     var heartSvgTile = isLikedTile
       ? '<svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg>'
       : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg>';
@@ -116,7 +117,10 @@ function renderRecommendations(items) {
       <div class="recs-tile-art">${thumbHtml}</div>
       <div class="recs-tile-title">${escHtml(item.title || '')}</div>
       <div class="recs-tile-artist">${window.artistLinksHtml(item.artist, item.channelId)}</div>
-      <button class="result-like-btn recs-like-btn${isLikedTile ? ' liked' : ''}" type="button" title="${isLikedTile ? 'Dislike' : 'Like'}">${heartSvgTile}</button>
+      <div class="recs-tile-actions">
+        ${duration ? `<span class="track-duration">${escHtml(duration)}</span>` : ''}
+        <button class="result-like-btn recs-like-btn${isLikedTile ? ' liked' : ''}" type="button" title="${isLikedTile ? 'Dislike' : 'Like'}">${heartSvgTile}</button>
+      </div>
     `;
     // Artist name clicks: stop propagation to prevent tile's play action
     window.wireArtistLinks(el);

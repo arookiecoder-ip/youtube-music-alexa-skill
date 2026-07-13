@@ -52,6 +52,19 @@
     content.hidden = show;
   }
 
+  function showArtistSongsSkeleton(show) {
+    var skeleton = document.getElementById('artist-songs-skeleton');
+    var content = document.getElementById('artist-songs-content');
+    if (!skeleton || !content) return;
+    if (show) {
+      skeleton.innerHTML = '<div class="artist-songs-skeleton-head"></div><div class="artist-skeleton-songs-container">' +
+        '<div class="artist-skeleton-song"><div class="skeleton-square"></div><div><div class="skeleton-line skeleton-line-title"></div><div class="skeleton-line skeleton-line-artist"></div></div></div>'.repeat(6) +
+        '</div>';
+    }
+    skeleton.hidden = !show;
+    content.hidden = show;
+  }
+
   function _preloadArtistImage(data) {
     if (data && data.__heroReady) return Promise.resolve();
     var thumbs = data && data.artist && data.artist.thumbnails || [];
@@ -183,6 +196,17 @@
     });
   }
 
+  function renderArtistSongsPage(data) {
+    if (!data || !data.artist) return;
+    var title = document.getElementById('artist-songs-title');
+    if (title) title.textContent = data.artist.name || 'Songs';
+    renderTopSongs(data.topSongs || [], '', true, 'artist-songs-list');
+    var back = document.getElementById('artist-songs-back');
+    if (back) back.onclick = function() {
+      if (window.navigateTo) window.navigateTo('#artist/' + encodeURIComponent(state._currentChannelId));
+    };
+  }
+
   function renderHero(artist) {
     var container = document.getElementById('artist-hero');
     if (!container) return;
@@ -289,11 +313,9 @@
       var isSubscribed = subscribeBtn.getAttribute('aria-pressed') === 'true';
       var body = { channel_id: channelId, name: artist.name || '', thumbnail: thumbUrl };
       try {
-        var result = await window.api('/api/subscribed_artists/', {
-          method: isSubscribed ? 'DELETE' : 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body)
-        });
+        var result = isSubscribed
+          ? await window.apiDelete('/api/subscribed_artists/', body)
+          : await window.api('/api/subscribed_artists/', body);
         state._subscribedArtists = result.artists || [];
         subscribeBtn.setAttribute('aria-pressed', String(!isSubscribed));
         subscribeBtn.textContent = isSubscribed ? 'Subscribe' : 'Subscribed';
@@ -302,8 +324,8 @@
     });
   }
 
-  function renderTopSongs(songs, browseId, topSongsOnly) {
-    var list = document.getElementById('artist-top-songs-list');
+  function renderTopSongs(songs, browseId, topSongsOnly, listId) {
+    var list = document.getElementById(listId || 'artist-top-songs-list');
     if (!list) return;
     if (!songs || !songs.length) {
       list.innerHTML = '';
@@ -328,6 +350,7 @@
       var artistCredits = artistCreditsHtml(item);
       var albumName = typeof item.album === 'string' ? item.album :
         (item.album && item.album.name) || item.album_name || '';
+      var duration = window.formatTrackDuration ? window.formatTrackDuration(item) : '';
       var isLiked = typeof _playlistsData !== 'undefined' && _playlistsData.liked_songs && _playlistsData.liked_songs.includes(item.video_id);
       var heartSvg = isLiked
         ? '<svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg>'
@@ -341,6 +364,7 @@
           (albumName ? '<div class="artist-song-album">' + escHtml(albumName) + '</div>' : '') +
         '</div>' +
         '<button class="artist-song-play-btn" title="Play"><svg viewBox="0 0 24 24" fill="currentColor"><polygon points="8,5 19,12 8,19"/></svg></button>' +
+        (duration ? '<span class="track-duration artist-song-duration">' + escHtml(duration) + '</span>' : '') +
         '<button class="artist-song-like-btn' + (isLiked ? ' liked' : '') + '" title="Like">' + heartSvg + '</button>' +
         '<button class="result-more-btn artist-song-more-btn" type="button" title="More options">' + moreSvg + '</button>';
       // Play button
@@ -371,17 +395,8 @@
       viewAllBtn.textContent = 'View all';
       viewAllBtn.addEventListener('click', function() {
         var channelId = state._currentChannelId;
-        if (browseId) {
-          if (channelId && window.navigateArtistTopSongs) {
-            window.navigateArtistTopSongs(channelId);
-          } else if (channelId && window.navigateTo) {
-            window.navigateTo('#artist/' + encodeURIComponent(channelId) + '?view=top-songs');
-          }
-        } else {
-          // Some artist payloads already contain more than the preview limit
-          // without exposing a browseId. Expand those rows in place.
-          renderTopSongs(songs, '', true);
-        }
+        if (channelId && window.navigateArtistTopSongs) window.navigateArtistTopSongs(channelId);
+        else if (channelId && window.navigateTo) window.navigateTo('#artist/' + encodeURIComponent(channelId) + '/songs');
       });
       viewAllContainer.appendChild(viewAllBtn);
       list.appendChild(viewAllContainer);
@@ -402,7 +417,7 @@
     for (let i = 0; i < items.length; i++) {
       let item = items[i];
       var card = document.createElement('div');
-      card.className = 'hscroll-card' + (type === 'artist' ? ' related-artist-card' : '');
+      card.className = 'hscroll-card' + (type === 'artist' ? ' related-artist-card' : '') + (type === 'album' ? ' album-card' : '');
       var thumbUrl = '';
       var isRound = false;
       var title = '';
@@ -488,5 +503,30 @@
     });
   }
 
+  async function loadArtistSongs(channelId) {
+    var route = '#artist/' + encodeURIComponent(channelId) + '/songs';
+    var token = ++state._artistLoadToken;
+    state._artistLoading = true;
+    state._currentChannelId = channelId;
+    showArtistSongsSkeleton(true);
+    function requestIsCurrent() {
+      return token === state._artistLoadToken && (!window.getRoute || window.getRoute() === route);
+    }
+    try {
+      var data = state._artistCache[channelId] || await window.api('/api/artist/' + encodeURIComponent(channelId));
+      await ensureExpandedTopSongs(channelId, data);
+      if (!requestIsCurrent()) return;
+      state._artistCache[channelId] = data;
+      state._cachedArtistData = data;
+      renderArtistSongsPage(data);
+      showArtistSongsSkeleton(false);
+    } catch (e) {
+      if (requestIsCurrent() && window.toast) window.toast(e.message || 'Unable to load songs', 'error');
+    } finally {
+      if (token === state._artistLoadToken) state._artistLoading = false;
+    }
+  }
+
   window.loadArtist = loadArtist;
+  window.loadArtistSongs = loadArtistSongs;
 })();

@@ -207,6 +207,7 @@ function _buildQueueRow(container, item, i, currentIndex, thumbsById) {
   el.dataset.index = String(i);
 
   const thumbUrl = item.thumbnail || '';
+  const duration = window.formatTrackDuration ? window.formatTrackDuration(item) : '';
   const reusableImg = thumbsById && thumbUrl ? thumbsById.get(id) : null;
   const sameUrl = reusableImg && reusableImg.src === thumbUrl;
   // A placeholder marker <div> stands in for the thumb during innerHTML
@@ -230,6 +231,7 @@ function _buildQueueRow(container, item, i, currentIndex, thumbsById) {
       <div class="queue-title">${escHtml(item.title)}</div>
       <div class="queue-artist">${window.artistLinksHtml(item.artist, item.channelId)}</div>
     </div>
+    ${duration ? `<span class="track-duration">${escHtml(duration)}</span>` : ''}
     ${_queueMoreMenuHtml(item)}
   `;
   if (sameUrl) el.querySelector('.queue-thumb-slot').replaceWith(reusableImg);

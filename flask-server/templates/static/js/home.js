@@ -108,42 +108,12 @@
 
   function renderShelvesWhenVisible(container, shelves) {
     if (deferredShelfObserver) deferredShelfObserver.disconnect();
-    const shelfById = new Map(shelves.map(shelf => [String(shelf.id), shelf]));
-    container.innerHTML = shelves.map(deferredShelfMarkup).join('');
-
-    const render = shell => {
-      if (!shell || shell.dataset.rendered) return;
-      const shelf = shelfById.get(shell.dataset.deferredShelfId);
-      if (!shelf) return;
-      shell.dataset.rendered = 'true';
-      const holder = document.createElement('div');
-      holder.innerHTML = HomeRenderers.renderShelf(shelf).trim();
-      const rendered = holder.firstElementChild;
-      if (!rendered) return;
-      shell.replaceWith(rendered);
-      rendered.querySelectorAll('.home-shelf-content').forEach(updateShelfArrows);
-      if (window.syncTrackPlaybackIndicators) window.syncTrackPlaybackIndicators();
-    };
-
-    const pending = Array.from(container.querySelectorAll('.home-shelf-deferred'));
-    // The opening viewport must never depend on IntersectionObserver. Some
-    // browser/WebView combinations defer its first callback until after a
-    // scroll, leaving Home apparently blank even though data has arrived.
-    // Render the first two shelves synchronously; lower shelves remain lazy.
-    pending.slice(0, 2).forEach(render);
-    const deferred = Array.from(container.querySelectorAll('.home-shelf-deferred'));
-    if (!('IntersectionObserver' in window)) {
-      deferred.forEach(render);
-      return;
-    }
-    deferredShelfObserver = new IntersectionObserver(entries => {
-      entries.forEach(entry => {
-        if (!entry.isIntersecting) return;
-        deferredShelfObserver.unobserve(entry.target);
-        render(entry.target);
-      });
-    }, { root: null, rootMargin: '240px 0px' });
-    deferred.forEach(shelf => deferredShelfObserver.observe(shelf));
+    // Render the complete returned feed. The prior observer-based approach
+    // could leave lower shelves permanently as placeholders in this app's
+    // scroll container, so account recommendations disappeared on scroll.
+    container.innerHTML = shelves.map(HomeRenderers.renderShelf).join('');
+    container.querySelectorAll('.home-shelf-content').forEach(updateShelfArrows);
+    if (window.syncTrackPlaybackIndicators) window.syncTrackPlaybackIndicators();
   }
 
   function renderHomeFeed() {

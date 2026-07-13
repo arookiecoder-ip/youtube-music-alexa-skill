@@ -371,7 +371,7 @@
                 <div class="queue-title">${escapeHtml(track.title || '')}</div>
                 <div class="queue-artist">${window.artistLinksHtml(artist, artistChannelIds.length ? artistChannelIds : (track.channelId || track.channel_id || ''))}</div>
               </div>
-              ${trackDuration ? `<div class="playlist-track-duration">${escapeHtml(trackDuration)}</div>` : ''}
+              ${trackDuration ? `<div class="track-duration playlist-track-duration">${escapeHtml(trackDuration)}</div>` : ''}
               ${songActions(contextTrack, plId.toUpperCase() === 'LM')}`;
             row.onclick = () => {
               if (window.playResult) {

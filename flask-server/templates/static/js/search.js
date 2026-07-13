@@ -158,6 +158,7 @@ function _createSongElement(item, existingThumbsById) {
     const moreSvg = `<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg>`;
 
     const isLiked = typeof _playlistsData !== 'undefined' && _playlistsData.liked_songs && _playlistsData.liked_songs.includes(item.video_id);
+    const duration = window.formatTrackDuration ? window.formatTrackDuration(item) : '';
     const heartSvg = isLiked 
       ? `<svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg>`
       : `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg>`;
@@ -168,6 +169,7 @@ function _createSongElement(item, existingThumbsById) {
         <div class="result-title">${escHtml(item.title)}</div>
         <div class="result-artist">${window.artistLinksHtml(item.artist, item.channelId || item.channel_id || '')}</div>
       </div>
+      ${duration ? `<span class="track-duration">${escHtml(duration)}</span>` : ''}
       <button class="result-like-btn ${isLiked ? 'liked' : ''}" type="button" title="Like" data-vid="${escHtml(item.video_id)}">${heartSvg}</button>
       <button class="result-queue-btn" type="button" title="Add to queue" ${isCurrent ? 'hidden' : ''}>${queueAddSvg}</button>
       <button class="result-more-btn" type="button" title="More options">${moreSvg}</button>
@@ -319,7 +321,7 @@ function renderResults() {
 
     items.forEach(item => {
       const card = document.createElement('div');
-      card.className = 'hscroll-card';
+      card.className = 'hscroll-card' + (type === 'album' ? ' album-card' : '');
       // The "all" tab maps items to camelCase browseId; the category-tab
       // endpoints return snake_case browse_id/playlist_id. Accept both.
       const browseId = item.browseId || item.browse_id || item.playlistId || item.playlist_id || '';
@@ -405,7 +407,7 @@ function renderResults() {
 
   function renderTopResultCard(item, topSongs) {
     const card = document.createElement('div');
-    card.className = 'top-result-card ' + (item.resultType === 'artist' ? 'is-artist' : 'is-song');
+    card.className = 'top-result-card ' + (item.resultType === 'artist' ? 'is-artist' : (item.resultType === 'album' ? 'is-album' : 'is-song'));
     
     let thumb = item.thumbnail || '';
     if (item.thumbnails && item.thumbnails.length) thumb = item.thumbnails[item.thumbnails.length - 1].url;

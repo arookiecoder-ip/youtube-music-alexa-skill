@@ -11,7 +11,7 @@
   }
 
   function hideAllViews() {
-    setHidden('.play-section, #recs-section, #home-section, #idle-hero, #results-section, #queue-section, #artist-section, #album-section', true);
+    setHidden('.play-section, #recs-section, #home-section, #idle-hero, #results-section, #queue-section, #artist-section, #artist-songs-section, #album-section', true);
   }
 
   function showHomeViews() {
@@ -22,7 +22,7 @@
     setHidden('.play-section', false);
     setHidden('#home-section', !homeReady);
     setHidden('#idle-hero', true);
-    setHidden('#results-section, #queue-section, #artist-section, #album-section', true);
+    setHidden('#results-section, #queue-section, #artist-section, #artist-songs-section, #album-section', true);
   }
 
   var routes = {
@@ -34,7 +34,7 @@
       // page goes blank.
       if (window.__appState && window.__appState._resultsOpen) {
         setHidden('.play-section, #results-section', false);
-        setHidden('#home-section, #idle-hero, #queue-section, #artist-section, #album-section', true);
+        setHidden('#home-section, #idle-hero, #queue-section, #artist-section, #artist-songs-section, #album-section', true);
       } else {
         showHomeViews();
       }
@@ -92,7 +92,16 @@
     if (section) {
       // Search bar and bottom playbar are persistent shell chrome — they stay
       // visible on the artist page; only the content views swap out.
-      setHidden('#recs-section, #home-section, #idle-hero, #results-section, #queue-section, #artist-section', true);
+      setHidden('#recs-section, #home-section, #idle-hero, #results-section, #queue-section, #artist-section, #artist-songs-section', true);
+      setHidden('.play-section', false);
+      section.hidden = false;
+    }
+  }
+
+  function showArtistSongsSection() {
+    var section = document.getElementById('artist-songs-section');
+    if (section) {
+      setHidden('#recs-section, #home-section, #idle-hero, #results-section, #queue-section, #artist-section, #artist-songs-section', true);
       setHidden('.play-section', false);
       section.hidden = false;
     }
@@ -107,11 +116,12 @@
   var _scrollCache = {};
   function _routeScrollId(route) {
     if (!route) return null;
-    if (route.indexOf('#artist/') === 0) return 'artist-section';
+    if (route.indexOf('#artist/') === 0) return route.endsWith('/songs') ? 'artist-songs-section' : 'artist-section';
     if (route.indexOf('#album/') === 0) return 'album-section';
     if (route === '#now-playing') return 'now-playing-section';
     if (route === '#history') return 'history-modal';
     if (route === '#explore') return 'explore-modal';
+    if (route.indexOf('#mood/') === 0) return 'mood-modal';
     if (route === '#library') return 'library-modal';
     if (route.indexOf('#playlist/') === 0) return 'playlist-detail-modal-overlay';
     return 'main'; // #home, search results
@@ -135,10 +145,10 @@
     document.documentElement.scrollTop = 0;
     document.body.scrollTop = 0;
     [
-      'main', 'results-section', 'results-list', 'artist-section',
+      'main', 'results-section', 'results-list', 'artist-section', 'artist-songs-section',
       'album-section', 'now-playing-section', 'playlist-detail-modal',
       'playlist-detail-modal-overlay', 'history-modal', 'history-modal-overlay',
-      'explore-modal', 'explore-modal-overlay', 'library-modal', 'library-modal-overlay'
+      'explore-modal', 'explore-modal-overlay', 'mood-modal', 'mood-modal-overlay', 'library-modal', 'library-modal-overlay'
     ].forEach(function(id) {
       var el = id === 'main' ? document.querySelector('main') : document.getElementById(id);
       if (el) el.scrollTop = 0;
@@ -165,6 +175,7 @@
     document.body.classList.toggle('album-route', returnRoute.indexOf('#album/') === 0);
     document.body.classList.toggle('history-route', returnRoute === '#history');
     document.body.classList.toggle('explore-route', returnRoute === '#explore');
+    document.body.classList.toggle('mood-route', returnRoute.indexOf('#mood/') === 0);
     document.body.classList.toggle('library-route', returnRoute === '#library');
 
     // Restore visibility of the underlying page NOW, before the slide-down
@@ -188,13 +199,16 @@
     } else if (returnRoute === '#explore') {
       var eo = document.getElementById('explore-modal-overlay');
       if (eo) eo.classList.add('open');
+    } else if (returnRoute.indexOf('#mood/') === 0) {
+      var mo = document.getElementById('mood-modal-overlay');
+      if (mo) mo.classList.add('open');
     } else if (returnRoute === '#library') {
       var lo = document.getElementById('library-modal-overlay');
       if (lo) lo.classList.add('open');
     } else if (returnRoute.indexOf('#artist/') === 0) {
       showArtistSection();
     } else if (returnRoute.indexOf('#album/') === 0) {
-      setHidden('#recs-section, #home-section, #idle-hero, #results-section, #queue-section, #artist-section', true);
+      setHidden('#recs-section, #home-section, #idle-hero, #results-section, #queue-section, #artist-section, #artist-songs-section', true);
       setHidden('.play-section', false);
       var albumSection = document.getElementById('album-section');
       if (albumSection) albumSection.hidden = false;
@@ -298,6 +312,7 @@
     document.body.classList.toggle('playlists-route', hash.indexOf('#playlist/') === 0);
     document.body.classList.toggle('history-route', hash === '#history');
     document.body.classList.toggle('explore-route', hash === '#explore');
+    document.body.classList.toggle('mood-route', hash.indexOf('#mood/') === 0);
     document.body.classList.toggle('library-route', hash === '#library');
     document.body.classList.toggle('artist-route', hash.indexOf('#artist/') === 0);
     document.body.classList.toggle('album-route', hash.indexOf('#album/') === 0);
@@ -316,6 +331,10 @@
     if (hash !== '#explore') {
       var exploreOverlay = document.getElementById('explore-modal-overlay');
       if (exploreOverlay) exploreOverlay.classList.remove('open');
+    }
+    if (hash.indexOf('#mood/') !== 0) {
+      var moodOverlay = document.getElementById('mood-modal-overlay');
+      if (moodOverlay) moodOverlay.classList.remove('open');
     }
     if (hash !== '#library') {
       var libraryOverlay = document.getElementById('library-modal-overlay');
@@ -386,14 +405,30 @@
       hideAllViews();
       setHidden('.play-section', false);
       if (window.loadAlbum) window.loadAlbum(albumId);
+    } else if (hash.indexOf('#mood/') === 0) {
+      var moodRouteValue = hash.slice('#mood/'.length);
+      var moodQueryIndex = moodRouteValue.indexOf('?');
+      var moodParams = decodeURIComponent(moodQueryIndex === -1 ? moodRouteValue : moodRouteValue.slice(0, moodQueryIndex));
+      var moodQuery = new URLSearchParams(moodQueryIndex === -1 ? '' : moodRouteValue.slice(moodQueryIndex + 1));
+      var moodTitle = moodQuery.get('title') || 'Moods and genres';
+      if (!moodParams) { window.navigateTo('#explore'); return; }
+      if (window.openMoodPage) window.openMoodPage(moodParams, moodTitle);
     } else if (hash.indexOf('#artist/') === 0) {
       var artistRouteValue = hash.slice('#artist/'.length);
       var artistQueryIndex = artistRouteValue.indexOf('?');
-      var artistTopSongsOnly = artistQueryIndex !== -1 && artistRouteValue.slice(artistQueryIndex + 1) === 'view=top-songs';
-      var channelId = decodeURIComponent(artistQueryIndex === -1 ? artistRouteValue : artistRouteValue.slice(0, artistQueryIndex));
+      var artistPath = artistQueryIndex === -1 ? artistRouteValue : artistRouteValue.slice(0, artistQueryIndex);
+      var legacyTopSongs = artistQueryIndex !== -1 && artistRouteValue.slice(artistQueryIndex + 1) === 'view=top-songs';
+      var artistSongsPage = /\/songs$/.test(artistPath);
+      var channelId = decodeURIComponent(artistSongsPage ? artistPath.slice(0, -'/songs'.length) : artistPath);
       if (!channelId) { window.navigateTo('#home'); return; }
-      showArtistSection();
-      if (window.loadArtist) window.loadArtist(channelId, artistTopSongsOnly);
+      if (legacyTopSongs) { window.navigateTo('#artist/' + encodeURIComponent(channelId) + '/songs'); return; }
+      if (artistSongsPage) {
+        showArtistSongsSection();
+        if (window.loadArtistSongs) window.loadArtistSongs(channelId);
+      } else {
+        showArtistSection();
+        if (window.loadArtist) window.loadArtist(channelId, false);
+      }
     } else {
       window.navigateTo('#home');
       return;

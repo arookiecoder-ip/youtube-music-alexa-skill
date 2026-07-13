@@ -406,6 +406,17 @@
     margin-bottom: 10px;
   }
 
+  /* Song length sits immediately before its Like action in every row type. */
+  .track-duration {
+    flex: none;
+    min-width: 38px;
+    color: var(--muted);
+    font-size: .78rem;
+    font-variant-numeric: tabular-nums;
+    text-align: right;
+    white-space: nowrap;
+  }
+
   .row { display: flex; gap: var(--space-2); }
 
   /* ---- Inputs ---- */

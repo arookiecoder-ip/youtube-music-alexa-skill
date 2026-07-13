@@ -3920,6 +3920,8 @@ async def get_history():
             "title": item.get("title"),
             "artist": ", ".join([a.get("name", "") for a in item.get("artists", [])]) if item.get("artists") else "",
             "thumbnail_url": item.get("thumbnails", [{"url": ""}])[0].get("url") if item.get("thumbnails") else "",
+            "duration": item.get("duration") or "",
+            "duration_seconds": item.get("duration_seconds") or 0,
             "played_at": 0 # Not provided by ytmusicapi directly
         })
     return jsonify(mapped)
@@ -5553,42 +5555,36 @@ async def api_get_explore():
     if _get_ytmusic_home().auth_type == AuthType.UNAUTHORIZED:
         return jsonify({'error': 'YouTube Music authentication required. Please visit /setup/'}), 403
     try:
-        # Explore is a recommendation surface: pair public discovery shelves
-        # with the authenticated account's native Home shelves.  get_home is
-        # personalized by YouTube Music (history, subscriptions and likes)
-        # while get_explore supplies the current charts, moods and releases.
+        # Keep Explore separate from Home.  get_home contains account-specific
+        # shelves such as Liked Music and Listen again; those belong on Home,
+        # not in the public discovery browser.
         ytm = _get_ytmusic_home()
-        account_home, explore = await asyncio.gather(
-            asyncio.to_thread(ytm.get_home, limit=8),
-            asyncio.to_thread(ytm.get_explore),
-            return_exceptions=True,
-        )
-        if isinstance(explore, Exception):
-            raise explore
-        if isinstance(account_home, Exception):
-            logger.warning("Personalized Explore shelves unavailable: %s", account_home)
-            account_home = []
-        personal_shelves = []
-        for shelf in account_home or []:
-            if not isinstance(shelf, dict):
-                continue
-            items = shelf.get('contents') or []
-            title = shelf.get('title') or ''
-            if title and items:
-                personal_shelves.append({'title': title, 'items': items})
-            if len(personal_shelves) >= 5:
-                break
-        return jsonify({
-            'personalized': True,
-            'personal_shelves': personal_shelves,
-            'discovery': explore or {},
-        })
+        explore = await asyncio.to_thread(ytm.get_explore)
+        return jsonify(explore or {})
     except Exception as e:
         message = str(e)
         if "invalid argument" in message.lower():
             # Keep Explore account-scoped. Returning an error is preferable to
             # quietly replacing a user's recommendations with anonymous data.
             logger.warning("Authenticated YouTube Explore request failed: %s", message)
+        return jsonify({'error': str(e)}), 500
+
+
+@app.route("/api/explore/moods/", methods=["GET"])
+async def api_get_explore_moods():
+    """Return the playlists behind a YouTube Music mood or genre category."""
+    from ytmusicapi.auth.types import AuthType
+    if _get_ytmusic_home().auth_type == AuthType.UNAUTHORIZED:
+        return jsonify({'error': 'YouTube Music authentication required. Please visit /setup/'}), 403
+
+    params = (request.args.get('params') or '').strip()
+    if not params:
+        return jsonify({'error': 'A mood or genre is required.'}), 400
+    try:
+        playlists = await asyncio.to_thread(_get_ytmusic_home().get_mood_playlists, params)
+        return jsonify({'playlists': playlists or []})
+    except Exception as e:
+        logger.warning("Explore mood lookup failed: %s", e)
         return jsonify({'error': str(e)}), 500
 
 

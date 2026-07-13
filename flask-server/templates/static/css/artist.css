@@ -2,6 +2,17 @@
   #artist-section {
     padding: 0 0 var(--space-5) 0;
   }
+  #artist-songs-section {
+    max-width: 1400px;
+    margin: 0 auto;
+    padding: calc(var(--topbar-h, 64px) + 28px) 18px var(--space-5);
+  }
+  #artist-songs-content[hidden], #artist-songs-skeleton[hidden] { display: none; }
+  .artist-songs-page-head { display: flex; align-items: center; gap: 16px; margin: 0 0 22px; }
+  .artist-songs-page-head h1 { margin: 3px 0 0; font-size: clamp(1.75rem, 3vw, 2.5rem); }
+  .artist-songs-back { width: 40px; height: 40px; border-radius: 50%; border: 1px solid var(--border); background: transparent; color: var(--text); font-size: 1.45rem; cursor: pointer; }
+  .artist-songs-back:hover { background: rgba(255,255,255,.12); }
+  .artist-songs-skeleton-head { width: 220px; height: 34px; margin: 0 0 22px; background: linear-gradient(90deg, var(--border) 25%, #2a2a2a 37%, var(--border) 63%); background-size: 400% 100%; animation: skeletonShimmer 1.4s ease infinite; }
   #artist-top-songs, .hscroll-section {
     padding: 0 18px;
     max-width: 1400px;

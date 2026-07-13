@@ -23,7 +23,9 @@
       window._playlistsData.liked_songs.includes(track.video_id);
     var like = '<svg viewBox="0 0 24 24" fill="' + (liked ? 'currentColor' : 'none') + '" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg>';
     var more = '<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg>';
-    return '<button class="result-like-btn' + (liked ? ' liked' : '') + '" type="button" title="Like" data-vid="' + esc(track.video_id) + '">' + like + '</button>' +
+    var duration = window.formatTrackDuration ? window.formatTrackDuration(track) : '';
+    return (duration ? '<span class="track-duration">' + esc(duration) + '</span>' : '') +
+      '<button class="result-like-btn' + (liked ? ' liked' : '') + '" type="button" title="Like" data-vid="' + esc(track.video_id) + '">' + like + '</button>' +
       '<button class="result-more-btn" type="button" title="More options">' + more + '</button>';
   }
 
@@ -109,6 +111,8 @@
           title: track.title || '',
           artist: artist,
           thumbnail: thumbnail,
+          duration: track.duration || '',
+          duration_seconds: track.duration_seconds || 0,
           album_id: currentAlbumId
         };
         var row = document.createElement('div');
