@@ -104,6 +104,7 @@
   border-color: transparent !important;
   background: transparent !important;
 }
+
 .artist-song-like-btn.liked {
   border-color: transparent !important;
   background: transparent !important;
@@ -652,12 +653,19 @@ body.rail-collapsed .sidebar-playlist-list { scrollbar-width: none; }
     opacity: 1;
   }
   body.rail-collapsed .sidebar-brand {
+    position: relative;
     width: 100%;
     min-width: 0;
     overflow: hidden;
     padding-left: 0;
     padding-right: 0;
     justify-content: center;
+  }
+  body.rail-collapsed .sidebar-rail-toggle {
+    position: absolute;
+    left: 50%;
+    margin: 0;
+    transform: translateX(-50%);
   }
   body.rail-collapsed .sidebar-brand strong {
     max-width: 0;
@@ -1006,6 +1014,7 @@ body.rail-collapsed .sidebar .sidebar-nav-btn:hover {
     right: auto;
     top: 3px;
     width: var(--rail-w);
+    transition: width .25s ease, background .25s ease, border-color .25s ease;
     height: auto;
     bottom: 0;
     transform: none;
@@ -1036,8 +1045,12 @@ body.rail-collapsed .sidebar .sidebar-nav-btn:hover {
   /* With the device section hidden, nav and tools read as one group —
      keep the same 2px rhythm between all nav buttons */
   .sidebar-nav { margin-bottom: 2px; }
-  header .rail-toggle-btn { visibility: hidden; pointer-events: none; }
-  header > .brand { display: none; }
+  /* The brand and rail toggle live in the header; the sidebar is navigation
+     only.  Keeping one source for these controls prevents two competing
+     icon/text positions during rail transitions. */
+  header .rail-toggle-btn { visibility: visible; pointer-events: auto; }
+  header > .brand { display: flex; }
+  .sidebar-brand { display: none; }
   .sidebar-tools #refresh-page-btn { display: none; }
   .sidebar-signout { padding-top: 12px; }
 }
@@ -1201,6 +1214,19 @@ body.results-open .player-section.is-visible { transform: none; }
   border-radius: 50% !important;
   outline: none !important;
   aspect-ratio: 1 / 1;
+}
+
+/* Full player overlay: preserve the page underneath completely. */
+@media (min-width: 900px) {
+  body.now-playing-route,
+  body.now-playing-closing { overflow: auto !important; }
+  body.now-playing-route main,
+  body.now-playing-closing main {
+    height: auto !important;
+    min-height: 0 !important;
+    overflow: visible !important;
+    padding-bottom: calc(var(--playbar-h) + 28px) !important;
+  }
 }
 .player-section .pp-btn:focus,
 .player-section .pp-btn:focus-visible {
@@ -1444,10 +1470,10 @@ body.now-playing-route .player-section .player-expand-btn svg {
      lets main go from height:100vh back to height:auto instantly — the
      content reflow is visible behind the sliding overlay as a jump. */
   body.now-playing-closing main {
-    height: 100vh;
+    height: auto;
     min-height: 0;
-    padding-bottom: 0;
-    overflow: hidden;
+    padding-bottom: calc(var(--playbar-h) + 28px);
+    overflow: visible;
   }
   /* Keep the now-playing section above underlying overlays (playlist, history,
      etc.) that share z-index 210, so the close slide always paints on top. */
@@ -1485,11 +1511,18 @@ body.now-playing-route .player-section .player-expand-btn svg {
   body.now-playing-closing .player-section:not(#now-playing-section) {
     transition: none !important;
   }
+  /* The compact desktop bar is the persistent layer underneath the expanded
+     player. Keep it fully settled while only #now-playing-section slides. */
+  body.now-playing-route .player-section,
+  body.now-playing-closing .player-section {
+    transform: none !important;
+    transition: none !important;
+  }
   body.now-playing-route main {
-    height: 100vh;
+    height: auto;
     min-height: 0;
-    padding-bottom: 0;
-    overflow: hidden;
+    padding-bottom: calc(var(--playbar-h) + 28px);
+    overflow: visible;
   }
 
   body.now-playing-route header {
@@ -2806,7 +2839,10 @@ body.results-open .player-section {
 #np-queue-list .queue-swipe-wrapper + .queue-swipe-wrapper .queue-item,
 #np-queue-list .queue-item + .queue-item { border-top: none; }
 #np-queue-list .queue-item:hover { background: rgba(255,255,255,.06); }
-#np-queue-list .queue-item.active { background: rgba(255,255,255,.08); }
+#np-queue-list .queue-item.active {
+  background: rgba(255,255,255,.08);
+  border-left-color: transparent;
+}
 
 /* On mobile the now-playing page shows full-width art only */
 @media (max-width: 899px) {

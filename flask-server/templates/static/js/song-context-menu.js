@@ -54,8 +54,10 @@
     if (root._songContextTrack) {
       const track = Object.assign({}, root._songContextTrack);
       if (!track.album_id) track.album_id = track.albumId || track.album_browse_id || root.dataset.albumId || root.dataset.albumBrowseId || '';
-      if (!track.album_id && track.album && typeof track.album === 'object') {
-        track.album_id = track.album.id || track.album.browseId || '';
+      if (!track.album_id && track.album) {
+        track.album_id = typeof track.album === 'object'
+          ? (track.album.id || track.album.browseId || '')
+          : '';
       }
       if (!track.artist_id) track.artist_id = track.channel_id || track.channelId || track.artistId || '';
       return track;

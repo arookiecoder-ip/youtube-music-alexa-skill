@@ -52,7 +52,7 @@
         const targetId = item.target ? (item.target.id || '') :
             (item.browseId || item.playlistId || item.targetId || '');
         
-        const albumId = item.albumId || item.album_id ||
+        const albumId = item.albumId || item.album_id || item.albumBrowseId || item.album_browse_id ||
             (item.album && typeof item.album === 'object' && (item.album.id || item.album.browseId)) || '';
         const artistId = item.channelId || item.channel_id || item.artistId || item.artist_id ||
             (Array.isArray(item.artists) && item.artists[0] &&

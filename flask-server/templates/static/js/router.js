@@ -49,11 +49,8 @@
       if (window.openHistoryPage) window.openHistoryPage(true);
     },
     '#now-playing': function() {
-      // Show the dedicated now-playing page (album art + queue) in the main content area.
-      // This replaces the old mini-popup overlay approach.
-      hideAllViews();
-      // Search is persistent top-bar chrome on desktop, including while the
-      // expanded player is open.
+      // Full player is a fixed overlay. Leave the current page and its layout
+      // untouched underneath it; only the overlay itself should animate.
       setHidden('.play-section', false);
       setHidden('.player-section', false);
       var npSection = document.getElementById('now-playing-section');
@@ -210,9 +207,13 @@
     // Clean up queue panel state
     var queueSection = document.getElementById('queue-section');
     if (queueSection) queueSection.hidden = true;
-    // Keep the two-column shell stable until the now-playing layer has
-    // finished sliding away; removing this immediately animates the layout
-    // underneath the closing layer and visibly pushes the page.
+    // Restore the underlying page geometry immediately, but freeze its layout
+    // transition so the home page is never exposed in the playback columns.
+    var closingMain = document.querySelector('main');
+    if (closingMain) {
+      closingMain.style.transition = 'none';
+      closingMain.classList.remove('has-queue');
+    }
 
     if (npSection) {
       if (npSection._closeTimer) clearTimeout(npSection._closeTimer);
@@ -225,11 +226,6 @@
 
         // Animation complete: only cleanup remains. The underlying page is
         // already visible (restored before the animation started).
-        var closingMain = document.querySelector('main');
-        if (closingMain) {
-          closingMain.style.transition = 'none';
-          closingMain.classList.remove('has-queue');
-        }
         npSection.hidden = true;
         npSection._closeTimer = null;
         npSection._closeCleanup = null;
@@ -326,6 +322,11 @@
       if (libraryOverlay) libraryOverlay.classList.remove('open');
     }
     if (hash !== '#now-playing') {
+      var closingMain = document.querySelector('main');
+      if (isClosingNowPlaying && closingMain) {
+        closingMain.style.transition = 'none';
+        closingMain.classList.remove('has-queue');
+      }
       var npSection = document.getElementById('now-playing-section');
       if (npSection && !isClosingNowPlaying) npSection.hidden = true;
       if (npSection && isClosingNowPlaying) {
@@ -336,11 +337,6 @@
           if (npSection._closeTimer) clearTimeout(npSection._closeTimer);
           npSection.removeEventListener('transitionend', finishClose);
           playerTrace('route:close-finished', { property: event && event.propertyName });
-          var closingMain = document.querySelector('main');
-          if (closingMain) {
-            closingMain.style.transition = 'none';
-            closingMain.classList.remove('has-queue');
-          }
           npSection.hidden = true;
           npSection._closeTimer = null;
           npSection._closeCleanup = null;

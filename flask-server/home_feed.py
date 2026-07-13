@@ -75,7 +75,9 @@ def normalize_track(item):
     if isinstance(album, str):
         album = {"name": album}
     album_text = _get_text(album.get("name")) if album else ""
-    album_id = album.get("id") or album.get("browseId") or ""
+    album_id = (album.get("id") or album.get("browseId") or
+                item.get("albumId") or item.get("album_id") or
+                item.get("albumBrowseId") or "")
     artist_id = artists[0]["id"] if artists else ""
     
     subtitle_parts = [p for p in (artists_text, album_text) if p]

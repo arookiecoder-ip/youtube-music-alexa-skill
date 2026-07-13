@@ -474,7 +474,9 @@
         }
 
         var playlistId = itemCard.dataset.playlistId || '';
-        var isPlaylist = !!playlistId;
+        // A track may carry a playlist id only as its playback source.  That
+        // does not make the card a playlist; use the normalized entity kind.
+        var isPlaylist = kind === 'playlist' || kind === 'station';
         sharedMoreMenu._track = {
           video_id: videoId,
           title: itemCard.querySelector('.home-item-title')?.textContent || '',
