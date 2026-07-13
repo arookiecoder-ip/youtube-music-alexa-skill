@@ -405,6 +405,10 @@
       routes[hash]();
     } else if (hash.indexOf('#playlist/') === 0) {
       var playlistId = decodeURIComponent(hash.slice('#playlist/'.length));
+      // Playlist detail is an overlay-style page. Clear the previous content
+      // first so an artist banner cannot remain visible behind the mini rail.
+      hideAllViews();
+      setHidden('.play-section', false);
       if (playlistId && window.openPlaylistDetailModal) window.openPlaylistDetailModal(playlistId, true);
     } else if (hash.indexOf('#album/') === 0) {
       var albumId = decodeURIComponent(hash.slice('#album/'.length));

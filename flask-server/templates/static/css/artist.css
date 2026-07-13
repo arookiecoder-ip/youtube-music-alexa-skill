@@ -24,6 +24,7 @@
   #artist-content[hidden] { display: none; }
   #artist-hero {
     position: relative;
+    overflow: hidden;
     width: auto;
     /* Pull the artwork beneath the sticky shell header. A negative top margin
        was swallowed by the nested artist containers in some layouts, leaving

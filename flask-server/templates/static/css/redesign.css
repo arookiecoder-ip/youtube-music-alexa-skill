@@ -2014,13 +2014,12 @@ body.results-open #results-section {
   border: none;
   border-radius: 0;
   padding: 8px 10px;
-  transition: background .16s ease, box-shadow .16s ease, transform .16s ease;
+  transition: background .16s ease, box-shadow .16s ease;
 }
 #results-section .result-swipe-wrapper .result-item-inner:hover,
 #results-section .result-swipe-wrapper .result-item-inner:focus-within {
   background: rgba(255, 255, 255, .10);
   box-shadow: inset 3px 0 0 var(--accent);
-  transform: translateX(3px);
 }
 #results-section .result-swipe-wrapper + .result-swipe-wrapper .result-item-inner {
   border-top: none;
@@ -2889,6 +2888,16 @@ body.results-open .player-section {
 }
 .np-page-art {
   transition: box-shadow .4s ease, filter .5s ease, transform .5s ease;
+}
+
+/* A shelf with no horizontal overflow disables both arrow buttons. Hide that
+   empty control group instead of showing non-functional navigation arrows. */
+@supports selector(.hscroll-controls:has(button)) {
+  .hscroll-controls:not(:has(.hscroll-scroll:not(:disabled))),
+  .home-shelf-scroll-btns:not(:has(.home-scroll-btn:not(:disabled))),
+  .explore-scroll-btns:not(:has(.explore-scroll-btn:not(:disabled))) {
+    display: none !important;
+  }
 }
 
 .np-page-art-overlay {
@@ -4120,13 +4129,12 @@ body.library-route #nav-library-btn::before {
 #playlist-detail-modal .history-item {
   min-height: 76px;
   padding: 9px 10px;
-  transition: background .16s ease, box-shadow .16s ease, transform .16s ease;
+  transition: background .16s ease, box-shadow .16s ease;
 }
 #playlist-detail-modal .history-item:hover,
 #playlist-detail-modal .history-item:focus-within {
   background: rgba(255,255,255,.09);
   box-shadow: inset 3px 0 0 var(--accent);
-  transform: translateX(3px);
 }
 #playlist-detail-modal .playlist-track-art,
 #playlist-detail-modal .queue-thumb {
