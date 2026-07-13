@@ -103,11 +103,19 @@
   }
 
   async function loadArtist(channelId, topSongsOnly) {
-    if (!state._subscribedArtists && window.api) {
+    // An empty array can be a stale pre-login/failure result. Refresh the
+    // subscription snapshot periodically instead of treating [] as loaded
+    // forever, otherwise an already-followed artist renders as Subscribe.
+    if ((!Array.isArray(state._subscribedArtists) ||
+        Date.now() - (state._subscribedArtistsFetchedAt || 0) > 60000) && window.api) {
       try {
         var subscriptionData = await window.api('/api/subscribed_artists/');
         state._subscribedArtists = subscriptionData.artists || [];
-      } catch (e) { state._subscribedArtists = []; }
+        state._subscribedArtistsFetchedAt = Date.now();
+      } catch (e) {
+        state._subscribedArtists = [];
+        state._subscribedArtistsFetchedAt = 0;
+      }
     }
     // ── Preload-nav: consume cached data from navigateWithPreload ──
     var route = '#artist/' + encodeURIComponent(channelId) + (topSongsOnly ? '?view=top-songs' : '');
@@ -223,7 +231,19 @@
     // ID used to load this page. Keep other common API names as fallbacks.
     var channelId = artist.channelId || artist.channel_id || artist.id ||
       artist.browseId || artist.browse_id || state._currentChannelId || '';
-    var subscribed = !!(state._subscribedArtists || []).find(function (a) { return a.channel_id === channelId; });
+    // YouTube's subscription endpoint can expose the artist's browse ID while
+    // get_artist returns its channel ID (or vice versa). Match every known ID
+    // and then the exact artist name as a safe fallback for that API mismatch.
+    var artistIds = [channelId, state._currentChannelId, artist.channelId,
+      artist.channel_id, artist.id, artist.browseId, artist.browse_id]
+      .filter(Boolean).map(function (id) { return String(id).trim(); });
+    var artistName = String(artist.name || '').trim().toLowerCase();
+    var subscribed = (state._subscribedArtists || []).some(function (a) {
+      var subscriptionId = a && (a.channel_id || a.channelId || a.id || a.browseId || a.browse_id);
+      var subscriptionName = String((a && (a.name || a.artist || a.title)) || '').trim().toLowerCase();
+      return (subscriptionId && artistIds.indexOf(String(subscriptionId).trim()) !== -1) ||
+        (artistName && subscriptionName === artistName);
+    });
     
     container.innerHTML = `
       <div class="artist-hero-art${previewUrl ? ' artist-hero-art-blurred' : ''}"${previewUrl ? ` style="background-image:url('${escHtml(previewUrl)}')"` : ''}></div>
@@ -333,6 +353,7 @@
           ? await window.apiDelete('/api/subscribed_artists/', body)
           : await window.api('/api/subscribed_artists/', body);
         state._subscribedArtists = result.artists || [];
+        state._subscribedArtistsFetchedAt = Date.now();
         subscribeBtn.setAttribute('aria-pressed', String(!isSubscribed));
         subscribeBtn.textContent = isSubscribed ? 'Subscribe' : 'Subscribed';
         if (window.toast) window.toast(isSubscribed ? 'Unsubscribed' : 'Artist subscribed', 'ok');
