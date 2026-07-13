@@ -423,6 +423,15 @@
 
         var videoId = itemCard.dataset.videoId;
         var playlistId = itemCard.dataset.playlistId || '';
+        var kind = itemCard.dataset.kind || '';
+        var isPlaylist = kind === 'playlist' || kind === 'station';
+        if (isPlaylist && playlistId && window.openPlaylistContextMenu) {
+          window.openPlaylistContextMenu(e, {
+            id: playlistId,
+            title: itemCard.querySelector('.home-item-title')?.textContent || 'Playlist'
+          });
+          return;
+        }
         var cardId = videoId || playlistId;
 
         if (activeMenuCardId === cardId && sharedMoreMenu && sharedMoreMenu.classList.contains('open')) {
@@ -532,7 +541,6 @@
         var playlistId = itemCard.dataset.playlistId || '';
         // A track may carry a playlist id only as its playback source.  That
         // does not make the card a playlist; use the normalized entity kind.
-        var isPlaylist = kind === 'playlist' || kind === 'station';
         sharedMoreMenu._track = {
           video_id: videoId,
           title: itemCard.querySelector('.home-item-title')?.textContent || '',

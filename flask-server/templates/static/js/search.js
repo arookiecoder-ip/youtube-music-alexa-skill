@@ -217,6 +217,14 @@ function _createSongElement(item, existingThumbsById) {
     moreMenu.addEventListener('click', (e) => e.stopPropagation());
     moreBtn.addEventListener('click', (e) => {
       e.stopPropagation();
+      // Right-click and the visible 3-dot control intentionally share the
+      // same canonical song menu and option order.
+      if (window.openSongContextMenu) {
+        window.openSongContextMenu(e, item);
+      }
+      // Never fall back to Search's older, shorter popup.  The shared menu
+      // is loaded before this script and is also used by right-click.
+      return;
       const wasOpen = moreMenu.classList.contains('open');
       _closeAllMoreMenus();
       if (!wasOpen) {
@@ -424,6 +432,12 @@ function renderResults() {
         }).join(' and ')
       : (window.artistLinksHtml ? window.artistLinksHtml(artistStr, item.channelId || item.channel_id || '') : escHtml(artistStr));
     const topVideoId = item.videoId || item.video_id || '';
+    const topPlaylistId = item.resultType === 'playlist'
+      ? (item.browseId || item.browse_id || item.playlistId || item.playlist_id || '') : '';
+    if (topPlaylistId) {
+      card.dataset.playlistContext = topPlaylistId;
+      card.dataset.playlistTitle = item.title || item.name || 'Playlist';
+    }
     if (topVideoId) {
       card.dataset.videoId = topVideoId;
       card._songContextTrack = {
@@ -533,11 +547,12 @@ function renderResults() {
     if (rightSide) {
        const songsContainer = card.querySelector('.top-result-songs');
        topSongs.forEach(song => {
+          const songArtist = song.artist || (song.artists && song.artists.length ? song.artists.map(a => a.name).join(' and ') : '');
           const songItem = {
              video_id: song.videoId,
              title: song.title,
-             artist: song.artist || (song.artists && song.artists.length ? song.artists.map(a=>a.name).join(' and ') : ''),
-             channelId: song.channelId || song.channel_id || (song.artists && song.artists[0] && (song.artists[0].id || song.artists[0].browseId)) || '',
+             artist: !songArtist || songArtist.trim().toLowerCase() === 'song' ? artistStr : songArtist,
+             channelId: song.channelId || song.channel_id || (song.artists && song.artists[0] && (song.artists[0].id || song.artists[0].browseId)) || item.browseId || '',
              thumbnail: song.thumbnail || (song.thumbnails && song.thumbnails.length ? song.thumbnails[song.thumbnails.length-1].url : '')
           };
           const el = _createSongElement(songItem, existingThumbsById);

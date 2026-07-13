@@ -115,6 +115,13 @@
     card.tabIndex = 0;
     card.setAttribute('role', 'button');
     card.setAttribute('aria-label', `Open ${title}`);
+    const itemType = String(item.type || item.resultType || '').toLowerCase();
+    const playlistId = item.playlistId || item.playlist_id || item.audioPlaylistId ||
+      (itemType === 'playlist' ? (item.browseId || item.browse_id || '') : '');
+    if (playlistId) {
+      card.dataset.playlistContext = playlistId;
+      card.dataset.playlistTitle = title;
+    }
     card.innerHTML = `
       <div class="explore-card-art">
         <img src="${escHtml(thumb || FALLBACK_IMG)}" alt="${escHtml(title)}" class="explore-card-image" loading="${eager ? 'eager' : 'lazy'}" decoding="async" onload="this.classList.add('is-loaded')" onerror="this.onerror=null;this.src='${FALLBACK_IMG}';this.classList.add('is-loaded')">
@@ -145,7 +152,11 @@
         event.stopPropagation();
         window.openSongContextMenu(event, track);
       } else {
-        openCardContextMenu(event, item);
+        if (playlistId && window.openPlaylistContextMenu) {
+          window.openPlaylistContextMenu(event, { id: playlistId, title: title });
+        } else {
+          openCardContextMenu(event, item);
+        }
       }
     });
     card.querySelector('.explore-card-play').addEventListener('click', event => playItem(event, item));
@@ -304,8 +315,9 @@
     section.appendChild(grid);
     let start = 0;
     const visibleItems = 24;
-    const rowSize = () => window.matchMedia('(max-width: 620px)').matches ? 2 :
-      (window.matchMedia('(max-width: 1050px)').matches ? 4 : 6);
+    // The grid is row-major, so advancing one item moves the visible tiles
+    // by one visual column. Do not jump a whole row on every arrow click.
+    const columnStep = 1;
     const renderPage = (direction) => {
       grid.replaceChildren();
       moods.slice(start, start + visibleItems).forEach((mood, index) => {
@@ -330,11 +342,11 @@
       }
     };
     section.querySelectorAll('.explore-mood-arrow')[0].addEventListener('click', () => {
-      start = Math.max(0, start - rowSize());
+      start = Math.max(0, start - columnStep);
       renderPage('previous');
     });
     section.querySelectorAll('.explore-mood-arrow')[1].addEventListener('click', () => {
-      start = Math.min(Math.max(0, moods.length - visibleItems), start + rowSize());
+      start = Math.min(Math.max(0, moods.length - visibleItems), start + columnStep);
       renderPage('next');
     });
     renderPage();

@@ -5090,8 +5090,8 @@ async def api_get_library():
         return jsonify({'error': str(e)}), 500
 
 @app.route("/api/subscribed_artists/", methods=["GET", "POST", "DELETE"])
-def api_subscribed_artists():
-    """Persist the artists followed by the web remote user."""
+async def api_subscribed_artists():
+    """Return YouTube Music subscriptions merged with website follows."""
     _ensure_db()
     key = 'subscribed_artists'
     with get_db() as conn:
@@ -5099,24 +5099,61 @@ def api_subscribed_artists():
         artists = json.loads(row['v']) if row and row['v'] else []
         if not isinstance(artists, list):
             artists = []
-        if request.method == 'GET':
-            return jsonify({'artists': artists})
-        body = request.get_json(silent=True) or {}
-        channel_id = str(body.get('channel_id') or body.get('id') or '').strip()
-        if not channel_id:
-            return jsonify({'error': 'channel_id is required'}), 400
-        if request.method == 'POST':
-            entry = {
+        if request.method != 'GET':
+            body = request.get_json(silent=True) or {}
+            channel_id = str(body.get('channel_id') or body.get('id') or '').strip()
+            if not channel_id:
+                return jsonify({'error': 'channel_id is required'}), 400
+            if request.method == 'POST':
+                entry = {
+                    'channel_id': channel_id,
+                    'name': str(body.get('name') or '').strip(),
+                    'thumbnail': str(body.get('thumbnail') or '').strip(),
+                }
+                artists = [a for a in artists if a.get('channel_id') != channel_id]
+                artists.insert(0, entry)
+            else:
+                artists = [a for a in artists if a.get('channel_id') != channel_id]
+            conn.execute('INSERT OR REPLACE INTO kv (k, v) VALUES (?, ?)', (key, json.dumps(artists)))
+
+    if request.method != 'GET':
+        return jsonify({'artists': artists})
+
+    # YouTube Music keeps subscriptions separate from library playlists. Merge
+    # them with follows created in this remote, instead of replacing either.
+    try:
+        remote_artists = await asyncio.to_thread(
+            _get_ytmusic_home().get_library_subscriptions, 500, 'recently_added'
+        )
+    except Exception as error:
+        logger.warning('YouTube Music subscriptions unavailable: %s', error)
+        remote_artists = []
+
+    youtube_artists = []
+    for artist in remote_artists or []:
+        channel_id = str(artist.get('browseId') or artist.get('channelId') or '').strip()
+        name = str(artist.get('artist') or artist.get('name') or '').strip()
+        thumbnails = artist.get('thumbnails') or []
+        thumbnail = thumbnails[-1].get('url', '') if thumbnails else ''
+        if channel_id or name:
+            youtube_artists.append({
                 'channel_id': channel_id,
-                'name': str(body.get('name') or '').strip(),
-                'thumbnail': str(body.get('thumbnail') or '').strip(),
-            }
-            artists = [a for a in artists if a.get('channel_id') != channel_id]
-            artists.insert(0, entry)
-        else:
-            artists = [a for a in artists if a.get('channel_id') != channel_id]
-        conn.execute('INSERT OR REPLACE INTO kv (k, v) VALUES (?, ?)', (key, json.dumps(artists)))
-    return jsonify({'artists': artists})
+                'name': name,
+                'thumbnail': thumbnail,
+                'source': 'youtube_music',
+            })
+
+    merged = []
+    seen = set()
+    for artist in list(artists) + youtube_artists:
+        channel_id = str(artist.get('channel_id') or '').strip()
+        name = str(artist.get('name') or '').strip()
+        identity = channel_id or name.lower()
+        if not identity or identity in seen:
+            continue
+        seen.add(identity)
+        merged.append(artist)
+    return jsonify({'artists': merged, 'youtube_count': len(youtube_artists)})
 
 @app.route("/api/library/playlists/", methods=["POST"])
 async def api_create_library_playlist():
@@ -5422,7 +5459,8 @@ def _normalize_artist_song_results(raw_songs, artist_name='', channel_id=''):
                 'id': artist.get('id') or artist.get('browseId') or '',
             }
             for artist in raw_artists
-            if isinstance(artist, dict) and artist.get('name')
+            if (isinstance(artist, dict) and
+                _clean_artist_credit(artist.get('name')))
         ]
         credit = ', '.join(artist['name'] for artist in artists) or artist_name
         thumbnails = song.get('thumbnails') or []
@@ -5493,8 +5531,8 @@ async def api_get_artist(channel_id):
     from ytmusicapi import YTMusic
     yt = _get_ytmusic_home()
 
-    def parse_visual_header_artist(source_client):
-        """Adapt YouTube's newer visual artist header for ytmusicapi 1.12.
+    def parse_resilient_artist(source_client):
+        """Adapt renderer variants that current ytmusicapi cannot parse.
 
         The library currently only parses musicImmersiveHeaderRenderer. Some
         artist pages now return musicVisualHeaderRenderer with identical page
@@ -5505,16 +5543,31 @@ async def api_get_artist(channel_id):
         from types import MethodType
 
         response = source_client._send_request('browse', {'browseId': channel_id})
-        visual_header = (response.get('header') or {}).get('musicVisualHeaderRenderer')
-        if not visual_header:
-            raise KeyError('musicVisualHeaderRenderer')
         adapted = deepcopy(response)
-        header = dict(visual_header)
-        # ytmusicapi's old parser looks for thumbnail.musicThumbnailRenderer;
-        # the visual header exposes the same data as foregroundThumbnail.
-        if not header.get('thumbnail') and header.get('foregroundThumbnail'):
-            header['thumbnail'] = header['foregroundThumbnail']
-        adapted.setdefault('header', {})['musicImmersiveHeaderRenderer'] = header
+        visual_header = (adapted.get('header') or {}).get('musicVisualHeaderRenderer')
+        if visual_header:
+            header = dict(visual_header)
+            # ytmusicapi's old parser looks for thumbnail.musicThumbnailRenderer;
+            # the visual header exposes the same data as foregroundThumbnail.
+            if not header.get('thumbnail') and header.get('foregroundThumbnail'):
+                header['thumbnail'] = header['foregroundThumbnail']
+            adapted.setdefault('header', {})['musicImmersiveHeaderRenderer'] = header
+
+        def remove_unsupported_search_links(node):
+            if isinstance(node, dict):
+                endpoint = node.get('navigationEndpoint')
+                # Artist descriptions/related shelves can contain hashtag runs
+                # with searchEndpoint only. Older ytmusicapi treats every link
+                # as a URL endpoint and raises KeyError. Plain text is safe.
+                if isinstance(endpoint, dict) and endpoint.get('searchEndpoint') and not endpoint.get('urlEndpoint'):
+                    node.pop('navigationEndpoint', None)
+                for child in list(node.values()):
+                    remove_unsupported_search_links(child)
+            elif isinstance(node, list):
+                for child in node:
+                    remove_unsupported_search_links(child)
+
+        remove_unsupported_search_links(adapted)
 
         # Parse with a throwaway client so the shared authenticated client is
         # never monkey-patched while concurrent requests are in flight.
@@ -5529,12 +5582,12 @@ async def api_get_artist(channel_id):
         raw = await asyncio.to_thread(yt.get_artist, channel_id)
     except Exception as e:
         message = str(e)
-        if 'musicImmersiveHeaderRenderer' in message:
-            logger.info('[api/artist/%s] adapting musicVisualHeaderRenderer', channel_id)
+        if 'musicImmersiveHeaderRenderer' in message or 'urlEndpoint' in message:
+            logger.info('[api/artist/%s] adapting unsupported YouTube renderer', channel_id)
             try:
-                raw = await asyncio.to_thread(parse_visual_header_artist, yt)
+                raw = await asyncio.to_thread(parse_resilient_artist, yt)
             except Exception as fallback_e:
-                logger.error('[api/artist/%s] visual-header fallback failed: %s', channel_id, fallback_e)
+                logger.error('[api/artist/%s] renderer fallback failed: %s', channel_id, fallback_e)
                 return jsonify({'error': str(fallback_e)}), 500
         elif "invalid argument" in message.lower():
             logger.warning("YouTube artist browse unavailable; retrying anonymously: %s", message)

@@ -61,7 +61,7 @@
     // is intentionally omitted — there is nothing meaningful for it to do.
     var shuffleBtnHtml = '<button class="playlist-hero-btn playlist-hero-shuffle" type="button" title="Shuffle" aria-label="Shuffle"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/><polyline points="21 16 21 21 16 21"/><line x1="15" y1="15" x2="21" y2="21"/><line x1="4" y1="4" x2="9" y2="9"/></svg></button>';
     var playNextBtnHtml = '<button class="playlist-hero-btn playlist-hero-play-next" type="button" title="Play next" aria-label="Play next"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M4 5v14l11-7L4 5zm13 0v14h3V5h-3z"/></svg></button>';
-    var shareBtnHtml = '<button class="playlist-hero-btn playlist-hero-share is-muted" type="button" title="Sharing unavailable for this album" aria-label="Sharing unavailable for this album" aria-disabled="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg></button>';
+    var shareBtnHtml = '<button class="playlist-hero-btn playlist-hero-share" type="button" title="Share" aria-label="Share"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg></button>';
     var moreBtnHtml = '<button class="playlist-hero-btn playlist-hero-more is-muted" type="button" title="Options unavailable for this album" aria-label="Options unavailable for this album" aria-disabled="true"><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg></button>';
     var actionsRowHtml = tracks.length
       ? '<div class="playlist-detail-hero-actions"><div class="playlist-hero-actions-left">' + shuffleBtnHtml + playNextBtnHtml + '</div><button class="playlist-hero-play album-play-all" type="button" aria-label="Play ' + esc(title) + '"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></button><div class="playlist-hero-actions-right">' + shareBtnHtml + moreBtnHtml + '</div></div>'
@@ -163,12 +163,10 @@
       var track = firstWrapper && firstWrapper._songContextTrack;
       if (track && window.addToQueue) window.addToQueue(track, 'next');
     });
-    // Share: copy the current page URL to the clipboard. Falls back to the
-    // legacy execCommand path on browsers without the async clipboard API.
+    // Share the canonical YouTube Music album/single URL, not the app route.
     var heroShare = hero.querySelector('.playlist-hero-share');
     if (heroShare) heroShare.addEventListener('click', async function () {
-      if (heroShare.classList.contains('is-muted')) return;
-      var url = window.location.href;
+      var url = 'https://music.youtube.com/browse/' + encodeURIComponent(currentAlbumId);
       if (navigator.share) {
         try {
           await navigator.share({ title: data.title || 'Album', text: 'Listen to ' + (data.title || 'this album'), url: url });

@@ -519,8 +519,8 @@ body.results-open .play-section {
   color: #ffffff !important;
   opacity: 1;
   pointer-events: auto;
-  transition: opacity .15s, color .15s, background .15s;
-  border-radius: 0;
+  transition: opacity .15s, color .15s, background .15s, transform .15s;
+  border-radius: 50%;
 }
 .suggest-item-remove svg {
   display: none !important;
@@ -540,7 +540,17 @@ body.results-open .play-section {
 }
 .suggest-item-remove:hover {
   color: #fff !important;
-  background: rgba(255, 255, 255, .15);
+  background: rgba(255, 255, 255, .16) !important;
+  transform: scale(1.08);
+}
+.result-menu-option.is-unavailable {
+  opacity: .42;
+  pointer-events: none;
+}
+/* Artist credits are links in every list surface. */
+.artist-name:hover {
+  text-decoration: underline;
+  text-underline-offset: 2px;
 }
 
 .clear-all-btn { border-radius: var(--radius-full); }
@@ -726,10 +736,11 @@ body.rail-collapsed .sidebar-playlist-list { scrollbar-width: none; }
   }
   body.rail-collapsed .sidebar-rail-toggle {
     position: absolute;
-    left: 50%;
+    /* Rail has 14px inset; a 5px local offset puts this 38px-wide button
+       on the exact 38px centerline used by every collapsed nav icon. */
+    left: 5px;
     margin: 0;
-    /* Match the mini-rail navigation-icon axis. */
-    transform: translateX(calc(-50% + 6px));
+    transform: none;
   }
   body.rail-collapsed .sidebar-brand strong {
     max-width: 0;
@@ -1754,6 +1765,8 @@ body.now-playing-route .player-section .player-expand-btn svg {
 .home-item-wide-card[data-kind="playlist"] .home-item-img-wrapper::after,
 .home-item-card[data-kind="album"] .home-item-img-wrapper::after,
 .home-item-wide-card[data-kind="album"] .home-item-img-wrapper::after,
+.home-item-circle[data-kind="album"] .home-item-img-wrapper::after,
+.home-item-circle[data-kind="artist"] .home-item-img-wrapper::after,
 .home-item-card[data-kind="station"] .home-item-img-wrapper::after,
 .home-item-wide-card[data-kind="station"] .home-item-img-wrapper::after {
   content: '';
@@ -1771,9 +1784,18 @@ body.now-playing-route .player-section .player-expand-btn svg {
 .home-item-wide-card[data-kind="playlist"]:hover .home-item-img-wrapper::after,
 .home-item-card[data-kind="album"]:hover .home-item-img-wrapper::after,
 .home-item-wide-card[data-kind="album"]:hover .home-item-img-wrapper::after,
+.home-item-circle[data-kind="album"]:hover .home-item-img-wrapper::after,
+.home-item-circle[data-kind="artist"]:hover .home-item-img-wrapper::after,
 .home-item-card[data-kind="station"]:hover .home-item-img-wrapper::after,
 .home-item-wide-card[data-kind="station"]:hover .home-item-img-wrapper::after {
   opacity: 1;
+}
+/* Album and artist entities open their pages; hover only darkens artwork. */
+.home-item-card[data-kind="album"] .home-play-btn,
+.home-item-wide-card[data-kind="album"] .home-play-btn,
+.home-item-circle[data-kind="album"] .home-play-btn,
+.home-item-circle[data-kind="artist"] .home-play-btn {
+  display: none !important;
 }
 .home-item-card[data-kind="track"] .home-play-btn,
 .home-item-wide-card[data-kind="track"] .home-play-btn {
@@ -2452,6 +2474,7 @@ body.results-open .player-section {
     margin: 0;
     padding: 18px 32px;
     box-sizing: border-box;
+    border-bottom: none;
   }
   #library-modal .history-modal-header {
     width: min(1500px, 100%);
@@ -2860,6 +2883,13 @@ body.results-open .player-section {
 }
 .np-page-art.has-thumb svg:not(.np-page-art-overlay svg) { display: none; }
 .np-page-art.has-thumb { box-shadow: 0 32px 80px rgba(0,0,0,.75); }
+.np-page-art.image-loading {
+  filter: blur(14px);
+  transform: scale(1.035);
+}
+.np-page-art {
+  transition: box-shadow .4s ease, filter .5s ease, transform .5s ease;
+}
 
 .np-page-art-overlay {
   position: absolute;
@@ -3006,7 +3036,8 @@ body.results-open .player-section {
 #np-queue-list .queue-item:hover { background: rgba(255,255,255,.06); }
 #np-queue-list .queue-item.active {
   background: rgba(255,255,255,.08);
-  border-left-color: transparent;
+  /* Preserve the original active-song marker without changing row layout. */
+  border-left-color: var(--accent);
 }
 
 /* On mobile the now-playing page shows full-width art only */
@@ -3933,6 +3964,12 @@ body.library-route #nav-library-btn::before {
   background: transparent !important;
   box-shadow: none !important;
 }
+/* Mood shelves share the same edge as the album/playlist grids below. */
+.mood-songs-shelf .home-shelf-header,
+.mood-songs-shelf .home-shelf-content {
+  padding-left: 0;
+  padding-right: 0;
+}
 .mood-page-loading { padding-top: 8px; }
 .mood-page-skeleton-grid {
   display: grid;
@@ -3979,6 +4016,11 @@ body.library-route #nav-library-btn::before {
 #album-section .album-artist-link {
   color: var(--text);
   font-size: .78rem;
+}
+
+#album-section .playlist-detail-hero-meta {
+  font-size: .88rem;
+  opacity: .9;
 }
 
 #album-section .playlist-detail-hero-actions {

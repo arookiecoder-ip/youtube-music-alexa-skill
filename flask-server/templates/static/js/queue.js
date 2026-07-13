@@ -424,6 +424,14 @@ function _wireQueueMoreMenu(el, item, index) {
   moreMenu.addEventListener('click', (e) => e.stopPropagation());
   moreBtn.addEventListener('click', (e) => {
     e.stopPropagation();
+    // Use the same menu as right-click and search result 3-dot controls.
+    if (window.openSongContextMenu) {
+      window.openSongContextMenu(e, Object.assign({}, item, {
+        _queueIndex: index,
+        _queueIsActive: el.classList.contains('active')
+      }));
+      return;
+    }
     const wasOpen = moreMenu.classList.contains('open');
     _closeAllQueueMenus();
     if (!wasOpen) {

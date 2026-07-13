@@ -262,6 +262,13 @@
     route = route || '#home';
     var changedRoute = route !== window.__route;
     if (changedRoute) {
+      // Not every card is wired through preload-nav (context menus and a few
+      // legacy shelves call navigateTo directly). Start the top bar in the
+      // same click call stack for uncached album/playlist destinations.
+      // Preloaded routes already own and complete their progress animation.
+      var isMediaDetail = route.indexOf('#album/') === 0 || route.indexOf('#playlist/') === 0;
+      var isPreloaded = window.__preloadCache && window.__preloadCache[route] !== undefined;
+      if (isMediaDetail && !isPreloaded && window._barStart) window._barStart();
       _saveScroll();
       if (route === '#now-playing') window.__npReturnRoute = window.__route;
       window.__route = route;

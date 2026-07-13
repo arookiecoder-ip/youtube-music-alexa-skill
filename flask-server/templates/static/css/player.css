@@ -27,6 +27,10 @@
   }
   .np-art svg { color: var(--border); }
   .np-art.has-thumb svg { display: none; }
+  .np-art.image-loading,
+  .mini-art.image-loading { filter: blur(12px); transform: scale(1.04); }
+  .np-art,
+  .mini-art { transition: filter .42s ease, transform .42s ease; }
 
   .np-info { flex: 1; min-width: 0; }
   .np-title {

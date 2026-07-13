@@ -305,8 +305,8 @@
         // playlist identity).
         const shuffleBtn = `<button class="playlist-hero-btn playlist-hero-shuffle" type="button" title="Shuffle" aria-label="Shuffle"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/><polyline points="21 16 21 21 16 21"/><line x1="15" y1="15" x2="21" y2="21"/><line x1="4" y1="4" x2="9" y2="9"/></svg></button>`;
         const playNextBtn = `<button class="playlist-hero-btn playlist-hero-play-next" type="button" title="Play next" aria-label="Play next"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M4 5v14l11-7L4 5zm13 0v14h3V5h-3z"/></svg></button>`;
-        const shareMuted = isCurated || isLikedPlaylist;
-        const shareBtn = `<button class="playlist-hero-btn playlist-hero-share${shareMuted ? ' is-muted' : ''}" type="button" title="${shareMuted ? 'Sharing unavailable for this playlist' : 'Share'}" aria-label="${shareMuted ? 'Sharing unavailable for this playlist' : 'Share'}"${shareMuted ? ' aria-disabled="true"' : ''}><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg></button>`;
+        const playlistShareId = pl.playlistId || pl.playlist_id || plId;
+        const shareBtn = `<button class="playlist-hero-btn playlist-hero-share" type="button" title="Share" aria-label="Share"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg></button>`;
         // The "more" button uses the same id as the previous header copy so
         // the existing rename / delete wiring in this file (and the inline
         // listener below) attaches to the new button. The id is shared
@@ -530,14 +530,11 @@
               menu.classList.add('open');
             });
           }
-          // Share copies the current page URL to the clipboard. The detail
-          // view is a routed page (#playlist/<id>), so the URL is the share
-          // link. Falls back to a textarea trick on browsers without async
-          // clipboard API support.
+          // Share the canonical YouTube Music playlist URL, never this app's
+          // routed page URL. Falls back to a textarea trick when needed.
           const heroShare = hero.querySelector('.playlist-hero-share');
           if (heroShare) heroShare.addEventListener('click', async () => {
-            if (shareMuted) return;
-            const url = window.location.href;
+            const url = 'https://music.youtube.com/playlist?list=' + encodeURIComponent(playlistShareId);
             if (navigator.share) {
               try {
                 await navigator.share({ title: title, text: `Listen to ${title}`, url: url });

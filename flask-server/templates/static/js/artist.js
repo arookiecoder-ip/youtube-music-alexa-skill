@@ -63,7 +63,9 @@
   function _preloadArtistImage(data) {
     if (data && data.__heroReady) return Promise.resolve();
     var thumbs = data && data.artist && data.artist.thumbnails || [];
-    var url = thumbs.length ? thumbs[thumbs.length - 1].url : '';
+    // Paint the smallest supplied thumbnail first. renderHero upgrades it to
+    // the largest image once that download completes.
+    var url = thumbs.length ? thumbs[0].url : '';
     if (!url) return Promise.resolve();
     return new Promise(function (resolve) {
       var settled = false;
@@ -208,16 +210,12 @@
     var container = document.getElementById('artist-hero');
     if (!container) return;
     var thumbs = artist.thumbnails || [];
-    var thumbUrl = thumbs.length ? (thumbs[thumbs.length - 1].url || '') : '';
-    
-    if (thumbUrl) {
-      container.style.backgroundImage = 'url(' + escHtml(thumbUrl) + ')';
-      container.style.background = ''; // Allow CSS to handle background sizing
-      container.style.backgroundImage = 'url(' + escHtml(thumbUrl) + ')';
-    } else {
-      container.style.backgroundImage = 'none';
-      container.style.background = 'var(--surface)';
-    }
+    var previewUrl = thumbs.length ? (thumbs[0].url || '') : '';
+    var fullUrl = thumbs.length ? (thumbs[thumbs.length - 1].url || '') : '';
+    var imageToken = (container._artistHeroImageToken || 0) + 1;
+    container._artistHeroImageToken = imageToken;
+    container.style.backgroundImage = 'none';
+    container.style.background = 'var(--surface)';
 
     var desc = artist.description || '';
     var subText = artist.subscribers || '';
@@ -228,6 +226,7 @@
     var subscribed = !!(state._subscribedArtists || []).find(function (a) { return a.channel_id === channelId; });
     
     container.innerHTML = `
+      <div class="artist-hero-art${previewUrl ? ' artist-hero-art-blurred' : ''}"${previewUrl ? ` style="background-image:url('${escHtml(previewUrl)}')"` : ''}></div>
       <div class="artist-hero-content">
         <div class="artist-hero-name">${escHtml(artist.name || '')}</div>
         ${desc ? `
@@ -239,6 +238,26 @@
         <div id="artist-top-songs-actions" class="artist-hero-actions"></div>
       </div>
     `;
+
+    // Use the low-resolution thumbnail as an immediate visual preview, then
+    // replace it only after the full-size artwork is decoded. The CSS
+    // transition clears the blur instead of flashing between images.
+    var art = container.querySelector('.artist-hero-art');
+    if (art && fullUrl && fullUrl !== previewUrl) {
+      var fullImage = new Image();
+      fullImage.onload = function () {
+        if (container._artistHeroImageToken !== imageToken) return;
+        art.style.backgroundImage = 'url(' + escHtml(fullUrl) + ')';
+        requestAnimationFrame(function () {
+          if (container._artistHeroImageToken === imageToken) {
+            art.classList.remove('artist-hero-art-blurred');
+          }
+        });
+      };
+      fullImage.src = fullUrl;
+    } else if (art && previewUrl) {
+      requestAnimationFrame(function () { art.classList.remove('artist-hero-art-blurred'); });
+    }
 
     var topSongsActions = document.getElementById('artist-top-songs-actions');
     if (topSongsActions) {

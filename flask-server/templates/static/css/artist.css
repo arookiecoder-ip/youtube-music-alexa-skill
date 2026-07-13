@@ -80,6 +80,18 @@
     z-index: 1;
     pointer-events: none;
   }
+  .artist-hero-art {
+    position: absolute;
+    inset: -14px;
+    z-index: 0;
+    background: var(--surface) center 20% / cover no-repeat;
+    transform: scale(1.04);
+    transition: filter .5s ease, transform .5s ease;
+  }
+  .artist-hero-art-blurred {
+    filter: blur(18px);
+    transform: scale(1.09);
+  }
   .artist-hero-content {
     position: relative;
     z-index: 2;
@@ -189,6 +201,11 @@
     transition: background .15s;
   }
   .artist-song-row:hover { background: #1a1a1a; }
+  /* Hover must not move the track row or its text. */
+  .artist-song-row:hover,
+  .artist-song-row:focus-within {
+    transform: none !important;
+  }
   .artist-song-thumb {
     width: 56px;
     height: 56px;

@@ -39,6 +39,7 @@
   document.body.appendChild(menu);
 
   const albumResolutionCache = new Map();
+  const artistResolutionCache = new Map();
 
   function resolveAlbumId(track, root) {
     if (track.album_id) return Promise.resolve(track.album_id);
@@ -66,6 +67,41 @@
       }
       if (window.preloadNavigateAlbum) window.preloadNavigateAlbum(albumId);
       else if (window.navigateTo) window.navigateTo('#album/' + encodeURIComponent(albumId));
+      return true;
+    });
+  }
+
+  function resolveArtistId(track) {
+    if (track.artist_id) return Promise.resolve(track.artist_id);
+    if (!track.video_id || typeof window.api !== 'function') return Promise.resolve('');
+    if (!artistResolutionCache.has(track.video_id)) {
+      artistResolutionCache.set(track.video_id,
+        window.api('/api/album/resolve/' + encodeURIComponent(track.video_id))
+          .then(function (data) {
+            if (data && data.artist_id) {
+              track.artist_id = data.artist_id;
+              if (data.artist) track.artist = data.artist;
+              return data.artist_id;
+            }
+            return '';
+          })
+          .catch(function () { return ''; })
+      );
+    }
+    return artistResolutionCache.get(track.video_id).then(function (artistId) {
+      if (artistId) track.artist_id = artistId;
+      return artistId;
+    });
+  }
+
+  function navigateTrackArtist(track) {
+    return resolveArtistId(track).then(function (artistId) {
+      if (!artistId) {
+        if (typeof window.toast === 'function') window.toast('Artist unavailable for this song', 'error');
+        return false;
+      }
+      if (window.preloadNavigateArtist) window.preloadNavigateArtist(artistId);
+      else if (window.navigateTo) window.navigateTo('#artist/' + encodeURIComponent(artistId));
       return true;
     });
   }
@@ -134,8 +170,17 @@
     // For station cards, only show Play — hide everything else
     const isStation = track._isStation;
     const albumOption = menu.querySelector('[data-action="open-album"]');
-    albumOption.hidden = !track.album_id && !track.video_id;
-    menu.querySelector('[data-action="open-artist"]').hidden = !track.artist_id;
+    const artistOption = menu.querySelector('[data-action="open-artist"]');
+    // Keep the canonical menu shape everywhere. Missing catalog metadata makes
+    // a link unavailable, never silently removes it and changes the menu.
+    function setUnavailable(option, unavailable) {
+      option.classList.toggle('is-unavailable', unavailable);
+      option.setAttribute('aria-disabled', unavailable ? 'true' : 'false');
+    }
+    albumOption.hidden = false;
+    artistOption.hidden = false;
+    setUnavailable(albumOption, !track.album_id && !track.video_id);
+    setUnavailable(artistOption, !track.artist_id && !track.video_id);
     menu.querySelector('[data-action="play"]').hidden = !isStation;
     menu.querySelector('[data-action="remove-from-queue"]').hidden =
       isStation || track._queueIndex === undefined || track._queueIsActive;
@@ -235,7 +280,7 @@
   menu.addEventListener('click', function (event) {
     const option = event.target.closest('[data-action]');
     const track = menu._track;
-    if (!option || !track) return;
+    if (!option || !track || option.getAttribute('aria-disabled') === 'true') return;
     event.stopPropagation();
     closeMenu();
     switch (option.dataset.action) {
@@ -261,10 +306,7 @@
         navigateTrackAlbum(track, null);
         break;
       case 'open-artist':
-        if (track.artist_id) {
-          if (window.preloadNavigateArtist) window.preloadNavigateArtist(track.artist_id);
-          else if (window.navigateTo) window.navigateTo('#artist/' + encodeURIComponent(track.artist_id));
-        }
+        navigateTrackArtist(track);
         break;
       case 'remove-from-queue':
         if (track._queueIndex !== undefined && typeof window.removeFromQueue === 'function') {

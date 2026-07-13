@@ -60,6 +60,10 @@
     card.setAttribute('role', 'button');
     card.setAttribute('tabindex', '0');
     card.setAttribute('aria-label', esc(title));
+    if (playlistId && !artistId) {
+      card.dataset.playlistContext = playlistId;
+      card.dataset.playlistTitle = title;
+    }
 
     const displayedImage = thumb || fallbackImage;
     const thumbHtml = displayedImage
