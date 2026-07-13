@@ -224,6 +224,12 @@
     const body = document.getElementById('playlist-detail-body');
 
     const route = '#playlist/' + encodeURIComponent(plId);
+    // The detail overlay is persistent DOM, so an earlier playlist request
+    // can finish after the user has already navigated to an artist (or to a
+    // different playlist). Only the route that started this load may reveal
+    // or mutate the overlay; otherwise its stale rows can reappear over the
+    // destination when the document is scrolled.
+    const stillOwnsRoute = () => !window.getRoute || window.getRoute() === route;
     const preloaded = window.consumePreload ? window.consumePreload(route) : null;
     const ownsProgress = !preloaded;
     if (ownsProgress && window._barStart) window._barStart();
@@ -259,6 +265,10 @@
           isCurated = _isCuratedPlaylist(pl);
         }
       }
+      // Do not let a late response from a previous playlist reclaim the
+      // shared overlay after another route has become active.
+      if (!stillOwnsRoute()) return;
+
       const canEditPlaylist = isLibrary && !isCurated && plId.toUpperCase() !== 'LM';
       // Only personal library playlists support rename/delete. Public/curated
       // playlists have no useful More menu, so the button isn't rendered
@@ -267,6 +277,10 @@
         _openPlaylistId = plId;
       }
       await preloadPlaylistHero(pl);
+      if (!stillOwnsRoute()) {
+        if (_openPlaylistId === plId) _openPlaylistId = null;
+        return;
+      }
       if (overlay) {
         // Keep the identity of the rendered page so the router can bring the
         // same overlay back instantly on browser Back before any refresh.
@@ -618,12 +632,13 @@
         body.appendChild(list);
       }
     } catch (e) {
+      if (!stillOwnsRoute()) return;
       console.warn('Failed to load playlist', e);
       if (titleEl) titleEl.textContent = 'Error loading playlist';
       if (body) body.innerHTML = '<div style="padding:24px; color:var(--muted); text-align:center;">Failed to load playlist</div>';
       if (window._barAbort) window._barAbort();
     }
-    if (ownsProgress && window._barComplete) window._barComplete();
+    if (ownsProgress && stillOwnsRoute() && window._barComplete) window._barComplete();
   }
   window.openPlaylistDetailModal = openLibraryPlaylist;
   /* ---- New Playlist button (sidebar) ---- */

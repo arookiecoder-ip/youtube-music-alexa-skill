@@ -92,7 +92,7 @@
     if (section) {
       // Search bar and bottom playbar are persistent shell chrome — they stay
       // visible on the artist page; only the content views swap out.
-      setHidden('#recs-section, #home-section, #idle-hero, #results-section, #queue-section, #artist-section, #artist-songs-section', true);
+      setHidden('#recs-section, #home-section, #idle-hero, #results-section, #queue-section, #artist-section, #artist-songs-section, #album-section', true);
       setHidden('.play-section', false);
       section.hidden = false;
     }
@@ -101,7 +101,7 @@
   function showArtistSongsSection() {
     var section = document.getElementById('artist-songs-section');
     if (section) {
-      setHidden('#recs-section, #home-section, #idle-hero, #results-section, #queue-section, #artist-section, #artist-songs-section', true);
+      setHidden('#recs-section, #home-section, #idle-hero, #results-section, #queue-section, #artist-section, #artist-songs-section, #album-section', true);
       setHidden('.play-section', false);
       section.hidden = false;
     }
