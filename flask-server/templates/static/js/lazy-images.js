@@ -5,9 +5,34 @@
   // scroll containers can still start hundreds of requests at once. Keep the
   // URL out of src until the image is close to the viewport.
   const pending = new WeakSet();
+  const reveal = function (img) {
+    if (!img || img.dataset.imageReady === 'true') return;
+    const expectedSrc = img.currentSrc || img.src;
+    const finish = function () {
+      if ((img.currentSrc || img.src) === expectedSrc) img.dataset.imageReady = 'true';
+    };
+    // `load` means the file is fully downloaded; `decode` prevents browsers
+    // from painting progressive JPEG passes before that finished bitmap is
+    // ready for display.
+    if (typeof img.decode === 'function') {
+      img.decode().catch(function () {}).then(finish);
+    } else {
+      finish();
+    }
+  };
+  const prepareReveal = function (img) {
+    if (!img || img.dataset.imageRevealTracked !== undefined) return;
+    img.dataset.imageRevealTracked = '';
+    img.addEventListener('load', function () { reveal(img); });
+    // Do not leave a failed image permanently transparent: its fallback/alt
+    // state still needs to be visible.
+    img.addEventListener('error', function () { img.dataset.imageReady = 'true'; });
+    if (img.complete && (img.currentSrc || img.getAttribute('src'))) reveal(img);
+  };
   const load = function (img) {
     const src = img.getAttribute('data-lazy-src');
     if (!src) return;
+    delete img.dataset.imageReady;
     img.src = src;
     img.removeAttribute('data-lazy-src');
   };
@@ -62,15 +87,25 @@
 
   const scan = function (root) {
     if (!root || !root.querySelectorAll) return;
-    if (root.tagName === 'IMG') observe(root);
+    if (root.tagName === 'IMG') {
+      prepareReveal(root);
+      observe(root);
+    }
+    root.querySelectorAll('img').forEach(prepareReveal);
     root.querySelectorAll('img[loading="lazy"], img[data-src]').forEach(observe);
   };
   scan(document);
   new MutationObserver(function (records) {
     records.forEach(function (record) {
+      if (record.type === 'attributes' && record.target.tagName === 'IMG') {
+        delete record.target.dataset.imageReady;
+        prepareReveal(record.target);
+        if (record.target.complete && (record.target.currentSrc || record.target.getAttribute('src'))) reveal(record.target);
+        return;
+      }
       record.addedNodes.forEach(function (node) {
         if (node.nodeType === 1) scan(node);
       });
     });
-  }).observe(document.documentElement, { childList: true, subtree: true });
+  }).observe(document.documentElement, { childList: true, subtree: true, attributes: true, attributeFilter: ['src'] });
 })();

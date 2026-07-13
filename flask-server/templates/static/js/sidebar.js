@@ -289,19 +289,26 @@
 /* Logo/wordmark is a Home shortcut; the nested rail toggle keeps its own
    independent action. */
 (function () {
-  const brand = document.getElementById('sidebar-brand-home');
-  if (!brand) return;
-  function goHome(e) {
-    if (e.target.closest('.sidebar-rail-toggle')) return;
+  const brands = [
+    { element: document.getElementById('header-brand-home'), toggle: '.rail-toggle-btn' },
+    { element: document.getElementById('sidebar-brand-home'), toggle: '.sidebar-rail-toggle' }
+  ];
+  function goHome(e, toggleSelector) {
+    if (e.target.closest(toggleSelector)) return;
+    // The brand is inert on Home: don't reload the route or reset its scroll.
+    if ((window.getRoute && window.getRoute()) === '#home') return;
     if (window.navigateTo) window.navigateTo('#home');
   }
-  brand.addEventListener('click', goHome);
-  brand.addEventListener('keydown', function (e) {
-    if (e.key !== 'Enter' && e.key !== ' ') return;
-    e.preventDefault();
-    goHome(e);
+  brands.forEach(function (entry) {
+    const brand = entry.element;
+    if (!brand) return;
+    brand.addEventListener('click', function (e) { goHome(e, entry.toggle); });
+    brand.addEventListener('keydown', function (e) {
+      if (e.key !== 'Enter' && e.key !== ' ') return;
+      e.preventDefault();
+      goHome(e, entry.toggle);
+    });
   });
-  
 })();
 })();
 

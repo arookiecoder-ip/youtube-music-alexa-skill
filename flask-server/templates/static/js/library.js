@@ -192,22 +192,13 @@
       });
 
       const artists = subscribedArtists;
-      if (artists.length) {
-        const artistSection = document.createElement('div');
-        artistSection.className = 'library-section';
-        artistSection.innerHTML = `<div class="library-section-header"><h2 class="library-section-title">Subscribed artists <span class="library-count">${artists.length}</span></h2></div>`;
-        const artistGrid = document.createElement('div');
-        artistGrid.className = 'library-grid';
-        artists.forEach(a => {
-          const card = renderPlaylistCard({ _artistId: a.channel_id, title: a.name || 'Artist', thumbnail: a.thumbnail, description: 'Artist' });
-          // Artists open a profile rather than start playback.  Mark them so
-          // their hover treatment matches artist cards across the app.
-          card.classList.add('library-card-artist');
-          artistGrid.appendChild(card);
-        });
-        artistSection.appendChild(artistGrid);
-        body.appendChild(artistSection);
-      }
+      // Artists belong in the same Library collection as playlists, rather
+      // than in a second, redundant "Subscribed artists" section.
+      artists.forEach(a => {
+        const card = renderPlaylistCard({ _artistId: a.channel_id, title: a.name || 'Artist', thumbnail: a.thumbnail, description: 'Artist' });
+        card.classList.add('library-card-artist');
+        grid.appendChild(card);
+      });
 
     } catch (e) {
       console.warn('[library] Failed to load', e);

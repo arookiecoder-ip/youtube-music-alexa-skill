@@ -245,7 +245,10 @@
           || libraryPlaylistIds.has(String(plId));
       } else {
         try {
-          pl = await window.api('/api/library/playlists/' + encodeURIComponent(plId));
+          // Always request the first page explicitly. The server can then
+          // return a continuation signal for very large playlists (including
+          // Liked Music) instead of silently returning its first browse page.
+          pl = await window.api('/api/library/playlists/' + encodeURIComponent(plId) + '?offset=0&limit=30');
           isLibrary = true;
         } catch (e1) {
           const status = e1 && (e1.status || (e1.response && e1.response.status));
@@ -451,30 +454,53 @@
             list.appendChild(loading);
             let nextOffset = Number(pl.next_offset) || tracks.length;
             let loadingTracks = false;
-            const loadingObserver = new IntersectionObserver(function (entries) {
-              entries.forEach(async function (entry) {
-                if (!entry.isIntersecting || loadingTracks) return;
-                loadingTracks = true;
-                loading.classList.add('visible');
-                try {
-                  const page = await window.api('/api/library/playlists/' + encodeURIComponent(plId) + '?offset=' + nextOffset + '&limit=30');
-                  const batch = page.tracks || [];
-                  appendTracks(batch, nextOffset);
-                  observeLazyImages(list);
-                  nextOffset = Number(page.next_offset) || (nextOffset + batch.length);
-                  if (!page.has_more || !batch.length) {
-                    loadingObserver.disconnect();
-                    loading.remove();
-                  }
-                } catch (e) {
-                  if (window.toast) window.toast('Could not load more songs', 'error');
-                } finally {
-                  loading.classList.remove('visible');
-                  loadingTracks = false;
+            let exhausted = false;
+            const scrollRoot = list.closest('.history-modal-body');
+            const cleanupPagination = () => {
+              exhausted = true;
+              loadingObserver.disconnect();
+              if (scrollRoot) scrollRoot.removeEventListener('scroll', loadWhenNearEnd);
+              loading.remove();
+            };
+            const loadMoreTracks = async () => {
+              if (loadingTracks || exhausted || !list.isConnected) return;
+              loadingTracks = true;
+              loading.classList.add('visible');
+              try {
+                const page = await window.api('/api/library/playlists/' + encodeURIComponent(plId) + '?offset=' + nextOffset + '&limit=30');
+                const batch = page.tracks || [];
+                appendTracks(batch, nextOffset);
+                observeLazyImages(list);
+                nextOffset = Number(page.next_offset) || (nextOffset + batch.length);
+                if (!page.has_more || !batch.length) {
+                  cleanupPagination();
+                  return;
                 }
+                // If the viewport is taller than the appended page, continue
+                // fetching until it is filled instead of waiting for another
+                // IntersectionObserver edge transition.
+                requestAnimationFrame(loadWhenNearEnd);
+              } catch (e) {
+                if (window.toast) window.toast('Could not load more songs', 'error');
+              } finally {
+                loading.classList.remove('visible');
+                loadingTracks = false;
+              }
+            };
+            const loadWhenNearEnd = () => {
+              if (!scrollRoot || exhausted || loadingTracks) return;
+              if (scrollRoot.scrollTop + scrollRoot.clientHeight >= scrollRoot.scrollHeight - 240) {
+                loadMoreTracks();
+              }
+            };
+            const loadingObserver = new IntersectionObserver(function (entries) {
+              entries.forEach(function (entry) {
+                if (entry.isIntersecting) loadMoreTracks();
               });
-            }, { root: list.closest('.history-modal-body'), rootMargin: '160px 0px' });
+            }, { root: scrollRoot, rootMargin: '240px 0px' });
             loadingObserver.observe(loading);
+            if (scrollRoot) scrollRoot.addEventListener('scroll', loadWhenNearEnd, { passive: true });
+            requestAnimationFrame(loadWhenNearEnd);
           }
           const heroPlay = hero.querySelector('.playlist-hero-play');
           if (heroPlay) heroPlay.addEventListener('click', () => list.querySelector('.history-item')?.click());

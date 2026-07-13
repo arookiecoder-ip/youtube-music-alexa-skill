@@ -338,6 +338,20 @@
             return;
         }
 
+        // Albums follow the same overlay-play interaction as playlists. The
+        // card body still opens the album; its play control starts track one.
+        if (playBtn && kind === 'album' && targetId) {
+            if (!window.api || !window.playFromQueue) return;
+            window.api('/api/album/' + encodeURIComponent(targetId)).then(function(albumData) {
+                var firstTrack = albumData && Array.isArray(albumData.tracks) && albumData.tracks[0];
+                if (firstTrack) window.playFromQueue(firstTrack, 0);
+                else if (window.toast) window.toast('No playable tracks in this album', 'error');
+            }).catch(function() {
+                if (window.toast) window.toast('Could not play album', 'error');
+            });
+            return;
+        }
+
         // If it's a play button click OR item click and it's a track/station/playlist to play directly
         if (playBtn || kind === 'track' || kind === 'station' || (!targetId && playlistId)) {
             if (!videoId && !playlistId) return;

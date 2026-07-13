@@ -547,13 +547,33 @@ body.results-open .play-section {
   opacity: .42;
   pointer-events: none;
 }
-/* Artist credits are links in every list surface. */
-.artist-name:hover {
-  text-decoration: underline;
+/* Artist credits are links in every list surface. Keep their affordance
+   identical regardless of which page rendered the song. */
+.artist-name {
+  cursor: pointer;
+  text-decoration-line: underline;
+  text-decoration-color: transparent;
+  text-decoration-thickness: 1px;
   text-underline-offset: 2px;
+  transition: color .15s, text-decoration-color .15s;
+}
+.artist-name:hover,
+.artist-name:focus-visible {
+  text-decoration-color: currentColor !important;
 }
 
 .clear-all-btn { border-radius: var(--radius-full); }
+
+/* Never expose progressive image passes. Artwork stays transparent until the
+   shared image loader has fully downloaded and decoded it, then fades in as
+   one finished bitmap. */
+img:not([data-image-ready="true"]) {
+  opacity: 0;
+  transition: opacity .16s ease;
+}
+img[data-image-ready="true"] {
+  opacity: 1 !important;
+}
 
 /* Wide screens: the search pill floats inside the top bar, dead center.
    The has-queue/results-open variants MUST be listed too: the base group
@@ -610,6 +630,7 @@ body.results-open .play-section {
   background: rgba(255, 255, 255, .08);
 }
 .rail-toggle-btn svg { width: 20px; height: 20px; }
+.home-shortcut { cursor: pointer; }
 
 /* Collapsed rail (desktop): YT Music-style mini guide — the rail narrows to
    an icon-only strip. Everything positioned off --rail-w (main, search pill,
@@ -690,25 +711,25 @@ body.rail-collapsed .sidebar-playlist-list { scrollbar-width: none; }
     margin: 0; 
     padding: 0;
   }
-  /* Keep the hover tile centered on the artwork in the mini rail. The
-     expanded row's full-width hit area otherwise leaves the highlight
-     visibly offset from the thumbnail after the label collapses. */
+  /* Keep each icon anchored to its expanded x-position while the rail
+     narrows. Centering it at the same time as the width transition caused
+     the visible one-frame jump on close. */
   body.rail-collapsed .sidebar-playlist-item {
-    width: 40px;
-    margin: 0 auto;
+    width: 100%;
+    margin: 0;
     padding: 6px 8px !important;
     gap: 0;
-    justify-content: center;
+    justify-content: flex-start;
     border-radius: 4px !important;
   }
   body.rail-collapsed .sidebar .sidebar-nav-btn {
-    width: 40px;
-    margin-left: auto;
-    margin-right: auto;
-    padding-left: 8px;
-    padding-right: 8px;
+    width: 100%;
+    margin-left: 0;
+    margin-right: 0;
+    padding-left: 14.5px;
+    padding-right: 14.5px;
     gap: 0;
-    justify-content: center;
+    justify-content: flex-start;
   }
   /* Playlist items keep the expanded padding/gap so the art never moves;
      the zero-width copy hides past the strip via overflow:hidden. */
@@ -716,7 +737,7 @@ body.rail-collapsed .sidebar-playlist-list { scrollbar-width: none; }
      hamburger stays put and nothing pokes past the mini rail. */
   .sidebar-brand {
     overflow: visible;
-    transition: width .25s ease;
+    transition: width .25s ease, padding .25s ease;
     white-space: nowrap;
   }
   .sidebar-brand strong { 
@@ -731,18 +752,19 @@ body.rail-collapsed .sidebar-playlist-list { scrollbar-width: none; }
     opacity: 1;
   }
   body.rail-collapsed .sidebar-brand {
-    position: relative;
     width: 100%;
     min-width: 0;
     overflow: hidden;
-    padding-left: 0;
-    padding-right: 0;
-    justify-content: center;
+    /* Sidebar nav icons are 24px after the final shell override.  With the
+       rail's 14px inset and the collapsed button padding, 7.5px places this
+       38px control on the exact same 40.5px centerline. */
+    padding-left: 7.5px;
+    padding-right: 7.5px;
+    justify-content: flex-start;
   }
   body.rail-collapsed .sidebar-rail-toggle {
-    position: absolute;
-    /* Match the collapsed nav-icon centerline. */
-    left: 12px;
+    position: static;
+    left: auto;
     margin: 0;
     transform: none;
   }
@@ -800,7 +822,7 @@ body.rail-collapsed .sidebar-playlist-list { scrollbar-width: none; }
   text-transform: none;
   padding: 8px 12px;
   border-radius: var(--radius-md);
-  transition: color .15s, background .15s;
+  transition: color .15s, background .15s, padding .25s ease, gap .25s ease;
   min-height: 40px;
   overflow: visible;
 }
@@ -925,6 +947,9 @@ body.rail-collapsed .sidebar .sidebar-nav-btn:hover {
   font-weight: 500;
 }
 .profile-menu-status span {
+  box-sizing: border-box;
+  width: 78px;
+  text-align: center;
   font-weight: 600;
   padding: 3px 7px;
   border: 1px solid var(--border);
@@ -953,10 +978,20 @@ body.rail-collapsed .sidebar .sidebar-nav-btn:hover {
 }
 .profile-menu button:hover { background: #222; border-color: var(--accent); color: var(--accent); }
 
-.profile-menu #amazon-signout { color: #ff6b6b; }
+.profile-menu #amazon-signout {
+  color: #ff6b6b;
+  justify-content: center;
+  text-align: center;
+}
 .profile-menu #amazon-signout:hover { background: rgba(255, 107, 107, 0.1); }
-.profile-menu #logout { color: var(--muted); background: transparent; }
-.profile-menu #logout:hover { background: #222; border-color: var(--border); color: var(--text); }
+.profile-menu #logout {
+  color: #000;
+  background: #e53935;
+  border-color: #e53935;
+  justify-content: center;
+  text-align: center;
+}
+.profile-menu #logout:hover { background: #ff5a55; border-color: #ff5a55; color: #000; }
 .sidebar-rail-toggle {
   width: 38px;
   height: 38px;
@@ -1808,12 +1843,10 @@ body.now-playing-route .player-section .player-expand-btn svg {
 .home-item-wide-card[data-kind="station"]:hover .home-item-img-wrapper::after {
   opacity: 1;
 }
-/* Album and artist entities open their pages; hover only darkens artwork. */
-.home-item-card[data-kind="album"] .home-play-btn,
-.home-item-wide-card[data-kind="album"] .home-play-btn,
+/* Artist entities open their pages; hover only darkens artwork. Albums use
+   the same overlay-play affordance as playlists. */
 .home-item-card[data-kind="artist"] .home-play-btn,
 .home-item-wide-card[data-kind="artist"] .home-play-btn,
-.home-item-circle[data-kind="album"] .home-play-btn,
 .home-item-circle[data-kind="artist"] .home-play-btn {
   display: none !important;
 }
@@ -1837,31 +1870,6 @@ body.now-playing-route .player-section .player-expand-btn svg {
 .home-item-card[data-kind="track"]:hover .home-play-btn,
 .home-item-wide-card[data-kind="track"]:hover .home-play-btn {
   transform: translate(-50%, -50%) scale(1);
-}
-/* Playlist/song row artist links underline only when the artist name itself
-   is hovered, so the row's playback hover never implies a link target. */
-#playlist-detail-modal .history-item .queue-artist .artist-name {
-  position: relative;
-  display: inline-block;
-  cursor: pointer;
-  z-index: 1;
-  text-decoration: none;
-}
-#playlist-detail-modal .history-item .queue-artist .artist-name:hover {
-  color: var(--text);
-}
-#playlist-detail-modal .history-item .queue-artist .artist-name::after {
-  content: '';
-  position: absolute;
-  left: 0;
-  bottom: -1px;
-  width: 0;
-  height: 1px;
-  background: currentColor;
-  transition: width .2s ease;
-}
-#playlist-detail-modal .history-item .queue-artist .artist-name:hover::after {
-  width: 100%;
 }
 .home-card-art {
   border-radius: var(--card-radius);
@@ -2982,8 +2990,7 @@ body.results-open .player-section {
   transition: color .15s;
 }
 .np-page-artist:hover { color: var(--text); }
-.np-page-artist .artist-name { text-decoration: none; color: inherit; }
-.np-page-artist .artist-name:hover { text-decoration: underline; }
+.np-page-artist .artist-name { color: inherit; }
 
 .np-page-btns {
   display: flex;
@@ -3425,6 +3432,26 @@ main:has(#now-playing-section:not([hidden])) {
 .library-card-artist:hover .library-card-art::after,
 .library-card-artist:focus-visible .library-card-art::after {
   opacity: 1;
+}
+.library-card-artist .library-card-art,
+.library-card-artist .library-card-art img,
+.library-card-artist .library-card-art-placeholder {
+  border-radius: 50%;
+}
+.library-card-artist .library-card-title {
+  display: inline-block;
+  width: fit-content;
+  max-width: 100%;
+  cursor: pointer;
+  text-decoration-line: underline;
+  text-decoration-color: transparent;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+  transition: text-decoration-color .15s ease;
+}
+.library-card-artist:hover .library-card-title,
+.library-card-artist:focus-visible .library-card-title {
+  text-decoration-color: currentColor;
 }
 .library-card-art-placeholder {
   width: 100%;
@@ -3876,15 +3903,15 @@ body.library-route #nav-library-btn::before {
   display: grid;
   grid-template-columns: repeat(6, minmax(0, 1fr));
   gap: 16px 24px;
-  transition: transform .28s ease-out, opacity .28s ease-out;
-  will-change: transform, opacity;
+  transition: transform .32s cubic-bezier(.2, .7, .2, 1);
+  will-change: transform;
 }
 .explore-mood-viewport { position: relative; overflow: hidden; }
 .explore-mood-grid.mood-grid-incoming { position: absolute; inset: 0; width: 100%; }
-.explore-mood-grid.mood-grid-enter-right { opacity: .4; transform: translateX(36px); }
-.explore-mood-grid.mood-grid-enter-left { opacity: .4; transform: translateX(-36px); }
-.explore-mood-grid.mood-grid-exit-left { opacity: .4; transform: translateX(-36px); }
-.explore-mood-grid.mood-grid-exit-right { opacity: .4; transform: translateX(36px); }
+.explore-mood-grid.mood-grid-enter-right { transform: translateX(var(--mood-slide-distance)); }
+.explore-mood-grid.mood-grid-enter-left { transform: translateX(calc(-1 * var(--mood-slide-distance))); }
+.explore-mood-grid.mood-grid-exit-left { transform: translateX(calc(-1 * var(--mood-slide-distance))); }
+.explore-mood-grid.mood-grid-exit-right { transform: translateX(var(--mood-slide-distance)); }
 @media (prefers-reduced-motion: reduce) {
   .explore-mood-grid { transition: none; }
 }

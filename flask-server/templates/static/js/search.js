@@ -654,6 +654,13 @@ function _closeAllMoreMenus() {
   for (const w of document.querySelectorAll('.result-swipe-wrapper.menu-open')) w.classList.remove('menu-open');
 }
 document.addEventListener('click', _closeAllMoreMenus);
+// A context menu is anchored to the item that opened it. Dismiss it as soon
+// as the user starts interacting with a different item, even when that item
+// stops its click event before it reaches the document bubble phase.
+document.addEventListener('pointerdown', (e) => {
+  if (!e.target.closest('.result-more-menu')) _closeAllMoreMenus();
+  if (!e.target.closest('.queue-more-menu') && window._closeAllQueueMenus) window._closeAllQueueMenus();
+}, true);
 document.addEventListener('contextmenu', (e) => {
   // Only close if right-clicking outside of any menu
   if (!e.target.closest('.result-more-menu') && !e.target.closest('.queue-more-menu')) {
@@ -668,6 +675,12 @@ document.addEventListener('contextmenu', (e) => {
   const list = document.getElementById('results-list');
   if (list) list.addEventListener('scroll', () => _closeAllMoreMenus(), { passive: true });
 })();
+// Any scrolling surface can move its source row. A fixed menu must never be
+// left floating over unrelated content.
+document.addEventListener('scroll', () => {
+  _closeAllMoreMenus();
+  if (window._closeAllQueueMenus) window._closeAllQueueMenus();
+}, true);
 
 // Highlight the currently playing track in the visible results page.
 function updateResultsActive() {

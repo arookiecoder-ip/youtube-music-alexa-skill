@@ -300,6 +300,13 @@
 
   function applyRoute(hash) {
     hash = hash || '#home';
+    // Context menus belong to the route and source item that opened them.
+    // Never carry one into another page.
+    if (window._closeAllMoreMenus) window._closeAllMoreMenus();
+    if (window._closeAllQueueMenus) window._closeAllQueueMenus();
+    if (window.closeSongContextMenu) window.closeSongContextMenu();
+    if (window.closePlaylistContextMenu) window.closePlaylistContextMenu();
+    if (window.closeExploreCardContextMenu) window.closeExploreCardContextMenu();
     var wasNowPlaying = document.body.classList.contains('now-playing-route');
     var isClosingNowPlaying = wasNowPlaying && hash !== '#now-playing' &&
       window.matchMedia('(min-width: 900px)').matches;

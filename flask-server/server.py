@@ -5179,7 +5179,11 @@ async def api_get_library_playlist(pl_id):
         return jsonify({'error': 'invalid playlist id'}), 400
     try:
         try:
-            page_limit = min(100, max(1, int(request.args.get('limit', 0) or 0)))
+            # Always page this endpoint. YouTube Music commonly returns only
+            # its first browse batch unless a bounded continuation request is
+            # made, which previously left large/liked playlists stuck around
+            # 90-100 songs with no `has_more` signal for the browser.
+            page_limit = min(100, max(1, int(request.args.get('limit', 30) or 30)))
         except (TypeError, ValueError):
             page_limit = 0
         try:
@@ -5188,9 +5192,7 @@ async def api_get_library_playlist(pl_id):
             page_offset = 0
 
         def page_response(info):
-            """Keep playlist payloads small when browser pagination is requested."""
-            if not page_limit:
-                return info
+            """Return one browser page plus an explicit continuation signal."""
             result = dict(info or {})
             all_tracks = list(result.get('tracks') or [])
             fetched_count = len(all_tracks)
@@ -5211,7 +5213,7 @@ async def api_get_library_playlist(pl_id):
             if yt.auth_type == AuthType.UNAUTHORIZED:
                 return jsonify({'error': 'YouTube Music authentication required. Please visit /setup/'}), 403
             try:
-                fetch_limit = page_offset + page_limit + 1 if page_limit else 5000
+                fetch_limit = page_offset + page_limit + 1
                 raw = await asyncio.to_thread(yt.get_liked_songs, fetch_limit)
             except Exception as liked_error:
                 if "invalid argument" in str(liked_error).lower():
@@ -5243,7 +5245,7 @@ async def api_get_library_playlist(pl_id):
                 'tracks': tracks,
             }))
         try:
-            fetch_limit = page_offset + page_limit + 1 if page_limit else None
+            fetch_limit = page_offset + page_limit + 1
             info = await asyncio.to_thread(yt.get_playlist, pl_id, fetch_limit)
         except Exception as browse_err:
             if "invalid argument" in str(browse_err).lower():

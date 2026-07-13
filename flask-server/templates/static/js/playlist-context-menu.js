@@ -12,9 +12,8 @@
     menu = document.createElement('div');
     menu.className = 'result-more-menu playlist-context-menu';
     menu.innerHTML =
-      '<button type="button" class="result-menu-option" data-action="play"><svg viewBox="0 0 24 24" fill="currentColor"><polygon points="7,4 20,12 7,20"/></svg><span>Play</span></button>' +
-      '<button type="button" class="result-menu-option" data-action="shuffle"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/><polyline points="21 16 21 21 16 21"/><line x1="15" y1="15" x2="21" y2="21"/><line x1="4" y1="4" x2="9" y2="9"/></svg><span>Shuffle play</span></button>' +
-      '<button type="button" class="result-menu-option" data-action="open"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg><span>Open playlist</span></button>';
+      '<div class="result-menu-option" role="menuitem" data-action="play"><svg viewBox="0 0 24 24" fill="currentColor"><polygon points="7,4 20,12 7,20"/></svg><span>Play</span></div>' +
+      '<div class="result-menu-option" role="menuitem" data-action="shuffle"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/><polyline points="21 16 21 21 16 21"/><line x1="15" y1="15" x2="21" y2="21"/><line x1="4" y1="4" x2="9" y2="9"/></svg><span>Shuffle play</span></div>';
     document.body.appendChild(menu);
     menu.addEventListener('click', function (event) {
       var action = event.target.closest('[data-action]');
@@ -22,11 +21,6 @@
       if (!action || !playlist || !playlist.id) return;
       event.stopPropagation();
       closeMenu();
-      if (action.dataset.action === 'open') {
-        if (window.preloadNavigatePlaylist) window.preloadNavigatePlaylist(playlist.id);
-        else if (window.navigateTo) window.navigateTo('#playlist/' + encodeURIComponent(playlist.id));
-        return;
-      }
       if (!window.api) return;
       window.api('/alexa/play/', {
         serial: window.selectedSerial ? window.selectedSerial() : '',
@@ -65,6 +59,7 @@
       popup.style.bottom = Math.max(8, window.innerHeight - event.clientY) + 'px';
     }
   };
+  window.closePlaylistContextMenu = closeMenu;
 
   document.addEventListener('contextmenu', function (event) {
     var card = event.target.closest('.home-item[data-kind="playlist"][data-playlist-id], .hscroll-card[data-playlist-id], [data-playlist-context]');

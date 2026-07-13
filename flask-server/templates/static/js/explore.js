@@ -29,7 +29,7 @@
   function openItem(item) {
     const videoId = item.videoId || item.video_id;
     if (videoId && window.playResult) {
-      window.playResult(Object.assign({}, item, { video_id: videoId }), false, true);
+      window.playResult(Object.assign({}, item, { video_id: videoId }), true, false);
       return;
     }
     const id = item.browseId || item.playlistId || item.albumId || item.audioPlaylistId;
@@ -48,7 +48,7 @@
     event.stopPropagation();
     const videoId = item.videoId || item.video_id;
     if (videoId && window.playResult) {
-      window.playResult(Object.assign({}, item, { video_id: videoId }), false, true);
+      window.playResult(Object.assign({}, item, { video_id: videoId }), true, false);
       return;
     }
     const playlistId = item.audioPlaylistId || item.playlistId;
@@ -116,8 +116,12 @@
     card.setAttribute('role', 'button');
     card.setAttribute('aria-label', `Open ${title}`);
     const itemType = String(item.type || item.resultType || '').toLowerCase();
-    const playlistId = item.playlistId || item.playlist_id || item.audioPlaylistId ||
-      (itemType === 'playlist' ? (item.browseId || item.browse_id || '') : '');
+    // Songs often include an audioPlaylistId as a radio/playback seed. It is
+    // not a playlist entity and must never change the card's click/menu type.
+    const isPlaylist = itemType === 'playlist' || itemType === 'community playlist';
+    const playlistId = isPlaylist
+      ? (item.playlistId || item.playlist_id || item.audioPlaylistId || item.browseId || item.browse_id || '')
+      : '';
     if (playlistId) {
       card.dataset.playlistContext = playlistId;
       card.dataset.playlistTitle = title;
@@ -246,7 +250,7 @@
       const play = event => {
         event.preventDefault();
         event.stopPropagation();
-        if (window.playResult) window.playResult(track, false, true);
+        if (window.playResult) window.playResult(track, true, false);
       };
       row.addEventListener('click', play);
       row.addEventListener('keydown', event => {
@@ -381,6 +385,13 @@
         (direction === 'next' ? 'mood-grid-enter-right' : 'mood-grid-enter-left');
       fillGrid(incoming, start);
       viewport.style.height = outgoing.getBoundingClientRect().height + 'px';
+      // Advance exactly one visual column. Using the measured tile width keeps
+      // the transition aligned at every responsive breakpoint.
+      const columns = 6;
+      const styles = window.getComputedStyle(outgoing);
+      const gap = parseFloat(styles.columnGap || styles.gap) || 0;
+      const slideDistance = (outgoing.clientWidth - gap * (columns - 1)) / columns + gap;
+      viewport.style.setProperty('--mood-slide-distance', slideDistance + 'px');
       viewport.appendChild(incoming);
 
       requestAnimationFrame(() => {
@@ -391,6 +402,7 @@
         outgoing.remove();
         incoming.classList.remove('mood-grid-incoming');
         viewport.style.height = '';
+        viewport.style.removeProperty('--mood-slide-distance');
         grid = incoming;
         sliding = false;
         updateArrows();
@@ -492,6 +504,7 @@
     if (overlay) overlay.classList.remove('open');
   };
   window.openMoodPage = openMoodPage;
+  window.closeExploreCardContextMenu = closeCardContextMenu;
   document.addEventListener('click', event => {
     if (event.target.closest('#explore-modal-close')) window.navigateTo('#home');
   });
