@@ -217,7 +217,7 @@
   .queue-menu-option.liked { color: var(--accent); }
   .queue-menu-option.liked:hover { background: rgba(243,125,34,.08); }
   .queue-menu-option svg { flex: none; width: 16px; height: 16px; color: var(--muted); }
-  .queue-menu-option.danger svg { color: #fff; }
+  .queue-menu-option.danger svg { color: var(--danger); }
   .queue-menu-option.liked svg { color: var(--accent); }
 
   .queue-thumb {

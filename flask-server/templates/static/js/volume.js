@@ -158,6 +158,24 @@ if (mobileVolumeButton && mobileVolumePopover) {
     mobileVolumePopover.classList.remove('open');
     mobileVolumeButton.setAttribute('aria-expanded', 'false');
   };
+  const positionMobileVolumePopover = () => {
+    const buttonRect = mobileVolumeButton.getBoundingClientRect();
+    const popoverWidth = Math.min(250, Math.max(0, window.innerWidth - 20));
+    const gap = 8;
+    const left = Math.max(10, Math.min(buttonRect.left, window.innerWidth - popoverWidth - 10));
+    const belowTop = buttonRect.bottom + gap;
+    const popoverHeight = mobileVolumePopover.offsetHeight;
+    const top = belowTop + popoverHeight <= window.innerHeight - 10
+      ? belowTop
+      : Math.max(10, buttonRect.top - popoverHeight - gap);
+    mobileVolumePopover.style.position = 'fixed';
+    mobileVolumePopover.style.left = `${left}px`;
+    mobileVolumePopover.style.right = 'auto';
+    mobileVolumePopover.style.top = `${top}px`;
+    const buttonCenterInPopover = buttonRect.left + buttonRect.width / 2 - left;
+    const arrowRight = popoverWidth - buttonCenterInPopover - 5;
+    mobileVolumePopover.style.setProperty('--volume-arrow-right', `${Math.max(12, Math.min(popoverWidth - 24, arrowRight))}px`);
+  };
   mobileVolumeButton.addEventListener('click', e => {
     e.preventDefault();
     e.stopPropagation();
@@ -173,6 +191,7 @@ if (mobileVolumeButton && mobileVolumePopover) {
     if (mobileVolumeValue) mobileVolumeValue.value = volumeEl.value;
     mobileVolumePopover.classList.add('open');
     mobileVolumeButton.setAttribute('aria-expanded', 'true');
+    positionMobileVolumePopover();
     refreshVolume(true);
   });
   document.addEventListener('click', e => {

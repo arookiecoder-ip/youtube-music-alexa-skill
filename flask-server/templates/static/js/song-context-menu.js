@@ -12,6 +12,7 @@
   ].join(',');
 
   const icon = {
+    likeFilled: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M2 10h4v12H2zM8 22V10l3.5-7.5c.3-.7 1.1-1.1 1.8-.8l.2.1c1.1.5 1.6 1.7 1.3 2.8L14 10h6.2c1.3 0 2.3 1.2 2 2.5l-1.5 7.5c-.2 1.2-1.2 2.4-2.4 2.4H8z"/></svg>',
     like: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg>',
     next: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M4 5v14l11-7L4 5zm13 0v14h3V5h-3z"/></svg>',
     add: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>',
@@ -168,6 +169,7 @@
       window._playlistsData.liked_songs.includes(track.video_id);
     const likeOption = menu.querySelector('[data-action="toggle-like"]');
     likeOption.classList.toggle('liked', !!liked);
+    likeOption.querySelector('svg').outerHTML = liked ? icon.likeFilled : icon.like;
     likeOption.querySelector('span').textContent = liked ? 'Dislike' : 'Like';
 
     // For station cards, only show Play — hide everything else

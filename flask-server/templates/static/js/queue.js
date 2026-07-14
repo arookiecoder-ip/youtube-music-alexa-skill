@@ -205,6 +205,9 @@ function _buildQueueRow(container, item, i, currentIndex, thumbsById) {
   const el = document.createElement('div');
   el.className = 'queue-item' + (i === currentIndex ? ' active' : '') + (i === currentIndex && state.isPlaying ? ' playing' : '');
   el.dataset.index = String(i);
+  // On mobile the queue row is one play target: artist links use the same
+  // row action, while the separate more button keeps its own menu behavior.
+  el.dataset.mobileRowPlay = 'true';
 
   const thumbUrl = item.thumbnail || '';
   const duration = window.formatTrackDuration ? window.formatTrackDuration(item) : '';
@@ -455,7 +458,7 @@ function _queueMoreMenuHtml(item) {
   const moreSvg = `<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg>`;
   const isLiked = typeof _playlistsData !== 'undefined' && _playlistsData.liked_songs && _playlistsData.liked_songs.includes(item.video_id);
   const likeSvg = isLiked
-    ? '<svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg>'
+    ? '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M2 10h4v12H2zM8 22V10l3.5-7.5c.3-.7 1.1-1.1 1.8-.8l.2.1c1.1.5 1.6 1.7 1.3 2.8L14 10h6.2c1.3 0 2.3 1.2 2 2.5l-1.5 7.5c-.2 1.2-1.2 2-2.4 2H8z"/></svg>'
     : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg>';
   const likeText = isLiked ? "Dislike" : "Like";
   const likeClass = isLiked ? "queue-menu-option liked" : "queue-menu-option";
@@ -483,9 +486,9 @@ function _queueMoreMenuHtml(item) {
           Go to artist
         </div>
         <div class="queue-menu-option danger" data-action="remove">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+          <svg viewBox="0 0 24 24" fill="currentColor">
             <path d="M3 6h18"/><path d="M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2"/>
-            <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+            <path d="M5 7h14l-1 14H6L5 7zm3-4h8l1 4H7l1-4zM3 6h18v2H3z"/>
           </svg>
           Remove from queue
         </div>
@@ -607,7 +610,7 @@ function _wireQueueMoreMenu(el, item, index) {
       await toggleLike(item);
       const isLikedNow = typeof _playlistsData !== 'undefined' && _playlistsData.liked_songs && _playlistsData.liked_songs.includes(item.video_id);
       const likeSvgNow = isLikedNow
-        ? '<svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg>'
+        ? '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M2 10h4v12H2zM8 22V10l3.5-7.5c.3-.7 1.1-1.1 1.8-.8l.2.1c1.1.5 1.6 1.7 1.3 2.8L14 10h6.2c1.3 0 2.3 1.2 2 2.5l-1.5 7.5c-.2 1.2-1.2 2-2.4 2H8z"/></svg>'
         : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg>';
       likeBtn.innerHTML = `\n          ${likeSvgNow}\n          ${isLikedNow ? "Dislike" : "Like"}\n        `;
       if (isLikedNow) likeBtn.classList.add('liked');
@@ -1470,14 +1473,14 @@ function scheduleHistoryRefresh() {
   const openBtn = document.getElementById('queue-modal-btn');
   if (openBtn) openBtn.addEventListener('click', openQueueModal);
 
-  // Drag the queue sheet from its header, or pull down from the top of the
-  // scrollable queue body, to close it.
+  // Drag the queue sheet from its header to close it. Keep the queue body as
+  // a native scroll surface so upward/downward scrolling cannot start the
+  // sheet close animation and nudge the content.
   const dragHandle = document.getElementById('queue-modal-drag');
   const dragHeader = document.querySelector('.queue-modal-header');
-  const dragSurfaces = [
-    { element: dragHeader || dragHandle, fromBody: false },
-    { element: body, fromBody: true }
-  ].filter(({ element }) => element);
+    const dragSurfaces = [
+      { element: dragHeader || dragHandle, fromBody: false }
+    ].filter(({ element }) => element);
   if (dragSurfaces.length && modal) {
     let startY = 0;
     let lastY = 0;
