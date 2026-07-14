@@ -780,7 +780,7 @@ _DEAD_VIDEO_TTL = 3600  # 1 hour
 # NOT a permanent-failure signal. Marking those videos as dead caches them for
 # `_DEAD_VIDEO_TTL` and every subsequent play returns 200 in ~2ms without
 # actually streaming audio. Do not add it back to this list. The client-profile
-# fallback loop (tv -> android_vr -> default -> web) is the right place to
+# fallback loop (default -> android_vr -> web -> tv) is the right place to
 # recover from it.
 _VIDEO_UNAVAILABLE_ERRORS = [
     'Video unavailable',
@@ -1765,11 +1765,11 @@ class Supporting:
         return {'song_info': {'metadata': playlist[0], 'stream': stream}, 'playlist': playlist}
 
     def get_ytdlp_clients():
-        # android_vr currently exposes the normal AAC/M4A audio formats without
-        # cookies, while cookie-authenticated default/web can return image-only
-        # manifests and TV can report otherwise-playable videos as DRM. Keep
-        # the cookie-capable profiles as fallbacks for videos that need auth.
-        return ["android_vr", "default", "web", "tv"]
+        # Prefer the normal cookie-authenticated client. On hosts challenged by
+        # YouTube this avoids a guaranteed failed cookie-free android_vr probe
+        # before every download. Keep android_vr second because it can expose
+        # AAC/M4A formats when the authenticated default manifest is image-only.
+        return ["default", "android_vr", "web", "tv"]
 
 
     @staticmethod
@@ -1958,7 +1958,7 @@ class Supporting:
                         return path
                     output = os.path.join(AUDIO_CACHE_DIR, f"{video_id}.%(ext)s")
                     clients = Supporting.get_ytdlp_clients()
-                    permanently_dead = False
+                    permanent_failures = 0
                     downloaded = False
                     last_error = ""
                     for index, client in enumerate(clients):
@@ -1975,13 +1975,15 @@ class Supporting:
                         last_error = stderr
                         logger.warning("yt-dlp client %s failed for %s; trying fallback: %s",
                                        client, video_id, stderr)
-                        # If any client reports the video itself is gone,
-                        # don't bother trying other clients — the video doesn't
-                        # exist, and retrying won't help.
+                        # "Video unavailable" can be client-specific: the
+                        # authenticated default profile may reject a playable
+                        # music video that android_vr can still download. Keep
+                        # trying, and only poison the dead-video cache when
+                        # every configured client independently says it is
+                        # permanently unavailable.
                         if _is_video_permanently_unavailable(stderr):
-                            permanently_dead = True
-                            break
-                    if permanently_dead:
+                            permanent_failures += 1
+                    if not downloaded and permanent_failures == len(clients):
                         _mark_video_dead(video_id)
                         logger.warning("yt-dlp: %s marked as permanently unavailable", video_id)
                     elif not downloaded:
@@ -2846,19 +2848,14 @@ def _watch_playback_confirmation(serial, video_id, resend):
             return
         if not _still_relevant():
             return
-        # If the video is known to be permanently unavailable, don't bother
-        # resending — the retry would hit the same dead video. Instead,
-        # try to skip to the next track in the queue right away.
+        # A permanently unavailable track must stop here. Do not substitute a
+        # different upload or advance the queue behind the user's back.
         if _is_dead_video(video_id):
-            logger.warning("[playback-watchdog] %s is known-dead, skipping instead of retry", video_id)
-            _promote_next_track('watchdog skipped dead video', position_ms=0)
-            # Also dispatch the promoted track so the device actually plays it.
-            cur = _get_now_playing()
-            next_vid = cur.get('video_id', '')
-            if next_vid and serial:
-                threading.Thread(
-                    target=_dispatch_play_with_retry,
-                    args=(serial, next_vid, 0), daemon=True).start()
+            logger.warning("[playback-watchdog] %s is unavailable; stopping", video_id)
+            _update_now_playing(
+                playing=False,
+                playback_error={'type': 'unavailable',
+                                'message': "This song isn't available. Playback stopped."})
             return
         logger.warning("[playback-watchdog] no confirmation for %s in %ss, retrying once", video_id, PLAYBACK_CONFIRM_TIMEOUT)
         error = resend()
@@ -3566,45 +3563,15 @@ def alexa_state_event():
             _now_playing['playing'] = False
             _now_playing['updated_at'] = time.time()
         _notify_sse()
-        # If the current track was never confirmed and is known to be
-        # permanently unavailable (deleted/privated video), try to skip to the
-        # next track in the queue instead of leaving playback in a wedged state.
+        # A failed current track stays selected and stopped. Never replace it
+        # with another upload or silently advance to another queue item.
         cur = _get_now_playing()
         cur_vid = cur.get('video_id', '')
         if cur_vid and not cur.get('playback_confirmed') and _is_dead_video(cur_vid):
-            queue = cur.get('queue') or []
-            idx = cur.get('queue_index', -1)
-            serial = body.get('serial')
-            # Find the next non-dead track in the queue and dispatch it.
-            # Don't use _promote_next_track here — it advances queue_index by
-            # exactly 1, which is wrong when multiple consecutive tracks are
-            # dead (the queue walk found a track several positions ahead).
-            for offset in range(1, len(queue) + 1):
-                next_idx = (idx + offset) % len(queue)
-                next_item = queue[next_idx]
-                next_vid = next_item.get('video_id', '')
-                if next_vid and not _is_dead_video(next_vid):
-                    logger.info(
-                        "[np] dead-video skip: %s→%s (%s)",
-                        cur_vid, next_vid, next_item.get('title', '?'))
-                    _update_now_playing(
-                        playing=False,
-                        title=next_item.get('title', ''),
-                        artist=next_item.get('artist', ''),
-                        thumbnail=next_item.get('thumbnail', ''),
-                        video_id=next_vid,
-                        duration_ms=next_item.get('duration_ms', 0),
-                        queue_index=next_idx,
-                        position_ms=0)
-                    if serial:
-                        threading.Thread(
-                            target=_dispatch_play_with_retry,
-                            args=(serial, next_vid, 0), daemon=True).start()
-                    break
-            else:
-                logger.warning(
-                    "[np] dead-video skip: no playable track found after %s",
-                    cur_vid)
+            _update_now_playing(
+                playing=False,
+                playback_error={'type': 'unavailable',
+                                'message': "This song isn't available. Playback stopped."})
     elif event == 'started':
         video_id = body.get('video_id', '')
         if video_id and not _valid_video_id(video_id):

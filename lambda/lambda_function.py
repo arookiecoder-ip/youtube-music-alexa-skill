@@ -14,11 +14,6 @@ from models import player_models
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
 
-# When a stream fails to play we auto-advance to the next track, but if every
-# track has a dead URL that would walk the whole playlist in a burst. Stop after
-# this many consecutive failures (the counter resets on a successful start).
-_MAX_PLAYBACK_RECOVERY_ATTEMPTS = 3
-
 ddb_region = os.environ.get('DYNAMODB_PERSISTENCE_REGION')
 ddb_table_name = os.environ.get('DYNAMODB_PERSISTENCE_TABLE_NAME')
 ddb_resource = boto3.resource('dynamodb', region_name=ddb_region)
@@ -594,10 +589,6 @@ class PlaybackStartedEventHandler(AbstractRequestHandler):
         playback_info["index"] = player.Attributes.get_calculated_index(handler_input)
         playback_info["in_playback_session"] = True
         playback_info["has_previous_playback_session"] = True
-        # A track started cleanly; reset the failure-recovery counter so a later
-        # failure gets a fresh set of recovery attempts.
-        playback_info["consecutive_failures"] = 0
-
         logger.info(f'playback_info -> {playback_info}')
 
         # Notify server: playback started (voice resume, auto-advance, etc.).
@@ -781,29 +772,12 @@ class PlaybackFailedEventHandler(AbstractRequestHandler):
             handler_input.request_envelope.request.error))
 
         playback_info["in_playback_session"] = False
-
-        # A stream can fail to load (dead/expired URL, device network blip). Try
-        # to recover by skipping to the next track instead of dying silently, so
-        # one bad song doesn't stop the whole session. Speech is not allowed in
-        # responses to AudioPlayer events, so recover quietly.
-        #
-        # Guard against a cascade: if every track in the playlist has a dead URL,
-        # advancing would fail again and again, walking the whole playlist in a
-        # burst. Count consecutive failures (reset on a successful start) and give
-        # up after a small number so we stop instead of hammering the API.
-        fail_count = int(playback_info.get("consecutive_failures", 0)) + 1
-        playback_info["consecutive_failures"] = fail_count
-        if fail_count > _MAX_PLAYBACK_RECOVERY_ATTEMPTS:
-            logger.warning("Giving up recovery after %s consecutive playback failures.", fail_count)
-            return handler_input.response_builder.response
-
-        try:
-            response = player.Controller.play_next(handler_input, is_playback=True)
-            # play_next may end the session (end of playlist); that's fine.
-            return _without_speech(response)
-        except Exception:
-            logger.exception("Failed to auto-advance after playback failure")
-            return handler_input.response_builder.response
+        playback_info["next_stream_enqueued"] = False
+        # A failed current track is terminal. Clear Alexa's AudioPlayer queue so
+        # an already-enqueued next item cannot start automatically, and leave
+        # the failed item selected for an explicit user retry or selection.
+        player._notify_server(handler_input, 'stopped')
+        return _without_speech(player.Controller.stop(handler_input))
 
 # ###################################################################
     

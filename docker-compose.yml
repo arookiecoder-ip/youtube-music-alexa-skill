@@ -12,6 +12,8 @@ services:
       # persistent data volume (not in a read-only bind mount).
       - YTMUSIC_AUTH_FILE=/data/headers_auth.json
     volumes:
+      # cookies.txt is provisioned separately in the project root and is
+      # gitignored; expose that exact file to yt-dlp inside the container.
       - ./cookies.txt:/app/cookies.txt:ro
       - ytmusic_cache:/tmp/ytm_audio_cache
       - ytmusic_data:/data
