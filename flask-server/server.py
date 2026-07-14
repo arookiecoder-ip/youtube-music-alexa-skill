@@ -771,15 +771,23 @@ _dead_video_ids = {}
 _dead_video_ids_lock = threading.Lock()
 _DEAD_VIDEO_TTL = 3600  # 1 hour
 
-# yt-dlp stderr strings that mean the video does not exist / can never be
-# downloaded (as opposed to transient network/auth/rate-limit errors).
+# yt-dlp stderr strings that mean the video does not exist and can never be
+# downloaded (as opposed to transient auth, bot-challenge, age-verification,
+# or network/rate-limit issues — those must fall through to the next client).
+#
+# IMPORTANT: "Sign in to confirm you're not a bot" is YouTube's bot-detection
+# challenge on datacenter IPs and happens for *fully available* videos. It is
+# NOT a permanent-failure signal. Marking those videos as dead caches them for
+# `_DEAD_VIDEO_TTL` and every subsequent play returns 200 in ~2ms without
+# actually streaming audio. Do not add it back to this list. The client-profile
+# fallback loop (tv -> android_vr -> default -> web) is the right place to
+# recover from it.
 _VIDEO_UNAVAILABLE_ERRORS = [
     'Video unavailable',
     'This video is not available',
     'Private video',
     'This video is private',
     'This video has been removed',
-    'Sign in to confirm',               # age-restricted without cookies
 ]
 
 
@@ -1757,10 +1765,15 @@ class Supporting:
         return {'song_info': {'metadata': playlist[0], 'stream': stream}, 'playlist': playlist}
 
     def get_ytdlp_clients():
-        # Exported cookies make the TV client the most reliable first choice.
-        # android_vr remains the cookie-free fallback; iOS rejects cookie
-        # authentication and only adds a guaranteed failed attempt.
-        return ["tv", "android_vr", "default", "web"]
+        # The `web` client is the most reliable first choice when exported
+        # cookies are configured (the common deployment): it is browser-flavoured
+        # and accepts cookie authentication. The others are tried in order only
+        # if `web` fails — `default` (no player_client) is a sane second pass,
+        # then `tv` (TV-flavoured, cookie-capable), with `android_vr` last as a
+        # cookie-free fallback that commonly hits YouTube's bot challenge on
+        # datacenter IPs. iOS rejects cookie authentication so it is omitted.
+        return ["web", "default", "tv", "android_vr"]
+
 
     @staticmethod
     def ytdlp_client_uses_cookies(client: str):
