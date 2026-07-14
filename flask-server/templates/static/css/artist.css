@@ -504,4 +504,97 @@
   #artist-skeleton .skeleton-line-artist { width: 80px; margin-top: 4px; }
   #artist-skeleton .skeleton-line-sm { width: 60px; margin-top: 4px; }
 
+  /* Artist pages can be taller than the mobile viewport. Keep the scroll
+     container scoped to these routes so the desktop layout is unaffected. */
+  @media (max-width: 899px) {
+    body.artist-route,
+    body.artist-route main,
+    body.artist-songs-route,
+    body.artist-songs-route main {
+      height: auto !important;
+      min-height: 100dvh;
+      overflow-y: auto !important;
+      overscroll-behavior-y: auto !important;
+    }
+
+    #artist-top-songs .artist-song-album,
+    #artist-top-songs .artist-song-like-btn,
+    #artist-songs-section .artist-song-album,
+    #artist-songs-section .artist-song-like-btn { display: none; }
+
+    #artist-top-songs .artist-song-row,
+    #artist-songs-section .artist-song-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      width: 100%;
+      height: 52px;
+      min-height: 52px;
+      padding: 4px 2px;
+      border: 0;
+      border-radius: 0;
+      background: transparent;
+      box-shadow: none;
+    }
+    #artist-top-songs .artist-song-thumb,
+    #artist-songs-section .artist-song-thumb {
+      width: 44px;
+      height: 44px;
+      min-width: 44px;
+      min-height: 44px;
+      flex: 0 0 44px;
+      border-radius: 4px;
+    }
+    #artist-top-songs .artist-song-info,
+    #artist-songs-section .artist-song-info { min-width: 0; flex: 1 1 auto; }
+    #artist-top-songs .artist-song-title,
+    #artist-songs-section .artist-song-title { font-size: .76rem; line-height: 1.25; }
+    #artist-top-songs .artist-song-artist,
+    #artist-songs-section .artist-song-artist { font-size: .68rem; line-height: 1.3; }
+    #artist-top-songs .artist-song-more-btn,
+    #artist-songs-section .artist-song-more-btn {
+      width: 28px;
+      height: 28px;
+      min-width: 28px;
+      min-height: 28px;
+      padding: 0;
+      border: 0;
+      background: transparent;
+    }
+    #artist-top-songs .artist-song-more-btn svg,
+    #artist-songs-section .artist-song-more-btn svg { width: 18px; height: 18px; }
+    #artist-top-songs .artist-song-play-btn,
+    #artist-songs-section .artist-song-play-btn { left: 2px; width: 44px; height: 44px; }
+    body.artist-songs-route #artist-songs-section {
+      padding-top: 12px;
+      padding-left: 8px;
+      padding-right: 8px;
+      padding-bottom: 120px;
+    }
+
+    body.artist-route,
+    body.artist-songs-route,
+    body:has(#artist-section:not([hidden])) main,
+    body:has(#artist-section:not([hidden])) #artist-section,
+    body:has(#artist-section:not([hidden])) #artist-content,
+    body:has(#artist-section:not([hidden])) #artist-hero,
+    body:has(#artist-section:not([hidden])) #artist-top-songs,
+    body:has(#artist-songs-section:not([hidden])) main,
+    body:has(#artist-songs-section:not([hidden])) #artist-songs-section,
+    body:has(#artist-songs-section:not([hidden])) #artist-songs-content {
+      background-color: #000;
+      background-image: none;
+      box-shadow: none;
+    }
+    body:has(#artist-section:not([hidden])) main > header,
+    body:has(#artist-section:not([hidden])) main > header::before,
+    body:has(#artist-songs-section:not([hidden])) main > header,
+    body:has(#artist-songs-section:not([hidden])) main > header::before {
+      background: transparent;
+      background-color: transparent;
+      background-image: none;
+      border-bottom-color: transparent;
+    }
+  }
+
 }

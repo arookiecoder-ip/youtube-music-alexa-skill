@@ -36,9 +36,32 @@
     return _bar;
   }
 
+  // Keep the shared viewport-edge request line available on every route.
+  // Some mobile routes previously hid the element itself, so album, artist,
+  // playlist and search requests still progressed but could never be seen.
+  function _syncMobileProgressVisibility() {
+    var bar = _getBar();
+    if (!bar) return;
+    bar.hidden = false;
+  }
+
+  _syncMobileProgressVisibility();
+  if (window.matchMedia) {
+    var _mobileProgressMedia = window.matchMedia('(max-width: 899px)');
+    if (_mobileProgressMedia.addEventListener) {
+      _mobileProgressMedia.addEventListener('change', _syncMobileProgressVisibility);
+    } else if (_mobileProgressMedia.addListener) {
+      _mobileProgressMedia.addListener(_syncMobileProgressVisibility);
+    }
+  }
+  window.addEventListener('hashchange', _syncMobileProgressVisibility);
+  window.syncTopProgressVisibility = _syncMobileProgressVisibility;
+
   function _barStart() {
     var bar = _getBar();
     if (!bar) return;
+    _syncMobileProgressVisibility();
+    if (bar.hidden) return;
     // Cancel any previous crawl
     clearInterval(_crawlTimer);
     // Hard-reset without transition so it appears instantly at 0
@@ -164,15 +187,24 @@
   }
 
   function _fetchPlaylist(plId, signal) {
-    // One detail endpoint handles library, Liked Music and public/curated
-    // playlists, including the anonymous fallback for public mixes.
+    // Try the library endpoint first for personal playlists and Liked Music.
+    // Home shelves can also contain public/curated playlists, which use the
+    // public endpoint when the library endpoint returns 404.
     return fetch('/api/library/playlists/' + encodeURIComponent(plId) + '?offset=0&limit=30', {
       credentials: 'same-origin',
       cache: 'no-store',
       signal: signal,
     }).then(function (r) {
-      if (!r.ok) throw new Error('HTTP ' + r.status);
-      return r.json();
+      if (r.ok) return r.json();
+      if (r.status !== 404) throw new Error('HTTP ' + r.status);
+      return fetch('/api/playlists/' + encodeURIComponent(plId), {
+        credentials: 'same-origin',
+        cache: 'no-store',
+        signal: signal,
+      }).then(function (publicResponse) {
+        if (!publicResponse.ok) throw new Error('HTTP ' + publicResponse.status);
+        return publicResponse.json();
+      });
     });
   }
 
@@ -238,9 +270,19 @@
     });
   }
 
+  function _normalizeImageUrl(value) {
+    if (typeof value !== 'string') return value || '';
+    if (value.startsWith('//')) return 'https:' + value;
+    if (!value.startsWith('http') && !value.startsWith('/') &&
+        (value.includes('googleusercontent.com') || value.includes('ggpht.com'))) {
+      return 'https://' + value;
+    }
+    return value;
+  }
+
   function _imageUrl(value) {
     if (!value) return '';
-    if (typeof value === 'string') return value;
+    if (typeof value === 'string') return _normalizeImageUrl(value);
     if (Array.isArray(value)) {
       for (var i = value.length - 1; i >= 0; i -= 1) {
         var arrayUrl = _imageUrl(value[i]);
@@ -248,7 +290,7 @@
       }
       return '';
     }
-    return value.url || value.src || _imageUrl(value.thumbnails) || _imageUrl(value.images) || '';
+    return _normalizeImageUrl(value.url || value.src) || _imageUrl(value.thumbnails) || _imageUrl(value.images) || '';
   }
 
   function _preloadImage(url, signal) {

@@ -7,6 +7,10 @@
 (function () {
   const deviceEl = document.getElementById('device');
   const hamburger = document.getElementById('hamburger-btn');
+  const mobileSearchToggle = document.getElementById('mobile-search-toggle');
+  const mobilePlayerClose = document.getElementById('mobile-player-close');
+  const searchSection = document.querySelector('.play-section');
+  const searchInput = document.getElementById('query');
   const sidebar = document.getElementById('sidebar');
   const overlay = document.getElementById('sidebar-overlay');
   const closeBtn = document.getElementById('sidebar-close');
@@ -77,7 +81,94 @@
     setTimeout(() => { overlay.style.display = 'none'; }, 300);
   }
 
-  hamburger.addEventListener('click', openSidebar);
+  hamburger.addEventListener('click', () => {
+    if (sidebar.classList.contains('open')) closeSidebar();
+    else openSidebar();
+  });
+
+  function closeMobileSearch() {
+    document.body.classList.remove('mobile-search-open');
+  }
+
+  function closeMobileProfile() {
+    if (!window.matchMedia('(max-width: 899px)').matches) return;
+    const profile = document.getElementById('profile-menu-wrap');
+    const profileTrigger = document.getElementById('profile-menu-trigger');
+    if (profile) profile.classList.remove('open');
+    if (profileTrigger) profileTrigger.setAttribute('aria-expanded', 'false');
+  }
+
+  if (mobileSearchToggle && searchSection) {
+    mobileSearchToggle.addEventListener('click', (event) => {
+      event.stopPropagation();
+      closeMobileProfile();
+      const isOpen = document.body.classList.toggle('mobile-search-open');
+      if (isOpen && searchInput) {
+        requestAnimationFrame(() => searchInput.focus());
+      }
+    });
+    document.addEventListener('click', (event) => {
+      if (!document.body.classList.contains('mobile-search-open')) return;
+      if (event.target.closest('.play-section, .mobile-search-toggle')) return;
+      closeMobileSearch();
+    });
+    if (searchInput) {
+      searchInput.addEventListener('focus', closeMobileProfile);
+      searchInput.addEventListener('keydown', (event) => {
+        if (event.key === 'Escape') closeMobileSearch();
+      });
+    }
+  }
+
+  if (mobilePlayerClose) {
+    mobilePlayerClose.addEventListener('click', (event) => {
+      event.stopPropagation();
+      if (window.closeNowPlayingOverlay) window.closeNowPlayingOverlay();
+      else if (window.navigateTo) window.navigateTo('#home');
+    });
+  }
+
+  // A quick downward flick anywhere on the non-interactive player surface
+  // dismisses the expanded mobile player through its normal slide-out path.
+  const nowPlayingSection = document.getElementById('now-playing-section');
+  if (nowPlayingSection) {
+    let swipeStartX = 0;
+    let swipeStartY = 0;
+    let swipeStartedAt = 0;
+    let swipeTracking = false;
+
+    nowPlayingSection.addEventListener('touchstart', (event) => {
+      if (!document.body.classList.contains('now-playing-route') ||
+          window.matchMedia('(min-width: 900px)').matches ||
+          event.touches.length !== 1 ||
+          event.target.closest('button, a, input, select, textarea, [role="slider"], .progress-track')) {
+        swipeTracking = false;
+        return;
+      }
+      const touch = event.touches[0];
+      swipeStartX = touch.clientX;
+      swipeStartY = touch.clientY;
+      swipeStartedAt = performance.now();
+      swipeTracking = true;
+    }, { passive: true });
+
+    nowPlayingSection.addEventListener('touchend', (event) => {
+      if (!swipeTracking || !event.changedTouches.length) return;
+      swipeTracking = false;
+      const touch = event.changedTouches[0];
+      const deltaX = touch.clientX - swipeStartX;
+      const deltaY = touch.clientY - swipeStartY;
+      const elapsed = Math.max(1, performance.now() - swipeStartedAt);
+      const velocity = deltaY / elapsed;
+      if (deltaY >= 72 && velocity >= .55 && deltaY > Math.abs(deltaX) * 1.25) {
+        if (window.closeNowPlayingOverlay) window.closeNowPlayingOverlay();
+      }
+    }, { passive: true });
+
+    nowPlayingSection.addEventListener('touchcancel', () => {
+      swipeTracking = false;
+    }, { passive: true });
+  }
   closeBtn.addEventListener('click', closeSidebar);
   overlay.addEventListener('click', closeSidebar);
 

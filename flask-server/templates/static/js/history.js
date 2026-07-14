@@ -13,11 +13,11 @@ async function loadHistory() {
     const newTopId  = fresh.length ? fresh[0].video_id : null;
     state._historyCache = fresh;
     syncHistoryTriggerVisibility();
-    // Keep the modal current if it's open.
-    const overlay = document.getElementById('history-modal-overlay');
-    if (overlay.classList.contains('open')) {
+    // Keep the history page current if it is visible.
+    const page = document.getElementById('history-page');
+    if (page && !page.hidden) {
       const isNewTop = newTopId && newTopId !== prevTopId;
-      const list = overlay.querySelector('.history-list');
+      const list = page.querySelector('.history-list');
       if (isNewTop && list) {
         // A genuinely new song appeared at the top — prepend it animated and
         // remove any existing row for the same id (avoids duplicates from the
@@ -36,7 +36,7 @@ async function loadHistory() {
       // If only metadata changed (same top), leave the list as-is.
     }
   } catch (e) {
-    console.warn('Failed to load history', e);
+    console.error('Failed to load history', e);
   }
 }
 
@@ -128,11 +128,11 @@ function _buildHistoryRow(entry) {
 }
 
 function renderHistoryModalList(history) {
-  const body = document.getElementById('history-modal-body');
+  const body = document.getElementById('history-page-body');
   const items = Array.isArray(history) ? history.filter(e => e && e.video_id) : [];
   if (!body) return;
   if (items.length === 0) {
-    body.innerHTML = '<div class="history-modal-empty">No listening history yet</div>';
+    body.innerHTML = '<div class="history-page-empty">No listening history yet</div>';
     return;
   }
   const now = Date.now() / 1000;
@@ -156,9 +156,51 @@ function renderHistoryModalList(history) {
   body.appendChild(list);
 }
 
+function _historyViewportImages(page) {
+  const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
+  return Array.from(page.querySelectorAll('img')).filter(function (img) {
+    const rect = img.getBoundingClientRect();
+    return rect.bottom > 0 && rect.top < viewportHeight;
+  });
+}
+
+function _waitForHistoryImage(img) {
+  return new Promise(function (resolve) {
+    let settled = false;
+    const finish = function () {
+      if (settled) return;
+      settled = true;
+      img.removeEventListener('load', finish);
+      img.removeEventListener('error', finish);
+      resolve();
+    };
+    const check = function () {
+      if (img.dataset.imageReady === 'true') {
+        finish();
+        return;
+      }
+      if (img.complete && (img.currentSrc || img.src)) {
+        if (typeof img.decode === 'function') img.decode().catch(function () {}).then(finish);
+        else finish();
+        return;
+      }
+      if (!settled) requestAnimationFrame(check);
+    };
+    img.addEventListener('load', check, { once: true });
+    img.addEventListener('error', finish, { once: true });
+    check();
+    setTimeout(finish, 10000);
+  });
+}
+
+function _waitForHistoryViewport(page) {
+  const images = _historyViewportImages(page);
+  if (!images.length) return Promise.resolve();
+  return Promise.all(images.map(_waitForHistoryImage));
+}
+
 (function () {
-  const overlay = document.getElementById('history-modal-overlay');
-  const closeBtn = document.getElementById('history-modal-close');
+  const page = document.getElementById('history-page');
   const openBtn = document.getElementById('history-modal-btn');
 
   function openHistoryModal(fromRoute) {
@@ -166,20 +208,29 @@ function renderHistoryModalList(history) {
       window.navigateTo('#history');
       return;
     }
-    // Render immediately from the pre-fetched cache — no fetch-on-click wait.
+    const waitForViewport = window.matchMedia('(max-width: 899px)').matches;
+    document.body.classList.remove('drag-lock');
+    document.documentElement.style.removeProperty('overflow');
+    document.body.style.removeProperty('overflow');
+    if (waitForViewport && window.startTopProgress) window.startTopProgress();
+    page.hidden = true;
+    page.classList.toggle('history-page-loading', waitForViewport);
     renderHistoryModalList(state._historyCache);
-    overlay.classList.add('open');
+    page.hidden = false;
+    if (waitForViewport) {
+      _waitForHistoryViewport(page).then(function () {
+        page.classList.remove('history-page-loading');
+        if (window.getRoute() === '#history' && !page.hidden && window.completeTopProgress) window.completeTopProgress();
+      });
+    }
   }
 
   function closeHistoryModal() {
-    overlay.classList.remove('open');
+    page.hidden = true;
     if (window.getRoute() === '#history') window.navigateTo('#home');
   }
 
   openBtn.addEventListener('click', openHistoryModal);
-  if (closeBtn) closeBtn.addEventListener('click', closeHistoryModal);
-  overlay.addEventListener('click', (e) => { if (e.target === overlay) closeHistoryModal(); });
-
   window._closeHistoryModal = closeHistoryModal;
   window.openHistoryPage = openHistoryModal;
   if (window.getRoute() === '#history') openHistoryModal(true);

@@ -44,13 +44,28 @@ function syncTrackPlaybackIndicators() {
 }
 
 function syncPlayPause() {
-  for (const btn of [document.getElementById('pp-btn'), document.getElementById('mini-pp'), document.getElementById('mp-pp-btn'), document.getElementById('np-page-art-overlay')]) {
+  for (const btn of [document.getElementById('pp-btn'), document.getElementById('mini-pp'), document.getElementById('mp-pp-btn'), document.getElementById('np-page-art-overlay'), document.getElementById('mobile-np-play')]) {
     if (!btn) continue;
-    const p = btn.querySelector('.icon-play');
-    if (p) p.style.display = state.isPlaying ? 'none' : '';
-    const pa = btn.querySelector('.icon-pause');
-    if (pa) pa.style.display = state.isPlaying ? '' : 'none';
+    const p = btn.querySelector('.icon-play, .mobile-np-play-icon');
+    if (p) p.style.display = state.isPlaying ? 'none' : 'block';
+    const pa = btn.querySelector('.icon-pause, .mobile-np-pause-icon');
+    if (pa) pa.style.display = state.isPlaying ? 'block' : 'none';
     btn.title = state.isPlaying ? 'Pause' : 'Play';
+  }
+  const mobileNpPlay = document.getElementById('mobile-np-play');
+  const npPagePlay = document.getElementById('np-page-art-overlay');
+  if (mobileNpPlay && npPagePlay) {
+    mobileNpPlay.addEventListener('click', () => npPagePlay.click());
+  }
+  const mobileNpShuffle = document.getElementById('mobile-np-shuffle');
+  const shuffleButton = document.getElementById('shuffle-btn');
+  if (mobileNpShuffle && shuffleButton) {
+    mobileNpShuffle.addEventListener('click', () => shuffleButton.click());
+  }
+  const mobileNpLike = document.getElementById('mobile-np-like');
+  const miniLikeButton = document.getElementById('np-like-btn');
+  if (mobileNpLike && miniLikeButton) {
+    mobileNpLike.addEventListener('click', () => miniLikeButton.click());
   }
   syncTrackPlaybackIndicators();
   if (window.updateQueuePlaying) window.updateQueuePlaying(state.isPlaying);
@@ -279,7 +294,7 @@ function refreshNpLikeButton() {
   const svg = isLiked
     ? `<svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="1" stroke-linecap="round" stroke-linejoin="round"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg>`
     : `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg>`;
-  for (const id of ['np-like-btn', 'np-page-like-btn', 'np-menu-like']) {
+  for (const id of ['np-like-btn', 'np-page-like-btn', 'np-menu-like', 'mobile-np-like']) {
     const btn = document.getElementById(id);
     if (!btn) continue;
     btn.classList.toggle('liked', isLiked);
@@ -410,6 +425,10 @@ const progress = window.progress = (function () {
     const mpElapsed = document.getElementById('mp-progress-elapsed');
     const mpTotal = document.getElementById('mp-progress-total');
     const miniFill = document.getElementById('mini-player-progress-fill');
+    const mobileNpFill = document.getElementById('mobile-np-progress-fill');
+    const mobileNpHandle = document.getElementById('mobile-np-progress-handle');
+    const mobileNpElapsed = document.getElementById('mobile-np-progress-elapsed');
+    const mobileNpTotal = document.getElementById('mobile-np-progress-total');
     if (mpFill) {
       mpFill.style.width = pct + '%';
       mpHandle.style.left = pct + '%';
@@ -417,6 +436,10 @@ const progress = window.progress = (function () {
       mpTotal.textContent = durationMs ? fmt(durationMs) : '--:--';
     }
     if (miniFill) miniFill.style.width = pct + '%';
+    if (mobileNpFill) mobileNpFill.style.width = pct + '%';
+    if (mobileNpHandle) mobileNpHandle.style.left = pct + '%';
+    if (mobileNpElapsed) mobileNpElapsed.textContent = fmt(pos);
+    if (mobileNpTotal) mobileNpTotal.textContent = durationMs ? fmt(durationMs) : '--:--';
   }
 
   function loop() {
@@ -637,6 +660,16 @@ const progress = window.progress = (function () {
     mpWrap.addEventListener('mousemove', handleTooltipMove);
     mpWrap.addEventListener('touchmove', handleTooltipMove, { passive: true });
   }
+  const mobileNpTrack = document.getElementById('mobile-np-progress-track');
+  const mobileNpWrap = document.getElementById('mobile-np-progress');
+  if (mobileNpTrack) {
+    mobileNpTrack.addEventListener('mousedown', beginDrag);
+    mobileNpTrack.addEventListener('touchstart', beginDrag, { passive: false });
+  }
+  if (mobileNpWrap) {
+    mobileNpWrap.addEventListener('mousemove', handleTooltipMove);
+    mobileNpWrap.addEventListener('touchmove', handleTooltipMove, { passive: true });
+  }
   // Global move/end handlers work for both tracks
   window.addEventListener('mousemove', moveDrag);
   window.addEventListener('mouseup', endDrag);
@@ -723,6 +756,21 @@ function syncModalScrollLock() {
     const el = document.getElementById(id);
     return el && el.classList.contains('open');
   });
+  // Locking body scrolling removes the native scrollbar on desktop. Reserve
+  // that exact width while the sheet is open so centered content underneath
+  // does not shift sideways. Mobile overlay scrollbars normally measure 0px,
+  // so this is a no-op there.
+  const body = document.body;
+  if (state._modalOriginalPaddingRight === undefined) {
+    state._modalOriginalPaddingRight = body.style.paddingRight || '';
+  }
+  const scrollbarWidth = Math.max(0, window.innerWidth - document.documentElement.clientWidth);
+  if (anyOpen && scrollbarWidth > 0) {
+    body.style.paddingRight = scrollbarWidth + 'px';
+  } else if (!anyOpen) {
+    body.style.paddingRight = state._modalOriginalPaddingRight;
+    state._modalOriginalPaddingRight = undefined;
+  }
   document.body.classList.toggle('modal-open', anyOpen);
 }
 
@@ -1096,12 +1144,30 @@ document.getElementById('shuffle-btn').addEventListener('click', async (e) => {
   const button = document.getElementById('np-more-btn');
   const menu = document.getElementById('np-more-menu');
   if (!wrap || !button || !menu) return;
-  const close = () => { wrap.classList.remove('open'); button.setAttribute('aria-expanded', 'false'); };
+  const mobileButton = document.getElementById('mobile-player-more');
+  const close = () => {
+    wrap.classList.remove('open');
+    menu.classList.remove('mobile-open');
+    button.setAttribute('aria-expanded', 'false');
+    if (menu.parentElement === document.body) {
+      document.querySelector('.player-section .np-more-wrap')?.appendChild(menu);
+      menu.classList.remove('mobile-now-playing-menu');
+    }
+  };
   button.addEventListener('click', (e) => {
     e.stopPropagation();
     const open = !wrap.classList.contains('open');
     close();
     if (open) { wrap.classList.add('open'); button.setAttribute('aria-expanded', 'true'); }
+  });
+  if (mobileButton) mobileButton.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const open = !menu.classList.contains('mobile-open');
+    close();
+    if (open) {
+      document.body.appendChild(menu);
+      menu.classList.add('mobile-now-playing-menu', 'mobile-open');
+    }
   });
   document.addEventListener('click', (e) => { if (!wrap.contains(e.target)) close(); });
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape') close(); });
@@ -1196,6 +1262,11 @@ for (const btn of document.querySelectorAll('[data-action="previous"], [data-act
     if (_navBusy) return;
     const serial = selectedSerial();
     if (!serial) return;
+    const navigationDirection = btn.dataset.action === 'next' ? 'next' : 'previous';
+    if (window.optimisticallyAdvanceMobileInlineQueue) {
+      const rendered = window.optimisticallyAdvanceMobileInlineQueue(navigationDirection);
+      if (!rendered && window.animateMobileInlineQueue) window.animateMobileInlineQueue(navigationDirection);
+    }
     _navBusy = true;
     document.querySelectorAll('[data-action="previous"], [data-action="next"]')
       .forEach(b => b.disabled = true);

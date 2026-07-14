@@ -306,6 +306,21 @@
     transform: none;
     opacity: 1;
   }
+  /* Routed Explore and Library pages open immediately. Other modal views
+     retain their existing fade/slide behavior. */
+  .history-modal-overlay.instant-page {
+    transition: none;
+  }
+  .history-modal-overlay.instant-page.open {
+    opacity: 1;
+    visibility: visible;
+  }
+  .history-modal-overlay.instant-page .history-modal,
+  .history-modal-overlay.instant-page.open .history-modal {
+    transform: none;
+    opacity: 1;
+    transition: none;
+  }
   /* Playlist detail keeps a taller minimum so the Play All button/empty-state
      don't leave it looking like a tiny collapsed box on short playlists. */
   #playlist-detail-modal { min-height: 420px; }

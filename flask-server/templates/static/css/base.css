@@ -723,6 +723,7 @@
       padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px));
     }
     .update-toast {
+      top: auto;
       bottom: calc(16px + env(safe-area-inset-bottom, 0px));
     }
     .hamburger-btn { display: inline-flex; }

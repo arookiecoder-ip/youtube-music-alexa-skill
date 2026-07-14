@@ -38,7 +38,7 @@ async function loadRecommendations() {
     // loaded, then swaps to the real grid — so no empty flash in between.
     renderRecommendations(state._recsItems);
   } catch (e) {
-    console.warn('Failed to load recommendations', e);
+    console.error('Failed to load recommendations', e);
     section.hidden = true;
     showRecsSkeleton(false);
   } finally {

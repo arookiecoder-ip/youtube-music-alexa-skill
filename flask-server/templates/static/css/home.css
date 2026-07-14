@@ -546,3 +546,22 @@
   height: 20px;
   flex-shrink: 0;
 }
+
+/* Desktop shelf viewport geometry belongs to home layout. */
+@media (min-width: 900px) {
+  body.home-route .home-shelf-viewport {
+    width: auto;
+    max-width: none;
+    margin: 0 0 0 40px;
+    overflow: hidden;
+  }
+
+  body.home-route .home-shelf-viewport .home-shelf-content {
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+    padding-left: 0;
+    padding-right: 0;
+  }
+}

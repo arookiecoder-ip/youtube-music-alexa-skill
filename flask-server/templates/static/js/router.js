@@ -11,7 +11,7 @@
   }
 
   function hideAllViews() {
-    setHidden('.play-section, #recs-section, #home-section, #idle-hero, #results-section, #queue-section, #artist-section, #artist-songs-section, #album-section', true);
+    setHidden('.play-section, #recs-section, #home-section, #idle-hero, #results-section, #queue-section, #artist-section, #artist-songs-section, #history-page', true);
   }
 
   function showHomeViews() {
@@ -22,7 +22,7 @@
     setHidden('.play-section', false);
     setHidden('#home-section', !homeReady);
     setHidden('#idle-hero', true);
-    setHidden('#results-section, #queue-section, #artist-section, #artist-songs-section, #album-section', true);
+    setHidden('#results-section, #queue-section, #artist-section, #artist-songs-section, #history-page', true);
   }
 
   var routes = {
@@ -34,18 +34,24 @@
       // page goes blank.
       if (window.__appState && window.__appState._resultsOpen) {
         setHidden('.play-section, #results-section', false);
-        setHidden('#home-section, #idle-hero, #queue-section, #artist-section, #artist-songs-section, #album-section', true);
+    setHidden('#home-section, #idle-hero, #queue-section, #artist-section, #artist-songs-section', true);
       } else {
         showHomeViews();
       }
     },
     '#explore': function() {
+      hideAllViews();
+      setHidden('.play-section', true);
       if (window.openExplorePage) window.openExplorePage();
     },
     '#library': function() {
+      hideAllViews();
+      setHidden('.play-section', true);
       if (window.openLibraryPage) window.openLibraryPage();
     },
     '#history': function() {
+      hideAllViews();
+      setHidden('.play-section', true);
       if (window.openHistoryPage) window.openHistoryPage(true);
     },
     '#now-playing': function() {
@@ -96,7 +102,7 @@
     if (section) {
       // Search bar and bottom playbar are persistent shell chrome — they stay
       // visible on the artist page; only the content views swap out.
-      setHidden('#recs-section, #home-section, #idle-hero, #results-section, #queue-section, #artist-section, #artist-songs-section, #album-section', true);
+    setHidden('#recs-section, #home-section, #idle-hero, #results-section, #queue-section, #artist-section, #artist-songs-section', true);
       setHidden('.play-section', false);
       section.hidden = false;
     }
@@ -105,7 +111,7 @@
   function showArtistSongsSection() {
     var section = document.getElementById('artist-songs-section');
     if (section) {
-      setHidden('#recs-section, #home-section, #idle-hero, #results-section, #queue-section, #artist-section, #artist-songs-section, #album-section', true);
+    setHidden('#recs-section, #home-section, #idle-hero, #results-section, #queue-section, #artist-section, #artist-songs-section', true);
       setHidden('.play-section', false);
       section.hidden = false;
     }
@@ -121,9 +127,9 @@
   function _routeScrollId(route) {
     if (!route) return null;
     if (route.indexOf('#artist/') === 0) return route.endsWith('/songs') ? 'artist-songs-section' : 'artist-section';
-    if (route.indexOf('#album/') === 0) return 'album-section';
+    if (route.indexOf('#album/') === 0) return 'playlist-detail-modal-overlay';
     if (route === '#now-playing') return 'now-playing-section';
-    if (route === '#history') return 'history-modal';
+    if (route === '#history') return 'history-page';
     if (route === '#explore') return 'explore-modal';
     if (route.indexOf('#mood/') === 0) return 'mood-modal';
     if (route === '#library') return 'library-modal';
@@ -150,8 +156,8 @@
     document.body.scrollTop = 0;
     [
       'main', 'results-section', 'results-list', 'artist-section', 'artist-songs-section',
-      'album-section', 'now-playing-section', 'playlist-detail-modal',
-      'playlist-detail-modal-overlay', 'history-modal', 'history-modal-overlay',
+      'now-playing-section', 'playlist-detail-modal',
+      'playlist-detail-modal-overlay', 'history-page',
       'explore-modal', 'explore-modal-overlay', 'mood-modal', 'mood-modal-overlay', 'library-modal', 'library-modal-overlay'
     ].forEach(function(id) {
       var el = id === 'main' ? document.querySelector('main') : document.getElementById(id);
@@ -174,7 +180,7 @@
 
     // Restore the return route's body classes
     document.body.classList.toggle('home-route', returnRoute === '#home');
-    document.body.classList.toggle('playlists-route', returnRoute.indexOf('#playlist/') === 0);
+    document.body.classList.toggle('playlists-route', returnRoute.indexOf('#playlist/') === 0 || returnRoute.indexOf('#album/') === 0);
     document.body.classList.toggle('artist-route', returnRoute.indexOf('#artist/') === 0);
     document.body.classList.toggle('artist-songs-route', /\/songs$/.test(returnRoute));
     document.body.classList.toggle('album-route', returnRoute.indexOf('#album/') === 0);
@@ -191,7 +197,7 @@
       var state = window.__appState;
       if (state && state._resultsOpen) {
         setHidden('.play-section, #results-section', false);
-        setHidden('#home-section, #idle-hero, #queue-section, #artist-section, #album-section', true);
+        setHidden('#home-section, #idle-hero, #queue-section, #artist-section', true);
       } else {
         showHomeViews();
       }
@@ -199,8 +205,8 @@
       var po = document.getElementById('playlist-detail-modal-overlay');
       if (po) po.classList.add('open');
     } else if (returnRoute === '#history') {
-      var ho = document.getElementById('history-modal-overlay');
-      if (ho) ho.classList.add('open');
+      var hp = document.getElementById('history-page');
+      if (hp) hp.hidden = false;
     } else if (returnRoute === '#explore') {
       var eo = document.getElementById('explore-modal-overlay');
       if (eo) eo.classList.add('open');
@@ -217,8 +223,8 @@
     } else if (returnRoute.indexOf('#album/') === 0) {
       setHidden('#recs-section, #home-section, #idle-hero, #results-section, #queue-section, #artist-section, #artist-songs-section', true);
       setHidden('.play-section', false);
-      var albumSection = document.getElementById('album-section');
-      if (albumSection) albumSection.hidden = false;
+      var albumOverlay = document.getElementById('playlist-detail-modal-overlay');
+      if (albumOverlay) albumOverlay.classList.add('open');
     }
 
     // Trigger the closing slide-out animation
@@ -279,6 +285,7 @@
       _saveScroll();
       if (route === '#now-playing') window.__npReturnRoute = window.__route;
       window.__route = route;
+      if (window.syncTopProgressVisibility) window.syncTopProgressVisibility();
       history.pushState({ route: route }, '', location.pathname + location.search);
     }
     applyRoute(route);
@@ -312,8 +319,7 @@
     if (window.closePlaylistContextMenu) window.closePlaylistContextMenu();
     if (window.closeExploreCardContextMenu) window.closeExploreCardContextMenu();
     var wasNowPlaying = document.body.classList.contains('now-playing-route');
-    var isClosingNowPlaying = wasNowPlaying && hash !== '#now-playing' &&
-      window.matchMedia('(min-width: 900px)').matches;
+    var isClosingNowPlaying = wasNowPlaying && hash !== '#now-playing';
     playerTrace('route:apply', { hash: hash, wasNowPlaying: wasNowPlaying, isClosingNowPlaying: isClosingNowPlaying });
     var routedNpSection = document.getElementById('now-playing-section');
     if (routedNpSection && routedNpSection._closeTimer) {
@@ -335,7 +341,7 @@
     // animate independently; remove it only after the transition completes.
     document.body.classList.toggle('now-playing-route', hash === '#now-playing' || isClosingNowPlaying);
     document.body.classList.toggle('now-playing-closing', isClosingNowPlaying);
-    document.body.classList.toggle('playlists-route', hash.indexOf('#playlist/') === 0);
+    document.body.classList.toggle('playlists-route', hash.indexOf('#playlist/') === 0 || hash.indexOf('#album/') === 0);
     document.body.classList.toggle('history-route', hash === '#history');
     document.body.classList.toggle('explore-route', hash === '#explore');
     document.body.classList.toggle('mood-route', hash.indexOf('#mood/') === 0);
@@ -352,8 +358,8 @@
       if (detailOverlay) detailOverlay.classList.remove('open');
     }
     if (hash !== '#history') {
-      var historyOverlay = document.getElementById('history-modal-overlay');
-      if (historyOverlay) historyOverlay.classList.remove('open');
+      var historyPage = document.getElementById('history-page');
+      if (historyPage) historyPage.hidden = true;
     }
     if (hash !== '#explore') {
       var exploreOverlay = document.getElementById('explore-modal-overlay');
@@ -440,13 +446,10 @@
     } else if (hash.indexOf('#album/') === 0) {
       var albumId = decodeURIComponent(hash.slice('#album/'.length));
       if (!albumId) { window.navigateTo('#home'); return; }
-      var albumSection = document.getElementById('album-section');
-      var restoreAlbum = albumSection && albumSection.dataset.albumId === String(albumId);
       hideAllViews();
       setHidden('.play-section', false);
-      // Preserve the previous album's rendered frame during Back navigation;
-      // loadAlbum will replace it only if fresh data is needed.
-      if (restoreAlbum) albumSection.hidden = false;
+      var albumOverlay = document.getElementById('playlist-detail-modal-overlay');
+      if (albumOverlay) albumOverlay.classList.add('open');
       if (window.loadAlbum) window.loadAlbum(albumId);
     } else if (hash.indexOf('#mood/') === 0) {
       var moodRouteValue = hash.slice('#mood/'.length);

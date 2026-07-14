@@ -24,6 +24,16 @@
       return;
     }
     const scrollRoot = root.closest('.history-modal-body') || null;
+    // The mobile playlist is a document-scrolling page, not a modal body.
+    // An IntersectionObserver rooted at an overflow-visible element can
+    // miss every image, leaving the data-src placeholders permanently blank.
+    if (scrollRoot) {
+      const overflowY = getComputedStyle(scrollRoot).overflowY;
+      if (overflowY !== 'auto' && overflowY !== 'scroll') {
+        images.forEach(load);
+        return;
+      }
+    }
     const observer = new IntersectionObserver(function (entries, obs) {
       entries.forEach(function (entry) {
         if (!entry.isIntersecting) return;
@@ -34,9 +44,19 @@
     images.forEach(function (img) { observer.observe(img); });
   }
 
+  function normalizeImageUrl(value) {
+    if (typeof value !== 'string') return value || '';
+    if (value.startsWith('//')) return 'https:' + value;
+    if (!value.startsWith('http') && !value.startsWith('/') &&
+        (value.includes('googleusercontent.com') || value.includes('ggpht.com'))) {
+      return 'https://' + value;
+    }
+    return value;
+  }
+
   function imageUrl(value) {
     if (!value) return '';
-    if (typeof value === 'string') return value;
+    if (typeof value === 'string') return normalizeImageUrl(value);
     if (Array.isArray(value)) {
       for (let i = value.length - 1; i >= 0; i -= 1) {
         const url = imageUrl(value[i]);
@@ -45,7 +65,7 @@
       return '';
     }
     if (typeof value === 'object') {
-      return value.url || value.src || imageUrl(value.thumbnails) || imageUrl(value.images) || '';
+      return normalizeImageUrl(value.url || value.src) || imageUrl(value.thumbnails) || imageUrl(value.images) || '';
     }
     return '';
   }
@@ -205,7 +225,7 @@
         }
       }
     } catch (e) {
-      console.warn('Failed to load library playlists', e);
+      console.error('Failed to load library playlists', e);
     }
   }
 
@@ -233,6 +253,11 @@
     const preloaded = window.consumePreload ? window.consumePreload(route) : null;
     const ownsProgress = !preloaded;
     if (ownsProgress && window._barStart) window._barStart();
+    if (ownsProgress && body) {
+      body.innerHTML = window.CollectionRenderer
+        ? window.CollectionRenderer.renderLoadingState('Loading playlist…')
+        : '<div class="playlist-loading-indicator visible" role="status"><span class="playlist-loading-spinner" aria-hidden="true"></span><span>Loading playlist…</span></div>';
+    }
     try {
       // The router doesn't know whether a #playlist/<id> route is the
       // user's own library entry or a public/curated playlist, so dispatch
@@ -326,37 +351,42 @@
         // row context menu, and the "more" icon matches the one that used to
         // live in the header (now moved here so the menu is closer to the
         // playlist identity).
-        const shuffleBtn = `<button class="playlist-hero-btn playlist-hero-shuffle" type="button" title="Shuffle" aria-label="Shuffle"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/><polyline points="21 16 21 21 16 21"/><line x1="15" y1="15" x2="21" y2="21"/><line x1="4" y1="4" x2="9" y2="9"/></svg></button>`;
-        const playNextBtn = `<button class="playlist-hero-btn playlist-hero-play-next" type="button" title="Play next" aria-label="Play next"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M4 5v14l11-7L4 5zm13 0v14h3V5h-3z"/></svg></button>`;
         const playlistShareId = pl.playlistId || pl.playlist_id || plId;
-        const shareBtn = `<button class="playlist-hero-btn playlist-hero-share" type="button" title="Share" aria-label="Share"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg></button>`;
         // The "more" button uses the same id as the previous header copy so
         // the existing rename / delete wiring in this file (and the inline
         // listener below) attaches to the new button. The id is shared
         // intentionally — only one #playlist-detail-more-btn exists at a time.
-        const moreBtn = `<button class="playlist-hero-btn playlist-hero-more${canEditPlaylist ? '' : ' is-muted'}" id="playlist-detail-more-btn" type="button" title="${canEditPlaylist ? 'More options' : 'Options unavailable for this playlist'}" aria-label="${canEditPlaylist ? 'More options' : 'Options unavailable for this playlist'}"${canEditPlaylist ? '' : ' aria-disabled="true"'}><svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg></button>`;
         // Build the right-hand action span based on playlist type:
         // - Library: Share + More (rename/delete menu)
         // - Public (other user): Share only — can't edit someone else's playlist
         // - Curated (YT Music): empty — read-only, no useful Share either
         // Conditional HTML (not CSS hiding) keeps the DOM clean: no
         // display:none buttons to focus via keyboard or click via dev tools.
-        const actionsRightHtml = shareBtn + moreBtn;
         // Wrap secondary actions in the existing left/right flex spans so the
         // 1fr-auto-1fr grid stays valid (Play sits in the auto column).
-        const actionsRow = `<div class="playlist-detail-hero-actions"><div class="playlist-hero-actions-left">${shuffleBtn}${playNextBtn}</div><button class="playlist-hero-play" type="button" aria-label="Play ${escapeHtml(title)}"><svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></button><div class="playlist-hero-actions-right">${actionsRightHtml}</div></div>`;
-        hero.innerHTML = `${collage}
-          <div class="playlist-detail-hero-info">
-            <h2 class="playlist-detail-page-title playlist-detail-hero-name">${escapeHtml(title)}</h2>
-            ${pl.description ? `<div class="playlist-detail-hero-desc">${escapeHtml(pl.description)}</div>` : ''}
-            <div class="playlist-detail-hero-meta">${escapeHtml(metaParts.join(' \u2022 '))}</div>
-            ${tracks.length ? actionsRow : ''}
-          </div>`;
         body.appendChild(hero);
+
+        if (window.CollectionRenderer) {
+          hero.outerHTML = window.CollectionRenderer.renderDetailHero({
+            className: 'playlist-detail-hero',
+            coverHtml: collage,
+            title: title,
+            description: pl.description || '',
+            meta: metaParts.join(' \u2022 '),
+            showActions: !!tracks.length,
+            showShare: true,
+            shareDisabled: isLikedPlaylist,
+            showMore: true,
+            // Only editable personal playlists have a useful More action;
+            // normal/public/curated playlists and Liked Music stay muted.
+            moreDisabled: isLikedPlaylist || !canEditPlaylist
+          });
+        }
+        const renderedHero = body.querySelector('.playlist-detail-hero');
 
         // A present-but-expired YouTube thumbnail should fall back exactly as
         // a missing thumbnail does, instead of leaving a broken image tile.
-        const primaryCover = hero.querySelector('[data-playlist-primary-cover]');
+        const primaryCover = renderedHero && renderedHero.querySelector('[data-playlist-primary-cover]');
         if (primaryCover) {
           primaryCover.addEventListener('error', () => {
             const cover = primaryCover.closest('.playlist-collage');
@@ -540,11 +570,11 @@
             if (scrollRoot) scrollRoot.addEventListener('scroll', loadWhenNearEnd, { passive: true });
             requestAnimationFrame(loadWhenNearEnd);
           }
-          const heroPlay = hero.querySelector('.playlist-hero-play');
+          const heroPlay = renderedHero && renderedHero.querySelector('.playlist-hero-play');
           if (heroPlay) heroPlay.addEventListener('click', () => list.querySelector('.history-item')?.click());
           // Shuffle plays the same first track but with the device's shuffle
           // mode flipped on (the same path the playbar Shuffle button uses).
-          const heroShuffle = hero.querySelector('.playlist-hero-shuffle');
+          const heroShuffle = renderedHero && renderedHero.querySelector('.playlist-hero-shuffle');
           if (heroShuffle) heroShuffle.addEventListener('click', async () => {
             const firstRow = list.querySelector('.history-item');
             if (!firstRow) return;
@@ -561,7 +591,7 @@
           // "next" slot (right after the currently-playing track). Reuses
           // the existing addToQueue helper from queue.js, which already
           // handles busy-locking and toasting.
-          const heroPlayNext = hero.querySelector('.playlist-hero-play-next');
+          const heroPlayNext = renderedHero && renderedHero.querySelector('.playlist-hero-play-next');
           if (heroPlayNext) heroPlayNext.addEventListener('click', () => {
             const firstWrapper = list.querySelector('.result-swipe-wrapper');
             const track = firstWrapper && firstWrapper._songContextTrack;
@@ -574,30 +604,44 @@
           // also looks up the same id — both listeners point at the same
           // single button now, but they do different work (positioning vs
           // outside-click close), so we keep both.
-          const heroMore = hero.querySelector('.playlist-hero-more');
+          const heroMore = renderedHero && renderedHero.querySelector('.playlist-hero-more');
           if (heroMore) {
+            heroMore.id = 'playlist-detail-more-btn';
             heroMore.addEventListener('click', function (e) {
               e.stopPropagation();
               e.preventDefault();
-              if (!canEditPlaylist) return;
+              if (isLikedPlaylist || !canEditPlaylist) return;
               const menu = document.getElementById('playlist-detail-more-menu');
               if (!menu) return;
+              // On PC the legacy header-actions wrapper is hidden. Move the
+              // shared menu out of that hidden parent before displaying it.
+              if (menu.parentElement !== document.body) document.body.appendChild(menu);
               if (menu.classList.contains('open')) {
                 menu.classList.remove('open');
                 return;
               }
               if (window._closeAllMoreMenus) window._closeAllMoreMenus();
               const rect = heroMore.getBoundingClientRect();
-              menu.style.top = (rect.bottom + 4) + 'px';
-              menu.style.right = (window.innerWidth - rect.right) + 'px';
+              menu.style.position = 'fixed';
+              menu.style.zIndex = '10000';
               menu.style.left = 'auto';
+              menu.style.right = Math.max(8, window.innerWidth - rect.right) + 'px';
+              menu.style.bottom = 'auto';
+              menu.style.top = (rect.bottom + 4) + 'px';
+              // Keep the menu inside the PC viewport when the button is near
+              // the bottom edge of the playlist page.
+              const menuHeight = 90;
+              if (rect.bottom + menuHeight + 4 > window.innerHeight) {
+                menu.style.top = 'auto';
+                menu.style.bottom = Math.max(8, window.innerHeight - rect.top + 4) + 'px';
+              }
               menu.classList.add('open');
             });
           }
           // Share the canonical YouTube Music playlist URL, never this app's
           // routed page URL. Falls back to a textarea trick when needed.
-          const heroShare = hero.querySelector('.playlist-hero-share');
-          if (heroShare) heroShare.addEventListener('click', async () => {
+          const heroShare = renderedHero && renderedHero.querySelector('.playlist-hero-share');
+          if (heroShare && !isLikedPlaylist) heroShare.addEventListener('click', async () => {
             const url = 'https://music.youtube.com/playlist?list=' + encodeURIComponent(playlistShareId);
             if (navigator.share) {
               try {
@@ -633,7 +677,7 @@
       }
     } catch (e) {
       if (!stillOwnsRoute()) return;
-      console.warn('Failed to load playlist', e);
+      console.error('Failed to load playlist', e);
       if (titleEl) titleEl.textContent = 'Error loading playlist';
       if (body) body.innerHTML = '<div style="padding:24px; color:var(--muted); text-align:center;">Failed to load playlist</div>';
       if (window._barAbort) window._barAbort();

@@ -78,6 +78,13 @@
     </div>
     <div class="header-actions">
 
+      <button class="mobile-search-toggle" id="mobile-search-toggle" type="button" aria-label="Open search" title="Search">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
+          <circle cx="11" cy="11" r="7"></circle>
+          <line x1="16.2" y1="16.2" x2="21" y2="21"></line>
+        </svg>
+      </button>
+
       <button class="needs-login header-history-btn jam-owner-only" id="jam-btn" title="Jam" hidden style="margin-right:8px;">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
@@ -512,15 +519,21 @@
     </div>
   </section>
 
-  <section id="album-section" hidden>
-
-    <div class="album-hero" id="album-hero"></div>
-    <div class="album-track-list" id="album-track-list"></div>
-  </section>
-
   <!-- Now Playing page: large album art (left) + UP NEXT queue (right) — YT Music style -->
   <section id="now-playing-section" hidden>
     <div class="np-page">
+      <button class="mobile-player-close" id="mobile-player-close" type="button" aria-label="Close player" title="Close player">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="m6 9 6 6 6-6"></path>
+        </svg>
+      </button>
+      <button class="mobile-player-more" id="mobile-player-more" type="button" aria-label="More options" title="More options">
+        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+          <circle cx="12" cy="5" r="1.7"></circle>
+          <circle cx="12" cy="12" r="1.7"></circle>
+          <circle cx="12" cy="19" r="1.7"></circle>
+        </svg>
+      </button>
       <div class="np-page-left">
         <div class="np-page-art" id="np-page-art">
           <svg width="64" height="64" viewBox="0 0 24 24" fill="currentColor">
@@ -535,6 +548,44 @@
           <div class="np-page-title" id="np-page-title">Nothing is playing</div>
           <div class="np-page-artist" id="np-page-artist"></div>
         </div>
+        <div class="mobile-np-progress" id="mobile-np-progress">
+          <div class="progress-track" id="mobile-np-progress-track" role="slider" aria-label="Seek" tabindex="0" aria-valuemin="0" aria-valuemax="0" aria-valuenow="0">
+            <div class="progress-fill" id="mobile-np-progress-fill"></div>
+            <div class="progress-handle" id="mobile-np-progress-handle"></div>
+          </div>
+          <div class="mobile-np-progress-times">
+            <span id="mobile-np-progress-elapsed">0:00</span>
+            <span id="mobile-np-progress-total">0:00</span>
+          </div>
+        </div>
+        <div class="mobile-np-controls" aria-label="Playback controls">
+          <button type="button" id="mobile-np-shuffle" aria-label="Shuffle" title="Shuffle">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="16 3 21 3 21 8"></polyline>
+              <line x1="4" y1="20" x2="21" y2="3"></line>
+              <polyline points="21 16 21 21 16 21"></polyline>
+              <line x1="15" y1="15" x2="21" y2="21"></line>
+              <line x1="4" y1="4" x2="9" y2="9"></line>
+            </svg>
+          </button>
+          <button type="button" data-action="previous" aria-label="Previous">
+            <svg viewBox="0 0 24 24" fill="currentColor"><rect x="4" y="5" width="2.5" height="14"/><polygon points="20,5 10,12 20,19"/></svg>
+          </button>
+          <button type="button" id="mobile-np-play" aria-label="Play or pause">
+            <svg class="mobile-np-play-icon" viewBox="0 0 24 24" fill="currentColor"><polygon points="7,4 20,12 7,20"/></svg>
+            <svg class="mobile-np-pause-icon" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="5" width="4" height="14"/><rect x="14" y="5" width="4" height="14"/></svg>
+          </button>
+          <button type="button" data-action="next" aria-label="Next">
+            <svg viewBox="0 0 24 24" fill="currentColor"><polygon points="4,5 14,12 4,19"/><rect x="17.5" y="5" width="2.5" height="14"/></svg>
+          </button>
+          <button type="button" id="mobile-np-like" aria-label="Like" title="Like">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"></path></svg>
+          </button>
+        </div>
+        <div class="mobile-queue-drag-region" id="mobile-queue-handle" role="button" aria-label="Drag Queue up">
+          <div class="mobile-queue-label">Queue</div>
+          <div class="mobile-inline-queue" id="mobile-inline-queue" aria-label="Current queue songs"></div>
+        </div>
       </div>
       <div class="np-page-right">
         <div class="np-page-queue-head">UP NEXT</div>
@@ -542,6 +593,66 @@
       </div>
     </div>
   </section>
+
+  <!-- Recently Listened routed page. -->
+  <section class="history-page" id="history-page" hidden>
+    <div class="history-page-inner">
+      <div class="history-page-header"><h3>Recently Listened</h3></div>
+      <div class="history-page-body" id="history-page-body">
+        <div class="history-page-empty">Loading…</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Explore Page (full-page routed view, mirrors history-modal-overlay pattern) -->
+  <div class="history-modal-overlay instant-page" id="explore-modal-overlay">
+    <div class="history-modal instant-page" id="explore-modal">
+      <div class="history-modal-header">
+        <h3>Explore</h3>
+        <div class="history-modal-header-actions">
+          <button class="history-modal-close" id="explore-modal-close" title="Close" aria-label="Close Explore">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+              <line x1="18" y1="6" x2="6" y2="18"/>
+              <line x1="6" y1="6" x2="18" y2="18"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+      <div class="history-modal-body" id="explore-modal-body">
+        <div class="loading-spinner"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Library Page (full-page routed view) -->
+  <div class="history-modal-overlay instant-page" id="library-modal-overlay">
+    <div class="history-modal instant-page" id="library-modal">
+      <div class="history-modal-header">
+        <h3>Library</h3>
+        <div class="history-modal-header-actions">
+          <button class="history-modal-close" id="library-modal-close" title="Close" aria-label="Close Library">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+              <line x1="18" y1="6" x2="6" y2="18"/>
+              <line x1="6" y1="6" x2="18" y2="18"/>
+            </svg>
+          </button>
+        </div>
+      </div>
+      <div class="history-modal-body" id="library-modal-body">
+        <div class="loading-spinner"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Mood/genre detail page -->
+  <div class="history-modal-overlay" id="mood-modal-overlay">
+    <div class="history-modal" id="mood-modal">
+      <div class="history-modal-header">
+        <h3 id="mood-modal-title">Moods and genres</h3>
+      </div>
+      <div class="history-modal-body" id="mood-modal-body"></div>
+    </div>
+  </div>
 
 </main>
 
@@ -605,69 +716,8 @@
   </div>
 </div>
 
-<!-- Recently Listened popup (desktop + mobile). No per-row remove button by
-     design — only Clear (which asks for confirmation via the dialog below). -->
-
-  <!-- Explore Page (full-page routed view, mirrors history-modal-overlay pattern) -->
-  <div class="history-modal-overlay" id="explore-modal-overlay">
-    <div class="history-modal" id="explore-modal">
-      <div class="history-modal-header">
-        <h3>Explore</h3>
-        <div class="history-modal-header-actions">
-          <button class="history-modal-close" id="explore-modal-close" title="Close" aria-label="Close Explore">
-            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-              <line x1="18" y1="6" x2="6" y2="18"/>
-              <line x1="6" y1="6" x2="18" y2="18"/>
-            </svg>
-          </button>
-        </div>
-      </div>
-      <div class="history-modal-body" id="explore-modal-body">
-        <div class="loading-spinner"></div>
-      </div>
-    </div>
-  </div>
-
-  <!-- Mood/genre detail page: a dedicated routed viewport, separate from Explore. -->
-  <div class="history-modal-overlay" id="mood-modal-overlay">
-    <div class="history-modal" id="mood-modal">
-      <div class="history-modal-header">
-        <h3 id="mood-modal-title">Moods and genres</h3>
-      </div>
-      <div class="history-modal-body" id="mood-modal-body"></div>
-    </div>
-  </div>
-
-  <!-- Library Page (full-page routed view) -->
-  <div class="history-modal-overlay" id="library-modal-overlay">
-    <div class="history-modal" id="library-modal">
-      <div class="history-modal-header">
-        <h3>Library</h3>
-        <div class="history-modal-header-actions">
-          <button class="history-modal-close" id="library-modal-close" title="Close" aria-label="Close Library">
-            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-              <line x1="18" y1="6" x2="6" y2="18"/>
-              <line x1="6" y1="6" x2="18" y2="18"/>
-            </svg>
-          </button>
-        </div>
-      </div>
-      <div class="history-modal-body" id="library-modal-body">
-        <div class="loading-spinner"></div>
-      </div>
-    </div>
-  </div>
-
-  <div class="history-modal-overlay" id="history-modal-overlay">
-  <div class="history-modal" id="history-modal">
-    <div class="history-modal-header">
-      <h3>Recently Listened</h3>
-    </div>
-    <div class="history-modal-body" id="history-modal-body">
-      <div class="history-modal-empty">Loading…</div>
-    </div>
-  </div>
-</div>
+<!-- Recently Listened page. No per-row remove button by design — only Clear
+     (which asks for confirmation via the dialog below). -->
 
 <!-- Playlist Detail Modal -->
 <div class="history-modal-overlay" id="playlist-detail-modal-overlay">
@@ -706,7 +756,7 @@
         </svg>
       </button>
     </div>
-    <div class="history-modal-body" id="playlist-detail-body">
+    <div class="history-modal-body collection-detail-body" id="playlist-detail-body">
     </div>
   </div>
 </div>
@@ -1033,17 +1083,19 @@
 <script>{% include "static/js/history.js" %}</script>
 <script>{% include "static/js/recs.js" %}</script>
 <script>{% include "static/js/home-renderers.js" %}</script>
+<script>{% include "static/js/collection-renderer.js" %}</script>
 <script>{% include "static/js/home.js" %}</script>
 <script>{% include "static/js/playlist-context-menu.js" %}</script>
 <script>{% include "static/js/artist-page-config.js" %}</script>
 <script>{% include "static/js/artist.js" %}</script>
 <script>{% include "static/js/artist-top-songs.js" %}</script>
-<script>{% include "static/js/album.js" %}</script>
 <script>{% include "static/js/explore.js" %}</script>
 <script>{% include "static/js/library.js" %}</script>
 <script>{% include "static/js/sw-register.js" %}</script>
 <script>{% include "static/js/pwa.js" %}</script>
 <script>{% include "static/playlists.js" %}</script>
+<script>{% include "static/js/album.js" %}</script>
+<script>{% include "static/js/long-press.js" %}</script>
 <script>{% include "static/js/like.js" %}</script>
 <script>
   (function () {

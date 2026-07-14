@@ -25,7 +25,7 @@
       }
     } catch (e) {
       // Non-fatal: heart buttons just stay in their current state
-      console.warn('[like.js] loadLikedSongs failed:', e);
+      console.error('[like.js] loadLikedSongs failed:', e);
     }
     // Refresh the now-playing heart buttons
     if (window.refreshNpLikeButton) window.refreshNpLikeButton();
@@ -76,7 +76,7 @@
         throw new Error(res.error || 'Like failed');
       }
       if (window.toast) {
-        window.toast(willBeLiked ? '\u2764 Added to Liked Songs' : 'Removed from Liked Songs', 'ok');
+        window.toast(willBeLiked ? 'Added to Liked Songs' : 'Removed from Liked Songs', 'ok');
       }
     } catch (e) {
       // Revert optimistic update on failure

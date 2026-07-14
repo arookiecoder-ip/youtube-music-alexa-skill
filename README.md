@@ -61,8 +61,9 @@ Core (`server.py`):
 | Var               | Purpose                                                                                                                                                              |
 | ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `PUBLIC_BASE_URL` | e.g. `https://<your-ip-with-dashes>.sslip.io`. When set, `audio_url` points to `/proxy/` and downloads are pre-warmed. Unset = dev mode (returns direct googlevideo URLs). |
-| `YTDLP_COOKIES_FILE` | optional path to a `cookies.txt` file (Netscape format). Passed to every yt-dlp call to bypass YouTube bot detection (502 errors). Default is `cookies.txt` in the server root. |
+| `YTDLP_COOKIES_FILE` | optional path to a `cookies.txt` file (Netscape format). `YTDLP_COOKIES` is accepted as a Docker-compatible alias. Local runs also discover `cookies.txt` in `flask-server/` or the repository root. Exported cookies take priority over `YTDLP_BROWSER`. |
 | `YTDLP_BROWSER`   | optional. If running on Windows/macOS/desktop Linux, set to `chrome`, `edge`, `firefox`, or `brave` to have yt-dlp automatically extract your live browser cookies to bypass bot detection. (Does not work in Docker). |
+| `YTDLP_JS_RUNTIME` | optional runtime override for YouTube signature challenges: `deno`, `node`, `bun`, or `qjs`. When unset, the server automatically selects the first installed runtime in that order. Docker installs Deno; local Windows commonly uses Node. |
 | `YTMUSIC_AUTH_FILE` | optional path to a browser headers JSON file for YT Music recommendations. Warning: DO NOT store this in a public repo; browser headers give full access. |
 | `YTDLP_PO_TOKEN`  | optional — if set, overrides the default `android_vr` client and passes this as the GVS PO token for `mweb` client instead (e.g. `youtube:po_token=mweb.gvs+{token}`) |
 | `API_KEY`         | shared secret; when set, all endpoints except privacy/terms and the login flow require `?key=` (or `X-Api-Key` header) **or** a valid web-remote session cookie. Must match `API_KEY` in `lambda/api_key.py`. |
@@ -103,6 +104,11 @@ resulting session cookie is stored (see
 | `ALEXA_PROXY_PORT`      | local-only port the login proxy listens on (default `5001`); Caddy forwards the public `/alexa/proxy/` path here |
 | `ALEXA_COOKIE_DIR`      | where the Amazon session cookie is persisted (default `flask-server/alexa_cookies/`)                 |
 | `SKILL_INVOCATION_NAME` | skill invocation name used in text commands (default `music box`)                                    |
+
+When running `python server.py` directly, `alexa_remote.py` automatically
+loads `flask-server/.env`. Values already exported by the shell take
+precedence. Docker Compose loads the repository-root `.env` through its
+`env_file` setting instead.
 
 ---
 
@@ -328,6 +334,19 @@ own browser, through a proxied copy of Amazon's real login page:
    the live session. The credentials you typed are used once to seed the
    proxy login and are never written to disk.
 
+The Amazon login has two network stages. First, the browser displays Amazon's
+login page through the local proxy. After that succeeds, AlexaPy exchanges the
+authorization result with Amazon's device-registration API. The cookie is
+written only after both stages succeed. A browser success page without a cookie
+therefore means the second, server-side stage failed.
+
+For local Windows development, a browser-only VPN extension does **not** cover
+Python or AlexaPy. If Amazon's device-registration API rejects the normal
+connection, use a full-device VPN (for example, the provider's Windows desktop
+app) or a different network such as a mobile hotspot. Confirm that the VPN
+adapter is connected and that PowerShell/Python sees the VPN's public IP; the
+browser and `server.py` do not necessarily share the same network route.
+
 Later restarts reuse the persisted cookie, so this is a one-time step until
 Amazon invalidates the session. There is **one** Amazon session for the whole
 server — logging in again replaces which account controls every Echo (the API
@@ -381,14 +400,37 @@ Worst-case leak then exposes an account that can only control your speaker.
 
 ## Local development (Windows)
 
-`.\run-local.ps1` starts the server on `http://127.0.0.1:5000/remote/` using
-the repo's `.venv`, with `FLASK_DEBUG=1` (edit → refresh) and no
-API_KEY/login gates. Real Echo control works locally too, if
-`flask-server\alexa_cookies\` holds a valid Amazon session — either copy it
-once from the VPS (`scp -r ubuntu@<vps>:~/flask-server/alexa_cookies
-flask-server/`) or log in via the page (the script sets
-`ALEXA_PROXY_BASE_URL=http://127.0.0.1:5001` so the browser hits the login
-proxy directly, without Caddy).
+Activate the repository's `.venv`, change to `flask-server`, and run
+`python server.py`. Open `http://127.0.0.1:5000/remote/`. The application reads
+`flask-server/.env` automatically and sends local Amazon login traffic directly
+to `http://127.0.0.1:5001/alexa/proxy/`, without Caddy. Port `5000` serves Flask;
+port `5001` serves the temporary interactive Amazon login proxy.
+
+Real Echo control works locally when `flask-server\alexa_cookies\.storage\`
+contains a valid AlexaPy session. During a fresh login, do not treat Amazon's
+browser success page as the final result: wait for the remote to show
+**Connected** and for the server to log `Alexa login finalized and cookie
+persisted`.
+
+### Docker behavior
+
+The supplied Docker configuration supports the same flow without publishing
+port `5001` on the host. Caddy and `ytmusic` share the `web` Docker network:
+normal requests go to `ytmusic:5000`, while `/alexa/proxy/*` goes to
+`ytmusic:5001`. The named `ytmusic_alexa_cookies` volume stores
+`/app/alexa_cookies`, so container restarts and image rebuilds retain the Amazon
+session.
+
+Docker login traffic uses the Docker host/VPS outbound public IP, not the IP or
+VPN used by the person's browser. It should work seamlessly when:
+
+- `PUBLIC_BASE_URL` and `ALEXA_PROXY_BASE_URL` use the HTTPS hostname served by Caddy.
+- Caddy can reach `ytmusic:5000` and `ytmusic:5001` on the shared network.
+- The Docker host can reach Amazon's login and device-registration APIs.
+- The `ytmusic_alexa_cookies` volume remains attached.
+
+If the VPS already completes Amazon login successfully, rebuilding the image
+will not require another login as long as that named volume is preserved.
 
 ---
 
@@ -401,6 +443,7 @@ proxy directly, without Caddy).
 | Server errors                                                 | `sudo journalctl -u ytmusic -f` on the VPS                                                  |
 | yt-dlp bot-check / "Sign in to confirm" errors return         | cookies expired → re-export + re-scp cookies.txt                                            |
 | yt-dlp HTTP 403 / "GVS PO Token not provided"                 | update yt-dlp (`pip install -U yt-dlp`); the `android_vr` client doesn't need PO tokens, but if it fails too, set `YTDLP_PO_TOKEN` to use `mweb` with a manual PO token instead |
+| One yt-dlp player client returns HTTP 403                         | the server tries cookie-capable `tv` first, then `android_vr` without cookies and default/web fallbacks. Intermediate failures are warnings; only "failed with every client" means the download was lost |
 | HTTPS dead                                                    | `journalctl -u caddy` — cert renewals need ports 80/443 open                                |
 | 401 everywhere                                                | API_KEY mismatch between `lambda/api_key.py` and ytmusic.service                            |
 | `/remote/` shows `{"error":"unauthorized"}` instead of a login | login not enabled — set **both** `REMOTE_USER` and `REMOTE_PASSWORD` in ytmusic.service, then daemon-reload + restart |
@@ -410,6 +453,9 @@ proxy directly, without Caddy).
 | 502 Bad Gateway, Caddy logs `connect: connection refused` (Docker) | Flask/aiohttp bound to `127.0.0.1` instead of `0.0.0.0` — Caddy can't reach a container's loopback address over the Docker network. See the Docker note under [Environment variables](#environment-variables) |
 | Amazon login page won't load / times out                      | the Caddy `/alexa/proxy/*` → `localhost:5001` route is missing, or `ALEXA_PROXY_BASE_URL`/`PUBLIC_BASE_URL` doesn't match the origin the browser is on |
 | Amazon login refused / loops                                  | `/alexa/status/` shows the state; check `AMAZON_DOMAIN` matches the account's Amazon site, then retry the in-page login (captcha/2FA happen in your browser) |
+| Amazon browser login succeeds, but no Alexa cookie is saved locally | the server-side device-registration exchange failed. A browser VPN extension does not route Python; use a full-device VPN or another network, restart `server.py`, and perform a fresh login |
+| Local login works only while a VPN is enabled                  | expected when Amazon rejects the normal outbound route. Keep the full-device VPN connected for login; reconnect it if session renewal later fails |
+| Docker rebuild asks for Amazon login again                     | the `/app/alexa_cookies` volume is missing or was deleted; keep the `ytmusic_alexa_cookies` named volume and do not run `docker compose down -v` unless you intend to erase sessions |
 | Web remote worked, then broke after months                    | Amazon changed the internal API → `~/ytm/bin/pip install -U alexapy` and restart; if the session expired, just log in again from the page |
 
 `HANDOFF.md` has the full debugging history and the reasoning behind every

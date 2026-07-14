@@ -157,7 +157,7 @@
         try {
           data = await window.api('/api/library/');
         } catch (e) {
-          console.warn('[library] YouTube playlists unavailable', e);
+          console.error('[library] YouTube playlists unavailable', e);
         }
       }
       _loaded = true;
@@ -201,7 +201,7 @@
       });
 
     } catch (e) {
-      console.warn('[library] Failed to load', e);
+      console.error('[library] Failed to load', e);
       _loaded = false;
       body.innerHTML = `<div class="library-empty">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="52" height="52">
@@ -223,7 +223,7 @@
   // ── public API ─────────────────────────────────────────────────────────────
   window.openLibraryPage = function (force) {
     const overlay = document.getElementById('library-modal-overlay');
-    if (overlay) overlay.classList.add('open');
+    if (overlay && window.matchMedia('(min-width: 900px)').matches) overlay.classList.add('open');
     loadLibrary(force);
   };
 

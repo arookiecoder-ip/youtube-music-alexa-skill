@@ -278,18 +278,46 @@
   function renderFeaturedPlaylists(body, playlists, title) {
     if (!Array.isArray(playlists) || !playlists.length) return false;
     const section = document.createElement('section');
-    section.className = 'explore-section mood-featured-playlists';
+    section.className = 'explore-section mood-featured-playlists' +
+      (title === 'Albums' ? ' mood-albums-playlists' : '');
     section.innerHTML = `
       <div class="explore-section-header">
         <h2 class="explore-section-title">${escHtml(title || 'Featured playlists')}</h2>
         <div class="home-shelf-scroll-btns">
           <button class="home-scroll-btn featured-left" type="button" aria-label="Previous featured playlists"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg></button>
-          <button class="home-scroll-btn featured-right" type="button" aria-label="Next featured playlists"><svg viewBox="0 0 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg></button>
+          <button class="home-scroll-btn featured-right" type="button" aria-label="Next featured playlists"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg></button>
         </div>
       </div>`;
     const grid = document.createElement('div');
     grid.className = 'explore-grid explore-grid--featured';
     section.appendChild(grid);
+    let dragStartX = 0;
+    let dragScrollLeft = 0;
+    let suppressCardClick = false;
+    grid.addEventListener('pointerdown', event => {
+      if (!window.matchMedia('(max-width: 899px)').matches) return;
+      dragStartX = event.clientX;
+      dragScrollLeft = grid.scrollLeft;
+    });
+    grid.addEventListener('pointermove', event => {
+      if (!dragStartX || !window.matchMedia('(max-width: 899px)').matches) return;
+      const distance = event.clientX - dragStartX;
+      if (Math.abs(distance) > 6) {
+        grid.scrollLeft = dragScrollLeft - distance;
+        suppressCardClick = true;
+      }
+    });
+    grid.addEventListener('pointerup', () => {
+      dragStartX = 0;
+      setTimeout(() => { suppressCardClick = false; }, 0);
+    });
+    grid.addEventListener('pointercancel', () => { dragStartX = 0; });
+    grid.addEventListener('click', event => {
+      if (!suppressCardClick) return;
+      event.preventDefault();
+      event.stopPropagation();
+      suppressCardClick = false;
+    }, true);
     let start = 0;
     const visibleItems = 12;
     const rowSize = () => window.matchMedia('(max-width: 620px)').matches ? 2 :
@@ -344,7 +372,9 @@
     // by one visual column. Do not jump a whole row on every arrow click.
     const columnStep = 1;
     const fillGrid = (target, pageStart) => {
-      moods.slice(pageStart, pageStart + visibleItems).forEach((mood, index) => {
+      const mobile = window.matchMedia('(max-width: 899px)').matches;
+      const items = mobile ? moods : moods.slice(pageStart, pageStart + visibleItems);
+      items.forEach((mood, index) => {
         const button = document.createElement('button');
         button.className = 'explore-mood-card';
         button.type = 'button';
@@ -387,7 +417,7 @@
       viewport.style.height = outgoing.getBoundingClientRect().height + 'px';
       // Advance exactly one visual column. Using the measured tile width keeps
       // the transition aligned at every responsive breakpoint.
-      const columns = 6;
+      const columns = window.matchMedia('(max-width: 899px)').matches ? 4 : 6;
       const styles = window.getComputedStyle(outgoing);
       const gap = parseFloat(styles.columnGap || styles.gap) || 0;
       const slideDistance = (outgoing.clientWidth - gap * (columns - 1)) / columns + gap;
@@ -414,6 +444,50 @@
     section.querySelectorAll('.explore-mood-arrow')[1].addEventListener('click', () => {
       slidePage('next');
     });
+
+    let dragStartX = 0;
+    let dragActive = false;
+    let suppressMoodClick = false;
+    viewport.addEventListener('pointerdown', event => {
+      if (!window.matchMedia('(max-width: 899px)').matches) return;
+      dragStartX = event.clientX;
+      dragActive = false;
+    });
+    viewport.addEventListener('pointermove', event => {
+      if (!window.matchMedia('(max-width: 899px)').matches || !dragStartX) return;
+      if (Math.abs(event.clientX - dragStartX) > 8) dragActive = true;
+    });
+    viewport.addEventListener('pointerup', event => {
+      if (!window.matchMedia('(max-width: 899px)').matches || !dragStartX) return;
+      const distance = event.clientX - dragStartX;
+      if (Math.abs(distance) >= 8) {
+        suppressMoodClick = true;
+        window.setTimeout(() => { suppressMoodClick = false; }, 0);
+        dragStartX = 0;
+        dragActive = false;
+        return;
+      }
+      if (Math.abs(distance) >= 40) {
+        suppressMoodClick = true;
+        slidePage(distance < 0 ? 'next' : 'previous');
+        window.setTimeout(() => { suppressMoodClick = false; }, 0);
+      } else if (dragActive) {
+        suppressMoodClick = true;
+        window.setTimeout(() => { suppressMoodClick = false; }, 0);
+      }
+      dragStartX = 0;
+      dragActive = false;
+    });
+    viewport.addEventListener('pointercancel', () => {
+      dragStartX = 0;
+      dragActive = false;
+    });
+    viewport.addEventListener('click', event => {
+      if (!suppressMoodClick) return;
+      event.preventDefault();
+      event.stopPropagation();
+      suppressMoodClick = false;
+    }, true);
     renderPage();
     body.appendChild(section);
     return true;
@@ -488,7 +562,7 @@
     } catch (error) {
       loaded = false;
       body.innerHTML = '<div class="explore-empty">Couldn’t load Explore. Please try again.</div>';
-      console.warn('[explore] Failed to load Explore', error);
+      console.error('[explore] Failed to load Explore', error);
     } finally {
       loading = false;
     }
@@ -496,7 +570,7 @@
 
   window.openExplorePage = function (force) {
     const overlay = document.getElementById('explore-modal-overlay');
-    if (overlay) overlay.classList.add('open');
+    if (overlay && window.matchMedia('(min-width: 900px)').matches) overlay.classList.add('open');
     loadExplore(force);
   };
   window.closeExplorePage = function () {

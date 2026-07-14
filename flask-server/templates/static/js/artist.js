@@ -347,7 +347,11 @@
         return;
       }
       var isSubscribed = subscribeBtn.getAttribute('aria-pressed') === 'true';
-      var body = { channel_id: channelId, name: artist.name || '', thumbnail: thumbUrl };
+      var body = {
+        channel_id: channelId,
+        name: artist.name || '',
+        thumbnail: fullUrl || previewUrl || ''
+      };
       try {
         var result = isSubscribed
           ? await window.apiDelete('/api/subscribed_artists/', body)
@@ -474,10 +478,18 @@
         ? '<img src="' + escHtml(thumbUrl) + '" alt="" loading="lazy" onload="this.classList.add(\'loaded\')">'
         : '<svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>';
       var playBtnHtml = (type === 'album') ? '<button type="button" class="hscroll-play-btn" title="Play"><svg viewBox="0 0 24 24" fill="currentColor"><polygon points="8,5 19,12 8,19"/></svg></button>' : '';
-      card.innerHTML =
-        '<div class="hscroll-card-art' + (isRound ? ' round' : '') + '">' + imgHtml + playBtnHtml + '</div>' +
-        '<div class="hscroll-card-title">' + escHtml(title) + '</div>' +
-        (sub ? '<div class="hscroll-card-sub">' + escHtml(sub) + '</div>' : '');
+      card.innerHTML = window.CollectionRenderer
+        ? window.CollectionRenderer.renderCard({
+            cardClass: (type === 'artist' ? 'related-artist-card' : 'album-card'),
+            imageHtml: imgHtml,
+            round: isRound,
+            showPlay: type === 'album',
+            title: title,
+            subtitle: sub
+          }).replace(/^<div class="hscroll-card[^>]*>/, '').replace(/<\/div>$/, '')
+        : '<div class="hscroll-card-art' + (isRound ? ' round' : '') + '">' + imgHtml + playBtnHtml + '</div>' +
+          '<div class="hscroll-card-title">' + escHtml(title) + '</div>' +
+          (sub ? '<div class="hscroll-card-sub">' + escHtml(sub) + '</div>' : '');
       if (type === 'artist' && item.browseId) {
         card.addEventListener('click', function() {
           if (window.preloadNavigateArtist) window.preloadNavigateArtist(item.browseId);

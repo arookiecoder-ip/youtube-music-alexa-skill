@@ -27,6 +27,9 @@ async function runSearch(query) {
     document.querySelectorAll('.results-tab').forEach(t => t.classList.toggle('active', t.dataset.category === state._activeCategory));
     renderResults();
     openResults();
+    // On mobile, collapse the expanded search panel once results are ready.
+    // Desktop has no mobile-search-open class, so its layout stays unchanged.
+    document.body.classList.remove('mobile-search-open');
     toast(totalItems + ' results', 'ok');
   } catch (e) {
     if (mySeq === state._searchSeq) {
@@ -51,7 +54,7 @@ function openResults() {
   clearTimeout(section._showTimer);
   // Views swap, they don't stack. We hide the underlying page content so the search results
   // behave as a standalone page instead of a side column or popup overlay.
-  const viewsToHide = ['home-section', 'jam-home-section', 'recs-section', 'album-section', 'artist-section'];
+  const viewsToHide = ['home-section', 'jam-home-section', 'recs-section', 'artist-section'];
   viewsToHide.forEach(id => {
     const el = document.getElementById(id);
     if (el) el.hidden = true;
@@ -350,7 +353,9 @@ function renderResults() {
       const thumbHtml = thumb ? `<img src="${escHtml(thumb)}" alt="" loading="lazy" onload="this.classList.add('loaded')">` : '';
       
       const subtitle = (item.artist || item.owner || item.year || '');
-      const subtitleHtml = subtitle ? `<div class="hscroll-card-artist">${escHtml(subtitle)}</div>` : '';
+      const subtitleHtml = subtitle ? `<div class="hscroll-card-artist">${type === 'album' && window.artistLinksHtml
+        ? window.artistLinksHtml(subtitle, item.channelId || item.channel_id || item.artistChannelId || '')
+        : escHtml(subtitle)}</div>` : '';
       
       const artClass = type === 'artist' ? 'hscroll-card-art round' : 'hscroll-card-art';
 
@@ -359,8 +364,13 @@ function renderResults() {
         <div class="hscroll-card-title">${escHtml(item.title || item.name || '')}</div>
         ${subtitleHtml}
       `;
+      if (type === 'album' && window.wireArtistLinks) window.wireArtistLinks(card);
 
       card.addEventListener('click', (e) => {
+        if (e.target.closest('.artist-name')) {
+           e.stopPropagation();
+           return;
+        }
         if (e.target.closest('.hscroll-play-btn, .search-playlist-play') && isAlbumOrPlaylist) {
            e.stopPropagation();
            if (!browseId) return;

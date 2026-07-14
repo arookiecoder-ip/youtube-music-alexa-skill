@@ -21,6 +21,50 @@
     if (right) right.disabled = shelfContent.scrollLeft >= maxScroll - 2;
   }
 
+  function attachMobileShelfDrag(rows) {
+    let drag = null;
+    let suppressClick = false;
+
+    rows.addEventListener('pointerdown', event => {
+      if (!window.matchMedia('(max-width: 899px)').matches) return;
+      const shelf = event.target.closest('.home-shelf-content');
+      if (!shelf) return;
+      drag = { shelf, startX: event.clientX, startY: event.clientY, scrollLeft: shelf.scrollLeft };
+    });
+    rows.addEventListener('pointermove', event => {
+      if (!drag || !window.matchMedia('(max-width: 899px)').matches) return;
+      const dx = event.clientX - drag.startX;
+      const dy = event.clientY - drag.startY;
+      if (Math.abs(dx) > 6 && Math.abs(dx) > Math.abs(dy)) {
+        drag.shelf.scrollLeft = drag.scrollLeft - dx;
+        suppressClick = true;
+      }
+    });
+    const endDrag = () => {
+      if (drag && suppressClick) {
+        const first = drag.shelf.firstElementChild;
+        if (first) {
+          const styles = window.getComputedStyle(drag.shelf);
+          const gap = parseFloat(styles.columnGap || styles.gap) || 0;
+          const step = first.getBoundingClientRect().width + gap;
+          if (step > 0) {
+            drag.shelf.scrollLeft = Math.round(drag.shelf.scrollLeft / step) * step;
+          }
+        }
+      }
+      drag = null;
+      if (suppressClick) window.setTimeout(() => { suppressClick = false; }, 0);
+    };
+    rows.addEventListener('pointerup', endDrag);
+    rows.addEventListener('pointercancel', endDrag);
+    rows.addEventListener('click', event => {
+      if (!suppressClick) return;
+      event.preventDefault();
+      event.stopPropagation();
+      suppressClick = false;
+    }, true);
+  }
+
   function showHomeSkeleton(show) {
     const container = document.getElementById('home-rows');
     if (!container) return;
@@ -33,8 +77,10 @@
             <div class="home-shelf-header">
                 <div class="home-shelf-title-area"><div class="skeleton-line" style="width: 140px; height: 16px; margin: 0;"></div></div>
             </div>
-            <div class="home-shelf-content">
-                ${Array(6).fill('<div class="home-item home-skeleton-card"><div class="skeleton-block"></div><div class="skeleton-line skeleton-line-title"></div></div>').join('')}
+            <div class="home-shelf-viewport">
+              <div class="home-shelf-content">
+                  ${Array(6).fill('<div class="home-item home-skeleton-card"><div class="skeleton-block"></div><div class="skeleton-line skeleton-line-title"></div></div>').join('')}
+              </div>
             </div>
           </div>
         `;
@@ -102,7 +148,7 @@
     const cards = Array(6).fill('<div class="home-item home-skeleton-card"><div class="skeleton-block"></div><div class="skeleton-line skeleton-line-title"></div><div class="skeleton-line skeleton-line-artist"></div></div>').join('');
     return `<section class="home-shelf home-skeleton-shelf home-shelf-deferred" data-deferred-shelf-id="${esc(shelf.id)}">
       <div class="home-shelf-header"><div class="home-shelf-title-area"><h2 class="home-shelf-title">${esc(shelf.title || '')}</h2></div></div>
-      <div class="home-shelf-content home-shelf-deferred-content" aria-busy="true">${cards}</div>
+      <div class="home-shelf-viewport"><div class="home-shelf-content home-shelf-deferred-content" aria-busy="true">${cards}</div></div>
     </section>`;
   }
 
@@ -204,7 +250,7 @@
       renderHomeFeed();
     } catch (e) {
       if (signal.aborted) return;
-      console.warn('Failed to load home feed', e);
+      console.error('Failed to load home feed', e);
       homeFeedData = null;
       const container = document.getElementById('home-rows');
       if (container) {
@@ -220,6 +266,7 @@
 
   const rows = document.getElementById('home-rows');
   if (rows) {
+    attachMobileShelfDrag(rows);
     rows.addEventListener('scroll', function(e) {
       if (e.target.classList && e.target.classList.contains('home-shelf-content')) updateShelfArrows(e.target);
       if (window._closeAllMoreMenus) window._closeAllMoreMenus();
@@ -293,9 +340,17 @@
           return;
       }
 
-      // Let the router's delegated artist-link handler own this click. If it
-      // reaches the card handler, the song starts playing before navigation.
-      if (e.target.closest('.artist-name')) return;
+      // Artist credits below Home songs are display-only on mobile. Prevent
+      // the delegated artist-link handler from navigating there, while
+      // preserving the existing PC behavior.
+      var artistNameTarget = e.target.closest('.artist-name');
+      if (artistNameTarget) {
+        if (window.matchMedia && window.matchMedia('(max-width: 899px)').matches) {
+          e.preventDefault();
+          e.stopPropagation();
+        }
+        return;
+      }
 
       var playBtn = e.target.closest('.home-play-btn');
       var itemCard = (playBtn || e.target).closest('.home-item');
@@ -306,6 +361,33 @@
         var playlistId = itemCard.dataset.playlistId;
         var targetId = itemCard.dataset.targetId;
         var kind = itemCard.dataset.kind;
+        var mobileHomeCard = window.matchMedia && window.matchMedia('(max-width: 899px)').matches;
+
+        // Mobile feed cards can come from compact shelf payloads whose kind is
+        // missing or reported as "single". Keep this fallback mobile-only so
+        // the established PC click routing remains unchanged.
+        if (mobileHomeCard && !playBtn) {
+            var mobileKind = String(kind || '').toLowerCase();
+            if (targetId && (mobileKind === 'single' || mobileKind === 'album')) {
+                if (window.preloadNavigateAlbum) window.preloadNavigateAlbum(targetId);
+                else window.navigateTo('#album/' + encodeURIComponent(targetId));
+                return;
+            }
+            if (targetId && (mobileKind === 'artist' || mobileKind === 'channel')) {
+                if (window.preloadNavigateArtist) window.preloadNavigateArtist(targetId);
+                else window.navigateTo('#artist/' + encodeURIComponent(targetId));
+                return;
+            }
+            if ((targetId || playlistId) &&
+                (mobileKind === 'playlist' || mobileKind === 'station' ||
+                 (!mobileKind || mobileKind === 'unknown') ||
+                 (!targetId && playlistId))) {
+                var mobilePlaylistId = targetId || playlistId;
+                if (window.preloadNavigatePlaylist) window.preloadNavigatePlaylist(mobilePlaylistId);
+                else window.navigateTo('#playlist/' + encodeURIComponent(mobilePlaylistId));
+                return;
+            }
+        }
 
         // A song title navigates to its album; artwork and the explicit play
         // button retain their normal direct-play behavior.

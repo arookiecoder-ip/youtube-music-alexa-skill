@@ -332,6 +332,7 @@ window.showQueue = showQueue;
 // Called by the router when navigating to #now-playing and by SSE updates.
 function renderNpQueue(queue, currentIndex) {
   var list = document.getElementById('np-queue-list');
+  renderMobileInlineQueue(queue, currentIndex);
   if (!list) return;
   if (!queue || queue.length === 0) {
     list.innerHTML = '<div style="padding:24px;color:var(--muted);font-size:.88rem">No queue</div>';
@@ -367,6 +368,85 @@ function renderNpQueue(queue, currentIndex) {
   if (active) requestAnimationFrame(function() { active.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); });
 }
 window.renderNpQueue = renderNpQueue;
+
+function renderMobileInlineQueue(queue, currentIndex) {
+  var list = document.getElementById('mobile-inline-queue');
+  if (!list) return;
+  if (!Array.isArray(queue) || !queue.length) {
+    list.replaceChildren();
+    list._mobileInlineQueueIndex = null;
+    return;
+  }
+  var start = Math.max(0, Number(currentIndex) || 0);
+  var previous = list._mobileInlineQueueIndex;
+  var transitionPrimed = list._mobileInlineQueueTransitionPrimed;
+  var isMobile = window.matchMedia('(max-width: 899px)').matches;
+  var existingRows = Array.from(list.querySelectorAll(':scope > .queue-swipe-wrapper'));
+  var sameQueue = existingRows.length === queue.length - start &&
+    existingRows.every(function(row, index) {
+      return row.dataset.videoId === (queue[start + index].video_id || '');
+    });
+  if (list._mobileInlineQueueIndex === start && sameQueue) {
+    existingRows.forEach(function(row, index) {
+      var item = row.querySelector('.queue-item');
+      var queueIndex = start + index;
+      if (item) {
+        item.classList.toggle('active', queueIndex === start);
+        item.classList.toggle('playing', queueIndex === start && state.isPlaying);
+      }
+    });
+    return;
+  }
+  var direction = isMobile && !transitionPrimed && Number.isFinite(previous) && start !== previous
+    ? (start > previous ? 'next' : 'previous')
+    : '';
+  var end = queue.length;
+  var rows = [];
+  for (var i = start; i < end; i++) {
+    var row = _buildQueueRow(list, queue[i], i, start, new Map());
+    if (direction) row.classList.add('mobile-queue-shift-' + direction);
+    rows.push(row);
+  }
+  list.replaceChildren.apply(list, rows);
+  list._mobileInlineQueueIndex = start;
+  list._mobileInlineQueueTransitionPrimed = false;
+}
+
+function animateMobileInlineQueue(direction) {
+  var list = document.getElementById('mobile-inline-queue');
+  if (!list || !window.matchMedia('(max-width: 899px)').matches) return;
+  if (direction !== 'next' && direction !== 'previous') return;
+  var className = 'mobile-queue-shift-' + direction;
+  list._mobileInlineQueueTransitionPrimed = true;
+  list.querySelectorAll(':scope > .queue-swipe-wrapper').forEach(function(row) {
+    row.classList.remove('mobile-queue-shift-next', 'mobile-queue-shift-previous');
+    void row.offsetWidth;
+    row.classList.add(className);
+  });
+  clearTimeout(list._mobileInlineQueueTransitionTimer);
+  list._mobileInlineQueueTransitionTimer = setTimeout(function() {
+    list._mobileInlineQueueTransitionPrimed = false;
+  }, 1200);
+}
+window.animateMobileInlineQueue = animateMobileInlineQueue;
+
+function optimisticallyAdvanceMobileInlineQueue(direction) {
+  if (!window.matchMedia('(max-width: 899px)').matches) return false;
+  var list = document.getElementById('mobile-inline-queue');
+  if (!list) return false;
+  var queue;
+  try { queue = JSON.parse(window._lastQueueJson || '[]'); } catch (_) { queue = []; }
+  if (!Array.isArray(queue) || !queue.length) return false;
+  var current = Number(window._lastQueueIndex);
+  if (!Number.isFinite(current) || current < 0) current = Number(list._mobileInlineQueueIndex);
+  if (!Number.isFinite(current) || current < 0) return false;
+  var target = current + (direction === 'next' ? 1 : -1);
+  if (target < 0 || target >= queue.length) return false;
+  window._lastQueueIndex = target;
+  renderMobileInlineQueue(queue, target);
+  return true;
+}
+window.optimisticallyAdvanceMobileInlineQueue = optimisticallyAdvanceMobileInlineQueue;
 
 // Builds the "3-dot" more-options button + dropdown for a queue row (used by
 // both the desktop inline queue and the mobile queue popup, which otherwise
@@ -1064,9 +1144,9 @@ async function playFromQueue(item, queueIndex, openPlaybackPage) {
     state._historyCache = [optimisticEntry, ...state._historyCache.filter(e => e.video_id !== item.video_id)].slice(0, 100);
     syncHistoryTriggerVisibility();
     // If the modal is open, prepend the new row with a slide-in animation.
-    const histOverlay = document.getElementById('history-modal-overlay');
-    if (histOverlay.classList.contains('open')) {
-      const list = histOverlay.querySelector('.history-list');
+    const historyPage = document.getElementById('history-page');
+    if (historyPage && !historyPage.hidden) {
+      const list = historyPage.querySelector('.history-list');
       if (list) {
         // Remove stale entry for same song if present
         list.querySelectorAll('.history-item').forEach(el => {
@@ -1123,6 +1203,7 @@ function scheduleHistoryRefresh() {
   const overlay = document.getElementById('queue-modal-overlay');
   const body = document.getElementById('queue-modal-body');
   if (!overlay || !body) return;
+  const modal = document.getElementById('queue-modal');
 
   function _queueSnapshot() {
     // SSE writes window._lastQueueJson; optimistic edits write the appState
@@ -1132,6 +1213,8 @@ function scheduleHistoryRefresh() {
   }
 
   function renderQueueModal() {
+    const preserveOpenScroll = overlay.classList.contains('open');
+    const previousScrollTop = body.scrollTop;
     const queue = _queueSnapshot();
     const idx = (typeof window._lastQueueIndex === 'number' && window._lastQueueIndex >= 0)
       ? window._lastQueueIndex : state._lastQueueIndex;
@@ -1148,28 +1231,424 @@ function scheduleHistoryRefresh() {
     for (let i = 0; i < limit; i++) rows.push(_buildQueueRow(body, queue[i], i, idx, new Map()));
     body.replaceChildren(...rows);
     _syncQueueSentinel(body);
+    if (preserveOpenScroll) body.scrollTop = previousScrollTop;
   }
 
-  function openQueueModal() {
-    renderQueueModal();
-    overlay.classList.add('open');
+  function scrollPlayingQueueRowToTop() {
+    const activeItem = body.querySelector('.queue-item.active');
+    const activeRow = activeItem?.closest('.queue-swipe-wrapper') || activeItem;
+    if (!activeRow) return;
+    const bodyRect = body.getBoundingClientRect();
+    const rowRect = activeRow.getBoundingClientRect();
+    body.scrollTop = Math.max(0, body.scrollTop + rowRect.top - bodyRect.top);
+  }
+
+  let inlineMorph = null;
+  let inlineMorphProgress = 0;
+  let inlineMorphFrame = 0;
+
+  const clamp01 = (value) => Math.max(0, Math.min(1, Number(value) || 0));
+  const fadeBetween = (value, start, end) => {
+    const t = clamp01((value - start) / (end - start));
+    return t * t * (3 - 2 * t);
+  };
+
+  function resetInlineMorphStyles() {
+    cancelAnimationFrame(inlineMorphFrame);
+    inlineMorphFrame = 0;
+    if (inlineMorph) {
+      [inlineMorph.sourceLabel, inlineMorph.sourceList, inlineMorph.targetTitle, inlineMorph.targetBody]
+        .filter(Boolean)
+        .forEach((element) => {
+          element.style.translate = '';
+          element.style.opacity = '';
+          element.style.visibility = '';
+          element.style.willChange = '';
+        });
+      inlineMorph.targetRows.forEach((row) => {
+        row.style.filter = '';
+        row.style.opacity = '';
+        row.style.willChange = '';
+      });
+    }
+    modal.style.clipPath = '';
+    modal.style.maskImage = '';
+    modal.style.webkitMaskImage = '';
+    modal.style.opacity = '';
+    modal.style.willChange = '';
+    overlay.style.removeProperty('--queue-drag-progress');
+    overlay.style.removeProperty('--queue-detail-progress');
+    overlay.style.removeProperty('--queue-background-progress');
+    overlay.classList.remove('queue-origin-expanded', 'queue-origin-closing', 'queue-origin-open');
+    inlineMorph = null;
+    inlineMorphProgress = 0;
+  }
+
+  function prepareInlineMorph(sourceRects) {
+    const sourceLabel = document.querySelector('#mobile-queue-handle .mobile-queue-label');
+    const sourceList = document.getElementById('mobile-inline-queue');
+    const targetTitle = modal.querySelector('.queue-modal-header h3');
+    const targetBody = body;
+    if (!sourceLabel || !sourceList || !targetTitle) return false;
+
+    const modalRect = modal.getBoundingClientRect();
+    const targetTitleRect = targetTitle.getBoundingClientRect();
+    const sourceRow = sourceList.querySelector('.queue-swipe-wrapper, .queue-item');
+    const activeItem = body.querySelector('.queue-item.active');
+    const targetRow = activeItem?.closest('.queue-swipe-wrapper') ||
+      activeItem || body.querySelector('.queue-swipe-wrapper, .queue-item');
+    const allTargetRows = Array.from(body.children);
+    const activeRowPosition = Math.max(0, allTargetRows.indexOf(targetRow));
+    const targetRows = allTargetRows.slice(activeRowPosition, activeRowPosition + 8);
+    const sourceRowRect = sourceRow ? sourceRow.getBoundingClientRect() : sourceRects.list;
+    const targetRowRect = targetRow ? targetRow.getBoundingClientRect() : targetBody.getBoundingClientRect();
+    const revealTop = Math.max(0, Math.min(modalRect.height, sourceRects.label.top - modalRect.top));
+    const revealBottom = Math.max(revealTop + 1, Math.min(
+      modalRect.height,
+      sourceRects.list.bottom - modalRect.top
+    ));
+
+    inlineMorph = {
+      sourceLabel,
+      sourceList,
+      targetTitle,
+      targetBody,
+      targetRows,
+      labelDx: targetTitleRect.left - sourceRects.label.left,
+      labelDy: targetTitleRect.top - sourceRects.label.top,
+      listDx: targetRowRect.left - sourceRowRect.left,
+      listDy: targetRowRect.top - sourceRowRect.top,
+      revealTop,
+      revealBottom,
+      modalHeight: modalRect.height
+    };
+    sourceLabel.style.visibility = 'hidden';
+    sourceList.style.visibility = 'hidden';
+    targetTitle.style.opacity = '1';
+    targetBody.style.opacity = '1';
+    targetTitle.style.willChange = 'translate';
+    targetBody.style.willChange = 'translate';
+    targetRows.forEach((row) => { row.style.willChange = 'opacity'; });
+    modal.style.maskImage = 'none';
+    modal.style.webkitMaskImage = 'none';
+    modal.style.opacity = '1';
+    modal.style.willChange = 'clip-path';
+    return true;
+  }
+
+  function setInlineQueueProgress(progress) {
+    if (!overlay.classList.contains('queue-origin-open') || !modal || !inlineMorph) return;
+    const value = clamp01(progress);
+    const remaining = 1 - value;
+    const m = inlineMorph;
+
+    inlineMorphProgress = value;
+    overlay.style.setProperty('--queue-drag-progress', value.toFixed(4));
+    overlay.style.setProperty('--queue-detail-progress', fadeBetween(value, .76, .96).toFixed(4));
+    overlay.style.setProperty('--queue-background-progress', fadeBetween(value, 0, 1).toFixed(4));
+    const revealTop = m.revealTop * remaining;
+    const revealBottom = m.revealBottom + (m.modalHeight - m.revealBottom) * value;
+    const clipBottom = Math.max(0, m.modalHeight - revealBottom);
+    modal.style.clipPath = `inset(${revealTop.toFixed(1)}px 0 ${clipBottom.toFixed(1)}px 0)`;
+
+    m.targetTitle.style.translate = `${(-m.labelDx * remaining).toFixed(2)}px ${(-m.labelDy * remaining).toFixed(2)}px`;
+    m.targetBody.style.translate = `${(-m.listDx * remaining).toFixed(2)}px ${(-m.listDy * remaining).toFixed(2)}px`;
+    m.targetRows.forEach((row, index) => {
+      const startOpacity = [0.92, 0.72, 0.42, 0.22][index] ?? 0.08;
+      row.style.opacity = String(startOpacity + (1 - startOpacity) * value);
+    });
+  }
+
+  function completeInlineMorphClose() {
+    // The morph has already reached its inline start state. Hide the overlay
+    // without its normal fade before removing morph variables; otherwise the
+    // base full-width sheet can appear for one transition frame.
+    overlay.style.transition = 'none';
+    overlay.classList.remove('open');
+    overlay.dataset.queueClosing = '0';
+    resetInlineMorphStyles();
+    void overlay.offsetWidth;
+    requestAnimationFrame(() => { overlay.style.transition = ''; });
     if (window.syncModalScrollLock) syncModalScrollLock();
   }
 
+  function animateInlineMorph(target, onComplete) {
+    cancelAnimationFrame(inlineMorphFrame);
+    const from = inlineMorphProgress;
+    const to = clamp01(target);
+    const distance = Math.abs(to - from);
+    if (distance < .001) {
+      setInlineQueueProgress(to);
+      onComplete?.();
+      return;
+    }
+    const started = performance.now();
+    const duration = Math.max(120, 300 * distance);
+    const tick = (now) => {
+      const elapsed = clamp01((now - started) / duration);
+      const eased = 1 - Math.pow(1 - elapsed, 3);
+      setInlineQueueProgress(from + (to - from) * eased);
+      if (elapsed < 1) inlineMorphFrame = requestAnimationFrame(tick);
+      else {
+        inlineMorphFrame = 0;
+        onComplete?.();
+      }
+    };
+    inlineMorphFrame = requestAnimationFrame(tick);
+  }
+
+  function openQueueModal(options) {
+    renderQueueModal();
+    const expandFromInline = options && options.fromInline && window.matchMedia('(max-width: 899px)').matches;
+    const interactive = expandFromInline && options && options.interactive;
+    if (expandFromInline) {
+      const sourceLabel = document.querySelector('#mobile-queue-handle .mobile-queue-label');
+      const sourceList = document.getElementById('mobile-inline-queue');
+      if (sourceLabel && sourceList) {
+        const sourceRects = {
+          label: sourceLabel.getBoundingClientRect(),
+          list: sourceList.getBoundingClientRect()
+        };
+        overlay.classList.add('queue-origin-open', 'open');
+        scrollPlayingQueueRowToTop();
+        if (prepareInlineMorph(sourceRects)) {
+          setInlineQueueProgress(0);
+          if (!interactive) finishInlineQueueProgress(true);
+        } else {
+          resetInlineMorphStyles();
+          overlay.classList.add('open');
+        }
+      } else {
+        overlay.classList.add('open');
+        scrollPlayingQueueRowToTop();
+      }
+    } else {
+      overlay.style.removeProperty('--queue-drag-progress');
+      overlay.classList.add('open');
+      if (window.matchMedia('(max-width: 899px)').matches) scrollPlayingQueueRowToTop();
+    }
+    if (window.syncModalScrollLock) syncModalScrollLock();
+  }
+
+  function finishInlineQueueProgress(shouldOpen) {
+    if (!overlay.classList.contains('queue-origin-open') || !inlineMorph) return;
+    if (shouldOpen) {
+      overlay.classList.remove('queue-origin-closing');
+      animateInlineMorph(1, () => overlay.classList.add('queue-origin-expanded'));
+    } else {
+      overlay.classList.add('queue-origin-closing');
+      animateInlineMorph(0, completeInlineMorphClose);
+    }
+  }
+
   function closeQueueModal() {
+    if (overlay.classList.contains('queue-origin-open') && inlineMorph) {
+      if (overlay.classList.contains('queue-origin-closing')) return;
+      finishInlineQueueProgress(false);
+      return;
+    }
     overlay.classList.remove('open');
+    overlay.style.removeProperty('--queue-drag-progress');
+    if (modal) {
+      modal.style.transition = '';
+      modal.style.transform = '';
+    }
     if (window.syncModalScrollLock) syncModalScrollLock();
   }
 
   const closeBtn = document.getElementById('queue-modal-close');
   if (closeBtn) closeBtn.addEventListener('click', closeQueueModal);
-  overlay.addEventListener('click', (e) => { if (e.target === overlay) closeQueueModal(); });
+  const closeFromBackdrop = (event) => {
+    if (event.target === overlay) {
+      event.preventDefault();
+      closeQueueModal();
+    }
+  };
+  overlay.addEventListener('pointerdown', closeFromBackdrop);
+  overlay.addEventListener('touchstart', closeFromBackdrop, { passive: false });
+  overlay.addEventListener('click', closeFromBackdrop);
   const openBtn = document.getElementById('queue-modal-btn');
   if (openBtn) openBtn.addEventListener('click', openQueueModal);
+
+  // Drag the queue sheet from its header, or pull down from the top of the
+  // scrollable queue body, to close it.
+  const dragHandle = document.getElementById('queue-modal-drag');
+  const dragHeader = document.querySelector('.queue-modal-header');
+  const dragSurfaces = [
+    { element: dragHeader || dragHandle, fromBody: false },
+    { element: body, fromBody: true }
+  ].filter(({ element }) => element);
+  if (dragSurfaces.length && modal) {
+    let startY = 0;
+    let lastY = 0;
+    let startX = 0;
+    let startTime = 0;
+    let dragging = false;
+    let morphDragging = false;
+    let bodyDragging = false;
+
+    const beginDrag = (clientY, fromBody, clientX = 0) => {
+      if (fromBody && body.scrollTop > 1) return false;
+      startY = lastY = clientY;
+      startX = clientX;
+      startTime = performance.now();
+      dragging = true;
+      bodyDragging = fromBody;
+      morphDragging = overlay.classList.contains('queue-origin-open') && !!inlineMorph;
+      cancelAnimationFrame(inlineMorphFrame);
+      inlineMorphFrame = 0;
+      if (!morphDragging) modal.style.transition = 'none';
+      return true;
+    };
+    const moveDrag = (clientY, event, clientX = startX) => {
+      if (!dragging) return;
+      lastY = clientY;
+      const rawDistance = clientY - startY;
+      if (bodyDragging && (
+        body.scrollTop > 1 ||
+        rawDistance <= 4 ||
+        Math.abs(clientX - startX) > rawDistance
+      )) return;
+      if (morphDragging) {
+        const distance = Math.max(0, rawDistance);
+        const closeDistance = Math.max(240, Math.min(360, window.innerHeight * .34));
+        setInlineQueueProgress(1 - distance / closeDistance);
+        event?.preventDefault?.();
+        return;
+      }
+      const offset = Math.max(-window.innerHeight * 0.25, Math.min(window.innerHeight * 0.9, clientY - startY));
+      modal.style.transform = `translateY(${offset}px)`;
+      event?.preventDefault?.();
+    };
+    const endDrag = () => {
+      if (!dragging) return;
+      const distance = lastY - startY;
+      const elapsed = Math.max(1, performance.now() - startTime);
+      const velocity = distance / elapsed;
+      dragging = false;
+      bodyDragging = false;
+      if (morphDragging) {
+        morphDragging = false;
+        finishInlineQueueProgress(inlineMorphProgress >= .72 && velocity < .55);
+        return;
+      }
+      modal.style.transition = '';
+      if (distance > 70 || velocity > 0.55) {
+        closeQueueModal();
+      } else {
+        modal.style.transform = '';
+      }
+    };
+
+    dragSurfaces.forEach(({ element: surface, fromBody }) => {
+      surface.addEventListener('pointerdown', (event) => {
+        if (event.target.closest('.queue-modal-close, button, a, input, select, textarea, [contenteditable="true"]')) return;
+        if (!beginDrag(event.clientY, fromBody, event.clientX)) return;
+        if (!fromBody) surface.setPointerCapture?.(event.pointerId);
+      });
+      surface.addEventListener('pointermove', (event) => moveDrag(event.clientY, event, event.clientX));
+      surface.addEventListener('pointerup', endDrag);
+      surface.addEventListener('pointercancel', endDrag);
+
+      surface.addEventListener('touchstart', (event) => {
+        if (event.target.closest('.queue-modal-close, button, a, input, select, textarea, [contenteditable="true"]')) return;
+        if (event.touches.length) beginDrag(event.touches[0].clientY, fromBody, event.touches[0].clientX);
+      }, { passive: true });
+      surface.addEventListener('touchmove', (event) => {
+        if (event.touches.length) {
+          moveDrag(event.touches[0].clientY, event, event.touches[0].clientX);
+        }
+      }, { passive: false });
+      surface.addEventListener('touchend', endDrag, { passive: true });
+      surface.addEventListener('touchcancel', endDrag, { passive: true });
+    });
+  }
 
   window._renderQueueModal = renderQueueModal;
   window._openQueueModal = openQueueModal;
   window._closeQueueModal = closeQueueModal;
+  window._setInlineQueueProgress = setInlineQueueProgress;
+  window._finishInlineQueueProgress = finishInlineQueueProgress;
+})();
+
+/* ---- Mobile Queue drag-up panel ---- */
+(function () {
+  const handle = document.getElementById('mobile-queue-handle');
+  if (!handle) return;
+
+  let startY = 0;
+  let lastY = 0;
+  let pointerId = null;
+  let dragging = false;
+  let modalStarted = false;
+  let progress = 0;
+  const dragDistance = () => Math.max(240, Math.min(360, window.innerHeight * .34));
+  const updateProgress = (clientY, event) => {
+    lastY = clientY;
+    const distance = startY - clientY;
+    if (!modalStarted && distance < 8) return;
+    if (!modalStarted) {
+      if (window._openQueueModal) {
+        window._openQueueModal({ fromInline: true, interactive: true });
+        modalStarted = true;
+      } else {
+        return;
+      }
+    }
+    progress = Math.max(0, Math.min(1, distance / dragDistance()));
+    handle.style.setProperty('--queue-drag-fill', `${progress * 100}%`);
+    handle.classList.add('queue-dragging');
+    window._setInlineQueueProgress?.(progress);
+    event?.preventDefault?.();
+  };
+  const finishDrag = () => {
+    if (!dragging) return;
+    dragging = false;
+    pointerId = null;
+    handle.classList.remove('queue-dragging');
+    handle.style.removeProperty('--queue-drag-fill');
+    if (modalStarted) window._finishInlineQueueProgress?.(progress >= 0.5);
+    modalStarted = false;
+    progress = 0;
+  };
+
+  handle.addEventListener('pointerdown', (event) => {
+    if (window.matchMedia('(min-width: 900px)').matches) return;
+    pointerId = event.pointerId;
+    startY = event.clientY;
+    lastY = startY;
+    dragging = true;
+    handle.setPointerCapture?.(pointerId);
+  });
+
+  handle.addEventListener('pointermove', (event) => {
+    if (!dragging || event.pointerId !== pointerId) return;
+    updateProgress(event.clientY, event);
+  });
+
+  const endDrag = (event) => {
+    if (event.pointerId !== pointerId) return;
+    finishDrag();
+  };
+  handle.addEventListener('pointerup', endDrag);
+  handle.addEventListener('pointercancel', endDrag);
+
+  // Fallback for mobile browsers that do not deliver a complete pointer
+  // gesture for a vertically draggable element.
+  handle.addEventListener('touchstart', (event) => {
+    if (window.matchMedia('(min-width: 900px)').matches || !event.touches.length) return;
+    startY = event.touches[0].clientY;
+    lastY = startY;
+    dragging = true;
+  }, { passive: true });
+  handle.addEventListener('touchmove', (event) => {
+    if (!dragging || !event.touches.length) return;
+    updateProgress(event.touches[0].clientY, event);
+  }, { passive: false });
+  handle.addEventListener('touchend', () => {
+    finishDrag();
+  }, { passive: true });
+  handle.addEventListener('touchcancel', finishDrag, { passive: true });
 })();
 
   window.addToQueue = addToQueue;

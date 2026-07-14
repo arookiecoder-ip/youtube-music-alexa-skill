@@ -149,6 +149,7 @@
 
   function showControls(loggedIn) {
     if (loginSection) loginSection.hidden = loggedIn;
+    document.body.classList.toggle('app-logged-in', !!loggedIn);
     for (const el of document.querySelectorAll('.needs-login')) el.hidden = !loggedIn;
     for (const el of document.querySelectorAll('.auth-only')) el.hidden = (!loggedIn || !window.IS_AUTHENTICATED);
     state()._loggedIn = !!loggedIn;
@@ -257,6 +258,10 @@
           if (loginBtn) loginBtn.disabled = false;
           showControls(true);
           loadDevices(false);
+        } else if (c.error) {
+          clearInterval(loginPoll);
+          if (loginBtn) loginBtn.disabled = false;
+          toast(c.error, 'error');
         }
       } catch (_) {}
     }, 2500);

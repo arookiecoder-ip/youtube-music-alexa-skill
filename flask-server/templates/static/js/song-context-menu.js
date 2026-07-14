@@ -5,7 +5,6 @@
     '.home-item[data-video-id]',
     '.recs-tile',
     '.artist-song-row',
-    '.album-track',
     '.history-item',
     '.queue-swipe-wrapper[data-video-id]',
     '.result-swipe-wrapper[data-video-id]',

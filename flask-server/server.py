@@ -14,6 +14,11 @@ logger = logging.getLogger(__name__)
 
 _start_time_epoch = time.time()
 
+
+def _is_local_host(host):
+    host = (host or "").split(":", 1)[0].strip().lower()
+    return host in {"localhost", "127.0.0.1", "::1"}
+
 app = Flask(__name__)
 # Under waitress (debug off) Jinja caches compiled templates in memory, so
 # edits to the CSS/JS inlined into remote.html via {% include %} never reach
@@ -276,8 +281,10 @@ _PUBLIC_PATHS = ('/', '/privacy_policy', '/terms_of_use', '/login', '/logout', '
                  '/manifest.webmanifest', '/service-worker.js')
 # Public path prefixes (startswith match) — static assets (CSS, JS, icons),
 # plus jam join links (/j/<token> and legacy /jam/<token> — the token itself is
-# the credential).
-_PUBLIC_PREFIXES = ('/static/', '/j/', '/jam/')
+# the credential). The Amazon proxy tunnel also has to stay public so the
+# browser can reach the interactive login page directly; the proxy flow itself
+# is guarded by the generated session/cookie inside alexapy.
+_PUBLIC_PREFIXES = ('/static/', '/j/', '/jam/', '/alexa/proxy/')
 
 # Endpoints reachable with a logged-in web-remote session cookie (so the long
 # API key stays out of the browser URL). Everything here plus the remote page.
@@ -1750,7 +1757,56 @@ class Supporting:
         return {'song_info': {'metadata': playlist[0], 'stream': stream}, 'playlist': playlist}
 
     def get_ytdlp_clients():
-        return ["default", "ios", "tv", "web"]
+        # Exported cookies make the TV client the most reliable first choice.
+        # android_vr remains the cookie-free fallback; iOS rejects cookie
+        # authentication and only adds a guaranteed failed attempt.
+        return ["tv", "android_vr", "default", "web"]
+
+    @staticmethod
+    def ytdlp_client_uses_cookies(client: str):
+        return client not in {"android_vr", "ios"}
+
+    @staticmethod
+    def add_ytdlp_cookies(command):
+        """Attach an exported cookie file, falling back to browser extraction.
+
+        Docker uses YTDLP_COOKIES=/app/cookies.txt while older deployments use
+        YTDLP_COOKIES_FILE. For local runs, also discover cookies.txt beside
+        flask-server or in the repository root.
+        """
+        configured = (os.environ.get("YTDLP_COOKIES_FILE")
+                      or os.environ.get("YTDLP_COOKIES"))
+        server_dir = os.path.dirname(os.path.abspath(__file__))
+        candidates = [
+            configured,
+            os.path.join(server_dir, "cookies.txt"),
+            os.path.join(os.path.dirname(server_dir), "cookies.txt"),
+            os.path.join(os.getcwd(), "cookies.txt"),
+        ]
+        cookies_file = next(
+            (path for path in candidates if path and os.path.isfile(path)), None
+        )
+        if cookies_file:
+            import shutil
+            import tempfile
+            tmp_cookies = os.path.join(tempfile.gettempdir(), "yt_dlp_cookies.txt")
+            shutil.copy2(cookies_file, tmp_cookies)
+            command.extend(["--cookies", tmp_cookies])
+            return
+        if browser := os.environ.get("YTDLP_BROWSER"):
+            command.extend(["--cookies-from-browser", browser])
+
+    @staticmethod
+    def add_ytdlp_js_runtime(command):
+        """Enable an installed JS runtime for YouTube's EJS challenges."""
+        import shutil
+        configured = (os.environ.get("YTDLP_JS_RUNTIME") or "").strip().lower()
+        runtimes = [configured] if configured else ["deno", "node", "bun", "qjs"]
+        for runtime in runtimes:
+            if runtime and (runtime_path := shutil.which(runtime)):
+                command.extend(["--js-runtimes", f"{runtime}:{runtime_path}"])
+                return runtime
+        return None
 
     def resolve_direct_url(video_id: str):
         if not _valid_video_id(video_id):
@@ -1766,15 +1822,9 @@ class Supporting:
                     extractor_args.append(f"youtube:po_token=mweb.gvs+{po_token}")
             command = ["yt-dlp", "--get-url", "--no-playlist", "--quiet", "-f", "ba",
                        "--remote-components", "ejs:github"]
-            cookies_file = os.environ.get("YTDLP_COOKIES_FILE", "cookies.txt")
-            if os.path.exists(cookies_file):
-                import tempfile
-                import shutil
-                tmp_cookies = os.path.join(tempfile.gettempdir(), "yt_dlp_cookies.txt")
-                shutil.copy2(cookies_file, tmp_cookies)
-                command.extend(["--cookies", tmp_cookies])
-            elif browser := os.environ.get("YTDLP_BROWSER"):
-                command.extend(["--cookies-from-browser", browser])
+            Supporting.add_ytdlp_js_runtime(command)
+            if Supporting.ytdlp_client_uses_cookies(client):
+                Supporting.add_ytdlp_cookies(command)
             if extractor_args:
                 command.extend(["--extractor-args", ",".join(extractor_args)])
             command += ["--", video_id]
@@ -1805,15 +1855,9 @@ class Supporting:
             command = ["yt-dlp", "--no-playlist", "--quiet", "--no-warnings",
                        "--remote-components", "ejs:github",
                        "--print", fmt]
-            cookies_file = os.environ.get("YTDLP_COOKIES_FILE", "cookies.txt")
-            if os.path.exists(cookies_file):
-                import tempfile
-                import shutil
-                tmp_cookies = os.path.join(tempfile.gettempdir(), "yt_dlp_cookies.txt")
-                shutil.copy2(cookies_file, tmp_cookies)
-                command.extend(["--cookies", tmp_cookies])
-            elif browser := os.environ.get("YTDLP_BROWSER"):
-                command.extend(["--cookies-from-browser", browser])
+            Supporting.add_ytdlp_js_runtime(command)
+            if Supporting.ytdlp_client_uses_cookies(client):
+                Supporting.add_ytdlp_cookies(command)
             if extractor_args:
                 command.extend(["--extractor-args", ",".join(extractor_args)])
             command += ["--", video_id]
@@ -1869,16 +1913,10 @@ class Supporting:
         command = ["yt-dlp", "--no-playlist", "--quiet",
                    "-f", "140/bestaudio[ext=m4a]/bestaudio",
                    "--remote-components", "ejs:github"]
-        
-        cookies_file = os.environ.get("YTDLP_COOKIES_FILE", "cookies.txt")
-        if os.path.exists(cookies_file):
-            import tempfile
-            import shutil
-            tmp_cookies = os.path.join(tempfile.gettempdir(), "yt_dlp_cookies.txt")
-            shutil.copy2(cookies_file, tmp_cookies)
-            command.extend(["--cookies", tmp_cookies])
-        elif browser := os.environ.get("YTDLP_BROWSER"):
-            command.extend(["--cookies-from-browser", browser])
+
+        Supporting.add_ytdlp_js_runtime(command)
+        if Supporting.ytdlp_client_uses_cookies(client):
+            Supporting.add_ytdlp_cookies(command)
             
         if extractor_args:
             command.extend(["--extractor-args", ",".join(extractor_args)])
@@ -1911,14 +1949,22 @@ class Supporting:
                     output = os.path.join(AUDIO_CACHE_DIR, f"{video_id}.%(ext)s")
                     clients = Supporting.get_ytdlp_clients()
                     permanently_dead = False
-                    for client in clients:
+                    downloaded = False
+                    last_error = ""
+                    for index, client in enumerate(clients):
                         result = subprocess.run(
                             Supporting.ytdlp_download_command(video_id, output, client=client),
                             capture_output=True, text=True)
                         if result.returncode == 0:
+                            downloaded = True
+                            if index:
+                                logger.info("yt-dlp download succeeded with %s fallback for %s",
+                                            client, video_id)
                             break
                         stderr = result.stderr.strip()
-                        logger.error("yt-dlp download failed (%s client): %s", client, stderr)
+                        last_error = stderr
+                        logger.warning("yt-dlp client %s failed for %s; trying fallback: %s",
+                                       client, video_id, stderr)
                         # If any client reports the video itself is gone,
                         # don't bother trying other clients — the video doesn't
                         # exist, and retrying won't help.
@@ -1928,6 +1974,9 @@ class Supporting:
                     if permanently_dead:
                         _mark_video_dead(video_id)
                         logger.warning("yt-dlp: %s marked as permanently unavailable", video_id)
+                    elif not downloaded:
+                        logger.error("yt-dlp download failed for %s with every client: %s",
+                                     video_id, last_error)
                     return Supporting.cached_audio_path(video_id)
         finally:
             _dec_download_depth()
@@ -3174,7 +3223,13 @@ def alexa_proxy_login():
             'Already signed in to Amazon. Signing in again will replace the '
             'current session for every device. Resubmit with "force": true '
             'to continue.', 409)
-    url, error = alexa_remote.remote.proxy_start_url(email, password)
+    proxy_base_url = None
+    if _is_local_host(request.host):
+        proxy_port = os.environ.get("ALEXA_PROXY_PORT", "5001")
+        proxy_base_url = f"http://127.0.0.1:{proxy_port}/alexa/proxy/"
+    url, error = alexa_remote.remote.proxy_start_url(
+        email, password, base_url=proxy_base_url
+    )
     if error:
         return error_response(error, 502)
     return jsonify({'login_url': url})

@@ -349,9 +349,120 @@
   }
 }
 
+/* Mobile playlist detail is a page layout, not a modal card. Keep its
+   responsive composition with the playlist component's original rules. */
+@media (max-width: 899px) {
+  #playlist-detail-modal-overlay.open #playlist-detail-modal #playlist-detail-body {
+    display: block;
+    width: 100%;
+    height: auto;
+    padding: 20px 8px 120px;
+    overflow: visible;
+    box-sizing: border-box;
+  }
+  #playlist-detail-modal-overlay.open #playlist-detail-modal .playlist-detail-hero {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+    max-height: none;
+    padding: 0 0 18px;
+    overflow: visible;
+    text-align: center;
+  }
+  #playlist-detail-modal-overlay.open #playlist-detail-modal .playlist-detail-hero > .playlist-collage {
+    width: 240px;
+    height: 240px;
+    flex: none;
+    margin: 0 auto;
+  }
+  #playlist-detail-modal-overlay.open #playlist-detail-modal .playlist-detail-hero-info {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    width: 100%;
+    padding: 0;
+    text-align: center;
+  }
+  #playlist-detail-modal-overlay.open #playlist-detail-modal .playlist-detail-hero-name,
+  #playlist-detail-modal-overlay.open #playlist-detail-modal .playlist-detail-hero-desc,
+  #playlist-detail-modal-overlay.open #playlist-detail-modal .playlist-detail-hero-meta { text-align: center; }
+  #playlist-detail-modal-overlay.open #playlist-detail-modal .playlist-detail-hero-actions {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-wrap: nowrap;
+    width: 100%;
+    gap: 16px;
+    margin-top: 20px;
+    padding: 0;
+  }
+  #playlist-detail-modal-overlay.open #playlist-detail-modal .playlist-hero-actions-left,
+  #playlist-detail-modal-overlay.open #playlist-detail-modal .playlist-hero-actions-right { display: contents; }
+  #playlist-detail-modal-overlay.open #playlist-detail-modal .playlist-detail-hero-actions button {
+    width: 42px;
+    height: 42px;
+  }
+  #playlist-detail-modal-overlay.open #playlist-detail-modal .playlist-detail-hero-actions .playlist-hero-play {
+    width: 54px;
+    height: 54px;
+    border: 0;
+    border-radius: 50%;
+    background: #fff;
+    color: #080808;
+    box-shadow: none;
+  }
+  #playlist-detail-modal-overlay.open #playlist-detail-modal .playlist-detail-hero-actions .playlist-hero-play svg {
+    width: 30px;
+    height: 30px;
+  }
+  #playlist-detail-modal-overlay.open #playlist-detail-modal #playlist-detail-body > .history-list {
+    display: block;
+    width: 100%;
+    height: auto;
+    overflow: visible;
+    padding: 0;
+  }
+  #playlist-detail-modal-overlay.open #playlist-detail-modal .history-item {
+    display: flex;
+    width: 100%;
+    height: 52px;
+    min-height: 52px;
+    padding: 4px 10px;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+    background: transparent;
+  }
+  #playlist-detail-modal-overlay.open #playlist-detail-modal .playlist-track-num,
+  #playlist-detail-modal-overlay.open #playlist-detail-modal .result-like-btn { display: none; }
+  #playlist-detail-modal-overlay.open #playlist-detail-modal .playlist-track-art,
+  #playlist-detail-modal-overlay.open #playlist-detail-modal .queue-thumb {
+    width: 44px;
+    height: 44px;
+    min-width: 44px;
+    min-height: 44px;
+    flex: 0 0 44px;
+  }
+  #playlist-detail-modal-overlay.open #playlist-detail-modal .playlist-track-duration,
+  #playlist-detail-modal-overlay.open #playlist-detail-modal .track-duration {
+    margin-left: auto;
+    margin-right: 2px;
+    min-width: 42px;
+    text-align: right;
+  }
+}
+
 /* Desktop playlist detail follows YT Music's two-column composition: the
    playlist identity remains on the left while tracks scroll on the right. */
 @media (min-width: 900px) {
+  body.album-route {
+    background-image: none;
+  }
+  body.album-route main {
+    background: var(--bg, #0a0a0a);
+  }
   #playlist-detail-modal { position: relative; }
   #playlist-detail-back { display: none !important; }
   #playlist-detail-modal .history-modal-header {
@@ -366,7 +477,7 @@
   #playlist-detail-modal .history-modal-header h3 { display: none; }
   #playlist-detail-modal .history-modal-header-actions { display: none; }
   #playlist-detail-modal .playlist-detail-actions { display: none; }
-  #playlist-detail-modal #playlist-detail-body {
+  .collection-detail-body {
     width: min(1160px, 100%);
     height: 100%;
     margin: 0 auto;
@@ -377,7 +488,13 @@
     overflow: hidden;
     box-sizing: border-box;
   }
-  #playlist-detail-modal .playlist-detail-hero {
+  .collection-detail-body {
+    background: transparent;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+  }
+  .collection-detail-body .playlist-detail-hero {
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -386,13 +503,13 @@
     padding: 0;
     text-align: center;
   }
-  #playlist-detail-modal .playlist-detail-hero .playlist-collage {
+  .collection-detail-body .playlist-detail-hero .playlist-collage {
     width: 210px;
     height: 210px;
     border-radius: 10px;
     box-shadow: 0 22px 60px rgba(0,0,0,.5);
   }
-  #playlist-detail-modal .playlist-detail-hero-info {
+  .collection-detail-body .playlist-detail-hero-info {
     width: 100%;
     align-items: center;
     gap: 9px;
@@ -404,8 +521,8 @@
     font-size: 1.65rem;
     line-height: 1.15;
   }
-  #playlist-detail-modal .playlist-detail-hero-meta { justify-content: center; }
-  #playlist-detail-modal .playlist-detail-hero-desc {
+  .collection-detail-body .playlist-detail-hero-meta { justify-content: center; }
+  .collection-detail-body .playlist-detail-hero-desc {
     max-width: 290px;
     font-size: .82rem;
     -webkit-line-clamp: 4;
@@ -444,7 +561,7 @@
   .playlist-detail-hero-actions button:focus { outline: none; }
   .playlist-detail-hero-actions button:hover { transform: scale(1.04); }
   .playlist-detail-hero-actions svg { width: 25px; height: 25px; }
-  #playlist-detail-modal #playlist-detail-body > .history-list {
+  .collection-detail-body > .history-list {
     min-width: 0;
     height: 100%;
     overflow-y: auto;
@@ -452,21 +569,21 @@
   }
   /* Track list is a flex column. Without flex:none, a long playlist shrinks
      every wrapper to fit the viewport, crushing rows into thin lines. */
-  #playlist-detail-modal .result-swipe-wrapper {
+  .collection-detail-body .result-swipe-wrapper {
     flex: none;
-    min-height: 58px;
+    min-height: 76px;
     background: transparent;
   }
-  #playlist-detail-modal .history-item {
-    height: 58px;
+  .collection-detail-body .history-item {
+    height: 76px;
     box-sizing: border-box;
-    min-height: 58px;
-    padding: 8px 10px;
+    min-height: 76px;
+    padding: 9px 10px;
     border-bottom: none;
     background: transparent;
   }
-  #playlist-detail-modal .history-item:hover { background: rgba(255,255,255,.06); }
-  #playlist-detail-modal .queue-thumb { width: 44px; height: 44px; border-radius: 4px; }
+  .collection-detail-body .history-item:hover { background: rgba(255,255,255,.06); }
+  .collection-detail-body .queue-thumb { width: 60px; height: 60px; border-radius: 4px; }
   .playlist-track-art {
     position: relative;
     width: 44px;

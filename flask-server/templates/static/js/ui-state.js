@@ -47,12 +47,10 @@
       ...(details || {})
     };
     window.__playerDebugRecords = (window.__playerDebugRecords || []).concat(record).slice(-300);
-    console.debug('[PLAYER-TRACE]', record);
     return record;
   };
   window.dumpPlayerDebugLogs = function() {
     const logs = window.__playerDebugRecords || [];
-    console.table(logs.map((r, i) => ({ i, t: r.t, event: r.event, route: r.route, body: r.body, queue: r.mainQueue, player: r.player && (r.player.hidden ? 'hidden' : r.player.visible ? 'visible' : 'shown'), np: r.nowPlaying && r.nowPlaying.transform, mini: r.mini && r.mini.visible })));
     return logs;
   };
   window.__playerDebugLog('ui-state-ready');
@@ -100,8 +98,12 @@
       // while a track plays; only search results or the artist page cover it.
       const artistOpen = route.indexOf('#artist/') === 0;
       const albumOpen = route.indexOf('#album/') === 0;
+      const historyOpen = route === '#history';
+      const exploreOpen = route === '#explore';
+      const moodOpen = route.indexOf('#mood/') === 0;
+      const libraryOpen = route === '#library';
       const npOpen = route === '#now-playing';
-      const shouldShow = state._loggedIn && !state._resultsOpen && !artistOpen && !albumOpen && !npOpen;
+      const shouldShow = state._loggedIn && !state._resultsOpen && !artistOpen && !albumOpen && !historyOpen && !exploreOpen && !moodOpen && !libraryOpen && !npOpen;
       if (shouldShow && !state._homeLoaded && window.loadHomeFeed) window.loadHomeFeed();
       else homeSection.hidden = !shouldShow || !state._homeLoaded;
     }

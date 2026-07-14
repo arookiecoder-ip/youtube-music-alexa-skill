@@ -17,3 +17,6 @@ tests/
 .claude/
 memory.md
 test_auth.json
+cookies.txt
+alexa_cookies/
+headers_auth.json

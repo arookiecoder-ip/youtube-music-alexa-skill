@@ -203,7 +203,6 @@ main {
 #queue-section[hidden],
 #home-section[hidden],
 #recs-section[hidden],
-#album-section[hidden],
 #artist-section[hidden],
 #artist-songs-section[hidden],
 #now-playing-section[hidden],
@@ -220,6 +219,15 @@ main {
   padding: 0 var(--space-4);
   padding-top: 4px;
 }
+
+.mobile-search-toggle,
+.mobile-player-close,
+.mobile-player-more,
+.mobile-np-controls,
+.mobile-np-progress,
+.mobile-queue-label,
+.mobile-inline-queue { display: none !important; }
+.mobile-queue-drag-region { display: none !important; }
 
 @media (min-width: 900px) {
   body {
@@ -602,6 +610,16 @@ img[data-image-ready="true"] {
 @media (max-width: 899px) {
   /* body + main both padded 16px doubled the gutters; keep one */
   body { padding: 0; }
+  .sidebar-playlist-list { padding-right: 0; }
+  .sidebar-playlist-item {
+    gap: 8px;
+    padding: 4px 0 !important;
+  }
+  .sidebar-playlist-art {
+    width: 32px;
+    height: 32px;
+    flex-basis: 32px;
+  }
 }
 
 /* The old right-side hamburger is replaced by the rail toggle next to the
@@ -804,7 +822,6 @@ body.rail-collapsed .sidebar-playlist-list { scrollbar-width: none; }
     -webkit-backdrop-filter: blur(16px);
   }
 }
-
 /* ============================================================
    Left rail (desktop) / drawer (mobile)
    ============================================================ */
@@ -1829,10 +1846,10 @@ body.now-playing-route .player-section .player-expand-btn svg {
    homepage consistent with the Related Artists section. */
 .home-item[data-kind="artist"] .home-item-img-wrapper,
 .home-item[data-kind="artist"] .home-item-img {
-  border-radius: 50%;
+  border-radius: 50% !important;
 }
 .home-item[data-kind="artist"] .home-item-img-wrapper {
-  overflow: hidden;
+  overflow: hidden !important;
 }
 .home-item[data-kind="artist"] .home-item-text {
   text-align: center;
@@ -2226,18 +2243,147 @@ body.results-open #results-section {
 #login-section {
   background: var(--shell-bg);
   border: 1px solid rgba(255, 255, 255, .08);
-  border-radius: var(--radius-xl);
+  border-radius: 0;
   max-width: 420px;
   margin: 10vh auto 0;
   padding: 28px 26px;
   box-shadow: 0 24px 80px rgba(0, 0, 0, .5);
 }
-#login-section input { border-radius: var(--radius-md); }
+#login-section input { border-radius: 0; }
 #login-section .btn-accent {
-  border-radius: var(--radius-full);
+  border-radius: 0;
   background: var(--accent-grad);
   border: none;
   padding: 12px 20px;
+}
+
+/* Blank state: the navigation rail and persistent playbar belong to the
+   signed-in music experience. The desktop rules above intentionally force
+   both layers on, so keep this guard late in the cascade. */
+body:not(.app-logged-in) .sidebar,
+body:not(.app-logged-in) .sidebar-overlay,
+body:not(.app-logged-in) .player-section,
+body:not(.app-logged-in) #mini-player,
+body:not(.app-logged-in) .rail-toggle-btn,
+body:not(.app-logged-in) .hamburger-btn {
+  display: none !important;
+}
+
+@media (min-width: 900px) {
+  body:not(.app-logged-in) main,
+  body:not(.app-logged-in) main.idle,
+  body:not(.app-logged-in) main.has-queue,
+  body:not(.app-logged-in) body.results-open main {
+    margin-left: 0;
+  }
+
+  body:not(.app-logged-in) header::before {
+    left: 0;
+  }
+}
+
+/* Mobile Home: keep feed inside phone-width shell and avoid desktop rail
+   spacing leaking into the compact layout. */
+@media (max-width: 899px) {
+  body.home-route {
+    background-color: var(--bg);
+    padding: 0 9px;
+  }
+
+  body.home-route main {
+    max-width: 560px;
+    margin: 0 auto;
+    padding: 4px 0 0;
+    background: transparent;
+    min-height: 100dvh;
+  }
+
+  body.home-route main header {
+    min-height: 53px;
+    margin: 0;
+    padding: 4px 14px 5px;
+    background: #2b1006;
+    border-bottom: 0;
+  }
+
+  body.home-route header .brand { gap: 10px; }
+  body.home-route header .brand h1 {
+    font-size: .72rem;
+    line-height: 1.25;
+    max-width: 72px;
+  }
+  body.home-route header .rail-toggle-btn {
+    width: 28px;
+    height: 28px;
+    padding: 4px;
+  }
+  body.home-route header .header-actions { gap: 5px; }
+  body.home-route header .header-history-btn,
+  body.home-route header .profile-menu-trigger {
+    width: 34px;
+    height: 34px;
+    padding: 7px;
+    border: 1px solid rgba(255,255,255,.2);
+  }
+
+  body.home-route .play-section {
+    margin: 0 0 18px;
+    padding: 8px 14px 10px !important;
+    background: #050505 !important;
+    border-radius: 0 0 8px 8px;
+  }
+  body.home-route .search-wrap input#query {
+    height: 40px;
+    border-color: #323232;
+    background: #050505;
+    font-size: .78rem;
+  }
+
+  body.home-route #home-section {
+    padding-bottom: 120px;
+  }
+  body.home-route .home-header-area {
+    padding: 12px 16px 16px;
+  }
+  body.home-route .home-greeting {
+    font-size: 1.35rem;
+    margin-bottom: 0;
+  }
+  body.home-route .home-shelf {
+    margin-bottom: 20px;
+  }
+  body.home-route .home-shelf-header {
+    padding: 0 16px 10px;
+  }
+  body.home-route .home-shelf-title {
+    font-size: 1rem;
+  }
+  body.home-route .home-shelf-content {
+    gap: 14px;
+    padding: 0 29px 6px;
+  }
+  body.home-route .home-item-card { width: 126px; gap: 7px; }
+  body.home-route .home-item-title { font-size: .76rem; }
+  body.home-route .home-item-subtitle { font-size: .68rem; }
+  body.home-route .home-layout-song_grid .home-shelf-content {
+    grid-auto-columns: 270px;
+    row-gap: 1px;
+  }
+  body.home-route .home-item-song .home-item-img {
+    width: 42px;
+    height: 42px;
+  }
+  body.home-route .home-item-song .home-item-text { padding: 0 10px; }
+}
+
+/* Keep the primary content tiles aligned with the sharper login treatment. */
+.recs-tile-art,
+.recs-skeleton .skeleton-block,
+.home-item,
+.home-item-img-wrapper,
+.home-item-img,
+.home-item-wide-card .home-item-img-wrapper {
+  border-radius: 0 !important;
 }
 
 /* ============================================================
@@ -2248,6 +2394,316 @@ body.results-open #results-section {
   border-radius: var(--radius-xl);
   background: #151515;
   border-color: rgba(255, 255, 255, .09);
+}
+
+/* Recently Listened is a routed page, not a modal. */
+.history-page[hidden] { display: none !important; }
+.history-page {
+  display: block;
+  width: 100%;
+  min-height: 100dvh;
+  padding: 24px 24px 140px;
+  background: var(--bg);
+  color: var(--text);
+}
+.history-page-inner {
+  width: min(760px, 100%);
+  margin: 0 auto;
+}
+.history-page-header {
+  padding: 18px 0 16px;
+  border-bottom: 1px solid var(--border);
+}
+.history-page-header h3 {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: .14em;
+}
+.history-page-body { padding-top: 8px; }
+.history-page-empty {
+  padding: 40px 20px;
+  color: var(--muted);
+  text-align: center;
+}
+body.history-route {
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+}
+body.history-route main { min-height: 0; }
+
+@media (max-width: 899px) {
+  body.history-route main {
+    display: block;
+    height: auto;
+    min-height: 0;
+    overflow: visible;
+    padding-bottom: 0 !important;
+  }
+  body.history-route {
+    height: auto;
+    min-height: 100dvh;
+    overflow-y: scroll !important;
+    overflow-x: hidden !important;
+    overscroll-behavior-y: auto;
+    touch-action: pan-y;
+  }
+  body.history-route .history-page {
+    width: 100vw;
+    min-height: 100dvh;
+    margin-left: calc(50% - 50vw);
+    padding: 0 0 calc(82px + 28px + env(safe-area-inset-bottom, 0px));
+    background: transparent;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+    overflow: visible;
+  }
+  body.history-route .history-page.history-page-loading { visibility: hidden; }
+  body.history-route .history-page-inner { width: 100%; }
+  body.history-route .history-page-header {
+    padding: 18px 0 14px;
+    border-bottom: 0;
+  }
+  body.history-route .history-like-btn { display: none; }
+}
+
+@media (max-width: 899px) {
+  body.explore-route,
+  body.mood-route,
+  body.library-route {
+    overflow-y: auto;
+    overscroll-behavior-y: auto;
+  }
+  body.mood-route main {
+    height: auto;
+    min-height: calc(100dvh + var(--playbar-h-mobile));
+    overflow: visible;
+    padding-bottom: calc(var(--playbar-h-mobile) + 28px + env(safe-area-inset-bottom, 0px));
+  }
+
+  body.explore-route #explore-modal-overlay,
+  body.mood-route #mood-modal-overlay,
+  body.library-route #library-modal-overlay {
+    display: block;
+    position: static;
+    inset: auto;
+    width: 100%;
+    min-height: 100dvh;
+    background: transparent;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    opacity: 1;
+    visibility: visible;
+    z-index: auto;
+  }
+
+  body.explore-route #explore-modal,
+  body.mood-route #mood-modal,
+  body.library-route #library-modal {
+    width: 100%;
+    max-width: none;
+    min-height: 100dvh;
+    max-height: none;
+    margin: 0;
+    background: transparent;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+    overflow: visible;
+    transform: none;
+    opacity: 1;
+  }
+
+  body.explore-route #explore-modal .history-modal-body,
+  body.mood-route #mood-modal .history-modal-body,
+  body.library-route #library-modal .history-modal-body {
+    flex: none;
+    overflow: visible;
+    overscroll-behavior-y: auto;
+  }
+
+  body.explore-route #explore-modal .history-modal-body,
+  body.mood-route #mood-modal .history-modal-body,
+  body.library-route #library-modal .history-modal-body {
+    padding-bottom: calc(var(--playbar-h-mobile) + 28px + env(safe-area-inset-bottom, 0px));
+  }
+
+  body.explore-route #explore-modal-close,
+  body.mood-route #mood-modal-close,
+  body.library-route #library-modal-close { display: none; }
+
+  body.explore-route #explore-modal .history-modal-header {
+    border-bottom: 0;
+    padding-left: 0;
+  }
+  body.library-route #library-modal .history-modal-header {
+    border-bottom: 0;
+  }
+  body.mood-route #mood-modal .history-modal-header {
+    border-bottom: 0;
+    padding-left: 0;
+  }
+
+  body.library-route .library-grid {
+    grid-template-columns: repeat(auto-fill, 126px);
+    column-gap: 24px;
+  }
+  body.library-route .library-card,
+  body.library-route .library-card-art {
+    width: 126px;
+  }
+  body.library-route .library-card-art {
+    height: 126px;
+    aspect-ratio: auto;
+  }
+  body.library-route .library-card-artist .library-card-info {
+    text-align: center;
+  }
+
+  body.explore-route .explore-card {
+    width: 126px;
+    flex-basis: 126px;
+  }
+  body.explore-route .explore-card-art {
+    width: 126px;
+    height: 126px;
+    aspect-ratio: auto;
+  }
+  body.mood-route .explore-card {
+    width: 126px;
+    flex-basis: 126px;
+  }
+  body.mood-route .explore-card-art {
+    width: 126px;
+    height: 126px;
+    aspect-ratio: auto;
+  }
+  body.mood-route .explore-grid {
+    gap: 14px;
+    padding: 0 29px 6px 0;
+  }
+  body.explore-route .explore-grid {
+    gap: 14px;
+    padding: 0 29px 6px 0;
+    overflow-x: auto;
+    overflow-y: hidden;
+    touch-action: auto;
+    overscroll-behavior-x: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+  body.explore-route .explore-card,
+  body.mood-route .explore-card {
+    gap: 7px;
+  }
+  body.mood-route .explore-grid {
+    overflow-x: auto;
+    overflow-y: hidden;
+    touch-action: auto;
+    overscroll-behavior-x: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+  body.explore-route .explore-card-art,
+  body.mood-route .explore-card-art {
+    margin-bottom: 0;
+  }
+  body.mood-route .mood-featured-playlists .explore-grid {
+    display: flex;
+    grid-template-columns: none;
+    width: 100%;
+    overflow-x: auto;
+    overflow-y: hidden;
+    flex-wrap: nowrap;
+    touch-action: auto;
+    scrollbar-width: none;
+  }
+  body.mood-route .mood-featured-playlists .explore-grid::-webkit-scrollbar { display: none; }
+  body.mood-route .mood-featured-playlists .explore-card {
+    flex: 0 0 126px;
+  }
+  body.mood-route .mood-albums-playlists .explore-grid {
+    display: grid;
+    grid-template-columns: none;
+    grid-template-rows: repeat(2, auto);
+    grid-auto-flow: column;
+    grid-auto-columns: 126px;
+    width: 100%;
+    min-width: 100%;
+    overflow-x: auto;
+    overflow-y: hidden;
+    flex-wrap: nowrap;
+    touch-action: auto;
+    scrollbar-width: none;
+  }
+  body.mood-route .mood-albums-playlists .explore-grid::-webkit-scrollbar { display: none; }
+  body.mood-route .mood-albums-playlists .explore-card {
+    flex: none;
+  }
+  body.mood-route .mood-songs-shelf .home-shelf-content {
+    grid-auto-columns: 270px;
+    row-gap: 1px;
+    padding: 0 29px 6px 0;
+  }
+  body.mood-route .mood-songs-shelf .home-item-song .home-item-img {
+    width: 42px;
+    height: 42px;
+  }
+  body.mood-route .mood-songs-shelf .home-item-song .home-item-text {
+    padding: 0 10px;
+  }
+
+  body.explore-route .explore-mood-controls { display: none; }
+  body.explore-route .explore-mood-viewport {
+    overflow-x: auto;
+    overflow-y: hidden;
+    cursor: grab;
+    touch-action: auto;
+    scrollbar-width: none;
+  }
+  body.explore-route .explore-mood-viewport::-webkit-scrollbar { display: none; }
+  body.explore-route .explore-mood-grid {
+    grid-template-columns: none;
+    grid-template-rows: repeat(4, 48px);
+    grid-auto-flow: column;
+    grid-auto-columns: calc((100vw - 48px) / 2);
+    width: max-content;
+    min-width: 100%;
+    gap: 12px;
+    transition: none;
+    will-change: auto;
+  }
+  body.explore-route .explore-mood-card {
+    min-width: 0;
+    padding: 10px 8px 10px 12px;
+    text-align: center;
+  }
+
+  body.explore-route .explore-quick-nav {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 8px;
+    margin-bottom: 28px;
+  }
+  body.explore-route .explore-quick-card {
+    aspect-ratio: 1;
+    min-height: 0;
+    padding: 8px 4px;
+    flex-direction: column;
+    justify-content: center;
+    gap: 5px;
+    text-align: center;
+    font-size: .68rem;
+    line-height: 1.15;
+  }
+  body.explore-route .explore-quick-icon {
+    width: 20px;
+    height: 20px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 1.2rem;
+    line-height: 1;
+  }
 }
 #playlist-detail-modal { background: transparent; }
 /* Playlist/history overlays own scrolling at every breakpoint. Keep the page
@@ -2370,9 +2826,205 @@ body.results-open .player-section {
    The playlists list and playlist detail reuse the modal markup,
    but render inside the content area — no dark backdrop, no
    floating card — so opening a playlist feels like navigating to
-   a page, the way YT Music and Spotify do it. Mobile keeps the
-   bottom-sheet/popup style.
+   a page, the way YT Music and Spotify do it.
    ============================================================ */
+
+/* Mobile playlist detail is a routed page, not a modal. Keep this scoped to
+   the mobile route so the desktop presentation below remains unchanged. */
+@media (max-width: 899px) {
+  /* Compact artist rows let more songs remain visible on a phone while
+     keeping the list itself free to grow vertically. */
+  body.artist-route #artist-top-songs {
+    margin-bottom: 24px;
+    padding-left: 8px;
+    padding-right: 8px;
+  }
+
+  body.artist-route .artist-song-row {
+    min-height: 50px;
+    height: 50px;
+    gap: 8px;
+    padding: 4px 4px;
+  }
+
+  body.artist-route .artist-song-thumb {
+    width: 42px;
+    height: 42px;
+  }
+
+  body.artist-route .artist-song-play-btn {
+    left: 4px;
+    width: 42px;
+    height: 42px;
+  }
+
+  body.artist-route .artist-song-title {
+    font-size: .76rem;
+  }
+
+  body.artist-route .artist-song-artist {
+    font-size: .68rem;
+  }
+
+  body.artist-route .artist-song-album {
+    font-size: .6rem;
+  }
+
+  body.artist-route .artist-song-like-btn {
+    width: 28px;
+    height: 28px;
+  }
+
+  body.artist-route .artist-song-like-btn svg {
+    width: 18px;
+    height: 18px;
+  }
+
+  body.playlists-route:has(#playlist-detail-modal-overlay.open) {
+    overflow-y: auto !important;
+    overflow-x: hidden !important;
+    overscroll-behavior-y: auto !important;
+  }
+
+  body.playlists-route main {
+    height: auto !important;
+    min-height: 0 !important;
+    padding-left: 0 !important;
+    padding-right: 0 !important;
+  }
+
+  body.album-route main {
+    padding-left: 0 !important;
+    padding-right: 0 !important;
+  }
+
+  /* Detail pages replace the mobile home feed. The routed sections are
+     rendered in normal document flow on mobile, so keep Home out of flow
+     even during an async/preloaded route transition. */
+  body.playlists-route #home-section,
+  body.album-route #home-section,
+  body.artist-route #home-section,
+  body.artist-songs-route #home-section {
+    display: none !important;
+  }
+
+  body.playlists-route #playlist-detail-modal-overlay {
+    display: none;
+    position: static;
+    inset: auto;
+    width: 100%;
+    min-height: 0;
+    align-items: stretch;
+    justify-content: stretch;
+    background: transparent;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    opacity: 1;
+    visibility: visible;
+    z-index: auto;
+  }
+
+  body.playlists-route #playlist-detail-modal-overlay.open {
+    display: block;
+  }
+
+  body.playlists-route #playlist-detail-modal {
+    width: 100%;
+    max-width: none;
+    max-height: none;
+    min-height: 0;
+    margin: 0;
+    overflow: visible;
+    background: transparent;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+    transform: none;
+    opacity: 1;
+  }
+
+  body.playlists-route #playlist-detail-modal .history-modal-header {
+    display: none;
+  }
+
+  body.playlists-route #playlist-detail-modal #playlist-detail-body {
+    width: 100%;
+    height: auto;
+    box-sizing: border-box;
+    padding: 20px 8px 120px;
+    overflow: visible;
+    display: block;
+  }
+
+  body.playlists-route #playlist-detail-modal .playlist-detail-hero {
+    position: static;
+    max-height: none;
+    overflow: visible;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+    padding: 0 0 18px;
+    text-align: center;
+  }
+
+  body.playlists-route #playlist-detail-modal .playlist-detail-hero .playlist-collage {
+    width: 180px;
+    height: 180px;
+    border-radius: 8px;
+  }
+
+  body.playlists-route #playlist-detail-modal .playlist-detail-hero-info {
+    width: 100%;
+    align-items: center;
+    gap: 7px;
+    padding: 0;
+    text-align: center;
+  }
+
+  body.playlists-route #playlist-detail-modal .playlist-detail-hero-name {
+    font-size: 1.35rem;
+    line-height: 1.2;
+  }
+
+  body.playlists-route #playlist-detail-modal .playlist-detail-hero-desc {
+    max-width: 290px;
+  }
+
+  body.playlists-route #playlist-detail-modal .playlist-detail-hero-meta {
+    justify-content: center;
+  }
+
+  body.playlists-route #playlist-detail-modal .playlist-detail-hero-actions {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    width: 100%;
+    margin-top: 8px;
+    padding: 0;
+  }
+
+  body.playlists-route #playlist-detail-modal .playlist-hero-actions-left,
+  body.playlists-route #playlist-detail-modal .playlist-hero-actions-right {
+    display: contents;
+  }
+
+  body.playlists-route #playlist-detail-modal .playlist-detail-hero-actions button {
+    width: 42px;
+    height: 42px;
+  }
+
+  body.playlists-route #playlist-detail-modal .playlist-detail-hero-actions .playlist-hero-play {
+    width: 54px;
+    height: 54px;
+  }
+
+  body.playlists-route #playlist-detail-modal #playlist-detail-body > .history-list {
+    height: auto;
+    overflow: visible;
+    padding-right: 0;
+  }
+}
 
 @media (min-width: 900px) {
   #playlist-detail-modal-overlay,
@@ -2464,10 +3116,13 @@ body.results-open .player-section {
      track list. The track list itself is no longer its own scroll
      region — it just grows with the body.
 
-     Scoped to #playlist-detail-modal so this does not touch the
-     Album page (which shares a few class names with the hero).
+     Shared by playlist and album detail pages so both routes use one
+     collection renderer geometry.
      ------------------------------------------------------------ */
-  #playlist-detail-modal #playlist-detail-body {
+  .collection-detail-body {
+    width: min(1100px, 100%);
+    margin: 0 auto;
+    box-sizing: border-box;
     /* Fill the available height under the header so we have a
        scroll viewport. The header (position:absolute above) and
        the body stack as siblings inside the modal. */
@@ -2490,7 +3145,7 @@ body.results-open .player-section {
   /* The track list used to be the scroll container. Letting it grow
      with the body means the grid row stretches to fit it, and that
      stretch is what gives the hero room to stick. */
-  #playlist-detail-modal #playlist-detail-body > .history-list {
+  .collection-detail-body > .history-list {
     min-width: 0;
     height: auto;
     overflow: visible;
@@ -2502,7 +3157,7 @@ body.results-open .player-section {
      calc(var(--topbar-h) + 24px) keeps the hero's top edge below the
      header (with a small breathing gap) so the back button and 3-dot
      menu never sit on top of the artwork. */
-  #playlist-detail-modal .playlist-detail-hero {
+  .collection-detail-body .playlist-detail-hero {
     position: sticky;
     top: calc(var(--topbar-h) + 24px);
     align-self: start;
@@ -2858,7 +3513,7 @@ body.results-open .player-section {
   .player-section .vol input[type=range]:focus-visible { opacity: 1; }
   .player-section .progress-track,
   .player-section .progress:hover .progress-track { height: 3px; }
-  .player-section .progress-fill { background: #ff0033; }
+  .player-section .progress-fill { background: var(--accent); }
 }
 
 /* ============================================================
@@ -3203,48 +3858,517 @@ body.results-open .player-section {
 main:has(#now-playing-section:not([hidden])) {
   padding-bottom: 0 !important;
 }
+
+/* Mobile now-playing redesign. Desktop player layout stays untouched. */
+@media (max-width: 899px) {
+  /* Remove queue UI from mobile player entirely. */
+  body #queue-section,
+  body #queue-modal-overlay,
+  body .np-page-right,
+  body .queue-toggle-btn,
+  body .mini-popup-queue-btn {
+    display: none !important;
+  }
+
+  body.now-playing-route {
+    background-color: #4a3546;
+    background-image: none;
+  }
+
+  body.now-playing-route #now-playing-section {
+    background: #4b1f13;
+    border: 1px solid rgba(255,255,255,.08);
+    box-sizing: border-box;
+    padding: 0 14px 24px;
+  }
+
+  body.now-playing-route .np-page {
+    min-height: 0;
+    height: auto;
+    gap: 0;
+    background: rgba(20, 7, 4, .2);
+  }
+
+  body.now-playing-route .np-page-left {
+    padding: 22px 15px 18px;
+    gap: 18px;
+    background: rgba(255,255,255,.035);
+  }
+
+  body.now-playing-route .np-page-art {
+    width: min(265px, calc(100vw - 78px));
+    box-shadow: 0 14px 34px rgba(0,0,0,.4);
+  }
+
+  body.now-playing-route .np-page-meta { max-width: 100%; }
+  body.now-playing-route .np-page-title {
+    font-size: 1.15rem;
+    margin-bottom: 5px;
+  }
+  body.now-playing-route .np-page-artist {
+    font-size: .8rem;
+    pointer-events: none;
+    user-select: none;
+    -webkit-user-select: none;
+    cursor: default;
+  }
+
+  body.now-playing-route .np-page-right {
+    min-height: 0;
+    max-height: none;
+    border-top: 1px solid rgba(255,255,255,.08);
+    background: rgba(255,255,255,.045);
+  }
+
+  body.now-playing-route .np-page-queue-head {
+    padding: 16px 22px 12px;
+    font-size: .64rem;
+  }
+
+  body.now-playing-route #np-queue-list {
+    padding: 0 0 8px;
+    overflow: visible;
+  }
+
+  /* Popup-open shell layers stay anchored to the mobile app frame. */
+  body:has(.mini-popup-overlay.open) {
+    overflow: hidden;
+  }
+  body:has(.mini-popup-overlay.open) main {
+    position: relative;
+  }
+  body:has(.mini-popup-overlay.open) main header {
+    position: absolute;
+    top: 0;
+    left: 0;
+    right: 0;
+    margin: 0;
+  }
+  body:has(.mini-popup-overlay.open) .player-section {
+    position: absolute;
+    left: 8px;
+    right: 8px;
+    bottom: 8px;
+  }
+}
+
+/* Persistent mobile chrome: visible on Home, routes, and open popups. */
+@media (max-width: 899px) {
+  body main {
+    padding-top: 57px;
+    padding-bottom: calc(var(--playbar-h-mobile) + 14px);
+  }
+
+  body main > header {
+    position: fixed !important;
+    top: 0;
+    left: 9px;
+    right: 9px;
+    width: auto;
+    margin: 0 auto !important;
+    z-index: 700;
+  }
+
+  body.now-playing-route main > header,
+  body:has(.mini-popup-overlay.open) main > header {
+    background: #2b1006 !important;
+    background-image: none !important;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+
+  body .player-section {
+    position: fixed !important;
+    left: 8px !important;
+    right: 8px !important;
+    bottom: 8px !important;
+    z-index: 650;
+  }
+
+  /* Keep compact player pinned while popup/page content scrolls. */
+  body.now-playing-route .player-section,
+  body:has(.mini-popup-overlay.open) .player-section {
+    position: fixed !important;
+    bottom: -8px !important;
+    margin-bottom: 0 !important;
+    transform: none !important;
+  }
+
+  /* Opening the expanded player hides the mini bar with a matching slide. */
+  body.now-playing-route .player-section {
+    opacity: 0 !important;
+    transform: translateY(100%) !important;
+    pointer-events: none !important;
+    transition: transform .32s cubic-bezier(.22,1,.36,1), opacity .2s ease !important;
+  }
+  body.now-playing-closing .player-section {
+    opacity: 1 !important;
+    transform: none !important;
+    pointer-events: auto !important;
+  }
+
+  body:has(.mini-popup-overlay.open) main > header {
+    position: fixed !important;
+  }
+  body:has(.mini-popup-overlay.open) .player-section {
+    position: fixed !important;
+  }
+
+  body .play-section {
+    top: 53px;
+  }
+
+  /* Expanded player occupies only space between persistent chrome layers. */
+  body.now-playing-route #now-playing-section {
+    position: fixed !important;
+    top: 57px;
+    left: 9px;
+    right: 9px;
+    bottom: calc(var(--playbar-h-mobile) + 14px);
+    width: auto;
+    height: auto;
+    min-height: 0;
+    max-height: none;
+    margin: 0;
+    overflow-y: auto;
+    z-index: 300;
+  }
+
+  body.now-playing-route .player-section {
+    display: grid !important;
+  }
+
+  /* Mobile player removal: no player bar, popup, expanded player, or queue
+     sheet. Desktop keeps the complete playback experience. */
+  body .player-section,
+  body #mini-player,
+  body .mini-popup-overlay,
+  body #now-playing-section,
+  body #queue-modal-overlay {
+    display: none !important;
+  }
+
+  body main,
+  body main:has(.player-section.is-visible) {
+    padding-bottom: 0 !important;
+  }
+
+  /* Mobile header is always opaque on every route and overlay state. */
+  body main > header,
+  body main > header::before {
+    background: #2b1006 !important;
+    background-color: #2b1006 !important;
+    background-image: none !important;
+    border-bottom-color: transparent !important;
+    opacity: 1 !important;
+  }
+
+  /* Full-width mobile shell: no page gutters or sideways document overflow.
+     Individual shelves may still scroll horizontally inside themselves. */
+  html,
+  body {
+    width: 100% !important;
+    max-width: 100% !important;
+    margin: 0 !important;
+    padding-left: 0 !important;
+    padding-right: 0 !important;
+    overflow-x: hidden !important;
+  }
+  body { display: block !important; }
+  body main {
+    width: 100% !important;
+    max-width: none !important;
+    margin-left: 0 !important;
+    margin-right: 0 !important;
+    overflow: visible !important;
+  }
+  body main > header {
+    left: 0 !important;
+    right: 0 !important;
+  }
+
+  body.home-route,
+  body.home-route main {
+    height: auto !important;
+    min-height: 100dvh;
+    overflow-y: auto !important;
+    overscroll-behavior-y: auto !important;
+  }
+
+  /* One stable mobile header box across Home, search, library, artist, and
+     album routes. */
+  body main > header {
+    position: fixed !important;
+    top: 0 !important;
+    left: 0 !important;
+    right: 0 !important;
+    width: 100% !important;
+    height: 57px !important;
+    min-height: 57px !important;
+    margin: 0 !important;
+    padding: 4px 14px 5px !important;
+    box-sizing: border-box !important;
+    transform: none !important;
+  }
+  body main {
+    padding-top: 57px !important;
+  }
+  body .play-section {
+    top: 57px !important;
+  }
+  body header #jam-btn {
+    display: none !important;
+  }
+  body header #history-modal-btn {
+    display: none !important;
+  }
+  .mobile-search-toggle {
+    display: inline-flex !important;
+    width: 36px;
+    height: 36px;
+    padding: 9px;
+    align-items: center;
+    justify-content: center;
+    background: transparent;
+    border: 1px solid rgba(255,255,255,.2);
+    border-radius: 2px !important;
+    color: var(--text);
+  }
+  .mobile-search-toggle svg { width: 18px; height: 18px; }
+  body:not(.mobile-search-open) .play-section {
+    display: none !important;
+  }
+  body.mobile-search-open::after {
+    content: '';
+    position: fixed;
+    top: 57px;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 680;
+    background: rgba(0,0,0,.72);
+  }
+  body.mobile-search-open .play-section {
+    display: flex !important;
+    position: fixed !important;
+    top: 57px !important;
+    left: 0 !important;
+    right: 0 !important;
+    width: 100% !important;
+    max-width: none !important;
+    margin: 0 !important;
+    padding: 8px 14px 10px !important;
+    z-index: 700 !important;
+    background: #050505 !important;
+    border-radius: 0 0 8px 8px;
+    box-sizing: border-box;
+    contain: none !important;
+    overflow: visible !important;
+  }
+  body.mobile-search-open .play-section .search-wrap {
+    width: 100%;
+    overflow: visible !important;
+  }
+  body.mobile-search-open .suggest-list {
+    z-index: 900 !important;
+    max-height: min(420px, calc(100dvh - 120px));
+  }
+  body #device-sidebar-wrapper {
+    flex: 0 0 140px !important;
+    width: 140px !important;
+    min-width: 0 !important;
+  }
+  body .sidebar-new-playlist-container,
+  body .sidebar-new-playlist {
+    width: 180px !important;
+    max-width: 180px !important;
+  }
+
+  /* Manual horizontal drags follow the finger; no snap or CSS scrolling
+     animation changes the user's swipe speed. */
+  body .explore-grid {
+    scroll-snap-type: none !important;
+    scroll-behavior: auto !important;
+    -webkit-overflow-scrolling: touch;
+  }
+  body.home-route .home-shelf-content {
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+    overflow-x: auto;
+    overflow-y: hidden;
+    touch-action: auto;
+    overscroll-behavior-x: contain;
+    scroll-snap-type: none;
+    scroll-padding-inline: 0;
+  }
+  body.home-route .home-shelf-viewport {
+    width: auto;
+    max-width: none;
+    margin: 0 16px;
+    overflow: hidden;
+  }
+  body.home-route .home-shelf-viewport .home-shelf-content {
+    width: 100%;
+    max-width: 100%;
+    padding-left: 0;
+    padding-right: 0;
+  }
+  body.home-route,
+  body.home-route main,
+  body.home-route #home-section,
+  body.home-route #home-rows {
+    max-width: 100%;
+    overflow-x: hidden;
+  }
+  body .explore-card {
+    scroll-snap-align: none !important;
+  }
+
+  /* Artist entities use circular artwork on mobile, regardless of the feed
+     shelf layout returned by the server. */
+  body .home-item[data-kind="artist"] {
+    width: 120px !important;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    text-align: center;
+  }
+  body .home-item[data-kind="artist"] .home-item-img-wrapper {
+    width: 100%;
+    aspect-ratio: 1;
+    border-radius: 50% !important;
+    overflow: hidden;
+  }
+  body .home-item[data-kind="artist"] .home-item-img {
+    width: 100%;
+    height: 100%;
+    border-radius: 50% !important;
+  }
+  body .home-item[data-kind="artist"] .home-item-subtitle {
+    display: none;
+  }
+
+  /* Mobile drawer opens from left edge. */
+  body .sidebar {
+    position: fixed !important;
+    width: 260px !important;
+    box-sizing: border-box !important;
+    left: 0 !important;
+    right: auto !important;
+    margin: 0 !important;
+    inset-inline-start: 0 !important;
+    inset-inline-end: auto !important;
+    top: 49px !important;
+    height: calc(100dvh - 49px) !important;
+    z-index: 600 !important;
+    border-left: 0 !important;
+    border-right: 1px solid var(--border) !important;
+    transform: translateX(-100%) !important;
+  }
+  body .sidebar.open {
+    transform: translateX(0) !important;
+  }
+  body .sidebar-overlay {
+    display: none;
+    top: 49px !important;
+    left: 0 !important;
+    right: 0 !important;
+    bottom: 0 !important;
+    background: rgba(0,0,0,.82) !important;
+    z-index: 550 !important;
+  }
+  body .sidebar-overlay.open {
+    display: block !important;
+    opacity: 1 !important;
+  }
+
+  body:has(.sidebar.open)::after {
+    content: '';
+    position: fixed;
+    top: 49px;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 540;
+    background: rgba(0,0,0,.88);
+    pointer-events: none;
+  }
+
+  body .sidebar .sidebar-header {
+    display: block !important;
+    height: 0 !important;
+    min-height: 0 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    border: 0 !important;
+    overflow: hidden !important;
+  }
+  body .sidebar .sidebar-header h2,
+  body .sidebar .sidebar-close {
+    display: none !important;
+  }
+}
 /* Keep main's horizontal padding on the routed player. The now-playing panel
    is fixed to the viewport and does not need the old bleed compensation;
    removing this padding shifts the header actions against the right edge. */
 
 /* ---- Album detail page ---- */
-#album-section { width: 100%; max-width: none; margin: 0; padding: 24px 32px 96px; background: transparent; border: 0; border-radius: 0; box-shadow: none; }
-.album-back { border: 0; background: none; color: var(--muted); padding: 8px 0; cursor: pointer; }
-.album-back:hover { color: var(--text); }
-.album-hero { display: flex; align-items: end; gap: 30px; min-height: 280px; padding: 22px 0 34px; }
-.album-hero > img, .album-art-placeholder { width: 260px; height: 260px; flex: none; object-fit: cover; border-radius: 10px; background: var(--surface); box-shadow: 0 18px 50px rgba(0,0,0,.45); }
-.album-hero-info > span { color: var(--muted); font-size: .72rem; text-transform: uppercase; letter-spacing: .12em; }
-.album-hero-info h1 { margin: 8px 0 12px; font-size: clamp(2rem, 5vw, 4rem); line-height: 1; }
 .album-artist-link { border: 0; padding: 0; background: none; color: var(--text); font-weight: 700; cursor: pointer; }
 .album-artist-link:hover { text-decoration: underline; }
-.album-hero-info p { margin: 7px 0 20px; color: var(--muted); font-size: .8rem; }
-.album-description { max-width: 560px; color: var(--muted); font-size: .8rem; line-height: 1.5; }
-.album-play-all { min-width: 0; width: 54px; height: 54px; padding: 0; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; }
-.album-play-all svg { width: 25px; height: 25px; }
-.album-track-list { border-top: none; }
-.album-track { width: 100%; display: flex; align-items: center; gap: 16px; min-height: 56px; padding: 9px 14px; border: 0; background: transparent; color: var(--text); text-align: left; cursor: pointer; border-radius: 6px; }
-.album-track:hover { background: rgba(255,255,255,.055); }
-.album-track-number { width: 24px; color: var(--muted); text-align: center; }
-.album-track:hover .album-track-number { font-size: 0; }
-.album-track:hover .album-track-number::after { content: '▶'; color: var(--text); font-size: 13px; }
-.album-track-info { min-width: 0; flex: 1; }
-.album-track-info strong, .album-track-info span { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.album-track-info strong { font-size: .86rem; }
-.album-track-info span { margin-top: 3px; color: var(--muted); font-size: .72rem; }
-@media (min-width: 900px) {
-  #album-section { display: grid; grid-template-columns: minmax(260px, 340px) minmax(0, 1fr); grid-template-rows: auto 1fr; column-gap: clamp(44px, 6vw, 90px); align-items: start; padding-bottom: 160px; }
-  .album-back { grid-column: 1 / -1; }
-  .album-hero { flex-direction: column; align-items: center; text-align: center; min-height: 0; padding-top: 28px; }
-  .album-hero-info { display: flex; flex-direction: column; align-items: center; }
-  .album-hero-info h1 { font-size: clamp(2rem, 3.5vw, 3.2rem); }
-  .album-track-list { margin-top: 28px; }
-}
-@media (max-width: 700px) {
-  #album-section { padding: 18px 16px 140px; }
-  .album-hero { align-items: center; flex-direction: column; text-align: center; }
-  .album-hero > img, .album-art-placeholder { width: min(72vw, 280px); height: auto; aspect-ratio: 1; }
-}
 
+/* Compact mobile player only. Desktop playbar remains unchanged. */
+@media (max-width: 899px) {
+  :root { --playbar-h-mobile: 84px; }
+
+  .player-section,
+  main.has-queue .player-section,
+  body.results-open .player-section {
+    height: var(--playbar-h-mobile);
+    min-height: var(--playbar-h-mobile);
+    padding: 7px 10px 6px;
+  }
+
+  .player-section .np-art {
+    width: 34px;
+    height: 34px;
+  }
+  .player-section .transport { gap: 0; }
+  .player-section .transport button,
+  .player-section .pp-btn,
+  .player-section .pp-btn:hover {
+    width: 34px;
+    height: 34px;
+    min-width: 34px;
+    min-height: 34px;
+  }
+  .player-section .pp-btn svg { width: 27px; height: 27px; }
+  .player-section .transport button svg { width: 15px; height: 15px; }
+
+  main:has(.player-section.is-visible) {
+    padding-bottom: calc(var(--playbar-h-mobile) + 12px);
+  }
+
+  /* Mobile player: keep only previous / play / next transport. */
+  .player-section .player-right,
+  .player-section .np-like-btn,
+  .player-section .np-ytm-btn,
+  .player-section .np-shuffle-btn,
+  .player-section .np-more-wrap,
+  .player-section .player-actions,
+  .player-section .player-expand-btn {
+    display: none !important;
+  }
+
+  .player-section .np-artist,
+  .player-section .np-artist .artist-name {
+    pointer-events: none;
+    user-select: none;
+    -webkit-user-select: none;
+    cursor: default;
+  }
+}
 /* ============================================================
    Explore page — card grid
    ============================================================ */
@@ -3980,25 +5104,6 @@ body.library-route #nav-library-btn::before {
   border-radius: 0;
 }
 
-/* Album, library playlist, Liked Music and curated playlist details share one
-   collection layout. Album markup keeps its route-specific IDs for routing,
-   while these rules make its hero and track rows match playlist detail. */
-#album-section {
-  padding: 18px 20px 140px;
-}
-
-#album-section .album-hero.playlist-detail-hero {
-  flex-direction: row;
-  min-height: 0;
-  align-items: flex-start;
-  text-align: left;
-  padding: 0 0 18px;
-}
-
-#album-section .album-hero .playlist-collage {
-  width: 240px;
-  height: 240px;
-}
 .library-card-play.home-play-btn {
   width: 44px;
   height: 44px;
@@ -4136,143 +5241,22 @@ body.library-route #nav-library-btn::before {
   .mood-page-skeleton-grid { grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); }
 }
 
-/* Use a proper large collection cover for playlists, albums, singles, and
-   Liked Music. Keep the shared hero dimensions in sync across all routes. */
-.playlist-detail-hero > .playlist-collage {
-  width: 240px;
-  height: 240px;
-}
-
-#album-section .playlist-detail-hero-info {
-  align-items: flex-start;
-  text-align: left;
-}
-
-#album-section .playlist-detail-hero-name {
-  margin: 0;
-  font-size: 1.1rem;
-}
-
-#album-section .album-artist-link {
-  color: var(--text);
-  font-size: .78rem;
-}
-
-#album-section .playlist-detail-hero-meta {
-  font-size: .88rem;
-  opacity: .9;
-}
-
-#album-section .playlist-detail-hero-actions {
-  display: flex;
-  width: 100%;
-  justify-content: center;
-  margin-top: 7px;
-}
-
-#album-section .album-play-all {
-  display: inline-flex;
-  width: 54px;
-  height: 54px;
-  min-width: 0;
-  align-items: center;
-  justify-content: center;
-  margin: 0;
-  padding: 0;
-  border: 0;
-  border-radius: 50%;
-  background: #fff;
-  color: #080808;
-  cursor: pointer;
-}
-
-#album-section .album-play-all svg {
-  width: 23px;
-  height: 23px;
-}
-
-#album-section .album-track-list {
-  margin: 0;
-  border: 0;
-}
-
-#album-section .result-swipe-wrapper {
-  background: transparent;
-}
-
-#album-section .history-item {
-  box-sizing: border-box;
-  min-height: 76px;
-  padding: 9px 10px;
-  border-bottom: 0;
-  border-radius: 6px;
-  background: transparent;
-}
-
-#album-section .history-item:hover {
-  background: rgba(255,255,255,.06);
-}
-
-#album-section .playlist-track-art,
-#album-section .queue-thumb {
-  width: 60px;
-  height: 60px;
-}
-
-#album-section .playlist-track-art {
-  position: relative;
-  flex: 0 0 60px;
-  overflow: hidden;
-  border-radius: 4px;
-}
-
-#album-section .playlist-track-art::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  background: rgba(0,0,0,.52) center / 25px no-repeat
-    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='white'%3E%3Cpolygon points='8,5 19,12 8,19'/%3E%3C/svg%3E");
-  opacity: 0;
-  transition: opacity .16s ease;
-  pointer-events: none;
-}
-
-#album-section .album-track:hover .playlist-track-art::after {
-  opacity: 1;
-}
-
-#album-section .result-like-btn,
-#album-section .result-more-btn {
-  width: 42px;
-  height: 42px;
-  min-width: 42px;
-}
-#album-section .result-like-btn::before,
-#album-section .result-more-btn::before {
-  width: 20px;
-  height: 20px;
-}
-#album-section .result-like-btn > svg,
-#album-section .result-more-btn > svg {
-  width: 20px;
-  height: 20px;
-}
-#playlist-detail-modal .history-item {
+.collection-detail-body .history-item {
   min-height: 76px;
   padding: 9px 10px;
   transition: background .16s ease, box-shadow .16s ease;
 }
-#playlist-detail-modal .history-item:hover,
-#playlist-detail-modal .history-item:focus-within {
+.collection-detail-body .history-item:hover,
+.collection-detail-body .history-item:focus-within {
   background: rgba(255,255,255,.09);
   box-shadow: inset 3px 0 0 var(--accent);
 }
-#playlist-detail-modal .playlist-track-art,
-#playlist-detail-modal .queue-thumb {
+.collection-detail-body .playlist-track-art,
+.collection-detail-body .queue-thumb {
   width: 60px;
   height: 60px;
 }
-#playlist-detail-modal .playlist-track-art {
+.collection-detail-body .playlist-track-art {
   position: relative;
   flex: 0 0 60px;
   overflow: hidden;
@@ -4306,16 +5290,16 @@ body.library-route #nav-library-btn::before {
 .result-swipe-wrapper.current-track.playing .playlist-track-playback-indicator .music-bars {
   display: flex;
 }
-#playlist-detail-modal .result-like-btn,
-#playlist-detail-modal .result-more-btn {
+.collection-detail-body .result-like-btn,
+.collection-detail-body .result-more-btn {
   width: 42px;
   height: 42px;
   min-width: 42px;
 }
-#playlist-detail-modal .result-like-btn::before,
-#playlist-detail-modal .result-more-btn::before,
-#playlist-detail-modal .result-like-btn > svg,
-#playlist-detail-modal .result-more-btn > svg {
+.collection-detail-body .result-like-btn::before,
+.collection-detail-body .result-more-btn::before,
+.collection-detail-body .result-like-btn > svg,
+.collection-detail-body .result-more-btn > svg {
   width: 20px;
   height: 20px;
 }
@@ -4367,101 +5351,1115 @@ body.library-route #nav-library-btn::before {
   text-decoration-color: currentColor;
 }
 
-@media (max-width: 480px) {
-  #album-section .album-hero .playlist-collage {
-    width: 90px;
-    height: 90px;
+/* Compact mobile player grid. */
+@media (max-width: 899px) {
+  body .player-section,
+  body .player-section.is-collapsed {
+    display: grid !important;
+    position: fixed !important;
+    left: 0 !important;
+    right: 0 !important;
+    bottom: 0 !important;
+    width: 100% !important;
+    height: 82px !important;
+    min-height: 82px !important;
+    padding: 8px 10px 5px !important;
+    margin: 0 !important;
+    box-sizing: border-box !important;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-rows: minmax(0, 1fr);
+    grid-template-areas: "np transport";
+    gap: 0 8px;
+    /* The progress track is the player edge on mobile. A second border here
+       creates a detached-looking line while the page is being scrolled. */
+    border: 0 !important;
+    border-radius: 0 !important;
+    background: #111 !important;
+    z-index: 650 !important;
+    transform: none !important;
+  }
+
+  body .player-section .player-left {
+    grid-area: np;
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  body .player-section .np-art {
+    width: 38px;
+    height: 38px;
+    flex: 0 0 38px;
+  }
+  body .player-section .np-info { min-width: 0; }
+  body .player-section .np-title,
+  body .player-section .np-artist {
+    max-width: 100%;
+    font-size: .72rem;
+  }
+
+  body .player-section .player-center { display: contents; }
+  body .player-section .transport {
+    grid-area: transport;
+    display: flex;
+    align-items: center;
+    gap: 2px;
+  }
+  body .player-section .transport [data-action="previous"] { display: none !important; }
+  body .player-section .transport button,
+  body .player-section .pp-btn,
+  body .player-section .pp-btn:hover {
+    width: 34px !important;
+    height: 34px !important;
+    min-width: 34px !important;
+    min-height: 34px !important;
+    padding: 0 !important;
+  }
+  body .player-section .pp-btn svg { width: 25px; height: 25px; }
+  body .player-section .transport button[data-action="next"] svg { width: 15px; height: 15px; }
+
+  body .player-section .progress {
+    grid-area: progress;
+    position: static;
+    width: auto;
+    margin: 0 !important;
+    display: block !important;
+  }
+  body .player-section .progress-track,
+  body .player-section .progress:hover .progress-track {
+    height: 3px !important;
+    padding: 0;
+    background: #333 !important;
+    border-radius: 3px;
+    box-shadow: none;
+  }
+  body .player-section .progress-fill { background: var(--accent) !important; }
+  body .player-section .progress-times { display: none !important; }
+  body .player-section .progress {
+    position: absolute !important;
+    top: 0 !important;
+    left: 0 !important;
+    right: 0 !important;
+    width: auto !important;
+    height: 3px !important;
+    margin: 0 !important;
+    z-index: 2;
+  }
+  body .player-section #progress {
+    position: fixed !important;
+    top: auto !important;
+    bottom: calc(82px - 10px) !important;
+    left: 0 !important;
+    right: 0 !important;
+    display: block !important;
+    width: 100% !important;
+    height: 20px !important;
+    margin: 0 !important;
+    z-index: 652 !important;
+  }
+  body .player-section #progress-track {
+    width: 100% !important;
+  }
+  /* Keep the real progress element visible when player.js removes its
+     desktop-only layout styles. It remains inside the fixed mobile bar and
+     is painted above the bar background. */
+  body .player-section #progress:not([hidden]) {
+    display: block !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+  }
+  body .player-section #progress-track {
+    display: block !important;
+    position: relative !important;
+    height: 20px !important;
+    min-height: 20px !important;
+    padding: 0 !important;
+    background: linear-gradient(
+      to bottom,
+      transparent calc(50% - 1.5px),
+      #333 calc(50% - 1.5px),
+      #333 calc(50% + 1.5px),
+      transparent calc(50% + 1.5px)
+    ) !important;
+    background-clip: border-box !important;
+    box-shadow: none !important;
+    overflow: visible !important;
+    touch-action: none;
+  }
+  body .player-section #progress-fill {
+    display: block !important;
+    top: 50% !important;
+    height: 3px !important;
+    background: var(--accent) !important;
+    transform: translateY(-50%) !important;
+  }
+  body .player-section #progress-handle {
+    display: block !important;
+    top: 50% !important;
+    width: 14px !important;
+    height: 14px !important;
+    border: 2px solid #111 !important;
+    border-radius: 50% !important;
+    background: var(--accent) !important;
+    box-shadow: 0 1px 5px rgba(0,0,0,.65) !important;
+    opacity: 1 !important;
+    visibility: visible !important;
+    transform: translate(-50%, -50%) scale(1) !important;
+    z-index: 3 !important;
+  }
+  body .player-section #progress-track.dragging #progress-fill,
+  body .player-section #progress-track.dragging #progress-handle {
+    transition: none !important;
+  }
+  /* The legacy mini-player uses a mirrored fill updated by player.js. Keep
+     that layer pinned to its own top edge when that player is active. */
+  body #mini-player.visible {
+    border-top: 0 !important;
+  }
+  body #mini-player.visible .mini-player-progress {
+    display: block !important;
+    top: 0 !important;
+    height: 3px !important;
+    z-index: 2 !important;
+  }
+  body .player-section .player-right,
+  body .player-section .np-like-btn,
+  body .player-section .np-ytm-btn,
+  body .player-section .np-shuffle-btn,
+  body .player-section .np-more-wrap,
+  body .player-section .player-expand-btn {
+    display: none !important;
+  }
+
+  /* The compact player is fixed 8px above the viewport and is 82px tall.
+     Reserve that exact footprint in the document so the final playlist/search
+     rows can scroll completely above the player instead of ending beneath it. */
+  body main {
+    min-height: 100dvh !important;
+    height: auto !important;
+    overflow: visible !important;
+    padding-bottom: calc(82px + 8px + 20px + env(safe-area-inset-bottom, 0px)) !important;
+  }
+
+  body.playlists-route,
+  body.album-route,
+  body.artist-route,
+  body.artist-songs-route,
+  body.results-open {
+    height: auto !important;
+    min-height: 100dvh !important;
+    overflow-y: auto !important;
+    overflow-x: hidden !important;
+    touch-action: pan-y !important;
+  }
+  html:has(body.playlists-route),
+  html:has(body.album-route),
+  html:has(body.artist-route),
+  html:has(body.artist-songs-route),
+  html:has(body.results-open) {
+    height: auto !important;
+    min-height: 100dvh !important;
+    overflow-y: auto !important;
+    overflow-x: hidden !important;
   }
 }
 
-@media (min-width: 900px) {
-  #album-section {
-    width: min(1160px, 100%);
-    height: calc(100vh - var(--topbar-h));
-    margin: 0 auto;
-    padding: 34px 32px 28px;
-    display: grid;
-    grid-template-columns: 300px minmax(0, 1fr);
-    grid-template-rows: minmax(0, 1fr);
-    gap: clamp(44px, 6vw, 86px);
+/* Mobile expanded-player entrance animation. */
+@media (max-width: 899px) {
+  body.now-playing-route {
+    overflow: hidden !important;
+  }
+  body #now-playing-section:not([hidden]) {
+    display: block !important;
+    position: fixed !important;
+    top: 0 !important;
+    left: 0 !important;
+    right: 0 !important;
+    bottom: 82px !important;
+    width: 100% !important;
+    height: auto !important;
+    max-height: none !important;
+    margin: 0 !important;
+    overflow-y: auto !important;
+    z-index: 1000 !important;
+    box-sizing: border-box !important;
+    background: #0b0503 !important;
+    isolation: isolate;
+    opacity: 0;
+    transform: translateY(100%);
+    transition: transform .32s cubic-bezier(.22,1,.36,1), opacity .2s ease;
+    pointer-events: none;
+  }
+  body.now-playing-route #now-playing-section:not([hidden]) {
+    opacity: 1;
+    transform: translateY(0);
+    pointer-events: auto;
+  }
+
+  /* Page and player meet flush; player paints above the overlay at bottom. */
+  body.now-playing-route #now-playing-section,
+  body.now-playing-route #now-playing-section .np-page,
+  body .player-section {
+    border-radius: 0 !important;
+    margin-bottom: 0 !important;
+  }
+  body.now-playing-route #now-playing-section {
+    bottom: 0 !important;
+  }
+
+  body.now-playing-route .np-page,
+  body.now-playing-route .np-page-left {
+    background: transparent !important;
+    border: 0 !important;
+    box-shadow: none !important;
+  }
+  body.now-playing-route #now-playing-section,
+  body.now-playing-route .np-page::before,
+  body.now-playing-route .np-page::after {
+    background: #0b0503 !important;
+    background-image: none !important;
+  }
+  body.now-playing-route .np-page::before,
+  body.now-playing-route .np-page::after {
+    display: none !important;
+  }
+  body.now-playing-route .np-page,
+  body.now-playing-route .np-page-art,
+  body.now-playing-route .np-page-art.image-loading {
+    filter: none !important;
+    transform: none !important;
+    transition: none !important;
+  }
+
+  /* Keep header geometry identical while player opens/closes. */
+  body.now-playing-route main > header,
+  body.now-playing-closing main > header {
+    top: 0 !important;
+    height: 57px !important;
+    min-height: 57px !important;
+    padding: 4px 14px 5px !important;
+    background: #2b1006 !important;
+    background-image: none !important;
+  }
+
+  body main > header { z-index: 900 !important; }
+  /* The expanded player is the top full-screen layer. */
+  body .sidebar { z-index: 800 !important; }
+  body .sidebar-overlay { z-index: 750 !important; }
+  body:has(.sidebar.open)::after { z-index: 740 !important; }
+  body.now-playing-route main > header > .brand,
+  body.now-playing-closing main > header > .brand {
+    position: static !important;
+    transform: none !important;
+  }
+
+  /* Same header brand geometry before and during player popup. */
+  body main > header > .brand {
+    position: static !important;
+    transform: none !important;
+    gap: 10px !important;
+  }
+  body main > header > .brand h1 {
+    max-width: 72px !important;
+    font-size: .72rem !important;
+    line-height: 1.25 !important;
+    white-space: normal !important;
+  }
+  body main > header .rail-toggle-btn {
+    transform: none !important;
+    margin-left: 0 !important;
+    width: 28px !important;
+    height: 28px !important;
+    min-width: 28px !important;
+    min-height: 28px !important;
+    padding: 4px !important;
+  }
+  body main > header > .brand { flex: 0 0 auto !important; }
+  body main > header .header-actions {
+    flex: 0 0 auto !important;
+    gap: 5px !important;
+  }
+  body main > header .profile-menu-trigger,
+  body main > header .header-history-btn,
+  body main > header .mobile-search-toggle {
+    width: 36px !important;
+    height: 36px !important;
+    min-width: 36px !important;
+    min-height: 36px !important;
+    padding: 8px !important;
+    box-sizing: border-box !important;
+    transform: none !important;
+  }
+  body main > header .profile-menu-trigger svg,
+  body main > header .header-history-btn svg,
+  body main > header .mobile-search-toggle svg {
+    width: 18px !important;
+    height: 18px !important;
+  }
+
+  /* Same compact player geometry before and during popup. */
+  body.now-playing-route .player-section,
+  body.now-playing-closing .player-section {
+    height: 82px !important;
+    min-height: 82px !important;
+    padding: 8px 10px 5px !important;
+    border-radius: 0 !important;
+    bottom: 0 !important;
+    transform: none !important;
+  }
+
+  /* Reverse the opening slide during route close. */
+  body.now-playing-closing #now-playing-section:not([hidden]) {
+    opacity: 1 !important;
+    transform: translateY(100%) !important;
+    pointer-events: none !important;
+    transition: transform .32s cubic-bezier(.22,1,.36,1) !important;
+  }
+
+  /* Final cascade: mini player exits while expanded player is open. */
+  body.now-playing-route .player-section {
+    opacity: 0 !important;
+    transform: translateY(100%) !important;
+    pointer-events: none !important;
+    transition: transform .32s cubic-bezier(.22,1,.36,1), opacity .2s ease !important;
+  }
+  body.now-playing-closing .player-section {
+    opacity: 1 !important;
+    transform: none !important;
+    pointer-events: auto !important;
+  }
+
+  body.now-playing-route .mobile-player-close,
+  body.now-playing-closing .mobile-player-close {
+    display: inline-flex !important;
+    width: 44px !important;
+    height: 44px !important;
+    min-width: 44px !important;
+    min-height: 44px !important;
+    padding: 12px !important;
+    align-items: center;
+    justify-content: center;
+    background: transparent;
+    border: 0;
+    color: var(--text);
+  }
+  body.now-playing-route .mobile-player-close svg,
+  body.now-playing-closing .mobile-player-close svg {
+    width: 19px;
+    height: 19px;
+  }
+  body.now-playing-route .mobile-player-close,
+  body.now-playing-closing .mobile-player-close {
+    position: absolute !important;
+    top: 4px !important;
+    left: 6px !important;
+    z-index: 920 !important;
+  }
+  body.now-playing-route .mobile-player-more,
+  body.now-playing-closing .mobile-player-more {
+    position: absolute !important;
+    top: 4px !important;
+    right: 6px !important;
+    z-index: 920 !important;
+    display: inline-flex !important;
+    align-items: center;
+    justify-content: center;
+    width: 44px !important;
+    height: 44px !important;
+    min-width: 44px !important;
+    min-height: 44px !important;
+    padding: 12px !important;
+    border: 0;
+    background: transparent;
+    color: var(--text);
+  }
+  body.now-playing-route .mobile-player-more svg,
+  body.now-playing-closing .mobile-player-more svg {
+    width: 19px;
+    height: 19px;
+  }
+  body .mobile-now-playing-menu {
+    display: none;
+    position: fixed;
+    top: 54px;
+    right: 10px;
+    z-index: 1200;
+    min-width: 190px;
+    padding: 4px 0;
+    border: 1px solid rgba(255,255,255,.12);
+    border-radius: 0;
+    background: #282828;
+    box-shadow: 0 12px 32px rgba(0,0,0,.55);
+  }
+  body .mobile-now-playing-menu.mobile-open { display: block; }
+  body .mobile-now-playing-menu button,
+  body .mobile-now-playing-menu a {
+    display: flex !important;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 10px;
+    width: 100%;
+    padding: 11px 14px;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    color: #fff;
+    font: inherit;
+    font-size: .88rem;
+    text-align: left;
+    text-decoration: none;
+    cursor: pointer;
+  }
+  body .mobile-now-playing-menu button svg,
+  body .mobile-now-playing-menu a svg {
+    flex: none;
+    width: 16px;
+    height: 16px;
+    color: var(--muted);
+  }
+  body .mobile-now-playing-menu button:hover,
+  body .mobile-now-playing-menu a:hover {
+    background: rgba(255,255,255,.08);
+  }
+  /* Hamburger stays in the header while the player opens/closes. */
+  body.now-playing-route main > header .rail-toggle-btn,
+  body.now-playing-closing main > header .rail-toggle-btn {
+    display: inline-flex !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+  }
+  body.now-playing-route .np-page-art,
+  body.now-playing-closing .np-page-art {
+    width: min(230px, calc(100vw - 90px)) !important;
+    margin-top: 34px !important;
+    cursor: default;
+  }
+  body.now-playing-route .np-page-art-overlay,
+  body.now-playing-closing .np-page-art-overlay {
+    display: none !important;
+  }
+
+  body.now-playing-route .mobile-np-controls,
+  body.now-playing-closing .mobile-np-controls {
+    display: flex !important;
+    align-items: center;
+    justify-content: center;
+    gap: 18px;
+    padding-inline: 10px;
+    box-sizing: border-box;
+    margin-top: 18px;
+  }
+  body.now-playing-route .mobile-np-controls button,
+  body.now-playing-closing .mobile-np-controls button {
+    width: 42px;
+    height: 42px;
+    min-width: 42px;
+    min-height: 42px;
+    padding: 9px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    color: var(--text);
+  }
+  body.now-playing-route .mobile-np-controls button svg,
+  body.now-playing-closing .mobile-np-controls button svg {
+    width: 22px;
+    height: 22px;
+  }
+  body.now-playing-route .mobile-np-controls #mobile-np-like.liked,
+  body.now-playing-closing .mobile-np-controls #mobile-np-like.liked {
+    color: var(--accent);
+  }
+  body.now-playing-route .mobile-np-controls #mobile-np-play,
+  body.now-playing-closing .mobile-np-controls #mobile-np-play {
+    width: 64px;
+    height: 64px;
+    min-width: 64px;
+    min-height: 64px;
+    padding: 14px;
+  }
+  body.now-playing-route .mobile-np-controls #mobile-np-play svg,
+  body.now-playing-closing .mobile-np-controls #mobile-np-play svg {
+    width: 36px;
+    height: 36px;
+  }
+  body.now-playing-route .mobile-np-pause-icon,
+  body.now-playing-closing .mobile-np-pause-icon { display: none; }
+
+  body.now-playing-route .mobile-np-progress,
+  body.now-playing-closing .mobile-np-progress {
+    display: block !important;
+    width: min(340px, calc(100% - 10px));
+    margin: 20px auto 0;
+    box-sizing: border-box;
+    align-self: center;
+  }
+  body.now-playing-route .mobile-np-progress .progress-track,
+  body.now-playing-closing .mobile-np-progress .progress-track {
+    position: relative;
+    width: 100%;
+    height: 4px;
+    padding: 0;
+    background: #3a302b;
+    border-radius: 3px;
+    cursor: pointer;
+    box-sizing: border-box;
+  }
+  body.now-playing-route .mobile-np-progress .progress-fill,
+  body.now-playing-closing .mobile-np-progress .progress-fill {
+    position: absolute;
+    top: 50%;
+    left: 0;
+    bottom: auto;
+    width: 0;
+    height: 4px;
+    background: var(--accent);
+    border-radius: 3px;
+    transform: translateY(-50%);
+    box-sizing: border-box;
+  }
+  body.now-playing-route .mobile-np-progress .progress-handle,
+  body.now-playing-closing .mobile-np-progress .progress-handle {
+    display: block !important;
+    position: absolute;
+    top: 50%;
+    left: 0;
+    width: 14px;
+    height: 14px;
+    background: var(--accent);
+    border: 2px solid #0b0503;
+    border-radius: 50%;
+    transform: translate(-50%, -50%);
+    pointer-events: none;
+    z-index: 2;
+    opacity: 1 !important;
+    visibility: visible !important;
+  }
+  body.now-playing-route .mobile-np-progress-times,
+  body.now-playing-closing .mobile-np-progress-times {
+    display: flex;
+    justify-content: space-between;
+    margin-top: 6px;
+    color: var(--muted);
+    font-size: .66rem;
+    font-variant-numeric: tabular-nums;
+  }
+}
+
+@media (max-width: 899px) {
+  body.now-playing-route .mobile-queue-label,
+  body.now-playing-closing .mobile-queue-label {
+    display: flex !important;
+    align-items: center;
+    justify-content: center;
+    width: 140px;
+    height: 36px;
+    margin-top: 8px;
+    border: none;
+    box-sizing: border-box;
+    color: var(--text);
+    font-size: .78rem;
+    font-weight: 700;
+    letter-spacing: .08em;
+    text-align: center;
+    text-transform: uppercase;
+    cursor: grab;
+    touch-action: none;
+    user-select: none;
+    transform: translateX(-30px);
+  }
+  body.now-playing-route .mobile-queue-drag-region,
+  body.now-playing-closing .mobile-queue-drag-region {
+    display: block !important;
+    position: relative;
+    width: 100%;
+    touch-action: none;
+    user-select: none;
+  }
+  body.now-playing-route .mobile-queue-label:active,
+  body.now-playing-closing .mobile-queue-label:active {
+    cursor: grabbing;
+  }
+  body.now-playing-route .mobile-queue-drag-region.queue-dragging .mobile-queue-label,
+  body.now-playing-closing .mobile-queue-drag-region.queue-dragging .mobile-queue-label {
+    color: var(--accent);
+    background: linear-gradient(to right, rgba(232, 89, 12, .28) var(--queue-drag-fill, 0%), transparent var(--queue-drag-fill, 0%));
+  }
+  body.now-playing-route .mobile-inline-queue,
+  body.now-playing-closing .mobile-inline-queue {
+    display: block !important;
+    position: relative;
+    width: calc(100% + 20px);
+    margin-left: -20px;
+    max-height: 220px;
+    margin-top: -10px;
     overflow: hidden;
+    pointer-events: none;
+    -webkit-mask-image: none;
+    mask-image: none;
+  }
+  body.now-playing-route .mobile-inline-queue > .queue-swipe-wrapper,
+  body.now-playing-closing .mobile-inline-queue > .queue-swipe-wrapper {
+    transition: filter .35s ease, opacity .35s ease;
+  }
+  body.now-playing-route .mobile-inline-queue > .queue-swipe-wrapper:nth-child(1),
+  body.now-playing-closing .mobile-inline-queue > .queue-swipe-wrapper:nth-child(1) {
+    filter: blur(.35px);
+    opacity: .92;
+  }
+  body.now-playing-route .mobile-inline-queue > .queue-swipe-wrapper:nth-child(2),
+  body.now-playing-closing .mobile-inline-queue > .queue-swipe-wrapper:nth-child(2) {
+    filter: blur(.9px);
+    opacity: .72;
+  }
+  body.now-playing-route .mobile-inline-queue > .queue-swipe-wrapper:nth-child(3),
+  body.now-playing-closing .mobile-inline-queue > .queue-swipe-wrapper:nth-child(3) {
+    filter: blur(1.8px);
+    opacity: .42;
+  }
+  body.now-playing-route .mobile-inline-queue > .queue-swipe-wrapper:nth-child(4),
+  body.now-playing-closing .mobile-inline-queue > .queue-swipe-wrapper:nth-child(4) {
+    filter: blur(2.8px);
+    opacity: .22;
+  }
+  body.now-playing-route .mobile-inline-queue > .queue-swipe-wrapper:nth-child(n+5),
+  body.now-playing-closing .mobile-inline-queue > .queue-swipe-wrapper:nth-child(n+5) {
+    filter: blur(4px);
+    opacity: .08;
+  }
+  body.now-playing-route .mobile-inline-queue .queue-item,
+  body.now-playing-closing .mobile-inline-queue .queue-item {
+    width: 100%;
+    box-sizing: border-box;
+    min-height: 44px;
+    padding: 2px 0;
+    gap: 8px;
+    border-radius: 0;
+    background: transparent;
+  }
+  body.now-playing-route .mobile-inline-queue .queue-item.active,
+  body.now-playing-closing .mobile-inline-queue .queue-item.active {
+    border-left: 0 !important;
+  }
+  body.now-playing-route .mobile-inline-queue .queue-thumb,
+  body.now-playing-closing .mobile-inline-queue .queue-thumb {
+    width: 28px;
+    height: 28px;
+  }
+  body.now-playing-route .mobile-inline-queue .queue-thumb-wrap,
+  body.now-playing-closing .mobile-inline-queue .queue-thumb-wrap {
+    width: 28px;
+    height: 28px;
+    flex: 0 0 28px;
+  }
+  body.now-playing-route .mobile-inline-queue .queue-info,
+  body.now-playing-closing .mobile-inline-queue .queue-info {
+    margin-left: 0;
+  }
+  body.now-playing-route .mobile-inline-queue .mobile-queue-shift-next,
+  body.now-playing-closing .mobile-inline-queue .mobile-queue-shift-next {
+    animation: mobileQueueShiftNext .55s cubic-bezier(.22, 1, .36, 1) both;
+  }
+  body.now-playing-route .mobile-inline-queue .mobile-queue-shift-previous,
+  body.now-playing-closing .mobile-inline-queue .mobile-queue-shift-previous {
+    animation: mobileQueueShiftPrevious .55s cubic-bezier(.22, 1, .36, 1) both;
+  }
+  @keyframes mobileQueueShiftNext {
+    from { transform: translateY(36px); }
+    to { transform: translateY(0); }
+  }
+  @keyframes mobileQueueShiftPrevious {
+    from { transform: translateY(-36px); }
+    to { transform: translateY(0); }
+  }
+  body.now-playing-route .mobile-inline-queue .queue-item + .queue-item,
+  body.now-playing-closing .mobile-inline-queue .queue-item + .queue-item {
+    border-top: 0 !important;
+  }
+  body.now-playing-route .mobile-inline-queue .queue-item,
+  body.now-playing-closing .mobile-inline-queue .queue-item,
+  body.now-playing-route .mobile-inline-queue .queue-swipe-wrapper,
+  body.now-playing-closing .mobile-inline-queue .queue-swipe-wrapper {
+    border-top: 0 !important;
+    border-bottom: 0 !important;
+  }
+  body.now-playing-route .mobile-inline-queue .queue-drag-handle,
+  body.now-playing-closing .mobile-inline-queue .queue-drag-handle {
+    display: none !important;
+  }
+  body.now-playing-route .mobile-inline-queue .queue-more-btn,
+  body.now-playing-closing .mobile-inline-queue .queue-more-btn {
+    display: none;
+  }
+  body #queue-modal-overlay {
+    display: flex !important;
+    z-index: 1300 !important;
+    background: transparent !important;
+    opacity: 0 !important;
+    visibility: hidden !important;
+    pointer-events: none !important;
+  }
+  body #queue-modal-overlay.open {
+    opacity: 1 !important;
+    visibility: visible !important;
+    pointer-events: auto !important;
+  }
+  body #queue-modal-overlay::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: rgba(0, 0, 0, .7);
+    opacity: var(--queue-background-progress, var(--queue-drag-progress, 1));
+    pointer-events: none;
+  }
+  body #queue-modal,
+  body #queue-modal .queue-item {
+    border-radius: 0 !important;
+  }
+  body #queue-modal {
+    position: relative;
+    z-index: 1;
+  }
+  body #queue-modal .queue-item.active {
+    border-left: 3px solid var(--accent) !important;
+  }
+  body #queue-modal .queue-modal-drag {
+    padding: 6px 0 3px;
+  }
+  body #queue-modal .queue-modal-header {
+    padding: 6px 14px 8px;
+  }
+  body #queue-modal .queue-modal-body {
+    padding-top: 0;
+  }
+  body #queue-modal .queue-item {
+    gap: 8px;
+    padding: 6px 10px;
+  }
+  body #queue-modal-overlay.queue-origin-open {
+    align-items: stretch;
+    justify-content: stretch;
+  }
+  body #queue-modal-overlay.queue-origin-open #queue-modal {
+    position: fixed;
+    left: 0;
+    top: 25dvh;
+    width: 100%;
+    height: 75dvh;
+    max-height: 75dvh;
+    border-radius: 0 !important;
+    overflow: hidden;
+    transform: none;
+    transition: none;
+    z-index: 1;
+    isolation: isolate;
+    background: transparent !important;
+    box-shadow: none;
+  }
+  body #queue-modal-overlay.queue-origin-open #queue-modal::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: 0;
+    background: var(--surface);
+    opacity: var(--queue-background-progress, 0);
+    pointer-events: none;
+  }
+  body #queue-modal-overlay.queue-origin-open #queue-modal > .queue-modal-drag,
+  body #queue-modal-overlay.queue-origin-open #queue-modal > .queue-modal-header,
+  body #queue-modal-overlay.queue-origin-open #queue-modal > .queue-modal-body {
+    position: relative;
+    z-index: 1;
+  }
+  body #queue-modal-overlay.queue-origin-open #queue-modal .queue-item,
+  body #queue-modal-overlay.queue-origin-open #queue-modal .queue-item.active,
+  body #queue-modal-overlay.queue-origin-open #queue-modal .queue-item:hover {
+    background: transparent !important;
+  }
+  body #queue-modal-overlay.queue-origin-open #queue-modal .queue-modal-drag,
+  body #queue-modal-overlay.queue-origin-open #queue-modal .queue-modal-close {
+    opacity: var(--queue-drag-progress, 0);
+  }
+  body #queue-modal-overlay.queue-origin-open #queue-modal .queue-drag-handle {
+    opacity: var(--queue-detail-progress, 0);
+  }
+  body #queue-modal-overlay.queue-origin-open.queue-origin-expanded #queue-modal {
+    left: 0;
+    top: 25dvh;
+    width: 100%;
+    height: 75dvh;
+    max-height: 75dvh;
+    transition: none;
+  }
+  body #queue-modal-overlay.queue-origin-open.queue-origin-closing #queue-modal {
+    left: 0 !important;
+    top: 25dvh !important;
+    width: 100% !important;
+    height: 75dvh !important;
+    transform: none !important;
+    max-height: 75dvh !important;
+    transition: none !important;
+  }
+}
+
+/* Keep the outer mobile controls comfortably inside narrow player cards. */
+@media (max-width: 400px) {
+  body.now-playing-route .mobile-np-controls,
+  body.now-playing-closing .mobile-np-controls {
+    gap: 10px;
+    padding-inline: 14px;
+  }
+}
+
+@media (max-width: 899px) {
+  body.now-playing-route,
+  body.now-playing-route #now-playing-section,
+  body.now-playing-route .np-page {
+    overflow: hidden !important;
+  }
+}
+
+/* Mobile collection geometry lives in playlist.css and the album component block above. */
+
+/* Mobile search tabs use square corners, overriding pill styling above. */
+@media (max-width: 768px) {
+  #results-section .results-tabs .results-tab {
+    border-radius: 0 !important;
+  }
+  #results-section .result-item-inner {
+    background: transparent !important;
+  }
+  #results-section .result-swipe-wrapper .result-item-inner:hover,
+  #results-section .result-swipe-wrapper .result-item-inner:focus-within {
+    background: transparent !important;
+    box-shadow: none !important;
+  }
+  #results-section .result-item-inner .result-like-btn {
+    display: none !important;
+  }
+  #results-section .result-item-inner .result-artist .artist-name {
+    pointer-events: none;
+    cursor: default;
+    text-decoration: none !important;
+  }
+  /* Remove legacy mobile swipe underlays; they were leaking orange through
+     transparent result rows and are not part of the current mobile layout. */
+  #results-section .result-swipe-underlay {
+    display: none !important;
+  }
+  #results-section .hscroll-controls {
+    display: none !important;
+  }
+  #results-section .hscroll-track {
+    display: flex !important;
+    overflow-x: auto !important;
+    overscroll-behavior-x: contain;
+    /* Allow a vertical gesture that starts over the shelf to reach the page
+       scroller; pan-x was trapping the gesture inside this element. */
+    touch-action: auto !important;
+    scroll-snap-type: none !important;
+    -webkit-overflow-scrolling: touch;
+  }
+  #results-section .hscroll-card {
+    flex: 0 0 126px !important;
+    width: 126px !important;
+  }
+  #results-section .hscroll-card-art {
+    width: 126px !important;
+    height: 126px !important;
+    aspect-ratio: auto;
+  }
+}
+
+/* Keep the restored mobile page opaque while the full player closes. The
+   return view is intentionally made visible before the sheet finishes its
+   slide, so the body tint must not show through the transparent page shell. */
+@media (max-width: 899px) {
+  body.now-playing-closing {
+    background-color: #0b0503 !important;
+    background-image: none !important;
+  }
+  body.now-playing-closing main {
+    background-color: #0b0503 !important;
+    background-image: none !important;
+  }
+  body.now-playing-closing #playlist-detail-modal-overlay,
+  body.now-playing-closing #playlist-detail-modal,
+  body.now-playing-closing #playlist-detail-modal #playlist-detail-body {
+    background-color: #0b0503 !important;
+    background-image: none !important;
+  }
+
+  /* The sheet enters over the existing page, so keep the underlying mobile
+     shell on the same dark surface while it slides into place. */
+  body.now-playing-route,
+  body.now-playing-route main {
+    background-color: #0b0503 !important;
+    background-image: none !important;
+  }
+  body.now-playing-route #playlist-detail-modal-overlay,
+  body.now-playing-route #playlist-detail-modal,
+  body.now-playing-route #playlist-detail-modal #playlist-detail-body {
+    background-color: #0b0503 !important;
+    background-image: none !important;
+  }
+
+  /* On open, cover the page immediately and animate only the sheet position.
+     Fading the sheet from opacity 0 exposes the page/body tint for one frame. */
+  body #now-playing-section:not([hidden]) {
+    opacity: 1 !important;
+    transition: transform .32s cubic-bezier(.22, 1, .36, 1) !important;
+  }
+}
+
+
+@media (max-width: 899px) {
+  body.home-route .home-item-subtitle .artist-name {
+    pointer-events: none !important;
+    user-select: none !important;
+    -webkit-user-select: none !important;
+    cursor: default !important;
+  }
+
+  #playlist-detail-modal #playlist-detail-body {
+    display: block !important;
+    width: 100% !important;
+    height: auto !important;
+    padding: 12px 4px 120px !important;
+    overflow: visible !important;
     box-sizing: border-box;
   }
 
-  body:has(.player-section.is-visible:not([hidden])) #album-section {
-    height: calc(100vh - var(--topbar-h) - var(--playbar-h));
+  #playlist-detail-modal .playlist-detail-hero {
+    display: flex !important;
+    flex-direction: column !important;
+    align-items: center !important;
+    gap: 12px !important;
+    width: 100% !important;
+    padding: 0 0 18px !important;
+    text-align: center !important;
+    overflow: visible !important;
   }
 
-  #album-section .album-hero.playlist-detail-hero {
-    flex-direction: column;
-    align-items: center;
-    align-self: start;
-    gap: 18px;
-    padding: 0;
-    text-align: center;
+  #playlist-detail-modal .playlist-detail-hero > .playlist-collage {
+    width: 240px !important;
+    height: 240px !important;
+    margin: 0 auto !important;
+    flex: none !important;
   }
 
-  #album-section .album-hero .playlist-collage {
-    width: 240px;
-    height: 240px;
-    border-radius: 10px;
-    box-shadow: 0 22px 60px rgba(0,0,0,.5);
+  /* Compact mobile playlist rows: hide counters and reduce album art. */
+  #playlist-detail-modal .history-item .playlist-track-num {
+    display: none !important;
   }
 
-  #album-section .playlist-detail-hero-info {
-    width: 100%;
-    align-items: center;
-    gap: 9px;
-    padding: 0;
-    text-align: center;
+  #playlist-detail-modal .history-item .playlist-track-art,
+  #playlist-detail-modal .history-item .queue-thumb {
+    width: 44px !important;
+    height: 44px !important;
+    flex: 0 0 44px !important;
   }
 
-  #album-section .playlist-detail-hero-name {
-    font-size: 1.65rem;
-    line-height: 1.15;
+  #playlist-detail-modal .history-item .result-like-btn {
+    display: none !important;
   }
 
-  #album-section .playlist-detail-hero-desc {
-    max-width: 290px;
-    font-size: .82rem;
-    -webkit-line-clamp: 4;
+  #playlist-detail-modal .history-item {
+    height: 52px !important;
+    min-height: 52px !important;
+    padding: 4px 10px !important;
+    border: 0 !important;
+    box-shadow: none !important;
   }
 
-  #album-section .playlist-detail-hero-meta {
-    justify-content: center;
+  #playlist-detail-modal .result-swipe-wrapper {
+    min-height: 52px !important;
+    border: 0 !important;
   }
 
-  #album-section .playlist-detail-hero-actions {
-    display: grid;
-    width: 100%;
-    grid-template-columns: 1fr auto 1fr;
-    align-items: center;
-    gap: 10px;
-    margin-top: 7px;
-    /* Match the playlist hero: give the hover-scaled Play button room so
-       it doesn't clip and trigger a horizontal scrollbar. */
-    padding: 4px 0;
+  #playlist-detail-modal #playlist-detail-body > .history-list {
+    border: 0 !important;
+    box-shadow: none !important;
+    overflow-x: hidden !important;
   }
 
-  #album-section .album-play-all {
-    width: 62px;
-    height: 62px;
+  #playlist-detail-modal .history-item .playlist-track-duration {
+    margin-left: auto !important;
+    margin-right: 2px !important;
+    min-width: 42px !important;
+    text-align: right !important;
   }
 
-  #album-section .album-play-all svg {
-    width: 25px;
-    height: 25px;
+  #playlist-detail-modal .playlist-detail-hero-info {
+    display: flex !important;
+    flex-direction: column !important;
+    width: 100% !important;
+    align-items: center !important;
+    padding: 0 !important;
+    text-align: center !important;
   }
 
-  #album-section .album-track-list {
-    min-width: 0;
-    height: 100%;
-    overflow-y: auto;
-    padding-right: 8px;
+  #playlist-detail-modal .playlist-detail-hero-name {
+    display: block !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+    margin: 0 !important;
   }
 
-  #album-section .result-swipe-wrapper {
-    flex: none;
-    min-height: 58px;
+  #playlist-detail-modal .playlist-detail-hero-actions {
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    gap: 8px !important;
+    width: 100% !important;
+  }
+
+  #playlist-detail-modal .playlist-hero-actions-left,
+  #playlist-detail-modal .playlist-hero-actions-right {
+    display: contents !important;
+  }
+}
+
+
+/* Mobile search shelves: center artist names and keep album credits compact
+   with natural wrapping for longer artist names. */
+@media (max-width: 899px) {
+  #results-section .hscroll-card:not(.album-card) .hscroll-card-title {
+    text-align: center !important;
+  }
+
+  #results-section .hscroll-card.album-card .hscroll-card-artist {
+    font-size: .68rem !important;
+    line-height: 1.25 !important;
+    white-space: normal !important;
+    overflow: visible !important;
+    text-overflow: clip !important;
+    overflow-wrap: anywhere !important;
+    word-break: break-word !important;
+  }
+}
+
+/* Let the mobile artist artwork continue underneath the fixed top bar.
+   Keep only a soft dark wash for icon/logo contrast; the solid mobile header
+   returns once the artist page has been scrolled past its hero. */
+@media (max-width: 899px) {
+  body.artist-route:not(.header-scrolled) main > header,
+  body:has(#artist-section:not([hidden])):not(.header-scrolled) main > header {
+    background: linear-gradient(to bottom, rgba(0, 0, 0, .58), rgba(0, 0, 0, .12)) !important;
+    background-color: transparent !important;
+    border-bottom-color: transparent !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
+
+  body.artist-route:not(.header-scrolled) main > header::before,
+  body:has(#artist-section:not([hidden])):not(.header-scrolled) main > header::before {
+    background: transparent !important;
+    background-color: transparent !important;
+    background-image: none !important;
+    border-bottom-color: transparent !important;
   }
 }

@@ -158,8 +158,10 @@
                         ${scrollBtnsHtml}
                     </div>
                 </div>
-                <div class="home-shelf-content">
-                    ${itemsHtml}
+                <div class="home-shelf-viewport">
+                    <div class="home-shelf-content">
+                        ${itemsHtml}
+                    </div>
                 </div>
             </div>
         `;

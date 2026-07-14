@@ -56,6 +56,8 @@
 
     opacity: 1;
 
+    pointer-events: auto;
+
   }
 
   .toast.error { color: #ffb4a8; border-color: rgba(255, 112, 92, .7); }

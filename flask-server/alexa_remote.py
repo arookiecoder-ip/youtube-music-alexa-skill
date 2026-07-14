@@ -26,11 +26,47 @@ runs on one dedicated background loop owned by this module.
 import asyncio, logging, os, threading, time
 from concurrent.futures import TimeoutError as FuturesTimeoutError
 
+import httpx
 from aiohttp import web
 from alexapy import AlexaAPI, AlexaLogin, AlexaProxy
 from alexapy.helpers import get_json_value
 
 logger = logging.getLogger(__name__)
+
+
+def _load_local_env():
+    """Load a sibling .env file if present.
+
+    The app is often started directly with `python server.py`, so relying on
+    the shell to export every variable is brittle. We keep this tiny loader
+    dependency-free so it works the same in Docker and local runs.
+    """
+    env_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env")
+    if not os.path.isfile(env_path):
+        return
+    try:
+        with open(env_path, encoding="utf-8") as f:
+            for raw in f:
+                line = raw.strip()
+                if not line or line.startswith("#") or "=" not in line:
+                    continue
+                key, value = line.split("=", 1)
+                key = key.strip()
+                value = value.strip().strip('\'"')
+                if key and key not in os.environ:
+                    os.environ[key] = value
+    except Exception:
+        logger.exception("failed to load local .env file")
+
+
+_load_local_env()
+logger.info(
+    "Alexa env: AMAZON_DOMAIN=%s ALEXA_PROXY_BASE_URL=%s PUBLIC_BASE_URL=%s PROXY_PORT=%s",
+    os.environ.get("AMAZON_DOMAIN"),
+    os.environ.get("ALEXA_PROXY_BASE_URL"),
+    os.environ.get("PUBLIC_BASE_URL"),
+    os.environ.get("ALEXA_PROXY_PORT", "5001"),
+)
 
 
 class AlexaUnreachable(Exception):
@@ -78,6 +114,7 @@ PROXY_PORT = int(os.environ.get("ALEXA_PROXY_PORT", "5001"))
 # Public path prefix the proxy is mounted under (must match the Caddy route).
 PROXY_PATH = "/alexa/proxy/"
 
+
 CALL_TIMEOUT = 60  # seconds; Amazon calls can be slow but must not hang a worker
 
 
@@ -102,6 +139,10 @@ class AlexaRemote:
         self._proxy_login = None
         self._proxy_runner = None
         self._proxy_started = False
+        self._proxy_base_url = None
+        self._proxy_finalize_task = None
+        self._proxy_login_error = None
+        self._proxy_login_complete = False
 
     # ---------- background loop plumbing ----------
 
@@ -246,17 +287,28 @@ class AlexaRemote:
             pass
         return resp
 
-    async def _start_proxy(self, email: str, password: str):
+    async def _start_proxy(self, email: str, password: str, base_url: str = None):
         """Idempotently bring up the proxy aiohttp app. Credentials come from
         the browser and are used only to seed this login object; they are not
         stored. Returns error or None."""
         if not (email and password):
             return "Enter your Amazon email and password to log in."
-        if not PROXY_PUBLIC_BASE_URL:
+        proxy_base_url = base_url or (
+            PROXY_PUBLIC_BASE_URL + PROXY_PATH if PROXY_PUBLIC_BASE_URL else ""
+        )
+        if not proxy_base_url:
             return ("Set ALEXA_PROXY_BASE_URL (or PUBLIC_BASE_URL) to this server's public "
                     "https origin so the proxy login can redirect back correctly.")
+        proxy_base_url = proxy_base_url.rstrip("/") + "/"
         if self._proxy_started:
-            return None
+            finalize_failed = (
+                self._proxy_finalize_task is not None
+                and self._proxy_finalize_task.done()
+                and not self._proxy_login_complete
+            )
+            if self._proxy_base_url == proxy_base_url and not finalize_failed:
+                return None
+            await self._stop_proxy()
 
         os.makedirs(os.path.join(ALEXA_COOKIE_DIR, ".storage"), exist_ok=True)
         # Fresh login object dedicated to the proxy flow; adopted as the live
@@ -268,13 +320,22 @@ class AlexaRemote:
             password=password,
             outputpath=lambda name: os.path.join(ALEXA_COOKIE_DIR, name),
         )
-        base = PROXY_PUBLIC_BASE_URL + PROXY_PATH
-        self._proxy = AlexaProxy(self._proxy_login, base)
+        self._proxy_login_complete = False
+        self._proxy_login_error = None
+        self._proxy_finalize_task = None
+        self._proxy = AlexaProxy(self._proxy_login, proxy_base_url)
+        # Amazon occasionally resets a TLS connection before sending a
+        # response. Retry connection establishment inside the proxy so users
+        # do not land on alexapy's otherwise unrecoverable error page.
+        await self._proxy.session.aclose()
+        self._proxy.session = httpx.AsyncClient(
+            transport=httpx.AsyncHTTPTransport(retries=3, http2=True)
+        )
 
         app = web.Application(middlewares=[self._proxy_autoclose_mw])
         # AlexaProxy.all_handler serves the whole proxied login tree; mount it
         # under PROXY_PATH for every method and sub-path.
-        app.router.add_route("*", PROXY_PATH + "{tail:.*}", self._proxy.all_handler)
+        app.router.add_route("*", PROXY_PATH + "{tail:.*}", self._proxy_handler)
         runner = web.AppRunner(app)
         await runner.setup()
         # Bind on all interfaces so Caddy (running in a separate container) can
@@ -283,12 +344,13 @@ class AlexaRemote:
         await site.start()
         self._proxy_runner = runner
         self._proxy_started = True
+        self._proxy_base_url = proxy_base_url
         logger.info("Alexa login proxy listening on 0.0.0.0:%s under %s", PROXY_PORT, PROXY_PATH)
         return None
 
-    async def _proxy_start_url(self, email: str, password: str):
+    async def _proxy_start_url(self, email: str, password: str, base_url: str = None):
         """Bring up the proxy and return (url, error). url is where the user logs in."""
-        error = await self._start_proxy(email, password)
+        error = await self._start_proxy(email, password, base_url)
         if error:
             return None, error
         proxy = self._proxy
@@ -301,48 +363,108 @@ class AlexaRemote:
             logger.debug("proxy.reset() unavailable or failed; continuing")
         return str(proxy.access_url()), None
 
+    async def _proxy_handler(self, request):
+        """Serve alexapy and start finalization as soon as its callback lands."""
+        proxy = self._proxy
+        if proxy is None:
+            raise web.HTTPServiceUnavailable(text="Alexa login proxy is not running.")
+        try:
+            return await proxy.all_handler(request)
+        finally:
+            login = self._proxy_login
+            if login and (login.authorization_code or login.access_token):
+                self._ensure_proxy_finalize_task()
+
+    def _ensure_proxy_finalize_task(self):
+        if self._proxy_finalize_task is None:
+            self._proxy_finalize_task = asyncio.create_task(
+                self._finalize_proxy_login(), name="alexa-login-finalize"
+            )
+
+    async def _finalize_proxy_login(self):
+        """Exchange Amazon's one-time code once and persist the Alexa session."""
+        login = self._proxy_login
+        if login is None:
+            self._proxy_login_error = "Amazon login session disappeared before finalization."
+            return False
+
+        logger.info("Amazon authorization received; finalizing Alexa login")
+        done = False
+        for attempt in range(1, 4):
+            try:
+                done = await login.test_loggedin()
+            except Exception:
+                logger.exception("Alexa login finalization attempt %s failed", attempt)
+            if done:
+                break
+            if attempt < 3:
+                logger.warning("Alexa login verification attempt %s failed; retrying", attempt)
+                await asyncio.sleep(attempt)
+
+        if not done:
+            self._proxy_login_error = (
+                "Amazon accepted the login, but Alexa session verification failed. "
+                "Click Connect to start a fresh login."
+            )
+            logger.error(self._proxy_login_error)
+            return False
+
+        # alexapy normally saves from test_loggedin(), but its writer handles
+        # filesystem errors internally. Save once more and verify the file so
+        # the UI cannot report success for a session that will vanish on restart.
+        try:
+            await login.save_cookiefile()
+            cookie_files = getattr(login, "_cookiefile", [])
+            cookie_file = cookie_files[0] if cookie_files else None
+        except Exception:
+            logger.exception("could not save Alexa login cookie")
+            cookie_file = None
+        if not cookie_file or not os.path.isfile(cookie_file):
+            self._proxy_login_error = "Alexa login succeeded, but its cookie file could not be saved."
+            logger.error(self._proxy_login_error)
+            return False
+
+        # Persist the email separately so _ensure_login can locate alexapy's
+        # email-keyed cookie file after a process restart.
+        try:
+            storage_dir = os.path.join(ALEXA_COOKIE_DIR, ".storage")
+            os.makedirs(storage_dir, exist_ok=True)
+            email_file = os.path.join(storage_dir, "last_email.txt")
+            with open(email_file, "w", encoding="utf-8") as f:
+                f.write(login.email)
+        except Exception:
+            logger.exception("could not persist login email for restore")
+
+        if self._login and self._login is not login:
+            try:
+                await self._login.close()
+            except Exception:
+                pass
+        self._login = login
+        self._login_checked_at = time.monotonic()
+        self._devices_raw = []
+        self._proxy_login_complete = True
+        await self._stop_proxy()
+        logger.info("Alexa login finalized and cookie persisted")
+        return True
+
     async def _proxy_check(self):
-        """Poll for completion. Returns dict describing proxy-login state."""
+        """Report callback-driven finalization without performing it in a poll."""
+        if self._proxy_login_complete:
+            return {"running": False, "logged_in": True}
+        if self._proxy_login_error:
+            return {
+                "running": False,
+                "logged_in": False,
+                "error": self._proxy_login_error,
+            }
         if not self._proxy_started or not self._proxy_login:
             return {"running": False, "logged_in": False}
-        try:
-            done = await self._proxy_login.test_loggedin()
-        except Exception:
-            logger.exception("proxy test_loggedin failed")
-            done = False
-        if done:
-            try:
-                await self._proxy_login.finalize_login()
-            except Exception:
-                logger.debug("finalize_login unavailable; cookie may still be valid")
-            try:
-                await self._proxy_login.save_cookiefile()
-            except Exception:
-                logger.exception("could not persist proxy cookie (session still usable)")
-            else:
-                # AlexaLogin's cookie filename is keyed by email
-                # (.storage/alexa_media.<email>.cookies) — a restart has no
-                # way to know that email up front, so a restore attempt with
-                # email="" always looks for the wrong file and silently fails
-                # (see _ensure_login). Persist it here so restores can find
-                # the real cookie file.
-                try:
-                    email_file = os.path.join(ALEXA_COOKIE_DIR, ".storage", "last_email.txt")
-                    with open(email_file, "w", encoding="utf-8") as f:
-                        f.write(self._proxy_login.email)
-                except Exception:
-                    logger.exception("could not persist login email for restore")
-            # adopt the proxy session as the live one and drop stale device cache
-            if self._login and self._login is not self._proxy_login:
-                try:
-                    await self._login.close()
-                except Exception:
-                    pass
-            self._login = self._proxy_login
-            self._login_checked_at = time.monotonic()
-            self._devices_raw = []
-            await self._stop_proxy()
-        return {"running": self._proxy_started, "logged_in": bool(done)}
+
+        login = self._proxy_login
+        if login.authorization_code or login.access_token:
+            self._ensure_proxy_finalize_task()
+        return {"running": True, "logged_in": False}
 
     async def _stop_proxy(self):
         if self._proxy_runner:
@@ -353,10 +475,11 @@ class AlexaRemote:
         self._proxy_runner = None
         self._proxy = None
         self._proxy_started = False
+        self._proxy_base_url = None
 
     # public (thread-safe) wrappers
-    def proxy_start_url(self, email: str, password: str):
-        return self._run(self._proxy_start_url(email, password))
+    def proxy_start_url(self, email: str, password: str, base_url: str = None):
+        return self._run(self._proxy_start_url(email, password, base_url))
 
     def proxy_check(self):
         return self._run(self._proxy_check())
@@ -386,6 +509,9 @@ class AlexaRemote:
                 logger.error("Failed to delete Amazon cookie dir: %s", e)
         self._login = None
         self._login_checked_at = 0.0
+        self._proxy_login_complete = False
+        self._proxy_login_error = None
+        self._proxy_finalize_task = None
         if self._proxy_runner:
             await self._stop_proxy()
 
