@@ -43,6 +43,29 @@ function syncTrackPlaybackIndicators() {
   }
 }
 
+// On mobile, a song title is a direct playback affordance everywhere it is
+// rendered. Album/playlist cards without a track video_id keep their normal
+// navigation behavior.
+document.addEventListener('click', (event) => {
+  if (!window.matchMedia('(max-width: 899px)').matches) return;
+  const title = event.target.closest(
+    '.home-item-title, .hscroll-card-title, .artist-song-title, .queue-title, .result-title, .top-result-title'
+  );
+  if (!title) return;
+  const root = title.closest('[data-video-id]');
+  if (!root || !root.dataset.videoId || typeof window.playFromQueue !== 'function') return;
+
+  const track = root._songContextTrack || {
+    video_id: root.dataset.videoId,
+    title: title.textContent.trim(),
+    artist: root.querySelector('.home-item-subtitle, .artist-song-artist, .queue-artist, .result-artist, .top-result-subtitle')?.textContent.trim() || '',
+    thumbnail: root.querySelector('img')?.src || ''
+  };
+  event.preventDefault();
+  event.stopPropagation();
+  window.playFromQueue(track);
+}, true);
+
 function syncPlayPause() {
   for (const btn of [document.getElementById('pp-btn'), document.getElementById('mini-pp'), document.getElementById('mp-pp-btn'), document.getElementById('np-page-art-overlay'), document.getElementById('mobile-np-play')]) {
     if (!btn) continue;
@@ -98,6 +121,7 @@ function upgradeLowResNowPlayingArt(info, fingerprint, artwork, npPageArt) {
         });
       if (_lastNpFingerprint !== fingerprint || !candidates.length) return false;
 
+      const isHdArtwork = (image) => image.naturalWidth >= 1000 && image.naturalHeight >= 600;
       const loadCandidate = (index) => {
         if (index >= candidates.length || _lastNpFingerprint !== fingerprint) {
           return Promise.resolve(false);
@@ -109,7 +133,7 @@ function upgradeLowResNowPlayingArt(info, fingerprint, artwork, npPageArt) {
             // Do not accept a candidate that is still a small shelf image.
             // Keep trying the ranked fallbacks until a genuinely larger
             // rendition is available.
-            if (highResImage.naturalWidth < 640 || highResImage.naturalHeight < 640) {
+            if (!isHdArtwork(highResImage)) {
               return resolve(loadCandidate(index + 1));
             }
             if (_lastNpFingerprint !== fingerprint) return resolve(false);
@@ -157,8 +181,10 @@ function showNowPlaying(info) {
       if (mpTitle) mpTitle.textContent = 'Nothing is playing';
       if (mpArtist) mpArtist.textContent = '';
       const mpArt = document.getElementById('mp-np-art');
-      mpArt.style.backgroundImage = '';
-      mpArt.classList.remove('has-thumb', 'image-loading');
+      if (mpArt) {
+        mpArt.style.backgroundImage = '';
+        mpArt.classList.remove('has-thumb', 'image-loading');
+      }
       const art = document.getElementById('np-art');
       if (art) {
         art.style.backgroundImage = '';
@@ -246,7 +272,7 @@ function showNowPlaying(info) {
         if (_lastNpFingerprint !== fp) return;
         // Small shelf thumbnails look hazy when enlarged in the player. Keep
         // the preview blurred while the server resolves the track's best art.
-        const isLowResolution = img.naturalWidth < 640 || img.naturalHeight < 640;
+        const isLowResolution = img.naturalWidth < 1000 || img.naturalHeight < 600;
         if (!isLowResolution) {
           if (info.video_id) _resolvedNowPlayingArt.set(info.video_id, info.thumbnail);
           artwork.forEach((el) => el.classList.remove('image-loading'));
@@ -274,8 +300,10 @@ function showNowPlaying(info) {
       art.classList.remove('has-thumb', 'image-loading');
       miniArt.style.backgroundImage = '';
       miniArt.classList.remove('has-thumb', 'image-loading');
-      mpArt.style.backgroundImage = '';
-      mpArt.classList.remove('has-thumb', 'image-loading');
+      if (mpArt) {
+        mpArt.style.backgroundImage = '';
+        mpArt.classList.remove('has-thumb', 'image-loading');
+      }
       if (npPageArt) {
         npPageArt.style.backgroundImage = '';
         npPageArt.classList.remove('has-thumb', 'image-loading');
@@ -775,7 +803,7 @@ async function playResult(item, suppressRadio, forceRadio, openPlaybackPage) {
    every open/close so stacked sheets (now-playing popup + queue modal on top)
    keep the lock until the last one closes. */
 function syncModalScrollLock() {
-  const anyOpen = ['mini-popup-overlay', 'queue-modal-overlay'].some((id) => {
+  const anyOpen = ['queue-modal-overlay'].some((id) => {
     const el = document.getElementById(id);
     return el && el.classList.contains('open');
   });
@@ -811,6 +839,10 @@ function syncModalScrollLock() {
   const mpShuffleBtn = document.getElementById('mp-shuffle-btn');
   const mpVolume = document.getElementById('mp-volume');
   let _miniPopupOpen = false;
+
+  // The legacy mini-popup markup has been removed. Keep this stale block
+  // inert if an old cached template is still being used during an update.
+  if (!overlay) return;
 
   function openMiniPopup(fromRoute) {
     playerTrace('mini:open-request', { fromRoute: !!fromRoute, desktop: window.matchMedia('(min-width: 900px)').matches });
@@ -1037,6 +1069,20 @@ function syncModalScrollLock() {
   if (window.getRoute && window.getRoute() === '#now-playing') openMiniPopup(true);
 })();
 
+// The legacy mini-popup is gone. On mobile, tapping the compact player now
+// opens the current now-playing route directly.
+(function wireMobileNowPlayingRoute() {
+  const playerBar = document.querySelector('.player-section');
+  if (!playerBar) return;
+  playerBar.addEventListener('click', (event) => {
+    if (!window.matchMedia('(max-width: 899px)').matches) return;
+    if (event.target.closest('button, a, input, [role="slider"], .progress-track, .artist-name')) return;
+    if (window.getRoute && window.getRoute() !== '#now-playing' && window.navigateTo) {
+      window.navigateTo('#now-playing');
+    }
+  });
+})();
+
 
 function clearUiAfterPlaybackReset() {
   const mainEl = document.querySelector('main');
@@ -1085,7 +1131,6 @@ async function doClearAll() {
     syncPlayPause();
     clearUiAfterPlaybackReset();
     if (window._closeQueueModal) window._closeQueueModal();
-    if (window._closeMiniPopup) window._closeMiniPopup();
     if (data.stop_error) toast('Cleared here, but the device may still be playing: ' + data.stop_error, 'error');
     else toast('Cleared', 'ok');
   } catch (e) {

@@ -5420,6 +5420,14 @@ async def api_get_track_artwork(video_id):
     if not _valid_video_id(video_id):
         return jsonify({'error': 'invalid videoId'}), 400
 
+    # These standard renditions are available independently of the catalog
+    # lookup. Keep them as a guaranteed fallback when ytmusicapi is slow or
+    # temporarily unable to return video metadata.
+    direct_urls = [
+        'https://i.ytimg.com/vi/{}/{}.jpg'.format(video_id, rendition)
+        for rendition in ('maxresdefault', 'sddefault', 'hqdefault')
+    ]
+
     def find_artwork(client):
         song = client.get_song(video_id) or {}
         thumbs = ((song.get('videoDetails') or {}).get('thumbnail') or {}).get('thumbnails') or []
@@ -5457,12 +5465,12 @@ async def api_get_track_artwork(video_id):
         # though YouTube still serves a larger standard video thumbnail.
         # Add those URLs as fallbacks; the browser will verify which one
         # actually exists before painting it.
-        direct_urls = []
+        catalog_direct_urls = []
         for rendition in ('maxresdefault', 'sddefault', 'hqdefault'):
             direct = 'https://i.ytimg.com/vi/{}/{}.jpg'.format(video_id, rendition)
-            if direct not in direct_urls:
-                direct_urls.append(direct)
-        return {'urls': direct_urls + [url for url in urls if url not in direct_urls]}
+            if direct not in catalog_direct_urls:
+                catalog_direct_urls.append(direct)
+        return {'urls': catalog_direct_urls + [url for url in urls if url not in catalog_direct_urls]}
 
     clients = [_get_ytmusic_home()]
     try:
@@ -5480,7 +5488,9 @@ async def api_get_track_artwork(video_id):
                 })
         except Exception as exc:
             logger.warning('[api/track/%s/artwork] lookup failed: %s', video_id, exc)
-    return jsonify({'error': 'artwork unavailable'}), 404
+    # Let the browser test the direct renditions even when the catalog lookup
+    # failed. It will skip unavailable/low-resolution candidates itself.
+    return jsonify({'thumbnail': direct_urls[0], 'thumbnails': direct_urls})
 
 
 @app.route("/api/album/<browse_id>", methods=["GET"])

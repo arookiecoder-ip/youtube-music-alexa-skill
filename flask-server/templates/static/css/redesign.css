@@ -144,7 +144,7 @@
 
 .artist-song-row .artist-song-play-btn {
   opacity: 0;
-  transform: translateY(-50%) scale(.72);
+  transform: translateY(-50%) scale(1);
   pointer-events: none;
   transition: opacity .18s ease, transform .18s ease, color .15s, border-color .15s;
 }
@@ -1944,7 +1944,7 @@ body.now-playing-route .player-section .player-expand-btn svg {
   left: 50%;
   right: auto;
   bottom: auto;
-  transform: translate(-50%, -50%) scale(.8);
+  transform: translate(-50%, -50%) scale(1);
 }
 .home-item-card[data-kind="track"] .home-play-btn svg,
 .home-item-wide-card[data-kind="track"] .home-play-btn svg {
@@ -5398,6 +5398,34 @@ body.library-route #nav-library-btn::before {
 
 /* Compact mobile player grid. */
 @media (max-width: 899px) {
+  /* Mobile collection artwork: albums, singles, and playlists use sharp
+     corners. Artist artwork remains circular. */
+  body .hscroll-card:not(.related-artist-card) .hscroll-card-art,
+  body .home-item[data-kind="album"] .home-item-img,
+  body .home-item[data-kind="album"] .home-item-img-wrapper,
+  body .home-item[data-kind="single"] .home-item-img,
+  body .home-item[data-kind="single"] .home-item-img-wrapper,
+  body .home-item[data-kind="playlist"] .home-item-img,
+  body .home-item[data-kind="playlist"] .home-item-img-wrapper,
+  body .playlist-card,
+  body .playlist-card .playlist-card-art {
+    border-radius: 2px !important;
+  }
+
+  /* Match the mobile song result to the rows below it. Keep the result
+     content padded, but remove the separate grey card surface. */
+  #results-section .top-result-card.is-song {
+    padding: 16px 14px;
+    background: transparent;
+    border-radius: 0;
+  }
+  #results-section .top-result-card.is-song .top-result-main,
+  #results-section .top-result-card.is-song .top-result-main:hover {
+    padding: 0;
+    margin: 0;
+    background: transparent;
+  }
+
   body .player-section,
   body .player-section.is-collapsed {
     display: grid !important;

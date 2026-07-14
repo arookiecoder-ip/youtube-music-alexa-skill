@@ -319,7 +319,6 @@
       if (window.syncPlayPause) window.syncPlayPause();
       clearUiAfterPlaybackReset();
       if (window._closeQueueModal) window._closeQueueModal();
-      if (window._closeMiniPopup) window._closeMiniPopup();
       if (data.stop_error) toast('Cleared here, but the device may still be playing: ' + data.stop_error, 'error');
       else toast('Cleared', 'ok');
     } catch (e) {

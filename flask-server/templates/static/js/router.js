@@ -426,7 +426,6 @@
         if (rs) rs.hidden = false;
       }
     }
-    if (hash !== '#now-playing' && window._closeMiniPopup) window._closeMiniPopup();
     if (routes[hash]) {
       routes[hash]();
     } else if (hash.indexOf('#playlist/') === 0) {
