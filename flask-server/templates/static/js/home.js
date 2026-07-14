@@ -69,6 +69,15 @@
     const container = document.getElementById('home-rows');
     if (!container) return;
     if (show) {
+      // Fill the visible shelf instead of stopping at six fixed cards. The
+      // real shelves use fixed-width cards in a horizontal scroller, so size
+      // the placeholder count from the viewport and the same card step.
+      const wide = window.matchMedia('(min-width: 900px)').matches;
+      const shelfPadding = wide ? 80 : 32;
+      const cardStep = wide ? 210 : 172;
+      const skeletonCount = Math.max(4, Math.ceil(
+        (window.innerWidth - shelfPadding) / cardStep
+      ));
       // Rough skeleton matching layouts, defaulting to 4 rows
       let rows = '';
       for (let i = 0; i < 4; i++) {
@@ -79,7 +88,7 @@
             </div>
             <div class="home-shelf-viewport">
               <div class="home-shelf-content">
-                  ${Array(6).fill('<div class="home-item home-skeleton-card"><div class="skeleton-block"></div><div class="skeleton-line skeleton-line-title"></div></div>').join('')}
+                  ${Array(skeletonCount).fill('<div class="home-item home-skeleton-card"><div class="skeleton-block"></div><div class="skeleton-line skeleton-line-title"></div></div>').join('')}
               </div>
             </div>
           </div>

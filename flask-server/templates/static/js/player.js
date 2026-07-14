@@ -805,20 +805,15 @@ function syncModalScrollLock() {
       }
       return;
     }
-    // One expanded-player path at every viewport. The legacy bottom sheet is
-    // retained in cached templates for compatibility, but is never opened.
-    if (window.getRoute && window.getRoute() === '#now-playing') {
-      if (!fromRoute && window.closeNowPlayingOverlay) window.closeNowPlayingOverlay();
-    } else if (window.navigateTo) {
-      window.navigateTo('#now-playing');
-    }
-    return;
     // On desktop, toggle the #now-playing overlay: expand, or collapse back
-    // to the view it was opened from.
+    // to the view it was opened from. `fromRoute` is used when the route is
+    // restored on page load; that should not immediately close the overlay.
     if (window.matchMedia('(min-width: 900px)').matches) {
       if (window.getRoute && window.getRoute() === '#now-playing') {
-        playerTrace('mini:desktop-close-full');
-        window.closeNowPlayingOverlay(); // Collapse
+        if (!fromRoute) {
+          playerTrace('mini:desktop-close-full');
+          if (window.closeNowPlayingOverlay) window.closeNowPlayingOverlay();
+        }
       } else {
         playerTrace('mini:desktop-open-full');
         window.navigateTo('#now-playing'); // Expand
@@ -872,7 +867,18 @@ function syncModalScrollLock() {
   // area of the player bar all open the full now-playing sheet.
   // Buttons/links inside keep their own behavior.
   const expandBtn = document.getElementById('player-expand-btn');
-  if (expandBtn) expandBtn.addEventListener('click', openMiniPopup);
+  if (expandBtn) {
+    expandBtn.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      if (window.getRoute && window.getRoute() === '#now-playing') {
+        playerTrace('mini:arrow-close');
+        if (window.closeNowPlayingOverlay) window.closeNowPlayingOverlay();
+        return;
+      }
+      openMiniPopup();
+    });
+  }
   const npCluster = document.getElementById('now-playing');
   if (npCluster) {
     npCluster.addEventListener('click', (e) => {
@@ -1120,6 +1126,18 @@ const npPageArt = document.getElementById('np-page-art');
 if (npPageArt) {
   npPageArt.onclick = (e) => {
     e.stopPropagation();
+    // On mobile, tapping the banner while the volume popover is open is a
+    // dismiss action, not a playback toggle. The document-level volume
+    // listener closes the popover too, but it must not fall through here and
+    // pause the current track.
+    const mobileVolumePopover = document.getElementById('mobile-volume-popover');
+    if (mobileVolumePopover && mobileVolumePopover.classList.contains('open') &&
+        window.matchMedia('(max-width: 899px)').matches) {
+      mobileVolumePopover.classList.remove('open');
+      const mobileVolumeButton = document.getElementById('mobile-player-volume');
+      if (mobileVolumeButton) mobileVolumeButton.setAttribute('aria-expanded', 'false');
+      return;
+    }
     const overlay = document.getElementById('np-page-art-overlay');
     if (overlay) {
       overlay.classList.remove('flash');

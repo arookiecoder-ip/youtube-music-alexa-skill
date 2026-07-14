@@ -29,7 +29,7 @@ Alexa cloud ──► Alexa-hosted Lambda (Python, free tier, EU-Ireland)
               Flask server (port 5000, systemd)
               ├── ytmusicapi ── search / radio / playlists
 ├── yt-dlp ────── downloads audio into a local cache
-│        (android_vr client, tv fallback + cookies + deno)
+│        (default client, android_vr/web/tv fallbacks + cookies + deno)
               ├── /proxy/ ───── serves the cached audio file to the Echo
               └── web remote ── /remote/ UI + /alexa/* API (AlexaPy)
                        └── Amazon login proxy (aiohttp, port 5001,
@@ -39,7 +39,7 @@ Alexa cloud ──► Alexa-hosted Lambda (Python, free tier, EU-Ireland)
 **Why an audio proxy?** googlevideo stream URLs are IP-locked to the machine
 that resolved them — an Echo can never fetch them directly. Worse, on
 datacenter IPs even the resolving machine gets 403 on raw fetches; only
-yt-dlp's own download path (android_vr client, falls back to tv) works. So
+yt-dlp's own download path (default client, falls back to android_vr, web, then tv) works. So
 the server downloads each track (~3 MB m4a) into a cache and serves the file
 itself, with Range support.
 
@@ -204,8 +204,8 @@ This is the engine that physically downloads the audio streams. Without standard
 Note: the first song of a session takes ~7-8 s to start (audio downloads;
 YouTube enforces an ad-skip gate of ~4-5 s on monetized videos — this fires
 regardless of yt-dlp player client and isn't bypassable: the googlevideo URL
-403s if fetched before that window opens). The `android_vr` client is the
-default (no GVS PO token required); if it fails, it falls back to `tv`.
+403s if fetched before that window opens). The default yt-dlp client is tried
+first; if it fails, the server falls back to `android_vr`, `web`, then `tv`.
 Track-to-track transitions are instant — the next song is pre-downloaded while
 the current one plays.
 
@@ -443,7 +443,7 @@ will not require another login as long as that named volume is preserved.
 | Server errors                                                 | `sudo journalctl -u ytmusic -f` on the VPS                                                  |
 | yt-dlp bot-check / "Sign in to confirm" errors return         | cookies expired → re-export + re-scp cookies.txt                                            |
 | yt-dlp HTTP 403 / "GVS PO Token not provided"                 | update yt-dlp (`pip install -U yt-dlp`); the `android_vr` client doesn't need PO tokens, but if it fails too, set `YTDLP_PO_TOKEN` to use `mweb` with a manual PO token instead |
-| One yt-dlp player client returns HTTP 403                         | the server tries cookie-capable `tv` first, then `android_vr` without cookies and default/web fallbacks. Intermediate failures are warnings; only "failed with every client" means the download was lost |
+| One yt-dlp player client returns HTTP 403                         | the server tries the default client first, then `android_vr`, `web`, and `tv` as fallbacks. Intermediate failures are warnings; only "failed with every client" means the download was lost |
 | HTTPS dead                                                    | `journalctl -u caddy` — cert renewals need ports 80/443 open                                |
 | 401 everywhere                                                | API_KEY mismatch between `lambda/api_key.py` and ytmusic.service                            |
 | `/remote/` shows `{"error":"unauthorized"}` instead of a login | login not enabled — set **both** `REMOTE_USER` and `REMOTE_PASSWORD` in ytmusic.service, then daemon-reload + restart |

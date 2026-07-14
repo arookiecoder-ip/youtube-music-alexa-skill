@@ -404,8 +404,18 @@
   ];
   function goHome(e, toggleSelector) {
     if (e.target.closest(toggleSelector)) return;
-    // The brand is inert on Home: don't reload the route or reset its scroll.
-    if ((window.getRoute && window.getRoute()) === '#home') return;
+    const alreadyHome = (window.getRoute && window.getRoute()) === '#home';
+    // Search results live on the Home route, so navigating to #home alone is
+    // a no-op. Close the results explicitly before treating the brand as an
+    // already-active Home shortcut.
+    if (alreadyHome) {
+      if (state._resultsOpen && window.closeResults) {
+        window.closeResults();
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+      }
+      return;
+    }
+    if (state._resultsOpen && window.closeResults) window.closeResults();
     if (window.navigateTo) window.navigateTo('#home');
   }
   brands.forEach(function (entry) {

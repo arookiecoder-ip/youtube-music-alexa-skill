@@ -1913,7 +1913,7 @@ class Supporting:
             except OSError:
                 pass
 
-    def ytdlp_download_command(video_id: str, output, client: str = "tv"):
+    def ytdlp_download_command(video_id: str, output, client: str = "default"):
         extractor_args = []
         if client != "default":
             extractor_args.append(f"youtube:player_client={client}")

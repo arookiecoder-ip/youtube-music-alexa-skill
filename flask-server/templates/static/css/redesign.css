@@ -358,6 +358,13 @@ header {
   letter-spacing: .16em;
 }
 
+/* Nudge only the mark and wordmark; keep the rail toggle and all other
+   header controls at their existing coordinates. */
+header > .brand .eq-icon,
+header > .brand h1 {
+  transform: translateX(6px);
+}
+
 /* Icon-only round header buttons (labels shown as tooltips) */
 .header-history-label { display: none; }
 .header-history-btn {
@@ -367,6 +374,14 @@ header {
 .header-history-btn:hover {
   background: rgba(232, 89, 12, .08);
 }
+
+/* Keep the Jam feature wired up, but temporarily remove its launch controls
+   from the layout so they do not reserve button, margin, or sidebar space. */
+#jam-btn,
+#sidebar-jam-btn {
+  display: none !important;
+}
+
 @media (min-width: 900px) {
   /* Playlists + Jam live in the left rail on desktop */
   #playlists-modal-btn, #jam-btn { display: none !important; }
@@ -658,6 +673,13 @@ img[data-image-ready="true"] {
 /* Collapsed rail (desktop): YT Music-style mini guide — the rail narrows to
    an icon-only strip. Everything positioned off --rail-w (main, search pill,
    overlays) reflows and animates with it. */
+@media (min-width: 900px) {
+  .rail-toggle-btn {
+    transform: translateX(8px);
+    margin-right: -4px;
+  }
+}
+
 @media (min-width: 900px) {
   body.rail-collapsed { --rail-w: var(--rail-w-mini); }
   /* Keep labels in the layout while the rail is moving. Removing them with
@@ -1841,6 +1863,17 @@ body.now-playing-route .player-section .player-expand-btn svg {
   .home-row-label { font-size: 1.3rem; }
 }
 
+/* Artist names in home shelves are interactive spans. Keep their hover
+   affordance above the card/subtitle text rules in the redesigned shell. */
+.home-item .home-item-subtitle .artist-name:hover,
+.home-item .home-item-subtitle .artist-name:focus-visible {
+  color: var(--text) !important;
+  text-decoration-line: underline !important;
+  text-decoration-color: currentColor !important;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+}
+
 .home-card, .home-skeleton-card { flex-basis: 156px; position: relative; }
 @media (min-width: 900px) {
   .home-card, .home-skeleton-card { flex-basis: 186px; }
@@ -2137,6 +2170,10 @@ body.results-open #results-section {
 
 /* Search playlist cards reuse the homepage playlist hover treatment: a
    consistent dark artwork overlay and bottom-right play glyph/control. */
+#results-section .hscroll-card[data-playlist-id] .hscroll-card-artist {
+  display: none;
+}
+
 #results-section .hscroll-card[data-playlist-id] .hscroll-card-art::after {
   background: rgba(0, 0, 0, .45);
   opacity: 0;
@@ -2785,8 +2822,13 @@ button { border-radius: var(--radius-md); }
   body.artist-route:not(.header-scrolled) main header,
   body.album-route:not(.results-open):not(.header-scrolled) main header,
   body.now-playing-route:not(.results-open) main header,
+  body.results-open:not(.header-scrolled) main header,
   body.home-route:not(.results-open):not(.header-scrolled) main header {
     background: transparent;
+  }
+  body.results-open:not(.header-scrolled) main header::before {
+    background-color: transparent;
+    border-bottom-color: transparent;
   }
 }
 
