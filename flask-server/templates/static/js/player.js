@@ -52,6 +52,14 @@ function syncPlayPause() {
     if (pa) pa.style.display = state.isPlaying ? 'block' : 'none';
     btn.title = state.isPlaying ? 'Pause' : 'Play';
   }
+  syncTrackPlaybackIndicators();
+  if (window.updateQueuePlaying) window.updateQueuePlaying(state.isPlaying);
+}
+
+// These controls are permanent DOM nodes, so wire their proxy actions once.
+// Binding them from syncPlayPause() accumulated another listener after every
+// SSE/state repaint and eventually made one mobile tap dispatch many commands.
+(function wireMobileNowPlayingControls() {
   const mobileNpPlay = document.getElementById('mobile-np-play');
   const npPagePlay = document.getElementById('np-page-art-overlay');
   if (mobileNpPlay && npPagePlay) {
@@ -67,9 +75,7 @@ function syncPlayPause() {
   if (mobileNpLike && miniLikeButton) {
     mobileNpLike.addEventListener('click', () => miniLikeButton.click());
   }
-  syncTrackPlaybackIndicators();
-  if (window.updateQueuePlaying) window.updateQueuePlaying(state.isPlaying);
-}
+})();
 
 /* ---- now-playing display (single element, no dual placeholder bug) ---- */
 // Last-rendered track fingerprint — used to skip redundant DOM writes.
@@ -1078,9 +1084,12 @@ async function doClearAll() {
   yesBtn.addEventListener('click', () => { overlay.classList.remove('open'); doClearAll(); });
 })();
 
+let _playPauseBusy = false;
 document.getElementById('pp-btn').onclick = () => {
+  if (_playPauseBusy) return;
   const serial = selectedSerial();
   if (!serial) return;
+  _playPauseBusy = true;
   state.lastActionAt = Date.now();
   const action = state.isPlaying ? 'pause' : 'play';
   toast((action === 'pause' ? 'Pausing' : 'Resuming') + '\u2026');
@@ -1103,7 +1112,8 @@ document.getElementById('pp-btn').onclick = () => {
       state.lastActionIntent = previousPlaying;
       syncPlayPause();
       toast(e.message, 'error');
-    });
+    })
+    .finally(() => { _playPauseBusy = false; });
 };
 
 const npPageArt = document.getElementById('np-page-art');

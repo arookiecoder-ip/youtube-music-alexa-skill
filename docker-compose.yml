@@ -12,7 +12,7 @@ services:
       # persistent data volume (not in a read-only bind mount).
       - YTMUSIC_AUTH_FILE=/data/headers_auth.json
     volumes:
-      - ~/cookies.txt:/app/cookies.txt:ro
+      - ./cookies.txt:/app/cookies.txt:ro
       - ytmusic_cache:/tmp/ytm_audio_cache
       - ytmusic_data:/data
       # Amazon/Alexa login session cookie (see alexa_remote.py ALEXA_COOKIE_DIR).
