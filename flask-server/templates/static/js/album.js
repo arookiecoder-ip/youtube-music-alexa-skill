@@ -130,6 +130,7 @@
         };
         var row = document.createElement('div');
         row.className = 'history-item';
+        row.dataset.mobileRowPlay = 'true';
         var contextTrack = wrapper._songContextTrack;
         row.innerHTML =
           '<div class="playlist-track-num">' + (index + 1) + '</div>' +

@@ -408,6 +408,7 @@
             wrapper.className = 'result-swipe-wrapper';
             const row = document.createElement('div');
             row.className = 'history-item';
+            row.dataset.mobileRowPlay = 'true';
             const thumbnail = imageUrl(track.thumbnails) || imageUrl(track.thumbnail) || imageUrl(track.image) || '/static/default-art.png';
             // Build parallel arrays: display names and per-artist channel IDs.
             // ytmusicapi returns artist objects with both .name and .id.
@@ -471,6 +472,9 @@
             };
             const titleNode = row.querySelector('.queue-title');
             if (titleNode) titleNode.addEventListener('click', event => {
+              // On mobile the whole playlist row is one playback target. Let
+              // the click bubble to row.onclick instead of opening the album.
+              if (window.matchMedia('(max-width: 899px)').matches) return;
               event.preventDefault();
               event.stopPropagation();
               openResolvedAlbum(contextTrack);

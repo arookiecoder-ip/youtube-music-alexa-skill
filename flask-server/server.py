@@ -1765,14 +1765,11 @@ class Supporting:
         return {'song_info': {'metadata': playlist[0], 'stream': stream}, 'playlist': playlist}
 
     def get_ytdlp_clients():
-        # The `web` client is the most reliable first choice when exported
-        # cookies are configured (the common deployment): it is browser-flavoured
-        # and accepts cookie authentication. The others are tried in order only
-        # if `web` fails — `default` (no player_client) is a sane second pass,
-        # then `tv` (TV-flavoured, cookie-capable), with `android_vr` last as a
-        # cookie-free fallback that commonly hits YouTube's bot challenge on
-        # datacenter IPs. iOS rejects cookie authentication so it is omitted.
-        return ["web", "default", "tv", "android_vr"]
+        # android_vr currently exposes the normal AAC/M4A audio formats without
+        # cookies, while cookie-authenticated default/web can return image-only
+        # manifests and TV can report otherwise-playable videos as DRM. Keep
+        # the cookie-capable profiles as fallbacks for videos that need auth.
+        return ["android_vr", "default", "web", "tv"]
 
 
     @staticmethod

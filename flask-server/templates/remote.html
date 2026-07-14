@@ -534,6 +534,25 @@
           <circle cx="12" cy="19" r="1.7"></circle>
         </svg>
       </button>
+      <div class="mobile-player-volume-wrap">
+        <button class="mobile-player-volume" id="mobile-player-volume" type="button"
+                aria-label="Volume" title="Volume" aria-expanded="false"
+                aria-controls="mobile-volume-popover">
+          <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <path d="M3 9v6h4l5 5V4L7 9H3z"></path>
+            <path d="M16.5 12c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02z" opacity=".72"></path>
+            <path d="M19 12c0-3.04-1.73-5.66-4.26-6.96v1.87C16.74 8.14 18 9.93 18 12s-1.26 3.86-3.26 5.1v1.87C17.27 17.66 19 15.04 19 12z" opacity=".45"></path>
+          </svg>
+        </button>
+        <div class="mobile-volume-popover" id="mobile-volume-popover" role="group" aria-label="Volume control">
+          <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <path d="M3 9v6h4l5 5V4L7 9H3z"></path>
+            <path d="M16.5 12c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02z" opacity=".65"></path>
+          </svg>
+          <input type="range" id="mobile-np-volume" min="0" max="100" value="50" aria-label="Volume level">
+          <output id="mobile-np-volume-value" for="mobile-np-volume">50</output>
+        </div>
+      </div>
       <div class="np-page-left">
         <div class="np-page-art" id="np-page-art">
           <svg width="64" height="64" viewBox="0 0 24 24" fill="currentColor">

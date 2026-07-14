@@ -9,6 +9,8 @@
 
 const deviceEl = document.getElementById('device');
 const volumeEl = document.getElementById('volume');
+const mobileVolumeEl = document.getElementById('mobile-np-volume');
+const mobileVolumeValue = document.getElementById('mobile-np-volume-value');
 
 function isYoutubeLinkLike(value) {
   return /^(https?:\/\/)?(www\.|m\.|music\.)?(youtube\.com\/|youtu\.be\/)/i.test((value || '').trim());
@@ -36,6 +38,8 @@ function syncVolume(value, force) {
     volumeEl.value = v;
     const mpVol = document.getElementById('mp-volume');
     if (mpVol) mpVol.value = v;
+    if (mobileVolumeEl) mobileVolumeEl.value = v;
+    if (mobileVolumeValue) mobileVolumeValue.value = v;
   }, 150);
 }
 
@@ -105,6 +109,79 @@ volumeEl.oninput = e => {
       });
   }, 220);
 };
+
+if (mobileVolumeEl) {
+  let mobileVolTimer;
+  mobileVolumeEl.addEventListener('pointerdown', () => { state.volumeUserActive = true; });
+  mobileVolumeEl.addEventListener('pointerup', () => { state.volumeUserActive = false; });
+  mobileVolumeEl.addEventListener('touchend', () => { state.volumeUserActive = false; });
+  mobileVolumeEl.addEventListener('change', () => { state.volumeUserActive = false; });
+  mobileVolumeEl.oninput = e => {
+    const value = +e.target.value;
+    state.volumeUserActive = true;
+    state.volumeGraceUntil = Date.now() + state.VOLUME_GRACE_MS;
+    volumeEl.value = e.target.value;
+    if (mobileVolumeValue) mobileVolumeValue.value = e.target.value;
+    clearTimeout(mobileVolTimer);
+    const mySeq = ++state._volCommandSeq;
+    mobileVolTimer = setTimeout(() => {
+      const serial = selectedSerial();
+      if (!serial) {
+        state.volumeUserActive = false;
+        state.volumeGraceUntil = 0;
+        return;
+      }
+      toast('Volume ' + value + '\u2026');
+      api('/alexa/command/', { serial, action: 'volume', value })
+        .then(() => {
+          if (mySeq !== state._volCommandSeq) return;
+          state.volumeUserActive = false;
+          state.volumeGraceUntil = Date.now() + state.VOLUME_GRACE_MS;
+          syncVolume(value, true);
+          toast('Volume ' + value, 'ok');
+        })
+        .catch(err => {
+          if (mySeq !== state._volCommandSeq) return;
+          state.volumeUserActive = false;
+          state.volumeGraceUntil = 0;
+          refreshVolume(true);
+          toast(err.message, 'error');
+        });
+    }, 220);
+  };
+}
+
+const mobileVolumeButton = document.getElementById('mobile-player-volume');
+const mobileVolumePopover = document.getElementById('mobile-volume-popover');
+if (mobileVolumeButton && mobileVolumePopover) {
+  const closeMobileVolume = () => {
+    mobileVolumePopover.classList.remove('open');
+    mobileVolumeButton.setAttribute('aria-expanded', 'false');
+  };
+  mobileVolumeButton.addEventListener('click', e => {
+    e.preventDefault();
+    e.stopPropagation();
+    const open = !mobileVolumePopover.classList.contains('open');
+    closeMobileVolume();
+    if (!open) return;
+    const mobileMoreMenu = document.getElementById('np-more-menu');
+    const mobileMoreButton = document.getElementById('mobile-player-more');
+    if (mobileMoreMenu && mobileMoreMenu.classList.contains('mobile-open') && mobileMoreButton) {
+      mobileMoreButton.click();
+    }
+    mobileVolumeEl.value = volumeEl.value;
+    if (mobileVolumeValue) mobileVolumeValue.value = volumeEl.value;
+    mobileVolumePopover.classList.add('open');
+    mobileVolumeButton.setAttribute('aria-expanded', 'true');
+    refreshVolume(true);
+  });
+  document.addEventListener('click', e => {
+    if (!e.target.closest('.mobile-player-volume-wrap')) closeMobileVolume();
+  }, true);
+  document.addEventListener('keydown', e => {
+    if (e.key === 'Escape') closeMobileVolume();
+  });
+}
 
 /* ---- login gating ---- */
 

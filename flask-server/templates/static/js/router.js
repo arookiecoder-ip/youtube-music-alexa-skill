@@ -548,6 +548,13 @@
   window.wireArtistLinks = function(container) {
     container.querySelectorAll('.artist-name').forEach(function(an) {
       an.addEventListener('click', function(e) {
+        var mobilePlayRow = an.closest('[data-mobile-row-play="true"]');
+        if (mobilePlayRow && window.matchMedia('(max-width: 899px)').matches) {
+          e.preventDefault();
+          e.stopPropagation();
+          mobilePlayRow.click();
+          return;
+        }
         e.preventDefault();
         e.stopPropagation();
         window.openArtistLink(an);
@@ -559,6 +566,13 @@
   document.addEventListener('click', function(e) {
     var target = e.target.closest('.artist-name');
     if (target) {
+      var mobilePlayRow = target.closest('[data-mobile-row-play="true"]');
+      if (mobilePlayRow && window.matchMedia('(max-width: 899px)').matches) {
+        e.preventDefault();
+        e.stopPropagation();
+        mobilePlayRow.click();
+        return;
+      }
       e.preventDefault();
       e.stopPropagation();
       window.openArtistLink(target);
