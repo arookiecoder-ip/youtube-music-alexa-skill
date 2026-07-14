@@ -5426,10 +5426,43 @@ async def api_get_track_artwork(video_id):
         candidates = [thumb for thumb in thumbs if isinstance(thumb, dict) and thumb.get('url')]
         if not candidates:
             return None
-        return max(candidates, key=lambda thumb: (
-            int(thumb.get('width') or 0) * int(thumb.get('height') or 0),
-            int(thumb.get('width') or 0),
-        ))
+
+        def quality(thumb):
+            url = thumb.get('url', '')
+            width = int(thumb.get('width') or 0)
+            height = int(thumb.get('height') or 0)
+            # ytmusicapi sometimes omits dimensions.  The YouTube rendition
+            # name is still a useful quality signal in that case.
+            name_score = {
+                'maxresdefault': 5,
+                'sddefault': 4,
+                'hqdefault': 3,
+                'mqdefault': 2,
+                'default': 1,
+            }
+            rendition_score = max(
+                (score for name, score in name_score.items() if name in url),
+                default=0,
+            )
+            return (width * height, width, height, rendition_score)
+
+        ranked = sorted(candidates, key=quality, reverse=True)
+        urls = []
+        for thumb in ranked:
+            url = thumb['url']
+            if url not in urls:
+                urls.append(url)
+
+        # Some videos expose only a small rendition through the API even
+        # though YouTube still serves a larger standard video thumbnail.
+        # Add those URLs as fallbacks; the browser will verify which one
+        # actually exists before painting it.
+        direct_urls = []
+        for rendition in ('maxresdefault', 'sddefault', 'hqdefault'):
+            direct = 'https://i.ytimg.com/vi/{}/{}.jpg'.format(video_id, rendition)
+            if direct not in direct_urls:
+                direct_urls.append(direct)
+        return {'urls': direct_urls + [url for url in urls if url not in direct_urls]}
 
     clients = [_get_ytmusic_home()]
     try:
@@ -5442,9 +5475,8 @@ async def api_get_track_artwork(video_id):
             artwork = await asyncio.to_thread(find_artwork, client)
             if artwork:
                 return jsonify({
-                    'thumbnail': artwork['url'],
-                    'width': artwork.get('width') or 0,
-                    'height': artwork.get('height') or 0,
+                    'thumbnail': artwork['urls'][0],
+                    'thumbnails': artwork['urls'],
                 })
         except Exception as exc:
             logger.warning('[api/track/%s/artwork] lookup failed: %s', video_id, exc)

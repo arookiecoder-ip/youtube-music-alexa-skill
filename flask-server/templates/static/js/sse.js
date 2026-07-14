@@ -68,7 +68,11 @@
     }
     if (window.updateQueuePlaying) window.updateQueuePlaying(state().isPlaying);
     if (window.progress) window.progress.update(np);
-    window._lastQueueIndex = np.queue_index ?? -1;
+    // Keep the legacy window mirror and the shared app state in lockstep.
+    // Queue controls use appState while the SSE renderer historically used
+    // window properties; letting those drift makes the reopened queue point
+    // at a different row than the now-playing banner.
+    var reportedQueueIndex = np.queue_index ?? -1;
     if (np.queue !== undefined && np.queue !== null) {
       _rafQueuedData = np.queue;
       // queue_index can arrive from an older SSE/poll response than the
@@ -78,7 +82,10 @@
       var resolvedIndex = npVideoId ? np.queue.findIndex(function (item) {
         return item && item.video_id === npVideoId;
       }) : -1;
-      _rafQueuedIndex = resolvedIndex >= 0 ? resolvedIndex : window._lastQueueIndex;
+      var effectiveQueueIndex = resolvedIndex >= 0 ? resolvedIndex : reportedQueueIndex;
+      window._lastQueueIndex = effectiveQueueIndex;
+      state()._lastQueueIndex = effectiveQueueIndex;
+      _rafQueuedIndex = effectiveQueueIndex;
       if (!_rafPending) {
         _rafPending = true;
         requestAnimationFrame(() => {
@@ -86,6 +93,7 @@
           const qJson = JSON.stringify(_rafQueuedData);
           if (qJson !== window._lastQueueJson) {
             window._lastQueueJson = qJson;
+            state()._lastQueueJson = qJson;
             if (window.showQueue) window.showQueue(_rafQueuedData, _rafQueuedIndex);
             // Also update the inline queue on the now-playing page if visible
             const npSection = document.getElementById('now-playing-section');
@@ -108,11 +116,15 @@
       // Queue omitted means only playback state changed. Resolve the active
       // row by the latest known video id as well, rather than trusting a
       // possibly stale queue_index from the device.
-      if (npVideoId && window._lastQueueJson) {
+      var knownQueueJson = window._lastQueueJson || state()._lastQueueJson;
+      if (npVideoId && knownQueueJson) {
         try {
-          var knownQueue = JSON.parse(window._lastQueueJson);
+          var knownQueue = JSON.parse(knownQueueJson);
           var knownIndex = knownQueue.findIndex(function (item) { return item && item.video_id === npVideoId; });
-          if (knownIndex >= 0) window._lastQueueIndex = knownIndex;
+          if (knownIndex >= 0) {
+            window._lastQueueIndex = knownIndex;
+            state()._lastQueueIndex = knownIndex;
+          }
         } catch (_) {}
       }
       for (const id of ['queue-list', 'queue-modal-body']) {

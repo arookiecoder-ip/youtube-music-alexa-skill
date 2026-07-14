@@ -91,33 +91,49 @@ function upgradeLowResNowPlayingArt(info, fingerprint, artwork, npPageArt) {
 
   return window.api('/api/track/' + encodeURIComponent(info.video_id) + '/artwork')
     .then((result) => {
-      const highResUrl = result && result.thumbnail;
-      if (!highResUrl || highResUrl === info.thumbnail || _lastNpFingerprint !== fingerprint) return false;
+      const candidates = [];
+      (result && result.thumbnails || []).concat(result && result.thumbnail || [])
+        .forEach((url) => {
+          if (url && !candidates.includes(url)) candidates.push(url);
+        });
+      if (_lastNpFingerprint !== fingerprint || !candidates.length) return false;
 
-      return new Promise((resolve) => {
-        const highResImage = new Image();
-        highResImage.onload = () => {
-          if (_lastNpFingerprint !== fingerprint) return resolve(false);
-          const url = 'url(' + highResUrl + ')';
-          artwork.forEach((el) => {
-            el.style.backgroundImage = url;
-            el.classList.remove('image-loading');
-          });
-          if (npPageArt) {
-            const npPage = npPageArt.closest('.np-page');
-            // The page backdrop deliberately stays on the first preview that
-            // arrived for this track. Upgrading only the foreground artwork
-            // avoids a distracting full-screen background change mid-play.
-            npPage.classList.remove('image-loading');
-          }
-          _resolvedNowPlayingArt.set(info.video_id, highResUrl);
-          state._currentThumbnail = highResUrl;
-          if (state._currentTrack) state._currentTrack.thumbnail = highResUrl;
-          resolve(true);
-        };
-        highResImage.onerror = () => resolve(false);
-        highResImage.src = highResUrl;
-      });
+      const loadCandidate = (index) => {
+        if (index >= candidates.length || _lastNpFingerprint !== fingerprint) {
+          return Promise.resolve(false);
+        }
+        const highResUrl = candidates[index];
+        return new Promise((resolve) => {
+          const highResImage = new Image();
+          highResImage.onload = () => {
+            // Do not accept a candidate that is still a small shelf image.
+            // Keep trying the ranked fallbacks until a genuinely larger
+            // rendition is available.
+            if (highResImage.naturalWidth < 640 || highResImage.naturalHeight < 640) {
+              return resolve(loadCandidate(index + 1));
+            }
+            if (_lastNpFingerprint !== fingerprint) return resolve(false);
+            const url = 'url(' + highResUrl + ')';
+            artwork.forEach((el) => {
+              el.style.backgroundImage = url;
+              el.classList.remove('image-loading');
+            });
+            if (npPageArt) {
+              const npPage = npPageArt.closest('.np-page');
+              // Keep the ambient backdrop stable while upgrading the sharp
+              // foreground artwork.
+              npPage.classList.remove('image-loading');
+            }
+            _resolvedNowPlayingArt.set(info.video_id, highResUrl);
+            state._currentThumbnail = highResUrl;
+            if (state._currentTrack) state._currentTrack.thumbnail = highResUrl;
+            resolve(true);
+          };
+          highResImage.onerror = () => resolve(loadCandidate(index + 1));
+          highResImage.src = highResUrl;
+        });
+      };
+      return loadCandidate(0);
     })
     .catch(() => false);
 }
@@ -199,16 +215,16 @@ function showNowPlaying(info) {
     }
     if (info.thumbnail) {
       const cachedHighRes = info.video_id && _resolvedNowPlayingArt.get(info.video_id);
-      const displayThumbnail = cachedHighRes || info.thumbnail;
       if (info.video_id && !_ambientNowPlayingArt.has(info.video_id)) {
         _ambientNowPlayingArt.set(info.video_id, info.thumbnail);
       }
       const ambientThumbnail = (info.video_id && _ambientNowPlayingArt.get(info.video_id)) || info.thumbnail;
-      const url = 'url(' + displayThumbnail + ')';
+      const url = 'url(' + info.thumbnail + ')';
       const ambientUrl = 'url(' + ambientThumbnail + ')';
       const artwork = [art, miniArt, mpArt, npPageArt].filter(Boolean);
-      // Compact player artwork must stay sharp. Only the large full-player
-      // cover uses the soft preview while its HD replacement is fetched.
+      // Keep the compact player artwork on its original shelf thumbnail.
+      // Only the large expanded hero is upgraded after its HD rendition is
+      // decoded, so fetching artwork never changes the mini player.
       artwork.forEach((el) => {
         el.style.backgroundImage = url;
         el.classList.remove('image-loading');
@@ -216,6 +232,7 @@ function showNowPlaying(info) {
       });
       if (npPageArt) {
         const npPage = npPageArt.closest('.np-page');
+        if (cachedHighRes) npPageArt.style.backgroundImage = 'url(' + cachedHighRes + ')';
         npPageArt.classList.toggle('image-loading', !cachedHighRes);
         npPage.style.setProperty('--np-cover', ambientUrl);
         npPage.classList.toggle('image-loading', !cachedHighRes);
@@ -236,7 +253,7 @@ function showNowPlaying(info) {
           if (npPageArt) npPageArt.closest('.np-page').classList.remove('image-loading');
           return;
         }
-        upgradeLowResNowPlayingArt(info, fp, artwork, npPageArt)
+        upgradeLowResNowPlayingArt(info, fp, npPageArt ? [npPageArt] : [], npPageArt)
           .then((upgraded) => {
             if (!upgraded && _lastNpFingerprint === fp) {
               artwork.forEach((el) => el.classList.remove('image-loading'));
