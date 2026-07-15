@@ -408,6 +408,9 @@
   ];
   function goHome(e, toggleSelector) {
     if (e.target.closest(toggleSelector)) return;
+    if (window.matchMedia('(max-width: 899px)').matches && window._closeSidebar) {
+      window._closeSidebar();
+    }
     const alreadyHome = (window.getRoute && window.getRoute()) === '#home';
     // Search results live on the Home route, so navigating to #home alone is
     // a no-op. Close the results explicitly before treating the brand as an
