@@ -1955,12 +1955,13 @@ body.now-playing-route .player-section .player-expand-btn svg {
     display: none !important;
   }
 
-  .player-section .np-artist,
-  .player-section .np-artist .artist-name {
+  body .player-section .np-artist,
+  body .player-section .np-artist .artist-name {
     pointer-events: none;
     user-select: none;
     -webkit-user-select: none;
     cursor: default;
+    text-decoration: none !important;
   }
 }
 

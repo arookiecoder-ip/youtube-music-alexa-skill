@@ -26,6 +26,21 @@
     return item.album && item.album.name || item.views || '';
   }
 
+  function artistSubtitleHtml(item) {
+    const artists = Array.isArray(item.artists) ? item.artists.filter(Boolean) : [];
+    const names = artists.map(artist => typeof artist === 'string' ? artist : artist.name).filter(Boolean);
+    const ids = artists.map(artist => typeof artist === 'object'
+      ? (artist.id || artist.browseId || artist.channelId || artist.channel_id || '')
+      : '');
+    const fallbackName = item.artist || item.author || '';
+    const artistText = names.length ? names.join(', ') : fallbackName;
+    if (!artistText) return escHtml(subtitle(item));
+    const fallbackId = item.artistId || item.artist_id || item.channelId || item.channel_id || '';
+    return window.artistLinksHtml
+      ? window.artistLinksHtml(artistText, ids.some(Boolean) ? ids : fallbackId)
+      : escHtml(artistText);
+  }
+
   function openItem(item) {
     const videoId = item.videoId || item.video_id;
     if (videoId && window.playResult) {
@@ -110,6 +125,9 @@
   function renderCard(item, eager) {
     const title = item.title || item.name || 'Unknown';
     const thumb = imageUrl(item.thumbnails) || imageUrl(item.thumbnail) || imageUrl(item.images) || imageUrl(item.image);
+    const cardSubtitle = subtitle(item) || item.artist || item.author ||
+      (Array.isArray(item.artists) && item.artists.length ? item.artists.map(artist =>
+        typeof artist === 'string' ? artist : artist.name).filter(Boolean).join(', ') : '');
     const card = document.createElement('article');
     card.className = 'explore-card' + ((item.type === 'Album' || String(item.browseId || item.albumId || '').startsWith('MPREb')) ? ' album-card' : '');
     card.tabIndex = 0;
@@ -135,9 +153,13 @@
       </div>
       <div class="explore-card-info">
         <div class="explore-card-title">${escHtml(title)}</div>
-        ${subtitle(item) ? `<div class="explore-card-sub">${escHtml(subtitle(item))}</div>` : ''}
+        ${cardSubtitle ? `<div class="explore-card-sub">${artistSubtitleHtml(item)}</div>` : ''}
       </div>`;
-    card.addEventListener('click', () => openItem(item));
+    if (window.wireArtistLinks) window.wireArtistLinks(card);
+    card.addEventListener('click', event => {
+      if (event.target.closest('.artist-name')) return;
+      openItem(item);
+    });
     card.addEventListener('keydown', event => {
       if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openItem(item); }
     });

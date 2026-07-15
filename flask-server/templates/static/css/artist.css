@@ -296,6 +296,16 @@
     color: var(--text);
     text-decoration: underline;
   }
+
+  /* On touch devices artist credits are part of the song-row play target,
+     rather than a separate link. This also removes the link-style feedback. */
+  @media (max-width: 899px) {
+    .artist-song-artist .artist-name {
+      cursor: inherit;
+      pointer-events: none;
+      text-decoration: none;
+    }
+  }
   .artist-song-play-btn:active, .artist-song-like-btn:active { color: var(--accent); border-color: var(--accent); }
   .artist-song-like-btn.liked { color: var(--accent); border-color: var(--accent); }
   .artist-song-play-btn svg { width: 30px; height: 30px; }
@@ -433,6 +443,12 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+  .hscroll-card-title:hover {
+    text-decoration: underline;
+    text-decoration-color: currentColor;
+    text-decoration-thickness: 1px;
+    text-underline-offset: 2px;
   }
   .hscroll-card-sub {
     font-size: .76rem;

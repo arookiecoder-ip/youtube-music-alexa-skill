@@ -605,3 +605,14 @@
   }
   .history-item:hover .playlist-track-art::after { opacity: 1; }
 }
+
+/* In every playlist variant, artist credits on touch devices belong to the
+   song-row playback target. The three-dot button remains independently
+   clickable because it is not affected by this rule. */
+@media (max-width: 899px) {
+  .history-item[data-mobile-row-play="true"] .artist-name {
+    cursor: inherit;
+    pointer-events: none;
+    text-decoration: none;
+  }
+}

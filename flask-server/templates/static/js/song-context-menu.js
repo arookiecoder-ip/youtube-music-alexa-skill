@@ -322,24 +322,9 @@
   });
 
   document.addEventListener('click', function (event) {
-    // A song title is a catalog link everywhere in the app.  Keep artwork,
-    // play buttons, and row actions as playback controls.
-    const title = event.target.closest('.home-item-title, .recs-tile-title, .artist-song-title, .queue-title, .result-title, .top-result-title');
-    // Queue rows are playback controls: their own click handler selects and
-    // plays the queued track. Do not let the generic catalog-title shortcut
-    // intercept a queue title during capture and send the user to its album.
-    if (title && !event.target.closest('button, .artist-name, .queue-swipe-wrapper')) {
-      const root = title.closest(ROOT_SELECTOR);
-      if (root) {
-        const track = trackFrom(root);
-        if (track.video_id) {
-          event.preventDefault();
-          event.stopImmediatePropagation();
-          navigateTrackAlbum(track, root);
-          return;
-        }
-      }
-    }
+    // Song rows and cards own playback through their local click handlers.
+    // Album navigation is intentionally explicit (the context menu or the
+    // dedicated now-playing banner title), never a generic song-title route.
     if (!event.target.closest('.song-context-menu')) closeMenu();
   }, true);
   document.addEventListener('keydown', function (event) {

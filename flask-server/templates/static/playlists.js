@@ -470,15 +470,8 @@
                 }, false, false, true);
               }
             };
-            const titleNode = row.querySelector('.queue-title');
-            if (titleNode) titleNode.addEventListener('click', event => {
-              // On mobile the whole playlist row is one playback target. Let
-              // the click bubble to row.onclick instead of opening the album.
-              if (window.matchMedia('(max-width: 899px)').matches) return;
-              event.preventDefault();
-              event.stopPropagation();
-              openResolvedAlbum(contextTrack);
-            });
+            // The row is the playback target; artist links and the three-dot
+            // action button stop propagation in their own handlers.
             // Playlist payloads occasionally label an unknown artist as
             // "Song". Resolve the canonical music metadata in the background
             // and replace that placeholder without delaying page rendering.

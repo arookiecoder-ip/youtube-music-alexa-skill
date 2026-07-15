@@ -41,17 +41,17 @@
     },
     '#explore': function() {
       hideAllViews();
-      setHidden('.play-section', true);
+      setHidden('.play-section', false);
       if (window.openExplorePage) window.openExplorePage();
     },
     '#library': function() {
       hideAllViews();
-      setHidden('.play-section', true);
+      setHidden('.play-section', false);
       if (window.openLibraryPage) window.openLibraryPage();
     },
     '#history': function() {
       hideAllViews();
-      setHidden('.play-section', true);
+      setHidden('.play-section', false);
       if (window.openHistoryPage) window.openHistoryPage(true);
     },
     '#now-playing': function() {
@@ -86,6 +86,7 @@
       }
     },
     '#queue': function() {
+      setHidden('.play-section', false);
       var queueSection = document.getElementById('queue-section');
       var resultsSection = document.getElementById('results-section');
       if (queueSection) {
@@ -457,6 +458,7 @@
       var moodQuery = new URLSearchParams(moodQueryIndex === -1 ? '' : moodRouteValue.slice(moodQueryIndex + 1));
       var moodTitle = moodQuery.get('title') || 'Moods and genres';
       if (!moodParams) { window.navigateTo('#explore'); return; }
+      setHidden('.play-section', false);
       if (window.openMoodPage) window.openMoodPage(moodParams, moodTitle);
     } else if (hash.indexOf('#artist/') === 0) {
       var artistRouteValue = hash.slice('#artist/'.length);
@@ -547,11 +549,11 @@
   window.wireArtistLinks = function(container) {
     container.querySelectorAll('.artist-name').forEach(function(an) {
       an.addEventListener('click', function(e) {
-        var mobilePlayRow = an.closest('[data-mobile-row-play="true"]');
-        if (mobilePlayRow && window.matchMedia('(max-width: 899px)').matches) {
+        // Artist credits are display-only on mobile. Do not turn their taps
+        // into either navigation or the parent song row's playback action.
+        if (window.matchMedia('(max-width: 899px)').matches) {
           e.preventDefault();
           e.stopPropagation();
-          mobilePlayRow.click();
           return;
         }
         e.preventDefault();
@@ -565,11 +567,10 @@
   document.addEventListener('click', function(e) {
     var target = e.target.closest('.artist-name');
     if (target) {
-      var mobilePlayRow = target.closest('[data-mobile-row-play="true"]');
-      if (mobilePlayRow && window.matchMedia('(max-width: 899px)').matches) {
+      // Covers artist spans that have not been individually wired yet.
+      if (window.matchMedia('(max-width: 899px)').matches) {
         e.preventDefault();
         e.stopPropagation();
-        mobilePlayRow.click();
         return;
       }
       e.preventDefault();

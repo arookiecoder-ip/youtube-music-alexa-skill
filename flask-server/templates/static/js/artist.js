@@ -425,6 +425,14 @@
         if (window.openSongContextMenu) window.openSongContextMenu(e, item);
       });
       if (window.wireArtistLinks) window.wireArtistLinks(row);
+      row.addEventListener('click', function(e) {
+        // Keep artist links and row controls independent. The rest of the
+        // song row, including its title, starts playback.
+        if (e.target.closest('button, .artist-name')) return;
+        if (window.playFromQueue) {
+          window.playFromQueue({video_id: item.video_id, title: item.title, artist: item.artist, thumbnail: item.thumbnail});
+        }
+      });
       list.appendChild(row);
     }
 

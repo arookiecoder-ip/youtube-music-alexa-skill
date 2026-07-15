@@ -372,6 +372,17 @@
         var kind = itemCard.dataset.kind;
         var mobileHomeCard = window.matchMedia && window.matchMedia('(max-width: 899px)').matches;
 
+        // Track cards play when their card is tapped, but their title is an
+        // explicit album-navigation target on mobile.  The renderer keeps the
+        // track's album browse id in data-album-id for this exact distinction.
+        var tappedTitle = !playBtn && e.target.closest('.home-item-title');
+        var albumId = itemCard.dataset.albumId;
+        if (mobileHomeCard && tappedTitle && albumId) {
+            if (window.preloadNavigateAlbum) window.preloadNavigateAlbum(albumId);
+            else window.navigateTo('#album/' + encodeURIComponent(albumId));
+            return;
+        }
+
         // Mobile feed cards can come from compact shelf payloads whose kind is
         // missing or reported as "single". Keep this fallback mobile-only so
         // the established PC click routing remains unchanged.

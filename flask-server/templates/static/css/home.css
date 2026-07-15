@@ -596,12 +596,19 @@
 
 /* Artist names in home shelves are interactive spans. Keep their hover
    affordance above the card/subtitle text rules in the redesigned shell. */
-.home-item .home-item-subtitle .artist-name:hover,
-.home-item .home-item-subtitle .artist-name:focus-visible {
+.home-item .home-item-subtitle .artist-name:hover {
   color: var(--text) !important;
   text-decoration-line: underline !important;
   text-decoration-color: currentColor !important;
   text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+}
+
+/* Title only. Card/banner hover must not underline this text. */
+.home-item-title:hover {
+  text-decoration: underline !important;
+  text-decoration-color: currentColor !important;
+  text-decoration-thickness: 1px !important;
   text-underline-offset: 2px;
 }
 
@@ -834,19 +841,6 @@
     height: 34px;
     padding: 7px;
     border: 1px solid rgba(255,255,255,.2);
-  }
-
-  body.home-route .play-section {
-    margin: 0 0 18px;
-    padding: 8px 14px 10px !important;
-    background: #050505 !important;
-    border-radius: 0 0 8px 8px;
-  }
-  body.home-route .search-wrap input#query {
-    height: 40px;
-    border-color: #323232;
-    background: #050505;
-    font-size: .78rem;
   }
 
   body.home-route #home-section {

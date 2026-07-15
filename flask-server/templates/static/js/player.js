@@ -810,7 +810,35 @@ function syncModalScrollLock() {
     window.navigateTo('#now-playing');
   }
 
+  function openCurrentTrackAlbum(event) {
+    event.preventDefault();
+    event.stopPropagation();
+    const track = state._currentTrack;
+    if (!track || !track.video_id || !window.navigateTo) return;
+
+    const navigate = (albumId) => {
+      if (!albumId) {
+        if (window.toast) window.toast('Album unavailable for this song', 'error');
+        return;
+      }
+      track.album_id = albumId;
+      if (window.preloadNavigateAlbum) window.preloadNavigateAlbum(albumId);
+      else window.navigateTo('#album/' + encodeURIComponent(albumId));
+    };
+
+    if (track.album_id) {
+      navigate(track.album_id);
+    } else if (typeof window.api === 'function') {
+      window.api('/api/album/resolve/' + encodeURIComponent(track.video_id))
+        .then((details) => navigate(details && details.album_id))
+        .catch(() => navigate(''));
+    }
+  }
+
   if (expandBtn) expandBtn.addEventListener('click', openNowPlaying);
+  for (const title of [document.getElementById('np-title'), document.getElementById('np-page-title')]) {
+    if (title) title.addEventListener('click', openCurrentTrackAlbum);
+  }
   playerBar.addEventListener('click', (event) => {
     if (event.target.closest('button, a, input, [role="slider"], .progress-track, .artist-name')) return;
     openNowPlaying(event);
@@ -934,6 +962,9 @@ if (npPageArt) {
       if (mobileVolumeButton) mobileVolumeButton.setAttribute('aria-expanded', 'false');
       return;
     }
+    // The mobile now-playing banner is informational; only its dedicated
+    // playback control may pause or resume the track.
+    if (window.matchMedia('(max-width: 899px)').matches) return;
     const overlay = document.getElementById('np-page-art-overlay');
     if (overlay) {
       overlay.classList.remove('flash');

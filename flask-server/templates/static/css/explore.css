@@ -1,0 +1,31 @@
+/* Keep Explore and Genre card metadata consistent with the Home feed. */
+.explore-card-title {
+  font-size: 0.9rem;
+  /* Reset legacy card-title underline. Dedicated rule below owns effect. */
+  text-decoration: none !important;
+  /* Reserve room inside the ellipsis clipping box for the hover underline. */
+  padding-bottom: 2px;
+  margin-bottom: -2px;
+}
+
+.explore-card-sub {
+  font-size: 0.8rem;
+}
+
+/* Genre album shelves should use the normal card width, not six columns
+   stretched across the full desktop viewport. */
+@media (min-width: 900px) {
+  body.mood-route .mood-albums-playlists .explore-grid--featured {
+    grid-template-columns: repeat(6, 174px);
+    gap: 24px;
+  }
+}
+
+@media (min-width: 900px) {
+  .explore-card-title:hover {
+    text-decoration: underline !important;
+    text-decoration-color: currentColor !important;
+    text-decoration-thickness: 1px !important;
+    text-underline-offset: 2px;
+  }
+}

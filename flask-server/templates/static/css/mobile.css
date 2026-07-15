@@ -1,0 +1,6 @@
+/* Touch screens do not use hover-link affordances. */
+@media (hover: none) and (pointer: coarse) {
+  body * {
+    text-decoration-line: none !important;
+  }
+}

@@ -776,3 +776,16 @@ body.jam-guest #login-section,
 body.jam-guest .jam-owner-only {
   display: none !important;
 }
+/* Touch browsers can retain hover styling after a tap. Titles and artist
+   credits stay visually neutral across Home, Explore, Artist, and Search. */
+@media (hover: none) and (pointer: coarse) {
+  .artist-name,
+  .home-item-title,
+  .explore-card-title,
+  .artist-song-title,
+  .hscroll-card-title,
+  #results-section .result-title,
+  #results-section .top-result-title {
+    text-decoration: none !important;
+  }
+}

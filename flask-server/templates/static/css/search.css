@@ -346,23 +346,12 @@
 
   body.results-open #queue-section { display: none !important; }
 
-  /* Sticky search bar on mobile while results are open.
-     IMPORTANT: Only hide the *non-redesigned* player-section on mobile;
-     the redesigned-bar is position:fixed and is independently managed. */
+  /* Results-only player behavior. Shared search placement is defined once
+     at the end of this component stylesheet. */
   @media (max-width: 899px) {
     body.results-open .player-section:not(.redesigned-bar) { display: none !important; }
     body.results-open main { padding-bottom: 92px; }
     body.results-open .toast { bottom: calc(92px + env(safe-area-inset-bottom, 0px)); }
-    body.results-open .needs-login:has(#play-query),
-    body.results-open .play-section {
-      position: sticky;
-      top: 0;
-      z-index: 40;
-      margin-bottom: 0;
-      border-bottom: none;
-      background: #141414;
-      contain: paint;
-    }
   }
 
   /* Desktop redesigned results page. The legacy two-column results layout
@@ -421,7 +410,8 @@
   transition: color .15s;
 }
 .artist-name:hover {
-  color: var(--accent);
+  color: var(--text);
+  text-decoration: underline;
 }
 .artist-name:active {
   color: var(--accent);
@@ -431,6 +421,13 @@
 .top-result-subtitle .artist-name:hover {
   color: var(--text);
   text-decoration: underline;
+}
+
+#results-section .hscroll-card-title:hover {
+  text-decoration: underline;
+  text-decoration-color: currentColor;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
 }
 
 /* ---- Top Result Card ---- */
@@ -646,6 +643,137 @@
     justify-content: flex-start;
     margin-top: 4px;
   }
+}
+
+/* ============================================================
+   Shared search shell
+
+   This is the sole owner of search-bar appearance and responsive placement.
+   Keep desktop rules in the min-width block and mobile rules in the max-width
+   block; route styles must not restyle this component.
+   ============================================================ */
+.play-section,
+main.has-queue .play-section,
+body.results-open .play-section {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  max-width: 620px;
+  margin: 10px auto 14px;
+  padding: 0 !important;
+  background: none !important;
+  border: 0 !important;
+}
+.play-section .section-head { display: none; }
+.play-section .row { display: flex; flex: 1; min-width: 0; gap: 8px; }
+.search-wrap { position: relative; flex: 1; min-width: 0; }
+.search-wrap::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 16px;
+  width: 17px;
+  height: 17px;
+  transform: translateY(-50%);
+  pointer-events: none;
+  opacity: .75;
+  background: center / contain no-repeat url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23aaaaaa' stroke-width='2.2' stroke-linecap='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cline x1='21' y1='21' x2='16.2' y2='16.2'/%3E%3C/svg%3E");
+}
+.search-wrap input#query {
+  width: 100%;
+  height: 42px;
+  padding: 12px 42px 12px 44px;
+  border: 1px solid rgba(255, 255, 255, .22);
+  border-radius: 0;
+  background: transparent;
+  font-size: .9rem;
+  transition: background .15s, border-color .15s, box-shadow .15s;
+}
+.search-wrap input#query:hover {
+  background: var(--pill-bg);
+  border-color: rgba(255, 255, 255, .38);
+}
+.search-wrap input#query:focus {
+  background: #232323;
+  border-color: rgba(232, 89, 12, .55);
+  box-shadow: 0 0 0 3px rgba(232, 89, 12, .12);
+}
+#play-query { display: none !important; }
+.suggest-list {
+  top: calc(100% + 6px);
+  z-index: 900;
+  max-height: 420px;
+  padding: 8px 0;
+  overflow: hidden auto;
+  border: 1px solid rgba(255, 255, 255, .08);
+  border-radius: 0;
+  background: #212121;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, .6);
+}
+.suggest-item { gap: 14px; padding: 10px 16px; font-size: .88rem; }
+.suggest-item + .suggest-item { border-top: 0; }
+.suggest-item:hover, .suggest-item.active { background: rgba(255, 255, 255, .08); }
+.suggest-item > span { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.suggest-item-remove { width: 28px; height: 28px; padding: 0; color: #fff !important; opacity: 1; pointer-events: auto; }
+.suggest-item-remove svg { display: none !important; }
+.suggest-item-remove::before { content: '\00d7'; font-size: 25px; font-weight: 300; line-height: 1; }
+
+@media (min-width: 900px) {
+  .play-section,
+  main.has-queue .play-section,
+  body.results-open .play-section {
+    position: fixed;
+    top: 1px;
+    left: 50vw;
+    z-index: 245;
+    width: clamp(300px, 34vw, 560px);
+    max-width: none;
+    height: var(--topbar-h);
+    margin: 0;
+    transform: translateX(-50%);
+  }
+}
+
+@media (max-width: 899px) {
+  .play-section,
+  main.has-queue .play-section,
+  body.results-open .play-section {
+    position: sticky;
+    top: 57px;
+    z-index: 90;
+    width: auto;
+    max-width: none;
+    margin: 0 calc(-1 * var(--space-4)) 10px;
+    padding: 8px var(--space-4) 10px !important;
+    background: #050505 !important;
+    border-radius: 0 0 8px 8px;
+    box-sizing: border-box;
+  }
+  @media (hover: none) and (pointer: coarse) {
+    body:not(.mobile-search-open) .play-section { display: none !important; }
+  }
+  body.mobile-search-open::after {
+    content: '';
+    position: fixed;
+    inset: 57px 0 0;
+    z-index: 680;
+    background: rgba(0, 0, 0, .72);
+  }
+  body.mobile-search-open .play-section {
+    display: flex !important;
+    position: fixed;
+    top: 57px;
+    left: 0;
+    right: 0;
+    z-index: 700;
+    width: 100%;
+    margin: 0;
+    padding: 8px 14px 10px !important;
+    overflow: visible;
+  }
+  body.mobile-search-open .search-wrap { width: 100%; overflow: visible; }
+  body.mobile-search-open .suggest-list { max-height: min(420px, calc(100dvh - 120px)); }
 }
 
 /* Mobile category chips: lower row, sharper corners. */

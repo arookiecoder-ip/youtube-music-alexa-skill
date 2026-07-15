@@ -427,148 +427,8 @@ header > .brand h1 {
   border-color: #2c2c2c;
 }
 
-/* ============================================================
-   Search bar (the old "Play" card becomes a search pill)
-   ============================================================ */
-
-.play-section,
-main.has-queue .play-section,
-body.results-open .play-section {
-  background: none !important;
-  border: none !important;
-  padding: 0 !important;
-  margin: 10px auto 14px;
-  width: 100%;
-  max-width: 620px;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-.play-section .section-head {
-  margin: 0;
-  order: 2;
-  flex: none;
-}
-.play-section .label { display: none; }
-.play-section .row {
-  flex: 1;
-  min-width: 0;
-  order: 1;
-  display: flex;
-  gap: 8px;
-}
-
-.search-wrap { position: relative; }
-.search-wrap::before {
-  content: '';
-  position: absolute;
-  left: 16px;
-  top: 50%;
-  transform: translateY(-50%);
-  width: 17px;
-  height: 17px;
-  pointer-events: none;
-  opacity: .75;
-  background: center / contain no-repeat
-    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23aaaaaa' stroke-width='2.2' stroke-linecap='round'%3E%3Ccircle cx='11' cy='11' r='7'/%3E%3Cline x1='21' y1='21' x2='16.2' y2='16.2'/%3E%3C/svg%3E");
-}
-.search-wrap input#query {
-  border-radius: 0;
-  background: transparent;
-  border: 1px solid rgba(255, 255, 255, .22);
-  padding: 12px 42px 12px 44px;
-  font-size: .9rem;
-  transition: background .15s, border-color .15s, box-shadow .15s;
-}
-.search-wrap input#query:hover {
-  background: var(--pill-bg);
-  border-color: rgba(255, 255, 255, .38);
-}
-.search-wrap input#query:focus {
-  background: #232323;
-  border-color: rgba(232, 89, 12, .55);
-  box-shadow: 0 0 0 3px rgba(232, 89, 12, .12);
-}
-
-#play-query {
-  display: none !important;
-}
-
 /* Suggestions / recent-searches dropdown — YT Music style: a rounded panel
    hanging just under the pill, roomy rows, no hairline between items. */
-.suggest-list {
-  top: calc(100% + 6px);
-  border-radius: 0;
-  overflow: hidden auto;
-  background: #212121;
-  border: 1px solid rgba(255, 255, 255, .08);
-  box-shadow: 0 16px 40px rgba(0, 0, 0, .6);
-  max-height: 420px;
-  padding: 8px 0;
-}
-.suggest-item {
-  padding: 10px 16px;
-  gap: 14px;
-  font-size: .88rem;
-}
-.suggest-item + .suggest-item { border-top: none; }
-.suggest-item:hover,
-.suggest-item.active { background: rgba(255, 255, 255, .08); }
-.suggest-item > svg {
-  width: 16px;
-  height: 16px;
-  color: #aaa;
-}
-.suggest-item > span {
-  /* flex:1 + min-width:0 are required for the ellipsis to fire inside a flex
-     parent; without them a long entry pushes the row wider than the dropdown
-     and overflow:hidden on .suggest-list clips the X button off-screen. */
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-}
-.suggest-item-remove {
-  width: 28px;
-  height: 28px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 0;
-  border: 0;
-  background: transparent !important;
-  color: #ffffff !important;
-  opacity: 1;
-  pointer-events: auto;
-  transition: opacity .15s, color .15s, background .15s, transform .15s;
-  border-radius: 50%;
-}
-.suggest-item-remove svg {
-  display: none !important;
-}
-.suggest-item-remove::before {
-  content: '×';
-  display: block;
-  color: #fff;
-  font-size: 25px;
-  font-weight: 300;
-  line-height: 1;
-}
-.suggest-item:hover .suggest-item-remove,
-.suggest-item.active .suggest-item-remove {
-  opacity: 1;
-  pointer-events: auto;
-}
-.suggest-item-remove:hover {
-  color: #fff !important;
-  background: rgba(255, 255, 255, .16) !important;
-  transform: scale(1.08);
-}
-.result-menu-option.is-unavailable {
-  opacity: .42;
-  pointer-events: none;
-}
 /* Artist credits are links in every list surface. Keep their affordance
    identical regardless of which page rendered the song. */
 .artist-name {
@@ -597,44 +457,6 @@ img[data-image-ready="true"] {
   opacity: 1 !important;
 }
 
-/* Wide screens: the search pill floats inside the top bar, dead center.
-   The has-queue/results-open variants MUST be listed too: the base group
-   above includes them at higher specificity, so a bare .play-section here
-   would lose and the pill would drop 10px and stretch to 620px the moment
-   search results opened (the "header breaks on search" bug). */
-@media (min-width: 900px) {
-  .play-section,
-  main.has-queue .play-section,
-  body.results-open .play-section {
-    position: fixed;
-    top: 1px;
-    left: 50vw;
-    transform: translateX(-50%);
-    width: clamp(300px, 34vw, 560px);
-    max-width: none;
-    height: var(--topbar-h);
-    margin: 0;
-    z-index: 245;
-    /* Header control: remains centered in the viewport while the rail moves. */
-    transition: none;
-  }
-}
-
-/* Sticky search on mobile so it's always one thumb away */
-@media (max-width: 899px) {
-  .play-section {
-    position: sticky;
-    top: 0;
-    z-index: 90;
-    margin: 0 calc(-1 * var(--space-4)) 10px;
-    width: auto;
-    max-width: none;
-    padding: 8px var(--space-4) 10px !important;
-    background: rgba(10, 10, 10, .88) !important;
-    backdrop-filter: blur(16px);
-    -webkit-backdrop-filter: blur(16px);
-  }
-}
 /* ============================================================
    Left rail (desktop) / drawer (mobile)
    ============================================================ */
@@ -1242,15 +1064,6 @@ button { border-radius: var(--radius-md); }
   body.library-route main header::before {
     background-color: transparent;
     border-bottom-color: transparent;
-  }
-}
-
-@media (max-width: 899px) {
-  .play-section {
-    background: #000 !important;
-    backdrop-filter: none;
-    -webkit-backdrop-filter: none;
-    contain: paint;
   }
 }
 
@@ -2002,10 +1815,6 @@ body.results-open .player-section {
     pointer-events: auto !important;
   }
 
-  body .play-section {
-    top: 53px;
-  }
-
   /* Expanded player occupies only space between persistent chrome layers. */
   body.now-playing-route #now-playing-section {
     position: fixed !important;
@@ -2100,9 +1909,6 @@ body.results-open .player-section {
   body main {
     padding-top: 57px !important;
   }
-  body .play-section {
-    top: 57px !important;
-  }
   body header #jam-btn {
     display: none !important;
   }
@@ -2122,44 +1928,6 @@ body.results-open .player-section {
     color: var(--text);
   }
   .mobile-search-toggle svg { width: 18px; height: 18px; }
-  body:not(.mobile-search-open) .play-section {
-    display: none !important;
-  }
-  body.mobile-search-open::after {
-    content: '';
-    position: fixed;
-    top: 57px;
-    left: 0;
-    right: 0;
-    bottom: 0;
-    z-index: 680;
-    background: rgba(0,0,0,.72);
-  }
-  body.mobile-search-open .play-section {
-    display: flex !important;
-    position: fixed !important;
-    top: 57px !important;
-    left: 0 !important;
-    right: 0 !important;
-    width: 100% !important;
-    max-width: none !important;
-    margin: 0 !important;
-    padding: 8px 14px 10px !important;
-    z-index: 700 !important;
-    background: #050505 !important;
-    border-radius: 0 0 8px 8px;
-    box-sizing: border-box;
-    contain: none !important;
-    overflow: visible !important;
-  }
-  body.mobile-search-open .play-section .search-wrap {
-    width: 100%;
-    overflow: visible !important;
-  }
-  body.mobile-search-open .suggest-list {
-    z-index: 900 !important;
-    max-height: min(420px, calc(100dvh - 120px));
-  }
   /* Manual horizontal drags follow the finger; no snap or CSS scrolling
      animation changes the user's swipe speed. */
   body .explore-grid {
@@ -3083,7 +2851,6 @@ body.results-open .player-section {
 
 /* Album cards already open their album on click; underline only their title
    on hover/focus so that navigation affordance is unmistakable. */
-.home-item[data-kind="album"] .home-item-title,
 .hscroll-card.album-card .hscroll-card-title,
 .explore-card.album-card .explore-card-title,
 .top-result-card.is-album .top-result-title {
@@ -3094,9 +2861,6 @@ body.results-open .player-section {
   text-decoration-thickness: 1px;
   transition: text-decoration-color .2s ease;
 }
-.home-item-card .home-item-title,
-.home-item-wide-card .home-item-title,
-.home-item-song .home-item-title,
 .explore-card .explore-card-title {
   cursor: pointer;
   text-decoration-line: underline;
@@ -3105,9 +2869,6 @@ body.results-open .player-section {
   text-underline-offset: 3px;
   transition: text-decoration-color .2s ease;
 }
-.home-item-card .home-item-title:hover,
-.home-item-wide-card .home-item-title:hover,
-.home-item-song .home-item-title:hover,
 .hscroll-card.album-card .hscroll-card-title:hover,
 .explore-card .explore-card-title:hover {
   text-decoration-color: currentColor;
