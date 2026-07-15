@@ -1,5 +1,5 @@
-/* Touch screens do not use hover-link affordances. */
-@media (hover: none) and (pointer: coarse) {
+/* Mobile views do not use underline affordances, including after touch focus. */
+@media (max-width: 899px) {
   body * {
     text-decoration-line: none !important;
   }
