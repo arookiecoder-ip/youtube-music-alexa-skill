@@ -46,7 +46,7 @@ function openResults() {
     window.navigateTo('#home');
   }
   const section = document.getElementById('results-section');
-  // The queue column collapses while results are showing; the mini player
+  // The queue column collapses while results are showing; the compact player
   // takes over at the bottom.
   const mainEl = document.querySelector('main');
   const queueSection = document.getElementById('queue-section');
@@ -106,7 +106,7 @@ function closeResults() {
       section.hidden = true;
       syncUiState();
       if (typeof window.renderRoute === 'function') window.renderRoute();
-      // Replay the player's reveal animation so enlarging from the mini player
+      // Replay the player's reveal animation so enlarging from the compact player
       // slides the full player in instead of popping it.
       if (state._hasTrack) {
         const player = document.querySelector('.player-section');

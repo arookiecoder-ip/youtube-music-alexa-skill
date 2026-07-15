@@ -36,8 +36,6 @@ function syncVolume(value, force) {
   clearTimeout(_volumeRepaintTimer);
   _volumeRepaintTimer = setTimeout(() => {
     volumeEl.value = v;
-    const mpVol = document.getElementById('mp-volume');
-    if (mpVol) mpVol.value = v;
     if (mobileVolumeEl) mobileVolumeEl.value = v;
     if (mobileVolumeValue) mobileVolumeValue.value = v;
   }, 150);

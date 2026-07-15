@@ -76,6 +76,15 @@
 
   /* ---- Search results ---- */
   #results-section {
+    display: block;
+    width: 100%;
+    max-width: none;
+    height: auto;
+    margin: 0 auto;
+    padding: 0 0 96px;
+    overflow: visible;
+    background: none;
+    border: none;
     opacity: 0;
     transform: translateY(8px);
     transition: opacity .28s ease, transform .28s ease;
@@ -356,27 +365,19 @@
     }
   }
 
-  /* Desktop: results open in a right-hand column beside the controls,
-     mirroring the has-queue two-column layout. */
+  /* Desktop redesigned results page. The legacy two-column results layout
+     has been removed from base.css. */
   @media (min-width: 900px) {
-    /* The 92px mini-player clearance above is mobile-only; on desktop it made
-       main taller than the viewport, so any programmatic scroll (e.g. after
-       paging results) shoved the whole page upward. */
-    body.results-open main { padding-bottom: 0; }
+    body.results-open {
+      overflow: auto;
+      padding-bottom: 0;
+    }
+    body.results-open main { height: auto; min-height: 100dvh; }
+    body.results-open .site-footer { padding: 10px 0 var(--space-5); }
     body.results-open #results-section {
-      padding-bottom: 14px;
+      max-width: 880px;
     }
     body.results-open .results-list { height: auto; max-height: none; overflow: visible; }
-    /* Keep the persistent desktop player visible in its normal grid layout
-       (for non-redesigned variants). */
-    body.results-open .player-section:not(.redesigned-bar) { display: grid !important; }
-    /* FIX: The redesigned-bar uses display:flex (set in player.css).
-       Forcing display:grid !important here overrides that flex layout and
-       collapses the left/center/right columns — causing the distortion.
-       Restore flex for the redesigned-bar specifically. */
-    body.results-open .player-section.redesigned-bar { display: flex !important; }
-    body.results-open .player-section.is-collapsed { display: none !important; }
-    body.results-open .mini-player { display: none !important; }
     body.results-open .toast { bottom: 24px; }
   }
 

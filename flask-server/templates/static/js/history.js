@@ -13,7 +13,7 @@ async function loadHistory() {
     const newTopId  = fresh.length ? fresh[0].video_id : null;
     state._historyCache = fresh;
     syncHistoryTriggerVisibility();
-    // Keep the history page current if it is visible.
+    // Keep the page current if it is visible.
     const page = document.getElementById('history-page');
     if (page && !page.hidden) {
       const isNewTop = newTopId && newTopId !== prevTopId;
@@ -30,7 +30,7 @@ async function loadHistory() {
         row.dataset.videoId = newTopId;
         list.prepend(row);
       } else if (!list) {
-        // Modal open but no list yet — full render.
+        // Page open but no list yet — full render.
         renderHistoryModalList(state._historyCache);
       }
       // If only metadata changed (same top), leave the list as-is.
@@ -156,84 +156,24 @@ function renderHistoryModalList(history) {
   body.appendChild(list);
 }
 
-function _historyViewportImages(page) {
-  const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 0;
-  return Array.from(page.querySelectorAll('img')).filter(function (img) {
-    const rect = img.getBoundingClientRect();
-    return rect.bottom > 0 && rect.top < viewportHeight;
-  });
-}
-
-function _waitForHistoryImage(img) {
-  return new Promise(function (resolve) {
-    let settled = false;
-    const finish = function () {
-      if (settled) return;
-      settled = true;
-      img.removeEventListener('load', finish);
-      img.removeEventListener('error', finish);
-      resolve();
-    };
-    const check = function () {
-      if (img.dataset.imageReady === 'true') {
-        finish();
-        return;
-      }
-      if (img.complete && (img.currentSrc || img.src)) {
-        if (typeof img.decode === 'function') img.decode().catch(function () {}).then(finish);
-        else finish();
-        return;
-      }
-      if (!settled) requestAnimationFrame(check);
-    };
-    img.addEventListener('load', check, { once: true });
-    img.addEventListener('error', finish, { once: true });
-    check();
-    setTimeout(finish, 10000);
-  });
-}
-
-function _waitForHistoryViewport(page) {
-  const images = _historyViewportImages(page);
-  if (!images.length) return Promise.resolve();
-  return Promise.all(images.map(_waitForHistoryImage));
-}
-
 (function () {
   const page = document.getElementById('history-page');
   const openBtn = document.getElementById('history-modal-btn');
 
-  function openHistoryModal(fromRoute) {
-    if (!fromRoute && window.matchMedia('(min-width: 900px)').matches) {
-      window.navigateTo('#history');
-      return;
-    }
-    const waitForViewport = window.matchMedia('(max-width: 899px)').matches;
-    document.body.classList.remove('drag-lock');
-    document.documentElement.style.removeProperty('overflow');
-    document.body.style.removeProperty('overflow');
-    if (waitForViewport && window.startTopProgress) window.startTopProgress();
-    page.hidden = true;
-    page.classList.toggle('history-page-loading', waitForViewport);
+  function openHistoryPage(fromRoute) {
     renderHistoryModalList(state._historyCache);
     page.hidden = false;
-    if (waitForViewport) {
-      _waitForHistoryViewport(page).then(function () {
-        page.classList.remove('history-page-loading');
-        if (window.getRoute() === '#history' && !page.hidden && window.completeTopProgress) window.completeTopProgress();
-      });
-    }
   }
 
-  function closeHistoryModal() {
+  function closeHistoryPage() {
     page.hidden = true;
     if (window.getRoute() === '#history') window.navigateTo('#home');
   }
 
-  openBtn.addEventListener('click', openHistoryModal);
-  window._closeHistoryModal = closeHistoryModal;
-  window.openHistoryPage = openHistoryModal;
-  if (window.getRoute() === '#history') openHistoryModal(true);
+  openBtn.addEventListener('click', () => window.navigateTo('#history'));
+  window._closeHistoryModal = closeHistoryPage;
+  window.openHistoryPage = openHistoryPage;
+  if (window.getRoute() === '#history') openHistoryPage(true);
 })();
 
 /* ---- Recommendations (blank-state, mixed history + discovery) ---- */

@@ -11,7 +11,7 @@
   }
 
   function hideAllViews() {
-    setHidden('.play-section, #recs-section, #home-section, #idle-hero, #results-section, #queue-section, #artist-section, #artist-songs-section, #history-page', true);
+    setHidden('.play-section, #recs-section, #home-section, #idle-hero, #results-section, #queue-section, #artist-section, #artist-songs-section', true);
   }
 
   function showHomeViews() {
@@ -22,7 +22,7 @@
     setHidden('.play-section', false);
     setHidden('#home-section', !homeReady);
     setHidden('#idle-hero', true);
-    setHidden('#results-section, #queue-section, #artist-section, #artist-songs-section, #history-page', true);
+    setHidden('#results-section, #queue-section, #artist-section, #artist-songs-section', true);
   }
 
   var routes = {

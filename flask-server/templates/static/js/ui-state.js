@@ -33,7 +33,6 @@
   window.__playerDebugLog = window.__playerDebugLog || function(event, details) {
     const main = document.querySelector('main');
     const np = document.getElementById('now-playing-section');
-    const mini = document.getElementById('mini-player');
     const bar = document.querySelector('.player-section');
     const record = {
       t: Math.round(performance.now()), event,
@@ -42,7 +41,6 @@
       mainQueue: !!(main && main.classList.contains('has-queue')),
       player: bar && { hidden: bar.hidden, visible: bar.classList.contains('is-visible'), collapsed: bar.classList.contains('is-collapsed') },
       nowPlaying: np && { hidden: np.hidden, visibility: getComputedStyle(np).visibility, transform: getComputedStyle(np).transform },
-      mini: mini && { visible: mini.classList.contains('visible'), display: getComputedStyle(mini).display },
       hasTrack: !!window.__appState._hasTrack,
       ...(details || {})
     };
@@ -56,7 +54,7 @@
   window.__playerDebugLog('ui-state-ready');
 
   function installPlayerMutationTrace() {
-    const targets = [document.querySelector('.player-section'), document.getElementById('now-playing-section'), document.getElementById('mini-player')].filter(Boolean);
+    const targets = [document.querySelector('.player-section'), document.getElementById('now-playing-section')].filter(Boolean);
     targets.forEach(function(el) {
       const label = el.id || el.className;
       let last = '';
@@ -86,11 +84,9 @@
     const resultsVisible = !!state._resultsOpen && route === '#home';
     const mainEl = document.querySelector('main');
     const player = document.querySelector('.player-section');
-    const mini = document.getElementById('mini-player');
     const clearBtn = document.getElementById('clear-all-btn');
     if (clearBtn) clearBtn.hidden = !(state._hasTrack || state._resultsOpen);
     document.body.classList.toggle('results-open', resultsVisible);
-    if (mini) mini.classList.toggle('visible', resultsVisible && state._hasTrack);
     if (mainEl) mainEl.classList.toggle('idle', route === '#home' && state._loggedIn && !state._hasTrack && !resultsVisible);
     const homeSection = document.getElementById('home-section');
     if (homeSection) {

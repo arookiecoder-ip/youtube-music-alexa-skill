@@ -11,7 +11,7 @@
   .layout-snap .play-section {
     transition: none !important;
   }
-  body.drag-lock {
+  body.drag-lock:not(.history-route):not(.explore-route):not(.mood-route):not(.library-route) {
     overflow: hidden;
     overscroll-behavior: none;
     touch-action: none;
@@ -181,7 +181,7 @@
   /* While a bottom-sheet (now-playing popup / queue modal) is open, the page
      behind it must not scroll. No touch-action:none here â€” that would also
      kill scrolling inside the sheets' own lists. */
-  body.modal-open {
+  body.modal-open:not(.history-route):not(.explore-route):not(.mood-route):not(.library-route) {
     overflow: hidden;
     overscroll-behavior: none;
   }
@@ -287,8 +287,7 @@
       max-width: 920px;
     }
 
-    body:has(main.has-queue),
-    body.results-open {
+    body:has(main.has-queue) {
       overflow: hidden;
       padding-bottom: 12px;
     }
@@ -302,14 +301,12 @@
       padding-bottom: 0;
     }
 
-    main.has-queue header,
-    body.results-open main header {
+    main.has-queue header {
       padding-bottom: 12px;
       margin-bottom: 12px;
     }
 
-    main.has-queue .layout,
-    body.results-open .layout {
+    main.has-queue .layout {
       grid-template-columns: 1fr 1fr;
       grid-template-rows: minmax(0, 1fr);
       column-gap: 10px;
@@ -320,26 +317,22 @@
       overflow: hidden;
     }
 
-    main.has-queue .site-footer,
-    body.results-open .site-footer {
+    main.has-queue .site-footer {
       flex: none;
       margin-top: 0;
       padding: 10px 0 var(--space-3);
     }
 
-    main.has-queue section,
-    body.results-open main section {
+    main.has-queue section {
       padding: 14px 18px;
       margin-bottom: 8px;
     }
 
     /* Left column: stacks its sections; its natural height sizes the grid row. */
-    main.has-queue .left-col,
-    body.results-open .left-col {
+    main.has-queue .left-col {
       min-height: 0;
     }
-    main.has-queue .left-col > section:last-child,
-    body.results-open .left-col > section:last-child { margin-bottom: 0; }
+    main.has-queue .left-col > section:last-child { margin-bottom: 0; }
 
     /* Queue: matches the left column's height and scrolls its list inside.
        height:0 keeps the queue's own (tall) content from inflating the grid
@@ -360,23 +353,17 @@
 
   /* .left-col is only a layout wrapper â€” it must never look like a section. */
   .left-col { display: contents; }
-  /* Desktop: .layout is always a CSS grid so column transitions are smooth
+  /* Desktop redesigned shell uses normal document flow
      (no display:flexâ†”grid switching that causes flicker). */
   @media (min-width: 900px) {
     .layout {
-      display: grid;
-      grid-template-columns: 1fr 0fr;
-      column-gap: 0px;
-      overflow: hidden;
-      transition: grid-template-columns .4s cubic-bezier(.4, 0, .2, 1),
-                  column-gap .4s cubic-bezier(.4, 0, .2, 1),
-                  padding-top .4s cubic-bezier(.4, 0, .2, 1);
+      display: block;
+      overflow: visible;
+      padding-top: 0;
+      flex: none;
     }
     .left-col {
-      display: flex;
-      flex-direction: column;
-      align-items: center;          /* always center play-section */
-      grid-column: 1;
+      display: block;
       min-width: 0;
     }
     /* play-section smoothly animates its max-width while staying centered */
@@ -389,7 +376,7 @@
   }
 
   /* ---- Sections ---- */
-  section {
+  section:not(.history-page):not(.explore-section):not(.player-section) {
     background: var(--surface);
     border: 1px solid var(--border);
     padding: var(--space-4) 18px;
@@ -763,11 +750,7 @@
     .hamburger-btn { display: none !important; }
     .sidebar, .sidebar-overlay { display: none !important; }
     .queue-modal-overlay { display: none !important; }
-    .mini-popup-overlay { display: none !important; }
     .transport-actions .queue-modal-btn { display: none; }
-    /* The bottom mini player is a mobile affordance â€” never show it on PC;
-       the full player stays visible in the left column instead. */
-    .mini-player { display: none !important; }
     /* Mobile-only elements: hide on desktop */
     .result-queue-btn { display: none !important; }
     .result-swipe-underlay { display: none !important; }

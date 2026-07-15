@@ -32,6 +32,23 @@
 const deviceEl = document.getElementById('device');
 const volumeEl = document.getElementById('volume');
 
+// These controls belong to the mobile player only. Keep that separation in
+// the DOM instead of relying on later CSS rules to undo their visibility on
+// desktop.
+const mobilePlayerMedia = window.matchMedia('(max-width: 899px)');
+function syncMobilePlayerMarkup() {
+  const showMobileControls = mobilePlayerMedia.matches;
+  for (const el of document.querySelectorAll('.mobile-np-controls, .mobile-np-progress')) {
+    el.hidden = !showMobileControls;
+  }
+}
+syncMobilePlayerMarkup();
+if (mobilePlayerMedia.addEventListener) {
+  mobilePlayerMedia.addEventListener('change', syncMobilePlayerMarkup);
+} else {
+  mobilePlayerMedia.addListener(syncMobilePlayerMarkup);
+}
+
 function syncTrackPlaybackIndicators() {
   const currentId = state._currentVideoId || '';
   for (const card of document.querySelectorAll(
@@ -67,7 +84,7 @@ document.addEventListener('click', (event) => {
 }, true);
 
 function syncPlayPause() {
-  for (const btn of [document.getElementById('pp-btn'), document.getElementById('mini-pp'), document.getElementById('mp-pp-btn'), document.getElementById('np-page-art-overlay'), document.getElementById('mobile-np-play')]) {
+  for (const btn of [document.getElementById('pp-btn'), document.getElementById('np-page-art-overlay'), document.getElementById('mobile-np-play')]) {
     if (!btn) continue;
     const p = btn.querySelector('.icon-play, .mobile-np-play-icon');
     if (p) p.style.display = state.isPlaying ? 'none' : 'block';
@@ -164,27 +181,12 @@ function upgradeLowResNowPlayingArt(info, fingerprint, artwork, npPageArt) {
 
 function showNowPlaying(info) {
   const np = document.getElementById('now-playing');
-  const miniArt = document.getElementById('mini-art');
   if (!info || (!info.title && !info.video_id)) {
     // Only update if we had a track before.
     if (state._hasTrack || _lastNpFingerprint) {
       np.classList.add('visible');
       document.getElementById('np-title').textContent = 'Nothing is playing';
       document.getElementById('np-artist').textContent = '';
-      document.getElementById('mini-title').textContent = 'Nothing is playing';
-      miniArt.style.backgroundImage = '';
-      miniArt.classList.remove('has-thumb', 'image-loading');
-      // Legacy mobile popup has been retired. Keep this null-safe for Jam's
-      // deliberately small shell and for stale cached markup during upgrades.
-      const mpTitle = document.getElementById('mp-np-title');
-      const mpArtist = document.getElementById('mp-np-artist');
-      if (mpTitle) mpTitle.textContent = 'Nothing is playing';
-      if (mpArtist) mpArtist.textContent = '';
-      const mpArt = document.getElementById('mp-np-art');
-      if (mpArt) {
-        mpArt.style.backgroundImage = '';
-        mpArt.classList.remove('has-thumb', 'image-loading');
-      }
       const art = document.getElementById('np-art');
       if (art) {
         art.style.backgroundImage = '';
@@ -225,13 +227,7 @@ function showNowPlaying(info) {
     np.classList.add('visible');
     document.getElementById('np-title').textContent = info.title;
     document.getElementById('np-artist').innerHTML = window.artistLinksHtml(info.artist, info.channelId);
-    document.getElementById('mini-title').textContent = info.title;
-    const mpTitle = document.getElementById('mp-np-title');
-    const mpArtist = document.getElementById('mp-np-artist');
-    if (mpTitle) mpTitle.textContent = info.title;
-    if (mpArtist) mpArtist.innerHTML = window.artistLinksHtml(info.artist, info.channelId);
     const art = document.getElementById('np-art');
-    const mpArt = document.getElementById('mp-np-art');
     const npPageArt = document.getElementById('np-page-art');
     const npPageTitle = document.getElementById('np-page-title');
     const npPageArtist = document.getElementById('np-page-artist');
@@ -247,10 +243,10 @@ function showNowPlaying(info) {
       const ambientThumbnail = (info.video_id && _ambientNowPlayingArt.get(info.video_id)) || info.thumbnail;
       const url = 'url(' + info.thumbnail + ')';
       const ambientUrl = 'url(' + ambientThumbnail + ')';
-      const artwork = [art, miniArt, mpArt, npPageArt].filter(Boolean);
+      const artwork = [art, npPageArt].filter(Boolean);
       // Keep the compact player artwork on its original shelf thumbnail.
       // Only the large expanded hero is upgraded after its HD rendition is
-      // decoded, so fetching artwork never changes the mini player.
+      // decoded, so fetching artwork never changes the compact player.
       artwork.forEach((el) => {
         el.style.backgroundImage = url;
         el.classList.remove('image-loading');
@@ -470,23 +466,10 @@ const progress = window.progress = (function () {
     if (barTotalEl) barTotalEl.textContent = durationMs ? fmt(durationMs) : '--:--';
     track.setAttribute('aria-valuenow', String(Math.floor(pos / 1000)));
     track.setAttribute('aria-valuemax', String(Math.floor(visualMax / 1000)));
-    // Mirror to mini popup progress
-    const mpFill = document.getElementById('mp-progress-fill');
-    const mpHandle = document.getElementById('mp-progress-handle');
-    const mpElapsed = document.getElementById('mp-progress-elapsed');
-    const mpTotal = document.getElementById('mp-progress-total');
-    const miniFill = document.getElementById('mini-player-progress-fill');
     const mobileNpFill = document.getElementById('mobile-np-progress-fill');
     const mobileNpHandle = document.getElementById('mobile-np-progress-handle');
     const mobileNpElapsed = document.getElementById('mobile-np-progress-elapsed');
     const mobileNpTotal = document.getElementById('mobile-np-progress-total');
-    if (mpFill) {
-      mpFill.style.width = pct + '%';
-      mpHandle.style.left = pct + '%';
-      mpElapsed.textContent = fmt(pos);
-      mpTotal.textContent = durationMs ? fmt(durationMs) : '--:--';
-    }
-    if (miniFill) miniFill.style.width = pct + '%';
     if (mobileNpFill) mobileNpFill.style.width = pct + '%';
     if (mobileNpHandle) mobileNpHandle.style.left = pct + '%';
     if (mobileNpElapsed) mobileNpElapsed.textContent = fmt(pos);
@@ -700,17 +683,6 @@ const progress = window.progress = (function () {
     wrap.addEventListener('mousemove', handleTooltipMove);
     wrap.addEventListener('touchmove', handleTooltipMove, { passive: true });
   }
-  // Also bind the mini popup progress track
-  const mpTrack = document.getElementById('mp-progress-track');
-  const mpWrap = document.getElementById('mp-progress');
-  if (mpTrack) {
-    mpTrack.addEventListener('mousedown', beginDrag);
-    mpTrack.addEventListener('touchstart', beginDrag, { passive: false });
-  }
-  if (mpWrap) {
-    mpWrap.addEventListener('mousemove', handleTooltipMove);
-    mpWrap.addEventListener('touchmove', handleTooltipMove, { passive: true });
-  }
   const mobileNpTrack = document.getElementById('mobile-np-progress-track');
   const mobileNpWrap = document.getElementById('mobile-np-progress');
   if (mobileNpTrack) {
@@ -825,261 +797,29 @@ function syncModalScrollLock() {
   document.body.classList.toggle('modal-open', anyOpen);
 }
 
-/* ---- mini player controls & popup ---- */
-(function () {
-  const miniPlayer = document.getElementById('mini-player');
-  const overlay = document.getElementById('mini-popup-overlay');
-  const popup = document.getElementById('mini-popup');
-  const dragArea = document.getElementById('mini-popup-drag');
-  const closeBtn = document.getElementById('mini-popup-close');
-  const queueBtn = document.getElementById('mini-popup-queue-btn');
-  const mpPpBtn = document.getElementById('mp-pp-btn');
-  const mpPrev = document.getElementById('mp-prev');
-  const mpNext = document.getElementById('mp-next');
-  const mpShuffleBtn = document.getElementById('mp-shuffle-btn');
-  const mpVolume = document.getElementById('mp-volume');
-  let _miniPopupOpen = false;
-
-  // The legacy mini-popup markup has been removed. Keep this stale block
-  // inert if an old cached template is still being used during an update.
-  if (!overlay) return;
-
-  function openMiniPopup(fromRoute) {
-    playerTrace('mini:open-request', { fromRoute: !!fromRoute, desktop: window.matchMedia('(min-width: 900px)').matches });
-    // Nothing playing: never open — but if the view is somehow up (e.g. the
-    // queue ended while expanded), the toggle must still be able to close it.
-    if (!state._hasTrack) {
-      if (fromRoute || (window.getRoute && window.getRoute() === '#now-playing')) {
-        if (window.navigateTo) window.navigateTo('#home');
-      }
-      return;
-    }
-    // On desktop, toggle the #now-playing overlay: expand, or collapse back
-    // to the view it was opened from. `fromRoute` is used when the route is
-    // restored on page load; that should not immediately close the overlay.
-    if (window.matchMedia('(min-width: 900px)').matches) {
-      if (window.getRoute && window.getRoute() === '#now-playing') {
-        if (!fromRoute) {
-          playerTrace('mini:desktop-close-full');
-          if (window.closeNowPlayingOverlay) window.closeNowPlayingOverlay();
-        }
-      } else {
-        playerTrace('mini:desktop-open-full');
-        window.navigateTo('#now-playing'); // Expand
-      }
-      return;
-    }
-    // Mobile: open the bottom sheet popup
-    if (_miniPopupOpen) return;
-    _miniPopupOpen = true;
-    // Sync volume from main slider
-    mpVolume.value = volumeEl.value;
-    // Sync shuffle state
-    const mainShuffle = document.getElementById('shuffle-btn');
-    mpShuffleBtn.classList.toggle('shuffle-active', mainShuffle.classList.contains('shuffle-active'));
-    overlay.classList.add('open');
-    syncModalScrollLock();
-    if (window.matchMedia('(min-width: 900px)').matches) {
-      if (!state._queueOpen) {
-        const queueToggle = document.getElementById('queue-toggle-btn');
-        if (queueToggle) queueToggle.click();
-      } else if (window.showQueue) {
-        let queue = [];
-        try { queue = JSON.parse(state._lastQueueJson || '[]'); } catch (_) {}
-        window.showQueue(queue, state._lastQueueIndex || 0);
-      }
-    }
-  }
-
-  function closeMiniPopup() {
-    playerTrace('mini:close-popup');
-    if (!_miniPopupOpen) return;
-    _miniPopupOpen = false;
-    overlay.classList.remove('open');
-    syncModalScrollLock();
-    if (window.getRoute && window.getRoute() === '#now-playing' && window.navigateTo) {
-      window.navigateTo('#home');
-    }
-  }
-
-  // Tap on mini player: play/pause button stays functional, everything else opens popup
-  miniPlayer.addEventListener('click', (e) => {
-    if (e.target.closest('.mini-pp')) {
-      // Proxy to the main play/pause
-      document.getElementById('pp-btn').click();
-      return;
-    }
-    openMiniPopup();
-  });
-
-  // Compact playbar: the expand toggle, the track-info cluster, and any empty
-  // area of the player bar all open the full now-playing sheet.
-  // Buttons/links inside keep their own behavior.
+/* ---- compact player opens the shared now-playing route ---- */
+(function wireNowPlayingRoute() {
+  const playerBar = document.querySelector('.player-section');
   const expandBtn = document.getElementById('player-expand-btn');
-  if (expandBtn) {
-    expandBtn.addEventListener('click', (event) => {
+  if (!playerBar) return;
+
+  function openNowPlaying(event) {
+    if (event) {
       event.preventDefault();
       event.stopPropagation();
-      if (window.getRoute && window.getRoute() === '#now-playing') {
-        playerTrace('mini:arrow-close');
-        if (window.closeNowPlayingOverlay) window.closeNowPlayingOverlay();
-        return;
-      }
-      openMiniPopup();
-    });
-  }
-  const npCluster = document.getElementById('now-playing');
-  if (npCluster) {
-    npCluster.addEventListener('click', (e) => {
-      if (e.target.closest('button, a, .artist-name')) return;
-      // The cluster lives inside .player-section, which also has an expand
-      // handler. Do not let one click toggle the route twice (open, then
-      // immediately close), which appears as a full-screen blink.
-      e.stopPropagation();
-      openMiniPopup();
-    });
-  }
-  // Clicking any empty area of the player bar (transport row, progress strip, etc.)
-  // also opens the now-playing sheet, so the user can tap anywhere on the bar.
-  const playerBar = document.querySelector('.player-section');
-  if (playerBar) {
-    playerBar.addEventListener('click', (e) => {
-      // Let interactive elements (buttons, links, inputs, range sliders,
-      // artist-name spans) keep their own click.
-      if (e.target.closest('button, a, input, [role="slider"], .progress-track, .artist-name')) return;
-      openMiniPopup();
-    });
-  }
-
-  // Close popup
-  closeBtn.addEventListener('click', closeMiniPopup);
-  overlay.addEventListener('click', (e) => {
-    if (e.target === overlay) closeMiniPopup();
-  });
-
-  // Transport: play/pause, prev, next
-  mpPpBtn.addEventListener('click', () => {
-    document.getElementById('pp-btn').click();
-  });
-  mpPrev.addEventListener('click', () => {
-    const mainPrev = document.querySelector('[data-action="previous"]');
-    if (mainPrev) mainPrev.click();
-  });
-  mpNext.addEventListener('click', () => {
-    const mainNext = document.querySelector('[data-action="next"]');
-    if (mainNext) mainNext.click();
-  });
-
-  // Shuffle
-  mpShuffleBtn.addEventListener('click', () => {
-    document.getElementById('shuffle-btn').click();
-    // Sync active state after a tick (the main handler toggles it)
-    setTimeout(() => {
-      const mainShuffle = document.getElementById('shuffle-btn');
-      mpShuffleBtn.classList.toggle('shuffle-active', mainShuffle.classList.contains('shuffle-active'));
-    }, 50);
-  });
-
-  // Volume
-  let mpVolTimer;
-  mpVolume.addEventListener('pointerdown', () => { state.volumeUserActive = true; });
-  mpVolume.addEventListener('pointerup', () => { state.volumeUserActive = false; });
-  mpVolume.addEventListener('touchend', () => { state.volumeUserActive = false; });
-  mpVolume.addEventListener('change', () => { state.volumeUserActive = false; });
-  mpVolume.oninput = (e) => {
-    state.volumeUserActive = true;
-    state.volumeGraceUntil = Date.now() + state.VOLUME_GRACE_MS;
-    // Sync main slider visually
-    volumeEl.value = e.target.value;
-    clearTimeout(mpVolTimer);
-    // Same fix as the main slider's handler: a paused/resumed drag (touch
-    // input can fire in bursts) lets more than one debounced call survive,
-    // each sending its own real volume command whose confirmations can then
-    // arrive out of order. Only the most recent command's result may act.
-    const mySeq = ++state._volCommandSeq;
-    mpVolTimer = setTimeout(() => {
-      const serial = selectedSerial();
-      if (!serial) { state.volumeUserActive = false; state.volumeGraceUntil = 0; return; }
-      const value = +e.target.value;
-      state.volumeGraceUntil = Date.now() + state.VOLUME_GRACE_MS;
-      toast('Volume ' + value + '\u2026');
-      api('/alexa/command/', { serial, action: 'volume', value })
-        .then(() => {
-          if (mySeq !== state._volCommandSeq) return;
-          state.volumeUserActive = false;
-          state.volumeGraceUntil = Date.now() + state.VOLUME_GRACE_MS;
-          syncVolume(value, true);
-          toast('Volume ' + value, 'ok');
-        })
-        .catch(err => {
-          if (mySeq !== state._volCommandSeq) return;
-          state.volumeUserActive = false;
-          state.volumeGraceUntil = 0;    // let server truth restore the slider
-          refreshVolume(true);
-          toast(err.message, 'error');
-        });
-    }, 300);
-  };
-
-  // Queue button: desktop shows the side panel (the bottom-sheet is
-  // display:none'd there), mobile opens the queue bottom-sheet on top.
-  queueBtn.addEventListener('click', () => {
-    if (window.matchMedia('(min-width: 900px)').matches) {
-      closeMiniPopup();
-      const t = document.getElementById('queue-toggle-btn');
-      if (t) t.click();
-    } else if (window._openQueueModal) {
-      window._openQueueModal();
     }
-  });
-
-  // Drag-to-dismiss
-  let startY = 0, currentY = 0, dragging = false;
-  function onDragStart(e) {
-    if (e.target.closest('.mini-popup-close') || e.target.closest('.mini-popup-queue-btn')) return;
-    dragging = true;
-    startY = e.touches[0].clientY;
-    currentY = 0;
-    popup.style.transition = 'none';
-  }
-  dragArea.addEventListener('touchstart', onDragStart, { passive: true });
-  const popupHeader = popup.querySelector('.mini-popup-header');
-  if (popupHeader) popupHeader.addEventListener('touchstart', onDragStart, { passive: true });
-
-  window.addEventListener('touchmove', (e) => {
-    if (!dragging || !_miniPopupOpen) return;
-    currentY = e.touches[0].clientY - startY;
-    if (currentY < 0) currentY = 0;
-    popup.style.transform = 'translateY(' + currentY + 'px)';
-  }, { passive: true });
-
-  window.addEventListener('touchend', () => {
-    if (!dragging) return;
-    dragging = false;
-    popup.style.transition = '';
-    if (currentY > 100) {
-      closeMiniPopup();
+    if (!state._hasTrack || !window.navigateTo) return;
+    if (window.getRoute && window.getRoute() === '#now-playing') {
+      if (window.closeNowPlayingOverlay) window.closeNowPlayingOverlay();
+      return;
     }
-    popup.style.transform = '';
-  });
+    window.navigateTo('#now-playing');
+  }
 
-  // Expose for external use
-  window._openMiniPopup = openMiniPopup;
-  window._closeMiniPopup = closeMiniPopup;
-  if (window.getRoute && window.getRoute() === '#now-playing') openMiniPopup(true);
-})();
-
-// The legacy mini-popup is gone. On mobile, tapping the compact player now
-// opens the current now-playing route directly.
-(function wireMobileNowPlayingRoute() {
-  const playerBar = document.querySelector('.player-section');
-  if (!playerBar) return;
+  if (expandBtn) expandBtn.addEventListener('click', openNowPlaying);
   playerBar.addEventListener('click', (event) => {
-    if (!window.matchMedia('(max-width: 899px)').matches) return;
     if (event.target.closest('button, a, input, [role="slider"], .progress-track, .artist-name')) return;
-    if (window.getRoute && window.getRoute() !== '#now-playing' && window.navigateTo) {
-      window.navigateTo('#now-playing');
-    }
+    openNowPlaying(event);
   });
 })();
 
@@ -1399,25 +1139,21 @@ for (const btn of document.querySelectorAll('[data-action="previous"], [data-act
 
 function updateUrlBar() {
   const ytmBtn = document.getElementById('np-url-toggle');
-  const mpYtmBtn = document.getElementById('mp-url-toggle');
   const mobileYtmBtn = document.getElementById('mobile-player-youtube');
   if (state._currentVideoId) {
     const seconds = Math.floor(progress.livePosition() / 1000);
     const url = 'https://music.youtube.com/watch?v=' + encodeURIComponent(state._currentVideoId)
       + (seconds > 0 ? '&t=' + seconds : '');
     if (ytmBtn) { ytmBtn.href = url; ytmBtn.style.display = ''; }
-    if (mpYtmBtn) { mpYtmBtn.href = url; mpYtmBtn.style.display = ''; }
     if (mobileYtmBtn) { mobileYtmBtn.href = url; mobileYtmBtn.classList.remove('is-hidden'); }
   } else {
     if (ytmBtn) { ytmBtn.removeAttribute('href'); ytmBtn.style.display = 'none'; }
-    if (mpYtmBtn) { mpYtmBtn.removeAttribute('href'); mpYtmBtn.style.display = 'none'; }
     if (mobileYtmBtn) { mobileYtmBtn.removeAttribute('href'); mobileYtmBtn.classList.add('is-hidden'); }
   }
 }
 
 (function () {
   const ytmBtn = document.getElementById('np-url-toggle');
-  const mpYtmBtn = document.getElementById('mp-url-toggle');
   const mobileYtmBtn = document.getElementById('mobile-player-youtube');
   updateUrlBar();
 
@@ -1443,7 +1179,6 @@ function updateUrlBar() {
     }
   };
   if (ytmBtn) ytmBtn.addEventListener('click', onClick);
-  if (mpYtmBtn) mpYtmBtn.addEventListener('click', onClick);
   if (mobileYtmBtn) mobileYtmBtn.addEventListener('click', onClick);
 })();
 
