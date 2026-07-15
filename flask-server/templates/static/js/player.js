@@ -60,9 +60,8 @@ function syncTrackPlaybackIndicators() {
   }
 }
 
-// On mobile, a song title is a direct playback affordance everywhere it is
-// rendered. Album/playlist cards without a track video_id keep their normal
-// navigation behavior.
+// On mobile, most song titles are direct playback affordances. Home feed track
+// titles are the exception: home.js owns them so they open the track album.
 document.addEventListener('click', (event) => {
   if (!window.matchMedia('(max-width: 899px)').matches) return;
   const title = event.target.closest(
@@ -71,6 +70,7 @@ document.addEventListener('click', (event) => {
   if (!title) return;
   const root = title.closest('[data-video-id]');
   if (!root || !root.dataset.videoId || typeof window.playFromQueue !== 'function') return;
+  if (root.matches('.home-item[data-kind="track"], .mood-songs-shelf .home-item-song')) return;
 
   const track = root._songContextTrack || {
     video_id: root.dataset.videoId,

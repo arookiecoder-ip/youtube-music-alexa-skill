@@ -7,6 +7,7 @@
   let loaded = false;
   let loading = false;
   let cardContextMenu = null;
+  const albumResolutionCache = new Map();
 
   function escHtml(value) {
     return String(value || '').replace(/&/g, '&amp;').replace(/</g, '&lt;')
@@ -32,13 +33,41 @@
     const ids = artists.map(artist => typeof artist === 'object'
       ? (artist.id || artist.browseId || artist.channelId || artist.channel_id || '')
       : '');
-    const fallbackName = item.artist || item.author || '';
+    // Explore/genre feeds often provide credits only as description/subtitle
+    // text. Treat that fallback as an artist credit too so it receives the
+    // same link and hover behavior as structured artist arrays.
+    const fallbackName = item.artist || item.author || subtitle(item) || '';
     const artistText = names.length ? names.join(', ') : fallbackName;
-    if (!artistText) return escHtml(subtitle(item));
+    if (!artistText) return '';
     const fallbackId = item.artistId || item.artist_id || item.channelId || item.channel_id || '';
     return window.artistLinksHtml
       ? window.artistLinksHtml(artistText, ids.some(Boolean) ? ids : fallbackId)
       : escHtml(artistText);
+  }
+
+  function openTrackAlbum(item) {
+    const videoId = item.videoId || item.video_id || '';
+    const album = item.album || {};
+    const existingAlbumId = item.albumId || item.album_id || item.albumBrowseId ||
+      (typeof album === 'object' && (album.id || album.browseId)) || '';
+    const navigate = albumId => {
+      if (!albumId) {
+        if (window.toast) window.toast('Album unavailable for this song', 'error');
+        return;
+      }
+      item.albumId = albumId;
+      if (window.preloadNavigateAlbum) window.preloadNavigateAlbum(albumId);
+      else window.navigateTo('#album/' + encodeURIComponent(albumId));
+    };
+    if (existingAlbumId) { navigate(existingAlbumId); return; }
+    if (!videoId || typeof window.api !== 'function') { navigate(''); return; }
+    if (!albumResolutionCache.has(videoId)) {
+      albumResolutionCache.set(videoId,
+        window.api('/api/album/resolve/' + encodeURIComponent(videoId))
+          .then(details => (details && details.album_id) || '')
+          .catch(() => ''));
+    }
+    albumResolutionCache.get(videoId).then(navigate);
   }
 
   function openItem(item) {
@@ -156,6 +185,12 @@
         ${cardSubtitle ? `<div class="explore-card-sub">${artistSubtitleHtml(item)}</div>` : ''}
       </div>`;
     if (window.wireArtistLinks) window.wireArtistLinks(card);
+    card.querySelector('.explore-card-title').addEventListener('click', event => {
+      if (!(item.videoId || item.video_id)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      openTrackAlbum(item);
+    });
     card.addEventListener('click', event => {
       if (event.target.closest('.artist-name')) return;
       openItem(item);
@@ -254,6 +289,8 @@
         title: title,
         artist: artist,
         thumbnail: thumbnail,
+        albumId: song.albumId || song.album_id || song.albumBrowseId || '',
+        album: song.album || null,
         artist_id: artistIds.find(Boolean) || fallbackArtistId,
         channelId: artistIds.find(Boolean) || fallbackArtistId
       };
@@ -268,6 +305,22 @@
         <img src="${escHtml(thumbnail)}" alt="${escHtml(title)}" class="home-item-img mood-song-image" loading="eager" decoding="async" onload="this.classList.add('is-loaded')" onerror="this.onerror=null;this.src='${FALLBACK_IMG}';this.classList.add('is-loaded')">
         <div class="home-item-text"><div class="home-item-title">${escHtml(title)}</div><div class="home-item-subtitle">${artistHtml}</div></div>
         <button class="home-play-btn" type="button" aria-label="Play ${escHtml(title)}"><svg class="home-play-glyph" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><polygon points="7,4 20,12 7,20"/></svg></button>`;
+      // Desktop text opens its album. Mobile is touch-first: title/artist text
+      // plays the song like the rest of the row. Register before artist links
+      // so this rule wins for artist-credit taps on desktop.
+      const openAlbumFromText = event => {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        if (window.matchMedia && window.matchMedia('(max-width: 899px)').matches) {
+          play(event);
+          return;
+        }
+        openTrackAlbum(track);
+      };
+      row.querySelector('.home-item-title').addEventListener('click', openAlbumFromText);
+      row.querySelectorAll('.home-item-subtitle .artist-name').forEach(artistLink => {
+        artistLink.addEventListener('click', openAlbumFromText);
+      });
       if (window.wireArtistLinks) window.wireArtistLinks(row);
       const play = event => {
         event.preventDefault();

@@ -10,6 +10,42 @@
   let deferredShelfObserver = null;
   let currentFilter = 'all';
   let abortController = null;
+  const homeAlbumResolutionCache = new Map();
+
+  function resolveHomeTrackAlbum(videoId) {
+    if (!videoId || typeof window.api !== 'function') return Promise.resolve('');
+    if (!homeAlbumResolutionCache.has(videoId)) {
+      homeAlbumResolutionCache.set(videoId,
+        window.api('/api/album/resolve/' + encodeURIComponent(videoId))
+          .then(details => (details && details.album_id) || '')
+          .catch(() => ''));
+    }
+    return homeAlbumResolutionCache.get(videoId);
+  }
+
+  // Handle a track title before the shelf's delegated card-click handler.
+  // Cards play tracks; titles always open their album on every viewport.
+  document.addEventListener('click', function(event) {
+    const title = event.target.closest('.home-item-title');
+    const card = title && title.closest('.home-item[data-kind="track"]');
+    if (!card) return;
+
+    event.preventDefault();
+    event.stopImmediatePropagation();
+
+    const openAlbum = albumId => {
+      if (!albumId) {
+        if (window.toast) window.toast('Album unavailable for this song', 'error');
+        return;
+      }
+      card.dataset.albumId = albumId;
+      if (window.preloadNavigateAlbum) window.preloadNavigateAlbum(albumId);
+      else window.navigateTo('#album/' + encodeURIComponent(albumId));
+    };
+    const albumId = card.dataset.albumId;
+    if (albumId) openAlbum(albumId);
+    else resolveHomeTrackAlbum(card.dataset.videoId).then(openAlbum);
+  }, true);
 
   function updateShelfArrows(shelfContent) {
     const shelf = shelfContent && shelfContent.closest('.home-shelf');
@@ -371,17 +407,6 @@
         var targetId = itemCard.dataset.targetId;
         var kind = itemCard.dataset.kind;
         var mobileHomeCard = window.matchMedia && window.matchMedia('(max-width: 899px)').matches;
-
-        // Track cards play when their card is tapped, but their title is an
-        // explicit album-navigation target on mobile.  The renderer keeps the
-        // track's album browse id in data-album-id for this exact distinction.
-        var tappedTitle = !playBtn && e.target.closest('.home-item-title');
-        var albumId = itemCard.dataset.albumId;
-        if (mobileHomeCard && tappedTitle && albumId) {
-            if (window.preloadNavigateAlbum) window.preloadNavigateAlbum(albumId);
-            else window.navigateTo('#album/' + encodeURIComponent(albumId));
-            return;
-        }
 
         // Mobile feed cards can come from compact shelf payloads whose kind is
         // missing or reported as "single". Keep this fallback mobile-only so

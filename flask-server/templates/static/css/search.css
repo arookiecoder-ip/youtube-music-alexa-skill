@@ -404,16 +404,16 @@
      with no action buttons (no play/queue/like/more). The thumbnail stays 48x48. */
 
 
-.artist-name {
+#results-section .artist-name {
   cursor: pointer;
   color: var(--text);
   transition: color .15s;
 }
-.artist-name:hover {
+#results-section .artist-name:hover {
   color: var(--text);
   text-decoration: underline;
 }
-.artist-name:active {
+#results-section .artist-name:active {
   color: var(--accent);
   opacity: .8;
 }
