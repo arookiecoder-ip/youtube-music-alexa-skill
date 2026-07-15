@@ -3,4 +3,11 @@
   body * {
     text-decoration-line: none !important;
   }
+
+  /* Match Home's high-specificity hover rules. Some touch browsers retain
+     :hover after a tap, so the generic reset above cannot override them. */
+  body .home-item-title:hover,
+  body .home-item .home-item-subtitle .artist-name:hover {
+    text-decoration: none !important;
+  }
 }
