@@ -565,3 +565,404 @@
     padding-right: 0;
   }
 }
+
+/* Final homepage and landing-feed styles, moved from redesign.css. */
+.home-greeting {
+  font-size: 1.7rem;
+  font-weight: 800;
+  letter-spacing: -.02em;
+  /* The header wrapper already supplies the shelf gutter. */
+  padding: 6px 0 2px;
+}
+.home-greeting[hidden] { display: none; }
+@media (min-width: 900px) {
+  .home-greeting {
+    font-size: 2rem;
+    padding: 10px 0 0;
+  }
+}
+
+.home-row-label {
+  text-transform: none;
+  font-size: 1.15rem;
+  font-weight: 800;
+  letter-spacing: -.01em;
+  color: var(--text);
+}
+.home-row-subtitle { font-size: .72rem; }
+@media (min-width: 900px) {
+  .home-row-label { font-size: 1.3rem; }
+}
+
+/* Artist names in home shelves are interactive spans. Keep their hover
+   affordance above the card/subtitle text rules in the redesigned shell. */
+.home-item .home-item-subtitle .artist-name:hover,
+.home-item .home-item-subtitle .artist-name:focus-visible {
+  color: var(--text) !important;
+  text-decoration-line: underline !important;
+  text-decoration-color: currentColor !important;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+}
+
+.home-card, .home-skeleton-card { flex-basis: 156px; position: relative; }
+@media (min-width: 900px) {
+  .home-card, .home-skeleton-card { flex-basis: 186px; }
+}
+/* Artist entities use portrait artwork, not album/playlist tiles. Keep the
+   homepage consistent with the Related Artists section. */
+.home-item[data-kind="artist"] .home-item-img-wrapper,
+.home-item[data-kind="artist"] .home-item-img {
+  border-radius: 50% !important;
+}
+.home-item[data-kind="artist"] .home-item-img-wrapper {
+  overflow: hidden !important;
+}
+.home-item[data-kind="artist"] .home-item-text {
+  text-align: center;
+}
+/* Card songs use the same focused hover treatment as playlist rows: dim the
+   artwork and reveal the play control in the exact center. */
+.home-item-card[data-kind="track"] .home-item-img-wrapper::after,
+.home-item-wide-card[data-kind="track"] .home-item-img-wrapper::after,
+.home-item-card[data-kind="playlist"] .home-item-img-wrapper::after,
+.home-item-wide-card[data-kind="playlist"] .home-item-img-wrapper::after,
+.home-item-card[data-kind="album"] .home-item-img-wrapper::after,
+.home-item-wide-card[data-kind="album"] .home-item-img-wrapper::after,
+.home-item-card[data-kind="artist"] .home-item-img-wrapper::after,
+.home-item-wide-card[data-kind="artist"] .home-item-img-wrapper::after,
+.home-item-circle[data-kind="album"] .home-item-img-wrapper::after,
+.home-item-circle[data-kind="artist"] .home-item-img-wrapper::after,
+.home-item-card[data-kind="station"] .home-item-img-wrapper::after,
+.home-item-wide-card[data-kind="station"] .home-item-img-wrapper::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, .45);
+  opacity: 0;
+  z-index: 1;
+  transition: opacity .18s ease;
+  pointer-events: none;
+}
+.home-item-card[data-kind="track"]:hover .home-item-img-wrapper::after,
+.home-item-wide-card[data-kind="track"]:hover .home-item-img-wrapper::after,
+.home-item-card[data-kind="playlist"]:hover .home-item-img-wrapper::after,
+.home-item-wide-card[data-kind="playlist"]:hover .home-item-img-wrapper::after,
+.home-item-card[data-kind="album"]:hover .home-item-img-wrapper::after,
+.home-item-wide-card[data-kind="album"]:hover .home-item-img-wrapper::after,
+.home-item-card[data-kind="artist"]:hover .home-item-img-wrapper::after,
+.home-item-wide-card[data-kind="artist"]:hover .home-item-img-wrapper::after,
+.home-item-circle[data-kind="album"]:hover .home-item-img-wrapper::after,
+.home-item-circle[data-kind="artist"]:hover .home-item-img-wrapper::after,
+.home-item-card[data-kind="station"]:hover .home-item-img-wrapper::after,
+.home-item-wide-card[data-kind="station"]:hover .home-item-img-wrapper::after {
+  opacity: 1;
+}
+/* Artist entities open their pages; hover only darkens artwork. Albums use
+   the same overlay-play affordance as playlists. */
+.home-item-card[data-kind="artist"] .home-play-btn,
+.home-item-wide-card[data-kind="artist"] .home-play-btn,
+.home-item-circle[data-kind="artist"] .home-play-btn {
+  display: none !important;
+}
+.home-item-card[data-kind="track"] .home-play-btn,
+.home-item-wide-card[data-kind="track"] .home-play-btn {
+  width: 58px;
+  height: 58px;
+  background: transparent;
+  border: none;
+  top: 50%;
+  left: 50%;
+  right: auto;
+  bottom: auto;
+  transform: translate(-50%, -50%) scale(1);
+}
+.home-item-card[data-kind="track"] .home-play-btn svg,
+.home-item-wide-card[data-kind="track"] .home-play-btn svg {
+  width: 38px;
+  height: 38px;
+}
+.home-item-card[data-kind="track"]:hover .home-play-btn,
+.home-item-wide-card[data-kind="track"]:hover .home-play-btn {
+  transform: translate(-50%, -50%) scale(1);
+}
+.home-card-art {
+  border-radius: var(--card-radius);
+  position: relative;
+}
+/* Pressed feedback: keep the card's size, darken the art with a shadow and
+   show a centered play icon while the pointer is down. Applies to home cards
+   and the recommendations tiles alike. */
+.recs-tile .recs-tile-art { position: relative; }
+.home-card-art::before,
+.recs-tile .recs-tile-art::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: rgba(0, 0, 0, .45);
+  opacity: 0;
+  transition: opacity .12s ease;
+  pointer-events: none;
+  z-index: 1;
+}
+.home-card:active .home-card-art::before,
+.recs-tile:active .recs-tile-art::before { opacity: 1; }
+.home-card:active .home-card-art,
+.recs-tile:active .recs-tile-art {
+  box-shadow: 0 10px 28px rgba(0, 0, 0, .65);
+}
+
+/* YT Music-style artwork hover: darken the thumbnail without resizing it.
+   The play glyph itself comes from .home-play-btn, so the overlay is
+   darkening only and follows the same card-level hover trigger. */
+.home-card-art::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: rgba(0, 0, 0, .42);
+  opacity: 0;
+  transition: opacity .18s ease;
+  pointer-events: none;
+}
+@media (hover: hover) {
+  .home-card:hover .home-card-art::after {
+    opacity: 1;
+  }
+}
+/* Like button floats over the art's corner */
+.home-card .result-like-btn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  margin: 0;
+  width: 30px;
+  height: 30px;
+  border: none;
+  color: #fff;
+  background: rgba(0, 0, 0, .55);
+  backdrop-filter: blur(4px);
+  border-radius: 50%;
+  opacity: 0;
+  transition: opacity .18s ease;
+  z-index: 2;
+}
+.home-card .result-like-btn.liked {
+  opacity: 1;
+  color: var(--accent);
+}
+@media (hover: hover) {
+  .home-card:hover .result-like-btn { opacity: 1; }
+}
+@media (hover: none) {
+  .home-card .result-like-btn { opacity: 1; }
+}
+
+/* Empty home feed: friendly message + retry instead of a blank page */
+.home-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  text-align: center;
+  padding: 56px 24px;
+}
+.home-empty-title {
+  font-size: 1.05rem;
+  font-weight: 700;
+}
+.home-empty-sub {
+  font-size: .8rem;
+  color: var(--muted);
+  margin-bottom: 10px;
+}
+#home-retry-btn {
+  background: var(--accent-grad);
+  border: none;
+  padding: 10px 26px;
+}
+
+/* Idle hero */
+.idle-hero-text { color: #3d3d3d; }
+.idle-hero-accent {
+  background: var(--accent-grad);
+  -webkit-background-clip: text;
+  background-clip: text;
+}
+
+
+/* Mobile Home: keep feed inside phone-width shell and avoid desktop rail
+   spacing leaking into the compact layout. */
+@media (max-width: 899px) {
+  body.home-route {
+    background-color: var(--bg);
+    padding: 0 9px;
+  }
+
+  body.home-route main {
+    max-width: 560px;
+    margin: 0 auto;
+    padding: 4px 0 0;
+    background: transparent;
+    min-height: 100dvh;
+  }
+
+  body.home-route main header {
+    min-height: 53px;
+    margin: 0;
+    padding: 4px 14px 5px;
+    background: #2b1006;
+    border-bottom: 0;
+  }
+
+  body.home-route header .brand { gap: 10px; }
+  body.home-route header .brand h1 {
+    font-size: .72rem;
+    line-height: 1.25;
+    max-width: 72px;
+  }
+  body.home-route header .rail-toggle-btn {
+    width: 28px;
+    height: 28px;
+    padding: 4px;
+  }
+  body.home-route header .header-actions { gap: 5px; }
+  body.home-route header .header-history-btn,
+  body.home-route header .profile-menu-trigger {
+    width: 34px;
+    height: 34px;
+    padding: 7px;
+    border: 1px solid rgba(255,255,255,.2);
+  }
+
+  body.home-route .play-section {
+    margin: 0 0 18px;
+    padding: 8px 14px 10px !important;
+    background: #050505 !important;
+    border-radius: 0 0 8px 8px;
+  }
+  body.home-route .search-wrap input#query {
+    height: 40px;
+    border-color: #323232;
+    background: #050505;
+    font-size: .78rem;
+  }
+
+  body.home-route #home-section {
+    padding-bottom: 120px;
+  }
+  body.home-route .home-header-area {
+    padding: 12px 16px 16px;
+  }
+  body.home-route .home-greeting {
+    font-size: 1.35rem;
+    margin-bottom: 0;
+  }
+  body.home-route .home-shelf {
+    margin-bottom: 20px;
+  }
+  body.home-route .home-shelf-header {
+    padding: 0 16px 10px;
+  }
+  body.home-route .home-shelf-title {
+    font-size: 1rem;
+  }
+  body.home-route .home-shelf-content {
+    gap: 14px;
+    padding: 0 29px 6px;
+  }
+  body.home-route .home-item-card { width: 126px; gap: 7px; }
+  body.home-route .home-item-title { font-size: .76rem; }
+  body.home-route .home-item-subtitle { font-size: .68rem; }
+  body.home-route .home-layout-song_grid .home-shelf-content {
+    grid-auto-columns: 270px;
+    row-gap: 1px;
+  }
+  body.home-route .home-item-song .home-item-img {
+    width: 42px;
+    height: 42px;
+  }
+  body.home-route .home-item-song .home-item-text { padding: 0 10px; }
+}
+
+/* Keep the primary content tiles aligned with the sharper login treatment. */
+.recs-tile-art,
+.recs-skeleton .skeleton-block,
+.home-item,
+.home-item-img-wrapper,
+.home-item-img,
+.home-item-wide-card .home-item-img-wrapper {
+  border-radius: 0 !important;
+}
+
+@media (max-width: 899px) {
+  body.home-route .home-shelf-content {
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+    overflow-x: auto;
+    overflow-y: hidden;
+    touch-action: auto;
+    overscroll-behavior-x: contain;
+    scroll-snap-type: none;
+    scroll-padding-inline: 0;
+  }
+  body.home-route .home-shelf-viewport {
+    width: auto;
+    max-width: none;
+    margin: 0 16px;
+    overflow: hidden;
+  }
+  body.home-route .home-shelf-viewport .home-shelf-content {
+    width: 100%;
+    max-width: 100%;
+    padding-left: 0;
+    padding-right: 0;
+  }
+  body.home-route,
+  body.home-route main,
+  body.home-route #home-section,
+  body.home-route #home-rows {
+    max-width: 100%;
+    overflow-x: hidden;
+  }
+  body .explore-card {
+    scroll-snap-align: none !important;
+  }
+
+  /* Artist entities use circular artwork on mobile, regardless of the feed
+     shelf layout returned by the server. */
+  body .home-item[data-kind="artist"] {
+    width: 120px !important;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    text-align: center;
+  }
+  body .home-item[data-kind="artist"] .home-item-img-wrapper {
+    width: 100%;
+    aspect-ratio: 1;
+    border-radius: 50% !important;
+    overflow: hidden;
+  }
+  body .home-item[data-kind="artist"] .home-item-img {
+    width: 100%;
+    height: 100%;
+    border-radius: 50% !important;
+  }
+  body .home-item[data-kind="artist"] .home-item-subtitle {
+    display: none;
+  }
+}
+
+
+@media (max-width: 899px) {
+  body.home-route .home-item-subtitle .artist-name {
+    pointer-events: none !important;
+    user-select: none !important;
+    -webkit-user-select: none !important;
+    cursor: default !important;
+  }
+}

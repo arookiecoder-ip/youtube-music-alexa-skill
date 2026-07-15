@@ -749,3 +749,236 @@
     word-break: break-word;
   }
 }
+
+/* Final search-results rules, moved from redesign.css. */
+/* ============================================================
+   Search results
+   ============================================================ */
+
+#results-section .section-head { padding: 0 2px; }
+#results-section .label {
+  font-size: 1.15rem;
+  font-weight: 800;
+  text-transform: none;
+  letter-spacing: -.01em;
+  color: var(--text);
+}
+.results-close { border-radius: var(--radius-full); }
+
+/* Category chips */
+.results-tabs {
+  display: flex;
+  gap: 8px;
+  border-bottom: none !important;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+.results-tab {
+  border-radius: var(--radius-full) !important;
+  border: none !important;
+  background: var(--pill-bg) !important;
+  color: var(--text) !important;
+  padding: 8px 16px !important;
+  font-size: .78rem !important;
+  font-weight: 600 !important;
+  text-transform: none !important;
+  letter-spacing: 0 !important;
+}
+.results-tab:hover { background: #262626 !important; }
+.results-tab.active {
+  background: var(--text) !important;
+  color: #000 !important;
+  font-weight: 700 !important;
+}
+
+#results-section .result-swipe-wrapper { background: transparent; }
+#results-section .result-item-inner {
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  padding: 8px 10px;
+  transition: background .16s ease, box-shadow .16s ease;
+}
+#results-section .result-swipe-wrapper .result-item-inner:hover,
+#results-section .result-swipe-wrapper .result-item-inner:focus-within {
+  background: rgba(255, 255, 255, .10);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+#results-section .result-swipe-wrapper + .result-swipe-wrapper .result-item-inner {
+  border-top: none;
+}
+#results-section .hscroll-card-art::after {
+  background: rgba(0, 0, 0, 0);
+  transition: background .18s ease;
+}
+#results-section .hscroll-card:hover .hscroll-card-art::after,
+#results-section .hscroll-card:focus-within .hscroll-card-art::after {
+  background: rgba(0, 0, 0, .28);
+}
+#results-section .hscroll-play-btn {
+  top: auto;
+  left: auto;
+  right: 10px;
+  bottom: 10px;
+  width: 44px;
+  height: 44px;
+  background: #fff;
+  color: #000;
+  box-shadow: 0 5px 16px rgba(0, 0, 0, .48);
+  transform: translateY(10px) scale(.9);
+}
+#results-section .hscroll-card:hover .hscroll-play-btn,
+#results-section .hscroll-card:focus-within .hscroll-play-btn {
+  opacity: 1;
+  transform: translateY(0) scale(1);
+}
+#results-section .hscroll-play-btn:hover,
+#results-section .hscroll-play-btn:focus-visible {
+  background: #fff;
+  color: #000;
+  transform: translateY(0) scale(1.08);
+}
+
+/* Search playlist cards reuse the homepage playlist hover treatment: a
+   consistent dark artwork overlay and bottom-right play glyph/control. */
+#results-section .hscroll-card[data-playlist-id] .hscroll-card-artist {
+  display: none;
+}
+
+#results-section .hscroll-card[data-playlist-id] .hscroll-card-art::after {
+  background: rgba(0, 0, 0, .45);
+  opacity: 0;
+  transition: opacity .18s ease;
+}
+#results-section .hscroll-card[data-playlist-id]:hover .hscroll-card-art::after,
+#results-section .hscroll-card[data-playlist-id]:focus-within .hscroll-card-art::after {
+  opacity: 1;
+}
+#results-section .hscroll-card[data-playlist-id] .search-playlist-play {
+  width: 44px;
+  height: 44px;
+  top: auto;
+  left: auto;
+  right: 8px;
+  bottom: 8px;
+  background: rgba(0, 0, 0, .6);
+  transform: none;
+  transition: opacity .2s, transform .1s;
+}
+#results-section .hscroll-card[data-playlist-id]:hover .search-playlist-play,
+#results-section .hscroll-card[data-playlist-id]:focus-within .search-playlist-play {
+  opacity: 1;
+  transform: none;
+}
+#results-section .hscroll-card[data-playlist-id] .search-playlist-play:hover,
+#results-section .hscroll-card[data-playlist-id] .search-playlist-play:focus-visible {
+  background: rgba(0, 0, 0, .6);
+  transform: scale(1.08);
+}
+/* Albums keep their established bottom-right placement while sharing the
+   homepage card control's dark treatment and reveal motion. */
+#results-section .search-album-play {
+  background: rgba(0, 0, 0, .6);
+  color: #fff;
+  transform: none;
+  transition: opacity .2s, transform .1s;
+}
+#results-section .hscroll-card:hover .search-album-play,
+#results-section .hscroll-card:focus-within .search-album-play {
+  opacity: 1;
+  transform: none;
+}
+#results-section .search-album-play:hover,
+#results-section .search-album-play:focus-visible {
+  background: rgba(0, 0, 0, .6);
+  color: #fff;
+  transform: scale(1.08);
+}
+#results-section .result-like-btn,
+#results-section .track-like-btn {
+  background: transparent;
+  border: none;
+  border-radius: 0;
+}
+#results-section .result-like-btn:hover,
+#results-section .track-like-btn:hover { background: transparent; }
+.result-thumb, .result-thumb-slot { border-radius: 0; overflow: hidden; }
+.results-pager button { border-radius: var(--radius-full); }
+
+
+/* ============================================================
+   Search results: artist rows are links to the artist page
+   ============================================================ */
+
+.result-item-link { cursor: pointer; }
+.result-thumb-round { border-radius: 50% !important; }
+
+
+/* Mobile search tabs use square corners, overriding pill styling above. */
+@media (max-width: 768px) {
+  #results-section .results-tabs .results-tab {
+    border-radius: 0 !important;
+  }
+  #results-section .result-item-inner {
+    background: transparent !important;
+  }
+  #results-section .result-swipe-wrapper .result-item-inner:hover,
+  #results-section .result-swipe-wrapper .result-item-inner:focus-within {
+    background: transparent !important;
+    box-shadow: none !important;
+  }
+  #results-section .result-item-inner .result-like-btn {
+    display: none !important;
+  }
+  #results-section .result-item-inner .result-artist .artist-name {
+    pointer-events: none;
+    cursor: default;
+    text-decoration: none !important;
+  }
+  /* Remove legacy mobile swipe underlays; they were leaking orange through
+     transparent result rows and are not part of the current mobile layout. */
+  #results-section .result-swipe-underlay {
+    display: none !important;
+  }
+  #results-section .hscroll-controls {
+    display: none !important;
+  }
+  #results-section .hscroll-track {
+    display: flex !important;
+    overflow-x: auto !important;
+    overscroll-behavior-x: contain;
+    /* Allow a vertical gesture that starts over the shelf to reach the page
+       scroller; pan-x was trapping the gesture inside this element. */
+    touch-action: auto !important;
+    scroll-snap-type: none !important;
+    -webkit-overflow-scrolling: touch;
+  }
+  #results-section .hscroll-card {
+    flex: 0 0 126px !important;
+    width: 126px !important;
+  }
+  #results-section .hscroll-card-art {
+    width: 126px !important;
+    height: 126px !important;
+    aspect-ratio: auto;
+  }
+}
+
+
+/* Mobile search shelves: center artist names and keep album credits compact
+   with natural wrapping for longer artist names. */
+@media (max-width: 899px) {
+  #results-section .hscroll-card:not(.album-card) .hscroll-card-title {
+    text-align: center !important;
+  }
+
+  #results-section .hscroll-card.album-card .hscroll-card-artist {
+    font-size: .68rem !important;
+    line-height: 1.25 !important;
+    white-space: normal !important;
+    overflow: visible !important;
+    text-overflow: clip !important;
+    overflow-wrap: anywhere !important;
+    word-break: break-word !important;
+  }
+}

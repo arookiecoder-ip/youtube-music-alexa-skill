@@ -66,6 +66,8 @@
   });
 
   function openSidebar() {
+    document.documentElement.classList.add('sidebar-open');
+    document.body.classList.add('sidebar-open');
     overlay.style.display = 'block';
     requestAnimationFrame(() => {
       sidebar.classList.add('open');
@@ -75,6 +77,8 @@
   }
 
   function closeSidebar() {
+    document.documentElement.classList.remove('sidebar-open');
+    document.body.classList.remove('sidebar-open');
     sidebar.classList.remove('open');
     overlay.classList.remove('open');
     sbWrapper.classList.remove('open');
