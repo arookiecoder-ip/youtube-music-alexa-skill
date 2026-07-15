@@ -316,6 +316,11 @@
     // Never carry one into another page.
     if (window._closeAllMoreMenus) window._closeAllMoreMenus();
     if (window._closeAllQueueMenus) window._closeAllQueueMenus();
+    // The mobile queue is a separate overlay above Now Playing. Close it
+    // before changing routes so Artist/Album pages cannot render beneath it.
+    if (hash !== '#now-playing' && window.matchMedia('(max-width: 899px)').matches && window._closeQueueModal) {
+      window._closeQueueModal();
+    }
     if (window.closeSongContextMenu) window.closeSongContextMenu();
     if (window.closePlaylistContextMenu) window.closePlaylistContextMenu();
     if (window.closeExploreCardContextMenu) window.closeExploreCardContextMenu();
