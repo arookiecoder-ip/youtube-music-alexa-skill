@@ -436,6 +436,7 @@
 /* ---- Top Result Card ---- */
 .top-result-card {
   display: flex;
+  min-width: 0;
   background: rgba(255, 255, 255, 0.04);
   border-radius: var(--radius-lg);
   padding: 24px;
@@ -446,6 +447,7 @@
 }
 .top-result-main {
   flex: 1;
+  min-width: 0;
   display: flex;
   align-items: center;
   gap: 24px;
@@ -477,6 +479,7 @@
 }
 .top-result-info {
   display: flex;
+  min-width: 0;
   flex-direction: column;
   gap: 8px;
 }
@@ -529,13 +532,20 @@
 /* Right side songs container for Artists */
 .top-result-songs {
   flex: 1;
+  min-width: 0;
   display: flex;
   flex-direction: column;
   gap: 4px;
 }
+.top-result-songs .result-swipe-wrapper,
+.top-result-songs .result-item-inner {
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
 
 /* Mobile responsive adjustments for Top Result */
-@media (max-width: 768px) {
+@media (max-width: 899px) {
   .top-result-card {
     flex-direction: column;
     padding: 14px 12px 16px;
@@ -594,31 +604,45 @@
     margin-top: 5px;
   }
 
-  /* Keep the main song result compact: artwork left, details beside it. */
-  .top-result-card.is-song {
-    padding: 8px;
+  /* Songs and albums share one compact mobile top-result row. */
+  .top-result-card.is-song,
+  .top-result-card.is-album {
+    padding: 16px 14px;
     margin: 10px 0;
-    border-radius: 2px;
+    border-radius: 0;
+    background: transparent;
   }
-  .top-result-card.is-song .top-result-main {
+  .top-result-card.is-song .top-result-main,
+  .top-result-card.is-album .top-result-main {
     flex-direction: row;
     text-align: left;
     align-items: center;
     gap: 12px;
+    padding: 0;
+    margin: 0;
+    background: transparent;
   }
-  .top-result-card.is-song .top-result-art {
+  .top-result-card.is-song .top-result-main:hover,
+  .top-result-card.is-album .top-result-main:hover {
+    background: transparent;
+  }
+  .top-result-card.is-song .top-result-art,
+  .top-result-card.is-album .top-result-art {
     width: 84px;
     height: 84px;
     border-radius: 2px;
   }
-  .top-result-card.is-song .top-result-info {
+  .top-result-card.is-song .top-result-info,
+  .top-result-card.is-album .top-result-info {
     align-items: flex-start;
     gap: 5px;
   }
-  .top-result-card.is-song .top-result-title {
+  .top-result-card.is-song .top-result-title,
+  .top-result-card.is-album .top-result-title {
     font-size: 1.35rem;
   }
-  .top-result-card.is-song .top-result-actions {
+  .top-result-card.is-song .top-result-actions,
+  .top-result-card.is-album .top-result-actions {
     justify-content: flex-start;
     margin-top: 4px;
   }

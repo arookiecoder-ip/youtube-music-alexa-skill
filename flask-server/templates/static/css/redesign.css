@@ -718,9 +718,9 @@ img[data-image-ready="true"] {
     -webkit-backdrop-filter: none;
     border-right: none;
   }
-  /* Artwork can bleed behind the mini rail on Home, Artist, and the full
-     player. Every other page uses a stable black rail instead. */
-  body.rail-collapsed:not(.home-route):not(.artist-route):not(.now-playing-route) .sidebar {
+  /* Artwork or the shared warm tint can bleed behind the mini rail on Home,
+     History, Artist, and the full player. Other pages use a stable black rail. */
+  body.rail-collapsed:not(.home-route):not(.history-route):not(.explore-route):not(.library-route):not(.artist-route):not(.now-playing-route) .sidebar {
     background: #000;
   }
   /* Text-only chrome has no icon form — hide it in the mini rail. Fade it
@@ -2707,10 +2707,16 @@ button { border-radius: var(--radius-md); }
   body.album-route:not(.results-open):not(.header-scrolled) main header,
   body.now-playing-route:not(.results-open) main header,
   body.results-open:not(.header-scrolled) main header,
+  body.history-route main header,
+  body.explore-route main header,
+  body.library-route main header,
   body.home-route:not(.results-open):not(.header-scrolled) main header {
     background: transparent;
   }
-  body.results-open:not(.header-scrolled) main header::before {
+  body.results-open:not(.header-scrolled) main header::before,
+  body.history-route main header::before,
+  body.explore-route main header::before,
+  body.library-route main header::before {
     background-color: transparent;
     border-bottom-color: transparent;
   }
@@ -3103,7 +3109,7 @@ body.results-open .player-section {
     top: calc(var(--topbar-h) + 3px);
     right: 0;
     bottom: 0;
-    background: var(--bg, #0a0a0a);
+    background: transparent;
     backdrop-filter: none;
     -webkit-backdrop-filter: none;
     align-items: stretch;
@@ -4835,20 +4841,6 @@ body.library-route #nav-library-btn::before {
     border-radius: 2px !important;
   }
 
-  /* Match the mobile song result to the rows below it. Keep the result
-     content padded, but remove the separate grey card surface. */
-  #results-section .top-result-card.is-song {
-    padding: 16px 14px;
-    background: transparent;
-    border-radius: 0;
-  }
-  #results-section .top-result-card.is-song .top-result-main,
-  #results-section .top-result-card.is-song .top-result-main:hover {
-    padding: 0;
-    margin: 0;
-    background: transparent;
-  }
-
   body .player-section,
   body .player-section.is-collapsed {
     display: grid !important;
@@ -5578,7 +5570,6 @@ body.library-route #nav-library-btn::before {
 /* History page layout. Keep these rules together so the page has one source
    of truth instead of relying on a stack of corrective overrides. */
 body.history-route {
-  background: var(--bg, #030303);
   overflow-y: auto;
   overflow-x: hidden;
   touch-action: pan-y;
@@ -5590,7 +5581,6 @@ body.history-route main {
   margin-right: 0;
   padding: 0;
   overflow: visible;
-  background: transparent;
   touch-action: pan-y;
 }
 body.history-route .history-page {
@@ -5598,7 +5588,6 @@ body.history-route .history-page {
   min-height: 100dvh;
   margin: 0;
   padding: 24px 24px 140px;
-  background: transparent;
   border: 0;
 }
 body.history-route .history-page-header {

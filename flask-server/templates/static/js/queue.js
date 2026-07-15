@@ -1602,7 +1602,7 @@ function scheduleHistoryRefresh() {
     handle.style.setProperty('--queue-drag-fill', `${progress * 100}%`);
     handle.classList.add('queue-dragging');
     window._setInlineQueueProgress?.(progress);
-    event?.preventDefault?.();
+    if (event?.cancelable) event.preventDefault();
   };
   const finishDrag = () => {
     if (!dragging) return;

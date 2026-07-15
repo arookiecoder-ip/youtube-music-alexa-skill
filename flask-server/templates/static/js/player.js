@@ -294,12 +294,6 @@ function showNowPlaying(info) {
     } else {
       art.style.backgroundImage = '';
       art.classList.remove('has-thumb', 'image-loading');
-      miniArt.style.backgroundImage = '';
-      miniArt.classList.remove('has-thumb', 'image-loading');
-      if (mpArt) {
-        mpArt.style.backgroundImage = '';
-        mpArt.classList.remove('has-thumb', 'image-loading');
-      }
       if (npPageArt) {
         npPageArt.style.backgroundImage = '';
         npPageArt.classList.remove('has-thumb', 'image-loading');
