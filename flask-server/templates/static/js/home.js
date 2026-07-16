@@ -57,50 +57,6 @@
     if (right) right.disabled = shelfContent.scrollLeft >= maxScroll - 2;
   }
 
-  function attachMobileShelfDrag(rows) {
-    let drag = null;
-    let suppressClick = false;
-
-    rows.addEventListener('pointerdown', event => {
-      if (!window.matchMedia('(max-width: 899px)').matches) return;
-      const shelf = event.target.closest('.home-shelf-content');
-      if (!shelf) return;
-      drag = { shelf, startX: event.clientX, startY: event.clientY, scrollLeft: shelf.scrollLeft };
-    });
-    rows.addEventListener('pointermove', event => {
-      if (!drag || !window.matchMedia('(max-width: 899px)').matches) return;
-      const dx = event.clientX - drag.startX;
-      const dy = event.clientY - drag.startY;
-      if (Math.abs(dx) > 6 && Math.abs(dx) > Math.abs(dy)) {
-        drag.shelf.scrollLeft = drag.scrollLeft - dx;
-        suppressClick = true;
-      }
-    });
-    const endDrag = () => {
-      if (drag && suppressClick) {
-        const first = drag.shelf.firstElementChild;
-        if (first) {
-          const styles = window.getComputedStyle(drag.shelf);
-          const gap = parseFloat(styles.columnGap || styles.gap) || 0;
-          const step = first.getBoundingClientRect().width + gap;
-          if (step > 0) {
-            drag.shelf.scrollLeft = Math.round(drag.shelf.scrollLeft / step) * step;
-          }
-        }
-      }
-      drag = null;
-      if (suppressClick) window.setTimeout(() => { suppressClick = false; }, 0);
-    };
-    rows.addEventListener('pointerup', endDrag);
-    rows.addEventListener('pointercancel', endDrag);
-    rows.addEventListener('click', event => {
-      if (!suppressClick) return;
-      event.preventDefault();
-      event.stopPropagation();
-      suppressClick = false;
-    }, true);
-  }
-
   function showHomeSkeleton(show) {
     const container = document.getElementById('home-rows');
     if (!container) return;
@@ -331,7 +287,6 @@
       });
     }
 
-    attachMobileShelfDrag(rows);
     rows.addEventListener('scroll', function(e) {
       if (e.target.classList && e.target.classList.contains('home-shelf-content')) updateShelfArrows(e.target);
       if (window._closeAllMoreMenus) window._closeAllMoreMenus();

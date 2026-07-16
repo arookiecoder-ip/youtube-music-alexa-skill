@@ -366,33 +366,6 @@
     const grid = document.createElement('div');
     grid.className = 'explore-grid explore-grid--featured';
     section.appendChild(grid);
-    let dragStartX = 0;
-    let dragScrollLeft = 0;
-    let suppressCardClick = false;
-    grid.addEventListener('pointerdown', event => {
-      if (!window.matchMedia('(max-width: 899px)').matches) return;
-      dragStartX = event.clientX;
-      dragScrollLeft = grid.scrollLeft;
-    });
-    grid.addEventListener('pointermove', event => {
-      if (!dragStartX || !window.matchMedia('(max-width: 899px)').matches) return;
-      const distance = event.clientX - dragStartX;
-      if (Math.abs(distance) > 6) {
-        grid.scrollLeft = dragScrollLeft - distance;
-        suppressCardClick = true;
-      }
-    });
-    grid.addEventListener('pointerup', () => {
-      dragStartX = 0;
-      setTimeout(() => { suppressCardClick = false; }, 0);
-    });
-    grid.addEventListener('pointercancel', () => { dragStartX = 0; });
-    grid.addEventListener('click', event => {
-      if (!suppressCardClick) return;
-      event.preventDefault();
-      event.stopPropagation();
-      suppressCardClick = false;
-    }, true);
     let start = 0;
     const visibleItems = 12;
     const rowSize = () => window.matchMedia('(max-width: 620px)').matches ? 2 :

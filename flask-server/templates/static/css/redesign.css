@@ -3136,6 +3136,20 @@ body.history-route .history-page .history-date-header {
 }
 
 @media (max-width: 899px) {
+  /* Horizontal lists use the browser's native touch scroller. Prevent the
+     boundary rubber-band from reversing the content at either edge; on mobile
+     that rebound looks like the shelf briefly scrolls the opposite way. */
+  .home-filter-chips,
+  .home-shelf-content,
+  .explore-grid,
+  .explore-mood-viewport,
+  .hscroll-track,
+  .results-tabs {
+    overscroll-behavior-x: none !important;
+    scroll-behavior: auto !important;
+    -webkit-overflow-scrolling: touch;
+  }
+
   body.history-route main {
     width: 100%;
     max-width: none;
