@@ -5239,10 +5239,34 @@ def _sweep_missing_thumbnails():
 @app.route("/api/library/", methods=["GET"])
 async def api_get_library():
     from ytmusicapi.auth.types import AuthType
-    if _get_ytmusic_home().auth_type == AuthType.UNAUTHORIZED:
+    yt = _get_ytmusic_home()
+    if yt.auth_type == AuthType.UNAUTHORIZED:
         return jsonify({'error': 'YouTube Music authentication required. Please visit /setup/'}), 403
     try:
-        playlists = await asyncio.to_thread(_get_ytmusic_home().get_library_playlists, 100)
+        playlists = await asyncio.to_thread(yt.get_library_playlists, 100)
+        account = await asyncio.to_thread(yt.get_account_info)
+        account_name = str((account or {}).get('accountName') or '').strip().casefold()
+        for playlist in playlists or []:
+            playlist_id = str(playlist.get('playlistId') or '').strip()
+            author = playlist.get('author') or {}
+            if isinstance(author, list):
+                author_names = {
+                    str(item.get('name') or '').strip().casefold()
+                    for item in author
+                    if isinstance(item, dict)
+                }
+            elif isinstance(author, dict):
+                author_names = {str(author.get('name') or '').strip().casefold()}
+            else:
+                author_names = {str(author).strip().casefold()}
+            # YouTube's writable user playlists use PL ids and are authored by
+            # the active account. Auto playlists, Recaps, Liked Music, podcast
+            # queues, and saved playlists owned by other channels stay hidden.
+            playlist['editable'] = bool(
+                playlist_id.startswith('PL')
+                and account_name
+                and account_name in author_names
+            )
         return jsonify({"playlists": playlists})
     except Exception as e:
         # Browser-header auth may reject some browse endpoints; show LM fallback.
@@ -5340,6 +5364,43 @@ async def api_create_library_playlist():
         return jsonify({"id": pl_id, "name": name, "description": description, "status": "created"})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
+
+@app.route("/api/library/playlists/<pl_id>/tracks", methods=["POST"])
+async def api_add_library_playlist_track(pl_id):
+    """Add one catalog track to a user's YouTube Music playlist."""
+    from ytmusicapi.auth.types import AuthType
+    yt = _get_ytmusic_home()
+    if yt.auth_type == AuthType.UNAUTHORIZED:
+        return jsonify({'error': 'YouTube Music authentication required. Please visit /setup/'}), 403
+
+    pl_id = (pl_id or '').strip()
+    body = request.get_json(silent=True) or {}
+    video_id = str(body.get('video_id') or body.get('videoId') or '').strip()
+    if not pl_id:
+        return jsonify({'error': 'invalid playlist id'}), 400
+    if pl_id.upper() == 'LM':
+        return jsonify({'error': 'Use Like to add songs to Liked Music'}), 400
+    if not _valid_video_id(video_id):
+        return jsonify({'error': 'invalid videoId'}), 400
+
+    try:
+        result = await asyncio.to_thread(
+            yt.add_playlist_items,
+            pl_id,
+            [video_id],
+            duplicates=False,
+        )
+        return jsonify({
+            'playlist_id': pl_id,
+            'video_id': video_id,
+            'status': 'added',
+            'result': result,
+        })
+    except Exception as e:
+        logger.error('[api/library/playlists/%s/tracks] failed: %s', pl_id, e)
+        return jsonify({'error': str(e)}), 500
+
 
 @app.route("/api/library/playlists/<pl_id>", methods=["GET"])
 async def api_get_library_playlist(pl_id):

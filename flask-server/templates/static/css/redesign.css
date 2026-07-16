@@ -1003,6 +1003,18 @@ body:not(.explore-route):not(.mood-route):not(.library-route):has(#library-modal
 .confirm-dialog { border-radius: 4px; background: #1e1e1e !important; border: 1px solid rgba(255,255,255,.12) !important; }
 .confirm-actions button { border-radius: 6px; }
 .btn-accent { border-radius: var(--radius-full); }
+#add-to-playlist-overlay {
+  /* The mobile expanded player is z-index: 1000 and its action menu is 1200. */
+  z-index: 1400;
+}
+#add-to-playlist-overlay .history-modal { border-radius: 0; }
+#new-playlist-name { border-radius: 0 !important; }
+#new-playlist-btn { border-radius: 0; }
+#add-to-playlist-list > button {
+  padding: 8px 12px !important;
+  border-radius: 0 !important;
+  border-bottom: 1px solid var(--border) !important;
+}
 .queue-modal { border-radius: var(--radius-xl) var(--radius-xl) 0 0; }
 .toast { border-radius: 4px; }
 /* Toasts float above the fixed playbar instead of underneath it */

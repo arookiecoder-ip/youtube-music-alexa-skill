@@ -682,6 +682,145 @@
     if (ownsProgress && stillOwnsRoute() && window._barComplete) window._barComplete();
   }
   window.openPlaylistDetailModal = openLibraryPlaylist;
+
+  /* ---- Add the selected song to a YouTube Music library playlist ---- */
+  (function () {
+    const overlay = document.getElementById('add-to-playlist-overlay');
+    const closeBtn = document.getElementById('add-to-playlist-close');
+    const listEl = document.getElementById('add-to-playlist-list');
+    const nameInput = document.getElementById('new-playlist-name');
+    const createBtn = document.getElementById('new-playlist-btn');
+    let selectedTrack = null;
+    let requestVersion = 0;
+
+    if (!overlay || !listEl) return;
+
+    function closeModal() {
+      requestVersion += 1;
+      overlay.classList.remove('open');
+      selectedTrack = null;
+    }
+
+    function playlistId(playlist) {
+      return String(playlist && (playlist.playlistId || playlist.id) || '').trim();
+    }
+
+    function playlistTitle(playlist) {
+      return String(playlist && (playlist.title || playlist.name) || 'Untitled playlist');
+    }
+
+    function renderPlaylists(playlists, version) {
+      if (version !== requestVersion || !overlay.classList.contains('open')) return;
+      listEl.innerHTML = '';
+      const writable = (playlists || []).filter(function (playlist) {
+        return playlistId(playlist) && playlist.editable === true;
+      });
+      if (!writable.length) {
+        listEl.innerHTML = '<div style="color:var(--muted); padding:12px;">No playlists found. Create one above.</div>';
+        return;
+      }
+
+      writable.forEach(function (playlist) {
+        const id = playlistId(playlist);
+        const row = document.createElement('button');
+        row.type = 'button';
+        row.style.cssText = 'width:100%; padding:12px; border:0; border-bottom:1px solid var(--border); cursor:pointer; display:flex; align-items:center; gap:12px; color:var(--text); background:transparent; text-align:left;';
+        const cover = imageUrl(playlist.thumbnails) || imageUrl(playlist.thumbnail) || imageUrl(playlist.image);
+        row.innerHTML = cover
+          ? '<img class="queue-thumb loaded" src="' + escapeHtml(cover) + '" alt="">'
+          : '<div class="queue-thumb" style="display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,.05);"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:20px;height:20px;"><path d="M9 18V5l12-2v13"></path><circle cx="6" cy="18" r="3"></circle><circle cx="18" cy="16" r="3"></circle></svg></div>';
+        const label = document.createElement('span');
+        label.style.cssText = 'flex:1;font-weight:500;';
+        label.textContent = playlistTitle(playlist);
+        row.appendChild(label);
+
+        row.addEventListener('click', async function () {
+          const track = selectedTrack;
+          if (!track || !track.video_id || row.disabled) return;
+          row.disabled = true;
+          try {
+            await window.api('/api/library/playlists/' + encodeURIComponent(id) + '/tracks', {
+              video_id: track.video_id
+            });
+            if (window.toast) window.toast('Added to “' + playlistTitle(playlist) + '”', 'ok');
+            closeModal();
+            await loadLibrary();
+          } catch (error) {
+            console.error('Failed to add track to playlist', error);
+            if (window.toast) window.toast(error.message || 'Failed to add to playlist', 'error');
+            row.disabled = false;
+          }
+        });
+        listEl.appendChild(row);
+      });
+    }
+
+    async function loadPlaylistChoices(version) {
+      listEl.innerHTML = '<div style="color:var(--muted); padding:12px;">Loading playlists…</div>';
+      try {
+        const data = await window.api('/api/library/');
+        renderPlaylists(data.playlists || [], version);
+      } catch (error) {
+        if (version !== requestVersion) return;
+        console.error('Failed to load playlist choices', error);
+        listEl.innerHTML = '<div style="color:var(--muted); padding:12px;">Could not load playlists.</div>';
+        if (window.toast) window.toast(error.message || 'Could not load playlists', 'error');
+      }
+    }
+
+    window.openAddToPlaylistModal = function (track) {
+      const videoId = String(track && (track.video_id || track.videoId) || '').trim();
+      if (!videoId) {
+        if (window.toast) window.toast('This song cannot be added to a playlist', 'error');
+        return;
+      }
+      selectedTrack = Object.assign({}, track, { video_id: videoId });
+      if (nameInput) nameInput.value = '';
+      overlay.classList.add('open');
+      const version = ++requestVersion;
+      loadPlaylistChoices(version);
+    };
+
+    if (closeBtn) closeBtn.addEventListener('click', closeModal);
+    overlay.addEventListener('click', function (event) {
+      if (event.target === overlay) closeModal();
+    });
+
+    if (nameInput) {
+      nameInput.addEventListener('keydown', function (event) {
+        if (event.key === 'Enter' && createBtn) createBtn.click();
+      });
+    }
+
+    if (createBtn) {
+      createBtn.addEventListener('click', async function () {
+        const name = String(nameInput && nameInput.value || '').trim();
+        const track = selectedTrack;
+        if (!name || !track || !track.video_id || createBtn.disabled) {
+          if (!name && nameInput) nameInput.focus();
+          return;
+        }
+        createBtn.disabled = true;
+        createBtn.textContent = 'Creating…';
+        try {
+          const created = await window.api('/api/library/playlists/', { name: name });
+          await window.api('/api/library/playlists/' + encodeURIComponent(created.id) + '/tracks', {
+            video_id: track.video_id
+          });
+          if (window.toast) window.toast('Created “' + name + '” and added the song', 'ok');
+          closeModal();
+          await loadLibrary();
+        } catch (error) {
+          console.error('Failed to create playlist and add track', error);
+          if (window.toast) window.toast(error.message || 'Failed to create playlist', 'error');
+        } finally {
+          createBtn.disabled = false;
+          createBtn.textContent = 'Create';
+        }
+      });
+    }
+  })();
+
   /* ---- New Playlist button (sidebar) ---- */
   (function () {
     const newBtn = document.getElementById('sidebar-new-playlist-btn');
