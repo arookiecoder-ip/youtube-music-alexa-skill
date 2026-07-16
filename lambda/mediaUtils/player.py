@@ -655,13 +655,23 @@ class Controller:
         playlist, _ = _window_playlist(playlist, 0)
         user_attr = Attributes.get_user_attributes(handler_input)
         Attributes.set_playlist(handler_input, playlist)
+        # queue_id/next_offset were added to SongInfoList for sliding-window
+        # playlist continuation. Custom-skill deployments can briefly contain
+        # a newer player.py beside an older cached/player_models.py (as seen in
+        # Lambda versioned deployments). Treat the cursor fields as optional so
+        # ordinary song playback never crashes during that rollout window.
+        queue_id = getattr(song_info_list, 'queue_id', None)
+        try:
+            queue_offset = max(0, int(getattr(song_info_list, 'next_offset', 0) or 0))
+        except (TypeError, ValueError):
+            queue_offset = 0
         user_attr['playback_info'] = {
             'index': 0,
             'offset_in_ms': 0,
             'play_order': [l for l in range(0, len(playlist))],
             'stream_url': song_info.stream.audio_url,
-            'queue_id': song_info_list.queue_id,
-            'queue_offset': max(0, int(song_info_list.next_offset or 0)),
+            'queue_id': queue_id,
+            'queue_offset': queue_offset,
         }
         Attributes.set_play_order(handler_input)
         return Controller.play(handler_input, song_info, is_playback)
