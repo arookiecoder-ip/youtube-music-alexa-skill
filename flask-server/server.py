@@ -2415,7 +2415,13 @@ def proxy_stream():
         if not found_in_queue:
             # queue_index=-1: the old highlight would point at the wrong row
             # until _refresh_radio_queue rebuilds the queue for this track.
+            # This transition can happen before PlaybackStarted installs the
+            # skill's authoritative queue.  Never carry the previous track's
+            # metadata under the new video_id: the later webhook would see the
+            # id as unchanged and could otherwise leave the old hero/mini
+            # player visible indefinitely.
             _update_now_playing(playing=False, video_id=video_id,
+                                title='', artist='', thumbnail='', duration_ms=0,
                                 playback_confirmed=False, queue_index=-1)
             threading.Thread(target=_lookup_and_update_np, args=(video_id,), daemon=True).start()
             sys.stderr.write(f"[np] proxy metadata: new video_id={video_id} (not in queue, looking up)\n")
@@ -3725,7 +3731,41 @@ def alexa_state_event():
             # visible progress-bar dip right after a fresh play. Only re-anchor
             # when this genuinely moves the position (a real seek/replay) —
             # skip it when already confirmed+playing at essentially this offset.
+            metadata_changed = False
             with _np_lock:
+                # /proxy/ may learn the new video_id before this webhook while
+                # the visible queue is still stale.  Once the signed skill
+                # snapshot above installs the authoritative queue, reconcile
+                # its metadata even though this is now technically the same
+                # video_id.  This keeps the hero and compact player aligned
+                # with the active queue row for voice next/previous.
+                live_queue = _now_playing.get('queue') or []
+                live_index = _now_playing.get('queue_index', -1)
+                matched = (live_queue[live_index]
+                           if 0 <= live_index < len(live_queue)
+                           and live_queue[live_index].get('video_id') == video_id
+                           else next((item for item in live_queue
+                                      if item.get('video_id') == video_id), None))
+                if matched:
+                    metadata_fields = {
+                        'title': matched.get('title', ''),
+                        'artist': matched.get('artist', ''),
+                        'thumbnail': matched.get('thumbnail', ''),
+                    }
+                    # A zero duration means "not known yet", not that a value
+                    # resolved earlier by _lookup_and_update_np should be lost.
+                    try:
+                        matched_duration = int(matched.get('duration_ms') or 0)
+                    except (TypeError, ValueError):
+                        matched_duration = 0
+                    if matched_duration > 0:
+                        metadata_fields['duration_ms'] = matched_duration
+                    metadata_changed = any(
+                        _now_playing.get(key) != value
+                        for key, value in metadata_fields.items())
+                    if metadata_changed:
+                        _now_playing.update(metadata_fields)
+                        _now_playing['updated_at'] = time.time()
                 already_tracking = (_now_playing.get('playing')
                                      and _now_playing.get('playback_confirmed'))
                 position_matches = abs(_computed_position_ms() - offset_in_ms) < 3000
@@ -3737,7 +3777,7 @@ def alexa_state_event():
                     _now_playing['playing'] = True
                     _now_playing['playback_confirmed'] = True
                     _now_playing['updated_at'] = time.time()
-            if not redundant_confirmation:
+            if metadata_changed or not redundant_confirmation:
                 _notify_sse()
             if video_id:
                 # A same-track restart from the top is a replay: bump it in

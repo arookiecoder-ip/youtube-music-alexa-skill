@@ -357,7 +357,22 @@ function renderNpQueue(queue, currentIndex) {
     && existingIds.length <= incomingIds.length
     && existingIds.every(function(id, i) { return id === incomingIds[i]; });
   if (samePrefix) {
-    renderedArr.forEach(function(w, i) { w.classList.toggle('active', i === currentIndex); w.classList.toggle('playing', i === currentIndex && state.isPlaying); });
+    // The queue itself is unchanged, but Alexa may have advanced several
+    // tracks. Ensure that row exists before updating the highlight; otherwise
+    // a lazy queue can remain stuck on the last rendered item.
+    if (currentIndex >= renderedArr.length) {
+      _appendLazyQueueRows(list, currentIndex + 11);
+      renderedArr = Array.from(_renderedQueueRows(list));
+    }
+    renderedArr.forEach(function(w) {
+      // CSS and click handlers use .queue-item.active. Toggling the wrapper
+      // leaves the previously-active visible row highlighted indefinitely.
+      var item = w.querySelector('.queue-item');
+      if (!item) return;
+      var isCurrent = Number(item.dataset.index) === Number(currentIndex);
+      item.classList.toggle('active', isCurrent);
+      item.classList.toggle('playing', isCurrent && state.isPlaying);
+    });
     _syncQueueSentinel(list);
     return;
   }
@@ -653,11 +668,18 @@ function _closeAllQueueMenus() {
 document.addEventListener('click', _closeAllQueueMenus);
 
 function updateQueueActive(currentIndex) {
-  const list = document.getElementById('queue-list');
-  if (!list) return;
-  for (const el of list.querySelectorAll('.queue-item')) {
-    el.classList.toggle('active', Number(el.dataset.index) === currentIndex);
-    el.classList.toggle('playing', Number(el.dataset.index) === currentIndex && state.isPlaying);
+  // #queue-list is the retired/hidden panel. The desktop now-playing queue,
+  // mobile inline queue, and legacy panel may coexist in the DOM, so update
+  // every rendered surface when a slim SSE payload changes only the index.
+  const targetIndex = Number(currentIndex);
+  for (const id of ['np-queue-list', 'mobile-inline-queue', 'queue-list']) {
+    const list = document.getElementById(id);
+    if (!list) continue;
+    for (const el of list.querySelectorAll('.queue-item')) {
+      const isCurrent = Number(el.dataset.index) === targetIndex;
+      el.classList.toggle('active', isCurrent);
+      el.classList.toggle('playing', isCurrent && state.isPlaying);
+    }
   }
 }
 

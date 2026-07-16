@@ -135,7 +135,7 @@
           }
         } catch (_) {}
       }
-      for (const id of ['queue-list', 'queue-modal-body']) {
+      for (const id of ['np-queue-list', 'queue-list', 'queue-modal-body']) {
         const container = document.getElementById(id);
         if (container && container._lazyQueue && window._renderedQueueRows &&
             window._lastQueueIndex >= window._renderedQueueRows(container).length &&

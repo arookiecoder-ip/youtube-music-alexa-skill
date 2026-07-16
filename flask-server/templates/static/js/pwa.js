@@ -28,9 +28,17 @@
           try { window.handleNpUpdate(e.data.np); } finally { _applyingRemote = false; }
         }
       } else if (type === 'queue-update' && e.data.queue) {
-        // Force queue re-render with the new data
+        // Keep the shared queue identity/index cache in sync before rendering.
+        // Later SSE broadcasts intentionally omit an unchanged queue and rely
+        // on this cache to resolve the active row by video_id.
         if (typeof e.data.queueIndex === 'number') {
-          window._lastQueueJson = '';
+          var queueJson = JSON.stringify(e.data.queue);
+          window._lastQueueJson = queueJson;
+          window._lastQueueIndex = e.data.queueIndex;
+          if (window.__appState) {
+            window.__appState._lastQueueJson = queueJson;
+            window.__appState._lastQueueIndex = e.data.queueIndex;
+          }
           if (window.showQueue) {
             window.showQueue(e.data.queue, e.data.queueIndex);
           }
