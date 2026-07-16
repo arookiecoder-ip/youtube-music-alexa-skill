@@ -79,9 +79,13 @@
       // now-playing track. Prefer the track identity whenever it is present;
       // this prevents the highlight from sticking to a different song after
       // playback changes.
-      var resolvedIndex = npVideoId ? np.queue.findIndex(function (item) {
-        return item && item.video_id === npVideoId;
-      }) : -1;
+      var reportedItem = (reportedQueueIndex >= 0 && reportedQueueIndex < np.queue.length)
+        ? np.queue[reportedQueueIndex] : null;
+      var resolvedIndex = (npVideoId && reportedItem && reportedItem.video_id === npVideoId)
+        ? reportedQueueIndex
+        : npVideoId ? np.queue.findIndex(function (item) {
+            return item && item.video_id === npVideoId;
+          }) : -1;
       var effectiveQueueIndex = resolvedIndex >= 0 ? resolvedIndex : reportedQueueIndex;
       window._lastQueueIndex = effectiveQueueIndex;
       state()._lastQueueIndex = effectiveQueueIndex;
@@ -120,7 +124,11 @@
       if (npVideoId && knownQueueJson) {
         try {
           var knownQueue = JSON.parse(knownQueueJson);
-          var knownIndex = knownQueue.findIndex(function (item) { return item && item.video_id === npVideoId; });
+          var reportedKnownItem = (reportedQueueIndex >= 0 && reportedQueueIndex < knownQueue.length)
+            ? knownQueue[reportedQueueIndex] : null;
+          var knownIndex = (reportedKnownItem && reportedKnownItem.video_id === npVideoId)
+            ? reportedQueueIndex
+            : knownQueue.findIndex(function (item) { return item && item.video_id === npVideoId; });
           if (knownIndex >= 0) {
             window._lastQueueIndex = knownIndex;
             state()._lastQueueIndex = knownIndex;
@@ -137,6 +145,15 @@
       }
       if (window.updateQueueActive) window.updateQueueActive(window._lastQueueIndex);
       if (window.updateQueueModalActive) window.updateQueueModalActive(window._lastQueueIndex);
+      // An unchanged queue is intentionally omitted by SSE when Alexa only
+      // advances its active index. Desktop rows can be toggled in place, but
+      // the mobile inline queue displays only the current-and-later slice, so
+      // it must be advanced from the cached queue as well. renderNpQueue keeps
+      // the desktop prefix intact and only rebuilds the shorter mobile slice.
+      const npSection = document.getElementById('now-playing-section');
+      if (npSection && !npSection.hidden && window.renderNpQueue && knownQueueJson) {
+        try { window.renderNpQueue(JSON.parse(knownQueueJson), window._lastQueueIndex); } catch (_) {}
+      }
     }
   }
 

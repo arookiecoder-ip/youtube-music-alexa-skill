@@ -557,10 +557,16 @@ class CatchAllExceptionHandler(AbstractExceptionHandler):
         logger.error(exception, exc_info=True)
 
         # Speech is not allowed in responses to AudioPlayer / PlaybackController
-        # events; an empty response is the only valid reply there.
+        # events. A handler may have partially populated the shared builder
+        # before raising, so explicitly strip every standard response property.
         request_type = handler_input.request_envelope.request.object_type or ''
         if request_type.startswith(('AudioPlayer.', 'PlaybackController.')) or request_type == 'SessionEndedRequest':
-            return handler_input.response_builder.response
+            response = handler_input.response_builder.response
+            response.output_speech = None
+            response.card = None
+            response.reprompt = None
+            response.should_end_session = None
+            return response
 
         speak_output = "Sorry, I had trouble doing what you asked. Please try again."
 
@@ -597,11 +603,19 @@ class PlaybackStartedEventHandler(AbstractRequestHandler):
         # offset (a seek) or the app is opened partway through playback.
         token = player.Attributes.get_token(handler_input) or ''
         offset_in_ms = player.Attributes.get_offset_in_ms(handler_input) or 0
-        player._notify_server(handler_input, 'started', video_id=token, offset_in_ms=offset_in_ms)
+        # Report the track before the lazy radio lookup below. get_radio may
+        # take many seconds; putting the webhook after it leaves the website
+        # showing the previous hero and queue until that network call returns.
+        player._notify_server(
+            handler_input, 'started', video_id=token, offset_in_ms=offset_in_ms,
+            queue=player.Attributes.get_queue_snapshot(handler_input),
+            queue_index=playback_info.get('index', 0))
 
         # The seed track started fast (find_stream_list returned only it). Now
         # that audio is playing, lazily fill the radio/autoplay queue so tracks
         # 2+ are ready before this one nearly finishes. No-op if already filled.
+        # /get_radio updates Flask with the exact returned queue as part of the
+        # same request, so a second started webhook is unnecessary.
         player.Controller.expand_radio_queue(handler_input)
 
         return handler_input.response_builder.response
@@ -716,10 +730,14 @@ class PlaybackNearlyFinishedEventHandler(AbstractRequestHandler):
 
 
 def _without_speech(response: Response) -> Response:
-    # Responses to PlaybackController events must not carry speech; strip any
-    # error message the shared Controller paths may have attached.
+    # PlaybackController requests are sessionless custom-skill interface
+    # events. Amazon permits only AudioPlayer directives in their response --
+    # no speech, cards, reprompts, or shouldEndSession. Shared Controller paths
+    # are also used by normal voice intents, so sanitize their response here.
     response.output_speech = None
+    response.card = None
     response.reprompt = None
+    response.should_end_session = None
     return response
 
 class PlayCommandHandler(AbstractRequestHandler):

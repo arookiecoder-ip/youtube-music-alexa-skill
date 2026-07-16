@@ -3584,13 +3584,91 @@ def alexa_state_event():
             offset_in_ms = int(body.get('offset_in_ms') or 0)
         except (TypeError, ValueError):
             offset_in_ms = 0
+        # Voice next/previous advances the queue persisted by the Alexa skill.
+        # Do not generate a second radio queue in Flask: separate radio calls
+        # can yield different results, which used to replace the visible queue
+        # after every voice skip.  Accept a bounded, validated queue snapshot
+        # from the signed skill webhook before resolving the current item.
+        skill_queue = body.get('queue')
+        skill_queue_index = body.get('queue_index')
+        skill_queue_received = False
+        if video_id and isinstance(skill_queue, list):
+            normalized_queue = []
+            for item in skill_queue[:250]:
+                if not isinstance(item, dict):
+                    continue
+                item_video_id = item.get('video_id')
+                if not _valid_video_id(item_video_id):
+                    continue
+                try:
+                    duration_ms = max(0, int(item.get('duration_ms') or 0))
+                except (TypeError, ValueError):
+                    duration_ms = 0
+                normalized_queue.append({
+                    'title': str(item.get('title') or ''),
+                    'artist': str(item.get('artist') or ''),
+                    'thumbnail': _thumbnail_url(item.get('thumbnail')),
+                    'video_id': item_video_id,
+                    'duration_ms': duration_ms,
+                })
+            try:
+                candidate = int(skill_queue_index)
+            except (TypeError, ValueError):
+                candidate = -1
+            # Prefer the reported logical index when it points at the token;
+            # searching by id alone selects the wrong row for repeated songs.
+            if (0 <= candidate < len(normalized_queue)
+                    and normalized_queue[candidate].get('video_id') == video_id):
+                incoming_index = candidate
+            else:
+                incoming_index = next((i for i, item in enumerate(normalized_queue)
+                                       if item.get('video_id') == video_id), -1)
+            if incoming_index >= 0:
+                skill_queue_received = True
+                cur_queue = _get_now_playing().get('queue') or []
+                incoming_ids = [item.get('video_id') for item in normalized_queue]
+                current_ids = [item.get('video_id') for item in cur_queue]
+
+                # A long playlist is kept as a sliding window in DynamoDB. If
+                # Alexa reports a contiguous slice of the server's full queue,
+                # retain the full queue and translate the window-relative
+                # index. A different order (voice shuffle/new radio) remains
+                # authoritative and replaces the obsolete visible queue.
+                slice_offset = -1
+                if len(incoming_ids) <= len(current_ids):
+                    last_start = len(current_ids) - len(incoming_ids)
+                    for start in range(last_start + 1):
+                        if current_ids[start:start + len(incoming_ids)] == incoming_ids:
+                            slice_offset = start
+                            break
+                if slice_offset >= 0:
+                    synced_queue = cur_queue
+                    queue_index = slice_offset + incoming_index
+                else:
+                    synced_queue = normalized_queue
+                    queue_index = incoming_index
+
+                sync_fields = {'queue_index': queue_index}
+                # Queue versions are identity-based. Reinstalling an equal
+                # list made every voice skip look like a queue replacement to
+                # SSE clients even though only the active index had changed.
+                if synced_queue != cur_queue:
+                    sync_fields['queue'] = synced_queue
+                _update_now_playing(**sync_fields)
         same_track = video_id and video_id == _get_now_playing().get('video_id')
         if video_id and not same_track:
             # New track: pull instant metadata from the queue if we have it.
-            queue = _get_now_playing().get('queue', [])
-            matched = next((item for item in queue if item.get('video_id') == video_id), None)
+            current_state = _get_now_playing()
+            queue = current_state.get('queue', [])
+            preferred_index = current_state.get('queue_index', -1)
+            if (0 <= preferred_index < len(queue)
+                    and queue[preferred_index].get('video_id') == video_id):
+                i = preferred_index
+            else:
+                i = next((index for index, item in enumerate(queue)
+                          if item.get('video_id') == video_id), -1)
+            matched = queue[i] if i >= 0 else None
             if matched:
-                i = queue.index(matched)
                 _update_now_playing(playing=True, video_id=video_id, title=matched['title'],
                                     artist=matched['artist'], thumbnail=matched['thumbnail'],
                                     duration_ms=matched.get('duration_ms', 0),
@@ -3615,15 +3693,26 @@ def alexa_state_event():
                 # video_id — look the real metadata up, otherwise the now-playing
                 # card stays wedged on the old song for every later auto-advance
                 # whose track is missing from the visible queue.
-                _update_now_playing(playing=True, video_id=video_id, position_ms=offset_in_ms,
+                _update_now_playing(playing=True, video_id=video_id,
+                                    title='', artist='', thumbnail='', duration_ms=0,
+                                    position_ms=offset_in_ms,
                                     playback_confirmed=True, queue_index=-1)
-                # Record with blank metadata now (the np card's title is still
-                # the previous track's here); _lookup_and_update_np backfills
-                # the real title/artist/thumbnail once the lookup lands.
+                # Record with blank metadata now; _lookup_and_update_np
+                # backfills the real title/artist/thumbnail once it lands.
                 if offset_in_ms < 5000:
                     _record_listen(video_id, '', '', '')
                 threading.Thread(target=_lookup_and_update_np, args=(video_id,), daemon=True).start()
-            threading.Thread(target=_refresh_radio_queue, args=(video_id,), daemon=True).start()
+            live_queue = _get_now_playing().get('queue') or []
+            has_playable_queue = (len(live_queue) > 1
+                                  and any(item.get('video_id') == video_id
+                                          for item in live_queue))
+            # A valid Lambda snapshot, even a one-song seed, means the skill is
+            # about to call /get_radio. That endpoint installs the exact queue
+            # it returns to Alexa. Starting _refresh_radio_queue concurrently
+            # here creates two independent radio requests; whichever finishes
+            # first wins, so Alexa and the website can immediately diverge.
+            if not has_playable_queue and not skill_queue_received:
+                threading.Thread(target=_refresh_radio_queue, args=(video_id,), daemon=True).start()
         else:
             # Same track re-starting (a seek) -- OR a redundant confirmation
             # for a track _confirm_stream_delivery already confirmed (that
@@ -3662,7 +3751,12 @@ def alexa_state_event():
                     np = _get_now_playing()
                     _record_listen(video_id, np.get('title', ''), np.get('artist', ''),
                                    _thumbnail_url(np.get('thumbnail')))
-                threading.Thread(target=_refresh_radio_queue, args=(video_id,), daemon=True).start()
+                live_queue = _get_now_playing().get('queue') or []
+                has_playable_queue = (len(live_queue) > 1
+                                      and any(item.get('video_id') == video_id
+                                              for item in live_queue))
+                if not has_playable_queue and not skill_queue_received:
+                    threading.Thread(target=_refresh_radio_queue, args=(video_id,), daemon=True).start()
         # Pre-download the next few songs in the queue now that playback has
         # started. This gives the full song duration (~3-5 min) to download,
         # instead of racing against PlaybackNearlyFinished's ~30s window.

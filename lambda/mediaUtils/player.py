@@ -337,6 +337,45 @@ class Attributes:
         return playlist[play_order_index]
 
     @staticmethod
+    def get_queue_snapshot(handler_input: HandlerInput) -> List[Dict]:
+        """Return the skill's playback-order queue in the web API shape.
+
+        The Flask remote and the Alexa skill can both grow a radio queue.  The
+        result is not guaranteed to be identical for separate YouTube Music
+        requests, so the remote must receive the *skill's* queue when Alexa
+        changes tracks.  That makes voice next/previous use the same queue the
+        Echo is actually playing instead of causing Flask to generate a new
+        one around every new token.
+        """
+        playlist = Attributes.get_playlist(handler_input)
+        playback_info = Attributes.get_playback_info(handler_input) or {}
+        play_order = list(playback_info.get('play_order') or [])
+        # A partially-saved/legacy play_order must not produce a truncated
+        # snapshot that the server could mistake for the complete live queue.
+        # A valid order contains every physical playlist index exactly once.
+        try:
+            normalized_order = [int(i) for i in play_order]
+        except (TypeError, ValueError):
+            normalized_order = []
+        if (len(normalized_order) != len(playlist)
+                or sorted(normalized_order) != list(range(len(playlist)))):
+            normalized_order = list(range(len(playlist)))
+        result = []
+        for playlist_index in normalized_order:
+            metadata = playlist[playlist_index]
+            if not metadata.video_id:
+                continue
+            thumbnail = metadata.thumbnail.url if metadata.thumbnail else ''
+            result.append({
+                'title': metadata.title or '',
+                'artist': metadata.artist or '',
+                'thumbnail': thumbnail or '',
+                'video_id': metadata.video_id,
+                'duration_ms': metadata.duration_ms or 0,
+            })
+        return result
+
+    @staticmethod
     def shuffle_order(handler_input: HandlerInput) -> List[int]:
         play_order = [l for l in range(0, len(Attributes.get_playlist(handler_input)))]
         random.shuffle(play_order)
