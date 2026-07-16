@@ -26,6 +26,7 @@ async function runSearch(query, options) {
     }
     return;
   }
+  if (window.closeSearchSuggestions) window.closeSearchSuggestions();
   // A direct /search URL must become the active view immediately. Waiting
   // for the API response leaves Home visible on cold loads and makes valid
   // deep links look broken when the request is slow, empty, or fails.
@@ -58,6 +59,7 @@ async function runSearch(query, options) {
 
 function openResults(options) {
   options = options || {};
+  if (window.closeSearchSuggestions) window.closeSearchSuggestions();
   // Legacy callers still get a durable Search URL. Route-owned calls have
   // already selected it and must not navigate again.
   if (!options.fromRoute && window.getRoute && window.navigateTo &&
@@ -865,6 +867,10 @@ if (nextBtn) {
     input.setAttribute('aria-expanded', 'false');
   }
 
+  // Route restoration changes the input programmatically. Expose the same
+  // close path so entering Search cancels synthetic suggestion requests.
+  window.closeSearchSuggestions = closeList;
+
   const removeSvg =
     '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" ' +
     'stroke="currentColor" stroke-width="2.5" stroke-linecap="round">' +
@@ -1012,6 +1018,12 @@ if (nextBtn) {
   });
 
   input.addEventListener('blur', () => setTimeout(closeList, 120));
+
+  // Programmatic input updates do not focus the field, so no blur event is
+  // guaranteed. Result clicks and navigation must still dismiss the list.
+  document.addEventListener('pointerdown', e => {
+    if (!e.target.closest('.search-wrap')) closeList();
+  });
 })();
 
   window.runSearch = runSearch;

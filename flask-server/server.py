@@ -1,6 +1,6 @@
 import asyncio, difflib, glob, hashlib, hmac, itertools, json, os, random, secrets, sys, threading, time, re, subprocess, logging, copy, uuid, tempfile, shlex
 from datetime import timedelta
-from urllib.parse import parse_qs, unquote, urlparse
+from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
 import home_feed
 from ytmusicapi import YTMusic
@@ -293,6 +293,39 @@ _SPA_DOCUMENT_PATHS = (
     '/home', '/search', '/playlist', '/album', '/artist', '/artist/songs',
     '/explore', '/library', '/history', '/mood', '/now-playing',
 )
+
+_SPA_QUERY_FIELDS = {
+    '/search': ('q',), '/playlist': ('list',), '/album': ('browse',),
+    '/artist': ('channel',), '/artist/songs': ('channel',),
+    '/mood': ('params', 'title'),
+}
+_JAM_PRIVATE_SPA_PATHS = {
+    '/playlist', '/album', '/artist', '/artist/songs', '/explore',
+    '/library', '/history', '/mood',
+}
+
+
+def _safe_spa_target(value, default='/home'):
+    """Return a canonical local SPA URL suitable for redirects/login state."""
+    try:
+        parsed = urlparse(str(value or ''))
+    except (TypeError, ValueError):
+        return default
+    if parsed.scheme or parsed.netloc or parsed.fragment:
+        return default
+    path = parsed.path or ''
+    if path != '/' and path not in _SPA_DOCUMENT_PATHS:
+        return default
+    query = parse_qs(parsed.query, keep_blank_values=True)
+    allowed = _SPA_QUERY_FIELDS.get(path, ())
+    required = allowed[:1]
+    if any(not query.get(name) or not query[name][0] for name in required):
+        return default
+    clean = []
+    for name in allowed:
+        if query.get(name) and query[name][0]:
+            clean.append((name, query[name][0]))
+    return path + (('?' + urlencode(clean)) if clean else '')
 
 # Endpoints reachable with a logged-in web-remote session cookie (so the long
 # API key stays out of the browser URL). Everything here plus the remote page.
@@ -2939,8 +2972,10 @@ def login():
         return redirect('/remote/')
     if request.method == "GET":
         if _logged_in():
-            return redirect('/')
-        return _no_store(app.make_response(render_template("login.html", totp=_totp_enabled())))
+            return redirect(_safe_spa_target(request.args.get('next')))
+        return _no_store(app.make_response(render_template(
+            "login.html", totp=_totp_enabled(),
+            next_target=_safe_spa_target(request.args.get('next')))))
 
     body = request.get_json(silent=True) or request.form
 
@@ -2958,7 +2993,7 @@ def login():
         session['remote_user'] = REMOTE_USER
         session['sid'] = _session_open()
         session.permanent = True
-        return jsonify({'ok': True})
+        return jsonify({'ok': True, 'next': pending.get('next') or '/home'})
 
     # Step 1: verify username + password. Coerce to str: a JSON body can send
     # a non-string (number/bool/null) for either field, and compare_digest
@@ -2971,12 +3006,15 @@ def login():
         # Hold the verified identity briefly while the browser collects the code.
         token = secrets.token_urlsafe(32)
         with _pending_lock:
-            _pending_store[token] = {'user': REMOTE_USER, 'at': time.time()}
+            _pending_store[token] = {
+                'user': REMOTE_USER, 'at': time.time(),
+                'next': _safe_spa_target(body.get('next')),
+            }
         return jsonify({'ok': True, 'totp_required': True, 'token': token})
     session['remote_user'] = REMOTE_USER
     session['sid'] = _session_open()
     session.permanent = True
-    return jsonify({'ok': True})
+    return jsonify({'ok': True, 'next': _safe_spa_target(body.get('next'))})
 
 
 @app.route("/logout/", methods=["POST", "GET"])
@@ -3015,7 +3053,7 @@ def remote_page():
     # bookmarks and installed PWAs but bounce them to the clean URL. The
     # key-in-URL scheme still serves here directly (see root()).
     if _remote_login_enabled():
-        return redirect('/')
+        return redirect(_safe_spa_target(request.args.get('next')))
     if _jam_guest() and not _valid_key_supplied():
         return _no_store(app.make_response(render_template(
             'jam.html', asset_v=_STATIC_VERSION)))
@@ -4227,47 +4265,18 @@ def alexa_now_playing():
 @app.route("/alexa/now_playing/stream")
 def now_playing_stream():
     serial = _effective_serial(request.args.get("serial"))
-    """SSE endpoint — pushes now-playing state to the browser in real time."""
-    # A jam guest's stream must die when the jam is revoked, not at whenever
-    # the browser next reconnects. Capture the token now (the request context
-    # is gone once streaming starts) and re-check it on every tick — the
-    # 25s keepalive bounds how long a revoked guest can keep this open.
-    jam_token = None if _logged_in() else session.get('jam')
-    def generate():
-        q = _queue_mod.Queue()
-        sub = {'serial': serial, 'qv': None}
-        with _sse_lock:
-            _sse_subscribers[q] = sub
-        _ensure_heartbeat()  # start the periodic re-sync (idempotent)
-        if serial:
-            threading.Thread(target=_refresh_volume, args=(serial, True), daemon=True).start()
-        try:
-            # Send current state immediately on connect (always with the queue)
-            with _np_lock:
-                snap = _np_snapshot(serial)
-            sub['qv'] = snap['queue_version']
-            data = json.dumps(_jam_safe_now_playing(snap) if jam_token is not None else snap)
-            yield f"data: {data}\n\n"
-            while True:
-                if jam_token is not None and not _jam_token_valid(jam_token):
-                    break  # jam revoked: close this guest's stream now
-                try:
-                    data = q.get(timeout=25)
-                    if jam_token is not None:
-                        try:
-                            data = json.dumps(_jam_safe_now_playing(json.loads(data)))
-                        except (TypeError, ValueError):
-                            continue
-                    yield f"data: {data}\n\n"
-                except _queue_mod.Empty:
-                    # Keepalive to prevent proxy / browser from closing
-                    yield ": keepalive\n\n"
-        except GeneratorExit:
-            pass
-        finally:
-            with _sse_lock:
-                _sse_subscribers.pop(q, None)
-    return Response(generate(), content_type='text/event-stream',
+    """Return one SSE snapshot for compatibility with older browser tabs."""
+    # A never-ending WSGI response owns one Waitress worker. Enough old or
+    # reloading tabs therefore prevent the HTML for every direct SPA URL from
+    # being served until the process restarts. Send one valid SSE event and
+    # close instead. Legacy EventSource tabs reconnect after ``retry`` while
+    # current tabs use the finite JSON polling endpoint above.
+    with _np_lock:
+        snap = _np_snapshot(serial)
+    if _jam_guest():
+        snap = _jam_safe_now_playing(snap)
+    body = 'retry: 3000\n' + f'data: {json.dumps(snap)}\n\n'
+    return Response(body, content_type='text/event-stream',
                     headers={'Cache-Control': 'no-cache', 'X-Accel-Buffering': 'no'})
 
 
@@ -5137,13 +5146,11 @@ def armed_play():
 
 
 @app.route("/alexa/search/", methods=["GET"])
-async def alexa_search():
+def alexa_search():
     """Categorized search results for the web remote's filter tabs."""
     query = (request.args.get("q") or "").strip()
     if not query:
         return error_response('missing required parameter "q"', 400)
-
-    search_filters = ('songs', 'videos', 'artists', 'albums', 'playlists')
 
     def _last_thumbnail(item):
         thumbs = item.get('thumbnails') or []
@@ -5222,12 +5229,22 @@ async def alexa_search():
         return results
 
     def _categorize(raw):
-        by_filter = dict(zip(search_filters, raw))
+        """Split one mixed search response into the existing API shape.
+
+        The previous implementation launched six upstream searches and waited
+        for every category. One throttled/hung request therefore blanked the
+        whole Search page. YT Music's unfiltered response already carries
+        resultType, so one request is enough for every current tab.
+        """
+        raw = raw if not isinstance(raw, BaseException) and raw else []
+        by_type = collections.defaultdict(list)
+        for item in raw:
+            by_type[item.get('resultType') or ''].append(item)
         return {
-            'songs': _collect_songs([by_filter.get('songs'), by_filter.get('videos')]),
-            'artists': _collect_artists(by_filter.get('artists')),
-            'albums': _collect_albums(by_filter.get('albums')),
-            'playlists': _collect_playlists(by_filter.get('playlists')),
+            'songs': _collect_songs([by_type['song'], by_type['video']]),
+            'artists': _collect_artists(by_type['artist']),
+            'albums': _collect_albums(by_type['album']),
+            'playlists': _collect_playlists(by_type['playlist']),
         }
 
     def _has_results(results):
@@ -5269,30 +5286,39 @@ async def alexa_search():
 
     ytmusic = YTMusic()
 
+    # ytmusicapi uses requests without a default timeout. Bound this private
+    # per-request client so a slow YouTube response cannot occupy the Search
+    # page (and a server worker) indefinitely.
+    original_request = ytmusic._session.request
+
+    def _request_with_timeout(method, url, **kwargs):
+        kwargs.setdefault('timeout', (5, 10))
+        return original_request(method, url, **kwargs)
+
+    ytmusic._session.request = _request_with_timeout
+
     # First try with spelling correction (ignore_spelling=False) so typos
     # like "dhdadak" get auto-corrected to "dhadak" by YouTube Music.
-    raw = await asyncio.gather(
-        *[asyncio.to_thread(ytmusic.search, query=query, filter=f,
-                            ignore_spelling=False, limit=30)
-          for f in search_filters],
-        asyncio.to_thread(ytmusic.search, query=query, filter=None,
-                          ignore_spelling=False, limit=20),
-        return_exceptions=True)
-    results = _categorize(raw[:-1])
-    all_raw = raw[-1] if not isinstance(raw[-1], BaseException) and raw[-1] else []
+    try:
+        all_raw = ytmusic.search(
+            query=query, filter=None,
+            ignore_spelling=False, limit=40)
+    except Exception as exc:
+        logger.warning('[alexa/search] corrected search failed for %r: %s', query, exc)
+        all_raw = []
+    results = _categorize(all_raw)
 
     # If spelling-corrected search found nothing, retry with exact spelling
     # in case the user intentionally typed an unusual query.
     if not _has_results(results):
-        raw = await asyncio.gather(
-            *[asyncio.to_thread(ytmusic.search, query=query, filter=f,
-                                ignore_spelling=True, limit=30)
-              for f in search_filters],
-            asyncio.to_thread(ytmusic.search, query=query, filter=None,
-                              ignore_spelling=True, limit=20),
-            return_exceptions=True)
-        results = _categorize(raw[:-1])
-        all_raw = raw[-1] if not isinstance(raw[-1], BaseException) and raw[-1] else []
+        try:
+            all_raw = ytmusic.search(
+                query=query, filter=None,
+                ignore_spelling=True, limit=40)
+        except Exception as exc:
+            logger.warning('[alexa/search] exact search failed for %r: %s', query, exc)
+            all_raw = []
+        results = _categorize(all_raw)
 
     if not _has_results(results) and not all_raw:
         return error_response('no results found', 404)
@@ -6275,19 +6301,32 @@ def _render_root_shell():
     # Serve the remote UI at the bare domain so the address bar shows just
     # the host, not /remote/. Unauthenticated visitors go to the login page.
     if not _remote_login_enabled():
-        # Key-in-URL scheme: keep the old path, a redirect would drop ?key=.
-        return redirect('/remote/')
+        # A valid legacy key may enter at any canonical SPA URL. Keep it in
+        # memory for API calls; router initialization removes it from history.
+        if not _valid_key_supplied():
+            return redirect('/remote/')
+        from ytmusicapi.auth.types import AuthType
+        is_auth = (_get_ytmusic_home().auth_type != AuthType.UNAUTHORIZED)
+        return _no_store(app.make_response(render_template(
+            "remote.html", asset_v=_STATIC_VERSION,
+            jam_guest=False, remote_username=REMOTE_USER,
+            is_authenticated=is_auth)))
     from ytmusicapi.auth.types import AuthType
     is_auth = (_get_ytmusic_home().auth_type != AuthType.UNAUTHORIZED)
     if _logged_in():
         return _no_store(app.make_response(render_template(
             "remote.html", asset_v=_STATIC_VERSION, remote_username=REMOTE_USER, is_authenticated=is_auth)))
     if _jam_guest():
+        if request.path in _JAM_PRIVATE_SPA_PATHS:
+            return redirect('/')
         return _no_store(app.make_response(render_template(
             "jam.html", asset_v=_STATIC_VERSION)))
     if session.get('jam'):
         session.pop('jam', None)
-    return redirect('/login/')
+    target = _safe_spa_target(request.full_path.rstrip('?'))
+    if target == '/':
+        return redirect('/login/')
+    return redirect('/login/?next=' + quote(target, safe=''))
 
 
 @app.route("/", methods=["GET"])
@@ -6380,7 +6419,8 @@ def manifest():
 # redirects and fresh HTML must win) with the last good shell as an offline
 # fallback — combined with the localStorage state cache in remote.js, opening
 # the app offline still shows the last known player. API, SSE, and audio
-# proxy requests are never intercepted. Staleness is handled by versioning:
+# now-playing requests and audio proxy requests are never intercepted.
+# Staleness is handled by versioning:
 # any static file change alters _STATIC_VERSION, byte-changing this source,
 # which makes the browser re-install the worker and precache fresh copies
 # (install fetches bypass the HTTP cache via cache: 'no-cache').
@@ -6491,7 +6531,6 @@ def service_worker():
 # Main entry point
 if __name__ == "__main__":
     import waitress
-    # Each connected web-remote client pins one thread on the long-lived SSE
-    # stream (/alexa/now_playing/stream), so 8 threads starve quickly with a
-    # few tabs open — 16 leaves headroom for normal requests.
+    # Keep enough workers for simultaneous catalog/device calls. The legacy
+    # SSE compatibility endpoint is finite and no longer owns a worker.
     waitress.serve(app, host="0.0.0.0", port=5000, threads=16)

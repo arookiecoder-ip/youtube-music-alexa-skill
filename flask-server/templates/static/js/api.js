@@ -1,6 +1,19 @@
 (function() {
   'use strict';
 
+  // Legacy key-in-URL entry: capture before router.js canonicalizes the
+  // address, then attach only to same-origin application requests.
+  var _legacyApiKey = new URL(location.href).searchParams.get('key') || '';
+  function _withApiKey(path) {
+    if (!_legacyApiKey) return path;
+    var target;
+    try { target = new URL(path, location.href); } catch (_) { return path; }
+    if (target.origin !== location.origin) return path;
+    if (!/^\/(?:alexa|api|history|recommendations)(?:\/|$)/.test(target.pathname)) return path;
+    target.searchParams.set('key', _legacyApiKey);
+    return target.pathname + target.search + target.hash;
+  }
+
   // Shared 401 handling for api/apiDelete/apiPatch. For a jam guest a 401
   // usually means the host ended the jam, but it can also be a forbidden action.
   function _onUnauthorized() {
@@ -110,7 +123,7 @@
         };
     let res;
     try {
-      res = await _fetchWithTimeout(path, opts);
+      res = await _fetchWithTimeout(_withApiKey(path), opts);
     } catch (e) {
       throw new Error(e._isTimeout
         ? e.message
@@ -152,7 +165,7 @@
   async function apiDelete(path, body) {
     let res;
     try {
-      res = await _fetchWithTimeout(path, {
+      res = await _fetchWithTimeout(_withApiKey(path), {
         method: 'DELETE',
         credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },
@@ -172,7 +185,7 @@
   async function apiPatch(path, body) {
     let res;
     try {
-      res = await _fetchWithTimeout(path, {
+      res = await _fetchWithTimeout(_withApiKey(path), {
         method: 'PATCH',
         credentials: 'same-origin',
         headers: { 'Content-Type': 'application/json' },

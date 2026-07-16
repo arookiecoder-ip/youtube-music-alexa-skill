@@ -237,6 +237,7 @@
 
 <script>
 const TOTP = {{ 'true' if totp else 'false' }};
+const NEXT_TARGET = {{ next_target|tojson }};
 const statusEl = document.getElementById('status');
 const stepCreds = document.getElementById('step-creds');
 const credsBtn = document.getElementById('creds-btn');
@@ -271,12 +272,13 @@ stepCreds.addEventListener('submit', async (e) => {
     const json = await post({
       username: document.getElementById('username').value.trim(),
       password: document.getElementById('password').value,
+      next: NEXT_TARGET,
     });
     if (json.totp_required) {
       window._loginToken = json.token;
       showStep(document.getElementById('step-code'));
     } else {
-      location.href = '/';
+      location.href = json.next || '/home';
     }
   } catch (err) {
     setError(err.message);
@@ -294,8 +296,8 @@ if (TOTP) {
     setError('');
     codeBtn.disabled = true;
     try {
-      await post({ step: 'totp', code: document.getElementById('code').value.trim(), token: window._loginToken });
-      location.href = '/';
+      const json = await post({ step: 'totp', code: document.getElementById('code').value.trim(), token: window._loginToken });
+      location.href = json.next || '/home';
     } catch (err) {
       setError(err.message);
     } finally {

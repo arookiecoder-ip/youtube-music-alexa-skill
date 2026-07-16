@@ -4,6 +4,7 @@
   const deviceEl = window.deviceEl || document.getElementById('device');
   let _evtSource = null;
   let _evtSourceSerial = '';
+  let _livePollTimer = null;
   let _lastHistoryVideoId = null;
   let _rafQueuedData = null;
   let _rafQueuedIndex = -1;
@@ -167,20 +168,21 @@
   function connectSSE() {
     const serial = deviceEl.value;
     if (!serial) return;
-    if (_evtSource && _evtSourceSerial === serial) return;
+    if (_livePollTimer && _evtSourceSerial === serial) return;
     stopSSE();
     _evtSourceSerial = serial;
-    _evtSource = new EventSource('/alexa/now_playing/stream?serial=' + encodeURIComponent(serial));
-    _evtSource.onmessage = (e) => {
-      try { handleNpUpdate(JSON.parse(e.data)); } catch (_) {}
-    };
-    _evtSource.onerror = () => {
-      // SSE auto-reconnects.
-    };
+    // Waitress is a threaded WSGI server: every EventSource connection pins
+    // one worker, and rapid page reloads leave old streams alive until their
+    // next heartbeat. Enough reloads starve normal API calls such as Search.
+    // Short polling uses existing endpoint/state handling without holding a
+    // worker between updates. Playback actions schedule faster one-off polls.
+    pollNowPlaying();
+    _livePollTimer = setInterval(pollNowPlaying, 3000);
   }
 
   function stopSSE() {
     if (_evtSource) { _evtSource.close(); _evtSource = null; }
+    if (_livePollTimer) { clearInterval(_livePollTimer); _livePollTimer = null; }
     _evtSourceSerial = '';
   }
 
