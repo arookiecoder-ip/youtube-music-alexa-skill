@@ -1,4 +1,14 @@
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  /* Artwork is interactive UI, not draggable page content. This also stops
+     the image callout/drag gesture on mobile Safari and Chromium. */
+  img {
+    -webkit-user-drag: none;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-touch-callout: none;
+  }
+
   .preload * {
     -webkit-transition: none !important;
     -moz-transition: none !important;

@@ -1,6 +1,13 @@
 (function() {
   'use strict';
 
+  // Images are rendered throughout the app after navigation. Cancel their
+  // native drag behavior once at the document level so desktop browsers do
+  // not show a draggable ghost image. CSS supplies the matching mobile fix.
+  document.addEventListener('dragstart', function(event) {
+    if (event.target instanceof HTMLImageElement) event.preventDefault();
+  });
+
   const toastEl = document.getElementById('toast');
   const deviceEl = document.getElementById('device');
 
