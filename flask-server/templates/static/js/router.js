@@ -1,5 +1,159 @@
+(function(root, factory) {
+  var codec = factory();
+  if (typeof module === 'object' && module.exports) module.exports = codec;
+  if (root) root.__spaRouteCodec = codec;
+})(typeof window !== 'undefined' ? window : null, function() {
+  'use strict';
+
+  var MAX_ROUTE_VALUE = 2048;
+  var STATIC_ROUTES = {
+    '/home': '#home',
+    '/explore': '#explore',
+    '/library': '#library',
+    '/history': '#history',
+    '/now-playing': '#now-playing'
+  };
+  var SUPPORTED_PATHS = Object.keys(STATIC_ROUTES).concat([
+    '/', '/search', '/playlist', '/album', '/artist', '/artist/songs', '/mood'
+  ]);
+
+  function validValue(value) {
+    return typeof value === 'string' && value.length > 0 && value.length <= MAX_ROUTE_VALUE &&
+      !/[\x00-\x1f\x7f\ufffd]/.test(value);
+  }
+
+  function safeDecode(value) {
+    try {
+      var decoded = decodeURIComponent(value);
+      return validValue(decoded) ? decoded : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function encodeQuery(params) {
+    var query = new URLSearchParams();
+    Object.keys(params).forEach(function(key) {
+      if (params[key] != null && params[key] !== '') query.set(key, params[key]);
+    });
+    return query.toString();
+  }
+
+  function searchRoute(query) {
+    query = String(query == null ? '' : query).trim();
+    if (!validValue(query)) return '#home';
+    return '#search?' + encodeQuery({ q: query });
+  }
+
+  function searchQuery(route) {
+    if (typeof route !== 'string' || route.indexOf('#search?') !== 0) return '';
+    var query = new URLSearchParams(route.slice('#search?'.length)).get('q') || '';
+    return validValue(query) ? query : '';
+  }
+
+  function routeToUrl(route) {
+    if (STATIC_ROUTES['/' + String(route || '').slice(1)]) return '/' + route.slice(1);
+    if (route === '#home') return '/home';
+    if (typeof route !== 'string') return '/home';
+
+    if (route.indexOf('#search?') === 0) {
+      var q = searchQuery(route);
+      return q ? '/search?' + encodeQuery({ q: q }) : '/home';
+    }
+
+    var value;
+    if (route.indexOf('#playlist/') === 0) {
+      value = safeDecode(route.slice('#playlist/'.length));
+      return value ? '/playlist?' + encodeQuery({ list: value }) : '/home';
+    }
+    if (route.indexOf('#album/') === 0) {
+      value = safeDecode(route.slice('#album/'.length));
+      return value ? '/album?' + encodeQuery({ browse: value }) : '/home';
+    }
+    if (route.indexOf('#artist/') === 0) {
+      var artistValue = route.slice('#artist/'.length);
+      var songs = /\/songs$/.test(artistValue);
+      if (songs) artistValue = artistValue.slice(0, -'/songs'.length);
+      var legacyQueryIndex = artistValue.indexOf('?');
+      if (legacyQueryIndex !== -1) {
+        songs = new URLSearchParams(artistValue.slice(legacyQueryIndex + 1)).get('view') === 'top-songs';
+        artistValue = artistValue.slice(0, legacyQueryIndex);
+      }
+      value = safeDecode(artistValue);
+      return value ? (songs ? '/artist/songs?' : '/artist?') + encodeQuery({ channel: value }) : '/home';
+    }
+    if (route.indexOf('#mood/') === 0) {
+      var moodValue = route.slice('#mood/'.length);
+      var queryIndex = moodValue.indexOf('?');
+      var encodedParams = queryIndex === -1 ? moodValue : moodValue.slice(0, queryIndex);
+      var params = safeDecode(encodedParams);
+      var title = queryIndex === -1 ? '' : new URLSearchParams(moodValue.slice(queryIndex + 1)).get('title') || '';
+      if (!params || (title && !validValue(title))) return '/home';
+      return '/mood?' + encodeQuery({ params: params, title: title });
+    }
+    return '/home';
+  }
+
+  function isSupportedPath(pathname) {
+    return SUPPORTED_PATHS.indexOf(pathname) !== -1;
+  }
+
+  function urlToRoute(locationLike) {
+    var pathname = locationLike.pathname || '/';
+    var query = locationLike.searchParams || new URLSearchParams(locationLike.search || '');
+    if (pathname === '/') return '#home';
+    if (STATIC_ROUTES[pathname]) return STATIC_ROUTES[pathname];
+    if (!isSupportedPath(pathname)) return '#home';
+
+    var value;
+    if (pathname === '/search') return searchRoute(query.get('q') || '');
+    if (pathname === '/playlist') {
+      value = query.get('list') || '';
+      return validValue(value) ? '#playlist/' + encodeURIComponent(value) : '#home';
+    }
+    if (pathname === '/album') {
+      value = query.get('browse') || '';
+      return validValue(value) ? '#album/' + encodeURIComponent(value) : '#home';
+    }
+    if (pathname === '/artist' || pathname === '/artist/songs') {
+      value = query.get('channel') || '';
+      return validValue(value) ? '#artist/' + encodeURIComponent(value) + (pathname === '/artist/songs' ? '/songs' : '') : '#home';
+    }
+    if (pathname === '/mood') {
+      value = query.get('params') || '';
+      var title = query.get('title') || '';
+      if (!validValue(value) || (title && !validValue(title))) return '#home';
+      return '#mood/' + encodeURIComponent(value) + (title ? '?' + encodeQuery({ title: title }) : '');
+    }
+    return '#home';
+  }
+
+  function decodeLocation(locationLike) {
+    var hash = locationLike.hash || '';
+    var route = hash && hash.indexOf('#') === 0 ? hash : urlToRoute(locationLike);
+    var url = routeToUrl(route);
+    if (url === '/home' && route !== '#home') route = '#home';
+    else if (hash) route = urlToRoute(new URL(url, 'http://spa.local'));
+    var current = (locationLike.pathname || '/') + (locationLike.search || '');
+    return { route: route, url: url, replace: !!hash || current !== url };
+  }
+
+  return {
+    decodeLocation: decodeLocation,
+    isSupportedPath: isSupportedPath,
+    routeToUrl: routeToUrl,
+    searchQuery: searchQuery,
+    searchRoute: searchRoute,
+    urlToRoute: urlToRoute
+  };
+});
+
 (function() {
   'use strict';
+  if (typeof window === 'undefined') return;
+  var routeCodec = window.__spaRouteCodec;
+  var decodeLocation = routeCodec.decodeLocation;
+  var routeToUrl = routeCodec.routeToUrl;
   var playerTrace = function(event, details) {
     if (window.__playerDebugLog) window.__playerDebugLog(event, details);
   };
@@ -27,17 +181,7 @@
 
   var routes = {
     '#home': function() {
-      // Search results live on the #home route (searching never navigates).
-      // If they were open when another view (e.g. the expanded player) took
-      // over, restore them instead of the home feed — otherwise both stay
-      // hidden (_resultsOpen keeps syncUiState from showing home) and the
-      // page goes blank.
-      if (window.__appState && window.__appState._resultsOpen) {
-        setHidden('.play-section, #results-section', false);
-    setHidden('#home-section, #idle-hero, #queue-section, #artist-section, #artist-songs-section', true);
-      } else {
-        showHomeViews();
-      }
+      showHomeViews();
     },
     '#explore': function() {
       hideAllViews();
@@ -118,9 +262,8 @@
     }
   }
 
-  /* Clean-URL routing: the current route lives in history.state (and the
-     window.__route mirror), never in the address bar. Route tokens keep the
-     legacy '#name' format so all existing comparisons still work. */
+  /* Route tokens retain the legacy '#name' format internally. The codec above
+     mirrors each durable screen into a canonical, shareable browser URL. */
   window.__route = '#home';
   window.getRoute = function() { return window.__route || '#home'; };
 
@@ -135,7 +278,8 @@
     if (route.indexOf('#mood/') === 0) return 'mood-modal';
     if (route === '#library') return 'library-modal';
     if (route.indexOf('#playlist/') === 0) return 'playlist-detail-modal-overlay';
-    return 'main'; // #home, search results
+    if (route.indexOf('#search?') === 0) return 'results-list';
+    return 'main';
   }
   function _saveScroll() {
     var id = _routeScrollId(window.__route);
@@ -177,7 +321,7 @@
 
     // Update route state without triggering applyRoute
     window.__route = returnRoute;
-    history.replaceState({ route: returnRoute }, '', location.pathname + location.search);
+    history.replaceState({ route: returnRoute }, '', routeToUrl(returnRoute));
 
     // Restore the return route's body classes
     document.body.classList.toggle('home-route', returnRoute === '#home');
@@ -195,13 +339,7 @@
     // so the user won't see any layout jumps — they just see the previous
     // page already rendered behind the sliding overlay.
     if (returnRoute === '#home') {
-      var state = window.__appState;
-      if (state && state._resultsOpen) {
-        setHidden('.play-section, #results-section', false);
-        setHidden('#home-section, #idle-hero, #queue-section, #artist-section', true);
-      } else {
-        showHomeViews();
-      }
+      showHomeViews();
     } else if (returnRoute.indexOf('#playlist/') === 0) {
       var po = document.getElementById('playlist-detail-modal-overlay');
       if (po) po.classList.add('open');
@@ -274,6 +412,8 @@
 
   window.navigateTo = function(route) {
     route = route || '#home';
+    var routeUrl = routeToUrl(route);
+    if (routeUrl === '/home' && route !== '#home') route = '#home';
     var changedRoute = route !== window.__route;
     if (changedRoute) {
       // Not every card is wired through preload-nav (context menus and a few
@@ -287,7 +427,7 @@
       if (route === '#now-playing') window.__npReturnRoute = window.__route;
       window.__route = route;
       if (window.syncTopProgressVisibility) window.syncTopProgressVisibility();
-      history.pushState({ route: route }, '', location.pathname + location.search);
+      history.pushState({ route: route }, '', routeUrl);
     }
     applyRoute(route);
     // The full player is a fixed overlay over the current page. Resetting all
@@ -301,7 +441,19 @@
   };
   window.addEventListener('popstate', function(e) {
     _saveScroll();
-    window.__route = (e.state && e.state.route) || '#home';
+    var decoded = decodeLocation(location);
+    // The URL is authoritative. state.route only supports old entries whose
+    // address never changed away from the root path.
+    window.__route = decoded.route;
+    if (location.pathname === '/' && !location.hash && e.state && e.state.route) {
+      var legacyUrl = routeToUrl(e.state.route);
+      if (legacyUrl !== '/home') {
+        window.__route = e.state.route;
+        history.replaceState({ route: window.__route }, '', legacyUrl);
+      }
+    } else if (decoded.replace) {
+      history.replaceState({ route: window.__route }, '', decoded.url);
+    }
     applyRoute(window.__route);
     if (window.__route !== '#now-playing') {
       resetRouteScroll();
@@ -312,6 +464,12 @@
 
   function applyRoute(hash) {
     hash = hash || '#home';
+    // Search is a durable screen. Leaving it invalidates late responses and
+    // clears its UI state. Now Playing is excluded because it overlays and
+    // later reveals the current screen.
+    if (hash.indexOf('#search?') !== 0 && hash !== '#now-playing' && window.deactivateSearchResults) {
+      window.deactivateSearchResults();
+    }
     // Context menus belong to the route and source item that opened them.
     // Never carry one into another page.
     if (window._closeAllMoreMenus) window._closeAllMoreMenus();
@@ -432,7 +590,16 @@
         if (rs) rs.hidden = false;
       }
     }
-    if (routes[hash]) {
+    if (hash.indexOf('#search?') === 0) {
+      var searchQuery = routeCodec.searchQuery(hash);
+      if (!searchQuery) { window.navigateTo('#home'); return; }
+      var queryInput = document.getElementById('query');
+      if (queryInput) {
+        queryInput.value = searchQuery;
+        queryInput.dispatchEvent(new Event('input', { bubbles: true }));
+      }
+      if (window.runSearch) window.runSearch(searchQuery, { fromRoute: true });
+    } else if (routes[hash]) {
       routes[hash]();
     } else if (hash.indexOf('#playlist/') === 0) {
       var playlistId = decodeURIComponent(hash.slice('#playlist/'.length));
@@ -584,14 +751,21 @@
     }
   });
 
-  // Initial route: honor a legacy #hash bookmark once, then strip it from the
-  // URL for good.
-  window.__route = location.hash || '#home';
+  // Parse immediately, but wait one event-loop turn before rendering so the
+  // remaining synchronous page scripts can register every screen loader.
+  var initialLocation = decodeLocation(location);
+  window.__route = initialLocation.route;
   function syncHeaderScrollState() {
     document.body.classList.toggle('header-scrolled', window.scrollY > 12);
   }
   window.addEventListener('scroll', syncHeaderScrollState, { passive: true });
   syncHeaderScrollState();
-  history.replaceState({ route: window.__route }, '', location.pathname + location.search);
-  applyRoute(window.__route);
+  var routeInitialized = false;
+  function initializeRoute() {
+    if (routeInitialized) return;
+    routeInitialized = true;
+    history.replaceState({ route: window.__route }, '', routeToUrl(window.__route));
+    applyRoute(window.__route);
+  }
+  setTimeout(initializeRoute, 0);
 })();

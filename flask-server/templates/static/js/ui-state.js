@@ -88,7 +88,8 @@
     // restore them, but their shell class must only style the visible #home
     // route. Leaving results-open on an artist route forces the header black
     // and blocks the hero artwork from bleeding underneath it.
-    const resultsVisible = !!state._resultsOpen && route === '#home';
+    const searchRoute = route.indexOf('#search?') === 0;
+    const resultsVisible = !!state._resultsOpen && searchRoute;
     const mainEl = document.querySelector('main');
     const player = document.querySelector('.player-section');
     const clearBtn = document.getElementById('clear-all-btn');
@@ -106,7 +107,7 @@
       const moodOpen = route.indexOf('#mood/') === 0;
       const libraryOpen = route === '#library';
       const npOpen = route === '#now-playing';
-      const shouldShow = state._loggedIn && !state._resultsOpen && !artistOpen && !albumOpen && !historyOpen && !exploreOpen && !moodOpen && !libraryOpen && !npOpen;
+      const shouldShow = state._loggedIn && !searchRoute && !state._resultsOpen && !artistOpen && !albumOpen && !historyOpen && !exploreOpen && !moodOpen && !libraryOpen && !npOpen;
       if (shouldShow && !state._homeLoaded && window.loadHomeFeed) window.loadHomeFeed();
       else homeSection.hidden = !shouldShow || !state._homeLoaded;
     }

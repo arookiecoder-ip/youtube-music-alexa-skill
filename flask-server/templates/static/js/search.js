@@ -11,7 +11,25 @@
 
 const RESULTS_PER_PAGE = 10;
 
-async function runSearch(query) {
+async function runSearch(query, options) {
+  options = options || {};
+  query = String(query || '').trim();
+  if (!query) {
+    if (window.navigateTo) window.navigateTo('#home');
+    return;
+  }
+  // User actions only select the route. The route handler owns the fetch, so
+  // submissions, direct links, and Back/Forward all execute exactly once.
+  if (!options.fromRoute) {
+    if (window.navigateTo && window.__spaRouteCodec) {
+      window.navigateTo(window.__spaRouteCodec.searchRoute(query));
+    }
+    return;
+  }
+  // A direct /search URL must become the active view immediately. Waiting
+  // for the API response leaves Home visible on cold loads and makes valid
+  // deep links look broken when the request is slow, empty, or fails.
+  openResults({ fromRoute: true });
   const mySeq = ++state._searchSeq;
   if (window.startTopProgress) window.startTopProgress();
   toast('Searching \u201c' + query + '\u201d\u2026');
@@ -26,7 +44,6 @@ async function runSearch(query) {
     state._activeCategory = window.JAM_GUEST ? 'songs' : 'all';
     document.querySelectorAll('.results-tab').forEach(t => t.classList.toggle('active', t.dataset.category === state._activeCategory));
     renderResults();
-    openResults();
     // On mobile, collapse the expanded search panel once results are ready.
     // Desktop has no mobile-search-open class, so its layout stays unchanged.
     document.body.classList.remove('mobile-search-open');
@@ -39,11 +56,16 @@ async function runSearch(query) {
   }
 }
 
-function openResults() {
-  // Search results live on the Home route. Return there from every routed
-  // surface so its overlay closes before results become visible.
-  if (window.getRoute && window.navigateTo && window.getRoute() !== '#home') {
-    window.navigateTo('#home');
+function openResults(options) {
+  options = options || {};
+  // Legacy callers still get a durable Search URL. Route-owned calls have
+  // already selected it and must not navigate again.
+  if (!options.fromRoute && window.getRoute && window.navigateTo &&
+      window.getRoute().indexOf('#search?') !== 0) {
+    const query = document.getElementById('query').value.trim();
+    if (query && window.__spaRouteCodec) {
+      window.navigateTo(window.__spaRouteCodec.searchRoute(query));
+    }
   }
   const section = document.getElementById('results-section');
   // The queue column collapses while results are showing; the compact player
@@ -78,6 +100,23 @@ function openResults() {
       if (state._resultsOpen && !section.hidden) section.classList.add('is-visible');
     });
   }, 120);
+}
+
+function deactivateSearchResults() {
+  // Route changes can happen while a request or close animation is running.
+  // Invalidate both so a late response cannot reopen Search over Home or a
+  // media-detail screen selected through Back/Forward.
+  state._searchSeq++;
+  state._resultsOpen = false;
+  const section = document.getElementById('results-section');
+  if (section) {
+    clearTimeout(section._hideTimer);
+    clearTimeout(section._showTimer);
+    section.classList.remove('is-visible');
+    section.hidden = true;
+  }
+  document.body.style.removeProperty('--search-theme-image');
+  document.body.classList.remove('search-art-themed');
 }
 
 function playSearchPlaylist(playlistId) {
@@ -131,6 +170,9 @@ function closeResults() {
       state._resultsOpen = false;
       section.hidden = true;
       syncUiState();
+      if (window.getRoute && window.navigateTo && window.getRoute().indexOf('#search?') === 0) {
+        window.navigateTo('#home');
+      }
       if (typeof window.renderRoute === 'function') window.renderRoute();
       // Replay the player's reveal animation so enlarging from the compact player
       // slides the full player in instead of popping it.
@@ -975,6 +1017,7 @@ if (nextBtn) {
   window.runSearch = runSearch;
   window.openResults = openResults;
   window.closeResults = closeResults;
+  window.deactivateSearchResults = deactivateSearchResults;
   window.renderResults = renderResults;
   window.updateResultsActive = updateResultsActive;
   window.scrollResultsToTop = scrollResultsToTop;

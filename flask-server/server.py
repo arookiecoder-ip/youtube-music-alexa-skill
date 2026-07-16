@@ -286,6 +286,14 @@ _PUBLIC_PATHS = ('/', '/privacy_policy', '/terms_of_use', '/login', '/logout', '
 # is guarded by the generated session/cookie inside alexapy.
 _PUBLIC_PREFIXES = ('/static/', '/j/', '/jam/', '/alexa/proxy/')
 
+# Canonical SPA document URLs. These exact paths (no trailing slash) render
+# the same protected shell as `/`; nearby API paths such as `/history/` remain
+# normal Flask endpoints and are deliberately not matched by a catch-all.
+_SPA_DOCUMENT_PATHS = (
+    '/home', '/search', '/playlist', '/album', '/artist', '/artist/songs',
+    '/explore', '/library', '/history', '/mood', '/now-playing',
+)
+
 # Endpoints reachable with a logged-in web-remote session cookie (so the long
 # API key stays out of the browser URL). Everything here plus the remote page.
 _SESSION_PATHS = ('/remote', '/alexa/status', '/alexa/init', '/alexa/devices', '/alexa/command',
@@ -546,6 +554,11 @@ def _jam_safe_now_playing(snapshot):
 def require_api_key():
     _ensure_db()
     path = request.path.rstrip('/') or '/'
+    # Let the shared shell renderer apply the same owner/jam/login policy as
+    # the public root document. Match request.path exactly so `/history/` and
+    # `/history/<id>` continue through API authorization and JSON errors.
+    if request.method in ('GET', 'HEAD') and request.path in _SPA_DOCUMENT_PATHS:
+        return None
     if path in _PUBLIC_PATHS or any(request.path.startswith(p) for p in _PUBLIC_PREFIXES):
         return None
     if request.method in ('GET', 'HEAD') and path == '/remote':
@@ -6258,8 +6271,7 @@ async def alexa_suggest():
     return jsonify({'suggestions': suggestions})
 
 
-@app.route("/", methods=["GET"])
-def root():
+def _render_root_shell():
     # Serve the remote UI at the bare domain so the address bar shows just
     # the host, not /remote/. Unauthenticated visitors go to the login page.
     if not _remote_login_enabled():
@@ -6276,6 +6288,24 @@ def root():
     if session.get('jam'):
         session.pop('jam', None)
     return redirect('/login/')
+
+
+@app.route("/", methods=["GET"])
+def root():
+    return _render_root_shell()
+
+
+def spa_document():
+    return _render_root_shell()
+
+
+for _spa_document_path in _SPA_DOCUMENT_PATHS:
+    app.add_url_rule(
+        _spa_document_path,
+        endpoint='spa_document_' + _spa_document_path.strip('/').replace('/', '_').replace('-', '_'),
+        view_func=spa_document,
+        methods=['GET', 'HEAD'],
+    )
 
 
 @app.route("/setup/", methods=["GET", "POST"])
@@ -6358,6 +6388,11 @@ _SERVICE_WORKER_TEMPLATE = """\
 const VERSION = '__VERSION__';
 const STATIC_CACHE = 'mb-static-' + VERSION;
 const PAGE_CACHE = 'mb-pages-' + VERSION;
+const SHELL_CACHE_KEY = '/__app_shell__';
+const SPA_PATHS = [
+  '/', '/remote/', '/home', '/search', '/playlist', '/album', '/artist',
+  '/artist/songs', '/explore', '/library', '/history', '/mood', '/now-playing',
+];
 const PRECACHE = [
   '/static/icons/icon-192.svg',
   '/static/icons/icon-512.svg',
@@ -6418,18 +6453,21 @@ self.addEventListener('fetch', (e) => {
   // Page navigations: network-first, falling back to the last good shell.
   if (req.mode === 'navigate') {
     e.respondWith((async () => {
+      const isSpaNavigation = SPA_PATHS.includes(url.pathname);
       try {
         const resp = await fetch(req);
         // Auth redirect (302 to /login/ etc.) comes back opaque for
         // navigations — hand it straight to the browser to follow. Never
         // cache it, and never mask it with the cached logged-in shell.
         if (resp.type === 'opaqueredirect' || resp.redirected) return resp;
-        if (resp.ok && resp.type === 'basic' && (url.pathname === '/' || url.pathname === '/remote/')) {
-          (await caches.open(PAGE_CACHE)).put(req, resp.clone());
+        if (resp.ok && resp.type === 'basic' && isSpaNavigation) {
+          const cache = await caches.open(PAGE_CACHE);
+          await cache.put(SHELL_CACHE_KEY, resp.clone());
         }
         return resp;
       } catch (_) {
-        const cached = await caches.match(req, { ignoreSearch: true });
+        const cache = await caches.open(PAGE_CACHE);
+        const cached = isSpaNavigation ? await cache.match(SHELL_CACHE_KEY) : null;
         return cached || new Response(OFFLINE_HTML, { headers: { 'Content-Type': 'text/html' } });
       }
     })());
