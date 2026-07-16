@@ -93,10 +93,13 @@ function playSearchPlaylist(playlistId) {
     return;
   }
 
-  window.api('/alexa/play/', {
-    serial: serial,
-    query: 'https://music.youtube.com/playlist?list=' + playlistId
-  }).catch(function (err) {
+  const request = window.playCollection
+    ? window.playCollection([], { playlistId: playlistId, openPlaybackPage: true })
+    : window.api('/alexa/play/', {
+        serial: serial,
+        query: 'https://music.youtube.com/playlist?list=' + playlistId
+      });
+  request.catch(function (err) {
     if (window.toast) {
       window.toast((err && err.message) || 'Could not start playlist playback', 'error');
     }
@@ -402,7 +405,8 @@ function renderResults() {
            if (type === 'album') {
                window.api('/api/album/' + encodeURIComponent(browseId)).then(function(albumData) {
                  if (albumData && albumData.tracks && albumData.tracks.length && window.playFromQueue) {
-                   window.playFromQueue(albumData.tracks[0], browseId, true);
+                    if (window.playCollection) window.playCollection(albumData.tracks, { openPlaybackPage: true });
+                    else window.playFromQueue(albumData.tracks[0], 0, true);
                  }
                });
            } else if (type === 'playlist') {
@@ -546,7 +550,8 @@ function renderResults() {
         if (item.resultType === 'album' && item.browseId) {
           window.api('/api/album/' + encodeURIComponent(item.browseId)).then(function (albumData) {
             if (albumData && albumData.tracks && albumData.tracks.length && window.playFromQueue) {
-              window.playFromQueue(albumData.tracks[0], item.browseId, true);
+              if (window.playCollection) window.playCollection(albumData.tracks, { openPlaybackPage: true });
+              else window.playFromQueue(albumData.tracks[0], 0, true);
             }
           });
         } else if (item.resultType === 'playlist' && browseId) {

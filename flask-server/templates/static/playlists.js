@@ -344,11 +344,11 @@
         const trackCount = Number(pl.trackCount) || tracks.length;
         const metaParts = [`${trackCount} ${trackCount === 1 ? 'song' : 'songs'}`];
         if (totalDuration) metaParts.push(totalDuration);
-        // Shuffle, Play next, Share, More in the existing left/right action spans
+        // Shuffle, Add to queue, Share, More in the existing action spans
         // so the 1fr-auto-1fr grid keeps Play centered. Icons are tiny so they
         // sit comfortably beside the large Play button without fighting it for
-        // attention. The "play next" icon matches the one used in the result
-        // row context menu, and the "more" icon matches the one that used to
+        // attention. The queue action appends the complete collection, and the
+        // "more" icon matches the one that used to
         // live in the header (now moved here so the menu is closer to the
         // playlist identity).
         const playlistShareId = pl.playlistId || pl.playlist_id || plId;
@@ -568,31 +568,20 @@
             requestAnimationFrame(loadWhenNearEnd);
           }
           const heroPlay = renderedHero && renderedHero.querySelector('.playlist-hero-play');
-          if (heroPlay) heroPlay.addEventListener('click', () => list.querySelector('.history-item')?.click());
-          // Shuffle plays the same first track but with the device's shuffle
-          // mode flipped on (the same path the playbar Shuffle button uses).
-          const heroShuffle = renderedHero && renderedHero.querySelector('.playlist-hero-shuffle');
-          if (heroShuffle) heroShuffle.addEventListener('click', async () => {
-            const firstRow = list.querySelector('.history-item');
-            if (!firstRow) return;
-            try {
-              const sb = document.getElementById('shuffle-btn');
-              if (sb && window.api && !sb.classList.contains('shuffle-active')) {
-                await window.api('/alexa/shuffle_queue/', {});
-                sb.classList.add('shuffle-active');
-              }
-            } catch (e) { /* best-effort: still play the row even if shuffle toggle fails */ }
-            firstRow.click();
+          if (heroPlay) heroPlay.addEventListener('click', () => {
+            if (window.playCollection) window.playCollection([], { playlistId: plId });
           });
-          // Play next: queues the first track of the playlist at the
-          // "next" slot (right after the currently-playing track). Reuses
-          // the existing addToQueue helper from queue.js, which already
-          // handles busy-locking and toasting.
-          const heroPlayNext = renderedHero && renderedHero.querySelector('.playlist-hero-play-next');
-          if (heroPlayNext) heroPlayNext.addEventListener('click', () => {
-            const firstWrapper = list.querySelector('.result-swipe-wrapper');
-            const track = firstWrapper && firstWrapper._songContextTrack;
-            if (track && window.addToQueue) window.addToQueue(track, 'next');
+          // Ask the server to load the complete playlist (including pages that
+          // have not been rendered yet) and randomize it before track 1 starts.
+          const heroShuffle = renderedHero && renderedHero.querySelector('.playlist-hero-shuffle');
+          if (heroShuffle) heroShuffle.addEventListener('click', () => {
+            if (window.playCollection) window.playCollection([], { playlistId: plId, shuffle: true });
+          });
+          // Append every playlist track in one operation. The server resolves
+          // the playlist id so unloaded continuation pages are included too.
+          const heroAddQueue = renderedHero && renderedHero.querySelector('.playlist-hero-add-queue');
+          if (heroAddQueue) heroAddQueue.addEventListener('click', () => {
+            if (window.addCollectionToQueue) window.addCollectionToQueue([], { playlistId: plId });
           });
           // More: the rename / delete menu moved into the actions area so
           // it's reachable without scrolling back to the page header. This

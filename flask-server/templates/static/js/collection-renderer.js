@@ -10,7 +10,7 @@
 
   var icons = {
     shuffle: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/><polyline points="21 16 21 21 16 21"/><line x1="15" y1="15" x2="21" y2="21"/><line x1="4" y1="4" x2="9" y2="9"/></svg>',
-    next: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M4 5v14l11-7L4 5zm13 0v14h3V5h-3z"/></svg>',
+    queue: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="6" x2="14" y2="6"/><line x1="3" y1="12" x2="14" y2="12"/><line x1="3" y1="18" x2="11" y2="18"/><line x1="18" y1="13" x2="18" y2="21"/><line x1="14" y1="17" x2="22" y2="17"/></svg>',
     play: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>',
     share: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/><line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/></svg>',
     more: '<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg>'
@@ -25,7 +25,7 @@
     return '<div class="playlist-detail-hero-actions">' +
       '<div class="playlist-hero-actions-left">' +
         actionButton('playlist-hero-shuffle', 'Shuffle', 'shuffle', false) +
-        actionButton('playlist-hero-play-next', 'Play next', 'next', false) +
+        actionButton('playlist-hero-add-queue', 'Add to queue', 'queue', false) +
       '</div>' +
       '<button class="playlist-hero-play' + (options.playClass ? ' ' + options.playClass : '') + '" type="button" aria-label="Play ' + esc(options.title) + '">' + icons.play + '</button>' +
       '<div class="playlist-hero-actions-right">' +

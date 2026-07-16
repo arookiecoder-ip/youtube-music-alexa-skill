@@ -1195,6 +1195,123 @@ async function playFromQueue(item, queueIndex, openPlaybackPage) {
   }
 }
 
+// Start a playlist/album as one queue operation.  Collection buttons must not
+// fall through to playFromQueue/playResult with only their first track: that is
+// a single-song play and intentionally grows a radio recommendation queue.
+async function playCollection(items, options) {
+  options = options || {};
+  const serial = selectedSerial();
+  if (!serial) return;
+  const playlistId = String(options.playlistId || '').replace(/^VL/, '');
+  const queueItems = (items || []).map(function (item) {
+    const artists = Array.isArray(item.artists)
+      ? item.artists.map(function (artist) {
+          return typeof artist === 'string' ? artist : artist && artist.name;
+        }).filter(Boolean).join(', ')
+      : '';
+    const thumbnails = item.thumbnails;
+    const thumbnail = (item.thumbnail && item.thumbnail.url) || item.thumbnail ||
+      (Array.isArray(thumbnails) && thumbnails.length ? thumbnails[thumbnails.length - 1].url : '') || '';
+    return {
+      video_id: item.video_id || item.videoId || '',
+      title: item.title || '',
+      artist: item.artist || artists,
+      thumbnail: thumbnail,
+      duration_ms: item.duration_ms || 0,
+    };
+  }).filter(function (item) { return item.video_id; });
+
+  if (!playlistId && !queueItems.length) {
+    toast('This collection has no playable songs.', 'error');
+    return;
+  }
+
+  state.lastActionAt = Date.now();
+  toast(options.shuffle ? 'Shuffling collection…' : 'Playing collection…');
+  try {
+    const data = playlistId
+      ? await api('/alexa/play/', {
+          serial: serial,
+          query: 'https://music.youtube.com/playlist?list=' + encodeURIComponent(playlistId),
+          shuffle: !!options.shuffle,
+        })
+      : await api('/alexa/play_queue/', {
+          serial: serial,
+          queue_items: queueItems,
+          shuffle: !!options.shuffle,
+        });
+    const first = data && data.now_playing;
+    if (first && first.video_id) {
+      state._lastPlayAttemptVideoId = first.video_id;
+      showNowPlaying(first);
+      progress.resetPending(first.video_id);
+    }
+    state.isPlaying = true;
+    state.lastActionIntent = true;
+    syncPlayPause();
+    toast(options.shuffle ? 'Shuffle started' : 'Playing', 'ok');
+    if (options.openPlaybackPage && window.matchMedia('(min-width: 900px)').matches) {
+      window.navigateTo('#now-playing');
+    }
+    schedulePollNowPlaying(1000);
+    return data;
+  } catch (error) {
+    toast((error && error.message) || 'Could not play collection', 'error');
+    return null;
+  }
+}
+
+async function addCollectionToQueue(items, options) {
+  options = options || {};
+  const serial = selectedSerial();
+  if (!serial) return null;
+  const playlistId = String(options.playlistId || '').replace(/^VL/, '');
+  const queueItems = (items || []).map(function (item) {
+    const artists = Array.isArray(item.artists)
+      ? item.artists.map(function (artist) {
+          return typeof artist === 'string' ? artist : artist && artist.name;
+        }).filter(Boolean).join(', ')
+      : '';
+    const thumbnails = item.thumbnails;
+    return {
+      video_id: item.video_id || item.videoId || '',
+      title: item.title || '',
+      artist: item.artist || artists,
+      thumbnail: (item.thumbnail && item.thumbnail.url) || item.thumbnail ||
+        (Array.isArray(thumbnails) && thumbnails.length ? thumbnails[thumbnails.length - 1].url : '') || '',
+      duration_ms: item.duration_ms || 0,
+    };
+  }).filter(function (item) { return item.video_id; });
+
+  if (!playlistId && !queueItems.length) {
+    toast('This collection has no playable songs.', 'error');
+    return null;
+  }
+  // An empty player has no meaningful queue tail. In that case, installing the
+  // collection as the active queue gives the button a useful result.
+  if (!state._hasTrack) return playCollection(queueItems, { playlistId: playlistId });
+
+  toast('Adding collection to queue…');
+  try {
+    const data = await api('/alexa/queue_add/', {
+      serial: serial,
+      position: 'last',
+      playlist_id: playlistId || undefined,
+      queue_items: playlistId ? undefined : queueItems,
+    });
+    const count = Number(data && data.added_count) || queueItems.length;
+    const skipped = Number(data && data.skipped_count) || 0;
+    const message = count + (count === 1 ? ' song added to queue' : ' songs added to queue') +
+      (skipped ? ' (' + skipped + ' unavailable skipped)' : '');
+    toast(message, 'ok');
+    schedulePollNowPlaying(500);
+    return data;
+  } catch (error) {
+    toast((error && error.message) || 'Could not add collection to queue', 'error');
+    return null;
+  }
+}
+
 // The 'started' webhook that records a listen can lag a few seconds behind the
 // play dispatch, so poll history a few times rather than once.
 function scheduleHistoryRefresh() {
@@ -1697,5 +1814,7 @@ window.renderNpQueue = renderNpQueue;
   window._attachQueueSwipeGestures = _attachQueueSwipeGestures;
   window._attachQueueDragReorder = _attachQueueDragReorder;
   window.playFromQueue = playFromQueue;
+  window.playCollection = playCollection;
+  window.addCollectionToQueue = addCollectionToQueue;
   window.scheduleHistoryRefresh = scheduleHistoryRefresh;
 })();

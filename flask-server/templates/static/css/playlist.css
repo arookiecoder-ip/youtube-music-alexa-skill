@@ -234,11 +234,11 @@
   opacity: .6;
 }
 
-/* ── Secondary action buttons (Shuffle / Play next / Share / More) flanking
+/* ── Secondary action buttons (Shuffle / Add to queue / Share / More) flanking
      Play. The Play button keeps the 62×62 white-circle treatment; the rest
      sit at 44×44 with a transparent background and a soft hover. ── */
 .playlist-hero-shuffle,
-.playlist-hero-play-next,
+.playlist-hero-add-queue,
 .playlist-hero-share,
 .playlist-hero-more {
   width: 44px;
@@ -255,7 +255,7 @@
   transition: background .15s, color .15s, transform .15s;
 }
 .playlist-hero-shuffle:hover,
-.playlist-hero-play-next:hover,
+.playlist-hero-add-queue:hover,
 .playlist-hero-share:hover,
 .playlist-hero-more:hover { background: rgba(255, 255, 255, .1); }
 .playlist-hero-more.is-muted { color: rgba(255, 255, 255, .35); cursor: default; }
@@ -263,15 +263,15 @@
 .playlist-hero-share.is-muted { color: rgba(255, 255, 255, .35); cursor: default; }
 .playlist-hero-share.is-muted:hover { background: transparent; }
 .playlist-hero-shuffle:focus,
-.playlist-hero-play-next:focus,
+.playlist-hero-add-queue:focus,
 .playlist-hero-share:focus,
 .playlist-hero-more:focus { outline: none; }
 .playlist-hero-shuffle:active,
-.playlist-hero-play-next:active,
+.playlist-hero-add-queue:active,
 .playlist-hero-share:active,
 .playlist-hero-more:active { transform: scale(.94); }
 .playlist-hero-shuffle svg,
-.playlist-hero-play-next svg,
+.playlist-hero-add-queue svg,
 .playlist-hero-share svg,
 .playlist-hero-more svg { width: 22px; height: 22px; }
 

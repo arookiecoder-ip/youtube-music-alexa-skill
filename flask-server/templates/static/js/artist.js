@@ -510,7 +510,8 @@
             if (window.toast) window.toast('Loading album...', 'ok');
             window.api('/api/album/' + encodeURIComponent(item.browseId)).then(function(albumData) {
               if (albumData && albumData.tracks && albumData.tracks.length > 0 && window.playFromQueue) {
-                window.playFromQueue(albumData.tracks[0], 0);
+                if (window.playCollection) window.playCollection(albumData.tracks);
+                else window.playFromQueue(albumData.tracks[0], 0);
               }
             }).catch(function() {
               if (window.toast) window.toast('Could not play album', 'error');

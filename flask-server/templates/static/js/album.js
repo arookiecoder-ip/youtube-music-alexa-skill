@@ -152,31 +152,17 @@
 
     var playAll = hero.querySelector('.playlist-hero-play');
     if (playAll) playAll.addEventListener('click', function () {
-      var firstRow = list.querySelector('.history-item');
-      if (firstRow) firstRow.click();
+      if (window.playCollection) window.playCollection(tracks);
     });
-    // Shuffle: enable device shuffle mode (same path the playbar Shuffle
-    // button uses), then start playback from the first row.
+    // Install and randomize the complete album before playback starts.
     var heroShuffle = hero.querySelector('.playlist-hero-shuffle');
-    if (heroShuffle) heroShuffle.addEventListener('click', async function () {
-      var firstRow = list.querySelector('.history-item');
-      if (!firstRow) return;
-      try {
-        var sb = document.getElementById('shuffle-btn');
-        if (sb && window.api && !sb.classList.contains('shuffle-active')) {
-          await window.api('/alexa/shuffle_queue/', {});
-          sb.classList.add('shuffle-active');
-        }
-      } catch (e) { /* best-effort: still play the row even if shuffle toggle fails */ }
-      firstRow.click();
+    if (heroShuffle) heroShuffle.addEventListener('click', function () {
+      if (window.playCollection) window.playCollection(tracks, { shuffle: true });
     });
-    // Play next: queue the first track of the album at the "next" slot.
-    // Reuses the existing addToQueue helper from queue.js.
-    var heroPlayNext = hero.querySelector('.playlist-hero-play-next');
-    if (heroPlayNext) heroPlayNext.addEventListener('click', function () {
-      var firstWrapper = list.querySelector('.result-swipe-wrapper');
-      var track = firstWrapper && firstWrapper._songContextTrack;
-      if (track && window.addToQueue) window.addToQueue(track, 'next');
+    // Append the complete album to the end of the current queue atomically.
+    var heroAddQueue = hero.querySelector('.playlist-hero-add-queue');
+    if (heroAddQueue) heroAddQueue.addEventListener('click', function () {
+      if (window.addCollectionToQueue) window.addCollectionToQueue(tracks);
     });
     // Share the canonical YouTube Music album/single URL, not the app route.
     var heroShare = hero.querySelector('.playlist-hero-share');

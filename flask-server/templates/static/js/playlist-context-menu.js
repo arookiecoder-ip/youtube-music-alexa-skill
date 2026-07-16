@@ -22,15 +22,17 @@
       event.stopPropagation();
       closeMenu();
       if (!window.api) return;
-      window.api('/alexa/play/', {
-        serial: window.selectedSerial ? window.selectedSerial() : '',
-        query: 'https://music.youtube.com/playlist?list=' + playlist.id
-      }).then(function () {
-        if (action.dataset.action !== 'shuffle') return;
-        setTimeout(function () {
-          window.api('/alexa/shuffle_queue/', {}).catch(function () {});
-        }, 1200);
-      }).catch(function () {
+      var request = window.playCollection
+        ? window.playCollection([], {
+            playlistId: playlist.id,
+            shuffle: action.dataset.action === 'shuffle'
+          })
+        : window.api('/alexa/play/', {
+            serial: window.selectedSerial ? window.selectedSerial() : '',
+            query: 'https://music.youtube.com/playlist?list=' + playlist.id,
+            shuffle: action.dataset.action === 'shuffle'
+          });
+      request.catch(function () {
         if (window.toast) window.toast('Could not start playlist', 'error');
       });
     });

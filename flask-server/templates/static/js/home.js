@@ -379,18 +379,13 @@
                       duration_ms: 0
                   }));
               if (queueItems.length > 0) {
-                  // Step 1: push the full queue to the server (no serial needed,
-                  // returns 200 even without a device selected).
-                  window.api('/alexa/play_queue/', {
-                      serial: window.selectedSerial ? window.selectedSerial() : '',
-                      queue_items: queueItems.map(i => i.video_id)
-                  }).then(() => {
-                      // Step 2: dispatch playback of the first song (handles
-                      // Alexa, progress bar, now-playing update, etc.).
-                      if (window.playFromQueue) {
-                          window.playFromQueue(queueItems[0], 0, false);
-                      }
-                  }).catch(err => {
+                  var playRequest = window.playCollection
+                      ? window.playCollection(queueItems)
+                      : window.api('/alexa/play_queue/', {
+                          serial: window.selectedSerial ? window.selectedSerial() : '',
+                          queue_items: queueItems
+                      });
+                  playRequest.catch(err => {
                       // 502 = Alexa device offline; the queue IS set on the
                       // server so retrying later will work. Surface a softer msg.
                       var msg = (err && err.message) || '';
@@ -656,11 +651,14 @@
               sharedMoreMenu.classList.remove('open');
               activeMenuCardId = null;
               var t = sharedMoreMenu._track;
-              if (t && t._playlistId && window.playFromQueue) {
-                window.api('/alexa/play/', {
-                  serial: window.selectedSerial ? window.selectedSerial() : '',
-                  query: 'https://music.youtube.com/playlist?list=' + t._playlistId
-                }).catch(function() {
+              if (t && t._playlistId) {
+                var request = window.playCollection
+                  ? window.playCollection([], { playlistId: t._playlistId })
+                  : window.api('/alexa/play/', {
+                      serial: window.selectedSerial ? window.selectedSerial() : '',
+                      query: 'https://music.youtube.com/playlist?list=' + t._playlistId
+                    });
+                request.catch(function() {
                   if (window.toast) window.toast('Failed to start playlist', 'error');
                 });
               }
@@ -672,22 +670,14 @@
               activeMenuCardId = null;
               var t = sharedMoreMenu._track;
               if (t && t._playlistId) {
-                window.api('/alexa/play/', {
-                  serial: window.selectedSerial ? window.selectedSerial() : '',
-                  query: 'https://music.youtube.com/playlist?list=' + t._playlistId
-                }).then(function() {
-                  // Give the device time to confirm playback before shuffling.
-                  // Without this delay the shuffle command interrupts the
-                  // device while it's still buffering the first track,
-                  // causing a "stopped" event and a broken queue.
-                  setTimeout(function() {
-                    window.api('/alexa/shuffle_queue/', {}).then(function() {
-                      var mainShuffle = document.getElementById('shuffle-btn');
-                      if (mainShuffle) mainShuffle.classList.add('shuffle-active');
-                      if (window.toast) window.toast('Queue shuffled', 'ok');
-                    }).catch(function() {});
-                  }, 2000);
-                }).catch(function() {
+                var request = window.playCollection
+                  ? window.playCollection([], { playlistId: t._playlistId, shuffle: true })
+                  : window.api('/alexa/play/', {
+                      serial: window.selectedSerial ? window.selectedSerial() : '',
+                      query: 'https://music.youtube.com/playlist?list=' + t._playlistId,
+                      shuffle: true
+                    });
+                request.catch(function() {
                   if (window.toast) window.toast('Failed to start playlist', 'error');
                 });
               }

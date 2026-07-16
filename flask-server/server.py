@@ -4477,6 +4477,12 @@ async def alexa_play():
                 'video_id': t['video_id'],
                 'duration_ms': t.get('duration_ms', 0),
             } for t in tracks]
+            # Shuffle collection playback before choosing the first track.  The
+            # old client started track 1 and shuffled only the remaining queue,
+            # which was not true "Shuffle play" behavior.
+            if body.get('shuffle'):
+                import random as _random
+                _random.shuffle(queue)
             first = queue[0]
             _update_now_playing(playing=False,
                                 title=first['title'],
@@ -4622,37 +4628,80 @@ def alexa_play_queue():
 
     queue_items = body.get('queue_items')
     if isinstance(queue_items, list):
-        if len(queue_items) > 100:
-            return error_response('queue_items exceeds 100', 400)
+        if len(queue_items) > 5000:
+            return error_response('queue_items exceeds 5000', 400)
 
         validated_items = []
-        for vid in queue_items:
-            if not isinstance(vid, str) or not vid:
+        for raw_item in queue_items:
+            # Keep compatibility with the original list-of-video-ids payload,
+            # while allowing collection callers to install rich metadata in a
+            # single atomic request.  Atomic installation prevents the radio
+            # builder from racing a sequence of queue_add calls.
+            if isinstance(raw_item, str):
+                item = {'video_id': raw_item, 'title': raw_item}
+            elif isinstance(raw_item, dict):
+                item = raw_item
+            else:
                 return error_response('invalid videoId in queue_items', 400)
+            vid = str(item.get('video_id') or item.get('videoId') or '').strip()
+            if not _valid_video_id(vid):
+                # Rich collection payloads can contain unavailable/private
+                # rows with no usable video id. Skip only that row rather than
+                # rejecting every playable track in the album/playlist.
+                if isinstance(raw_item, dict):
+                    continue
+                return error_response('invalid videoId in queue_items', 400)
+            artists = item.get('artists') or []
+            artist = item.get('artist') or ''
+            if not artist and isinstance(artists, list):
+                artist = ', '.join(
+                    str(a.get('name') if isinstance(a, dict) else a)
+                    for a in artists if a
+                )
+            thumbnail = item.get('thumbnail') or item.get('thumbnails') or ''
+            try:
+                duration_ms = int(item.get('duration_ms') or 0)
+            except (TypeError, ValueError):
+                duration_ms = 0
             validated_items.append({
                 'video_id': vid,
-                'title': vid,
-                'artist': '',
-                'thumbnail': '',
-                'duration_ms': 0
+                'title': str(item.get('title') or vid),
+                'artist': str(artist),
+                'thumbnail': _thumbnail_url(thumbnail),
+                'duration_ms': duration_ms,
             })
 
         if not validated_items:
             return error_response('queue_items is empty', 400)
 
-        _update_now_playing(playing=False, queue=validated_items, queue_index=0)
+        if body.get('shuffle'):
+            import random as _random
+            _random.shuffle(validated_items)
+
+        first = validated_items[0]
+        _update_now_playing(playing=False,
+                            title=first['title'], artist=first['artist'],
+                            thumbnail=first['thumbnail'], video_id=first['video_id'],
+                            duration_ms=first['duration_ms'], position_ms=0,
+                            playback_confirmed=False,
+                            queue=validated_items, queue_index=0)
 
         serial = _effective_serial(body.get("serial"))
         if serial:
-            _ensure_audio_ready_for_play(validated_items[0]['video_id'], wait=False)
-            error = _dispatch_play_with_retry(serial, validated_items[0]['video_id'])
+            _ensure_audio_ready_for_play(first['video_id'], wait=False)
+            error = _dispatch_play_with_retry(serial, first['video_id'])
             if error:
                 return _device_dispatch_failed(error)
+            if not _jam_guest():
+                _record_listen(first['video_id'], first['title'],
+                               first['artist'], first['thumbnail'])
+            _prewarm_queue_audio(validated_items, 0)
 
         return jsonify({
             'ok': True,
             'queue': validated_items,
-            'queue_index': 0
+            'queue_index': 0,
+            'now_playing': first,
         })
 
     serial = _effective_serial(body.get("serial"))
@@ -4772,7 +4821,7 @@ def alexa_play_queue():
 
 @app.route("/alexa/queue_add/", methods=["POST"])
 def alexa_queue_add():
-    """Add a song to the queue without starting playback.
+    """Add one song or a complete collection without starting playback.
 
     Body params:
       serial      – device serial (required)
@@ -4786,10 +4835,87 @@ def alexa_queue_add():
     position = body.get("position", "last")  # 'next' or 'last'
     if not serial:
         return error_response('missing "serial"', 400)
-    if not video_id or not _valid_video_id(video_id):
-        return error_response('missing or invalid "video_id"', 400)
     if position not in ('next', 'last'):
         return error_response('"position" must be "next" or "last"', 400)
+
+    # Collection hero "Add to queue" uses one atomic append. Sending tracks
+    # one-by-one is both slow and unsafe: the browser's single-item queue lock
+    # intentionally drops overlapping requests. Playlist ids are resolved on
+    # the server so paginated playlists include tracks not rendered yet.
+    queue_items = body.get('queue_items')
+    playlist_id = str(body.get('playlist_id') or '').strip()
+    if playlist_id.startswith('VL'):
+        playlist_id = playlist_id[2:]
+    if playlist_id:
+        try:
+            queue_items = asyncio.run(Supporting.get_playlist_tracks(playlist_id))
+        except Exception:
+            logger.exception("queue_add: failed to load playlist %s", playlist_id)
+            return error_response('Could not load that playlist.', 502)
+
+    if isinstance(queue_items, list):
+        if not queue_items:
+            return error_response('collection has no playable tracks', 400)
+        if len(queue_items) > 5000:
+            return error_response('queue_items exceeds 5000', 400)
+        added_items = []
+        for raw_item in queue_items:
+            if not isinstance(raw_item, dict):
+                return error_response('invalid track in queue_items', 400)
+            vid = str(raw_item.get('video_id') or raw_item.get('videoId') or '').strip()
+            if not _valid_video_id(vid):
+                # YouTube Music occasionally leaves unavailable/private rows in
+                # a collection. They cannot be queued, but must not prevent the
+                # remaining playable tracks from being appended.
+                continue
+            artists = raw_item.get('artists') or []
+            artist = raw_item.get('artist') or ''
+            if not artist and isinstance(artists, list):
+                artist = ', '.join(
+                    str(a.get('name') if isinstance(a, dict) else a)
+                    for a in artists if a
+                )
+            thumbnail = raw_item.get('thumbnail') or raw_item.get('thumbnails') or ''
+            if isinstance(thumbnail, list) and thumbnail:
+                thumbnail = thumbnail[-1]
+            try:
+                duration_ms = int(raw_item.get('duration_ms') or 0)
+            except (TypeError, ValueError):
+                duration_ms = 0
+            added_items.append({
+                'title': str(raw_item.get('title') or vid),
+                'artist': str(artist),
+                'thumbnail': _thumbnail_url(thumbnail),
+                'video_id': vid,
+                'duration_ms': duration_ms,
+            })
+
+        if not added_items:
+            return error_response('collection has no playable tracks', 400)
+
+        with _np_lock:
+            queue = list(_now_playing.get('queue') or [])
+            current_idx = _now_playing.get('queue_index', -1)
+            if position == 'next':
+                insert_at = (current_idx + 1) if current_idx >= 0 else 0
+                queue[insert_at:insert_at] = added_items
+            else:
+                insert_at = len(queue)
+                queue.extend(added_items)
+            _now_playing['queue'] = queue
+            _now_playing['updated_at'] = time.time()
+
+        _prewarm_queue_audio(queue, current_index=current_idx, limit=4)
+        _notify_sse()
+        return jsonify({
+            'ok': True,
+            'added_count': len(added_items),
+            'skipped_count': len(queue_items) - len(added_items),
+            'queue_position': insert_at,
+        })
+
+    if not video_id or not _valid_video_id(video_id):
+        return error_response('missing or invalid "video_id"', 400)
 
     # Build the item from the body metadata, or look it up
     title = str(body.get("title") or "").strip()
