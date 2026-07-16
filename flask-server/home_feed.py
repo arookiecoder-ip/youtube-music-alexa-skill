@@ -52,6 +52,14 @@ def _construct_play(kind, video_id=None, playlist_id=None):
         return {"playlistId": playlist_id}
     return None
 
+def _canonical_playlist_id(playlist_id):
+    """Turn Music browse playlist ids (``VLPL...``/``VLRD...``) into
+    the ids accepted by ytmusicapi (``PL...``/``RD...``)."""
+    playlist_id = str(playlist_id or "").strip()
+    if playlist_id.startswith("VL") and playlist_id[2:].startswith(("PL", "RD", "OLAK", "LM")):
+        return playlist_id[2:]
+    return playlist_id
+
 def normalize_track(item):
     if not item or not isinstance(item, dict):
         return None
@@ -145,7 +153,7 @@ def normalize_album(item):
 def normalize_playlist(item):
     if not item or not isinstance(item, dict):
         return None
-    playlist_id = item.get("playlistId")
+    playlist_id = _canonical_playlist_id(item.get("playlistId"))
     if not playlist_id:
         return None
 
@@ -201,7 +209,7 @@ def normalize_artist(item):
 def normalize_station(item):
     if not item or not isinstance(item, dict):
         return None
-    playlist_id = item.get("playlistId")
+    playlist_id = _canonical_playlist_id(item.get("playlistId"))
     if not playlist_id:
         return None
 
@@ -236,12 +244,12 @@ def normalize_home_item(item):
         return normalize_track(item)
     if item.get("browseId") and "subscribers" in item:
         return normalize_artist(item)
-    if item.get("browseId"):
-        return normalize_album(item)
     if item.get("playlistId"):
-        if item.get("playlistId", "").startswith("RD"):
+        if _canonical_playlist_id(item.get("playlistId")).startswith("RD"):
             return normalize_station(item)
         return normalize_playlist(item)
+    if item.get("browseId"):
+        return normalize_album(item)
     return None
 
 def normalize_local_history(item):

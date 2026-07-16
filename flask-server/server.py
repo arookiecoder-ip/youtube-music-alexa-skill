@@ -1704,7 +1704,11 @@ class Supporting:
                 if cache_key == 'LM':
                     search_results = await asyncio.to_thread(yt_home.get_liked_songs, 1000)
                 else:
-                    ytmusic = YTMusic()
+                    # Home can return account-only collections such as the
+                    # seasonal Recap. Use the same authenticated client that
+                    # produced the card; an anonymous client receives a
+                    # noindex response and cannot read its tracks.
+                    ytmusic = yt_home
                     # limit=None: fetch every track. The default limit=100 would
                     # truncate large playlists and break continuation paging.
                     search_results = await asyncio.to_thread(
@@ -1713,7 +1717,7 @@ class Supporting:
                 try:
                     # Curated playlists (RDAMPL, RDTMAK) are watch playlists.
                     search_results = await asyncio.to_thread(
-                        YTMusic().get_watch_playlist, playlistId=playlist_id)
+                        yt_home.get_watch_playlist, playlistId=playlist_id)
                 except Exception:
                     logger.exception("get_playlist_tracks: playlist %s failed", playlist_id)
                     return None

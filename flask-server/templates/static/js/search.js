@@ -80,6 +80,29 @@ function openResults() {
   }, 120);
 }
 
+function playSearchPlaylist(playlistId) {
+  playlistId = String(playlistId || '').trim();
+  if (!playlistId || !window.api) return;
+  // Search may expose the Music browse id (VL...) instead of the underlying
+  // playlist id expected by the playback endpoint.
+  if (playlistId.indexOf('VL') === 0) playlistId = playlistId.slice(2);
+
+  const serial = window.selectedSerial ? window.selectedSerial() : '';
+  if (!serial) {
+    if (window.toast) window.toast('Select an Alexa device before playing', 'warning');
+    return;
+  }
+
+  window.api('/alexa/play/', {
+    serial: serial,
+    query: 'https://music.youtube.com/playlist?list=' + playlistId
+  }).catch(function (err) {
+    if (window.toast) {
+      window.toast((err && err.message) || 'Could not start playlist playback', 'error');
+    }
+  });
+}
+
 function closeResults() {
   if (!state._resultsOpen) return;
   const section = document.getElementById('results-section');
@@ -338,7 +361,9 @@ function renderResults() {
       card.className = 'hscroll-card' + (type === 'album' ? ' album-card' : '');
       // The "all" tab maps items to camelCase browseId; the category-tab
       // endpoints return snake_case browse_id/playlist_id. Accept both.
-      const browseId = item.browseId || item.browse_id || item.playlistId || item.playlist_id || '';
+      const browseId = type === 'playlist'
+        ? (item.playlistId || item.playlist_id || item.browseId || item.browse_id || '')
+        : (item.browseId || item.browse_id || item.playlistId || item.playlist_id || '');
       if (type === 'artist') {
         card.dataset.channelId = browseId;
       } else if (type === 'album') {
@@ -381,11 +406,7 @@ function renderResults() {
                  }
                });
            } else if (type === 'playlist') {
-               window.api('/api/playlists/' + encodeURIComponent(browseId)).then(function(playlistData) {
-                 if (playlistData && playlistData.tracks && playlistData.tracks.length && window.playFromQueue) {
-                   window.playFromQueue(playlistData.tracks[0], browseId, true);
-                 }
-               });
+               playSearchPlaylist(browseId);
            }
         } else {
            if (type === 'artist') {
@@ -446,7 +467,7 @@ function renderResults() {
       : (window.artistLinksHtml ? window.artistLinksHtml(artistStr, item.channelId || item.channel_id || '') : escHtml(artistStr));
     const topVideoId = item.videoId || item.video_id || '';
     const topPlaylistId = item.resultType === 'playlist'
-      ? (item.browseId || item.browse_id || item.playlistId || item.playlist_id || '') : '';
+      ? (item.playlistId || item.playlist_id || item.browseId || item.browse_id || '') : '';
     if (topPlaylistId) {
       card.dataset.playlistContext = topPlaylistId;
       card.dataset.playlistTitle = item.title || item.name || 'Playlist';
@@ -517,7 +538,9 @@ function renderResults() {
       // so anything with a videoId is treated as playable.
       const playableId = item.videoId || item.video_id || '';
       const playItem = { video_id: playableId, title: item.title, artist: artistStr, thumbnail: thumb };
-      const browseId = item.browseId || item.playlistId || '';
+      const browseId = item.resultType === 'playlist'
+        ? (item.playlistId || item.playlist_id || item.browseId || item.browse_id || '')
+        : (item.browseId || item.browse_id || item.playlistId || item.playlist_id || '');
 
       function playTopResult() {
         if (item.resultType === 'album' && item.browseId) {
@@ -527,11 +550,7 @@ function renderResults() {
             }
           });
         } else if (item.resultType === 'playlist' && browseId) {
-          window.api('/api/playlists/' + encodeURIComponent(browseId)).then(function (playlistData) {
-            if (playlistData && playlistData.tracks && playlistData.tracks.length && window.playFromQueue) {
-              window.playFromQueue(playlistData.tracks[0], browseId, true);
-            }
-          });
+          playSearchPlaylist(browseId);
         } else if (playableId) {
           window.playResult(playItem, false, false, true);
         }

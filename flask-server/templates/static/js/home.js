@@ -311,6 +311,26 @@
 
   const rows = document.getElementById('home-rows');
   if (rows) {
+    function startHomePlaylist(playlistId) {
+      if (!playlistId || !window.api) return;
+      // Home's Music browse payload sometimes exposes a virtual ``VL`` id.
+      // Alexa playback resolves the underlying playlist/radio id instead.
+      if (playlistId.indexOf('VL') === 0 && /^(PL|RD|OLAK|LM)/.test(playlistId.slice(2))) {
+        playlistId = playlistId.slice(2);
+      }
+      var serial = window.selectedSerial ? window.selectedSerial() : '';
+      if (!serial) {
+        if (window.toast) window.toast('Select an Alexa device before playing', 'warning');
+        return;
+      }
+      window.api('/alexa/play/', {
+        serial: serial,
+        query: 'https://music.youtube.com/playlist?list=' + playlistId
+      }).catch(function(err) {
+        if (window.toast) window.toast((err && err.message) || 'Could not start playlist playback', 'error');
+      });
+    }
+
     attachMobileShelfDrag(rows);
     rows.addEventListener('scroll', function(e) {
       if (e.target.classList && e.target.classList.contains('home-shelf-content')) updateShelfArrows(e.target);
@@ -401,6 +421,12 @@
       var itemCard = (playBtn || e.target).closest('.home-item');
 
       if (itemCard) {
+        if (playBtn) {
+            // The control sits inside a clickable card. Explicitly consume its
+            // native button action so it always takes the direct-play path.
+            e.preventDefault();
+            e.stopPropagation();
+        }
         e.stopPropagation();
         var videoId = itemCard.dataset.videoId;
         var playlistId = itemCard.dataset.playlistId;
@@ -474,6 +500,10 @@
             if (window.playFromQueue) {
                 // If it's just a track
                 if (videoId) {
+                    if (!window.selectedSerial || !window.selectedSerial()) {
+                        if (window.toast) window.toast('Select an Alexa device before playing', 'warning');
+                        return;
+                    }
                     window.playFromQueue({
                         video_id: videoId,
                         title: itemCard.querySelector('.home-item-title')?.textContent || '',
@@ -481,11 +511,7 @@
                         thumbnail: itemCard.querySelector('img')?.src || ''
                     });
                 } else if (playlistId) {
-                    // Start playlist playback
-                    window.api('/alexa/play/', {
-                        serial: window.selectedSerial ? window.selectedSerial() : '',
-                        query: 'https://music.youtube.com/playlist?list=' + playlistId
-                    });
+                    startHomePlaylist(playlistId);
                 }
             }
             return;

@@ -66,7 +66,7 @@
         
         let playBtnHtml = '';
         if (cap.play) {
-            playBtnHtml = `<button class="home-play-btn" aria-label="Play ${title}"><svg class="home-play-glyph" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><polygon points="7,4 20,12 7,20"/></svg><span class="music-bars" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span></button>`;
+            playBtnHtml = `<button type="button" class="home-play-btn" aria-label="Play ${title}"><svg class="home-play-glyph" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><polygon points="7,4 20,12 7,20"/></svg><span class="music-bars" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span></button>`;
         }
         
         if (layout === 'shortcuts') {
