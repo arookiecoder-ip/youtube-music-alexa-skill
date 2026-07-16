@@ -1781,13 +1781,8 @@ class Supporting:
         return client not in {"android_vr", "ios"}
 
     @staticmethod
-    def add_ytdlp_cookies(command):
-        """Attach an exported cookie file, falling back to browser extraction.
-
-        Docker uses YTDLP_COOKIES=/app/cookies.txt while older deployments use
-        YTDLP_COOKIES_FILE. For local runs, also discover cookies.txt beside
-        flask-server or in the repository root.
-        """
+    def get_ytdlp_cookies_file():
+        """Return configured/discovered Netscape cookie file, if present."""
         configured = (os.environ.get("YTDLP_COOKIES_FILE")
                       or os.environ.get("YTDLP_COOKIES"))
         server_dir = os.path.dirname(os.path.abspath(__file__))
@@ -1797,9 +1792,19 @@ class Supporting:
             os.path.join(os.path.dirname(server_dir), "cookies.txt"),
             os.path.join(os.getcwd(), "cookies.txt"),
         ]
-        cookies_file = next(
+        return next(
             (path for path in candidates if path and os.path.isfile(path)), None
         )
+
+    @staticmethod
+    def add_ytdlp_cookies(command):
+        """Attach an exported cookie file, falling back to browser extraction.
+
+        Docker uses YTDLP_COOKIES=/app/cookies.txt while older deployments use
+        YTDLP_COOKIES_FILE. For local runs, also discover cookies.txt beside
+        flask-server or in the repository root.
+        """
+        cookies_file = Supporting.get_ytdlp_cookies_file()
         if cookies_file:
             import shutil
             import tempfile
@@ -3265,7 +3270,7 @@ def alexa_amazon_signout():
 
 @app.route("/api/profile_status/", methods=["GET"])
 def profile_status():
-    """Returns auth statuses for Amazon and YouTube."""
+    """Returns auth statuses for Amazon, YouTube headers, and yt-dlp cookies."""
     # Amazon
     amazon_status = alexa_remote.remote.status()
     amazon_connected = bool(amazon_status.get("logged_in"))
@@ -3282,14 +3287,44 @@ def profile_status():
             yt_auth_working = False
             auth_type_str = "UNAUTHORIZED"
     headers_debug = f"auth_type={auth_type_str}"
+
+    # A signed-in-only feed verifies current acceptance. Public videos still
+    # work with expired cookies, so they cannot provide an honest status.
+    cookies_file = Supporting.get_ytdlp_cookies_file()
+    cookies_working = False
+    cookies_debug = "No cookies.txt file found"
+    if cookies_file:
+        command = [
+            "yt-dlp", "--flat-playlist", "--playlist-end", "1",
+            "--print", "%(id)s",
+        ]
+        # Use the normal temporary copy so read-only Docker mounts are never
+        # touched when yt-dlp saves its cookie jar on exit.
+        Supporting.add_ytdlp_cookies(command)
+        command += ["--", "https://www.youtube.com/feed/history"]
+        try:
+            result = subprocess.run(command, capture_output=True, text=True, timeout=15)
+            # An empty/disabled watch history can legitimately print no IDs;
+            # successful extraction itself proves the signed-in feed opened.
+            cookies_working = result.returncode == 0
+            cookies_debug = ("YouTube accepted cookies"
+                             if cookies_working
+                             else "YouTube rejected cookies; upload a fresh cookies.txt")
+        except subprocess.TimeoutExpired:
+            cookies_debug = "Cookie check timed out; try again"
+        except OSError:
+            cookies_debug = "yt-dlp is unavailable"
     
     return jsonify({
         "amazon_connected": amazon_connected,
         "youtube_auth_working": yt_auth_working,
         "youtube_auth_type": auth_type_str,
+        "youtube_cookies_present": bool(cookies_file),
+        "youtube_cookies_working": cookies_working,
         "debug": {
             "amazon": amazon_debug,
-            "headers": headers_debug
+            "headers": headers_debug,
+            "cookies": cookies_debug
         }
     })
 

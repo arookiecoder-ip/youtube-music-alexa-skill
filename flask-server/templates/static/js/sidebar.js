@@ -353,6 +353,15 @@
           ythEl.style.backgroundColor = status.youtube_auth_working ? 'rgba(74, 222, 128, 0.1)' : 'rgba(255, 107, 107, 0.1)';
           if (status.debug && status.debug.headers) ythEl.title = status.debug.headers;
         }
+
+        const ytcEl = document.getElementById('status-yt-cookies');
+        if (ytcEl) {
+          const cookiesOk = status.youtube_cookies_working;
+          ytcEl.textContent = cookiesOk ? 'Valid' : (status.youtube_cookies_present ? 'Invalid' : 'Not Found');
+          ytcEl.style.color = cookiesOk ? '#4ade80' : '#ff6b6b';
+          ytcEl.style.backgroundColor = cookiesOk ? 'rgba(74, 222, 128, 0.1)' : 'rgba(255, 107, 107, 0.1)';
+          if (status.debug && status.debug.cookies) ytcEl.title = status.debug.cookies;
+        }
         
         const amzSignout = document.getElementById('amazon-signout');
         const amzSignin = document.getElementById('amazon-signin');
