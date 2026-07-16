@@ -220,7 +220,12 @@
   }
 
   document.addEventListener('visibilitychange', () => {
-    if (window.progress) window.progress.syncLoop();
+    // During a mixed service-worker cache update, `sse.js` can briefly run
+    // alongside an older progress controller. Browsers may also expose the
+    // #progress element as window.progress before player.js replaces it.
+    if (window.progress && typeof window.progress.syncLoop === 'function') {
+      window.progress.syncLoop();
+    }
     if (document.hidden) stopSSE();
     else if (deviceEl.value) {
       connectSSE();
