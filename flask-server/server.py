@@ -6194,38 +6194,29 @@ async def api_get_artist(channel_id):
 
 @app.route("/api/explore/", methods=["GET"])
 async def api_get_explore():
-    from ytmusicapi.auth.types import AuthType
-    if _get_ytmusic_home().auth_type == AuthType.UNAUTHORIZED:
-        return jsonify({'error': 'YouTube Music authentication required. Please visit /setup/'}), 403
     try:
         # Keep Explore separate from Home.  get_home contains account-specific
         # shelves such as Liked Music and Listen again; those belong on Home,
         # not in the public discovery browser.
-        ytm = _get_ytmusic_home()
+        ytm = _get_ytmusic_home() if _ytmusic_is_authenticated() else _get_ytmusic()
         explore = await asyncio.to_thread(ytm.get_explore)
         return jsonify(explore or {})
     except Exception as e:
         message = str(e)
         if "invalid argument" in message.lower():
-            # Keep Explore account-scoped. Returning an error is preferable to
-            # quietly replacing a user's recommendations with anonymous data.
-            logger.warning("Authenticated YouTube Explore request failed: %s", message)
+            logger.warning("YouTube Explore request failed: %s", message)
         return jsonify({'error': str(e)}), 500
 
 
 @app.route("/api/explore/moods/", methods=["GET"])
 async def api_get_explore_moods():
     """Return the playlists behind a YouTube Music mood or genre category."""
-    from ytmusicapi.auth.types import AuthType
-    if _get_ytmusic_home().auth_type == AuthType.UNAUTHORIZED:
-        return jsonify({'error': 'YouTube Music authentication required. Please visit /setup/'}), 403
-
     params = (request.args.get('params') or '').strip()
     title = (request.args.get('title') or '').strip()[:100]
     if not params:
         return jsonify({'error': 'A mood or genre is required.'}), 400
     try:
-        ytm = _get_ytmusic_home()
+        ytm = _get_ytmusic_home() if _ytmusic_is_authenticated() else _get_ytmusic()
         featured_playlists, community_playlists, songs, albums = await asyncio.gather(
             asyncio.to_thread(ytm.get_mood_playlists, params),
             asyncio.to_thread(ytm.search, f'{title or "music"} music', 'playlists', None, 24),
