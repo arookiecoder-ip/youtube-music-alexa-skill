@@ -738,6 +738,25 @@ def _get_ytmusic_home():
         return inst
 
 
+def _ytmusic_is_authenticated():
+    """Return whether the configured YT Music account is currently usable.
+
+    A browser-headers client keeps its BROWSER auth type even after those
+    headers expire, so auth_type alone cannot distinguish it from a working
+    signed-in session.
+    """
+    yt_home = _get_ytmusic_home()
+    auth_type = str(getattr(yt_home, 'auth_type', 'UNAUTHORIZED'))
+    if "UNAUTHORIZED" in auth_type:
+        return False
+    if "BROWSER" in auth_type:
+        try:
+            yt_home.get_account_info()
+        except Exception:
+            return False
+    return True
+
+
 def _yt_call(method, *args, timeout=15, **kwargs):
     """Call a YTMusic method with retry. Returns (result, error)."""
     yt = _get_ytmusic()
@@ -3057,8 +3076,7 @@ def remote_page():
     if _jam_guest() and not _valid_key_supplied():
         return _no_store(app.make_response(render_template(
             'jam.html', asset_v=_STATIC_VERSION)))
-    from ytmusicapi.auth.types import AuthType
-    is_auth = (_get_ytmusic_home().auth_type != AuthType.UNAUTHORIZED)
+    is_auth = _ytmusic_is_authenticated()
     return _no_store(app.make_response(render_template(
         "remote.html", asset_v=_STATIC_VERSION,
         jam_guest=_jam_guest() and not _valid_key_supplied(), remote_username=REMOTE_USER,
@@ -6305,14 +6323,12 @@ def _render_root_shell():
         # memory for API calls; router initialization removes it from history.
         if not _valid_key_supplied():
             return redirect('/remote/')
-        from ytmusicapi.auth.types import AuthType
-        is_auth = (_get_ytmusic_home().auth_type != AuthType.UNAUTHORIZED)
+        is_auth = _ytmusic_is_authenticated()
         return _no_store(app.make_response(render_template(
             "remote.html", asset_v=_STATIC_VERSION,
             jam_guest=False, remote_username=REMOTE_USER,
             is_authenticated=is_auth)))
-    from ytmusicapi.auth.types import AuthType
-    is_auth = (_get_ytmusic_home().auth_type != AuthType.UNAUTHORIZED)
+    is_auth = _ytmusic_is_authenticated()
     if _logged_in():
         return _no_store(app.make_response(render_template(
             "remote.html", asset_v=_STATIC_VERSION, remote_username=REMOTE_USER, is_authenticated=is_auth)))
