@@ -217,6 +217,7 @@ main {
 #artist-section[hidden],
 #artist-songs-section[hidden],
 #now-playing-section[hidden],
+.auth-only[hidden],
 .sidebar-nav-btn[hidden],
 .progress[hidden] { display: none !important; }
 
