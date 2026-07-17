@@ -1067,6 +1067,7 @@ button { border-radius: var(--radius-md); }
   body.results-open:not(.header-scrolled) main header,
   body.history-route main header,
   body.explore-route main header,
+  body.mood-route:not(.header-scrolled) main header,
   body.library-route main header,
   body.home-route:not(.results-open):not(.header-scrolled) main header {
     background: transparent;
@@ -1074,6 +1075,7 @@ button { border-radius: var(--radius-md); }
   body.results-open:not(.header-scrolled) main header::before,
   body.history-route main header::before,
   body.explore-route main header::before,
+  body.mood-route:not(.header-scrolled) main header::before,
   body.library-route main header::before {
     background-color: transparent;
     border-bottom-color: transparent;
