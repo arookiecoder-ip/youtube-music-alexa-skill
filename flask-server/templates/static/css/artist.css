@@ -55,7 +55,10 @@
     padding: 32px 48px;
     padding-top: calc(32px + var(--topbar-h, 64px) + 7px);
     margin-bottom: calc(var(--space-5) - var(--artist-header-overlap));
-    transform: translateY(calc(-1 * var(--artist-header-overlap)));
+    /* Relative positioning preserves the same header overlap without making
+       the entire hero a transformed compositor layer. The transformed edge
+       produced a faint one-pixel rule above the songs section. */
+    top: calc(-1 * var(--artist-header-overlap));
     background-size: cover;
     background-position: center 20%;
   }
@@ -84,7 +87,9 @@
     content: '';
     position: absolute;
     inset: 0;
-    background: linear-gradient(to top, var(--bg) 0%, rgba(0,0,0,0.6) 40%, rgba(0,0,0,0) 100%);
+    /* Finish on the artist page's true black so the artwork fades cleanly
+       into the songs section. */
+    background: linear-gradient(to top, #000 0%, rgba(0,0,0,0.6) 40%, rgba(0,0,0,0) 100%);
     z-index: 1;
   }
   #artist-hero::after {
