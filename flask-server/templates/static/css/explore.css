@@ -44,8 +44,10 @@
     text-underline-offset: 2px;
     transition: text-decoration-color .15s ease;
   }
-  .explore-card:hover .explore-card-title,
-  .explore-card:focus-within .explore-card-title,
+  /* Match Home: artwork/card hover reveals playback controls without also
+     underlining the title. The underline belongs to the title hover only. */
+  .explore-card .explore-card-title:hover,
+  .explore-card .explore-card-title:focus-visible,
   .explore-card .explore-card-sub .artist-name:hover,
   .explore-card .explore-card-sub .artist-name:focus-visible {
     text-decoration: underline !important;
