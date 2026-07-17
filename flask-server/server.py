@@ -300,8 +300,7 @@ _SPA_QUERY_FIELDS = {
     '/mood': ('params', 'title'),
 }
 _JAM_PRIVATE_SPA_PATHS = {
-    '/playlist', '/album', '/artist', '/artist/songs', '/explore',
-    '/library', '/history', '/mood',
+    '/library', '/history',
 }
 
 
@@ -540,23 +539,31 @@ def _jam_url(token):
     return f"{base}/j/{token}"
 
 
-# What a jam guest may reach. Keep this deliberately narrow: playback controls,
-# anonymous search, and the dedicated guest endpoints below. In particular,
-# never expose account status, device metadata, history-backed recommendations,
-# library data, or authenticated YouTube Music surfaces.
+# What a jam guest may reach. Jam shares the full public music browser and the
+# live room queue, but never the owner's account, history, library, likes, or
+# saved playlists. Public catalog endpoints are GET-only below; queue changes
+# deliberately apply to the shared Jam queue.
 # Deliberately absent: /alexa/proxy_login + /alexa/proxy_check (Amazon auth),
 # /alexa/clear (wipes the owner's queue), /alexa/jam/* (owner-only controls),
-# /api/playlists/*, /history/*.
+# /history/*, and account/library/profile endpoints.
 _JAM_PATHS = ('/remote', '/alexa/command', '/alexa/play', '/alexa/suggest',
               '/alexa/now_playing', '/alexa/seek', '/alexa/volume',
               '/alexa/play_queue', '/alexa/shuffle_queue', '/alexa/search',
+              '/alexa/queue_add', '/alexa/queue_remove', '/alexa/queue_reorder',
               '/api/jam/session', '/api/jam/home', '/api/jam/leave')
+_JAM_PUBLIC_GET_PREFIXES = (
+    '/api/artist/', '/api/album/', '/api/explore/', '/api/track/',
+    '/api/library/playlists/',
+)
 
 
 def _jam_request_allowed(path):
     """Allow-list for guest sessions; `path` is the trailing-slash-normalized
     request path."""
-    return path in _JAM_PATHS or request.path.startswith('/alexa/now_playing/')
+    if path in _JAM_PATHS or request.path.startswith('/alexa/now_playing/'):
+        return True
+    return (request.method in ('GET', 'HEAD') and
+            request.path.startswith(_JAM_PUBLIC_GET_PREFIXES))
 
 
 def _jam_device_serial():
@@ -576,11 +583,12 @@ def _effective_serial(serial):
 
 
 def _jam_safe_now_playing(snapshot):
-    """Only expose media currently shared by the jam, never the host queue."""
-    safe = dict(snapshot or {})
-    safe.pop('queue', None)
-    safe.pop('queue_version', None)
-    return safe
+    """Return the live room state, including its shared queue.
+
+    Queue media is part of the Jam experience; owner account identity and
+    device metadata are never stored in this snapshot.
+    """
+    return dict(snapshot or {})
 
 
 @app.before_request
@@ -594,9 +602,12 @@ def require_api_key():
         return None
     if path in _PUBLIC_PATHS or any(request.path.startswith(p) for p in _PUBLIC_PREFIXES):
         return None
-    if request.method in ('GET', 'HEAD') and path == '/remote':
-        if not _logged_in():
-            _clear_stale_jam_cookie()
+    # A guest may refresh the legacy /remote/ URL after the host revokes the
+    # Jam. Handle that stale marker before normal auth redirects it to login.
+    if (request.method in ('GET', 'HEAD') and path == '/remote' and
+            not _logged_in() and session.get('jam') and not _jam_guest()):
+        session.pop('jam', None)
+        return _no_store(app.make_response((_JAM_ENDED_HTML, 410)))
     # A valid session cookie authorizes the remote page and its /alexa/* calls.
     if _logged_in() and (path in _SESSION_PATHS or any(request.path.startswith(p) for p in _SESSION_PREFIXES)):
         # Mutating requests must be JSON. A cross-site HTML form or plain
@@ -3075,7 +3086,9 @@ def remote_page():
         return redirect(_safe_spa_target(request.args.get('next')))
     if _jam_guest() and not _valid_key_supplied():
         return _no_store(app.make_response(render_template(
-            'jam.html', asset_v=_STATIC_VERSION)))
+            'remote.html', asset_v=_STATIC_VERSION,
+            jam_guest=True, remote_username='Jam guest',
+            is_authenticated=False)))
     is_auth = _ytmusic_is_authenticated()
     return _no_store(app.make_response(render_template(
         "remote.html", asset_v=_STATIC_VERSION,
@@ -3175,9 +3188,29 @@ def _jam_chart_items(raw_items):
         item = home_feed.normalize_track(raw)
         if not item:
             continue
-        # Guest cards are intentionally play-only. They do not link into an
-        # artist, album, playlist, like, or library surface.
-        item['target'] = None
+        # These are public catalog tracks; account-writing actions remain off.
+        item['capabilities'] = {
+            'play': True,
+            'like': False,
+            'queue': False,
+            'playlist': False,
+        }
+        items.append(item)
+    return items[:24]
+
+
+def _jam_public_home_items(raw_items):
+    """Normalize anonymous YouTube Music Home items for the guest feed.
+
+    Public Home is the fallback when regional Charts are unavailable. Cards
+    retain their public album/artist/playlist targets, but no account-writing
+    capability is exposed.
+    """
+    items = []
+    for raw in raw_items or []:
+        item = home_feed.normalize_home_item(raw)
+        if not item or not (item.get('play') or {}).get('videoId') and not (item.get('play') or {}).get('playlistId'):
+            continue
         item['capabilities'] = {
             'play': True,
             'like': False,
@@ -3213,6 +3246,25 @@ def _build_jam_india_home():
             'filters': ['all'],
             'items': items,
         })
+
+    # Charts are occasionally empty from YouTube Music's anonymous endpoint.
+    # Public Home remains anonymous and gives a Jam usable discovery shelves
+    # instead of leaving the shared main UI with an empty-state screen.
+    if not shelves:
+        for index, section in enumerate(_get_ytmusic().get_home(limit=40) or []):
+            items = _jam_public_home_items(section.get('contents') or [])
+            if not items:
+                continue
+            shelves.append({
+                'id': f'public-home-{index}',
+                'title': str(section.get('title') or 'Popular on YouTube Music'),
+                'subtitle': 'Public music discovery',
+                'layout': 'cards',
+                'source': 'public_youtube_home',
+                'actions': {'playAll': False, 'showAll': False},
+                'filters': ['all'],
+                'items': items,
+            })
     return {
         'schemaVersion': home_feed.SCHEMA_VERSION,
         'generatedAt': int(time.time()),
@@ -5388,14 +5440,6 @@ def alexa_search():
         # Search must remain available even if local activity storage is
         # temporarily unreadable.
         logger.exception('search personalization failed')
-    if _jam_guest():
-        # The guest experience is deliberately song-only. Do not expose or
-        # link into account-adjacent artist, album, or playlist surfaces.
-        results['all'] = [item for item in results['all']
-                          if item.get('resultType') in ('song', 'video')]
-        results['artists'] = []
-        results['albums'] = []
-        results['playlists'] = []
     return jsonify(results)
 
 
@@ -5623,9 +5667,11 @@ async def api_add_library_playlist_track(pl_id):
 @app.route("/api/library/playlists/<pl_id>", methods=["GET"])
 async def api_get_library_playlist(pl_id):
     from ytmusicapi.auth.types import AuthType
-    yt = _get_ytmusic_home()
+    yt = _get_ytmusic() if _jam_guest() else _get_ytmusic_home()
     if not pl_id.strip():
         return jsonify({'error': 'invalid playlist id'}), 400
+    if _jam_guest() and pl_id.upper() == 'LM':
+        return jsonify({'error': 'Liked Music is private to the host account.'}), 403
     try:
         try:
             # Always page this endpoint. YouTube Music commonly returns only
@@ -5809,7 +5855,7 @@ async def api_resolve_track_album(video_id):
             'artist': artists[0].get('name') or '' if artists else '',
         }
 
-    clients = [_get_ytmusic_home()]
+    clients = [_get_ytmusic() if _jam_guest() else _get_ytmusic_home()]
     try:
         from ytmusicapi import YTMusic
         clients.append(YTMusic())
@@ -5921,7 +5967,7 @@ async def api_get_album(browse_id):
     if not browse_id:
         return jsonify({'error': 'invalid browseId'}), 400
     from ytmusicapi import YTMusic
-    yt = _get_ytmusic_home()
+    yt = _get_ytmusic() if _jam_guest() else _get_ytmusic_home()
     try:
         raw = await asyncio.to_thread(yt.get_album, browse_id)
     except Exception as e:
@@ -6028,7 +6074,7 @@ async def api_get_artist_songs(channel_id):
     if not re.fullmatch(r'[A-Za-z0-9_-]{3,200}', browse_id):
         return jsonify({'error': 'invalid songs browseId'}), 400
 
-    clients = [_get_ytmusic_home()]
+    clients = [_get_ytmusic() if _jam_guest() else _get_ytmusic_home()]
     try:
         clients.append(YTMusic())
     except Exception as error:
@@ -6067,7 +6113,7 @@ async def api_get_artist(channel_id):
     if not channel_id:
         return jsonify({'error': 'invalid channelId'}), 400
     from ytmusicapi import YTMusic
-    yt = _get_ytmusic_home()
+    yt = _get_ytmusic() if _jam_guest() else _get_ytmusic_home()
 
     def parse_resilient_artist(source_client):
         """Adapt renderer variants that current ytmusicapi cannot parse.
@@ -6198,7 +6244,7 @@ async def api_get_explore():
         # Keep Explore separate from Home.  get_home contains account-specific
         # shelves such as Liked Music and Listen again; those belong on Home,
         # not in the public discovery browser.
-        ytm = _get_ytmusic_home() if _ytmusic_is_authenticated() else _get_ytmusic()
+        ytm = _get_ytmusic() if _jam_guest() else (_get_ytmusic_home() if _ytmusic_is_authenticated() else _get_ytmusic())
         explore = await asyncio.to_thread(ytm.get_explore)
         return jsonify(explore or {})
     except Exception as e:
@@ -6216,7 +6262,7 @@ async def api_get_explore_moods():
     if not params:
         return jsonify({'error': 'A mood or genre is required.'}), 400
     try:
-        ytm = _get_ytmusic_home() if _ytmusic_is_authenticated() else _get_ytmusic()
+        ytm = _get_ytmusic() if _jam_guest() else (_get_ytmusic_home() if _ytmusic_is_authenticated() else _get_ytmusic())
         featured_playlists, community_playlists, songs, albums = await asyncio.gather(
             asyncio.to_thread(ytm.get_mood_playlists, params),
             asyncio.to_thread(ytm.search, f'{title or "music"} music', 'playlists', None, 24),
@@ -6327,9 +6373,14 @@ def _render_root_shell():
         if request.path in _JAM_PRIVATE_SPA_PATHS:
             return redirect('/')
         return _no_store(app.make_response(render_template(
-            "jam.html", asset_v=_STATIC_VERSION)))
+            "remote.html", asset_v=_STATIC_VERSION,
+            jam_guest=True, remote_username='Jam guest',
+            is_authenticated=False)))
+    # Keep the stale marker long enough to render an explicit terminal Jam
+    # page. Clearing it first used to make a guest refresh land on /login/.
     if session.get('jam'):
         session.pop('jam', None)
+        return _no_store(app.make_response((_JAM_ENDED_HTML, 410)))
     target = _safe_spa_target(request.full_path.rstrip('?'))
     if target == '/':
         return redirect('/login/')

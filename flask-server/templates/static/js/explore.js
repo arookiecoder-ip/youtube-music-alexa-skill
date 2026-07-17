@@ -589,7 +589,7 @@
   }
 
   async function loadExplore(force) {
-    if (!state._loggedIn || window.JAM_GUEST || loading || (loaded && !force)) return;
+    if (!state._loggedIn || loading || (loaded && !force)) return;
     const body = document.getElementById('explore-modal-body');
     if (!body) return;
     loading = true;

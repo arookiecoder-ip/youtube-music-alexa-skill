@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>Music Box — Remote</title>
+<title>Music Box — {{ 'Jam' if jam_guest else 'Remote' }}</title>
 <link rel="icon" type="image/svg+xml" href="/favicon.ico">
 <!-- PWA: installable web remote -->
 <link rel="manifest" href="/manifest.webmanifest">
@@ -120,24 +120,24 @@
           </svg>
         </button>
       </div>
-      <div class="profile-menu-wrap needs-login" id="profile-menu-wrap" hidden>
+      <div class="profile-menu-wrap needs-login{{ ' jam-guest-profile' if jam_guest else '' }}" id="profile-menu-wrap" hidden>
         <button class="profile-menu-trigger" id="profile-menu-trigger" type="button" aria-label="Account" aria-expanded="false">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>
         </button>
         <div class="profile-menu" id="profile-menu">
           <div class="profile-menu-user">
             <div class="profile-menu-avatar">{{ (remote_username or 'U')[:1]|upper }}</div>
-            <div><span>Signed in as</span><strong>{{ remote_username or 'User' }}</strong></div>
+            <div><span>{{ 'Listening in' if jam_guest else 'Signed in as' }}</span><strong>{{ remote_username or 'User' }}</strong></div>
           </div>
-          <div class="profile-menu-status">
+          <div class="profile-menu-status jam-owner-only">
             <div><strong>Amazon</strong> <span id="status-amazon">Checking...</span></div>
             <div><strong>YouTube</strong> <span id="status-yt-headers">Checking...</span></div>
             <div><strong>YT Cookies</strong> <span id="status-yt-cookies">Checking...</span></div>
           </div>
-          <button id="amazon-signin" type="button" style="display: none;">Sign in to Amazon</button>
-          <button id="amazon-signout" type="button" style="display: none;">Sign out of Amazon</button>
-          <button id="youtube-browser-auth" type="button">Fix personalized YouTube data</button>
-          <button id="logout" type="button">Sign out of Web Remote</button>
+          <button class="jam-owner-only" id="amazon-signin" type="button" style="display: none;">Sign in to Amazon</button>
+          <button class="jam-owner-only" id="amazon-signout" type="button" style="display: none;">Sign out of Amazon</button>
+          <button class="jam-owner-only" id="youtube-browser-auth" type="button">Fix personalized YouTube data</button>
+          <button id="logout" type="button">{{ 'Leave Jam' if jam_guest else 'Sign out of Web Remote' }}</button>
         </div>
       </div>
       <button class="hamburger-btn" id="hamburger-btn" title="Menu">
@@ -205,7 +205,7 @@
         </svg>
         <span class="nav-label">History</span>
       </button>
-      <button class="sidebar-nav-btn needs-login jam-owner-only" id="nav-explore-btn" hidden>
+      <button class="sidebar-nav-btn needs-login" id="nav-explore-btn" hidden>
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <circle cx="12" cy="12" r="10"/>
           <polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76"/>

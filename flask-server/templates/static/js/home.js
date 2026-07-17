@@ -239,7 +239,9 @@
     try {
       // Use existing window.api logic which returns json, but we need to pass signal if it supported it.
       // Since window.api uses fetch, we'll just use window.api and check signal.aborted later
-      const data = await window.api('/api/home/?refresh=1&filter=all');
+      const data = await window.api(window.JAM_GUEST
+        ? '/api/jam/home/'
+        : '/api/home/?refresh=1&filter=all');
       if (signal.aborted) return;
 
       if (data && data.schemaVersion === 2) {
@@ -383,6 +385,12 @@
         var targetId = itemCard.dataset.targetId;
         var kind = itemCard.dataset.kind;
         var mobileHomeCard = window.matchMedia && window.matchMedia('(max-width: 899px)').matches;
+
+        // Liked Music is tied to the host account and is never a Jam route.
+        if (window.JAM_GUEST && playlistId === 'LM') {
+          if (window.toast) window.toast('Liked Music is private to the host account.', 'error');
+          return;
+        }
 
         // Mobile feed cards can come from compact shelf payloads whose kind is
         // missing or reported as "single". Keep this fallback mobile-only so

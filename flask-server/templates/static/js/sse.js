@@ -245,7 +245,7 @@
   if (deviceEl) {
     deviceEl.addEventListener('change', () => {
       if (deviceEl.value) {
-        localStorage.setItem('selectedSerial', deviceEl.value);
+        if (!window.JAM_GUEST) localStorage.setItem('selectedSerial', deviceEl.value);
         if (window.selectedDeviceOnline && !window.selectedDeviceOnline() && window.toast) {
           window.toast('That device is offline. Commands may not reach it.', 'error');
         }

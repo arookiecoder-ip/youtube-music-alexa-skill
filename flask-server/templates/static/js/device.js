@@ -187,7 +187,9 @@
       o.dataset.online = d.online ? '1' : '0';
       deviceEl.appendChild(o);
     }
-    try { localStorage.setItem(window.CACHE_DEVICES_KEY || 'cachedDevices', JSON.stringify(devices)); } catch (_) {}
+    if (!window.JAM_GUEST) {
+      try { localStorage.setItem(window.CACHE_DEVICES_KEY || 'cachedDevices', JSON.stringify(devices)); } catch (_) {}
+    }
     if (preferSerial && [...deviceEl.options].some(o => o.value === preferSerial)) deviceEl.value = preferSerial;
     if (deviceEl.value && !selectedDeviceOnline()) toast('Selected device is offline.', 'error');
     syncCustomDropdown();
@@ -214,6 +216,38 @@
   }
 
   async function initPage() {
+    if (window.JAM_GUEST) {
+      try {
+        const data = await api('/api/jam/session/');
+        const s = data.status || {};
+        if (!s.configured) {
+          showJamEnded('Jam unavailable', 'The host\'s server is not fully configured.');
+          return;
+        }
+        if (!s.logged_in || !data.device_available || !data.serial) {
+          showJamEnded('Jam unavailable', 'The host does not have a playback device available.');
+          return;
+        }
+
+        showControls(true);
+        _applyDevices([{
+          serial: data.serial,
+          name: 'Jam device',
+          online: true
+        }], data.serial);
+
+        if (data.now_playing && window.handleNpUpdate) {
+          window.handleNpUpdate(data.now_playing);
+          if (!state()._paintedFromCache) requestAnimationFrame(playStartupReveal);
+        }
+        if (window.connectSSE) window.connectSSE();
+        if (window.refreshVolume) window.refreshVolume(true);
+      } catch (e) {
+        showJamEnded('This jam has ended', 'Ask the host for a new link to keep listening.');
+      }
+      return;
+    }
+
     const savedSerial = localStorage.getItem('selectedSerial') || '';
     try {
       const data = await api('/alexa/init/' + (savedSerial ? '?serial=' + encodeURIComponent(savedSerial) : ''));

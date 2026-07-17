@@ -332,7 +332,7 @@
     const open = wrap.classList.toggle('open');
     trigger.setAttribute('aria-expanded', String(open));
     
-    if (open && window.api) {
+    if (open && window.api && !window.JAM_GUEST) {
       try {
         const status = await window.api('/api/profile_status/');
         

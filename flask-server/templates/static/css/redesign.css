@@ -372,13 +372,6 @@ header > .brand h1 {
   background: rgba(232, 89, 12, .08);
 }
 
-/* Keep the Jam feature wired up, but temporarily remove its launch controls
-   from the layout so they do not reserve button, margin, or sidebar space. */
-#jam-btn,
-#sidebar-jam-btn {
-  display: none !important;
-}
-
 @media (min-width: 900px) {
   /* Playlists + Jam live in the left rail on desktop */
   #playlists-modal-btn, #jam-btn { display: none !important; }

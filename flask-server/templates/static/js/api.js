@@ -18,7 +18,11 @@
   // usually means the host ended the jam, but it can also be a forbidden action.
   function _onUnauthorized() {
     if (window.JAM_GUEST) {
-      fetch('/alexa/status/', { credentials: 'same-origin', cache: 'no-store' })
+      // `/alexa/status/` is owner-only, so probing it always returned 401 for
+      // a live guest and falsely displayed the "Jam ended" overlay whenever
+      // any forbidden account endpoint was touched. The guest session endpoint
+      // is the actual liveness check.
+      fetch('/api/jam/session/', { credentials: 'same-origin', cache: 'no-store' })
         .then((r) => {
           if (r.status === 401 && window.showJamEnded) window.showJamEnded();
           else if (window.toast) window.toast("That action isn't available in a jam.", 'error');

@@ -196,11 +196,8 @@
       menu.querySelector('[data-action="play-radio"]').hidden = true;
       menu.querySelector('[data-action="save-playlist"]').hidden = true;
     } else {
-      // Jam guests only retain the server-authorized radio action. They never
-      // receive account-writing or host-queue mutation controls.
+      // Jam guests share queue controls, but never account-writing actions.
       menu.querySelector('[data-action="toggle-like"]').hidden = !!window.JAM_GUEST;
-      menu.querySelector('[data-action="play-next"]').hidden = !!window.JAM_GUEST;
-      menu.querySelector('[data-action="add-to-queue"]').hidden = !!window.JAM_GUEST;
       menu.querySelector('[data-action="save-playlist"]').hidden = !!window.JAM_GUEST;
     }
 

@@ -127,6 +127,10 @@ const _resolvedNowPlayingArt = new Map();
 const _ambientNowPlayingArt = new Map();
 
 function upgradeLowResNowPlayingArt(info, fingerprint, artwork, npPageArt) {
+  // Jam guests receive only public playback metadata. Avoid an account-backed
+  // artwork lookup; it is both unnecessary and forbidden by the guest API
+  // policy.
+  if (window.JAM_GUEST) return Promise.resolve(false);
   if (!info.video_id || typeof window.api !== 'function') return Promise.resolve(false);
 
   return window.api('/api/track/' + encodeURIComponent(info.video_id) + '/artwork')

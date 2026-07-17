@@ -9,6 +9,7 @@
   if (window.__appState._paintedFromCache === undefined) window.__appState._paintedFromCache = false;
 
   function _cacheNowPlaying(np) {
+    if (window.JAM_GUEST) return;
     if (!np || !np.title) return;
     const key = (np.video_id || '') + ':' + (np.queue ? np.queue.length : 'nq') + ':' + (np.queue_index ?? -1);
     if (key === _npCacheKey) return;
@@ -36,6 +37,7 @@
   }
 
   function restoreFromCache() {
+    if (window.JAM_GUEST) return;
     try {
       const devices = JSON.parse(localStorage.getItem(CACHE_DEVICES_KEY) || 'null');
       if (!devices || !devices.length) return;

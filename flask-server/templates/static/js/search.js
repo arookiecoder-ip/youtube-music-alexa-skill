@@ -42,7 +42,7 @@ async function runSearch(query, options) {
     const totalItems = (data.songs?.length || 0) + (data.artists?.length || 0) + (data.albums?.length || 0) + (data.playlists?.length || 0);
     if (!totalItems) { toast('No results found.', 'error'); return; }
     state._resultsPage = { songs: 0, artists: 0, albums: 0, playlists: 0 };
-    state._activeCategory = window.JAM_GUEST ? 'songs' : 'all';
+    state._activeCategory = 'all';
     document.querySelectorAll('.results-tab').forEach(t => t.classList.toggle('active', t.dataset.category === state._activeCategory));
     renderResults();
     // On mobile, collapse the expanded search panel once results are ready.
