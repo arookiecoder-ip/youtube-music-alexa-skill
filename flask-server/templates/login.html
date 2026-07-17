@@ -260,7 +260,13 @@ async function post(payload) {
     body: JSON.stringify(payload),
   });
   const json = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(json.error || ('HTTP ' + res.status));
+  if (!res.ok) {
+    const error = json && json.error;
+    const message = typeof error === 'string'
+      ? error
+      : (error && typeof error.message === 'string' ? error.message : 'HTTP ' + res.status);
+    throw new Error(message);
+  }
   return json;
 }
 
