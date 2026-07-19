@@ -26,7 +26,7 @@ Alexa cloud ──► Alexa-hosted Lambda (Python, free tier, EU-Ireland)
               https://<ip-dashes>.sslip.io            free-tier VPS
                      │  reverse_proxy                 (Ubuntu 24.04 arm64)
                      ▼
-              Flask server (port 5000, systemd)
+              Docker Compose stack
               ├── ytmusicapi ── search / radio / playlists
 ├── yt-dlp ────── downloads audio into a local cache
 │        (default client, android_vr/web/tv fallbacks + cookies + deno)
@@ -43,16 +43,16 @@ yt-dlp's own download path (default client, falls back to android_vr, web, then 
 the server downloads each track (~3 MB m4a) into a cache and serves the file
 itself, with Range support.
 
-### Components on the VPS
+### Docker services and volumes
 
 | Piece                              | Role                                                                                |
 | ---------------------------------- | ----------------------------------------------------------------------------------- |
-| `~/ytm` venv                       | flask[async], ytmusicapi, yt-dlp, alexapy                           |
-| deno (`~/.deno`)                   | JS runtime yt-dlp needs to solve YouTube's challenges                               |
-| `~/cookies.txt`                    | YouTube account cookies (throwaway account) — gets past the datacenter-IP bot check |
-| `ytmusic.service` (systemd)        | runs the Flask server with the env vars below                                       |
-| Caddy                              | HTTPS via sslip.io hostname + automatic Let's Encrypt; also fronts the login proxy  |
-| cron (`*/30` + daily)              | sweeps cached audio older than 2 h; trims yt-dlp info cache weekly                  |
+| `ytmusic` container                | Flask, ytmusicapi, yt-dlp, AlexaPy, and the audio proxy                              |
+| `youtube-browser` container        | Private Chromium/noVNC service for personalized YouTube Music authentication          |
+| `caddy` container                  | HTTPS and reverse proxy for the web remote and Amazon login proxy                     |
+| `ytmusic_cache` volume             | TTL-swept downloaded audio cache                                                       |
+| `ytmusic_data` volume              | Listening history, database, and persistent YouTube Music auth headers                 |
+| `ytmusic_alexa_cookies` volume     | Persisted Amazon/Alexa session                                                          |
 
 ### Environment variables
 
@@ -61,15 +61,13 @@ Core (`server.py`):
 | Var               | Purpose                                                                                                                                                              |
 | ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `PUBLIC_BASE_URL` | e.g. `https://<your-ip-with-dashes>.sslip.io`. When set, `audio_url` points to `/proxy/` and downloads are pre-warmed. Unset = dev mode (returns direct googlevideo URLs). |
-| `YTDLP_COOKIES_FILE` | optional path to a `cookies.txt` file (Netscape format). `YTDLP_COOKIES` is accepted as a Docker-compatible alias. Local runs also discover `cookies.txt` in `flask-server/` or the repository root. Exported cookies take priority over `YTDLP_BROWSER`. |
-| `YTDLP_BROWSER`   | optional. If running on Windows/macOS/desktop Linux, set to `chrome`, `edge`, `firefox`, or `brave` to have yt-dlp automatically extract your live browser cookies to bypass bot detection. (Does not work in Docker). |
-| `YTDLP_JS_RUNTIME` | optional runtime override for YouTube signature challenges: `deno`, `node`, `bun`, or `qjs`. When unset, the server automatically selects the first installed runtime in that order. Docker installs Deno; local Windows commonly uses Node. |
+| `YTDLP_COOKIES` | optional path inside the container to a mounted Netscape-format `cookies.txt` file. |
+| `YTDLP_JS_RUNTIME` | optional runtime override for YouTube signature challenges. Docker includes Deno by default. |
 | `YTMUSIC_AUTH_FILE` | optional path to a browser headers JSON file for YT Music recommendations. Warning: DO NOT store this in a public repo; browser headers give full access. |
 | `YTDLP_PO_TOKEN`  | optional — if set, overrides the default `android_vr` client and passes this as the GVS PO token for `mweb` client instead (e.g. `youtube:po_token=mweb.gvs+{token}`) |
 | `API_KEY`         | shared secret; when set, all endpoints except privacy/terms and the login flow require `?key=` (or `X-Api-Key` header) **or** a valid web-remote session cookie. Must match `API_KEY` in `lambda/api_key.py`. |
 | `AUDIO_CACHE_DIR` | audio cache location (default `/tmp/ytm_audio_cache`)                                                                                                               |
 | `HISTORY_FILE`    | listening-history JSON file location for the web remote's Recently Listened / Recommended sections (default `/tmp/ytm_listen_history.json`) — see the Docker note below |
-| `FLASK_DEBUG`     | set to `1` for auto-reload during local development                                                                                                                 |
 
 > **Docker Compose deployments:** `server.py` binds Flask to `0.0.0.0` (not
 > `127.0.0.1`) and the Amazon login proxy in `alexa_remote.py` does the same for
@@ -90,7 +88,7 @@ Web-remote login (see [Web remote](#web-remote-control-the-echo-from-any-browser
 | `REMOTE_PASSWORD`     | web-remote login password                                                                                                                   |
 | `REMOTE_TOTP_SECRET`  | optional base32 secret adding a 6-digit 2FA code to the login (RFC 6238 TOTP, verified in-server, no extra dependency)                      |
 | `SECRET_KEY`          | signs the session cookie. Set it so logins survive restarts; if unset a random key is generated (sessions reset on every restart)          |
-| `COOKIE_INSECURE`     | set to `1` only for local HTTP testing (drops the cookie's `Secure` flag). Leave unset in production — the VPS serves HTTPS                 |
+| `COOKIE_INSECURE`     | leave unset; the Docker deployment is served over HTTPS through Caddy                 |
 
 Amazon / Echo side (`alexa_remote.py`). **Amazon credentials are NOT
 configured here** — you type them into the remote's login form and only the
@@ -105,10 +103,9 @@ resulting session cookie is stored (see
 | `ALEXA_COOKIE_DIR`      | where the Amazon session cookie is persisted (default `flask-server/alexa_cookies/`)                 |
 | `SKILL_INVOCATION_NAME` | skill invocation name used in text commands (default `music box`)                                    |
 
-When running `python server.py` directly, `alexa_remote.py` automatically
-loads `flask-server/.env`. Values already exported by the shell take
-precedence. Docker Compose loads the repository-root `.env` through its
-`env_file` setting instead.
+Docker Compose loads the repository-root `.env` through its `env_file`
+setting. Keep this file private: it contains service secrets and may reference
+credential-bearing files.
 
 ---
 
@@ -129,7 +126,6 @@ lambda/               Alexa skill code (paste into the Alexa-hosted code editor)
   mediaUtils/player.py  API client, playback controller, SSML escaping
   models/player_models.py  dataclasses
 skill-package/interactionModels/custom/   interaction model JSON (5 locales)
-run-local.ps1         local dev launcher (Windows)
 HANDOFF.md            detailed session-by-session project state
 PROJECT-PLAN.md       roadmap
 ```
@@ -138,21 +134,9 @@ PROJECT-PLAN.md       roadmap
 
 ## Setup from scratch
 
-Full step-by-step, beginner-friendly guides (server + Alexa skill, start to
-finish) live in their own files — pick one based on how you want to run the
-server:
-
-- **[SETUP-DOCKER.md](SETUP-DOCKER.md)** — Docker Compose. Recommended if
-  this VPS will host other projects too (keeps everything isolated,
-  shares Caddy across projects).
-- **[SETUP-VPS.md](SETUP-VPS.md)** — plain Python venv + systemd, no Docker.
-  Simpler if this VPS is dedicated to just this project.
-
-Both guides cover the same ground: installing dependencies, getting YouTube
-cookies, setting up HTTPS with Caddy, and creating/configuring the Alexa
-skill in the developer console. The rest of this README is reference
-material — architecture, environment variables, voice commands, the web
-remote, and troubleshooting.
+Follow **[SETUP-DOCKER.md](SETUP-DOCKER.md)** for the complete Docker Compose
+deployment: server, Alexa skill, HTTPS, cookies, and environment setup. The
+rest of this README is Docker-focused operational reference.
 
 ### Shared secret: the API key
 
@@ -164,8 +148,7 @@ openssl rand -base64 32 | tr -d '\n'
 ```
 
 - **Alexa console**: `lambda/api_key.py` → `API_KEY = "<secret>"` → Deploy.
-- **Server**: `API_KEY` in `.env` (Docker) or the systemd unit (plain VPS),
-  then restart the service.
+- **Server**: `API_KEY` in the Docker `.env`, then restart the stack.
 
 A mismatch here is the #1 cause of "401 everywhere" — see
 [Troubleshooting](#troubleshooting).
@@ -181,8 +164,7 @@ This powers your personalized Home feed, playlists, history, and search results.
 
 **2. The Downloader (`yt-dlp`)**
 This is the engine that physically downloads the audio streams. Without standard browser cookies, YouTube will eventually flag it as a bot and block your server IP (causing 502 Bad Gateway errors).
-- **Automated extraction**: If you run the server directly on your desktop (not Docker), set `YTDLP_BROWSER=chrome` (or `edge`, `firefox`) in your `.env`. The backend will magically extract your live cookies when needed.
-- **Manual extraction (`cookies.txt`)**: Use a browser extension like "Get cookies.txt LOCALLY" to export your YouTube cookies. Save it as `cookies.txt` in your server folder (or point `YTDLP_COOKIES_FILE` to it). This is **mandatory** for Docker deployments.
+- **Manual extraction (`cookies.txt`)**: Use a browser extension like "Get cookies.txt LOCALLY" to export your YouTube cookies, then mount it for the `ytmusic` container and set `YTDLP_COOKIES` in `.env` as described in [SETUP-DOCKER.md](SETUP-DOCKER.md).
 
 ---
 
@@ -307,9 +289,8 @@ YouTube-Music data-plane endpoints (`/find_stream_list/`, `/get_stream/`,
 If `REMOTE_USER`/`REMOTE_PASSWORD` are unset, the login is disabled and
 `/remote/` keeps working with `?key=<API_KEY>` exactly as before.
 
-The env vars live in `/etc/systemd/system/ytmusic.service` (see the unit file
-above); after editing, `sudo systemctl daemon-reload && sudo systemctl restart
-ytmusic`.
+Set these variables in the Docker `.env` file, then restart the stack with
+`docker compose up -d`.
 
 > Note: this login protects the **web remote** (who may control your Echo from
 > a browser). It is separate from the Amazon login below, which is how the
@@ -340,12 +321,9 @@ authorization result with Amazon's device-registration API. The cookie is
 written only after both stages succeed. A browser success page without a cookie
 therefore means the second, server-side stage failed.
 
-For local Windows development, a browser-only VPN extension does **not** cover
-Python or AlexaPy. If Amazon's device-registration API rejects the normal
-connection, use a full-device VPN (for example, the provider's Windows desktop
-app) or a different network such as a mobile hotspot. Confirm that the VPN
-adapter is connected and that PowerShell/Python sees the VPN's public IP; the
-browser and `server.py` do not necessarily share the same network route.
+Amazon's device-registration traffic originates from the Docker host, not the
+browser used to complete the proxied login. If Amazon rejects that route, use
+a host-level VPN or another outbound network for the Docker host.
 
 Later restarts reuse the persisted cookie, so this is a one-time step until
 Amazon invalidates the session. There is **one** Amazon session for the whole
@@ -398,21 +376,7 @@ Worst-case leak then exposes an account that can only control your speaker.
 
 ---
 
-## Local development (Windows)
-
-Activate the repository's `.venv`, change to `flask-server`, and run
-`python server.py`. Open `http://127.0.0.1:5000/remote/`. The application reads
-`flask-server/.env` automatically and sends local Amazon login traffic directly
-to `http://127.0.0.1:5001/alexa/proxy/`, without Caddy. Port `5000` serves Flask;
-port `5001` serves the temporary interactive Amazon login proxy.
-
-Real Echo control works locally when `flask-server\alexa_cookies\.storage\`
-contains a valid AlexaPy session. During a fresh login, do not treat Amazon's
-browser success page as the final result: wait for the remote to show
-**Connected** and for the server to log `Alexa login finalized and cookie
-persisted`.
-
-### Docker behavior
+### Docker deployment behavior
 
 The supplied Docker configuration supports the same flow without publishing
 port `5001` on the host. Caddy and `ytmusic` share the `web` Docker network:
@@ -440,16 +404,16 @@ will not require another login as long as that named volume is preserved.
 | ------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
 | Alexa: "there was a problem with the skill's response"        | CloudWatch logs (Code tab → Logs link)                                                      |
 | Says "Playing X" but silence + `PlaybackFailed` in CloudWatch | `curl <PUBLIC_BASE_URL>/proxy/?video_id=J7p4bzqLvCw&key=<key>` from outside — should be 200 |
-| Server errors                                                 | `sudo journalctl -u ytmusic -f` on the VPS                                                  |
-| yt-dlp bot-check / "Sign in to confirm" errors return         | cookies expired → re-export + re-scp cookies.txt                                            |
+| Server errors                                                 | `docker compose logs -f ytmusic`                                                            |
+| yt-dlp bot-check / "Sign in to confirm" errors return         | cookies expired → export and remount a fresh `cookies.txt`, then restart the stack         |
 | yt-dlp HTTP 403 / "GVS PO Token not provided"                 | update yt-dlp (`pip install -U yt-dlp`); the `android_vr` client doesn't need PO tokens, but if it fails too, set `YTDLP_PO_TOKEN` to use `mweb` with a manual PO token instead |
 | One yt-dlp player client returns HTTP 403                         | the server tries the default client first, then `android_vr`, `web`, and `tv` as fallbacks. Intermediate failures are warnings; only "failed with every client" means the download was lost |
-| HTTPS dead                                                    | `journalctl -u caddy` — cert renewals need ports 80/443 open                                |
-| 401 everywhere                                                | API_KEY mismatch between `lambda/api_key.py` and ytmusic.service                            |
-| `/remote/` shows `{"error":"unauthorized"}` instead of a login | login not enabled — set **both** `REMOTE_USER` and `REMOTE_PASSWORD` in ytmusic.service, then daemon-reload + restart |
+| HTTPS dead                                                    | `docker compose logs caddy` — cert renewals need ports 80/443 open                          |
+| 401 everywhere                                                | API_KEY mismatch between `lambda/api_key.py` and the Docker `.env`                          |
+| `/remote/` shows `{"error":"unauthorized"}` instead of a login | login not enabled — set **both** `REMOTE_USER` and `REMOTE_PASSWORD` in Docker `.env`, then restart the stack |
 | Web-remote login: "invalid authentication code"               | TOTP mismatch — check the phone clock, that the authenticator secret equals `REMOTE_TOTP_SECRET`, and that the code is current |
 | Signed in, but bounced back to `/login/` after a restart      | set `SECRET_KEY` (a random one is generated per boot, invalidating old cookies)             |
-| Search/queue works but no audio plays on the Echo              | `PUBLIC_BASE_URL` (`.env`/systemd) and `DEFAULT_API_URL` (Lambda's `api_key.py`) must both point at the domain the Echo can actually reach — a leftover placeholder (e.g. an old `sslip.io` hostname) after migrating to a real domain sends Alexa `audio_url`s that resolve nowhere |
+| Search/queue works but no audio plays on the Echo              | `PUBLIC_BASE_URL` (Docker `.env`) and `DEFAULT_API_URL` (Lambda's `api_key.py`) must both point at the domain the Echo can actually reach — a leftover placeholder after migrating to a real domain sends Alexa `audio_url`s that resolve nowhere |
 | 502 Bad Gateway, Caddy logs `connect: connection refused` (Docker) | Flask/aiohttp bound to `127.0.0.1` instead of `0.0.0.0` — Caddy can't reach a container's loopback address over the Docker network. See the Docker note under [Environment variables](#environment-variables) |
 | Amazon login page won't load / times out                      | the Caddy `/alexa/proxy/*` → `localhost:5001` route is missing, or `ALEXA_PROXY_BASE_URL`/`PUBLIC_BASE_URL` doesn't match the origin the browser is on |
 | Amazon login refused / loops                                  | `/alexa/status/` shows the state; check `AMAZON_DOMAIN` matches the account's Amazon site, then retry the in-page login (captcha/2FA happen in your browser) |

@@ -3,8 +3,7 @@
 This guide walks through setting up the whole project — backend **and** the
 Alexa skill — using **Docker Compose** for the server. Use this if you plan
 to run other projects on the same VPS too, since Docker keeps everything
-isolated. If you'd rather not use Docker, see [SETUP-VPS.md](SETUP-VPS.md)
-instead (plain Python venv + systemd).
+isolated.
 
 If you get stuck, check the [Troubleshooting](README.md#troubleshooting)
 section in the main README.
