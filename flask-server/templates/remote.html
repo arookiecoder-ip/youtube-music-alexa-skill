@@ -136,7 +136,7 @@
           </div>
           <button class="jam-owner-only" id="amazon-signin" type="button" style="display: none;">Sign in to Amazon</button>
           <button class="jam-owner-only" id="amazon-signout" type="button" style="display: none;">Sign out of Amazon</button>
-          <button class="jam-owner-only" id="youtube-browser-auth" type="button">Fix personalized YouTube data</button>
+          <button class="jam-owner-only" id="youtube-browser-auth" type="button">Connect YouTube Music</button>
           <button id="logout" type="button">{{ 'Leave Jam' if jam_guest else 'Sign out of Web Remote' }}</button>
         </div>
       </div>
@@ -153,7 +153,7 @@
   <!-- Mobile sidebar -->
   <div class="sidebar-overlay" id="sidebar-overlay"></div>
 
-  <div class="login-modal-wrap" id="youtube-browser-auth-modal-wrap" hidden>
+  {% if not jam_guest %}<div class="login-modal-wrap" id="youtube-browser-auth-modal-wrap" hidden>
     <div class="login-modal browser-auth-modal" role="dialog" aria-modal="true" aria-labelledby="youtube-browser-auth-title">
       <div class="login-modal-header">
         <h2 id="youtube-browser-auth-title">Connect personalized YouTube Music</h2>
@@ -162,17 +162,26 @@
         </button>
       </div>
       <div class="login-modal-body">
-        <ol class="browser-auth-steps">
-          <li>Open <strong>music.youtube.com</strong> while signed in.</li>
-          <li>Open Developer Tools → Network, then click Library.</li>
-          <li>Right-click that <strong>browse</strong> request → Copy → <strong>Copy as cURL (bash)</strong>.</li>
-        </ol>
-        <textarea id="youtube-browser-headers" class="browser-auth-input" rows="8" spellcheck="false" autocomplete="off" placeholder="Paste request headers here…"></textarea>
-        <button id="youtube-browser-auth-save" class="browser-auth-save" type="button">Save and reconnect</button>
-        <p id="youtube-browser-auth-status" class="auth-status"></p>
+        <p>Open the private server-side browser and sign in directly on <strong>music.youtube.com</strong>. Continue until YouTube Music's <strong>Sign in</strong> button disappears. Your Google password is never sent to this app.</p>
+        <div class="browser-auth-actions">
+          <button id="youtube-browser-session-start" class="browser-auth-save" type="button">Open secure browser</button>
+          <button id="youtube-browser-session-retry" type="button" hidden>Retry</button>
+          <button id="youtube-browser-session-stop" type="button" hidden>Close browser</button>
+        </div>
+        <p id="youtube-browser-auth-status" class="auth-status" role="status" aria-live="polite">Ready to connect.</p>
+        <a id="youtube-browser-session-link" class="browser-session-link" href="#" target="_blank" rel="noopener" hidden>Open browser in a new tab</a>
+        <details class="browser-auth-advanced">
+          <summary>Advanced: import headers manually</summary>
+          <ol class="browser-auth-steps">
+            <li>In your own browser, open Developer Tools → Network on music.youtube.com.</li>
+            <li>Copy a signed-in <strong>browse</strong> request as cURL (bash).</li>
+          </ol>
+          <textarea id="youtube-browser-headers" class="browser-auth-input" rows="8" spellcheck="false" autocomplete="off" placeholder="Paste request headers here…"></textarea>
+          <button id="youtube-browser-auth-save" class="browser-auth-save" type="button">Validate manual headers</button>
+        </details>
       </div>
     </div>
-  </div>
+  </div>{% endif %}
   <div class="sidebar" id="sidebar">
     <div class="sidebar-brand" id="sidebar-brand-home" role="button" tabindex="0" aria-label="Go to home">
       <button class="sidebar-rail-toggle" id="sidebar-rail-toggle" aria-label="Toggle sidebar">

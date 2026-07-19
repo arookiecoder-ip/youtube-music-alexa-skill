@@ -188,7 +188,7 @@
   window._closeSidebar = closeSidebar;
 })();
 
-/* ---- YouTube browser-header authentication ---- */
+/* ---- Persistent YouTube browser authentication ---- */
 (function () {
   const openBtn = document.getElementById('youtube-browser-auth');
   const modal = document.getElementById('youtube-browser-auth-modal-wrap');
@@ -196,9 +196,71 @@
   const saveBtn = document.getElementById('youtube-browser-auth-save');
   const input = document.getElementById('youtube-browser-headers');
   const status = document.getElementById('youtube-browser-auth-status');
+  const startBtn = document.getElementById('youtube-browser-session-start');
+  const retryBtn = document.getElementById('youtube-browser-session-retry');
+  const stopBtn = document.getElementById('youtube-browser-session-stop');
+  const browserLink = document.getElementById('youtube-browser-session-link');
   if (!openBtn || !modal || !saveBtn || !input) return;
+  let pollTimer = null;
+  let pollCount = 0;
+  const labels = {
+    capture_requested: 'Capture requested...',
+    settling_session: 'Saving the signed-in browser profile...',
+    validating_login: 'Validating the selected YouTube Music account...',
+    idle: 'Ready to connect.', connecting: 'Starting the secure browser…',
+    waiting_for_login: 'Waiting until YouTube Music is fully signed in…',
+    captured: 'Signed-in request captured…', validating: 'Validating personalized access…',
+    refreshing: 'Refreshing the saved browser session…', connected: 'Connected. Personalized data is ready.',
+    reconnect_required: 'Google needs you to sign in or complete a challenge.',
+    unavailable: 'The browser service is unavailable. You can still use manual import below.'
+  };
+
+  function stopPolling() {
+    if (pollTimer) window.clearTimeout(pollTimer);
+    pollTimer = null;
+  }
+  function render(data) {
+    const stateName = data.state || 'unavailable';
+    if (status) status.textContent = data.message || labels[stateName] || stateName;
+    modal.dataset.browserState = stateName;
+    if (retryBtn) retryBtn.hidden = !['reconnect_required', 'unavailable'].includes(stateName);
+    if (stopBtn) stopBtn.hidden = !['connecting', 'waiting_for_login', 'capture_requested',
+      'settling_session', 'validating_login', 'captured', 'validating'].includes(stateName);
+    if (stateName === 'connected') {
+      stopPolling();
+      window.setTimeout(() => { window.location.href = '/?refresh=1'; }, 700);
+    } else if (['reconnect_required', 'unavailable', 'idle'].includes(stateName)) stopPolling();
+  }
+  async function poll() {
+    if (modal.hidden || pollCount++ >= 120) { stopPolling(); return; }
+    try {
+      const data = await window.api('/api/youtube/browser-session/status');
+      render(data);
+      if (!['connected', 'reconnect_required', 'unavailable', 'idle'].includes(data.state)) {
+        pollTimer = window.setTimeout(poll, 1500);
+      }
+    } catch (error) { render({ state: 'unavailable', message: error.message }); }
+  }
+  async function begin(endpoint) {
+    render({ state: 'connecting' });
+    try {
+      const data = await window.api(endpoint, {});
+      render(data);
+      if (browserLink && data.url) {
+        browserLink.href = data.url;
+        browserLink.hidden = false;
+        const popup = window.open(data.url, '_blank');
+        if (popup) popup.opener = null;
+        if (!popup) browserLink.textContent = 'Popup blocked — open browser here';
+      }
+      pollCount = 0;
+      stopPolling();
+      pollTimer = window.setTimeout(poll, 1000);
+    } catch (error) { render({ state: 'unavailable', message: error.message }); }
+  }
 
   function close() {
+    stopPolling();
     modal.hidden = true;
     input.value = '';
     if (status) status.textContent = '';
@@ -208,7 +270,15 @@
     const profile = document.getElementById('profile-menu-wrap');
     if (profile) profile.classList.remove('open');
     modal.hidden = false;
-    input.focus();
+    render({ state: 'idle' });
+  });
+  if (startBtn) startBtn.addEventListener('click', () => begin('/api/youtube/browser-session/start'));
+  if (retryBtn) retryBtn.addEventListener('click', () => begin('/api/youtube/browser-session/retry'));
+  if (stopBtn) stopBtn.addEventListener('click', async () => {
+    stopPolling();
+    try { await window.api('/api/youtube/browser-session/stop', {}); } catch (_) {}
+    render({ state: 'idle' });
+    if (browserLink) browserLink.hidden = true;
   });
   if (closeBtn) closeBtn.addEventListener('click', close);
   modal.addEventListener('click', (event) => { if (event.target === modal) close(); });
@@ -234,7 +304,7 @@
       if (status) status.textContent = error.message || 'Could not validate these headers.';
     } finally {
       saveBtn.disabled = false;
-      saveBtn.textContent = 'Save and reconnect';
+      saveBtn.textContent = 'Validate manual headers';
     }
   });
 })();
@@ -348,10 +418,14 @@
         
         const ythEl = document.getElementById('status-yt-headers');
         if (ythEl) {
-          ythEl.textContent = status.youtube_auth_working ? 'Working' : 'Not Working';
+          ythEl.textContent = status.youtube_browser_refreshing ? 'Refreshing' :
+            (status.youtube_browser_reconnect_required ? 'Reconnect' :
+              (status.youtube_auth_working ? 'Saved session active' : 'Not connected'));
           ythEl.style.color = status.youtube_auth_working ? '#4ade80' : '#ff6b6b';
           ythEl.style.backgroundColor = status.youtube_auth_working ? 'rgba(74, 222, 128, 0.1)' : 'rgba(255, 107, 107, 0.1)';
-          if (status.debug && status.debug.headers) ythEl.title = status.debug.headers;
+          if (status.youtube_browser_last_successful_renewal) {
+            ythEl.title = `Last browser renewal: ${new Date(status.youtube_browser_last_successful_renewal * 1000).toLocaleString()}`;
+          } else if (status.debug && status.debug.headers) ythEl.title = status.debug.headers;
         }
 
         const ytcEl = document.getElementById('status-yt-cookies');

@@ -574,6 +574,20 @@ img[data-image-ready="true"] {
   text-align: center;
 }
 .profile-menu #logout:hover { background: #ff5a55; border-color: #ff5a55; color: #000; }
+
+.browser-auth-modal { width: min(560px, 94vw); }
+.browser-auth-modal .login-modal-body { display: grid; gap: 14px; }
+.browser-auth-actions { display: flex; flex-wrap: wrap; gap: 10px; }
+.browser-auth-actions button { min-height: 42px; padding: 10px 14px; }
+.browser-session-link { color: var(--accent); font-weight: 700; }
+.browser-auth-advanced { border-top: 1px solid var(--border); padding-top: 14px; }
+.browser-auth-advanced summary { cursor: pointer; color: var(--muted); }
+.browser-auth-advanced[open] summary { margin-bottom: 12px; }
+.browser-auth-input { box-sizing: border-box; width: 100%; margin: 10px 0; }
+.auth-status { min-height: 22px; margin: 0; color: var(--muted); }
+#youtube-browser-auth-modal-wrap[data-browser-state="connected"] .auth-status { color: #4ade80; }
+#youtube-browser-auth-modal-wrap[data-browser-state="reconnect_required"] .auth-status,
+#youtube-browser-auth-modal-wrap[data-browser-state="unavailable"] .auth-status { color: #ffb4b0; }
 /* ============================================================
    Home feed
    ============================================================ */

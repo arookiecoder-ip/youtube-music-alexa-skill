@@ -3,7 +3,9 @@ services:
     build: ./flask-server
     container_name: ytmusic
     restart: unless-stopped
-    env_file: .env
+    env_file:
+      - path: .env
+        required: false
     environment:
       # Listen history and playlists must outlive the container; /tmp is ephemeral.
       - DB_FILE=/data/data.db
@@ -11,6 +13,11 @@ services:
       # Auth file is created by the web UI, so it must live on the writable,
       # persistent data volume (not in a read-only bind mount).
       - YTMUSIC_AUTH_FILE=/data/headers_auth.json
+      - YT_BROWSER_SERVICE_URL=http://youtube-browser:8765
+      - YT_BROWSER_CONTROL_TOKEN=${YT_BROWSER_CONTROL_TOKEN:?set YT_BROWSER_CONTROL_TOKEN in .env}
+      # Requests with a localhost Host header still arrive through Caddy in
+      # Compose; do not redirect the browser to an unpublished host port 5001.
+      - ALEXA_PROXY_BEHIND_CADDY=1
     volumes:
       # cookies.txt is provisioned separately in the project root and is
       # gitignored; expose that exact file to yt-dlp inside the container.
@@ -23,11 +30,32 @@ services:
       - ytmusic_alexa_cookies:/app/alexa_cookies
     networks:
       - web
+    depends_on:
+      youtube-browser:
+        condition: service_healthy
+
+  youtube-browser:
+    build: ./browser-auth
+    container_name: youtube-browser
+    restart: unless-stopped
+    environment:
+      - YT_BROWSER_CONTROL_TOKEN=${YT_BROWSER_CONTROL_TOKEN:?set YT_BROWSER_CONTROL_TOKEN in .env}
+      - YT_BROWSER_CAPTURE_TIMEOUT=${YT_BROWSER_CAPTURE_TIMEOUT:-120}
+      - YT_BROWSER_LOGIN_TIMEOUT=${YT_BROWSER_LOGIN_TIMEOUT:-240}
+      - YT_BROWSER_SUCCESS_DISPLAY=${YT_BROWSER_SUCCESS_DISPLAY:-12}
+      - SCREEN_GEOMETRY=${YT_BROWSER_SCREEN_GEOMETRY:-1365x768x24}
+    volumes:
+      - ytmusic_chromium_profile:/profile
+    networks:
+      - web
+    shm_size: 512mb
 
   caddy:
     image: caddy:2
     container_name: caddy
     restart: unless-stopped
+    environment:
+      - SITE_ADDRESS=${SITE_ADDRESS:-localhost}
     ports:
       - "80:80"
       - "443:443"
@@ -46,5 +74,6 @@ volumes:
   ytmusic_cache:
   ytmusic_data:
   ytmusic_alexa_cookies:
+  ytmusic_chromium_profile:
   caddy_data:
   caddy_config:

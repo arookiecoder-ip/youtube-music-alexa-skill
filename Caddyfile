@@ -1,14 +1,30 @@
-# Replace <your-ip-with-dashes>.sslip.io with your real VPS hostname
-# (or your own domain, e.g. abc.example.com, if you have one
-# instead of using sslip.io).
+# Set SITE_ADDRESS to the hostname or address Caddy should serve.
+# Examples:
+#   SITE_ADDRESS=music.example.com
+#   SITE_ADDRESS=http://localhost
+#   SITE_ADDRESS=your-ip.sslip.io
 #
 # If you set ALEXA_PROXY_BASE_URL in .env to a DIFFERENT hostname than
 # PUBLIC_BASE_URL (i.e. the Amazon login proxy gets its own domain instead
 # of sharing /alexa/proxy/* below), add a second site block instead:
-#   alexa.aibosscentral.digital {
+#   alexa.example.com {
 #       reverse_proxy ytmusic:5001
 # 
-alexa.aibosscentral.digital {
+
+{$SITE_ADDRESS:localhost} {
+    handle_path /youtube-login/* {
+        forward_auth ytmusic:5000 {
+            uri /api/youtube/browser-session/authorize
+            # A WebSocket request is cloned for this ordinary HTTP auth
+            # check. Waitress rejects Upgrade headers with HTTP 400, so strip
+            # them from the clone only; the original request keeps them for
+            # the noVNC reverse proxy below.
+            header_up -Connection
+            header_up -Upgrade
+        }
+        header Cache-Control "no-store"
+        reverse_proxy youtube-browser:6080
+    }
     handle /alexa/proxy/* {
         reverse_proxy ytmusic:5001
     }

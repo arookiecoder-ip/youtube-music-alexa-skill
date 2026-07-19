@@ -466,3 +466,69 @@ piece of this setup.
 ## License
 
 MIT — see LICENSE.
+## Persistent YouTube Music browser authentication
+
+Personalized Home, Library, history, and playlists use a real Chromium profile
+instead of OAuth. Docker Compose runs `youtube-browser` privately with Xvfb,
+Chromium, x11vnc, noVNC, and a token-protected controller. Chromium connects
+directly to `https://music.youtube.com`; Caddy proxies only the remote-desktop
+UI beneath `/youtube-login/`.
+
+Set a long random `YT_BROWSER_CONTROL_TOKEN` in `.env` before starting the
+stack (for example, generate one with `openssl rand -hex 32`). The same value
+is injected into Flask and the sidecar and is never exposed to the browser.
+Optional tuning variables are:
+
+| Variable | Default | Purpose |
+| --- | ---: | --- |
+| `YT_BROWSER_CAPTURE_TIMEOUT` | `120` | Seconds the sidecar waits for a signed-in `/browse` request. |
+| `YT_BROWSER_LOGIN_TIMEOUT` | `240` | Seconds allowed for manual Google sign-in in ordinary Chromium. |
+| `YT_BROWSER_LEASE_TTL` | `300` | Lifetime of the owner-only noVNC URL cookie. |
+| `YT_BROWSER_REFRESH_TIMEOUT` | `45` | Maximum automatic saved-profile renewal wait. |
+| `YT_BROWSER_REFRESH_COOLDOWN` | `300` | Minimum interval between automatic attempts. |
+| `YT_BROWSER_CONTROL_TIMEOUT` | `10` | Flask-to-sidecar control request timeout. |
+| `YT_BROWSER_PROACTIVE_INTERVAL` | `21600` | Seconds between saved-auth validity probes (minimum 900). |
+| `YT_BROWSER_SCREEN_GEOMETRY` | `1365x768x24` | Remote Chromium desktop size. |
+
+After signing into the Web Remote as its owner, choose **Connect YouTube
+Music**, then **Open secure browser**. Complete Google login, CAPTCHA, passkey,
+or 2FA inside that remote Chromium window. Sign-in runs in ordinary Chromium,
+outside Playwright, because Google rejects automation-controlled login pages.
+Keep the window open until YouTube Music's **Sign in** button disappears. After
+YouTube's `LOGIN_INFO` marker appears, the controller attaches to that same
+running Chromium process over a loopback-only DevTools connection and captures
+a `music.youtube.com/youtubei/v1/browse` request. Chromium is not restarted
+during this handoff. The app validates the request with
+`get_account_info()`, and only then atomically replaces the persistent
+`/data/headers_auth.json`. Ordinary cookie rotation can subsequently renew from
+the saved profile without interaction. A revoked/challenged Google session is
+reported as **Reconnect required**. Manual copied-header import remains under
+the modal's Advanced disclosure.
+
+The noVNC route is protected twice: Flask must see a valid owner web session,
+and the request must carry the short-lived, HttpOnly browser-lease cookie.
+Jam guests, API-key-only callers, stale links, and signed-out browsers are
+rejected by Caddy `forward_auth`. No VNC, noVNC, Chromium debugging, or control
+port is published on the Docker host. Treat VPS/root access as highly trusted:
+root can inspect a live Google browser profile. Logs deliberately omit cookies,
+authorization headers, captured requests, screenshots, and profile contents.
+
+The `ytmusic_chromium_profile` volume survives rebuilds and normal
+`docker compose down`. Back it up only as sensitive credential material.
+Deleting that volume forces a new Google login; **`docker compose down -v`
+erases it**. Chromium/noVNC commonly consumes a few hundred MB while active;
+the compose file reserves a 512 MB shared-memory area for Chromium stability.
+
+Troubleshooting:
+
+- Blank noVNC or failed WebSocket: confirm Caddy uses `handle_path`, the URL's
+  `path=youtube-login/websockify`, and that `youtube-browser` is healthy.
+- Browser service unavailable: check `docker compose logs youtube-browser`
+  (logs are redacted) and verify both containers have the identical control
+  token.
+- Google challenge/CAPTCHA/2FA: finish it interactively; the application never
+  stores or types a Google password.
+- Reconnect keeps returning: Google revoked the profile. Close the old session,
+  reconnect interactively, and verify the VPS clock and outbound connectivity.
+- Sidecar down: personalized data falls back as before, and Advanced manual
+  header import remains available.

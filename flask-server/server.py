@@ -6,6 +6,9 @@ import home_feed
 from ytmusicapi import YTMusic
 
 import alexa_remote
+from youtube_browser_session import (BrowserController, YouTubeBrowserSessionManager,
+                                     browser_client_is_signed_in,
+                                     promote_browser_headers)
 from flask import Flask, request, render_template, jsonify, send_file, session, redirect, Response
 from werkzeug.exceptions import HTTPException
 
@@ -340,7 +343,14 @@ _SESSION_PATHS = ('/remote', '/alexa/status', '/alexa/init', '/alexa/devices', '
                   '/api/subscribed_artists',
                   '/alexa/like', '/api/liked_songs', '/api/profile_status',
 '/alexa/amazon_signout',
-                   '/api/youtube/browser-auth')
+                   '/api/youtube/browser-auth',
+                   '/api/youtube/browser-session/start',
+                   '/api/youtube/browser-session/status',
+                   '/api/youtube/browser-session/stop',
+                   '/api/youtube/browser-session/retry',
+                   '/api/youtube/browser-session/open-youtube',
+                   '/api/youtube/browser-session/capture',
+                   '/api/youtube/browser-session/authorize')
 _SESSION_PREFIXES = ('/alexa/now_playing/', '/history/', '/api/playlists/', '/recommendations/',
                      '/api/artist/', '/api/album/', '/api/library/', '/api/explore/', '/api/home/')
 
@@ -749,23 +759,80 @@ def _get_ytmusic_home():
         return inst
 
 
-def _ytmusic_is_authenticated():
-    """Return whether the configured YT Music account is currently usable.
-
-    A browser-headers client keeps its BROWSER auth type even after those
-    headers expire, so auth_type alone cannot distinguish it from a working
-    signed-in session.
-    """
-    yt_home = _get_ytmusic_home()
+def _ytmusic_client_is_authenticated(yt_home):
+    """Verify browser auth using YouTube Music's active-account marker."""
     auth_type = str(getattr(yt_home, 'auth_type', 'UNAUTHORIZED'))
     if "UNAUTHORIZED" in auth_type:
         return False
     if "BROWSER" in auth_type:
-        try:
-            yt_home.get_account_info()
-        except Exception:
-            return False
+        return browser_client_is_signed_in(yt_home)
     return True
+
+
+def _ytmusic_is_authenticated():
+    """Return whether the configured YT Music account is currently usable."""
+    return _ytmusic_client_is_authenticated(_get_ytmusic_home())
+
+
+def _invalidate_youtube_auth_caches():
+    """Drop every thread-local authenticated client and personalized feed."""
+    global _YT_HOME_CACHE_MTIME
+    with _YT_HOME_CACHE_LOCK:
+        _YT_HOME_CACHE.clear()
+        auth_file = os.environ.get("YTMUSIC_AUTH_FILE") or "headers_auth.json"
+        _YT_HOME_CACHE_MTIME = os.path.getmtime(auth_file) if os.path.isfile(auth_file) else 0
+    with _YT_CACHE_LOCK:
+        _YT_CACHE.clear()
+    with _home_lock:
+        _home_cache['data'] = None
+        _home_cache['built_at'] = 0
+
+
+def _promote_youtube_browser_headers(headers):
+    from ytmusicapi.auth.browser import setup_browser
+    auth_file = os.environ.get("YTMUSIC_AUTH_FILE") or "headers_auth.json"
+    promote_browser_headers(headers, auth_file, setup_browser,
+                            lambda path: YTMusic(auth=path))
+
+
+_youtube_browser_controller = BrowserController(
+    os.environ.get("YT_BROWSER_SERVICE_URL", "http://youtube-browser:8765"),
+    os.environ.get("YT_BROWSER_CONTROL_TOKEN", ""),
+    timeout=float(os.environ.get("YT_BROWSER_CONTROL_TIMEOUT", "10")),
+)
+_youtube_browser_sessions = YouTubeBrowserSessionManager(
+    _youtube_browser_controller, _promote_youtube_browser_headers,
+    _invalidate_youtube_auth_caches,
+    lease_ttl=float(os.environ.get("YT_BROWSER_LEASE_TTL", "300")),
+    refresh_timeout=float(os.environ.get("YT_BROWSER_REFRESH_TIMEOUT", "45")),
+    refresh_cooldown=float(os.environ.get("YT_BROWSER_REFRESH_COOLDOWN", "300")),
+)
+
+
+def _youtube_auth_proactive_loop():
+    """Occasionally validate saved browser auth before a user needs it."""
+    interval = max(900.0, float(os.environ.get("YT_BROWSER_PROACTIVE_INTERVAL", "21600")))
+    while True:
+        time.sleep(interval)
+        auth_file = os.environ.get("YTMUSIC_AUTH_FILE") or "headers_auth.json"
+        if not os.path.isfile(auth_file):
+            continue
+        try:
+            if not _ytmusic_is_authenticated():
+                _youtube_browser_sessions.refresh(wait=False)
+        except Exception:
+            # Probe failures are intentionally quiet and bounded by the
+            # manager cooldown; the normal status endpoint remains authoritative.
+            logger.debug("Proactive YouTube auth check could not complete")
+
+
+threading.Thread(target=_youtube_auth_proactive_loop, daemon=True,
+                 name="youtube-auth-proactive").start()
+
+
+def _with_youtube_auth_renewal(operation):
+    """Run a personalized operation with at most one saved-profile renewal."""
+    return _youtube_browser_sessions.call_with_one_refresh(operation)
 
 
 def _yt_call(method, *args, timeout=15, **kwargs):
@@ -812,6 +879,7 @@ _RATE_LIMITS = {
     'proxy':    (30, 60),     # /proxy/ - expensive audio downloads
     'poll':     (200, 60),   # /alexa/now_playing/ - SSE-alike polling
     'static':   (0, 0),       # No limit for static assets
+    'browser_session': (0, 0), # Owner-only noVNC/session polling is frequent
     'default':  (300, 60),    # Catch-all
 }
 
@@ -820,6 +888,8 @@ def _rate_limit_group(path: str) -> str:
         return 'static'
     if path == '/proxy' or path.startswith('/proxy'):
         return 'proxy'
+    if path.startswith('/api/youtube/browser-session/'):
+        return 'browser_session'
     # `path` arrives with its trailing slash already stripped, so match the
     # bare endpoint (the SSE stream keeps its own suffix and stays in 'api').
     if path.startswith('/alexa/now_playing') and 'stream' not in path:
@@ -3057,6 +3127,7 @@ def logout():
     owner_logged_in = _logged_in()
     if owner_logged_in:
         _jam_close_all()
+        _youtube_browser_sessions.revoke()
     if body.get('everywhere') and owner_logged_in:
         _sessions_close_all()
     elif session.get('sid'):
@@ -3367,7 +3438,11 @@ def alexa_proxy_login():
             'current session for every device. Resubmit with "force": true '
             'to continue.', 409)
     proxy_base_url = None
-    if _is_local_host(request.host):
+    # Direct local development exposes AlexaProxy itself on 127.0.0.1:5001.
+    # In Docker Compose that port is private and Caddy publishes the proxy at
+    # /alexa/proxy/ on the normal site origin, even when Host is localhost.
+    behind_caddy = os.environ.get("ALEXA_PROXY_BEHIND_CADDY") == "1"
+    if _is_local_host(request.host) and not behind_caddy:
         proxy_port = os.environ.get("ALEXA_PROXY_PORT", "5001")
         proxy_base_url = f"http://127.0.0.1:{proxy_port}/alexa/proxy/"
     url, error = alexa_remote.remote.proxy_start_url(
@@ -3400,13 +3475,12 @@ def profile_status():
     # YouTube Auth
     yt_home = _get_ytmusic_home()
     auth_type_str = str(getattr(yt_home, 'auth_type', 'UNAUTHORIZED'))
-    yt_auth_working = "UNAUTHORIZED" not in auth_type_str
-    if yt_auth_working and "BROWSER" in auth_type_str:
-        try:
-            yt_home.get_account_info()
-        except Exception:
-            yt_auth_working = False
-            auth_type_str = "UNAUTHORIZED"
+    yt_auth_working = _ytmusic_client_is_authenticated(yt_home)
+    if not yt_auth_working:
+        auth_type_str = "UNAUTHORIZED"
+        # Merely opening the profile menu must not start a browser refresh.
+        # It races with the owner's Connect action and used to expose the
+        # background capture browser as though it were the login browser.
     headers_debug = f"auth_type={auth_type_str}"
 
     # A signed-in-only feed verifies current acceptance. Public videos still
@@ -3436,12 +3510,18 @@ def profile_status():
         except OSError:
             cookies_debug = "yt-dlp is unavailable"
     
+    browser_status = _youtube_browser_sessions.status()
     return jsonify({
         "amazon_connected": amazon_connected,
         "youtube_auth_working": yt_auth_working,
         "youtube_auth_type": auth_type_str,
         "youtube_cookies_present": bool(cookies_file),
         "youtube_cookies_working": cookies_working,
+        "youtube_browser_available": browser_status["available"],
+        "youtube_browser_refreshing": browser_status["refreshing"],
+        "youtube_browser_state": browser_status["state"],
+        "youtube_browser_reconnect_required": browser_status["reconnect_required"],
+        "youtube_browser_last_successful_renewal": browser_status["last_successful_renewal"],
         "debug": {
             "amazon": amazon_debug,
             "headers": headers_debug,
@@ -3455,6 +3535,8 @@ def profile_status():
 @app.route("/api/youtube/browser-auth", methods=["POST"])
 def youtube_browser_auth():
     """Import YouTube Music browser request headers."""
+    if not _logged_in():
+        return error_response("Owner session required.", 401)
     body = request.get_json(silent=True) or {}
     headers_raw = body.get("headers")
     if not isinstance(headers_raw, str) or not headers_raw.strip():
@@ -3462,65 +3544,87 @@ def youtube_browser_auth():
     if len(headers_raw) > 128 * 1024:
         return error_response("Headers input is too large.", 413)
 
-    # Chrome exposes a reliable "Copy as cURL (bash)" action. Convert its
-    # -H/--header and -b/--cookie arguments into the raw format expected by
-    # ytmusicapi, while continuing to accept manually copied raw headers.
-    normalized_headers = headers_raw
-    if headers_raw.lstrip().lower().startswith("curl "):
-        try:
-            tokens = shlex.split(headers_raw.replace("\\\n", " "), posix=True)
-        except ValueError as e:
-            return error_response(f"Could not parse copied cURL request: {e}", 400)
-        extracted = []
-        i = 1
-        while i < len(tokens):
-            token = tokens[i]
-            if token in ("-H", "--header") and i + 1 < len(tokens):
-                extracted.append(tokens[i + 1])
-                i += 2
-                continue
-            if token.startswith("--header="):
-                extracted.append(token.split("=", 1)[1])
-            elif token in ("-b", "--cookie") and i + 1 < len(tokens):
-                extracted.append("cookie: " + tokens[i + 1])
-                i += 2
-                continue
-            elif token.startswith("--cookie="):
-                extracted.append("cookie: " + token.split("=", 1)[1])
-            i += 1
-        normalized_headers = "\n".join(extracted)
-
-    if "x-goog-authuser:" not in normalized_headers.lower():
-        normalized_headers += "\nx-goog-authuser: 0"
-
-    auth_file = os.environ.get("YTMUSIC_AUTH_FILE") or "headers_auth.json"
-    if os.path.isdir(auth_file):
-        return error_response("YTMUSIC_AUTH_FILE must be a writable file path, not a directory.", 500)
-    auth_parent = os.path.dirname(os.path.abspath(auth_file))
-    os.makedirs(auth_parent, exist_ok=True)
-    fd, temp_path = tempfile.mkstemp(prefix="ytmusic-browser-", suffix=".json", dir=auth_parent)
-    os.close(fd)
     try:
-        from ytmusicapi.auth.browser import setup_browser
-        setup_browser(filepath=temp_path, headers_raw=normalized_headers)
-        candidate = YTMusic(auth=temp_path)
-        candidate.get_account_info()
-        os.replace(temp_path, auth_file)
-
-        global _YT_HOME_CACHE_MTIME
-        with _YT_HOME_CACHE_LOCK:
-            _YT_HOME_CACHE.clear()
-            _YT_HOME_CACHE_MTIME = os.path.getmtime(auth_file)
-        with _home_lock:
-            _home_cache['data'] = None
-            _home_cache['built_at'] = 0
+        _promote_youtube_browser_headers(headers_raw)
+        _invalidate_youtube_auth_caches()
         return jsonify({"success": True})
     except Exception as e:
         logger.warning("YouTube browser-header import failed: %s", e)
         return error_response(str(e), 400)
-    finally:
-        if os.path.exists(temp_path):
-            os.unlink(temp_path)
+
+
+def _browser_owner_id():
+    return session.get('sid') or ''
+
+
+@app.route("/api/youtube/browser-session/start", methods=["POST"])
+def youtube_browser_session_start():
+    if not _logged_in():
+        return error_response("Owner session required.", 401)
+    token, status = _youtube_browser_sessions.start(_browser_owner_id())
+    response = jsonify(dict(status, url="/youtube-login/vnc.html?ui=2&autoconnect=1&resize=scale&path=youtube-login/websockify"))
+    response.set_cookie(_youtube_browser_sessions.COOKIE_NAME, token,
+                        max_age=int(_youtube_browser_sessions.lease_ttl),
+                        secure=app.config['SESSION_COOKIE_SECURE'], httponly=True,
+                        samesite='Lax', path='/youtube-login/')
+    return response
+
+
+@app.route("/api/youtube/browser-session/status", methods=["GET"])
+def youtube_browser_session_status():
+    if not _logged_in():
+        return error_response("Owner session required.", 401)
+    return jsonify(_youtube_browser_sessions.poll())
+
+
+@app.route("/api/youtube/browser-session/retry", methods=["POST"])
+def youtube_browser_session_retry():
+    if not _logged_in():
+        return error_response("Owner session required.", 401)
+    token, status = _youtube_browser_sessions.start(_browser_owner_id())
+    response = jsonify(dict(status, url="/youtube-login/vnc.html?ui=2&autoconnect=1&resize=scale&path=youtube-login/websockify"))
+    response.set_cookie(_youtube_browser_sessions.COOKIE_NAME, token,
+                        max_age=int(_youtube_browser_sessions.lease_ttl), secure=app.config['SESSION_COOKIE_SECURE'],
+                        httponly=True, samesite='Lax', path='/youtube-login/')
+    return response
+
+
+@app.route("/api/youtube/browser-session/stop", methods=["POST"])
+def youtube_browser_session_stop():
+    if not _logged_in():
+        return error_response("Owner session required.", 401)
+    _youtube_browser_sessions.revoke()
+    response = jsonify({"success": True})
+    response.delete_cookie(_youtube_browser_sessions.COOKIE_NAME, path='/youtube-login/')
+    return response
+
+
+@app.route("/api/youtube/browser-session/open-youtube", methods=["POST"])
+def youtube_browser_session_open_youtube():
+    if not _logged_in():
+        return error_response("Owner session required.", 401)
+    try:
+        return jsonify(_youtube_browser_sessions.open_youtube())
+    except Exception:
+        return error_response("Browser window is unavailable.", 503)
+
+
+@app.route("/api/youtube/browser-session/capture", methods=["POST"])
+def youtube_browser_session_capture():
+    if not _logged_in():
+        return error_response("Owner session required.", 401)
+    try:
+        return jsonify(_youtube_browser_sessions.request_capture()), 202
+    except Exception:
+        return error_response("Browser window is unavailable.", 503)
+
+
+@app.route("/api/youtube/browser-session/authorize", methods=["GET"])
+def youtube_browser_session_authorize():
+    token = request.cookies.get(_youtube_browser_sessions.COOKIE_NAME)
+    if not _logged_in() or not _youtube_browser_sessions.authorize(_browser_owner_id(), token):
+        return Response(status=401)
+    return Response(status=204)
 
 @app.route("/alexa/devices/", methods=["GET"])
 def alexa_devices():
@@ -3989,7 +4093,10 @@ async def _fetch_home_sources():
     async def get_native_home():
         try:
             ytm = await asyncio.to_thread(_get_ytmusic_home)
-            return await asyncio.wait_for(asyncio.to_thread(ytm.get_home, limit=6), timeout=home_feed.SOURCE_TIMEOUTS['ytmusic_home'])
+            return await asyncio.wait_for(
+                asyncio.to_thread(_with_youtube_auth_renewal,
+                                  lambda: _get_ytmusic_home().get_home(limit=6)),
+                timeout=home_feed.SOURCE_TIMEOUTS['ytmusic_home'])
         except Exception as e:
             logger.warning(f"ytm_home failed: {e}")
             try:
