@@ -197,15 +197,13 @@ You should get back JSON with track info, not an error.
 
 ---
 
-## 10. Cache cleanup cron (optional but recommended)
+## 10. Cache cleanup
 
-The audio cache lives in a Docker volume. Add a cron job on the VPS host to
-sweep old files:
-
-```bash
-(crontab -l 2>/dev/null | grep -v 'ytm_audio_cache'; \
- echo "*/30 * * * * cd ~/youtube-music-alexa-skill && docker compose exec -T ytmusic find /tmp/ytm_audio_cache -type f -mmin +120 -delete") | crontab -
-```
+No host cron job is required. The `ytmusic` service sweeps the persistent audio
+cache every 30 minutes and removes files older than two hours. Override the
+defaults with `AUDIO_CACHE_SWEEP_INTERVAL` and `AUDIO_CACHE_TTL` in `.env`
+(values are seconds) if your storage or listening patterns need a different
+retention period.
 
 ---
 

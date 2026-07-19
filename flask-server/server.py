@@ -1,4 +1,4 @@
-import asyncio, difflib, glob, hashlib, hmac, itertools, json, os, random, secrets, sys, threading, time, re, subprocess, logging, copy, uuid, tempfile, shlex
+import asyncio, difflib, glob, hashlib, hmac, itertools, json, math, os, random, secrets, sys, threading, time, re, subprocess, logging, copy, uuid, tempfile, shlex
 from datetime import timedelta
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
@@ -133,7 +133,19 @@ def _totp_verify(code: str, window: int = 1) -> bool:
 PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "").rstrip('/')
 
 AUDIO_CACHE_DIR = os.environ.get("AUDIO_CACHE_DIR", "/tmp/ytm_audio_cache")
-AUDIO_CACHE_TTL = 24 * 60 * 60
+def _cache_seconds_env(name, default):
+    """Read a finite, safe cache duration without risking the sweep thread."""
+    try:
+        value = float(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        return float(default)
+    return value if math.isfinite(value) and value >= 60.0 else float(default)
+
+
+# Keep cache retention independent of host cron. The defaults mirror the
+# previously documented 30-minute cron / two-hour retention policy.
+AUDIO_CACHE_TTL = _cache_seconds_env("AUDIO_CACHE_TTL", 7200)
+AUDIO_CACHE_SWEEP_INTERVAL = _cache_seconds_env("AUDIO_CACHE_SWEEP_INTERVAL", 1800)
 
 # When set, every request must carry ?key=<API_KEY> (or X-Api-Key header).
 # Key rides in the URL because Alexa devices fetch /proxy/ with no custom headers.
@@ -2201,6 +2213,20 @@ class Supporting:
             return None
 
         return {'id': playlist_raw['id'], 'title': playlist_raw.get('title', 'Untitled')}
+
+
+def _audio_cache_sweep_loop():
+    """Prune the persistent audio volume without relying on host cron."""
+    while True:
+        try:
+            Supporting.prune_audio_cache()
+        except Exception:
+            logger.exception("Audio cache sweep failed")
+        time.sleep(AUDIO_CACHE_SWEEP_INTERVAL)
+
+
+threading.Thread(target=_audio_cache_sweep_loop, daemon=True,
+                 name="audio-cache-sweep").start()
 
 @app.route("/get_playlist_info/", methods=["GET"])
 async def get_playlist_info():

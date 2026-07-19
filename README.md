@@ -67,6 +67,8 @@ Core (`server.py`):
 | `YTDLP_PO_TOKEN`  | optional — if set, overrides the default `android_vr` client and passes this as the GVS PO token for `mweb` client instead (e.g. `youtube:po_token=mweb.gvs+{token}`) |
 | `API_KEY`         | shared secret; when set, all endpoints except privacy/terms and the login flow require `?key=` (or `X-Api-Key` header) **or** a valid web-remote session cookie. Must match `API_KEY` in `lambda/api_key.py`. |
 | `AUDIO_CACHE_DIR` | audio cache location (default `/tmp/ytm_audio_cache`)                                                                                                               |
+| `AUDIO_CACHE_TTL` | seconds to retain cached audio (default `7200`, two hours)                                                                                                          |
+| `AUDIO_CACHE_SWEEP_INTERVAL` | seconds between in-service cache sweeps (default `1800`, 30 minutes)                                                                                  |
 | `HISTORY_FILE`    | listening-history JSON file location for the web remote's Recently Listened / Recommended sections (default `/tmp/ytm_listen_history.json`) — see the Docker note below |
 
 > **Docker Compose deployments:** `server.py` binds Flask to `0.0.0.0` (not
@@ -74,8 +76,9 @@ Core (`server.py`):
 > its port, since Caddy runs in a separate container and can only reach the
 > `ytmusic` container over the Docker bridge network, not via loopback.
 >
-> The audio cache volume (`ytmusic_cache` → `/tmp/ytm_audio_cache`) is TTL-swept
-> and `/tmp` itself is ephemeral, so listening history is kept on its own
+> The audio cache volume (`ytmusic_cache` → `/tmp/ytm_audio_cache`) is swept by
+> the `ytmusic` service every 30 minutes; no host cron configuration is needed.
+> Files older than the configured TTL are removed. Listening history is kept on its own
 > `ytmusic_data` volume mounted at `/data`, with `HISTORY_FILE` pointed there
 > (`docker-compose.yml` sets this up already) — otherwise history would be
 > wiped on every container recreate.
