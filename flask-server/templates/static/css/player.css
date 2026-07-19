@@ -487,7 +487,11 @@
     bottom: var(--playbar-h); /* stop exactly at the desktop playbar's top edge */
     margin: 0;
     border-radius: 0;
-    z-index: 210;
+    /* Routed pages (Library, Explore, playlists) use fixed layers at 210.
+       Now Playing must sit above the page it was opened from; using the same
+       layer let whichever overlay occurs later in the DOM paint over it. Keep
+       this below the sticky header (240) and persistent playbar (270). */
+    z-index: 230;
     background: var(--bg, #0a0a0a);
     display: block !important;
     visibility: hidden;
@@ -1032,6 +1036,13 @@ main:has(#now-playing-section:not([hidden])) {
     opacity: 1 !important;
     transform: none !important;
     pointer-events: auto !important;
+    /* The expanded sheet is the only moving layer during dismissal. Let it
+       uncover an already-settled mini player instead of starting the mini
+       player's own opacity/translate transition underneath it. */
+    transition: none !important;
+    background: #111 !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
   }
 
   body.now-playing-route .mobile-player-close,
@@ -1406,6 +1417,13 @@ body.results-open .player-section {
   backdrop-filter: blur(24px);
   -webkit-backdrop-filter: blur(24px);
   box-shadow: 0 -12px 40px rgba(0, 0, 0, .45);
+  /* Keep the persistent player on one compositor layer across route changes.
+     Creating and destroying that layer at the end of the Now Playing close
+     transition caused a flash despite no DOM/style mutation on the bar. */
+  will-change: opacity, transform;
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+  isolation: isolate;
   display: grid;
   align-items: center;
   transform: translateY(24px);
@@ -1797,10 +1815,10 @@ body.now-playing-route .player-section .player-expand-btn svg {
     padding-bottom: calc(var(--playbar-h) + 28px);
     overflow: visible;
   }
-  /* Keep the now-playing section above underlying overlays (playlist, history,
-     etc.) that share z-index 210, so the close slide always paints on top. */
+  /* Keep the now-playing section above underlying routed pages throughout the
+     close slide as well. */
   body.now-playing-closing #now-playing-section {
-    z-index: 211;
+    z-index: 230;
     /* Animate only the now-playing layer while the underlying route remains
        locked in its existing layout. */
     transition: transform .32s cubic-bezier(.22, 1, .36, 1),
@@ -1860,10 +1878,12 @@ body.now-playing-route .player-section .player-expand-btn svg {
        backdrop would sample that moving layer, making the compact player look
        as though it flickers while the sheet closes. Freeze it as an opaque
        composited surface for the handoff. */
-    background: #0e0e0e !important;
+    /* Match .player-section.redesigned-bar's actual desktop surface exactly.
+       The frame trace showed #202020 switching to #181818 at cleanup, which
+       was the visible flash despite every other computed value staying put. */
+    background: #181818 !important;
     backdrop-filter: none !important;
     -webkit-backdrop-filter: none !important;
-    contain: paint;
   }
   /* The compact playbar remains the stable layer below the expanded player.
      Pin its rendered state during both directions of the overlay handoff so
@@ -1872,8 +1892,6 @@ body.now-playing-route .player-section .player-expand-btn svg {
   body.now-playing-closing .player-section.is-visible {
     opacity: 1 !important;
     visibility: visible !important;
-    will-change: opacity, transform;
-    backface-visibility: hidden;
   }
   body.now-playing-route main {
     height: auto;

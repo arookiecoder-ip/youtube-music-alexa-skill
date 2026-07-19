@@ -399,12 +399,13 @@
         npSection.hidden = true;
         npSection._closeTimer = null;
         npSection._closeCleanup = null;
-        requestAnimationFrame(function () {
-          document.body.classList.remove('now-playing-route', 'now-playing-closing');
-          if (closingMain) {
-            requestAnimationFrame(function () { closingMain.style.removeProperty('transition'); });
-          }
-        });
+        // Commit the layer removal and its route-state cleanup in the same
+        // frame. Deferring the body classes exposed the mini player with
+        // handoff-only styles for one paint, then restyled it on the next.
+        document.body.classList.remove('now-playing-route', 'now-playing-closing');
+        if (closingMain) {
+          requestAnimationFrame(function () { closingMain.style.removeProperty('transition'); });
+        }
         document.documentElement.style.removeProperty('overflow');
         document.body.style.removeProperty('overflow');
       };
@@ -603,12 +604,13 @@
           npSection.hidden = true;
           npSection._closeTimer = null;
           npSection._closeCleanup = null;
-          requestAnimationFrame(function () {
-            document.body.classList.remove('now-playing-route', 'now-playing-closing');
-            if (closingMain) {
-              requestAnimationFrame(function () { closingMain.style.removeProperty('transition'); });
-            }
-          });
+          // Keep the visibility and route-state handoff atomic. Otherwise the
+          // compact player is painted once with closing styles before its
+          // normal route styles take over on the following frame.
+          document.body.classList.remove('now-playing-route', 'now-playing-closing');
+          if (closingMain) {
+            requestAnimationFrame(function () { closingMain.style.removeProperty('transition'); });
+          }
           // Belt-and-suspenders: restore scroll in case overflow got stuck.
           document.documentElement.style.removeProperty('overflow');
           document.body.style.removeProperty('overflow');
