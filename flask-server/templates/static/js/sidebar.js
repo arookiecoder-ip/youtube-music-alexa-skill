@@ -198,11 +198,10 @@
   const status = document.getElementById('youtube-browser-auth-status');
   const startBtn = document.getElementById('youtube-browser-session-start');
   const retryBtn = document.getElementById('youtube-browser-session-retry');
-  const stopBtn = document.getElementById('youtube-browser-session-stop');
-  const browserLink = document.getElementById('youtube-browser-session-link');
   if (!openBtn || !modal || !saveBtn || !input) return;
   let pollTimer = null;
   let pollCount = 0;
+  let browserPopup = null;
   const labels = {
     capture_requested: 'Capture requested...',
     settling_session: 'Saving the signed-in browser profile...',
@@ -224,10 +223,12 @@
     if (status) status.textContent = data.message || labels[stateName] || stateName;
     modal.dataset.browserState = stateName;
     if (retryBtn) retryBtn.hidden = !['reconnect_required', 'unavailable'].includes(stateName);
-    if (stopBtn) stopBtn.hidden = !['connecting', 'waiting_for_login', 'capture_requested',
-      'settling_session', 'validating_login', 'captured', 'validating'].includes(stateName);
     if (stateName === 'connected') {
       stopPolling();
+      // The noVNC page is only closed after Flask has validated and promoted
+      // the captured session. Failed captures remain available for a retry.
+      if (browserPopup && !browserPopup.closed) browserPopup.close();
+      browserPopup = null;
       window.setTimeout(() => { window.location.href = '/?refresh=1'; }, 700);
     } else if (['reconnect_required', 'unavailable', 'idle'].includes(stateName)) stopPolling();
   }
@@ -246,12 +247,14 @@
     try {
       const data = await window.api(endpoint, {});
       render(data);
-      if (browserLink && data.url) {
-        browserLink.href = data.url;
-        browserLink.hidden = false;
-        const popup = window.open(data.url, '_blank');
-        if (popup) popup.opener = null;
-        if (!popup) browserLink.textContent = 'Popup blocked — open browser here';
+      if (data.url) {
+        browserPopup = window.open(data.url, '_blank');
+        if (browserPopup) browserPopup.opener = null;
+        if (!browserPopup) {
+          await window.api('/api/youtube/browser-session/stop', {});
+          render({ state: 'idle', message: 'Popup was blocked. Allow popups, then try again.' });
+          return;
+        }
       }
       pollCount = 0;
       stopPolling();
@@ -259,8 +262,13 @@
     } catch (error) { render({ state: 'unavailable', message: error.message }); }
   }
 
-  function close() {
+  async function close() {
     stopPolling();
+    if (browserPopup && !browserPopup.closed) browserPopup.close();
+    browserPopup = null;
+    // Closing the setup modal also terminates the temporary server-side
+    // browser, so it never remains running after the user dismisses setup.
+    try { await window.api('/api/youtube/browser-session/stop', {}); } catch (_) {}
     modal.hidden = true;
     input.value = '';
     if (status) status.textContent = '';
@@ -274,12 +282,6 @@
   });
   if (startBtn) startBtn.addEventListener('click', () => begin('/api/youtube/browser-session/start'));
   if (retryBtn) retryBtn.addEventListener('click', () => begin('/api/youtube/browser-session/retry'));
-  if (stopBtn) stopBtn.addEventListener('click', async () => {
-    stopPolling();
-    try { await window.api('/api/youtube/browser-session/stop', {}); } catch (_) {}
-    render({ state: 'idle' });
-    if (browserLink) browserLink.hidden = true;
-  });
   if (closeBtn) closeBtn.addEventListener('click', close);
   modal.addEventListener('click', (event) => { if (event.target === modal) close(); });
   document.addEventListener('keydown', (event) => {

@@ -197,6 +197,13 @@ class CaptureTests(unittest.TestCase):
         self.assertEqual(status["state"], "reconnect_required")
         self.assertNotIn(("/candidate/take", "POST"), controller.calls)
 
+    def test_sidecar_complete_preserves_promoted_connected_state(self):
+        controller = FakeController(states=[{"state": "complete"}])
+        manager = YouTubeBrowserSessionManager(controller, lambda _: None)
+        manager._state = "connected"
+        status = manager.poll()
+        self.assertEqual(status["state"], "connected")
+
     def test_controller_rejects_missing_or_wrong_token(self):
         path = Path(__file__).parents[1] / "browser-auth" / "service.py"
         spec = importlib.util.spec_from_file_location("browser_service_test", path)
@@ -300,6 +307,8 @@ class CaptureTests(unittest.TestCase):
         self.assertIn('body: "{}"', script)
         self.assertIn("open-youtube", script)
         self.assertIn("capture", script)
+        self.assertIn("browser-session/status", script)
+        self.assertIn("window.close()", script)
         self.assertNotIn("YT_BROWSER_CONTROL_TOKEN", script)
 
 class PromotionTests(unittest.TestCase):

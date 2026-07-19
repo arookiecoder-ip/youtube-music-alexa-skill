@@ -205,10 +205,12 @@ class YouTubeBrowserSessionManager:
         try:
             sidecar = self.controller.call("/status")
             state = sidecar.get("state", "unavailable")
-            if state == "candidate_taken":
-                # Promotion owns the one-time candidate. Keep the manager's
-                # current validating/connected/error state instead of trying
-                # to consume it again on concurrent or subsequent polls.
+            if state in ("candidate_taken", "complete"):
+                # Promotion owns the one-time candidate, then asks the
+                # sidecar to complete. Keep the manager's authoritative
+                # connected state in both cases: replacing it with the
+                # sidecar's transient "complete" status prevents the remote
+                # UI from running its successful-auth refresh path.
                 return self.status()
             with self._lock:
                 self._expire_locked()
