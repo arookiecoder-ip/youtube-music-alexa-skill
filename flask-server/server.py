@@ -6299,6 +6299,56 @@ async def api_get_artist(channel_id):
         )
         return parser_client.get_artist(channel_id)
 
+    def minimal_artist_from_browse(source_client):
+        """Return a usable artist shell when YouTube serves no music shelves.
+
+        Some artist channels currently return just a ``Music`` tab with no
+        ``content`` key.  That is a valid (but empty) YouTube Music page, yet
+        ytmusicapi's get_artist() assumes at least one shelf is present and
+        raises KeyError.  Keep the page navigable rather than translating that
+        upstream layout quirk into a 500.
+        """
+        response = source_client._send_request('browse', {'browseId': channel_id}) or {}
+        header = (response.get('header') or {}).get('musicImmersiveHeaderRenderer') or \
+            (response.get('header') or {}).get('musicVisualHeaderRenderer') or {}
+
+        def text(value):
+            return ''.join(run.get('text', '') for run in (value or {}).get('runs', []))
+
+        subscription = (header.get('subscriptionButton') or {}).get('subscribeButtonRenderer') or {}
+        name = text(header.get('title')) or channel_id
+        thumbnails = ((header.get('thumbnail') or header.get('foregroundThumbnail') or {})
+                      .get('musicThumbnailRenderer', {}).get('thumbnail', {}).get('thumbnails') or [])
+        # Search supplies an avatar for channels whose bare browse header has
+        # none (the exact response shape that caused this failure).
+        canonical_channel_id = channel_id
+        try:
+            matches = source_client.search(name, filter='artists', limit=10) or []
+            # An artist channel with an empty Music tab is commonly a duplicate
+            # profile. Search ranks the canonical music profile first, so use
+            # its exact-name match instead of preserving that empty channel.
+            exact_matches = [item for item in matches
+                             if (item.get('artist') or '').casefold() == name.casefold()
+                             and item.get('browseId')]
+            match = exact_matches[0] if exact_matches else next(
+                (item for item in matches if item.get('browseId') == channel_id), None)
+            if match:
+                name = match.get('artist') or name
+                thumbnails = thumbnails or match.get('thumbnails') or []
+                canonical_channel_id = match.get('browseId') or channel_id
+        except Exception as search_error:
+            logger.info('[api/artist/%s] avatar search fallback failed: %s', channel_id, search_error)
+        return {
+            'name': name,
+            'channelId': channel_id,
+            'canonicalChannelId': canonical_channel_id,
+            'description': text(header.get('description')),
+            'subscribers': text(subscription.get('subscriberCountText')) or
+                           text(subscription.get('longSubscriberCountText')),
+            'thumbnails': thumbnails,
+            'songs': {}, 'albums': {}, 'singles': {}, 'related': {},
+        }
+
     try:
         raw = await asyncio.to_thread(yt.get_artist, channel_id)
     except Exception as e:
@@ -6316,6 +6366,13 @@ async def api_get_artist(channel_id):
                 raw = await asyncio.to_thread(YTMusic().get_artist, channel_id)
             except Exception as fallback_e:
                 logger.error('[api/artist/%s] anonymous fallback failed: %s', channel_id, fallback_e)
+                return jsonify({'error': str(fallback_e)}), 500
+        elif "Unable to find 'content'" in message:
+            logger.info('[api/artist/%s] browse page has no music shelves; using artist shell', channel_id)
+            try:
+                raw = await asyncio.to_thread(minimal_artist_from_browse, yt)
+            except Exception as fallback_e:
+                logger.error('[api/artist/%s] empty-shelf fallback failed: %s', channel_id, fallback_e)
                 return jsonify({'error': str(fallback_e)}), 500
         else:
             logger.error('[api/artist/%s] failed: %s', channel_id, e)

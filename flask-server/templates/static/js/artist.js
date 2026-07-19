@@ -52,6 +52,12 @@
     content.hidden = show;
   }
 
+  function canonicalChannelId(data, requestedChannelId) {
+    var artist = data && data.artist || {};
+    var canonical = artist.canonicalChannelId || artist.canonical_channel_id || '';
+    return canonical && canonical !== requestedChannelId ? canonical : '';
+  }
+
   function showArtistSongsLoading(show) {
     var content = document.getElementById('artist-songs-content');
     if (!content) return;
@@ -136,6 +142,11 @@
     state._artistLoading = true;
     state._currentChannelId = channelId;
     if (cached) {
+      var cachedCanonicalId = canonicalChannelId(cached, channelId);
+      if (cachedCanonicalId) {
+        window.navigateTo('#artist/' + encodeURIComponent(cachedCanonicalId));
+        return;
+      }
       if (topSongsOnly) {
         try {
           await ensureExpandedTopSongs(channelId, cached);
@@ -165,6 +176,11 @@
     state._cachedArtistData = null;
     try {
       var data = await window.api('/api/artist/' + encodeURIComponent(channelId));
+      var resolvedChannelId = canonicalChannelId(data, channelId);
+      if (resolvedChannelId) {
+        window.navigateTo('#artist/' + encodeURIComponent(resolvedChannelId));
+        return;
+      }
       if (topSongsOnly) {
         try {
           await ensureExpandedTopSongs(channelId, data);

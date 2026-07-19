@@ -284,10 +284,12 @@
     <div class="label">Amazon Account</div>
     <p class="hint">Enter your Amazon credentials to connect. A new tab opens
       Amazon's login page &mdash; complete any verification there, then return.</p>
-    <input type="email" id="login-email" placeholder="Email" autocomplete="username">
-    <input type="password" id="login-password" placeholder="Password"
-           autocomplete="current-password" style="margin-bottom:12px">
-    <button class="btn-accent" id="login-btn" style="width:100%">Connect</button>
+    <form id="amazon-login-form">
+      <input type="email" id="login-email" placeholder="Email" autocomplete="username">
+      <input type="password" id="login-password" placeholder="Password"
+             autocomplete="current-password" style="margin-bottom:12px">
+      <button class="btn-accent" id="login-btn" type="button" style="width:100%">Connect</button>
+    </form>
   </section>
 
   <!-- Play -->
