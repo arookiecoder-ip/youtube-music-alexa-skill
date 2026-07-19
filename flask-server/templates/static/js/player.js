@@ -217,7 +217,7 @@ function showNowPlaying(info) {
       syncTrackPlaybackIndicators();
       _lastNpFingerprint = '';
       // Playback is gone — don't leave an empty expanded player on screen.
-      if (window.getRoute && window.getRoute() === '#now-playing') {
+      if (document.body.classList.contains('now-playing-route')) {
         window.closeNowPlayingOverlay();
       }
     }
@@ -807,7 +807,7 @@ function syncModalScrollLock() {
       event.stopPropagation();
     }
     if (!state._hasTrack || !window.navigateTo) return;
-    if (window.getRoute && window.getRoute() === '#now-playing') {
+    if (document.body.classList.contains('now-playing-route')) {
       if (window.closeNowPlayingOverlay) window.closeNowPlayingOverlay();
       return;
     }

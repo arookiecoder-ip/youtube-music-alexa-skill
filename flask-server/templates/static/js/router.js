@@ -267,6 +267,14 @@
   window.__route = '#home';
   window.getRoute = function() { return window.__route || '#home'; };
 
+  // The full player is an overlay, not a destination.  Keep a small sequence
+  // number on real page entries so Back/Forward can be bounced back to the
+  // current page when the overlay is open, then just dismiss the overlay.
+  // This prevents the player from becoming a phantom browser-history entry.
+  var _historyPosition = (history.state && Number.isInteger(history.state.position))
+    ? history.state.position : 0;
+  var _restoringAfterPlayerDismiss = false;
+
   var _scrollCache = {};
   function _routeScrollId(route) {
     if (!route) return null;
@@ -318,10 +326,6 @@
     if (!document.body.classList.contains('now-playing-route')) return;
     var npSection = document.getElementById('now-playing-section');
     var returnRoute = window.__npReturnRoute || '#home';
-
-    // Update route state without triggering applyRoute
-    window.__route = returnRoute;
-    history.replaceState({ route: returnRoute }, '', routeToUrl(returnRoute));
 
     // Restore the return route's body classes
     document.body.classList.toggle('home-route', returnRoute === '#home');
@@ -410,8 +414,36 @@
     }
   };
 
+  window.openNowPlayingOverlay = function() {
+    if (document.body.classList.contains('now-playing-route')) return;
+    window.__npReturnRoute = window.__route || '#home';
+    var npSection = document.getElementById('now-playing-section');
+    if (npSection && npSection._closeTimer) {
+      clearTimeout(npSection._closeTimer);
+      npSection._closeTimer = null;
+    }
+    if (npSection && npSection._closeCleanup) {
+      npSection.removeEventListener('transitionend', npSection._closeCleanup);
+      npSection._closeCleanup = null;
+    }
+    if (npSection) {
+      npSection.hidden = false;
+      void npSection.offsetHeight;
+    }
+    document.body.classList.remove('now-playing-closing');
+    document.body.classList.add('now-playing-route');
+    // Reuse the route renderer's player-specific setup without changing the
+    // active route or the browser URL.
+    if (routes['#now-playing']) routes['#now-playing']();
+    if (window.syncUiState) window.syncUiState();
+  };
+
   window.navigateTo = function(route) {
     route = route || '#home';
+    if (route === '#now-playing') {
+      window.openNowPlayingOverlay();
+      return;
+    }
     var routeUrl = routeToUrl(route);
     if (routeUrl === '/home' && route !== '#home') route = '#home';
     var changedRoute = route !== window.__route;
@@ -424,10 +456,10 @@
       var isPreloaded = window.__preloadCache && window.__preloadCache[route] !== undefined;
       if (isMediaDetail && !isPreloaded && window._barStart) window._barStart();
       _saveScroll();
-      if (route === '#now-playing') window.__npReturnRoute = window.__route;
       window.__route = route;
       if (window.syncTopProgressVisibility) window.syncTopProgressVisibility();
-      history.pushState({ route: route }, '', routeUrl);
+      _historyPosition += 1;
+      history.pushState({ route: route, position: _historyPosition }, '', routeUrl);
     }
     applyRoute(route);
     // The full player is a fixed overlay over the current page. Resetting all
@@ -440,19 +472,34 @@
     }
   };
   window.addEventListener('popstate', function(e) {
+    if (_restoringAfterPlayerDismiss) {
+      _restoringAfterPlayerDismiss = false;
+      if (e.state && Number.isInteger(e.state.position)) _historyPosition = e.state.position;
+      return;
+    }
+    if (document.body.classList.contains('now-playing-route')) {
+      var targetPosition = e.state && Number.isInteger(e.state.position) ? e.state.position : null;
+      // Return to the unchanged page entry, then close the player. The next
+      // Back/Forward press is therefore free to navigate between real pages.
+      _restoringAfterPlayerDismiss = true;
+      history.go(targetPosition == null ? 1 : _historyPosition - targetPosition);
+      window.closeNowPlayingOverlay();
+      return;
+    }
     _saveScroll();
     var decoded = decodeLocation(location);
     // The URL is authoritative. state.route only supports old entries whose
     // address never changed away from the root path.
     window.__route = decoded.route;
+    if (e.state && Number.isInteger(e.state.position)) _historyPosition = e.state.position;
     if (location.pathname === '/' && !location.hash && e.state && e.state.route) {
       var legacyUrl = routeToUrl(e.state.route);
       if (legacyUrl !== '/home') {
         window.__route = e.state.route;
-        history.replaceState({ route: window.__route }, '', legacyUrl);
+        history.replaceState({ route: window.__route, position: _historyPosition }, '', legacyUrl);
       }
     } else if (decoded.replace) {
-      history.replaceState({ route: window.__route }, '', decoded.url);
+      history.replaceState({ route: window.__route, position: _historyPosition }, '', decoded.url);
     }
     applyRoute(window.__route);
     if (window.__route !== '#now-playing') {
@@ -764,7 +811,7 @@
   function initializeRoute() {
     if (routeInitialized) return;
     routeInitialized = true;
-    history.replaceState({ route: window.__route }, '', routeToUrl(window.__route));
+    history.replaceState({ route: window.__route, position: _historyPosition }, '', routeToUrl(window.__route));
     applyRoute(window.__route);
   }
   setTimeout(initializeRoute, 0);
