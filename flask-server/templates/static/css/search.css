@@ -793,6 +793,38 @@ body.results-open .play-section {
    Keep these rules with the search component so route-specific cascade patches
    are not needed in the global redesign stylesheet. */
 @media (max-width: 899px) {
+  /* Search is a document-scrolled page on phones. A queue sheet that was
+     dismissed while changing routes can briefly leave .modal-open on <body>;
+     its generic overflow lock used to freeze the results page. Give the
+     active Search route explicit ownership of the vertical scroll surface.
+     Result rows and horizontal shelves retain their own tap/swipe behaviour,
+     while a vertical drag always reaches this page scroller. */
+  body.results-open,
+  body.results-open.modal-open {
+    overflow-y: auto !important;
+    overscroll-behavior-y: auto;
+    touch-action: pan-y;
+  }
+  body.results-open #results-section,
+  body.results-open #results-list .result-swipe-wrapper {
+    touch-action: pan-y;
+  }
+  /* Do not rely on the document's scroll height here. Some mobile WebViews
+     keep the flex page root at exactly one viewport tall after a route swap,
+     even when the result contents extend below it. The list is therefore the
+     native vertical scroller on phones. The lower padding keeps the final row
+     clear of the fixed mini player. */
+  body.results-open #results-list {
+    height: calc(100dvh - 240px);
+    min-height: 220px;
+    overflow-y: auto !important;
+    overflow-x: hidden;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior-y: contain;
+    touch-action: pan-y;
+    padding-bottom: calc(var(--playbar-h-mobile, 84px) + 16px);
+  }
+
   .top-result-card.is-artist {
     background: transparent;
     background-color: transparent;

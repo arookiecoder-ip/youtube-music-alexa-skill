@@ -5333,6 +5333,19 @@ def alexa_search():
         thumbs = item.get('thumbnails') or []
         return thumbs[-1].get('url', '') if thumbs else ''
 
+    def _is_playlist_or_radio(item):
+        """True for YT Music playlist/radio browse ids, never album ids.
+
+        Search occasionally labels stations such as ``VLRD...`` as albums.
+        They are browse wrappers around playlist/radio ids (``RD...``), while
+        ``get_album`` accepts only ``MPRE...`` ids.  Classify by identifier so
+        the client opens/plays the collection through the playlist path.
+        """
+        browse_id = str(item.get('browseId') or '')
+        playlist_id = str(item.get('playlistId') or '')
+        return (browse_id.startswith('VL') or
+                playlist_id.startswith(('PL', 'RD', 'OLAK', 'LM')))
+
     def _collect_songs(raw_groups):
         results, seen = [], set()
         for tracks in raw_groups:
@@ -5417,11 +5430,14 @@ def alexa_search():
         by_type = collections.defaultdict(list)
         for item in raw:
             by_type[item.get('resultType') or ''].append(item)
+        album_items = by_type['album']
+        radio_items = [item for item in album_items if _is_playlist_or_radio(item)]
         return {
             'songs': _collect_songs([by_type['song'], by_type['video']]),
             'artists': _collect_artists(by_type['artist']),
-            'albums': _collect_albums(by_type['album']),
-            'playlists': _collect_playlists(by_type['playlist']),
+            'albums': _collect_albums([item for item in album_items
+                                       if not _is_playlist_or_radio(item)]),
+            'playlists': _collect_playlists(by_type['playlist'] + radio_items),
         }
 
     def _has_results(results):
@@ -5519,6 +5535,13 @@ def alexa_search():
             'views': item.get('views') or '',
             'subscribers': item.get('subscribers') or '',
         }
+        # Radio/station search hits may claim resultType=album even though
+        # their VLRD... browse id is a playlist wrapper.  This was sending
+        # clicks and the hero Play button to /api/album/VLRD..., which fails
+        # because that API rightly requires an MPRE album id.
+        if cleaned['resultType'] == 'album' and _is_playlist_or_radio(item):
+            cleaned['resultType'] = 'playlist'
+            cleaned['playlistId'] = cleaned['playlistId'] or cleaned['browseId']
         # For Top result artist, the channel ID is sometimes tucked inside the artists array
         if cleaned['resultType'] == 'artist' and cleaned['category'] == 'Top result' and not cleaned['browseId'] and cleaned['artists']:
             cleaned['browseId'] = cleaned['artists'][0].get('id') or ''
@@ -5775,8 +5798,15 @@ async def api_add_library_playlist_track(pl_id):
 async def api_get_library_playlist(pl_id):
     from ytmusicapi.auth.types import AuthType
     yt = _get_ytmusic() if _jam_guest() else _get_ytmusic_home()
-    if not pl_id.strip():
+    pl_id = (pl_id or '').strip()
+    if not pl_id:
         return jsonify({'error': 'invalid playlist id'}), 400
+    # Search/home browse responses wrap public playlists and radio stations
+    # as VLPL... / VLRD.... ytmusicapi accepts the canonical PL... / RD...
+    # id instead. Keep this conversion at the API boundary so direct detail
+    # links work as well as the Play button.
+    if pl_id.startswith('VL') and pl_id[2:].startswith(('PL', 'RD', 'OLAK', 'LM')):
+        pl_id = pl_id[2:]
     if _jam_guest() and pl_id.upper() == 'LM':
         return jsonify({'error': 'Liked Music is private to the host account.'}), 403
     try:
