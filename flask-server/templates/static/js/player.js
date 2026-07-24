@@ -101,9 +101,12 @@ function syncPlayPause() {
 // SSE/state repaint and eventually made one mobile tap dispatch many commands.
 (function wireMobileNowPlayingControls() {
   const mobileNpPlay = document.getElementById('mobile-np-play');
-  const npPagePlay = document.getElementById('np-page-art-overlay');
-  if (mobileNpPlay && npPagePlay) {
-    mobileNpPlay.addEventListener('click', () => npPagePlay.click());
+  const playPauseButton = document.getElementById('pp-btn');
+  if (mobileNpPlay && playPauseButton) {
+    // The artwork overlay is visual-only (and is hidden on the mobile
+    // now-playing route), so forwarding to it leaves the mobile button with
+    // no action. The persistent play/pause button owns the command logic.
+    mobileNpPlay.addEventListener('click', () => playPauseButton.click());
   }
   const mobileNpShuffle = document.getElementById('mobile-np-shuffle');
   const shuffleButton = document.getElementById('shuffle-btn');
