@@ -50,6 +50,25 @@
   .suggest-item:hover,
   .suggest-item.active { background: #1a1a1a; }
   .suggest-item > svg { flex: none; color: var(--muted); }
+  .suggest-item-use {
+    margin-left: auto;
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 24px;
+    height: 24px;
+    border: none;
+    border-radius: 50%;
+    padding: 0;
+    background: none;
+    color: var(--muted);
+    cursor: pointer;
+    transition: color .15s, background .15s;
+  }
+  .suggest-item-use:hover,
+  .suggest-item-use:focus-visible { color: var(--text); background: rgba(255,255,255,.08); }
+  .suggest-item-use svg { width: 18px; height: 18px; }
   .suggest-item-remove {
     margin-left: auto;
     flex: none;

@@ -875,6 +875,10 @@ if (nextBtn) {
     '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" ' +
     'stroke="currentColor" stroke-width="2.5" stroke-linecap="round">' +
     '<path d="M18 6 6 18M6 6l12 12"/></svg>';
+  const useSuggestionSvg =
+    '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" ' +
+    'stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">' +
+    '<path d="M7 17 17 7"/><path d="M9 7h8v8"/></svg>';
 
   function removeHistoryEntry(text) {
     if (window.JAM_GUEST) return;
@@ -895,8 +899,22 @@ if (nextBtn) {
       li.setAttribute('role', 'option');
       li.innerHTML = (showingHistory ? clockSvg : searchSvg) + '<span></span>';
       li.querySelector('span').textContent = text;
-      // mousedown (not click) so it fires before the input's blur
-      li.addEventListener('mousedown', e => { e.preventDefault(); choose(i); });
+      // mousedown (not click) so it fires before the input's blur. Selecting a
+      // suggestion completes the field; Enter can then submit it.
+      li.addEventListener('mousedown', e => { e.preventDefault(); applySuggestion(i); });
+
+      const useBtn = document.createElement('button');
+      useBtn.className = 'suggest-item-use';
+      useBtn.type = 'button';
+      useBtn.setAttribute('aria-label', 'Use ' + text + ' in search');
+      useBtn.title = 'Use this suggestion';
+      useBtn.innerHTML = useSuggestionSvg;
+      useBtn.addEventListener('mousedown', e => {
+        e.preventDefault();
+        e.stopPropagation();
+        applySuggestion(i);
+      });
+      li.appendChild(useBtn);
 
       if (showingHistory) {
         const removeBtn = document.createElement('button');
@@ -932,12 +950,13 @@ if (nextBtn) {
 
   window._suggestHistory = showHistory;
 
-  function choose(i) {
+  function applySuggestion(i) {
     if (i < 0 || i >= items.length) return;
     input.value = items[i];
     syncClearBtn();
-    closeList();
-    document.getElementById('play-query').click();
+    activeIdx = i;
+    render();
+    input.focus();
   }
 
   function syncClearBtn() { clearBtn.hidden = !input.value; syncUiState(); }
@@ -1004,14 +1023,14 @@ if (nextBtn) {
     if (e.key === 'ArrowDown' && open) {
       e.preventDefault();
       activeIdx = (activeIdx + 1) % items.length;
-      render();
+      applySuggestion(activeIdx);
     } else if (e.key === 'ArrowUp' && open) {
       e.preventDefault();
       activeIdx = (activeIdx - 1 + items.length) % items.length;
-      render();
+      applySuggestion(activeIdx);
     } else if (e.key === 'Enter') {
-      if (open && activeIdx >= 0) { e.preventDefault(); choose(activeIdx); }
-      else { closeList(); document.getElementById('play-query').click(); }
+      closeList();
+      document.getElementById('play-query').click();
     } else if (e.key === 'Escape') {
       closeList();
     }
