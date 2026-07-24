@@ -140,7 +140,14 @@
           '<div class="queue-info"><div class="queue-title">' + esc(track.title || '') + '</div>' +
           '<div class="queue-artist">' + window.artistLinksHtml(artist, artistChannelIds.length ? artistChannelIds : (track.channelId || track.channel_id || '')) + '</div></div>' + songActions(contextTrack);
         row.addEventListener('click', function () {
-          if (window.playFromQueue) window.playFromQueue(track, index);
+          // A row belongs to this album, so keep the complete album as the
+          // queue and begin at the selected track rather than starting radio.
+          if (window.playCollection) {
+            window.playCollection(tracks, {
+              startIndex: index,
+              startVideoId: track.video_id || track.videoId || ''
+            });
+          }
         });
         if (window.wireArtistLinks) window.wireArtistLinks(row);
         wireSongActions(row, contextTrack);

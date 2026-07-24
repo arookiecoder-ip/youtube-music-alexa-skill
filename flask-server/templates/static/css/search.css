@@ -61,6 +61,7 @@
     border: none;
     border-radius: 50%;
     padding: 0;
+    line-height: 0;
     background: none;
     color: var(--muted);
     cursor: pointer;
@@ -68,9 +69,11 @@
   }
   .suggest-item-use:hover,
   .suggest-item-use:focus-visible { color: var(--text); background: rgba(255,255,255,.08); }
-  .suggest-item-use svg { width: 18px; height: 18px; }
+  .suggest-item-use svg { display: block; width: 18px; height: 18px; }
   .suggest-item-remove {
-    margin-left: auto;
+    /* The suggestion-use button owns the flexible gap. Keeping this at zero
+       centers the × hover circle on the icon instead of adding a second gap. */
+    margin-left: 0;
     flex: none;
     display: inline-flex;
     align-items: center;
@@ -79,6 +82,7 @@
     height: 24px;
     border: none;
     background: none;
+    line-height: 0;
     color: var(--muted);
     cursor: pointer;
     border-radius: 50%;
@@ -92,6 +96,7 @@
     pointer-events: auto;
   }
   .suggest-item-remove:hover { color: var(--text); background: rgba(255,255,255,.08); }
+  .suggest-item-remove svg { display: block; width: 16px; height: 16px; }
 
   /* ---- Search results ---- */
   #results-section {

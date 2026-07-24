@@ -1203,6 +1203,8 @@ async function playCollection(items, options) {
   const serial = selectedSerial();
   if (!serial) return;
   const playlistId = String(options.playlistId || '').replace(/^VL/, '');
+  const startVideoId = String(options.startVideoId || '').trim();
+  const requestedStartIndex = Number.isInteger(options.startIndex) ? options.startIndex : 0;
   const queueItems = (items || []).map(function (item) {
     const artists = Array.isArray(item.artists)
       ? item.artists.map(function (artist) {
@@ -1229,17 +1231,17 @@ async function playCollection(items, options) {
   state.lastActionAt = Date.now();
   toast(options.shuffle ? 'Shuffling collection…' : 'Playing collection…');
   try {
-    const data = playlistId
-      ? await api('/alexa/play/', {
-          serial: serial,
-          query: 'https://music.youtube.com/playlist?list=' + encodeURIComponent(playlistId),
-          shuffle: !!options.shuffle,
-        })
-      : await api('/alexa/play_queue/', {
-          serial: serial,
-          queue_items: queueItems,
-          shuffle: !!options.shuffle,
-        });
+    // Use the queue endpoint for both kinds of collection. Besides retaining
+    // the whole collection in Up Next, it lets a track-row click start at the
+    // exact song the user selected instead of falling back to a radio queue.
+    const data = await api('/alexa/play_queue/', {
+      serial: serial,
+      playlist_id: playlistId || undefined,
+      queue_items: playlistId ? undefined : queueItems,
+      target_video_id: startVideoId || undefined,
+      start_index: requestedStartIndex,
+      shuffle: !!options.shuffle,
+    });
     const first = data && data.now_playing;
     if (first && first.video_id) {
       state._lastPlayAttemptVideoId = first.video_id;

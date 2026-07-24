@@ -4887,6 +4887,18 @@ def alexa_play_queue():
     body = request.get_json(silent=True) or {}
 
     queue_items = body.get('queue_items')
+    playlist_id = str(body.get('playlist_id') or '').strip()
+    if playlist_id.startswith('VL'):
+        playlist_id = playlist_id[2:]
+    # A playlist row can start playback from any of its tracks. Resolve its
+    # complete contents here (including pages the browser has not loaded), so
+    # that selecting one song never degrades into a single-song radio queue.
+    if playlist_id:
+        try:
+            queue_items = asyncio.run(Supporting.get_playlist_tracks(playlist_id))
+        except Exception:
+            logger.exception("play_queue: failed to load playlist %s", playlist_id)
+            return error_response('Could not load playlist tracks', 502)
     if isinstance(queue_items, list):
         if len(queue_items) > 5000:
             return error_response('queue_items exceeds 5000', 400)
@@ -4938,13 +4950,30 @@ def alexa_play_queue():
             import random as _random
             _random.shuffle(validated_items)
 
-        first = validated_items[0]
+        target_idx = 0
+        target_video_id = str(body.get('target_video_id') or '').strip()
+        matched_target = False
+        if target_video_id:
+            matching_index = next((i for i, item in enumerate(validated_items)
+                                   if item['video_id'] == target_video_id), None)
+            if matching_index is not None:
+                target_idx = matching_index
+                matched_target = True
+        if not matched_target:
+            try:
+                requested_index = int(body.get('start_index') or 0)
+            except (TypeError, ValueError):
+                requested_index = 0
+            if 0 <= requested_index < len(validated_items):
+                target_idx = requested_index
+
+        first = validated_items[target_idx]
         _update_now_playing(playing=False,
                             title=first['title'], artist=first['artist'],
                             thumbnail=first['thumbnail'], video_id=first['video_id'],
                             duration_ms=first['duration_ms'], position_ms=0,
                             playback_confirmed=False,
-                            queue=validated_items, queue_index=0)
+                            queue=validated_items, queue_index=target_idx)
 
         serial = _effective_serial(body.get("serial"))
         if serial:
@@ -4955,12 +4984,12 @@ def alexa_play_queue():
             if not _jam_guest():
                 _record_listen(first['video_id'], first['title'],
                                first['artist'], first['thumbnail'])
-            _prewarm_queue_audio(validated_items, 0)
+            _prewarm_queue_audio(validated_items, target_idx)
 
         return jsonify({
             'ok': True,
             'queue': validated_items,
-            'queue_index': 0,
+            'queue_index': target_idx,
             'now_playing': first,
         })
 

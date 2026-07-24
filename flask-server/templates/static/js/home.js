@@ -444,7 +444,8 @@
             if (!window.api || !window.playFromQueue) return;
             window.api('/api/album/' + encodeURIComponent(targetId)).then(function(albumData) {
                 var firstTrack = albumData && Array.isArray(albumData.tracks) && albumData.tracks[0];
-                if (firstTrack) window.playFromQueue(firstTrack, 0);
+                if (firstTrack && window.playCollection) window.playCollection(albumData.tracks);
+                else if (firstTrack) window.playFromQueue(firstTrack, 0);
                 else if (window.toast) window.toast('No playable tracks in this album', 'error');
             }).catch(function() {
                 if (window.toast) window.toast('Could not play album', 'error');

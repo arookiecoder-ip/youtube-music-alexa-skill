@@ -317,6 +317,11 @@
       if (body) {
         body.innerHTML = '';
         const tracks = pl.tracks || [];
+        // Start row playback from the tracks already rendered/fetched in the
+        // browser. Resolving every page again on the server delays the first
+        // note of a large playlist substantially. Continuation pages extend
+        // this same queue source as the user scrolls.
+        const loadedTracks = tracks.slice();
         const title = pl.title || 'Playlist';
         // Prefer the playlist's own/default thumbnail. Some API responses use
         // `thumbnail` while others use `thumbnails`; `image` is the fallback.
@@ -403,6 +408,7 @@
           // it so the observer always follows the real end of the playlist.
           let loading = null;
           const appendTracks = (batch, startIndex) => {
+            if (startIndex > 0) loadedTracks.push(...batch);
             batch.forEach((track, index) => {
             const wrapper = document.createElement('div');
             wrapper.className = 'result-swipe-wrapper';
@@ -461,13 +467,14 @@
               ${trackDuration ? `<div class="track-duration playlist-track-duration">${escapeHtml(trackDuration)}</div>` : ''}
               ${songActions(contextTrack, plId.toUpperCase() === 'LM')}`;
             row.onclick = () => {
-              if (window.playResult) {
-                window.playResult({
-                  video_id: videoId,
-                  title: track.title,
-                  artist,
-                  thumbnail
-                }, false, false, true);
+              // Use the tracks already available in the page so the selected
+              // song starts immediately. This remains a collection queue,
+              // unlike the single-song/radio playback path.
+              if (window.playCollection) {
+                window.playCollection(loadedTracks, {
+                  startIndex: startIndex + index,
+                  startVideoId: videoId
+                });
               }
             };
             // The row is the playback target; artist links and the three-dot

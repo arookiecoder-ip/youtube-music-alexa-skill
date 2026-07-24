@@ -395,6 +395,16 @@
     list.innerHTML = '';
     
     var displaySongs = topSongsOnly ? songs : songs.slice(0, 10);
+    function playArtistSongInCollection(item, index) {
+      if (!window.playCollection) return;
+      // These rows are part of the artist's displayed song collection. Keep
+      // that collection in Up Next instead of treating the row as a fresh
+      // single-song radio request.
+      window.playCollection(songs, {
+        startIndex: index,
+        startVideoId: item.video_id || ''
+      });
+    }
     // let, not var: the click handlers below close over `item` per iteration.
     for (let i = 0; i < displaySongs.length; i++) {
       let item = displaySongs[i];
@@ -431,9 +441,7 @@
       // Play button
       row.querySelector('.artist-song-play-btn').addEventListener('click', function(e) {
         e.stopPropagation();
-        if (window.playFromQueue) {
-          window.playFromQueue({video_id: item.video_id, title: item.title, artist: item.artist, thumbnail: item.thumbnail});
-        }
+        playArtistSongInCollection(item, i);
       });
       // Like button
       row.querySelector('.artist-song-like-btn').addEventListener('click', function(e) {
@@ -449,9 +457,7 @@
         // Keep artist links and row controls independent. The rest of the
         // song row, including its title, starts playback.
         if (e.target.closest('button, .artist-name')) return;
-        if (window.playFromQueue) {
-          window.playFromQueue({video_id: item.video_id, title: item.title, artist: item.artist, thumbnail: item.thumbnail});
-        }
+        playArtistSongInCollection(item, i);
       });
       list.appendChild(row);
     }
