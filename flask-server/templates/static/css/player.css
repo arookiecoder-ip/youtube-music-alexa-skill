@@ -449,6 +449,7 @@
 .mobile-player-youtube {
   display: none !important;
 }
+.mobile-np-volume-row { display: none; }
 
 /* ============================================================
    Now Playing page — YT Music style
@@ -1094,63 +1095,80 @@ main:has(#now-playing-section:not([hidden])) {
     width: 19px;
     height: 19px;
   }
-  body.now-playing-route .mobile-player-volume-wrap,
-  body.now-playing-closing .mobile-player-volume-wrap {
-    display: block !important;
-    position: relative !important;
-    top: auto !important;
-    right: auto !important;
-    z-index: 921 !important;
-    grid-column: 1;
-    justify-self: end;
-    margin-right: 8px;
-  }
-  body.now-playing-route .mobile-player-volume,
-  body.now-playing-closing .mobile-player-volume {
-    display: inline-flex !important;
+  body.now-playing-route .mobile-np-volume-row,
+  body.now-playing-closing .mobile-np-volume-row {
+    display: flex !important;
     align-items: center;
-    justify-content: center;
-    width: 30px !important;
-    height: 30px !important;
-    min-width: 30px !important;
-    min-height: 30px !important;
-    padding: 6px !important;
-    border: 0;
-    background: transparent;
-    color: var(--text);
+    gap: 10px;
+    width: min(340px, calc(100% - 10px));
+    margin: 0 auto -2px;
+    box-sizing: border-box;
   }
-  body.now-playing-route .mobile-player-volume svg,
-  body.now-playing-closing .mobile-player-volume svg {
+  body.now-playing-route .mobile-np-volume-row > svg,
+  body.now-playing-closing .mobile-np-volume-row > svg {
+    flex: none;
     width: 19px;
     height: 19px;
+    color: var(--muted);
   }
-  body.now-playing-route .mobile-player-youtube,
-  body.now-playing-closing .mobile-player-youtube {
+  body.now-playing-route .mobile-np-volume-row input[type="range"],
+  body.now-playing-closing .mobile-np-volume-row input[type="range"] {
+    --volume-level: 50%;
+    flex: 1;
+    min-width: 0;
+    height: 4px;
+    margin: 0;
+    border-radius: var(--radius-full);
+    background: linear-gradient(to right, var(--accent) 0 var(--volume-level), #3a302b var(--volume-level) 100%);
+    accent-color: var(--accent);
+  }
+  body.now-playing-route .mobile-np-volume-row input[type="range"]::-webkit-slider-runnable-track,
+  body.now-playing-closing .mobile-np-volume-row input[type="range"]::-webkit-slider-runnable-track {
+    height: 4px;
+    border-radius: var(--radius-full);
+    background: transparent;
+  }
+  body.now-playing-route .mobile-np-volume-row input[type="range"]::-webkit-slider-thumb,
+  body.now-playing-closing .mobile-np-volume-row input[type="range"]::-webkit-slider-thumb {
+    margin-top: -5px;
+  }
+  body.now-playing-route .mobile-np-volume-row input[type="range"]::-moz-range-track,
+  body.now-playing-closing .mobile-np-volume-row input[type="range"]::-moz-range-track {
+    height: 4px;
+    border-radius: var(--radius-full);
+    background: #3a302b;
+  }
+  body.now-playing-route .mobile-np-volume-row input[type="range"]::-moz-range-progress,
+  body.now-playing-closing .mobile-np-volume-row input[type="range"]::-moz-range-progress {
+    height: 4px;
+    border-radius: var(--radius-full);
+    background: var(--accent);
+  }
+  body.now-playing-route .mobile-np-volume-row .mobile-player-youtube,
+  body.now-playing-closing .mobile-np-volume-row .mobile-player-youtube {
     display: inline-flex !important;
-    grid-column: 3;
-    justify-self: start;
     align-items: center;
     justify-content: center;
     width: 30px !important;
     height: 30px !important;
     min-width: 30px !important;
     min-height: 30px !important;
-    margin-left: 8px;
+    margin: 0;
     padding: 6px !important;
     border: 0;
     background: transparent;
     color: var(--text);
   }
-  body.now-playing-route .mobile-player-youtube.is-hidden,
-  body.now-playing-closing .mobile-player-youtube.is-hidden {
+  body.now-playing-route .mobile-np-volume-row .mobile-player-youtube.is-hidden,
+  body.now-playing-closing .mobile-np-volume-row .mobile-player-youtube.is-hidden {
     display: none !important;
   }
-  body.now-playing-route .mobile-player-youtube:hover,
-  body.now-playing-closing .mobile-player-youtube:hover {
+  body.now-playing-route .mobile-np-volume-row .mobile-player-youtube:hover,
+  body.now-playing-closing .mobile-np-volume-row .mobile-player-youtube:hover {
     color: #ff0000;
   }
-  body.now-playing-route .mobile-player-youtube svg,
-  body.now-playing-closing .mobile-player-youtube svg {
+  body.now-playing-route .mobile-np-volume-row .mobile-player-youtube svg,
+  body.now-playing-closing .mobile-np-volume-row .mobile-player-youtube svg {
     width: 19px;
     height: 19px;
   }
@@ -1274,7 +1292,7 @@ main:has(#now-playing-section:not([hidden])) {
   }
   body.now-playing-route .np-page-art,
   body.now-playing-closing .np-page-art {
-    width: min(230px, calc(100vw - 90px)) !important;
+    width: min(270px, calc(100vw - 60px)) !important;
     margin-top: 34px !important;
     cursor: default;
   }
@@ -1291,7 +1309,7 @@ main:has(#now-playing-section:not([hidden])) {
     gap: 18px;
     padding-inline: 10px;
     box-sizing: border-box;
-    margin-top: 18px;
+    margin-top: 26px;
   }
   body.now-playing-route .mobile-np-controls button,
   body.now-playing-closing .mobile-np-controls button {
@@ -1319,16 +1337,16 @@ main:has(#now-playing-section:not([hidden])) {
   }
   body.now-playing-route .mobile-np-controls #mobile-np-play,
   body.now-playing-closing .mobile-np-controls #mobile-np-play {
-    width: 64px;
-    height: 64px;
-    min-width: 64px;
-    min-height: 64px;
-    padding: 14px;
+    width: 76px;
+    height: 76px;
+    min-width: 76px;
+    min-height: 76px;
+    padding: 16px;
   }
   body.now-playing-route .mobile-np-controls #mobile-np-play svg,
   body.now-playing-closing .mobile-np-controls #mobile-np-play svg {
-    width: 36px;
-    height: 36px;
+    width: 42px;
+    height: 42px;
   }
   body.now-playing-route .mobile-np-pause-icon,
   body.now-playing-closing .mobile-np-pause-icon { display: none; }
@@ -1337,9 +1355,9 @@ main:has(#now-playing-section:not([hidden])) {
   body.now-playing-closing .mobile-np-progress {
     display: block !important;
     width: min(340px, calc(100% - 10px));
-    margin: 20px auto 0;
+    margin: 24px auto 0;
     position: relative;
-    top: 8px;
+    top: 0;
     box-sizing: border-box;
     align-self: center;
   }
@@ -1942,7 +1960,7 @@ body.now-playing-route .player-section .player-expand-btn svg {
 
 /* Compact mobile player only. Desktop playbar remains unchanged. */
 @media (max-width: 899px) {
-  :root { --playbar-h-mobile: 72px; }
+  :root { --playbar-h-mobile: 78px; }
 
   .player-section,
   main.has-queue .player-section,
@@ -2057,8 +2075,15 @@ body.now-playing-route .player-section .player-expand-btn svg {
     min-height: 34px !important;
     padding: 0 !important;
   }
-  body .player-section .pp-btn svg { width: 25px; height: 25px; }
-  body .player-section .transport button[data-action="next"] svg { width: 15px; height: 15px; }
+  body .player-section .pp-btn,
+  body .player-section .pp-btn:hover {
+    width: 56px !important;
+    height: 56px !important;
+    min-width: 56px !important;
+    min-height: 56px !important;
+  }
+  body .player-section .pp-btn svg { width: 38px; height: 38px; }
+  body .player-section .transport button[data-action="next"] svg { width: 18px; height: 18px; }
 
   body .player-section .progress {
     grid-area: progress;

@@ -36,7 +36,10 @@ function syncVolume(value, force) {
   clearTimeout(_volumeRepaintTimer);
   _volumeRepaintTimer = setTimeout(() => {
     volumeEl.value = v;
-    if (mobileVolumeEl) mobileVolumeEl.value = v;
+    if (mobileVolumeEl) {
+      mobileVolumeEl.value = v;
+      mobileVolumeEl.style.setProperty('--volume-level', v + '%');
+    }
     if (mobileVolumeValue) mobileVolumeValue.value = v;
   }, 150);
 }
@@ -119,6 +122,7 @@ if (mobileVolumeEl) {
     state.volumeUserActive = true;
     state.volumeGraceUntil = Date.now() + state.VOLUME_GRACE_MS;
     volumeEl.value = e.target.value;
+    mobileVolumeEl.style.setProperty('--volume-level', e.target.value + '%');
     if (mobileVolumeValue) mobileVolumeValue.value = e.target.value;
     clearTimeout(mobileVolTimer);
     const mySeq = ++state._volCommandSeq;
