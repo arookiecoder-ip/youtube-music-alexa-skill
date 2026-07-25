@@ -158,6 +158,78 @@
     if (window.__playerDebugLog) window.__playerDebugLog(event, details);
   };
 
+  // ---- Body scroll lock for the mobile full player ----
+  // `body { overflow: hidden }` alone is not enough on iOS Safari — the html
+  // viewport still scrolls on touch and touchmove chains through the overlay
+  // edges to scroll the page underneath. Pinning body to the viewport at its
+  // current scroll offset is the cross-browser workaround; the negative top
+  // preserves visual position so reopening the page after close stays put.
+  // Desktop is left alone because the body already scrolls behind the
+  // (intentionally) scrollable desktop overlay.
+  function _isMobileViewport() {
+    return typeof window !== 'undefined' &&
+      window.matchMedia && window.matchMedia('(max-width: 899px)').matches;
+  }
+  function lockPlayerScroll() {
+    if (!_isMobileViewport()) return;
+    if (window.__npScrollLocked) return;
+    var y = window.scrollY;
+    window.__npScrollLocked = true;
+    var b = document.body;
+    var h = document.documentElement;
+    b.dataset.npScrollY = String(y);
+    b.style.position = 'fixed';
+    b.style.top = '-' + y + 'px';
+    b.style.left = '0';
+    b.style.right = '0';
+    b.style.width = '100%';
+    b.style.overflow = 'hidden';
+    b.style.overscrollBehavior = 'none';
+    // Lock the html viewport directly too. Safari's default html { overflow:
+    // visible } keeps the document scrollable even when body is fixed, and
+    // older mobile browsers don't support `html:has(body.now-playing-route)`
+    // so the JS form is the cross-browser fallback.
+    h.style.overflow = 'hidden';
+    h.style.overscrollBehavior = 'none';
+  }
+  function unlockPlayerScroll() {
+    if (!window.__npScrollLocked) return;
+    window.__npScrollLocked = false;
+    var b = document.body;
+    var h = document.documentElement;
+    var y = parseInt(b.dataset.npScrollY || '0', 10);
+    b.style.removeProperty('position');
+    b.style.removeProperty('top');
+    b.style.removeProperty('left');
+    b.style.removeProperty('right');
+    b.style.removeProperty('width');
+    b.style.removeProperty('overflow');
+    b.style.removeProperty('overscroll-behavior');
+    h.style.removeProperty('overflow');
+    h.style.removeProperty('overscroll-behavior');
+    delete b.dataset.npScrollY;
+    // Restore scroll on the next frame so layout has time to settle back
+    // before we re-anchor window.scrollY; otherwise the page briefly paints
+    // at the top before snapping to the saved offset.
+    requestAnimationFrame(function() { window.scrollTo(0, y); });
+  }
+  // While the player is open, the user may rotate their device or resize
+  // the window across the 900px breakpoint. Re-applying the mobile lock or
+  // clearing it on the matching side keeps inline body styles in sync with
+  // the active breakpoint so a desktop-resize-mid-overlay cannot leave a
+  // stray position:fixed body or a stale top:-scrollY offset.
+  window.addEventListener('resize', function() {
+    if (!document.body.classList.contains('now-playing-route')) return;
+    var wasLocked = window.__npScrollLocked;
+    var savedY = parseInt(document.body.dataset.npScrollY || String(window.scrollY), 10);
+    if (wasLocked) unlockPlayerScroll();
+    if (_isMobileViewport()) {
+      window.__npScrollLocked = false; // force a re-lock
+      window.scrollTo(0, savedY);
+      lockPlayerScroll();
+    }
+  });
+
   function setHidden(selector, hidden) {
     document.querySelectorAll(selector).forEach(function(el) {
       el.hidden = hidden;
@@ -408,6 +480,10 @@
         }
         document.documentElement.style.removeProperty('overflow');
         document.body.style.removeProperty('overflow');
+        // Release the body scroll pin we put on open and restore the page to
+        // its prior viewport offset, so closing the player never yanks the
+        // user back to the top of the previous page.
+        unlockPlayerScroll();
       };
       npSection._closeCleanup = finishClose;
       npSection.addEventListener('transitionend', finishClose);
@@ -433,6 +509,9 @@
     }
     document.body.classList.remove('now-playing-closing');
     document.body.classList.add('now-playing-route');
+    // Pin the body at its current scroll offset so background scrolling
+    // stops on mobile before the slide-in animation even starts.
+    lockPlayerScroll();
     // Reuse the route renderer's player-specific setup without changing the
     // active route or the browser URL.
     if (routes['#now-playing']) routes['#now-playing']();
@@ -614,6 +693,10 @@
           // Belt-and-suspenders: restore scroll in case overflow got stuck.
           document.documentElement.style.removeProperty('overflow');
           document.body.style.removeProperty('overflow');
+          // Mirror the open:close handshake in closeNowPlayingOverlay —
+          // release the body scroll pin we put on open and restore the page's
+          // saved viewport offset before handing the user back to the route.
+          unlockPlayerScroll();
         };
         npSection._closeCleanup = finishClose;
         npSection.addEventListener('transitionend', finishClose);

@@ -961,8 +961,19 @@ main:has(#now-playing-section:not([hidden])) {
 /* Mobile expanded-player entrance animation. These controls are hidden by
    default and enabled only inside the mobile route below. */
 @media (max-width: 899px) {
-  body.now-playing-route {
+  /* Background scroll lock belt-and-suspenders. The actual pin (position:
+     fixed; top: -scrollYpx; width: 100%) is set inline by router.js's
+     lockPlayerScroll() so the saved offset travels with the playwright.
+     Keeping the position values out of CSS avoids a resize edge case
+     where opening the player on desktop then resizing to mobile would
+     snap the body to top:0 with no offset. The overflow + overscroll-
+     behavior locks here cover the html viewport (which body position:
+     fixed does not on every browser) and stop rubber-band scroll from
+     showing the underlying page on iOS. */
+  body.now-playing-route,
+  html:has(body.now-playing-route) {
     overflow: hidden !important;
+    overscroll-behavior: none !important;
   }
   body #now-playing-section:not([hidden]) {
     display: block !important;
