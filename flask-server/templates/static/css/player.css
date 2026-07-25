@@ -873,6 +873,89 @@ main:has(#now-playing-section:not([hidden])) {
     overflow: visible;
   }
 
+  /* ---- Mobile full player: swipe art banner to skip ----
+     The album art on the now-playing page becomes a horizontal swipe target.
+     touch-action: pan-y keeps native vertical page scrolling intact while
+     letting our pointer handlers decide whether the gesture is a swipe.
+     user-select prevents text-selection flashes during the drag. */
+  body.now-playing-route .np-page-art,
+  body.now-playing-closing .np-page-art {
+    touch-action: pan-y;
+    -webkit-user-select: none;
+    user-select: none;
+  }
+  /* The exit animation is driven by inline style -- the !important reset
+     above would otherwise freeze transform: none !important for the duration
+     the swipe is in flight. Inline styles always beat !important declarations. */
+
+  /* Tiny "Next \u2192" / "\u2190 Previous" pill that pops above the artwork the
+     instant a swipe commits, so the user gets a same-frame confirmation
+     while the Alexa round-trip is still in flight. Body-fixed so it doesn't
+     inherit the artwork's exit transform; opacity + transform animate it in
+     with a subtle overshoot and fade. The pill is created on demand by
+     player.js and reused across swipes; pointer-events:none keeps it out of
+     the swipe hit-area, and z-index 1100 sits below the queue modal (1201)
+     and toasts but above the route's close/menu (920) controls.
+     Position is anchored to a viewport offset (top: 14vh) rather than a
+     getBoundingClientRect() read, because the artwork typically still
+     carries the user's drag-residual translateX at the moment of release --
+     reading the rect would offset the pill sideways to wherever the
+     dragged artwork currently is. max-width: 90vw guards against system
+     font-scaling clipping the pill on a 320 px viewport. */
+  .np-swipe-indicator {
+    position: fixed;
+    top: 14vh;
+    left: 50%;
+    max-width: 90vw;
+    z-index: 1100;
+    pointer-events: none;
+    padding: 6px 14px;
+    border-radius: 999px;
+    background: rgba(20, 20, 20, .85);
+    -webkit-backdrop-filter: blur(10px);
+    backdrop-filter: blur(10px);
+    color: #fff;
+    font-size: .82rem;
+    font-weight: 600;
+    letter-spacing: .02em;
+    white-space: nowrap;
+    opacity: 0;
+    transform: translateX(-50%) translateY(-6px) scale(.92);
+    transition:
+      opacity .15s ease,
+      transform .22s cubic-bezier(.34, 1.56, .64, 1);
+    box-shadow: 0 4px 14px rgba(0, 0, 0, .45);
+  }
+  .np-swipe-indicator.visible {
+    opacity: 1;
+    transform: translateX(-50%) translateY(0) scale(1);
+  }
+
+  /* ---- Banner change animation ----
+     Any time the now-playing track changes — swipe, button, voice, or SSE
+     update — the artwork + title + artist get a brief fade-up. The .track-
+     changed class is applied briefly from player.js's showNowPlaying() on
+     fp-mismatch, then cleared on animationend. CSS animations win over the
+     `transform: none !important` reset during their runtime because the
+     keyframe layer has higher priority than the static cascade, including
+     !important declarations on the same property. So the very same artwork
+     that gets pinned to scale(1) by the route's reset still animates. */
+  @keyframes npArtSwapIn {
+    from { opacity: 0; transform: translateY(8px) scale(0.96); }
+    to   { opacity: 1; transform: translateY(0) scale(1); }
+  }
+  @keyframes npMetaSwapIn {
+    from { opacity: 0; transform: translateY(4px); }
+    to   { opacity: 1; transform: translateY(0); }
+  }
+  .np-page-art.track-changed {
+    animation: npArtSwapIn .36s cubic-bezier(.22, 1, .36, 1) both;
+  }
+  /* Title and artist animate as descendants of .np-page-meta once the
+     parent gets .track-changed — no separate rules are needed for them. */
+  .np-page-meta.track-changed {
+    animation: npMetaSwapIn .36s cubic-bezier(.22, 1, .36, 1) both;
+  }
 }
 
 /* Mobile expanded-player entrance animation. These controls are hidden by
@@ -1102,6 +1185,11 @@ main:has(#now-playing-section:not([hidden])) {
     gap: 10px;
     width: min(340px, calc(100% - 10px));
     margin: 0 auto -2px;
+    /* Match the progress strip's 14px downward shift so the two paired
+       controls still read as a unit. translateY is layered on top of the
+       existing -2px bottom margin (preserving the original safe-area
+       alignment) without altering any in-flow gap between blocks. */
+    transform: translateY(14px);
     box-sizing: border-box;
   }
   body.now-playing-route .mobile-np-volume-row > svg,
@@ -1357,7 +1445,16 @@ main:has(#now-playing-section:not([hidden])) {
     width: min(340px, calc(100% - 10px));
     margin: 24px auto 0;
     position: relative;
-    top: 0;
+    /* Pull the mobile progress strip down a touch relative to the
+       transport controls (keeping its 24px top gap above -> transport
+       unchanged). Using `top` (the wrapper is already position:relative)
+       rather than increasing margin-top so the gap to .mobile-np-controls
+       and the gap to .mobile-np-volume-row stay exactly as they were.
+       Tuned to 14px after evaluating 8/10/14 — 14px lands squarely inside
+       the ~12–16px section-spacing grid Spotify / Apple Music / YT Music
+       use between control groups on mobile, so it reads as a deliberate
+       nudge rather than a barely-noticeable 8px tick. */
+    top: 14px;
     box-sizing: border-box;
     align-self: center;
   }

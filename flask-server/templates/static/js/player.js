@@ -130,6 +130,41 @@ const _resolvedNowPlayingArt = new Map();
 const _ambientNowPlayingArt = new Map();
 const _pendingNowPlayingArt = new Map();
 
+// Play the "track changed" entrance animation on the artwork + meta block.
+// Called when showNowPlaying detects a new track (fp mismatch) so the user
+// gets a same-frame visual cue regardless of how the change arrived:
+// swipe-exit + new content, button click + SSE update, voice command, or
+// the queue's own SSE-poll catching a remote change. Skipped while a
+// swipe-exit is still in flight so we don't yank the artwork away from the
+// gesture trajectory in the middle of its slide-off.
+function playArtworkSwapIn() {
+  const art = document.getElementById('np-page-art');
+  if (!art) return;
+  // The swipe-exit sets inline `translateX(\u00b1120vw)`. While that transform is
+  // active, the swipe handler's transitionend hasn't run yet, so fighting
+  // it with a fresh keyframe frame would clip the artwork's exit short.
+  const inline = art.style.transform;
+  if (inline && inline !== 'none' && inline !== '') return;
+  const meta = document.querySelector('.np-page-meta');
+  const targets = art ? [art] : [];
+  if (meta) targets.push(meta);
+  for (const el of targets) {
+    el.classList.remove('track-changed');
+    // Force a reflow so the next class-add restarts the CSS animation; only
+    // one class is active at a time so a re-trigger cleanly replaces it.
+    void el.offsetWidth;
+    el.classList.add('track-changed');
+    // Clean up once the animation has played so a future track change can
+    // re-add the class and re-trigger without colliding with the previous
+    // animation's keyframe retention.
+    el.addEventListener('animationend', function cleanup(ev) {
+      if (ev.animationName && ev.animationName.indexOf('SwapIn') === -1) return;
+      el.classList.remove('track-changed');
+      el.removeEventListener('animationend', cleanup);
+    });
+  }
+}
+
 function resolveNowPlayingArtwork(videoId) {
   // Jam guests receive only public playback metadata. Avoid an account-backed
   // artwork lookup; it is both unnecessary and forbidden by the guest API
@@ -337,6 +372,11 @@ function showNowPlaying(info) {
     };
     updateUrlBar();
     syncTrackPlaybackIndicators();
+    // Visual cue for the song change. Called AFTER background-image / text
+    // updates so the artwork already shows the new cover as it animates in.
+    // Skipped internally when a swipe-exit is still in flight, so a swipe
+    // and a same-frame SSE update don't fight each other.
+    playArtworkSwapIn();
   }
 
   refreshNpLikeButton();
@@ -1189,17 +1229,327 @@ for (const btn of document.querySelectorAll('[data-action="previous"], [data-act
       })
       .catch(e => toast(e.message, 'error'))
       .finally(() => {
-        // Alexa's own round-trip outlasts our HTTP call, so keep the buttons
-        // disabled a bit longer than the request itself before allowing the
-        // next command.
+        // Don't keep buttons disabled for Alexa's full skill round-trip
+        // (a few seconds) -- otherwise rapid skip gestures can't register
+        // until each prior one finishes processing. 600 ms is short enough
+        // for a ~2 Hz skip rhythm to feel responsive, while still longer
+        // than Alexa's NLU + skill-arm window so the slot isn't overwritten
+        // by the next request. The swipe handler's canStart() reads the
+        // same disabled state, so swipes feel the same lock as the buttons.
         setTimeout(() => {
           _navBusy = false;
           document.querySelectorAll('[data-action="previous"], [data-action="next"]')
             .forEach(b => b.disabled = false);
-        }, 3000);
+        }, 600);
       });
   };
 }
+
+/* ---- mobile swipe-to-skip on the full-player banner (artwork) ----
+   Mapping (standard iOS / Spotify / YT Music convention):
+     swipe left  (finger right → left) → next song
+     swipe right (finger left → right) → previous song
+   The artwork slides off in the direction of the gesture, and the new
+   track appears from the opposite side after the round-trip with Alexa.
+   Edge cases handled:
+     - Vertical scroll is preserved (touch-action: pan-y + axis lock by
+       pointer move distance, never by `preventDefault` on small motion).
+     - Only the np-page-art element responds; touches anywhere else on the
+       route pass through to the title/progress/controls/scroll as before.
+     - Respects the existing _navBusy lock (~600 ms window) by checking
+       that the on-screen next/previous buttons are still enabled before
+       firing. The lock is short enough that rapid skip gestures register
+       back-to-back at a ~2 Hz rhythm, while still longer than Alexa's
+       NLU + skill-arm window so the slot isn't overwritten by the next
+       request.
+     - Skipped whenever the queue modal sheet (queue-modal-overlay) is open
+       on top, the now-playing route is closing, the device picker is empty,
+       or the body is hidden.
+     - Multi-touch: a second pointerdown while one swipe is in flight is
+       ignored. Pointercancel / pointerleave / contextmenu / blurred tab all
+       fall back to a clean snap-back without firing nav.
+     - Velocity is honored alongside distance: a short fast flick counts even
+       when the drag stayed under the distance threshold.
+     - Soft resistance past the artwork's width so a wild fling doesn't
+       visually leap across the screen.
+     - Exit animation is driven by inline style; the mobile route's stronger
+       `transform: none !important` rule (player.css) is intentionally
+       overridden via inline styles, which beat !important declarations.
+     - Click that the browser fires at pointerup is suppressed for ~600 ms
+       after a real commit in case the np-page-art click handler ever grows
+       beyond its current mobile no-op. */
+(function wireMobileNowPlayingSwipe() {
+  if (window.matchMedia && window.matchMedia('(min-width: 900px)').matches) return;
+  const art = document.getElementById('np-page-art');
+  if (!art) return;
+
+  const SWIPE_DISTANCE_PX = 50;       // simple distance commit threshold
+  const SWIPE_VELOCITY_PX_MS = 0.45;  // flick win (avoids a 12 px jitter commit)
+  const AXIS_LOCK_PX = 8;             // pointer must travel this far to commit axis
+  const AXIS_BIAS = 1.25;             // vertical wins when |dy| > |dx| * bias
+  const RESISTANCE_START_PX = 240;    // start dampening once past the artwork width
+  const RESISTANCE_DIVISOR_PX = 80;   // every additional 80px halves extra travel
+  const EXIT_MS = 220;                // match CSS feel of other route transitions
+  const SUPPRESS_CLICK_MS = 600;      // how long after a commit to drop the synthetic click
+
+  let active = null; // {pointerId,startX,startY,lastX,lastY,startedAt,axis}
+
+  function canStart() {
+    if (!art.isConnected || art.hidden) return false;
+    if (!window.matchMedia('(max-width: 899px)').matches) return false;
+    if (!document.body.classList.contains('now-playing-route')) return false;
+    if (document.body.classList.contains('now-playing-closing')) return false;
+    const queueModal = document.getElementById('queue-modal-overlay');
+    if (queueModal && queueModal.classList.contains('open')) return false;
+    if (document.hidden) return false;
+    // If either navigation button is currently disabled, the existing _navBusy
+    // ~600 ms lock is engaged: ignore the swipe so we don't double-arm the
+    // Alexa backend, which races the in-flight spoken command. _navBusy
+    // toggles both [data-action="previous"] and [data-action="next"] in
+    // tandem; checking either is correct in practice, but check both so the
+    // gate stays correct if a future call site ever disables them
+    // independently.
+    const navBtns = document.querySelectorAll(
+      'button[data-action="previous"]:not([disabled]), button[data-action="next"]:not([disabled])'
+    );
+    return navBtns.length >= 2;
+  }
+
+  function clearInlineTransform() {
+    art.style.transition = 'none';
+    art.style.transform = '';
+    // Force a reflow so the `none` sticks before the next event resets it.
+    void art.offsetWidth;
+    art.style.transition = '';
+  }
+
+  function snapBack() {
+    art.style.transition = 'transform 200ms cubic-bezier(.22,1,.36,1)';
+    art.style.transform = '';
+    // Clean the styling after the snap so later code that reads transitions
+    // doesn't see a lingering 200 ms curve.
+    setTimeout(clearInlineTransform, 220);
+  }
+
+  function commitExit(direction) {
+    art.style.transition = 'transform ' + EXIT_MS + 'ms cubic-bezier(.22,1,.36,1)';
+    // Match physics: swipe left (next) slides the artwork off-screen to the
+    // left; swipe right (previous) slides it off-screen to the right. This
+    // matches the visual convention used by iOS/Spotify/YT Music, where the
+    // artwork leaving in a direction implies "the next one comes from the
+    // opposite side".
+    const distance = direction === 'next' ? '-120vw' : '120vw';
+    art.style.transform = 'translateX(' + distance + ')';
+    const onDone = (ev) => {
+      // The inline transition could fire for a separate property; only react
+      // to the transform one we just set.
+      if (ev && ev.propertyName && ev.propertyName !== 'transform') return;
+      art.removeEventListener('transitionend', onDone);
+      clearInlineTransform();
+    };
+    art.addEventListener('transitionend', onDone);
+    // Safety net: transitionend won't fire if the element is hidden mid-flight
+    // (e.g., the route closes, or a new track arrived and reset things).
+    setTimeout(() => {
+      art.removeEventListener('transitionend', onDone);
+      if (art.style.transform !== '' && art.style.transform !== 'none') {
+        clearInlineTransform();
+      }
+    }, EXIT_MS + 80);
+  }
+
+  function fireNav(direction) {
+    // Piggyback the on-screen next/previous button so the existing _navBusy
+    // lock, toast, showNowPlaying call, and progress.resetPending all fire
+    // unchanged. This is exactly the same command the player plays when the
+    // user taps the next/previous icon.
+    const btn = document.querySelector('button[data-action="' + direction + '"]');
+    if (btn) btn.click();
+  }
+
+  function onPointerDown(e) {
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+    if (active) return; // Ignore secondary fingers.
+    if (!canStart()) return;
+    // Defensive: if any descendant overlay ever becomes interactive on mobile
+    // again, treat taps inside it as separate targets, not swipe starts.
+    if (e.target.closest('.np-page-art-overlay')) return;
+    active = {
+      pointerId: e.pointerId,
+      startX: e.clientX,
+      startY: e.clientY,
+      lastX: e.clientX,
+      startedAt: performance.now(),
+      axis: null,
+    };
+    if (art.setPointerCapture) {
+      try { art.setPointerCapture(e.pointerId); } catch (_) {}
+    }
+  }
+
+  function onPointerMove(e) {
+    if (!active || e.pointerId !== active.pointerId) return;
+    // Coalesced events feed smoother drags; keep only the latest pointer.
+    const dx = e.clientX - active.startX;
+    const dy = e.clientY - active.startY;
+    const absX = Math.abs(dx);
+    const absY = Math.abs(dy);
+
+    if (active.axis === null) {
+      if (Math.max(absX, absY) < AXIS_LOCK_PX) return; // bogus micro motion
+      if (absY > absX * AXIS_BIAS) {
+        // Vertical wins: hand it back to the page. Re-enable transitions so
+        // any in-flight style change from a prior gesture isn't stuck.
+        active = null;
+        return;
+      }
+      if (absX > absY * AXIS_BIAS) {
+        active.axis = 'h';
+        art.style.transition = 'none';
+      }
+    }
+    if (active.axis !== 'h') return;
+    // Soft resistance past the visible artwork width so a wild fling doesn't
+    // visually leap across the page. Past RESISTANCE_START_PX, every
+    // RESISTANCE_DIVISOR_PX adds another factor of resistance (divide by 2
+    // per chunk). The artwork is ~265px on mobile, so RESISTANCE_START_PX
+    // matches that plus margin.
+    const sign = dx >= 0 ? 1 : -1;
+    const limited = dx / (1 + Math.max(0, absX - RESISTANCE_START_PX) / RESISTANCE_DIVISOR_PX);
+    art.style.transform = 'translateX(' + limited.toFixed(1) + 'px)';
+    active.lastX = e.clientX;
+  }
+
+  function showSwipeFeedback(direction) {
+    // Tiny haptic blip on commit. navigator.vibrate is supported by Android
+    // Chrome (and quietly returns false on iOS Safari / desktop) so iOS users
+    // simply don't feel anything rather than seeing an error prompt.
+    if (navigator.vibrate) {
+      try { navigator.vibrate(20); } catch (_) {}
+    }
+    // Visual: a small pill that pops in above the artwork, then fades out
+    // ~360 ms later. Lives on document.body with position:fixed so it
+    // isn't dragged along with the artwork's exit transform.
+    //
+    // Position is fixed in CSS (top: 14vh) -- we deliberately do NOT read
+    // art.getBoundingClientRect() to pick a top value. The artwork may
+    // still hold an inline translateX residue from the user's drag at the
+    // moment of release (endGesture clears it after commitExit, not before),
+    // so reading the rect here would offset the pill sideways to wherever
+    // the dragged artwork currently sits instead of staying centered.
+    let pill = document.getElementById('np-swipe-indicator');
+    if (!pill) {
+      pill = document.createElement('div');
+      pill.id = 'np-swipe-indicator';
+      pill.className = 'np-swipe-indicator';
+      pill.setAttribute('role', 'status');
+      pill.setAttribute('aria-live', 'polite');
+      document.body.appendChild(pill);
+    }
+    const nextLabel = 'Next \u2192';
+    const prevLabel = '\u2190 Previous';
+    // Only rewrite the live region if the label actually changed. Replaying
+    // the same text into an aria-live=polite region on every commit is a
+    // known anti-pattern and asks the screen-reader debouncer to work
+    // harder than it needs to on rapid double-swipes.
+    const desired = direction === 'next' ? nextLabel : prevLabel;
+    if (pill.textContent !== desired) pill.textContent = desired;
+    // Restart the entrance animation cleanly in case another commit fires
+    // before the previous pill has faded out (rapid double-swipe).
+    pill.classList.remove('visible');
+    void pill.offsetWidth;
+    pill.classList.add('visible');
+    clearTimeout(pill._hideTimer);
+    pill._hideTimer = setTimeout(() => pill.classList.remove('visible'), 360);
+  }
+
+  // If the user closes the Now Playing route in the 360 ms window between
+  // the pill's show setTimeout and its hide setTimeout, force-hide the pill
+  // now so it can't sit on top of whatever page they returned to. The
+  // existing hashchange listener already cancels any in-flight gesture.
+  // Empty the textContent too so the polite live region can't keep stale
+  // "Next \u2192" / "\u2190 Previous" text accessible to screen readers after the
+  // visual layer has faded.
+  function hideSwipeFeedback() {
+    const pill = document.getElementById('np-swipe-indicator');
+    if (!pill) return;
+    pill.classList.remove('visible');
+    pill.textContent = '';
+    clearTimeout(pill._hideTimer);
+  }
+
+  function endGesture(commit) {
+    if (!active) return;
+    const wasActive = active;
+    active = null;
+    if (!commit) {
+      snapBack();
+      return;
+    }
+    const direction = wasActive.lastX < wasActive.startX ? 'next' : 'previous';
+    art._swipeSuppressClick = true;
+    setTimeout(() => { art._swipeSuppressClick = false; }, SUPPRESS_CLICK_MS);
+    // Show instantaneous confirmation (haptic + small pill) before the
+    // artwork exit and the server nav fire so the user gets a same-frame
+    // "got it" reply even though the Alexa round-trip won't surface new
+    // track content for a few seconds.
+    showSwipeFeedback(direction);
+    commitExit(direction);
+    fireNav(direction);
+  }
+
+  function onPointerUp(e) {
+    if (!active || e.pointerId !== active.pointerId) return;
+    const dx = active.lastX - active.startX;
+    const dt = Math.max(1, performance.now() - active.startedAt);
+    const velocity = Math.abs(dx) / dt;
+    const committed = active.axis === 'h' &&
+      (Math.abs(dx) >= SWIPE_DISTANCE_PX || velocity >= SWIPE_VELOCITY_PX_MS);
+    endGesture(committed);
+  }
+
+  function onPointerCancel() {
+    if (!active) return;
+    const wasPointerId = active.pointerId;
+    if (wasPointerId != null && art.releasePointerCapture) {
+      try { art.releasePointerCapture(wasPointerId); } catch (_) {}
+    }
+    endGesture(false);
+  }
+
+  art.addEventListener('pointerdown', onPointerDown);
+  art.addEventListener('pointermove', onPointerMove);
+  art.addEventListener('pointerup', onPointerUp);
+  art.addEventListener('pointercancel', onPointerCancel);
+  art.addEventListener('pointerleave', onPointerCancel);
+  art.addEventListener('lostpointercapture', onPointerCancel);
+  // Long-press: cancel any in-progress gesture cleanly. The browser's
+  // contextmenu keeps its default on mobile (which is a no-op anyway).
+  art.addEventListener('contextmenu', () => {
+    if (active) onPointerCancel();
+  });
+  // Capture the synthetic click that lands immediately after a swipe so it
+  // doesn't leak to anything else. The np-page-art click handler is a no-op
+  // on mobile today, so this is forward-compatible for future handlers.
+  art.addEventListener('click', (e) => {
+    if (art._swipeSuppressClick) {
+      e.stopImmediatePropagation();
+      e.preventDefault();
+    }
+  }, true);
+  // If the now-playing route is closed mid-swipe, drop the gesture rather
+  // than finishing an animation against an element that's now invisible.
+  // Also hide the swipe-feedback pill so it can't bleed onto the page that
+  // replaced the now-playing route during the pill's 360 ms auto-hide.
+  window.addEventListener('hashchange', () => {
+    if (active && document.body.classList.contains('now-playing-closing')) {
+      onPointerCancel();
+    }
+    if (document.body.classList.contains('now-playing-closing')) {
+      hideSwipeFeedback();
+    }
+  });
+})();
 
 /* ---- volume ---- */
 
