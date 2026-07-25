@@ -128,62 +128,69 @@ let _lastNpFingerprint = '';
 // because the server sent the original small thumbnail again.
 const _resolvedNowPlayingArt = new Map();
 const _ambientNowPlayingArt = new Map();
+const _pendingNowPlayingArt = new Map();
 
-function upgradeLowResNowPlayingArt(info, fingerprint, artwork, npPageArt) {
+function resolveNowPlayingArtwork(videoId) {
   // Jam guests receive only public playback metadata. Avoid an account-backed
   // artwork lookup; it is both unnecessary and forbidden by the guest API
   // policy.
-  if (window.JAM_GUEST) return Promise.resolve(false);
-  if (!info.video_id || typeof window.api !== 'function') return Promise.resolve(false);
+  if (window.JAM_GUEST || !videoId) return Promise.resolve('');
+  if (_resolvedNowPlayingArt.has(videoId)) return Promise.resolve(_resolvedNowPlayingArt.get(videoId));
+  if (_pendingNowPlayingArt.has(videoId)) return _pendingNowPlayingArt.get(videoId);
 
-  return window.api('/api/track/' + encodeURIComponent(info.video_id) + '/artwork')
-    .then((result) => {
-      const candidates = [];
-      (result && result.thumbnails || []).concat(result && result.thumbnail || [])
-        .forEach((url) => {
-          if (url && !candidates.includes(url)) candidates.push(url);
-        });
-      if (_lastNpFingerprint !== fingerprint || !candidates.length) return false;
-
-      const isHdArtwork = (image) => image.naturalWidth >= 1000 && image.naturalHeight >= 600;
-      const loadCandidate = (index) => {
-        if (index >= candidates.length || _lastNpFingerprint !== fingerprint) {
-          return Promise.resolve(false);
-        }
-        const highResUrl = candidates[index];
-        return new Promise((resolve) => {
-          const highResImage = new Image();
-          highResImage.onload = () => {
-            // Do not accept a candidate that is still a small shelf image.
-            // Keep trying the ranked fallbacks until a genuinely larger
-            // rendition is available.
-            if (!isHdArtwork(highResImage)) {
-              return resolve(loadCandidate(index + 1));
-            }
-            if (_lastNpFingerprint !== fingerprint) return resolve(false);
-            const url = 'url(' + highResUrl + ')';
-            artwork.forEach((el) => {
-              el.style.backgroundImage = url;
-              el.classList.remove('image-loading');
-            });
-            if (npPageArt) {
-              const npPage = npPageArt.closest('.np-page');
-              // Keep the ambient backdrop stable while upgrading the sharp
-              // foreground artwork.
-              npPage.classList.remove('image-loading');
-            }
-            _resolvedNowPlayingArt.set(info.video_id, highResUrl);
-            state._currentThumbnail = highResUrl;
-            if (state._currentTrack) state._currentTrack.thumbnail = highResUrl;
-            resolve(true);
-          };
-          highResImage.onerror = () => resolve(loadCandidate(index + 1));
-          highResImage.src = highResUrl;
-        });
+  // Probe direct image URLs immediately. Catalog lookup happens alongside the
+  // probe, so high-resolution artwork never delays the play command.
+  const directCandidates = ['maxresdefault', 'sddefault', 'hqdefault']
+    .map((rendition) => 'https://i.ytimg.com/vi/' + encodeURIComponent(videoId) + '/' + rendition + '.jpg');
+  const catalogCandidates = typeof window.api === 'function'
+    ? window.api('/api/track/' + encodeURIComponent(videoId) + '/artwork')
+      .then((result) => (result && result.thumbnails || []).concat(result && result.thumbnail || []))
+      .catch(() => [])
+    : Promise.resolve([]);
+  const isHdArtwork = (image) => image.naturalWidth >= 1000 && image.naturalHeight >= 600;
+  const loadCandidate = (candidates, index = 0) => {
+    if (index >= candidates.length) return Promise.resolve('');
+    const highResUrl = candidates[index];
+    return new Promise((resolve) => {
+      const highResImage = new Image();
+      highResImage.onload = () => {
+        if (isHdArtwork(highResImage)) return resolve(highResUrl);
+        resolve(loadCandidate(candidates, index + 1));
       };
-      return loadCandidate(0);
+      highResImage.onerror = () => resolve(loadCandidate(candidates, index + 1));
+      highResImage.src = highResUrl;
+    });
+  };
+  const request = loadCandidate(directCandidates)
+    .then((directUrl) => directUrl || catalogCandidates.then((urls) => loadCandidate([...new Set(urls.filter(Boolean))])))
+    .then((highResUrl) => {
+      if (highResUrl) _resolvedNowPlayingArt.set(videoId, highResUrl);
+      return highResUrl;
     })
-    .catch(() => false);
+    .catch(() => '')
+    .finally(() => _pendingNowPlayingArt.delete(videoId));
+  _pendingNowPlayingArt.set(videoId, request);
+  return request;
+}
+
+function preloadNowPlayingArtwork(info) {
+  if (info && info.video_id) void resolveNowPlayingArtwork(info.video_id);
+}
+
+function upgradeLowResNowPlayingArt(info, fingerprint, artwork, npPageArt) {
+  return resolveNowPlayingArtwork(info.video_id)
+    .then((highResUrl) => {
+      if (_lastNpFingerprint !== fingerprint || !highResUrl) return false;
+      const url = 'url(' + highResUrl + ')';
+      artwork.forEach((el) => {
+        el.style.backgroundImage = url;
+        el.classList.remove('image-loading');
+      });
+      if (npPageArt) npPageArt.closest('.np-page').classList.remove('image-loading');
+      state._currentThumbnail = highResUrl;
+      if (state._currentTrack) state._currentTrack.thumbnail = highResUrl;
+      return true;
+    });
 }
 
 function showNowPlaying(info) {
@@ -233,6 +240,7 @@ function showNowPlaying(info) {
   // producing a visible flash. Artwork is set when the track changes and
   // remains on that stable image for the lifetime of the track.
   const fp = (info.video_id || '') + '|' + info.title + '|' + (info.artist || '');
+  preloadNowPlayingArtwork(info);
   const changed = fp !== _lastNpFingerprint;
   if (changed) {
     _lastNpFingerprint = fp;
@@ -253,7 +261,8 @@ function showNowPlaying(info) {
         _ambientNowPlayingArt.set(info.video_id, info.thumbnail);
       }
       const ambientThumbnail = (info.video_id && _ambientNowPlayingArt.get(info.video_id)) || info.thumbnail;
-      const url = 'url(' + info.thumbnail + ')';
+      const foregroundThumbnail = cachedHighRes || info.thumbnail;
+      const url = 'url(' + foregroundThumbnail + ')';
       const ambientUrl = 'url(' + ambientThumbnail + ')';
       const artwork = [art, npPageArt].filter(Boolean);
       // Keep the compact player artwork on its original shelf thumbnail.
@@ -747,6 +756,7 @@ async function playResult(item, suppressRadio, forceRadio, openPlaybackPage) {
   const serial = selectedSerial();
   if (!serial) return;
   state.lastActionAt = Date.now();
+  preloadNowPlayingArtwork(item);
   toast(forceRadio
     ? 'Starting radio from \u201c' + item.title + '\u201d\u2026'
     : 'Playing \u201c' + item.title + '\u201d\u2026');
@@ -1248,4 +1258,5 @@ function updateUrlBar() {
   window.clearUiAfterPlaybackReset = clearUiAfterPlaybackReset;
   window.doClearAll = doClearAll;
   window.updateUrlBar = updateUrlBar;
+  window.preloadNowPlayingArtwork = preloadNowPlayingArtwork;
 })();

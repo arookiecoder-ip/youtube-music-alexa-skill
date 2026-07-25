@@ -124,6 +124,7 @@
       const data = await api('/alexa/play/', { serial, query });
       const npInfo = data.now_playing || { title: query, artist: '', thumbnail: '' };
       state()._lastPlayAttemptVideoId = data.video_id || npInfo.video_id;
+      if (window.preloadNowPlayingArtwork) window.preloadNowPlayingArtwork(npInfo);
       if (window.showNowPlaying) window.showNowPlaying(npInfo);
       if (window.progress) window.progress.resetPending(npInfo.video_id);
       state().isPlaying = true;

@@ -1049,6 +1049,7 @@ async function playFromQueue(item, queueIndex, openPlaybackPage) {
   if (!serial) return;
   state.lastActionAt = Date.now();
   if (!item.video_id) { toast('That recommendation cannot be played.', 'error'); return; }
+  if (window.preloadNowPlayingArtwork) window.preloadNowPlayingArtwork(item);
   toast('Playing \u201c' + item.title + '\u201d\u2026');
   try {
     // Pass along metadata so a song that isn't in the server's queue yet (e.g.
