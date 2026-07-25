@@ -185,6 +185,11 @@ To update the server after future code changes:
 docker compose up -d --build ytmusic
 ```
 
+This deliberately builds and recreates only the Flask service. Do not use the
+unscoped `docker compose up -d --build` for ordinary app changes: it also
+rebuilds and recreates `youtube-browser`, even when Docker can satisfy every
+one of its layers from cache.
+
 ---
 
 ## 9. Verify it's working

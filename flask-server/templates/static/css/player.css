@@ -1457,6 +1457,16 @@ body.results-open .player-section.is-visible { transform: none; }
   gap: 12px;
   min-width: 0;
 }
+/* `.np` is also used by the old inline player, where its entrance animation
+   is useful. In the persistent mini player it can restart when the expanded
+   player is dismissed, briefly fading the song details and cover artwork.
+   Keep this fixed-bar cluster on a stable composited layer instead. */
+.player-section .player-left.np {
+  animation: none;
+  transform: translateZ(0);
+  backface-visibility: hidden;
+  -webkit-backface-visibility: hidden;
+}
 .player-section .np-art {
   width: 56px;
   height: 56px;

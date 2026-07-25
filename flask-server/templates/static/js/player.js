@@ -226,8 +226,13 @@ function showNowPlaying(info) {
     }
     return;
   }
-  // Fingerprint: skip all DOM work when nothing changed.
-  const fp = (info.video_id || '') + '|' + info.title + '|' + (info.artist || '') + '|' + (info.thumbnail || '');
+  // Fingerprint: the track identity deliberately excludes the thumbnail URL.
+  // The now-playing poll can return a differently-sized (or signed) URL for
+  // the same cover. Treating that as a new track rebuilt the mini-player
+  // title and background image while the full player was being minimized,
+  // producing a visible flash. Artwork is set when the track changes and
+  // remains on that stable image for the lifetime of the track.
+  const fp = (info.video_id || '') + '|' + info.title + '|' + (info.artist || '');
   const changed = fp !== _lastNpFingerprint;
   if (changed) {
     _lastNpFingerprint = fp;
