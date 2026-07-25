@@ -886,7 +886,7 @@ main:has(#now-playing-section:not([hidden])) {
     top: 0 !important;
     left: 0 !important;
     right: 0 !important;
-    bottom: 82px !important;
+    bottom: var(--playbar-h-mobile) !important;
     width: 100% !important;
     height: auto !important;
     max-height: none !important;
@@ -1009,9 +1009,9 @@ main:has(#now-playing-section:not([hidden])) {
   /* Same compact player geometry before and during popup. */
   body.now-playing-route .player-section,
   body.now-playing-closing .player-section {
-    height: 82px !important;
-    min-height: 82px !important;
-    padding: 8px 10px 5px !important;
+    height: var(--playbar-h-mobile) !important;
+    min-height: var(--playbar-h-mobile) !important;
+    padding: 5px 10px !important;
     border-radius: 0 !important;
     bottom: 0 !important;
     transform: none !important;
@@ -1942,7 +1942,7 @@ body.now-playing-route .player-section .player-expand-btn svg {
 
 /* Compact mobile player only. Desktop playbar remains unchanged. */
 @media (max-width: 899px) {
-  :root { --playbar-h-mobile: 84px; }
+  :root { --playbar-h-mobile: 72px; }
 
   .player-section,
   main.has-queue .player-section,
@@ -2003,9 +2003,9 @@ body.now-playing-route .player-section .player-expand-btn svg {
     right: 0 !important;
     bottom: 0 !important;
     width: 100% !important;
-    height: 82px !important;
-    min-height: 82px !important;
-    padding: 8px 10px 5px !important;
+    height: var(--playbar-h-mobile) !important;
+    min-height: var(--playbar-h-mobile) !important;
+    padding: 5px 10px !important;
     margin: 0 !important;
     box-sizing: border-box !important;
     grid-template-columns: minmax(0, 1fr) auto;
@@ -2029,9 +2029,9 @@ body.now-playing-route .player-section .player-expand-btn svg {
     gap: 8px;
   }
   body .player-section .np-art {
-    width: 38px;
-    height: 38px;
-    flex: 0 0 38px;
+    width: 34px;
+    height: 34px;
+    flex: 0 0 34px;
   }
   body .player-section .np-info { min-width: 0; }
   body .player-section .np-title,
@@ -2088,14 +2088,16 @@ body.now-playing-route .player-section .player-expand-btn svg {
     z-index: 2;
   }
   body .player-section #progress {
-    position: fixed !important;
-    top: auto !important;
-    bottom: calc(82px - 10px) !important;
+    /* Keep the visual-only timeline inside the mini player. The former
+       fixed 20px hit area straddled the player's edge after it was shortened. */
+    position: absolute !important;
+    top: 0 !important;
+    bottom: auto !important;
     left: 0 !important;
     right: 0 !important;
     display: block !important;
     width: 100% !important;
-    height: 20px !important;
+    height: 3px !important;
     margin: 0 !important;
     z-index: 652 !important;
   }
@@ -2113,30 +2115,26 @@ body.now-playing-route .player-section .player-expand-btn svg {
   body .player-section #progress-track {
     display: block !important;
     position: relative !important;
-    height: 20px !important;
-    min-height: 20px !important;
+    height: 3px !important;
+    min-height: 3px !important;
     padding: 0 !important;
-    background: linear-gradient(
-      to bottom,
-      transparent calc(50% - 1.5px),
-      #333 calc(50% - 1.5px),
-      #333 calc(50% + 1.5px),
-      transparent calc(50% + 1.5px)
-    ) !important;
+    background: #333 !important;
     background-clip: border-box !important;
     box-shadow: none !important;
     overflow: visible !important;
-    touch-action: none;
+    /* The mini-player timeline is visual only on touch devices. */
+    pointer-events: none;
+    touch-action: auto;
   }
   body .player-section #progress-fill {
     display: block !important;
-    top: 50% !important;
+    top: 0 !important;
     height: 3px !important;
     background: var(--accent) !important;
-    transform: translateY(-50%) !important;
+    transform: none !important;
   }
   body .player-section #progress-handle {
-    display: block !important;
+    display: none !important;
     top: 50% !important;
     width: 14px !important;
     height: 14px !important;
@@ -2162,14 +2160,14 @@ body.now-playing-route .player-section .player-expand-btn svg {
     display: none !important;
   }
 
-  /* The compact player is fixed 8px above the viewport and is 82px tall.
+  /* The compact player is fixed at the viewport edge and is deliberately thin.
      Reserve that exact footprint in the document so the final playlist/search
      rows can scroll completely above the player instead of ending beneath it. */
   body main {
     min-height: 100dvh !important;
     height: auto !important;
     overflow: visible !important;
-    padding-bottom: calc(82px + 8px + 20px + env(safe-area-inset-bottom, 0px)) !important;
+    padding-bottom: calc(var(--playbar-h-mobile) + 20px + env(safe-area-inset-bottom, 0px)) !important;
   }
 
   body.playlists-route,

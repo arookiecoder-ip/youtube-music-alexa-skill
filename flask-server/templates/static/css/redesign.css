@@ -14,7 +14,7 @@
   --rail-w-mini: 76px;
   --topbar-h: 64px;
   --playbar-h: 72px;
-  --playbar-h-mobile: 112px;
+  --playbar-h-mobile: 72px;
   --queue-w: 320px;
   --accent-grad: linear-gradient(135deg, var(--accent), #ff6a00);
   --shell-bg: #030303;

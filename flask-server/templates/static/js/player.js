@@ -626,6 +626,9 @@ const progress = window.progress = (function () {
     updateTooltip(e, e.currentTarget);
   }
   function beginDrag(e) {
+    // The compact mobile player is display-only: dragging its progress strip
+    // competes with page gestures and is deliberately disabled there.
+    if (e.currentTarget === track && window.matchMedia('(max-width: 899px)').matches) return;
     if (awaitingStart) return;
     // Track which progress-track was touched
     _activeTrack = e.currentTarget;
