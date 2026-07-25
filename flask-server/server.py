@@ -309,6 +309,25 @@ _SPA_DOCUMENT_PATHS = (
     '/explore', '/library', '/history', '/mood', '/now-playing',
 )
 
+# Browsers (and bookmark/email/share-link generators) routinely normalize a
+# pasted URL to its canonical form with a trailing `/`. Without this set
+# every shared album/search/playlist/mood/art­ist URL would silently fall
+# through to the API-key path and bounce to /login/, which is the bug
+# "copy-paste URL fails while click navigation works":
+#   /album/   →  request.path  =  "/album/"  NOT IN  _SPA_DOCUMENT_PATHS
+# So the SPA bypass also accepts those slashed variants. The lone exception
+# is `/history/` itself — that exact path is owned by the JSON listening-
+# history endpoint, which must stay on the API authorization + JSON-error
+# path so direct `/history/` calls from device clients keep returning data.
+_SPA_DOCUMENT_PATH_SLASH_VARIANTS = frozenset(
+    p + '/' for p in _SPA_DOCUMENT_PATHS
+) - {'/history/'}
+
+# Whichever variant the request arrived in, we look up query-field rules and
+# membership checks against this canonical set so there is one place to add
+# new SPA routes.
+_SPA_DOCUMENT_PATHS_ALL = frozenset(_SPA_DOCUMENT_PATHS) | _SPA_DOCUMENT_PATH_SLASH_VARIANTS
+
 _SPA_QUERY_FIELDS = {
     '/search': ('q',), '/playlist': ('list',), '/album': ('browse',),
     '/artist': ('channel',), '/artist/songs': ('channel',),
@@ -328,10 +347,18 @@ def _safe_spa_target(value, default='/home'):
     if parsed.scheme or parsed.netloc or parsed.fragment:
         return default
     path = parsed.path or ''
-    if path != '/' and path not in _SPA_DOCUMENT_PATHS:
+    # Browsers, mail clients, and share-link builders routinely append a
+    # trailing `/`. Treat the slashed variant exactly like the canonical
+    # slash-less form so the original destination survives a login redirect
+    # — otherwise a cookie-bearing owner who pastes `/album/?browse=ABC`
+    # while signed out would complete login and land on `/home`, losing
+    # the album they were trying to open.
+    normalized_path = path.rstrip('/') if path else ''
+    if normalized_path and normalized_path != '/' and normalized_path not in _SPA_DOCUMENT_PATHS:
         return default
+    canonical_path = normalized_path or '/'
     query = parse_qs(parsed.query, keep_blank_values=True)
-    allowed = _SPA_QUERY_FIELDS.get(path, ())
+    allowed = _SPA_QUERY_FIELDS.get(canonical_path, ())
     required = allowed[:1]
     if any(not query.get(name) or not query[name][0] for name in required):
         return default
@@ -339,7 +366,7 @@ def _safe_spa_target(value, default='/home'):
     for name in allowed:
         if query.get(name) and query[name][0]:
             clean.append((name, query[name][0]))
-    return path + (('?' + urlencode(clean)) if clean else '')
+    return canonical_path + (('?' + urlencode(clean)) if clean else '')
 
 # Endpoints reachable with a logged-in web-remote session cookie (so the long
 # API key stays out of the browser URL). Everything here plus the remote page.
@@ -618,9 +645,14 @@ def require_api_key():
     _ensure_db()
     path = request.path.rstrip('/') or '/'
     # Let the shared shell renderer apply the same owner/jam/login policy as
-    # the public root document. Match request.path exactly so `/history/` and
-    # `/history/<id>` continue through API authorization and JSON errors.
-    if request.method in ('GET', 'HEAD') and request.path in _SPA_DOCUMENT_PATHS:
+    # the public root document. The SPA bypass accepts both the slash-less
+    # canonical paths (`/album`) and their slashed variants (`/album/`) so a
+    # pasted URL whose browser normalized the trailing slash still serves
+    # the same shell instead of bouncing to /login. The exact `/history/`
+    # path is intentionally NOT bypassed — that endpoint serves JSON for
+    # the device and must keep going through API authorization so it
+    # returns a machine-readable 401/JSON error on failure.
+    if request.method in ('GET', 'HEAD') and request.path in _SPA_DOCUMENT_PATHS_ALL:
         return None
     if path in _PUBLIC_PATHS or any(request.path.startswith(p) for p in _PUBLIC_PREFIXES):
         return None
@@ -5952,8 +5984,70 @@ async def api_get_library_playlist(pl_id):
                 info['title'] = 'Curated Mix'
         return jsonify(page_response(info))
     except Exception as e:
-        logger.error('[api/library/playlists/%s] failed: %s', pl_id, e)
-        return jsonify({'error': str(e)}), 500
+        # ytmusicapi surfaces a handful of phrases for ids that aren't a
+        # playable playlist — most commonly an album browse_id (MPREb_xxx)
+        # mis-routed from the search / explore shelves. Map matched phrases
+        # to a clean JSON 404 so the SPA's 404-fallback can route the call
+        # to /api/playlists/<id> (or to /api/album/<id> client-side).
+        msg = str(e).lower() if e else ''
+        # AUTH-SHAPED FIRST. A ytmusicapi message like "401 Unauthorized" can
+        # substring-match an *unrelated* playlist-not-found needle (e.g. if
+        # ytmusicapi adds "playlist" to its auth error wording in the future).
+        # Mapping it to 404 instead of 401 would send the SPA into its
+        # 404-fallback loop (it would re-issue forever) instead of triggering
+        # its auth gate. Catch auth-shape messages before the not-found
+        # classifier so this can never regress.
+        # Phrasing check: '401' alone covers HTTP-status wrapping; the other
+        # three are human-string variants ytmusicapi / httpx / urllib emit. None
+        # of these substring-matches any not-found needle below, so reordering
+        # does not regress the existing 404 cases.
+        if any(needle in msg for needle in (
+                '401', 'unauthorized', 'authentication required',
+                'invalid credentials')):
+            logger.warning('[api/library/playlists/%s] upstream auth: %s',
+                           pl_id, e)
+            return jsonify({'error': {
+                'code': 'unauthorized',
+                'message': 'YouTube Music authentication required.',
+            }}), 401
+        # Not-found-shaped: ytmusicapi raising one of these phrases on a
+        # playlist id means it really isn't a playlist (often it's actually
+        # an album id like `MPREb_*` that someone mis-routed — see the
+        # client-side guard in search.js). Map to JSON 404 with code
+        # `not_a_playlist` so the SPA can route to /api/album/<id> instead
+        # of looping.
+        # Needle choice: 'http 400' is preferred over bare 'bad request' which
+        # collides with unrelated validation errors elsewhere in the request
+        # lifecycle. The other phrasings are extracted from ytmusicapi's
+        # observed wording across its httpx wrapper, urllib, and parsed JSON
+        # error fallbacks.
+        if any(needle in msg for needle in (
+                'invalid argument', 'invalid id',
+                'playlist not found', 'playlist does not exist',
+                'no such playlist',
+                'http 400',
+                'cannot find playlist', 'not a valid playlist',
+                'unsupported playlist')):
+            logger.info('[api/library/playlists/%s] upstream miss: %s',
+                        pl_id, e)
+            return jsonify({'error': {
+                'code': 'not_a_playlist',
+                'message': f'{pl_id!r} is not a playable playlist id.',
+            }}), 404
+        # Default: NEVER leak str(e) to the client. ytmusicapi phrasing
+        # changes over time and a stale needle list must not surface a
+        # raw exception string in the browser console (also: leaks
+        # internal class names like `YTMusicError`, internal request IDs,
+        # etc.). Log full exception server-side; return a sanitised 502.
+        # Include pl_id in the message (in quotes, so the response body is
+        # bounded) so a user reporting a 502 to support can search their
+        # server logs by the exact id that surfaced the error.
+        logger.error('[api/library/playlists/%s] upstream error: %s',
+                     pl_id, e)
+        return jsonify({'error': {
+            'code': 'bad_gateway',
+            'message': f'ytmusicapi error for {pl_id!r} (see server logs).',
+        }}), 502
 
 @app.route("/api/library/playlists/<pl_id>", methods=["PATCH"])
 async def api_rename_library_playlist(pl_id):
@@ -6645,12 +6739,25 @@ def spa_document():
     return _render_root_shell()
 
 
+def _spa_endpoint_name(_spa_document_path):
+    """Distinct endpoint names per canonical path. Without the trailing-slash
+    suffix here, registering `/album` and `/album/` would collide on the same
+    endpoint name and Flask would raise `AssertionError`. `_spa_document_path`
+    itself already includes the trailing slash for the slash variant, so the
+    path itself naturally differentiates the two before naming."""
+    return 'spa_document_' + _spa_document_path.strip('/').replace('/', '_').replace('-', '_')
+
 for _spa_document_path in _SPA_DOCUMENT_PATHS:
+    # strict_slashes=False lets each canonical rule dispatch both `/album` and
+    # `/album/` without forcing a 308 redirect that could clobber the
+    # original query string. This is cleaner than registering two rules per
+    # path because it sidesteps duplicate-endpoint mapping entirely.
     app.add_url_rule(
         _spa_document_path,
-        endpoint='spa_document_' + _spa_document_path.strip('/').replace('/', '_').replace('-', '_'),
+        endpoint=_spa_endpoint_name(_spa_document_path),
         view_func=spa_document,
         methods=['GET', 'HEAD'],
+        strict_slashes=False,
     )
 
 

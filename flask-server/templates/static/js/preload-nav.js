@@ -186,7 +186,42 @@
     });
   }
 
+  // YTM uses `MPREb_*` browse ids for album records (and a couple of legacy
+  // variants of the same prefix). When a card from explore/home shelves
+  // mis-routes to the playlist fetcher with one of these ids, hitting
+  // /api/library/playlists/<id> just wastes an upstream call and surfaces a
+  // 404 in the console. Use this to short-circuit at the source.
+  function _looksLikeAlbumBrowseId(id) {
+    if (!id) return false;
+    // Case-fold both the input AND the prefix string before comparing —
+    // `.startsWith` is case-sensitive, so a mixed-case literal `MPREb_`
+    // would never match an already-uppercased id, which is what
+    // `.toUpperCase()` gives us here. The fold also catches hand-typed
+    // pastes and any code path that lowercases the id first.
+    //
+    // `MPREB_` is the verified YTM album browse-id prefix. Tight wins:
+    // a too-narrow check at worst sends a real id to #playlist/ and
+    // falls through to the server's clean 404; a too-wide check wastes
+    // an upstream /api/album/ round-trip. Add new prefixes only when
+    // a real YTM payload confirms them.
+    var s = String(id).toUpperCase();
+    return s.startsWith('MPREB_');
+  }
+
   function _fetchPlaylist(plId, signal) {
+    // Album-shaped browse ids are not playlist ids; the library endpoint
+    // can't load them and the server would return a clean 404 (good) but
+    // still spend an upstream round-trip (bad). Source the preload from
+    // /api/album/<id> so the right kind of content drives the render and
+    // the user lands on a populated list, not an empty one.
+    if (_looksLikeAlbumBrowseId(plId)) {
+      return fetch('/api/album/' + encodeURIComponent(plId), {
+        credentials: 'same-origin', cache: 'no-store', signal: signal,
+      }).then(function (r) {
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        return r.json();
+      });
+    }
     // Try the library endpoint first for personal playlists and Liked Music.
     // Home shelves can also contain public/curated playlists, which use the
     // public endpoint when the library endpoint returns 404.
@@ -468,6 +503,20 @@
 
   window.preloadNavigatePlaylist = function (plId) {
     if (!plId) return;
+    // Some shelves miscategorize an album browse_id as a playlist
+    // (search.js uses `resultType`, home.js uses `kind` — neither is a
+    // ground-truth signal). Without this guard a click on an MPREb_ row
+    // would land on #playlist/<id>, but the playlist view's renderer was
+    // built against fields the album response doesn't carry (notably
+    // audioPlaylistId, which the queue-bridge path requires). Re-route
+    // album-shaped ids at the navigator boundary so the SPA URL strictly
+    // matches the content the page renderer is built for. The fetcher
+    // also has this guard at the network layer; this guard works at the
+    // URL layer so the user never lands on the wrong page in the first
+    // place — belt + suspenders.
+    if (_looksLikeAlbumBrowseId(plId)) {
+      return window.preloadNavigateAlbum(plId);
+    }
     var route = '#playlist/' + encodeURIComponent(plId);
     window.navigateWithPreload(route, function (signal) {
       return _fetchPlaylist(plId, signal);

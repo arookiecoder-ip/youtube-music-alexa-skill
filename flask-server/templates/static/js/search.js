@@ -470,8 +470,21 @@ function renderResults() {
              if (window.preloadNavigateAlbum) window.preloadNavigateAlbum(browseId);
              else window.navigateTo('#album/' + encodeURIComponent(browseId));
            } else if (type === 'playlist' && browseId) {
-             if (window.preloadNavigatePlaylist) window.preloadNavigatePlaylist(browseId);
-             else window.navigateTo('#playlist/' + encodeURIComponent(browseId));
+             // Defense-in-depth: a mis-classified `type === 'playlist'` row
+             // may carry a browseId that's actually an album browse-id
+             // (`MPREb_*`). Older client bundles (without the round-3 guard
+             // in preload-nav.js:preloadNavigatePlaylist) would route this
+             // straight to /api/library/playlists/<id>, where the server
+             // logs a 500. Filter the prefix here so even a stale bundle
+             // produces a redirect to the album endpoint, not a 500.
+             if (String(browseId).toUpperCase().startsWith('MPREB_')) {
+               if (window.preloadNavigateAlbum) window.preloadNavigateAlbum(browseId);
+               else window.navigateTo('#album/' + encodeURIComponent(browseId));
+             } else if (window.preloadNavigatePlaylist) {
+               window.preloadNavigatePlaylist(browseId);
+             } else {
+               window.navigateTo('#playlist/' + encodeURIComponent(browseId));
+             }
            }
         }
       });
@@ -617,8 +630,21 @@ function renderResults() {
           if (window.preloadNavigateAlbum) window.preloadNavigateAlbum(item.browseId);
           else window.navigateTo('#album/' + encodeURIComponent(item.browseId));
         } else if (item.resultType === 'playlist' && browseId) {
-          if (window.preloadNavigatePlaylist) window.preloadNavigatePlaylist(browseId);
-          else window.navigateTo('#playlist/' + encodeURIComponent(browseId));
+          // Defense-in-depth: a mis-classified `resultType === 'playlist'`
+          // row may carry a browseId that's actually an album browse-id
+          // (`MPREb_*`). Older client bundles (without the round-3 guard
+          // in preload-nav.js:preloadNavigatePlaylist) would route this
+          // straight to /api/library/playlists/<id>, where the server
+          // logs a 500. Filter the prefix here so even a stale bundle
+          // produces a redirect to the album endpoint, not a 500.
+          if (String(browseId).toUpperCase().startsWith('MPREB_')) {
+            if (window.preloadNavigateAlbum) window.preloadNavigateAlbum(browseId);
+            else window.navigateTo('#album/' + encodeURIComponent(browseId));
+          } else if (window.preloadNavigatePlaylist) {
+            window.preloadNavigatePlaylist(browseId);
+          } else {
+            window.navigateTo('#playlist/' + encodeURIComponent(browseId));
+          }
         } else {
           playTopResult();
         }

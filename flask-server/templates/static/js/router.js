@@ -16,6 +16,9 @@
   var SUPPORTED_PATHS = Object.keys(STATIC_ROUTES).concat([
     '/', '/search', '/playlist', '/album', '/artist', '/artist/songs', '/mood'
   ]);
+  // Slash variants (`/album/`, `/artist/songs/`) are normalized to canonical
+  // form by urlToRoute() before isSupportedPath() is consulted, so they
+  // route correctly without being listed explicitly here.
 
   function validValue(value) {
     return typeof value === 'string' && value.length > 0 && value.length <= MAX_ROUTE_VALUE &&
@@ -99,7 +102,14 @@
   }
 
   function urlToRoute(locationLike) {
-    var pathname = locationLike.pathname || '/';
+    var rawPathname = locationLike.pathname || '/';
+    // Browsers and share-link generators routinely add a trailing `/` to a
+    // pasted URL. Strip it for route matching so `/album/?browse=ABC` and
+    // `/album?browse=ABC` resolve to the same `#album/<id>` route, and
+    // `/search/?q=hello` lands on the search results page instead of `#home`.
+    // Falls back to `/` when stripping would otherwise yield an empty string
+    // (single `/`, malformed `//`, etc.) so downstream comparisons stay sane.
+    var pathname = rawPathname.replace(/\/+$/, '') || '/';
     var query = locationLike.searchParams || new URLSearchParams(locationLike.search || '');
     if (pathname === '/') return '#home';
     if (STATIC_ROUTES[pathname]) return STATIC_ROUTES[pathname];
@@ -159,11 +169,15 @@
   };
 
   // ---- Body scroll lock for the mobile full player ----
-  // `body { overflow: hidden }` alone is not enough on iOS Safari — the html
-  // viewport still scrolls on touch and touchmove chains through the overlay
-  // edges to scroll the page underneath. Pinning body to the viewport at its
-  // current scroll offset is the cross-browser workaround; the negative top
-  // preserves visual position so reopening the page after close stays put.
+  // Modern mobile browsers respect `body + html { overflow: hidden }` for
+  // background scroll lock. Earlier versions of this fix used `body
+  // { position: fixed; top: -scrollY }` to thwart iOS Safari scroll-chain,
+  // but pinning the body in place introduced a fresh bug: removing the pin
+  // at close time produced a viewport reflow that the bottom-fixed mini-
+  // player visibly inherited as a brief resize animation. CSS-only lock
+  // avoids that reflow while still blocking background scroll on Android,
+  // modern iOS, and any browser that supports `overscroll-behavior: none`
+  // (Chrome 63+, Safari 16+, Firefox 59+).
   // Desktop is left alone because the body already scrolls behind the
   // (intentionally) scrollable desktop overlay.
   function _isMobileViewport() {
@@ -175,60 +189,26 @@
     if (window.__npScrollLocked) return;
     var y = window.scrollY;
     window.__npScrollLocked = true;
-    var b = document.body;
-    var h = document.documentElement;
-    b.dataset.npScrollY = String(y);
-    b.style.position = 'fixed';
-    b.style.top = '-' + y + 'px';
-    b.style.left = '0';
-    b.style.right = '0';
-    b.style.width = '100%';
-    b.style.overflow = 'hidden';
-    b.style.overscrollBehavior = 'none';
-    // Lock the html viewport directly too. Safari's default html { overflow:
-    // visible } keeps the document scrollable even when body is fixed, and
-    // older mobile browsers don't support `html:has(body.now-playing-route)`
-    // so the JS form is the cross-browser fallback.
-    h.style.overflow = 'hidden';
-    h.style.overscrollBehavior = 'none';
+    document.body.dataset.npScrollY = String(y);
+    document.body.style.overflow = 'hidden';
+    document.documentElement.style.overflow = 'hidden';
+    document.body.style.overscrollBehavior = 'none';
+    document.documentElement.style.overscrollBehavior = 'none';
   }
   function unlockPlayerScroll() {
     if (!window.__npScrollLocked) return;
     window.__npScrollLocked = false;
-    var b = document.body;
-    var h = document.documentElement;
-    var y = parseInt(b.dataset.npScrollY || '0', 10);
-    b.style.removeProperty('position');
-    b.style.removeProperty('top');
-    b.style.removeProperty('left');
-    b.style.removeProperty('right');
-    b.style.removeProperty('width');
-    b.style.removeProperty('overflow');
-    b.style.removeProperty('overscroll-behavior');
-    h.style.removeProperty('overflow');
-    h.style.removeProperty('overscroll-behavior');
-    delete b.dataset.npScrollY;
-    // Restore scroll on the next frame so layout has time to settle back
-    // before we re-anchor window.scrollY; otherwise the page briefly paints
-    // at the top before snapping to the saved offset.
+    var y = parseInt(document.body.dataset.npScrollY || '0', 10);
+    document.body.style.removeProperty('overflow');
+    document.body.style.removeProperty('overscroll-behavior');
+    document.documentElement.style.removeProperty('overflow');
+    document.documentElement.style.removeProperty('overscroll-behavior');
+    delete document.body.dataset.npScrollY;
+    // Restore the saved scroll position so closing the player never yanks
+    // the user back to the top of the page they were on. Use rAF so the
+    // document's overflow restoration has settled before we scroll.
     requestAnimationFrame(function() { window.scrollTo(0, y); });
   }
-  // While the player is open, the user may rotate their device or resize
-  // the window across the 900px breakpoint. Re-applying the mobile lock or
-  // clearing it on the matching side keeps inline body styles in sync with
-  // the active breakpoint so a desktop-resize-mid-overlay cannot leave a
-  // stray position:fixed body or a stale top:-scrollY offset.
-  window.addEventListener('resize', function() {
-    if (!document.body.classList.contains('now-playing-route')) return;
-    var wasLocked = window.__npScrollLocked;
-    var savedY = parseInt(document.body.dataset.npScrollY || String(window.scrollY), 10);
-    if (wasLocked) unlockPlayerScroll();
-    if (_isMobileViewport()) {
-      window.__npScrollLocked = false; // force a re-lock
-      window.scrollTo(0, savedY);
-      lockPlayerScroll();
-    }
-  });
 
   function setHidden(selector, hidden) {
     document.querySelectorAll(selector).forEach(function(el) {
