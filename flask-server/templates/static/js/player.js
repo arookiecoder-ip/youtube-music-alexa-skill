@@ -810,6 +810,7 @@ function syncModalScrollLock() {
 (function wireNowPlayingRoute() {
   const playerBar = document.querySelector('.player-section');
   const expandBtn = document.getElementById('player-expand-btn');
+  const compactTrackInfo = document.querySelector('.player-section .np-info');
   if (!playerBar) return;
 
   function openNowPlaying(event) {
@@ -852,7 +853,26 @@ function syncModalScrollLock() {
 
   if (expandBtn) expandBtn.addEventListener('click', openNowPlaying);
   for (const title of [document.getElementById('np-title'), document.getElementById('np-page-title')]) {
-    if (title) title.addEventListener('click', openCurrentTrackAlbum);
+    if (!title) continue;
+    title.addEventListener('click', (event) => {
+      // On the compact mobile player, the track details are one clear target:
+      // open the full player. Keep the title-to-album shortcut on desktop and
+      // in the expanded player.
+      if (title.id === 'np-title' && window.matchMedia('(max-width: 899px)').matches) {
+        openNowPlaying(event);
+        return;
+      }
+      openCurrentTrackAlbum(event);
+    });
+  }
+  if (compactTrackInfo) {
+    // Artist names are rendered as links. Capture their click before the link
+    // handler so title and artist taps behave identically on a mobile mini
+    // player instead of navigating away to an artist page.
+    compactTrackInfo.addEventListener('click', (event) => {
+      if (!window.matchMedia('(max-width: 899px)').matches) return;
+      openNowPlaying(event);
+    }, true);
   }
   playerBar.addEventListener('click', (event) => {
     if (event.target.closest('button, a, input, [role="slider"], .progress-track, .artist-name')) return;
@@ -1133,10 +1153,6 @@ for (const btn of document.querySelectorAll('[data-action="previous"], [data-act
     const serial = selectedSerial();
     if (!serial) return;
     const navigationDirection = btn.dataset.action === 'next' ? 'next' : 'previous';
-    if (window.optimisticallyAdvanceMobileInlineQueue) {
-      const rendered = window.optimisticallyAdvanceMobileInlineQueue(navigationDirection);
-      if (!rendered && window.animateMobileInlineQueue) window.animateMobileInlineQueue(navigationDirection);
-    }
     _navBusy = true;
     document.querySelectorAll('[data-action="previous"], [data-action="next"]')
       .forEach(b => b.disabled = true);

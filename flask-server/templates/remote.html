@@ -622,10 +622,16 @@
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"></path></svg>
           </button>
         </div>
-        <div class="mobile-queue-drag-region" id="mobile-queue-handle" role="button" aria-label="Drag Queue up">
-          <div class="mobile-queue-label">Queue</div>
-          <div class="mobile-inline-queue" id="mobile-inline-queue" aria-label="Current queue songs"></div>
-        </div>
+        <button class="mobile-queue-button" id="queue-modal-btn" type="button" aria-label="Open queue">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M4 6h16"></path>
+            <path d="M4 12h16"></path>
+            <path d="M4 18h10"></path>
+            <path d="M18 16v4"></path>
+            <path d="M16 18h4"></path>
+          </svg>
+          Queue
+        </button>
       </div>
       <div class="np-page-right">
         <div class="np-page-queue-head">UP NEXT</div>

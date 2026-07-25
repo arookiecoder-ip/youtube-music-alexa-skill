@@ -335,7 +335,6 @@ window.showQueue = showQueue;
 // Called by the router when navigating to #now-playing and by SSE updates.
 function renderNpQueue(queue, currentIndex) {
   var list = document.getElementById('np-queue-list');
-  renderMobileInlineQueue(queue, currentIndex);
   if (!list) return;
   if (!queue || queue.length === 0) {
     list.innerHTML = '<div style="padding:24px;color:var(--muted);font-size:.88rem">No queue</div>';
@@ -386,85 +385,6 @@ function renderNpQueue(queue, currentIndex) {
   if (active) requestAnimationFrame(function() { active.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); });
 }
 window.renderNpQueue = renderNpQueue;
-
-function renderMobileInlineQueue(queue, currentIndex) {
-  var list = document.getElementById('mobile-inline-queue');
-  if (!list) return;
-  if (!Array.isArray(queue) || !queue.length) {
-    list.replaceChildren();
-    list._mobileInlineQueueIndex = null;
-    return;
-  }
-  var start = Math.max(0, Number(currentIndex) || 0);
-  var previous = list._mobileInlineQueueIndex;
-  var transitionPrimed = list._mobileInlineQueueTransitionPrimed;
-  var isMobile = window.matchMedia('(max-width: 899px)').matches;
-  var existingRows = Array.from(list.querySelectorAll(':scope > .queue-swipe-wrapper'));
-  var sameQueue = existingRows.length === queue.length - start &&
-    existingRows.every(function(row, index) {
-      return row.dataset.videoId === (queue[start + index].video_id || '');
-    });
-  if (list._mobileInlineQueueIndex === start && sameQueue) {
-    existingRows.forEach(function(row, index) {
-      var item = row.querySelector('.queue-item');
-      var queueIndex = start + index;
-      if (item) {
-        item.classList.toggle('active', queueIndex === start);
-        item.classList.toggle('playing', queueIndex === start && state.isPlaying);
-      }
-    });
-    return;
-  }
-  var direction = isMobile && !transitionPrimed && Number.isFinite(previous) && start !== previous
-    ? (start > previous ? 'next' : 'previous')
-    : '';
-  var end = queue.length;
-  var rows = [];
-  for (var i = start; i < end; i++) {
-    var row = _buildQueueRow(list, queue[i], i, start, new Map());
-    if (direction) row.classList.add('mobile-queue-shift-' + direction);
-    rows.push(row);
-  }
-  list.replaceChildren.apply(list, rows);
-  list._mobileInlineQueueIndex = start;
-  list._mobileInlineQueueTransitionPrimed = false;
-}
-
-function animateMobileInlineQueue(direction) {
-  var list = document.getElementById('mobile-inline-queue');
-  if (!list || !window.matchMedia('(max-width: 899px)').matches) return;
-  if (direction !== 'next' && direction !== 'previous') return;
-  var className = 'mobile-queue-shift-' + direction;
-  list._mobileInlineQueueTransitionPrimed = true;
-  list.querySelectorAll(':scope > .queue-swipe-wrapper').forEach(function(row) {
-    row.classList.remove('mobile-queue-shift-next', 'mobile-queue-shift-previous');
-    void row.offsetWidth;
-    row.classList.add(className);
-  });
-  clearTimeout(list._mobileInlineQueueTransitionTimer);
-  list._mobileInlineQueueTransitionTimer = setTimeout(function() {
-    list._mobileInlineQueueTransitionPrimed = false;
-  }, 1200);
-}
-window.animateMobileInlineQueue = animateMobileInlineQueue;
-
-function optimisticallyAdvanceMobileInlineQueue(direction) {
-  if (!window.matchMedia('(max-width: 899px)').matches) return false;
-  var list = document.getElementById('mobile-inline-queue');
-  if (!list) return false;
-  var queue;
-  try { queue = JSON.parse(window._lastQueueJson || '[]'); } catch (_) { queue = []; }
-  if (!Array.isArray(queue) || !queue.length) return false;
-  var current = Number(window._lastQueueIndex);
-  if (!Number.isFinite(current) || current < 0) current = Number(list._mobileInlineQueueIndex);
-  if (!Number.isFinite(current) || current < 0) return false;
-  var target = current + (direction === 'next' ? 1 : -1);
-  if (target < 0 || target >= queue.length) return false;
-  window._lastQueueIndex = target;
-  renderMobileInlineQueue(queue, target);
-  return true;
-}
-window.optimisticallyAdvanceMobileInlineQueue = optimisticallyAdvanceMobileInlineQueue;
 
 // Builds the "3-dot" more-options button + dropdown for a queue row (used by
 // both the desktop inline queue and the mobile queue popup, which otherwise
@@ -672,7 +592,7 @@ function updateQueueActive(currentIndex) {
   // mobile inline queue, and legacy panel may coexist in the DOM, so update
   // every rendered surface when a slim SSE payload changes only the index.
   const targetIndex = Number(currentIndex);
-  for (const id of ['np-queue-list', 'mobile-inline-queue', 'queue-list']) {
+  for (const id of ['np-queue-list', 'queue-list']) {
     const list = document.getElementById(id);
     if (!list) continue;
     for (const el of list.querySelectorAll('.queue-item')) {

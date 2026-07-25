@@ -2196,8 +2196,40 @@ body.now-playing-route .player-section .player-expand-btn svg {
     overflow-x: hidden !important;
   }}
 
-/* Expanded mobile Now Playing inline queue, moved from redesign.css. */
+/* Mobile queue access lives below the playback controls. */
+.mobile-queue-button { display: none; }
+
 @media (max-width: 899px) {
+  body.now-playing-route .mobile-queue-button,
+  body.now-playing-closing .mobile-queue-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    width: calc(100% - 40px);
+    height: 44px;
+    margin: 18px 20px calc(16px + env(safe-area-inset-bottom, 0px));
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    color: var(--text);
+    background: var(--surface);
+    font: inherit;
+    font-size: .8rem;
+    font-weight: 700;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+    cursor: pointer;
+  }
+  body.now-playing-route .mobile-queue-button svg,
+  body.now-playing-closing .mobile-queue-button svg {
+    width: 18px;
+    height: 18px;
+  }
+  body.now-playing-route .mobile-queue-button:active,
+  body.now-playing-closing .mobile-queue-button:active {
+    color: var(--accent);
+    border-color: var(--accent);
+  }
   body.now-playing-route .mobile-queue-label,
   body.now-playing-closing .mobile-queue-label {
     display: flex !important;
