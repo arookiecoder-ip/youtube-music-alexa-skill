@@ -2647,12 +2647,87 @@ def proxy_stream():
     if not _get_now_playing().get('duration_ms'):
         threading.Thread(target=_lookup_and_update_np, args=(video_id,), daemon=True).start()
     threading.Thread(target=_refresh_radio_queue, args=(video_id,), daemon=True).start()
+    if not Supporting.cached_audio_path(video_id):
+        # Cold cache: stream yt-dlp output straight to the response so the
+        # Echo device starts receiving audio as soon as yt-dlp produces
+        # bytes, instead of waiting for the full download + send_file path
+        # (which exceeded the device's ~11s /proxy/ timeout over the VPN).
+        _confirm_stream_delivery(video_id)
+        return _stream_proxy_download(video_id)
     path = Supporting.ensure_downloaded(video_id)
     if not path:
         return error_response('download failed', 502)
     _confirm_stream_delivery(video_id)
     mimetype = 'audio/mp4' if path.endswith(('.m4a', '.mp4')) else 'audio/webm'
     return send_file(path, mimetype=mimetype, conditional=True)
+
+
+def _stream_proxy_download(video_id):
+    """Stream a cold-cache yt-dlp download straight to the Echo response.
+
+    Buffers the same bytes to the audio cache (atomic via a .part rename) so
+    subsequent plays of this song take the fast send_file path. The Echo
+    device's /proxy/ timeout (~11s) is well below a typical VPN-only
+    yt-dlp download, so streaming first-byte responsiveness is required.
+    """
+    os.makedirs(AUDIO_CACHE_DIR, exist_ok=True)
+    cache_path = os.path.join(AUDIO_CACHE_DIR, f"{video_id}.m4a")
+    temp_path = f"{cache_path}.part"
+    cmd = list(Supporting.ytdlp_download_command(video_id, "-", "default"))
+    proc = subprocess.Popen(
+        cmd,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        bufsize=64 * 1024,
+    )
+
+    def generate():
+        cache_fp = None
+        try:
+            cache_fp = open(temp_path, 'wb')
+            while True:
+                chunk = proc.stdout.read(64 * 1024)
+                if not chunk:
+                    break
+                cache_fp.write(chunk)
+                yield chunk
+            proc.wait()
+            if cache_fp is not None:
+                cache_fp.close()
+                cache_fp = None
+            if proc.returncode == 0:
+                os.replace(temp_path, cache_path)
+            else:
+                try:
+                    os.unlink(temp_path)
+                except OSError:
+                    pass
+        finally:
+            if cache_fp is not None:
+                try:
+                    cache_fp.close()
+                except Exception:
+                    pass
+            if os.path.exists(temp_path):
+                try:
+                    os.unlink(temp_path)
+                except OSError:
+                    pass
+            if proc.poll() is None:
+                proc.kill()
+                try:
+                    proc.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    pass
+
+    return Response(
+        generate(),
+        mimetype='audio/mp4',
+        headers={
+            'Content-Disposition': f'inline; filename="{video_id}.m4a"',
+            'Cache-Control': 'no-store',
+        },
+    )
 
 def _lookup_and_update_np(video_id):
     """Fallback: look up song metadata from video_id."""
