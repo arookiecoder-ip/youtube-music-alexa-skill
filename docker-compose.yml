@@ -3,20 +3,20 @@ services:
     build: ./flask-server
     container_name: ytmusic
     restart: unless-stopped
+    # should only use when the vpn is connected
+    network_mode: "container:gluetun"
     env_file:
       - path: .env
         required: false
     environment:
-      # Listen history and playlists must outlive the container; /tmp is ephemeral.
       - DB_FILE=/data/data.db
       - YTDLP_COOKIES=/app/cookies.txt
-      # Auth file is created by the web UI, so it must live on the writable,
-      # persistent data volume (not in a read-only bind mount).
       - YTMUSIC_AUTH_FILE=/data/headers_auth.json
-      - YT_BROWSER_SERVICE_URL=http://youtube-browser:8765
+      #should use by default
+      # - YT_BROWSER_SERVICE_URL=http://youtube-browser:8765
+      #should only use if vpn is connected
+      - YT_BROWSER_SERVICE_URL=http://127.0.0.1:8765
       - YT_BROWSER_CONTROL_TOKEN=${YT_BROWSER_CONTROL_TOKEN:?set YT_BROWSER_CONTROL_TOKEN in .env}
-      # Requests with a localhost Host header still arrive through Caddy in
-      # Compose; do not redirect the browser to an unpublished host port 5001.
       - ALEXA_PROXY_BEHIND_CADDY=1
     volumes:
       # cookies.txt is provisioned separately in the project root and is
@@ -28,8 +28,9 @@ services:
       # Without this volume, every rebuild/restart wipes it and forces a fresh
       # Amazon login.
       - ytmusic_alexa_cookies:/app/alexa_cookies
-    networks:
-      - web
+  # should use when the vpn is not connected
+    # networks:
+    #   - web  
     depends_on:
       youtube-browser:
         condition: service_healthy
@@ -38,6 +39,8 @@ services:
     build: ./browser-auth
     container_name: youtube-browser
     restart: unless-stopped
+    #shouldnt use normally when the vps is not connected
+    network_mode: "container:gluetun"
     environment:
       - YT_BROWSER_CONTROL_TOKEN=${YT_BROWSER_CONTROL_TOKEN:?set YT_BROWSER_CONTROL_TOKEN in .env}
       - YT_BROWSER_CAPTURE_TIMEOUT=${YT_BROWSER_CAPTURE_TIMEOUT:-120}
@@ -46,8 +49,9 @@ services:
       - SCREEN_GEOMETRY=${YT_BROWSER_SCREEN_GEOMETRY:-1365x768x24}
     volumes:
       - ytmusic_chromium_profile:/profile
-    networks:
-      - web
+      #shouldnt use when vpn is being used
+    # networks:
+    #   - web  
     shm_size: 512mb
 
   caddy:
@@ -65,6 +69,9 @@ services:
       - caddy_config:/config
     networks:
       - web
+      #should only use if proxy is using else comment out
+    depends_on:
+      - ytmusic
 
 networks:
   web:
