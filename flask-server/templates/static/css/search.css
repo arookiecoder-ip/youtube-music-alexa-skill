@@ -56,33 +56,31 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 24px;
-    height: 24px;
+    width: 28px;
+    height: 28px;
     border: none;
     border-radius: 50%;
     padding: 0;
-    line-height: 0;
+    line-height: 1;
     background: none;
     color: var(--muted);
     cursor: pointer;
     transition: color .15s, background .15s;
   }
   .suggest-item-use:hover,
-  .suggest-item-use:focus-visible { color: var(--text); background: rgba(255,255,255,.08); }
+  .suggest-item-use:focus-visible { color: var(--text); background: rgba(255,255,255,.1); }
   .suggest-item-use svg { display: block; width: 18px; height: 18px; }
   .suggest-item-remove {
-    /* The suggestion-use button owns the flexible gap. Keeping this at zero
-       centers the × hover circle on the icon instead of adding a second gap. */
-    margin-left: 0;
+    margin-left: 4px;
     flex: none;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    width: 24px;
-    height: 24px;
+    width: 28px;
+    height: 28px;
     border: none;
     background: none;
-    line-height: 0;
+    line-height: 1;
     color: var(--muted);
     cursor: pointer;
     border-radius: 50%;
@@ -95,8 +93,9 @@
     opacity: 1;
     pointer-events: auto;
   }
-  .suggest-item-remove:hover { color: var(--text); background: rgba(255,255,255,.08); }
-  .suggest-item-remove svg { display: block; width: 16px; height: 16px; }
+  .suggest-item-remove:hover,
+  .suggest-item-remove:focus-visible { color: var(--text); background: rgba(255,255,255,.1); }
+  .suggest-item-remove svg { display: block; width: 18px; height: 18px; }
 
   /* ---- Search results ---- */
   #results-section {
@@ -739,9 +738,22 @@ body.results-open .play-section {
 .suggest-item + .suggest-item { border-top: 0; }
 .suggest-item:hover, .suggest-item.active { background: rgba(255, 255, 255, .08); }
 .suggest-item > span { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
-.suggest-item-remove { width: 28px; height: 28px; padding: 0; color: #fff !important; opacity: 1; pointer-events: auto; }
-.suggest-item-remove svg { display: none !important; }
-.suggest-item-remove::before { content: '\00d7'; font-size: 25px; font-weight: 300; line-height: 1; }
+.suggest-item-use,
+.suggest-item-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border-radius: 50%;
+  color: var(--muted);
+  opacity: 1;
+  pointer-events: auto;
+}
+.suggest-item-use svg,
+.suggest-item-remove svg { display: block !important; width: 18px; height: 18px; }
+.suggest-item-remove::before { display: none !important; content: none !important; }
 
 @media (min-width: 900px) {
   .play-section,

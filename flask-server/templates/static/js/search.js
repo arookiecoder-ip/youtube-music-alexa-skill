@@ -898,7 +898,7 @@ if (nextBtn) {
   window.closeSearchSuggestions = closeList;
 
   const removeSvg =
-    '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" ' +
+    '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" ' +
     'stroke="currentColor" stroke-width="2.5" stroke-linecap="round">' +
     '<path d="M18 6 6 18M6 6l12 12"/></svg>';
   const useSuggestionSvg =
@@ -916,6 +916,36 @@ if (nextBtn) {
     render();
   }
 
+  function submitSuggestion(text) {
+    if (!text) return;
+    input.value = text;
+    syncClearBtn();
+    closeList();
+    const playBtn = document.getElementById('play-query');
+    if (playBtn) {
+      playBtn.click();
+    } else if (window.runSearch) {
+      if (typeof window._recordSearchHistory === 'function') window._recordSearchHistory(text);
+      window.runSearch(text);
+    }
+  }
+
+  function attachInteraction(el, action) {
+    let handled = false;
+    const handler = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (handled) return;
+      handled = true;
+      action();
+      setTimeout(() => { handled = false; }, 300);
+    };
+    el.addEventListener('pointerdown', handler);
+    el.addEventListener('mousedown', handler);
+    el.addEventListener('touchstart', handler);
+    el.addEventListener('click', handler);
+  }
+
   function render() {
     if (!items.length) { closeList(); return; }
     listEl.innerHTML = '';
@@ -925,9 +955,9 @@ if (nextBtn) {
       li.setAttribute('role', 'option');
       li.innerHTML = (showingHistory ? clockSvg : searchSvg) + '<span></span>';
       li.querySelector('span').textContent = text;
-      // mousedown (not click) so it fires before the input's blur. Selecting a
-      // suggestion completes the field; Enter can then submit it.
-      li.addEventListener('mousedown', e => { e.preventDefault(); applySuggestion(i); });
+      attachInteraction(li, () => {
+        submitSuggestion(text);
+      });
 
       const useBtn = document.createElement('button');
       useBtn.className = 'suggest-item-use';
@@ -935,9 +965,7 @@ if (nextBtn) {
       useBtn.setAttribute('aria-label', 'Use ' + text + ' in search');
       useBtn.title = 'Use this suggestion';
       useBtn.innerHTML = useSuggestionSvg;
-      useBtn.addEventListener('mousedown', e => {
-        e.preventDefault();
-        e.stopPropagation();
+      attachInteraction(useBtn, () => {
         applySuggestion(i);
       });
       li.appendChild(useBtn);
@@ -948,9 +976,7 @@ if (nextBtn) {
         removeBtn.type = 'button';
         removeBtn.setAttribute('aria-label', 'Remove ' + text + ' from history');
         removeBtn.innerHTML = removeSvg;
-        removeBtn.addEventListener('mousedown', e => {
-          e.preventDefault();
-          e.stopPropagation();
+        attachInteraction(removeBtn, () => {
           removeHistoryEntry(text);
         });
         li.appendChild(removeBtn);

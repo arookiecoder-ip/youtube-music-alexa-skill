@@ -2672,7 +2672,7 @@ def _stream_proxy_download(video_id):
     """
     os.makedirs(AUDIO_CACHE_DIR, exist_ok=True)
     cache_path = os.path.join(AUDIO_CACHE_DIR, f"{video_id}.m4a")
-    temp_path = f"{cache_path}.part"
+    temp_path = f"{cache_path}.{uuid.uuid4().hex}.part"
     cmd = list(Supporting.ytdlp_download_command(video_id, "-", "default"))
     proc = subprocess.Popen(
         cmd,
@@ -2696,10 +2696,15 @@ def _stream_proxy_download(video_id):
                 cache_fp.close()
                 cache_fp = None
             if proc.returncode == 0:
-                os.replace(temp_path, cache_path)
+                try:
+                    if os.path.exists(temp_path):
+                        os.replace(temp_path, cache_path)
+                except OSError:
+                    pass
             else:
                 try:
-                    os.unlink(temp_path)
+                    if os.path.exists(temp_path):
+                        os.unlink(temp_path)
                 except OSError:
                     pass
         finally:
