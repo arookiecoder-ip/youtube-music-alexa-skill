@@ -357,13 +357,10 @@ class StartOverHandler(AbstractRequestHandler):
 
     def handle(self, handler_input: HandlerInput):
         logger.info("In StartOverHandler")
-        playback_info = player.Attributes.get_playback_info(handler_input)
-        playback_info["offset_in_ms"] = 0
-        player.send_progressive_response(handler_input, 'Starting over...')
-        # return player.Controller.fetch(
-        #     handler_input=handler_input
-        # )
-        return handler_input.response_builder.speak('This feature is not available yet.').response
+        if not player.Attributes.get_playlist(handler_input):
+            return handler_input.response_builder.speak(data.NOTHING_TO_RESUME).response
+        
+        return player.Controller.seek(handler_input, offset_in_ms=0, is_playback=True)
     
 class AnnounceNowPlayingHandler(AbstractRequestHandler):
     def can_handle(self, handler_input: HandlerInput):
