@@ -508,6 +508,7 @@ const progress = window.progress = (function () {
     return Math.max(0, p);
   }
 
+  let _lastPaintLog = 0;
   function paint() {
     const pos = livePosition();
     const visualMax = durationMs || seekLimitMs();
@@ -529,6 +530,19 @@ const progress = window.progress = (function () {
     if (mobileNpHandle) mobileNpHandle.style.left = pct + '%';
     if (mobileNpElapsed) mobileNpElapsed.textContent = fmt(pos);
     if (mobileNpTotal) mobileNpTotal.textContent = durationMs ? fmt(durationMs) : '--:--';
+
+    const now = Date.now();
+    if (now - _lastPaintLog > 2000) {
+      _lastPaintLog = now;
+      console.log('[progress.paint]', {
+        posSec: Math.floor(pos / 1000),
+        durationSec: Math.floor(durationMs / 1000),
+        pct: pct.toFixed(1) + '%',
+        awaitingStart,
+        playing,
+        wrapHidden: wrap.hidden
+      });
+    }
   }
 
   function loop() {
@@ -544,7 +558,29 @@ const progress = window.progress = (function () {
   // Fed from now-playing updates (SSE / poll).
   function update(np) {
     const hasTrack = !!(np && np.title);
+    const isConfirmed = !!(np && np.playback_confirmed);
+
+    // Only hide the bar when there is genuinely no track. While awaitingStart
+    // the bar stays visible but frozen at 0:00, so the user can see feedback
+    // that a play was requested. Hiding it during awaitingStart (as the recent
+    // refactor did) also kills syncLoop (which gates on !wrap.hidden), leaving
+    // the bar stuck at 0 even after the track confirms.
     wrap.hidden = !hasTrack;
+
+    console.log('[progress.update]', {
+      time: new Date().toLocaleTimeString() + '.' + String(Date.now() % 1000).padStart(3, '0'),
+      title: np && np.title,
+      video_id: np && np.video_id,
+      playing: np && np.playing,
+      playback_confirmed: np && np.playback_confirmed,
+      confirmed_at: np && np.confirmed_at,
+      position_ms: np && np.position_ms,
+      duration_ms: np && np.duration_ms,
+      awaitingStart,
+      pendingVideoId,
+      wrapHidden: wrap.hidden
+    });
+
     if (!hasTrack) {
       durationMs = 0;
       positionMs = 0;
@@ -572,6 +608,7 @@ const progress = window.progress = (function () {
     const matchesPending =
       (pendingVideoId ? np.video_id === pendingVideoId : serverPosNow < 10000) ||
       (awaitingStart && pendingSince && Date.now() - pendingSince > 15000);
+
     if (!awaitingStart || matchesPending) {
       durationMs = Number(np.duration_ms) || 0;
     }
@@ -579,7 +616,7 @@ const progress = window.progress = (function () {
     // a proxy fetch / PlaybackStarted webhook confirms that the timer may tick
     // -- and only if that confirmation is actually for the track we're
     // waiting on, not a stale push for the previous track.
-    if (awaitingStart && np.playback_confirmed && matchesPending) {
+    if (awaitingStart && isConfirmed && matchesPending) {
       awaitingStart = false;
       pendingVideoId = null;
       pendingSince = 0;
@@ -636,6 +673,10 @@ const progress = window.progress = (function () {
   // plain-text searches, where the server picks the track and any confirmed
   // snapshot is accepted.
   function resetPending(videoId) {
+    console.log('[progress.resetPending]', {
+      time: new Date().toLocaleTimeString() + '.' + String(Date.now() % 1000).padStart(3, '0'),
+      videoId
+    });
     awaitingStart = true;
     pendingVideoId = videoId || null;
     pendingSince = Date.now();
@@ -645,7 +686,12 @@ const progress = window.progress = (function () {
     anchorClientMs = Date.now();
     lastServerAnchor = 0;
     playing = false;
+    // Keep the bar visible but frozen at 0:00 while we await the track start.
+    // Hiding it here (as a recent refactor did) kills syncLoop (which gates
+    // on !wrap.hidden) and leaves the bar stuck forever once the track lands.
     wrap.hidden = false;
+    const mobileNpWrap = document.getElementById('mobile-np-progress');
+    if (mobileNpWrap) mobileNpWrap.hidden = false;
     syncLoop();
     paint();
   }

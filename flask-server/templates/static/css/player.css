@@ -426,11 +426,18 @@
 }
 .redesigned-bar .progress-track {
   flex: 1;
-  height: 6px !important;
+  height: 2px !important;
   background: #333 !important;
   border-radius: 3px;
+  transition: height 0.15s ease;
+}
+.redesigned-bar .progress:hover .progress-track,
+.redesigned-bar .progress-track:hover,
+.redesigned-bar .progress-track.dragging {
+  height: 4px !important;
 }
 .redesigned-bar .progress-fill {
+  height: 100% !important;
   background: var(--accent) !important;
 }
 .redesigned-bar #progress-elapsed,
@@ -1832,16 +1839,27 @@ input[type=range]::-moz-range-thumb { border-radius: 50%; }
   margin: 0;
   justify-self: stretch;
 }
-.player-section .progress-track {
-  height: 4px;
+.player-section .progress-track,
+.player-section #progress-track {
+  height: 2px !important;
   padding: 0;
   border-radius: 0;
   transition: height 0.15s ease;
 }
 /* Grow bar slightly on hover for tactile feel */
+.player-section .progress:hover .progress-track,
 .player-section .progress-track:hover,
-.player-section .progress-track.dragging {
-  height: 6px;
+.player-section .progress-track.dragging,
+.player-section .progress:hover #progress-track,
+.player-section #progress-track:hover,
+.player-section #progress-track.dragging {
+  height: 4px !important;
+}
+.player-section .progress-fill,
+.player-section #progress-fill {
+  height: 100% !important;
+  top: 0 !important;
+  transform: none !important;
 }
 /* Hide the flanking time labels (elapsed + total) inside the progress strip.
    We keep only the playbar-time in the np-info cluster. */

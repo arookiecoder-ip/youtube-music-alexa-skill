@@ -1152,6 +1152,11 @@ def _np_snapshot(serial=None):
         'duration_ms': s.get('duration_ms', 0),
         'position_ms': _computed_position_ms(),
         'started_at': now,
+        # Raw stored anchor timestamp (set by _reset_progress on each new play/seek).
+        # Unlike started_at (normalised to now), this only changes when a new play
+        # starts or a seek happens, so the client can use it to detect whether a
+        # playback_confirmed snapshot is actually for the current play request.
+        'confirmed_at': s.get('started_at', 0),
         'playback_confirmed': bool(s.get('playback_confirmed')),
         'volume': volume,
         'playback_error': playback_error,
@@ -2652,7 +2657,11 @@ def proxy_stream():
         # Echo device starts receiving audio as soon as yt-dlp produces
         # bytes, instead of waiting for the full download + send_file path
         # (which exceeded the device's ~11s /proxy/ timeout over the VPN).
-        _confirm_stream_delivery(video_id)
+        # NOTE: _confirm_stream_delivery is intentionally NOT called here.
+        # Calling it before yt-dlp produces any bytes sets playback_confirmed=True
+        # immediately, which clears awaitingStart on the client and starts the
+        # progress bar ticking even though yt-dlp still takes 7-8s to process.
+        # Confirmation is instead deferred to the first chunk inside generate().
         return _stream_proxy_download(video_id)
     path = Supporting.ensure_downloaded(video_id)
     if not path:
@@ -2683,6 +2692,7 @@ def _stream_proxy_download(video_id):
 
     def generate():
         cache_fp = None
+        confirmed = False
         try:
             cache_fp = open(temp_path, 'wb')
             while True:
@@ -2690,6 +2700,15 @@ def _stream_proxy_download(video_id):
                 if not chunk:
                     break
                 cache_fp.write(chunk)
+                # Confirm playback only once the first audio bytes are ready
+                # to be streamed to the Echo. This is the earliest moment the
+                # device can actually start playing — confirming before this
+                # (at proxy request time) set playback_confirmed=True while
+                # yt-dlp was still processing, causing the client progress bar
+                # to start ticking 7-8 seconds before audio actually played.
+                if not confirmed:
+                    confirmed = True
+                    _confirm_stream_delivery(video_id)
                 yield chunk
             proc.wait()
             if cache_fp is not None:
@@ -3083,8 +3102,22 @@ def _confirm_stream_delivery(video_id):
         if _now_playing.get('video_id') != video_id:
             return
         if _now_playing.get('playback_confirmed'):
+            # Already confirmed — just ensure duration is populated if it was
+            # missing when the first confirmation fired.
+            if not _now_playing.get('duration_ms'):
+                queue = _now_playing.get('queue', [])
+                matched = next((item for item in queue if item.get('video_id') == video_id), None)
+                if matched and matched.get('duration_ms'):
+                    _now_playing['duration_ms'] = int(matched['duration_ms'])
+                    _now_playing['updated_at'] = time.time()
+                    _notify_sse()
             return
-        _reset_progress(_now_playing.get('position_ms', 0))
+        if not _now_playing.get('duration_ms'):
+            queue = _now_playing.get('queue', [])
+            matched = next((item for item in queue if item.get('video_id') == video_id), None)
+            if matched and matched.get('duration_ms'):
+                _now_playing['duration_ms'] = int(matched['duration_ms'])
+        _reset_progress(0)
         _now_playing['playing'] = True
         _now_playing['playback_confirmed'] = True
         _now_playing['updated_at'] = time.time()
@@ -4169,7 +4202,8 @@ def alexa_state_event():
                         _now_playing.update(metadata_fields)
                         _now_playing['updated_at'] = time.time()
                 already_tracking = (_now_playing.get('playing')
-                                     and _now_playing.get('playback_confirmed'))
+                                     and _now_playing.get('playback_confirmed')
+                                     and (_now_playing.get('video_id') == video_id or not video_id))
                 position_matches = abs(_computed_position_ms() - offset_in_ms) < 3000
                 if already_tracking and position_matches:
                     redundant_confirmation = True

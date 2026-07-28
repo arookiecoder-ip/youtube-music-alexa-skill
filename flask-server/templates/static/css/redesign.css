@@ -1640,7 +1640,7 @@ body.results-open .player-section {
   text-decoration: underline;
 }
 .player-section .progress-track { transition: height .12s ease; }
-.player-section .progress:hover .progress-track { height: 6px; }
+.player-section .progress:hover .progress-track { height: 4px; }
 .player-section .transport button svg { width: 16px; height: 16px; }
 .player-section .pp-btn svg { width: 28px; height: 28px; fill: #ffffff; color: #ffffff; }
 .player-section .vol input[type=range] { flex: 1; }
@@ -1787,8 +1787,8 @@ body.results-open .player-section {
   }
   .player-section .vol:hover input[type=range],
   .player-section .vol input[type=range]:focus-visible { opacity: 1; }
-  .player-section .progress-track,
-  .player-section .progress:hover .progress-track { height: 3px; }
+  .player-section .progress-track { height: 2px; }
+  .player-section .progress:hover .progress-track { height: 4px; }
   .player-section .progress-fill { background: var(--accent); }
 }
 
