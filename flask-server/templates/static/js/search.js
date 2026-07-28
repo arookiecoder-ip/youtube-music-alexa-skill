@@ -32,6 +32,11 @@ async function runSearch(query, options) {
   // deep links look broken when the request is slow, empty, or fails.
   openResults({ fromRoute: true });
   const mySeq = ++state._searchSeq;
+  // Clear stale results immediately so the previous search's data is never
+  // shown while the new request is in-flight.
+  state._searchCategorized = {};
+  const list = document.getElementById('results-list');
+  if (list) list.innerHTML = '';
   if (window.startTopProgress) window.startTopProgress();
   toast('Searching \u201c' + query + '\u201d\u2026');
   try {
@@ -40,7 +45,11 @@ async function runSearch(query, options) {
     if (window.completeTopProgress) window.completeTopProgress();
     state._searchCategorized = data || {};
     const totalItems = (data.songs?.length || 0) + (data.artists?.length || 0) + (data.albums?.length || 0) + (data.playlists?.length || 0);
-    if (!totalItems) { toast('No results found.', 'error'); return; }
+    if (!totalItems) {
+      toast('No results found.', 'error');
+      if (list) list.innerHTML = '<div class="results-empty-state">No results found for your search.</div>';
+      return;
+    }
     state._resultsPage = { songs: 0, artists: 0, albums: 0, playlists: 0 };
     state._activeCategory = 'all';
     document.querySelectorAll('.results-tab').forEach(t => t.classList.toggle('active', t.dataset.category === state._activeCategory));
@@ -53,6 +62,7 @@ async function runSearch(query, options) {
     if (mySeq === state._searchSeq) {
       if (window.abortTopProgress) window.abortTopProgress();
       toast(e.message, 'error');
+      if (list) list.innerHTML = '<div class="results-empty-state results-error-state">Search failed. Please try again.</div>';
     }
   }
 }
@@ -843,6 +853,7 @@ if (nextBtn) {
   let debounceTimer = null;
   let seq = 0;           // request sequencer, drops stale responses
   let showingHistory = false; // list currently shows recent searches, not live suggestions
+  let lastQuery = '';    // the query string that generated the current `items`
 
   const searchSvg =
     '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" ' +
@@ -886,10 +897,6 @@ if (nextBtn) {
     clearTimeout(debounceTimer);
     seq++;
     listEl.hidden = true;
-    listEl.innerHTML = '';
-    items = [];
-    activeIdx = -1;
-    showingHistory = false;
     input.setAttribute('aria-expanded', 'false');
   }
 
@@ -959,18 +966,8 @@ if (nextBtn) {
         submitSuggestion(text);
       });
 
-      const useBtn = document.createElement('button');
-      useBtn.className = 'suggest-item-use';
-      useBtn.type = 'button';
-      useBtn.setAttribute('aria-label', 'Use ' + text + ' in search');
-      useBtn.title = 'Use this suggestion';
-      useBtn.innerHTML = useSuggestionSvg;
-      attachInteraction(useBtn, () => {
-        applySuggestion(i);
-      });
-      li.appendChild(useBtn);
-
       if (showingHistory) {
+        // History rows: only the remove (✕) button; no copy-to-box arrow.
         const removeBtn = document.createElement('button');
         removeBtn.className = 'suggest-item-remove';
         removeBtn.type = 'button';
@@ -980,6 +977,18 @@ if (nextBtn) {
           removeHistoryEntry(text);
         });
         li.appendChild(removeBtn);
+      } else {
+        // Live suggestion rows: only the copy-to-box (↗) arrow button.
+        const useBtn = document.createElement('button');
+        useBtn.className = 'suggest-item-use';
+        useBtn.type = 'button';
+        useBtn.setAttribute('aria-label', 'Use ' + text + ' in search');
+        useBtn.title = 'Use this suggestion';
+        useBtn.innerHTML = useSuggestionSvg;
+        attachInteraction(useBtn, () => {
+          applySuggestion(i);
+        });
+        li.appendChild(useBtn);
       }
 
       listEl.appendChild(li);
@@ -1040,6 +1049,7 @@ if (nextBtn) {
       items = (data.suggestions || []).slice(0, 8);
       activeIdx = -1;
       showingHistory = false;
+      lastQuery = q;
       render();
     } catch (_) {
       // Suggestions are best-effort; stay silent on failure.
@@ -1065,9 +1075,19 @@ if (nextBtn) {
     debounceTimer = setTimeout(() => fetchSuggestions(q), 180);
   });
 
-  // Clicking/tabbing into the empty search bar surfaces recent searches.
+  // Clicking/tabbing into the search bar surfaces recent searches or suggestions.
   input.addEventListener('focus', () => {
-    if (!input.value.trim()) showHistory();
+    const q = input.value.trim();
+    if (!q) {
+      showHistory();
+    } else if (!isYoutubeLinkLike(q)) {
+      if (items.length > 0 && !showingHistory && lastQuery === q) {
+        listEl.hidden = false;
+        input.setAttribute('aria-expanded', 'true');
+      } else {
+        fetchSuggestions(q);
+      }
+    }
   });
 
   input.addEventListener('keydown', e => {
