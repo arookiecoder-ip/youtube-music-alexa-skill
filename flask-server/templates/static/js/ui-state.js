@@ -206,7 +206,19 @@
     }
     // Re-clicking a previously abandoned track makes it wanted again.
     if (videoId) _abandoned.delete(videoId);
-    state._playIntentSeq += 1;
+    // The server remembers the highest intent_seq it has ever claimed for
+    // this device, across every browser tab/session, for the lifetime of the
+    // process (see _claim_play_intent in server.py). A plain per-page counter
+    // starting at 0 broke the very first click after any page reload, tab
+    // switch, or second device controlling the same Echo: the server had
+    // already seen a much higher seq from the previous session and silently
+    // rejected the "superseded" click — dispatching nothing while the client
+    // still painted an optimistic "Playing ..." UI that a few seconds later
+    // snapped back to the old track. Anchoring to wall-clock time means a
+    // fresh session's first seq is virtually always ahead of whatever any
+    // prior session left behind, while still increasing monotonically within
+    // this session for in-order click-burst coalescing.
+    state._playIntentSeq = Math.max(now, state._playIntentSeq + 1);
     state._playIntentVideoId = videoId || '';
     state._playIntentAt = now;
     // Existing consumers key their "did the user just act?" grace windows off

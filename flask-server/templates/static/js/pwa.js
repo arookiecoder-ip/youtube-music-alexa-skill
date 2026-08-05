@@ -201,9 +201,35 @@
     }, 30000);
   }
 
+  /* ── Desktop install window sizing ──
+     Chrome/Edge give an installed PWA's first-launch window some percentage
+     of the screen with no way to request a size from the manifest (see
+     https://web.dev/learn/pwa/windows/). On many desktop displays that
+     default lands under our 900px layout breakpoint, so the app renders its
+     mobile layout inside a perfectly normal desktop monitor. Nudge it to a
+     sane desktop size once, the first time it's launched installed — never
+     again, so we don't fight a user's own manual resize afterwards. */
+  function _sizeDesktopWindow() {
+    try {
+      var standalone = window.matchMedia('(display-mode: standalone)').matches ||
+        window.matchMedia('(display-mode: window-controls-overlay)').matches;
+      if (!standalone) return;
+      // Real touch/mobile OSes control their own window/task sizing —
+      // only desktop Chrome/Edge installs need the nudge.
+      if (/Android|iPhone|iPad|iPod/i.test(navigator.userAgent || '')) return;
+      if (screen.availWidth < 900) return;
+      if (localStorage.getItem('pwa-desktop-sized')) return;
+      localStorage.setItem('pwa-desktop-sized', '1');
+      if (window.innerWidth < 900) {
+        window.resizeTo(1280, Math.min(832, screen.availHeight));
+      }
+    } catch (_) {}
+  }
+
   /* ── Initialization ── */
   function init() {
     _initBroadcastChannel();
+    _sizeDesktopWindow();
 
     // Listen for install prompt
     window.addEventListener('beforeinstallprompt', function(e) {
