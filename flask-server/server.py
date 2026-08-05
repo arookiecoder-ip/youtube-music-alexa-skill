@@ -1247,6 +1247,16 @@ def _mark_video_dead(video_id: str):
             del _dead_video_ids[oldest]
 
 
+def _evict_bad_cache_entry(video_id: str):
+    """Delete a cached audio file suspected of being truncated/corrupt so the
+    next play re-downloads a fresh copy instead of repeating the same short
+    clip. Best-effort; never raises."""
+    try:
+        Supporting.evict_cached_audio(video_id)
+    except Exception:
+        logger.exception("failed to evict cache entry for %s", video_id)
+
+
 def _is_dead_video(video_id: str) -> bool:
     with _dead_video_ids_lock:
         ts = _dead_video_ids.get(video_id)
@@ -2567,6 +2577,14 @@ class Supporting:
                  if not p.endswith('.part')]
         return paths[0] if paths else None
 
+    def evict_cached_audio(video_id: str):
+        """Delete any cached audio file(s) for `video_id`. Best-effort."""
+        for path in glob.glob(os.path.join(AUDIO_CACHE_DIR, f"{video_id}.*")):
+            try:
+                os.remove(path)
+            except OSError:
+                pass
+
     def prune_audio_cache():
         os.makedirs(AUDIO_CACHE_DIR, exist_ok=True)
         for old in glob.glob(os.path.join(AUDIO_CACHE_DIR, "*")):
@@ -2668,11 +2686,28 @@ class Supporting:
                             Supporting.ytdlp_download_command(video_id, output, client=client),
                             capture_output=True, text=True)
                         if result.returncode == 0:
-                            downloaded = True
-                            if index:
-                                logger.info("yt-dlp download succeeded with %s fallback for %s",
-                                            client, video_id)
-                            break
+                            written_path = Supporting.cached_audio_path(video_id)
+                            # returncode 0 is not proof of a complete file --
+                            # see _is_audio_file_valid. Reject a truncated
+                            # result instead of caching it, and fall through
+                            # to the next client profile like any other
+                            # failure.
+                            if written_path and _is_audio_file_valid(written_path):
+                                downloaded = True
+                                if index:
+                                    logger.info("yt-dlp download succeeded with %s fallback for %s",
+                                                client, video_id)
+                                break
+                            if written_path:
+                                logger.warning(
+                                    "yt-dlp: discarding truncated/invalid download of %s "
+                                    "(client %s)", video_id, client)
+                                try:
+                                    os.unlink(written_path)
+                                except OSError:
+                                    pass
+                            last_error = "downloaded file failed integrity check"
+                            continue
                         stderr = result.stderr.strip()
                         last_error = stderr
                         logger.warning("yt-dlp client %s failed for %s; trying fallback: %s",
@@ -3302,6 +3337,63 @@ def _kill_process(proc):
         pass
 
 
+# Minimum viable duration for a cached audio file to be trusted. Below this,
+# a "successful" yt-dlp run (returncode 0) is treated as a truncated/corrupt
+# download rather than a real track -- observed after a stream got killed by
+# the abandon-watchdog or superseded mid-write: yt-dlp can still exit 0 on a
+# partial pipe, and the temp file was getting promoted straight into the
+# permanent cache. Every later play of that video_id then served the same
+# few-second clip from the warm-cache path: the Echo reports genuine
+# PlaybackStarted/PlaybackStopped for it (it did play, just for a few
+# seconds), so nothing here treated it as a failure -- it looked to the user
+# like "the progress bar ran but no sound", when actually a tiny amount of
+# real (correct) audio played and then legitimately ended.
+_MIN_VALID_AUDIO_MS = 15_000
+
+
+def _probe_duration_ms(path: str):
+    """Return the audio duration of `path` in ms via ffprobe, or None if it
+    can't be determined (missing/corrupt file, ffprobe failure)."""
+    try:
+        result = subprocess.run(
+            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
+             "-of", "default=noprint_wrappers=1:nokey=1", path],
+            capture_output=True, text=True, timeout=10)
+        if result.returncode != 0:
+            return None
+        duration_s = float(result.stdout.strip())
+        if duration_s <= 0:
+            return None
+        return int(duration_s * 1000)
+    except (subprocess.TimeoutExpired, ValueError, OSError):
+        return None
+
+
+def _is_audio_file_valid(path: str, expected_duration_ms: int = 0) -> bool:
+    """True when `path` looks like a complete, playable audio file.
+
+    Rejects empty/zero-byte files outright (no point calling ffprobe), then
+    checks the probed duration against `_MIN_VALID_AUDIO_MS` and, when the
+    caller knows the track's real duration, against a generous fraction of
+    it -- a stream cut off partway through is usually far short of the real
+    length, not just a few seconds off (which could be a legitimate metadata
+    mismatch and shouldn't be treated as corruption).
+    """
+    try:
+        if os.path.getsize(path) <= 0:
+            return False
+    except OSError:
+        return False
+    duration_ms = _probe_duration_ms(path)
+    if duration_ms is None:
+        return False
+    if duration_ms < _MIN_VALID_AUDIO_MS:
+        return False
+    if expected_duration_ms and duration_ms < expected_duration_ms * 0.5:
+        return False
+    return True
+
+
 def _stream_proxy_download(video_id):
     """Stream a cold-cache yt-dlp download straight to the Echo response.
 
@@ -3374,13 +3466,21 @@ def _stream_proxy_download(video_id):
             if cache_fp is not None:
                 cache_fp.close()
                 cache_fp = None
-            if proc.returncode == 0:
+            # returncode == 0 alone is not proof of a complete file: a stream
+            # killed by the abandon-watchdog or superseded mid-write can still
+            # let yt-dlp report success on a truncated pipe. Validate before
+            # promoting into the permanent cache -- otherwise every later play
+            # of this video_id serves the same truncated clip (see
+            # _is_audio_file_valid's comment).
+            if proc.returncode == 0 and os.path.exists(temp_path) and _is_audio_file_valid(temp_path):
                 try:
-                    if os.path.exists(temp_path):
-                        os.replace(temp_path, cache_path)
+                    os.replace(temp_path, cache_path)
                 except OSError:
                     pass
             else:
+                if proc.returncode == 0 and os.path.exists(temp_path):
+                    logger.warning("proxy: discarding truncated/invalid stream cache for %s",
+                                   video_id)
                 try:
                     if os.path.exists(temp_path):
                         os.unlink(temp_path)
@@ -4791,10 +4891,29 @@ def alexa_state_event():
         # song snapped the bar back to 0:00/track-start instead of freezing at
         # the actual paused position. Mirrors the app-button pause path below.
         with _np_lock:
-            _reset_progress(_computed_position_ms())
+            elapsed_ms = _computed_position_ms()
+            stopped_video_id = _now_playing.get('video_id', '')
+            stopped_duration_ms = int(_now_playing.get('duration_ms') or 0)
+            was_confirmed = bool(_now_playing.get('playback_confirmed'))
+            _reset_progress(elapsed_ms)
             _now_playing['playing'] = False
             _now_playing['updated_at'] = time.time()
         _notify_sse()
+        # Genuine PlaybackStarted followed by PlaybackStopped within seconds,
+        # far short of the track's real length, is not a normal skip/pause --
+        # it's the signature of a truncated/corrupt cached audio file (see
+        # _is_audio_file_valid): Alexa did receive and play real audio (hence
+        # the confirmed webhook), it just ran out after a few seconds instead
+        # of minutes. Evict the cache entry so the next play re-downloads
+        # instead of serving the same broken clip forever.
+        if (was_confirmed and stopped_video_id and stopped_duration_ms
+                and elapsed_ms < _MIN_VALID_AUDIO_MS
+                and elapsed_ms < stopped_duration_ms * 0.5):
+            logger.warning(
+                "[np] %s stopped after only %dms of a %dms track -- "
+                "evicting cache as likely truncated", stopped_video_id,
+                elapsed_ms, stopped_duration_ms)
+            _evict_bad_cache_entry(stopped_video_id)
         # A failed current track stays selected and stopped. Never replace it
         # with another upload or silently advance to another queue item.
         cur = _get_now_playing()
