@@ -271,7 +271,18 @@
     opacity: 0;
     visibility: hidden;
   }
-  body.rail-collapsed .sidebar-new-playlist-container { visibility: hidden !important; }
+  .sidebar-new-playlist-container {
+    overflow: hidden;
+    max-height: 56px;
+    opacity: 1;
+    transition: max-height .25s ease, opacity .14s ease, margin .25s ease;
+  }
+  body.rail-collapsed .sidebar-new-playlist-container {
+    max-height: 0;
+    opacity: 0;
+    margin: 0;
+    pointer-events: none;
+  }
   body.rail-collapsed .sidebar-playlist-list { overflow-x: hidden; }
 body.rail-collapsed .sidebar-playlist-list::-webkit-scrollbar { display: none; }
 body.rail-collapsed .sidebar-playlist-list { scrollbar-width: none; }
