@@ -272,6 +272,7 @@
     visibility: hidden;
   }
   .sidebar-new-playlist-container {
+    flex: none;
     overflow: hidden;
     max-height: 100px;
     opacity: 1;
