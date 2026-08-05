@@ -833,11 +833,12 @@
   window.wireArtistLinks = function(container) {
     container.querySelectorAll('.artist-name').forEach(function(an) {
       an.addEventListener('click', function(e) {
-        // Artist credits are display-only on mobile. Do not turn their taps
-        // into either navigation or the parent song row's playback action.
+        // Artist credits don't navigate on mobile, but the tap should still
+        // fall through to the parent song row's play action (the row is one
+        // big play target there), so only suppress the link's own default
+        // behavior — never stop the click from bubbling up.
         if (window.matchMedia('(max-width: 899px)').matches) {
           e.preventDefault();
-          e.stopPropagation();
           return;
         }
         e.preventDefault();
@@ -854,7 +855,6 @@
       // Covers artist spans that have not been individually wired yet.
       if (window.matchMedia('(max-width: 899px)').matches) {
         e.preventDefault();
-        e.stopPropagation();
         return;
       }
       e.preventDefault();

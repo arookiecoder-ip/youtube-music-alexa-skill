@@ -95,7 +95,8 @@ function _buildHistoryRow(entry) {
     <button class="result-like-btn history-like-btn${isLikedHistory ? ' liked' : ''}" type="button" title="${isLikedHistory ? 'Dislike' : 'Like'}">${heartSvgHistory}</button>
   `;
 
-  // Artist name clicks: stop propagation to prevent parent row's play action
+  // Artist name clicks: navigate on desktop (stopping the row's play
+  // action); on mobile let the tap fall through so it still plays the row.
   window.wireArtistLinks(el);
 
   // Like button: stop propagation to prevent history item's play action

@@ -266,7 +266,8 @@ function _buildQueueRow(container, item, i, currentIndex, thumbsById) {
     if (removeOption) removeOption.hidden = true;
   }
 
-  // Artist name clicks: stop propagation to prevent parent row's play action
+  // Artist name clicks: navigate on desktop (stopping the row's play
+  // action); on mobile let the tap fall through so it still plays the row.
   window.wireArtistLinks(el);
 
   // Tap on the item Ã¢â€ â€™ play from queue. Mark it active immediately so the

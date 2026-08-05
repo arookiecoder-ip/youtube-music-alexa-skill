@@ -122,7 +122,8 @@ function renderRecommendations(items) {
         <button class="result-like-btn recs-like-btn${isLikedTile ? ' liked' : ''}" type="button" title="${isLikedTile ? 'Dislike' : 'Like'}">${heartSvgTile}</button>
       </div>
     `;
-    // Artist name clicks: stop propagation to prevent tile's play action
+    // Artist name clicks: navigate on desktop (stopping the tile's play
+    // action); on mobile let the tap fall through so it still plays the tile.
     window.wireArtistLinks(el);
 
     // Like button: stop propagation to prevent tile's play action

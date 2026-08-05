@@ -273,7 +273,7 @@
   }
   .sidebar-new-playlist-container {
     overflow: hidden;
-    max-height: 56px;
+    max-height: 100px;
     opacity: 1;
     transition: max-height .25s ease, opacity .14s ease, margin .25s ease;
   }
