@@ -174,6 +174,25 @@ function _renderedQueueRows(container) {
   return container.querySelectorAll(':scope > .queue-swipe-wrapper');
 }
 
+// Keeps a queue surface (#np-queue-list, #queue-modal-body) scrolled to the
+// currently-playing row whenever the highlighted track changes — natural
+// playback advance, Next/Previous, a voice command, or the page/sheet being
+// opened while mid-queue. Guarded by the row's own last-known index so
+// repeated calls with an unchanged index (frequent SSE polling) never yank
+// a user's manual scroll position back to the active row.
+function _scrollQueueRowIntoView(container, currentIndex, force) {
+  if (!container) return;
+  const key = String(currentIndex);
+  if (!force && container.dataset.lastActiveIndex === key) return;
+  container.dataset.lastActiveIndex = key;
+  const row = container.querySelector('.queue-item.active');
+  if (!row) return;
+  const wrapper = row.closest('.queue-swipe-wrapper') || row;
+  requestAnimationFrame(function () {
+    wrapper.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+  });
+}
+
 // Builds one queue row (wrapper + item + listeners). thumbsById, when given,
 // maps video_id -> already-loaded <img> to transplant so the browser never
 // re-fetches/re-decodes it (the re-fetch flash on every track change was the
@@ -373,6 +392,7 @@ function renderNpQueue(queue, currentIndex) {
       item.classList.toggle('playing', isCurrent && state.isPlaying);
     });
     _syncQueueSentinel(list);
+    _scrollQueueRowIntoView(list, currentIndex, false);
     return;
   }
   var newChildren = [];
@@ -381,8 +401,10 @@ function renderNpQueue(queue, currentIndex) {
   }
   list.replaceChildren.apply(list, newChildren);
   _syncQueueSentinel(list);
-  var active = list.querySelector('.active');
-  if (active) requestAnimationFrame(function() { active.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); });
+  // A full rebuild happens on first render (page just opened) or when the
+  // queue contents themselves changed (reorder, add/remove, new radio batch).
+  // Either way the active row should be brought into view.
+  _scrollQueueRowIntoView(list, currentIndex, true);
 }
 window.renderNpQueue = renderNpQueue;
 
@@ -600,6 +622,7 @@ function updateQueueActive(currentIndex) {
       el.classList.toggle('active', isCurrent);
       el.classList.toggle('playing', isCurrent && state.isPlaying);
     }
+    _scrollQueueRowIntoView(list, targetIndex, false);
   }
 }
 
@@ -617,6 +640,13 @@ function updateQueueModalActive(currentIndex) {
   for (const el of modalBody.querySelectorAll('.queue-item')) {
     el.classList.toggle('active', Number(el.dataset.index) === currentIndex);
     el.classList.toggle('playing', Number(el.dataset.index) === currentIndex && state.isPlaying);
+  }
+  // Only auto-scroll while the sheet is actually open — otherwise this would
+  // silently move its scroll position while hidden, surprising the user the
+  // next time they open it on an unrelated row.
+  const overlay = document.getElementById('queue-modal-overlay');
+  if (overlay && overlay.classList.contains('open')) {
+    _scrollQueueRowIntoView(modalBody, currentIndex, false);
   }
 }
 
@@ -1330,7 +1360,13 @@ function scheduleHistoryRefresh() {
     for (let i = 0; i < limit; i++) rows.push(_buildQueueRow(body, queue[i], i, idx, new Map()));
     body.replaceChildren(...rows);
     _syncQueueSentinel(body);
-    if (preserveOpenScroll) body.scrollTop = previousScrollTop;
+    if (preserveOpenScroll) {
+      body.scrollTop = previousScrollTop;
+      // The sheet is refreshed on every SSE push while open (full rebuild,
+      // no diffing). If the active track changed since the last refresh,
+      // follow it; otherwise leave the user's manual scroll position alone.
+      _scrollQueueRowIntoView(body, idx, false);
+    }
   }
 
   function scrollPlayingQueueRowToTop() {
@@ -1340,6 +1376,10 @@ function scheduleHistoryRefresh() {
     const bodyRect = body.getBoundingClientRect();
     const rowRect = activeRow.getBoundingClientRect();
     body.scrollTop = Math.max(0, body.scrollTop + rowRect.top - bodyRect.top);
+    // Record the index we just scrolled to so the next SSE-driven
+    // updateQueueModalActive() call doesn't immediately re-scroll on top of
+    // this deliberate open-time placement.
+    if (activeItem) body.dataset.lastActiveIndex = activeItem.dataset.index || '';
   }
 
   let inlineMorph = null;

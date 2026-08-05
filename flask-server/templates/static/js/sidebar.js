@@ -321,14 +321,19 @@
 
   function goHome() {
     const alreadyHome = window.getRoute && window.getRoute() === '#home';
+    const overlayOpen = document.body.classList.contains('now-playing-route');
     // An active Home item is intentionally inert: do not reapply the route,
     // dispatch a synthetic hashchange, or reset the user's scroll position.
-    if (alreadyHome && !state._resultsOpen) {
+    // Exception: if the full player overlay is open, Home must still
+    // minimize it back down to the (already active) home page.
+    if (alreadyHome && !state._resultsOpen && !overlayOpen) {
       if (window._closeSidebar) window._closeSidebar();
       return;
     }
     if (state._resultsOpen && window.closeResults) window.closeResults();
-    if (!alreadyHome) window.navigateTo('#home');
+    // navigateTo() re-runs applyRoute() even when the route hasn't changed,
+    // which is what closes ("minimizes") the now-playing overlay.
+    if (!alreadyHome || overlayOpen) window.navigateTo('#home');
     if (window._closeSidebar) window._closeSidebar();
     if (!alreadyHome) window.scrollTo({ top: 0, behavior: 'smooth' });
   }
@@ -497,10 +502,12 @@
       window._closeSidebar();
     }
     const alreadyHome = (window.getRoute && window.getRoute()) === '#home';
+    const overlayOpen = document.body.classList.contains('now-playing-route');
     // Search results live on the Home route, so navigating to #home alone is
     // a no-op. Close the results explicitly before treating the brand as an
-    // already-active Home shortcut.
-    if (alreadyHome) {
+    // already-active Home shortcut. Exception: if the full player overlay
+    // is open, the brand must still minimize it back down to home.
+    if (alreadyHome && !overlayOpen) {
       if (state._resultsOpen && window.closeResults) {
         window.closeResults();
         window.scrollTo({ top: 0, behavior: 'smooth' });
