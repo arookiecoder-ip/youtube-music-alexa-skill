@@ -1047,9 +1047,26 @@ function escHtml(s) {
 async function playFromQueue(item, queueIndex, openPlaybackPage) {
   const serial = selectedSerial();
   if (!serial) return;
-  state.lastActionAt = Date.now();
   if (!item.video_id) { toast('That recommendation cannot be played.', 'error'); return; }
+  // Claim the intent and paint the row + banner *before* the await. Rapid
+  // clicks down the queue previously each rendered after their own response,
+  // so out-of-order responses made the selected-row highlight jump around.
+  const mySeq = window.beginPlayIntent(item.video_id);
+  state._lastPlayAttemptVideoId = item.video_id;
   if (window.preloadNowPlayingArtwork) window.preloadNowPlayingArtwork(item);
+  const npInfo = { video_id: item.video_id, title: item.title, artist: item.artist, thumbnail: item.thumbnail };
+  showNowPlaying(npInfo);
+  progress.resetPending(item.video_id);
+  state.isPlaying = true;
+  state.lastActionIntent = true;
+  syncPlayPause();
+  if (typeof queueIndex === 'number' && queueIndex >= 0) {
+    // Move the highlight immediately to the row that was actually clicked.
+    state._lastQueueIndex = queueIndex;
+    window._lastQueueIndex = queueIndex;
+    updateQueueActive(queueIndex);
+    if (window.updateQueueModalActive) window.updateQueueModalActive(queueIndex);
+  }
   toast('Playing \u201c' + item.title + '\u201d\u2026');
   try {
     // Pass along metadata so a song that isn't in the server's queue yet (e.g.
@@ -1067,14 +1084,11 @@ async function playFromQueue(item, queueIndex, openPlaybackPage) {
       thumbnail: (item.thumbnail && item.thumbnail.url) || item.thumbnail || '',
       duration_ms: item.duration_ms || 0,
       queue_index: typeof queueIndex === 'number' ? queueIndex : undefined,
+      // Lets the server drop this play if a later click supersedes it.
+      intent_seq: mySeq,
     });
-    state._lastPlayAttemptVideoId = item.video_id;
-    const npInfo = { video_id: item.video_id, title: item.title, artist: item.artist, thumbnail: item.thumbnail };
-    showNowPlaying(npInfo);
-    progress.resetPending(item.video_id);
-    state.isPlaying = true;
-    state.lastActionIntent = true;
-    syncPlayPause();
+    // Superseded by a later click: that click owns the UI now.
+    if (!window.isCurrentPlayIntent(mySeq)) return;
     toast('Playing', 'ok');
     if (openPlaybackPage && window.matchMedia('(min-width: 900px)').matches) window.navigateTo('#now-playing');
     schedulePollNowPlaying(3000);
@@ -1112,6 +1126,14 @@ async function playFromQueue(item, queueIndex, openPlaybackPage) {
     // Still schedule server refreshes to pick up proper metadata / dedup
     scheduleHistoryRefresh();
   } catch (e) {
+    if (!window.isCurrentPlayIntent(mySeq)) return;
+    // Painting before the await means a failed play has already rendered as
+    // playing. Undo the optimistic state and let server state take over.
+    window.settlePlayIntent(item.video_id);
+    state.isPlaying = false;
+    state.lastActionIntent = false;
+    syncPlayPause();
+    schedulePollNowPlaying(0);
     toast(e.message, 'error');
   }
 }
@@ -1149,7 +1171,11 @@ async function playCollection(items, options) {
     return;
   }
 
-  state.lastActionAt = Date.now();
+  // The first track is only known after the server resolves the collection,
+  // so this path claims the intent without a video_id and pins it once the
+  // response arrives. beginPlayIntent still bumps the sequence, so a later
+  // single-song click supersedes this collection play.
+  const mySeq = window.beginPlayIntent('');
   toast(options.shuffle ? 'Shuffling collection…' : 'Playing collection…');
   try {
     // Use the queue endpoint for both kinds of collection. Besides retaining
@@ -1162,10 +1188,16 @@ async function playCollection(items, options) {
       target_video_id: startVideoId || undefined,
       start_index: requestedStartIndex,
       shuffle: !!options.shuffle,
+      // Lets the server drop this play if a later click supersedes it.
+      intent_seq: mySeq,
     });
+    // Superseded by a later click: that click owns the UI now.
+    if (!window.isCurrentPlayIntent(mySeq)) return data;
     const first = data && data.now_playing;
     if (first && first.video_id) {
       state._lastPlayAttemptVideoId = first.video_id;
+      state._playIntentVideoId = first.video_id;
+      state._playIntentAt = Date.now();
       showNowPlaying(first);
       progress.resetPending(first.video_id);
     }
@@ -1179,6 +1211,8 @@ async function playCollection(items, options) {
     schedulePollNowPlaying(1000);
     return data;
   } catch (error) {
+    if (!window.isCurrentPlayIntent(mySeq)) return null;
+    window.settlePlayIntent(state._playIntentVideoId);
     toast((error && error.message) || 'Could not play collection', 'error');
     return null;
   }

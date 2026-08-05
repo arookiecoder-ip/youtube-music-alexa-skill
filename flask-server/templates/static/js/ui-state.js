@@ -27,6 +27,23 @@
     volumeGraceUntil: 0,
     VOLUME_GRACE_MS: 4000,
     _volCommandSeq: 0,
+    // Play-intent sequencing. Rapid clicks on song A, B, C each fire their own
+    // POST /alexa/play_queue/, and those responses can complete out of order
+    // (the endpoint ranges from ~400ms to several seconds depending on radio /
+    // playlist expansion). Each handler used to render its optimistic
+    // now-playing *after* its await, so an earlier click's late response
+    // overwrote a later click's UI — showing C, then B, then C again once the
+    // server caught up. These fields let every play path discard work that a
+    // newer click has superseded, exactly like _volCommandSeq does for volume.
+    _playIntentSeq: 0,
+    _playIntentVideoId: '',
+    _playIntentAt: 0,
+    // How long local play intent outranks a contradicting server snapshot.
+    // Must comfortably exceed the Echo's cold-start path (~9-10s of yt-dlp
+    // before the first byte) or the UI would snap back to the previous track
+    // while the new one is still being fetched. Expiring at all is the safety
+    // valve: if the play never happens, server state takes over again.
+    PLAY_INTENT_GRACE_MS: 12000,
     lastVolumeRefreshAt: 0,
     _hasTrack: false,
     _resultsOpen: false,
@@ -159,4 +176,77 @@
   window.deviceEl = deviceEl;
   window.syncUiState = syncUiState;
   window.animatePlaySectionLayout = animatePlaySectionLayout;
+
+  /* ---- play-intent sequencing (see _playIntentSeq in __appState) ---- */
+
+  // Tracks the user clicked away from, with the time they were abandoned.
+  // Needed because settling the intent on the first matching snapshot used to
+  // disarm the guard completely: with five concurrent clicks the server can
+  // publish the newest track *first* and the older ones a moment later, so the
+  // UI jumped back through 1, 2, 3, 4 after already showing 5. An abandoned
+  // track stays rejected for the whole grace window regardless of settling.
+  const _abandoned = new Map();
+
+  function _pruneAbandoned(now) {
+    const grace = window.__appState.PLAY_INTENT_GRACE_MS;
+    for (const [videoId, at] of _abandoned) {
+      if (now - at >= grace) _abandoned.delete(videoId);
+    }
+  }
+
+  // Call synchronously at click time, before any await, and keep the returned
+  // token to check whether this click is still the newest one.
+  window.beginPlayIntent = function beginPlayIntent(videoId) {
+    const state = window.__appState;
+    const now = Date.now();
+    _pruneAbandoned(now);
+    // The track we are leaving must not be able to re-render itself later.
+    if (state._playIntentVideoId && state._playIntentVideoId !== videoId) {
+      _abandoned.set(state._playIntentVideoId, now);
+    }
+    // Re-clicking a previously abandoned track makes it wanted again.
+    if (videoId) _abandoned.delete(videoId);
+    state._playIntentSeq += 1;
+    state._playIntentVideoId = videoId || '';
+    state._playIntentAt = now;
+    // Existing consumers key their "did the user just act?" grace windows off
+    // lastActionAt; keep it in lockstep so behaviour there is unchanged.
+    state.lastActionAt = now;
+    return state._playIntentSeq;
+  };
+
+  window.isCurrentPlayIntent = function isCurrentPlayIntent(seq) {
+    return window.__appState._playIntentSeq === seq;
+  };
+
+  // True when a server snapshot describes a track the user has already clicked
+  // away from, and local intent should therefore win. Returns false as soon as
+  // the snapshot catches up to the intended track, so the authoritative state
+  // is never blocked — only stale state is.
+  window.playIntentSupersedes = function playIntentSupersedes(videoId) {
+    const state = window.__appState;
+    if (!videoId) return false;
+    const now = Date.now();
+    _pruneAbandoned(now);
+    // Explicitly abandoned: reject for the whole grace window even after the
+    // intended track has been settled.
+    if (_abandoned.has(videoId)) return true;
+    if (!state._playIntentVideoId) return false;
+    if (videoId === state._playIntentVideoId) return false;
+    return (now - state._playIntentAt) < state.PLAY_INTENT_GRACE_MS;
+  };
+
+  // Clears the intent once the server agrees (or a play failed), so later
+  // genuine track changes — the queue advancing on its own, a voice command —
+  // are not held back by a stale intent.
+  window.settlePlayIntent = function settlePlayIntent(videoId) {
+    const state = window.__appState;
+    if (videoId && state._playIntentVideoId === videoId) {
+      state._playIntentVideoId = '';
+      state._playIntentAt = 0;
+    }
+  };
+
+  // Test/diagnostic hook.
+  window.__abandonedPlayIntents = _abandoned;
 })();

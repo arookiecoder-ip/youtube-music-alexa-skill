@@ -1016,6 +1016,13 @@ body:not(.explore-route):not(.mood-route):not(.library-route):has(#library-modal
   z-index: 1400;
 }
 #add-to-playlist-overlay .history-modal { border-radius: 0; }
+#new-playlist-overlay .history-modal { border-radius: 0; }
+#new-playlist-overlay #new-playlist-overlay-name,
+#new-playlist-overlay #new-playlist-overlay-desc { border-radius: 0 !important; }
+#new-playlist-overlay #new-playlist-overlay-create { border-radius: 0 !important; }
+#import-playlist-overlay .history-modal { border-radius: 0; }
+#import-playlist-overlay #import-playlist-url { border-radius: 0 !important; }
+#import-playlist-overlay #import-playlist-submit { border-radius: 0 !important; }
 #new-playlist-name { border-radius: 0 !important; }
 #new-playlist-btn { border-radius: 0; }
 #add-to-playlist-list > button {
@@ -1786,6 +1793,7 @@ body.results-open .player-section {
     transition: opacity .15s ease;
   }
   .player-section .vol:hover input[type=range],
+  .player-section .vol.vol-open input[type=range],
   .player-section .vol input[type=range]:focus-visible { opacity: 1; }
   .player-section .progress-track { height: 2px; }
   .player-section .progress:hover .progress-track { height: 4px; }

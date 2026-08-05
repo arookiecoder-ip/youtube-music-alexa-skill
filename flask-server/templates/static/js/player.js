@@ -841,8 +841,17 @@ const progress = window.progress = (function () {
 async function playResult(item, suppressRadio, forceRadio, openPlaybackPage) {
   const serial = selectedSerial();
   if (!serial) return;
-  state.lastActionAt = Date.now();
+  // Claim the intent and paint the UI *before* the await. Doing it afterwards
+  // meant the UI followed response order rather than click order, so clicking
+  // A, B, C could show C, then B, then C again.
+  const mySeq = window.beginPlayIntent(item.video_id);
+  state._lastPlayAttemptVideoId = item.video_id;
   preloadNowPlayingArtwork(item);
+  showNowPlaying(item);
+  progress.resetPending(item.video_id);
+  state.isPlaying = true;
+  state.lastActionIntent = true;
+  syncPlayPause();
   toast(forceRadio
     ? 'Starting radio from \u201c' + item.title + '\u201d\u2026'
     : 'Playing \u201c' + item.title + '\u201d\u2026');
@@ -859,19 +868,25 @@ async function playResult(item, suppressRadio, forceRadio, openPlaybackPage) {
       // queue seeded from just this track instead of silently reusing the
       // existing one (see alexa_play_queue's force_radio handling).
       force_radio: !!forceRadio,
+      // Lets the server drop this play if a later click supersedes it.
+      intent_seq: mySeq,
     });
-    state._lastPlayAttemptVideoId = item.video_id;
-    showNowPlaying(item);
-    progress.resetPending(item.video_id);
-    state.isPlaying = true;
-    state.lastActionIntent = true;
-    syncPlayPause();
+    // Superseded by a later click: that click owns the UI now.
+    if (!window.isCurrentPlayIntent(mySeq)) return;
     toast(forceRadio ? 'Radio started' : 'Playing', 'ok');
     // Only search-result plays opt into opening the expanded playback page.
     if (openPlaybackPage && window.matchMedia('(min-width: 900px)').matches) window.navigateTo('#now-playing');
     state._lastQueueJson = '';
     schedulePollNowPlaying(3000);
   } catch (e) {
+    if (!window.isCurrentPlayIntent(mySeq)) return;
+    // Painting before the await means a failed play has already rendered as
+    // playing. Undo the optimistic state and let server state take over.
+    window.settlePlayIntent(item.video_id);
+    state.isPlaying = false;
+    state.lastActionIntent = false;
+    syncPlayPause();
+    schedulePollNowPlaying(0);
     toast(e.message, 'error');
   }
 }

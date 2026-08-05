@@ -20,3 +20,5 @@ test_auth.json
 cookies.txt
 alexa_cookies/
 headers_auth.json
+BUG_REPORT.md
+FRONTEND_REPORT.md

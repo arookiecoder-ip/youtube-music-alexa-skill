@@ -204,6 +204,28 @@ if (mobileVolumeButton && mobileVolumePopover) {
   });
 }
 
+/* ---- desktop vol: tap-to-toggle for touch devices (tablets in desktop view) ---- */
+const volContainer = document.querySelector('.player-section .vol');
+if (volContainer) {
+  const volSvg = volContainer.querySelector('svg');
+  if (volSvg) {
+    volSvg.style.cursor = 'pointer';
+    volSvg.addEventListener('click', e => {
+      // Don't interfere if user is interacting with the slider itself
+      if (e.target.closest('input')) return;
+      e.stopPropagation();
+      volContainer.classList.toggle('vol-open');
+      if (volContainer.classList.contains('vol-open')) refreshVolume(true);
+    });
+  }
+  // Close when clicking outside
+  document.addEventListener('click', e => {
+    if (!e.target.closest('.player-section .vol')) {
+      volContainer.classList.remove('vol-open');
+    }
+  });
+}
+
 /* ---- login gating ---- */
 
   window.isYoutubeLinkLike = isYoutubeLinkLike;

@@ -177,6 +177,190 @@ _ARMED_PLAYS = {}
 _ARMED_PLAYS_LOCK = threading.Lock()
 ARMED_PLAY_TTL = 60.0  # seconds
 
+# ---- play-intent claims (rapid-click coalescing) ----
+# Clicking five songs in quick succession fires five concurrent
+# POST /alexa/play_queue/ requests. Each one used to update now-playing and
+# dispatch its own trigger phrase to Alexa, so:
+#   * whichever request's thread finished last won the now-playing state,
+#     which is not necessarily the song the user clicked last, and
+#   * Alexa received five play commands and the Echo dutifully played all five
+#     in turn, pushing an SSE snapshot per track. On screen that appeared as
+#     "shows 5, then jumps back to 1, then 2, 3, 4, then 5".
+# The web remote stamps each play with its monotonic `_playIntentSeq`; we keep
+# the highest seq seen per device and drop anything older, so a burst of clicks
+# collapses into exactly one dispatch for the song the user actually landed on.
+# Requests without a seq (voice commands, the Lambda, older clients) always
+# claim, preserving existing behaviour.
+_PLAY_INTENT_SEQS = {}
+_PLAY_INTENT_LOCK = threading.Lock()
+
+
+def _claim_play_intent(serial, seq):
+    """True when this play request is the newest for `serial`.
+
+    `seq` is the client's play-intent sequence number. None means "unsequenced"
+    and always claims. Equal sequences are treated as superseded so a retried
+    or duplicated POST cannot dispatch twice.
+    """
+    if seq is None:
+        return True
+    try:
+        seq = int(seq)
+    except (TypeError, ValueError):
+        return True
+    key = serial or ''
+    with _PLAY_INTENT_LOCK:
+        previous = _PLAY_INTENT_SEQS.get(key)
+        if previous is not None and seq <= previous:
+            return False
+        _PLAY_INTENT_SEQS[key] = seq
+        # Bound memory on a long-lived process with many devices.
+        if len(_PLAY_INTENT_SEQS) > 64:
+            for stale in list(_PLAY_INTENT_SEQS)[:-32]:
+                del _PLAY_INTENT_SEQS[stale]
+        return True
+
+
+def _play_intent_seq_arg(body):
+    """Read the client's play-intent sequence from a request body."""
+    value = body.get('intent_seq')
+    if value is None:
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+# ---- dispatch coalescing ----
+# The sequence claim above only rejects clicks that arrive *out of order*. A
+# human clicking five songs produces five requests in ascending order, so every
+# one of them claims -- and each sends its own trigger phrase to Alexa, which
+# queues them and makes the Echo play all five in turn.
+#
+# Coalescing is therefore done on the dispatch itself: each play request arms
+# its song (the arm is keyed by device, so it overwrites) and schedules the
+# trigger a short moment later, cancelling any trigger the previous click had
+# scheduled. A burst of clicks collapses into exactly one trigger phrase for
+# whatever the user landed on. The delay is short enough to be invisible next to
+# the ~9-10s cold-start path but long enough to absorb ordinary rapid clicking.
+PLAY_DISPATCH_DEBOUNCE = float(os.environ.get('PLAY_DISPATCH_DEBOUNCE', '0.7'))
+_PENDING_DISPATCH = {}
+_PENDING_DISPATCH_LOCK = threading.Lock()
+
+# A short debounce only merges clicks that land within its window; clicks ~1s
+# apart still produced one trigger each. The timing-independent half of the fix
+# exploits how playback is actually requested: the trigger phrase carries no
+# song, the skill fetches it from /armed_play/, and the arm is per-device and
+# overwritten. So a trigger that has been sent but not yet served will pick up
+# whatever is armed *when it lands* -- one in-flight trigger can serve any
+# number of subsequent clicks. While one is outstanding we therefore only
+# re-arm, and send no further triggers.
+#
+# The TTL bounds the case where Alexa silently drops a trigger: after it we
+# allow a fresh one rather than blocking playback forever.
+TRIGGER_INFLIGHT_TTL = 15.0
+_TRIGGER_INFLIGHT = {}
+_TRIGGER_INFLIGHT_LOCK = threading.Lock()
+
+
+def _note_trigger_sent(serial):
+    with _TRIGGER_INFLIGHT_LOCK:
+        _TRIGGER_INFLIGHT[serial or ''] = time.time()
+
+
+def _trigger_in_flight(serial):
+    """True while a trigger phrase for this device is sent but not yet served."""
+    key = serial or ''
+    with _TRIGGER_INFLIGHT_LOCK:
+        sent_at = _TRIGGER_INFLIGHT.get(key)
+        if sent_at is None:
+            return False
+        if time.time() - sent_at > TRIGGER_INFLIGHT_TTL:
+            del _TRIGGER_INFLIGHT[key]
+            return False
+        return True
+
+
+def _clear_trigger_inflight(serial=None):
+    """The outstanding trigger has been served (or playback was confirmed).
+
+    `serial=None` clears the most recent entry: the skill calls /armed_play/
+    without a serial because it cannot map its Alexa deviceId to the AlexaPy
+    serialNumber, the same single-user assumption `_consume_armed_play` documents.
+    """
+    with _TRIGGER_INFLIGHT_LOCK:
+        if serial is not None:
+            _TRIGGER_INFLIGHT.pop(serial, None)
+        elif _TRIGGER_INFLIGHT:
+            newest = max(_TRIGGER_INFLIGHT, key=_TRIGGER_INFLIGHT.get)
+            del _TRIGGER_INFLIGHT[newest]
+
+
+def _cancel_pending_dispatch(serial):
+    """Cancel a scheduled trigger for this device. True if one was cancelled."""
+    with _PENDING_DISPATCH_LOCK:
+        pending = _PENDING_DISPATCH.pop(serial or '', None)
+    if pending is None:
+        return False
+    pending['timer'].cancel()
+    return True
+
+
+def _schedule_play_dispatch(serial, video_id, offset_ms=0, delay=None):
+    """Schedule the single trigger phrase for a (possibly ongoing) click burst.
+
+    Replaces any trigger the previous click scheduled for the same device, so
+    only the newest song is ever dispatched. Dispatch errors surface through
+    now-playing's `playback_error` (the web remote already toasts it) rather than
+    this call's return value, because the send happens after the response.
+    """
+    key = serial or ''
+    if delay is None:
+        delay = PLAY_DISPATCH_DEBOUNCE
+
+    def _fire():
+        with _PENDING_DISPATCH_LOCK:
+            pending = _PENDING_DISPATCH.get(key)
+            # A newer click replaced us between the timer firing and this lock.
+            if not pending or pending['token'] != token:
+                return
+            del _PENDING_DISPATCH[key]
+        # Always keep the arm current: this is what an in-flight trigger, or the
+        # one we are about to send, will actually play.
+        _arm_play(serial, video_id, offset_ms)
+        if _trigger_in_flight(serial):
+            # A trigger is already on its way to Alexa and will fetch the arm we
+            # just refreshed. Sending another would make the Echo play this song
+            # *and then* the next one.
+            logger.info("[play-dispatch] reusing in-flight trigger for %s", video_id)
+            return
+        try:
+            _note_trigger_sent(serial)
+            error = _dispatch_play_with_retry(serial, video_id, offset_ms)
+            if error:
+                _clear_trigger_inflight(serial)
+                logger.error("[play-dispatch] %s failed: %s", video_id, error)
+                _update_now_playing(
+                    playback_error={'type': 'dispatch_error', 'message': error})
+        except Exception:
+            _clear_trigger_inflight(serial)
+            logger.exception("[play-dispatch] unexpected failure for %s", video_id)
+
+    token = object()
+    timer = threading.Timer(delay, _fire)
+    timer.daemon = True
+    with _PENDING_DISPATCH_LOCK:
+        previous = _PENDING_DISPATCH.get(key)
+        if previous is not None:
+            previous['timer'].cancel()
+        _PENDING_DISPATCH[key] = {
+            'timer': timer, 'token': token, 'video_id': video_id,
+            'offset_ms': offset_ms, 'scheduled_at': time.time(),
+        }
+    timer.start()
+    return previous['video_id'] if previous else None
+
 
 def _arm_play(serial, video_id, offset_ms=0):
     with _ARMED_PLAYS_LOCK:
@@ -953,6 +1137,18 @@ _locks_guard = threading.Lock()
 # unbounded concurrent downloads of many different ids).
 _DOWNLOAD_CONCURRENCY = 4
 _download_semaphore = threading.Semaphore(_DOWNLOAD_CONCURRENCY)
+# Best-effort prefetch must never occupy the whole download pool. A cold-cache
+# song needs ~9-10s of yt-dlp (≈5s extraction plus a buffered transfer) and the
+# Echo abandons /proxy/ after ~11s, so if the track the user just clicked has to
+# queue behind a queue-prewarm burst it misses that window and the device plays
+# silence. Prefetch takes this smaller semaphore *in addition* to the one above,
+# which keeps (_DOWNLOAD_CONCURRENCY - _PREFETCH_CONCURRENCY) permits
+# permanently available to user-initiated downloads.
+_PREFETCH_CONCURRENCY = 2
+_prefetch_semaphore = threading.Semaphore(_PREFETCH_CONCURRENCY)
+# Prefetch is dropped rather than queued when its own slots are taken: waiting
+# would just hold a thread to do work that the next track change may discard.
+_PREFETCH_SLOT_TIMEOUT = 0.5
 
 # Permanently-unavailable video ids (deleted, privated, etc.). Keyed by
 # video_id -> timestamp so they expire after a TTL (in case a video is
@@ -981,10 +1177,63 @@ _VIDEO_UNAVAILABLE_ERRORS = [
 ]
 
 
+# yt-dlp stderr strings that mean YouTube is throttling *this server* rather
+# than saying anything about the video. Under an HTTP 429 the extractor cannot
+# fetch the watch page at all, so it reports downstream symptoms that look
+# byte-identical to a deleted video ("Video unavailable", "This video is not
+# available"). Classifying those as permanent poisons `_dead_video_ids` for
+# `_DEAD_VIDEO_TTL`, after which a perfectly fine song is skipped with
+# "known-dead, skipping download" for an hour. This check therefore always
+# takes precedence over `_VIDEO_UNAVAILABLE_ERRORS`.
+_RATE_LIMIT_ERRORS = [
+    'HTTP Error 429',
+    'Too Many Requests',
+]
+
+
+def _rate_limit_warning_present(stderr: str) -> bool:
+    """True when a 429 appears anywhere in yt-dlp's output.
+
+    Includes the common recoverable case, e.g.
+    ``WARNING: [youtube] X: Unable to download webpage: HTTP Error 429``
+    followed by a successful innertube extraction. Enough to distrust any
+    "unavailable" wording in the same output and to pause best-effort prefetch,
+    but NOT enough to stop trying the other client profiles.
+    """
+    if not stderr:
+        return False
+    return any(err in stderr for err in _RATE_LIMIT_ERRORS)
+
+
+def _is_rate_limited_error(stderr: str) -> bool:
+    """True when a 429 is the *fatal* cause of this client's failure.
+
+    Only counts a 429 reported on an ``ERROR:`` line. yt-dlp routinely emits a
+    429 as a WARNING for the watch-page fetch and then succeeds via the
+    innertube API, so treating any 429 as fatal cut the client-profile fallback
+    chain short — in the incident logs the run that warned about a 429 actually
+    failed with "Sign in to confirm you're not a bot", which the *next* client
+    is exactly what recovers from.
+    """
+    if not stderr:
+        return False
+    for line in stderr.splitlines():
+        stripped = line.strip()
+        if not stripped.startswith('ERROR'):
+            continue
+        if any(err in stripped for err in _RATE_LIMIT_ERRORS):
+            return True
+    return False
+
+
 def _is_video_permanently_unavailable(stderr: str) -> bool:
     """True when the yt-dlp error indicates the video itself is dead (deleted,
     privated, etc.), as opposed to a transient network or rate-limit issue."""
     if not stderr:
+        return False
+    # A run that hit a 429 never reliably learned anything about the video, so
+    # its "unavailable" wording is not evidence of a permanent failure.
+    if _rate_limit_warning_present(stderr):
         return False
     return any(err in stderr for err in _VIDEO_UNAVAILABLE_ERRORS)
 
@@ -1032,6 +1281,175 @@ def _dec_download_depth():
     with _download_queue_lock:
         if _download_queue_depth > 0:
             _download_queue_depth -= 1
+
+
+def _download_queue_size() -> int:
+    with _download_queue_lock:
+        return _download_queue_depth
+
+
+# ---------- yt-dlp rate-limit cooldown ----------
+# A burst of downloads (several rapid song clicks, each fanning out into a
+# foreground download plus up to 8 queue prewarms) gets the server's IP a 429
+# from YouTube. Once that happens every client profile fails, including for the
+# song the user is actually waiting on, and hammering it further deepens the
+# block. After a 429 we therefore stop issuing *best-effort* work (queue
+# prewarm) for a cooldown window; user-initiated downloads still go through.
+_YTDLP_COOLDOWN_SECONDS = 90.0
+_ytdlp_cooldown_until = 0.0
+_ytdlp_cooldown_lock = threading.Lock()
+
+
+def _note_rate_limited(video_id: str = ''):
+    """Record that YouTube just rate-limited us and open a cooldown window."""
+    global _ytdlp_cooldown_until
+    with _ytdlp_cooldown_lock:
+        until = time.time() + _YTDLP_COOLDOWN_SECONDS
+        # Never shorten an existing window (a later 429 during an active
+        # cooldown means we are still being throttled).
+        if until > _ytdlp_cooldown_until:
+            _ytdlp_cooldown_until = until
+    logger.warning("yt-dlp: rate-limited by YouTube%s; pausing prefetch for %.0fs",
+                   f" on {video_id}" if video_id else "", _YTDLP_COOLDOWN_SECONDS)
+
+
+def _ytdlp_cooldown_remaining() -> float:
+    with _ytdlp_cooldown_lock:
+        return max(0.0, _ytdlp_cooldown_until - time.time())
+
+
+def _ytdlp_rate_limited() -> bool:
+    """True while inside the post-429 cooldown window."""
+    return _ytdlp_cooldown_remaining() > 0
+
+
+def _reset_rate_limit_cooldown():
+    """Clear the cooldown (a download just succeeded, or tests want a clean slate)."""
+    global _ytdlp_cooldown_until
+    with _ytdlp_cooldown_lock:
+        _ytdlp_cooldown_until = 0.0
+
+
+# ---------- playback generation ----------
+# Monotonic counter bumped every time the current track changes. Background
+# work (queue prewarm, cold-cache proxy streams) captures the generation it was
+# started for and abandons itself once the counter moves on, so clicking three
+# songs in a row costs one track's worth of downloads instead of three -- which
+# is what triggered the 429 above.
+_playback_generation = 0
+_playback_generation_lock = threading.Lock()
+
+
+def _current_playback_generation() -> int:
+    with _playback_generation_lock:
+        return _playback_generation
+
+
+def _bump_playback_generation() -> int:
+    global _playback_generation
+    with _playback_generation_lock:
+        _playback_generation += 1
+        return _playback_generation
+
+
+def _generation_superseded(generation) -> bool:
+    """True when `generation` is stale, i.e. the user has moved to another track.
+
+    `generation=None` means "not cancellable" (a foreground download for the
+    track the user is waiting on) and is never considered superseded.
+    """
+    if generation is None:
+        return False
+    return _current_playback_generation() != generation
+
+
+# ---------- cold-cache proxy stream registry ----------
+# /proxy/ serves a cold-cache track by streaming a yt-dlp subprocess straight
+# to the Echo. That path bypasses the per-id `_download_locks`, so N concurrent
+# requests for one video_id (the Echo's own retries plus the playback
+# watchdog's resend) used to spawn N independent yt-dlp processes for the same
+# song. Entries here make those requests visible both to each other and to
+# `_download_in_progress`.
+_stream_inflight = {}
+_stream_inflight_lock = threading.Lock()
+# How long a duplicate request waits for the in-flight stream to land a cache
+# file before giving up and doing its own download.
+_STREAM_DUPLICATE_WAIT = 25.0
+_STREAM_DUPLICATE_POLL = 0.25
+# A superseded stream is killed once it has been stale this long. The grace
+# period absorbs the brief window where /proxy/ arrives before the now-playing
+# state has been updated for the same track (voice-initiated playback).
+_STREAM_SUPERSEDE_GRACE = 8.0
+# Absolute ceiling on a single cold-cache stream. Each open stream holds one
+# waitress worker thread and one yt-dlp process; a stuck one (yt-dlp grinding
+# through its retry loop against a rate-limited endpoint) must not be able to
+# occupy them for minutes, starving every other request.
+_STREAM_MAX_SECONDS = 150.0
+# How long a cold-cache stream waits for a streaming slot before proceeding
+# anyway. The user is waiting on this audio, so the slot is a throttle, not a
+# gate: never let it delay playback past the Echo's ~11s /proxy/ timeout.
+_STREAM_PERMIT_TIMEOUT = 2.0
+# Cold-cache streams get their own budget rather than sharing
+# `_download_semaphore` with prewarm. Sharing put best-effort prefetch work
+# directly in front of the track the user is waiting on: with only
+# _DOWNLOAD_CONCURRENCY permits, a couple of streams plus prewarms saturated the
+# pool ("streaming X without a download permit"), and anything that did wait on
+# that semaphore stalled playback.
+_STREAM_CONCURRENCY = 3
+_stream_semaphore = threading.Semaphore(_STREAM_CONCURRENCY)
+
+
+def _stream_register(video_id: str) -> bool:
+    """Claim `video_id` for a cold-cache stream. False when already claimed."""
+    with _stream_inflight_lock:
+        if video_id in _stream_inflight:
+            return False
+        _stream_inflight[video_id] = time.time()
+        return True
+
+
+def _stream_unregister(video_id: str):
+    with _stream_inflight_lock:
+        _stream_inflight.pop(video_id, None)
+
+
+def _stream_is_inflight(video_id: str) -> bool:
+    with _stream_inflight_lock:
+        return video_id in _stream_inflight
+
+
+class _SemaphorePermit:
+    """Idempotently-released semaphore permit for a streaming response.
+
+    A permit taken by a view function but released inside the response
+    generator leaks whenever the WSGI server closes the response without ever
+    iterating it. The release is therefore idempotent and gets wired to both
+    the generator's `finally` and `Response.call_on_close`.
+    """
+
+    def __init__(self, semaphore):
+        self._semaphore = semaphore
+        self._lock = threading.Lock()
+        self._held = False
+
+    @property
+    def held(self) -> bool:
+        with self._lock:
+            return self._held
+
+    def acquire(self, timeout: float) -> bool:
+        acquired = self._semaphore.acquire(timeout=timeout)
+        if acquired:
+            with self._lock:
+                self._held = True
+        return acquired
+
+    def release(self):
+        with self._lock:
+            if not self._held:
+                return
+            self._held = False
+        self._semaphore.release()
 
 _stream_list_cache = {}
 _stream_list_pending = {}
@@ -1314,6 +1732,11 @@ def _update_now_playing(**kwargs):
             if 'playback_confirmed' not in kwargs:
                 _now_playing['playback_confirmed'] = False
         _now_playing['updated_at'] = time.time()
+    if track_changed:
+        # Invalidate background download work started for the previous track:
+        # queue prewarms and cold-cache proxy streams check this and abandon
+        # themselves rather than piling more yt-dlp processes onto YouTube.
+        _bump_playback_generation()
     _notify_sse()
 
 def _get_now_playing():
@@ -1548,11 +1971,35 @@ def _current_queue_for_video(video_id):
 
 
 def _prewarm_queue_audio(queue, current_index=0, limit=4):
+    """Best-effort pre-download of the next few queue entries.
+
+    Strictly best-effort: it must never compete with the track the user is
+    waiting on. It gives up when the download queue is saturated, while YouTube
+    is rate-limiting us, and as soon as the user moves to a different track.
+    """
     if not queue:
-        return
+        return 0
+    generation = _current_playback_generation()
+    if _ytdlp_rate_limited():
+        logger.info("prewarm skipped: yt-dlp cooling down for %.0fs more",
+                    _ytdlp_cooldown_remaining())
+        return 0
     warmed = 0
     for offset in range(1, len(queue)):
         if warmed >= limit:
+            break
+        # The user clicked another song: everything below is now waste that
+        # would only push us closer to a 429.
+        if _generation_superseded(generation):
+            logger.info("prewarm aborted: playback moved on after %d warm(s)", warmed)
+            break
+        # Never queue prefetch work behind an already-saturated download queue.
+        if not _download_backpressure():
+            logger.info("prewarm aborted: download queue saturated (%d queued)",
+                        _download_queue_size())
+            break
+        if _ytdlp_rate_limited():
+            logger.info("prewarm aborted: yt-dlp rate-limited")
             break
         item = queue[(current_index + offset) % len(queue)]
         video_id = item.get('video_id', '')
@@ -1560,18 +2007,30 @@ def _prewarm_queue_audio(queue, current_index=0, limit=4):
             continue
         if Supporting.cached_audio_path(video_id):
             continue
-        _ensure_audio_ready_for_play(video_id, wait=False)
+        _ensure_audio_ready_for_play(video_id, wait=False, generation=generation,
+                                    prefetch=True)
         warmed += 1
+    return warmed
 
 
-def _ensure_audio_ready_for_play(video_id, wait=False):
+def _ensure_audio_ready_for_play(video_id, wait=False, generation=None, prefetch=False):
+    """Make sure `video_id`'s audio is cached.
+
+    `generation` opts the download into cancellation: it is abandoned if the
+    current track changes before yt-dlp actually starts. Leave it None for the
+    track the user is waiting on. `prefetch=True` marks the download as
+    best-effort so it is dropped entirely during a rate-limit cooldown.
+    """
     if not _valid_video_id(video_id):
         return False
     if Supporting.cached_audio_path(video_id):
         return True
     if wait:
-        return bool(Supporting.ensure_downloaded(video_id))
-    threading.Thread(target=Supporting.ensure_downloaded, args=(video_id,), daemon=True).start()
+        return bool(Supporting.ensure_downloaded(video_id, generation=generation,
+                                                 prefetch=prefetch))
+    threading.Thread(target=Supporting.ensure_downloaded, args=(video_id,),
+                     kwargs={'generation': generation, 'prefetch': prefetch},
+                     daemon=True).start()
     return False
 
 
@@ -2137,13 +2596,31 @@ class Supporting:
         command += ["-o", output, "--", video_id]
         return command
 
-    def ensure_downloaded(video_id: str):
+    def ensure_downloaded(video_id: str, generation=None, prefetch=False):
+        """Download `video_id` into the audio cache and return its path.
+
+        `generation` (see `_current_playback_generation`) makes the download
+        cancellable: because the semaphore below can hold a caller for a long
+        time, the generation is re-checked right before yt-dlp is spawned so a
+        backlog built up by rapid song clicks drains instantly instead of
+        running downloads nobody is waiting for any more.
+
+        `prefetch=True` marks the download best-effort; it is dropped while
+        YouTube is rate-limiting this host.
+        """
         if not _valid_video_id(video_id):
             return None
         # Check the dead-video cache first — skip the yt-dlp subprocess
         # entirely for videos known to be permanently unavailable.
         if _is_dead_video(video_id):
             logger.warning("yt-dlp: %s is known-dead, skipping download", video_id)
+            return None
+        if prefetch and _ytdlp_rate_limited():
+            logger.info("yt-dlp: skipping prefetch of %s (rate-limit cooldown %.0fs)",
+                        video_id, _ytdlp_cooldown_remaining())
+            return None
+        if _generation_superseded(generation):
+            logger.info("yt-dlp: skipping %s, playback already moved on", video_id)
             return None
         now = time.time()
         if now - _last_prune[0] > 60:
@@ -2152,8 +2629,28 @@ class Supporting:
         # Track queue depth: increment BEFORE acquiring the semaphore so the
         # counter reflects queued (waiting) + active downloads, not just active.
         _inc_download_depth()
+        prefetch_slot = None
         try:
+            if prefetch:
+                # Cap prefetch below the pool size so the song the user is
+                # waiting on always has permits available. Best-effort: if no
+                # prefetch slot is free, drop this one instead of queueing.
+                prefetch_slot = _SemaphorePermit(_prefetch_semaphore)
+                if not prefetch_slot.acquire(timeout=_PREFETCH_SLOT_TIMEOUT):
+                    logger.info("yt-dlp: dropping prefetch of %s (%d prefetch slots busy)",
+                                video_id, _PREFETCH_CONCURRENCY)
+                    return None
             with _download_semaphore:
+                # Re-check after the wait: by the time a permit frees up the
+                # user may have clicked several songs past this one.
+                if _generation_superseded(generation):
+                    logger.info("yt-dlp: dropping queued download of %s, playback moved on",
+                                video_id)
+                    return None
+                if prefetch and _ytdlp_rate_limited():
+                    logger.info("yt-dlp: dropping queued prefetch of %s (rate-limited)",
+                                video_id)
+                    return None
                 with _locks_guard:
                     lock = _download_locks.setdefault(video_id, threading.Lock())
                 with lock:
@@ -2164,6 +2661,7 @@ class Supporting:
                     clients = Supporting.get_ytdlp_clients()
                     permanent_failures = 0
                     downloaded = False
+                    rate_limited = False
                     last_error = ""
                     for index, client in enumerate(clients):
                         result = subprocess.run(
@@ -2179,6 +2677,22 @@ class Supporting:
                         last_error = stderr
                         logger.warning("yt-dlp client %s failed for %s; trying fallback: %s",
                                        client, video_id, stderr)
+                        # A 429 is a property of our IP, not of this client
+                        # profile. Pause best-effort prefetch either way, but
+                        # only stop trying other clients when the 429 is what
+                        # actually killed this run: yt-dlp frequently warns
+                        # about a 429 on the watch page and then extracts fine
+                        # via innertube, and the incident logs show the run that
+                        # warned about a 429 really failed on the bot check --
+                        # which the next client profile is what recovers from.
+                        if _rate_limit_warning_present(stderr):
+                            rate_limited = True
+                            _note_rate_limited(video_id)
+                        if _is_rate_limited_error(stderr):
+                            logger.warning(
+                                "yt-dlp: aborting remaining client fallbacks for %s "
+                                "(fatally rate-limited after %s)", video_id, client)
+                            break
                         # "Video unavailable" can be client-specific: the
                         # authenticated default profile may reject a playable
                         # music video that android_vr can still download. Keep
@@ -2187,14 +2701,26 @@ class Supporting:
                         # permanently unavailable.
                         if _is_video_permanently_unavailable(stderr):
                             permanent_failures += 1
-                    if not downloaded and permanent_failures == len(clients):
+                    # A rate-limited run learned nothing about the video, so it
+                    # must never reach the dead-video cache: doing so made
+                    # healthy songs unplayable for _DEAD_VIDEO_TTL.
+                    if (not downloaded and not rate_limited
+                            and permanent_failures == len(clients)):
                         _mark_video_dead(video_id)
                         logger.warning("yt-dlp: %s marked as permanently unavailable", video_id)
+                    elif not downloaded and rate_limited:
+                        logger.error("yt-dlp download failed for %s: rate-limited by YouTube",
+                                     video_id)
                     elif not downloaded:
                         logger.error("yt-dlp download failed for %s with every client: %s",
                                      video_id, last_error)
+                    if downloaded:
+                        # Throughput is back; stop suppressing prefetch.
+                        _reset_rate_limit_cooldown()
                     return Supporting.cached_audio_path(video_id)
         finally:
+            if prefetch_slot is not None:
+                prefetch_slot.release()
             _dec_download_depth()
 
     async def get_stream(video_id: str):
@@ -2662,13 +3188,118 @@ def proxy_stream():
         # immediately, which clears awaitingStart on the client and starts the
         # progress bar ticking even though yt-dlp still takes 7-8s to process.
         # Confirmation is instead deferred to the first chunk inside generate().
+        #
+        # Another request is already streaming this exact track (the Echo
+        # retries /proxy/, and the playback watchdog resends the play command).
+        # Spawning a second yt-dlp for the same song only doubles the load that
+        # gets us rate-limited, so wait for the in-flight one to land its cache
+        # file and serve that instead.
+        if _stream_is_inflight(video_id):
+            path = _await_inflight_stream(video_id)
+            if path:
+                logger.info("proxy: served %s from the in-flight stream's cache", video_id)
+                _confirm_stream_delivery(video_id)
+                mimetype = 'audio/mp4' if path.endswith(('.m4a', '.mp4')) else 'audio/webm'
+                return send_file(path, mimetype=mimetype, conditional=True)
         return _stream_proxy_download(video_id)
-    path = Supporting.ensure_downloaded(video_id)
+    # Warm cache: serve the file directly. This must NOT go through
+    # ensure_downloaded(): that acquires _download_semaphore *before* looking at
+    # the cache, so a request for an already-downloaded file would queue behind
+    # up to _DOWNLOAD_CONCURRENCY slow yt-dlp runs, with no timeout, while
+    # holding a waitress worker thread. That is what produced the 154s/134s/114s
+    # /proxy/ responses that all completed within 9ms of each other once the
+    # download backlog drained -- and on the device it is simply silence, since
+    # the Echo gives up on /proxy/ after ~11s.
+    path = Supporting.cached_audio_path(video_id)
+    if not path:
+        # Raced with the cache sweep between the check above and here; fall back
+        # to a real download.
+        path = Supporting.ensure_downloaded(video_id)
     if not path:
         return error_response('download failed', 502)
     _confirm_stream_delivery(video_id)
     mimetype = 'audio/mp4' if path.endswith(('.m4a', '.mp4')) else 'audio/webm'
     return send_file(path, mimetype=mimetype, conditional=True)
+
+
+def _await_inflight_stream(video_id):
+    """Wait for an in-flight cold-cache stream to publish its cache file.
+
+    Returns the cached path, or None if the in-flight stream ended without one
+    (it failed) or took too long. Callers fall back to their own download, so a
+    None result stays correct — it just costs an extra yt-dlp run.
+    """
+    deadline = time.time() + _STREAM_DUPLICATE_WAIT
+    while time.time() < deadline:
+        path = Supporting.cached_audio_path(video_id)
+        if path:
+            return path
+        if not _stream_is_inflight(video_id):
+            # It finished; one last look in case the rename just landed.
+            return Supporting.cached_audio_path(video_id)
+        time.sleep(_STREAM_DUPLICATE_POLL)
+    logger.warning("proxy: gave up waiting %.0fs for the in-flight stream of %s",
+                   _STREAM_DUPLICATE_WAIT, video_id)
+    return None
+
+
+def _stream_superseded(video_id) -> bool:
+    """True when nothing is waiting for this cold-cache stream any more.
+
+    A stream is still wanted when its track is the current one, or when it is
+    the next track the Echo is legitimately buffering ahead (see the
+    `_prefetched_next` bookkeeping in proxy_stream).
+    """
+    with _np_lock:
+        if _now_playing.get('video_id') == video_id:
+            return False
+    prefetched = _prefetched_next or {}
+    if prefetched.get('video_id') == video_id:
+        return False
+    return True
+
+
+def _stream_abandon_watchdog(video_id, proc, generation, stop_event):
+    """Kill a cold-cache yt-dlp process once nobody is waiting for its output.
+
+    Without this, an abandoned stream holds a waitress worker thread and a live
+    yt-dlp process until the Echo happens to drop the TCP connection — observed
+    at over 150 seconds each, with eight of them stacked up at once, which
+    starves every other request on the server. Note that the in-generator check
+    cannot cover this on its own: the generator is usually blocked inside
+    `proc.stdout.read()` (yt-dlp grinding through its retry loop) and only an
+    external kill unblocks it.
+    """
+    hard_deadline = time.time() + _STREAM_MAX_SECONDS
+    superseded_since = None
+    while not stop_event.wait(0.5):
+        if proc.poll() is not None:
+            return
+        now = time.time()
+        if now >= hard_deadline:
+            logger.warning("proxy: killing stream of %s after %.0fs hard cap",
+                           video_id, _STREAM_MAX_SECONDS)
+            _kill_process(proc)
+            return
+        stale = _generation_superseded(generation) and _stream_superseded(video_id)
+        if not stale:
+            superseded_since = None
+            continue
+        if superseded_since is None:
+            superseded_since = now
+        elif now - superseded_since >= _STREAM_SUPERSEDE_GRACE:
+            logger.info("proxy: killing superseded stream of %s (playback moved on)",
+                        video_id)
+            _kill_process(proc)
+            return
+
+
+def _kill_process(proc):
+    try:
+        if proc.poll() is None:
+            proc.kill()
+    except Exception:
+        pass
 
 
 def _stream_proxy_download(video_id):
@@ -2678,17 +3309,41 @@ def _stream_proxy_download(video_id):
     subsequent plays of this song take the fast send_file path. The Echo
     device's /proxy/ timeout (~11s) is well below a typical VPN-only
     yt-dlp download, so streaming first-byte responsiveness is required.
+
+    The stream is registered in `_stream_inflight` (so duplicate requests and
+    the playback watchdog can see it), counted against `_download_semaphore`
+    (so it cannot outnumber the bounded background downloads), and watched by
+    `_stream_abandon_watchdog` (so it is killed once superseded).
     """
     os.makedirs(AUDIO_CACHE_DIR, exist_ok=True)
     cache_path = os.path.join(AUDIO_CACHE_DIR, f"{video_id}.m4a")
     temp_path = f"{cache_path}.{uuid.uuid4().hex}.part"
+    generation = _current_playback_generation()
+    claimed = _stream_register(video_id)
+    # Cap simultaneous streams, on their own budget so prewarm downloads can
+    # never queue in front of playback. Best-effort: if all slots are busy we
+    # proceed unthrottled rather than make the user wait.
+    permit = _SemaphorePermit(_stream_semaphore)
+    if not permit.acquire(timeout=_STREAM_PERMIT_TIMEOUT):
+        logger.warning("proxy: streaming %s without a stream slot (%d already active)",
+                       video_id, _STREAM_CONCURRENCY)
     cmd = list(Supporting.ytdlp_download_command(video_id, "-", "default"))
-    proc = subprocess.Popen(
-        cmd,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.DEVNULL,
-        bufsize=64 * 1024,
-    )
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            bufsize=64 * 1024,
+        )
+    except Exception:
+        permit.release()
+        if claimed:
+            _stream_unregister(video_id)
+        raise
+    stop_watchdog = threading.Event()
+    threading.Thread(target=_stream_abandon_watchdog,
+                     args=(video_id, proc, generation, stop_watchdog),
+                     name=f"proxy-watchdog-{video_id}", daemon=True).start()
 
     def generate():
         cache_fp = None
@@ -2710,6 +3365,11 @@ def _stream_proxy_download(video_id):
                     confirmed = True
                     _confirm_stream_delivery(video_id)
                 yield chunk
+                # Fast-path abandonment check. The watchdog thread covers the
+                # (common) case where this loop is blocked in read() instead.
+                if _generation_superseded(generation) and _stream_superseded(video_id):
+                    logger.info("proxy: stopping superseded stream of %s", video_id)
+                    break
             proc.wait()
             if cache_fp is not None:
                 cache_fp.close()
@@ -2727,6 +3387,7 @@ def _stream_proxy_download(video_id):
                 except OSError:
                     pass
         finally:
+            stop_watchdog.set()
             if cache_fp is not None:
                 try:
                     cache_fp.close()
@@ -2743,8 +3404,11 @@ def _stream_proxy_download(video_id):
                     proc.wait(timeout=5)
                 except subprocess.TimeoutExpired:
                     pass
+            permit.release()
+            if claimed:
+                _stream_unregister(video_id)
 
-    return Response(
+    response = Response(
         generate(),
         mimetype='audio/mp4',
         headers={
@@ -2752,6 +3416,19 @@ def _stream_proxy_download(video_id):
             'Cache-Control': 'no-store',
         },
     )
+
+    # Belt and braces: if the WSGI server closes this response without ever
+    # iterating the generator, the `finally` above never runs and the permit
+    # plus the in-flight claim would leak. Both releases are idempotent.
+    def _cleanup():
+        stop_watchdog.set()
+        _kill_process(proc)
+        permit.release()
+        if claimed:
+            _stream_unregister(video_id)
+
+    response.call_on_close(_cleanup)
+    return response
 
 def _lookup_and_update_np(video_id):
     """Fallback: look up song metadata from video_id."""
@@ -3135,8 +3812,17 @@ PLAYBACK_CONFIRM_POLL_INTERVAL = 0.5
 
 
 def _download_in_progress(video_id):
-    """True while some thread's ensure_downloaded currently holds the per-id
-    download lock for video_id (i.e. yt-dlp is still fetching it)."""
+    """True while some thread is currently fetching video_id's audio.
+
+    Covers both download paths: the per-id `_download_locks` entry held by
+    `ensure_downloaded`, and the cold-cache `/proxy/` stream registered in
+    `_stream_inflight`. Missing the streaming path made the playback watchdog
+    believe no download was running, so it resent the play command after 12s
+    and the Echo opened yet another /proxy/ request — each one spawning another
+    yt-dlp process for the very same song.
+    """
+    if _stream_is_inflight(video_id):
+        return True
     with _locks_guard:
         lock = _download_locks.get(video_id)
     return bool(lock and lock.locked())
@@ -5032,6 +5718,15 @@ def alexa_shuffle_queue():
 def alexa_play_queue():
     body = request.get_json(silent=True) or {}
 
+    # Claim the intent before any slow work (playlist expansion below can take
+    # seconds). A superseded click must not expand a playlist, install a queue,
+    # move now-playing, dispatch to Alexa, or record a listen -- otherwise the
+    # Echo plays every song in a rapid-click burst and the UI replays them.
+    _intent_seq = _play_intent_seq_arg(body)
+    if not _claim_play_intent(_effective_serial(body.get("serial")), _intent_seq):
+        logger.info("play_queue: ignoring superseded click (intent_seq=%s)", _intent_seq)
+        return jsonify({'ok': True, 'superseded': True})
+
     queue_items = body.get('queue_items')
     playlist_id = str(body.get('playlist_id') or '').strip()
     if playlist_id.startswith('VL'):
@@ -5123,10 +5818,19 @@ def alexa_play_queue():
 
         serial = _effective_serial(body.get("serial"))
         if serial:
-            _ensure_audio_ready_for_play(first['video_id'], wait=False)
-            error = _dispatch_play_with_retry(serial, first['video_id'])
-            if error:
-                return _device_dispatch_failed(error)
+            # Captured *after* the _update_now_playing above, so this is the
+            # generation for this track: a later click supersedes it and this
+            # download drops instead of competing with the newer one.
+            generation = _current_playback_generation()
+            _ensure_audio_ready_for_play(first['video_id'], wait=False,
+                                        generation=generation)
+            # Coalesced: a rapid click burst sends one trigger phrase for the
+            # song the user landed on, instead of one per click (which made the
+            # Echo play every song in the burst in turn).
+            replaced = _schedule_play_dispatch(serial, first['video_id'])
+            if replaced:
+                logger.info("play_queue: coalesced pending dispatch %s -> %s",
+                            replaced, first['video_id'])
             if not _jam_guest():
                 _record_listen(first['video_id'], first['title'],
                                first['artist'], first['thumbnail'])
@@ -5212,9 +5916,12 @@ def alexa_play_queue():
             target_idx = queue.index(item)
 
     _ensure_audio_ready_for_play(video_id, wait=False)
-    error = _dispatch_play_with_retry(serial, video_id)
-    if error:
-        return _device_dispatch_failed(error)
+    # Coalesced: see _schedule_play_dispatch. A burst of queue-row clicks sends
+    # one trigger phrase for the row the user landed on.
+    replaced = _schedule_play_dispatch(serial, video_id)
+    if replaced:
+        logger.info("play_queue: coalesced pending dispatch %s -> %s",
+                    replaced, video_id)
 
     thumb = _thumbnail_url(item.get('thumbnail'))
     # Record the listen right away so "Recently Played" updates immediately,
@@ -5375,8 +6082,11 @@ def alexa_queue_add():
         if isinstance(new_item.get('thumbnail'), dict):
             new_item['thumbnail'] = new_item['thumbnail'].get('url', '')
 
-    # Pre-warm the audio cache in the background
-    _ensure_audio_ready_for_play(video_id, wait=False)
+    # Pre-warm the audio cache in the background. Best-effort: a queue add is
+    # not the track the user is waiting on, so it must not run during a
+    # rate-limit cooldown or survive a jump to a different song.
+    _ensure_audio_ready_for_play(video_id, wait=False, prefetch=True,
+                                generation=_current_playback_generation())
 
     with _np_lock:
         queue = list(_now_playing.get('queue') or [])
@@ -5520,6 +6230,11 @@ def armed_play():
     if not armed:
         return jsonify({'video_id': None})
     video_id, offset_ms = armed
+    # The outstanding trigger has now been served, so a later click may send a
+    # fresh one. Until this point additional clicks only re-arm (see
+    # _trigger_in_flight), which is what stops the Echo playing every song in a
+    # rapid-click burst one after another.
+    _clear_trigger_inflight(serial)
     return jsonify({'video_id': video_id, 'offset_ms': offset_ms})
 
 

@@ -18,6 +18,22 @@
 
   function handleNpUpdate(np) {
     const npVideoId = (np && np.video_id) || null;
+    // Drop snapshots describing a track the user has already clicked away
+    // from. The server needs a moment to catch up after each click, so during
+    // a rapid A → B → C burst its in-flight SSE pushes and poll responses still
+    // report A or B; applying them made the UI show C, then B, then C again,
+    // and made the queue's selected-row highlight jump around. Volume is still
+    // synced below because it is track-independent.
+    if (window.playIntentSupersedes && window.playIntentSupersedes(npVideoId)) {
+      if (np && np.volume !== undefined && np.volume !== null && window.syncVolume) {
+        window.syncVolume(np.volume);
+      }
+      return;
+    }
+    // The server agrees with local intent (or intent has expired): stop
+    // outranking it, so a later genuine track change — the queue advancing on
+    // its own, a voice command — is applied immediately.
+    if (window.settlePlayIntent && npVideoId) window.settlePlayIntent(npVideoId);
     if (window._cacheNowPlaying) window._cacheNowPlaying(np);
     // Broadcast to other tabs via PWA BroadcastChannel
     if (window.broadcastNpUpdate && np && np.title) window.broadcastNpUpdate(np);
