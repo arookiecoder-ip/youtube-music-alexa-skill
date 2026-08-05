@@ -1,0 +1,15 @@
+[Unit]
+Description=Attach bgutil-provider to the web Docker network (PO token sidecar for ytmusic)
+After=docker.service
+Requires=docker.service
+# Best-effort: never block or fail boot if bgutil-provider/the network aren't
+# up yet (the script itself no-ops cleanly in that case too).
+
+[Service]
+Type=oneshot
+ExecStart=/home/ubuntu/youtube-music-alexa-skill/scripts/ensure-bgutil-network.sh
+RemainAfterExit=yes
+User=ubuntu
+
+[Install]
+WantedBy=multi-user.target

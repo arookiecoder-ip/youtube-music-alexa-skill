@@ -114,6 +114,8 @@ class _CleanServerState(unittest.TestCase):
         server._reset_rate_limit_cooldown()
         with server._dead_video_ids_lock:
             server._dead_video_ids.clear()
+        with server._flaky_video_ids_lock:
+            server._flaky_video_ids.clear()
         with server._stream_inflight_lock:
             server._stream_inflight.clear()
         with server._download_queue_lock:
@@ -124,6 +126,8 @@ class _CleanServerState(unittest.TestCase):
         server._reset_rate_limit_cooldown()
         with server._dead_video_ids_lock:
             server._dead_video_ids.clear()
+        with server._flaky_video_ids_lock:
+            server._flaky_video_ids.clear()
         with server._stream_inflight_lock:
             server._stream_inflight.clear()
         with server._download_queue_lock:
@@ -176,6 +180,22 @@ _STDERR_REALLY_DEAD = (
 _STDERR_BOT_CHECK = (
     "ERROR: [youtube] abcdefghijk: Sign in to confirm you're not a bot. "
     "Use --cookies-from-browser or --cookies for the authentication."
+)
+
+# Verbatim-style yt-dlp stderr for a transient/extractor-side failure that is
+# neither a 429 nor a recognized permanent-unavailable string: a TLS reset
+# (VPN blip / YouTube edge reset) and YouTube's SABR-only rollout leaving no
+# downloadable URL for a given client. Neither implies the video is gone.
+_STDERR_SSL_RESET = (
+    "ERROR: \n[download] Got error: [SSL: UNEXPECTED_EOF_WHILE_READING] EOF "
+    "occurred in violation of protocol (_ssl.c:1010). Giving up after 10 retries"
+)
+_STDERR_SABR_NO_FORMAT = (
+    "WARNING: [youtube] flakyvideoid: Some tv client https formats have been "
+    "skipped as they are missing a URL. YouTube may have enabled the SABR-only "
+    "streaming experiment for your account.\n"
+    "ERROR: [youtube] flakyvideoid: Requested format is not available. Use "
+    "--list-formats for a list of available formats"
 )
 
 
@@ -393,6 +413,110 @@ class EnsureDownloadedRateLimit(_CleanServerState):
                          msg="the bot-check challenge is exactly what the "
                              "client-profile fallback loop exists to recover from")
         self.assertFalse(server._is_dead_video("botchecked"))
+
+    def test_unrecognized_failure_on_every_client_is_flaky_not_dead(self):
+        """SSL resets and SABR format gaps are not permanent-unavailable
+        signals, but a video that fails every client this way still can't be
+        downloaded right now. It must land in the short-TTL flaky cache, not
+        the hour-long dead cache, and must not be silently forgotten (retried
+        forever at full 4-client cost) either."""
+        calls = []
+
+        def fake_run(cmd, **kwargs):
+            calls.append(cmd)
+            return _FakeCompleted(1, _STDERR_SSL_RESET)
+
+        with mock.patch.object(server.subprocess, "run", side_effect=fake_run):
+            server.Supporting.ensure_downloaded("flakyvideoid")
+
+        self.assertEqual(len(calls), len(self.clients),
+                         msg="an unrecognized failure must still be confirmed "
+                             "by every client before being cached as flaky")
+        self.assertFalse(
+            server._is_dead_video("flakyvideoid"),
+            msg="an SSL reset / SABR gap is not proof of permanent "
+                "unavailability and must not poison _dead_video_ids for an hour")
+        self.assertTrue(
+            server._is_flaky_video("flakyvideoid"),
+            msg="a video that failed every client without a recognized cause "
+                "must be cached as flaky so a retry loop doesn't re-run all "
+                "4 clients' retry/timeout budgets back-to-back")
+        self.assertTrue(server._is_dead_or_flaky_video("flakyvideoid"))
+
+    def test_flaky_cache_skips_the_subprocess_on_retry(self):
+        with mock.patch.object(server.subprocess, "run",
+                               return_value=_FakeCompleted(1, _STDERR_SABR_NO_FORMAT)):
+            server.Supporting.ensure_downloaded("flakyvideoid2")
+        self.assertTrue(server._is_flaky_video("flakyvideoid2"))
+
+        with mock.patch.object(server.subprocess, "run") as run:
+            result = server.Supporting.ensure_downloaded("flakyvideoid2")
+        run.assert_not_called()
+        self.assertIsNone(result)
+
+    def test_flaky_cache_expires_and_allows_retry(self):
+        with mock.patch.object(server.subprocess, "run",
+                               return_value=_FakeCompleted(1, _STDERR_SSL_RESET)):
+            server.Supporting.ensure_downloaded("flakyvideoid3")
+        self.assertTrue(server._is_flaky_video("flakyvideoid3"))
+
+        with server._flaky_video_ids_lock:
+            server._flaky_video_ids["flakyvideoid3"] = (
+                time.time() - server._FLAKY_VIDEO_TTL - 1)
+
+        self.assertFalse(server._is_flaky_video("flakyvideoid3"))
+        with mock.patch.object(server.subprocess, "run",
+                               return_value=_FakeCompleted(1, _STDERR_SSL_RESET)) as run:
+            server.Supporting.ensure_downloaded("flakyvideoid3")
+        self.assertTrue(run.called,
+                        msg="an expired flaky entry must allow a fresh attempt")
+
+    def test_concurrent_callers_for_a_doomed_id_do_not_double_run_fallback(self):
+        """Reproduces the 12:40:39-54 incident log: get_stream()'s background
+        prewarm thread and /proxy/'s own ensure_downloaded() call race for the
+        same about-to-be-dead video_id. The second caller queues behind the
+        first's per-id lock (both pass the dead-check before either has run),
+        and must see the first caller's dead/flaky verdict once it acquires
+        the lock instead of repeating all 4 clients itself."""
+        calls = []
+        release_first = threading.Event()
+        first_started = threading.Event()
+
+        def fake_run(cmd, **kwargs):
+            calls.append(cmd)
+            # Let the second caller start queuing behind the lock while the
+            # first client attempt of the first caller is still "in flight".
+            if len(calls) == 1:
+                first_started.set()
+                release_first.wait(5)
+            return _FakeCompleted(1, _STDERR_REALLY_DEAD)
+
+        results = []
+
+        def run_second_caller():
+            first_started.wait(5)
+            # Give the first caller a beat to actually acquire the per-id
+            # lock before this one tries to acquire it too.
+            time.sleep(0.05)
+            results.append(server.Supporting.ensure_downloaded("racyvideoid"))
+
+        t = threading.Thread(target=run_second_caller, daemon=True)
+        t.start()
+        try:
+            with mock.patch.object(server.subprocess, "run", side_effect=fake_run):
+                first_result = server.Supporting.ensure_downloaded("racyvideoid")
+        finally:
+            release_first.set()
+            t.join(timeout=5)
+
+        self.assertIsNone(first_result)
+        self.assertEqual(results, [None])
+        self.assertEqual(
+            len(calls), len(self.clients),
+            msg="the second caller re-ran the full client fallback loop for a "
+                "video the first caller (which it was queued behind) had "
+                "already just proven dead")
+        self.assertTrue(server._is_dead_video("racyvideoid"))
 
     def test_success_clears_the_cooldown(self):
         server._note_rate_limited("earlier")

@@ -1157,6 +1157,18 @@ _dead_video_ids = {}
 _dead_video_ids_lock = threading.Lock()
 _DEAD_VIDEO_TTL = 3600  # 1 hour
 
+# Videos that failed every client profile without any client reporting a
+# recognized permanent-unavailable string (e.g. SSL/TLS resets, SABR-only
+# format errors, "only images available"). These are usually transient
+# server-/extractor-side issues (VPN blip, YouTube edge reset, yt-dlp not yet
+# patched for a new streaming rollout) rather than proof the video is gone,
+# so they get a much shorter TTL than `_dead_video_ids` and the playback
+# watchdog treats a hit the same as a dead video: skip and auto-advance
+# instead of leaving the Echo on dead air for minutes on every retry.
+_flaky_video_ids = {}
+_flaky_video_ids_lock = threading.Lock()
+_FLAKY_VIDEO_TTL = 300  # 5 minutes
+
 # yt-dlp stderr strings that mean the video does not exist and can never be
 # downloaded (as opposed to transient auth, bot-challenge, age-verification,
 # or network/rate-limit issues — those must fall through to the next client).
@@ -1266,6 +1278,29 @@ def _is_dead_video(video_id: str) -> bool:
             del _dead_video_ids[video_id]
             return False
         return True
+
+
+def _mark_video_flaky(video_id: str):
+    with _flaky_video_ids_lock:
+        _flaky_video_ids[video_id] = time.time()
+        if len(_flaky_video_ids) > 500:
+            oldest = min(_flaky_video_ids, key=_flaky_video_ids.get)
+            del _flaky_video_ids[oldest]
+
+
+def _is_flaky_video(video_id: str) -> bool:
+    with _flaky_video_ids_lock:
+        ts = _flaky_video_ids.get(video_id)
+        if ts is None:
+            return False
+        if time.time() - ts > _FLAKY_VIDEO_TTL:
+            del _flaky_video_ids[video_id]
+            return False
+        return True
+
+
+def _is_dead_or_flaky_video(video_id: str) -> bool:
+    return _is_dead_video(video_id) or _is_flaky_video(video_id)
 # v3.1: Download queue depth tracking
 _download_queue_depth = 0
 _download_queue_lock = threading.Lock()
@@ -2505,6 +2540,47 @@ class Supporting:
                 return runtime
         return None
 
+    @staticmethod
+    def get_bgutil_pot_base_url():
+        """Base URL of the bgutil-ytdlp-pot-provider HTTP server, if configured.
+
+        Some PO-token failure modes (YouTube returning HTTP 403 / "GVS PO
+        Token not provided" once formats are already listed) are fixed by
+        supplying a valid PO token via this sidecar. Note this does NOT fix
+        every "Video unavailable"/UNPLAYABLE case: YouTube's separate "bind
+        GVS PO Token to video ID" experiment rejects the player API request
+        itself before formats exist, for every non-browser client (including
+        `web` with valid cookies) -- yt-dlp upstream has confirmed there is no
+        token or extractor-arg workaround for that specific experiment
+        (https://github.com/yt-dlp/yt-dlp/issues/16225, closed not-planned).
+        bgutil-provider is a small sidecar (see docker-compose/README) that
+        mints PO tokens; this env var points the `getpot_bgutil` yt-dlp
+        plugin at it. Defaults to the container-name address used when the
+        sidecar is reachable from ytmusic's network namespace (see the
+        "bgutil-provider" service note in this project's deployment docs).
+        """
+        return (os.environ.get("YTDLP_BGUTIL_BASE_URL")
+                or "http://bgutil-provider:4416")
+
+    @staticmethod
+    def add_ytdlp_pot_provider(command):
+        """Append a --extractor-args flag wiring the bgutil PO-token provider,
+        unless explicitly disabled.
+
+        This must be its own `--extractor-args youtubepot-bgutilhttp:...`
+        flag, not merged into the `youtube:...` extractor-args string built
+        alongside it: yt-dlp scopes `--extractor-args` per ie_key, and
+        `youtubepot-bgutilhttp` is a distinct ie_key from `youtube`.
+
+        Set YTDLP_BGUTIL_BASE_URL="" (empty) to opt out, e.g. for a local dev
+        run with no sidecar; any other value (or leaving it unset, which uses
+        the default above) enables it.
+        """
+        if os.environ.get("YTDLP_BGUTIL_BASE_URL") == "":
+            return
+        base_url = Supporting.get_bgutil_pot_base_url()
+        command.extend(["--extractor-args", f"youtubepot-bgutilhttp:base_url={base_url}"])
+
     def resolve_direct_url(video_id: str):
         if not _valid_video_id(video_id):
             return None
@@ -2518,8 +2594,10 @@ class Supporting:
                 if po_token := os.environ.get("YTDLP_PO_TOKEN"):
                     extractor_args.append(f"youtube:po_token=mweb.gvs+{po_token}")
             command = ["yt-dlp", "--get-url", "--no-playlist", "--quiet", "-f", "ba",
-                       "--remote-components", "ejs:github"]
+                       "--remote-components", "ejs:github",
+                       "--retries", "2", "--socket-timeout", "10"]
             Supporting.add_ytdlp_js_runtime(command)
+            Supporting.add_ytdlp_pot_provider(command)
             if Supporting.ytdlp_client_uses_cookies(client):
                 Supporting.add_ytdlp_cookies(command)
             if extractor_args:
@@ -2553,6 +2631,7 @@ class Supporting:
                        "--remote-components", "ejs:github",
                        "--print", fmt]
             Supporting.add_ytdlp_js_runtime(command)
+            Supporting.add_ytdlp_pot_provider(command)
             if Supporting.ytdlp_client_uses_cookies(client):
                 Supporting.add_ytdlp_cookies(command)
             if extractor_args:
@@ -2617,9 +2696,17 @@ class Supporting:
 
         command = ["yt-dlp", "--no-playlist", "--quiet",
                    "-f", "140/bestaudio[ext=m4a]/bestaudio",
-                   "--remote-components", "ejs:github"]
+                   "--remote-components", "ejs:github",
+                   # A dead TCP/TLS session (VPN blip, YouTube edge reset) used
+                   # to cost up to 10 retries per client before falling through
+                   # -- multiple minutes of dead air across 4 client profiles.
+                   # Fail fast instead: 2 retries here is enough to absorb a
+                   # single transient blip, and the client-profile fallback
+                   # loop is what actually recovers from a persistent failure.
+                   "--retries", "2", "--socket-timeout", "10"]
 
         Supporting.add_ytdlp_js_runtime(command)
+        Supporting.add_ytdlp_pot_provider(command)
         if Supporting.ytdlp_client_uses_cookies(client):
             Supporting.add_ytdlp_cookies(command)
             
@@ -2642,10 +2729,17 @@ class Supporting:
         """
         if not _valid_video_id(video_id):
             return None
-        # Check the dead-video cache first — skip the yt-dlp subprocess
-        # entirely for videos known to be permanently unavailable.
+        # Check the dead-video and flaky-video caches first — skip the
+        # yt-dlp subprocess entirely for videos known to be permanently
+        # unavailable, or that recently failed every client without a clear
+        # cause (avoids re-running all 4 clients' retry/timeout budgets
+        # back-to-back on a hands-free retry loop).
         if _is_dead_video(video_id):
             logger.warning("yt-dlp: %s is known-dead, skipping download", video_id)
+            return None
+        if _is_flaky_video(video_id):
+            logger.warning("yt-dlp: %s recently failed every client, skipping download "
+                           "(flaky cache)", video_id)
             return None
         if prefetch and _ytdlp_rate_limited():
             logger.info("yt-dlp: skipping prefetch of %s (rate-limit cooldown %.0fs)",
@@ -2689,6 +2783,23 @@ class Supporting:
                     path = Supporting.cached_audio_path(video_id)
                     if path:
                         return path
+                    # Re-check dead/flaky status now that the per-id lock is
+                    # held: a concurrent caller for the same id (prewarm from
+                    # get_stream() racing /proxy/'s own ensure_downloaded, for
+                    # instance) can win the lock first and mark the video
+                    # dead/flaky while this call was queued behind it. Without
+                    # this re-check the queued call runs the full 4-client
+                    # fallback loop a second time for a video the other caller
+                    # just proved was unavailable.
+                    if _is_dead_video(video_id):
+                        logger.warning("yt-dlp: %s is known-dead, skipping download "
+                                       "(caught by another caller while queued)", video_id)
+                        return None
+                    if _is_flaky_video(video_id):
+                        logger.warning("yt-dlp: %s recently failed every client, skipping "
+                                       "download (caught by another caller while queued)",
+                                       video_id)
+                        return None
                     output = os.path.join(AUDIO_CACHE_DIR, f"{video_id}.%(ext)s")
                     clients = Supporting.get_ytdlp_clients()
                     permanent_failures = 0
@@ -2761,8 +2872,18 @@ class Supporting:
                         logger.error("yt-dlp download failed for %s: rate-limited by YouTube",
                                      video_id)
                     elif not downloaded:
-                        logger.error("yt-dlp download failed for %s with every client: %s",
-                                     video_id, last_error)
+                        # Every client failed, but not with a recognized
+                        # permanent-unavailable string (SSL reset, SABR-only
+                        # format gap, integrity check, etc.) -- this is most
+                        # likely transient, not proof the video is gone.
+                        # Cache it briefly so a hands-free retry loop doesn't
+                        # re-run all 4 clients (each with its own retry/
+                        # timeout budget) back-to-back, and so the playback
+                        # watchdog can auto-advance instead of stalling.
+                        _mark_video_flaky(video_id)
+                        logger.error("yt-dlp download failed for %s with every client "
+                                     "(no permanent-unavailable signal; caching as flaky "
+                                     "for %ds): %s", video_id, _FLAKY_VIDEO_TTL, last_error)
                     if downloaded:
                         # Throughput is back; stop suppressing prefetch.
                         _reset_rate_limit_cooldown()
@@ -4029,7 +4150,7 @@ def _watch_playback_confirmation(serial, video_id, resend):
         # gave up is a worse outcome for a hands-free device. Advance to the
         # next queue item automatically; if there is none, fall back to the
         # old stop-and-toast behavior.
-        if _is_dead_video(video_id):
+        if _is_dead_or_flaky_video(video_id):
             logger.warning("[playback-watchdog] %s is unavailable; skipping", video_id)
             if not _auto_advance_after_failure(serial, video_id, 'unavailable'):
                 _update_now_playing(
