@@ -49,11 +49,21 @@
     if (np.playback_error) {
       var errType = (typeof np.playback_error === 'object') ? (np.playback_error.type || 'unknown') : 'unknown';
       var errMsg = (typeof np.playback_error === 'object') ? (np.playback_error.message || '') : np.playback_error;
-      state()._lastPlaybackError = { type: errType, message: errMsg };
-      if (window.toast) window.toast(errMsg, 'error', 'Error code: ' + errType + ' - ' + errMsg, state()._lastPlayAttemptVideoId);
-      state().isPlaying = false;
-      state().lastActionIntent = false;
-      if (window.syncPlayPause) window.syncPlayPause();
+      // 'buffering' is informational, not a failure: the watchdog is still
+      // waiting on confirmation and hasn't given up. Showing it as an 'error'
+      // toast (and flipping isPlaying off) would make a slow-but-successful
+      // start look like a dead end. Terminal error types (dispatch_error,
+      // timeout, unavailable, rate_limited, ...) keep the original behavior.
+      var isTerminal = (typeof np.playback_error !== 'object') || np.playback_error.terminal !== false;
+      if (!isTerminal) {
+        if (window.toast) window.toast(errMsg, 'info');
+      } else {
+        state()._lastPlaybackError = { type: errType, message: errMsg };
+        if (window.toast) window.toast(errMsg, 'error', 'Error code: ' + errType + ' - ' + errMsg, state()._lastPlayAttemptVideoId);
+        state().isPlaying = false;
+        state().lastActionIntent = false;
+        if (window.syncPlayPause) window.syncPlayPause();
+      }
     }
     // A paused track still has a title — keep showing it. Only a missing
     // title means there is genuinely nothing to display.

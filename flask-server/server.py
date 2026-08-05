@@ -3808,7 +3808,20 @@ def _confirm_stream_delivery(video_id):
 # /proxy/ being hit — see _confirm_stream_delivery) and, if it doesn't arrive in
 # time, resends the command once before giving up and surfacing an error.
 PLAYBACK_CONFIRM_TIMEOUT = 12.0
+# When the audio is already cached, the Echo has nothing to wait on but the
+# trigger phrase + /proxy/ round-trip, so a stalled confirmation is known
+# almost immediately. Cutting the timeout for that case means a genuinely
+# dropped voice command (see the module comment above) gets retried in ~5s
+# instead of 12, without touching the cold-download case where 12s is close
+# to the actual first-byte latency.
+PLAYBACK_CONFIRM_TIMEOUT_CACHED = 5.0
 PLAYBACK_CONFIRM_POLL_INTERVAL = 0.5
+# After this long with no confirmation (and no fatal cause identified yet),
+# tell the UI something is happening instead of leaving it silent until the
+# full timeout elapses. This is informational only: it does not stop
+# playback or count as a failure, so it must not use one of the terminal
+# playback_error types the frontend treats as "playback stopped".
+PLAYBACK_BUFFERING_FEEDBACK_DELAY = 4.0
 
 
 def _download_in_progress(video_id):
@@ -3847,7 +3860,16 @@ def _watch_playback_confirmation(serial, video_id, resend):
             return _now_playing.get('video_id') == video_id
 
     def _wait_once():
-        deadline = time.time() + PLAYBACK_CONFIRM_TIMEOUT
+        # A cache hit has nothing left to wait on but the trigger + /proxy/
+        # round-trip, so use the short timeout unless/until a download shows
+        # up mid-wait (handled below by resetting the deadline with the full
+        # window, same as the pre-existing "don't count download time" logic).
+        base_timeout = (PLAYBACK_CONFIRM_TIMEOUT_CACHED
+                        if Supporting.cached_audio_path(video_id)
+                        else PLAYBACK_CONFIRM_TIMEOUT)
+        deadline = time.time() + base_timeout
+        buffering_deadline = time.time() + PLAYBACK_BUFFERING_FEEDBACK_DELAY
+        buffering_sent = False
         while time.time() < deadline:
             if _confirmed() or not _still_relevant():
                 return True
@@ -3858,6 +3880,15 @@ def _watch_playback_confirmation(serial, video_id, resend):
             # playback any sooner.
             if _download_in_progress(video_id):
                 deadline = time.time() + PLAYBACK_CONFIRM_TIMEOUT
+            elif not buffering_sent and time.time() >= buffering_deadline:
+                # Non-fatal, informational only: lets the UI show "still
+                # working on it" instead of sitting silent until a real
+                # failure (or success) is known.
+                buffering_sent = True
+                _update_now_playing(playback_error={
+                    'type': 'buffering',
+                    'message': "Still trying to start playback...",
+                    'terminal': False})
             time.sleep(PLAYBACK_CONFIRM_POLL_INTERVAL)
         return _confirmed()
 
@@ -3866,15 +3897,46 @@ def _watch_playback_confirmation(serial, video_id, resend):
             return
         if not _still_relevant():
             return
-        # A permanently unavailable track must stop here. Do not substitute a
-        # different upload or advance the queue behind the user's back.
+        # A permanently unavailable track must stop here, but the queue can
+        # still move on: substituting a *different* upload would be wrong,
+        # while sitting on a dead track forever just because the watchdog
+        # gave up is a worse outcome for a hands-free device. Advance to the
+        # next queue item automatically; if there is none, fall back to the
+        # old stop-and-toast behavior.
         if _is_dead_video(video_id):
-            logger.warning("[playback-watchdog] %s is unavailable; stopping", video_id)
-            _update_now_playing(
-                playing=False,
-                playback_error={'type': 'unavailable',
-                                'message': "This song isn't available. Playback stopped."})
+            logger.warning("[playback-watchdog] %s is unavailable; skipping", video_id)
+            if not _auto_advance_after_failure(serial, video_id, 'unavailable'):
+                _update_now_playing(
+                    playing=False,
+                    playback_error={'type': 'unavailable',
+                                    'message': "This song isn't available. Playback stopped."})
             return
+        # A resend during an active rate-limit cooldown cannot succeed —
+        # YouTube is already throttling this IP, so a duplicate yt-dlp burst
+        # only deepens the block. Skip straight to reporting the failure.
+        if _ytdlp_rate_limited():
+            remaining = _ytdlp_cooldown_remaining()
+            logger.warning("[playback-watchdog] skipping retry for %s during "
+                           "rate-limit cooldown (%.0fs left)", video_id, remaining)
+            _update_now_playing(playback_error={
+                'type': 'rate_limited',
+                'message': "YouTube is rate-limiting downloads. Try again in "
+                           f"about {int(remaining)}s.",
+                'retry_after_s': int(remaining)})
+            return
+        # Race guard: a download can start in the instant between the last
+        # _wait_once loop check and here. Resending now would let the Echo
+        # open a second /proxy/ for the same video_id while the first
+        # download is still running — the exact duplicate-yt-dlp-process bug
+        # _download_in_progress exists to prevent. One more short wait lets
+        # that in-flight download finish (or keep extending) instead.
+        if _download_in_progress(video_id):
+            logger.info("[playback-watchdog] download started for %s just "
+                        "before retry; waiting instead of resending", video_id)
+            if _wait_once():
+                return
+            if not _still_relevant():
+                return
         logger.warning("[playback-watchdog] no confirmation for %s in %ss, retrying once", video_id, PLAYBACK_CONFIRM_TIMEOUT)
         error = resend()
         if error:
@@ -3886,10 +3948,53 @@ def _watch_playback_confirmation(serial, video_id, resend):
         if not _still_relevant():
             return
         logger.warning("[playback-watchdog] retry for %s also unconfirmed", video_id)
-        _update_now_playing(
-            playback_error={'type': 'timeout', 'message': "Playback didn't start. Check the device and try again."})
+        if not _auto_advance_after_failure(serial, video_id, 'timeout'):
+            _update_now_playing(
+                playback_error={'type': 'timeout', 'message': "Playback didn't start. Check the device and try again."})
     except Exception:
         logger.exception("")
+
+
+def _auto_advance_after_failure(serial, video_id, reason):
+    """Best-effort skip to the next queue item after `video_id` fails to play.
+
+    Returns True if a next track was found and dispatched, in which case the
+    caller must NOT also surface a `playback_error` (a fresh dispatch, once
+    confirmed, clears any stale error on its own). Returns False if there is
+    nothing to advance to, leaving the caller's own error-and-stop path as the
+    fallback so the user is never left with silence and no explanation.
+    """
+    if not _still_relevant_video(video_id):
+        return False
+    target, err = _queue_neighbor('next')
+    if not target:
+        logger.info("[playback-watchdog] no next track to auto-advance to "
+                    "after %s (%s): %s", video_id, reason, err)
+        return False
+    next_idx, next_item = target
+    next_id = next_item.get('video_id')
+    if not next_id or not _valid_video_id(next_id):
+        return False
+    logger.warning("[playback-watchdog] auto-advancing to %s after %s (%s)",
+                   next_id, video_id, reason)
+    _update_now_playing(
+        video_id=next_id, queue_index=next_idx, playing=True,
+        title=next_item.get('title', ''), artist=next_item.get('artist', ''),
+        thumbnail=next_item.get('thumbnail', ''),
+        duration_ms=next_item.get('duration_ms', 0),
+        playback_confirmed=False,
+        playback_error={'type': reason, 'message': "Skipped a track that wouldn't play.",
+                        'skipped_video_id': video_id})
+    dispatch_error = _dispatch_play_with_retry(serial, next_id)
+    if dispatch_error:
+        logger.error("[playback-watchdog] auto-advance dispatch failed: %s", dispatch_error)
+        _update_now_playing(playback_error={'type': 'dispatch_error', 'message': dispatch_error})
+    return True
+
+
+def _still_relevant_video(video_id):
+    with _np_lock:
+        return _now_playing.get('video_id') == video_id
 
 
 def _dispatch_play_with_retry(serial, video_id, offset_ms=0):

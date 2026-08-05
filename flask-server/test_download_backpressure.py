@@ -1810,5 +1810,268 @@ class RapidClickScenario(_CleanServerState):
         self.assertEqual(len(resends), 1)
 
 
+# --------------------------------------------------------------------------
+# Playback-failure optimizations: auto-advance, adaptive timeout, buffering
+# feedback, rate-limit short-circuit, and the pre-resend race guard.
+# --------------------------------------------------------------------------
+
+class PlaybackFailureAutoAdvance(_CleanServerState):
+    """A dead/timed-out track should skip to the next queue item instead of
+    just stopping, whenever one is available."""
+
+    def _install_queue(self, current_id, upcoming_id):
+        with mock.patch.object(server, "_notify_sse"):
+            server._update_now_playing(
+                video_id=current_id, queue_index=0, playing=True,
+                # Confirmation is still pending: this is what the watchdog is
+                # waiting on, and setting it True here would make the very
+                # first check in _wait_once report success immediately.
+                playback_confirmed=False,
+                queue=[{'video_id': current_id, 'title': 'Current'},
+                       {'video_id': upcoming_id, 'title': 'Next', 'artist': 'A'}])
+
+    def test_dead_video_auto_advances_to_next_track(self):
+        current, nxt = "DEADDEADDEA", "NEXTNEXTNEX"
+        self._install_queue(current, nxt)
+        server._mark_video_dead(current)
+        dispatched = []
+        with mock.patch.object(server, "PLAYBACK_CONFIRM_TIMEOUT", 0.05), \
+                mock.patch.object(server, "PLAYBACK_CONFIRM_TIMEOUT_CACHED", 0.05), \
+                mock.patch.object(server, "PLAYBACK_CONFIRM_POLL_INTERVAL", 0.02), \
+                mock.patch.object(server, "PLAYBACK_BUFFERING_FEEDBACK_DELAY", 10.0), \
+                mock.patch.object(server.Supporting, "cached_audio_path",
+                                  staticmethod(lambda vid: None)), \
+                mock.patch.object(server, "_dispatch_play_with_retry",
+                                  side_effect=lambda s, v, o=0: dispatched.append(v)), \
+                mock.patch.object(server, "_record_listen"), \
+                mock.patch.object(server, "_refresh_radio_queue"), \
+                mock.patch.object(server, "_lookup_and_update_np"), \
+                mock.patch.object(server, "_notify_sse"):
+            server._watch_playback_confirmation("DEVICE1", current, lambda: None)
+        self.assertEqual(dispatched, [nxt],
+                         msg="a dead video must auto-advance to the next queue "
+                             "item rather than leaving playback stopped")
+        snap = server._get_now_playing()
+        self.assertEqual(snap['video_id'], nxt)
+        self.assertTrue(snap['playing'])
+
+    def test_dead_video_with_no_next_track_falls_back_to_stop_and_error(self):
+        current = "LONELYLONEL"
+        with mock.patch.object(server, "_notify_sse"):
+            server._update_now_playing(video_id=current, queue_index=0,
+                                       playing=True, playback_confirmed=False,
+                                       queue=[{'video_id': current, 'title': 'Only'}])
+        server._mark_video_dead(current)
+        with mock.patch.object(server, "PLAYBACK_CONFIRM_TIMEOUT", 0.05), \
+                mock.patch.object(server, "PLAYBACK_CONFIRM_TIMEOUT_CACHED", 0.05), \
+                mock.patch.object(server, "PLAYBACK_CONFIRM_POLL_INTERVAL", 0.02), \
+                mock.patch.object(server, "PLAYBACK_BUFFERING_FEEDBACK_DELAY", 10.0), \
+                mock.patch.object(server.Supporting, "cached_audio_path",
+                                  staticmethod(lambda vid: None)), \
+                mock.patch.object(server, "_refresh_radio_queue"), \
+                mock.patch.object(server, "_notify_sse"), \
+                mock.patch.object(server, "_update_now_playing",
+                                  wraps=server._update_now_playing) as update:
+            server._watch_playback_confirmation("DEVICE1", current, lambda: None)
+        errors = [c.kwargs.get('playback_error') for c in update.call_args_list
+                  if c.kwargs.get('playback_error')]
+        self.assertTrue(errors)
+        self.assertEqual(errors[-1]['type'], 'unavailable')
+
+    def test_final_timeout_auto_advances_to_next_track(self):
+        current, nxt = "TIMEOUTTIME", "AFTERAFTERA"
+        self._install_queue(current, nxt)
+        dispatched = []
+        with mock.patch.object(server, "PLAYBACK_CONFIRM_TIMEOUT", 0.05), \
+                mock.patch.object(server, "PLAYBACK_CONFIRM_TIMEOUT_CACHED", 0.05), \
+                mock.patch.object(server, "PLAYBACK_CONFIRM_POLL_INTERVAL", 0.02), \
+                mock.patch.object(server, "PLAYBACK_BUFFERING_FEEDBACK_DELAY", 10.0), \
+                mock.patch.object(server.Supporting, "cached_audio_path",
+                                  staticmethod(lambda vid: None)), \
+                mock.patch.object(server, "_dispatch_play_with_retry",
+                                  side_effect=lambda s, v, o=0: dispatched.append(v)), \
+                mock.patch.object(server, "_record_listen"), \
+                mock.patch.object(server, "_refresh_radio_queue"), \
+                mock.patch.object(server, "_lookup_and_update_np"), \
+                mock.patch.object(server, "_notify_sse"):
+            # `resend` models the watchdog's own first retry of `current`; it
+            # "succeeds" at sending (no error) but the track still never gets
+            # confirmed, so the second _wait_once also times out.
+            server._watch_playback_confirmation(
+                "DEVICE1", current, lambda: dispatched.append(current) or None)
+        self.assertEqual(dispatched, [current, nxt],
+                         msg="expected one resend of the original track, then "
+                             "an auto-advance dispatch to the next queue item")
+
+
+class PlaybackFailureRateLimit(_CleanServerState):
+    """The watchdog must not resend into an active 429 cooldown, and must
+    report a distinct, actionable error instead."""
+
+    def test_resend_is_skipped_during_cooldown_and_reports_rate_limited(self):
+        video_id = "RATELIMITED"
+        with mock.patch.object(server, "_notify_sse"):
+            server._update_now_playing(video_id=video_id, playing=True,
+                                       playback_confirmed=False)
+        server._note_rate_limited(video_id)
+        resends = []
+        with mock.patch.object(server, "PLAYBACK_CONFIRM_TIMEOUT", 0.05), \
+                mock.patch.object(server, "PLAYBACK_CONFIRM_TIMEOUT_CACHED", 0.05), \
+                mock.patch.object(server, "PLAYBACK_CONFIRM_POLL_INTERVAL", 0.02), \
+                mock.patch.object(server, "PLAYBACK_BUFFERING_FEEDBACK_DELAY", 10.0), \
+                mock.patch.object(server.Supporting, "cached_audio_path",
+                                  staticmethod(lambda vid: None)), \
+                mock.patch.object(server, "_notify_sse"), \
+                mock.patch.object(server, "_update_now_playing",
+                                  wraps=server._update_now_playing) as update:
+            server._watch_playback_confirmation(
+                "DEVICE1", video_id, lambda: resends.append(1))
+        self.assertEqual(resends, [],
+                         msg="resending during an active 429 cooldown only "
+                             "deepens the throttle and cannot succeed")
+        errors = [c.kwargs.get('playback_error') for c in update.call_args_list
+                  if c.kwargs.get('playback_error')]
+        self.assertTrue(errors, msg="a skipped retry reported nothing to the UI")
+        self.assertEqual(errors[-1]['type'], 'rate_limited')
+        self.assertIn('retry_after_s', errors[-1])
+        self.assertGreater(errors[-1]['retry_after_s'], 0)
+
+    def test_no_cooldown_still_retries_normally(self):
+        """Control: outside a cooldown, the resend path is untouched."""
+        video_id = "NORMALRETRY"
+        with mock.patch.object(server, "_notify_sse"):
+            server._update_now_playing(video_id=video_id, playing=True,
+                                       playback_confirmed=False)
+        resends = []
+        with mock.patch.object(server, "PLAYBACK_CONFIRM_TIMEOUT", 0.05), \
+                mock.patch.object(server, "PLAYBACK_CONFIRM_TIMEOUT_CACHED", 0.05), \
+                mock.patch.object(server, "PLAYBACK_CONFIRM_POLL_INTERVAL", 0.02), \
+                mock.patch.object(server, "PLAYBACK_BUFFERING_FEEDBACK_DELAY", 10.0), \
+                mock.patch.object(server.Supporting, "cached_audio_path",
+                                  staticmethod(lambda vid: None)), \
+                mock.patch.object(server, "_notify_sse"):
+            server._watch_playback_confirmation(
+                "DEVICE1", video_id, lambda: resends.append(1))
+        self.assertEqual(resends, [1])
+
+
+class PlaybackFailureAdaptiveTimeout(_CleanServerState):
+    """A cached track should time out (and thus retry) faster than a cold one."""
+
+    def _time_to_resend(self, cached):
+        video_id = "ADAPTIVEVID"
+        with mock.patch.object(server, "_notify_sse"):
+            server._update_now_playing(video_id=video_id, playing=True,
+                                       playback_confirmed=False)
+        resend_at = []
+        start = time.time()
+        with mock.patch.object(server, "PLAYBACK_CONFIRM_TIMEOUT", 1.0), \
+                mock.patch.object(server, "PLAYBACK_CONFIRM_TIMEOUT_CACHED", 0.2), \
+                mock.patch.object(server, "PLAYBACK_CONFIRM_POLL_INTERVAL", 0.02), \
+                mock.patch.object(server, "PLAYBACK_BUFFERING_FEEDBACK_DELAY", 10.0), \
+                mock.patch.object(server.Supporting, "cached_audio_path",
+                                  staticmethod(lambda vid: ("/tmp/x.m4a" if cached else None))), \
+                mock.patch.object(server, "_notify_sse"):
+            server._watch_playback_confirmation(
+                "DEVICE1", video_id, lambda: resend_at.append(time.time() - start))
+        self.assertEqual(len(resend_at), 1)
+        return resend_at[0]
+
+    def test_cached_track_times_out_faster_than_cold_track(self):
+        cached_elapsed = self._time_to_resend(cached=True)
+        cold_elapsed = self._time_to_resend(cached=False)
+        self.assertLess(cached_elapsed, cold_elapsed,
+                        msg="a cached (no-download-needed) track should be "
+                            "retried sooner than one still being fetched")
+        self.assertLess(cached_elapsed, 0.6)
+        self.assertGreaterEqual(cold_elapsed, 0.9)
+
+
+class PlaybackFailureBufferingFeedback(_CleanServerState):
+    """A non-fatal 'buffering' hint should surface mid-wait without stopping
+    playback or counting as a failure."""
+
+    def test_buffering_hint_is_emitted_before_the_confirm_timeout(self):
+        video_id = "BUFFERINGVI"
+        with mock.patch.object(server, "_notify_sse"):
+            server._update_now_playing(video_id=video_id, playing=True,
+                                       playback_confirmed=False)
+        with mock.patch.object(server, "PLAYBACK_CONFIRM_TIMEOUT", 2.0), \
+                mock.patch.object(server, "PLAYBACK_CONFIRM_TIMEOUT_CACHED", 2.0), \
+                mock.patch.object(server, "PLAYBACK_CONFIRM_POLL_INTERVAL", 0.02), \
+                mock.patch.object(server, "PLAYBACK_BUFFERING_FEEDBACK_DELAY", 0.1), \
+                mock.patch.object(server.Supporting, "cached_audio_path",
+                                  staticmethod(lambda vid: None)), \
+                mock.patch.object(server, "_notify_sse"), \
+                mock.patch.object(server, "_update_now_playing",
+                                  wraps=server._update_now_playing) as update:
+            # Confirm shortly after the buffering hint should have fired, so
+            # the watchdog returns without ever reaching the terminal path.
+            def _confirm_soon():
+                time.sleep(0.3)
+                with mock.patch.object(server, "_notify_sse"):
+                    server._update_now_playing(video_id=video_id,
+                                               playback_confirmed=True)
+            t = threading.Thread(target=_confirm_soon, daemon=True)
+            t.start()
+            server._watch_playback_confirmation("DEVICE1", video_id, lambda: None)
+            t.join(timeout=5)
+        errors = [c.kwargs.get('playback_error') for c in update.call_args_list
+                  if c.kwargs.get('playback_error')]
+        buffering = [e for e in errors if e.get('type') == 'buffering']
+        self.assertTrue(buffering, msg="no buffering feedback was surfaced "
+                                       "while confirmation was pending")
+        self.assertFalse(buffering[-1].get('terminal', True),
+                         msg="buffering feedback must be marked non-terminal so "
+                             "the frontend does not treat it as a failure")
+        terminal_errors = [e for e in errors if e.get('terminal', True)]
+        self.assertEqual(terminal_errors, [],
+                         msg="confirming playback after a buffering hint must "
+                             "not also report a terminal failure")
+
+
+class PlaybackFailureRetryRaceGuard(_CleanServerState):
+    """If a download starts in the instant before the retry fires, the
+    watchdog must wait for it instead of resending into it."""
+
+    def test_download_starting_just_before_retry_defers_the_resend(self):
+        video_id = "RACEGUARDVI"
+        with mock.patch.object(server, "_notify_sse"):
+            server._update_now_playing(video_id=video_id, playing=True,
+                                       playback_confirmed=False)
+        resends = []
+        call_count = {'n': 0}
+        real_in_progress = server._download_in_progress
+
+        def fake_in_progress(vid):
+            call_count['n'] += 1
+            # First call happens inside the initial _wait_once loop (must stay
+            # False so the loop actually times out); the second call is the
+            # race-guard check right before resending — flip it on there to
+            # simulate a download starting in that exact window, then let the
+            # subsequent _wait_once call see it end.
+            if call_count['n'] <= 2:
+                return False
+            if call_count['n'] == 3:
+                return True
+            return False
+
+        with mock.patch.object(server, "PLAYBACK_CONFIRM_TIMEOUT", 0.05), \
+                mock.patch.object(server, "PLAYBACK_CONFIRM_TIMEOUT_CACHED", 0.05), \
+                mock.patch.object(server, "PLAYBACK_CONFIRM_POLL_INTERVAL", 0.02), \
+                mock.patch.object(server, "PLAYBACK_BUFFERING_FEEDBACK_DELAY", 10.0), \
+                mock.patch.object(server.Supporting, "cached_audio_path",
+                                  staticmethod(lambda vid: None)), \
+                mock.patch.object(server, "_download_in_progress",
+                                  side_effect=fake_in_progress), \
+                mock.patch.object(server, "_notify_sse"):
+            server._watch_playback_confirmation(
+                "DEVICE1", video_id, lambda: resends.append(1))
+        # However many times _download_in_progress was consulted, the resend
+        # must still have fired exactly once once the simulated download
+        # cleared — the guard defers, it does not cancel, the retry.
+        self.assertEqual(resends, [1])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
