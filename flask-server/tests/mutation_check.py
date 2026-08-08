@@ -2,7 +2,7 @@
 the new test suite fails. A test that passes against the *unfixed* code proves
 nothing, so every fix gets an explicit "this test would have caught it" check.
 
-Usage: ../.venv/bin/python3 mutation_check.py
+Usage: ../../.venv/bin/python3 flask-server/tests/mutation_check.py
 """
 import shutil
 import subprocess
@@ -11,9 +11,9 @@ import tempfile
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-SERVER = HERE / "server.py"
+SERVER = HERE.parent / "server.py"
 TESTS = HERE / "test_download_backpressure.py"
-PYTHON = str(HERE.parent / ".venv" / "bin" / "python3")
+PYTHON = str(HERE.parent.parent / ".venv" / "bin" / "python3")
 
 # (label, old_snippet, new_snippet, test selector expected to fail)
 MUTATIONS = [

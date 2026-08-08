@@ -6,13 +6,13 @@
 // payload shape it doesn't understand. The fix delegates to
 // `preloadNavigateAlbum` so the SPA URL matches the page renderer.
 //
-// Run: `node test_preload_nav_routing.js` from flask-server/.
+// Run: `node flask-server/tests/test_preload_nav_routing.js` from the repository root.
 
 const fs = require('fs');
 const vm = require('vm');
 
 const ROUTER_PATH = require('path').join(
-  __dirname, 'templates', 'static', 'js', 'preload-nav.js');
+  __dirname, '..', 'templates', 'static', 'js', 'preload-nav.js');
 const src = fs.readFileSync(ROUTER_PATH, 'utf8');
 
 // Minimal browser shim. `noop` is declared INLINE inside the shim string

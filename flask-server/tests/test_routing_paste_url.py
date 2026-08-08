@@ -7,9 +7,14 @@ Flask's auth bypass keyed on `request.path` against slash-less variants of
 paths, and `_safe_spa_target` returned the default `/home` for slashed variants.
 
 This test guards every link in that chain so a future refactor cannot silently
-re-introduce the bug. Run with ``pytest test_routing_paste_url.py`` or
-``python -m unittest test_routing_paste_url``.
+re-introduce the bug. Run with ``pytest flask-server/tests/test_routing_paste_url.py`` or
+``python -m unittest discover -s flask-server/tests -p 'test_routing_paste_url.py'``.
 """
+import os
+import sys
+
+# Tests live in flask-server/tests/, while application modules remain in the flask-server parent directory.
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 import os
 import sys
 import types

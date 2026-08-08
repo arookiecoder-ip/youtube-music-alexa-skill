@@ -23,9 +23,14 @@ The five fixes under test here:
    cooldown, and never marks a video permanently dead.
 5. `_download_backpressure()` is actually consulted by the prewarm path.
 
-Run with ``pytest test_download_backpressure.py`` or
-``python -m unittest test_download_backpressure``.
+Run with ``pytest flask-server/tests/test_download_backpressure.py`` or
+``python -m unittest discover -s flask-server/tests -p 'test_download_backpressure.py'``.
 """
+import os
+import sys
+
+# Tests live in flask-server/tests/, while application modules remain in the flask-server parent directory.
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 import os
 import sys
 import threading

@@ -17,13 +17,13 @@
 // same "superseded by a later click" pattern the volume controls already use
 // via `_volCommandSeq`), consumed by the play paths and by handleNpUpdate.
 //
-// Run: `node test_play_intent_ordering.js`
+// Run: `node flask-server/tests/test_play_intent_ordering.js`
 
 const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
 
-const JS_DIR = path.join(__dirname, 'templates', 'static', 'js');
+const JS_DIR = path.join(__dirname, '..', 'templates', 'static', 'js');
 
 let passed = 0;
 let failed = 0;

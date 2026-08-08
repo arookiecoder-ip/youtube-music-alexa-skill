@@ -4,13 +4,13 @@
 // and confirms test_play_intent_ordering.js fails. A test that passes against
 // the unfixed code proves nothing.
 //
-// Run: `node mutation_check_js.js`
+// Run: `node flask-server/tests/mutation_check_js.js`
 
 const fs = require('fs');
 const path = require('path');
 const { execFileSync } = require('child_process');
 
-const JS_DIR = path.join(__dirname, 'templates', 'static', 'js');
+const JS_DIR = path.join(__dirname, '..', 'templates', 'static', 'js');
 const TEST = path.join(__dirname, 'test_play_intent_ordering.js');
 
 // [label, file, oldSnippet, newSnippet]

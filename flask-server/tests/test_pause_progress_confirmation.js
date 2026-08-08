@@ -8,7 +8,7 @@ const path = require('path');
 const vm = require('vm');
 
 const SRC = fs.readFileSync(
-  path.join(__dirname, 'templates', 'static', 'js', 'player.js'),
+  path.join(__dirname, '..', 'templates', 'static', 'js', 'player.js'),
   'utf8'
 );
 

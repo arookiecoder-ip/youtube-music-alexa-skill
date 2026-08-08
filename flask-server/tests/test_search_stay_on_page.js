@@ -18,16 +18,16 @@
 // against a controlled fake environment, so it exercises the actual shipped
 // logic.
 //
-// Run: `node test_search_stay_on_page.js`
+// Run: `node flask-server/tests/test_search_stay_on_page.js`
 
 const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
 
-const JS_PATH = path.join(__dirname, 'templates', 'static', 'js', 'search.js');
+const JS_PATH = path.join(__dirname, '..', 'templates', 'static', 'js', 'search.js');
 const SRC = fs.readFileSync(JS_PATH, 'utf8');
 const ROUTER_SRC = fs.readFileSync(
-  path.join(__dirname, 'templates', 'static', 'js', 'router.js'),
+  path.join(__dirname, '..', 'templates', 'static', 'js', 'router.js'),
   'utf8'
 );
 

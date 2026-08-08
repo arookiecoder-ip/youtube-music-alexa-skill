@@ -25,13 +25,13 @@
 // controlled fake `api`/state/DOM, so this exercises the real shipped logic,
 // not a re-implementation of it.
 //
-// Run: `node test_youtube_icon_pause.js`
+// Run: `node flask-server/tests/test_youtube_icon_pause.js`
 
 const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
 
-const JS_PATH = path.join(__dirname, 'templates', 'static', 'js', 'player.js');
+const JS_PATH = path.join(__dirname, '..', 'templates', 'static', 'js', 'player.js');
 const SRC = fs.readFileSync(JS_PATH, 'utf8');
 
 let passed = 0;

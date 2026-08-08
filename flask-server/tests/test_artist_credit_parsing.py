@@ -21,13 +21,17 @@ Fix: a shared `_artist_credit_from_list()` helper (server.py) / `_clean_artist_n
 (home_feed.py) that strips "- Topic" suffixes and generic labels before joining,
 now used by every one of those call sites.
 
-Run with ``pytest test_artist_credit_parsing.py`` or
-``python -m unittest test_artist_credit_parsing``.
+Run with ``pytest flask-server/tests/test_artist_credit_parsing.py`` or
+``python -m unittest discover -s flask-server/tests -p 'test_artist_credit_parsing.py'``.
 """
 import os
 import sys
 import types
 import unittest
+
+# Tests live in flask-server/tests/, while application modules remain in the
+# flask-server parent directory.
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 # ---------------------------------------------------------------------------
 # home_feed.py has no heavy dependencies, so it can be imported directly.

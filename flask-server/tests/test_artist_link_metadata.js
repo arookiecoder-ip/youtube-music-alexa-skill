@@ -3,11 +3,11 @@ const path = require('path');
 const vm = require('vm');
 
 const routerSource = fs.readFileSync(
-  path.join(__dirname, 'templates', 'static', 'js', 'router.js'),
+  path.join(__dirname, '..', 'templates', 'static', 'js', 'router.js'),
   'utf8'
 );
 const playerSource = fs.readFileSync(
-  path.join(__dirname, 'templates', 'static', 'js', 'player.js'),
+  path.join(__dirname, '..', 'templates', 'static', 'js', 'player.js'),
   'utf8'
 );
 

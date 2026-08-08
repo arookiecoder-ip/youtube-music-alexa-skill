@@ -23,9 +23,14 @@ hardcoding 0. This is a no-op for a fresh play (which already anchors position
 to 0 via `_update_now_playing`'s track-changed branch before /proxy/ can ever
 be hit for that video_id) and fixes the resume case.
 
-Run with ``pytest test_resume_after_pause.py`` or
-``python -m unittest test_resume_after_pause``.
+Run with ``pytest flask-server/tests/test_resume_after_pause.py`` or
+``python -m unittest discover -s flask-server/tests -p 'test_resume_after_pause.py'``.
 """
+import os
+import sys
+
+# Tests live in flask-server/tests/, while application modules remain in the flask-server parent directory.
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 import os
 import sys
 import types

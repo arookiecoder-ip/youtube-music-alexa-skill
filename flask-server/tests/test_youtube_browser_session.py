@@ -1,3 +1,8 @@
+import os
+import sys
+
+# Tests live in flask-server/tests/, while application modules remain in the flask-server parent directory.
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 import importlib.util
 import os
 import tempfile

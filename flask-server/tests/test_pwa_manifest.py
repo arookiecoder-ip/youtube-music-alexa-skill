@@ -5,6 +5,10 @@ import sys
 import types
 import unittest
 
+# Tests live in flask-server/tests/, while application modules remain in the
+# flask-server parent directory.
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 os.environ.setdefault("SECRET_KEY", "test-secret-for-pwa-manifest")
 os.environ.setdefault("REMOTE_USER", "test-owner")
 os.environ.setdefault("REMOTE_PASSWORD", "test-pass")
@@ -62,3 +66,8 @@ class PwaManifest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+import os
+import sys
+
+# Tests live in flask-server/tests/, while application modules remain in the flask-server parent directory.
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))

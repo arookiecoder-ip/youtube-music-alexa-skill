@@ -6,15 +6,15 @@
 // disable shell geometry transitions for the handoff; normal UI transitions
 // remain enabled after the destination settles.
 //
-// Run: `node test_navigation_no_shift.js` from flask-server/.
+// Run: `node flask-server/tests/test_navigation_no_shift.js` from the repository root.
 
 const fs = require('fs');
 const path = require('path');
 
 const router = fs.readFileSync(
-  path.join(__dirname, 'templates', 'static', 'js', 'router.js'), 'utf8');
+  path.join(__dirname, '..', 'templates', 'static', 'js', 'router.js'), 'utf8');
 const baseCss = fs.readFileSync(
-  path.join(__dirname, 'templates', 'static', 'css', 'base.css'), 'utf8');
+  path.join(__dirname, '..', 'templates', 'static', 'css', 'base.css'), 'utf8');
 
 function extractFunction(src, marker) {
   const start = src.indexOf(marker);

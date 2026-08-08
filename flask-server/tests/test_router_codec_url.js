@@ -6,14 +6,14 @@
 // `document`, `history`, etc., then calling the codec's urlToRoute and
 // routeToUrl directly.
 //
-// Run: `node test_router_codec_url.js` (the file is in flask-server/ so it
+// Run: `node flask-server/tests/test_router_codec_url.js` (the file is in
 // sits next to the Python regression test for parallel CI usage).
 
 const fs = require('fs');
 const vm = require('vm');
 
 const ROUTER_PATH = require('path').join(
-  __dirname, 'templates', 'static', 'js', 'router.js');
+  __dirname, '..', 'templates', 'static', 'js', 'router.js');
 
 const routerSrc = fs.readFileSync(ROUTER_PATH, 'utf8');
 
