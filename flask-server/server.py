@@ -2752,7 +2752,15 @@ class Supporting:
             except OSError:
                 pass
 
-    def ytdlp_download_command(video_id: str, output, client: str = "default"):
+    def ytdlp_download_command(video_id: str, output, client: str = "default",
+                                retries: int = 2, socket_timeout: int = 10):
+        """Build a yt-dlp command for either cached or streaming playback.
+
+        Streaming playback passes a shorter timeout and no retries so a stalled
+        client profile can fall through to the next profile before Alexa's
+        roughly 11-second proxy deadline. Background cache downloads retain the
+        more tolerant defaults above.
+        """
         extractor_args = []
         if client != "default":
             extractor_args.append(f"youtube:player_client={client}")
@@ -2768,7 +2776,8 @@ class Supporting:
                    # Fail fast instead: 2 retries here is enough to absorb a
                    # single transient blip, and the client-profile fallback
                    # loop is what actually recovers from a persistent failure.
-                   "--retries", "2", "--socket-timeout", "10"]
+                   "--retries", str(max(0, int(retries))),
+                   "--socket-timeout", str(max(1, int(socket_timeout)))]
 
         Supporting.add_ytdlp_js_runtime(command)
         Supporting.add_ytdlp_pot_provider(command)
@@ -3619,25 +3628,48 @@ def _stream_proxy_download(video_id):
     if not permit.acquire(timeout=_STREAM_PERMIT_TIMEOUT):
         logger.warning("proxy: streaming %s without a stream slot (%d already active)",
                        video_id, _STREAM_CONCURRENCY)
-    cmd = list(Supporting.ytdlp_download_command(video_id, "-", "default"))
-    try:
+    # The Echo gives this endpoint only about 11 seconds. A default-profile
+    # socket stall used to consume almost all of that budget before the
+    # background downloader eventually succeeded with android_vr. Streaming
+    # gets a short, no-retry attempt per profile and falls through immediately
+    # when a profile exits without producing audio.
+    stream_clients = list(Supporting.get_ytdlp_clients()) or ["default", "android_vr"]
+    stream_timeout = max(1, int(os.environ.get("YTDLP_STREAM_SOCKET_TIMEOUT", "3")))
+    stream_retries = max(0, int(os.environ.get("YTDLP_STREAM_RETRIES", "0")))
+    proc = None
+    proc_index = 0
+    stop_watchdog = threading.Event()
+
+    def launch_stream(client, index):
+        nonlocal proc
+        cmd = list(Supporting.ytdlp_download_command(
+            video_id, "-", client=client,
+            retries=stream_retries, socket_timeout=stream_timeout,
+        ))
         proc = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
             bufsize=64 * 1024,
         )
+        if index:
+            logger.info("proxy: trying %s fallback for %s", client, video_id)
+        threading.Thread(
+            target=_stream_abandon_watchdog,
+            args=(video_id, proc, generation, stop_watchdog),
+            name=f"proxy-watchdog-{video_id}-{client}", daemon=True,
+        ).start()
+
+    try:
+        launch_stream(stream_clients[0], 0)
     except Exception:
         permit.release()
         if claimed:
             _stream_unregister(video_id)
         raise
-    stop_watchdog = threading.Event()
-    threading.Thread(target=_stream_abandon_watchdog,
-                     args=(video_id, proc, generation, stop_watchdog),
-                     name=f"proxy-watchdog-{video_id}", daemon=True).start()
 
     def generate():
+        nonlocal proc_index
         cache_fp = None
         confirmed = False
         try:
@@ -3645,6 +3677,22 @@ def _stream_proxy_download(video_id):
             while True:
                 chunk = proc.stdout.read(64 * 1024)
                 if not chunk:
+                    proc.wait()
+                    # Only switch profiles before the first byte. Once audio
+                    # has reached the Echo, restarting would splice two
+                    # different streams and is worse than letting that stream
+                    # finish/fail normally.
+                    if (not confirmed and proc_index + 1 < len(stream_clients)):
+                        proc_index += 1
+                        try:
+                            launch_stream(stream_clients[proc_index], proc_index)
+                        except Exception as exc:
+                            logger.warning(
+                                "proxy: %s fallback could not start for %s: %s",
+                                stream_clients[proc_index], video_id, exc,
+                            )
+                            continue
+                        continue
                     break
                 cache_fp.write(chunk)
                 # Confirm playback only once the first audio bytes are ready

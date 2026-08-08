@@ -631,6 +631,85 @@ class EnsureDownloadedRateLimit(_CleanServerState):
 
 
 # --------------------------------------------------------------------------
+# Cold-stream fallback latency
+# --------------------------------------------------------------------------
+
+class StreamingFallbackLatency(_CleanServerState):
+    def test_stream_command_uses_fast_timeout_without_changing_background_defaults(self):
+        background = server.Supporting.ytdlp_download_command(
+            "backgroundvid", "-", client="default"
+        )
+        streaming = server.Supporting.ytdlp_download_command(
+            "streamingvid", "-", client="android_vr", retries=0, socket_timeout=3
+        )
+
+        def option(command, name):
+            return command[command.index(name) + 1]
+
+        self.assertEqual(option(background, "--retries"), "2")
+        self.assertEqual(option(background, "--socket-timeout"), "10")
+        self.assertEqual(option(streaming, "--retries"), "0")
+        self.assertEqual(option(streaming, "--socket-timeout"), "3")
+        self.assertIn("youtube:player_client=android_vr", streaming)
+
+    def test_stream_falls_back_when_first_profile_exits_without_audio(self):
+        class _Proc:
+            def __init__(self, chunks):
+                self.stdout = iter(chunks)
+                self.waited = False
+                self.killed = False
+                self.returncode = None
+
+            def poll(self):
+                return self.returncode
+
+            def wait(self, timeout=None):
+                self.waited = True
+                self.returncode = 0
+                return self.returncode
+
+            def kill(self):
+                self.killed = True
+                self.returncode = -9
+
+        class _Stdout:
+            def __init__(self, chunks):
+                self.chunks = iter(chunks)
+
+            def read(self, _size=None):
+                return next(self.chunks, b'')
+
+            def close(self):
+                pass
+
+        first = _Proc([])
+        first.stdout = _Stdout([])
+        second = _Proc([b'audio-bytes', b''])
+        second.stdout = _Stdout([b'audio-bytes', b''])
+        clients = ['default', 'android_vr']
+
+        with (mock.patch.object(server.Supporting, "get_ytdlp_clients",
+                                staticmethod(lambda: clients)),
+              mock.patch.object(server.subprocess, "Popen",
+                                side_effect=[first, second]) as popen,
+              mock.patch.object(server, "_stream_abandon_watchdog"),
+              mock.patch.object(server, "_is_audio_file_valid", return_value=True),
+              mock.patch.object(server, "_confirm_stream_delivery"),
+              mock.patch.object(server.os, "replace")):
+            response = server._stream_proxy_download("streamfallback1")
+            body = b''.join(response.response)
+            response.close()
+
+        self.assertEqual(body, b'audio-bytes')
+        self.assertEqual(popen.call_count, 2)
+        self.assertTrue(first.waited,
+                        msg="the failed profile must be reaped before fallback")
+        self.assertTrue(second.waited)
+        self.assertIn("youtube:player_client=android_vr",
+                      popen.call_args_list[1].args[0])
+
+
+# --------------------------------------------------------------------------
 # Fix 1: playback generation token
 # --------------------------------------------------------------------------
 
