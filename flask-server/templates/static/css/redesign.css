@@ -1054,14 +1054,17 @@ body:not(.explore-route):not(.mood-route):not(.library-route):has(#library-modal
   transition: background .15s ease, border-color .15s ease, box-shadow .15s ease, transform .15s ease;
 }
 #add-to-playlist-list > button:not(:disabled):hover,
+#add-to-playlist-list > button:not(:disabled):focus,
 #add-to-playlist-list > button:not(:disabled):focus-visible {
-  background: rgba(232, 89, 12, .12) !important;
+  background: rgba(232, 89, 12, .24) !important;
   border-bottom-color: var(--accent) !important;
-  box-shadow: inset 3px 0 0 var(--accent), 0 4px 14px rgba(0, 0, 0, .2);
+  color: #fff !important;
+  box-shadow: inset 4px 0 0 var(--accent), 0 4px 14px rgba(0, 0, 0, .28);
   outline: none;
+  transform: translateX(3px);
 }
 #add-to-playlist-list > button:not(:disabled):active {
-  transform: translateX(2px);
+  transform: translateX(5px) scale(.99);
 }
 .queue-modal { border-radius: var(--radius-xl) var(--radius-xl) 0 0; }
 .toast { border-radius: 4px; }

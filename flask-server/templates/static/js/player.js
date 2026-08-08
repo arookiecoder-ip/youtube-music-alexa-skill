@@ -1075,7 +1075,9 @@ document.addEventListener('keydown', (event) => {
       !nowPlayingSection || nowPlayingSection.hidden) return;
 
   const target = event.target;
-  if (target && target.closest && target.closest(
+  const playerExpandButton = document.getElementById('player-expand-btn');
+  const isModalOpenerFocus = target === playerExpandButton;
+  if (!isModalOpenerFocus && target && target.closest && target.closest(
     'button, a, input, select, textarea, [contenteditable]:not([contenteditable="false"]), [role="button"], [role="slider"]'
   )) return;
 
