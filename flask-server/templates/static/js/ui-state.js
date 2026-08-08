@@ -50,7 +50,6 @@
     _loggedIn: false,
     _homeLoaded: false,
     _homeLoading: false,
-    _searchPending: false,
     _searchPreservePreviousView: false,
     _searchPreviousHomeVisible: false,
   }, window.__appState || {});

@@ -8,7 +8,6 @@
   if (state._activeCategory === undefined) state._activeCategory = 'songs';
   if (state._resultsPage === undefined) state._resultsPage = {};
   if (state._searchSeq === undefined) state._searchSeq = 0;
-  if (state._searchPending === undefined) state._searchPending = false;
   if (state._searchPreservePreviousView === undefined) state._searchPreservePreviousView = false;
   if (state._searchPreviousHomeVisible === undefined) state._searchPreviousHomeVisible = false;
 
@@ -29,7 +28,6 @@ async function runSearch(query, options) {
     // snapshot is what lets the shell keep Home visible during the request.
     const previousHome = document.getElementById('home-section');
     state._searchPreviousHomeVisible = !!(previousHome && !previousHome.hidden);
-    state._searchPending = true;
     state._searchPreservePreviousView = state._searchPreviousHomeVisible;
     if (window.syncUiState) window.syncUiState();
     if (window.navigateTo && window.__spaRouteCodec) {
@@ -78,7 +76,6 @@ async function runSearch(query, options) {
   try {
     const data = await api('/alexa/search/?q=' + encodeURIComponent(query));
     if (mySeq !== state._searchSeq) return;   // a newer search (or a route change) won
-    state._searchPending = false;
     state._searchPreservePreviousView = false;
     state._searchPreviousHomeVisible = false;
     if (window.completeTopProgress) window.completeTopProgress();
@@ -89,20 +86,24 @@ async function runSearch(query, options) {
     if (!totalItems) {
       toast('No results found.', 'error');
       if (list) list.innerHTML = '<div class="results-empty-state">No results found for your search.</div>';
+      resetResultsScroll();
       return;
     }
     state._resultsPage = { songs: 0, artists: 0, albums: 0, playlists: 0 };
     state._activeCategory = 'all';
     document.querySelectorAll('.results-tab').forEach(t => t.classList.toggle('active', t.dataset.category === state._activeCategory));
     renderResults();
+    // A second search can update an already-open Results view without calling
+    // openResults(), so reset the destination scroll after every response—not
+    // only during the first Home-to-Results handoff.
+    resetResultsScroll();
     // On mobile, collapse the expanded search panel once results are ready.
     // Desktop has no mobile-search-open class, so its layout stays unchanged.
     document.body.classList.remove('mobile-search-open');
     toast(totalItems + ' results', 'ok');
   } catch (e) {
     if (mySeq === state._searchSeq) {
-      state._searchPending = false;
-      // Keep the captured previous view on a failed search too; never invent
+        // Keep the captured previous view on a failed search too; never invent
       // Home as the fallback for an Artist page or a cold-load deep link.
       state._searchPreservePreviousView = state._searchPreviousHomeVisible;
       if (window.syncUiState) window.syncUiState();
@@ -118,6 +119,18 @@ async function runSearch(query, options) {
       }
     }
   }
+}
+
+function resetResultsScroll() {
+  window.scrollTo(0, 0);
+  document.documentElement.scrollTop = 0;
+  document.body.scrollTop = 0;
+  const main = document.querySelector('main');
+  if (main) main.scrollTop = 0;
+  const section = document.getElementById('results-section');
+  if (section) section.scrollTop = 0;
+  const list = document.getElementById('results-list');
+  if (list) list.scrollTop = 0;
 }
 
 function openResults(options) {
@@ -159,6 +172,9 @@ function openResults(options) {
     mainEl.classList.remove('has-queue');
     queueSection.classList.remove('is-visible');
     queueSection.hidden = true;
+    // The router skips its normal route scroll reset while a pending search
+    // keeps Home mounted. Results are positioned after their content is
+    // rendered, so the old page never visibly jumps during the request.
     section.hidden = false;
     syncUiState();
   });

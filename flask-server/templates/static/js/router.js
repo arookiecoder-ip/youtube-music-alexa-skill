@@ -525,7 +525,11 @@
     // The full player is a fixed overlay over the current page. Resetting all
     // view scroll positions here also resets the artist page underneath it,
     // which makes the artist background visibly jump before the overlay lands.
-    if (changedRoute && route !== '#now-playing') {
+    // Search owns scroll positioning: while loading, the current page must
+    // not jump; once data arrives, openResults() performs the single atomic
+    // reset for the Results view. Never run the global route reset for Search.
+    var isSearchRoute = route.indexOf('#search?') === 0;
+    if (changedRoute && route !== '#now-playing' && !isSearchRoute) {
       resetRouteScroll();
       _restoreScroll();
       requestAnimationFrame(_restoreScroll);
@@ -562,7 +566,8 @@
       history.replaceState({ route: window.__route, position: _historyPosition }, '', decoded.url);
     }
     applyRoute(window.__route);
-    if (window.__route !== '#now-playing') {
+    var isSearchRoute = window.__route.indexOf('#search?') === 0;
+    if (window.__route !== '#now-playing' && !isSearchRoute) {
       resetRouteScroll();
       _restoreScroll();
       requestAnimationFrame(_restoreScroll);
@@ -645,6 +650,10 @@
       if (libraryOverlay) libraryOverlay.classList.remove('open');
     }
     if (hash !== '#now-playing') {
+      // Search owns the queue/layout swap for every entry mode. Direct links
+      // and Back/Forward reach applyRoute before runSearch can set its pending
+      // flag, so gating this only on state would reintroduce the same nudge.
+      var deferSearchLayout = hash.indexOf('#search?') === 0;
       var closingMain = document.querySelector('main');
       if (isClosingNowPlaying && closingMain) {
         closingMain.style.transition = 'none';
@@ -683,10 +692,15 @@
         // Fallback for reduced motion, background tabs, or interrupted CSS.
         npSection._closeTimer = setTimeout(finishClose, 450);
       }
-      setHidden('#queue-section', true);
-      if (!isClosingNowPlaying) {
-        var main = document.querySelector('main');
-        if (main) main.classList.remove('has-queue');
+      // Keep the current homepage geometry intact while Enter-triggered
+      // Search is waiting. openResults() performs this swap after content
+      // arrives, preventing the queue column from causing a visible nudge.
+      if (!deferSearchLayout) {
+        setHidden('#queue-section', true);
+        if (!isClosingNowPlaying) {
+          var main = document.querySelector('main');
+          if (main) main.classList.remove('has-queue');
+        }
       }
     }
     // Safety: when landing on home, always ensure scroll is not locked.

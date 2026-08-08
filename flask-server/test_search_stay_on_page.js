@@ -26,6 +26,10 @@ const vm = require('vm');
 
 const JS_PATH = path.join(__dirname, 'templates', 'static', 'js', 'search.js');
 const SRC = fs.readFileSync(JS_PATH, 'utf8');
+const ROUTER_SRC = fs.readFileSync(
+  path.join(__dirname, 'templates', 'static', 'js', 'router.js'),
+  'utf8'
+);
 
 let passed = 0;
 let failed = 0;
@@ -97,6 +101,9 @@ function makeSandbox({ initialSectionsHidden, resultsOpenInitially, apiImpl, ope
     document: {
       getElementById: fakeElementById,
       querySelectorAll: () => [],
+      querySelector: (selector) => selector === 'main' ? { scrollTop: 0 } : null,
+      documentElement: { scrollTop: 0 },
+      body: { scrollTop: 0, classList: { remove: () => {} } },
     },
     toast: (msg, kind) => events.push(['toast', msg, kind]),
     api: (path) => { events.push(['api', path]); return apiImpl(path); },
@@ -109,6 +116,7 @@ function makeSandbox({ initialSectionsHidden, resultsOpenInitially, apiImpl, ope
       if (openResultsSpy) openResultsSpy(opts);
     },
     renderResults: () => events.push(['renderResults']),
+    resetResultsScroll: () => events.push(['resetResultsScroll']),
   };
   sandbox.window = {
     startTopProgress: () => events.push(['startTopProgress']),
@@ -123,7 +131,7 @@ function makeSandbox({ initialSectionsHidden, resultsOpenInitially, apiImpl, ope
       if (isSearchRoute) sections['home-section'] = !preserve;
     },
   };
-  sandbox.document.body = { classList: { remove: () => {} } };
+  sandbox.window.scrollTo = () => events.push(['scrollTo']);
 
   const context = vm.createContext(sandbox);
   vm.runInContext(runSearchSrc, context, { filename: 'runSearch.js' });
@@ -135,6 +143,25 @@ function makeSandbox({ initialSectionsHidden, resultsOpenInitially, apiImpl, ope
 }
 
 async function main() {
+  console.log('--- route handoff: scroll reset waits for Results ---');
+  checkTrue('router leaves Search scroll ownership to the Results handoff',
+            (ROUTER_SRC.match(/var isSearchRoute = route\.indexOf\('\#search\?'\) === 0/g) || []).length >= 1 &&
+            ROUTER_SRC.includes("route !== '#now-playing' && !isSearchRoute"),
+            'the visible Home page must not be globally reset on Search route entry');
+  checkTrue('popstate also leaves Search scroll ownership to Results',
+            ROUTER_SRC.includes("var isSearchRoute = window.__route.indexOf('#search?') === 0") &&
+            ROUTER_SRC.includes("window.__route !== '#now-playing' && !isSearchRoute"),
+            'Back/Forward into Search must use the same no-jump behavior');
+  checkTrue('all Search route entries defer queue/layout changes',
+            ROUTER_SRC.includes("var deferSearchLayout = hash.indexOf('#search?') === 0") &&
+            ROUTER_SRC.includes('if (!deferSearchLayout)'),
+            'direct links and browser navigation must not shift the current page before data arrives');
+  checkTrue('Results handoff owns the scroll reset',
+            SRC.includes('function resetResultsScroll()') &&
+            SRC.includes('if (main) main.scrollTop = 0;') &&
+            SRC.includes('if (list) list.scrollTop = 0;'),
+            'the reset belongs at the Results handoff, not route entry');
+
   console.log('--- searching from Home: stays on Home until data arrives ---');
   {
     let resolveApi;
