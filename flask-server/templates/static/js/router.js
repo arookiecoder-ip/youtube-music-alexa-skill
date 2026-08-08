@@ -402,6 +402,7 @@
         });
       window.__appState._searchPreviousViewVisible = sourceVisible;
       window.__appState._searchPreservePreviousView = sourceVisible;
+      window.__appState._searchPreviousRoute = window.__appState._searchPreviousRoute || window.__route || '#home';
       var homeSource = document.getElementById('home-section');
       window.__appState._searchPreviousHomeVisible = !!(homeSource && !homeSource.hidden);
     }
@@ -568,6 +569,9 @@
       var isPreloaded = window.__preloadCache && window.__preloadCache[route] !== undefined;
       if (isMediaDetail && !isPreloaded && window._barStart) window._barStart();
       _saveScroll();
+      if (route.indexOf('#search?') === 0 && window.__appState) {
+        window.__appState._searchPreviousRoute = window.__route || '#home';
+      }
       window.__route = route;
       if (window.syncTopProgressVisibility) window.syncTopProgressVisibility();
       _historyPosition += 1;
@@ -604,6 +608,9 @@
     var decoded = decodeLocation(location);
     // The URL is authoritative. state.route only supports old entries whose
     // address never changed away from the root path.
+    if (decoded.route.indexOf('#search?') === 0 && window.__appState) {
+      window.__appState._searchPreviousRoute = window.__route || '#home';
+    }
     window.__route = decoded.route;
     if (e.state && Number.isInteger(e.state.position)) _historyPosition = e.state.position;
     if (location.pathname === '/' && !location.hash && e.state && e.state.route) {
@@ -705,25 +712,26 @@
     document.body.classList.toggle('album-route', hash.indexOf('#album/') === 0);
 
     // Routed desktop pages reuse overlay markup, so explicitly dismiss layers
-    // belonging to the previous route. Otherwise an invisible full-screen
-    // layer can keep intercepting sidebar clicks after navigation.
-    if (hash.indexOf('#playlist/') !== 0) {
+    // belonging to the previous route. A pending Search is different: it is
+    // not the visible destination yet, so keep the source page/overlay intact
+    // until openResults() performs the atomic handoff after data arrives.
+    if (!preserveSearchShell && hash.indexOf('#playlist/') !== 0) {
       var detailOverlay = document.getElementById('playlist-detail-modal-overlay');
       if (detailOverlay) detailOverlay.classList.remove('open');
     }
-    if (hash !== '#history') {
+    if (!preserveSearchShell && hash !== '#history') {
       var historyPage = document.getElementById('history-page');
       if (historyPage) historyPage.hidden = true;
     }
-    if (hash !== '#explore') {
+    if (!preserveSearchShell && hash !== '#explore') {
       var exploreOverlay = document.getElementById('explore-modal-overlay');
       if (exploreOverlay) exploreOverlay.classList.remove('open');
     }
-    if (hash.indexOf('#mood/') !== 0) {
+    if (!preserveSearchShell && hash.indexOf('#mood/') !== 0) {
       var moodOverlay = document.getElementById('mood-modal-overlay');
       if (moodOverlay) moodOverlay.classList.remove('open');
     }
-    if (hash !== '#library') {
+    if (!preserveSearchShell && hash !== '#library') {
       var libraryOverlay = document.getElementById('library-modal-overlay');
       if (libraryOverlay) libraryOverlay.classList.remove('open');
     }
@@ -860,7 +868,12 @@
     // Restore the visible page's shell classes while a pending Search request
     // keeps that page mounted. The durable Search classes are applied by the
     // Results handoff after content arrives.
-    if (preserveSearchShell && previousRouteClasses) {
+    // A deferred user Search can synchronously consume its fetched payload,
+    // open Results, and clear the pending flag inside runSearch(). In that
+    // case Search now owns the route classes; do not put the source page's
+    // classes back on the Results view after the handoff.
+    if (preserveSearchShell && previousRouteClasses &&
+        window.__appState && window.__appState._searchPreservePreviousView) {
       routeClassNames.forEach(function(name) {
         document.body.classList.toggle(name, previousRouteClasses[name]);
       });

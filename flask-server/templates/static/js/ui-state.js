@@ -53,6 +53,7 @@
     _searchPreservePreviousView: false,
     _searchPreviousViewVisible: false,
     _searchPreviousHomeVisible: false,
+    _searchPreviousRoute: '',
   }, window.__appState || {});
 
   // Player lifecycle trace. Run window.dumpPlayerDebugLogs() in the console
@@ -110,12 +111,16 @@
     // and blocks the hero artwork from bleeding underneath it.
     const searchRoute = route.indexOf('#search?') === 0;
     const resultsVisible = !!state._resultsOpen && searchRoute;
+    const preserveSearchView = searchRoute && state._searchPreservePreviousView;
+    const viewRoute = preserveSearchView && state._searchPreviousRoute
+      ? state._searchPreviousRoute
+      : route;
     const mainEl = document.querySelector('main');
     const player = document.querySelector('.player-section');
     const clearBtn = document.getElementById('clear-all-btn');
     if (clearBtn) clearBtn.hidden = !(state._hasTrack || state._resultsOpen);
     document.body.classList.toggle('results-open', resultsVisible);
-    if (mainEl) mainEl.classList.toggle('idle', route === '#home' && state._loggedIn && !state._hasTrack && !resultsVisible);
+    if (mainEl) mainEl.classList.toggle('idle', viewRoute === '#home' && state._loggedIn && !state._hasTrack && !resultsVisible);
     const homeSection = document.getElementById('home-section');
     if (homeSection) {
       // The player is a fixed bottom bar now, so the home feed stays visible
@@ -131,9 +136,13 @@
       // Keep the previous Home view mounted during that pending window; the
       // router's final sync otherwise hides it immediately and exposes an
       // empty Results shell while Enter-triggered searches are still loading.
-      const preserveSearchView = searchRoute && state._searchPreservePreviousView;
+      // A pending Search must keep the actual source page mounted. Only keep
+      // Home visible when Search was started from Home; otherwise showing Home
+      // here makes Artist/Playlist/History/etc. appear to redirect to Home.
+      const preserveHomeDuringSearch = preserveSearchView &&
+        (!state._searchPreviousRoute || state._searchPreviousRoute === '#home');
       const shouldShow = state._loggedIn &&
-        ((!searchRoute && !state._resultsOpen) || preserveSearchView) &&
+        ((!searchRoute && !state._resultsOpen) || preserveHomeDuringSearch) &&
         !artistOpen && !albumOpen && !historyOpen && !exploreOpen && !moodOpen && !libraryOpen && !npOpen;
       if (shouldShow && !state._homeLoaded && window.loadHomeFeed) window.loadHomeFeed();
       else homeSection.hidden = !shouldShow || !state._homeLoaded;

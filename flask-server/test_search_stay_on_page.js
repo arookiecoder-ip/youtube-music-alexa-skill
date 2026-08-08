@@ -131,7 +131,9 @@ function makeSandbox({ initialSectionsHidden, resultsOpenInitially, apiImpl, ope
     syncUiState: () => {
       const isSearchRoute = (state._route || '').indexOf('#search?') === 0;
       const preserve = state._searchPreservePreviousView;
-      if (isSearchRoute) sections['home-section'] = !preserve;
+      const sourceRoute = state._searchPreviousRoute || '#home';
+      if (isSearchRoute && preserve && sourceRoute === '#home') sections['home-section'] = false;
+      else if (isSearchRoute && sourceRoute === '#home') sections['home-section'] = true;
     },
   };
   sandbox.window.scrollTo = () => events.push(['scrollTo']);
@@ -164,6 +166,13 @@ async function main() {
             SRC.includes('if (main) main.scrollTop = 0;') &&
             SRC.includes('if (list) list.scrollTop = 0;'),
             'the reset belongs at the Results handoff, not route entry');
+  checkTrue('router keeps the source overlays/pages during pending Search',
+            ROUTER_SRC.includes("if (!preserveSearchShell && hash.indexOf('#playlist/') !== 0)") &&
+            ROUTER_SRC.includes("if (!preserveSearchShell && hash !== '#history')") &&
+            ROUTER_SRC.includes("if (!preserveSearchShell && hash !== '#explore')") &&
+            ROUTER_SRC.includes("if (!preserveSearchShell && hash.indexOf('#mood/') !== 0)") &&
+            ROUTER_SRC.includes("if (!preserveSearchShell && hash !== '#library')"),
+            'Artist/Playlist/History/Explore/Library must remain visible until results arrive');
 
   console.log('--- searching from Home: stays on Home until data arrives ---');
   {
@@ -217,7 +226,7 @@ async function main() {
       routePromise = sandbox.wrapped('enter query', { fromRoute: true });
       sandbox.window.syncUiState();
     };
-    sandbox.wrapped('enter query');
+    const enterPromise = sandbox.wrapped('enter query');
     checkTrue('Enter path does not open Results while loading',
               !sandbox.events.some(([fn]) => fn === 'openResults'),
               'the real button/Enter path must preserve the current page too');
@@ -226,6 +235,10 @@ async function main() {
     checkTrue('Enter path records the previous Home view',
               sandbox.state._searchPreviousHomeVisible === true);
     resolveApi({ songs: [{ video_id: 'enter-v1' }] });
+    // The first promise resolves after it invokes navigateTo(); the route
+    // handler returns its own promise because the real app performs the
+    // handoff synchronously inside the router call stack.
+    await enterPromise;
     await routePromise;
     checkTrue('Enter path opens Results after data arrives',
               sandbox.events.some(([fn]) => fn === 'openResults'));
@@ -254,6 +267,42 @@ async function main() {
     resolveApi({ songs: [{ video_id: 'replacement-v1' }] });
     await runPromise;
     checkTrue('replacement results open after the new data arrives',
+              sandbox.events.some(([fn]) => fn === 'openResults'));
+  }
+
+  console.log('\n--- searching from Artist: stays on Artist until data arrives ---');
+  {
+    let resolveApi;
+    const pending = new Promise((r) => { resolveApi = r; });
+    const sandbox = makeSandbox({
+      initialSectionsHidden: {
+        'home-section': true,
+        'artist-section': false,
+      },
+      resultsOpenInitially: false,
+      apiImpl: () => pending,
+    });
+    sandbox.state._route = '#artist/UC-artist';
+    sandbox.window.getRoute = () => sandbox.state._route;
+    sandbox.window.__spaRouteCodec = {
+      searchRoute: (query) => '#search?q=' + encodeURIComponent(query),
+    };
+    let routePromise;
+    sandbox.window.navigateTo = (route) => {
+      sandbox.state._route = route;
+      routePromise = sandbox.wrapped('artist query', { fromRoute: true });
+    };
+    const runPromise = sandbox.wrapped('artist query');
+    check('Artist remains visible before the route handoff',
+          sandbox.sections['artist-section'], false);
+    check('Home does not become visible from an Artist search',
+          sandbox.sections['home-section'], true);
+    check('source route is captured for the pending search',
+          sandbox.state._searchPreviousRoute, '#artist/UC-artist');
+    resolveApi({ songs: [{ video_id: 'artist-v1' }] });
+    await runPromise;
+    await routePromise;
+    checkTrue('Artist search opens Results only after data arrives',
               sandbox.events.some(([fn]) => fn === 'openResults'));
   }
 

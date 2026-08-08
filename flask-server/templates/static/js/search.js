@@ -11,6 +11,10 @@
   if (state._searchPreservePreviousView === undefined) state._searchPreservePreviousView = false;
   if (state._searchPreviousViewVisible === undefined) state._searchPreviousViewVisible = false;
   if (state._searchPreviousHomeVisible === undefined) state._searchPreviousHomeVisible = false;
+  if (state._searchPreviousRoute === undefined) state._searchPreviousRoute = '';
+  if (state._searchHandoffQuery === undefined) state._searchHandoffQuery = '';
+  if (state._searchHandoffData === undefined) state._searchHandoffData = null;
+  if (state._searchHandoffSeq === undefined) state._searchHandoffSeq = 0;
 
 const RESULTS_PER_PAGE = 10;
 
@@ -29,6 +33,13 @@ async function runSearch(query, options) {
     // snapshot is what lets the shell keep Home visible during the request.
     const previousHome = document.getElementById('home-section');
     state._searchPreviousHomeVisible = !!(previousHome && !previousHome.hidden);
+    const currentRoute = window.getRoute ? (window.getRoute() || '#home') : '#home';
+    // A failed Search keeps the durable Search URL active while the source
+    // page remains visible. Reuse that original source route on retry instead
+    // of treating the current #search route as a new source page.
+    state._searchPreviousRoute = currentRoute.indexOf('#search?') === 0 && state._searchPreviousRoute
+      ? state._searchPreviousRoute
+      : currentRoute;
     state._searchPreviousViewVisible = ['home-section', 'jam-home-section', 'recs-section',
       'artist-section', 'artist-songs-section', 'history-page',
       'playlist-detail-modal-overlay', 'explore-modal-overlay',
@@ -39,12 +50,26 @@ async function runSearch(query, options) {
       });
     state._searchPreservePreviousView = state._searchPreviousViewVisible;
     if (window.syncUiState) window.syncUiState();
+    // Do not change the durable route yet. Fetch on the page the user is
+    // currently viewing, then perform one atomic route/results handoff after
+    // the response arrives. This prevents the router from briefly rendering
+    // Home or an empty Search shell while Artist/Playlist/History/etc. is still
+    // the visible source page.
     if (window.navigateTo && window.__spaRouteCodec) {
-      window.navigateTo(window.__spaRouteCodec.searchRoute(query));
+      return runSearch(query, { fromRoute: true, deferRouteHandoff: true });
     }
     return;
   }
   if (window.closeSearchSuggestions) window.closeSearchSuggestions();
+  const handoffData = state._searchHandoffSeq === state._searchSeq &&
+    state._searchHandoffQuery === query
+    ? state._searchHandoffData
+    : null;
+  if (handoffData !== null) {
+    state._searchHandoffQuery = '';
+    state._searchHandoffData = null;
+    state._searchHandoffSeq = 0;
+  }
   const mySeq = ++state._searchSeq;
   const resultsSection = document.getElementById('results-section');
   const alreadyOnResults = !!(state._resultsOpen && resultsSection && !resultsSection.hidden);
@@ -96,11 +121,34 @@ async function runSearch(query, options) {
   if (window.startTopProgress) window.startTopProgress();
   toast('Searching \u201c' + query + '\u201d\u2026');
   try {
-    const data = await api('/alexa/search/?q=' + encodeURIComponent(query));
+    const data = handoffData || await api('/alexa/search/?q=' + encodeURIComponent(query));
     if (mySeq !== state._searchSeq) return;   // a newer search (or a route change) won
+    if (options.deferRouteHandoff && window.navigateTo && window.__spaRouteCodec) {
+      // The request completed while the original page was still mounted.
+      // Carry its response through the route handler so Search opens without
+      // issuing a second request or exposing an intermediate Home view.
+      state._searchHandoffQuery = query;
+      state._searchHandoffData = data || {};
+      state._searchHandoffSeq = mySeq;
+      try {
+        window.navigateTo(window.__spaRouteCodec.searchRoute(query));
+      } finally {
+        // The synchronous route handler consumes this payload. If navigation
+        // is interrupted or throws before consumption, do not let stale data
+        // satisfy a later identical search.
+        if (state._searchHandoffSeq === mySeq) {
+          state._searchHandoffQuery = '';
+          state._searchHandoffData = null;
+          state._searchHandoffSeq = 0;
+        }
+      }
+      return;
+    }
     state._searchPreservePreviousView = false;
     state._searchPreviousViewVisible = false;
     state._searchPreviousHomeVisible = false;
+    state._searchPreviousRoute = '';
+
     if (window.completeTopProgress) window.completeTopProgress();
     state._searchCategorized = data || {};
     const totalItems = (data.songs?.length || 0) + (data.artists?.length || 0) + (data.albums?.length || 0) + (data.playlists?.length || 0);
@@ -130,6 +178,9 @@ async function runSearch(query, options) {
       // Home as the fallback for an Artist page or a cold-load deep link.
       state._searchPreservePreviousView = state._searchPreviousViewVisible;
       if (window.syncUiState) window.syncUiState();
+      // Keep the source marker while the Search URL remains active so a retry
+      // still knows which page must stay mounted. A real route change calls
+      // deactivateSearchResults(), which clears these fields.
       if (window.abortTopProgress) window.abortTopProgress();
       toast(e.message, 'error');
       // Only show the inline error state if the results page is already the
@@ -178,17 +229,19 @@ function openResults(options) {
   clearTimeout(section._showTimer);
   // Views swap, they don't stack. We hide the underlying page content so the search results
   // behave as a standalone page instead of a side column or popup overlay.
-  const viewsToHide = ['home-section', 'jam-home-section', 'recs-section', 'artist-section'];
+  const viewsToHide = ['home-section', 'jam-home-section', 'recs-section',
+    'artist-section', 'artist-songs-section', 'history-page'];
   viewsToHide.forEach(id => {
     const el = document.getElementById(id);
     if (el) el.hidden = true;
   });
   // Same for the playlist detail view: it sits above the content area (z-210),
   // so results rendered behind it would be invisible until manually closed.
-  {
-    const ov = document.getElementById('playlist-detail-modal-overlay');
+  ['playlist-detail-modal-overlay', 'explore-modal-overlay',
+    'mood-modal-overlay', 'library-modal-overlay'].forEach(id => {
+    const ov = document.getElementById(id);
     if (ov) ov.classList.remove('open');
-  }
+  });
   animatePlaySectionLayout(() => {
     state._resultsOpen = true;
     // The old route shell was preserved while this request loaded. Results
@@ -221,6 +274,11 @@ function deactivateSearchResults() {
   state._searchSeq++;
   state._searchPreservePreviousView = false;
   state._searchPreviousHomeVisible = false;
+  state._searchPreviousViewVisible = false;
+  state._searchPreviousRoute = '';
+  state._searchHandoffQuery = '';
+  state._searchHandoffData = null;
+  state._searchHandoffSeq = 0;
   state._resultsOpen = false;
   const section = document.getElementById('results-section');
   if (section) {
