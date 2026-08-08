@@ -1647,12 +1647,18 @@ function updateUrlBar() {
       + (seconds > 0 ? '&t=' + seconds : '');
 
     const serial = selectedSerial();
-    if (serial && state.isPlaying) {
+    // Always attempt the pause, even if the locally-tracked isPlaying flag
+    // says it's already paused: that flag is an optimistic client guess (SSE
+    // lag, a race with another tab, etc.) and can be stale. Sending 'pause'
+    // to an already-paused device is a harmless no-op server-side, whereas
+    // skipping it on a stale "false" left music playing behind the YouTube
+    // tab. A failed dispatch is now surfaced instead of silently swallowed.
+    if (serial) {
       state.lastActionAt = Date.now();
       state.lastActionIntent = false;
       api('/alexa/command/', { serial, action: 'pause' })
         .then(() => { state.isPlaying = false; state.lastActionIntent = false; syncPlayPause(); })
-        .catch(() => {});
+        .catch(() => { toast('Could not pause playback.', 'error'); });
     }
   };
   if (ytmBtn) ytmBtn.addEventListener('click', onClick);

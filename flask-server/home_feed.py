@@ -40,6 +40,22 @@ def _get_best_thumbnail(thumbnails):
     best = max(thumbnails, key=lambda t: t.get('width', 0) if isinstance(t, dict) else 0, default=None)
     return best.get('url', "") if best and isinstance(best, dict) else ""
 
+_GENERIC_ARTIST_LABELS = frozenset({
+    'release', 'releases', 'album', 'song', 'music', 'video',
+})
+
+def _clean_artist_name(name):
+    """Strip a "- Topic" uploader-channel suffix / generic label so home-feed
+    cards don't show the wrong "artist" (mirrors server.py's
+    _clean_artist_credit -- kept local here to avoid a circular import)."""
+    name = str(name or '').strip()
+    # Match without the leading space: stripping the whole string first (as a
+    # previous version did) eats that leading space off a name that is *only*
+    # "- Topic", so `name.endswith(' - Topic')` would miss it after the strip.
+    if name.endswith('- Topic'):
+        name = name[:-len('- Topic')].strip()
+    return '' if name.casefold() in _GENERIC_ARTIST_LABELS else name
+
 def _construct_target(kind, item_id):
     if not item_id:
         return None
@@ -73,10 +89,11 @@ def normalize_track(item):
         raw_artists = [raw_artists]
     artists = [
         {
-            "name": _get_text(a.get("name")),
+            "name": cleaned,
             "id": a.get("id") or a.get("browseId") or a.get("channelId") or ""
         }
-        for a in raw_artists if isinstance(a, dict) and a.get("name")
+        for a in raw_artists if isinstance(a, dict)
+        for cleaned in (_clean_artist_name(_get_text(a.get("name"))),) if cleaned
     ]
     artists_text = ", ".join(a["name"] for a in artists)
     album = item.get("album") or {}

@@ -1910,9 +1910,26 @@ _GENERIC_ARTIST_LABELS = frozenset({
 def _clean_artist_credit(value):
     """Return a real artist credit, not a generic YouTube metadata label."""
     artist = str(value or '').strip()
-    if artist.endswith(' - Topic'):
-        artist = artist[:-len(' - Topic')].strip()
+    # Check the suffix without its leading space: stripping the whole string
+    # first (as a previous version did) eats that leading space off an artist
+    # name that is *only* "- Topic" (e.g. a channel literally named " - Topic"),
+    # so `artist.endswith(' - Topic')` would miss it after the strip. Slicing
+    # off the space-less "- Topic" always matches regardless of what preceded it.
+    if artist.endswith('- Topic'):
+        artist = artist[:-len('- Topic')].strip()
     return '' if artist.casefold() in _GENERIC_ARTIST_LABELS else artist
+
+
+def _artist_credit_from_list(artists, fallback=''):
+    """Join a ytmusicapi 'artists' list into a display credit, dropping any
+    entry that's a "- Topic" channel name or generic label (see
+    _clean_artist_credit) instead of a real artist name. Search/radio/chart
+    results can carry these -- most commonly on 'videos'-filter hits, where
+    the parsed artist is really the uploading channel -- and joining them
+    unfiltered is what shows the wrong artist for those tracks."""
+    names = [cleaned for a in (artists or [])
+             if isinstance(a, dict) and (cleaned := _clean_artist_credit(a.get('name')))]
+    return " and ".join(names) if names else fallback
 
 
 def _metadata_from_queue(video_id):
@@ -2195,7 +2212,7 @@ class Supporting:
         # call before audio begins.
         seed = {
             'title': top.get('title') or '',
-            'artist': " and ".join(a.get('name') or '' for a in top.get('artists') or []),
+            'artist': _artist_credit_from_list(top.get('artists')),
             'video_id': video_id,
             'thumbnail': (top.get('thumbnails') or [None])[-1],
             'duration_ms': Supporting.duration_ms(top),
@@ -2225,7 +2242,7 @@ class Supporting:
         return [
             {
                 'title': track.get('title', ''),
-                'artist': " and ".join(a.get('name') or '' for a in track.get('artists') or []),
+                'artist': _artist_credit_from_list(track.get('artists')),
                 'video_id': track.get('videoId', ''),
                 'thumbnail': track['thumbnails'][-1] if track.get('thumbnails') else None,
                 'duration_ms': 0,
@@ -2260,7 +2277,7 @@ class Supporting:
                 continue
             out.append({
                 'title': track.get("title", ""),
-                'artist': " and ".join(a.get("name", "") for a in (track.get("artists") or [])),
+                'artist': _artist_credit_from_list(track.get("artists")),
                 'video_id': vid,
                 'thumbnail': track['thumbnail'][-1] if track.get('thumbnail') else None,
                 'duration_ms': Supporting.duration_ms(track),
@@ -2285,7 +2302,7 @@ class Supporting:
         return [
             {
                 'title': track["title"],
-                'artist': " and ".join([artist["name"] for artist in track.get("artists", [])]),
+                'artist': _artist_credit_from_list(track.get("artists"), fallback=artist_name),
                 'video_id': track["videoId"],
                 'thumbnail': track['thumbnails'][-1] if track.get('thumbnails') else None,
                 'duration_ms': Supporting.duration_ms(track),
@@ -2317,7 +2334,7 @@ class Supporting:
         return [
             {
                 'title': track["title"],
-                'artist': " and ".join([artist["name"] for artist in track.get("artists", [])]),
+                'artist': _artist_credit_from_list(track.get("artists")),
                 'video_id': track["videoId"],
                 'thumbnail': track['thumbnails'][-1] if track.get('thumbnails') else None,
                 'duration_ms': Supporting.duration_ms(track),
@@ -2392,10 +2409,7 @@ class Supporting:
             playlist = [
                 {
                     'title': track.get("title") or '',
-                    'artist': " and ".join(
-                        artist.get("name") or '' for artist in track.get("artists", [])
-                        if artist.get("name")
-                    ),
+                    'artist': _artist_credit_from_list(track.get("artists")),
                     'video_id': track.get("videoId"),
                     'thumbnail': track['thumbnails'][-1] if track.get('thumbnails') else None,
                     'duration_ms': Supporting.duration_ms(track),
@@ -3894,7 +3908,19 @@ def _confirm_stream_delivery(video_id):
             matched = next((item for item in queue if item.get('video_id') == video_id), None)
             if matched and matched.get('duration_ms'):
                 _now_playing['duration_ms'] = int(matched['duration_ms'])
-        _reset_progress(0)
+        # Re-anchor the clock to now, but keep whatever position was already
+        # recorded -- NOT a hardcoded 0. A fresh play already anchors position
+        # to 0 before /proxy/ is ever hit (see the next/previous, queue-click,
+        # and proxy "not in queue" branches), so this is a no-op for that case.
+        # But a *resume* after pause anchors position to the frozen offset in
+        # alexa_command's 'play' handler before dispatching -- and because a
+        # warm-cache /proxy/ hit lands here well before Lambda's slower
+        # PlaybackStarted webhook, forcing position back to 0 here clobbered
+        # that resume offset. If the webhook is then late or lost (more likely
+        # after a long pause, where the device/session round-trip is slower),
+        # the bar was left confirmed and ticking from the wrong anchor while
+        # the device may not be playing from where the user actually paused.
+        _reset_progress(_now_playing.get('position_ms', 0))
         _now_playing['playing'] = True
         _now_playing['playback_confirmed'] = True
         _now_playing['updated_at'] = time.time()
@@ -7338,7 +7364,7 @@ async def api_get_album(browse_id):
         if not vid:
             continue
         t_artists = t.get('artists') or []
-        t_artist = (t_artists[0].get('name') or '') if t_artists else artist_name
+        t_artist = _artist_credit_from_list(t_artists, fallback=artist_name)
         t_thumbs = t.get('thumbnails') or thumbs
         t_thumb = t_thumbs[-1].get('url', '') if t_thumbs else thumbnail
         tracks.append({
