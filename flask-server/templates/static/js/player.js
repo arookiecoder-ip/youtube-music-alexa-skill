@@ -1061,6 +1061,31 @@ async function doClearAll() {
 })();
 
 let _playPauseBusy = false;
+
+// Space is a playback shortcut only inside the expanded now-playing view.
+// Keep normal page scrolling, text entry, and focused control activation
+// unchanged everywhere else.
+document.addEventListener('keydown', (event) => {
+  if (event.defaultPrevented || event.repeat ||
+      (event.code !== 'Space' && event.key !== ' ')) return;
+
+  const nowPlayingSection = document.getElementById('now-playing-section');
+  if (!document.body.classList.contains('now-playing-route') ||
+      document.body.classList.contains('now-playing-closing') ||
+      !nowPlayingSection || nowPlayingSection.hidden) return;
+
+  const target = event.target;
+  if (target && target.closest && target.closest(
+    'button, a, input, select, textarea, [contenteditable]:not([contenteditable="false"]), [role="button"], [role="slider"]'
+  )) return;
+
+  const playPauseButton = document.getElementById('pp-btn');
+  if (!playPauseButton || playPauseButton.disabled) return;
+
+  event.preventDefault();
+  playPauseButton.click();
+});
+
 document.getElementById('pp-btn').onclick = () => {
   if (_playPauseBusy) return;
   const serial = selectedSerial();

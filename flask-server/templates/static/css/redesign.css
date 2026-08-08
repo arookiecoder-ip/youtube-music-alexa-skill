@@ -1018,8 +1018,30 @@ body:not(.explore-route):not(.mood-route):not(.library-route):has(#library-modal
 #add-to-playlist-overlay .history-modal { border-radius: 0; }
 #new-playlist-overlay .history-modal { border-radius: 0; }
 #new-playlist-overlay #new-playlist-overlay-name,
-#new-playlist-overlay #new-playlist-overlay-desc { border-radius: 0 !important; }
-#new-playlist-overlay #new-playlist-overlay-create { border-radius: 0 !important; }
+#new-playlist-overlay #new-playlist-overlay-desc {
+  border-radius: 0 !important;
+  transition: border-color .15s ease, background-color .15s ease, box-shadow .15s ease;
+}
+#new-playlist-overlay #new-playlist-overlay-name:focus,
+#new-playlist-overlay #new-playlist-overlay-desc:focus {
+  border-color: var(--accent) !important;
+  background: var(--surface) !important;
+  background: color-mix(in srgb, var(--surface) 88%, var(--accent) 12%) !important;
+  box-shadow: 0 0 0 3px rgba(232, 89, 12, .2), 0 6px 18px rgba(0, 0, 0, .18);
+}
+#new-playlist-overlay #new-playlist-overlay-create {
+  border-radius: 0 !important;
+  transition: border-color .15s ease, background-color .15s ease, box-shadow .15s ease, transform .15s ease;
+}
+#new-playlist-overlay #new-playlist-overlay-create:focus,
+#new-playlist-overlay #new-playlist-overlay-create:focus-visible,
+#new-playlist-overlay #new-playlist-overlay-create:active {
+  border-color: var(--accent) !important;
+  box-shadow: 0 0 0 3px rgba(232, 89, 12, .2), 0 6px 18px rgba(0, 0, 0, .18);
+}
+#new-playlist-overlay #new-playlist-overlay-create:active {
+  transform: translateY(1px);
+}
 #import-playlist-overlay .history-modal { border-radius: 0; }
 #import-playlist-overlay #import-playlist-url { border-radius: 0 !important; }
 #import-playlist-overlay #import-playlist-submit { border-radius: 0 !important; }
@@ -1029,6 +1051,17 @@ body:not(.explore-route):not(.mood-route):not(.library-route):has(#library-modal
   padding: 8px 12px !important;
   border-radius: 0 !important;
   border-bottom: 1px solid var(--border) !important;
+  transition: background .15s ease, border-color .15s ease, box-shadow .15s ease, transform .15s ease;
+}
+#add-to-playlist-list > button:not(:disabled):hover,
+#add-to-playlist-list > button:not(:disabled):focus-visible {
+  background: rgba(232, 89, 12, .12) !important;
+  border-bottom-color: var(--accent) !important;
+  box-shadow: inset 3px 0 0 var(--accent), 0 4px 14px rgba(0, 0, 0, .2);
+  outline: none;
+}
+#add-to-playlist-list > button:not(:disabled):active {
+  transform: translateX(2px);
 }
 .queue-modal { border-radius: var(--radius-xl) var(--radius-xl) 0 0; }
 .toast { border-radius: 4px; }
