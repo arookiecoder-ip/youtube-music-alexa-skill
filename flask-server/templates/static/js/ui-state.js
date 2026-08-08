@@ -51,6 +51,7 @@
     _homeLoaded: false,
     _homeLoading: false,
     _searchPreservePreviousView: false,
+    _searchPreviousViewVisible: false,
     _searchPreviousHomeVisible: false,
   }, window.__appState || {});
 

@@ -9,6 +9,7 @@
   if (state._resultsPage === undefined) state._resultsPage = {};
   if (state._searchSeq === undefined) state._searchSeq = 0;
   if (state._searchPreservePreviousView === undefined) state._searchPreservePreviousView = false;
+  if (state._searchPreviousViewVisible === undefined) state._searchPreviousViewVisible = false;
   if (state._searchPreviousHomeVisible === undefined) state._searchPreviousHomeVisible = false;
 
 const RESULTS_PER_PAGE = 10;
@@ -28,7 +29,15 @@ async function runSearch(query, options) {
     // snapshot is what lets the shell keep Home visible during the request.
     const previousHome = document.getElementById('home-section');
     state._searchPreviousHomeVisible = !!(previousHome && !previousHome.hidden);
-    state._searchPreservePreviousView = state._searchPreviousHomeVisible;
+    state._searchPreviousViewVisible = ['home-section', 'jam-home-section', 'recs-section',
+      'artist-section', 'artist-songs-section', 'history-page',
+      'playlist-detail-modal-overlay', 'explore-modal-overlay',
+      'mood-modal-overlay', 'library-modal-overlay'].some(id => {
+        const el = document.getElementById(id);
+        return el && !el.hidden &&
+          (!id.endsWith('-overlay') || el.classList.contains('open'));
+      });
+    state._searchPreservePreviousView = state._searchPreviousViewVisible;
     if (window.syncUiState) window.syncUiState();
     if (window.navigateTo && window.__spaRouteCodec) {
       window.navigateTo(window.__spaRouteCodec.searchRoute(query));
@@ -42,7 +51,7 @@ async function runSearch(query, options) {
   // The route changes synchronously before this request starts. Mark the
   // search as pending immediately so the shell can restore the view that was
   // visible before navigation instead of painting an empty Results page.
-  state._searchPreservePreviousView = state._searchPreviousHomeVisible && !alreadyOnResults;
+  state._searchPreservePreviousView = state._searchPreviousViewVisible && !alreadyOnResults;
   if (window.syncUiState) window.syncUiState();
   // Clear stale results so the previous search's data is never shown once
   // the new results do land.
@@ -66,8 +75,14 @@ async function runSearch(query, options) {
   // there would leave the user staring at a blank page instead of any content,
   // which is worse than a Results page with a spinner, so that case still
   // opens immediately as before.
-  const anyOtherViewVisible = ['home-section', 'jam-home-section', 'recs-section', 'artist-section']
-    .some(id => { const el = document.getElementById(id); return el && !el.hidden; });
+  const anyOtherViewVisible = ['home-section', 'jam-home-section', 'recs-section',
+    'artist-section', 'artist-songs-section', 'history-page',
+    'playlist-detail-modal-overlay', 'explore-modal-overlay',
+    'mood-modal-overlay', 'library-modal-overlay'].some(id => {
+      const el = document.getElementById(id);
+      return el && !el.hidden &&
+        (!id.endsWith('-overlay') || el.classList.contains('open'));
+    });
 
   if (!alreadyOnResults && !anyOtherViewVisible) {
     openResults({ fromRoute: true });
@@ -84,6 +99,7 @@ async function runSearch(query, options) {
     const data = await api('/alexa/search/?q=' + encodeURIComponent(query));
     if (mySeq !== state._searchSeq) return;   // a newer search (or a route change) won
     state._searchPreservePreviousView = false;
+    state._searchPreviousViewVisible = false;
     state._searchPreviousHomeVisible = false;
     if (window.completeTopProgress) window.completeTopProgress();
     state._searchCategorized = data || {};
@@ -112,7 +128,7 @@ async function runSearch(query, options) {
     if (mySeq === state._searchSeq) {
         // Keep the captured previous view on a failed search too; never invent
       // Home as the fallback for an Artist page or a cold-load deep link.
-      state._searchPreservePreviousView = state._searchPreviousHomeVisible;
+      state._searchPreservePreviousView = state._searchPreviousViewVisible;
       if (window.syncUiState) window.syncUiState();
       if (window.abortTopProgress) window.abortTopProgress();
       toast(e.message, 'error');
@@ -175,6 +191,13 @@ function openResults(options) {
   }
   animatePlaySectionLayout(() => {
     state._resultsOpen = true;
+    // The old route shell was preserved while this request loaded. Results
+    // now own the shell styling, so switch route classes at the same handoff
+    // as visibility/layout rather than leaving Artist/Explore/Library styles
+    // attached to the Results screen.
+    if (window.syncRouteClasses) {
+      window.syncRouteClasses(window.getRoute ? window.getRoute() : '#search?');
+    }
     mainEl.classList.remove('has-queue');
     queueSection.classList.remove('is-visible');
     queueSection.hidden = true;

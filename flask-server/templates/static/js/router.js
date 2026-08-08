@@ -328,6 +328,7 @@
   var _restoringAfterPlayerDismiss = false;
 
   var _scrollCache = {};
+  var _layoutSnapSeq = 0;
   function _routeScrollId(route) {
     if (!route) return null;
     if (route.indexOf('#artist/') === 0) return route.endsWith('/songs') ? 'artist-songs-section' : 'artist-section';
@@ -355,19 +356,70 @@
       if (el) el.scrollTop = _scrollCache[window.__route];
     }
   }
-  function resetRouteScroll() {
+  // This runs only after applyRouteForNavigation() has synchronously hidden the
+  // old view and mounted the destination. Resetting the shared viewport now
+  // cannot visibly move the page being left, while document-scrolling routes
+  // still start at the top. Search is excluded because it owns its reset after
+  // content arrives and intentionally keeps the previous view mounted while
+  // loading.
+  function resetRouteScroll(route) {
     window.scrollTo(0, 0);
     document.documentElement.scrollTop = 0;
     document.body.scrollTop = 0;
-    [
-      'main', 'results-section', 'results-list', 'artist-section', 'artist-songs-section',
-      'now-playing-section', 'playlist-detail-modal',
-      'playlist-detail-modal-overlay', 'history-page',
-      'explore-modal', 'explore-modal-overlay', 'mood-modal', 'mood-modal-overlay', 'library-modal', 'library-modal-overlay'
-    ].forEach(function(id) {
-      var el = id === 'main' ? document.querySelector('main') : document.getElementById(id);
-      if (el) el.scrollTop = 0;
-    });
+    var id = _routeScrollId(route || window.__route);
+    var el = id === 'main'
+      ? document.querySelector('main')
+      : (id && (document.getElementById(id) || document.querySelector(id)));
+    if (el) el.scrollTop = 0;
+  }
+
+  // Route classes intentionally have small visual transitions for normal UI
+  // changes (rail width, header tint, artist hero bleed). A route swap is not
+  // one of those changes: freeze shell geometry for the handoff, then release
+  // the rule after the destination has had two paint opportunities to settle.
+  function applyRouteForNavigation(route, resetScroll) {
+    // Capture the source view before applyRoute() changes route state. This
+    // covers direct Search URLs and Back/Forward, where runSearch() has not
+    // yet had a chance to set the preservation flag.
+    if (route.indexOf('#search?') === 0 && window.__appState &&
+        !window.__appState._searchPreservePreviousView) {
+      var sourceIds = ['home-section', 'jam-home-section', 'recs-section',
+        'artist-section', 'artist-songs-section', 'history-page',
+        'playlist-detail-modal-overlay', 'explore-modal-overlay',
+        'mood-modal-overlay', 'library-modal-overlay'];
+      var sourceVisible = sourceIds.some(function(id) {
+        var el = document.getElementById(id);
+        return el && !el.hidden &&
+          (id.indexOf('-overlay') === -1 || el.classList.contains('open'));
+      });
+      // Routed detail/modal screens may use a visible overlay without a
+      // dedicated section in the normal view list. Their body classes are a
+      // reliable source-view marker while Search is being entered.
+      sourceVisible = sourceVisible || ['home-route', 'artist-route',
+        'artist-songs-route', 'playlists-route', 'album-route', 'history-route',
+        'explore-route', 'mood-route', 'library-route'].some(function(name) {
+          return document.body.classList.contains(name);
+        });
+      window.__appState._searchPreviousViewVisible = sourceVisible;
+      window.__appState._searchPreservePreviousView = sourceVisible;
+      var homeSource = document.getElementById('home-section');
+      window.__appState._searchPreviousHomeVisible = !!(homeSource && !homeSource.hidden);
+    }
+    var snapSeq = ++_layoutSnapSeq;
+    document.body.classList.add('layout-snap');
+    try {
+      applyRoute(route);
+      // applyRoute synchronously swaps visibility/classes before this runs.
+      // That makes the viewport reset belong to the destination, not the page
+      // the user was looking at before navigation.
+      if (resetScroll) resetRouteScroll(route);
+    } finally {
+      requestAnimationFrame(function() {
+        requestAnimationFrame(function() {
+          if (snapSeq === _layoutSnapSeq) document.body.classList.remove('layout-snap');
+        });
+      });
+    }
   }
   // Close the now-playing overlay without re-applying the underlying route.
   // navigateTo() would re-run the return route's handler (e.g., re-fetching
@@ -521,16 +573,14 @@
       _historyPosition += 1;
       history.pushState({ route: route, position: _historyPosition }, '', routeUrl);
     }
-    applyRoute(route);
-    // The full player is a fixed overlay over the current page. Resetting all
-    // view scroll positions here also resets the artist page underneath it,
-    // which makes the artist background visibly jump before the overlay lands.
-    // Search owns scroll positioning: while loading, the current page must
-    // not jump; once data arrives, openResults() performs the single atomic
-    // reset for the Results view. Never run the global route reset for Search.
+    // The full player is a fixed overlay over the current page. Search owns
+    // scroll positioning: while loading, the current page must not jump; once
+    // data arrives, openResults() performs the single atomic reset for the
+    // Results view. Never run the global route reset for Search.
     var isSearchRoute = route.indexOf('#search?') === 0;
-    if (changedRoute && route !== '#now-playing' && !isSearchRoute) {
-      resetRouteScroll();
+    var shouldResetScroll = changedRoute && route !== '#now-playing' && !isSearchRoute;
+    applyRouteForNavigation(route, shouldResetScroll);
+    if (shouldResetScroll) {
       _restoreScroll();
       requestAnimationFrame(_restoreScroll);
     }
@@ -565,14 +615,30 @@
     } else if (decoded.replace) {
       history.replaceState({ route: window.__route, position: _historyPosition }, '', decoded.url);
     }
-    applyRoute(window.__route);
     var isSearchRoute = window.__route.indexOf('#search?') === 0;
-    if (window.__route !== '#now-playing' && !isSearchRoute) {
-      resetRouteScroll();
+    var shouldResetScroll = window.__route !== '#now-playing' && !isSearchRoute;
+    applyRouteForNavigation(window.__route, shouldResetScroll);
+    if (shouldResetScroll) {
       _restoreScroll();
       requestAnimationFrame(_restoreScroll);
     }
   });
+
+  function syncRouteClasses(hash) {
+    hash = hash || '#home';
+    document.body.classList.toggle('home-route', hash === '#home');
+    document.body.classList.toggle('now-playing-route', hash === '#now-playing');
+    document.body.classList.toggle('now-playing-closing', false);
+    document.body.classList.toggle('playlists-route', hash.indexOf('#playlist/') === 0 || hash.indexOf('#album/') === 0);
+    document.body.classList.toggle('history-route', hash === '#history');
+    document.body.classList.toggle('explore-route', hash === '#explore');
+    document.body.classList.toggle('mood-route', hash.indexOf('#mood/') === 0);
+    document.body.classList.toggle('library-route', hash === '#library');
+    document.body.classList.toggle('artist-route', hash.indexOf('#artist/') === 0);
+    document.body.classList.toggle('artist-songs-route', /\/songs$/.test(hash));
+    document.body.classList.toggle('album-route', hash.indexOf('#album/') === 0);
+  }
+  window.syncRouteClasses = syncRouteClasses;
 
   function applyRoute(hash) {
     hash = hash || '#home';
@@ -611,6 +677,18 @@
     if (hash === '#now-playing' && routedNpSection) {
       routedNpSection.hidden = false;
       void routedNpSection.offsetHeight;
+    }
+    var preserveSearchShell = hash.indexOf('#search?') === 0 &&
+      window.__appState && window.__appState._searchPreservePreviousView;
+    var routeClassNames = ['home-route', 'now-playing-route', 'now-playing-closing',
+      'playlists-route', 'history-route', 'explore-route', 'mood-route',
+      'library-route', 'artist-route', 'artist-songs-route', 'album-route'];
+    var previousRouteClasses = null;
+    if (preserveSearchShell) {
+      previousRouteClasses = {};
+      routeClassNames.forEach(function(name) {
+        previousRouteClasses[name] = document.body.classList.contains(name);
+      });
     }
     document.body.classList.toggle('home-route', hash === '#home');
     // Keep the expanded route alive during close so its fixed layer can
@@ -779,6 +857,14 @@
       return;
     }
 
+    // Restore the visible page's shell classes while a pending Search request
+    // keeps that page mounted. The durable Search classes are applied by the
+    // Results handoff after content arrives.
+    if (preserveSearchShell && previousRouteClasses) {
+      routeClassNames.forEach(function(name) {
+        document.body.classList.toggle(name, previousRouteClasses[name]);
+      });
+    }
     // View routing may set `hidden` on the persistent playbar. Reconcile the
     // shell after every route change so an already-playing track is restored
     // even when no new playback event arrives afterward.
@@ -891,7 +977,7 @@
     if (routeInitialized) return;
     routeInitialized = true;
     history.replaceState({ route: window.__route, position: _historyPosition }, '', routeToUrl(window.__route));
-    applyRoute(window.__route);
+    applyRouteForNavigation(window.__route, false);
   }
   setTimeout(initializeRoute, 0);
 })();

@@ -18,7 +18,11 @@
   }
   .layout-snap main,
   .layout-snap .layout,
-  .layout-snap .play-section {
+  .layout-snap .play-section,
+  .layout-snap header,
+  .layout-snap #artist-hero,
+  .layout-snap .sidebar,
+  .layout-snap header::before {
     transition: none !important;
   }
   body.drag-lock:not(.history-route):not(.explore-route):not(.mood-route):not(.library-route) {
