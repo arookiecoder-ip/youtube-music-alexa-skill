@@ -37,16 +37,23 @@ async function runSearch(query, options) {
   }
   if (window.closeSearchSuggestions) window.closeSearchSuggestions();
   const mySeq = ++state._searchSeq;
-  const alreadyOnResults = state._resultsOpen;
+  const resultsSection = document.getElementById('results-section');
+  const alreadyOnResults = !!(state._resultsOpen && resultsSection && !resultsSection.hidden);
   // The route changes synchronously before this request starts. Mark the
   // search as pending immediately so the shell can restore the view that was
   // visible before navigation instead of painting an empty Results page.
-  state._searchPending = true;
   state._searchPreservePreviousView = state._searchPreviousHomeVisible && !alreadyOnResults;
   if (window.syncUiState) window.syncUiState();
   // Clear stale results so the previous search's data is never shown once
   // the new results do land.
   state._searchCategorized = {};
+  // If the user left an earlier Results route, its hidden list is stale and
+  // must not flash when this search opens the Results shell. Keep old rows only
+  // for an intentional re-search while Results is already the visible page.
+  if (!alreadyOnResults) {
+    const staleList = document.getElementById('results-list');
+    if (staleList) staleList.innerHTML = '';
+  }
 
   // Stay on whatever the user is currently looking at (Home, Artist, an
   // already-open Results page, ...) while the request is in flight, and only
@@ -135,7 +142,6 @@ function resetResultsScroll() {
 
 function openResults(options) {
   options = options || {};
-  state._searchPending = false;
   state._searchPreservePreviousView = false;
   if (window.closeSearchSuggestions) window.closeSearchSuggestions();
   // Legacy callers still get a durable Search URL. Route-owned calls have
@@ -190,7 +196,6 @@ function deactivateSearchResults() {
   // Invalidate both so a late response cannot reopen Search over Home or a
   // media-detail screen selected through Back/Forward.
   state._searchSeq++;
-  state._searchPending = false;
   state._searchPreservePreviousView = false;
   state._searchPreviousHomeVisible = false;
   state._resultsOpen = false;

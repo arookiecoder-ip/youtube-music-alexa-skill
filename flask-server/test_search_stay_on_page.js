@@ -86,9 +86,11 @@ function makeSandbox({ initialSectionsHidden, resultsOpenInitially, apiImpl, ope
   }, initialSectionsHidden);
 
   const resultsListEl = { innerHTML: '' };
+  const resultsSectionEl = { hidden: !resultsOpenInitially };
 
   function fakeElementById(id) {
     if (id === 'results-list') return resultsListEl;
+    if (id === 'results-section') return resultsSectionEl;
     if (id in sections) return { hidden: sections[id] };
     if (id === 'query') return { value: '' };
     return null;
@@ -112,6 +114,7 @@ function makeSandbox({ initialSectionsHidden, resultsOpenInitially, apiImpl, ope
     openResults: (opts) => {
       events.push(['openResults', opts]);
       state._resultsOpen = true;
+      resultsSectionEl.hidden = false;
       sections['home-section'] = true;
       if (openResultsSpy) openResultsSpy(opts);
     },
@@ -139,7 +142,7 @@ function makeSandbox({ initialSectionsHidden, resultsOpenInitially, apiImpl, ope
   // invoke it via a small harness that returns the callable.
   const wrapped = vm.runInContext(
     `(${runSearchSrc})`, context, { filename: 'runSearch-wrapped.js' });
-  return { wrapped, state, events, sections, resultsListEl, window: sandbox.window };
+  return { wrapped, state, events, sections, resultsListEl, resultsSectionEl, window: sandbox.window };
 }
 
 async function main() {
@@ -225,6 +228,32 @@ async function main() {
     resolveApi({ songs: [{ video_id: 'enter-v1' }] });
     await routePromise;
     checkTrue('Enter path opens Results after data arrives',
+              sandbox.events.some(([fn]) => fn === 'openResults'));
+  }
+
+  console.log('\n--- searching after leaving Results: stale rows stay hidden ---');
+  {
+    let resolveApi;
+    const pending = new Promise((r) => { resolveApi = r; });
+    const sandbox = makeSandbox({
+      initialSectionsHidden: { 'home-section': false },
+      resultsOpenInitially: false,
+      apiImpl: () => pending,
+    });
+    sandbox.resultsListEl.innerHTML = '<div>previous search results</div>';
+    // Model the real route-away cleanup: the Results section is hidden and
+    // the search state is invalidated, but its old list DOM still exists.
+    sandbox.resultsSectionEl.hidden = true;
+    sandbox.state._resultsOpen = false;
+    sandbox.state._searchSeq += 1;
+    const runPromise = sandbox.wrapped('new query', { fromRoute: true });
+    check('old results are cleared while searching from Home',
+          sandbox.resultsListEl.innerHTML, '');
+    checkTrue('Results remain closed while the replacement search loads',
+              !sandbox.events.some(([fn]) => fn === 'openResults'));
+    resolveApi({ songs: [{ video_id: 'replacement-v1' }] });
+    await runPromise;
+    checkTrue('replacement results open after the new data arrives',
               sandbox.events.some(([fn]) => fn === 'openResults'));
   }
 
