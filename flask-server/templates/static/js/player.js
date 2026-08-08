@@ -441,6 +441,7 @@ const progress = window.progress = (function () {
   let anchorClientMs = 0;// client Date.now() when positionMs was captured
   let lastServerAnchor = 0; // server started_at of the last update (change detector)
   let playing = false;
+  let pausePending = false;
   let dragging = false;
   let dragMs = 0;        // previewed position while dragging
   let rafId = null;
@@ -647,13 +648,17 @@ const progress = window.progress = (function () {
     }
     if (typeof np.playing === 'boolean' && !awaitingStart) {
       const reported = np.playing && !!np.playback_confirmed;
+      // A pause request remains visually live until the command response
+      // confirms it. Snapshots are intentionally not allowed to clear this
+      // flag: an older confirmed snapshot can arrive while the pause request
+      // is still in flight and would stop the bar too early.
       // Mirror the top-level grace guard: a snapshot that contradicts the
       // user's just-clicked play/pause intent can be a stale confirmation for
       // the *start* of playback (already in flight when pause was clicked) --
       // accepting it would resume the ticking bar right after the user paused.
       const inGrace = (Date.now() - state.lastActionAt) < state.GRACE_MS;
       const contradictsIntent = inGrace && state.lastActionIntent !== null && reported !== state.lastActionIntent;
-      if (!contradictsIntent) playing = reported;
+      if (!contradictsIntent) playing = pausePending ? true : reported;
     }
     syncLoop();
     paint();
@@ -686,6 +691,7 @@ const progress = window.progress = (function () {
     anchorClientMs = Date.now();
     lastServerAnchor = 0;
     playing = false;
+    pausePending = false;
     // Keep the bar visible but frozen at 0:00 while we await the track start.
     // Hiding it here (as a recent refactor did) kills syncLoop (which gates
     // on !wrap.hidden) and leaves the bar stuck forever once the track lands.
@@ -828,7 +834,18 @@ const progress = window.progress = (function () {
     }
   });
 
-  return { update, resetPending, livePosition, getDuration: () => durationMs, syncLoop };
+  function setPausePending(pending) {
+    pausePending = !!pending;
+    if (pausePending) {
+      playing = true;
+    } else {
+      playing = !!(window.__appState && window.__appState.isPlaying);
+    }
+    syncLoop();
+    paint();
+  }
+
+  return { update, resetPending, setPausePending, livePosition, getDuration: () => durationMs, syncLoop };
 })();
 
 /* ---- API ---- */
@@ -1061,6 +1078,186 @@ async function doClearAll() {
 })();
 
 let _playPauseBusy = false;
+let _queuedPlayPauseAction = null;
+let _playPauseDesiredState = null;
+let _confirmedPlayPauseState = null;
+let _playPauseServerPlaying = null;
+let _playPauseServerUpdatedAt = 0;
+let _playPauseServerRevision = 0;
+let _playPauseServerSeq = 0;
+let _playPauseWaiters = [];
+const PLAY_PAUSE_CONFIRM_TIMEOUT_MS = 3000;
+
+function waitForPlayPauseServerState(expected, timeoutMs, minSeq = _playPauseServerSeq, minUpdatedAt = _playPauseServerUpdatedAt, minRevision = _playPauseServerRevision) {
+  if (_playPauseServerPlaying === expected &&
+      (_playPauseServerRevision > minRevision || _playPauseServerUpdatedAt > minUpdatedAt || _playPauseServerSeq > minSeq)) {
+    return Promise.resolve(true);
+  }
+  return new Promise((resolve) => {
+    const waiter = { expected, minSeq, minUpdatedAt, minRevision, resolve };
+    const timer = setTimeout(() => {
+      _playPauseWaiters = _playPauseWaiters.filter((item) => item !== waiter);
+      resolve(false);
+    }, timeoutMs);
+    waiter.resolve = (matched) => {
+      clearTimeout(timer);
+      resolve(matched);
+    };
+    _playPauseWaiters.push(waiter);
+  });
+}
+
+function notifyPlayPauseServerState(playing, updatedAt, revision) {
+  _playPauseServerPlaying = !!playing;
+  const marker = Number(updatedAt) || 0;
+  const playbackRevision = Number(revision) || 0;
+  if (marker > _playPauseServerUpdatedAt) _playPauseServerUpdatedAt = marker;
+  if (playbackRevision > _playPauseServerRevision) _playPauseServerRevision = playbackRevision;
+  _playPauseServerSeq += 1;
+  const currentSeq = _playPauseServerSeq;
+  const remaining = [];
+  _playPauseWaiters.forEach((waiter) => {
+    const freshByRevision = playbackRevision > 0 && playbackRevision > waiter.minRevision;
+    const freshByMarker = playbackRevision <= 0 && marker > 0 && marker > waiter.minUpdatedAt;
+    const freshBySequence = playbackRevision <= 0 && marker <= 0 && waiter.minSeq < currentSeq;
+    if (waiter.expected === _playPauseServerPlaying && (freshByRevision || freshByMarker || freshBySequence)) waiter.resolve(true);
+    else remaining.push(waiter);
+  });
+  _playPauseWaiters = remaining;
+}
+
+window._notifyPlayPauseServerState = notifyPlayPauseServerState;
+
+function applyPlayPauseIntent(action) {
+  state.lastActionAt = Date.now();
+  // Pause is reflected immediately; resume remains visually paused until a
+  // server snapshot confirms that the device has actually started again.
+  // This avoids showing a playing icon while the Echo is still processing the
+  // preceding pause command.
+  state.isPlaying = action === 'pause' ? false : false;
+  state.lastActionIntent = action === 'play';
+  if (window.progress && window.progress.setPausePending) {
+    window.progress.setPausePending(action === 'pause');
+  }
+  syncPlayPause();
+}
+
+async function drainPlayPause(action) {
+  const previousPlaying = _confirmedPlayPauseState;
+  applyPlayPauseIntent(action);
+  let succeeded = false;
+  let error = null;
+  let confirmed = false;
+  const commandBaselineSeq = _playPauseServerSeq;
+  const commandBaselineUpdatedAt = _playPauseServerUpdatedAt;
+  const commandBaselineRevision = _playPauseServerRevision;
+  // Register before dispatch: /alexa/command updates the server snapshot
+  // before its HTTP response is returned, so a quick pause confirmation can
+  // otherwise arrive between the request and waiter registration. A queued
+  // Resume does not wait for the pause snapshot: the accepted Pause response
+  // already orders the next command, and waiting here made quick Resume feel
+  // broken when the snapshot was delayed.
+  const shouldWaitForConfirmation = !(action === 'pause' &&
+    _queuedPlayPauseAction && _queuedPlayPauseAction !== action);
+  const serverConfirmation = shouldWaitForConfirmation
+    ? waitForPlayPauseServerState(
+        action === 'play', PLAY_PAUSE_CONFIRM_TIMEOUT_MS,
+        commandBaselineSeq, commandBaselineUpdatedAt, commandBaselineRevision
+      )
+    : null;
+  try {
+    await api('/alexa/command/', { serial: selectedSerial(), action });
+    succeeded = true;
+    if (window.schedulePollNowPlaying) window.schedulePollNowPlaying(0);
+    const queuedAfterDispatch = _queuedPlayPauseAction && _queuedPlayPauseAction !== action;
+    confirmed = queuedAfterDispatch && action === 'pause'
+      ? false
+      : serverConfirmation ? await serverConfirmation : false;
+    _confirmedPlayPauseState = confirmed ? action === 'play' : previousPlaying;
+  } catch (e) {
+    error = e;
+  }
+
+  // Read the queue only after command confirmation. A third click during the
+  // pause/apply wait must replace the older queued action, never be discarded.
+  const nextAction = _queuedPlayPauseAction;
+  _queuedPlayPauseAction = null;
+  if (nextAction && nextAction !== action && succeeded &&
+      (confirmed || action === 'pause')) {
+    // The first command was accepted. For pause → resume, the short settle
+    // fallback above preserves command order even if the paused snapshot is
+    // late; never drop the user's queued Resume.
+    return drainPlayPause(nextAction);
+  }
+  if (nextAction && nextAction !== action && (!succeeded || !confirmed)) {
+    _playPauseBusy = false;
+    state.isPlaying = previousPlaying;
+    _playPauseDesiredState = state.isPlaying;
+    state.lastActionIntent = state.isPlaying;
+    if (window.progress && window.progress.setPausePending) window.progress.setPausePending(false);
+    syncPlayPause();
+    toast(error && error.message ? error.message : 'Playback command failed; try again.', 'error');
+    return;
+  }
+
+  _playPauseBusy = false;
+  if (succeeded && confirmed) {
+    state.isPlaying = action === 'play';
+    state.lastActionIntent = state.isPlaying;
+    _playPauseDesiredState = state.isPlaying;
+    if (window.progress && window.progress.setPausePending) {
+      window.progress.setPausePending(false);
+    }
+    syncPlayPause();
+    toast(action === 'pause' ? 'Paused' : 'Resumed', 'ok');
+  } else if (succeeded && action === 'pause' && !confirmed) {
+    // The transport accepted the request, but the device did not confirm it.
+    // Do not pretend the transition completed; the next click can retry.
+    state.isPlaying = false;
+    state.lastActionIntent = false;
+    _playPauseDesiredState = false;
+    if (window.progress && window.progress.setPausePending) window.progress.setPausePending(false);
+    syncPlayPause();
+    toast('Pause is still processing…', 'info');
+  } else if (succeeded && action === 'play' && !confirmed) {
+    // Alexa/device confirmation can arrive after the command HTTP response.
+    // An accepted resume is not an error: keep the icon paused and let the
+    // later confirmed snapshot switch it to playing. This prevents the old
+    // "Playback did not confirm" false failure without claiming audio started.
+    state.isPlaying = false;
+    state.lastActionIntent = true;
+    _playPauseDesiredState = true;
+    if (window.progress && window.progress.setPausePending) window.progress.setPausePending(false);
+    if (window.schedulePollNowPlaying) window.schedulePollNowPlaying(0);
+    syncPlayPause();
+    toast('Resume requested…', 'info');
+  } else {
+    // Restore the last confirmed state after a failed command; never leave a
+    // failed resume looking like active playback.
+    state.isPlaying = previousPlaying;
+    _playPauseDesiredState = state.isPlaying;
+    if (window.progress && window.progress.setPausePending) {
+      window.progress.setPausePending(false);
+    }
+    state.lastActionIntent = state.isPlaying;
+    syncPlayPause();
+    toast(error && error.message ? error.message : 'Playback command failed.', 'error');
+  }
+}
+
+function requestPlayPause(action) {
+  _playPauseDesiredState = action === 'play';
+  if (_playPauseBusy) {
+    _queuedPlayPauseAction = action;
+    // Keep the controls responsive while the latest intent waits its turn.
+    applyPlayPauseIntent(action);
+    return;
+  }
+  _playPauseBusy = true;
+  _queuedPlayPauseAction = null;
+  _confirmedPlayPauseState = state.isPlaying;
+  void drainPlayPause(action);
+}
 
 // Space is a playback shortcut only inside the expanded now-playing view.
 // Keep normal page scrolling, text entry, and focused control activation
@@ -1089,34 +1286,17 @@ document.addEventListener('keydown', (event) => {
 });
 
 document.getElementById('pp-btn').onclick = () => {
-  if (_playPauseBusy) return;
   const serial = selectedSerial();
   if (!serial) return;
-  _playPauseBusy = true;
-  state.lastActionAt = Date.now();
-  const action = state.isPlaying ? 'pause' : 'play';
+  // Base the next toggle on the latest user intent, not only on the
+  // confirmation-backed visual state. This makes pause → resume → pause work
+  // correctly even when all three clicks happen before the first response.
+  const desiredPlaying = _playPauseDesiredState === null
+    ? state.isPlaying
+    : _playPauseDesiredState;
+  const action = desiredPlaying ? 'pause' : 'play';
   toast((action === 'pause' ? 'Pausing' : 'Resuming') + '\u2026');
-  // Update the visual state immediately.  Waiting for the device response
-  // leaves the banner showing the old glyph during the overlay animation and
-  // can make both play/pause icons flash in sequence.
-  const previousPlaying = state.isPlaying;
-  state.isPlaying = action === 'play';
-  state.lastActionIntent = action === 'play';
-  syncPlayPause();
-  api('/alexa/command/', { serial, action })
-    .then(() => {
-      state.isPlaying = action === 'play';
-      state.lastActionIntent = state.isPlaying;
-      syncPlayPause();
-      toast(action === 'pause' ? 'Paused' : 'Resumed', 'ok');
-    })
-    .catch(e => {
-      state.isPlaying = previousPlaying;
-      state.lastActionIntent = previousPlaying;
-      syncPlayPause();
-      toast(e.message, 'error');
-    })
-    .finally(() => { _playPauseBusy = false; });
+  requestPlayPause(action);
 };
 
 const npPageArt = document.getElementById('np-page-art');
@@ -1681,11 +1861,30 @@ function updateUrlBar() {
     // skipping it on a stale "false" left music playing behind the YouTube
     // tab. A failed dispatch is now surfaced instead of silently swallowed.
     if (serial) {
+      const previousPlaying = state.isPlaying;
       state.lastActionAt = Date.now();
       state.lastActionIntent = false;
+      if (window.progress && window.progress.setPausePending) {
+        window.progress.setPausePending(true);
+      }
       api('/alexa/command/', { serial, action: 'pause' })
-        .then(() => { state.isPlaying = false; state.lastActionIntent = false; syncPlayPause(); })
-        .catch(() => { toast('Could not pause playback.', 'error'); });
+        .then(() => {
+          state.isPlaying = false;
+          state.lastActionIntent = false;
+          if (window.progress && window.progress.setPausePending) {
+            window.progress.setPausePending(false);
+          }
+          syncPlayPause();
+        })
+        .catch(() => {
+          state.isPlaying = previousPlaying;
+          state.lastActionIntent = previousPlaying;
+          if (window.progress && window.progress.setPausePending) {
+            window.progress.setPausePending(false);
+          }
+          syncPlayPause();
+          toast('Could not pause playback.', 'error');
+        });
     }
   };
   if (ytmBtn) ytmBtn.addEventListener('click', onClick);

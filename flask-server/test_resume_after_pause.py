@@ -30,6 +30,7 @@ import os
 import sys
 import types
 import unittest
+from unittest import mock
 
 
 _TEST_ENV = {
@@ -67,6 +68,8 @@ def _install_stubs():
         alexa_remote_remote = types.ModuleType("alexa_remote.remote")
         alexa_remote_remote.devices = lambda refresh=False: (None, "stubbed-no-devices")
         alexa_remote_remote.volume = lambda serial: (None, "stubbed-no-devices")
+        alexa_remote_remote.command = lambda serial, action, value=None: None
+        alexa_remote_remote.play_video_id = lambda serial, video_id, offset_ms=0: None
         alexa_remote_remote.is_logged_in = lambda: (True, None)
         alexa_remote_remote.proxy_start_url = lambda *a, **kw: (None, "stubbed")
         alexa_remote.remote = alexa_remote_remote
@@ -228,8 +231,74 @@ class ConfirmStreamDeliveryPreservesResumeOffset(_CleanNowPlayingState):
 
 
 class ResumeDispatchAnchorsBeforeConfirmation(_CleanNowPlayingState):
-    """Integration-style check of the two pieces working together: the resume
-    handler's anchor call followed by a simulated fast /proxy/ confirmation."""
+    """Integration-style checks for the web resume command."""
+
+    def test_web_resume_uses_voice_resume_path_and_stages_before_dispatch(self):
+        """The website must use the same transport resume path as Alexa voice.
+
+        The callback observes the state while the mocked Amazon call is still
+        in flight. That catches the race where PlaybackStarted could arrive
+        before the old post-dispatch state mutation.
+        """
+        with server._np_lock:
+            server._now_playing.update({
+                'video_id': 'WEBRESUME001',
+                'playing': False,
+                'playback_confirmed': True,
+                'position_ms': 90_000,
+                'started_at': server.time.time(),
+                'duration_ms': 180_000,
+                'queue': [],
+            })
+        observed = {}
+
+        def command(serial, action, value=None):
+            observed['serial'] = serial
+            observed['action'] = action
+            with server._np_lock:
+                observed['playing_during_dispatch'] = server._now_playing['playing']
+                observed['confirmed_during_dispatch'] = server._now_playing['playback_confirmed']
+                observed['position_during_dispatch'] = server._now_playing['position_ms']
+            return None
+
+        with mock.patch.object(server.alexa_remote.remote, 'command', side_effect=command) as command_mock, \
+             mock.patch.object(server.alexa_remote.remote, 'play_video_id') as play_video_mock, \
+             mock.patch.object(server, '_notify_sse'):
+            response = server.app.test_client().post(
+                '/alexa/command/?key=' + server.API_KEY,
+                json={'serial': 'TEST-SERIAL', 'action': 'play'},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        command_mock.assert_called_once_with('TEST-SERIAL', 'play', None)
+        play_video_mock.assert_not_called()
+        self.assertFalse(observed['playing_during_dispatch'])
+        self.assertFalse(observed['confirmed_during_dispatch'])
+        self.assertGreaterEqual(observed['position_during_dispatch'], 90_000)
+
+    def test_failed_web_resume_restores_previous_state(self):
+        """A rejected Amazon request must not leave the remote stuck pending."""
+        with server._np_lock:
+            server._now_playing.update({
+                'video_id': 'FAILEDRESUME1',
+                'playing': False,
+                'playback_confirmed': True,
+                'position_ms': 42_000,
+                'started_at': server.time.time(),
+                'duration_ms': 180_000,
+                'queue': [],
+            })
+        with mock.patch.object(server.alexa_remote.remote, 'command', return_value='device unavailable'), \
+             mock.patch.object(server, '_notify_sse'):
+            response = server.app.test_client().post(
+                '/alexa/command/?key=' + server.API_KEY,
+                json={'serial': 'TEST-SERIAL', 'action': 'play'},
+            )
+        self.assertEqual(response.status_code, 502)
+        with server._np_lock:
+            self.assertFalse(server._now_playing['playing'])
+            self.assertTrue(server._now_playing['playback_confirmed'])
+            self.assertEqual(server._now_playing['position_ms'], 42_000)
 
     def test_resume_then_immediate_confirm_keeps_resume_position(self):
         with server._np_lock:

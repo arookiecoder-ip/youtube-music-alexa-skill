@@ -71,9 +71,13 @@
       if (window.showNowPlaying) window.showNowPlaying(np);
       if (np.playing !== undefined) {
         const inGrace = (Date.now() - state().lastActionAt) < state().GRACE_MS;
-        const contradictsIntent = inGrace && state().lastActionIntent !== null && np.playing !== state().lastActionIntent;
-        if (!contradictsIntent && (np.playing || !inGrace)) {
-          state().isPlaying = np.playing;
+        const serverPlaying = np.playing === true && np.playback_confirmed === true;
+        const contradictsIntent = inGrace && state().lastActionIntent !== null && serverPlaying !== state().lastActionIntent;
+        if (!contradictsIntent && window._notifyPlayPauseServerState) {
+          window._notifyPlayPauseServerState(serverPlaying, np.state_updated_at || np.updated_at || np.confirmed_at, np.playback_revision);
+        }
+        if (!contradictsIntent && (serverPlaying || !inGrace)) {
+          state().isPlaying = serverPlaying;
           if (window.syncPlayPause) window.syncPlayPause();
         }
       }
@@ -87,8 +91,11 @@
       }
       if (np.playing !== undefined) {
         const contradictsIntent = inGrace && state().lastActionIntent !== null && np.playing !== state().lastActionIntent;
+        if (!contradictsIntent && window._notifyPlayPauseServerState) {
+          window._notifyPlayPauseServerState(np.playing && np.playback_confirmed === true, np.state_updated_at || np.updated_at || np.confirmed_at, np.playback_revision);
+        }
         if (!contradictsIntent && !inGrace) {
-          state().isPlaying = np.playing;
+          state().isPlaying = np.playing === true && np.playback_confirmed === true;
           if (window.syncPlayPause) window.syncPlayPause();
         }
       }

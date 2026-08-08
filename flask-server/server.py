@@ -1523,6 +1523,10 @@ _now_playing = {
     'queue': [],        # [{title, artist, thumbnail, video_id}, ...]
     'queue_index': -1,  # current position in queue (-1 = unknown)
     'updated_at': 0,
+    # Monotonic playback-state revision. Unlike updated_at, this changes only
+    # when playback state/identity changes, so clients can reject stale polls
+    # and use it to confirm a specific pause or resume command.
+    'playback_revision': 0,
     # Progress-bar anchor. The web remote runs a local timer for a smooth bar;
     # the server only supplies the anchor: when the current track's playback
     # position was last known (started_at, epoch seconds) and what position it
@@ -1620,6 +1624,10 @@ def _np_snapshot(serial=None):
         # starts or a seek happens, so the client can use it to detect whether a
         # playback_confirmed snapshot is actually for the current play request.
         'confirmed_at': s.get('started_at', 0),
+        # Monotonic-per-process state marker used by web clients to reject
+        # delayed responses that were already in flight before a new command.
+        'state_updated_at': s.get('updated_at', 0),
+        'playback_revision': s.get('playback_revision', 0),
         'playback_confirmed': bool(s.get('playback_confirmed')),
         'volume': volume,
         'playback_error': playback_error,
@@ -1769,6 +1777,8 @@ def _update_now_playing(**kwargs):
         track_changed = (new_video_id is not None
                          and new_video_id != _now_playing.get('video_id'))
         _now_playing.update(kwargs)
+        if track_changed or 'playing' in kwargs or 'playback_confirmed' in kwargs:
+            _now_playing['playback_revision'] = int(_now_playing.get('playback_revision', 0)) + 1
         if track_changed and 'started_at' not in kwargs:
             _now_playing['position_ms'] = int(kwargs.get('position_ms', 0) or 0)
             _now_playing['started_at'] = time.time()
@@ -4044,6 +4054,7 @@ def _confirm_stream_delivery(video_id):
         _reset_progress(_now_playing.get('position_ms', 0))
         _now_playing['playing'] = True
         _now_playing['playback_confirmed'] = True
+        _now_playing['playback_revision'] = int(_now_playing.get('playback_revision', 0)) + 1
         _now_playing['updated_at'] = time.time()
     _notify_sse()
 
@@ -4913,47 +4924,64 @@ def alexa_command():
             threading.Thread(target=_lookup_and_update_np, args=(video_id,), daemon=True).start()
         return jsonify({'ok': True, 'now_playing': item, 'queue_index': target_idx})
     resume_position_ms = None
+    previous_now_playing = None
+    if action in ('play', 'pause'):
+        with _np_lock:
+            previous_now_playing = copy.deepcopy(_now_playing)
     if action == 'play':
-        cur = _get_now_playing()
-        video_id = cur.get('video_id', '')
-        if _valid_video_id(video_id):
-            with _np_lock:
-                position_ms = _computed_position_ms()
-            resume_position_ms = position_ms
-            # Alexa custom skills can't resume a paused stream directly, so resume
-            # replays the track from where it was frozen. The offset rides in the
-            # arm (play_video_id ignores its position argument and reads it back
-            # from /armed_play/), so we must arm before triggering — otherwise the
-            # skill gets no offset and resume silently does nothing.
-            global _last_reposition_at
-            _last_reposition_at = time.time()
-            error = _dispatch_play_with_retry(serial, video_id, position_ms)
-        else:
-            error = alexa_remote.remote.command(serial, action, body.get("value"))
-    else:
-        error = alexa_remote.remote.command(serial, action, body.get("value"))
-    if error:
-        return _device_dispatch_failed(error)
-    # Track play/pause state server-side
-    if action == 'volume':
-        _set_volume_state(serial, body.get("value"))
+        # Stage the pending state before sending the command. Alexa can deliver
+        # PlaybackStarted while remote.command() is still waiting for Amazon's
+        # response; staging afterward used to overwrite that real confirmation
+        # with playing=False and made the website wait forever.
+        with _np_lock:
+            resume_position_ms = _computed_position_ms()
+            _reset_progress(resume_position_ms)
+            _now_playing['playing'] = False
+            _now_playing['playback_confirmed'] = False
+            _now_playing['playback_revision'] = int(_now_playing.get('playback_revision', 0)) + 1
+            _now_playing['updated_at'] = time.time()
         _notify_sse()
+        # Use the same Alexa transport path as a voice "resume". The previous
+        # web-only implementation replayed the exact video through the
+        # app-selection intent, which is a fresh fetch/play directive and races
+        # the pause directive when Resume is clicked quickly. ResumeIntent lets
+        # the skill restore its persisted AudioPlayer session instead.
+        error = alexa_remote.remote.command(serial, action, body.get("value"))
     elif action == 'pause':
-        # Freeze the progress anchor at the current computed position so the bar
-        # stops advancing while paused (and doesn't jump on resume).
+        # Freeze the progress anchor before dispatch for the same reason: the
+        # skill's PlaybackStopped event may arrive before the HTTP call returns.
         with _np_lock:
             _reset_progress(_computed_position_ms())
             _now_playing['playing'] = False
+            _now_playing['playback_revision'] = int(_now_playing.get('playback_revision', 0)) + 1
             _now_playing['updated_at'] = time.time()
         _notify_sse()
-    elif action == 'play':
-        # Resume from where we froze: re-anchor started_at to now, keep position.
-        with _np_lock:
-            _reset_progress(resume_position_ms if resume_position_ms is not None else _now_playing.get('position_ms', 0))
-            _now_playing['playing'] = False
-            _now_playing['playback_confirmed'] = False
-            _now_playing['updated_at'] = time.time()
+        error = alexa_remote.remote.command(serial, action, body.get("value"))
+    else:
+        error = alexa_remote.remote.command(serial, action, body.get("value"))
+    if error:
+        if previous_now_playing is not None:
+            # A rejected command must not leave every browser stuck in an
+            # unconfirmed pending state. Restore the pre-command snapshot only
+            # when no webhook has advanced the staged state in the meantime.
+            with _np_lock:
+                staged_revision = int(previous_now_playing.get('playback_revision', 0)) + 1
+                if _now_playing.get('playback_revision') == staged_revision:
+                    _now_playing.clear()
+                    _now_playing.update(previous_now_playing)
+                    should_notify_restore = True
+                else:
+                    should_notify_restore = False
+            if should_notify_restore:
+                _notify_sse()
+            return error_response(error or 'Device is offline or unreachable.', 502)
+        return _device_dispatch_failed(error)
+    if action == 'volume':
+        _set_volume_state(serial, body.get("value"))
         _notify_sse()
+    # Play/pause state was staged before dispatch. The PlaybackStarted or
+    # PlaybackStopped webhook is authoritative if it arrived during the
+    # command; do not overwrite it after remote.command returns.
     return jsonify({'ok': True})
 
 @app.route("/alexa/seek/", methods=["POST"])
@@ -5012,6 +5040,7 @@ def alexa_seek():
         _reset_progress(position_ms)
         _now_playing['playing'] = False
         _now_playing['playback_confirmed'] = False
+        _now_playing['playback_revision'] = int(_now_playing.get('playback_revision', 0)) + 1
         _now_playing['updated_at'] = time.time()
     _notify_sse()
     return jsonify({'ok': True})
