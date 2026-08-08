@@ -8217,7 +8217,9 @@ _MANIFEST = {
     # A tap on the icon should focus the already-running remote, not spawn a
     # second window with its own SSE stream.
     "launch_handler": {"client_mode": "navigate-existing"},
-    "orientation": "portrait",
+    # Let the tablet follow its physical orientation. Forcing portrait here
+    # makes an installed PWA keep the narrow mobile layout even in landscape.
+    "orientation": "any",
     "background_color": "#0a0a0a",
     "theme_color": "#0a0a0a",
     "categories": ["music", "entertainment"],
@@ -8230,7 +8232,11 @@ _MANIFEST = {
 
 @app.route("/manifest.webmanifest")
 def manifest():
-    return Response(json.dumps(_MANIFEST), mimetype="application/manifest+json")
+    # Installed PWAs may retain the manifest independently of normal page
+    # assets. Do not let the old portrait lock survive an orientation change.
+    response = Response(json.dumps(_MANIFEST), mimetype="application/manifest+json")
+    response.headers["Cache-Control"] = "no-store, max-age=0"
+    return response
 
 
 # Service worker: precaches the app shell assets under a cache versioned by
