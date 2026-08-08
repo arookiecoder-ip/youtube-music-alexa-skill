@@ -50,6 +50,9 @@
     _loggedIn: false,
     _homeLoaded: false,
     _homeLoading: false,
+    _searchPending: false,
+    _searchPreservePreviousView: false,
+    _searchPreviousHomeVisible: false,
   }, window.__appState || {});
 
   // Player lifecycle trace. Run window.dumpPlayerDebugLogs() in the console
@@ -124,7 +127,14 @@
       const moodOpen = route.indexOf('#mood/') === 0;
       const libraryOpen = route === '#library';
       const npOpen = route === '#now-playing';
-      const shouldShow = state._loggedIn && !searchRoute && !state._resultsOpen && !artistOpen && !albumOpen && !historyOpen && !exploreOpen && !moodOpen && !libraryOpen && !npOpen;
+      // Search navigation updates the durable route before the request starts.
+      // Keep the previous Home view mounted during that pending window; the
+      // router's final sync otherwise hides it immediately and exposes an
+      // empty Results shell while Enter-triggered searches are still loading.
+      const preserveSearchView = searchRoute && state._searchPreservePreviousView;
+      const shouldShow = state._loggedIn &&
+        ((!searchRoute && !state._resultsOpen) || preserveSearchView) &&
+        !artistOpen && !albumOpen && !historyOpen && !exploreOpen && !moodOpen && !libraryOpen && !npOpen;
       if (shouldShow && !state._homeLoaded && window.loadHomeFeed) window.loadHomeFeed();
       else homeSection.hidden = !shouldShow || !state._homeLoaded;
     }

@@ -8,6 +8,9 @@
   if (state._activeCategory === undefined) state._activeCategory = 'songs';
   if (state._resultsPage === undefined) state._resultsPage = {};
   if (state._searchSeq === undefined) state._searchSeq = 0;
+  if (state._searchPending === undefined) state._searchPending = false;
+  if (state._searchPreservePreviousView === undefined) state._searchPreservePreviousView = false;
+  if (state._searchPreviousHomeVisible === undefined) state._searchPreviousHomeVisible = false;
 
 const RESULTS_PER_PAGE = 10;
 
@@ -21,6 +24,14 @@ async function runSearch(query, options) {
   // User actions only select the route. The route handler owns the fetch, so
   // submissions, direct links, and Back/Forward all execute exactly once.
   if (!options.fromRoute) {
+    // Capture the pre-navigation view before the router synchronously applies
+    // the new Search URL. Enter/button submissions use this branch, so this
+    // snapshot is what lets the shell keep Home visible during the request.
+    const previousHome = document.getElementById('home-section');
+    state._searchPreviousHomeVisible = !!(previousHome && !previousHome.hidden);
+    state._searchPending = true;
+    state._searchPreservePreviousView = state._searchPreviousHomeVisible;
+    if (window.syncUiState) window.syncUiState();
     if (window.navigateTo && window.__spaRouteCodec) {
       window.navigateTo(window.__spaRouteCodec.searchRoute(query));
     }
@@ -28,6 +39,13 @@ async function runSearch(query, options) {
   }
   if (window.closeSearchSuggestions) window.closeSearchSuggestions();
   const mySeq = ++state._searchSeq;
+  const alreadyOnResults = state._resultsOpen;
+  // The route changes synchronously before this request starts. Mark the
+  // search as pending immediately so the shell can restore the view that was
+  // visible before navigation instead of painting an empty Results page.
+  state._searchPending = true;
+  state._searchPreservePreviousView = state._searchPreviousHomeVisible && !alreadyOnResults;
+  if (window.syncUiState) window.syncUiState();
   // Clear stale results so the previous search's data is never shown once
   // the new results do land.
   state._searchCategorized = {};
@@ -43,7 +61,6 @@ async function runSearch(query, options) {
   // there would leave the user staring at a blank page instead of any content,
   // which is worse than a Results page with a spinner, so that case still
   // opens immediately as before.
-  const alreadyOnResults = state._resultsOpen;
   const anyOtherViewVisible = ['home-section', 'jam-home-section', 'recs-section', 'artist-section']
     .some(id => { const el = document.getElementById(id); return el && !el.hidden; });
 
@@ -61,6 +78,9 @@ async function runSearch(query, options) {
   try {
     const data = await api('/alexa/search/?q=' + encodeURIComponent(query));
     if (mySeq !== state._searchSeq) return;   // a newer search (or a route change) won
+    state._searchPending = false;
+    state._searchPreservePreviousView = false;
+    state._searchPreviousHomeVisible = false;
     if (window.completeTopProgress) window.completeTopProgress();
     state._searchCategorized = data || {};
     const totalItems = (data.songs?.length || 0) + (data.artists?.length || 0) + (data.albums?.length || 0) + (data.playlists?.length || 0);
@@ -81,6 +101,11 @@ async function runSearch(query, options) {
     toast(totalItems + ' results', 'ok');
   } catch (e) {
     if (mySeq === state._searchSeq) {
+      state._searchPending = false;
+      // Keep the captured previous view on a failed search too; never invent
+      // Home as the fallback for an Artist page or a cold-load deep link.
+      state._searchPreservePreviousView = state._searchPreviousHomeVisible;
+      if (window.syncUiState) window.syncUiState();
       if (window.abortTopProgress) window.abortTopProgress();
       toast(e.message, 'error');
       // Only show the inline error state if the results page is already the
@@ -97,6 +122,8 @@ async function runSearch(query, options) {
 
 function openResults(options) {
   options = options || {};
+  state._searchPending = false;
+  state._searchPreservePreviousView = false;
   if (window.closeSearchSuggestions) window.closeSearchSuggestions();
   // Legacy callers still get a durable Search URL. Route-owned calls have
   // already selected it and must not navigate again.
@@ -147,6 +174,9 @@ function deactivateSearchResults() {
   // Invalidate both so a late response cannot reopen Search over Home or a
   // media-detail screen selected through Back/Forward.
   state._searchSeq++;
+  state._searchPending = false;
+  state._searchPreservePreviousView = false;
+  state._searchPreviousHomeVisible = false;
   state._resultsOpen = false;
   const section = document.getElementById('results-section');
   if (section) {

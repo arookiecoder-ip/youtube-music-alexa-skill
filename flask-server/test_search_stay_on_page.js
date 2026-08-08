@@ -105,6 +105,7 @@ function makeSandbox({ initialSectionsHidden, resultsOpenInitially, apiImpl, ope
     openResults: (opts) => {
       events.push(['openResults', opts]);
       state._resultsOpen = true;
+      sections['home-section'] = true;
       if (openResultsSpy) openResultsSpy(opts);
     },
     renderResults: () => events.push(['renderResults']),
@@ -115,6 +116,12 @@ function makeSandbox({ initialSectionsHidden, resultsOpenInitially, apiImpl, ope
     abortTopProgress: () => events.push(['abortTopProgress']),
     closeSearchSuggestions: undefined,
     navigateTo: undefined,
+    getRoute: () => state._route || '#home',
+    syncUiState: () => {
+      const isSearchRoute = (state._route || '').indexOf('#search?') === 0;
+      const preserve = state._searchPreservePreviousView;
+      if (isSearchRoute) sections['home-section'] = !preserve;
+    },
   };
   sandbox.document.body = { classList: { remove: () => {} } };
 
@@ -124,7 +131,7 @@ function makeSandbox({ initialSectionsHidden, resultsOpenInitially, apiImpl, ope
   // invoke it via a small harness that returns the callable.
   const wrapped = vm.runInContext(
     `(${runSearchSrc})`, context, { filename: 'runSearch-wrapped.js' });
-  return { wrapped, state, events, sections, resultsListEl };
+  return { wrapped, state, events, sections, resultsListEl, window: sandbox.window };
 }
 
 async function main() {
@@ -150,6 +157,48 @@ async function main() {
     await runPromise;
     checkTrue('Results opened once data arrived', events.some(([fn]) => fn === 'openResults'));
     checkTrue('progress bar completed', events.some(([fn]) => fn === 'completeTopProgress'));
+  }
+
+  console.log('\n--- Enter submission: route handoff keeps Home until data arrives ---');
+  {
+    let resolveApi;
+    const pending = new Promise((r) => { resolveApi = r; });
+    const sandbox = makeSandbox({
+      initialSectionsHidden: { 'home-section': false },
+      resultsOpenInitially: false,
+      apiImpl: () => pending,
+    });
+    // The real Enter path calls runSearch() without fromRoute, which then
+    // navigates synchronously and lets the router call runSearch() again with
+    // fromRoute: true. Reproduce that handoff instead of testing only the
+    // route-owned half of the implementation.
+    let routePromise;
+    sandbox.window.__spaRouteCodec = {
+      searchRoute: (query) => '#search?q=' + encodeURIComponent(query),
+    };
+    sandbox.window.navigateTo = () => {
+      // Simulate the router's route handoff and its final UI-state sync. The
+      // real sync must leave Home mounted while the pending flag is set.
+      sandbox.state._route = '#search?q=enter+query';
+      // The router's route setup hides Home before invoking the route-owned
+      // search handler. The handler must restore it from its captured snapshot.
+      sandbox.sections['home-section'] = true;
+      sandbox.window.syncUiState();
+      routePromise = sandbox.wrapped('enter query', { fromRoute: true });
+      sandbox.window.syncUiState();
+    };
+    sandbox.wrapped('enter query');
+    checkTrue('Enter path does not open Results while loading',
+              !sandbox.events.some(([fn]) => fn === 'openResults'),
+              'the real button/Enter path must preserve the current page too');
+    check('Home remains visible during the Enter request',
+          sandbox.sections['home-section'], false);
+    checkTrue('Enter path records the previous Home view',
+              sandbox.state._searchPreviousHomeVisible === true);
+    resolveApi({ songs: [{ video_id: 'enter-v1' }] });
+    await routePromise;
+    checkTrue('Enter path opens Results after data arrives',
+              sandbox.events.some(([fn]) => fn === 'openResults'));
   }
 
   console.log('\n--- searching while already on Results: no flicker, updates in place ---');
