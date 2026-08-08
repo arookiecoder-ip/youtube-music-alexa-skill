@@ -1005,20 +1005,30 @@ body.results-open .play-section {
   flex-wrap: wrap;
 }
 .results-tab {
-  border-radius: var(--radius-full) !important;
-  border: none !important;
-  background: var(--pill-bg) !important;
-  color: var(--text) !important;
+  flex: 0 0 auto;
+  border-radius: 8px !important;
+  border: 1px solid var(--border) !important;
+  background: var(--surface) !important;
+  color: var(--muted) !important;
   padding: 8px 16px !important;
   font-size: .78rem !important;
   font-weight: 600 !important;
   text-transform: none !important;
   letter-spacing: 0 !important;
+  transition: color .15s, border-color .15s, background-color .15s;
 }
-.results-tab:hover { background: #262626 !important; }
+.results-tab:hover,
+.results-tab:focus-visible {
+  background: var(--surface) !important;
+  color: var(--text) !important;
+  border-color: var(--accent) !important;
+  box-shadow: 0 0 0 3px rgba(232, 89, 12, .2);
+  outline: none;
+}
 .results-tab.active {
-  background: var(--text) !important;
-  color: #000 !important;
+  background: var(--accent) !important;
+  color: #fff !important;
+  border-color: var(--accent) !important;
   font-weight: 700 !important;
 }
 
@@ -1148,7 +1158,8 @@ body.results-open .play-section {
 /* Mobile search tabs use square corners, overriding pill styling above. */
 @media (max-width: 768px) {
   #results-section .results-tabs .results-tab {
-    border-radius: 0 !important;
+    border-radius: 6px !important;
+    border: 1px solid var(--border) !important;
   }
   #results-section .result-item-inner {
     background: transparent !important;
