@@ -55,7 +55,7 @@ function checkTrue(name, actual, hint) {
  * ------------------------------------------------------------------ */
 
 function makeContext() {
-  const renders = { nowPlaying: [], queueActive: [], volume: [] };
+  const renders = { nowPlaying: [], queueActive: [], volume: [], progress: [] };
   const noop = () => {};
 
   const fakeClassList = () => ({
@@ -113,7 +113,11 @@ function makeContext() {
   sandbox.syncVolume = (v) => { renders.volume.push(v); };
   sandbox.syncPlayPause = noop;
   sandbox.getRoute = () => '#home';
-  sandbox.progress = { update: noop, resetPending: noop, syncLoop: noop };
+  sandbox.progress = {
+    update: (np) => renders.progress.push(np),
+    resetPending: noop,
+    syncLoop: noop,
+  };
   sandbox.toast = noop;
   sandbox.api = async () => ({});
   sandbox.showQueue = noop;
@@ -216,6 +220,21 @@ console.log('\n--- handleNpUpdate vs stale server state ---');
   });
   check('a later genuine track change is applied',
         renders.nowPlaying, ['CCCCCCCCCCC', 'DDDDDDDDDDD']);
+
+  // Cross-device/Alexa snapshots must reach the shared progress controller;
+  // that controller owns the processing-state decision for every client.
+  const progressBeforeExternal = renders.progress.length;
+  sandbox.handleNpUpdate({
+    video_id: 'DDDDDDDDDDD', title: 'Song D', playing: true,
+    playback_confirmed: false, position_ms: 0,
+  });
+  sandbox.handleNpUpdate({
+    video_id: 'DDDDDDDDDDD', title: 'Song D', playing: true,
+    playback_confirmed: true, position_ms: 0,
+  });
+  check('SSE forwards external preparing and confirmed snapshots to progress',
+        renders.progress.slice(progressBeforeExternal).map((snapshot) => !!snapshot.playback_confirmed),
+        [false, true]);
 }
 
 /* ------------------------------------------------------------------ *

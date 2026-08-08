@@ -1,0 +1,84 @@
+/* Playback processing feedback: indeterminate, never a fake position. */
+@keyframes playbackProcessingSweep {
+  from { left: -40%; }
+  to { left: 100%; }
+}
+
+@keyframes playbackProcessingSpin {
+  to { transform: rotate(360deg); }
+}
+
+.progress.playback-processing .progress-track,
+.mobile-np-progress.playback-processing .progress-track {
+  overflow: hidden !important;
+}
+
+/* Hide the real position fill while the next track is being prepared. This
+   prevents the previous track's percentage from leaking into the transition.
+   The moving segment below is a separate overlay so late player-bar rules
+   cannot cancel it with `#progress-fill { transform: none !important; }`. */
+.progress.playback-processing .progress-fill,
+.mobile-np-progress.playback-processing .progress-fill {
+  width: 0 !important;
+  opacity: 0 !important;
+  animation: none !important;
+  transition: none !important;
+}
+
+.progress.playback-processing .progress-track::after,
+.mobile-np-progress.playback-processing .progress-track::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: -40%;
+  width: 40%;
+  min-height: 3px;
+  background: var(--accent);
+  border-radius: inherit;
+  pointer-events: none;
+  animation: playbackProcessingSweep 1.15s ease-in-out infinite;
+}
+
+.progress.playback-processing .progress-handle,
+.mobile-np-progress.playback-processing .progress-handle {
+  opacity: 0 !important;
+}
+
+.pp-btn.playback-processing,
+#mobile-np-play.playback-processing,
+#np-page-art-overlay.playback-processing {
+  position: relative;
+}
+
+.pp-btn.playback-processing::after,
+#mobile-np-play.playback-processing::after,
+#np-page-art-overlay.playback-processing::after {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 1.15em;
+  height: 1.15em;
+  margin: -.575em 0 0 -.575em;
+  border: 2px solid currentColor;
+  border-right-color: transparent;
+  border-radius: 50%;
+  animation: playbackProcessingSpin .7s linear infinite;
+}
+
+.pp-btn.playback-processing > svg,
+#mobile-np-play.playback-processing > svg,
+#np-page-art-overlay.playback-processing > svg {
+  visibility: hidden;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .progress.playback-processing .progress-track::after,
+  .mobile-np-progress.playback-processing .progress-track::after,
+  .pp-btn.playback-processing::after,
+  #mobile-np-play.playback-processing::after,
+  #np-page-art-overlay.playback-processing::after {
+    animation-duration: 1.8s;
+  }
+}

@@ -119,6 +119,7 @@
     const serial = selectedSerial();
     if (!serial) return;
     state().lastActionAt = Date.now();
+    if (window.progress && window.progress.resetPending) window.progress.resetPending();
     toast('Resolving link...');
     try {
       const data = await api('/alexa/play/', { serial, query });
@@ -134,6 +135,7 @@
       window._lastQueueJson = '';
       if (window.schedulePollNowPlaying) window.schedulePollNowPlaying(3000);
     } catch (e) {
+      if (window.progress && window.progress.cancelPending) window.progress.cancelPending();
       toast(e.message, 'error');
     }
   }

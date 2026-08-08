@@ -31,6 +31,7 @@ import sys
 
 # Tests live in flask-server/tests/, while application modules remain in the flask-server parent directory.
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+import copy
 import os
 import sys
 import threading
@@ -2279,6 +2280,55 @@ class PlaybackFailureRetryRaceGuard(_CleanServerState):
         # must still have fired exactly once once the simulated download
         # cleared — the guard defers, it does not cancel, the retry.
         self.assertEqual(resends, [1])
+
+
+class PausedSeekProcessing(unittest.TestCase):
+    """A paused seek completes locally and must settle every remote client."""
+
+    def setUp(self):
+        with server._np_lock:
+            self._previous_now_playing = copy.deepcopy(server._now_playing)
+        self.addCleanup(self._restore_now_playing)
+        with server._np_lock:
+            server._now_playing.update({
+                'playing': False,
+                'title': 'Paused track',
+                'artist': 'Artist',
+                'video_id': 'seekvideo01',
+                'duration_ms': 180000,
+                'position_ms': 1000,
+                'playback_confirmed': True,
+                'playback_processing': True,
+                'playback_revision': 41,
+                'started_at': time.time(),
+                'updated_at': time.time(),
+            })
+
+    def _restore_now_playing(self):
+        with server._np_lock:
+            server._now_playing.clear()
+            server._now_playing.update(self._previous_now_playing)
+
+    def test_paused_seek_clears_marker_updates_revision_and_broadcasts(self):
+        snapshots = []
+        client = server.app.test_client()
+        with mock.patch.object(
+                server, '_notify_sse',
+                side_effect=lambda: snapshots.append(server._np_snapshot('DEVICE1'))):
+            response = client.post(
+                f"/alexa/seek/?key={os.environ['API_KEY']}",
+                json={'serial': 'DEVICE1', 'position_ms': 42000})
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json(), {'ok': True, 'paused': True})
+        with server._np_lock:
+            self.assertFalse(server._now_playing['playback_processing'])
+            self.assertEqual(server._now_playing['position_ms'], 42000)
+            self.assertEqual(server._now_playing['playback_revision'], 42)
+        self.assertEqual(len(snapshots), 1)
+        self.assertFalse(snapshots[0]['playback_processing'])
+        self.assertEqual(snapshots[0]['position_ms'], 42000)
+        self.assertEqual(snapshots[0]['playback_revision'], 42)
 
 
 if __name__ == "__main__":

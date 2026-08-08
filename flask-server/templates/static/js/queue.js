@@ -1179,6 +1179,7 @@ async function playFromQueue(item, queueIndex, openPlaybackPage) {
     // Painting before the await means a failed play has already rendered as
     // playing. Undo the optimistic state and let server state take over.
     window.settlePlayIntent(item.video_id);
+    if (window.progress && window.progress.cancelPending) window.progress.cancelPending();
     state.isPlaying = false;
     state.lastActionIntent = false;
     syncPlayPause();
@@ -1227,6 +1228,7 @@ async function playCollection(items, options) {
   // response arrives. beginPlayIntent still bumps the sequence, so a later
   // single-song click supersedes this collection play.
   const mySeq = window.beginPlayIntent('');
+  if (window.progress && window.progress.resetPending) window.progress.resetPending();
   toast(options.shuffle ? 'Shuffling collection…' : 'Playing collection…');
   try {
     // Use the queue endpoint for both kinds of collection. Besides retaining
@@ -1264,6 +1266,7 @@ async function playCollection(items, options) {
   } catch (error) {
     if (!window.isCurrentPlayIntent(mySeq)) return null;
     window.settlePlayIntent(state._playIntentVideoId);
+    if (window.progress && window.progress.cancelPending) window.progress.cancelPending();
     toast((error && error.message) || 'Could not play collection', 'error');
     return null;
   }

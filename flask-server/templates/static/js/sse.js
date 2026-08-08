@@ -62,6 +62,7 @@
         if (window.toast) window.toast(errMsg, 'error', 'Error code: ' + errType + ' - ' + errMsg, state()._lastPlayAttemptVideoId);
         state().isPlaying = false;
         state().lastActionIntent = false;
+        if (window.progress && window.progress.cancelPending) window.progress.cancelPending();
         if (window.syncPlayPause) window.syncPlayPause();
       }
     }

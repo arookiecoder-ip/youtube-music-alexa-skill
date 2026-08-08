@@ -1542,6 +1542,7 @@ _now_playing = {
     'position_ms': 0,    # known playback position at started_at
     'started_at': 0.0,   # epoch seconds when position_ms was captured
     'playback_confirmed': False,
+    'playback_processing': False,
     'volume': None,
     # One-shot: set when the playback watchdog gives up on a dispatch (see
     # _watch_playback_confirmation). Cleared once read via _np_snapshot so it
@@ -1634,6 +1635,7 @@ def _np_snapshot(serial=None):
         'state_updated_at': s.get('updated_at', 0),
         'playback_revision': s.get('playback_revision', 0),
         'playback_confirmed': bool(s.get('playback_confirmed')),
+        'playback_processing': bool(s.get('playback_processing')),
         'volume': volume,
         'playback_error': playback_error,
         'liked_version': _liked_version,
@@ -1782,9 +1784,19 @@ def _update_now_playing(**kwargs):
         track_changed = (new_video_id is not None
                          and new_video_id != _now_playing.get('video_id'))
         _now_playing.update(kwargs)
+        if kwargs.get('playback_confirmed') is True:
+            _now_playing['playback_processing'] = False
+        playback_error = kwargs.get('playback_error')
+        if playback_error and (
+            not isinstance(playback_error, dict) or playback_error.get('terminal', True)
+        ):
+            _now_playing['playback_processing'] = False
         if track_changed or 'playing' in kwargs or 'playback_confirmed' in kwargs:
             _now_playing['playback_revision'] = int(_now_playing.get('playback_revision', 0)) + 1
         if track_changed:
+            _now_playing['playback_processing'] = not bool(
+                kwargs.get('playback_confirmed', False)
+            )
             if 'artists' not in kwargs:
                 _now_playing['artists'] = []
             if 'started_at' not in kwargs:
@@ -4199,6 +4211,7 @@ def _confirm_stream_delivery(video_id):
         _reset_progress(_now_playing.get('position_ms', 0))
         _now_playing['playing'] = True
         _now_playing['playback_confirmed'] = True
+        _now_playing['playback_processing'] = False
         _now_playing['playback_revision'] = int(_now_playing.get('playback_revision', 0)) + 1
         _now_playing['updated_at'] = time.time()
     _notify_sse()
@@ -5083,6 +5096,7 @@ def alexa_command():
             _reset_progress(resume_position_ms)
             _now_playing['playing'] = False
             _now_playing['playback_confirmed'] = False
+            _now_playing['playback_processing'] = True
             _now_playing['playback_revision'] = int(_now_playing.get('playback_revision', 0)) + 1
             _now_playing['updated_at'] = time.time()
         _notify_sse()
@@ -5098,6 +5112,7 @@ def alexa_command():
         with _np_lock:
             _reset_progress(_computed_position_ms())
             _now_playing['playing'] = False
+            _now_playing['playback_processing'] = True
             _now_playing['playback_revision'] = int(_now_playing.get('playback_revision', 0)) + 1
             _now_playing['updated_at'] = time.time()
         _notify_sse()
@@ -5166,7 +5181,20 @@ def alexa_seek():
     # (playing=False, confirmed=False), which must still dispatch.
     if not cur.get('playing') and cur.get('playback_confirmed'):
         with _np_lock:
+            # `cur` was read before entering this lock. Re-check the identity
+            # and pause state so a delayed seek cannot overwrite a newer track
+            # or clear its play transition's processing marker.
+            if (_now_playing.get('video_id') != video_id
+                    or _now_playing.get('playing')
+                    or not _now_playing.get('playback_confirmed')):
+                return error_response('playback changed while seeking', 409)
             _reset_progress(position_ms)
+            # A paused seek is already the authoritative completion of the
+            # reposition request: it does not dispatch playback or wait for a
+            # PlaybackStarted webhook. Clear the shared marker so every open
+            # client settles immediately instead of showing a stale spinner.
+            _now_playing['playback_processing'] = False
+            _now_playing['playback_revision'] = int(_now_playing.get('playback_revision', 0)) + 1
             _now_playing['updated_at'] = time.time()
         _notify_sse()
         return jsonify({'ok': True, 'paused': True})
@@ -5185,6 +5213,7 @@ def alexa_seek():
         _reset_progress(position_ms)
         _now_playing['playing'] = False
         _now_playing['playback_confirmed'] = False
+        _now_playing['playback_processing'] = True
         _now_playing['playback_revision'] = int(_now_playing.get('playback_revision', 0)) + 1
         _now_playing['updated_at'] = time.time()
     _notify_sse()
@@ -5218,6 +5247,10 @@ def alexa_state_event():
             was_confirmed = bool(_now_playing.get('playback_confirmed'))
             _reset_progress(elapsed_ms)
             _now_playing['playing'] = False
+            # PlaybackStopped is the authoritative completion of a pause/stop
+            # transition. Clear the shared processing marker so every browser
+            # settles, including clients that did not send the command.
+            _now_playing['playback_processing'] = False
             _now_playing['updated_at'] = time.time()
         _notify_sse()
         # Genuine PlaybackStarted followed by PlaybackStopped within seconds,

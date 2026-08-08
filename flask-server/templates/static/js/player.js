@@ -28,6 +28,7 @@
   if (state.volumeGraceUntil === undefined) state.volumeGraceUntil = 0;
   if (state.VOLUME_GRACE_MS === undefined) state.VOLUME_GRACE_MS = 4000;
   if (state._volCommandSeq === undefined) state._volCommandSeq = 0;
+  if (state.playbackProcessing === undefined) state.playbackProcessing = false;
 
 const deviceEl = document.getElementById('device');
 const volumeEl = document.getElementById('volume');
@@ -90,7 +91,12 @@ function syncPlayPause() {
     if (p) p.style.display = state.isPlaying ? 'none' : 'block';
     const pa = btn.querySelector('.icon-pause, .mobile-np-pause-icon');
     if (pa) pa.style.display = state.isPlaying ? 'block' : 'none';
-    btn.title = state.isPlaying ? 'Pause' : 'Play';
+    const processing = !!state.playbackProcessing;
+    btn.classList.toggle('playback-processing', processing);
+    btn.setAttribute('aria-busy', processing ? 'true' : 'false');
+    const label = processing ? 'Processing playback…' : (state.isPlaying ? 'Pause' : 'Play');
+    btn.title = label;
+    btn.setAttribute('aria-label', label);
   }
   syncTrackPlaybackIndicators();
   if (window.updateQueuePlaying) window.updateQueuePlaying(state.isPlaying);
@@ -513,6 +519,11 @@ const progress = window.progress = (function () {
   let lastServerAnchor = 0; // server started_at of the last update (change detector)
   let playing = false;
   let pausePending = false;
+  let pausePendingTimer = null;
+  let playPending = false;
+  let playPendingTimer = null;
+  let seekPending = false;
+  let seekPendingTimer = null;
   let dragging = false;
   let dragMs = 0;        // previewed position while dragging
   let rafId = null;
@@ -536,6 +547,12 @@ const progress = window.progress = (function () {
   // strict comparison would never match and the bar would stay stuck at 0:00.
   let pendingVideoId = null;
   let pendingSince = 0;      // when resetPending() started waiting
+  // Snapshot history lets every open client show the same processing feedback
+  // for playback started elsewhere (another browser, mobile PWA, or Alexa).
+  let activeVideoId = null;
+  let lastKnownVideoId = null;
+  let lastSnapshotPlaying = null;
+  let lastSnapshotProcessing = false;
   // After a local drag-to-seek, snapshots generated before the server
   // processed the seek still carry the old position; re-anchoring to them
   // snaps the bar back to where it was before jumping to the seek target.
@@ -544,6 +561,26 @@ const progress = window.progress = (function () {
   let localSeekUntil = 0;
   let _inactivityTimer = null;
   const _INACTIVITY_TIMEOUT_MS = 30000;
+
+  function syncProcessingVisuals() {
+    const processing = awaitingStart || pausePending || playPending || seekPending;
+    state.playbackProcessing = processing;
+    for (const id of ['progress', 'mobile-np-progress']) {
+      const el = document.getElementById(id);
+      if (!el) continue;
+      el.classList.toggle('playback-processing', processing);
+      el.setAttribute('aria-busy', processing ? 'true' : 'false');
+    }
+    for (const id of ['pp-btn', 'mobile-np-play', 'np-page-art-overlay']) {
+      const el = document.getElementById(id);
+      if (!el) continue;
+      el.classList.toggle('playback-processing', processing);
+      el.setAttribute('aria-busy', processing ? 'true' : 'false');
+    }
+    // Keep the accessible label/title in lockstep with the visual spinner,
+    // including when a safety timeout clears a lost confirmation.
+    if (typeof syncPlayPause === 'function') syncPlayPause();
+  }
 
   function resetInactivityTimer() {
     clearTimeout(_inactivityTimer);
@@ -617,7 +654,46 @@ const progress = window.progress = (function () {
   // Fed from now-playing updates (SSE / poll).
   function update(np) {
     const hasTrack = !!(np && np.title);
+    const incomingVideoId = np && np.video_id ? String(np.video_id) : '';
     const isConfirmed = !!(np && np.playback_confirmed);
+    const knownVideoId = activeVideoId || lastKnownVideoId;
+
+    // The backend marker covers freshly opened clients and all device-originated
+    // transitions. Keep the heuristic below as a compatibility fallback for
+    // older server snapshots that do not include it.
+    const snapshotProcessing = np && np.playback_processing === true && !isConfirmed;
+    const processingStarted = snapshotProcessing && !lastSnapshotProcessing;
+    if (processingStarted && !awaitingStart) {
+      if (incomingVideoId && (!knownVideoId || incomingVideoId !== knownVideoId)) resetPending(incomingVideoId);
+      else if (np.playing === true) setPlayPending(true);
+      else if (np.playing === false) setPausePending(true);
+    }
+    if (!snapshotProcessing && (lastSnapshotProcessing || isConfirmed)) {
+      if (playPending) setPlayPending(false);
+      if (pausePending) setPausePending(false);
+    }
+    lastSnapshotProcessing = snapshotProcessing;
+
+    // A local click calls resetPending() before its request. For playback
+    // initiated on another client or by Alexa, the first unconfirmed snapshot
+    // is the equivalent signal: begin the same loading state here so every
+    // open browser shows the transition, not just the device that sent it.
+    const externalTrackPreparing = hasTrack && incomingVideoId && knownVideoId &&
+      incomingVideoId !== knownVideoId && !isConfirmed && !awaitingStart;
+    const externalResumePreparing = hasTrack && incomingVideoId &&
+      incomingVideoId === activeVideoId && lastSnapshotPlaying === false &&
+      np.playing === true && !isConfirmed;
+    const externalPausePreparing = hasTrack && incomingVideoId &&
+      incomingVideoId === activeVideoId && lastSnapshotPlaying === true &&
+      np.playing === false && !isConfirmed;
+    if (externalTrackPreparing) resetPending(incomingVideoId);
+    else if (externalResumePreparing) setPlayPending(true);
+    else if (externalPausePreparing) setPausePending(true);
+    if (hasTrack && incomingVideoId) {
+      activeVideoId = incomingVideoId;
+      lastKnownVideoId = incomingVideoId;
+    }
+    if (hasTrack && typeof np.playing === 'boolean') lastSnapshotPlaying = np.playing;
 
     // Only hide the bar when there is genuinely no track. While awaitingStart
     // the bar stays visible but frozen at 0:00, so the user can see feedback
@@ -627,11 +703,27 @@ const progress = window.progress = (function () {
     wrap.hidden = !hasTrack;
 
     if (!hasTrack) {
+      activeVideoId = null;
+      lastSnapshotProcessing = false;
+      // Keep lastKnownVideoId through a transient empty snapshot. Alexa and
+      // the device can briefly publish no title between tracks; forgetting the
+      // prior identity would suppress processing feedback for the next one.
+      lastSnapshotPlaying = null;
+      awaitingStart = false;
+      pendingVideoId = null;
+      pendingSince = 0;
+      pausePending = false;
+      playPending = false;
+      seekPending = false;
+      clearTimeout(seekPendingTimer);
+      clearTimeout(pausePendingTimer);
+      clearTimeout(playPendingTimer);
       durationMs = 0;
       positionMs = 0;
       anchorClientMs = 0;
       lastServerAnchor = 0;
       playing = false;
+      syncProcessingVisuals();
       paint();
       syncLoop();
       return;
@@ -685,10 +777,20 @@ const progress = window.progress = (function () {
         lastServerAnchor = serverAnchor;
       } else {
         localSeekUntil = 0;
+        seekPending = false;
+        clearTimeout(seekPendingTimer);
         lastServerAnchor = serverAnchor;
         positionMs = serverPos;
         anchorClientMs = Date.now();
       }
+    }
+    if (playPending && isConfirmed && np.playing) {
+      playPending = false;
+      clearTimeout(playPendingTimer);
+    }
+    if (pausePending && isConfirmed && np.playing === false) {
+      pausePending = false;
+      clearTimeout(pausePendingTimer);
     }
     if (typeof np.playing === 'boolean' && !awaitingStart) {
       const reported = np.playing && !!np.playback_confirmed;
@@ -704,6 +806,7 @@ const progress = window.progress = (function () {
       const contradictsIntent = inGrace && state.lastActionIntent !== null && reported !== state.lastActionIntent;
       if (!contradictsIntent) playing = pausePending ? true : reported;
     }
+    syncProcessingVisuals();
     syncLoop();
     paint();
     resetInactivityTimer();
@@ -723,6 +826,10 @@ const progress = window.progress = (function () {
   // snapshot is accepted.
   function resetPending(videoId) {
     awaitingStart = true;
+    if (videoId) {
+      activeVideoId = String(videoId);
+      lastKnownVideoId = String(videoId);
+    }
     pendingVideoId = videoId || null;
     pendingSince = Date.now();
     localSeekUntil = 0;
@@ -732,12 +839,18 @@ const progress = window.progress = (function () {
     lastServerAnchor = 0;
     playing = false;
     pausePending = false;
+    clearTimeout(pausePendingTimer);
+    playPending = false;
+    clearTimeout(playPendingTimer);
+    seekPending = false;
+    clearTimeout(seekPendingTimer);
     // Keep the bar visible but frozen at 0:00 while we await the track start.
     // Hiding it here (as a recent refactor did) kills syncLoop (which gates
     // on !wrap.hidden) and leaves the bar stuck forever once the track lands.
     wrap.hidden = false;
     const mobileNpWrap = document.getElementById('mobile-np-progress');
     if (mobileNpWrap) mobileNpWrap.hidden = false;
+    syncProcessingVisuals();
     syncLoop();
     paint();
   }
@@ -804,10 +917,23 @@ const progress = window.progress = (function () {
     positionMs = target;
     anchorClientMs = Date.now();
     playing = false;
+    seekPending = true;
+    clearTimeout(seekPendingTimer);
+    seekPendingTimer = setTimeout(() => {
+      seekPending = false;
+      syncProcessingVisuals();
+    }, 8000);
+    syncProcessingVisuals();
     syncLoop();
     paint();
     const serial = deviceEl.value;
-    if (!serial) { toast('Pick a device first.', 'error'); return; }
+    if (!serial) {
+      seekPending = false;
+      clearTimeout(seekPendingTimer);
+      syncProcessingVisuals();
+      toast('Pick a device first.', 'error');
+      return;
+    }
     state.lastActionAt = Date.now();
     localSeekUntil = Date.now() + 8000;
     toast('Seeking to ' + fmt(target) + '\u2026');
@@ -815,12 +941,20 @@ const progress = window.progress = (function () {
       const res = await api('/alexa/seek/', { serial, position_ms: target });
       // paused: the server only moved the frozen anchor (no playback dispatch);
       // the track stays paused and resume will pick up from here.
+      if (res && res.paused) {
+        seekPending = false;
+        clearTimeout(seekPendingTimer);
+      }
+      syncProcessingVisuals();
       toast(res && res.paused
         ? 'Paused at ' + fmt(target) + ' — press play to resume here'
         : 'Seeked to ' + fmt(target), 'ok');
     } catch (err) {
       // Seek failed: drop the hold so the next server push restores truth.
       localSeekUntil = 0;
+      seekPending = false;
+      clearTimeout(seekPendingTimer);
+      syncProcessingVisuals();
       toast(err.message, 'error');
     }
   }
@@ -877,15 +1011,68 @@ const progress = window.progress = (function () {
   function setPausePending(pending) {
     pausePending = !!pending;
     if (pausePending) {
+      playPending = false;
+      clearTimeout(playPendingTimer);
+      clearTimeout(pausePendingTimer);
+      // A pause can take longer than the command response. Keep the spinner
+      // visible while the device settles, but cap it so a lost webhook cannot
+      // wedge the controls forever.
+      pausePendingTimer = setTimeout(() => {
+        pausePending = false;
+        playing = !!(window.__appState && window.__appState.isPlaying);
+        syncProcessingVisuals();
+        syncLoop();
+        paint();
+      }, 10000);
       playing = true;
     } else {
+      clearTimeout(pausePendingTimer);
       playing = !!(window.__appState && window.__appState.isPlaying);
     }
+    syncProcessingVisuals();
     syncLoop();
     paint();
   }
 
-  return { update, resetPending, setPausePending, livePosition, getDuration: () => durationMs, syncLoop };
+  function setPlayPending(pending) {
+    playPending = !!pending;
+    if (playPending) {
+      pausePending = false;
+      clearTimeout(playPendingTimer);
+      // A resume confirmation normally arrives through SSE. The timeout is a
+      // safety valve for an accepted command whose device never reports back;
+      // it removes the spinner without claiming that audio started.
+      playPendingTimer = setTimeout(() => {
+        playPending = false;
+        playing = !!(window.__appState && window.__appState.isPlaying);
+        syncProcessingVisuals();
+        syncLoop();
+        paint();
+      }, 10000);
+    } else {
+      clearTimeout(playPendingTimer);
+    }
+    syncProcessingVisuals();
+    syncLoop();
+    paint();
+  }
+
+  function cancelPending() {
+    awaitingStart = false;
+    pendingVideoId = null;
+    pendingSince = 0;
+    pausePending = false;
+    clearTimeout(pausePendingTimer);
+    playPending = false;
+    seekPending = false;
+    clearTimeout(playPendingTimer);
+    clearTimeout(seekPendingTimer);
+    syncProcessingVisuals();
+    syncLoop();
+    paint();
+  }
+
+  return { update, resetPending, cancelPending, setPausePending, setPlayPending, livePosition, getDuration: () => durationMs, syncLoop };
 })();
 
 /* ---- API ---- */
@@ -942,6 +1129,7 @@ async function playResult(item, suppressRadio, forceRadio, openPlaybackPage) {
     // Painting before the await means a failed play has already rendered as
     // playing. Undo the optimistic state and let server state take over.
     window.settlePlayIntent(item.video_id);
+    if (window.progress && window.progress.cancelPending) window.progress.cancelPending();
     state.isPlaying = false;
     state.lastActionIntent = false;
     syncPlayPause();
@@ -1202,8 +1390,9 @@ function applyPlayPauseIntent(action) {
   // preceding pause command.
   state.isPlaying = action === 'pause' ? false : false;
   state.lastActionIntent = action === 'play';
-  if (window.progress && window.progress.setPausePending) {
-    window.progress.setPausePending(action === 'pause');
+  if (window.progress) {
+    if (window.progress.setPausePending) window.progress.setPausePending(action === 'pause');
+    if (window.progress.setPlayPending) window.progress.setPlayPending(action === 'play');
   }
   syncPlayPause();
 }
@@ -1259,10 +1448,12 @@ async function drainPlayPause(action) {
     _playPauseBusy = false;
     state.isPlaying = previousPlaying;
     _playPauseDesiredState = state.isPlaying;
-    state.lastActionIntent = state.isPlaying;
-    if (window.progress && window.progress.setPausePending) window.progress.setPausePending(false);
-    syncPlayPause();
-    toast(error && error.message ? error.message : 'Playback command failed; try again.', 'error');
+    state.lastActionIntent = state.isPlaying;     if (window.progress) {
+       if (window.progress.setPausePending) window.progress.setPausePending(false);
+       if (window.progress.setPlayPending) window.progress.setPlayPending(false);
+     }
+     syncPlayPause();
+     toast(error && error.message ? error.message : 'Playback command failed; try again.', 'error');
     return;
   }
 
@@ -1271,8 +1462,9 @@ async function drainPlayPause(action) {
     state.isPlaying = action === 'play';
     state.lastActionIntent = state.isPlaying;
     _playPauseDesiredState = state.isPlaying;
-    if (window.progress && window.progress.setPausePending) {
-      window.progress.setPausePending(false);
+    if (window.progress) {
+      if (window.progress.setPausePending) window.progress.setPausePending(false);
+      if (window.progress.setPlayPending) window.progress.setPlayPending(false);
     }
     syncPlayPause();
     toast(action === 'pause' ? 'Paused' : 'Resumed', 'ok');
@@ -1282,7 +1474,9 @@ async function drainPlayPause(action) {
     state.isPlaying = false;
     state.lastActionIntent = false;
     _playPauseDesiredState = false;
-    if (window.progress && window.progress.setPausePending) window.progress.setPausePending(false);
+    // Keep the processing state until the device confirms the pause or the
+    // progress controller's bounded safety timeout expires.
+    if (window.progress && window.progress.setPlayPending) window.progress.setPlayPending(false);
     syncPlayPause();
     toast('Pause is still processing…', 'info');
   } else if (succeeded && action === 'play' && !confirmed) {
@@ -1293,7 +1487,10 @@ async function drainPlayPause(action) {
     state.isPlaying = false;
     state.lastActionIntent = true;
     _playPauseDesiredState = true;
+    // Keep the processing indicator until a confirmed playing snapshot arrives
+    // (or the progress controller's safety timeout expires).
     if (window.progress && window.progress.setPausePending) window.progress.setPausePending(false);
+    if (window.progress && window.progress.setPlayPending) window.progress.setPlayPending(true);
     if (window.schedulePollNowPlaying) window.schedulePollNowPlaying(0);
     syncPlayPause();
     toast('Resume requested…', 'info');
@@ -1302,8 +1499,9 @@ async function drainPlayPause(action) {
     // failed resume looking like active playback.
     state.isPlaying = previousPlaying;
     _playPauseDesiredState = state.isPlaying;
-    if (window.progress && window.progress.setPausePending) {
-      window.progress.setPausePending(false);
+    if (window.progress) {
+      if (window.progress.setPausePending) window.progress.setPausePending(false);
+      if (window.progress.setPlayPending) window.progress.setPlayPending(false);
     }
     state.lastActionIntent = state.isPlaying;
     syncPlayPause();
@@ -1546,24 +1744,29 @@ for (const btn of document.querySelectorAll('[data-action="previous"], [data-act
     // Guard the optimistic state.isPlaying=true below from the server's own
     // playing:false push (set synchronously by /alexa/command/ while the new
     // track is still loading) \u2014 without this, that SSE message arrives before
-    // playback is confirmed and immediately flips the UI back to "paused".
-    state.lastActionAt = Date.now();
+    // playback is confirmed and immediately flips the UI back to "paused".        state.lastActionAt = Date.now();
+    // Next/previous has no reliable new video id yet, so start an identity-
+    // neutral processing state before the command round-trip.
+    progress.resetPending();
     api('/alexa/command/', { serial, action: btn.dataset.action })
       .then((data) => {
         if (data.now_playing) showNowPlaying(data.now_playing);
+        progress.resetPending(data.now_playing && data.now_playing.video_id);
         state.isPlaying = true;
         state.lastActionIntent = true;
         syncPlayPause();
         // New track incoming: hold the bar at 0:00 until PlaybackStarted
         // confirms *this* video_id (not a stale push for the track we just left).
-        progress.resetPending(data.now_playing && data.now_playing.video_id);
         // Schedule one fallback poll; SSE remains the primary transition path.
         state._lastQueueJson = '';
         schedulePollNowPlaying(2000);
         schedulePollNowPlaying(5000);
         schedulePollNowPlaying(8000);
       })
-      .catch(e => toast(e.message, 'error'))
+      .catch(e => {
+        if (progress.cancelPending) progress.cancelPending();
+        toast(e.message, 'error');
+      })
       .finally(() => {
         // Don't keep buttons disabled for Alexa's full skill round-trip
         // (a few seconds) -- otherwise rapid skip gestures can't register
