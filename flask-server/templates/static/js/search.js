@@ -27,24 +27,45 @@ async function runSearch(query, options) {
     return;
   }
   if (window.closeSearchSuggestions) window.closeSearchSuggestions();
-  // A direct /search URL must become the active view immediately. Waiting
-  // for the API response leaves Home visible on cold loads and makes valid
-  // deep links look broken when the request is slow, empty, or fails.
-  openResults({ fromRoute: true });
   const mySeq = ++state._searchSeq;
-  // Clear stale results immediately so the previous search's data is never
-  // shown while the new request is in-flight.
+  // Clear stale results so the previous search's data is never shown once
+  // the new results do land.
   state._searchCategorized = {};
-  const list = document.getElementById('results-list');
-  if (list) list.innerHTML = '';
+
+  // Stay on whatever the user is currently looking at (Home, Artist, an
+  // already-open Results page, ...) while the request is in flight, and only
+  // switch to the Results page once data has actually arrived -- the top
+  // progress bar is the only loading feedback until then, instead of flashing
+  // an empty Results page first.
+  //
+  // The one exception is a bare cold-load direct link to #search?q=... with
+  // nothing else rendered yet (no Home/Artist/etc. section visible): waiting
+  // there would leave the user staring at a blank page instead of any content,
+  // which is worse than a Results page with a spinner, so that case still
+  // opens immediately as before.
+  const alreadyOnResults = state._resultsOpen;
+  const anyOtherViewVisible = ['home-section', 'jam-home-section', 'recs-section', 'artist-section']
+    .some(id => { const el = document.getElementById(id); return el && !el.hidden; });
+
+  if (!alreadyOnResults && !anyOtherViewVisible) {
+    openResults({ fromRoute: true });
+  }
+  // Note: deliberately NOT clearing #results-list here. Whatever is
+  // currently on screen (the previous search's results, or the page the user
+  // was on) stays visible -- with only the top progress bar as feedback --
+  // until the new data arrives and renderResults() swaps the content in one
+  // shot. Clearing first would show a blank page for the duration of the
+  // request, which is exactly the flicker this is meant to avoid.
   if (window.startTopProgress) window.startTopProgress();
   toast('Searching \u201c' + query + '\u201d\u2026');
   try {
     const data = await api('/alexa/search/?q=' + encodeURIComponent(query));
-    if (mySeq !== state._searchSeq) return;   // a newer search won
+    if (mySeq !== state._searchSeq) return;   // a newer search (or a route change) won
     if (window.completeTopProgress) window.completeTopProgress();
     state._searchCategorized = data || {};
     const totalItems = (data.songs?.length || 0) + (data.artists?.length || 0) + (data.albums?.length || 0) + (data.playlists?.length || 0);
+    if (!state._resultsOpen) openResults({ fromRoute: true });
+    const list = document.getElementById('results-list');
     if (!totalItems) {
       toast('No results found.', 'error');
       if (list) list.innerHTML = '<div class="results-empty-state">No results found for your search.</div>';
@@ -62,7 +83,14 @@ async function runSearch(query, options) {
     if (mySeq === state._searchSeq) {
       if (window.abortTopProgress) window.abortTopProgress();
       toast(e.message, 'error');
-      if (list) list.innerHTML = '<div class="results-empty-state results-error-state">Search failed. Please try again.</div>';
+      // Only show the inline error state if the results page is already the
+      // active view (or was opened as the cold-load fallback above). If the
+      // user was left on their previous page, forcing a navigation to an
+      // error screen they never asked for would be worse than the toast alone.
+      if (state._resultsOpen) {
+        const list = document.getElementById('results-list');
+        if (list) list.innerHTML = '<div class="results-empty-state results-error-state">Search failed. Please try again.</div>';
+      }
     }
   }
 }

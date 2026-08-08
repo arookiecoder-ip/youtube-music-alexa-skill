@@ -410,29 +410,32 @@
     body.results-open .toast { bottom: 24px; }
   }
 
-  /* ---- Search result: category tabs ---- */
+  /* ---- Search result: category tabs (rectangle/chip style) ---- */
   .results-tabs {
     display: flex;
-    border-bottom: 1px solid var(--border);
-    margin-bottom: var(--space-2);
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    border-bottom: none;
+    margin-bottom: var(--space-3);
   }
   .results-tab {
-    flex: 1;
-    padding: var(--space-2) var(--space-3);
-    background: none;
-    border: none;
-    border-bottom: 2px solid transparent;
+    flex: 0 0 auto;
+    padding: var(--space-2) var(--space-4);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 8px;
     color: var(--muted);
     font-size: var(--text-sm);
     font-weight: 600;
     cursor: pointer;
-    transition: color .15s, border-color .15s;
+    transition: color .15s, border-color .15s, background-color .15s;
     text-align: center;
   }
-  .results-tab:hover { color: var(--text); }
+  .results-tab:hover { color: var(--text); border-color: var(--accent); }
   .results-tab.active {
-    color: var(--text);
-    border-bottom-color: var(--accent);
+    color: #fff;
+    background: var(--accent);
+    border-color: var(--accent);
   }
   .results-count {
     font-size: var(--text-xs);
@@ -837,16 +840,23 @@ body.results-open .play-section {
   body.mobile-search-open .suggest-list { max-height: min(420px, calc(100dvh - 120px)); }
 }
 
-/* Mobile category chips: lower row, sharper corners. */
+/* Mobile category chips: lower row, tighter padding, horizontally scrollable
+   instead of wrapping if the labels overflow a narrow viewport. */
 @media (max-width: 768px) {
   #results-section > .section-head {
     margin-top: var(--space-2) !important;
   }
   .results-tabs {
     margin-top: 16px;
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    -ms-overflow-style: none;
+    scrollbar-width: none;
   }
+  .results-tabs::-webkit-scrollbar { display: none; }
   .results-tab {
-    border-radius: 2px !important;
+    padding: var(--space-1) var(--space-3);
+    border-radius: 6px;
   }
 }
 

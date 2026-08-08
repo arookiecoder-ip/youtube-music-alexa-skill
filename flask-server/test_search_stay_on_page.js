@@ -1,0 +1,215 @@
+// Regression test for the "blank search page" UX bug.
+//
+// Bug (reported): searching navigated to an empty Results page immediately,
+// then populated it once the API call resolved -- a visible blank-page flash
+// on every search.
+//
+// Fix under test: runSearch() (search.js) now stays on whatever view is
+// currently visible (Home, Artist, an already-open Results page, ...) while
+// the request is in flight, showing only the top progress bar as feedback,
+// and only calls openResults() once the data has actually arrived. The one
+// exception is a bare cold-load direct link to #search?q=... with no other
+// section visible yet -- there is nothing to "stay on" in that case, so it
+// still opens Results immediately (matching the previous deep-link behavior).
+//
+// This test extracts the real runSearch function body by source text (the
+// same technique test_play_intent_ordering.js and test_youtube_icon_pause.js
+// use for behavior that depends on many cross-file globals) and executes it
+// against a controlled fake environment, so it exercises the actual shipped
+// logic.
+//
+// Run: `node test_search_stay_on_page.js`
+
+const fs = require('fs');
+const path = require('path');
+const vm = require('vm');
+
+const JS_PATH = path.join(__dirname, 'templates', 'static', 'js', 'search.js');
+const SRC = fs.readFileSync(JS_PATH, 'utf8');
+
+let passed = 0;
+let failed = 0;
+
+function check(name, actual, expected) {
+  const ok = JSON.stringify(actual) === JSON.stringify(expected);
+  if (ok) { passed += 1; console.log(`PASS  ${name}`); }
+  else {
+    failed += 1;
+    console.log(`FAIL  ${name}\n        expected ${JSON.stringify(expected)}\n        actual   ${JSON.stringify(actual)}`);
+  }
+}
+
+function checkTrue(name, actual, hint) {
+  if (actual) { passed += 1; console.log(`PASS  ${name}`); }
+  else { failed += 1; console.log(`FAIL  ${name}${hint ? '\n        ' + hint : ''}`); }
+}
+
+function extractFunctionBody(src, marker) {
+  const start = src.indexOf(marker);
+  if (start < 0) return null;
+  const openBrace = src.indexOf('{', start);
+  let depth = 0;
+  for (let i = openBrace; i < src.length; i += 1) {
+    if (src[i] === '{') depth += 1;
+    else if (src[i] === '}') {
+      depth -= 1;
+      if (depth === 0) return src.slice(start, i + 1);
+    }
+  }
+  return null;
+}
+
+const runSearchSrc = extractFunctionBody(SRC, 'async function runSearch(query, options) {');
+if (!runSearchSrc) {
+  console.log('FATAL: could not locate runSearch() in search.js -- the source '
+             + 'structure changed; update this test\'s marker.');
+  process.exit(1);
+}
+
+function makeSandbox({ initialSectionsHidden, resultsOpenInitially, apiImpl, openResultsSpy }) {
+  const events = [];
+  const state = {
+    _searchSeq: 0,
+    _resultsOpen: !!resultsOpenInitially,
+    _searchCategorized: {},
+    _activeCategory: 'songs',
+    _resultsPage: {},
+  };
+
+  const sections = Object.assign({
+    'home-section': true, 'jam-home-section': true,
+    'recs-section': true, 'artist-section': true,
+  }, initialSectionsHidden);
+
+  const resultsListEl = { innerHTML: '' };
+
+  function fakeElementById(id) {
+    if (id === 'results-list') return resultsListEl;
+    if (id in sections) return { hidden: sections[id] };
+    if (id === 'query') return { value: '' };
+    return null;
+  }
+
+  const sandbox = {
+    console,
+    state,
+    window: null,  // filled below
+    document: {
+      getElementById: fakeElementById,
+      querySelectorAll: () => [],
+    },
+    toast: (msg, kind) => events.push(['toast', msg, kind]),
+    api: (path) => { events.push(['api', path]); return apiImpl(path); },
+    escHtml: (s) => s,
+    encodeURIComponent,
+    openResults: (opts) => {
+      events.push(['openResults', opts]);
+      state._resultsOpen = true;
+      if (openResultsSpy) openResultsSpy(opts);
+    },
+    renderResults: () => events.push(['renderResults']),
+  };
+  sandbox.window = {
+    startTopProgress: () => events.push(['startTopProgress']),
+    completeTopProgress: () => events.push(['completeTopProgress']),
+    abortTopProgress: () => events.push(['abortTopProgress']),
+    closeSearchSuggestions: undefined,
+    navigateTo: undefined,
+  };
+  sandbox.document.body = { classList: { remove: () => {} } };
+
+  const context = vm.createContext(sandbox);
+  vm.runInContext(runSearchSrc, context, { filename: 'runSearch.js' });
+  // The extracted source is a bare function *declaration* statement; wrap and
+  // invoke it via a small harness that returns the callable.
+  const wrapped = vm.runInContext(
+    `(${runSearchSrc})`, context, { filename: 'runSearch-wrapped.js' });
+  return { wrapped, state, events, sections, resultsListEl };
+}
+
+async function main() {
+  console.log('--- searching from Home: stays on Home until data arrives ---');
+  {
+    let resolveApi;
+    const pending = new Promise((r) => { resolveApi = r; });
+    const { wrapped, state, events, sections } = makeSandbox({
+      initialSectionsHidden: { 'home-section': false },  // Home is visible
+      resultsOpenInitially: false,
+      apiImpl: () => pending,
+    });
+    const runPromise = wrapped('some song', { fromRoute: true });
+    // Before the API resolves: must NOT have opened Results, must still be
+    // showing the progress bar as the only feedback.
+    checkTrue('did not open Results while the request is in flight',
+              !events.some(([fn]) => fn === 'openResults'),
+              'the bug: navigating to Results before data arrives shows a blank page');
+    checkTrue('top progress bar was started', events.some(([fn]) => fn === 'startTopProgress'));
+    check('Home section is still visible mid-request', sections['home-section'], false);
+
+    resolveApi({ songs: [{ video_id: 'v1' }] });
+    await runPromise;
+    checkTrue('Results opened once data arrived', events.some(([fn]) => fn === 'openResults'));
+    checkTrue('progress bar completed', events.some(([fn]) => fn === 'completeTopProgress'));
+  }
+
+  console.log('\n--- searching while already on Results: no flicker, updates in place ---');
+  {
+    const { wrapped, events, resultsListEl } = makeSandbox({
+      initialSectionsHidden: {},
+      resultsOpenInitially: true,
+      apiImpl: () => Promise.resolve({ songs: [{ video_id: 'v2' }] }),
+    });
+    resultsListEl.innerHTML = '<div>previous results</div>';
+    await wrapped('another song', { fromRoute: true });
+    checkTrue('did not call openResults again (already open)',
+              !events.some(([fn]) => fn === 'openResults'),
+              'reopening an already-open page is unnecessary churn');
+    check('previous results were NOT cleared before the new data arrived',
+          resultsListEl.innerHTML, '<div>previous results</div>');
+    checkTrue('renderResults was called once data arrived',
+              events.some(([fn]) => fn === 'renderResults'));
+  }
+
+  console.log('\n--- cold-load deep link with nothing else visible: opens immediately ---');
+  {
+    let resolveApi;
+    const pending = new Promise((r) => { resolveApi = r; });
+    const { wrapped, events, sections } = makeSandbox({
+      // Nothing else is visible -- simulates a fresh page load landing
+      // directly on a #search?q=... URL.
+      initialSectionsHidden: {},
+      resultsOpenInitially: false,
+      apiImpl: () => pending,
+    });
+    const runPromise = wrapped('deep link query', { fromRoute: true });
+    checkTrue('Results opened immediately (nothing else to show)',
+              events.some(([fn]) => fn === 'openResults'),
+              'a bare deep link must not leave the user on a totally blank page');
+    resolveApi({ songs: [] });
+    await runPromise;
+  }
+
+  console.log('\n--- a newer search supersedes an older one\'s late response ---');
+  {
+    let resolveFirst;
+    const firstPending = new Promise((r) => { resolveFirst = r; });
+    const sandbox = makeSandbox({
+      initialSectionsHidden: { 'home-section': false },
+      resultsOpenInitially: false,
+      apiImpl: () => firstPending,
+    });
+    const firstRun = sandbox.wrapped('first query', { fromRoute: true });
+    // A second search starts before the first resolves.
+    sandbox.state._searchSeq += 1;  // simulate what the second runSearch call does
+    resolveFirst({ songs: [{ video_id: 'stale' }] });
+    await firstRun;
+    checkTrue('a superseded search does not render stale data',
+              !sandbox.events.some(([fn]) => fn === 'renderResults'),
+              'the first search\'s late response must be dropped once superseded');
+  }
+
+  console.log(`\nsearch-stay-on-page: passed=${passed} failed=${failed}`);
+  process.exit(failed ? 1 : 0);
+}
+
+main();
