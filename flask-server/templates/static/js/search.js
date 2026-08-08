@@ -410,7 +410,7 @@ function _createSongElement(item, existingThumbsById) {
       ${thumbHtml}
       <div class="result-info">
         <div class="result-title">${escHtml(item.title)}</div>
-        <div class="result-artist">${window.artistLinksHtml(item.artist, item.channelId || item.channel_id || '')}</div>
+        <div class="result-artist">${window.artistLinksHtml(item.artist, item.channelId || item.channel_id || '', item.video_id || item.videoId || '')}</div>
       </div>
       ${duration ? `<span class="track-duration">${escHtml(duration)}</span>` : ''}
       <button class="result-like-btn ${isLiked ? 'liked' : ''}" type="button" title="Like" data-vid="${escHtml(item.video_id)}">${heartSvg}</button>
@@ -596,7 +596,7 @@ function renderResults() {
       
       const subtitle = (item.artist || item.owner || item.year || '');
       const subtitleHtml = subtitle ? `<div class="hscroll-card-artist">${type === 'album' && window.artistLinksHtml
-        ? window.artistLinksHtml(subtitle, item.channelId || item.channel_id || item.artistChannelId || '')
+        ? window.artistLinksHtml(subtitle, item.channelId || item.channel_id || item.artistChannelId || '', item.video_id || item.videoId || '')
         : escHtml(subtitle)}</div>` : '';
       
       const artClass = type === 'artist' ? 'hscroll-card-art round' : 'hscroll-card-art';
@@ -693,7 +693,8 @@ function renderResults() {
       ? topArtists.map(a => {
           const artistId = a.id || a.browseId || a.channelId || '';
           const idAttr = artistId ? ` data-channel-id="${escHtml(artistId)}"` : '';
-          return `<span class="artist-name" data-artist-name="${escHtml(a.name)}"${idAttr}>${escHtml(a.name)}</span>`;
+          const videoAttr = item.video_id || item.videoId ? ` data-video-id="${escHtml(item.video_id || item.videoId)}"` : '';
+          return `<span class="artist-name" data-artist-name="${escHtml(a.name)}"${idAttr}${videoAttr}>${escHtml(a.name)}</span>`;
         }).join(' and ')
       : (window.artistLinksHtml ? window.artistLinksHtml(artistStr, item.channelId || item.channel_id || '') : escHtml(artistStr));
     const topVideoId = item.videoId || item.video_id || '';
@@ -768,7 +769,17 @@ function renderResults() {
       // frequently marks the top result as resultType 'video' even for music,
       // so anything with a videoId is treated as playable.
       const playableId = item.videoId || item.video_id || '';
-      const playItem = { video_id: playableId, title: item.title, artist: artistStr, thumbnail: thumb };
+      const searchArtistEntries = Array.isArray(item.artists) ? item.artists : [];
+      const playItem = {
+        video_id: playableId,
+        title: item.title,
+        artist: artistStr,
+        artists: searchArtistEntries,
+        artist_id: item.artist_id || item.artistId || item.channelId || item.channel_id ||
+          (searchArtistEntries[0] && (searchArtistEntries[0].id || searchArtistEntries[0].browseId || searchArtistEntries[0].channelId)) || '',
+        channelId: item.channelId || item.channel_id || '',
+        thumbnail: thumb
+      };
       const browseId = item.resultType === 'playlist'
         ? (item.playlistId || item.playlist_id || item.browseId || item.browse_id || '')
         : (item.browseId || item.browse_id || item.playlistId || item.playlist_id || '');

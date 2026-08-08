@@ -1518,9 +1518,13 @@ _now_playing = {
     'playing': False,
     'title': '',
     'artist': '',
+    # Structured credits are carried alongside the display string whenever a
+    # web/catalog request knows them. The playback page can then link the exact
+    # artist channel instead of resolving the name through an ambiguous search.
+    'artists': [],       # [{name, id}, ...]
     'thumbnail': '',
     'video_id': '',
-    'queue': [],        # [{title, artist, thumbnail, video_id}, ...]
+    'queue': [],        # [{title, artist, artists, thumbnail, video_id}, ...]
     'queue_index': -1,  # current position in queue (-1 = unknown)
     'updated_at': 0,
     # Monotonic playback-state revision. Unlike updated_at, this changes only
@@ -1612,7 +1616,8 @@ def _np_snapshot(serial=None):
     s['playback_error'] = None  # one-shot: clear once surfaced
     return {
         'playing': s['playing'], 'title': s['title'],
-        'artist': s['artist'], 'thumbnail': s['thumbnail'],
+        'artist': s['artist'], 'artists': s.get('artists', []),
+        'thumbnail': s['thumbnail'],
         'video_id': s.get('video_id', ''),
         'queue': s.get('queue', []), 'queue_index': s.get('queue_index', -1),
         'queue_version': _queue_version_locked(),
@@ -1779,13 +1784,16 @@ def _update_now_playing(**kwargs):
         _now_playing.update(kwargs)
         if track_changed or 'playing' in kwargs or 'playback_confirmed' in kwargs:
             _now_playing['playback_revision'] = int(_now_playing.get('playback_revision', 0)) + 1
-        if track_changed and 'started_at' not in kwargs:
-            _now_playing['position_ms'] = int(kwargs.get('position_ms', 0) or 0)
-            _now_playing['started_at'] = time.time()
-            if 'duration_ms' not in kwargs:
-                _now_playing['duration_ms'] = 0
-            if 'playback_confirmed' not in kwargs:
-                _now_playing['playback_confirmed'] = False
+        if track_changed:
+            if 'artists' not in kwargs:
+                _now_playing['artists'] = []
+            if 'started_at' not in kwargs:
+                _now_playing['position_ms'] = int(kwargs.get('position_ms', 0) or 0)
+                _now_playing['started_at'] = time.time()
+                if 'duration_ms' not in kwargs:
+                    _now_playing['duration_ms'] = 0
+                if 'playback_confirmed' not in kwargs:
+                    _now_playing['playback_confirmed'] = False
         _now_playing['updated_at'] = time.time()
     if track_changed:
         # Invalidate background download work started for the previous track:
@@ -1977,6 +1985,49 @@ def _artist_credit_from_list(artists, fallback=''):
     return " and ".join(names) if names else fallback
 
 
+def _artist_entries_from_item(item, fallback_artist=''):
+    """Return cleaned structured credits from a browser/catalog track item.
+
+    Different YT Music responses call the channel identifier ``id``,
+    ``browseId`` or ``channelId``. Keep all of those at the queue boundary so
+    the now-playing page never has to guess an artist from display text.
+    """
+    raw_artists = item.get('artists') if isinstance(item, dict) else []
+    entries = []
+    fallback_id = str((item or {}).get('artist_id') or
+                      (item or {}).get('artistId') or
+                      (item or {}).get('channelId') or
+                      (item or {}).get('channel_id') or '').strip()
+    for raw in raw_artists or []:
+        if isinstance(raw, str):
+            name, artist_id = _clean_artist_credit(raw), ''
+        elif isinstance(raw, dict):
+            name = _clean_artist_credit(raw.get('name'))
+            artist_id = str(raw.get('id') or raw.get('browseId') or
+                             raw.get('channelId') or raw.get('channel_id') or '').strip()
+        else:
+            continue
+        if name:
+            entries.append({'name': name, 'id': artist_id})
+    if entries and fallback_id and not any(entry['id'] for entry in entries):
+        entries[0]['id'] = fallback_id
+    if not entries:
+        artist_id = fallback_id
+        fallback = _clean_artist_credit(fallback_artist or (item or {}).get('artist'))
+        if fallback:
+            entries.append({'name': fallback, 'id': artist_id})
+    return entries
+
+
+def _track_artist_fields(item):
+    """Normalize display + structured artist fields for queue snapshots."""
+    item = item if isinstance(item, dict) else {}
+    fallback = str(item.get('artist') or '').strip()
+    entries = _artist_entries_from_item(item, fallback)
+    artist = _artist_credit_from_list(entries, fallback=fallback)
+    return artist, entries
+
+
 def _metadata_from_queue(video_id):
     cur = _get_now_playing()
     for item in cur.get('queue') or []:
@@ -1984,6 +2035,7 @@ def _metadata_from_queue(video_id):
             return {
                 'title': item.get('title', ''),
                 'artist': item.get('artist', ''),
+                'artists': item.get('artists', []),
                 'video_id': video_id,
                 'thumbnail': _thumbnail_metadata(item.get('thumbnail')),
                 'duration_ms': item.get('duration_ms', 0),
@@ -2258,6 +2310,7 @@ class Supporting:
         seed = {
             'title': top.get('title') or '',
             'artist': _artist_credit_from_list(top.get('artists')),
+            'artists': _artist_entries_from_item(top),
             'video_id': video_id,
             'thumbnail': (top.get('thumbnails') or [None])[-1],
             'duration_ms': Supporting.duration_ms(top),
@@ -2323,6 +2376,7 @@ class Supporting:
             out.append({
                 'title': track.get("title", ""),
                 'artist': _artist_credit_from_list(track.get("artists")),
+                'artists': _artist_entries_from_item(track),
                 'video_id': vid,
                 'thumbnail': track['thumbnail'][-1] if track.get('thumbnail') else None,
                 'duration_ms': Supporting.duration_ms(track),
@@ -2455,6 +2509,7 @@ class Supporting:
                 {
                     'title': track.get("title") or '',
                     'artist': _artist_credit_from_list(track.get("artists")),
+                    'artists': _artist_entries_from_item(track),
                     'video_id': track.get("videoId"),
                     'thumbnail': track['thumbnails'][-1] if track.get('thumbnails') else None,
                     'duration_ms': Supporting.duration_ms(track),
@@ -3683,6 +3738,22 @@ def _lookup_and_update_np(video_id):
         details = (info or {}).get('videoDetails') or {}
         title = details.get('title') or ''
         author = _clean_artist_credit(details.get('author'))
+        structured_artists = []
+        # `get_song()` exposes the uploader in videoDetails.author, not always
+        # the recording artist or its channel ID. A watch-playlist lookup is a
+        # best-effort exact-video enrichment for tracks that reached playback
+        # without queue metadata; failures still use the existing author fallback.
+        try:
+            watch = ytmusic.get_watch_playlist(videoId=video_id, limit=25) or {}
+            watch_tracks = watch.get('tracks') or []
+            watch_track = next((track for track in watch_tracks
+                                if track.get('videoId') == video_id), None)
+            if watch_track:
+                structured_artists = _artist_entries_from_item(watch_track)
+                if not author:
+                    author = _clean_artist_credit(watch_track.get('author'))
+        except Exception:
+            logger.debug("exact artist lookup failed for %s", video_id, exc_info=True)
         thumb = ''
         thumbs = details.get('thumbnail', {}).get('thumbnails', [])
         if thumbs:
@@ -3725,8 +3796,29 @@ def _lookup_and_update_np(video_id):
                 fields['title'] = title
             current_artist = str(current.get('artist') or '').strip()
             lookup_artist = _clean_artist_credit(author)
-            if not current_artist and lookup_artist:
+            current_artists = current.get('artists') or []
+            if structured_artists:
+                # Merge exact IDs by artist name so a partial lookup cannot
+                # erase a collaborator ID already received from the queue.
+                known_by_name = {
+                    str(entry.get('name') or '').strip().lower(): entry
+                    for entry in current_artists if isinstance(entry, dict)
+                }
+                merged_artists = []
+                for entry in structured_artists:
+                    key = str(entry.get('name') or '').strip().lower()
+                    merged_artists.append({
+                        'name': entry.get('name', ''),
+                        'id': entry.get('id') or (known_by_name.get(key) or {}).get('id', ''),
+                    })
+                fields['artists'] = merged_artists
+                if not current_artist:
+                    fields['artist'] = _artist_credit_from_list(
+                        merged_artists, fallback=lookup_artist
+                    )
+            elif not current_artist and lookup_artist:
                 fields['artist'] = lookup_artist
+                fields['artists'] = _artist_entries_from_item({'artist': lookup_artist})
             # Don't overwrite an already-known thumbnail with a blank one just
             # because this particular lookup came back without one (ytmusicapi
             # occasionally returns an empty thumbnails list transiently).
@@ -3784,9 +3876,11 @@ def _refresh_radio_queue(video_id, force=False):
             seen.add(vid)
             t = item.get('thumbnail')
             thumb = t.get('url', '') if isinstance(t, dict) else (t if isinstance(t, str) else '')
+            radio_artist, radio_artists = _track_artist_fields(item)
             queue.append({
                 'title': item.get('title', ''),
-                'artist': item.get('artist', ''),
+                'artist': radio_artist,
+                'artists': radio_artists,
                 'thumbnail': thumb,
                 'video_id': vid,
                 'duration_ms': item.get('duration_ms', 0),
@@ -3811,6 +3905,9 @@ def _refresh_radio_queue(video_id, force=False):
                     fields['artist'] = match.get('artist', '')
                     if match.get('thumbnail'):
                         fields['thumbnail'] = match.get('thumbnail')
+                if match.get('artists') and not cur.get('artists'):
+                    fields['artists'] = match.get('artists', [])
+                    fields['artist'] = match.get('artist', cur.get('artist', ''))
             _update_now_playing(**fields)
             _prewarm_queue_audio(queue, idx)
             # The radio API occasionally omits a thumbnail for a given
@@ -5131,9 +5228,13 @@ def alexa_state_event():
                     duration_ms = max(0, int(item.get('duration_ms') or 0))
                 except (TypeError, ValueError):
                     duration_ms = 0
+                skill_item = dict(item)
+                skill_item['artist'] = str(item.get('artist') or '')
+                normalized_artist, normalized_artists = _track_artist_fields(skill_item)
                 normalized_queue.append({
                     'title': str(item.get('title') or ''),
-                    'artist': str(item.get('artist') or ''),
+                    'artist': normalized_artist,
+                    'artists': normalized_artists,
                     'thumbnail': _thumbnail_url(item.get('thumbnail')),
                     'video_id': item_video_id,
                     'duration_ms': duration_ms,
@@ -5196,8 +5297,10 @@ def alexa_state_event():
                           if item.get('video_id') == video_id), -1)
             matched = queue[i] if i >= 0 else None
             if matched:
+                matched_artist, matched_artists = _track_artist_fields(matched)
                 _update_now_playing(playing=True, video_id=video_id, title=matched['title'],
-                                    artist=matched['artist'], thumbnail=matched['thumbnail'],
+                                    artist=matched_artist, artists=matched_artists,
+                                    thumbnail=matched['thumbnail'],
                                     duration_ms=matched.get('duration_ms', 0),
                                     playback_confirmed=True,
                                     queue_index=i, position_ms=offset_in_ms)
@@ -5221,7 +5324,7 @@ def alexa_state_event():
                 # card stays wedged on the old song for every later auto-advance
                 # whose track is missing from the visible queue.
                 _update_now_playing(playing=True, video_id=video_id,
-                                    title='', artist='', thumbnail='', duration_ms=0,
+                                    title='', artist='', artists=[], thumbnail='', duration_ms=0,
                                     position_ms=offset_in_ms,
                                     playback_confirmed=True, queue_index=-1)
                 # Record with blank metadata now; _lookup_and_update_np
@@ -6176,10 +6279,12 @@ def alexa_play_queue():
                 duration_ms = int(item.get('duration_ms') or 0)
             except (TypeError, ValueError):
                 duration_ms = 0
+            artist, artist_entries = _track_artist_fields(dict(item, artist=artist))
             validated_items.append({
                 'video_id': vid,
                 'title': str(item.get('title') or vid),
-                'artist': str(artist),
+                'artist': artist,
+                'artists': artist_entries,
                 'thumbnail': _thumbnail_url(thumbnail),
                 'duration_ms': duration_ms,
             })
@@ -6211,6 +6316,7 @@ def alexa_play_queue():
         first = validated_items[target_idx]
         _update_now_playing(playing=False,
                             title=first['title'], artist=first['artist'],
+                            artists=first.get('artists', []),
                             thumbnail=first['thumbnail'], video_id=first['video_id'],
                             duration_ms=first['duration_ms'], position_ms=0,
                             playback_confirmed=False,
@@ -6323,6 +6429,19 @@ def alexa_play_queue():
         logger.info("play_queue: coalesced pending dispatch %s -> %s",
                     replaced, video_id)
 
+    # Preserve the structured artist IDs supplied by the browser. The old
+    # direct-play path kept only the display string, so the playback page had
+    # to search that name and could land on another artist with the same name.
+    item = dict(item)
+    if body.get('artists'):
+        item['artists'] = body.get('artists')
+    if body.get('artist_id') or body.get('artistId') or body.get('channelId'):
+        item['artist_id'] = (body.get('artist_id') or body.get('artistId') or
+                             body.get('channelId'))
+    item['artist'], item['artists'] = _track_artist_fields(item)
+    if queue and 0 <= target_idx < len(queue):
+        queue[target_idx] = item
+
     thumb = _thumbnail_url(item.get('thumbnail'))
     # Record the listen right away so "Recently Played" updates immediately,
     # instead of waiting for the Lambda webhook (which may lag or not fire for
@@ -6333,6 +6452,7 @@ def alexa_play_queue():
     _update_now_playing(playing=False,
                         title=item.get('title', ''),
                         artist=item.get('artist', ''),
+                        artists=item.get('artists', []),
                         thumbnail=thumb,
                         video_id=video_id,
                         duration_ms=item.get('duration_ms', 0),
@@ -6355,6 +6475,7 @@ def alexa_play_queue():
     return jsonify({'ok': True, 'now_playing': {
         'title': item.get('title', ''),
         'artist': item.get('artist', ''),
+        'artists': item.get('artists', []),
         'thumbnail': thumb,
         'video_id': video_id,
         'duration_ms': item.get('duration_ms', 0),
@@ -6424,9 +6545,11 @@ def alexa_queue_add():
                 duration_ms = int(raw_item.get('duration_ms') or 0)
             except (TypeError, ValueError):
                 duration_ms = 0
+            normalized_artist, normalized_artists = _track_artist_fields(dict(raw_item, artist=artist))
             added_items.append({
                 'title': str(raw_item.get('title') or vid),
-                'artist': str(artist),
+                'artist': normalized_artist,
+                'artists': normalized_artists,
                 'thumbnail': _thumbnail_url(thumbnail),
                 'video_id': vid,
                 'duration_ms': duration_ms,
@@ -6469,10 +6592,13 @@ def alexa_queue_add():
         new_item = {
             'title': title,
             'artist': str(body.get("artist") or ""),
+            'artists': body.get('artists') or [],
+            'artist_id': body.get('artist_id') or body.get('artistId') or body.get('channelId') or '',
             'thumbnail': str(body.get("thumbnail") or ""),
             'video_id': video_id,
             'duration_ms': duration_ms,
         }
+        new_item['artist'], new_item['artists'] = _track_artist_fields(new_item)
     else:
         metadata = _lookup_video_metadata(video_id)
         if not metadata:
@@ -6906,7 +7032,7 @@ def alexa_clear():
             stop_error = str(e)
     with _np_lock:
         _now_playing.update({
-            'playing': False, 'title': '', 'artist': '', 'thumbnail': '',
+            'playing': False, 'title': '', 'artist': '', 'artists': [], 'thumbnail': '',
             'video_id': '', 'queue': [], 'queue_index': -1,
             'duration_ms': 0, 'position_ms': 0, 'started_at': 0.0,
             'playback_confirmed': False, 'playback_error': None,
@@ -7337,6 +7463,7 @@ async def api_resolve_track_album(video_id):
             return {
                 'album_id': album_id,
                 'album': album.get('name') or '',
+                'artists': watch_artists,
                 **watch_artist,
             }
 
@@ -7359,6 +7486,7 @@ async def api_resolve_track_album(video_id):
         if not album_id:
             artists = match.get('artists') or []
             return {
+                'artists': artists,
                 'artist_id': (artists[0].get('id') or artists[0].get('browseId') or '') if artists else fallback_artist['artist_id'],
                 'artist': artists[0].get('name') or '' if artists else fallback_artist['artist'],
             }
@@ -7366,6 +7494,7 @@ async def api_resolve_track_album(video_id):
         return {
             'album_id': album_id,
             'album': album.get('name') or '',
+            'artists': artists,
             'artist_id': (artists[0].get('id') or artists[0].get('browseId') or '') if artists else '',
             'artist': artists[0].get('name') or '' if artists else '',
         }

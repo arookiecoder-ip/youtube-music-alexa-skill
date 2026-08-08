@@ -29,7 +29,7 @@
           escHtml(artist.name) + '</span>';
       }).join(', ');
     }
-    if (window.artistLinksHtml) return window.artistLinksHtml(item.artist || '', item.channelId || '');
+    if (window.artistLinksHtml) return window.artistLinksHtml(item.artist || '', item.channelId || '', item.video_id || item.videoId || '');
     return escHtml(item.artist || '');
   }
 

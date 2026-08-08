@@ -41,7 +41,7 @@
     if (!artistText) return '';
     const fallbackId = item.artistId || item.artist_id || item.channelId || item.channel_id || '';
     return window.artistLinksHtml
-      ? window.artistLinksHtml(artistText, ids.some(Boolean) ? ids : fallbackId)
+      ? window.artistLinksHtml(artistText, ids.some(Boolean) ? ids : fallbackId, item.video_id || item.videoId || '')
       : escHtml(artistText);
   }
 
@@ -281,7 +281,7 @@
       const artist = artistNames.length ? artistNames.join(', ') : subtitle(song);
       const fallbackArtistId = song.artistId || song.artist_id || song.channelId || song.channel_id || '';
       const artistHtml = window.artistLinksHtml
-        ? window.artistLinksHtml(artist, artistIds.some(Boolean) ? artistIds : fallbackArtistId)
+        ? window.artistLinksHtml(artist, artistIds.some(Boolean) ? artistIds : fallbackArtistId, song.video_id || song.videoId || '')
         : escHtml(artist);
       const thumbnail = imageUrl(song.thumbnails) || imageUrl(song.thumbnail) || FALLBACK_IMG;
       const track = {

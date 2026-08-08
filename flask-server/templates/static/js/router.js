@@ -892,7 +892,7 @@
   // rest carry only their name and are resolved via search on click.
   var ARTIST_SEP_RE = /(,\s*|\s*&\s*|\s+and\s+|\s*·\s*|\s+(?:feat\.?|ft\.?|featuring)\s+)/i;
 
-  window.artistLinksHtml = function(artist, channelIds) {
+  window.artistLinksHtml = function(artist, channelIds, videoId) {
     var esc = window.escHtml;
     var s = String(artist || '').trim();
     if (!s) return '';
@@ -907,6 +907,7 @@
       if (i % 2 === 1) return esc(p); // separator text, not clickable
       if (!p) return '';
       var attrs = ' data-artist-name="' + esc(p.trim()) + '"';
+      if (videoId) attrs += ' data-video-id="' + esc(videoId) + '"';
       var cid = channelIds[artistIdx];
       if (cid) attrs += ' data-channel-id="' + esc(cid) + '"';
       artistIdx++;
@@ -926,6 +927,34 @@
     }
     var name = (el.getAttribute('data-artist-name') || el.textContent || '').trim();
     if (!name) return;
+    var videoId = el.getAttribute('data-video-id') || '';
+    // A playback snapshot may have the exact song but no structured artist ID
+    // (voice-started and auto-advanced tracks can arrive this way). Resolve the
+    // artist from that exact video first; searching by a common artist name can
+    // otherwise select an unrelated result with the same display name.
+    if (videoId && window.api) {
+      window.api('/api/album/resolve/' + encodeURIComponent(videoId)).then(function(details) {
+        var exactId = details && (details.artist_id || details.artistId || details.channel_id || details.channelId);
+        var structuredArtists = details && Array.isArray(details.artists) ? details.artists : [];
+        var matchingArtist = structuredArtists.find(function(artist) {
+          return artist && String(artist.name || '').trim().toLowerCase() === name.toLowerCase();
+        });
+        if (matchingArtist) {
+          exactId = matchingArtist.id || matchingArtist.browseId || matchingArtist.channelId || '';
+        }
+        if (exactId) {
+          if (window.preloadNavigateArtist) window.preloadNavigateArtist(exactId);
+          else window.navigateTo('#artist/' + encodeURIComponent(exactId));
+          return;
+        }
+        resolveArtistName(name);
+      }).catch(function() { resolveArtistName(name); });
+      return;
+    }
+    resolveArtistName(name);
+  };
+
+  function resolveArtistName(name) {
     // Use the preload variant that resolves name → channelId → fetches artist data
     if (window.preloadNavigateArtistByName) {
       window.preloadNavigateArtistByName(name);

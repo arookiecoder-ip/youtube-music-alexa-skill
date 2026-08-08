@@ -228,6 +228,43 @@ function upgradeLowResNowPlayingArt(info, fingerprint, artwork, npPageArt) {
     });
 }
 
+function nowPlayingArtistEntries(info) {
+  const raw = Array.isArray(info && info.artists) ? info.artists : [];
+  const entries = raw.map((artist) => {
+    if (typeof artist === 'string') return { name: artist, id: '' };
+    if (!artist || typeof artist !== 'object') return null;
+    return {
+      name: artist.name || '',
+      id: artist.id || artist.browseId || artist.channelId || artist.channel_id || ''
+    };
+  }).filter((artist) => artist && artist.name);
+  if (entries.length) return entries;
+  const fallbackName = String(info && info.artist || '').trim();
+  if (!fallbackName) return [];
+  return [{
+    name: fallbackName,
+    id: info && (info.channelId || info.channel_id || info.artistId || info.artist_id) || ''
+  }];
+}
+
+function mergeNowPlayingArtistEntries(incoming, existing) {
+  const knownByName = new Map((Array.isArray(existing) ? existing : []).map((artist) => [
+    String(artist && artist.name || '').trim().toLowerCase(), artist
+  ]));
+  return (Array.isArray(incoming) ? incoming : []).map((artist) => {
+    const known = knownByName.get(String(artist.name || '').trim().toLowerCase());
+    return {
+      name: artist.name,
+      id: artist.id || (known && known.id) || ''
+    };
+  });
+}
+
+function nowPlayingArtistText(info) {
+  const supplied = String(info && info.artist || '').trim();
+  return supplied || nowPlayingArtistEntries(info).map((artist) => artist.name).join(', ');
+}
+
 function showNowPlaying(info) {
   const np = document.getElementById('now-playing');
   if (!info || (!info.title && !info.video_id)) {
@@ -259,6 +296,7 @@ function showNowPlaying(info) {
       state._currentVideoId = '';
       state._currentThumbnail = '';
       state._currentTrack = null;
+      state._nowPlayingArtistFingerprint = '';
       syncTrackPlaybackIndicators();
       _lastNpFingerprint = '';
       // Playback is gone — don't leave an empty expanded player on screen.
@@ -275,20 +313,38 @@ function showNowPlaying(info) {
   // producing a visible flash. Artwork is set when the track changes and
   // remains on that stable image for the lifetime of the track.
   const fp = (info.video_id || '') + '|' + info.title + '|' + (info.artist || '');
+  let artistEntries = nowPlayingArtistEntries(info);
+  const currentTrackEntries = state._currentTrack && state._currentTrack.video_id === (info.video_id || info.videoId)
+    ? (Array.isArray(state._currentTrack.artists) ? state._currentTrack.artists : [])
+    : [];
+  // Polls can briefly omit structured credits after a richer snapshot. Keep
+  // known IDs for the same video instead of replacing exact links with an
+  // ambiguous name-only fallback.
+  if (currentTrackEntries.some((artist) => artist && artist.id)) {
+    artistEntries = mergeNowPlayingArtistEntries(artistEntries, currentTrackEntries);
+  }
+  const artistText = nowPlayingArtistText(info);
+  const artistIds = artistEntries.map((artist) => artist.id);
+  // Keep the exact song ID on name-only links as a last-resort resolver. This
+  // covers voice/auto-advanced snapshots whose artist credit has no channel ID.
+  const artistMarkup = window.artistLinksHtml(artistText, artistIds, info.video_id || info.videoId || '');
+  const artistFingerprint = JSON.stringify(artistEntries);
+  const artistMarkupChanged = artistFingerprint !== (state._nowPlayingArtistFingerprint || '');
+  state._nowPlayingArtistFingerprint = artistFingerprint;
   preloadNowPlayingArtwork(info);
   const changed = fp !== _lastNpFingerprint;
   if (changed) {
     _lastNpFingerprint = fp;
     np.classList.add('visible');
     document.getElementById('np-title').textContent = info.title;
-    document.getElementById('np-artist').innerHTML = window.artistLinksHtml(info.artist, info.channelId);
+    document.getElementById('np-artist').innerHTML = artistMarkup;
     const art = document.getElementById('np-art');
     const npPageArt = document.getElementById('np-page-art');
     const npPageTitle = document.getElementById('np-page-title');
     const npPageArtist = document.getElementById('np-page-artist');
     if (npPageTitle) npPageTitle.textContent = info.title;
     if (npPageArtist) {
-      npPageArtist.innerHTML = window.artistLinksHtml(info.artist, info.channelId);
+      npPageArtist.innerHTML = artistMarkup;
     }
     if (info.thumbnail) {
       const cachedHighRes = info.video_id && _resolvedNowPlayingArt.get(info.video_id);
@@ -365,9 +421,11 @@ function showNowPlaying(info) {
     state._currentVideoId = info.video_id || '';
     state._currentThumbnail = (info.video_id && _resolvedNowPlayingArt.get(info.video_id)) || info.thumbnail || '';
     state._currentTrack = {
-      video_id: info.video_id || '', title: info.title || '', artist: info.artist || '',
-      thumbnail: state._currentThumbnail, channelId: info.channelId || '',
-      artist_id: info.artist_id || info.artistId || info.channelId || '',
+      video_id: info.video_id || '', title: info.title || '', artist: artistText,
+      artists: artistEntries,
+      thumbnail: state._currentThumbnail,
+      channelId: artistEntries[0] && artistEntries[0].id || '',
+      artist_id: artistEntries[0] && artistEntries[0].id || '',
       album_id: info.album_id || info.albumId || info.album_browse_id || ''
     };
     updateUrlBar();
@@ -377,6 +435,19 @@ function showNowPlaying(info) {
     // Skipped internally when a swipe-exit is still in flight, so a swipe
     // and a same-frame SSE update don't fight each other.
     playArtworkSwapIn();
+  }
+
+  if (!changed && artistMarkupChanged) {
+    const compactArtist = document.getElementById('np-artist');
+    const pageArtist = document.getElementById('np-page-artist');
+    if (compactArtist) compactArtist.innerHTML = artistMarkup;
+    if (pageArtist) pageArtist.innerHTML = artistMarkup;
+    if (state._currentTrack) {
+      state._currentTrack.artist = artistText;
+      state._currentTrack.artists = artistEntries;
+      state._currentTrack.channelId = artistEntries[0] && artistEntries[0].id || '';
+      state._currentTrack.artist_id = artistEntries[0] && artistEntries[0].id || '';
+    }
   }
 
   refreshNpLikeButton();
@@ -878,6 +949,8 @@ async function playResult(item, suppressRadio, forceRadio, openPlaybackPage) {
       video_id: item.video_id,
       title: item.title,
       artist: item.artist,
+      artists: item.artists || [],
+      artist_id: item.artist_id || item.artistId || item.channelId || item.channel_id || '',
       thumbnail: item.thumbnail,
       duration_ms: item.duration_ms,
       suppress_radio: !!suppressRadio,

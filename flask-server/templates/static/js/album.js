@@ -123,6 +123,8 @@
           video_id: track.video_id || track.videoId || '',
           title: track.title || '',
           artist: artist,
+          artists: Array.isArray(track.artists) ? track.artists : [],
+          artist_id: artistChannelIds[0] || track.channelId || track.channel_id || '',
           thumbnail: thumbnail,
           duration: track.duration || '',
           duration_seconds: track.duration_seconds || 0,
@@ -138,7 +140,7 @@
           '<span class="playlist-track-playback-indicator" aria-hidden="true"><svg class="playlist-track-play-glyph" viewBox="0 0 24 24" fill="currentColor"><polygon points="7,4 20,12 7,20"/></svg>' +
           '<span class="music-bars"><i></i><i></i><i></i><i></i><i></i></span></span></div>' +
           '<div class="queue-info"><div class="queue-title">' + esc(track.title || '') + '</div>' +
-          '<div class="queue-artist">' + window.artistLinksHtml(artist, artistChannelIds.length ? artistChannelIds : (track.channelId || track.channel_id || '')) + '</div></div>' + songActions(contextTrack);
+          '<div class="queue-artist">' + window.artistLinksHtml(artist, artistChannelIds.length ? artistChannelIds : (track.channelId || track.channel_id || ''), track.video_id || track.videoId || '') + '</div></div>' + songActions(contextTrack);
         row.addEventListener('click', function () {
           // A row belongs to this album, so keep the complete album as the
           // queue and begin at the selected track rather than starting radio.

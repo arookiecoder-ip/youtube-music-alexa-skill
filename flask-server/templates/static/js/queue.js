@@ -39,6 +39,8 @@ async function addToQueue(item, position, silent) {
       video_id: item.video_id,
       title: item.title,
       artist: item.artist,
+      artists: item.artists || [],
+      artist_id: item.artist_id || item.artistId || item.channelId || item.channel_id || '',
       thumbnail: item.thumbnail,
       duration_ms: item.duration_ms,
       position,
@@ -251,7 +253,14 @@ function _buildQueueRow(container, item, i, currentIndex, thumbsById) {
     </div>
     <div class="queue-info">
       <div class="queue-title">${escHtml(item.title)}</div>
-      <div class="queue-artist">${window.artistLinksHtml(item.artist, item.channelId)}</div>
+      <div class="queue-artist">${window.artistLinksHtml(
+        item.artist,
+        Array.isArray(item.artists) && item.artists.length
+          ? item.artists.map((artist) => typeof artist === 'string' ? '' :
+              (artist.id || artist.browseId || artist.channelId || artist.channel_id || ''))
+      : (item.channelId || item.channel_id || item.artistId || item.artist_id || ''),
+    item.video_id || item.videoId || ''
+  )}</div>
     </div>
     ${duration ? `<span class="track-duration">${escHtml(duration)}</span>` : ''}
     ${_queueMoreMenuHtml(item)}
@@ -1085,7 +1094,14 @@ async function playFromQueue(item, queueIndex, openPlaybackPage) {
   const mySeq = window.beginPlayIntent(item.video_id);
   state._lastPlayAttemptVideoId = item.video_id;
   if (window.preloadNowPlayingArtwork) window.preloadNowPlayingArtwork(item);
-  const npInfo = { video_id: item.video_id, title: item.title, artist: item.artist, thumbnail: item.thumbnail };
+  const npInfo = {
+    video_id: item.video_id,
+    title: item.title,
+    artist: item.artist,
+    artists: item.artists || [],
+    channelId: item.channelId || item.channel_id || item.artistId || item.artist_id || '',
+    thumbnail: item.thumbnail
+  };
   showNowPlaying(npInfo);
   progress.resetPending(item.video_id);
   state.isPlaying = true;
@@ -1112,6 +1128,8 @@ async function playFromQueue(item, queueIndex, openPlaybackPage) {
       video_id: item.video_id,
       title: item.title || '',
       artist: item.artist || '',
+      artists: item.artists || [],
+      artist_id: item.artist_id || item.artistId || item.channelId || item.channel_id || '',
       thumbnail: (item.thumbnail && item.thumbnail.url) || item.thumbnail || '',
       duration_ms: item.duration_ms || 0,
       queue_index: typeof queueIndex === 'number' ? queueIndex : undefined,
@@ -1192,6 +1210,8 @@ async function playCollection(items, options) {
       video_id: item.video_id || item.videoId || '',
       title: item.title || '',
       artist: item.artist || artists,
+      artists: Array.isArray(item.artists) ? item.artists : [],
+      artist_id: item.artist_id || item.artistId || item.channelId || item.channel_id || '',
       thumbnail: thumbnail,
       duration_ms: item.duration_ms || 0,
     };

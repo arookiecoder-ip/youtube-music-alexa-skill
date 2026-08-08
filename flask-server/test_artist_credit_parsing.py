@@ -225,6 +225,42 @@ class ArtistCreditFromListTests(unittest.TestCase):
         artists = [{"name": "A"}, {"name": "B"}, {"name": "C"}]
         self.assertEqual(server._artist_credit_from_list(artists), "A and B and C")
 
+    def test_track_artist_fields_preserve_exact_artist_ids(self):
+        artist, entries = server._track_artist_fields({
+            "artist": "Real Artist and Guest Artist",
+            "artists": [
+                {"name": "Real Artist - Topic", "browseId": "UC_REAL"},
+                {"name": "Guest Artist", "channelId": "UC_GUEST"},
+            ],
+        })
+        self.assertEqual(artist, "Real Artist and Guest Artist")
+        self.assertEqual(entries, [
+            {"name": "Real Artist", "id": "UC_REAL"},
+            {"name": "Guest Artist", "id": "UC_GUEST"},
+        ])
+
+    def test_track_artist_fields_fallback_keeps_single_known_id(self):
+        artist, entries = server._track_artist_fields({
+            "artist": "Real Artist",
+            "artist_id": "UC_REAL",
+        })
+        self.assertEqual(artist, "Real Artist")
+        self.assertEqual(entries, [{"name": "Real Artist", "id": "UC_REAL"}])
+
+    def test_now_playing_snapshot_exposes_structured_artists(self):
+        with server._np_lock:
+            previous = dict(server._now_playing)
+            server._now_playing.update({
+                "artist": "Real Artist",
+                "artists": [{"name": "Real Artist", "id": "UC_REAL"}],
+            })
+            try:
+                snapshot = server._np_snapshot()
+            finally:
+                server._now_playing.clear()
+                server._now_playing.update(previous)
+        self.assertEqual(snapshot["artists"], [{"name": "Real Artist", "id": "UC_REAL"}])
+
 
 class CleanArtistCreditTests(unittest.TestCase):
     """Direct edge-case coverage of the underlying primitive both the server

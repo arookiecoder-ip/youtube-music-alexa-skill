@@ -116,7 +116,7 @@ function renderRecommendations(items) {
     el.innerHTML = `
       <div class="recs-tile-art">${thumbHtml}</div>
       <div class="recs-tile-title">${escHtml(item.title || '')}</div>
-      <div class="recs-tile-artist">${window.artistLinksHtml(item.artist, item.channelId)}</div>
+      <div class="recs-tile-artist">${window.artistLinksHtml(item.artist, item.channelId, item.video_id || item.videoId || '')}</div>
       <div class="recs-tile-actions">
         ${duration ? `<span class="track-duration">${escHtml(duration)}</span>` : ''}
         <button class="result-like-btn recs-like-btn${isLikedTile ? ' liked' : ''}" type="button" title="${isLikedTile ? 'Dislike' : 'Like'}">${heartSvgTile}</button>
