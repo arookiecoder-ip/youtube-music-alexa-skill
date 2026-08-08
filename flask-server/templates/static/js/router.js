@@ -178,8 +178,8 @@
   // avoids that reflow while still blocking background scroll on Android,
   // modern iOS, and any browser that supports `overscroll-behavior: none`
   // (Chrome 63+, Safari 16+, Firefox 59+).
-  // Desktop is left alone because the body already scrolls behind the
-  // (intentionally) scrollable desktop overlay.
+  // The scrollbar remains available while playback is open. Input guards below
+  // stop background wheel/touch scrolling without changing viewport geometry.
   function _isMobileViewport() {
     return typeof window !== 'undefined' &&
       window.matchMedia && window.matchMedia('(max-width: 899px)').matches;
@@ -190,11 +190,26 @@
     var y = window.scrollY;
     window.__npScrollLocked = true;
     document.body.dataset.npScrollY = String(y);
-    document.body.style.overflow = 'hidden';
-    document.documentElement.style.overflow = 'hidden';
     document.body.style.overscrollBehavior = 'none';
     document.documentElement.style.overscrollBehavior = 'none';
   }
+  function _isQueueScrollTarget(target) {
+    if (target && target.nodeType !== 1) target = target.parentElement;
+    return !!(target && target.closest && target.closest(
+      '#np-queue-list, #queue-modal-body, .queue-modal-body, .queue-section'
+    ));
+  }
+  function _blockPlaybackBackgroundScroll(event) {
+    if (!document.body.classList.contains('now-playing-route') &&
+        !document.body.classList.contains('now-playing-closing')) return;
+    if (_isQueueScrollTarget(event.target)) return;
+    event.preventDefault();
+  }
+  // Capture before the page/overlay scroll handlers. Queue containers are the
+  // only allowlisted scroll surfaces while the playback overlay is active.
+  document.addEventListener('wheel', _blockPlaybackBackgroundScroll, { capture: true, passive: false });
+  document.addEventListener('touchmove', _blockPlaybackBackgroundScroll, { capture: true, passive: false });
+
   function unlockPlayerScroll() {
     if (!window.__npScrollLocked) return;
     window.__npScrollLocked = false;

@@ -979,7 +979,7 @@ main:has(#now-playing-section:not([hidden])) {
      showing the underlying page on iOS. */
   body.now-playing-route,
   html:has(body.now-playing-route) {
-    overflow: hidden !important;
+    overflow: auto !important;
     overscroll-behavior: none !important;
   }
   body #now-playing-section:not([hidden]) {

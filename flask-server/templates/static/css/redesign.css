@@ -2980,9 +2980,12 @@ body.results-open .player-section {
 
 @media (max-width: 899px) {
   body.now-playing-route,
+  body.now-playing-closing,
   body.now-playing-route #now-playing-section,
-  body.now-playing-route .np-page {
-    overflow: hidden !important;
+  body.now-playing-closing #now-playing-section,
+  body.now-playing-route .np-page,
+  body.now-playing-closing .np-page {
+    overflow: auto !important;
   }
 }
 

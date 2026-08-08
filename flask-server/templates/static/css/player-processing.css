@@ -25,6 +25,14 @@
   transition: none !important;
 }
 
+/* The expanded mobile player has a more-specific route rule that keeps the
+   progress handle visible. Hide both stale position layers while loading so
+   only the processing sweep remains; other progress bars are unchanged. */
+#mobile-np-progress.playback-processing .progress-fill,
+#mobile-np-progress.playback-processing .progress-handle {
+  display: none !important;
+}
+
 .progress.playback-processing .progress-track::after,
 .mobile-np-progress.playback-processing .progress-track::after {
   content: '';
