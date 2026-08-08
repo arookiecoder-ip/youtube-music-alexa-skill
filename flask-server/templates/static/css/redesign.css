@@ -1026,8 +1026,7 @@ body:not(.explore-route):not(.mood-route):not(.library-route):has(#library-modal
 #new-playlist-overlay #new-playlist-overlay-desc:focus {
   border-color: var(--accent) !important;
   background: var(--surface) !important;
-  background: color-mix(in srgb, var(--surface) 88%, var(--accent) 12%) !important;
-  box-shadow: 0 0 0 3px rgba(232, 89, 12, .2), 0 6px 18px rgba(0, 0, 0, .18);
+  box-shadow: none;
 }
 #new-playlist-overlay #new-playlist-overlay-create {
   border-radius: 0 !important;
@@ -1037,7 +1036,7 @@ body:not(.explore-route):not(.mood-route):not(.library-route):has(#library-modal
 #new-playlist-overlay #new-playlist-overlay-create:focus-visible,
 #new-playlist-overlay #new-playlist-overlay-create:active {
   border-color: var(--accent) !important;
-  box-shadow: 0 0 0 3px rgba(232, 89, 12, .2), 0 6px 18px rgba(0, 0, 0, .18);
+  box-shadow: none;
 }
 #new-playlist-overlay #new-playlist-overlay-create:active {
   transform: translateY(1px);
@@ -1047,11 +1046,24 @@ body:not(.explore-route):not(.mood-route):not(.library-route):has(#library-modal
 #import-playlist-overlay #import-playlist-submit { border-radius: 0 !important; }
 #new-playlist-name { border-radius: 0 !important; }
 #new-playlist-btn { border-radius: 0; }
+#add-to-playlist-overlay .history-modal-body {
+  /* Keep the list as the modal's only scroll container. */
+  min-height: 0;
+  overflow: hidden;
+}
+#add-to-playlist-list {
+  /* Hover feedback must not expand the scrollable area horizontally. */
+  min-width: 0;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+}
 #add-to-playlist-list > button {
   padding: 8px 12px !important;
   border-radius: 0 !important;
   border-bottom: 1px solid var(--border) !important;
-  transition: background .15s ease, border-color .15s ease, box-shadow .15s ease, transform .15s ease;
+  transition: background .15s ease, border-color .15s ease, box-shadow .15s ease;
 }
 #add-to-playlist-list > button:not(:disabled):hover,
 #add-to-playlist-list > button:not(:disabled):focus,
@@ -1061,10 +1073,9 @@ body:not(.explore-route):not(.mood-route):not(.library-route):has(#library-modal
   color: #fff !important;
   box-shadow: inset 4px 0 0 var(--accent), 0 4px 14px rgba(0, 0, 0, .28);
   outline: none;
-  transform: translateX(3px);
 }
 #add-to-playlist-list > button:not(:disabled):active {
-  transform: translateX(5px) scale(.99);
+  box-shadow: inset 4px 0 0 var(--accent), 0 2px 8px rgba(0, 0, 0, .24);
 }
 .queue-modal { border-radius: var(--radius-xl) var(--radius-xl) 0 0; }
 .toast { border-radius: 4px; }

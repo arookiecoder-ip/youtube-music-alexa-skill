@@ -6,6 +6,19 @@
   const libraryPlaylistIds = new Set();
   const trackMetadataRequests = new Map();
   const PLAYLIST_PAGE_SIZE = 100;
+  const HIDDEN_PERSONAL_PLAYLIST_NAMES = new Set([
+    'episodes for later',
+    'Sounds from Shorts',
+    'sounds from shorts',
+    'new episodes',
+    'new episdes'
+  ]);
+
+  function isHiddenPersonalPlaylist(playlist) {
+    const title = String(playlist && (playlist.title || playlist.name) || '')
+      .trim().replace(/\s+/g, ' ').toLowerCase();
+    return HIDDEN_PERSONAL_PLAYLIST_NAMES.has(title);
+  }
 
   const escapeHtml = window.escHtml || (s => String(s || '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'));
 
@@ -196,15 +209,18 @@
     if (!state._loggedIn || window.JAM_GUEST || !window.IS_AUTHENTICATED) return;
     try {
       const data = await api('/api/library/');
-      (data.playlists || []).forEach(function (playlist) {
+      const playlists = (data.playlists || []).filter(function (playlist) {
+        return !isHiddenPersonalPlaylist(playlist);
+      });
+      playlists.forEach(function (playlist) {
         const id = playlist.playlistId || playlist.id;
         if (id) libraryPlaylistIds.add(String(id));
       });
       const container = document.getElementById('sidebar-playlist-list');
       if (container) {
         container.innerHTML = '';
-        if (data.playlists && data.playlists.length > 0) {
-          data.playlists.forEach(pl => {
+        if (playlists.length > 0) {
+          playlists.forEach(pl => {
             const btn = document.createElement('button');
             const cover = imageUrl(pl.thumbnails) || imageUrl(pl.thumbnail) || imageUrl(pl.image);
             const isLiked = pl.playlistId === 'LM';
@@ -709,7 +725,7 @@
       if (version !== requestVersion || !overlay.classList.contains('open')) return;
       listEl.innerHTML = '';
       const writable = (playlists || []).filter(function (playlist) {
-        return playlistId(playlist) && playlist.editable === true;
+        return playlistId(playlist) && playlist.editable === true && !isHiddenPersonalPlaylist(playlist);
       });
       if (!writable.length) {
         listEl.innerHTML = '<div style="color:var(--muted); padding:12px;">No playlists found. Create one above.</div>';

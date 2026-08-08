@@ -9,6 +9,19 @@
   }
 
   const FALLBACK_IMG = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='4' fill='%231a1a1a'/%3E%3Cpath d='M12 3v10.55A4 4 0 1 0 14 17V7h4V3h-6z' fill='%23444'/%3E%3C/svg%3E";
+  const HIDDEN_PERSONAL_PLAYLIST_NAMES = new Set([
+    'episodes for later',
+    'Sounds from Shorts',
+    'sounds from shorts',
+    'new episodes',
+    'new episdes'
+  ]);
+
+  function isHiddenPersonalPlaylist(playlist) {
+    const title = String(playlist && (playlist.title || playlist.name) || '')
+      .trim().replace(/\s+/g, ' ').toLowerCase();
+    return HIDDEN_PERSONAL_PLAYLIST_NAMES.has(title);
+  }
 
   function imageUrl(value) {
     if (!value) return '';
@@ -164,7 +177,9 @@
 
       body.innerHTML = '';
 
-      const playlists = (data && data.playlists) || [];
+      const playlists = ((data && data.playlists) || []).filter(function (playlist) {
+        return !isHiddenPersonalPlaylist(playlist);
+      });
 
       const subscribedArtists = state._subscribedArtists || [];
       if (!playlists.length && !subscribedArtists.length) {

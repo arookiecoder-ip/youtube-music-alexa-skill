@@ -3544,10 +3544,7 @@ def _stream_abandon_watchdog(video_id, proc, generation, stop_event):
         if superseded_since is None:
             superseded_since = now
         elif now - superseded_since >= _STREAM_SUPERSEDE_GRACE:
-            logger.info("proxy: killing superseded stream of %s (playback moved on)",
-                        video_id)
-            _kill_process(proc)
-            return
+            pass
 
 
 def _kill_process(proc):
