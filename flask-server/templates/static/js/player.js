@@ -1108,9 +1108,33 @@ function waitForPlayPauseServerState(expected, timeoutMs, minSeq = _playPauseSer
 }
 
 function notifyPlayPauseServerState(playing, updatedAt, revision) {
-  _playPauseServerPlaying = !!playing;
   const marker = Number(updatedAt) || 0;
   const playbackRevision = Number(revision) || 0;
+  // Ignore delayed snapshots that belong to an older server state. Without
+  // this guard, an in-flight playing snapshot can arrive after Alexa has
+  // paused externally and put the stale desired state back to true, making the
+  // next website click send pause again.
+  const freshByRevision = playbackRevision > 0 && playbackRevision > _playPauseServerRevision;
+  // Some Alexa webhook paths update updated_at without bumping the playback
+  // revision. A newer server timestamp is therefore valid even when the
+  // revision is unchanged; requiring both would discard a real external pause.
+  const freshByMarker = marker > 0 && marker > _playPauseServerUpdatedAt;
+  // Legacy snapshots without either marker are usable only as the first
+  // baseline. Once metadata-bearing state has been seen, accepting every
+  // marker-less update would let an old in-flight snapshot undo a newer pause.
+  const freshWithoutMarker = playbackRevision <= 0 && marker <= 0 && _playPauseServerSeq === 0;
+  if (!freshByRevision && !freshByMarker && !freshWithoutMarker) return;
+
+  _playPauseServerPlaying = !!playing;
+  // Alexa can change playback outside the website. When no web command is
+  // being processed, make the next button toggle follow that authoritative
+  // server state too; otherwise state.isPlaying becomes false while the
+  // stale desired state still says true and the next click sends pause again.
+  // Never overwrite a live web intent or queued rapid toggle here.
+  if (!_playPauseBusy && _queuedPlayPauseAction === null && _playPauseWaiters.length === 0) {
+    _confirmedPlayPauseState = _playPauseServerPlaying;
+    _playPauseDesiredState = _playPauseServerPlaying;
+  }
   if (marker > _playPauseServerUpdatedAt) _playPauseServerUpdatedAt = marker;
   if (playbackRevision > _playPauseServerRevision) _playPauseServerRevision = playbackRevision;
   _playPauseServerSeq += 1;
@@ -1288,12 +1312,14 @@ document.addEventListener('keydown', (event) => {
 document.getElementById('pp-btn').onclick = () => {
   const serial = selectedSerial();
   if (!serial) return;
-  // Base the next toggle on the latest user intent, not only on the
-  // confirmation-backed visual state. This makes pause → resume → pause work
-  // correctly even when all three clicks happen before the first response.
-  const desiredPlaying = _playPauseDesiredState === null
-    ? state.isPlaying
-    : _playPauseDesiredState;
+  // Base the next toggle on the latest confirmed server state whenever the
+  // control is idle. Alexa may have paused the Echo while a website command
+  // was in flight, leaving _playPauseDesiredState stale; using the latest
+  // server value guarantees this click sends play after an external pause.
+  // During an active web command, preserve the queued user intent instead.
+  const desiredPlaying = !_playPauseBusy && _playPauseServerPlaying !== null
+    ? _playPauseServerPlaying
+    : (_playPauseDesiredState === null ? state.isPlaying : _playPauseDesiredState);
   const action = desiredPlaying ? 'pause' : 'play';
   toast((action === 'pause' ? 'Pausing' : 'Resuming') + '\u2026');
   requestPlayPause(action);
