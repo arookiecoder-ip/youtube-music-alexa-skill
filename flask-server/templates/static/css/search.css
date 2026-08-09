@@ -1279,3 +1279,44 @@ body.results-open .play-section {
 .results-error-state {
   color: var(--error, #f87171);
 }
+
+/* Song rows need readable metadata at normal phone viewing distance.
+   Moved from redesign.css. */
+.queue-title,
+.result-title,
+.artist-song-title {
+  font-size: 1rem;
+  line-height: 1.25;
+}
+.queue-artist,
+.result-artist,
+.artist-song-artist {
+  font-size: .82rem;
+  line-height: 1.3;
+}
+.track-duration { font-size: .82rem; }
+
+/* Album cards already open their album on click; underline only their title
+   on hover/focus so that navigation affordance is unmistakable. */
+.hscroll-card.album-card .hscroll-card-title,
+.explore-card.album-card .explore-card-title,
+.top-result-card.is-album .top-result-title {
+  cursor: pointer;
+  text-decoration-line: underline;
+  text-decoration-color: transparent;
+  text-underline-offset: 3px;
+  text-decoration-thickness: 1px;
+  transition: text-decoration-color .2s ease;
+}
+.explore-card .explore-card-title {
+  cursor: pointer;
+  text-decoration-line: underline;
+  text-decoration-color: transparent;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+  transition: text-decoration-color .2s ease;
+}
+.hscroll-card.album-card .hscroll-card-title:hover,
+.explore-card .explore-card-title:hover {
+  text-decoration-color: currentColor;
+}

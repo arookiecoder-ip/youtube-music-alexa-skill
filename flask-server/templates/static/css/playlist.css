@@ -1049,3 +1049,207 @@
   width: 20px;
   height: 20px;
 }
+
+/* ============================================================
+   Add-to-playlist / new-playlist / import-playlist overlays.
+   Moved from redesign.css.
+   ============================================================ */
+
+#add-to-playlist-overlay {
+  /* The mobile expanded player is z-index: 1000 and its action menu is 1200. */
+  z-index: 1400;
+}
+#add-to-playlist-overlay .history-modal { border-radius: 0; }
+#new-playlist-overlay .history-modal { border-radius: 0; }
+#new-playlist-overlay #new-playlist-overlay-name,
+#new-playlist-overlay #new-playlist-overlay-desc {
+  border-radius: 0 !important;
+  transition: border-color .15s ease, background-color .15s ease, box-shadow .15s ease;
+}
+#new-playlist-overlay #new-playlist-overlay-name:focus,
+#new-playlist-overlay #new-playlist-overlay-desc:focus {
+  border-color: var(--accent) !important;
+  background: var(--surface) !important;
+  box-shadow: none;
+}
+#new-playlist-overlay #new-playlist-overlay-create {
+  border-radius: 0 !important;
+  transition: border-color .15s ease, background-color .15s ease, box-shadow .15s ease, transform .15s ease;
+}
+#new-playlist-overlay #new-playlist-overlay-create:focus,
+#new-playlist-overlay #new-playlist-overlay-create:focus-visible,
+#new-playlist-overlay #new-playlist-overlay-create:active {
+  border-color: var(--accent) !important;
+  box-shadow: none;
+}
+#new-playlist-overlay #new-playlist-overlay-create:active {
+  transform: translateY(1px);
+}
+#import-playlist-overlay .history-modal { border-radius: 0; }
+#import-playlist-overlay #import-playlist-url { border-radius: 0 !important; }
+#import-playlist-overlay #import-playlist-submit { border-radius: 0 !important; }
+#new-playlist-name { border-radius: 0 !important; }
+#new-playlist-btn { border-radius: 0; }
+#add-to-playlist-overlay .history-modal-body {
+  /* Keep the list as the modal's only scroll container. */
+  min-height: 0;
+  overflow: hidden;
+}
+#add-to-playlist-list {
+  /* Hover feedback must not expand the scrollable area horizontally. */
+  min-width: 0;
+  min-height: 0;
+  overflow-x: hidden;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
+}
+#add-to-playlist-list > button {
+  padding: 8px 12px !important;
+  border-radius: 0 !important;
+  border-bottom: 1px solid var(--border) !important;
+  transition: background .15s ease, border-color .15s ease, box-shadow .15s ease;
+}
+#add-to-playlist-list > button:not(:disabled):hover,
+#add-to-playlist-list > button:not(:disabled):focus,
+#add-to-playlist-list > button:not(:disabled):focus-visible {
+  background: rgba(232, 89, 12, .24) !important;
+  border-bottom-color: var(--accent) !important;
+  color: #fff !important;
+  box-shadow: inset 4px 0 0 var(--accent), 0 4px 14px rgba(0, 0, 0, .28);
+  outline: none;
+}
+#add-to-playlist-list > button:not(:disabled):active {
+  box-shadow: inset 4px 0 0 var(--accent), 0 2px 8px rgba(0, 0, 0, .24);
+}
+
+/* Moved from redesign.css. */
+#playlist-detail-modal { background: transparent; }
+/* Playlist overlays own scrolling at every breakpoint. Keep the page
+   beneath them fixed so reaching the final row cannot move the outer shell. */
+body:not(.explore-route):not(.mood-route):not(.library-route):has(#playlist-detail-modal-overlay.open) {
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+#playlist-detail-modal-overlay {
+  overscroll-behavior: none;
+}
+
+/* ============================================================
+   Playlist detail modal — mobile transition backgrounds and
+   compact row layout. Moved from redesign.css.
+   ============================================================ */
+
+@media (max-width: 899px) {
+  body.now-playing-closing #playlist-detail-modal-overlay,
+  body.now-playing-closing #playlist-detail-modal,
+  body.now-playing-closing #playlist-detail-modal #playlist-detail-body {
+    background-color: #0b0503 !important;
+    background-image: none !important;
+  }
+  body.now-playing-route #playlist-detail-modal-overlay,
+  body.now-playing-route #playlist-detail-modal,
+  body.now-playing-route #playlist-detail-modal #playlist-detail-body {
+    background-color: #0b0503 !important;
+    background-image: none !important;
+  }
+}
+
+@media (max-width: 899px) {
+  #playlist-detail-modal #playlist-detail-body {
+    display: block !important;
+    width: 100% !important;
+    height: auto !important;
+    padding: 12px 4px 120px !important;
+    overflow: visible !important;
+    box-sizing: border-box;
+  }
+
+  #playlist-detail-modal .playlist-detail-hero {
+    display: flex !important;
+    flex-direction: column !important;
+    align-items: center !important;
+    gap: 12px !important;
+    width: 100% !important;
+    padding: 0 0 18px !important;
+    text-align: center !important;
+    overflow: visible !important;
+  }
+
+  #playlist-detail-modal .playlist-detail-hero > .playlist-collage {
+    width: 240px !important;
+    height: 240px !important;
+    margin: 0 auto !important;
+    flex: none !important;
+  }
+
+  /* Compact mobile playlist rows: hide counters and reduce album art. */
+  #playlist-detail-modal .history-item .playlist-track-num {
+    display: none !important;
+  }
+
+  #playlist-detail-modal .history-item .playlist-track-art,
+  #playlist-detail-modal .history-item .queue-thumb {
+    width: 44px !important;
+    height: 44px !important;
+    flex: 0 0 44px !important;
+  }
+
+  #playlist-detail-modal .history-item .result-like-btn {
+    display: none !important;
+  }
+
+  #playlist-detail-modal .history-item {
+    height: 52px !important;
+    min-height: 52px !important;
+    padding: 4px 10px !important;
+    border: 0 !important;
+    box-shadow: none !important;
+  }
+
+  #playlist-detail-modal .result-swipe-wrapper {
+    min-height: 52px !important;
+    border: 0 !important;
+  }
+
+  #playlist-detail-modal #playlist-detail-body > .history-list {
+    border: 0 !important;
+    box-shadow: none !important;
+    overflow-x: hidden !important;
+  }
+
+  #playlist-detail-modal .history-item .playlist-track-duration {
+    margin-left: auto !important;
+    margin-right: 2px !important;
+    min-width: 42px !important;
+    text-align: right !important;
+  }
+
+  #playlist-detail-modal .playlist-detail-hero-info {
+    display: flex !important;
+    flex-direction: column !important;
+    width: 100% !important;
+    align-items: center !important;
+    padding: 0 !important;
+    text-align: center !important;
+  }
+
+  #playlist-detail-modal .playlist-detail-hero-name {
+    display: block !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+    margin: 0 !important;
+  }
+
+  #playlist-detail-modal .playlist-detail-hero-actions {
+    display: flex !important;
+    align-items: center !important;
+    justify-content: center !important;
+    gap: 8px !important;
+    width: 100% !important;
+  }
+
+  #playlist-detail-modal .playlist-hero-actions-left,
+  #playlist-detail-modal .playlist-hero-actions-right {
+    display: contents !important;
+  }
+}

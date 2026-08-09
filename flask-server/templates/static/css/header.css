@@ -540,3 +540,123 @@ header > .brand h1 {
   background: #1b1b1b;
   border-color: #2c2c2c;
 }
+
+/* Scroll performance: fixed/sticky backdrop blur forces Chromium to repaint
+   the page behind these surfaces on every frame. Opaque fills preserve the
+   same dark chrome while letting the compositor reuse each layer. Moved
+   from redesign.css. */
+@media (min-width: 900px) {
+  header,
+  main.has-queue header,
+  body.results-open main header {
+    background: #000;
+    transition: background-color .28s ease, margin .25s ease;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    /* No contain:paint here — it clips absolutely-positioned descendants
+       (device dropdown menu, profile menu) to the header's 67px box. The
+       opaque background alone removes the backdrop-blur repaint cost. */
+  }
+  /* Transparent header so content (artist hero, now-playing blurred art,
+     body warm gradient) bleeds behind the sticky top bar. Opaque black
+     returns automatically when the user scrolls (header-scrolled). */
+  body.artist-route:not(.header-scrolled) main header,
+  body.album-route:not(.results-open):not(.header-scrolled) main header,
+  body.now-playing-route:not(.results-open) main header,
+  body.results-open:not(.header-scrolled) main header,
+  body.history-route main header,
+  body.explore-route main header,
+  body.mood-route:not(.header-scrolled) main header,
+  body.library-route main header,
+  body.home-route:not(.results-open):not(.header-scrolled) main header {
+    background: transparent;
+  }
+  body.results-open:not(.header-scrolled) main header::before,
+  body.history-route main header::before,
+  body.explore-route main header::before,
+  body.mood-route:not(.header-scrolled) main header::before,
+  body.library-route main header::before {
+    background-color: transparent;
+    border-bottom-color: transparent;
+  }
+}
+
+/* ============================================================
+   History page layout. Keep these rules together so the page
+   has one source of truth instead of relying on a stack of
+   corrective overrides. Moved from redesign.css.
+   ============================================================ */
+
+body.history-route {
+  overflow-y: auto;
+  overflow-x: hidden;
+  touch-action: pan-y;
+}
+body.history-route main {
+  min-height: 100dvh;
+  height: auto;
+  margin-left: var(--rail-w);
+  margin-right: 0;
+  padding: 0;
+  overflow: visible;
+  touch-action: pan-y;
+}
+body.history-route .history-page {
+  width: 100%;
+  min-height: 100dvh;
+  margin: 0;
+  padding: 24px 24px 140px;
+  border: 0;
+}
+body.history-route .history-page-header {
+  min-height: 64px;
+  padding: 18px 52px;
+  border-bottom: 0;
+}
+body.history-route .history-page-body {
+  padding: 0 32px;
+}
+body.history-route .history-page-header h3,
+body.history-route .history-page .queue-title {
+  color: var(--text);
+}
+body.history-route .history-page .queue-artist,
+body.history-route .history-page .history-date-header {
+  color: var(--muted);
+}
+
+@media (max-width: 899px) {
+  /* Horizontal lists use the browser's native touch scroller. Prevent the
+     boundary rubber-band from reversing the content at either edge; on mobile
+     that rebound looks like the shelf briefly scrolls the opposite way. */
+  .home-filter-chips,
+  .home-shelf-content,
+  .explore-grid,
+  .explore-mood-viewport,
+  .hscroll-track,
+  .results-tabs {
+    overscroll-behavior-x: none !important;
+    scroll-behavior: auto !important;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  body.history-route main {
+    width: 100%;
+    max-width: none;
+    margin-left: 0;
+    margin-right: 0;
+  }
+  body.history-route .history-page {
+    min-height: calc(100dvh + var(--playbar-h-mobile));
+    padding: 0 0 calc(var(--playbar-h-mobile) + 28px + env(safe-area-inset-bottom, 0px));
+  }
+  body.history-route .history-page-header {
+    padding: 18px 20px;
+  }
+  body.history-route .history-page-header h3 {
+    font-size: 1.05rem;
+  }
+  body.history-route .history-page-body {
+    padding: 0;
+  }
+}

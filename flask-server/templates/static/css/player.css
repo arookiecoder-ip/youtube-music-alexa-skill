@@ -3031,3 +3031,82 @@ body.now-playing-route .player-section .player-expand-btn svg {
     -webkit-overflow-scrolling: touch;
   }
 }
+
+/* Moved from redesign.css. */
+.player-section,
+main.has-queue .player-section,
+body.results-open .player-section {
+  background: #111;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  /* No contain:paint — it clips the "..." more-menu that pops above the bar. */
+}
+
+/* ============================================================
+   Compact mobile player grid + now-playing-route transitions.
+   Moved from redesign.css.
+   ============================================================ */
+
+@media (max-width: 899px) {
+  /* Mobile collection artwork: albums, singles, and playlists use sharp
+     corners. Artist artwork remains circular. */
+  body .hscroll-card:not(.related-artist-card) .hscroll-card-art,
+  body .home-item[data-kind="album"] .home-item-img,
+  body .home-item[data-kind="album"] .home-item-img-wrapper,
+  body .home-item[data-kind="single"] .home-item-img,
+  body .home-item[data-kind="single"] .home-item-img-wrapper,
+  body .home-item[data-kind="playlist"] .home-item-img,
+  body .home-item[data-kind="playlist"] .home-item-img-wrapper,
+  body .playlist-card,
+  body .playlist-card .playlist-card-art {
+    border-radius: 2px !important;
+  }
+}
+
+@media (max-width: 400px) {
+  body.now-playing-route .mobile-np-controls,
+  body.now-playing-closing .mobile-np-controls {
+    gap: 10px;
+    padding-inline: 14px;
+  }
+}
+
+@media (max-width: 899px) {
+  body.now-playing-route,
+  body.now-playing-closing,
+  body.now-playing-route #now-playing-section,
+  body.now-playing-closing #now-playing-section,
+  body.now-playing-route .np-page,
+  body.now-playing-closing .np-page {
+    overflow: auto !important;
+  }
+}
+
+/* Keep the restored mobile page opaque while the full player closes. The
+   return view is intentionally made visible before the sheet finishes its
+   slide, so the body tint must not show through the transparent page shell. */
+@media (max-width: 899px) {
+  body.now-playing-closing {
+    background-color: #0b0503 !important;
+    background-image: none !important;
+  }
+  body.now-playing-closing main {
+    background-color: #0b0503 !important;
+    background-image: none !important;
+  }
+
+  /* The sheet enters over the existing page, so keep the underlying mobile
+     shell on the same dark surface while it slides into place. */
+  body.now-playing-route,
+  body.now-playing-route main {
+    background-color: #0b0503 !important;
+    background-image: none !important;
+  }
+
+  /* On open, cover the page immediately and animate only the sheet position.
+     Fading the sheet from opacity 0 exposes the page/body tint for one frame. */
+  body #now-playing-section:not([hidden]) {
+    opacity: 1 !important;
+    transition: transform .32s cubic-bezier(.22, 1, .36, 1) !important;
+  }
+}

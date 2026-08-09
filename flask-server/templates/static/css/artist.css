@@ -1,6 +1,16 @@
   /* ---- Artist page: hero section ---- */
   #artist-section {
     padding: 0 0 var(--space-5) 0;
+    /* Preserve the global reset that redesign.css supplied after this
+       stylesheet before the redesign was migrated. The artist page is a
+       full-bleed route, not a generic surface-backed section. */
+    background: none;
+    border: none;
+    max-width: none;
+    margin: 0;
+    width: 100%;
+    border-radius: 0;
+    box-shadow: none;
   }
   #artist-songs-section {
     width: 100%;
@@ -33,6 +43,7 @@
     padding: 0 18px;
     max-width: 1400px;
     margin: 0 auto;
+    background: transparent;
   }
   #artist-skeleton[hidden] { display: none; }
   #artist-content[hidden] { display: none; }
@@ -618,4 +629,131 @@
     }
   }
 
+}
+
+/* Mobile playlist/album/artist detail routes. Moved from redesign.css. */
+@media (max-width: 899px) {
+  /* Compact artist rows let more songs remain visible on a phone while
+     keeping the list itself free to grow vertically. */
+  body.artist-route #artist-top-songs {
+    margin-bottom: 24px;
+    padding-left: 8px;
+    padding-right: 8px;
+  }
+
+  body.artist-route .artist-song-row {
+    min-height: 50px;
+    height: 50px;
+    gap: 8px;
+    padding: 4px 4px;
+  }
+
+  body.artist-route .artist-song-thumb {
+    width: 42px;
+    height: 42px;
+  }
+
+  body.artist-route .artist-song-play-btn {
+    left: 4px;
+    width: 42px;
+    height: 42px;
+  }
+
+  body.artist-route .artist-song-title {
+    font-size: .76rem;
+  }
+
+  body.artist-route .artist-song-artist {
+    font-size: .68rem;
+  }
+
+  body.artist-route .artist-song-album {
+    font-size: .6rem;
+  }
+
+  body.artist-route .artist-song-like-btn {
+    width: 28px;
+    height: 28px;
+  }
+
+  body.artist-route .artist-song-like-btn svg {
+    width: 18px;
+    height: 18px;
+  }
+
+  body.album-route main {
+    padding-left: 0 !important;
+    padding-right: 0 !important;
+  }    /* Detail pages replace the mobile home feed. The routed sections are
+       rendered in normal document flow on mobile, so keep Home out of flow
+       even during an async/preloaded route transition. */
+    body.playlists-route #home-section,
+    body.album-route #home-section,
+    body.artist-route #home-section,
+    body.artist-songs-route #home-section {
+      display: none !important;
+    }
+
+    /* redesign.css used to apply this late in the cascade. Without it,
+       base.css leaves the mobile body/main gutters in place, which exposes
+       the surrounding shell as a visible frame around the artist page. */
+    body.artist-route,
+    body.artist-songs-route,
+    body:has(#artist-section:not([hidden])),
+    body:has(#artist-songs-section:not([hidden])) {
+      width: 100% !important;
+      max-width: 100% !important;
+      margin: 0 !important;
+      padding-left: 0 !important;
+      padding-right: 0 !important;
+      overflow-x: hidden !important;
+      display: block !important;
+    }
+
+    body.artist-route main,
+    body.artist-songs-route main,
+    body:has(#artist-section:not([hidden])) main,
+    body:has(#artist-songs-section:not([hidden])) main {
+      width: 100% !important;
+      max-width: none !important;
+      margin-left: 0 !important;
+      margin-right: 0 !important;
+      padding-left: 0 !important;
+      padding-right: 0 !important;
+      overflow: visible !important;
+    }
+
+    body.artist-route main > header,
+    body.artist-songs-route main > header,
+    body:has(#artist-section:not([hidden])) main > header,
+    body:has(#artist-songs-section:not([hidden])) main > header {
+      left: 0 !important;
+      right: 0 !important;
+    }
+}
+
+/* ---- Album detail page ---- Moved from redesign.css. */
+.album-artist-link { border: 0; padding: 0; background: none; color: var(--text); font-weight: 700; cursor: pointer; }
+.album-artist-link:hover { text-decoration: underline; }
+
+/* Let the mobile artist artwork continue underneath the fixed top bar.
+   Keep only a soft dark wash for icon/logo contrast; the solid mobile header
+   returns once the artist page has been scrolled past its hero. */
+@media (max-width: 899px) {
+  body.artist-route:not(.header-scrolled) main > header,
+  body:has(#artist-section:not([hidden])):not(.header-scrolled) main > header {
+    background: linear-gradient(to bottom, rgba(0, 0, 0, .58), rgba(0, 0, 0, .12)) !important;
+    background-color: transparent !important;
+    border-bottom-color: transparent !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
+  }
+
+  body.artist-route:not(.header-scrolled) main > header::before,
+  body:has(#artist-section:not([hidden])):not(.header-scrolled) main > header::before {
+    background: transparent !important;
+    background-color: transparent !important;
+    background-image: none !important;
+    border-bottom-color: transparent !important;
+  }
 }

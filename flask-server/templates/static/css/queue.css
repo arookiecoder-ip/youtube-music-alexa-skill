@@ -427,3 +427,48 @@
     height: 16px;
   }
 
+
+/* ============================================================
+   Queue: right-side panel on desktop. Moved from redesign.css.
+   ============================================================ */
+
+@media (min-width: 900px) {
+  #queue-section,
+  main.has-queue #queue-section {
+    position: fixed;
+    top: calc(var(--topbar-h) + 3px + 12px);
+    right: 16px;
+    width: var(--queue-w);
+    margin: 0;
+    z-index: 120;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    background: var(--shell-bg);
+    border: 1px solid rgba(255, 255, 255, .07);
+    border-radius: var(--radius-xl);
+    padding: var(--space-4) 14px;
+    height: auto;
+  }
+  #queue-section > .label {
+    font-size: .95rem;
+    font-weight: 800;
+    text-transform: none;
+    letter-spacing: 0;
+    color: var(--text);
+    padding: 0 6px;
+  }
+  #queue-section .queue-section {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+  }
+}
+
+.queue-item { border-radius: var(--radius-md); }
+.queue-thumb, .queue-thumb-slot { border-radius: 0; }
+
+/* Moved from redesign.css. */
+.queue-modal { border-radius: var(--radius-xl) var(--radius-xl) 0 0; }

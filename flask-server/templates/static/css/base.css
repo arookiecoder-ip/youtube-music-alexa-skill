@@ -1056,3 +1056,284 @@ img:not([data-image-ready="true"]) {
 img[data-image-ready="true"] {
   opacity: 1 !important;
 }
+
+/* ============================================================
+   Login (blank/logged-out state guards). Moved from redesign.css.
+   ============================================================ */
+
+#login-section {
+  background: var(--shell-bg);
+  border: 1px solid rgba(255, 255, 255, .08);
+  border-radius: 0;
+  max-width: 420px;
+  margin: 10vh auto 0;
+  padding: 28px 26px;
+  box-shadow: 0 24px 80px rgba(0, 0, 0, .5);
+}
+#login-section input { border-radius: 0; }
+#login-section .btn-accent {
+  border-radius: 0;
+  background: var(--accent-grad);
+  border: none;
+  padding: 12px 20px;
+}
+
+/* Blank state: the navigation rail and persistent playbar belong to the
+   signed-in music experience. The desktop rules above intentionally force
+   both layers on, so keep this guard late in the cascade. */
+body:not(.app-logged-in) .sidebar,
+body:not(.app-logged-in) .sidebar-overlay,
+body:not(.app-logged-in) .player-section,
+body:not(.app-logged-in) .rail-toggle-btn,
+body:not(.app-logged-in) .hamburger-btn {
+  display: none !important;
+}
+
+@media (min-width: 900px) {
+  body:not(.app-logged-in) main,
+  body:not(.app-logged-in) main.idle,
+  body:not(.app-logged-in) main.has-queue,
+  body:not(.app-logged-in) body.results-open main {
+    margin-left: 0;
+  }
+
+  body:not(.app-logged-in) header::before {
+    left: 0;
+  }
+}
+
+/* ============================================================
+   Global confirm dialog, button, and scrollbar polish. Moved
+   from redesign.css.
+   ============================================================ */
+
+.confirm-dialog { border-radius: 4px; background: #1e1e1e !important; border: 1px solid rgba(255,255,255,.12) !important; }
+.confirm-actions button { border-radius: 6px; }
+.btn-accent { border-radius: var(--radius-full); }
+
+/* Buttons across the app pick up soft corners */
+button { border-radius: var(--radius-md); }
+
+/* Thin dark scrollbars */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: #333 transparent;
+}
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-thumb {
+  background: #333;
+  border-radius: var(--radius-full);
+}
+::-webkit-scrollbar-track { background: transparent; }
+
+/* ============================================================
+   Shared like glyph + generic shell resets. Moved from
+   redesign.css.
+   ============================================================ */
+
+/* One crisp like glyph everywhere. The old inline thumbs-up path collapses
+   into a flag-like shape at 12–22px, and dozens of duplicated copies made it
+   impossible to fix consistently. Keep their state/handlers, hide only the
+   malformed artwork, and render a shared heart from CSS. */
+:is(
+  .np-like-btn,
+  .np-page-like-btn,
+  .result-like-btn,
+  .track-like-btn,
+  .artist-song-like-btn,
+  .queue-like-underlay,
+  [data-action="toggle-like"],
+  [data-action="like"],
+  #np-menu-like,
+  .library-card-liked .library-card-art-placeholder
+) {
+  --like-icon-size: 16px;
+  --like-icon: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2024%2024'%3E%3Cpath%20d='M20.84%204.61a5.5%205.5%200%200%200-7.78%200L12%205.67l-1.06-1.06a5.5%205.5%200%200%200-7.78%207.78L12%2021.23l8.84-8.84a5.5%205.5%200%200%200%200-7.78Z'%20fill='none'%20stroke='white'%20stroke-width='2'%20stroke-linecap='round'%20stroke-linejoin='round'/%3E%3C/svg%3E");
+}
+:is(
+  .np-like-btn,
+  .np-page-like-btn,
+  .result-like-btn,
+  .track-like-btn,
+  .artist-song-like-btn,
+  .queue-like-underlay,
+  [data-action="toggle-like"],
+  [data-action="like"],
+  #np-menu-like,
+  .library-card-liked .library-card-art-placeholder
+) > svg {
+  display: none !important;
+}
+:is(
+  .np-like-btn,
+  .np-page-like-btn,
+  .result-like-btn,
+  .track-like-btn,
+  .artist-song-like-btn,
+  .queue-like-underlay,
+  [data-action="toggle-like"],
+  [data-action="like"],
+  #np-menu-like,
+  .library-card-liked .library-card-art-placeholder
+)::before {
+  content: '';
+  display: block;
+  flex: none;
+  width: var(--like-icon-size);
+  height: var(--like-icon-size);
+  background: currentColor;
+  -webkit-mask: var(--like-icon) center / contain no-repeat;
+  mask: var(--like-icon) center / contain no-repeat;
+}
+:is(
+  .np-like-btn.liked,
+  .np-page-like-btn.liked,
+  .result-like-btn.liked,
+  .track-like-btn.liked,
+  .artist-song-like-btn.liked,
+  [data-action="toggle-like"].liked,
+  #np-menu-like.liked,
+  [data-action="like"].liked,
+  .library-card-liked .library-card-art-placeholder
+) {
+  /* Solid-fill heart: the white fill in the SVG mask makes the entire heart
+     visible, so the `background: currentColor` underneath (orange) shows
+     through the whole shape — i.e. a solid orange heart, not an outline.
+     The orange `color` is set right here (not just in scattered per-button
+     rules below) so every liked button is guaranteed to be solid orange
+     regardless of which CSS rule the cascade picks for the mask swap. */
+  --like-icon: url("data:image/svg+xml,%3Csvg%20xmlns='http://www.w3.org/2000/svg'%20viewBox='0%200%2024%2024'%3E%3Cpath%20d='M20.84%204.61a5.5%205.5%200%200%200-7.78%200L12%205.67l-1.06-1.06a5.5%205.5%200%200%200-7.78%207.78L12%2021.23l8.84-8.84a5.5%205.5%200%200%200%200-7.78Z'%20fill='white'/%3E%3C/svg%3E");
+  color: var(--accent);
+}
+.player-section .np-like-btn,
+.np-page-like-btn { --like-icon-size: 28px; }
+.artist-song-like-btn { --like-icon-size: 14px; }
+.artist-song-like-btn {
+  border-color: transparent !important;
+  background: transparent !important;
+}
+
+.artist-song-like-btn.liked {
+  border-color: transparent !important;
+  background: transparent !important;
+}
+
+/* Liked menu actions use the same thumbs-up artwork, but must render it
+   solid instead of inheriting the default outline treatment. */
+#np-menu-like.liked > svg,
+.queue-menu-option.liked > svg {
+  fill: currentColor !important;
+  stroke: currentColor;
+  color: var(--accent) !important;
+}
+[data-action="remove-from-queue"] > svg {
+  color: var(--danger) !important;
+  fill: currentColor !important;
+  stroke: none !important;
+}
+/* Use the app's standard thumbs-up artwork for Like actions. */
+:is(
+  .np-like-btn,
+  .np-page-like-btn,
+  .result-like-btn,
+  .track-like-btn,
+  .artist-song-like-btn,
+  .queue-like-underlay,
+  [data-action="toggle-like"],
+  [data-action="like"],
+  #np-menu-like,
+  .library-card-liked .library-card-art-placeholder
+)::before {
+  display: none !important;
+}
+:is(
+  .np-like-btn,
+  .np-page-like-btn,
+  .result-like-btn,
+  .track-like-btn,
+  .artist-song-like-btn,
+  .queue-like-underlay,
+  [data-action="toggle-like"],
+  [data-action="like"],
+  #np-menu-like,
+  .library-card-liked .library-card-art-placeholder
+) > svg {
+  display: block !important;
+  background: none;
+  -webkit-mask: none;
+  mask: none;
+}
+
+.artist-song-row .artist-song-play-btn {
+  opacity: 0;
+  transform: translateY(-50%) scale(1);
+  pointer-events: none;
+  transition: opacity .18s ease, transform .18s ease, color .15s, border-color .15s;
+}
+.artist-song-row:hover .artist-song-play-btn,
+.artist-song-row:focus-within .artist-song-play-btn {
+  opacity: 1;
+  transform: translateY(-50%) scale(1);
+  pointer-events: auto;
+}
+.recs-like-btn { --like-icon-size: 12px; }
+.library-card-liked .library-card-art-placeholder { --like-icon-size: 36px; }
+
+/* Keep the shell width stable when routed overlays lock body scrolling. The
+   reserved gutter prevents header/search controls shifting as the vertical
+   scrollbar disappears and returns. */
+html { scrollbar-gutter: stable; }
+/* Keep the content width identical while modal/player layers toggle page
+   scrolling. Without a reserved gutter the scrollbar appears/disappears and
+   the homepage or playlist visibly jumps sideways during close animations. */
+body { scrollbar-gutter: stable; }
+
+/* The old permanent orange brand line added visual noise. */
+body::before {
+  display: none;
+}
+
+/* Temporary request progress remains visible at the viewport edge. */
+.top-progress-bar {
+  height: 3px;
+  background: #fff;
+  box-shadow: 0 0 8px rgba(255, 255, 255, 0.8);
+  z-index: 10001;
+}
+
+/* Warm tint bleeding down from the top of the page (behind the header).
+   Applied to body so it also shows through the transparent collapsed rail
+   (main starts after margin-left and would otherwise leave the rail over
+   the flat #030303 body colour, appearing as a solid opaque black strip). */
+body {
+  /* One viewport-wide tint. Two 10% overlays previously stacked over main
+     (roughly 19% combined) but only one covered the rail/header-left cell,
+     producing a vertical dark seam beside the hamburger. */
+  background-image: linear-gradient(180deg, rgba(232, 89, 12, .19), transparent 340px);
+}
+main {
+  background-image: none;
+}
+
+/* ---- Generic hidden guards (we change display on these below) ---- */
+.play-section[hidden],
+.player-section[hidden],
+#results-section[hidden],
+#queue-section[hidden],
+#home-section[hidden],
+#recs-section[hidden],
+#artist-section[hidden],
+#artist-songs-section[hidden],
+#now-playing-section[hidden],
+.auth-only[hidden],
+.sidebar-nav-btn[hidden],
+.progress[hidden] { display: none !important; }
+
+/* Prevent the browser's mobile pull-to-refresh gesture without changing
+   normal page scrolling or touch handling inside interactive controls. */
+@media (max-width: 899px) {
+  html,
+  body {
+    overscroll-behavior-y: none !important;
+  }
+}

@@ -137,3 +137,15 @@
   .toast-retry:hover { opacity: .7; }
 
 
+
+/* Moved from redesign.css. */
+.toast { border-radius: 4px; }
+/* Toasts float above the fixed playbar instead of underneath it */
+body:has(.player-section.is-visible) .toast {
+  bottom: calc(var(--playbar-h-mobile) + 20px);
+}
+@media (min-width: 900px) {
+  body:has(.player-section.is-visible) .toast {
+    bottom: calc(var(--playbar-h) + 24px);
+  }
+}
