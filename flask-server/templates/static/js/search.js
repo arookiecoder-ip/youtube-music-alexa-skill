@@ -478,7 +478,9 @@ function _createSongElement(item, existingThumbsById) {
       ${thumbHtml}
       <div class="result-info">
         <div class="result-title">${escHtml(item.title)}</div>
-        <div class="result-artist">${window.artistLinksHtml(item.artist, item.channelId || item.channel_id || '', item.video_id || item.videoId || '')}</div>
+        <div class="result-artist">${window.artistLinksHtml(item.artist, Array.isArray(item.artists) && item.artists.length
+          ? item.artists.map(a => (a && (a.id || a.browseId || a.channelId || a.channel_id)) || '')
+          : (item.channelId || item.channel_id || ''), item.video_id || item.videoId || '')}</div>
       </div>
       ${duration ? `<span class="track-duration">${escHtml(duration)}</span>` : ''}
       <button class="result-like-btn ${isLiked ? 'liked' : ''}" type="button" title="Like" data-vid="${escHtml(item.video_id)}">${heartSvg}</button>
@@ -757,13 +759,14 @@ function renderResults() {
 
     const topArtists = Array.isArray(item.artists) ? item.artists.filter(a => a && a.name) : [];
     const artistStr = topArtists.length ? topArtists.map(a => a.name).join(' and ') : (item.artist || '');
+    // Route structured credits through artistLinksHtml so combined credits
+    // (ytmusicapi returns the whole multi-artist byline as a single entry
+    // with no id) split into individual clickable names instead of one giant
+    // span whose hover underlines the "and" too.
     const artistCredits = topArtists.length
-      ? topArtists.map(a => {
-          const artistId = a.id || a.browseId || a.channelId || '';
-          const idAttr = artistId ? ` data-channel-id="${escHtml(artistId)}"` : '';
-          const videoAttr = item.video_id || item.videoId ? ` data-video-id="${escHtml(item.video_id || item.videoId)}"` : '';
-          return `<span class="artist-name" data-artist-name="${escHtml(a.name)}"${idAttr}${videoAttr}>${escHtml(a.name)}</span>`;
-        }).join(' and ')
+      ? (window.artistLinksHtml
+          ? window.artistLinksHtml(artistStr, topArtists.map(a => a.id || a.browseId || a.channelId || ''), item.video_id || item.videoId || '')
+          : escHtml(artistStr))
       : (window.artistLinksHtml ? window.artistLinksHtml(artistStr, item.channelId || item.channel_id || '') : escHtml(artistStr));
     const topVideoId = item.videoId || item.video_id || '';
     const topPlaylistId = item.resultType === 'playlist'

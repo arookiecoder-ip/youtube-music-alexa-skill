@@ -23,11 +23,17 @@
       return artist && artist.name;
     }) : [];
     if (artists.length) {
-      return artists.map(function(artist) {
-        var id = artist.id ? ' data-channel-id="' + escHtml(artist.id) + '"' : '';
-        return '<span class="artist-name" data-artist-name="' + escHtml(artist.name) + '"' + id + '>' +
-          escHtml(artist.name) + '</span>';
-      }).join(', ');
+      // Route through artistLinksHtml so a combined credit (one entry whose
+      // name holds the whole multi-artist byline, no per-artist id) splits
+      // into individual links instead of one giant span.
+      var ids = artists.map(function(artist) {
+        return artist.id || artist.browseId || artist.channelId || artist.channel_id || '';
+      });
+      var credit = artists.map(function(artist) { return artist.name; }).join(', ');
+      if (window.artistLinksHtml) {
+        return window.artistLinksHtml(credit, ids, item.video_id || item.videoId || '');
+      }
+      return escHtml(credit);
     }
     if (window.artistLinksHtml) return window.artistLinksHtml(item.artist || '', item.channelId || '', item.video_id || item.videoId || '');
     return escHtml(item.artist || '');

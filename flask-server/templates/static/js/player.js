@@ -331,9 +331,20 @@ function showNowPlaying(info) {
   }
   const artistText = nowPlayingArtistText(info);
   const artistIds = artistEntries.map((artist) => artist.id);
+  // Structured credits are ground truth for how many artists exist: pass them
+  // as an array so a single entry ("Simon & Garfunkel" — one artist whose
+  // name contains "&") renders as one link. A bare string fallback (voice /
+  // auto-advanced snapshots carry only `artist` + `channelId`, no `artists`)
+  // may be a joined multi-artist credit, so pass the id as a plain string:
+  // the renderer then splits "A and B"-style credits (primary id stays on the
+  // first link, the rest resolve by name) instead of collapsing every click
+  // onto the primary artist's page.
+  const hasStructuredCredits = Array.isArray(info && info.artists) &&
+    info.artists.some((artist) => artist && typeof artist === 'object' && artist.name);
+  const artistIdArg = hasStructuredCredits ? artistIds : (artistIds[0] || '');
   // Keep the exact song ID on name-only links as a last-resort resolver. This
   // covers voice/auto-advanced snapshots whose artist credit has no channel ID.
-  const artistMarkup = window.artistLinksHtml(artistText, artistIds, info.video_id || info.videoId || '');
+  const artistMarkup = window.artistLinksHtml(artistText, artistIdArg, info.video_id || info.videoId || '');
   const artistFingerprint = JSON.stringify(artistEntries);
   const artistMarkupChanged = artistFingerprint !== (state._nowPlayingArtistFingerprint || '');
   state._nowPlayingArtistFingerprint = artistFingerprint;

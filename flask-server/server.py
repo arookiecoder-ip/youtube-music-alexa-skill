@@ -2566,6 +2566,7 @@ class Supporting:
             {
                 'title': track.get('title', ''),
                 'artist': _artist_credit_from_list(track.get('artists')),
+                'artists': _artist_entries_from_item(track),
                 'video_id': track.get('videoId', ''),
                 'thumbnail': track['thumbnails'][-1] if track.get('thumbnails') else None,
                 'duration_ms': 0,
@@ -6004,6 +6005,9 @@ async def get_history():
             "video_id": item.get("videoId"),
             "title": item.get("title"),
             "artist": ", ".join([a.get("name", "") for a in item.get("artists", [])]) if item.get("artists") else "",
+            # Cleaned structured credits: history rows may include "- Topic"
+            # uploader channels that must not render as clickable artists.
+            "artists": _artist_entries_from_item(item),
             "thumbnail_url": item.get("thumbnails", [{"url": ""}])[0].get("url") if item.get("thumbnails") else "",
             "duration": item.get("duration") or "",
             "duration_seconds": item.get("duration_seconds") or 0,
@@ -7092,6 +7096,13 @@ def alexa_search():
                 results.append({
                     'title': track.get('title') or '',
                     'artist': " and ".join(a.get('name') or '' for a in track.get('artists') or []),
+                    # Keep the structured credits so the client can link each
+                    # artist directly instead of re-splitting the joined
+                    # string (a single band whose name contains "&" or
+                    # " and " — "Simon & Garfunkel" — must stay one link).
+                    # Clean the entries so "- Topic" uploader channels don't
+                    # surface as separate clickable artists.
+                    'artists': _artist_entries_from_item(track),
                     'video_id': video_id,
                     'thumbnail': _last_thumbnail(track),
                     'duration_ms': Supporting.duration_ms(track),
@@ -7658,6 +7669,62 @@ def _detail_id_has_known_shape(entity, value):
     if entity == 'playlist':
         return bool(value)
     return bool(value) and value.startswith(prefixes.get(entity, ()))
+
+
+# Mirror the client's artist-credit split (router.js ARTIST_SEP_RE) so a
+# combined credit like "Shareh, Natasha Noornai, Jokhay, and superdupersultan"
+# can be resolved artist-by-artist. The alternation order matters: ", and "
+# must win over ", " or the word "and" stays glued to the following name.
+_ARTIST_CREDIT_SEP = re.compile(
+    r',\s+and\s+|,\s*|\s*&\s*|\s+and\s+|\s*·\s*|\s+(?:feat\.?|ft\.?|featuring)\s+',
+    re.IGNORECASE)
+
+
+def _first_artist_name(name):
+    """Return the first artist in a possibly-combined credit string."""
+    for part in _ARTIST_CREDIT_SEP.split(name or ''):
+        if part and part.strip():
+            return part.strip()
+    return (name or '').strip()
+
+
+# /api/artist/resolve/ results are cached by normalized name so repeated
+# clicks on id-less artist credits do not re-run an upstream search every time.
+_artist_resolve_cache = {}
+_artist_resolve_cache_lock = threading.Lock()
+_ARTIST_RESOLVE_CACHE_TTL = 60 * 60  # 1 hour
+
+
+def _best_artist_match(name, results):
+    """Pick the artist result that matches ``name`` with confidence.
+
+    The unfiltered search behind /alexa/search/ often returns a malformed
+    first entry and omits the queried artist, so resolving a credit through
+    it can land on an unrelated artist page. A filtered 'artists' search is
+    reliable: prefer an exact case-insensitive name match, then a fuzzy-close
+    top result (covers credit typos like "Noornai" vs the catalog's
+    "Noorani"). Never fall back to an unrelated result -- a click should
+    either reach the right artist page or fail honestly.
+    """
+    wanted = (name or '').strip().casefold()
+    if not wanted:
+        return None
+    candidates = [r for r in (results or [])
+                  if isinstance(r, dict) and (r.get('artist') or '').strip() and r.get('browseId')]
+    exact = next((r for r in candidates
+                  if r['artist'].strip().casefold() == wanted), None)
+    if exact:
+        return exact
+    best, best_ratio = None, 0.0
+    for r in candidates:
+        candidate = r['artist'].strip().casefold()
+        ratio = difflib.SequenceMatcher(None, wanted, candidate).ratio()
+        if ratio > best_ratio:
+            best, best_ratio = r, ratio
+    if (best and best_ratio >= 0.9 and len(wanted) >= 5
+            and len(best['artist'].strip()) >= 5):
+        return best
+    return None
 
 
 def _normalize_olak_album(playlist_info, browse_id):
@@ -8300,6 +8367,63 @@ def _normalize_artist_song_results(raw_songs, artist_name='', channel_id=''):
             'duration_seconds': song.get('duration_seconds') or 0,
         })
     return songs
+
+
+@app.route("/api/artist/resolve/", methods=["GET"])
+async def api_resolve_artist():
+    """Resolve one artist credit name to a channel id.
+
+    Artist credits without a structured channel id (ytmusicapi returns the
+    whole multi-artist byline as a single entry with id None for many
+    tracks) are resolved on click. A filtered 'artists' search is far more
+    reliable than the mixed /alexa/search/ response; _best_artist_match
+    accepts only an exact or fuzzy-close match so the click can never land
+    on an unrelated artist page.
+
+    Note: the trailing slash is significant -- without it Werkzeug would
+    match the /api/artist/<channel_id> converter with channel_id='resolve'
+    and fall through to a 404. Keep callers on the slashed form.
+    """
+    name = _first_artist_name(request.args.get('name') or '')
+    if not name:
+        return jsonify({'error': 'missing required parameter "name"'}), 400
+    cache_key = name.strip().casefold()
+    with _artist_resolve_cache_lock:
+        cached = _artist_resolve_cache.get(cache_key)
+        if cached and cached[0] >= time.time():
+            return jsonify({'name': cached[1][0], 'channel_id': cached[1][1]})
+        if cached:
+            _artist_resolve_cache.pop(cache_key, None)
+    yt = _get_ytmusic() if _jam_guest() else _get_ytmusic_home()
+    try:
+        results = await asyncio.to_thread(
+            yt.search, query=name, filter='artists', limit=10)
+    except Exception as exc:
+        logger.warning('[api/artist/resolve] authed search failed for %r: %s', name, exc)
+        try:
+            results = await asyncio.to_thread(
+                YTMusic().search, query=name, filter='artists', limit=10)
+        except Exception as exc2:
+            logger.warning('[api/artist/resolve] anonymous search failed for %r: %s', name, exc2)
+            return jsonify({'error': {
+                'code': 'bad_gateway',
+                'message': 'Artist search unavailable.',
+            }}), 502
+    match = _best_artist_match(name, results)
+    if not match:
+        return jsonify({'error': {
+            'code': 'not_found',
+            'message': 'Artist not found.',
+        }}), 404
+    with _artist_resolve_cache_lock:
+        if len(_artist_resolve_cache) > 512:
+            oldest = min(_artist_resolve_cache,
+                         key=lambda key: _artist_resolve_cache[key][0])
+            _artist_resolve_cache.pop(oldest, None)
+        _artist_resolve_cache[cache_key] = (
+            time.time() + _ARTIST_RESOLVE_CACHE_TTL,
+            (match['artist'], match['browseId']))
+    return jsonify({'name': match['artist'], 'channel_id': match['browseId']})
 
 
 @app.route("/api/artist/<channel_id>/songs", methods=["GET"])

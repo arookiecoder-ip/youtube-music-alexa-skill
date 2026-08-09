@@ -89,7 +89,9 @@ function _buildHistoryRow(entry) {
     ${thumbHtml}
     <div class="queue-info">
       <div class="queue-title">${escHtml(entry.title || 'Unknown title')}</div>
-      <div class="queue-artist">${window.artistLinksHtml(entry.artist, entry.channelId, entry.video_id || entry.videoId || '')}${entry.play_count > 1 ? '<span class="play-count-badge">\u00d7' + entry.play_count + '</span>' : ''}</div>
+      <div class="queue-artist">${window.artistLinksHtml(entry.artist, Array.isArray(entry.artists) && entry.artists.length
+        ? entry.artists.map(a => (a && (a.id || a.browseId || a.channelId || a.channel_id)) || '')
+        : (entry.channelId || entry.channel_id || ''), entry.video_id || entry.videoId || '')}${entry.play_count > 1 ? '<span class="play-count-badge">\u00d7' + entry.play_count + '</span>' : ''}</div>
     </div>
     ${duration ? `<span class="track-duration">${escHtml(duration)}</span>` : ''}
     <button class="result-like-btn history-like-btn${isLikedHistory ? ' liked' : ''}" type="button" title="${isLikedHistory ? 'Dislike' : 'Like'}">${heartSvgHistory}</button>

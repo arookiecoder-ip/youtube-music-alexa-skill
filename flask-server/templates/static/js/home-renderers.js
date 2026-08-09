@@ -28,10 +28,14 @@
     const renderSubtitle = (item) => {
         const artists = Array.isArray(item.artists) ? item.artists.filter(a => a && a.name) : [];
         if (!artists.length) return escapeHtml(item.subtitle || '');
-        const artistHtml = artists.map(a => {
-            const id = a.id ? ` data-channel-id="${escapeHtml(a.id)}"` : '';
-            return `<span class="artist-name" data-artist-name="${escapeHtml(a.name)}"${id}>${escapeHtml(a.name)}</span>`;
-        }).join(', ');
+        // Route through artistLinksHtml so combined credits (one entry whose
+        // name holds the whole byline, with no per-artist id) split into
+        // individual links; hovering one then underlines only that name.
+        const artistIds = artists.map(a => (a.id || a.browseId || a.channelId || a.channel_id || ''));
+        const credit = artists.map(a => a.name).join(', ');
+        const artistHtml = window.artistLinksHtml
+            ? window.artistLinksHtml(credit, artistIds)
+            : escapeHtml(credit);
         const album = item.album ? ` • ${escapeHtml(item.album)}` : '';
         return artistHtml + album;
     };

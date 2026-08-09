@@ -266,6 +266,69 @@ class ArtistCreditFromListTests(unittest.TestCase):
         self.assertEqual(snapshot["artists"], [{"name": "Real Artist", "id": "UC_REAL"}])
 
 
+class ArtistNameResolutionTests(unittest.TestCase):
+    """Click-time artist-name resolution: /api/artist/resolve/ helpers.
+
+    ytmusicapi returns the whole multi-artist byline as a single artist entry
+    with no id for many tracks, so clicks resolve the credit name through a
+    filtered artists search. These helpers must split combined credits, match
+    exactly (or fuzzy-close, for credit typos like "Noornai" vs the catalog's
+    "Noorani"), and never fall back to an unrelated artist.
+    """
+
+    def test_first_artist_name_returns_single_clean_name(self):
+        self.assertEqual(server._first_artist_name("Shareh"), "Shareh")
+
+    def test_first_artist_name_splits_combined_credit(self):
+        self.assertEqual(
+            server._first_artist_name(
+                "Shareh, Natasha Noornai, Jokhay, and superdupersultan"),
+            "Shareh")
+
+    def test_first_artist_name_handles_ampersand_and_and(self):
+        self.assertEqual(server._first_artist_name("BHZ, Ion Miles, & MotB"), "BHZ")
+        self.assertEqual(server._first_artist_name("Real Artist and Guest Artist"),
+                         "Real Artist")
+
+    def test_first_artist_name_empty(self):
+        self.assertEqual(server._first_artist_name(""), "")
+        self.assertEqual(server._first_artist_name("   "), "")
+        self.assertEqual(server._first_artist_name(None), "")
+
+    def test_best_artist_match_exact_name(self):
+        results = [
+            {"artist": "Talha Anjum", "browseId": "UCZQUb-qB6nViYaPABPYGxQA"},
+            {"artist": "Jokhay", "browseId": "UCXD1sy-zqax8Ys-AWfS2HHA"},
+        ]
+        self.assertEqual(server._best_artist_match("Jokhay", results)["browseId"],
+                         "UCXD1sy-zqax8Ys-AWfS2HHA")
+
+    def test_best_artist_match_case_insensitive(self):
+        results = [{"artist": "Shareh", "browseId": "UC27k6axVQdZsM5A9oCkbsww"}]
+        self.assertEqual(server._best_artist_match("shareh", results)["browseId"],
+                         "UC27k6axVQdZsM5A9oCkbsww")
+
+    def test_best_artist_match_fuzzy_typo_credit(self):
+        # YouTube's credit says "Natasha Noornai" but the catalog artist is
+        # "Natasha Noorani" -- the fuzzy path must still land on the artist.
+        results = [{"artist": "Natasha Noorani", "browseId": "UCTuG_NaZ1Vn-xCnBnfQkaqg"}]
+        match = server._best_artist_match("Natasha Noornai", results)
+        self.assertIsNotNone(match)
+        self.assertEqual(match["browseId"], "UCTuG_NaZ1Vn-xCnBnfQkaqg")
+
+    def test_best_artist_match_rejects_unrelated_result(self):
+        results = [{"artist": "Umer Anjum", "browseId": "UCWYpbQ8BOVS0otuBhJ9hogA"}]
+        self.assertIsNone(server._best_artist_match("superdupersultan", results))
+
+    def test_best_artist_match_skips_entries_without_browse_id(self):
+        results = [{"artist": "Shareh", "browseId": None}]
+        self.assertIsNone(server._best_artist_match("Shareh", results))
+
+    def test_best_artist_match_empty_inputs(self):
+        self.assertIsNone(server._best_artist_match("", []))
+        self.assertIsNone(server._best_artist_match("Drake", None))
+
+
 class CleanArtistCreditTests(unittest.TestCase):
     """Direct edge-case coverage of the underlying primitive both the server
     and home_feed helpers build on."""

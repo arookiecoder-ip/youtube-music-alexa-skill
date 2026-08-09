@@ -928,18 +928,45 @@
   // click to the first artist's page. artistLinksHtml splits the credit into
   // one clickable span per artist: the first keeps the known channelId, the
   // rest carry only their name and are resolved via search on click.
-  var ARTIST_SEP_RE = /(,\s*|\s*&\s*|\s+and\s+|\s*·\s*|\s+(?:feat\.?|ft\.?|featuring)\s+)/i;
+  // Alternation order matters: ", and " must win over ", " or the word
+  // "and" stays glued to the following artist name ("A, B, and C" would
+  // render the last link as "and C", underlining the "and" on hover and
+  // making clicks search for "and C").
+  //
+  // "&" is a character inside a real artist's name ("Simon & Garfunkel",
+  // "Hall & Oates"), not a separator: ytmusicapi returns names verbatim and
+  // every server-side credit join uses " and " / ", " — never "&". Splitting
+  // on "&" turned one band into two links ("Simon" + "Garfunkel") that both
+  // resolved to the same channel. "&" only stays meaningful when the caller
+  // already knows multiple distinct artist ids (a true collab credit).
+  var ARTIST_SEP_RE = /(,\s+and\s+|,\s*|\s+and\s+|\s*·\s*|\s+(?:feat\.?|ft\.?|featuring)\s+)/i;
+  var ARTIST_SEP_RE_COLLAB = /(,\s+and\s+|,\s*|\s*&\s*|\s+and\s+|\s*·\s*|\s+(?:feat\.?|ft\.?|featuring)\s+)/i;
 
   window.artistLinksHtml = function(artist, channelIds, videoId) {
     var esc = window.escHtml;
     var s = String(artist || '').trim();
     if (!s) return '';
+    var wasArray = Array.isArray(channelIds);
     // Normalise: a single channelId string → array, so the same position-
     // based lookup works for both old callers and new array-aware callers.
-    if (!Array.isArray(channelIds)) channelIds = channelIds ? [channelIds] : [];
+    if (!wasArray) channelIds = channelIds ? [channelIds] : [];
+    var validIds = channelIds.filter(Boolean);
+    // A structured artists array with exactly one real channel id declares a
+    // single artist: its whole name is one link, "&" included. (Combined
+    // credits arrive as one entry with no id, so they still split below.)
+    if (wasArray && channelIds.length === 1 && validIds.length === 1) {
+      var single = ' data-artist-name="' + esc(s) + '"';
+      if (videoId) single += ' data-video-id="' + esc(videoId) + '"';
+      single += ' data-channel-id="' + esc(validIds[0]) + '"';
+      return '<span class="artist-name"' + single + '>' + esc(s) + '</span>';
+    }
     // split with a capture group keeps the separators at odd indices so the
-    // displayed text stays byte-for-byte what the metadata said
-    var parts = s.split(new RegExp(ARTIST_SEP_RE.source, 'gi'));
+    // displayed text stays byte-for-byte what the metadata said. "&" splits
+    // only when the caller knows 2+ distinct artist entries (a true collab
+    // credit, even if one id is missing); a single id means the name is one
+    // artist's, so "&" stays literal.
+    var sepRe = channelIds.length >= 2 ? ARTIST_SEP_RE_COLLAB : ARTIST_SEP_RE;
+    var parts = s.split(new RegExp(sepRe.source, 'gi'));
     var artistIdx = 0;
     return parts.map(function(p, i) {
       if (i % 2 === 1) return esc(p); // separator text, not clickable
@@ -997,12 +1024,13 @@
     if (window.preloadNavigateArtistByName) {
       window.preloadNavigateArtistByName(name);
     } else {
-      window.api('/alexa/search/?q=' + encodeURIComponent(name)).then(function(result) {
-        var artists = (result && result.artists) || [];
-        var exact = artists.find(function(a) {
-          return (a.name || '').toLowerCase() === name.toLowerCase();
-        }) || artists[0];
-        if (exact && exact.browse_id) window.navigateTo('#artist/' + encodeURIComponent(exact.browse_id));
+      // The unfiltered /alexa/search/ artist category is unreliable (it can
+      // lead with a malformed entry and omit the queried artist, which is
+      // what made name-only clicks land on 'not available' or a random
+      // artist). /api/artist/resolve/ uses a filtered artists search and
+      // returns only a confident match.
+      window.api('/api/artist/resolve/?name=' + encodeURIComponent(name)).then(function(result) {
+        if (result && result.channel_id) window.navigateTo('#artist/' + encodeURIComponent(result.channel_id));
         else if (window.toast) toast('Artist page unavailable', 'error');
       }).catch(function() { if (window.toast) toast('Artist page unavailable', 'error'); });
     }

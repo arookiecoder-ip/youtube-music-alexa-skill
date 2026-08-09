@@ -289,20 +289,24 @@
   }
 
   function _fetchArtistByName(name, signal) {
-    return fetch('/alexa/search/?q=' + encodeURIComponent(name), {
+    // Resolve through the dedicated artist-name endpoint: it uses a filtered
+    // 'artists' search and returns only a confident match. The unfiltered
+    // /alexa/search/ response can omit the queried artist or lead with an
+    // unrelated one, which previously surfaced 'Artist not found' toasts or
+    // navigated to a random artist page.
+    return fetch('/api/artist/resolve/?name=' + encodeURIComponent(name), {
       credentials: 'same-origin',
       cache: 'no-store',
       signal: signal,
     }).then(function (r) {
-      if (!r.ok) throw new Error('HTTP ' + r.status);
+      // A real miss is a 404; anything else (502 from a transient upstream
+      // failure) is not "not found" and should not be labelled as such.
+      if (r.status === 404) throw new Error('Artist not found');
+      if (!r.ok) throw new Error('Artist search unavailable');
       return r.json();
     }).then(function (result) {
-      var artists = (result && result.artists) || [];
-      var exact = artists.find(function (a) {
-        return (a.name || '').toLowerCase() === name.toLowerCase();
-      }) || artists[0];
-      if (!exact || !exact.browse_id) throw new Error('Artist not found');
-      return { _resolvedChannelId: exact.browse_id };
+      if (!result || !result.channel_id) throw new Error('Artist not found');
+      return { _resolvedChannelId: result.channel_id };
     });
   }
 

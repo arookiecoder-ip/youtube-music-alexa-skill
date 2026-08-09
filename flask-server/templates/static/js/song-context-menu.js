@@ -83,7 +83,21 @@
               if (data.artist) track.artist = data.artist;
               return data.artist_id;
             }
-            return '';
+            // Some multi-artist tracks carry no channel id on any structured
+            // artist entry (ytmusicapi emits the whole credit as one name).
+            // Resolve the first credited artist by name instead of failing.
+            var names = (data && Array.isArray(data.artists) ? data.artists : [])
+              .map(function (a) { return (a && a.name) ? String(a.name) : ''; })
+              .filter(Boolean);
+            if (!names.length) return '';
+            return window.api('/api/artist/resolve/?name=' + encodeURIComponent(names[0]))
+              .then(function (resolved) {
+                if (resolved && resolved.channel_id) {
+                  track.artist_id = resolved.channel_id;
+                  return resolved.channel_id;
+                }
+                return '';
+              });
           })
           .catch(function () { return ''; })
       );
