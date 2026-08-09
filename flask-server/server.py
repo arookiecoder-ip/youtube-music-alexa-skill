@@ -8220,7 +8220,16 @@ async def alexa_suggest():
 
 def _render_root_shell():
     # Serve the remote UI at the bare domain so the address bar shows just
-    # the host, not /remote/. Unauthenticated visitors go to the login page.
+    # the host, not /remote/. A valid API key is also a complete owner
+    # credential, even when username/password login is configured. This matters
+    # for direct deep links: the browser can open `/artist?...&key=...` in a
+    # new tab before a session cookie has been adopted by the new document.
+    if _valid_key_supplied():
+        is_auth = _ytmusic_is_authenticated()
+        return _no_store(app.make_response(render_template(
+            "remote.html", asset_v=_STATIC_VERSION,
+            jam_guest=False, remote_username=REMOTE_USER,
+            is_authenticated=is_auth)))
     if not _remote_login_enabled():
         # A valid legacy key may enter at any canonical SPA URL. Keep it in
         # memory for API calls; router initialization removes it from history.

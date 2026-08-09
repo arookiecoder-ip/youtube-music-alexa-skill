@@ -64,6 +64,93 @@
   opacity: 0;
   transition: opacity .16s ease;
 }
+
+/* Collection detail skeleton used by both cold album and playlist routes. It
+   mirrors the desktop hero/track layout and collapses to the mobile stack. */
+.collection-detail-skeleton {
+  grid-column: 1 / -1;
+  display: grid;
+  grid-template-columns: minmax(220px, 300px) minmax(0, 1fr);
+  gap: clamp(44px, 6vw, 86px);
+  width: 100%;
+  height: 100%;
+  padding: 34px 32px 28px;
+  box-sizing: border-box;
+}
+.collection-skeleton-hero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+  padding: 0 12px 18px;
+}
+.collection-skeleton-cover,
+.collection-skeleton-thumb,
+.collection-skeleton-number,
+.collection-skeleton-action,
+.collection-skeleton-line {
+  display: block;
+  background: linear-gradient(90deg, var(--border) 25%, #2a2a2a 37%, var(--border) 63%);
+  background-size: 400% 100%;
+  animation: skeletonShimmer 1.4s ease infinite;
+}
+.collection-skeleton-cover {
+  width: 210px;
+  height: 210px;
+  border-radius: 10px;
+}
+.collection-skeleton-hero-copy {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+}
+.collection-skeleton-line { height: 10px; border-radius: var(--radius-sm); }
+.collection-skeleton-line-heading { width: min(220px, 80%); height: 22px; }
+.collection-skeleton-line-meta { width: 130px; }
+.collection-skeleton-actions {
+  width: 190px;
+  height: 42px;
+  margin-top: 7px;
+  border-radius: 24px;
+  background: linear-gradient(90deg, var(--border) 25%, #2a2a2a 37%, var(--border) 63%);
+  background-size: 400% 100%;
+  animation: skeletonShimmer 1.4s ease infinite;
+}
+.collection-skeleton-list {
+  min-width: 0;
+  overflow: hidden;
+}
+.collection-skeleton-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 76px;
+  padding: 9px 10px;
+  box-sizing: border-box;
+}
+.collection-skeleton-number { width: 28px; height: 10px; border-radius: 3px; }
+.collection-skeleton-thumb { width: 60px; height: 60px; flex: 0 0 60px; border-radius: 4px; }
+.collection-skeleton-copy { flex: 1; min-width: 0; }
+.collection-skeleton-line-title { width: min(260px, 75%); }
+.collection-skeleton-line-subtitle { width: min(150px, 45%); margin-top: 9px; }
+.collection-skeleton-action { width: 22px; height: 22px; flex: 0 0 22px; border-radius: 50%; }
+@media (max-width: 899px) {
+  .collection-detail-skeleton {
+    display: block;
+    width: 100%;
+    height: auto;
+    padding: 20px 8px 120px;
+  }
+  .collection-skeleton-hero { padding: 0 0 18px; }
+  .collection-skeleton-cover { width: 240px; height: 240px; }
+  .collection-skeleton-list { width: 100%; }
+  .collection-skeleton-row { min-height: 52px; height: 52px; padding: 4px 10px; }
+  .collection-skeleton-number { display: none; }
+  .collection-skeleton-thumb { width: 44px; height: 44px; flex-basis: 44px; }
+}
 .playlist-loading-indicator.visible { opacity: 1; }
 .playlist-loading-indicator { overflow-anchor: none; }
 .playlist-loading-spinner {
@@ -75,6 +162,14 @@
   animation: playlist-loading-spin .7s linear infinite;
 }
 @keyframes playlist-loading-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .collection-skeleton-cover,
+  .collection-skeleton-thumb,
+  .collection-skeleton-number,
+  .collection-skeleton-action,
+  .collection-skeleton-line,
+  .collection-skeleton-actions { animation: none; }
+}
 .liked-playlist-banner {
   background: linear-gradient(135deg, #c64bdb, #6b3fd1 55%, #293b9b);
   color: #fff;

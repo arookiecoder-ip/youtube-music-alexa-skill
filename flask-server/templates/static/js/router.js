@@ -1020,8 +1020,13 @@
     }
   });
 
-  // Parse immediately, but wait one event-loop turn before rendering so the
-  // remaining synchronous page scripts can register every screen loader.
+  // Parse the URL immediately, but do not render until DOMContentLoaded.
+  // This shell includes router.js before album.js, artist.js, and playlists.js;
+  // a zero-delay timer can fire while the parser is still working through the
+  // remaining inline scripts in a fresh tab. In that race the router hides the
+  // home view and opens an empty detail overlay because window.loadAlbum (or
+  // another destination loader) does not exist yet. DOMContentLoaded runs only
+  // after every parser-blocking shell script has registered its loader.
   var initialLocation = decodeLocation(location);
   window.__route = initialLocation.route;
   function syncHeaderScrollState() {
@@ -1036,5 +1041,9 @@
     history.replaceState({ route: window.__route, position: _historyPosition }, '', routeToUrl(window.__route));
     applyRouteForNavigation(window.__route, false);
   }
-  setTimeout(initializeRoute, 0);
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initializeRoute, { once: true });
+  } else {
+    setTimeout(initializeRoute, 0);
+  }
 })();

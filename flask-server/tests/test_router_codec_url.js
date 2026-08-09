@@ -164,6 +164,15 @@ for (const [pathname, search, expectedRoute, expectedUrl] of decodeCases) {
   }
 }
 
+const bootOrderGuard = "document.addEventListener('DOMContentLoaded', initializeRoute";
+if (routerSrc.includes(bootOrderGuard)) {
+  pass++;
+  console.log('PASS  direct deep-link initialization waits for DOMContentLoaded');
+} else {
+  fail++;
+  console.log('FAIL  direct deep-link initialization still uses an early timer');
+}
+
 console.log('');
 console.log('router.js codec: passed=' + pass + ' failed=' + fail);
 process.exit(fail ? 1 : 0);

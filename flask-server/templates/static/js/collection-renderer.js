@@ -49,9 +49,22 @@
   }
 
   function renderLoadingState(message) {
-    return '<div class="playlist-loading-indicator visible" role="status" aria-live="polite">' +
-      '<span class="playlist-loading-spinner" aria-hidden="true"></span>' +
-      '<span>' + esc(message || 'Loading songs…') + '</span>' +
+    var label = message || 'Loading songs…';
+    var rows = '';
+    for (var i = 0; i < 7; i++) {
+      rows += '<div class="collection-skeleton-row" aria-hidden="true">' +
+        '<span class="collection-skeleton-number"></span>' +
+        '<span class="collection-skeleton-thumb"></span>' +
+        '<span class="collection-skeleton-copy"><span class="collection-skeleton-line collection-skeleton-line-title"></span><span class="collection-skeleton-line collection-skeleton-line-subtitle"></span></span>' +
+        '<span class="collection-skeleton-action"></span>' +
+      '</div>';
+    }
+    return '<div class="collection-detail-skeleton" role="status" aria-live="polite" aria-label="' + esc(label) + '">' +
+      '<div class="collection-skeleton-hero" aria-hidden="true">' +
+        '<span class="collection-skeleton-cover"></span>' +
+        '<span class="collection-skeleton-hero-copy"><span class="collection-skeleton-line collection-skeleton-line-heading"></span><span class="collection-skeleton-line collection-skeleton-line-meta"></span><span class="collection-skeleton-actions"></span></span>' +
+      '</div>' +
+      '<div class="collection-skeleton-list history-list">' + rows + '</div>' +
     '</div>';
   }
 

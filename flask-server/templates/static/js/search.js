@@ -19,6 +19,17 @@
 const RESULTS_PER_PAGE = 10;
 
 async function runSearch(query, options) {
+  function renderSearchLoadingState() {
+    let rows = '';
+    for (let i = 0; i < 8; i++) {
+      rows += '<div class="search-skeleton-row" aria-hidden="true">' +
+        '<span class="search-skeleton-thumb"></span>' +
+        '<span class="search-skeleton-copy"><span class="search-skeleton-line search-skeleton-line-title"></span><span class="search-skeleton-line search-skeleton-line-subtitle"></span></span>' +
+        '<span class="search-skeleton-action"></span>' +
+      '</div>';
+    }
+    return '<div class="search-results-skeleton" role="status" aria-live="polite" aria-label="Loading search results">' + rows + '</div>';
+  }
   options = options || {};
   query = String(query || '').trim();
   if (!query) {
@@ -109,8 +120,23 @@ async function runSearch(query, options) {
         (!id.endsWith('-overlay') || el.classList.contains('open'));
     });
 
-  if (!alreadyOnResults && !anyOtherViewVisible) {
+  const coldDirectSearch = options.fromRoute && !options.deferRouteHandoff &&
+    !alreadyOnResults && !anyOtherViewVisible;
+  let coldSearchSkeletonRendered = false;
+  if (!alreadyOnResults && coldDirectSearch) {
     openResults({ fromRoute: true });
+  }
+  // Cold direct URLs have no previous page to keep visible. Paint a stable
+  // results skeleton immediately instead of leaving the results list empty
+  // while the search request is in flight. In-app searches deliberately keep
+  // their source page mounted, so they continue to use the top progress bar
+  // without replacing the current content.
+  if (!alreadyOnResults && coldDirectSearch) {
+    const loadingList = document.getElementById('results-list');
+    if (loadingList) {
+      loadingList.innerHTML = renderSearchLoadingState();
+      coldSearchSkeletonRendered = true;
+    }
   }
   // Note: deliberately NOT clearing #results-list here. Whatever is
   // currently on screen (the previous search's results, or the page the user
@@ -187,7 +213,7 @@ async function runSearch(query, options) {
       // active view (or was opened as the cold-load fallback above). If the
       // user was left on their previous page, forcing a navigation to an
       // error screen they never asked for would be worse than the toast alone.
-      if (state._resultsOpen) {
+      if (state._resultsOpen || coldSearchSkeletonRendered) {
         const list = document.getElementById('results-list');
         if (list) list.innerHTML = '<div class="results-empty-state results-error-state">Search failed. Please try again.</div>';
       }

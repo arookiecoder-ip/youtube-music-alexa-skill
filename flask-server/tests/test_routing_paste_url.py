@@ -394,7 +394,44 @@ class FlaskDispatch(unittest.TestCase):
             server._safe_spa_target(path + ("?" + query if query else "")),
         )
 
+    def test_valid_api_key_renders_deep_link_even_with_login_configured(self):
+        deep_links = (
+            '/artist?channel=UCabc',
+            '/album?browse=MPREb_abc',
+            '/playlist?list=PLabc123',
+            '/search?q=hello',
+        )
+        with mock.patch.object(server, '_valid_key_supplied', return_value=True), \
+             mock.patch.object(server, '_ytmusic_is_authenticated', return_value=False):
+            for path in deep_links:
+                with self.subTest(path=path):
+                    response = self.client.get(path)
+                    self.assertEqual(response.status_code, 200)
+                    self.assertIn(b'__spaRouteCodec', response.data)
+                    self.assertTrue(
+                        response.content_type.startswith('text/html')
+                    )
+
+    def test_valid_session_renders_deep_link(self):
+        with self.client.session_transaction() as sess:
+            sess['remote_user'] = server.REMOTE_USER
+            sess['sid'] = server._session_open()
+            sess.permanent = True
+        with mock.patch.object(server, '_valid_key_supplied', return_value=False), \
+             mock.patch.object(server, '_ytmusic_is_authenticated', return_value=False):
+            for path in (
+                '/artist?channel=UCabc',
+                '/album?browse=MPREb_abc',
+                '/playlist?list=PLabc123',
+                '/search?q=hello',
+            ):
+                with self.subTest(path=path):
+                    response = self.client.get(path)
+                    self.assertEqual(response.status_code, 200)
+                    self.assertIn(b'__spaRouteCodec', response.data)
+
     def test_dispatch_round_trips_for_each_family(self):
+
         """Parametric dispatcher regression: every (path, query, scenario)
         row in `_FLASK_DISPATCH_FAMILIES` is exercised in BOTH slash
         forms so a single tuple covers both `strict_slashes=False`

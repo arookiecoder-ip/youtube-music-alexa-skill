@@ -328,17 +328,20 @@ async function main() {
   {
     let resolveApi;
     const pending = new Promise((r) => { resolveApi = r; });
-    const { wrapped, events, sections } = makeSandbox({
+    const sandbox = makeSandbox({
       // Nothing else is visible -- simulates a fresh page load landing
       // directly on a #search?q=... URL.
       initialSectionsHidden: {},
       resultsOpenInitially: false,
       apiImpl: () => pending,
     });
-    const runPromise = wrapped('deep link query', { fromRoute: true });
+    const runPromise = sandbox.wrapped('deep link query', { fromRoute: true });
     checkTrue('Results opened immediately (nothing else to show)',
-              events.some(([fn]) => fn === 'openResults'),
+              sandbox.events.some(([fn]) => fn === 'openResults'),
               'a bare deep link must not leave the user on a totally blank page');
+    checkTrue('cold direct Search paints a skeleton while loading',
+              sandbox.resultsListEl.innerHTML.includes('search-results-skeleton'),
+              'direct Search should show result placeholders before the API responds');
     resolveApi({ songs: [] });
     await runPromise;
   }
