@@ -8,7 +8,10 @@
   let _firstShow = true;
 
   function state() { return window.__appState; }
-  function toast() { return window.toast && window.toast.apply(window, arguments); }
+  function toast() {
+    if (window._sessionExpired && window._sessionExpired()) return;
+    return window.toast && window.toast.apply(window, arguments);
+  }
   function api() { return window.api.apply(window, arguments); }
   function isYoutubeLinkLike(value) {
     return /^(https?:\/\/)?(www\.|m\.|music\.)?(youtube\.com\/|youtu\.be\/)/i.test((value || '').trim());
@@ -111,7 +114,7 @@
       if (window.refreshVolume) window.refreshVolume(true);
     } catch (e) {
       deviceEl.innerHTML = '<option value="">Unavailable</option>';
-      toast(e.message, 'error');
+      if (!window._sessionExpired || !window._sessionExpired()) toast(e.message, 'error');
     }
   }
 
@@ -213,7 +216,7 @@
       else toast('Not connected to Amazon.', 'error');
       return !!s.logged_in;
     } catch (e) {
-      toast(e.message, 'error');
+      if (!window._sessionExpired || !window._sessionExpired()) toast(e.message, 'error');
       return false;
     }
   }
@@ -275,8 +278,12 @@
       if (window.connectSSE) window.connectSSE();
       if (window.refreshVolume) window.refreshVolume(true);
     } catch (e) {
-      toast(e.message, 'error');
-      refreshAuth();
+      // A 401 is already surfaced once by api.js. Do not toast it again or
+      // retry /alexa/status; that retry was the second half of the startup loop.
+      if (!window._sessionExpired || !window._sessionExpired()) {
+        toast(e.message, 'error');
+        refreshAuth();
+      }
     }
   }
 

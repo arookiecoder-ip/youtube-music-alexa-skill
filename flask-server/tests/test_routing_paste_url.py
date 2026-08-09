@@ -38,6 +38,17 @@ _TEST_ENV = {
     # api_key.txt path, which would litter the working directory on first run.
     "API_KEY": "0123456789abcdef0123456789abcdef",
 }
+_ORIGINAL_ENV = os.environ.copy()
+_STUB_MODULE_NAMES = (
+    'ytmusicapi', 'ytmusicapi.auth', 'ytmusicapi.auth.types',
+    'ytmusicapi.auth.browser', 'home_feed', 'alexa_remote',
+    'alexa_remote.remote', 'youtube_browser_session',
+)
+_ORIGINAL_MODULES = {
+    name: sys.modules.get(name)
+    for name in _STUB_MODULE_NAMES
+}
+os.environ.update(_TEST_ENV)
 
 
 def _install_stubs():
@@ -87,6 +98,16 @@ def _install_stubs():
 
 _install_stubs()
 import server  # noqa: E402 — only place server.py is imported, AFTER stubs
+# server.py has captured its configuration at import time; restore the host
+# process environment so importing this test cannot leak fake credentials into
+# neighboring test modules.
+os.environ.clear()
+os.environ.update(_ORIGINAL_ENV)
+for _module_name, _original_module in _ORIGINAL_MODULES.items():
+    if _original_module is None:
+        sys.modules.pop(_module_name, None)
+    else:
+        sys.modules[_module_name] = _original_module
 
 
 class SpaPathRegistration(unittest.TestCase):
@@ -109,11 +130,18 @@ class SpaPathRegistration(unittest.TestCase):
                           msg=f"slashed {p} missing from SPA bypass set — "
                               f"this is the original paste-URL bug regressing")
 
+    def test_path_style_deep_links_are_spa_documents(self):
+        for path in ('/album/ABC', '/playlist/PLabc', '/artist/UCabc',
+                     '/artist/UCabc/songs', '/artist/songs/UCabc'):
+            self.assertTrue(server._is_spa_document_path(path), path)
+
     def test_history_slash_is_excluded(self):
         # /history/ is the JSON history endpoint; it must NOT be bypassed.
         self.assertNotIn("/history/", server._SPA_DOCUMENT_PATHS_ALL,
                          msg="/history/ must NOT be in the SPA bypass set — "
                              "the JSON endpoint there returns JSON, not a shell.")
+        self.assertFalse(server._is_spa_document_path('/history/'))
+        self.assertFalse(server._is_spa_document_path('/history//'))
 
 
 class SafeSpaTarget(unittest.TestCase):
@@ -430,6 +458,19 @@ class FlaskDispatch(unittest.TestCase):
                     self.assertEqual(response.status_code, 200)
                     self.assertIn(b'__spaRouteCodec', response.data)
 
+    def test_valid_document_renders_shell_before_detail_fetch(self):
+        # A valid document URL must not depend on detail data being available.
+        # The browser requests the detail endpoint after receiving this shell,
+        # where any backend error can be shown in-page.
+        with mock.patch.object(server, '_logged_in', return_value=True), \
+             mock.patch.object(server, '_jam_guest', return_value=False), \
+             mock.patch.object(server, '_ytmusic_is_authenticated',
+                               return_value=False):
+            response = self.client.get('/album?browse=valid-but-unavailable')
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b'__spaRouteCodec', response.data)
+        self.assertNotIn(b'detail backend down', response.data)
+
     def test_dispatch_round_trips_for_each_family(self):
 
         """Parametric dispatcher regression: every (path, query, scenario)
@@ -485,6 +526,186 @@ class FlaskDispatch(unittest.TestCase):
             self.assertNotIn("next", qs)
 
 
+class BrowserNotFound(unittest.TestCase):
+    """Browser document misses render a helpful HTML 404, while API misses
+    retain their machine-readable JSON contract."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.client = server.app.test_client()
+
+    def test_unknown_browser_path_renders_404_page(self):
+        with mock.patch.object(server, '_valid_key_supplied', return_value=False):
+            response = self.client.get(
+                '/this-page-does-not-exist', headers={'Accept': 'text/html'})
+        self.assertEqual(response.status_code, 404)
+        self.assertTrue(response.content_type.startswith('text/html'))
+        self.assertIn(b'We couldn', response.data)
+        self.assertIn(b'/home', response.data)
+        self.assertIn(b"window.location.replace('/home')", response.data)
+        self.assertIn(b'setTimeout', response.data)
+        self.assertIn(b'2000', response.data)
+        self.assertNotIn(b'seconds = 5', response.data)
+        self.assertNotIn(b'setInterval', response.data)
+        self.assertNotIn(b'Redirecting to', response.data)
+        # The code style must not use negative tracking, which visually joins
+        # the three digits on narrow screens.
+        self.assertIn(b'letter-spacing: .06em', response.data)
+
+    def test_registered_spa_documents_are_shell_first(self):
+        # A new tab must receive the shell for every known SPA document. The
+        # client then performs the detail/API request and owns that error state.
+        paths = (
+            '/home', '/search', '/playlist', '/album', '/artist',
+            '/artist/songs', '/explore', '/library', '/mood', '/now-playing',
+            '/album?browse=%00', '/playlist?list=' + ('x' * 2049),
+            '/artist?channel=%EF%BF%BD', '/mood?params=valid&title=%01',
+            '/album/MPREb_test', '/playlist/PL_test', '/artist/UC_test',
+            '/artist/UC_test/songs', '/artist/songs/UC_test',
+        )
+        with mock.patch.object(server, '_logged_in', return_value=True), \
+             mock.patch.object(server, '_jam_guest', return_value=False):
+            for path in paths:
+                with self.subTest(path=path):
+                    response = self.client.get(path)
+                    self.assertEqual(response.status_code, 200)
+                    self.assertIn(b'__spaRouteCodec', response.data)
+
+    def test_unknown_document_path_remains_a_404(self):
+        for path in ('/album-not-a-route', '/album/a/b'):
+            with self.subTest(path=path):
+                response = self.client.get(path)
+                self.assertEqual(response.status_code, 404)
+                self.assertTrue(response.content_type.startswith('text/html'))
+                self.assertIn(b'Page not found', response.data)
+
+    def test_unknown_api_path_requires_auth_before_json_404(self):
+        response = self.client.get('/api/does-not-exist')
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(response.get_json()['error']['code'], 'unauthorized')
+
+    def test_unknown_api_path_with_valid_key_is_json_404(self):
+        response = self.client.get(
+            '/api/does-not-exist?key=' + server.API_KEY,
+            headers={'Accept': 'application/json'},
+        )
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.get_json()['error']['code'], 'not_found')
+
+    def test_browser_path_with_json_accept_is_json_404(self):
+        response = self.client.get(
+            '/this-page-does-not-exist',
+            headers={'Accept': 'application/json'},
+        )
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(response.get_json()['error']['code'], 'not_found')
+
+
+class AlbumEndpoint(unittest.TestCase):
+    """Invalid album browse IDs must be a clean 404 for the SPA."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.client = server.app.test_client()
+
+    def test_invalid_album_id_returns_sanitised_404(self):
+        fake = mock.Mock()
+        fake.get_album.side_effect = Exception('Invalid id (404)')
+        with (
+            mock.patch.object(server, '_logged_in', return_value=True),
+            mock.patch.object(server, '_jam_guest', return_value=False),
+            mock.patch.object(server, '_get_ytmusic_home', return_value=fake),
+            mock.patch.object(server.YTMusic, 'get_album',
+                              side_effect=Exception('Album not found'),
+                              create=True),
+        ):
+            response = self.client.get('/api/album/invalid-album-id')
+        self.assertEqual(response.status_code, 404)
+        body = response.get_json()
+        self.assertEqual(body.get('error', {}).get('code'), 'not_found')
+        self.assertNotIn('Invalid id', response.get_data(as_text=True))
+
+    def test_unrelated_not_found_provider_failure_returns_502(self):
+        fake = mock.Mock()
+        fake.get_album.side_effect = Exception('response field not found in payload')
+        with (
+            mock.patch.object(server, '_logged_in', return_value=True),
+            mock.patch.object(server, '_jam_guest', return_value=False),
+            mock.patch.object(server, '_get_ytmusic_home', return_value=fake),
+        ):
+            response = self.client.get('/api/album/MPREb_albumtest')
+        self.assertEqual(response.status_code, 502)
+        self.assertEqual(response.get_json().get('error', {}).get('code'), 'bad_gateway')
+        self.assertNotIn('response field not found', response.get_data(as_text=True))
+
+    def test_unexpected_album_provider_failure_returns_502(self):
+        fake = mock.Mock()
+        fake.get_album.side_effect = Exception('connection refused')
+        with (
+            mock.patch.object(server, '_logged_in', return_value=True),
+            mock.patch.object(server, '_jam_guest', return_value=False),
+            mock.patch.object(server, '_get_ytmusic_home', return_value=fake),
+        ):
+            response = self.client.get('/api/album/MPREb_albumtest')
+        self.assertEqual(response.status_code, 502)
+        self.assertEqual(response.get_json().get('error', {}).get('code'), 'bad_gateway')
+
+    def test_olak_album_id_loads_via_get_playlist(self):
+        # YT Music album share links carry OLAK5uy_* ids, which ytmusicapi's
+        # get_album() rejects ("must start with MPRE"). They must load through
+        # get_playlist() and come back in the album response shape — not a 502.
+        fake = mock.Mock()
+        fake.get_playlist.return_value = {
+            'title': 'Jaana', 'description': 'Album',
+            'thumbnails': [{'url': 'https://cover/1.jpg'}],
+            'author': {'id': 'UCabc', 'name': 'Artist Name'},
+            'tracks': [
+                {'videoId': 'v1', 'title': 'Song A',
+                 'artists': [{'id': 'UCabc', 'name': 'Artist Name'}],
+                 'thumbnails': [{'url': 'https://t/1.jpg'}],
+                 'duration': '3:08', 'duration_seconds': 188},
+            ],
+        }
+        with (
+            mock.patch.object(server, '_logged_in', return_value=True),
+            mock.patch.object(server, '_jam_guest', return_value=False),
+            mock.patch.object(server, '_get_ytmusic_home', return_value=fake),
+        ):
+            response = self.client.get('/api/album/OLAK5uy_albumtest')
+        self.assertEqual(response.status_code, 200)
+        body = response.get_json()
+        self.assertEqual(body.get('title'), 'Jaana')
+        self.assertEqual(body.get('artist'), 'Artist Name')
+        self.assertEqual(body.get('channelId'), 'UCabc')
+        self.assertEqual(body.get('thumbnail'), 'https://cover/1.jpg')
+        tracks = body.get('tracks') or []
+        self.assertEqual(len(tracks), 1)
+        self.assertEqual(tracks[0]['videoId'], 'v1')
+        self.assertEqual(tracks[0]['artist'], 'Artist Name')
+        self.assertEqual(fake.get_playlist.call_count, 1)
+        self.assertEqual(fake.get_playlist.call_args[0][0], 'OLAK5uy_albumtest')
+
+    def test_wrong_olak_album_id_returns_404(self):
+        # A non-existent OLAK id must surface as the album 404 (driving the
+        # SPA's 404 page), never a 502 toast. Covers both the playlist-shaped
+        # miss ('Invalid id') and the browse-shaped miss ('Unable to find')
+        # that ytmusicapi actually raises for a bad OLAK id.
+        for phrase in ('Invalid id: playlist not found',
+                       "Unable to find 'contents' using path"):
+            with self.subTest(phrase=phrase):
+                fake = mock.Mock()
+                fake.get_playlist.side_effect = Exception(phrase)
+                with (
+                    mock.patch.object(server, '_logged_in', return_value=True),
+                    mock.patch.object(server, '_jam_guest', return_value=False),
+                    mock.patch.object(server, '_get_ytmusic_home', return_value=fake),
+                ):
+                    response = self.client.get('/api/album/OLAK5uy_wrongid')
+                self.assertEqual(response.status_code, 404)
+                self.assertEqual(
+                    response.get_json().get('error', {}).get('code'), 'not_found')
+
+
 class LibraryPlaylistEndpoint(unittest.TestCase):
     """Regression for: GET /api/library/playlists/<id> with a non-playlist id
     (album browse_id `MPREb_*`, deleted id, garbage string) must return
@@ -499,6 +720,10 @@ class LibraryPlaylistEndpoint(unittest.TestCase):
     miss errors to a clean 404 so existing client-side 404-fallbacks (and
     the new `_looksLikeAlbumBrowseId` shortcut in preload-nav.js) can
     route the call to the right endpoint."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.client = server.app.test_client()
 
     def _fake_ytmusic(self, *, get_playlist_response=None,
                       get_playlist_error=None,
@@ -575,7 +800,13 @@ class LibraryPlaylistEndpoint(unittest.TestCase):
                      mock.patch.object(server, '_jam_guest',
                                        return_value=False), \
                      mock.patch.object(server, '_get_ytmusic_home',
-                                       return_value=fake):
+                                       return_value=fake), \
+                     mock.patch.object(server.YTMusic, 'get_playlist',
+                                       side_effect=Exception(msg),
+                                       create=True), \
+                     mock.patch.object(server.YTMusic, 'get_watch_playlist',
+                                       side_effect=Exception(msg),
+                                       create=True):
                     response = self.client.get(
                         f'/api/library/playlists/{sentinel_id}')
                 self.assertEqual(
@@ -586,6 +817,17 @@ class LibraryPlaylistEndpoint(unittest.TestCase):
                 self.assertEqual(
                     response.get_json().get('error', {}).get('code'),
                     'not_a_playlist')
+
+    def test_public_playlist_compatibility_route_uses_same_loader(self):
+        fake = self._fake_ytmusic(get_playlist_response={
+            'title': 'Public Mix', 'trackCount': 0, 'tracks': [],
+        })
+        with mock.patch.object(server, '_logged_in', return_value=True), \
+             mock.patch.object(server, '_jam_guest', return_value=False), \
+             mock.patch.object(server, '_get_ytmusic_home', return_value=fake):
+            response = self.client.get('/api/playlists/PLpublic123')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.get_json().get('title'), 'Public Mix')
 
     def test_valid_playlist_id_routes_to_get_playlist(self):
         # Regression: a real PL id must still reach get_playlist and return
@@ -637,6 +879,8 @@ class LibraryPlaylistEndpoint(unittest.TestCase):
         # only the request-injected pl_id (for support correlation).
         fake = self._fake_ytmusic(
             get_playlist_error=Exception(
+                'HTTPSConnectionPool: connection refused'),
+            get_watch_playlist_error=Exception(
                 'HTTPSConnectionPool: connection refused'))
         with mock.patch.object(server, '_logged_in', return_value=True), \
              mock.patch.object(server, '_jam_guest', return_value=False), \
@@ -687,7 +931,8 @@ class LibraryPlaylistEndpoint(unittest.TestCase):
         # false-positives from the pl_id itself.
         secret = 'bad request: playlist fetch failed'
         fake = self._fake_ytmusic(
-            get_playlist_error=Exception(secret))
+            get_playlist_error=Exception(secret),
+            get_watch_playlist_error=Exception(secret))
         with mock.patch.object(server, '_logged_in', return_value=True), \
              mock.patch.object(server, '_jam_guest', return_value=False), \
              mock.patch.object(server, '_get_ytmusic_home',
@@ -723,7 +968,8 @@ class LibraryPlaylistEndpoint(unittest.TestCase):
         # NOT 500 with str(e).
         leaked_phrase = "YTMusicError: some-new-phrase (500) that wraps private state"
         fake = self._fake_ytmusic(
-            get_playlist_error=Exception(leaked_phrase))
+            get_playlist_error=Exception(leaked_phrase),
+            get_watch_playlist_error=Exception(leaked_phrase))
         with mock.patch.object(server, '_logged_in', return_value=True), \
              mock.patch.object(server, '_jam_guest', return_value=False), \
              mock.patch.object(server, '_get_ytmusic_home',
@@ -750,7 +996,8 @@ class LibraryPlaylistEndpoint(unittest.TestCase):
                        'invalid credentials', 'Please sign in to continue'):
             with self.subTest(phrase=phrase):
                 fake = self._fake_ytmusic(
-                    get_playlist_error=Exception(phrase))
+                    get_playlist_error=Exception(phrase),
+                    get_watch_playlist_error=Exception(phrase))
                 with mock.patch.object(server, '_logged_in',
                                        return_value=True), \
                      mock.patch.object(server, '_jam_guest',
@@ -775,6 +1022,8 @@ class LibraryPlaylistEndpoint(unittest.TestCase):
         # raw exception text in the body.
         fake = self._fake_ytmusic(
             get_playlist_error=Exception(
+                "could not parse response: 'Library state' not found in payload"),
+            get_watch_playlist_error=Exception(
                 "could not parse response: 'Library state' not found in payload"))
         with mock.patch.object(server, '_logged_in', return_value=True), \
              mock.patch.object(server, '_jam_guest', return_value=False), \

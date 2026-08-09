@@ -13,6 +13,11 @@
       state.lastToastKind = '';
       return;
     }
+    // The API layer already shows the single authoritative session-expired
+    // message. Ignore secondary catch-block errors from parallel startup calls
+    // so one expired cookie cannot flood the toast or obscure recovery.
+    if (window._sessionExpired && window._sessionExpired() &&
+        msg !== (window._sessionExpiredMessage || 'Session expired - please log in again.')) return;
     kind = kind || 'info';
     if (toastEl.classList.contains('show') && msg === state.lastToastMsg && kind === state.lastToastKind && !detail) return;
     state.lastToastMsg = msg;
@@ -31,6 +36,14 @@
       detailEl.className = 'toast-detail';
       detailEl.textContent = detail;
       toastEl.appendChild(detailEl);
+    }
+
+    if (kind === 'error' && msg === (window._sessionExpiredMessage || 'Session expired - please log in again.')) {
+      var loginBtn = document.createElement('a');
+      loginBtn.className = 'toast-login';
+      loginBtn.href = '/login/';
+      loginBtn.textContent = 'Sign in again';
+      toastEl.appendChild(loginBtn);
     }
 
     if (kind === 'error') {

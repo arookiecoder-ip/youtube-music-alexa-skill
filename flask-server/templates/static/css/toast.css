@@ -112,6 +112,16 @@
 
   }
 
+  .toast-login {
+    display: inline-block;
+    margin-top: 6px;
+    color: inherit;
+    font-size: .72rem;
+    font-weight: 700;
+    text-decoration: underline;
+    text-underline-offset: 2px;
+  }
+
   .toast-retry {
 
     display: inline-block;

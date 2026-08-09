@@ -113,10 +113,42 @@
     var query = locationLike.searchParams || new URLSearchParams(locationLike.search || '');
     if (pathname === '/') return '#home';
     if (STATIC_ROUTES[pathname]) return STATIC_ROUTES[pathname];
-    if (!isSupportedPath(pathname)) return '#home';
+    var isPathStyleDetail = /^\/(?:album|playlist)\/[^/]+$/.test(pathname) ||
+      /^\/artist\/[^/]+(?:\/songs)?$/.test(pathname) ||
+      /^\/artist\/songs\/[^/]+$/.test(pathname);
+    if (!isSupportedPath(pathname) && !isPathStyleDetail) return '#home';
 
     var value;
     if (pathname === '/search') return searchRoute(query.get('q') || '');
+    if (pathname === '/artist/songs') {
+      value = query.get('channel') || '';
+      return validValue(value) ? '#artist/' + encodeURIComponent(value) + '/songs' : '#home';
+    }
+    // Accept both the canonical query form and older path-style deep links.
+    // The server serves the shell for either form; normalize here before the
+    // page loaders run so a new tab opens the same destination as in-app nav.
+    if (pathname.indexOf('/playlist/') === 0) {
+      var playlistPathId = pathname.slice('/playlist/'.length);
+      return validValue(playlistPathId) ? '#playlist/' + encodeURIComponent(playlistPathId) : '#home';
+    }
+    if (pathname.indexOf('/album/') === 0) {
+      var albumPathId = pathname.slice('/album/'.length);
+      return validValue(albumPathId) ? '#album/' + encodeURIComponent(albumPathId) : '#home';
+    }
+    if (pathname.indexOf('/artist/songs/') === 0) {
+      var artistSongsPathId = pathname.slice('/artist/songs/'.length);
+      return validValue(artistSongsPathId)
+        ? '#artist/' + encodeURIComponent(artistSongsPathId) + '/songs'
+        : '#home';
+    }
+    if (pathname.indexOf('/artist/') === 0) {
+      var artistPathValue = pathname.slice('/artist/'.length);
+      var artistPathSongs = /\/songs$/.test(artistPathValue);
+      if (artistPathSongs) artistPathValue = artistPathValue.slice(0, -'/songs'.length);
+      return validValue(artistPathValue)
+        ? '#artist/' + encodeURIComponent(artistPathValue) + (artistPathSongs ? '/songs' : '')
+        : '#home';
+    }
     if (pathname === '/playlist') {
       value = query.get('list') || '';
       return validValue(value) ? '#playlist/' + encodeURIComponent(value) : '#home';
@@ -125,7 +157,7 @@
       value = query.get('browse') || '';
       return validValue(value) ? '#album/' + encodeURIComponent(value) : '#home';
     }
-    if (pathname === '/artist' || pathname === '/artist/songs') {
+    if (pathname === '/artist') {
       value = query.get('channel') || '';
       return validValue(value) ? '#artist/' + encodeURIComponent(value) + (pathname === '/artist/songs' ? '/songs' : '') : '#home';
     }

@@ -29,14 +29,47 @@ app = Flask(__name__)
 # the browser until the process restarts. Auto-reload re-renders on change.
 app.config["TEMPLATES_AUTO_RELOAD"] = True
 
-# Signs the session cookie used by the web remote login. Set SECRET_KEY in the
-# environment so sessions survive restarts; otherwise a random one is generated
-# (logins reset on every restart, which is fine for a personal tool).
-app.secret_key = os.environ.get("SECRET_KEY") or secrets.token_hex(32)
+# Signs the session cookie used by the web remote login. Prefer an explicit
+# SECRET_KEY. When it is omitted, persist an automatically generated key beside
+# DB_FILE so a container restart does not invalidate every browser session.
+_default_db_file = os.environ.get(
+    "DB_FILE", os.path.join(os.path.dirname(os.path.abspath(__file__)), "data.db"))
+_secret_key_file = os.environ.get(
+    "SECRET_KEY_FILE", os.path.join(os.path.dirname(_default_db_file), "secret_key.txt"))
+_secret_key = os.environ.get("SECRET_KEY")
+if not _secret_key:
+    try:
+        with open(_secret_key_file, "r", encoding="utf-8") as _secret_file:
+            _secret_key = _secret_file.read().strip()
+    except OSError:
+        _secret_key = secrets.token_hex(32)
+        try:
+            with open(_secret_key_file, "w", encoding="utf-8") as _secret_file:
+                _secret_file.write(_secret_key)
+            os.chmod(_secret_key_file, 0o600)
+        except OSError:
+            # Read-only filesystems can still run; sessions simply reset on
+            # restart when there is nowhere safe to persist the generated key.
+            logger.warning("Could not persist generated SECRET_KEY at %s", _secret_key_file)
+app.secret_key = _secret_key or secrets.token_hex(32)
+
+# A Secure cookie is correct behind HTTPS, but browsers silently discard it
+# when the remote is opened over plain HTTP. Keep HTTPS secure by default;
+# explicit COOKIE_INSECURE or an explicitly configured http:// public URL opts
+# into the development/HTTP behavior.
+_cookie_insecure = os.environ.get("COOKIE_INSECURE")
+_public_base_url = os.environ.get("PUBLIC_BASE_URL", "").lower()
+if _cookie_insecure is None:
+    # No public URL means local/dev mode; do not issue a cookie that HTTP
+    # browsers silently refuse. A configured HTTPS origin keeps Secure on.
+    _session_cookie_secure = _public_base_url.startswith("https://")
+else:
+    _session_cookie_secure = _cookie_insecure.strip().lower() not in {"1", "true", "yes", "on"}
+
 app.config.update(
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE="Lax",
-    SESSION_COOKIE_SECURE=os.environ.get("COOKIE_INSECURE") != "1",
+    SESSION_COOKIE_SECURE=_session_cookie_secure,
     PERMANENT_SESSION_LIFETIME=timedelta(days=30),
     MAX_CONTENT_LENGTH=16 * 1024 * 1024,
     # Static assets are safe to cache long-term: remote.html references them
@@ -490,7 +523,7 @@ def _record_listen(video_id, title, artist, thumbnail_url):
 # plus the PWA manifest / service worker / icons, which the browser fetches with
 # no ?key= and which contain no private data).
 _PUBLIC_PATHS = ('/', '/privacy_policy', '/terms_of_use', '/login', '/logout', '/favicon.ico',
-                 '/manifest.webmanifest', '/service-worker.js')
+                 '/manifest.webmanifest', '/service-worker.js', '/__not_found__')
 # Public path prefixes (startswith match) — static assets (CSS, JS, icons),
 # plus jam join links (/j/<token> and legacy /jam/<token> — the token itself is
 # the credential). The Amazon proxy tunnel also has to stay public so the
@@ -525,11 +558,86 @@ _SPA_DOCUMENT_PATH_SLASH_VARIANTS = frozenset(
 # new SPA routes.
 _SPA_DOCUMENT_PATHS_ALL = frozenset(_SPA_DOCUMENT_PATHS) | _SPA_DOCUMENT_PATH_SLASH_VARIANTS
 
+
+def _is_spa_document_path(path):
+    """Recognize canonical and path-style SPA document URLs.
+
+    Keep the exact ``/history/`` endpoint out of the SPA bypass: it is the
+    JSON history API, not a document. Other recognized document variants are
+    shell-first and leave detail-data validation to the browser/API.
+    """
+    raw = path or ''
+    normalized = raw.rstrip('/') or '/'
+    # `/history` is the browser screen, while `/history/` is the JSON API.
+    # Reject every slash-expanded variant of the API path from the SPA bypass.
+    if normalized == '/history' and raw != '/history':
+        return False
+    if normalized in _SPA_DOCUMENT_PATHS_ALL:
+        return True
+    return bool(re.fullmatch(
+        # `/artist/songs` is the canonical songs screen (query carries the
+        # channel), not a path-style artist deep link; only the ID-bearing
+        # variants `/artist/<id>`, `/artist/<id>/songs` and
+        # `/artist/songs/<id>` count as path-style documents.
+        r'/(?:album|playlist)/[^/]+'
+        r'|/artist/(?!songs(?:/|$))[^/]+(?:/songs)?'
+        r'|/artist/songs/[^/]+',
+        normalized,
+    ))
+
+
 _SPA_QUERY_FIELDS = {
     '/search': ('q',), '/playlist': ('list',), '/album': ('browse',),
     '/artist': ('channel',), '/artist/songs': ('channel',),
     '/mood': ('params', 'title'),
 }
+# Keep direct-document validation in lockstep with router.js's route codec.
+# Flask has already percent-decoded request arguments by the time they reach
+# this helper, so reject the same malformed/control values the browser router
+# rejects instead of booting the shell for a URL that will become Home.
+_MAX_SPA_ROUTE_VALUE = 2048
+
+
+def _valid_spa_route_value(value, trim=False):
+    if not isinstance(value, str):
+        return False
+    if trim:
+        value = value.strip()
+    # JavaScript String.length counts UTF-16 code units rather than Unicode
+    # code points. Encode with surrogatepass so astral characters are counted
+    # exactly like the browser route codec.
+    try:
+        js_length = len(value.encode('utf-16-le', 'surrogatepass')) // 2
+    except UnicodeEncodeError:
+        return False
+    return (bool(value) and js_length <= _MAX_SPA_ROUTE_VALUE and
+            not re.search(r'[\x00-\x1f\x7f\ufffd]', value))
+
+
+def _first_query_value(query, name):
+    value = query.get(name)
+    if isinstance(value, (list, tuple)):
+        return value[0] if value else ''
+    return value or ''
+
+
+def _spa_query_is_valid(canonical_path, query):
+    allowed = _SPA_QUERY_FIELDS.get(canonical_path, ())
+    required = allowed[:1]
+    if any(not _valid_spa_route_value(
+                _first_query_value(query, name), trim=(name == 'q'))
+           for name in required):
+        return False
+    # Optional values may be omitted or empty (the client treats an empty
+    # optional mood title as absent), but a supplied non-empty value must still
+    # satisfy the route codec's size/control-character checks.
+    for name in allowed[1:]:
+        value = _first_query_value(query, name)
+        if value and not _valid_spa_route_value(value):
+            return False
+    return True
+
+
 _JAM_PRIVATE_SPA_PATHS = {
     '/library', '/history',
 }
@@ -551,18 +659,33 @@ def _safe_spa_target(value, default='/home'):
     # while signed out would complete login and land on `/home`, losing
     # the album they were trying to open.
     normalized_path = path.rstrip('/') if path else ''
-    if normalized_path and normalized_path != '/' and normalized_path not in _SPA_DOCUMENT_PATHS:
+    path_style = bool(re.fullmatch(
+        # `/artist/songs` is a canonical document path (channel arrives as a
+        # query value), so it must NOT be classified path-style here or its
+        # query would be dropped by the early return below.
+        r'/(?:album|playlist)/[^/]+'
+        r'|/artist/(?!songs(?:/|$))[^/]+(?:/songs)?'
+        r'|/artist/songs/[^/]+',
+        normalized_path,
+    ))
+    if (normalized_path and normalized_path != '/' and
+            normalized_path not in _SPA_DOCUMENT_PATHS and not path_style):
         return default
+    # Path-style links are already canonical enough for a login `next=` target;
+    # do not reinterpret their identifier as a query value before the shell has
+    # loaded and the client router has normalized it.
+    if path_style:
+        return normalized_path
     canonical_path = normalized_path or '/'
     query = parse_qs(parsed.query, keep_blank_values=True)
     allowed = _SPA_QUERY_FIELDS.get(canonical_path, ())
-    required = allowed[:1]
-    if any(not query.get(name) or not query[name][0] for name in required):
+    if not _spa_query_is_valid(canonical_path, query):
         return default
     clean = []
     for name in allowed:
-        if query.get(name) and query[name][0]:
-            clean.append((name, query[name][0]))
+        value = _first_query_value(query, name)
+        if value:
+            clean.append((name, value))
     return canonical_path + (('?' + urlencode(clean)) if clean else '')
 
 # Endpoints reachable with a logged-in web-remote session cookie (so the long
@@ -592,11 +715,27 @@ _SESSION_PREFIXES = ('/alexa/now_playing/', '/history/', '/api/playlists/', '/re
 
 # API/device endpoints: the Alexa skill and web-remote JS hit these directly
 # and need a machine-readable JSON error, never an HTML redirect, on failure.
-_API_PREFIXES = ('/alexa/', '/proxy/', '/get_stream/', '/get_radio/',
-                  '/find_stream_list/', '/armed_play/', '/stream_video/',
-                  '/stream_playlist/', '/get_playlist_info/', '/queue_tracks/',
-                  '/play_genre/',
-                   '/history', '/recommendations', '/api/playlists/', '/api/album/', '/api/artist/', '/api/explore/', '/api/home/')
+_API_PATH_ROOTS = (
+    '/api', '/alexa', '/proxy', '/get_stream', '/get_radio',
+    '/find_stream_list', '/armed_play', '/stream_video',
+    '/stream_playlist', '/get_playlist_info', '/queue_tracks',
+    '/play_genre', '/history', '/recommendations',
+)
+
+
+def _is_api_path(path):
+    """Match API/device roots without classifying lookalike browser paths."""
+    normalized = path.rstrip('/') or '/'
+    return any(normalized == root or normalized.startswith(root + '/')
+               for root in _API_PATH_ROOTS)
+
+
+def _is_web_session_path(path):
+    """True for endpoints intended to be called by the logged-in web remote."""
+    normalized = path.rstrip('/') or '/'
+    return (normalized in {p.rstrip('/') for p in _SESSION_PATHS} or
+            any(normalized.startswith(prefix.rstrip('/') + '/')
+                for prefix in _SESSION_PREFIXES))
 
 
 def _remote_login_enabled():
@@ -849,7 +988,7 @@ def require_api_key():
     # path is intentionally NOT bypassed — that endpoint serves JSON for
     # the device and must keep going through API authorization so it
     # returns a machine-readable 401/JSON error on failure.
-    if request.method in ('GET', 'HEAD') and request.path in _SPA_DOCUMENT_PATHS_ALL:
+    if request.method in ('GET', 'HEAD') and _is_spa_document_path(request.path):
         return None
     if path in _PUBLIC_PATHS or any(request.path.startswith(p) for p in _PUBLIC_PREFIXES):
         return None
@@ -884,11 +1023,24 @@ def require_api_key():
     supplied = request.args.get('key') or request.headers.get('X-Api-Key')
     if not hmac.compare_digest(supplied or "", API_KEY):
         # Device/skill endpoints must get a JSON error, never an HTML redirect.
-        if any(request.path.startswith(p) for p in _API_PREFIXES):
-            return jsonify({'error': 'unauthorized'}), 401
-        # Anything else is a browser hitting the site directly (root, /remote,
-        # /setup, a typo, whatever) with no valid key/session: send them to the
-        # login screen instead of a bare JSON 401.
+        if _is_api_path(request.path):
+            # Keep API/device auth failures machine-readable and distinguish
+            # a missing web session from an invalid API key. The browser uses
+            # this code to avoid calling every unrelated 401 "session expired".
+            supplied_key = request.args.get('key') or request.headers.get('X-Api-Key')
+            if _is_web_session_path(request.path) and not supplied_key:
+                return jsonify({'error': {
+                    'code': 'web_session_required',
+                    'message': 'Web session required.'
+                }}), 401
+            return jsonify({'error': {'code': 'unauthorized', 'message': 'unauthorized'}}), 401
+        # Let browser document misses reach Flask's 404 handler. This keeps a
+        # typo such as /not-a-real-page from being mistaken for an auth failure
+        # and lets the user see the helpful 404 page before its safe /home
+        # redirect. Known browser routes still pass through their normal
+        # handler and login policy.
+        if request.method in ('GET', 'HEAD'):
+            return None
         return redirect('/login/')
     return None
 
@@ -1840,6 +1992,54 @@ def handle_alexa_unreachable(error):
     # Device offline / Amazon not responding: a clear 503 so the web remote can
     # show a useful message instead of a generic 500.
     return jsonify({'error': {'code': 'device_unreachable', 'message': str(error)}}), 503
+
+
+def _browser_not_found_response():
+    """Render a browser-facing 404 without changing its HTTP status."""
+    response = app.make_response(render_template(
+        '404.html', invalid_path=request.path))
+    response.status_code = 404
+    response.headers['Cache-Control'] = 'no-store'
+    return response
+
+
+def _wants_json_not_found():
+    """Use JSON for API/device paths or an explicit JSON Accept header.
+
+    A bare `*/*` (and the test client's missing Accept header) should retain
+    browser-friendly HTML. If a caller explicitly asks for JSON, including
+    `application/json, */*`, honor that even for a malformed SPA document.
+    """
+    if _is_api_path(request.path):
+        return True
+    accept = (request.headers.get('Accept') or '').lower()
+    if not accept:
+        return False
+    has_json = 'application/json' in accept
+    has_html = 'text/html' in accept
+    if not has_json:
+        return False
+    if not has_html:
+        return True
+    return request.accept_mimetypes['application/json'] >= request.accept_mimetypes['text/html']
+
+
+def _not_found_response():
+    if _wants_json_not_found():
+        return jsonify({'error': {'code': 'not_found', 'message': 'not found'}}), 404
+    return _browser_not_found_response()
+
+
+@app.route('/__not_found__', methods=['GET', 'HEAD'])
+def not_found_page():
+    """Render the browser 404 page after a detail API reports a missing item."""
+    return _browser_not_found_response()
+
+
+@app.errorhandler(404)
+def handle_not_found(error):
+    """Keep API/device misses JSON while giving browser misses a useful page."""
+    return _not_found_response()
 
 
 @app.errorhandler(Exception)
@@ -7401,13 +7601,165 @@ async def api_add_library_playlist_track(pl_id):
         return jsonify({'error': str(e)}), 500
 
 
+def _upstream_status(error):
+    """Best-effort HTTP status extraction from ytmusicapi/http clients."""
+    response = getattr(error, 'response', None)
+    for candidate in (
+            getattr(error, 'status_code', None),
+            getattr(error, 'status', None),
+            getattr(response, 'status_code', None),
+            getattr(response, 'status', None),
+            getattr(error, 'code', None)):
+        try:
+            if candidate is not None:
+                return int(candidate)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _is_missing_entity(error, needles):
+    """Recognize an upstream miss without exposing provider error text."""
+    if _upstream_status(error) in (400, 404):
+        return True
+    lowered = str(error or '').lower()
+    return any(needle in lowered for needle in needles)
+
+
+def _is_auth_error(error):
+    """Recognize ytmusicapi / YouTube auth-shaped upstream errors.
+
+    Must run BEFORE the missing-entity classifier everywhere: an auth message
+    has to surface as 401 (triggering the SPA's auth gate), never as a 404
+    that would send the client into its not-found fallback loop.
+    """
+    if _upstream_status(error) == 401:
+        return True
+    message = str(error or '').lower()
+    return any(needle in message for needle in (
+        '401', 'unauthorized', 'authentication required',
+        'invalid credentials', 'please sign in'))
+
+
+def _detail_id_has_known_shape(entity, value):
+    """Reject clearly wrong detail IDs after the API request reaches Flask.
+
+    Playlist IDs from YouTube Music are not limited to one prefix: custom
+    playlists may be opaque IDs, while browse payloads may include VL-wrapped
+    IDs. Keep this guard strict only for the entity types whose IDs are
+    unambiguous; let playlist IDs reach ytmusicapi so normal playlists keep
+    working and provider responses decide whether they are missing.
+    """
+    value = (value or '').strip().upper()
+    prefixes = {
+        'album': ('MPRE', 'OLAK'),
+        'artist': ('UC',),
+    }
+    if entity == 'playlist':
+        return bool(value)
+    return bool(value) and value.startswith(prefixes.get(entity, ()))
+
+
+def _normalize_olak_album(playlist_info, browse_id):
+    """Shape a get_playlist() response into the album response the browser
+    renderer expects.
+
+    YouTube Music album share links carry the album's underlying playlist id
+    (OLAK5uy_*), which ytmusicapi's get_album() rejects ("must start with
+    MPRE"). Loading it through get_playlist() works, so normalize that payload
+    to the same { title, artist, channelId, year, thumbnail, description,
+    tracks } contract the MPREb path produces.
+    """
+    info = playlist_info or {}
+    raw_tracks = list(info.get('tracks') or [])
+    thumbs = list(info.get('thumbnails') or [])
+    thumbnail = thumbs[-1].get('url', '') if thumbs else ''
+    author = info.get('author') or {}
+    artist_name = author.get('name') or ''
+    channel_id = author.get('id') or ''
+    tracks = []
+    for t in raw_tracks:
+        vid = t.get('videoId') or ''
+        if not vid:
+            continue
+        t_artists = t.get('artists') or []
+        # Same credit handling as the MPREb album path so multi-artist
+        # tracks render identically on both album id families.
+        t_artist = _artist_credit_from_list(t_artists, fallback=artist_name)
+        if not artist_name and t_artists:
+            artist_name = t_artists[0].get('name') or ''
+        if not channel_id and t_artists:
+            channel_id = t_artists[0].get('id') or ''
+        t_thumbs = t.get('thumbnails') or thumbs
+        t_thumb = t_thumbs[-1].get('url', '') if t_thumbs else thumbnail
+        tracks.append({
+            'videoId': vid,
+            'video_id': vid,
+            'title': t.get('title') or '',
+            'artist': t_artist,
+            'artists': t_artists,
+            'thumbnail': t_thumb,
+            'duration': t.get('duration') or '',
+            'duration_seconds': t.get('duration_seconds') or 0,
+        })
+    return {
+        'browseId': browse_id,
+        'title': info.get('title') or '',
+        'artist': artist_name,
+        'artists': [{'id': channel_id, 'name': artist_name}] if artist_name else [],
+        'channelId': channel_id,
+        'year': str(info.get('year') or ''),
+        'thumbnail': thumbnail or (tracks[0].get('thumbnail') if tracks else ''),
+        'description': info.get('description') or '',
+        'tracks': tracks,
+        'olak': True,
+    }
+
+
+def _album_provider_error_response(error, browse_id, log_label):
+    """Classify an upstream failure while loading an album.
+
+    Used by the OLAK path, which loads through get_playlist(), so the
+    missing-entity needles are the playlist phrasings (an OLAK id that is
+    not a real album surfaces the same "not a playlist" messages). Auth
+    must be classified before missing so the SPA gate triggers, never a 404
+    fallback loop.
+    """
+    if _is_auth_error(error):
+        return jsonify({'error': {
+            'code': 'unauthorized',
+            'message': 'YouTube Music authentication required.',
+        }}), 401
+    if _is_missing_entity(error, (
+            'invalid argument', 'invalid id', 'http 400', 'status code 400',
+            'http 404', 'status code 404', 'unable to find',
+            'no content returned',
+            'playlist not found', 'playlist does not exist',
+            'no such playlist',
+            'cannot find playlist', 'not a valid playlist',
+            'unsupported playlist')):
+        return jsonify({'error': {
+            'code': 'not_found',
+            'message': 'Album not found.',
+        }}), 404
+    logger.error('[api/album/%s] %s: %s', browse_id, log_label, error)
+    return jsonify({'error': {
+        'code': 'bad_gateway',
+        'message': 'Album provider unavailable.',
+    }}), 502
+
+
 @app.route("/api/library/playlists/<pl_id>", methods=["GET"])
 async def api_get_library_playlist(pl_id):
     from ytmusicapi.auth.types import AuthType
-    yt = _get_ytmusic() if _jam_guest() else _get_ytmusic_home()
     pl_id = (pl_id or '').strip()
     if not pl_id:
         return jsonify({'error': 'invalid playlist id'}), 400
+    if not _detail_id_has_known_shape('playlist', pl_id):
+        return jsonify({'error': {
+            'code': 'not_a_playlist',
+            'message': 'Playlist not found.',
+        }}), 404
     # Search/home browse responses wrap public playlists and radio stations
     # as VLPL... / VLRD.... ytmusicapi accepts the canonical PL... / RD...
     # id instead. Keep this conversion at the API boundary so direct detail
@@ -7417,6 +7769,7 @@ async def api_get_library_playlist(pl_id):
     if _jam_guest() and pl_id.upper() == 'LM':
         return jsonify({'error': 'Liked Music is private to the host account.'}), 403
     try:
+        yt = _get_ytmusic() if _jam_guest() else _get_ytmusic_home()
         try:
             # Always page this endpoint. YouTube Music commonly returns only
             # its first browse batch unless a bounded continuation request is
@@ -7509,7 +7862,6 @@ async def api_get_library_playlist(pl_id):
         # mis-routed from the search / explore shelves. Map matched phrases
         # to a clean JSON 404 so the SPA's 404-fallback can route the call
         # to /api/playlists/<id> (or to /api/album/<id> client-side).
-        msg = str(e).lower() if e else ''
         # AUTH-SHAPED FIRST. A ytmusicapi message like "401 Unauthorized" can
         # substring-match an *unrelated* playlist-not-found needle (e.g. if
         # ytmusicapi adds "playlist" to its auth error wording in the future).
@@ -7518,12 +7870,10 @@ async def api_get_library_playlist(pl_id):
         # its auth gate. Catch auth-shape messages before the not-found
         # classifier so this can never regress.
         # Phrasing check: '401' alone covers HTTP-status wrapping; the other
-        # three are human-string variants ytmusicapi / httpx / urllib emit. None
-        # of these substring-matches any not-found needle below, so reordering
-        # does not regress the existing 404 cases.
-        if any(needle in msg for needle in (
-                '401', 'unauthorized', 'authentication required',
-                'invalid credentials')):
+        # phrases are human-string variants ytmusicapi / httpx / urllib emit.
+        # None of these substring-matches any not-found needle below, so
+        # reordering does not regress the existing 404 cases.
+        if _is_auth_error(e):
             logger.warning('[api/library/playlists/%s] upstream auth: %s',
                            pl_id, e)
             return jsonify({'error': {
@@ -7541,11 +7891,11 @@ async def api_get_library_playlist(pl_id):
         # lifecycle. The other phrasings are extracted from ytmusicapi's
         # observed wording across its httpx wrapper, urllib, and parsed JSON
         # error fallbacks.
-        if any(needle in msg for needle in (
+        if _is_missing_entity(e, (
                 'invalid argument', 'invalid id',
                 'playlist not found', 'playlist does not exist',
-                'no such playlist',
-                'http 400',
+                'no such playlist', 'http 400',
+                'no content returned',
                 'cannot find playlist', 'not a valid playlist',
                 'unsupported playlist')):
             logger.info('[api/library/playlists/%s] upstream miss: %s',
@@ -7569,7 +7919,21 @@ async def api_get_library_playlist(pl_id):
             'message': f'ytmusicapi error for {pl_id!r} (see server logs).',
         }}), 502
 
+
+@app.route("/api/playlists/<pl_id>", methods=["GET"])
+async def api_get_public_playlist(pl_id):
+    """Public/curated playlist compatibility endpoint.
+
+    Older frontend preloaders use this path after the authenticated library
+    lookup returns 404. Keep it as a thin alias of the same provider-backed
+    loader so valid public playlists still open and genuine misses preserve
+    the structured 404 response.
+    """
+    return await api_get_library_playlist(pl_id)
+
+
 @app.route("/api/library/playlists/<pl_id>", methods=["PATCH"])
+
 async def api_rename_library_playlist(pl_id):
     """Rename a library playlist."""
     from ytmusicapi.auth.types import AuthType
@@ -7775,22 +8139,87 @@ async def api_get_album(browse_id):
     browse_id = (browse_id or '').strip()
     if not browse_id:
         return jsonify({'error': 'invalid browseId'}), 400
-    from ytmusicapi import YTMusic
-    yt = _get_ytmusic() if _jam_guest() else _get_ytmusic_home()
+    if not _detail_id_has_known_shape('album', browse_id):
+        return jsonify({'error': {
+            'code': 'not_found',
+            'message': 'Album not found.',
+        }}), 404
+    # OLAK ids are the album playlist ids that YouTube Music album share
+    # links carry. ytmusicapi's get_album() only accepts MPREb_* browse ids
+    # ("Invalid album browseId provided, must start with MPRE"), so load the
+    # album through get_playlist() and normalize the payload to the album
+    # shape the browser renderer expects. Wrong OLAK ids fall through the
+    # playlist classifier to a clean 404 instead of a 502 toast.
+    if browse_id.upper().startswith('OLAK'):
+        try:
+            yt = _get_ytmusic() if _jam_guest() else _get_ytmusic_home()
+            raw_pl = await asyncio.to_thread(yt.get_playlist, browse_id, 100)
+        except Exception as e:
+            message = str(e)
+            if "invalid argument" in message.lower():
+                logger.warning("YouTube OLAK album browse unavailable; retrying anonymously: %s", message)
+                try:
+                    raw_pl = await asyncio.to_thread(YTMusic().get_playlist, browse_id, 100)
+                except Exception as fallback_e:
+                    return _album_provider_error_response(fallback_e, browse_id, 'OLAK playlist load failed')
+            else:
+                return _album_provider_error_response(e, browse_id, 'OLAK playlist load failed')
+        return jsonify(_normalize_olak_album(raw_pl, browse_id))
     try:
+        yt = _get_ytmusic() if _jam_guest() else _get_ytmusic_home()
         raw = await asyncio.to_thread(yt.get_album, browse_id)
     except Exception as e:
         message = str(e)
-        if "invalid argument" in message.lower():
+        lowered = message.lower()
+        if "invalid argument" in lowered:
             logger.warning("YouTube album browse unavailable; retrying anonymously: %s", message)
             try:
                 raw = await asyncio.to_thread(YTMusic().get_album, browse_id)
             except Exception as fallback_e:
-                logger.error('[api/album/%s] anonymous fallback failed: %s', browse_id, fallback_e)
-                return jsonify({'error': str(fallback_e)}), 500
+                fallback_message = str(fallback_e)
+                fallback_lowered = fallback_message.lower()
+                logger.error('[api/album/%s] anonymous fallback failed: %s', browse_id, fallback_message)
+                if _is_auth_error(fallback_e):
+                    return jsonify({'error': {
+                        'code': 'unauthorized',
+                        'message': 'YouTube Music authentication required.',
+                    }}), 401
+                if _is_missing_entity(fallback_e, (
+                        'invalid argument', 'invalid id', 'http 400',
+                        'status code 400', 'http 404', 'status code 404',
+                        'unable to find', 'no content returned',
+                        'album not found', 'no such album',
+                        'album does not exist', 'cannot find album',
+                        'not a valid album')):
+                    return jsonify({'error': {
+                        'code': 'not_found',
+                        'message': 'Album not found.',
+                    }}), 404
+                return jsonify({'error': {
+                    'code': 'bad_gateway',
+                    'message': 'Album provider unavailable.',
+                }}), 502
         else:
             logger.error('[api/album/%s] failed: %s', browse_id, e)
-            return jsonify({'error': str(e)}), 500
+            if _is_auth_error(e):
+                return jsonify({'error': {
+                    'code': 'unauthorized',
+                    'message': 'YouTube Music authentication required.',
+                }}), 401
+            if _is_missing_entity(e, (
+                    'invalid id', 'http 400', 'status code 400',
+                    'http 404', 'status code 404',
+                    'unable to find', 'no content returned',
+                    'album not found', 'no such album', 'album does not exist',
+                    'cannot find album', 'not a valid album')):
+                return jsonify({'error': {
+                    'code': 'not_found',
+                    'message': 'Album not found.',
+                }}), 404
+            return jsonify({'error': {
+                'code': 'bad_gateway',
+                'message': 'Album provider unavailable.',
+            }}), 502
 
     # Normalise artist info
     raw_artists = raw.get('artists') or []
@@ -7880,15 +8309,24 @@ async def api_get_artist_songs(channel_id):
     browse_id = (request.args.get('browse_id') or '').strip()
     if not channel_id:
         return jsonify({'error': 'invalid channelId'}), 400
+    if not _detail_id_has_known_shape('artist', channel_id):
+        return jsonify({'error': {
+            'code': 'not_found',
+            'message': 'Artist not found.',
+        }}), 404
     if not re.fullmatch(r'[A-Za-z0-9_-]{3,200}', browse_id):
         return jsonify({'error': 'invalid songs browseId'}), 400
 
-    clients = [_get_ytmusic() if _jam_guest() else _get_ytmusic_home()]
-    try:
-        clients.append(YTMusic())
-    except Exception as error:
-        logger.warning('[api/artist/%s/songs] anonymous client unavailable: %s', channel_id, error)
     last_error = None
+    try:
+        clients = [_get_ytmusic() if _jam_guest() else _get_ytmusic_home()]
+        try:
+            clients.append(YTMusic())
+        except Exception as error:
+            logger.warning('[api/artist/%s/songs] anonymous client unavailable: %s', channel_id, error)
+    except Exception as error:
+        last_error = error
+        clients = []
     for client in clients:
         try:
             playlist = await asyncio.to_thread(client.get_playlist, browse_id, None)
@@ -7905,7 +8343,21 @@ async def api_get_artist_songs(channel_id):
         except Exception as error:
             last_error = error
             logger.warning('[api/artist/%s/songs] playlist fetch failed: %s', channel_id, error)
-    return jsonify({'error': str(last_error or 'songs unavailable')}), 500
+    error_message = str(last_error or 'songs unavailable')
+    lowered_error = error_message.lower()
+    if _is_missing_entity(last_error, (
+            'invalid argument', 'invalid id', 'invalid browse',
+            'playlist not found', 'no such playlist',
+            'playlist does not exist', 'no content returned',
+            'cannot find playlist', 'not a valid playlist')):
+        return jsonify({'error': {
+            'code': 'not_found',
+            'message': 'Artist songs not found.',
+        }}), 404
+    return jsonify({'error': {
+        'code': 'bad_gateway',
+        'message': 'Artist songs provider unavailable.',
+    }}), 502
 
 
 @app.route("/api/artist/<channel_id>", methods=["GET"])
@@ -7921,9 +8373,33 @@ async def api_get_artist(channel_id):
     channel_id = (channel_id or '').strip()
     if not channel_id:
         return jsonify({'error': 'invalid channelId'}), 400
-    from ytmusicapi import YTMusic
-    yt = _get_ytmusic() if _jam_guest() else _get_ytmusic_home()
-
+    if not _detail_id_has_known_shape('artist', channel_id):
+        return jsonify({'error': {
+            'code': 'not_found',
+            'message': 'Artist not found.',
+        }}), 404
+    def _artist_error_response(error):
+        if _is_auth_error(error):
+            return jsonify({'error': {
+                'code': 'unauthorized',
+                'message': 'YouTube Music authentication required.',
+            }}), 401
+        if _is_missing_entity(error, (
+                'invalid argument', 'invalid id', 'invalid browse',
+                'invalid channel', 'http 400', 'status code 400',
+                'http 404', 'status code 404',
+                'unable to find', 'no content returned',
+                'artist not found', 'channel not found', 'no such artist',
+                'artist does not exist', 'cannot find artist',
+                'not a valid artist')):
+            return jsonify({'error': {
+                'code': 'not_found',
+                'message': 'Artist not found.',
+            }}), 404
+        return jsonify({'error': {
+            'code': 'bad_gateway',
+            'message': 'Artist provider unavailable.',
+        }}), 502
     def parse_resilient_artist(source_client):
         """Adapt renderer variants that current ytmusicapi cannot parse.
 
@@ -7987,8 +8463,16 @@ async def api_get_artist(channel_id):
         def text(value):
             return ''.join(run.get('text', '') for run in (value or {}).get('runs', []))
 
+        # ytmusicapi raises "Unable to find 'content'" for both a genuinely
+        # empty artist page and an invalid channel. Only the former has a
+        # usable artist header; do not turn an unknown channel into a fake
+        # successful page whose later UI error becomes a toast.
+        name = text(header.get('title'))
+        if not name:
+            raise LookupError('artist not found')
+
         subscription = (header.get('subscriptionButton') or {}).get('subscribeButtonRenderer') or {}
-        name = text(header.get('title')) or channel_id
+        name = name or channel_id
         thumbnails = ((header.get('thumbnail') or header.get('foregroundThumbnail') or {})
                       .get('musicThumbnailRenderer', {}).get('thumbnail', {}).get('thumbnails') or [])
         # Search supplies an avatar for channels whose bare browse header has
@@ -8022,6 +8506,7 @@ async def api_get_artist(channel_id):
         }
 
     try:
+        yt = _get_ytmusic() if _jam_guest() else _get_ytmusic_home()
         raw = await asyncio.to_thread(yt.get_artist, channel_id)
     except Exception as e:
         message = str(e)
@@ -8031,24 +8516,24 @@ async def api_get_artist(channel_id):
                 raw = await asyncio.to_thread(parse_resilient_artist, yt)
             except Exception as fallback_e:
                 logger.error('[api/artist/%s] renderer fallback failed: %s', channel_id, fallback_e)
-                return jsonify({'error': str(fallback_e)}), 500
+                return _artist_error_response(fallback_e)
         elif "invalid argument" in message.lower():
             logger.warning("YouTube artist browse unavailable; retrying anonymously: %s", message)
             try:
                 raw = await asyncio.to_thread(YTMusic().get_artist, channel_id)
             except Exception as fallback_e:
                 logger.error('[api/artist/%s] anonymous fallback failed: %s', channel_id, fallback_e)
-                return jsonify({'error': str(fallback_e)}), 500
+                return _artist_error_response(fallback_e)
         elif "Unable to find 'content'" in message:
             logger.info('[api/artist/%s] browse page has no music shelves; using artist shell', channel_id)
             try:
                 raw = await asyncio.to_thread(minimal_artist_from_browse, yt)
             except Exception as fallback_e:
                 logger.error('[api/artist/%s] empty-shelf fallback failed: %s', channel_id, fallback_e)
-                return jsonify({'error': str(fallback_e)}), 500
+                return _artist_error_response(fallback_e)
         else:
             logger.error('[api/artist/%s] failed: %s', channel_id, e)
-            return jsonify({'error': str(e)}), 500
+            return _artist_error_response(e)
 
     artist_name = raw.get('name') or ''
 
@@ -8268,6 +8753,17 @@ def root():
 
 
 def spa_document():
+    # Every recognized SPA document is shell-first. Do not validate or resolve
+    # album/playlist/artist/search parameters here: this is the document
+    # request, not the detail request. The browser must receive remote.html
+    # first so its router can issue the backend request and display any backend
+    # error in the app. Only paths that are not registered SPA documents reach
+    # the document-level 404 handler.
+    return _render_root_shell()
+
+
+def spa_path_document(_detail_id=None):
+    """Serve the same shell for a path-style deep link."""
     return _render_root_shell()
 
 
@@ -8288,6 +8784,24 @@ for _spa_document_path in _SPA_DOCUMENT_PATHS:
         _spa_document_path,
         endpoint=_spa_endpoint_name(_spa_document_path),
         view_func=spa_document,
+        methods=['GET', 'HEAD'],
+        strict_slashes=False,
+    )
+
+# Also accept path-style links copied from older versions or external clients.
+# The shell is still returned first; router.js receives the identifier through
+# the normalized query URL only when the browser has loaded the document.
+for _spa_path, _spa_converter in (
+    ('/album/<string:_detail_id>', 'album'),
+    ('/playlist/<string:_detail_id>', 'playlist'),
+    ('/artist/<string:_detail_id>', 'artist'),
+    ('/artist/<string:_detail_id>/songs', 'artist_songs'),
+    ('/artist/songs/<string:_detail_id>', 'artist_songs_prefix'),
+):
+    app.add_url_rule(
+        _spa_path,
+        endpoint='spa_path_' + _spa_converter,
+        view_func=spa_path_document,
         methods=['GET', 'HEAD'],
         strict_slashes=False,
     )

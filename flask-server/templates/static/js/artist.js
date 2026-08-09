@@ -155,6 +155,10 @@
         try {
           await ensureExpandedTopSongs(channelId, cached);
         } catch (e) {
+          if (requestIsCurrent() && window._isNotFoundError && window._isNotFoundError(e) && window._showNotFoundPage) {
+            window._showNotFoundPage();
+            return;
+          }
           if (requestIsCurrent() && window.toast) {
             window.toast(e.message || 'Unable to load all songs', 'error');
           }
@@ -189,6 +193,10 @@
         try {
           await ensureExpandedTopSongs(channelId, data);
         } catch (e) {
+          if (requestIsCurrent() && window._isNotFoundError && window._isNotFoundError(e) && window._showNotFoundPage) {
+            window._showNotFoundPage();
+            return;
+          }
           if (requestIsCurrent() && window.toast) {
             window.toast(e.message || 'Unable to load all songs', 'error');
           }
@@ -203,6 +211,10 @@
       state._renderedArtistChannelId = channelId;
       showSkeleton(false);
     } catch (e) {
+      if (requestIsCurrent() && window._isNotFoundError && window._isNotFoundError(e) && window._showNotFoundPage) {
+        window._showNotFoundPage();
+        return;
+      }
       if (requestIsCurrent() && window.toast) window.toast(e.message, 'error');
     } finally {
       if (token === state._artistLoadToken) state._artistLoading = false;
@@ -674,6 +686,10 @@
       showArtistSongsLoading(false);
       if (needsFetch && window.completeTopProgress) window.completeTopProgress();
     } catch (e) {
+      if (requestIsCurrent() && window._isNotFoundError && window._isNotFoundError(e) && window._showNotFoundPage) {
+        window._showNotFoundPage();
+        return;
+      }
       if (requestIsCurrent() && window.toast) window.toast(e.message || 'Unable to load songs', 'error');
       if (needsFetch && window.abortTopProgress) window.abortTopProgress();
     } finally {

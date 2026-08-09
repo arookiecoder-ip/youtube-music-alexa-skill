@@ -227,6 +227,11 @@
       cache[browseId] = data;
       render(data);
     } catch (error) {
+      var ownsAlbumRoute = !window.getRoute || window.getRoute() === route;
+      if (ownsAlbumRoute && window._isNotFoundError && window._isNotFoundError(error) && window._showNotFoundPage) {
+        window._showNotFoundPage();
+        return;
+      }
       if (body) body.innerHTML = '<div class="history-modal-empty">Could not load this album.</div>';
       if (window.toast) window.toast(error.message || 'Could not load album', 'error');
     }

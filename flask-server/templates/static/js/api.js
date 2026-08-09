@@ -16,6 +16,11 @@
 
   // Shared 401 handling for api/apiDelete/apiPatch. For a jam guest a 401
   // usually means the host ended the jam, but it can also be a forbidden action.
+  // Several startup requests can fail together when the session expires. Never
+  // navigate from a background API failure: if the cookie is being rejected,
+  // redirecting to the app again only creates an infinite refresh cycle.
+  var _sessionExpired = false;
+
   function _onUnauthorized() {
     if (window.JAM_GUEST) {
       // `/alexa/status/` is owner-only, so probing it always returned 401 for
@@ -30,8 +35,13 @@
         .catch(() => { /* network hiccup: leave the UI alone */ });
       return new Error('Not available in this jam');
     }
+    if (_sessionExpired) return new Error('Session expired');
+    _sessionExpired = true;
     if (window.toast) window.toast('Session expired - please log in again.', 'error');
-    setTimeout(function() { window.location.href = '/login/'; }, 2000);
+    // Deliberately do not auto-redirect. This request may be one of several
+    // startup calls, and a missing Secure cookie on HTTP would otherwise make
+    // /login/ → /home → 401 → /login/ repeat forever. The user can use the
+    // explicit login control without losing the current page state.
     return new Error('Session expired');
   }
 
@@ -44,21 +54,52 @@
     return '';
   }
 
+  function _isWebSessionFailure(res, json) {
+    if (res.redirected && res.url.includes('/login')) return true;
+    if (res.status !== 401 || !json) return false;
+    var err = json.error;
+    return !!(err && typeof err === 'object' &&
+      err.code === 'web_session_required');
+  }
+
   // Generous: a cold /api/home build or a slow search can take >15s server-side.
   var API_TIMEOUT_MS = 30000;
 
   // v3.1: Shared error response handler — throws appropriate Error for 429, 502/503, and other statuses.
   function _handleErrorResponse(res, json) {
     var errMsg = _extractError(json);
+    var message = errMsg || ('HTTP ' + res.status);
     if (res.status === 429) {
       var retryAfter = res.headers.get('Retry-After');
-      var waitMsg = retryAfter ? ' Try again in ' + retryAfter + 's.' : '';
-      throw new Error(errMsg || ('Server is busy.' + waitMsg));
+      message = errMsg || ('Server is busy.' + (retryAfter ? ' Try again in ' + retryAfter + 's.' : ''));
+    } else if (res.status === 502 || res.status === 503) {
+      message = errMsg || 'Device is offline or unreachable.';
     }
-    if (res.status === 502 || res.status === 503) {
-      throw new Error(errMsg || 'Device is offline or unreachable.');
-    }
-    throw new Error(errMsg || ('HTTP ' + res.status));
+    var error = new Error(message);
+    error.status = res.status;
+    var responseError = json && json.error;
+    error.code = responseError && typeof responseError === 'object'
+      ? (responseError.code || '') : '';
+    throw error;
+  }
+
+  function isNotFoundError(error) {
+    if (!error) return false;
+    if (error.status === 404) return true;
+    return error.code === 'not_found' || error.code === 'not_a_playlist';
+  }
+
+  // Detail bundles may be invoked by the router during a hot reload before
+  // their shared API bundle has reattached the exported helper. Keep the
+  // entity-miss contract available to every loader without treating 401/502
+  // provider failures as a page-not-found.
+  window._isNotFoundError = isNotFoundError;
+
+  function showNotFoundPage() {
+    // Let Flask render the canonical 404 template. This is only called after
+    // a detail API explicitly identified the requested entity as missing,
+    // never for network/session/provider errors.
+    window.location.replace('/__not_found__');
   }
 
   let _activeRequests = 0;
@@ -133,8 +174,8 @@
         ? e.message
         : "Can't reach the server. Check your connection and try again.");
     }
-    if (res.status === 401 || (res.redirected && res.url.includes('/login'))) throw _onUnauthorized();
     const json = await res.json().catch(() => ({}));
+    if (_isWebSessionFailure(res, json)) throw _onUnauthorized();
     if (!res.ok) _handleErrorResponse(res, json);
     return json;
   }
@@ -180,8 +221,8 @@
         ? e.message
         : "Can't reach the server. Check your connection and try again.");
     }
-    if (res.status === 401 || (res.redirected && res.url.includes('/login'))) throw _onUnauthorized();
     const json = await res.json().catch(() => ({}));
+    if (_isWebSessionFailure(res, json)) throw _onUnauthorized();
     if (!res.ok) _handleErrorResponse(res, json);
     return json;
   }
@@ -200,8 +241,8 @@
         ? e.message
         : "Can't reach the server. Check your connection and try again.");
     }
-    if (res.status === 401 || (res.redirected && res.url.includes('/login'))) throw _onUnauthorized();
     const json = await res.json().catch(() => ({}));
+    if (_isWebSessionFailure(res, json)) throw _onUnauthorized();
     if (!res.ok) _handleErrorResponse(res, json);
     return json;
   }
@@ -211,6 +252,9 @@
   window.apiPatch = apiPatch;
   window.escHtml = escHtml;
   window._onUnauthorized = _onUnauthorized;
+  window._sessionExpired = function() { return _sessionExpired; };
+  window._sessionExpiredMessage = 'Session expired - please log in again.';
+  window._showNotFoundPage = showNotFoundPage;
 
   // Globally hide broken images
   window.addEventListener('error', function(e) {

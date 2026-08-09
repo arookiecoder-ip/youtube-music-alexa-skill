@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#030303">
+<title>Page not found — Music Box</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #030303;
+    --surface: #141414;
+    --border: #292929;
+    --text: #f4f4f4;
+    --muted: #999;
+    --accent: #e8590c;
+    --accent-hover: #f76707;
+  }
+  *, *::before, *::after { box-sizing: border-box; }
+  html, body { min-height: 100%; }
+  body {
+    min-height: 100dvh;
+    margin: 0;
+    display: grid;
+    place-items: center;
+    padding: 24px;
+    overflow: hidden;
+    color: var(--text);
+    background:
+      radial-gradient(circle at 50% 22%, rgba(232, 89, 12, .16), transparent 34%),
+      var(--bg);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+  }
+  body::before {
+    content: '';
+    position: fixed;
+    inset: 0 0 auto;
+    height: 3px;
+    background: var(--accent);
+  }
+  main {
+    width: min(100%, 520px);
+    text-align: center;
+  }
+  .brand {
+    display: inline-flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 36px;
+    color: var(--text);
+    font-size: .82rem;
+    font-weight: 800;
+    letter-spacing: .16em;
+    text-transform: uppercase;
+  }
+  .eq-icon {
+    display: flex;
+    align-items: flex-end;
+    gap: 3px;
+    width: 22px;
+    height: 22px;
+  }
+  .eq-icon span {
+    display: block;
+    width: 3px;
+    background: var(--accent);
+    transform-origin: bottom;
+    animation: eq 1.4s ease-in-out infinite;
+  }
+  .eq-icon span:nth-child(1) { height: 35%; }
+  .eq-icon span:nth-child(2) { height: 75%; animation-delay: .15s; }
+  .eq-icon span:nth-child(3) { height: 50%; animation-delay: .35s; }
+  .eq-icon span:nth-child(4) { height: 90%; animation-delay: .1s; }
+  .eq-icon span:nth-child(5) { height: 60%; animation-delay: .25s; }
+  @keyframes eq { 0%, 100% { transform: scaleY(1); } 50% { transform: scaleY(.3); } }
+  .code {
+  margin: 0 auto;
+  color: var(--accent);
+  font-size: clamp(5.5rem, 22vw, 9rem);
+  font-weight: 900;
+  line-height: .82;
+  text-align: center;
+  letter-spacing: .06em;
+
+  /* Fix uneven digit width */
+  font-variant-numeric: tabular-nums;
+}
+  h1 {
+    margin: 28px 0 10px;
+    font-size: clamp(1.35rem, 4vw, 2rem);
+    line-height: 1.2;
+  }
+  p {
+    margin: 0 auto;
+    max-width: 390px;
+    color: var(--muted);
+    font-size: .9rem;
+    line-height: 1.55;
+  }
+  .actions {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 12px;
+    margin-top: 28px;
+  }
+  .home-button {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 44px;
+    padding: 0 22px;
+    border: 1px solid var(--accent);
+    border-radius: 999px;
+    color: #fff;
+    background: var(--accent);
+    font: inherit;
+    font-size: .78rem;
+    font-weight: 800;
+    letter-spacing: .06em;
+    text-decoration: none;
+    cursor: pointer;
+    transition: background .15s, border-color .15s, transform .15s;
+  }
+  .home-button:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+  .home-button:active { transform: translateY(1px); }
+  code {
+    color: #bbb;
+    font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+    font-size: .85em;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .eq-icon span { animation: none; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <div class="brand" aria-label="Music Box">
+    <span class="eq-icon" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span></span>
+    Music Box
+  </div>
+  <p class="code" aria-hidden="true">404</p>
+  <h1>We couldn't find that page</h1>
+  <p>The address <code>{{ invalid_path }}</code> may be incorrect or the page may have moved. You’ll be taken back to Music Box shortly.</p>
+  <div class="actions">
+    <a class="home-button" href="/home">Go to homepage</a>
+  </div>
+</main>
+<script>
+(function () {
+  // Keep the error page quiet, then return to the app after exactly two seconds.
+  window.setTimeout(function () {
+    window.location.replace('/home');
+  }, 2000);
+})();
+</script>
+</body>
+</html>

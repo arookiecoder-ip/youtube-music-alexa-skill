@@ -292,19 +292,15 @@
           || pl.isLibraryPlaylist === true
           || libraryPlaylistIds.has(String(plId));
       } else {
-        try {
-          // Always request the first page explicitly. The server can then
-          // return a continuation signal for very large playlists (including
-          // Liked Music) instead of silently returning its first browse page.
-          pl = await window.api('/api/library/playlists/' + encodeURIComponent(plId) + '?offset=0&limit=' + PLAYLIST_PAGE_SIZE);
-          isLibrary = true;
-        } catch (e1) {
-          const status = e1 && (e1.status || (e1.response && e1.response.status));
-          if (status !== 404) throw e1;
-          pl = await window.api('/api/playlists/' + encodeURIComponent(plId));
-          isLibrary = false;
-          isCurated = _isCuratedPlaylist(pl);
-        }
+        // Always request the first page explicitly. The server can then
+        // return a continuation signal for very large playlists (including
+        // Liked Music) instead of silently returning its first browse page.
+        // The library endpoint itself already falls back to YouTube's public
+        // watch-playlist API for curated IDs; there is no second browser
+        // endpoint to retry here. Let every error reach the page-level catch
+        // unchanged so a real 404 remains a 404.
+        pl = await window.api('/api/library/playlists/' + encodeURIComponent(plId) + '?offset=0&limit=' + PLAYLIST_PAGE_SIZE);
+        isLibrary = true;
       }
       // Do not let a late response from a previous playlist reclaim the
       // shared overlay after another route has become active.
@@ -686,6 +682,10 @@
       }
     } catch (e) {
       if (!stillOwnsRoute()) return;
+      if (window._isNotFoundError && window._isNotFoundError(e) && window._showNotFoundPage) {
+        window._showNotFoundPage();
+        return;
+      }
       console.error('Failed to load playlist', e);
       if (titleEl) titleEl.textContent = 'Error loading playlist';
       if (body) body.innerHTML = '<div style="padding:24px; color:var(--muted); text-align:center;">Failed to load playlist</div>';
