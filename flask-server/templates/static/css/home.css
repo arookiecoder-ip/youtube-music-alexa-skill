@@ -1415,16 +1415,24 @@
 }
 .library-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, 140px);
-  justify-content: center;
+  grid-template-columns: repeat(auto-fill, minmax(126px, 1fr));
   gap: 16px;
 }
-@media (min-width: 700px) {
+
+/* Desktop Library deliberately stays at six tracks while the rail changes.
+   The maximum width is exactly the homepage geometry: six 174px cards with
+   five 24px gaps. When the expanded rail leaves less room, the same six 1fr
+   tracks shrink instead of reflowing one card into a fifth-column layout. */
+@media (min-width: 900px) {
   .library-grid {
-    grid-template-columns: repeat(auto-fill, 174px);
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    width: 100%;
+    max-width: 1164px;
+    margin-inline: auto;
     gap: 24px;
   }
 }
+
 .library-card {
   display: flex;
   flex-direction: column;
@@ -1562,6 +1570,21 @@
 .library-card:hover .library-card-play.home-play-btn,
 .library-card:focus-within .library-card-play.home-play-btn,
 .library-card-play.home-play-btn:focus-visible { opacity: 1; }
+
+/* Library keeps the homepage's card geometry while retaining a fluid row
+   count. Playlist cards use the normal 174px desktop / 126px mobile tracks;
+   subscribed artists use the homepage circle sizes (160px / 120px). */
+@media (min-width: 900px) {
+  body.library-route .library-card-artist {
+    width: 100%;
+    max-width: 160px;
+    justify-self: center;
+  }
+  body.library-route .library-card-artist .library-card-art {
+    width: 100%;
+    height: auto;
+  }
+}
 .explore-mood-grid {
   display: grid;
   grid-template-columns: repeat(6, minmax(0, 1fr));
@@ -1935,6 +1958,7 @@
 
   body.library-route .library-grid {
     grid-template-columns: repeat(auto-fill, 126px);
+    justify-content: center;
     column-gap: 24px;
   }
   body.library-route .library-card,
@@ -1944,6 +1968,13 @@
   body.library-route .library-card-art {
     height: 126px;
     aspect-ratio: auto;
+  }
+  body.library-route .library-card-artist,
+  body.library-route .library-card-artist .library-card-art {
+    width: 120px;
+  }
+  body.library-route .library-card-artist .library-card-art {
+    height: 120px;
   }
   body.library-route .library-card-artist .library-card-info {
     text-align: center;

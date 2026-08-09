@@ -231,9 +231,11 @@
     const section = document.getElementById('home-section');
     const idleHero = document.getElementById('idle-hero');
     if (idleHero) idleHero.hidden = true;
-    const artistOpen = (window.getRoute() || '').indexOf('#artist/') === 0;
-    const npOpen = (window.getRoute() || '') === '#now-playing';
-    if (section) section.hidden = !!(state._resultsOpen || artistOpen || npOpen);
+    const currentRoute = window.getRoute() || '';
+    const artistOpen = currentRoute.indexOf('#artist/') === 0;
+    const collectionOpen = currentRoute.indexOf('#playlist/') === 0 || currentRoute.indexOf('#album/') === 0;
+    const npOpen = currentRoute === '#now-playing';
+    if (section) section.hidden = !!(state._resultsOpen || artistOpen || collectionOpen || npOpen);
 
     showHomeSkeleton(true);
     try {

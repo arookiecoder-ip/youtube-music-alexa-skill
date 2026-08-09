@@ -126,6 +126,7 @@
       // The player is a fixed bottom bar now, so the home feed stays visible
       // while a track plays; only search results or the artist page cover it.
       const artistOpen = route.indexOf('#artist/') === 0;
+      const playlistOpen = route.indexOf('#playlist/') === 0;
       const albumOpen = route.indexOf('#album/') === 0;
       const historyOpen = route === '#history';
       const exploreOpen = route === '#explore';
@@ -143,7 +144,7 @@
         (!state._searchPreviousRoute || state._searchPreviousRoute === '#home');
       const shouldShow = state._loggedIn &&
         ((!searchRoute && !state._resultsOpen) || preserveHomeDuringSearch) &&
-        !artistOpen && !albumOpen && !historyOpen && !exploreOpen && !moodOpen && !libraryOpen && !npOpen;
+        !artistOpen && !playlistOpen && !albumOpen && !historyOpen && !exploreOpen && !moodOpen && !libraryOpen && !npOpen;
       if (shouldShow && !state._homeLoaded && window.loadHomeFeed) window.loadHomeFeed();
       else homeSection.hidden = !shouldShow || !state._homeLoaded;
     }

@@ -688,9 +688,15 @@
        rendered in normal document flow on mobile, so keep Home out of flow
        even during an async/preloaded route transition. */
     body.playlists-route #home-section,
+    body.playlists-route #recs-section,
     body.album-route #home-section,
+    body.album-route #recs-section,
     body.artist-route #home-section,
-    body.artist-songs-route #home-section {
+    body.artist-route #recs-section,
+    body.artist-songs-route #home-section,
+    body.artist-songs-route #recs-section,
+    body:has(#playlist-detail-modal-overlay.open) #home-section,
+    body:has(#playlist-detail-modal-overlay.open) #recs-section {
       display: none !important;
     }
 
@@ -755,5 +761,16 @@
     background-color: transparent !important;
     background-image: none !important;
     border-bottom-color: transparent !important;
+  }
+
+  /* Match the mobile Home card geometry: Albums and Singles use 126px
+     square cards, while Related Artists use the 120px Home artist circle. */
+  body.artist-route #artist-section .hscroll-card {
+    flex-basis: 126px;
+    width: 126px;
+  }
+  body.artist-route #artist-section .hscroll-card.related-artist-card {
+    flex-basis: 120px;
+    width: 120px;
   }
 }
