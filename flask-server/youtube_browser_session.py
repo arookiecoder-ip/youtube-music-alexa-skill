@@ -65,8 +65,10 @@ def is_authentication_error(error):
     if status == 429 or isinstance(error, (TimeoutError, urllib.error.URLError)):
         return False
     message = str(error).lower()
-    positive = ("login required", "authentication required", "unauthorized",
-                "invalid authentication", "invalid sapisid", "session expired")
+    positive = ("login required", "authentication required",
+                 "requires authentication", "unauthorized",
+                 "invalid authentication", "invalid sapisid", "session expired")
+
     negative = ("timeout", "timed out", "rate limit", "too many requests",
                 "parse", "json", "decode")
     return any(x in message for x in positive) and not any(x in message for x in negative)

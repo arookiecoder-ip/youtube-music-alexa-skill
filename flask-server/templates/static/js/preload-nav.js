@@ -278,7 +278,8 @@
       });
     }
 
-    // Keep local subscriptions when YouTube Music access has expired.
+    // Artist subscriptions are read only from the connected YouTube Music
+    // account; do not substitute local follows when that request fails.
     return Promise.all([
       getJson('/api/subscribed_artists/'),
       getJson('/api/library/').catch(function () { return { playlists: [] }; }),

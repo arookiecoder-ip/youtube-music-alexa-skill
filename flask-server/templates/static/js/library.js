@@ -144,8 +144,9 @@
   let _loading = false;
 
   async function loadLibrary(force) {
-    // Subscribed artists are stored by this app, not YouTube Music. They must
-    // still render when login-state hydration has not completed yet.
+    // Artist subscriptions come from the connected YouTube Music account.
+    // Never render a local fallback: it can show artists the account does not
+    // actually follow.
     if (window.JAM_GUEST) return;
 
     const body = document.getElementById('library-modal-body');
@@ -162,9 +163,10 @@
       const subscribedData = preloaded
         ? preloaded.subscribedData
         : await window.api('/api/subscribed_artists/');
-      state._subscribedArtists = subscribedData.artists || [];
-      // YouTube library can fail independently (expired YT session, guest
-      // account, etc.); keep local subscribed artists visible regardless.
+      state._subscribedArtists = (subscribedData && subscribedData.artists) || [];
+      state._subscribedArtistsAvailable = true;
+      // Playlist loading is independent, but subscribed artists remain the
+      // authoritative YouTube Music response above.
       let data = preloaded ? preloaded.libraryData : { playlists: [] };
       if (!preloaded) {
         try {

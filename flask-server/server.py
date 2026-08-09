@@ -8,6 +8,7 @@ from ytmusicapi import YTMusic
 import alexa_remote
 from youtube_browser_session import (BrowserController, YouTubeBrowserSessionManager,
                                      browser_client_is_signed_in,
+                                     is_authentication_error,
                                      promote_browser_headers)
 from flask import Flask, request, render_template, jsonify, send_file, session, redirect, Response
 from werkzeug.exceptions import HTTPException
@@ -406,6 +407,7 @@ HISTORY_MAX = 100
 
 _history_lock = threading.Lock() # Dummy lock to avoid breaking other routes
 _playlists_lock = threading.Lock() # Dummy lock to avoid breaking other routes
+_artist_subscriptions_lock = threading.Lock()
 
 def get_db():
     conn = sqlite3.connect(DB_FILE, timeout=10.0)
@@ -427,6 +429,17 @@ def init_db():
                 v TEXT
             )
         ''')
+        # Artist subscriptions are authoritative in YouTube Music. Remove
+        # records written by older releases so stale local follows can never
+        # appear in the library after an upgrade.
+        migration = conn.execute(
+            "SELECT v FROM kv WHERE k = 'artist_subscription_migration_v2'"
+        ).fetchone()
+        if migration is None:
+            conn.execute("DELETE FROM kv WHERE k IN ('subscribed_artists', 'unsubscribed_artists')")
+            conn.execute(
+                "INSERT INTO kv (k, v) VALUES ('artist_subscription_migration_v2', '1')"
+            )
         conn.execute('''
             CREATE TABLE IF NOT EXISTS jam_tokens (
                 token TEXT PRIMARY KEY,
@@ -7195,71 +7208,145 @@ async def api_get_library():
             })
         return jsonify({'error': str(e)}), 500
 
-@app.route("/api/subscribed_artists/", methods=["GET", "POST", "DELETE"])
-async def api_subscribed_artists():
-    """Return YouTube Music subscriptions merged with website follows."""
-    _ensure_db()
-    key = 'subscribed_artists'
-    with get_db() as conn:
-        row = conn.execute('SELECT v FROM kv WHERE k = ?', (key,)).fetchone()
-        artists = json.loads(row['v']) if row and row['v'] else []
-        if not isinstance(artists, list):
-            artists = []
-        if request.method != 'GET':
-            body = request.get_json(silent=True) or {}
-            channel_id = str(body.get('channel_id') or body.get('id') or '').strip()
-            if not channel_id:
-                return jsonify({'error': 'channel_id is required'}), 400
-            if request.method == 'POST':
-                entry = {
-                    'channel_id': channel_id,
-                    'name': str(body.get('name') or '').strip(),
-                    'thumbnail': str(body.get('thumbnail') or '').strip(),
-                }
-                artists = [a for a in artists if a.get('channel_id') != channel_id]
-                artists.insert(0, entry)
-            else:
-                artists = [a for a in artists if a.get('channel_id') != channel_id]
-            conn.execute('INSERT OR REPLACE INTO kv (k, v) VALUES (?, ?)', (key, json.dumps(artists)))
-
-    if request.method != 'GET':
-        return jsonify({'artists': artists})
-
-    # YouTube Music keeps subscriptions separate from library playlists. Merge
-    # them with follows created in this remote, instead of replacing either.
-    try:
-        remote_artists = await asyncio.to_thread(
-            _get_ytmusic_home().get_library_subscriptions, 500, 'recently_added'
-        )
-    except Exception as error:
-        logger.warning('YouTube Music subscriptions unavailable: %s', error)
-        remote_artists = []
-
-    youtube_artists = []
-    for artist in remote_artists or []:
+def _normalize_youtube_artist_subscriptions(raw_artists):
+    """Convert ytmusicapi subscription records to the UI's stable shape."""
+    normalized = []
+    seen = set()
+    for artist in raw_artists or []:
+        if not isinstance(artist, dict):
+            continue
         channel_id = str(artist.get('browseId') or artist.get('channelId') or '').strip()
-        name = str(artist.get('artist') or artist.get('name') or '').strip()
+        name = str(artist.get('artist') or artist.get('name') or
+                    artist.get('title') or '').strip()
         thumbnails = artist.get('thumbnails') or []
-        thumbnail = thumbnails[-1].get('url', '') if thumbnails else ''
-        if channel_id or name:
-            youtube_artists.append({
+        thumbnail = thumbnails[-1].get('url', '') if thumbnails and isinstance(thumbnails[-1], dict) else ''
+        identity = channel_id or name.casefold()
+        if identity and identity not in seen:
+            seen.add(identity)
+            normalized.append({
                 'channel_id': channel_id,
                 'name': name,
                 'thumbnail': thumbnail,
                 'source': 'youtube_music',
             })
+    return normalized
 
-    merged = []
-    seen = set()
-    for artist in list(artists) + youtube_artists:
-        channel_id = str(artist.get('channel_id') or '').strip()
-        name = str(artist.get('name') or '').strip()
-        identity = channel_id or name.lower()
-        if not identity or identity in seen:
-            continue
-        seen.add(identity)
-        merged.append(artist)
-    return jsonify({'artists': merged, 'youtube_count': len(youtube_artists)})
+
+def _youtube_subscription_error(error, method_name):
+    """Return a safe, actionable response for an upstream subscription error."""
+    if is_authentication_error(error):
+        return jsonify({'error': {
+            'code': 'youtube_auth_required',
+            'message': 'Connect YouTube Music before changing artist subscriptions.',
+        }}), 403
+    logger.warning('YouTube Music %s failed: %s', method_name, error,
+                   exc_info=True)
+    return jsonify({'error': {
+        'code': 'youtube_subscription_failed',
+        'message': 'YouTube Music could not update the artist subscription. Try again.',
+    }}), 502
+
+
+@app.route("/api/subscribed_artists/", methods=["GET", "POST", "DELETE"])
+async def api_subscribed_artists():
+    """Read and mutate artist subscriptions in YouTube Music only."""
+    _ensure_db()
+
+    if request.method == 'GET':
+        method_name = 'get_library_subscriptions'
+
+        def fetch_subscriptions():
+            yt = _get_ytmusic_home()
+            method = getattr(yt, method_name, None)
+            if not callable(method):
+                raise LookupError(method_name)
+            return _normalize_youtube_artist_subscriptions(
+                method(500, 'recently_added')
+            )
+
+        try:
+            artists = await asyncio.to_thread(
+                _with_youtube_auth_renewal, fetch_subscriptions
+            )
+        except LookupError as error:
+            logger.warning('Configured ytmusicapi lacks %s', error)
+            return jsonify({'error': {
+                'code': 'subscription_controls_unavailable',
+                'message': 'This server cannot read YouTube Music subscriptions.',
+            }}), 502
+        except Exception as error:
+            return _youtube_subscription_error(error, method_name)
+        return jsonify({'artists': artists, 'youtube_count': len(artists)})
+
+    body = request.get_json(silent=True) or {}
+    # DELETE request bodies are not reliably preserved by every proxy, so keep
+    # accepting the identifier in the query string as well.
+    channel_id = str(request.args.get('channel_id') or
+                     body.get('channel_id') or body.get('id') or '').strip()
+    if not channel_id:
+        return jsonify({'error': 'channel_id is required'}), 400
+
+    # ytmusicapi exposes both mutations as batch operations. In particular,
+    # current releases provide subscribe_artists([id]), not subscribe_artist(id).
+    method_name = ('subscribe_artists' if request.method == 'POST'
+                   else 'unsubscribe_artists')
+    expected_subscribed = request.method == 'POST'
+
+    def mutate_subscription():
+        yt = _get_ytmusic_home()
+        method = getattr(yt, method_name, None)
+        if not callable(method):
+            raise LookupError(method_name)
+        # Both current mutation methods are batch operations. A completed call
+        # means YouTube accepted the mutation; its library read can lag behind
+        # that write for several seconds.
+        return method([channel_id])
+
+    try:
+        await asyncio.to_thread(
+            _with_youtube_auth_renewal, mutate_subscription
+        )
+    except LookupError as error:
+        logger.warning('Configured ytmusicapi lacks %s', error)
+        return jsonify({'error': {
+            'code': 'subscription_controls_unavailable',
+            'message': 'This server cannot control YouTube Music subscriptions.',
+        }}), 502
+    except Exception as error:
+        return _youtube_subscription_error(error, method_name)
+
+    # Read-after-write is useful when YouTube has propagated the change, but it
+    # is not a valid failure signal: get_library_subscriptions is eventually
+    # consistent. Return the confirmed snapshot when available, otherwise
+    # explicitly tell the client that the accepted mutation is still settling.
+    response = {
+        'subscribed': expected_subscribed,
+        'pending_confirmation': True,
+    }
+    try:
+        def fetch_after_mutation():
+            yt = _get_ytmusic_home()
+            method = getattr(yt, 'get_library_subscriptions', None)
+            if not callable(method):
+                raise LookupError('get_library_subscriptions')
+            return _normalize_youtube_artist_subscriptions(
+                method(500, 'recently_added')
+            )
+
+        artists = await asyncio.to_thread(
+            _with_youtube_auth_renewal, fetch_after_mutation
+        )
+        present = any(a.get('channel_id') == channel_id for a in artists)
+        if present == expected_subscribed:
+            response.update({
+                'artists': artists,
+                'youtube_count': len(artists),
+                'pending_confirmation': False,
+            })
+    except Exception as error:
+        logger.info('YouTube subscription accepted; confirmation read pending for %s: %s',
+                    channel_id, error)
+    return jsonify(response), 202 if response['pending_confirmation'] else 200
 
 @app.route("/api/library/playlists/", methods=["POST"])
 async def api_create_library_playlist():

@@ -115,11 +115,15 @@
     if (window.IS_AUTHENTICATED && !window.JAM_GUEST &&
         (!Array.isArray(state._subscribedArtists) ||
         Date.now() - (state._subscribedArtistsFetchedAt || 0) > 60000) && window.api) {
+      state._subscribedArtistsAvailable = false;
       try {
         var subscriptionData = await window.api('/api/subscribed_artists/');
         state._subscribedArtists = subscriptionData.artists || [];
         state._subscribedArtistsFetchedAt = Date.now();
+        state._subscribedArtistsAvailable = true;
       } catch (e) {
+        // Unknown is not the same as unsubscribed. Do not enable a mutation
+        // button or render a misleading Subscribe state until YouTube responds.
         state._subscribedArtists = [];
         state._subscribedArtistsFetchedAt = 0;
       }
@@ -255,7 +259,8 @@
       artist.channel_id, artist.id, artist.browseId, artist.browse_id]
       .filter(Boolean).map(function (id) { return String(id).trim(); });
     var artistName = String(artist.name || '').trim().toLowerCase();
-    var subscribed = (state._subscribedArtists || []).some(function (a) {
+    var subscriptionsAvailable = state._subscribedArtistsAvailable === true;
+    var subscribed = subscriptionsAvailable && (state._subscribedArtists || []).some(function (a) {
       var subscriptionId = a && (a.channel_id || a.channelId || a.id || a.browseId || a.browse_id);
       var subscriptionName = String((a && (a.name || a.artist || a.title)) || '').trim().toLowerCase();
       return (subscriptionId && artistIds.indexOf(String(subscriptionId).trim()) !== -1) ||
@@ -299,8 +304,8 @@
     var topSongsActions = document.getElementById('artist-top-songs-actions');
     if (topSongsActions) {
       var subscribeAction = window.IS_AUTHENTICATED && !window.JAM_GUEST ? `
-        <button class="artist-action-btn secondary" id="artist-btn-subscribe" aria-pressed="${subscribed}">
-          ${subscribed ? 'Subscribed' : 'Subscribe'}
+        <button class="artist-action-btn secondary" id="artist-btn-subscribe" aria-pressed="${subscribed}"${subscriptionsAvailable ? '' : ' disabled aria-disabled="true" title="Connect YouTube Music to manage subscriptions"'}>
+          ${subscriptionsAvailable ? (subscribed ? 'Subscribed' : 'Subscribe') : 'YouTube Music unavailable'}
         </button>
       ` : '';
       topSongsActions.innerHTML = `
@@ -361,27 +366,86 @@
     }
 
     var subscribeBtn = document.getElementById('artist-btn-subscribe');
+    var subscriptionMutationToken = 0;
     if (subscribeBtn) subscribeBtn.addEventListener('click', async function() {
+      if (state._subscribedArtistsAvailable === false) {
+        if (window.toast) window.toast('Connect YouTube Music before managing subscriptions', 'error');
+        return;
+      }
       if (!channelId || !window.api) {
         if (window.toast) window.toast('Artist ID unavailable', 'error');
         return;
       }
+      if (subscribeBtn.disabled) return;
       var isSubscribed = subscribeBtn.getAttribute('aria-pressed') === 'true';
+      var mutationToken = ++subscriptionMutationToken;
+      subscribeBtn.disabled = true;
+      subscribeBtn.setAttribute('aria-busy', 'true');
       var body = {
         channel_id: channelId,
         name: artist.name || '',
         thumbnail: fullUrl || previewUrl || ''
       };
       try {
+        // Keep DELETE identifiers in the URL: some proxies/WSGI servers do
+        // not reliably preserve JSON request bodies for DELETE.
         var result = isSubscribed
-          ? await window.apiDelete('/api/subscribed_artists/', body)
+          ? await window.apiDelete('/api/subscribed_artists/?channel_id=' + encodeURIComponent(channelId))
           : await window.api('/api/subscribed_artists/', body);
-        state._subscribedArtists = result.artists || [];
-        state._subscribedArtistsFetchedAt = Date.now();
+        // A 202 may contain a stale snapshot, or no snapshot if the
+        // read-after-write probe failed. Never replace a known snapshot with
+        // an empty fallback; YouTube Music remains the only source of truth.
+        if (Array.isArray(result.artists) && !result.pending_confirmation) {
+          state._subscribedArtists = result.artists;
+          state._subscribedArtistsFetchedAt = Date.now();
+        }
+        state._subscribedArtistsAvailable = true;
+        subscribeBtn.disabled = false;
+        subscribeBtn.removeAttribute('aria-busy');
         subscribeBtn.setAttribute('aria-pressed', String(!isSubscribed));
         subscribeBtn.textContent = isSubscribed ? 'Subscribe' : 'Subscribed';
-        if (window.toast) window.toast(isSubscribed ? 'Unsubscribed' : 'Artist subscribed', 'ok');
-      } catch (e) { if (window.toast) window.toast(e.message || 'Unable to update subscription', 'error'); }
+        if (window.toast) window.toast(
+          result.pending_confirmation
+            ? 'YouTube Music is updating this subscription…'
+            : (isSubscribed ? 'Unsubscribed' : 'Artist subscribed'),
+          result.pending_confirmation ? 'info' : 'ok'
+        );
+        if (result.pending_confirmation) {
+          // Let YouTube propagate the write, then refresh from its list rather
+          // than inventing a local subscription record. Keep stale snapshots
+          // out of shared state and retry a few times if propagation lags.
+          var refreshPendingSubscription = function (attempt) {
+            if (mutationToken !== subscriptionMutationToken) return;
+            window.api('/api/subscribed_artists/').then(function (latest) {
+              if (mutationToken !== subscriptionMutationToken || !Array.isArray(latest.artists)) return;
+              var latestSubscribed = latest.artists.some(function (a) {
+                var id = a && (a.channel_id || a.channelId || a.browseId || a.browse_id || a.id);
+                return String(id || '').trim() === String(channelId).trim();
+              });
+              if (latestSubscribed !== !isSubscribed && attempt < 3) {
+                setTimeout(function () { refreshPendingSubscription(attempt + 1); }, 3000);
+                return;
+              }
+              if (latestSubscribed !== !isSubscribed) return;
+              state._subscribedArtists = latest.artists;
+              state._subscribedArtistsFetchedAt = Date.now();
+              if (subscribeBtn.isConnected) {
+                subscribeBtn.setAttribute('aria-pressed', String(latestSubscribed));
+                subscribeBtn.textContent = latestSubscribed ? 'Subscribed' : 'Subscribe';
+              }
+            }).catch(function () {
+              if (attempt < 3) {
+                setTimeout(function () { refreshPendingSubscription(attempt + 1); }, 3000);
+              }
+            });
+          };
+          setTimeout(function () { refreshPendingSubscription(0); }, 3000);
+        }
+      } catch (e) {
+        subscribeBtn.disabled = false;
+        subscribeBtn.removeAttribute('aria-busy');
+        if (window.toast) window.toast(e.message || 'Unable to update subscription', 'error');
+      }
     });
   }
 
