@@ -71,6 +71,11 @@ check('desktop page layout remains two-column and scrollable',
   playlistCss.includes('.collection-detail-body'));
 check('desktop collection page does not lock document scrolling',
   !playlistCss.includes('body:not(.explore-route):not(.mood-route):not(.library-route):has(#collection-detail-page:not([hidden])) {\n  overflow: hidden;'));
+check('desktop collection page establishes a definite-height scroll chain',
+  playlistCss.includes('body:has(#collection-detail-page:not([hidden])) main {\n    height: 100dvh;') &&
+  playlistCss.includes('body:has(#collection-detail-page:not([hidden])) main:has(.player-section.is-visible:not([hidden])) {\n    padding-bottom: var(--playbar-h);') &&
+  playlistCss.includes('body:has(#collection-detail-page:not([hidden])) #collection-detail-page {\n    flex: 1 1 0;\n    min-height: 0;') &&
+  playlistCss.includes('min-width: 900px'));
 check('now-playing album return has no unreachable duplicate branch',
   !router.includes("var returnedCollectionPage = document.getElementById('collection-detail-page');"));
 check('collection page keeps home/recommendations hidden',

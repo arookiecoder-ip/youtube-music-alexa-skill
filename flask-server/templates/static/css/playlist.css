@@ -874,14 +874,38 @@
   #collection-detail-shell .history-modal-body {
     overscroll-behavior: contain;
   }
-  /* Main already reserves document clearance for the fixed playbar. */
-  body:has(.player-section.is-visible:not([hidden])) #collection-detail-page {
+  /* The routed collection page must fill the viewport beneath the header so
+     the track list below owns the scroll (with the hero sticking beside it).
+     While the page is open, main becomes a fixed-height flex column and the
+     page flexes to fill whatever height remains after the sticky header.
+
+     Without a definite height the `height: 100%` chain inside
+     .collection-detail-body collapses: the body grows with its content and
+     never becomes a scroll container, so the document scrolls instead and
+     the sticky hero scrolls away with the page (and the song list cannot
+     scroll independently). */
+  body:has(#collection-detail-page:not([hidden])) main {
+    height: 100dvh;
     padding-bottom: 0;
+  }
+  /* Stop the page just above the fixed playbar so the track list scrolls
+     clear of the bar instead of underneath it. */
+  body:has(#collection-detail-page:not([hidden])) main:has(.player-section.is-visible:not([hidden])) {
+    padding-bottom: var(--playbar-h);
+  }
+  body:has(#collection-detail-page:not([hidden])) #collection-detail-page {
+    flex: 1 1 0;
+    min-height: 0;
+    height: auto;
   }
   #collection-detail-shell {
     width: 100%;
     max-width: none;
     height: 100%;
+    /* The modal-era 420px floor could outgrow the flexed page on short
+       desktop windows and overflow the viewport. The routed page fills the
+       space below the header, so no minimum is needed here. */
+    min-height: 0;
     max-height: none;
     margin: 0 auto;
     background: transparent;
