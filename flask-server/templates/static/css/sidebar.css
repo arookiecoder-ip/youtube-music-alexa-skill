@@ -256,8 +256,10 @@
     border-right: none;
   }
   /* Artwork or the shared warm tint can bleed behind the mini rail on Home,
-     History, Artist, and the full player. Other pages use a stable black rail. */
-  body.rail-collapsed:not(.home-route):not(.history-route):not(.explore-route):not(.library-route):not(.artist-route):not(.now-playing-route):not(.playlists-route):not(.album-route) .sidebar {
+     History, Explore, Library, Artist, the full player, and the search
+     results page (which uses the same warm tint as Home). Other pages use a
+     stable black rail. */
+  body.rail-collapsed:not(.home-route):not(.history-route):not(.explore-route):not(.library-route):not(.artist-route):not(.now-playing-route):not(.results-open):not(.playlists-route):not(.album-route) .sidebar {
     background: #000;
   }
   /* Text-only chrome has no icon form — hide it in the mini rail. Fade it
@@ -572,9 +574,7 @@ body.rail-collapsed .sidebar .sidebar-nav-btn:hover {
   text-overflow: ellipsis;
 }
 .sidebar-playlist-item strong { font-size: .79rem; line-height: 1.3; }
-.sidebar-playlist-item span { margin-top: 2px; color: var(--muted); font-size: .68rem; }
-
-@media (min-width: 900px) {
+.sidebar-playlist-item span { margin-top: 2px; color: var(--muted); font-size: .68rem; }  @media (min-width: 900px) {
   .sidebar {
     display: flex !important;
     left: 0;
@@ -582,6 +582,12 @@ body.rail-collapsed .sidebar .sidebar-nav-btn:hover {
     /* Keep the rail between the fixed header and the persistent player. */
     top: calc(var(--topbar-h) + 3px);
     width: var(--rail-w);
+    /* Animate width, background and border together. The earlier
+       multi-property transition must stay the final one: an override that
+       only listed width made the collapsed rail's background snap to black
+       instantly on non-artwork pages while the width was still shrinking,
+       which read as an abrupt, too-fast close compared to Home/playback
+       (whose transparent collapsed rail hides the same snap). */
     transition: width .25s ease, background .25s ease, border-color .25s ease;
     height: auto;
     bottom: 0;
@@ -593,9 +599,6 @@ body.rail-collapsed .sidebar .sidebar-nav-btn:hover {
        mini rail without being clipped by the header background. */
     z-index: 260;
     padding: 10px 14px 16px;
-    /* The mobile drawer's transform transition doesn't apply here; the rail
-       animates its width when toggling the mini guide. */
-    transition: width .25s ease;
     overflow: visible;
   }
   .sidebar-overlay { display: none !important; }
