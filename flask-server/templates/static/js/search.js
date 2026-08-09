@@ -53,7 +53,7 @@ async function runSearch(query, options) {
       : currentRoute;
     state._searchPreviousViewVisible = ['home-section', 'jam-home-section', 'recs-section',
       'artist-section', 'artist-songs-section', 'history-page',
-      'playlist-detail-modal-overlay', 'explore-modal-overlay',
+      'collection-detail-page', 'explore-modal-overlay',
       'mood-modal-overlay', 'library-modal-overlay'].some(id => {
         const el = document.getElementById(id);
         return el && !el.hidden &&
@@ -113,7 +113,7 @@ async function runSearch(query, options) {
   // opens immediately as before.
   const anyOtherViewVisible = ['home-section', 'jam-home-section', 'recs-section',
     'artist-section', 'artist-songs-section', 'history-page',
-    'playlist-detail-modal-overlay', 'explore-modal-overlay',
+    'collection-detail-page', 'explore-modal-overlay',
     'mood-modal-overlay', 'library-modal-overlay'].some(id => {
       const el = document.getElementById(id);
       return el && !el.hidden &&
@@ -263,11 +263,13 @@ function openResults(options) {
   });
   // Same for the playlist detail view: it sits above the content area (z-210),
   // so results rendered behind it would be invisible until manually closed.
-  ['playlist-detail-modal-overlay', 'explore-modal-overlay',
+  ['explore-modal-overlay',
     'mood-modal-overlay', 'library-modal-overlay'].forEach(id => {
     const ov = document.getElementById(id);
     if (ov) ov.classList.remove('open');
   });
+  const collectionPage = document.getElementById('collection-detail-page');
+  if (collectionPage) collectionPage.hidden = true;
   animatePlaySectionLayout(() => {
     state._resultsOpen = true;
     // The old route shell was preserved while this request loaded. Results

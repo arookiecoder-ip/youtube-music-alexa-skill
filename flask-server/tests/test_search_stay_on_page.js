@@ -167,7 +167,7 @@ async function main() {
             SRC.includes('if (list) list.scrollTop = 0;'),
             'the reset belongs at the Results handoff, not route entry');
   checkTrue('router keeps the source overlays/pages during pending Search',
-            ROUTER_SRC.includes("if (!preserveSearchShell && hash.indexOf('#playlist/') !== 0)") &&
+            ROUTER_SRC.includes("if (!preserveSearchShell && hash.indexOf('#playlist/') !== 0 && hash.indexOf('#album/') !== 0)") &&
             ROUTER_SRC.includes("if (!preserveSearchShell && hash !== '#history')") &&
             ROUTER_SRC.includes("if (!preserveSearchShell && hash !== '#explore')") &&
             ROUTER_SRC.includes("if (!preserveSearchShell && hash.indexOf('#mood/') !== 0)") &&

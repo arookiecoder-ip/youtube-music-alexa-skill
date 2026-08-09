@@ -254,7 +254,7 @@
     // a More-menu click on a public playlist silently rename/delete a
     // completely different library entry).
     _openPlaylistId = null;
-    const overlay = document.getElementById('playlist-detail-modal-overlay');
+    const page = document.getElementById('collection-detail-page');
     // Use the correct element IDs that exist in remote.html
     const titleEl = document.getElementById('playlist-detail-title');
     const body = document.getElementById('playlist-detail-body');
@@ -322,11 +322,11 @@
         if (_openPlaylistId === plId) _openPlaylistId = null;
         return;
       }
-      if (overlay) {
-        // Keep the identity of the rendered page so the router can bring the
-        // same overlay back instantly on browser Back before any refresh.
-        overlay.dataset.playlistId = String(plId);
-        overlay.classList.add('open');
+      if (page) {
+        // Keep the identity of the rendered page so browser Back/Forward can
+        // restore the same collection shell before refreshed data arrives.
+        page.dataset.collectionId = String(plId);
+        page.hidden = false;
       }
       if (titleEl) titleEl.textContent = pl.title || 'Playlist';
 
@@ -1013,9 +1013,9 @@
         try {
           await window.apiDelete('/api/library/playlists/' + encodeURIComponent(_openPlaylistId));
           confirmOverlay.classList.remove('open');
-          // Close the playlist detail modal and go back
-          var overlay = document.getElementById('playlist-detail-modal-overlay');
-          if (overlay) overlay.classList.remove('open');
+          // Leave the collection detail page and go back to Library.
+          var page = document.getElementById('collection-detail-page');
+          if (page) page.hidden = true;
           if (window.showToast) window.showToast('Playlist deleted');
           // Refresh sidebar playlists
           if (window.loadLibrary) window.loadLibrary();

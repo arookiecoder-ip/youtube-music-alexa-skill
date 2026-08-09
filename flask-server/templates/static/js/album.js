@@ -231,10 +231,10 @@
       if (window.toast) window.toast(error.message || 'Could not load album', 'error');
     }
 
-    var overlay = document.getElementById('playlist-detail-modal-overlay');
-    if (overlay) {
-      overlay.dataset.playlistId = String(browseId);
-      overlay.classList.add('open');
+    var page = document.getElementById('collection-detail-page');
+    if (page) {
+      page.dataset.collectionId = String(browseId);
+      page.hidden = false;
     }
   }
 

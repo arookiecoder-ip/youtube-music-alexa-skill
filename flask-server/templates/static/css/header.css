@@ -323,7 +323,7 @@
   }
   /* Playlist detail keeps a taller minimum so the Play All button/empty-state
      don't leave it looking like a tiny collapsed box on short playlists. */
-  #playlist-detail-modal { min-height: 420px; }
+  #collection-detail-shell { min-height: 420px; }
   .history-modal-header {
     display: flex;
     align-items: center;
@@ -561,6 +561,7 @@ header > .brand h1 {
      body warm gradient) bleeds behind the sticky top bar. Opaque black
      returns automatically when the user scrolls (header-scrolled). */
   body.artist-route:not(.header-scrolled) main header,
+  body.playlists-route:not(.results-open):not(.header-scrolled) main header,
   body.album-route:not(.results-open):not(.header-scrolled) main header,
   body.now-playing-route:not(.results-open) main header,
   body.results-open:not(.header-scrolled) main header,
@@ -571,6 +572,8 @@ header > .brand h1 {
   body.home-route:not(.results-open):not(.header-scrolled) main header {
     background: transparent;
   }
+  body.playlists-route:not(.results-open):not(.header-scrolled) main header::before,
+  body.album-route:not(.results-open):not(.header-scrolled) main header::before,
   body.results-open:not(.header-scrolled) main header::before,
   body.history-route main header::before,
   body.explore-route main header::before,

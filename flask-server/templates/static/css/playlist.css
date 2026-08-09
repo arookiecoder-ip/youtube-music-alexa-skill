@@ -243,20 +243,20 @@
 }
 
 /* ── Playlist Detail Hero (collage + metadata) ── */
-#playlist-detail-modal {
+#collection-detail-shell {
   background: none !important;
   border: 0 !important;
   box-shadow: none !important;
 }
 
-#playlist-detail-modal #playlist-detail-body,
-#playlist-detail-modal .playlist-detail-hero {
+#collection-detail-shell #playlist-detail-body,
+#collection-detail-shell .playlist-detail-hero {
   background: transparent;
 }
 
 /* The hero is a <section>, so base.css gives it the generic card frame.
    Playlist detail is a page layout, not a card: remove that inherited box. */
-#playlist-detail-modal .playlist-detail-hero {
+#collection-detail-shell .playlist-detail-hero {
   border: 0;
   border-radius: 0;
   box-shadow: none;
@@ -397,8 +397,8 @@
    text colour instead of muted, so the whole row reads as "active" at a
    glance. Scoped to the playlist detail body to avoid leaking into the
    album page, which has its own active-row treatment. */
-#playlist-detail-modal .history-item.active .playlist-track-num,
-#playlist-detail-modal .history-item.active .playlist-track-duration {
+#collection-detail-shell .history-item.active .playlist-track-num,
+#collection-detail-shell .history-item.active .playlist-track-duration {
   color: var(--text);
 }
   flex: none;
@@ -447,7 +447,7 @@
 /* Mobile playlist detail is a page layout, not a modal card. Keep its
    responsive composition with the playlist component's original rules. */
 @media (max-width: 899px) {
-  #playlist-detail-modal-overlay.open #playlist-detail-modal #playlist-detail-body {
+  #collection-detail-page:not([hidden]) #collection-detail-shell #playlist-detail-body {
     display: block;
     width: 100%;
     height: auto;
@@ -455,7 +455,7 @@
     overflow: visible;
     box-sizing: border-box;
   }
-  #playlist-detail-modal-overlay.open #playlist-detail-modal .playlist-detail-hero {
+  #collection-detail-page:not([hidden]) #collection-detail-shell .playlist-detail-hero {
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -466,13 +466,13 @@
     overflow: visible;
     text-align: center;
   }
-  #playlist-detail-modal-overlay.open #playlist-detail-modal .playlist-detail-hero > .playlist-collage {
+  #collection-detail-page:not([hidden]) #collection-detail-shell .playlist-detail-hero > .playlist-collage {
     width: 240px;
     height: 240px;
     flex: none;
     margin: 0 auto;
   }
-  #playlist-detail-modal-overlay.open #playlist-detail-modal .playlist-detail-hero-info {
+  #collection-detail-page:not([hidden]) #collection-detail-shell .playlist-detail-hero-info {
     display: flex;
     flex-direction: column;
     align-items: center;
@@ -480,10 +480,10 @@
     padding: 0;
     text-align: center;
   }
-  #playlist-detail-modal-overlay.open #playlist-detail-modal .playlist-detail-hero-name,
-  #playlist-detail-modal-overlay.open #playlist-detail-modal .playlist-detail-hero-desc,
-  #playlist-detail-modal-overlay.open #playlist-detail-modal .playlist-detail-hero-meta { text-align: center; }
-  #playlist-detail-modal-overlay.open #playlist-detail-modal .playlist-detail-hero-actions {
+  #collection-detail-page:not([hidden]) #collection-detail-shell .playlist-detail-hero-name,
+  #collection-detail-page:not([hidden]) #collection-detail-shell .playlist-detail-hero-desc,
+  #collection-detail-page:not([hidden]) #collection-detail-shell .playlist-detail-hero-meta { text-align: center; }
+  #collection-detail-page:not([hidden]) #collection-detail-shell .playlist-detail-hero-actions {
     display: flex;
     align-items: center;
     justify-content: center;
@@ -493,13 +493,13 @@
     margin-top: 20px;
     padding: 0;
   }
-  #playlist-detail-modal-overlay.open #playlist-detail-modal .playlist-hero-actions-left,
-  #playlist-detail-modal-overlay.open #playlist-detail-modal .playlist-hero-actions-right { display: contents; }
-  #playlist-detail-modal-overlay.open #playlist-detail-modal .playlist-detail-hero-actions button {
+  #collection-detail-page:not([hidden]) #collection-detail-shell .playlist-hero-actions-left,
+  #collection-detail-page:not([hidden]) #collection-detail-shell .playlist-hero-actions-right { display: contents; }
+  #collection-detail-page:not([hidden]) #collection-detail-shell .playlist-detail-hero-actions button {
     width: 42px;
     height: 42px;
   }
-  #playlist-detail-modal-overlay.open #playlist-detail-modal .playlist-detail-hero-actions .playlist-hero-play {
+  #collection-detail-page:not([hidden]) #collection-detail-shell .playlist-detail-hero-actions .playlist-hero-play {
     width: 54px;
     height: 54px;
     border: 0;
@@ -508,18 +508,18 @@
     color: #080808;
     box-shadow: none;
   }
-  #playlist-detail-modal-overlay.open #playlist-detail-modal .playlist-detail-hero-actions .playlist-hero-play svg {
+  #collection-detail-page:not([hidden]) #collection-detail-shell .playlist-detail-hero-actions .playlist-hero-play svg {
     width: 30px;
     height: 30px;
   }
-  #playlist-detail-modal-overlay.open #playlist-detail-modal #playlist-detail-body > .history-list {
+  #collection-detail-page:not([hidden]) #collection-detail-shell #playlist-detail-body > .history-list {
     display: block;
     width: 100%;
     height: auto;
     overflow: visible;
     padding: 0;
   }
-  #playlist-detail-modal-overlay.open #playlist-detail-modal .history-item {
+  #collection-detail-page:not([hidden]) #collection-detail-shell .history-item {
     display: flex;
     width: 100%;
     height: 52px;
@@ -530,18 +530,18 @@
     box-shadow: none;
     background: transparent;
   }
-  #playlist-detail-modal-overlay.open #playlist-detail-modal .playlist-track-num,
-  #playlist-detail-modal-overlay.open #playlist-detail-modal .result-like-btn { display: none; }
-  #playlist-detail-modal-overlay.open #playlist-detail-modal .playlist-track-art,
-  #playlist-detail-modal-overlay.open #playlist-detail-modal .queue-thumb {
+  #collection-detail-page:not([hidden]) #collection-detail-shell .playlist-track-num,
+  #collection-detail-page:not([hidden]) #collection-detail-shell .result-like-btn { display: none; }
+  #collection-detail-page:not([hidden]) #collection-detail-shell .playlist-track-art,
+  #collection-detail-page:not([hidden]) #collection-detail-shell .queue-thumb {
     width: 44px;
     height: 44px;
     min-width: 44px;
     min-height: 44px;
     flex: 0 0 44px;
   }
-  #playlist-detail-modal-overlay.open #playlist-detail-modal .playlist-track-duration,
-  #playlist-detail-modal-overlay.open #playlist-detail-modal .track-duration {
+  #collection-detail-page:not([hidden]) #collection-detail-shell .playlist-track-duration,
+  #collection-detail-page:not([hidden]) #collection-detail-shell .track-duration {
     margin-left: auto;
     margin-right: 2px;
     min-width: 42px;
@@ -558,9 +558,9 @@
   body.album-route main {
     background: var(--bg, #0a0a0a);
   }
-  #playlist-detail-modal { position: relative; }
+  #collection-detail-shell { position: relative; }
   #playlist-detail-back { display: none !important; }
-  #playlist-detail-modal .history-modal-header {
+  #collection-detail-shell .history-modal-header {
     position: absolute;
     inset: 14px 20px auto;
     width: auto;
@@ -568,10 +568,10 @@
     z-index: 3;
     pointer-events: none;
   }
-  #playlist-detail-modal .history-modal-header > * { pointer-events: auto; }
-  #playlist-detail-modal .history-modal-header h3 { display: none; }
-  #playlist-detail-modal .history-modal-header-actions { display: none; }
-  #playlist-detail-modal .playlist-detail-actions { display: none; }
+  #collection-detail-shell .history-modal-header > * { pointer-events: auto; }
+  #collection-detail-shell .history-modal-header h3 { display: none; }
+  #collection-detail-shell .history-modal-header-actions { display: none; }
+  #collection-detail-shell .playlist-detail-actions { display: none; }
   .collection-detail-body {
     width: min(1160px, 100%);
     height: 100%;
@@ -718,7 +718,7 @@
    ============================================================ */
 
 @media (max-width: 899px) {
-  body.playlists-route:has(#playlist-detail-modal-overlay.open) {
+  body.playlists-route:has(#collection-detail-page:not([hidden])) {
     overflow-y: auto !important;
     overflow-x: hidden !important;
     overscroll-behavior-y: auto !important;
@@ -731,9 +731,9 @@
     padding-right: 0 !important;
   }
 
-  body.playlists-route #playlist-detail-modal-overlay {
+  body.playlists-route #collection-detail-page {
     display: none;
-    position: static;
+    position: relative;
     inset: auto;
     width: 100%;
     min-height: 0;
@@ -747,11 +747,11 @@
     z-index: auto;
   }
 
-  body.playlists-route #playlist-detail-modal-overlay.open {
+  body.playlists-route #collection-detail-page:not([hidden]) {
     display: block;
   }
 
-  body.playlists-route #playlist-detail-modal {
+  body.playlists-route #collection-detail-shell {
     width: 100%;
     max-width: none;
     max-height: none;
@@ -766,11 +766,11 @@
     opacity: 1;
   }
 
-  body.playlists-route #playlist-detail-modal .history-modal-header {
+  body.playlists-route #collection-detail-shell .history-modal-header {
     display: none;
   }
 
-  body.playlists-route #playlist-detail-modal #playlist-detail-body {
+  body.playlists-route #collection-detail-shell #playlist-detail-body {
     width: 100%;
     height: auto;
     box-sizing: border-box;
@@ -779,7 +779,7 @@
     display: block;
   }
 
-  body.playlists-route #playlist-detail-modal .playlist-detail-hero {
+  body.playlists-route #collection-detail-shell .playlist-detail-hero {
     position: static;
     max-height: none;
     overflow: visible;
@@ -790,13 +790,13 @@
     text-align: center;
   }
 
-  body.playlists-route #playlist-detail-modal .playlist-detail-hero .playlist-collage {
+  body.playlists-route #collection-detail-shell .playlist-detail-hero .playlist-collage {
     width: 180px;
     height: 180px;
     border-radius: 8px;
   }
 
-  body.playlists-route #playlist-detail-modal .playlist-detail-hero-info {
+  body.playlists-route #collection-detail-shell .playlist-detail-hero-info {
     width: 100%;
     align-items: center;
     gap: 7px;
@@ -804,20 +804,20 @@
     text-align: center;
   }
 
-  body.playlists-route #playlist-detail-modal .playlist-detail-hero-name {
+  body.playlists-route #collection-detail-shell .playlist-detail-hero-name {
     font-size: 1.35rem;
     line-height: 1.2;
   }
 
-  body.playlists-route #playlist-detail-modal .playlist-detail-hero-desc {
+  body.playlists-route #collection-detail-shell .playlist-detail-hero-desc {
     max-width: 290px;
   }
 
-  body.playlists-route #playlist-detail-modal .playlist-detail-hero-meta {
+  body.playlists-route #collection-detail-shell .playlist-detail-hero-meta {
     justify-content: center;
   }
 
-  body.playlists-route #playlist-detail-modal .playlist-detail-hero-actions {
+  body.playlists-route #collection-detail-shell .playlist-detail-hero-actions {
     display: flex;
     align-items: center;
     justify-content: center;
@@ -827,22 +827,22 @@
     padding: 0;
   }
 
-  body.playlists-route #playlist-detail-modal .playlist-hero-actions-left,
-  body.playlists-route #playlist-detail-modal .playlist-hero-actions-right {
+  body.playlists-route #collection-detail-shell .playlist-hero-actions-left,
+  body.playlists-route #collection-detail-shell .playlist-hero-actions-right {
     display: contents;
   }
 
-  body.playlists-route #playlist-detail-modal .playlist-detail-hero-actions button {
+  body.playlists-route #collection-detail-shell .playlist-detail-hero-actions button {
     width: 42px;
     height: 42px;
   }
 
-  body.playlists-route #playlist-detail-modal .playlist-detail-hero-actions .playlist-hero-play {
+  body.playlists-route #collection-detail-shell .playlist-detail-hero-actions .playlist-hero-play {
     width: 54px;
     height: 54px;
   }
 
-  body.playlists-route #playlist-detail-modal #playlist-detail-body > .history-list {
+  body.playlists-route #collection-detail-shell #playlist-detail-body > .history-list {
     height: auto;
     overflow: visible;
     padding-right: 0;
@@ -850,42 +850,35 @@
 }
 
 @media (min-width: 900px) {
-  #playlist-detail-modal-overlay {
-    left: var(--rail-w);
-    top: calc(var(--topbar-h) + 3px);
-    right: 0;
-    bottom: 0;
+  #collection-detail-page {
+    position: relative;
+    left: auto;
+    top: auto;
+    right: auto;
+    bottom: auto;
+    min-height: calc(100dvh - var(--topbar-h));
     background: var(--bg, #0a0a0a);
-    backdrop-filter: none;
-    -webkit-backdrop-filter: none;
     align-items: stretch;
-    /* Below the playbar (220) so playback controls stay reachable */
-    z-index: 210;
-    transition: left .25s ease;
+    z-index: auto;
+    transition: none;
   }
-  /* Playlist detail is never shortened by stale playback state. */
-  body:not(.now-playing-route) #playlist-detail-modal-overlay {
-    bottom: 0 !important;
+  /* The routed page participates in normal document flow. */
+  body:not(.now-playing-route) #collection-detail-page {
+    position: relative;
   }
-  /* While a playlist view is open it owns the scroll: freeze the page
-     behind it so the wheel never scrolls the background view first. */
-  body:has(#playlist-detail-modal-overlay.open) {
-    overflow: hidden;
+  /* Collection details use the document's normal page scroll. */
+  body:has(#collection-detail-page:not([hidden])) {
+    overflow-y: auto;
+    overflow-x: hidden;
   }
-  #playlist-detail-modal .history-modal-body {
+  #collection-detail-shell .history-modal-body {
     overscroll-behavior: contain;
   }
-  /* Stop above the playbar only when the playbar is REALLY on screen.
-     Matching .is-visible alone left an 88px strip of the page behind
-     exposed while the playbar was hidden (it can carry .is-visible
-     together with [hidden]/.is-collapsed during transitions). */
-  body:has(.player-section.is-visible:not([hidden])) #playlist-detail-modal-overlay {
-    /* !important: must beat the route-scoped `bottom: 0 !important` above.
-       The persistent desktop playbar keeps .is-collapsed, so we only key on
-       visibility — any on-screen playbar means overlays stop at its top edge. */
-    bottom: var(--playbar-h) !important;
+  /* Main already reserves document clearance for the fixed playbar. */
+  body:has(.player-section.is-visible:not([hidden])) #collection-detail-page {
+    padding-bottom: 0;
   }
-  #playlist-detail-modal {
+  #collection-detail-shell {
     width: 100%;
     max-width: none;
     height: 100%;
@@ -896,20 +889,20 @@
     border-radius: 0;
     box-shadow: none;
   }
-  #playlist-detail-modal .history-modal-header {
+  #collection-detail-shell .history-modal-header {
     border-bottom: none;
     width: min(1100px, 100%);
     margin: 0 auto;
     padding: 18px 32px;
     box-sizing: border-box;
   }
-  #playlist-detail-modal .history-modal-body {
+  #collection-detail-shell .history-modal-body {
     width: min(1100px, 100%);
     margin: 0 auto;
     padding-left: 32px;
     padding-right: 32px;
   }
-  #playlist-detail-modal .history-modal-header h3 {
+  #collection-detail-shell .history-modal-header h3 {
     text-transform: none;
     letter-spacing: -.01em;
     font-size: 1.3rem;
@@ -1123,14 +1116,17 @@
 }
 
 /* Moved from redesign.css. */
-#playlist-detail-modal { background: transparent; }
-/* Playlist overlays own scrolling at every breakpoint. Keep the page
-   beneath them fixed so reaching the final row cannot move the outer shell. */
-body:not(.explore-route):not(.mood-route):not(.library-route):has(#playlist-detail-modal-overlay.open) {
-  overflow: hidden;
-  overscroll-behavior: none;
-}
-#playlist-detail-modal-overlay {
+#collection-detail-shell { background: transparent; }
+#collection-detail-page {
+  position: relative;
+  width: 100%;
+  min-height: calc(100dvh - var(--topbar-h));
+  margin: 0;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
   overscroll-behavior: none;
 }
 
@@ -1140,22 +1136,22 @@ body:not(.explore-route):not(.mood-route):not(.library-route):has(#playlist-deta
    ============================================================ */
 
 @media (max-width: 899px) {
-  body.now-playing-closing #playlist-detail-modal-overlay,
-  body.now-playing-closing #playlist-detail-modal,
-  body.now-playing-closing #playlist-detail-modal #playlist-detail-body {
+  body.now-playing-closing #collection-detail-page,
+  body.now-playing-closing #collection-detail-shell,
+  body.now-playing-closing #collection-detail-shell #playlist-detail-body {
     background-color: #0b0503 !important;
     background-image: none !important;
   }
-  body.now-playing-route #playlist-detail-modal-overlay,
-  body.now-playing-route #playlist-detail-modal,
-  body.now-playing-route #playlist-detail-modal #playlist-detail-body {
+  body.now-playing-route #collection-detail-page,
+  body.now-playing-route #collection-detail-shell,
+  body.now-playing-route #collection-detail-shell #playlist-detail-body {
     background-color: #0b0503 !important;
     background-image: none !important;
   }
 }
 
 @media (max-width: 899px) {
-  #playlist-detail-modal #playlist-detail-body {
+  #collection-detail-shell #playlist-detail-body {
     display: block !important;
     width: 100% !important;
     height: auto !important;
@@ -1164,7 +1160,7 @@ body:not(.explore-route):not(.mood-route):not(.library-route):has(#playlist-deta
     box-sizing: border-box;
   }
 
-  #playlist-detail-modal .playlist-detail-hero {
+  #collection-detail-shell .playlist-detail-hero {
     display: flex !important;
     flex-direction: column !important;
     align-items: center !important;
@@ -1175,7 +1171,7 @@ body:not(.explore-route):not(.mood-route):not(.library-route):has(#playlist-deta
     overflow: visible !important;
   }
 
-  #playlist-detail-modal .playlist-detail-hero > .playlist-collage {
+  #collection-detail-shell .playlist-detail-hero > .playlist-collage {
     width: 240px !important;
     height: 240px !important;
     margin: 0 auto !important;
@@ -1183,22 +1179,22 @@ body:not(.explore-route):not(.mood-route):not(.library-route):has(#playlist-deta
   }
 
   /* Compact mobile playlist rows: hide counters and reduce album art. */
-  #playlist-detail-modal .history-item .playlist-track-num {
+  #collection-detail-shell .history-item .playlist-track-num {
     display: none !important;
   }
 
-  #playlist-detail-modal .history-item .playlist-track-art,
-  #playlist-detail-modal .history-item .queue-thumb {
+  #collection-detail-shell .history-item .playlist-track-art,
+  #collection-detail-shell .history-item .queue-thumb {
     width: 44px !important;
     height: 44px !important;
     flex: 0 0 44px !important;
   }
 
-  #playlist-detail-modal .history-item .result-like-btn {
+  #collection-detail-shell .history-item .result-like-btn {
     display: none !important;
   }
 
-  #playlist-detail-modal .history-item {
+  #collection-detail-shell .history-item {
     height: 52px !important;
     min-height: 52px !important;
     padding: 4px 10px !important;
@@ -1206,25 +1202,25 @@ body:not(.explore-route):not(.mood-route):not(.library-route):has(#playlist-deta
     box-shadow: none !important;
   }
 
-  #playlist-detail-modal .result-swipe-wrapper {
+  #collection-detail-shell .result-swipe-wrapper {
     min-height: 52px !important;
     border: 0 !important;
   }
 
-  #playlist-detail-modal #playlist-detail-body > .history-list {
+  #collection-detail-shell #playlist-detail-body > .history-list {
     border: 0 !important;
     box-shadow: none !important;
     overflow-x: hidden !important;
   }
 
-  #playlist-detail-modal .history-item .playlist-track-duration {
+  #collection-detail-shell .history-item .playlist-track-duration {
     margin-left: auto !important;
     margin-right: 2px !important;
     min-width: 42px !important;
     text-align: right !important;
   }
 
-  #playlist-detail-modal .playlist-detail-hero-info {
+  #collection-detail-shell .playlist-detail-hero-info {
     display: flex !important;
     flex-direction: column !important;
     width: 100% !important;
@@ -1233,14 +1229,14 @@ body:not(.explore-route):not(.mood-route):not(.library-route):has(#playlist-deta
     text-align: center !important;
   }
 
-  #playlist-detail-modal .playlist-detail-hero-name {
+  #collection-detail-shell .playlist-detail-hero-name {
     display: block !important;
     visibility: visible !important;
     opacity: 1 !important;
     margin: 0 !important;
   }
 
-  #playlist-detail-modal .playlist-detail-hero-actions {
+  #collection-detail-shell .playlist-detail-hero-actions {
     display: flex !important;
     align-items: center !important;
     justify-content: center !important;
@@ -1248,8 +1244,8 @@ body:not(.explore-route):not(.mood-route):not(.library-route):has(#playlist-deta
     width: 100% !important;
   }
 
-  #playlist-detail-modal .playlist-hero-actions-left,
-  #playlist-detail-modal .playlist-hero-actions-right {
+  #collection-detail-shell .playlist-hero-actions-left,
+  #collection-detail-shell .playlist-hero-actions-right {
     display: contents !important;
   }
 }

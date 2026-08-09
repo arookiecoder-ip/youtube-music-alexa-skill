@@ -695,8 +695,8 @@
     body.artist-route #recs-section,
     body.artist-songs-route #home-section,
     body.artist-songs-route #recs-section,
-    body:has(#playlist-detail-modal-overlay.open) #home-section,
-    body:has(#playlist-detail-modal-overlay.open) #recs-section {
+    body:has(#collection-detail-page:not([hidden])) #home-section,
+    body:has(#collection-detail-page:not([hidden])) #recs-section {
       display: none !important;
     }
 

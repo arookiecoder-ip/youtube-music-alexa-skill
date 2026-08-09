@@ -630,6 +630,44 @@
     </div>
   </section>
 
+  <!-- Playlist / Album detail page. The shared renderer stays identical for both routes. -->
+  <section id="collection-detail-page" hidden>
+    <div class="collection-detail-shell" id="collection-detail-shell">
+      <div class="history-modal-header">
+        <button class="history-modal-close" id="playlist-detail-back" title="Back to Playlists" style="margin-right:8px">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+            <polyline points="15 18 9 12 15 6"/>
+          </svg>
+        </button>
+        <h3 id="playlist-detail-title">Playlist</h3>
+        <div class="history-modal-header-actions">
+          <button class="clear-all-btn" id="playlist-sync-btn" title="Sync Playlist" hidden>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+              <polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+            </svg>
+            Sync
+          </button>
+          <div class="playlist-more-menu" id="playlist-detail-more-menu" style="position:fixed; background: var(--surface); border: 1px solid var(--border); z-index: 9999; min-width: 170px; box-shadow: 0 8px 24px rgba(0,0,0,.5); overflow: hidden;">
+            <div class="queue-menu-option" id="playlist-detail-rename-opt">Rename playlist</div>
+            <div class="queue-menu-option danger" id="playlist-detail-delete-opt">Delete playlist</div>
+          </div>
+        </div>
+      </div>
+      <div class="playlist-detail-actions">
+        <button class="btn-accent play-all-btn" id="playlist-detail-play-all-btn" style="flex: 1; align-items:center; justify-content:center; gap:8px;" hidden>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+          Play All
+        </button>
+        <button class="btn-accent shuffle-play-btn" id="playlist-detail-shuffle-btn" title="Shuffle Play" style="flex: none; width: 40px; align-items:center; justify-content:center; padding: 0;" hidden>
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/><polyline points="21 16 21 21 16 21"/><line x1="15" y1="15" x2="21" y2="21"/><line x1="4" y1="4" x2="9" y2="9"/>
+          </svg>
+        </button>
+      </div>
+      <div class="history-modal-body collection-detail-body" id="playlist-detail-body"></div>
+    </div>
+  </section>
+
   <!-- Recently Listened routed page. -->
   <section class="history-page" id="history-page" hidden>
     <div class="history-page-inner">
@@ -754,48 +792,6 @@
 
 <!-- Recently Listened page. No per-row remove button by design — only Clear
      (which asks for confirmation via the dialog below). -->
-
-<!-- Playlist Detail Modal -->
-<div class="history-modal-overlay" id="playlist-detail-modal-overlay">
-  <div class="history-modal" id="playlist-detail-modal">
-    <div class="history-modal-header">
-      <button class="history-modal-close" id="playlist-detail-back" title="Back to Playlists" style="margin-right:8px">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-          <polyline points="15 18 9 12 15 6"/>
-        </svg>
-      </button>
-      <h3 id="playlist-detail-title">Playlist</h3>
-      <div class="history-modal-header-actions">
-        <button class="clear-all-btn" id="playlist-sync-btn" title="Sync Playlist" hidden>
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-            <polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
-          </svg>
-          Sync
-        </button>
-        <!-- The rename / delete menu moved down into the playlist hero
-             (rendered by playlists.js). The menu div stays so the existing
-             rename / delete wiring in playlists.js still has a target by id. -->
-        <div class="playlist-more-menu" id="playlist-detail-more-menu" style="position:fixed; background: var(--surface); border: 1px solid var(--border); z-index: 9999; min-width: 170px; box-shadow: 0 8px 24px rgba(0,0,0,.5); overflow: hidden;">
-          <div class="queue-menu-option" id="playlist-detail-rename-opt">Rename playlist</div>
-          <div class="queue-menu-option danger" id="playlist-detail-delete-opt">Delete playlist</div>
-        </div>
-      </div>
-    </div>
-    <div class="playlist-detail-actions">
-      <button class="btn-accent play-all-btn" id="playlist-detail-play-all-btn" style="flex: 1; align-items:center; justify-content:center; gap:8px;" hidden>
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
-        Play All
-      </button>
-      <button class="btn-accent shuffle-play-btn" id="playlist-detail-shuffle-btn" title="Shuffle Play" style="flex: none; width: 40px; align-items:center; justify-content:center; padding: 0;" hidden>
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/><polyline points="21 16 21 21 16 21"/><line x1="15" y1="15" x2="21" y2="21"/><line x1="4" y1="4" x2="9" y2="9"/>
-        </svg>
-      </button>
-    </div>
-    <div class="history-modal-body collection-detail-body" id="playlist-detail-body">
-    </div>
-  </div>
-</div>
 
 <!-- Confirm Dialog (generic). Can be opened while another modal (e.g. Import
      Playlist) is still open behind it -- needs a higher z-index than the

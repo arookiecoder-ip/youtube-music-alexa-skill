@@ -2068,6 +2068,7 @@ body.now-playing-route .player-section .player-expand-btn svg {
   }
   /* Transparent so the blurred album art continues behind the header. */
   body.artist-route:not(.header-scrolled) main header,
+  body.playlists-route:not(.results-open):not(.header-scrolled) main header,
   body.album-route:not(.results-open):not(.header-scrolled) main header,
   /* The expanded player is a fixed artwork layer. Its header must stay
      transparent even when the page behind it was previously scrolled. */
@@ -2076,6 +2077,7 @@ body.now-playing-route .player-section .player-expand-btn svg {
     background: transparent;
   }
   body.artist-route:not(.header-scrolled) main header::before,
+  body.playlists-route:not(.results-open):not(.header-scrolled) main header::before,
   body.album-route:not(.results-open):not(.header-scrolled) main header::before,
   body.now-playing-route:not(.results-open) main header::before,
   body.home-route:not(.results-open):not(.header-scrolled) main header::before {

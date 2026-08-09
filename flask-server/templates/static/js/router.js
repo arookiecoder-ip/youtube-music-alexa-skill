@@ -232,7 +232,7 @@
   }
 
   function hideAllViews() {
-    setHidden('.play-section, #recs-section, #home-section, #idle-hero, #results-section, #queue-section, #artist-section, #artist-songs-section', true);
+    setHidden('.play-section, #recs-section, #home-section, #idle-hero, #results-section, #queue-section, #artist-section, #artist-songs-section, #collection-detail-page', true);
   }
 
   function showHomeViews() {
@@ -347,13 +347,13 @@
   function _routeScrollId(route) {
     if (!route) return null;
     if (route.indexOf('#artist/') === 0) return route.endsWith('/songs') ? 'artist-songs-section' : 'artist-section';
-    if (route.indexOf('#album/') === 0) return 'playlist-detail-modal-overlay';
+    if (route.indexOf('#album/') === 0) return 'collection-detail-page';
     if (route === '#now-playing') return 'now-playing-section';
     if (route === '#history') return 'history-page';
     if (route === '#explore') return 'explore-modal';
     if (route.indexOf('#mood/') === 0) return 'mood-modal';
     if (route === '#library') return 'library-modal';
-    if (route.indexOf('#playlist/') === 0) return 'playlist-detail-modal-overlay';
+    if (route.indexOf('#playlist/') === 0) return 'collection-detail-page';
     if (route.indexOf('#search?') === 0) return 'results-list';
     return 'main';
   }
@@ -400,7 +400,7 @@
         !window.__appState._searchPreservePreviousView) {
       var sourceIds = ['home-section', 'jam-home-section', 'recs-section',
         'artist-section', 'artist-songs-section', 'history-page',
-        'playlist-detail-modal-overlay', 'explore-modal-overlay',
+        'collection-detail-page', 'explore-modal-overlay',
         'mood-modal-overlay', 'library-modal-overlay'];
       var sourceVisible = sourceIds.some(function(id) {
         var el = document.getElementById(id);
@@ -464,9 +464,9 @@
     // page already rendered behind the sliding overlay.
     if (returnRoute === '#home') {
       showHomeViews();
-    } else if (returnRoute.indexOf('#playlist/') === 0) {
-      var po = document.getElementById('playlist-detail-modal-overlay');
-      if (po) po.classList.add('open');
+    } else if (returnRoute.indexOf('#playlist/') === 0 || returnRoute.indexOf('#album/') === 0) {
+      var collectionPage = document.getElementById('collection-detail-page');
+      if (collectionPage) collectionPage.hidden = false;
     } else if (returnRoute === '#history') {
       var hp = document.getElementById('history-page');
       if (hp) hp.hidden = false;
@@ -483,11 +483,6 @@
       showArtistSongsSection();
     } else if (returnRoute.indexOf('#artist/') === 0) {
       showArtistSection();
-    } else if (returnRoute.indexOf('#album/') === 0) {
-      setHidden('#recs-section, #home-section, #idle-hero, #results-section, #queue-section, #artist-section, #artist-songs-section', true);
-      setHidden('.play-section', false);
-      var albumOverlay = document.getElementById('playlist-detail-modal-overlay');
-      if (albumOverlay) albumOverlay.classList.add('open');
     }
 
     // Trigger the closing slide-out animation
@@ -730,9 +725,9 @@
     // belonging to the previous route. A pending Search is different: it is
     // not the visible destination yet, so keep the source page/overlay intact
     // until openResults() performs the atomic handoff after data arrives.
-    if (!preserveSearchShell && hash.indexOf('#playlist/') !== 0) {
-      var detailOverlay = document.getElementById('playlist-detail-modal-overlay');
-      if (detailOverlay) detailOverlay.classList.remove('open');
+    if (!preserveSearchShell && hash.indexOf('#playlist/') !== 0 && hash.indexOf('#album/') !== 0) {
+      var collectionPage = document.getElementById('collection-detail-page');
+      if (collectionPage) collectionPage.hidden = true;
     }
     if (!preserveSearchShell && hash !== '#history') {
       var historyPage = document.getElementById('history-page');
@@ -830,25 +825,21 @@
       routes[hash]();
     } else if (hash.indexOf('#playlist/') === 0) {
       var playlistId = decodeURIComponent(hash.slice('#playlist/'.length));
-      // On browser Back, the playlist markup is still in the overlay. Restore
-      // that exact page synchronously while its data refreshes so Home never
-      // flashes between an artist and the previous playlist.
-      var playlistOverlay = document.getElementById('playlist-detail-modal-overlay');
-      if (playlistOverlay && playlistOverlay.dataset.playlistId === String(playlistId)) {
-        playlistOverlay.classList.add('open');
-      }
-      // Playlist detail is an overlay-style page. Clear the previous content
-      // first so an artist banner cannot remain visible behind the mini rail.
+      // Collection detail is a real routed page. Keep the shared page shell
+      // mounted synchronously on Back/Forward while its data refreshes.
+      var playlistPage = document.getElementById('collection-detail-page');
+      if (playlistPage) playlistPage.hidden = false;
       hideAllViews();
       setHidden('.play-section', false);
+      if (playlistPage) playlistPage.hidden = false;
       if (playlistId && window.openPlaylistDetailModal) window.openPlaylistDetailModal(playlistId, true);
     } else if (hash.indexOf('#album/') === 0) {
       var albumId = decodeURIComponent(hash.slice('#album/'.length));
       if (!albumId) { window.navigateTo('#home'); return; }
       hideAllViews();
       setHidden('.play-section', false);
-      var albumOverlay = document.getElementById('playlist-detail-modal-overlay');
-      if (albumOverlay) albumOverlay.classList.add('open');
+      var albumPage = document.getElementById('collection-detail-page');
+      if (albumPage) albumPage.hidden = false;
       if (window.loadAlbum) window.loadAlbum(albumId);
     } else if (hash.indexOf('#mood/') === 0) {
       var moodRouteValue = hash.slice('#mood/'.length);

@@ -257,7 +257,7 @@
   }
   /* Artwork or the shared warm tint can bleed behind the mini rail on Home,
      History, Artist, and the full player. Other pages use a stable black rail. */
-  body.rail-collapsed:not(.home-route):not(.history-route):not(.explore-route):not(.library-route):not(.artist-route):not(.now-playing-route) .sidebar {
+  body.rail-collapsed:not(.home-route):not(.history-route):not(.explore-route):not(.library-route):not(.artist-route):not(.now-playing-route):not(.playlists-route):not(.album-route) .sidebar {
     background: #000;
   }
   /* Text-only chrome has no icon form — hide it in the mini rail. Fade it
