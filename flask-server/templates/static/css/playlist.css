@@ -711,3 +711,341 @@
     text-decoration: none;
   }
 }
+
+/* ============================================================
+   Playlist detail — routed page (mobile) and in-page desktop
+   view. Moved from redesign.css.
+   ============================================================ */
+
+@media (max-width: 899px) {
+  body.playlists-route:has(#playlist-detail-modal-overlay.open) {
+    overflow-y: auto !important;
+    overflow-x: hidden !important;
+    overscroll-behavior-y: auto !important;
+  }
+
+  body.playlists-route main {
+    height: auto !important;
+    min-height: 0 !important;
+    padding-left: 0 !important;
+    padding-right: 0 !important;
+  }
+
+  body.playlists-route #playlist-detail-modal-overlay {
+    display: none;
+    position: static;
+    inset: auto;
+    width: 100%;
+    min-height: 0;
+    align-items: stretch;
+    justify-content: stretch;
+    background: transparent;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    opacity: 1;
+    visibility: visible;
+    z-index: auto;
+  }
+
+  body.playlists-route #playlist-detail-modal-overlay.open {
+    display: block;
+  }
+
+  body.playlists-route #playlist-detail-modal {
+    width: 100%;
+    max-width: none;
+    max-height: none;
+    min-height: 0;
+    margin: 0;
+    overflow: visible;
+    background: transparent;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+    transform: none;
+    opacity: 1;
+  }
+
+  body.playlists-route #playlist-detail-modal .history-modal-header {
+    display: none;
+  }
+
+  body.playlists-route #playlist-detail-modal #playlist-detail-body {
+    width: 100%;
+    height: auto;
+    box-sizing: border-box;
+    padding: 20px 8px 120px;
+    overflow: visible;
+    display: block;
+  }
+
+  body.playlists-route #playlist-detail-modal .playlist-detail-hero {
+    position: static;
+    max-height: none;
+    overflow: visible;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+    padding: 0 0 18px;
+    text-align: center;
+  }
+
+  body.playlists-route #playlist-detail-modal .playlist-detail-hero .playlist-collage {
+    width: 180px;
+    height: 180px;
+    border-radius: 8px;
+  }
+
+  body.playlists-route #playlist-detail-modal .playlist-detail-hero-info {
+    width: 100%;
+    align-items: center;
+    gap: 7px;
+    padding: 0;
+    text-align: center;
+  }
+
+  body.playlists-route #playlist-detail-modal .playlist-detail-hero-name {
+    font-size: 1.35rem;
+    line-height: 1.2;
+  }
+
+  body.playlists-route #playlist-detail-modal .playlist-detail-hero-desc {
+    max-width: 290px;
+  }
+
+  body.playlists-route #playlist-detail-modal .playlist-detail-hero-meta {
+    justify-content: center;
+  }
+
+  body.playlists-route #playlist-detail-modal .playlist-detail-hero-actions {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    width: 100%;
+    margin-top: 8px;
+    padding: 0;
+  }
+
+  body.playlists-route #playlist-detail-modal .playlist-hero-actions-left,
+  body.playlists-route #playlist-detail-modal .playlist-hero-actions-right {
+    display: contents;
+  }
+
+  body.playlists-route #playlist-detail-modal .playlist-detail-hero-actions button {
+    width: 42px;
+    height: 42px;
+  }
+
+  body.playlists-route #playlist-detail-modal .playlist-detail-hero-actions .playlist-hero-play {
+    width: 54px;
+    height: 54px;
+  }
+
+  body.playlists-route #playlist-detail-modal #playlist-detail-body > .history-list {
+    height: auto;
+    overflow: visible;
+    padding-right: 0;
+  }
+}
+
+@media (min-width: 900px) {
+  #playlist-detail-modal-overlay {
+    left: var(--rail-w);
+    top: calc(var(--topbar-h) + 3px);
+    right: 0;
+    bottom: 0;
+    background: var(--bg, #0a0a0a);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    align-items: stretch;
+    /* Below the playbar (220) so playback controls stay reachable */
+    z-index: 210;
+    transition: left .25s ease;
+  }
+  /* Playlist detail is never shortened by stale playback state. */
+  body:not(.now-playing-route) #playlist-detail-modal-overlay {
+    bottom: 0 !important;
+  }
+  /* While a playlist view is open it owns the scroll: freeze the page
+     behind it so the wheel never scrolls the background view first. */
+  body:has(#playlist-detail-modal-overlay.open) {
+    overflow: hidden;
+  }
+  #playlist-detail-modal .history-modal-body {
+    overscroll-behavior: contain;
+  }
+  /* Stop above the playbar only when the playbar is REALLY on screen.
+     Matching .is-visible alone left an 88px strip of the page behind
+     exposed while the playbar was hidden (it can carry .is-visible
+     together with [hidden]/.is-collapsed during transitions). */
+  body:has(.player-section.is-visible:not([hidden])) #playlist-detail-modal-overlay {
+    /* !important: must beat the route-scoped `bottom: 0 !important` above.
+       The persistent desktop playbar keeps .is-collapsed, so we only key on
+       visibility — any on-screen playbar means overlays stop at its top edge. */
+    bottom: var(--playbar-h) !important;
+  }
+  #playlist-detail-modal {
+    width: 100%;
+    max-width: none;
+    height: 100%;
+    max-height: none;
+    margin: 0 auto;
+    background: transparent;
+    border: none;
+    border-radius: 0;
+    box-shadow: none;
+  }
+  #playlist-detail-modal .history-modal-header {
+    border-bottom: none;
+    width: min(1100px, 100%);
+    margin: 0 auto;
+    padding: 18px 32px;
+    box-sizing: border-box;
+  }
+  #playlist-detail-modal .history-modal-body {
+    width: min(1100px, 100%);
+    margin: 0 auto;
+    padding-left: 32px;
+    padding-right: 32px;
+  }
+  #playlist-detail-modal .history-modal-header h3 {
+    text-transform: none;
+    letter-spacing: -.01em;
+    font-size: 1.3rem;
+    font-weight: 800;
+  }
+  /* These are routed desktop pages, so they do not need modal close icons.
+     Keep the playlist-detail back arrow for navigating to the list. */
+  #playlist-detail-close {
+    display: none;
+  }
+
+  /* ------------------------------------------------------------
+     Playlist Detail — YT Music-style two-column layout
+     The body becomes the scroll container (overflow-y: auto) and
+     the hero sticks to the top of the scroll viewport so the
+     playlist identity stays in view as the user scrolls a long
+     track list. The track list itself is no longer its own scroll
+     region — it just grows with the body.
+
+     Shared by playlist and album detail pages so both routes use one
+     collection renderer geometry.
+     ------------------------------------------------------------ */
+  .collection-detail-body {
+    width: min(1100px, 100%);
+    margin: 0 auto;
+    box-sizing: border-box;
+    /* Fill the available height under the header so we have a
+       scroll viewport. The header (position:absolute above) and
+       the body stack as siblings inside the modal. */
+    height: 100%;
+    /* The body owns the scroll now. The previous "overflow: hidden"
+       + right-column "overflow-y: auto" combination prevented any
+       ancestor from being a sticky anchor, which forced the left
+       column to scroll out of view with the right column. */
+    overflow-y: auto;
+    overflow-x: hidden;
+    display: grid;
+    /* Slightly wider / more flexible left rail — YT Music uses ~340px
+       for a playlist summary; 360px here leaves room for the
+       "N songs • X minutes" meta line to breathe. */
+    grid-template-columns: minmax(320px, 360px) minmax(0, 1fr);
+    gap: clamp(28px, 4vw, 56px);
+    padding: 24px 32px 32px;
+    align-items: start;     /* hero is its own height; track list grows below */
+  }
+  /* The track list used to be the scroll container. Letting it grow
+     with the body means the grid row stretches to fit it, and that
+     stretch is what gives the hero room to stick. */
+  .collection-detail-body > .history-list {
+    min-width: 0;
+    height: auto;
+    overflow: visible;
+    padding-right: 0;
+  }
+  /* The hero now sticks to the top of the body's scroll viewport. The
+     absolute header sits at top:14px with a height of var(--topbar-h)+3
+     (~67px), so it occupies the 14–81px band of the modal. Sticking at
+     calc(var(--topbar-h) + 24px) keeps the hero's top edge below the
+     header (with a small breathing gap) so the back button and 3-dot
+     menu never sit on top of the artwork. */
+  .collection-detail-body .playlist-detail-hero {
+    position: sticky;
+    top: calc(var(--topbar-h) + 24px);
+    align-self: start;
+    max-height: calc(100dvh - var(--topbar-h) - 48px);
+    overflow-y: auto;       /* scroll inside the rail if metadata is very long */
+  }
+  /* The 3-dot "more" button (rename / delete) used to live in the header
+     here, but moved down into the playlist hero's action row so the menu
+     is reachable without scrolling back to the page top. The header
+     actions div now only contains the Sync button (which is [hidden]
+     by default and toggled by JS), so we can let the original mobile-
+     only visibility rules stand — the desktop rule that un-hid the
+     header actions was removed in the same change that moved the more
+     button. */
+}
+
+.collection-detail-body .history-item {
+  min-height: 76px;
+  padding: 9px 10px;
+  transition: background .16s ease, box-shadow .16s ease;
+}
+.collection-detail-body .history-item:hover,
+.collection-detail-body .history-item:focus-within {
+  background: rgba(255,255,255,.09);
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+.collection-detail-body .playlist-track-art,
+.collection-detail-body .queue-thumb {
+  width: 60px;
+  height: 60px;
+}
+.collection-detail-body .playlist-track-art {
+  position: relative;
+  flex: 0 0 60px;
+  overflow: hidden;
+  border-radius: 4px;
+}
+.playlist-track-playback-indicator {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  background: rgba(0,0,0,.52);
+  opacity: 0;
+  transition: opacity .16s ease;
+  pointer-events: none;
+}
+.playlist-track-play-glyph {
+  display: block;
+  width: 25px;
+  height: 25px;
+}
+.playlist-track-playback-indicator .music-bars { display: none; }
+.result-swipe-wrapper:hover .playlist-track-playback-indicator,
+.result-swipe-wrapper:focus-within .playlist-track-playback-indicator,
+.result-swipe-wrapper.current-track.playing .playlist-track-playback-indicator {
+  opacity: 1;
+}
+.result-swipe-wrapper.current-track.playing .playlist-track-play-glyph { display: none; }
+.result-swipe-wrapper.current-track.playing .playlist-track-playback-indicator .music-bars {
+  display: flex;
+}
+.collection-detail-body .result-like-btn,
+.collection-detail-body .result-more-btn {
+  width: 42px;
+  height: 42px;
+  min-width: 42px;
+}
+.collection-detail-body .result-like-btn::before,
+.collection-detail-body .result-more-btn::before,
+.collection-detail-body .result-like-btn > svg,
+.collection-detail-body .result-more-btn > svg {
+  width: 20px;
+  height: 20px;
+}

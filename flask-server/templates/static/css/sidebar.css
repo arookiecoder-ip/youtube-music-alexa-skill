@@ -760,3 +760,134 @@ body.library-route #nav-library-btn::before {
   background: var(--accent);
 }
 .sidebar .sidebar-nav-btn { position: relative; }
+
+/* ============================================================
+   Profile menu (left rail). Moved from redesign.css.
+   ============================================================ */
+
+@media (min-width: 900px) {
+  /* Sign out + history live in the left rail on desktop; hiding their header
+     copies clears room for the centered search pill. */
+  #history-modal-btn { display: none !important; }
+  .sidebar-header { display: none; }
+}
+
+.profile-menu-wrap { position: relative; flex: none; }
+.profile-menu-trigger {
+  width: 38px;
+  height: 38px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 1px solid rgba(255,255,255,.14);
+  border-radius: 0;
+  background: rgba(255,255,255,.07);
+  color: var(--text);
+  cursor: pointer;
+}
+.profile-menu-trigger:hover,
+.profile-menu-wrap.open .profile-menu-trigger { background: rgba(255,255,255,.13); }
+.profile-menu-trigger svg { width: 21px; height: 21px; }
+.profile-menu {
+  position: absolute;
+  top: calc(100% + 14px);
+  right: 0;
+  width: 280px;
+  padding: 12px;
+  border: 1px solid #2c2c2c;
+  border-radius: 0;
+  background: #1b1b1b;
+  box-shadow: 0 12px 32px rgba(0,0,0,.55);
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(-6px);
+  transform-origin: top right;
+  transition: opacity 0.25s cubic-bezier(0.16, 1, 0.3, 1), visibility 0.25s, transform 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+  z-index: 1000;
+}
+.profile-menu-wrap.open .profile-menu { opacity: 1; visibility: visible; transform: none; }
+.profile-menu-user { display: flex; align-items: center; gap: 12px; padding: 4px 0 12px; border-bottom: 1px solid var(--border); }
+.profile-menu-avatar {
+  width: 54px;
+  height: 54px;
+  display: grid;
+  place-items: center;
+  flex: none;
+  border: 1px solid var(--accent);
+  border-radius: 0;
+  background: var(--bg);
+  color: var(--accent);
+  font-weight: 700;
+  font-size: 1.1rem;
+}
+.profile-menu-user span,
+.profile-menu-user strong { display: block; }
+.profile-menu-user span { color: var(--muted); font-size: 0.75rem; letter-spacing: 0.5px; text-transform: uppercase; margin-bottom: 2px; }
+.profile-menu-user strong { font-size: 1rem; font-weight: 600; color: var(--text); overflow: hidden; text-overflow: ellipsis; }
+
+.profile-menu-status {
+  padding: 12px 0;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.85rem;
+  line-height: 1.6;
+  color: var(--muted);
+}
+.profile-menu-status > div {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+}
+.profile-menu-status > div:last-child {
+  margin-bottom: 0;
+}
+.profile-menu-status strong {
+  font-weight: 500;
+}
+.profile-menu-status span {
+  box-sizing: border-box;
+  width: 78px;
+  text-align: center;
+  font-weight: 600;
+  padding: 3px 7px;
+  border: 1px solid var(--border);
+  border-radius: 0;
+  background: var(--bg);
+  font-size: 0.75rem;
+  letter-spacing: 0.5px;
+}
+
+.profile-menu button {
+  width: 100%;
+  margin-top: 8px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  background: var(--bg);
+  color: var(--text);
+  font-weight: 600;
+  font-size: 0.85rem;
+  text-align: left;
+  cursor: pointer;
+  border-radius: 0;
+  transition: color .15s, border-color .15s, background .15s;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.profile-menu button:hover { background: #222; border-color: var(--accent); color: var(--accent); }
+
+.profile-menu #amazon-signout {
+  color: #ff6b6b;
+  justify-content: center;
+  text-align: center;
+}
+.profile-menu #amazon-signout:hover { background: rgba(255, 107, 107, 0.1); }
+.profile-menu #logout {
+  color: #000;
+  background: #e53935;
+  border-color: #e53935;
+  justify-content: center;
+  text-align: center;
+}
+.profile-menu #logout:hover { background: #ff5a55; border-color: #ff5a55; color: #000; }

@@ -803,3 +803,256 @@ body.jam-guest .jam-owner-only {
     text-decoration: none !important;
   }
 }
+
+/* ============================================================
+   Auth modals (browser YT Music connect + Amazon login popup).
+   Moved from redesign.css.
+   ============================================================ */
+
+.browser-auth-modal { width: min(560px, 94vw); }
+.browser-auth-modal .login-modal-body { display: grid; gap: 14px; }
+.browser-auth-actions { display: flex; flex-wrap: wrap; gap: 10px; }
+.browser-auth-actions button { min-height: 42px; padding: 10px 14px; }
+.browser-session-link { color: var(--accent); font-weight: 700; }
+.browser-auth-advanced { border-top: 1px solid var(--border); padding-top: 14px; }
+.browser-auth-advanced summary { cursor: pointer; color: var(--muted); }
+.browser-auth-advanced[open] summary { margin-bottom: 12px; }
+.browser-auth-input { box-sizing: border-box; width: 100%; margin: 10px 0; }
+.auth-status { min-height: 22px; margin: 0; color: var(--muted); }
+#youtube-browser-auth-modal-wrap[data-browser-state="connected"] .auth-status { color: #4ade80; }
+#youtube-browser-auth-modal-wrap[data-browser-state="reconnect_required"] .auth-status,
+#youtube-browser-auth-modal-wrap[data-browser-state="unavailable"] .auth-status { color: #ffb4b0; }
+
+/* Auth Modals */
+.login-modal-wrap {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 100vw;
+  height: 100vh;
+  background: rgba(0, 0, 0, 0.82);
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.login-modal-wrap[hidden] {
+  display: none !important;
+}
+.login-modal {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55);
+  width: 90%;
+  max-width: 400px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.login-modal-header {
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+.login-modal-header h2 {
+  font-size: 1.1rem;
+  font-weight: 600;
+  margin: 0;
+}
+.login-modal-close {
+  background: none;
+  border: none;
+  color: rgba(255, 255, 255, 0.6);
+  cursor: pointer;
+  padding: 4px;
+  width: 32px;
+  height: 32px;
+  border-radius: 3px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.2s;
+}
+.login-modal-close:hover {
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+}
+.login-modal-body {
+  padding: 20px;
+  text-align: center;
+}
+.auth-status {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 20px;
+  color: var(--muted);
+  font-size: var(--text-xs);
+}
+.browser-auth-modal { max-width: 520px; }
+.browser-auth-steps {
+  margin: 0 0 16px;
+  padding-left: 20px;
+  color: var(--muted);
+  font-size: var(--text-sm);
+  line-height: 1.55;
+  text-align: left;
+}
+.browser-auth-steps strong { color: var(--text); }
+.browser-auth-input {
+  display: block;
+  width: 100%;
+  min-height: 150px;
+  resize: vertical;
+  padding: 10px;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 0;
+  font: 12px/1.4 ui-monospace, SFMono-Regular, Consolas, monospace;
+}
+.browser-auth-input:focus { outline: 1px solid var(--accent); border-color: var(--accent); }
+.browser-auth-save {
+  width: 100%;
+  margin: 12px 0;
+  padding: 10px 16px;
+  color: #000;
+  background: var(--accent);
+  border: 0;
+  border-radius: 0;
+  font-weight: 700;
+  cursor: pointer;
+}
+.browser-auth-save:hover { background: var(--accent-hover); }
+.browser-auth-save:disabled { opacity: .55; cursor: wait; }
+
+/* ============================================================
+   Redesign shell tokens. Moved from redesign.css. These override
+   --card-radius (8px -> 12px) and add rail/topbar/playbar sizing
+   used by the desktop shell, header, sidebar, and player.
+   ============================================================ */
+:root {
+  --rail-w: 224px;
+  /* 76px keeps the icon column at the exact same x-position in both states:
+     14px rail padding + 12px button padding + half of the 24px icon = 38px,
+     which is also the centre of the 76px strip (76/2 = 38). */
+  --rail-w-mini: 76px;
+  --topbar-h: 64px;
+  --playbar-h: 72px;
+  --playbar-h-mobile: 72px;
+  --queue-w: 320px;
+  --accent-grad: linear-gradient(135deg, var(--accent), #ff6a00);
+  --shell-bg: #030303;
+  --pill-bg: #212121;
+  /* Softer, rounder look everywhere */
+  --card-radius: 12px;
+}
+
+/* ============================================================
+   Shell layout. Moved from redesign.css.
+   ============================================================ */
+
+main {
+  width: 100%;
+  max-width: 100%;
+  padding: 0 var(--space-4);
+  padding-top: 4px;
+}
+
+.mobile-search-toggle,
+.mobile-player-close,
+.mobile-player-more,
+.mobile-player-volume-wrap,
+.mobile-player-volume,
+.mobile-volume-popover,
+.mobile-np-controls,
+.mobile-np-progress,
+.mobile-queue-label,
+.mobile-inline-queue { display: none !important; }
+.mobile-queue-drag-region { display: none !important; }
+
+@media (min-width: 900px) {
+  body {
+    display: block;
+    padding: 0;
+  }
+  main,
+  main.idle,
+  main.has-queue {
+    margin-left: var(--rail-w);
+    width: auto;
+    max-width: none;
+    height: auto;
+    min-height: 100dvh;
+    padding: 0 28px;
+    display: flex;
+    flex-direction: column;
+    transition: margin-left .25s ease;
+  }
+  /* The old layout locked the page and scrolled inner panels; the new shell
+     always uses the normal document scroll. */
+  body:has(main.has-queue) {
+    overflow: auto;
+    padding-bottom: 0;
+  }
+  main.has-queue .site-footer {
+    padding: 10px 0 var(--space-5);
+  }
+  /* Queue side panel is deprecated — queue lives in the #now-playing page.
+     No right-padding reserved any more. */
+  /* Hard-hide: belt-and-suspenders so it never floats over any page. */
+  #queue-section { display: none !important; }
+}
+
+/* Reserve space for the fixed playbar whenever a track is loaded */
+main:has(.player-section.is-visible) {
+  padding-bottom: calc(var(--playbar-h-mobile) + 12px);
+}
+@media (min-width: 900px) {
+  main:has(.player-section.is-visible) {
+    padding-bottom: calc(var(--playbar-h) + 28px);
+  }
+  #queue-section { bottom: 16px; }
+  body:has(.player-section.is-visible) #queue-section {
+    bottom: calc(var(--playbar-h) + 16px);
+  }
+  /* YT Music style: the playbar spans the full viewport width and paints
+     above the rail; the rail simply stops at the bar's top edge so its
+     content never scrolls underneath. Rail state (open/collapsed) must not
+     affect the bar at all. */
+  body:has(.player-section.is-visible) .sidebar {
+    bottom: var(--playbar-h);
+  }
+}
+
+/* Artist credits are links in every list surface. Keep their affordance
+   identical regardless of which page rendered the song. */
+.artist-name {
+  cursor: pointer;
+  text-decoration-line: underline;
+  text-decoration-color: transparent;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 2px;
+  transition: color .15s, text-decoration-color .15s;
+}
+.artist-name:hover,
+.artist-name:focus-visible {
+  text-decoration-color: currentColor !important;
+}
+
+.clear-all-btn { border-radius: var(--radius-full); }
+
+/* Never expose progressive image passes. Artwork stays transparent until the
+   shared image loader has fully downloaded and decoded it, then fades in as
+   one finished bitmap. */
+img:not([data-image-ready="true"]) {
+  opacity: 0;
+  transition: opacity .16s ease;
+}
+img[data-image-ready="true"] {
+  opacity: 1 !important;
+}

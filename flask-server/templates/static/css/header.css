@@ -423,3 +423,120 @@
   letter-spacing: .12em;
   text-transform: uppercase;
 }
+
+/* ============================================================
+   Top bar (shell). Moved from redesign.css.
+   ============================================================ */
+
+header {
+  position: relative;
+  z-index: 500;
+  border-bottom: none;
+  padding: 10px 0;
+  margin-bottom: 4px;
+}
+
+@media (min-width: 900px) {
+  header,
+  main.has-queue header,
+  body.results-open main header {
+    position: sticky;
+    top: 0;
+    z-index: 240;
+    height: calc(var(--topbar-h) + 3px);
+    margin: 0 -28px 4px;
+    padding: 3px 28px 0;
+    background: transparent;
+    border-bottom: none;
+    overflow: visible !important;
+  }
+  /* Paint the header across the rail column too. The header DOM lives inside
+     main (which starts after the rail), but visually this must be one full
+     viewport row above both the sidebar and page content. */
+  header::before {
+    content: '';
+    position: absolute;
+    inset: 0 0 0 calc(-1 * var(--rail-w));
+    z-index: -1;
+    background-color: #000;
+    border-bottom: 1px solid rgba(255, 255, 255, .08);
+    pointer-events: none;
+    transition: left .25s ease, background-color .28s ease, border-color .28s ease;
+  }
+  header .header-actions {
+    margin-left: 0;
+    position: fixed;
+    top: 15px;
+    right: 28px;
+    z-index: 250;
+    overflow: visible;
+  }
+}
+
+.brand h1 {
+  background: var(--accent-grad);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
+  letter-spacing: .16em;
+}
+
+/* Nudge only the mark and wordmark; keep the rail toggle and all other
+   header controls at their existing coordinates. */
+header > .brand .eq-icon,
+header > .brand h1 {
+  transform: translateX(6px);
+}
+
+/* Icon-only round header buttons (labels shown as tooltips) */
+.header-history-label { display: none; }
+.header-history-btn {
+  border-radius: var(--radius-full);
+  padding: 8px 10px;
+}
+.header-history-btn:hover {
+  background: rgba(232, 89, 12, .08);
+}
+
+@media (min-width: 900px) {
+  /* Playlists + Jam live in the left rail on desktop */
+  #playlists-modal-btn, #jam-btn { display: none !important; }
+  /* No refresh chrome on desktop (YT Music has none; F5 exists) — keep both
+     the header device-refresh icon and the rail's Refresh Page for mobile. */
+  .device-section-inline #refresh { display: none !important; }
+  #refresh-page-btn { display: none !important; }
+}
+
+.btn-ghost {
+  border-radius: var(--radius-full);
+  padding: 8px 16px;
+}
+
+.device-section-inline .custom-select-trigger {
+  border-radius: 0;
+  background: transparent;
+  border-color: rgba(255, 255, 255, .22);
+  padding: 8px 14px;
+  transition: background .15s, border-color .15s, box-shadow .15s;
+}
+.device-section-inline .custom-select-trigger:hover,
+.device-section-inline .custom-select:focus-within .custom-select-trigger,
+.device-section-inline .custom-select.open .custom-select-trigger {
+  background: var(--pill-bg);
+  border-color: rgba(255, 255, 255, .38);
+}
+.device-section-inline .custom-select.open .custom-select-trigger {
+  box-shadow: 0 0 0 3px rgba(232, 89, 12, .12);
+}
+.device-section-inline #refresh {
+  border-radius: 0;
+  background: none;
+  border-color: transparent;
+}
+.device-section-inline #refresh:hover { border-color: var(--border); }
+.custom-select-menu {
+  border-radius: 0;
+  overflow: hidden;
+  background: #1b1b1b;
+  border-color: #2c2c2c;
+}

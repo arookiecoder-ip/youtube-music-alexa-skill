@@ -2637,3 +2637,397 @@ body.now-playing-route .player-section .player-expand-btn svg {
 }
 
 /* Keep the outer mobile controls comfortably inside narrow player cards. */
+
+/* ============================================================
+   Playbar polish + persistent mobile chrome. Moved from
+   redesign.css (was loaded last, so these rules override the
+   base playbar/header rules above them in this same file).
+   ============================================================ */
+
+.player-section .np-info {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: auto max-content 1fr;
+  grid-template-areas:
+    "title time ."
+    "artist artist artist";
+  align-items: center;
+  column-gap: 8px;
+}
+.player-section .np-title {
+  grid-area: title;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.player-section .np-artist {
+  grid-area: artist;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.player-section .np-more-wrap { position: relative; flex: none; }
+.player-section .np-more-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 38px; height: 38px; padding: 0; border: 0; background: transparent; color: #eee;
+}
+.player-section .np-more-btn:hover { background: rgba(255,255,255,.08); }
+.player-section .np-more-btn svg { width: 21px; height: 21px; }
+.player-section .np-more-menu {
+  display: none; position: absolute; right: 0; bottom: calc(100% + 10px); z-index: 500;
+  min-width: 190px; padding: 4px 0; border: 1px solid rgba(255,255,255,.12);
+  border-radius: 0; background: #282828; box-shadow: 0 12px 32px rgba(0,0,0,.55);
+}
+.player-section .np-more-wrap.open .np-more-menu { display: block; }
+.player-section .np-more-menu button,
+.player-section .np-more-menu a {
+  display: flex; align-items: center; justify-content: flex-start; gap: 10px;
+  width: 100%; padding: 9px 14px; border: 0; border-radius: 0;
+  background: transparent; color: #fff;
+  font: inherit; font-size: .88rem;
+  text-align: left; text-decoration: none; cursor: pointer;
+}
+.player-section .np-more-menu button svg,
+.player-section .np-more-menu a svg {
+  flex: none; width: 16px; height: 16px; color: var(--muted);
+}
+.player-section .np-more-menu button:hover,
+.player-section .np-more-menu a:hover { background: rgba(255,255,255,.08); }
+.player-section .np-title {
+  font-weight: 700;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.player-section .np-artist {
+  color: var(--muted);
+  font-size: .76rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.player-section .np-artist .artist-name { cursor: pointer; }
+.player-section .np-artist .artist-name:hover {
+  color: var(--text);
+  text-decoration: underline;
+}
+.player-section .progress-track { transition: height .12s ease; }
+.player-section .progress:hover .progress-track { height: 4px; }
+.player-section .transport button svg { width: 16px; height: 16px; }
+.player-section .pp-btn svg { width: 28px; height: 28px; fill: #ffffff; color: #ffffff; }
+.player-section .vol input[type=range] { flex: 1; }
+
+/* YouTube Music-style persistent desktop playbar: transport at left, track
+   identity in the middle, and utility controls at right. */
+@media (min-width: 900px) {
+  /* Removing the incorrect display: none rule that hides the persistent playbar */
+  body:not(.now-playing-route) main {
+    padding-bottom: 0;
+  }
+  /* Whenever the fixed playbar is on screen, every document-scrolled view
+     (home, search results, artist, album) needs clearance below its last row
+     so content can scroll fully out from under the bar. */
+  body:not(.now-playing-route) main:has(.player-section.is-visible) {
+    padding-bottom: calc(var(--playbar-h) + 28px);
+  }
+  .player-section,
+  main.has-queue .player-section,
+  body.results-open .player-section {
+    overflow: visible;
+    height: var(--playbar-h);
+    min-height: var(--playbar-h);
+    box-sizing: border-box;
+    z-index: 270;
+    left: 0;
+    padding: 3px 16px 3px;
+    grid-template-columns: 205px minmax(320px, 1fr) auto auto;
+    /* Expand arrow cluster sits at the far right, after the volume */
+    grid-template-areas: "transport np volume actions";
+    gap: 18px;
+    background: #202020;
+  }
+  .player-section .transport {
+    grid-area: transport;
+    justify-self: start;
+    gap: 8px;
+  }
+  .player-section .transport button,
+  .player-section .transport button[data-action="previous"] {
+    display: inline-flex;
+    width: 44px;
+    height: 44px;
+    color: #fff;
+  }
+  .player-section .transport button svg { width: 26px; height: 26px; }
+  /* Play/pause: plain glyph (no circular chip), larger than prev/next */
+  .player-section .pp-btn,
+  .player-section .pp-btn:hover {
+    flex: 0 0 44px;
+    width: 44px;
+    height: 44px;
+    border-radius: 50%;
+    box-sizing: border-box;
+    padding: 0;
+    background: transparent;
+    border: 0;
+    color: #fff;
+    box-shadow: none;
+    filter: none;
+    transform: none;
+  }
+  .player-section .pp-btn:hover { filter: none; transform: none; }
+  .player-section .pp-btn svg { flex: none; width: 40px; height: 40px; margin: 0; }
+
+  .player-section .np {
+    grid-area: np;
+    justify-self: center;
+    width: min(560px, 100%);
+    gap: 13px;
+  }
+  .player-section .np-art {
+    width: 48px;
+    height: 48px;
+    border: 0;
+  }
+  .player-section .np-title { font-size: .92rem; color: #fff; }
+  .player-section .np-artist { font-size: .78rem; color: #aaa; }
+  .player-section .np-like-btn,
+  .player-section .np-shuffle-btn {
+    display: inline-flex;
+    width: 38px;
+    height: 38px;
+    border: 0;
+    background: transparent;
+    color: #eee;
+  }
+  .player-section .np-like-btn svg,
+  .player-section .np-shuffle-btn svg { width: 22px; height: 22px; }
+  .player-section .np-like-btn:hover,
+  .player-section .np-shuffle-btn:hover { background: rgba(255,255,255,.08); }
+
+  .player-section .player-actions {
+    grid-area: actions;
+    justify-self: end;
+    gap: 4px;
+  }
+  .player-section .np-ytm-btn,
+  .player-section .player-expand-btn {
+    width: 40px;
+    height: 40px;
+    border: 0;
+    color: #eee;
+  }
+  .player-section .np-ytm-btn svg,
+  .player-section .player-expand-btn svg { width: 22px; height: 22px; }
+
+  /* Icon sits at the right edge; the slider reveals to its LEFT on hover */
+  .player-section .vol {
+    display: flex;
+    flex-direction: row-reverse;
+    justify-content: flex-start;
+    grid-area: volume;
+    gap: 8px;
+    min-width: 154px;
+    color: #aaa;
+  }
+  .player-section .vol > svg { width: 23px; height: 23px; }
+  /* Timer: shown beside the song title (inherits grid-area: time from global rule) */
+  .player-section .playbar-time {
+    display: block;
+    position: static;
+    transform: none;
+    margin: 0;
+    font-size: .72rem;
+    color: rgba(255,255,255,0.45);
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.03em;
+    pointer-events: none;
+  }
+  .player-section .queue-toggle-btn {
+    width: 40px;
+    height: 40px;
+    border: 0;
+    color: #eee;
+  }
+  .player-section .queue-toggle-btn svg { width: 22px; height: 22px; }
+  /* Volume slider stays hidden until the volume cluster is hovered/focused */
+  .player-section .vol input[type=range] {
+    width: 72px;
+    opacity: 0;
+    transition: opacity .15s ease;
+  }
+  .player-section .vol:hover input[type=range],
+  .player-section .vol.vol-open input[type=range],
+  .player-section .vol input[type=range]:focus-visible { opacity: 1; }
+  .player-section .progress-track { height: 2px; }
+  .player-section .progress:hover .progress-track { height: 4px; }
+  .player-section .progress-fill { background: var(--accent); }
+}
+
+/* Persistent mobile chrome: visible on Home, routes, and open popups. */
+@media (max-width: 899px) {
+  body main {
+    padding-top: 57px;
+    padding-bottom: calc(var(--playbar-h-mobile) + 14px);
+  }
+
+  body main > header {
+    position: fixed !important;
+    top: 0;
+    left: 9px;
+    right: 9px;
+    width: auto;
+    margin: 0 auto !important;
+    z-index: 700;
+  }
+
+  body.now-playing-route main > header {
+    background: #2b1006 !important;
+    background-image: none !important;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+
+  /* Keep compact player pinned while popup/page content scrolls. */
+  body.now-playing-route .player-section {
+    position: fixed !important;
+    bottom: -8px !important;
+    margin-bottom: 0 !important;
+    transform: none !important;
+  }
+
+  /* Opening the expanded player hides the mini bar with a matching slide. */
+  body.now-playing-route .player-section {
+    opacity: 0 !important;
+    transform: translateY(100%) !important;
+    pointer-events: none !important;
+    transition: transform .32s cubic-bezier(.22,1,.36,1), opacity .2s ease !important;
+  }
+  body.now-playing-closing .player-section {
+    opacity: 1 !important;
+    transform: none !important;
+    pointer-events: auto !important;
+  }
+
+  /* Expanded player occupies only space between persistent chrome layers. */
+  body.now-playing-route #now-playing-section {
+    position: fixed !important;
+    top: 57px;
+    left: 9px;
+    right: 9px;
+    bottom: calc(var(--playbar-h-mobile) + 14px);
+    width: auto;
+    height: auto;
+    min-height: 0;
+    max-height: none;
+    margin: 0;
+    overflow-y: auto;
+    z-index: 300;
+  }
+
+  body.now-playing-route .player-section {
+    display: grid !important;
+  }
+
+  body main,
+  body main:has(.player-section.is-visible) {
+    padding-bottom: 0 !important;
+  }
+
+  /* Mobile header is always opaque on every route and overlay state. */
+  body main > header,
+  body main > header::before {
+    background: #2b1006 !important;
+    background-color: #2b1006 !important;
+    background-image: none !important;
+    border-bottom-color: transparent !important;
+    opacity: 1 !important;
+  }
+
+  /* Full-width mobile shell: no page gutters or sideways document overflow.
+     Individual shelves may still scroll horizontally inside themselves. */
+  html,
+  body {
+    width: 100% !important;
+    max-width: 100% !important;
+    margin: 0 !important;
+    padding-left: 0 !important;
+    padding-right: 0 !important;
+    overflow-x: hidden !important;
+  }
+  body { display: block !important; }
+  body main {
+    width: 100% !important;
+    max-width: none !important;
+    margin-left: 0 !important;
+    margin-right: 0 !important;
+    overflow: visible !important;
+  }
+  body main > header {
+    left: 0 !important;
+    right: 0 !important;
+  }
+
+  body.home-route,
+  body.history-route,
+  body.explore-route,
+  body.mood-route,
+  body.library-route,
+  body.home-route main,
+  body.history-route main,
+  body.explore-route main,
+  body.mood-route main,
+  body.library-route main {
+    height: auto !important;
+    min-height: 100dvh;
+    overflow-y: auto !important;
+    overscroll-behavior-y: auto !important;
+    touch-action: pan-y !important;
+  }
+
+  /* One stable mobile header box across Home, search, library, artist, and
+     album routes. */
+  body main > header {
+    position: fixed !important;
+    top: 0 !important;
+    left: 0 !important;
+    right: 0 !important;
+    width: 100% !important;
+    height: 57px !important;
+    min-height: 57px !important;
+    margin: 0 !important;
+    padding: 4px 14px 5px !important;
+    box-sizing: border-box !important;
+    transform: none !important;
+  }
+  body main {
+    padding-top: 57px !important;
+  }
+  body header #jam-btn {
+    display: none !important;
+  }
+  body header #history-modal-btn {
+    display: none !important;
+  }
+  .mobile-search-toggle {
+    display: inline-flex !important;
+    width: 36px;
+    height: 36px;
+    padding: 9px;
+    align-items: center;
+    justify-content: center;
+    background: transparent;
+    border: 1px solid rgba(255,255,255,.2);
+    border-radius: 2px !important;
+    color: var(--text);
+  }
+  .mobile-search-toggle svg { width: 18px; height: 18px; }
+  /* Manual horizontal drags follow the finger; no snap or CSS scrolling
+     animation changes the user's swipe speed. */
+  body .explore-grid {
+    scroll-snap-type: none !important;
+    scroll-behavior: auto !important;
+    -webkit-overflow-scrolling: touch;
+  }
+}

@@ -960,3 +960,850 @@
     cursor: default !important;
   }
 }
+
+/* ============================================================
+   Jam modal (owner-side "start a Jam session" dialog) — YT
+   Music-style session sharing. Remote-only; jam.html has its own
+   separate guest-scoped jam-ended styles in jam.css. Moved from
+   redesign.css.
+   ============================================================ */
+
+.jam-body {
+  padding: 18px 20px 20px;
+  display: flex;
+  flex-direction: column;
+}
+
+#jam-active:not([hidden]),
+#jam-inactive:not([hidden]) {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.jam-desc {
+  margin: 0;
+  color: var(--muted);
+  font-size: .85rem;
+  line-height: 1.45;
+}
+
+.jam-link-row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.jam-link-input {
+  flex: 1;
+  min-width: 0;
+  background: rgba(255,255,255,.06);
+  border: 1px solid rgba(255,255,255,.12);
+  color: var(--text);
+  height: 40px;
+  box-sizing: border-box;
+  padding: 9px 12px;
+  border-radius: 0;
+  font-size: .82rem;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  outline: none;
+  transition: border-color .15s;
+}
+.jam-link-input:focus {
+  border-color: var(--accent);
+}
+
+.jam-btn-row {
+  display: flex;
+  gap: 8px;
+}
+
+.jam-btn {
+  flex: 1;
+  min-height: 40px;
+  padding: 9px 12px;
+  font-weight: 600;
+  border-radius: 0;
+  cursor: pointer;
+  font-family: inherit;
+  font-size: .82rem;
+  transition: background .12s, border-color .12s, color .12s, opacity .12s;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+.jam-btn:disabled {
+  opacity: .4;
+  cursor: default;
+  pointer-events: none;
+}
+
+.jam-btn-primary {
+  background: var(--accent);
+  border: 1px solid var(--accent);
+  color: #fff;
+}
+.jam-btn-primary:hover {
+  background: var(--accent-hover);
+  border-color: var(--accent-hover);
+}
+
+.jam-btn-secondary {
+  background: transparent;
+  border: 1px solid rgba(255,255,255,.18);
+  color: var(--text);
+}
+.jam-btn-secondary:hover {
+  border-color: rgba(255,255,255,.35);
+  background: rgba(255,255,255,.06);
+}
+
+.jam-btn-danger {
+  background: transparent;
+  border: 1px solid rgba(220, 60, 60, .45);
+  color: #e66;
+}
+.jam-btn-danger:hover {
+  background: rgba(255, 60, 60, .1);
+  border-color: #e66;
+}
+
+.jam-btn-full {
+  width: 100%;
+}
+
+#jam-copy-btn {
+  flex: none;
+  padding-inline: 18px;
+}
+
+#jam-end-btn {
+  margin-top: 2px;
+}
+
+.jam-qr-panel {
+  margin: 0 auto;
+  width: min(200px, 100%);
+  padding: 10px;
+  background: #fff;
+  border-radius: 0;
+}
+
+.jam-qr-img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+/* Jam-ended overlay (owner side) */
+#jam-ended-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  background: var(--bg, #0a0a0a);
+  align-items: center;
+  justify-content: center;
+  display: none;
+}
+
+.jam-ended-card {
+  text-align: center;
+  padding: 32px;
+  max-width: 360px;
+}
+
+.jam-ended-icon {
+  width: 56px;
+  height: 56px;
+  margin: 0 auto 20px;
+  border: 2px solid rgba(255,255,255,.15);
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--muted);
+}
+
+.jam-ended-icon svg {
+  width: 26px;
+  height: 26px;
+}
+
+.jam-ended-title {
+  font-size: 1.25rem;
+  font-weight: 700;
+  margin: 0 0 10px;
+  color: var(--text);
+}
+
+.jam-ended-msg {
+  color: var(--muted);
+  font-size: .88rem;
+  margin: 0;
+  line-height: 1.55;
+}
+
+/* Jam modal width */
+#jam-modal {
+  max-width: min(420px, 92vw);
+  background: var(--bg, #0a0a0a);
+  border: 1px solid var(--border);
+  border-radius: 0;
+  box-shadow: 0 18px 48px rgba(0, 0, 0, .55);
+}
+
+#jam-modal .history-modal-header {
+  min-height: 60px;
+  box-sizing: border-box;
+  padding: 14px 20px;
+  border-bottom-color: var(--border);
+}
+
+#jam-modal .history-modal-header h3 {
+  display: flex;
+  align-items: center;
+  margin: 0;
+}
+
+#jam-modal-close {
+  border-radius: 0;
+}
+
+/* ============================================================
+   Explore page — card grid. Moved from redesign.css. Loads
+   before explore.css/mobile.css in remote.html, so explore.css's
+   .explore-card-title/.explore-card-sub underline rules continue
+   to win for shared properties, same as before the move.
+   ============================================================ */
+
+.explore-section {
+  margin-bottom: 42px;
+  padding: 0;
+}
+.explore-loading-status { display:flex; align-items:center; gap:9px; margin:0 0 26px; color:var(--muted); font-size:.88rem; font-weight:600; }
+.explore-loading-dot { width:8px; height:8px; border-radius:50%; background:var(--accent); animation:explorePulse 1s ease-in-out infinite; }
+@keyframes explorePulse { 50% { opacity:.35; transform:scale(.7); } }
+.explore-section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+.explore-section-title {
+  font-size: 1.05rem;
+  font-weight: 700;
+  letter-spacing: -.01em;
+  color: var(--text);
+  margin: 0;
+}
+.explore-grid {
+  display: flex;
+  gap: 16px;
+  overflow-x: auto;
+  padding: 0 0 8px;
+  scroll-snap-type: x proximity;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: none;
+}
+.explore-grid::-webkit-scrollbar { display: none; }
+.explore-grid--featured {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 28px 24px;
+  overflow: hidden;
+  padding-bottom: 0;
+}
+.explore-grid--featured .explore-card { flex: auto; }
+.explore-grid--featured.featured-slide-left { animation: featuredSlideLeft .28s ease-out; }
+.explore-grid--featured.featured-slide-right { animation: featuredSlideRight .28s ease-out; }
+@keyframes featuredSlideLeft {
+  from { opacity: .4; transform: translateX(36px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+@keyframes featuredSlideRight {
+  from { opacity: .4; transform: translateX(-36px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+@media (max-width: 1050px) {
+  .explore-grid--featured { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 24px 18px; }
+}
+@media (max-width: 620px) {
+  .explore-grid--featured { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px 12px; }
+}
+.explore-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  border-radius: var(--radius-sm);
+  overflow: visible;
+  cursor: pointer;
+  transition: background .2s;
+  flex: 0 0 140px;
+  scroll-snap-align: start;
+}
+@media (min-width: 900px) { .explore-grid { gap: 24px; } .explore-card { flex-basis: 174px; } }
+.explore-card:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.explore-card-art {
+  aspect-ratio: 1;
+  border-radius: 8px;
+  overflow: hidden;
+  background: #1a1a1a;
+  margin-bottom: 8px;
+  flex-shrink: 0;
+  position: relative;
+}
+.explore-card-art::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, .38);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .2s ease;
+}
+.explore-card-art img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  opacity: 0;
+  transition: opacity .2s ease;
+}
+.explore-card-art img.is-loaded { opacity: 1; }
+.mood-song-image {
+  opacity: 0;
+  transition: opacity .2s ease;
+}
+.mood-song-image.is-loaded { opacity: 1; }
+.explore-thumb-placeholder {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #444;
+}
+.explore-thumb-placeholder svg { width: 36px; height: 36px; }
+.explore-card-play.home-play-btn {
+  width: 44px;
+  height: 44px;
+  right: 8px;
+  bottom: 8px;
+  left: auto;
+  top: auto;
+  transform: none;
+}
+.explore-card:hover .explore-card-play.home-play-btn,
+.explore-card:focus-within .explore-card-play.home-play-btn,
+.explore-card-play.home-play-btn:focus-visible {
+  opacity: 1;
+}
+.explore-card:hover .explore-card-art::after,
+.explore-card:focus-within .explore-card-art::after { opacity: 1; }
+.explore-scroll-btns { display: none; gap: 8px; }
+@media (min-width: 900px) { .explore-scroll-btns { display: flex; } }
+.explore-scroll-btn {
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid rgba(255,255,255,.2);
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+.explore-scroll-btn:hover:not(:disabled) { background: rgba(255,255,255,.1); }
+.explore-scroll-btn:disabled { opacity: .28; cursor: default; }
+.explore-scroll-btn svg { width: 20px; height: 20px; }
+.explore-quick-nav { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:14px; margin-bottom:42px; }
+.explore-quick-card { display:flex; align-items:center; gap:12px; min-height:68px; padding:0 18px; border:1px solid rgba(255,255,255,.08); border-radius:var(--radius-sm); background:#242424; color:var(--text); font-weight:750; font-size:.95rem; text-align:left; cursor:pointer; transition:background .18s, border-color .18s; }
+.explore-quick-card:hover,
+.explore-quick-card:focus-visible { background:#161616; border-color:rgba(255,255,255,.18); }
+.explore-quick-icon { color:var(--accent); font-size:1.35rem; }
+.explore-context-menu { position:fixed; z-index:10000; min-width:170px; padding:6px; border:1px solid rgba(255,255,255,.12); border-radius:12px; background:#202020; box-shadow:0 18px 45px rgba(0,0,0,.5); }
+.explore-context-menu button { display:block; width:100%; padding:10px 12px; border:0; background:transparent; color:var(--text); text-align:left; font-size:.88rem; }
+.explore-context-menu button:hover { background:rgba(255,255,255,.1); }
+@media (max-width:620px) { .explore-quick-nav { grid-template-columns:repeat(2,1fr); } .explore-quick-card { min-height:58px; padding:0 12px; } }
+.explore-card-info {
+  padding: 0 4px 8px;
+}
+.explore-card-title {
+  font-size: .82rem;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.explore-card-sub {
+  font-size: .72rem;
+  color: var(--muted);
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.explore-skeleton-card .explore-card-art .skeleton-block {
+  width: 100%;
+  height: 100%;
+  aspect-ratio: 1;
+}
+.explore-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 60px 20px;
+  color: var(--muted);
+  text-align: center;
+}
+.explore-empty svg { opacity: .4; }
+.explore-empty-title {
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--text);
+  margin: 0;
+}
+.explore-empty-sub {
+  font-size: .84rem;
+  max-width: 320px;
+  line-height: 1.5;
+}
+
+/* ============================================================
+   Library page — playlist card grid, and Explore mood/genre
+   pages. Moved from redesign.css.
+   ============================================================ */
+
+.library-section {
+  margin-bottom: 36px;
+}
+.library-section-header {
+  margin-bottom: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+}
+.library-section-title {
+  font-size: 1.05rem;
+  font-weight: 700;
+  letter-spacing: -.01em;
+  color: var(--text);
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.library-count {
+  font-size: .75rem;
+  font-weight: 600;
+  color: var(--muted);
+  background: rgba(255,255,255,.09);
+  border-radius: 20px;
+  padding: 2px 9px;
+}
+.library-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, 140px);
+  justify-content: center;
+  gap: 16px;
+}
+@media (min-width: 700px) {
+  .library-grid {
+    grid-template-columns: repeat(auto-fill, 174px);
+    gap: 24px;
+  }
+}
+.library-card {
+  display: flex;
+  flex-direction: column;
+  border-radius: 0;
+  padding: 0;
+  overflow: visible;
+  transition: background .2s;
+  cursor: pointer;
+}
+.library-card:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+.library-card-art {
+  position: relative;
+  aspect-ratio: 1;
+  border-radius: 0;
+  overflow: hidden;
+  background: #1a1a1a;
+  margin-bottom: 9px;
+  flex-shrink: 0;
+}
+.library-card-art img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  transition: opacity .2s;
+}
+/* Artist cards navigate to a profile, so match the rest of the app: a quiet
+   artwork dim on hover, no play affordance, and no layout-shifting transform. */
+.library-card-artist .library-card-art::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  background: rgba(0, 0, 0, .45);
+  opacity: 0;
+  transition: opacity .18s ease;
+}
+.library-card-artist:hover .library-card-art::after,
+.library-card-artist:focus-visible .library-card-art::after {
+  opacity: 1;
+}
+.library-card-artist .library-card-art,
+.library-card-artist .library-card-art img,
+.library-card-artist .library-card-art-placeholder {
+  border-radius: 50%;
+}
+.library-card-artist .library-card-title {
+  display: inline-block;
+  width: fit-content;
+  max-width: 100%;
+  cursor: pointer;
+  text-decoration-line: underline;
+  text-decoration-color: transparent;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 3px;
+  transition: text-decoration-color .15s ease;
+}
+.library-card-artist:hover .library-card-title,
+.library-card-artist:focus-visible .library-card-title {
+  text-decoration-color: currentColor;
+}
+.library-card-art-placeholder {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #444;
+}
+.library-card-art-placeholder svg { width: 36px; height: 36px; }
+.library-card-liked .library-card-art {
+  background: linear-gradient(135deg, #4a1a7a, #7a2d8f);
+}
+.library-card-liked .library-card-art-placeholder { color: rgba(255,255,255,.6); }
+.library-card-info {
+  padding: 0 4px 8px;
+}
+.library-card-title {
+  font-size: .82rem;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.library-card-sub {
+  font-size: .72rem;
+  color: var(--muted);
+  margin-top: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.library-skeleton-card .library-card-art .skeleton-block {
+  width: 100%;
+  height: 100%;
+  aspect-ratio: 1;
+}
+.library-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 60px 20px;
+  color: var(--muted);
+  text-align: center;
+}
+.library-empty svg { opacity: .4; }
+.library-empty-title {
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--text);
+  margin: 0;
+}
+.library-empty-sub {
+  font-size: .84rem;
+  max-width: 320px;
+  line-height: 1.5;
+}
+
+.library-card-play.home-play-btn {
+  width: 44px;
+  height: 44px;
+  right: 8px;
+  bottom: 8px;
+  left: auto;
+  top: auto;
+  transform: none;
+}
+.library-card:hover .library-card-play.home-play-btn,
+.library-card:focus-within .library-card-play.home-play-btn,
+.library-card-play.home-play-btn:focus-visible { opacity: 1; }
+.explore-mood-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 16px 24px;
+  transition: transform .32s cubic-bezier(.2, .7, .2, 1);
+  will-change: transform;
+}
+.explore-mood-viewport { position: relative; overflow: hidden; }
+.explore-mood-grid.mood-grid-incoming { position: absolute; inset: 0; width: 100%; }
+.explore-mood-grid.mood-grid-enter-right { transform: translateX(var(--mood-slide-distance)); }
+.explore-mood-grid.mood-grid-enter-left { transform: translateX(calc(-1 * var(--mood-slide-distance))); }
+.explore-mood-grid.mood-grid-exit-left { transform: translateX(calc(-1 * var(--mood-slide-distance))); }
+.explore-mood-grid.mood-grid-exit-right { transform: translateX(var(--mood-slide-distance)); }
+@media (prefers-reduced-motion: reduce) {
+  .explore-mood-grid { transition: none; }
+}
+.explore-mood-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+}
+.explore-section--moods .explore-section-title {
+  font-size: 1.7rem;
+  font-weight: 800;
+}
+.explore-section--moods {
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+}
+.explore-mood-controls { display: flex; align-items: center; gap: 16px; }
+.explore-mood-card {
+  min-height: 48px;
+  padding: 11px 14px 11px 18px;
+  border: 0;
+  border-left: 6px solid var(--mood-accent);
+  border-radius: 0;
+  background: #2b2b2b;
+  color: var(--text);
+  font: inherit;
+  font-size: .86rem;
+  font-weight: 700;
+  text-align: left;
+  cursor: pointer;
+  transition: background .18s;
+}
+.explore-mood-card:hover,
+.explore-mood-card:focus-visible {
+  background: #3a3a3a;
+}
+
+/* Explore uses square media and content tiles. Keep circular navigation controls intact. */
+.explore-card,
+.explore-card-art,
+.explore-quick-card,
+.explore-context-menu,
+.explore-mood-card {
+  border-radius: 0;
+}
+@media (max-width: 1050px) {
+  .explore-mood-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; }
+}
+@media (max-width: 620px) {
+  .explore-mood-header { align-items: flex-start; }
+  .explore-section--moods .explore-section-title { font-size: 1.35rem; }
+  .explore-mood-controls { gap: 8px; }
+  .explore-mood-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+}
+.explore-back-button {
+  margin: 0 0 26px;
+  padding: 7px 0;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+.explore-back-button:hover,
+.explore-back-button:focus-visible { color: var(--accent); }
+
+/* Dedicated mood/genre viewport loading state. The shared API helper drives
+   the global progress bar while these cards reserve the final page geometry. */
+.mood-songs-shelf {
+  padding: 0 !important;
+  border: 0 !important;
+  border-radius: 0 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+/* Mood shelves share the same edge as the album/playlist grids below. */
+.mood-songs-shelf .home-shelf-header,
+.mood-songs-shelf .home-shelf-content {
+  padding-left: 0;
+  padding-right: 0;
+}
+.mood-page-loading { padding-top: 8px; }
+.mood-page-skeleton-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 20px;
+}
+.mood-page-skeleton > div {
+  aspect-ratio: 1;
+  border-radius: var(--radius-sm);
+  background: linear-gradient(100deg, #1a1a1a 30%, #292929 48%, #1a1a1a 66%);
+  background-size: 220% 100%;
+  animation: moodSkeleton 1.2s linear infinite;
+}
+.mood-page-skeleton > span {
+  display: block;
+  height: 12px;
+  margin: 9px 4px 0;
+  border-radius: 4px;
+  background: #242424;
+}
+.mood-page-skeleton > span:last-child { width: 62%; height: 10px; margin-top: 6px; }
+@keyframes moodSkeleton { to { background-position: -220% 0; } }
+@media (min-width: 700px) {
+  .mood-page-skeleton-grid { grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); }
+}
+
+@media (min-width: 900px) {
+  /* ============================================================
+     Explore & Library: full-page routed views on desktop
+     (same treatment as history-modal-overlay). Moved from
+     redesign.css.
+     ============================================================ */
+  #explore-modal-overlay,
+  #mood-modal-overlay,
+  #library-modal-overlay {
+    left: var(--rail-w);
+    top: calc(var(--topbar-h) + 3px);
+    right: 0;
+    bottom: 0;
+    background: transparent;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    align-items: stretch;
+    z-index: 210;
+    transition: left .25s ease;
+  }
+  body:not(.now-playing-route) #explore-modal-overlay,
+  body:not(.now-playing-route) #mood-modal-overlay,
+  body:not(.now-playing-route) #library-modal-overlay {
+    bottom: 0 !important;
+  }
+  body:has(#explore-modal-overlay.open),
+  body:has(#mood-modal-overlay.open),
+  body:has(#library-modal-overlay.open) {
+    overflow: hidden;
+  }
+  #explore-modal .history-modal-body,
+  #mood-modal .history-modal-body,
+  #library-modal .history-modal-body {
+    overscroll-behavior: contain;
+  }
+  body:has(.player-section.is-visible:not([hidden])) #explore-modal-overlay,
+  body:has(.player-section.is-visible:not([hidden])) #mood-modal-overlay,
+  body:has(.player-section.is-visible:not([hidden])) #library-modal-overlay {
+    bottom: var(--playbar-h) !important;
+  }
+  #explore-modal,
+  #mood-modal,
+  #library-modal {
+    width: 100%;
+    max-width: none;
+    height: 100%;
+    max-height: none;
+    margin: 0 auto;
+    background: transparent;
+    border: none;
+    border-radius: 0;
+    box-shadow: none;
+  }
+  #explore-modal .history-modal-header {
+    border-bottom: none;
+    /* The overlay already begins after the desktop rail. Fill that remaining
+       viewport instead of keeping Explore artificially narrow. */
+    width: min(1500px, 100%);
+    margin: 0 auto;
+    padding: 18px 32px;
+    box-sizing: border-box;
+  }
+  #mood-modal .history-modal-header {
+    width: 100%;
+    max-width: none;
+    margin: 0;
+    padding: 18px 32px;
+    box-sizing: border-box;
+    border-bottom: none;
+  }
+  #library-modal .history-modal-header {
+    width: min(1500px, 100%);
+    margin: 0 auto;
+    padding: 18px 32px;
+    box-sizing: border-box;
+    border-bottom: 0;
+  }
+  #explore-modal .history-modal-body {
+    width: min(1500px, 100%);
+    margin: 0 auto;
+    padding-left: 32px;
+    padding-right: 32px;
+    box-sizing: border-box;
+    overflow-y: auto;
+    flex: 1;
+  }
+  #mood-modal .history-modal-body {
+    width: 100%;
+    max-width: none;
+    margin: 0;
+    padding-left: 32px;
+    padding-right: 32px;
+    box-sizing: border-box;
+    overflow-y: auto;
+    flex: 1;
+  }
+  #library-modal .history-modal-body {
+    width: min(1500px, 100%);
+    margin: 0 auto;
+    padding-left: 32px;
+    padding-right: 32px;
+    box-sizing: border-box;
+    overflow-y: auto;
+    flex: 1;
+  }
+  #explore-modal .history-modal-header h3,
+  #mood-modal .history-modal-header h3,
+  #library-modal .history-modal-header h3 {
+    text-transform: none;
+    letter-spacing: -.01em;
+    font-size: 1.3rem;
+    font-weight: 800;
+  }
+  /* Close button hidden on desktop (navigate back to go home) */
+  #explore-modal-close,
+  #mood-modal-close,
+  #library-modal-close {
+    display: none;
+  }
+}
