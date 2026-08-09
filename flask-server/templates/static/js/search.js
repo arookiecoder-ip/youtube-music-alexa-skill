@@ -19,16 +19,56 @@
 const RESULTS_PER_PAGE = 10;
 
 async function runSearch(query, options) {
+  // Paint a skeleton that mirrors the real "All" results layout: a Top Result
+  // hero card, a Songs shelf with 4 rows, then horizontal artist and album
+  // shelves. Reusing the same geometry as the final render avoids layout shift.
   function renderSearchLoadingState() {
-    let rows = '';
-    for (let i = 0; i < 8; i++) {
-      rows += '<div class="search-skeleton-row" aria-hidden="true">' +
+    const hero =
+      '<div class="search-skeleton-hero" aria-hidden="true">' +
+        '<div class="search-skeleton-hero-art"></div>' +
+        '<div class="search-skeleton-hero-copy">' +
+          '<div class="search-skeleton-line search-skeleton-hero-title"></div>' +
+          '<div class="search-skeleton-line search-skeleton-hero-subtitle"></div>' +
+          '<div class="search-skeleton-hero-actions">' +
+            '<span class="search-skeleton-btn"></span>' +
+            '<span class="search-skeleton-btn"></span>' +
+          '</div>' +
+        '</div>' +
+      '</div>';
+
+    let songRows = '';
+    for (let i = 0; i < 4; i++) {
+      songRows += '<div class="search-skeleton-row" aria-hidden="true">' +
         '<span class="search-skeleton-thumb"></span>' +
         '<span class="search-skeleton-copy"><span class="search-skeleton-line search-skeleton-line-title"></span><span class="search-skeleton-line search-skeleton-line-subtitle"></span></span>' +
         '<span class="search-skeleton-action"></span>' +
       '</div>';
     }
-    return '<div class="search-results-skeleton" role="status" aria-live="polite" aria-label="Loading search results">' + rows + '</div>';
+
+    function shelfHead(label) {
+      return '<div class="search-skeleton-section-head" aria-hidden="true">' + escHtml(label) + '</div>';
+    }
+    function shelf(roundArt) {
+      let cards = '';
+      for (let i = 0; i < 6; i++) {
+        cards += '<div class="search-skeleton-card" aria-hidden="true">' +
+          '<div class="search-skeleton-card-art' + (roundArt ? ' round' : '') + '"></div>' +
+          '<div class="search-skeleton-line search-skeleton-card-title"></div>' +
+          '<div class="search-skeleton-line search-skeleton-card-sub"></div>' +
+        '</div>';
+      }
+      return '<div class="search-skeleton-shelf">' + cards + '</div>';
+    }
+
+    return '<div class="search-results-skeleton" role="status" aria-live="polite" aria-label="Loading search results">' +
+      hero +
+      shelfHead('Songs') +
+      songRows +
+      shelfHead('Artists') +
+      shelf(true) +
+      shelfHead('Albums') +
+      shelf(false) +
+    '</div>';
   }
   options = options || {};
   query = String(query || '').trim();

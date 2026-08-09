@@ -134,12 +134,86 @@
     transform: none;
   }
   /* Cold search routes show a stable placeholder list until the API response
-     arrives. Keep the geometry close to real result rows to avoid layout shift. */
+     arrives. Keep the geometry close to the real "All" results layout (Top
+     Result hero, Songs rows, artist/album shelves) to avoid layout shift. */
   .search-results-skeleton {
     display: flex;
     flex-direction: column;
     gap: 1px;
     padding: 8px 0;
+  }
+  /* The generic .search-skeleton-line sizing must come before the specific
+     hero/card line rules: elements carry both classes, and with equal
+     specificity the later rule in the stylesheet would win. */
+  .search-skeleton-line { height: 9px; border-radius: var(--radius-sm); }
+  .search-skeleton-hero {
+    display: flex;
+    align-items: center;
+    gap: 24px;
+    margin: 12px 0 24px;
+    padding: 24px;
+    background: rgba(255, 255, 255, 0.04);
+    border-radius: var(--radius-lg);
+  }
+  .search-skeleton-hero-art {
+    width: 120px;
+    height: 120px;
+    flex: 0 0 120px;
+    border-radius: var(--radius-md);
+  }
+  .search-skeleton-hero-copy {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .search-skeleton-hero-title { height: 34px; width: min(320px, 70%); }
+  .search-skeleton-hero-subtitle { height: 13px; width: min(200px, 45%); }
+  .search-skeleton-hero-actions {
+    display: flex;
+    gap: 12px;
+    margin-top: 8px;
+  }
+  .search-skeleton-btn {
+    width: 92px;
+    height: 34px;
+    border-radius: 100px;
+  }
+  .search-skeleton-section-head {
+    padding: 18px 2px 6px;
+    font-size: 1.15rem;
+    font-weight: 800;
+    letter-spacing: -.01em;
+    color: var(--text);
+    opacity: .5;
+  }
+  .search-skeleton-shelf {
+    display: flex;
+    gap: var(--card-gap);
+    padding: 6px 2px;
+    overflow: hidden;
+  }
+  .search-skeleton-card {
+    flex: 0 0 140px;
+    width: 140px;
+    min-width: 0;
+  }
+  .search-skeleton-card-art {
+    width: 100%;
+    aspect-ratio: 1 / 1;
+    border-radius: var(--radius-md);
+  }
+  .search-skeleton-card-art.round { border-radius: 50%; }
+  .search-skeleton-card-title {
+    width: min(110px, 78%);
+    height: 12px;
+    margin-top: 10px;
+  }
+  .search-skeleton-card-sub {
+    width: min(80px, 56%);
+    height: 10px;
+    margin-top: 6px;
   }
   .search-skeleton-row {
     display: flex;
@@ -150,8 +224,11 @@
     border-radius: var(--card-radius);
     background: var(--surface);
   }
+  .search-skeleton-hero-art,
   .search-skeleton-thumb,
   .search-skeleton-line,
+  .search-skeleton-btn,
+  .search-skeleton-card-art,
   .search-skeleton-action {
     display: block;
     background: linear-gradient(90deg, var(--border) 25%, #2a2a2a 37%, var(--border) 63%);
@@ -160,17 +237,41 @@
   }
   .search-skeleton-thumb { width: 48px; height: 48px; flex: 0 0 48px; border-radius: 4px; }
   .search-skeleton-copy { flex: 1; min-width: 0; }
-  .search-skeleton-line { height: 9px; border-radius: var(--radius-sm); }
   .search-skeleton-line-title { width: min(310px, 70%); }
   .search-skeleton-line-subtitle { width: min(180px, 45%); margin-top: 9px; }
   .search-skeleton-action { width: 26px; height: 26px; flex: 0 0 26px; border-radius: 50%; }
   @media (max-width: 899px) {
+    /* The hero collapses to the same column layout as the real Top Result
+       card, and shelves shrink to the mobile card size. */
+    .search-skeleton-hero {
+      flex-direction: column;
+      align-items: stretch;
+      text-align: center;
+      gap: 12px;
+      margin: 10px 0 16px;
+      padding: 14px 12px 16px;
+      border-radius: 2px;
+    }
+    .search-skeleton-hero-art {
+      width: 120px;
+      height: 120px;
+      flex-basis: 120px;
+      align-self: center;
+    }
+    .search-skeleton-hero-copy { align-items: center; }
+    .search-skeleton-hero-title { width: 70%; }
+    .search-skeleton-hero-subtitle { width: 50%; }
+    .search-skeleton-hero-actions { justify-content: center; }
+    .search-skeleton-card { flex: 0 0 126px; width: 126px; }
     .search-skeleton-row { min-height: 52px; height: 52px; padding: 4px 20px; }
     .search-skeleton-thumb { width: 44px; height: 44px; flex-basis: 44px; }
   }
   @media (prefers-reduced-motion: reduce) {
+    .search-skeleton-hero-art,
     .search-skeleton-thumb,
     .search-skeleton-line,
+    .search-skeleton-btn,
+    .search-skeleton-card-art,
     .search-skeleton-action { animation: none; }
   }
 
