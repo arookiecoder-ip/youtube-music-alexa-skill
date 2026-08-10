@@ -9,7 +9,7 @@
   const hamburger = document.getElementById('hamburger-btn');
   const mobileSearchToggle = document.getElementById('mobile-search-toggle');
   const mobilePlayerClose = document.getElementById('mobile-player-close');
-  const searchSection = document.querySelector('.play-section');
+  const searchSection = document.querySelector('.header-search-wrap');
   const searchInput = document.getElementById('query');
   const sidebar = document.getElementById('sidebar');
   const overlay = document.getElementById('sidebar-overlay');
@@ -113,7 +113,7 @@
     });
     document.addEventListener('click', (event) => {
       if (!document.body.classList.contains('mobile-search-open')) return;
-      if (event.target.closest('.play-section, .mobile-search-toggle')) return;
+      if (event.target.closest('.header-search-wrap, .mobile-search-toggle')) return;
       closeMobileSearch();
     });
     if (searchInput) {

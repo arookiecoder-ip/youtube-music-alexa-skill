@@ -88,8 +88,8 @@ function routeBranchContains(routePrefix, text) {
   return router.slice(start, end < 0 ? router.length : end).includes(text);
 }
 check('collection routes keep the persistent search shell visible',
-  routeBranchContains('#playlist/', "setHidden('.play-section', false);") &&
-  routeBranchContains('#album/', "setHidden('.play-section', false);"));
+  routeBranchContains('#playlist/', "hideAllViews();") &&
+  routeBranchContains('#album/', "hideAllViews();"));
 check('playlist route uses transparent header treatment',
   playerCss.includes('body.playlists-route:not(.results-open):not(.header-scrolled) main header') &&
   headerCss.includes('body.playlists-route:not(.results-open):not(.header-scrolled) main header'));

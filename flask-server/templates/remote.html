@@ -14,14 +14,12 @@
 <meta name="apple-mobile-web-app-title" content="Music Box">
 <link rel="apple-touch-icon" href="/static/icons/icon-192.svg">
 <style>
-  body.preload .play-section,
   body.preload .player-section,
   body.preload #queue-section,
   body.preload .recs-section,
   body.preload #home-section {
     opacity: 0;
   }
-  body.preload .play-section,
   body.preload .player-section,
   body.preload #queue-section,
   body.preload .recs-section,
@@ -32,7 +30,6 @@
     0%, 100% { opacity: 0; }
     50% { opacity: 0.3; }
   }
-  body:not(.preload) .play-section,
   body:not(.preload) .player-section,
   body:not(.preload) #queue-section,
   body:not(.preload) .recs-section,
@@ -77,6 +74,20 @@
         <span></span><span></span><span></span><span></span><span></span>
       </div>
       <h1>Music Box</h1>
+    </div>
+    <div class="header-search-wrap">
+      <input type="text" id="query"
+             placeholder="Song, artist, or YouTube link" autocomplete="off"
+             role="combobox" aria-expanded="false" aria-autocomplete="list"
+             aria-controls="suggest-list">
+      <button class="search-clear" id="query-clear" type="button"
+              title="Clear" aria-label="Clear search" hidden>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
+             stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
+          <path d="M18 6 6 18"/><path d="M6 6l12 12"/>
+        </svg>
+      </button>
+      <ul class="suggest-list" id="suggest-list" role="listbox" hidden></ul>
     </div>
     <div class="header-actions">
 
@@ -291,30 +302,6 @@
              autocomplete="current-password" style="margin-bottom:12px">
       <button class="btn-accent" id="login-btn" type="button" style="width:100%">Connect</button>
     </form>
-  </section>
-
-  <!-- Play -->
-  <section class="needs-login play-section" hidden>
-    <div class="section-head">
-      <div class="label">Play</div>
-    </div>
-    <div class="row">
-      <div class="search-wrap">
-        <input type="text" id="query"
-               placeholder="Song, artist, or YouTube link" autocomplete="off"
-               role="combobox" aria-expanded="false" aria-autocomplete="list"
-               aria-controls="suggest-list">
-        <button class="search-clear" id="query-clear" type="button"
-                title="Clear" aria-label="Clear search" hidden>
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
-               stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
-            <path d="M18 6 6 18"/><path d="M6 6l12 12"/>
-          </svg>
-        </button>
-        <ul class="suggest-list" id="suggest-list" role="listbox" hidden></ul>
-      </div>
-      <button class="btn-accent" id="play-query">GO</button>
-    </div>
   </section>
 
   <!-- Player -->

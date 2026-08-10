@@ -1345,7 +1345,10 @@ if (nextBtn) {
       applySuggestion(activeIdx);
     } else if (e.key === 'Enter') {
       closeList();
-      document.getElementById('play-query').click();
+      const query = input.value.trim();
+      if (!query) return;
+      if (typeof window._recordSearchHistory === 'function') window._recordSearchHistory(query);
+      if (window.runSearch) window.runSearch(query);
     } else if (e.key === 'Escape') {
       closeList();
     }
@@ -1356,7 +1359,7 @@ if (nextBtn) {
   // Programmatic input updates do not focus the field, so no blur event is
   // guaranteed. Result clicks and navigation must still dismiss the list.
   document.addEventListener('pointerdown', e => {
-    if (!e.target.closest('.search-wrap')) closeList();
+    if (!e.target.closest('.header-search-wrap')) closeList();
   });
 })();
 

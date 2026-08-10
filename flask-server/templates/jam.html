@@ -37,31 +37,24 @@
       <div class="eq-icon"><span></span><span></span><span></span><span></span><span></span></div>
       <h1>Music Box</h1>
     </div>
+    <div class="header-search-wrap">
+      <input type="text" id="query"
+             placeholder="Search songs" autocomplete="off"
+             role="combobox" aria-expanded="false" aria-autocomplete="list"
+             aria-controls="suggest-list">
+      <button class="search-clear" id="query-clear" type="button"
+              title="Clear" aria-label="Clear search" hidden>
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
+             stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
+          <path d="M18 6 6 18"/><path d="M6 6l12 12"/>
+        </svg>
+      </button>
+      <ul class="suggest-list" id="suggest-list" role="listbox" hidden></ul>
+    </div>
     <div class="jam-header-actions">
       <button class="jam-leave-btn" id="jam-leave-btn">Leave Jam</button>
     </div>
   </header>
-
-  <!-- Search -->
-  <section class="play-section" id="play-section">
-    <div class="row">
-      <div class="search-wrap">
-        <input type="text" id="query"
-               placeholder="Search songs" autocomplete="off"
-               role="combobox" aria-expanded="false" aria-autocomplete="list"
-               aria-controls="suggest-list">
-        <button class="search-clear" id="query-clear" type="button"
-                title="Clear" aria-label="Clear search" hidden>
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none"
-               stroke="currentColor" stroke-width="2.2" stroke-linecap="round">
-            <path d="M18 6 6 18"/><path d="M6 6l12 12"/>
-          </svg>
-        </button>
-        <ul class="suggest-list" id="suggest-list" role="listbox" hidden></ul>
-      </div>
-      <button class="btn-accent" id="play-query">GO</button>
-    </div>
-  </section>
 
   <!-- Anonymous discovery only: public India charts, never host activity. -->
   <section class="home-section jam-home-section" id="jam-home-section">

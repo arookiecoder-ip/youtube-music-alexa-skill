@@ -18,7 +18,6 @@
   }
   .layout-snap main,
   .layout-snap .layout,
-  .layout-snap .play-section,
   .layout-snap header,
   .layout-snap #artist-hero,
   .layout-snap .sidebar,
@@ -380,8 +379,6 @@
       display: block;
       min-width: 0;
     }
-    /* play-section smoothly animates its max-width while staying centered */
-    .play-section,
     .player-section {
       width: 100%;
       max-width: 506px;
@@ -1316,7 +1313,6 @@ main {
 }
 
 /* ---- Generic hidden guards (we change display on these below) ---- */
-.play-section[hidden],
 .player-section[hidden],
 #results-section[hidden],
 #queue-section[hidden],

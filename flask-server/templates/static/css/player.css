@@ -2023,7 +2023,6 @@ body.now-playing-route .player-section .player-expand-btn svg {
     animation: none !important;
   }
   body.now-playing-closing .layout,
-  body.now-playing-closing .play-section,
   body.now-playing-closing .player-section:not(#now-playing-section) {
     transition: none !important;
   }

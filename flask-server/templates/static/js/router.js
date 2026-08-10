@@ -264,7 +264,7 @@
   }
 
   function hideAllViews() {
-    setHidden('.play-section, #recs-section, #home-section, #idle-hero, #results-section, #queue-section, #artist-section, #artist-songs-section, #collection-detail-page', true);
+    setHidden('#recs-section, #home-section, #idle-hero, #results-section, #queue-section, #artist-section, #artist-songs-section, #collection-detail-page', true);
   }
 
   function showHomeViews() {
@@ -272,7 +272,6 @@
     var homeReady = !!(state && state._loggedIn && state._homeLoaded);
     var homeSection = document.getElementById('home-section');
     if (homeReady && homeSection) homeSection.classList.add('home-cached');
-    setHidden('.play-section', false);
     setHidden('#home-section', !homeReady);
     setHidden('#idle-hero', true);
     setHidden('#results-section, #queue-section, #artist-section, #artist-songs-section', true);
@@ -284,23 +283,19 @@
     },
     '#explore': function() {
       hideAllViews();
-      setHidden('.play-section', false);
       if (window.openExplorePage) window.openExplorePage();
     },
     '#library': function() {
       hideAllViews();
-      setHidden('.play-section', false);
       if (window.openLibraryPage) window.openLibraryPage();
     },
     '#history': function() {
       hideAllViews();
-      setHidden('.play-section', false);
       if (window.openHistoryPage) window.openHistoryPage(true);
     },
     '#now-playing': function() {
       // Full player is a fixed overlay. Leave the current page and its layout
       // untouched underneath it; only the overlay itself should animate.
-      setHidden('.play-section', false);
       setHidden('.player-section', false);
       var npSection = document.getElementById('now-playing-section');
       if (npSection) npSection.hidden = false;
@@ -329,7 +324,6 @@
       }
     },
     '#queue': function() {
-      setHidden('.play-section', false);
       var queueSection = document.getElementById('queue-section');
       var resultsSection = document.getElementById('results-section');
       if (queueSection) {
@@ -347,7 +341,6 @@
       // Search bar and bottom playbar are persistent shell chrome — they stay
       // visible on the artist page; only the content views swap out.
     setHidden('#recs-section, #home-section, #idle-hero, #results-section, #queue-section, #artist-section, #artist-songs-section', true);
-      setHidden('.play-section', false);
       section.hidden = false;
     }
   }
@@ -356,7 +349,6 @@
     var section = document.getElementById('artist-songs-section');
     if (section) {
     setHidden('#recs-section, #home-section, #idle-hero, #results-section, #queue-section, #artist-section, #artist-songs-section', true);
-      setHidden('.play-section', false);
       section.hidden = false;
     }
   }
@@ -862,14 +854,12 @@
       var playlistPage = document.getElementById('collection-detail-page');
       if (playlistPage) playlistPage.hidden = false;
       hideAllViews();
-      setHidden('.play-section', false);
       if (playlistPage) playlistPage.hidden = false;
       if (playlistId && window.openPlaylistDetailModal) window.openPlaylistDetailModal(playlistId, true);
     } else if (hash.indexOf('#album/') === 0) {
       var albumId = decodeURIComponent(hash.slice('#album/'.length));
       if (!albumId) { window.navigateTo('#home'); return; }
       hideAllViews();
-      setHidden('.play-section', false);
       var albumPage = document.getElementById('collection-detail-page');
       if (albumPage) albumPage.hidden = false;
       if (window.loadAlbum) window.loadAlbum(albumId);
@@ -880,7 +870,6 @@
       var moodQuery = new URLSearchParams(moodQueryIndex === -1 ? '' : moodRouteValue.slice(moodQueryIndex + 1));
       var moodTitle = moodQuery.get('title') || 'Moods and genres';
       if (!moodParams) { window.navigateTo('#explore'); return; }
-      setHidden('.play-section', false);
       if (window.openMoodPage) window.openMoodPage(moodParams, moodTitle);
     } else if (hash.indexOf('#artist/') === 0) {
       var artistRouteValue = hash.slice('#artist/'.length);
