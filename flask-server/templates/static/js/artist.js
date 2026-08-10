@@ -491,6 +491,10 @@
     for (let i = 0; i < displaySongs.length; i++) {
       let item = displaySongs[i];
       if (!item.video_id) continue;
+      var wrapper = document.createElement('div');
+      wrapper.className = 'result-swipe-wrapper';
+      wrapper.dataset.videoId = item.video_id || '';
+      wrapper._songContextTrack = item;
       var row = document.createElement('div');
       row.className = 'artist-song-row';
       row.dataset.videoId = item.video_id || '';
@@ -541,7 +545,9 @@
         if (e.target.closest('button, .artist-name')) return;
         playArtistSongInCollection(item, i);
       });
-      list.appendChild(row);
+      if (window.attachResultSwipeGesture) window.attachResultSwipeGesture(wrapper, row, item);
+      wrapper.appendChild(row);
+      list.appendChild(wrapper);
     }
 
     if (!topSongsOnly && (browseId || songs.length > 10)) {

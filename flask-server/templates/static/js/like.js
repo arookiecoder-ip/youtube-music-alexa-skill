@@ -11,6 +11,9 @@
 
   // Shared data store referenced by player.js, queue.js, search.js, etc.
   var _playlistsData = window._playlistsData = window._playlistsData || { liked_songs: [] };
+  // Prevent rapid taps/swipes for the same song from sending overlapping
+  // opposite mutations whose responses could arrive out of order.
+  var _likeRequestsInFlight = new Set();
 
   /**
    * Fetch the current liked video IDs from the server and refresh all heart
@@ -46,6 +49,8 @@
     }
 
     var videoId = item.video_id;
+    if (_likeRequestsInFlight.has(videoId)) return;
+    _likeRequestsInFlight.add(videoId);
     var liked_songs = _playlistsData.liked_songs || [];
     var isCurrentlyLiked = liked_songs.includes(videoId);
     var newAction = isCurrentlyLiked ? 'INDIFFERENT' : 'LIKE';
@@ -89,6 +94,8 @@
       _refreshAllLikeButtons(videoId, !willBeLiked);
       if (window.refreshNpLikeButton) window.refreshNpLikeButton();
       if (window.toast) window.toast('Could not update like: ' + (e.message || e), 'error');
+    } finally {
+      _likeRequestsInFlight.delete(videoId);
     }
   }
 

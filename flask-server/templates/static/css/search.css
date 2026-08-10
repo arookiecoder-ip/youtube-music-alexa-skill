@@ -348,6 +348,14 @@
     justify-content: flex-end;
     width: 100%;
   }
+  .result-swipe-wrapper > .history-item,
+  .result-swipe-wrapper > .artist-song-row {
+    position: relative;
+    z-index: 1;
+    touch-action: pan-y;
+    transition: background .15s, border-color .15s, transform .15s;
+  }
+
   .result-item-inner {
     position: relative;
     display: flex;
@@ -1319,10 +1327,10 @@ body.results-open .play-section {
     cursor: default;
     text-decoration: none !important;
   }
-  /* Remove legacy mobile swipe underlays; they were leaking orange through
-     transparent result rows and are not part of the current mobile layout. */
-  #results-section .result-swipe-underlay {
-    display: none !important;
+  /* Result rows share the mobile action swipe with album, playlist, and
+     artist pages. Keep the native vertical scroll chain intact. */
+  #results-section .result-swipe-wrapper > .result-item-inner {
+    touch-action: pan-y;
   }
   #results-section .hscroll-controls {
     display: none !important;

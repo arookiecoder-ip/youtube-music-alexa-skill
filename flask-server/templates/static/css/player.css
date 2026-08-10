@@ -751,10 +751,15 @@
 #np-queue-list::-webkit-scrollbar-track { background: transparent; }
 #np-queue-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
 
-/* np-queue-list reuses the queue-item / queue-swipe-wrapper styles from queue.css */
-#np-queue-list .queue-delete-underlay,
-#np-queue-list .queue-like-underlay { display: none !important; }
-#np-queue-list .queue-swipe-wrapper { transform: none !important; touch-action: auto !important; margin: 0; }
+/* np-queue-list reuses the queue-item / queue-swipe-wrapper styles from queue.css.
+   Keep the desktop now-playing queue flat and non-swipeable; on touch layouts
+   the queue is rendered in the dedicated queue modal (or hidden by the mobile
+   player shell), where the queue swipe styles remain active. */
+@media (min-width: 900px) {
+  #np-queue-list .queue-delete-underlay,
+  #np-queue-list .queue-like-underlay { display: none !important; }
+  #np-queue-list .queue-swipe-wrapper { transform: none !important; touch-action: auto !important; margin: 0; }
+}
 
 /* Flat YT Music-style rows in the UP NEXT list — no per-song card boxes */
 #np-queue-list .queue-item {

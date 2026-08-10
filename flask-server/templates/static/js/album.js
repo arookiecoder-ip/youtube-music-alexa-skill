@@ -153,6 +153,7 @@
         });
         if (window.wireArtistLinks) window.wireArtistLinks(row);
         wireSongActions(row, contextTrack);
+        if (window.attachResultSwipeGesture) window.attachResultSwipeGesture(wrapper, row, contextTrack);
         wrapper.appendChild(row);
         list.appendChild(wrapper);
       });

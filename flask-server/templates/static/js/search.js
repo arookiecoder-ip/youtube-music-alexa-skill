@@ -512,6 +512,7 @@ function _createSongElement(item, existingThumbsById) {
     // Artist clicks navigate independently instead of triggering the row's
     // play action. The shared helper also resolves artists that lack an id.
     if (window.wireArtistLinks) window.wireArtistLinks(inner);
+    if (window.attachResultSwipeGesture) window.attachResultSwipeGesture(wrapper, inner, item);
 
     attachQueueItemTap(inner, () => {
       for (const other of wrapper.parentElement.querySelectorAll('.result-item-inner.active')) other.classList.remove('active');

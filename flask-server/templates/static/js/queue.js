@@ -67,15 +67,38 @@ async function addToQueue(item, position, silent) {
   }
 }
 
-/* ---- Swipe gesture for result items (mobile) ---- */
+/* ---- Shared row swipe gesture (mobile) ----
+   Right swipe = play next; left swipe = append to queue. The helper is shared
+   by search, album, playlist, and artist rows so every surface keeps the same
+   gesture thresholds, scroll lock, and click suppression behavior. */
+const RESULT_SWIPE_UNDERLAY_HTML = `
+  <div class="result-swipe-underlay underlay-play-next">
+    <svg viewBox="0 0 24 24" fill="currentColor"><path d="M4 5v14l11-7L4 5zm13 0v14h3V5h-3z"/></svg>
+    Play next
+  </div>
+  <div class="result-swipe-underlay underlay-add-queue">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+    Add to queue
+  </div>
+`;
+
+function _ensureResultSwipeUnderlay(wrapper) {
+  if (!wrapper || wrapper.querySelector('.result-swipe-underlay')) return;
+  wrapper.insertAdjacentHTML('afterbegin', RESULT_SWIPE_UNDERLAY_HTML);
+}
+
 function _attachSwipeGesture(wrapper, inner, item) {
+  _ensureResultSwipeUnderlay(wrapper);
   const SWIPE_THRESHOLD = 60;
   const LOCK_DISTANCE = 8;
   const AXIS_BIAS = 1.2;
   let startX = 0, startY = 0, currentX = 0, gesture = 'pending';
 
   inner.addEventListener('touchstart', (e) => {
+    if (e.target.closest && e.target.closest('button, a, input, textarea, select')) return;
     if (e.touches.length !== 1) return;
+    inner._swipeSuppressClick = false;
+    inner._swipeAllowClick = false;
     startX = e.touches[0].clientX;
     startY = e.touches[0].clientY;
     currentX = 0;
@@ -122,13 +145,23 @@ function _attachSwipeGesture(wrapper, inner, item) {
     }
     inner.style.transition = 'transform .25s cubic-bezier(.22,1,.36,1)';
     inner.style.transform = '';
-    inner._swipeSuppressClick = true;
     wrapper.classList.remove('swiping-left', 'swiping-right');
 
+    // Only a committed action swipe cancels the browser's follow-up click.
+    // A short horizontal wobble should still behave like a normal row tap.
     if (currentX > SWIPE_THRESHOLD) {
+      inner._swipeSuppressClick = true;
+      inner._swipeAllowClick = false;
       addToQueue(item, 'next');
     } else if (currentX < -SWIPE_THRESHOLD) {
+      inner._swipeSuppressClick = true;
+      inner._swipeAllowClick = false;
       addToQueue(item, 'last');
+    } else {
+      // Keep a short horizontal wobble as a normal row tap. This overrides
+      // attachQueueItemTap's generic drag guard for touch gestures that did
+      // axis-lock horizontally but never reached the action threshold.
+      inner._swipeAllowClick = true;
     }
     gesture = 'idle';
     currentX = 0;
@@ -138,9 +171,22 @@ function _attachSwipeGesture(wrapper, inner, item) {
     inner.style.transition = '';
     inner.style.transform = '';
     wrapper.classList.remove('swiping-left', 'swiping-right');
+    inner._swipeSuppressClick = false;
+    inner._swipeAllowClick = false;
     gesture = 'idle';
     currentX = 0;
   }, { passive: true });
+
+  // Collection and artist rows use their own click handlers instead of
+  // attachQueueItemTap. Capture the synthetic click after a committed swipe
+  // so it cannot start playback on any surface.
+  inner.addEventListener('click', (e) => {
+    if (!inner._swipeSuppressClick) return;
+    inner._swipeSuppressClick = false;
+    inner._swipeAllowClick = false;
+    e.preventDefault();
+    e.stopImmediatePropagation();
+  }, true);
 }
 
 
@@ -160,6 +206,14 @@ function attachQueueItemTap(el, onTap) {
   el.addEventListener('click', () => {
     if (el._swipeSuppressClick) {
       el._swipeSuppressClick = false;
+      el._swipeAllowClick = false;
+      return;
+    }
+    if (el._swipeAllowClick) {
+      // A sub-threshold horizontal queue gesture is still a normal tap,
+      // even though pointermove may have exceeded the generic drag guard.
+      el._swipeAllowClick = false;
+      onTap();
       return;
     }
     if (!dragged) onTap();
@@ -200,6 +254,16 @@ function _scrollQueueRowIntoView(container, currentIndex, force) {
 // re-fetches/re-decodes it (the re-fetch flash on every track change was the
 // visible flicker here). Rows capture their index by closure, so callers must
 // rebuild rows whose index changed (reorders) rather than reuse them.
+function _refreshQueueSwipeLikeLabel(wrapper, item) {
+  if (!wrapper || !item) return;
+  const label = wrapper.querySelector('.queue-swipe-like-label');
+  if (!label) return;
+  const liked = window._playlistsData &&
+    Array.isArray(window._playlistsData.liked_songs) &&
+    window._playlistsData.liked_songs.includes(item.video_id);
+  label.textContent = liked ? 'Unlike' : 'Like';
+}
+
 function _buildQueueRow(container, item, i, currentIndex, thumbsById) {
   const id = item.video_id || '';
   const wrapper = document.createElement('div');
@@ -219,7 +283,9 @@ function _buildQueueRow(container, item, i, currentIndex, thumbsById) {
     </div>
     <div class="queue-like-underlay">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg>
-      Like
+      <span class="queue-swipe-like-label">${typeof _playlistsData !== 'undefined' &&
+        Array.isArray(_playlistsData.liked_songs) &&
+        _playlistsData.liked_songs.includes(item.video_id) ? 'Unlike' : 'Like'}</span>
     </div>
   `;
 
@@ -423,11 +489,11 @@ window.renderNpQueue = renderNpQueue;
 // only offered swipe gestures with no menu equivalent).
 function _queueMoreMenuHtml(item) {
   const moreSvg = `<svg viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="5" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="12" cy="19" r="2"/></svg>`;
-  const isLiked = typeof _playlistsData !== 'undefined' && _playlistsData.liked_songs && _playlistsData.liked_songs.includes(item.video_id);
+  const isLiked = window._playlistsData && window._playlistsData.liked_songs && window._playlistsData.liked_songs.includes(item.video_id);
   const likeSvg = isLiked
     ? '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M2 10h4v12H2zM8 22V10l3.5-7.5c.3-.7 1.1-1.1 1.8-.8l.2.1c1.1.5 1.6 1.7 1.3 2.8L14 10h6.2c1.3 0 2.3 1.2 2 2.5l-1.5 7.5c-.2 1.2-1.2 2-2.4 2H8z"/></svg>'
     : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg>';
-  const likeText = isLiked ? "Dislike" : "Like";
+  const likeText = isLiked ? "Unlike" : "Like";
   const likeClass = isLiked ? "queue-menu-option liked" : "queue-menu-option";
   return `
       <button class="queue-more-btn" type="button" title="More options">${moreSvg}</button>
@@ -575,11 +641,11 @@ function _wireQueueMoreMenu(el, item, index) {
     _closeAllQueueMenus();
     if (typeof toggleLike === 'function') {
       await toggleLike(item);
-      const isLikedNow = typeof _playlistsData !== 'undefined' && _playlistsData.liked_songs && _playlistsData.liked_songs.includes(item.video_id);
+      const isLikedNow = window._playlistsData && window._playlistsData.liked_songs && window._playlistsData.liked_songs.includes(item.video_id);
       const likeSvgNow = isLikedNow
         ? '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M2 10h4v12H2zM8 22V10l3.5-7.5c.3-.7 1.1-1.1 1.8-.8l.2.1c1.1.5 1.6 1.7 1.3 2.8L14 10h6.2c1.3 0 2.3 1.2 2 2.5l-1.5 7.5c-.2 1.2-1.2 2-2.4 2H8z"/></svg>'
         : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg>';
-      likeBtn.innerHTML = `\n          ${likeSvgNow}\n          ${isLikedNow ? "Dislike" : "Like"}\n        `;
+      likeBtn.innerHTML = `\n          ${likeSvgNow}\n          ${isLikedNow ? "Unlike" : "Like"}\n        `;
       if (isLikedNow) likeBtn.classList.add('liked');
       else likeBtn.classList.remove('liked');
     }
@@ -765,15 +831,11 @@ function _attachQueueSwipeGestures(wrapper, el, index, item, currentIndex) {
   const SWIPE_THRESHOLD = 80;
   const LOCK_DISTANCE = 8;
   const AXIS_BIAS = 1.2;
-  const HOLD_DURATION = 50;
   let startX = 0, startY = 0, currentX = 0, gesture = 'pending';
-  let holdTimer = null, holdReady = false;
 
   function resetSwipeState() {
     // Never undo the slide-out/collapse of a row whose removal is committed.
     if (wrapper._removing) return;
-    clearTimeout(holdTimer);
-    el.classList.remove('hold-selected');
     wrapper.classList.remove('swiping-left', 'swiping-right');
     el.style.transition = '';
     el.style.transform = '';
@@ -781,24 +843,20 @@ function _attachQueueSwipeGestures(wrapper, el, index, item, currentIndex) {
     wrapper.style.height = '';
     wrapper.style.opacity = '';
     gesture = 'idle';
-    holdReady = false;
     currentX = 0;
   }
 
   el.addEventListener('touchstart', (e) => {
     if (wrapper._removing) return;
     if (e.target.closest('.queue-drag-handle') || e.touches.length !== 1) return;
+    el._swipeSuppressClick = false;
+    el._swipeAllowClick = false;
+    _refreshQueueSwipeLikeLabel(wrapper, item);
     startX = e.touches[0].clientX;
     startY = e.touches[0].clientY;
     currentX = 0;
     gesture = 'pending';
-    holdReady = false;
-    clearTimeout(holdTimer);
-    holdTimer = setTimeout(() => {
-      if (gesture === 'scroll') return;
-      holdReady = true;
-      el.style.transition = 'none';
-    }, HOLD_DURATION);
+    el.style.transition = 'none';
   }, { passive: true });
 
   el.addEventListener('touchmove', (e) => {
@@ -810,14 +868,13 @@ function _attachQueueSwipeGestures(wrapper, el, index, item, currentIndex) {
 
     if (gesture === 'pending' && Math.max(absX, absY) >= LOCK_DISTANCE) {
       if (absY > absX * AXIS_BIAS) {
-        clearTimeout(holdTimer);
         gesture = 'scroll';
         return;
       }
       if (absX > absY * AXIS_BIAS) gesture = 'swipe';
     }
 
-    if (gesture !== 'swipe' || !holdReady) return;
+    if (gesture !== 'swipe') return;
     e.preventDefault();
     currentX = dx;
     if (currentX > 0) {
@@ -831,18 +888,24 @@ function _attachQueueSwipeGestures(wrapper, el, index, item, currentIndex) {
   }, { passive: false });
 
   el.addEventListener('touchend', () => {
-    clearTimeout(holdTimer);
-    if (gesture !== 'swipe' || !holdReady) {
+    if (gesture !== 'swipe') {
       resetSwipeState();
       return;
     }
-    el._swipeSuppressClick = true;
     const liveIdx = _liveQueueIndexOf(item, index);
     
     // Left swipe = delete
     const committedDelete = currentX < -SWIPE_THRESHOLD && !wrapper._removing;
     // Right swipe = like
     const committedLike = currentX > SWIPE_THRESHOLD && !wrapper._removing;
+    // Only committed actions cancel the synthetic click that follows a touch.
+    // A short horizontal wobble should still activate the row normally.
+    if (committedDelete || committedLike) {
+      el._swipeSuppressClick = true;
+      el._swipeAllowClick = false;
+    } else {
+      el._swipeAllowClick = true;
+    }
 
     if (committedDelete && liveIdx !== -1 && liveIdx !== state._lastQueueIndex) {
       wrapper._removing = true;
@@ -863,7 +926,11 @@ function _attachQueueSwipeGestures(wrapper, el, index, item, currentIndex) {
           toast('CanÃ¢â‚¬â„¢t remove the playing track', 'error');
         }
       } else if (committedLike) {
-        if (typeof toggleLike === 'function') toggleLike(item);
+        if (typeof toggleLike === 'function') {
+          Promise.resolve(toggleLike(item)).then(() => {
+            _refreshQueueSwipeLikeLabel(wrapper, item);
+          });
+        }
       }
       
       el.style.transition = 'transform .25s cubic-bezier(.22,1,.36,1)';
@@ -871,11 +938,14 @@ function _attachQueueSwipeGestures(wrapper, el, index, item, currentIndex) {
       setTimeout(() => wrapper.classList.remove('swiping-left', 'swiping-right'), 260);
     }
     gesture = 'idle';
-    holdReady = false;
     currentX = 0;
   }, { passive: true });
 
-  el.addEventListener('touchcancel', resetSwipeState, { passive: true });
+  el.addEventListener('touchcancel', () => {
+    el._swipeSuppressClick = false;
+    el._swipeAllowClick = false;
+    resetSwipeState();
+  }, { passive: true });
 }
 
 /* ---- Queue drag-to-reorder ---- */
@@ -1816,6 +1886,7 @@ function scheduleHistoryRefresh() {
 
   window.addToQueue = addToQueue;
   window._attachSwipeGesture = _attachSwipeGesture;
+  window.attachResultSwipeGesture = _attachSwipeGesture;
   window.attachQueueItemTap = attachQueueItemTap;
   window._renderedQueueRows = _renderedQueueRows;
   window._buildQueueRow = _buildQueueRow;
@@ -1833,6 +1904,7 @@ window.renderNpQueue = renderNpQueue;
   window.removeFromQueue = removeFromQueue;
   window.reorderQueue = reorderQueue;
   window._attachQueueSwipeGestures = _attachQueueSwipeGestures;
+  window._refreshQueueSwipeLikeLabel = _refreshQueueSwipeLikeLabel;
   window._attachQueueDragReorder = _attachQueueDragReorder;
   window.playFromQueue = playFromQueue;
   window.playCollection = playCollection;
