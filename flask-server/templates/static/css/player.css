@@ -1713,7 +1713,7 @@ body.results-open .player-section.is-visible { transform: none; }
   body.now-playing-route main,
   body.now-playing-closing main {
     height: auto !important;
-    min-height: 0 !important;
+    min-height: 100dvh !important;
     overflow: visible !important;
     padding-bottom: calc(var(--playbar-h) + 28px) !important;
   }

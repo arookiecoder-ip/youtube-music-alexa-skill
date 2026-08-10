@@ -117,9 +117,8 @@ function _buildHistoryRow(entry) {
   }
 
   // No per-row remove control by design — Clear (with confirmation) is the
-  // only way to modify history from this popup.
+  // only way to modify history from this page.
   el.addEventListener('click', () => {
-    window._closeHistoryModal();
     playFromQueue({
       video_id: entry.video_id,
       title: entry.title || '',
@@ -170,7 +169,22 @@ function renderHistoryModalList(history) {
 
   function closeHistoryPage() {
     page.hidden = true;
-    if (window.getRoute() === '#history') window.navigateTo('#home');
+    if (window.getRoute() === '#history') {
+      // Switch to home view directly — skip navigateTo to avoid a full
+      // route re-render that would flash blank and reload data.
+      document.body.classList.remove('history-route');
+      if (window.__route !== undefined) window.__route = '#home';
+      if (window.history && window.history.replaceState) {
+        window.history.replaceState(null, '', '/home');
+      }
+      var home = document.getElementById('home-section');
+      if (home && window.__appState && window.__appState._homeLoaded) {
+        home.hidden = false;
+      }
+      var idleHero = document.getElementById('idle-hero');
+      if (idleHero) idleHero.hidden = true;
+      if (typeof syncUiState === 'function') syncUiState();
+    }
   }
 
   openBtn.addEventListener('click', () => window.navigateTo('#history'));

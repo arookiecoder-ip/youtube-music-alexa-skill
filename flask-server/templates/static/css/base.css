@@ -988,7 +988,7 @@ main {
     padding: 0 28px;
     display: flex;
     flex-direction: column;
-    transition: margin-left .25s ease;
+    transition: margin-left .25s ease, padding-bottom .3s ease;
   }
   /* The old layout locked the page and scrolled inner panels; the new shell
      always uses the normal document scroll. */

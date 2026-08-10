@@ -376,7 +376,7 @@ body.rail-collapsed .sidebar-playlist-list { scrollbar-width: none; }
   main,
   main.idle,
   main.has-queue,
-  body.results-open main { transition: margin-left .25s ease; }
+  body.results-open main { transition: margin-left .25s ease, padding-bottom .3s ease; }
 }
 
 
