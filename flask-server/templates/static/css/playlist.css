@@ -886,12 +886,24 @@
      scroll independently). */
   body:has(#collection-detail-page:not([hidden])) main {
     height: 100dvh;
-    padding-bottom: 0;
-  }
-  /* Stop the page just above the fixed playbar so the track list scrolls
-     clear of the bar instead of underneath it. */
-  body:has(#collection-detail-page:not([hidden])) main:has(.player-section.is-visible:not([hidden])) {
+    /* Always reserve the playbar height so the content area never changes
+       when the player toggles — prevents a layout jump and flicker that
+       would otherwise happen because height is explicitly 100dvh, not
+       min-height like every other page. */
     padding-bottom: var(--playbar-h);
+  }
+  /* When the full-screen now-playing overlay opens/closes, player.css sets
+     `height: auto !important` on main (to let the page underneath scroll
+     naturally). On the collection detail page that destroys the `height:
+     100%` chain inside — the entire scroll container collapses because its
+     parent no longer has a definite height, causing the content to flicker
+     and clip. Override with higher specificity to keep the fixed viewport
+     height while the overlay animates. */
+  body.now-playing-route main:has(#collection-detail-page:not([hidden])),
+  body.now-playing-closing main:has(#collection-detail-page:not([hidden])) {
+    height: 100dvh !important;
+    min-height: 100dvh !important;
+    overflow: hidden !important;
   }
   body:has(#collection-detail-page:not([hidden])) #collection-detail-page {
     flex: 1 1 0;
@@ -971,6 +983,15 @@
     gap: clamp(28px, 4vw, 56px);
     padding: 24px 32px 32px;
     align-items: start;     /* hero is its own height; track list grows below */
+    /* Isolate this scroll container from viewport-level compositing changes
+       (e.g. the player bar toggling its backdrop-filter GPU layer). Without
+       its own layer the collection body repaints when the player recomposites,
+       causing visible flicker and content clipping on playlist/album pages.
+       Paint containment is deliberately excluded so position:sticky children
+       (the playlist hero) continue to work across all browsers. */
+    contain: layout style;
+    isolation: isolate;
+    transform: translateZ(0);
   }
   /* The track list used to be the scroll container. Letting it grow
      with the body means the grid row stretches to fit it, and that
