@@ -330,9 +330,12 @@
     pointer-events: none;
     gap: 6px;
     z-index: 0;
+    opacity: 0;
   }
   .result-swipe-wrapper.swiping-right .underlay-play-next,
-  .result-swipe-wrapper.swiping-left .underlay-add-queue { z-index: 1; }
+  .result-swipe-wrapper.swiping-left .underlay-add-queue {
+    z-index: 1;
+  }
   .result-swipe-underlay svg { width: 16px; height: 16px; }
   .result-swipe-underlay.underlay-play-next {
     left: 0;
@@ -352,6 +355,7 @@
   .result-swipe-wrapper > .artist-song-row {
     position: relative;
     z-index: 1;
+    background: var(--bg, #030303);
     touch-action: pan-y;
     transition: background .15s, border-color .15s, transform .15s;
   }
