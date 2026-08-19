@@ -127,6 +127,63 @@ class SessionCookieConfig(unittest.TestCase):
         self.assertTrue(payload['thumbnails'])
         self.assertIn('EiukAyTOzCk', payload['thumbnail'])
 
+    def test_jam_home_falls_back_to_public_home_when_charts_fail(self):
+        # The anonymous India charts call can raise or return empty (YouTube
+        # blocking). A failure there must not prevent the public-home fallback
+        # from building shelves, and a fully empty result must return an empty
+        # feed rather than a 500.
+        import importlib.util
+        home_feed_path = os.path.join(os.path.dirname(__file__), '..', 'home_feed.py')
+        spec = importlib.util.spec_from_file_location('home_feed_real', home_feed_path)
+        real_home_feed = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(real_home_feed)
+        self.server.home_feed = real_home_feed
+
+        class FakeYT:
+            def __init__(self, charts_raise):
+                self.charts_raise = charts_raise
+
+            def get_charts(self, country):
+                if self.charts_raise:
+                    raise RuntimeError('anonymous charts blocked')
+                return {'songs': {'items': [{
+                    'videoId': 'abc123', 'title': 'Chart Song',
+                    'artists': [{'name': 'Artist'}],
+                    'thumbnails': [{'url': 'http://x/chart.jpg'}],
+                }]}, 'videos': {'items': []}}
+
+            def get_home(self, limit=40):
+                return [{'title': 'Public shelf', 'contents': [{
+                    'videoId': 'def456', 'title': 'Home Song',
+                    'artists': [{'name': 'A'}],
+                    'thumbnails': [{'url': 'http://x/home.jpg'}],
+                }]}]
+
+        with mock.patch.object(self.server, '_get_ytmusic',
+                               return_value=FakeYT(charts_raise=True)):
+            data = self.server._build_jam_india_home()
+        self.assertEqual(len(data['shelves']), 1)
+        self.assertEqual(data['shelves'][0]['source'], 'public_youtube_home')
+        self.assertEqual(data['shelves'][0]['items'][0]['title'], 'Home Song')
+
+        with mock.patch.object(self.server, '_get_ytmusic',
+                               return_value=FakeYT(charts_raise=False)):
+            data = self.server._build_jam_india_home()
+        self.assertEqual(len(data['shelves']), 1)
+        self.assertEqual(data['shelves'][0]['source'], 'public_india_charts')
+
+        class EmptyYT:
+            def get_charts(self, country):
+                return {}
+
+            def get_home(self, limit=40):
+                return []
+
+        with mock.patch.object(self.server, '_get_ytmusic',
+                               return_value=EmptyYT()):
+            data = self.server._build_jam_india_home()
+        self.assertEqual(data['shelves'], [])
+
 
 if __name__ == '__main__':
     unittest.main()

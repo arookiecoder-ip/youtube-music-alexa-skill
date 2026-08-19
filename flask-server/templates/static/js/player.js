@@ -172,10 +172,10 @@ function playArtworkSwapIn() {
 }
 
 function resolveNowPlayingArtwork(videoId) {
-  // Jam guests receive only public playback metadata. Avoid an account-backed
-  // artwork lookup; it is both unnecessary and forbidden by the guest API
-  // policy.
-  if (window.JAM_GUEST || !videoId) return Promise.resolve('');
+  // Jam guests receive only public playback metadata. The account-backed
+  // catalog lookup is forbidden by the guest API policy, but the public
+  // i.ytimg.com renditions need no account and still upgrade the hero to HD.
+  if (!videoId) return Promise.resolve('');
   if (_resolvedNowPlayingArt.has(videoId)) return Promise.resolve(_resolvedNowPlayingArt.get(videoId));
   if (_pendingNowPlayingArt.has(videoId)) return _pendingNowPlayingArt.get(videoId);
 
@@ -183,7 +183,7 @@ function resolveNowPlayingArtwork(videoId) {
   // probe, so high-resolution artwork never delays the play command.
   const directCandidates = ['maxresdefault', 'sddefault', 'hqdefault']
     .map((rendition) => 'https://i.ytimg.com/vi/' + encodeURIComponent(videoId) + '/' + rendition + '.jpg');
-  const catalogCandidates = typeof window.api === 'function'
+  const catalogCandidates = !window.JAM_GUEST && typeof window.api === 'function'
     ? window.api('/api/track/' + encodeURIComponent(videoId) + '/artwork')
       .then((result) => (result && result.thumbnails || []).concat(result && result.thumbnail || []))
       .catch(() => [])
@@ -2136,13 +2136,15 @@ function updateUrlBar() {
       + (seconds > 0 ? '&t=' + seconds : '');
 
     const serial = selectedSerial();
-    // Always attempt the pause, even if the locally-tracked isPlaying flag
-    // says it's already paused: that flag is an optimistic client guess (SSE
-    // lag, a race with another tab, etc.) and can be stale. Sending 'pause'
-    // to an already-paused device is a harmless no-op server-side, whereas
-    // skipping it on a stale "false" left music playing behind the YouTube
-    // tab. A failed dispatch is now surfaced instead of silently swallowed.
-    if (serial) {
+    // Jam guests share the host's playback device: opening the song on
+    // YouTube must not pause the music for everyone in the jam.
+    if (serial && !window.JAM_GUEST) {
+      // Always attempt the pause, even if the locally-tracked isPlaying flag
+      // says it's already paused: that flag is an optimistic client guess (SSE
+      // lag, a race with another tab, etc.) and can be stale. Sending 'pause'
+      // to an already-paused device is a harmless no-op server-side, whereas
+      // skipping it on a stale "false" left music playing behind the YouTube
+      // tab. A failed dispatch is now surfaced instead of silently swallowed.
       const previousPlaying = state.isPlaying;
       state.lastActionAt = Date.now();
       state.lastActionIntent = false;

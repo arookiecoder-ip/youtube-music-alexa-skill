@@ -775,6 +775,8 @@
    rules just remove every account-writing control from a guest's UI so
    nothing they can click will 401. */
 body.jam-guest #np-like-btn,
+body.jam-guest #np-menu-like,
+body.jam-guest #np-menu-playlist,
 body.jam-guest .result-like-btn,
 body.jam-guest .track-like-btn,
 body.jam-guest [data-action="like"],

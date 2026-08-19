@@ -88,7 +88,7 @@ if (!iife) {
   process.exit(1);
 }
 
-function runScenario({ isPlayingBefore, currentVideoId, apiImpl }) {
+function runScenario({ isPlayingBefore, currentVideoId, apiImpl, jamGuest }) {
   const events = {};
   const calls = [];
   const toasts = [];
@@ -114,6 +114,7 @@ function runScenario({ isPlayingBefore, currentVideoId, apiImpl }) {
       getElementById: (id) => (id === 'np-url-toggle' || id === 'mobile-player-youtube'
         ? fakeElement(id) : null),
     },
+    JAM_GUEST: !!jamGuest,
     state,
     progress: { livePosition: () => 42000 },
     selectedSerial: () => 'DEVICE_SERIAL_1',
@@ -163,6 +164,17 @@ async function main() {
       apiImpl: () => Promise.resolve({}),
     });
     checkTrue('pause was dispatched', calls.length === 1 && calls[0][1].action === 'pause');
+  }
+
+  console.log('\n--- jam guest: clicking the YouTube icon must not pause the shared device ---');
+  {
+    const { calls } = runScenario({
+      isPlayingBefore: true,
+      currentVideoId: 'VIDEOID00006',
+      jamGuest: true,
+      apiImpl: () => Promise.resolve({}),
+    });
+    check('no pause dispatched for a jam guest (shared playback device)', calls, []);
   }
 
   console.log('\n--- no device selected: no pause call, no crash ---');

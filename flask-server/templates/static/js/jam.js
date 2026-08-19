@@ -43,11 +43,19 @@
   async function loadJamHome() {
     const rows = document.getElementById('jam-home-rows');
     if (rows) rows.innerHTML = '<div class="jam-home-loading">Loading public Indian charts…</div>';
-    try {
-      renderJamHome(await window.api('/api/jam/home/'));
-    } catch (_) {
-      if (rows) rows.innerHTML = '<div class="jam-home-empty">Indian recommendations are unavailable right now. Search for a song to keep the jam going.</div>';
+    // The join redirect sets the guest cookie immediately before this page
+    // loads; behind a reverse proxy the first request can race it and 401.
+    // The session handshake below retries for the same reason, so mirror
+    // that backoff here instead of showing a permanent empty state.
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        renderJamHome(await window.api('/api/jam/home/'));
+        return;
+      } catch (_) {
+        if (attempt < 2) await new Promise(resolve => setTimeout(resolve, 800 * (attempt + 1)));
+      }
     }
+    if (rows) rows.innerHTML = '<div class="jam-home-empty">Indian recommendations are unavailable right now. Search for a song to keep the jam going.</div>';
   }
 
   const jamRows = document.getElementById('jam-home-rows');
@@ -116,6 +124,10 @@
       if (window.connectSSE) window.connectSSE();
       if (window.refreshVolume) window.refreshVolume(true);
       if (window.syncUiState) window.syncUiState();
+      // The handshake has now confirmed the guest session cookie. If the feed
+      // request raced it and is still showing the empty state, retry once.
+      const jamRows = document.getElementById('jam-home-rows');
+      if (jamRows && jamRows.querySelector('.jam-home-empty')) loadJamHome();
     } catch (error) {
       showJamEnded('Connection failed',
         error && error.message

@@ -4898,31 +4898,41 @@ def _build_jam_india_home():
     This never calls the authenticated YTMusic client and never reads local
     history, likes, playlists, or any other host preference signal.
     """
-    charts = _get_ytmusic().get_charts('IN') or {}
     shelves = []
-    for key, shelf_id, title, layout in (
-            ('songs', 'india-top-songs', 'Top songs in India', 'cards'),
-            ('videos', 'india-music-videos', 'Popular music videos in India', 'wide_cards')):
-        section = charts.get(key) or {}
-        items = _jam_chart_items(section.get('items') or [])
-        if not items:
-            continue
-        shelves.append({
-            'id': shelf_id,
-            'title': title,
-            'subtitle': 'Anonymous recommendations · India',
-            'layout': layout,
-            'source': 'public_india_charts',
-            'actions': {'playAll': False, 'showAll': False},
-            'filters': ['all'],
-            'items': items,
-        })
+    try:
+        charts = _get_ytmusic().get_charts('IN') or {}
+        for key, shelf_id, title, layout in (
+                ('songs', 'india-top-songs', 'Top songs in India', 'cards'),
+                ('videos', 'india-music-videos', 'Popular music videos in India', 'wide_cards')):
+            section = charts.get(key) or {}
+            items = _jam_chart_items(section.get('items') or [])
+            if not items:
+                continue
+            shelves.append({
+                'id': shelf_id,
+                'title': title,
+                'subtitle': 'Anonymous recommendations · India',
+                'layout': layout,
+                'source': 'public_india_charts',
+                'actions': {'playAll': False, 'showAll': False},
+                'filters': ['all'],
+                'items': items,
+            })
+    except Exception:
+        # A charts failure (e.g. YouTube blocking the anonymous request) must
+        # not prevent the public-home fallback below from running.
+        logger.warning('anonymous India jam charts failed, trying public home', exc_info=True)
 
     # Charts are occasionally empty from YouTube Music's anonymous endpoint.
     # Public Home remains anonymous and gives a Jam usable discovery shelves
     # instead of leaving the shared main UI with an empty-state screen.
     if not shelves:
-        for index, section in enumerate(_get_ytmusic().get_home(limit=40) or []):
+        try:
+            home_sections = _get_ytmusic().get_home(limit=40) or []
+        except Exception:
+            logger.warning('anonymous public home failed for jam feed', exc_info=True)
+            home_sections = []
+        for index, section in enumerate(home_sections):
             items = _jam_public_home_items(section.get('contents') or [])
             if not items:
                 continue
