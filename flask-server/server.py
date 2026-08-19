@@ -1597,6 +1597,16 @@ _stream_inflight_lock = threading.Lock()
 # file before giving up and doing its own download.
 _STREAM_DUPLICATE_WAIT = 25.0
 _STREAM_DUPLICATE_POLL = 0.25
+# How long a cold-cache /proxy/ request waits for an in-flight *background*
+# prewarm (ensure_downloaded, started by the play click and again by get_stream)
+# to land its cache file before starting its own stream. The prewarm begins at
+# click time and finishes in ~4s (premium) or ~8s (free), while the Echo hits
+# /proxy/ a couple of seconds later, so this is normally a short wait that just
+# lets the prewarm finish instead of spawning a redundant second yt-dlp process.
+# Bounded so that even a stuck prewarm still falls back to a stream (~4s first
+# byte) inside the Echo's ~11s /proxy/ deadline.
+_PREWARM_WAIT_SECONDS = 6.0
+_PREWARM_POLL = 0.2
 # A superseded stream is killed once it has been stale this long. The grace
 # period absorbs the brief window where /proxy/ arrives before the now-playing
 # state has been updated for the same track (voice-initiated playback).
@@ -3682,6 +3692,18 @@ def proxy_stream():
                 _confirm_stream_delivery(video_id)
                 mimetype = 'audio/mp4' if path.endswith(('.m4a', '.mp4')) else 'audio/webm'
                 return send_file(path, mimetype=mimetype, conditional=True)
+        # A background prewarm (ensure_downloaded, started by the play click and
+        # again by get_stream) is already fetching this exact track. It began
+        # seconds before the Echo's /proxy/ request, so waiting for its cache
+        # file is faster than spawning a second yt-dlp stream — and avoids the
+        # double-download that left superseded streams stuck for 150s.
+        if _download_in_progress(video_id):
+            path = _await_prewarm_cache(video_id)
+            if path:
+                logger.info("proxy: served %s from the in-flight prewarm's cache", video_id)
+                _confirm_stream_delivery(video_id)
+                mimetype = 'audio/mp4' if path.endswith(('.m4a', '.mp4')) else 'audio/webm'
+                return send_file(path, mimetype=mimetype, conditional=True)
         return _stream_proxy_download(video_id)
     # Warm cache: serve the file directly. This must NOT go through
     # ensure_downloaded(): that acquires _download_semaphore *before* looking at
@@ -3721,6 +3743,35 @@ def _await_inflight_stream(video_id):
         time.sleep(_STREAM_DUPLICATE_POLL)
     logger.warning("proxy: gave up waiting %.0fs for the in-flight stream of %s",
                    _STREAM_DUPLICATE_WAIT, video_id)
+    return None
+
+
+def _await_prewarm_cache(video_id):
+    """Wait for an in-flight background prewarm to publish its cache file.
+
+    `ensure_downloaded` is kicked off at click time (and again by get_stream),
+    so by the time the Echo hits /proxy/ a couple seconds later the prewarm is
+    usually partway through. Spawning a fresh stream here instead of waiting
+    would start a second yt-dlp for the same song — the redundant download that
+    left superseded streams stuck for 150s and pushed first byte out past the
+    point where the prewarm had already finished.
+
+    Returns the cached path, or None when the prewarm ended without a file (it
+    failed) or is taking too long. A None result falls back to a stream, so it
+    stays correct — it just costs an extra yt-dlp run.
+    """
+    deadline = time.time() + _PREWARM_WAIT_SECONDS
+    while time.time() < deadline:
+        path = Supporting.cached_audio_path(video_id)
+        if path:
+            return path
+        if not _download_in_progress(video_id):
+            # The prewarm finished (success or failure); one last look in case
+            # the final rename just landed.
+            return Supporting.cached_audio_path(video_id)
+        time.sleep(_PREWARM_POLL)
+    logger.warning("proxy: gave up waiting %.0fs for the prewarm of %s",
+                   _PREWARM_WAIT_SECONDS, video_id)
     return None
 
 
