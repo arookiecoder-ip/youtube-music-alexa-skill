@@ -866,18 +866,23 @@
     gap: 14px;
     padding: 0 29px 6px;
   }
-  body.home-route .home-item-card { width: 126px; gap: 7px; }
+  body.home-route .home-item-card { width: 145px; gap: 7px; }
   body.home-route .home-item-title { font-size: .76rem; }
   body.home-route .home-item-subtitle { font-size: .68rem; }
   body.home-route .home-layout-song_grid .home-shelf-content {
-    grid-auto-columns: 270px;
+    grid-auto-columns: 330px;
     row-gap: 1px;
+  }
+  body.home-route .home-item-song {
+    height: 50px;
   }
   body.home-route .home-item-song .home-item-img {
     width: 42px;
     height: 42px;
   }
   body.home-route .home-item-song .home-item-text { padding: 0 10px; }
+  body.home-route .home-item-song .home-item-title { font-size: .9rem; }
+  body.home-route .home-item-song .home-item-subtitle { font-size: .8rem; }
 }
 
 /* Keep the primary content tiles aligned with the sharper login treatment. */
@@ -1412,7 +1417,7 @@
 }
 .library-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(126px, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(145px, 1fr));
   gap: 16px;
 }
 
@@ -1568,8 +1573,7 @@
 .library-card:focus-within .library-card-play.home-play-btn,
 .library-card-play.home-play-btn:focus-visible { opacity: 1; }
 
-/* Library keeps the homepage's card geometry while retaining a fluid row
-   count. Playlist cards use the normal 174px desktop / 126px mobile tracks;
+/* Library keeps the homepage's card geometry while retaining a fluid row     count. Playlist cards use the normal 174px desktop / 145px mobile tracks;
    subscribed artists use the homepage circle sizes (160px / 120px). */
 @media (min-width: 900px) {
   body.library-route .library-card-artist {
@@ -1996,21 +2000,21 @@
   }
 
   body.explore-route .explore-card {
-    width: 126px;
-    flex-basis: 126px;
+    width: 145px;
+    flex-basis: 145px;
   }
   body.explore-route .explore-card-art {
-    width: 126px;
-    height: 126px;
+    width: 145px;
+    height: 145px;
     aspect-ratio: auto;
   }
   body.mood-route .explore-card {
-    width: 126px;
-    flex-basis: 126px;
+    width: 145px;
+    flex-basis: 145px;
   }
   body.mood-route .explore-card-art {
-    width: 126px;
-    height: 126px;
+    width: 145px;
+    height: 145px;
     aspect-ratio: auto;
   }
   body.mood-route .explore-grid {
@@ -2053,14 +2057,14 @@
   }
   body.mood-route .mood-featured-playlists .explore-grid::-webkit-scrollbar { display: none; }
   body.mood-route .mood-featured-playlists .explore-card {
-    flex: 0 0 126px;
+    flex: 0 0 145px;
   }
   body.mood-route .mood-albums-playlists .explore-grid {
     display: grid;
     grid-template-columns: none;
     grid-template-rows: repeat(2, auto);
     grid-auto-flow: column;
-    grid-auto-columns: 126px;
+    grid-auto-columns: 145px;
     width: 100%;
     min-width: 100%;
     overflow-x: auto;

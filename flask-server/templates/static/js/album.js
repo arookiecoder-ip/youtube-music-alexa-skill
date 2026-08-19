@@ -216,6 +216,13 @@
     var route = '#album/' + encodeURIComponent(browseId);
     var preloaded = window.consumePreload ? window.consumePreload(route) : null;
     var data = preloaded || cache[browseId];
+    // The collection detail page is shared by album and playlist routes. Only
+    // the route that started this load may reveal or mutate it; a late album
+    // response must not reclaim the page after the user has navigated away
+    // (e.g. into Search, which paints its own loading skeleton).
+    var stillOwnsRoute = function() {
+      return !window.getRoute || window.getRoute() === route;
+    };
 
     // Albums use same loader as playlist detail. Keep loading state inside
     // shared track-list component; no album-specific spinner or CSS.
@@ -228,10 +235,11 @@
     try {
       if (!data) data = await window.api('/api/album/' + encodeURIComponent(browseId));
       cache[browseId] = data;
+      if (!stillOwnsRoute()) return;
       render(data);
     } catch (error) {
-      var ownsAlbumRoute = !window.getRoute || window.getRoute() === route;
-      if (ownsAlbumRoute && window._isNotFoundError && window._isNotFoundError(error) && window._showNotFoundPage) {
+      if (!stillOwnsRoute()) return;
+      if (window._isNotFoundError && window._isNotFoundError(error) && window._showNotFoundPage) {
         window._showNotFoundPage();
         return;
       }

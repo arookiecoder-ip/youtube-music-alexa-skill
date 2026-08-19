@@ -1260,10 +1260,10 @@ main:has(#now-playing-section:not([hidden])) {
     display: inline-flex !important;
     align-items: center;
     justify-content: center;
-    width: 30px !important;
-    height: 30px !important;
-    min-width: 30px !important;
-    min-height: 30px !important;
+    width: 36px !important;
+    height: 36px !important;
+    min-width: 36px !important;
+    min-height: 36px !important;
     margin: 0;
     padding: 6px !important;
     border: 0;
@@ -1280,8 +1280,8 @@ main:has(#now-playing-section:not([hidden])) {
   }
   body.now-playing-route .mobile-np-volume-row .mobile-player-youtube svg,
   body.now-playing-closing .mobile-np-volume-row .mobile-player-youtube svg {
-    width: 19px;
-    height: 19px;
+    width: 24px;
+    height: 24px;
   }
   body .mobile-volume-popover {
     display: none;

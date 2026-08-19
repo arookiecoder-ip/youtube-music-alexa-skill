@@ -1222,6 +1222,10 @@
     margin: 0 auto !important;
     flex: none !important;
   }
+  #collection-detail-shell .playlist-detail-hero > .playlist-collage.liked-playlist-banner {
+    width: 200px !important;
+    height: 200px !important;
+  }
 
   /* Compact mobile playlist rows: hide counters and reduce album art. */
   #collection-detail-shell .history-item .playlist-track-num {

@@ -763,11 +763,11 @@
     border-bottom-color: transparent !important;
   }
 
-  /* Match the mobile Home card geometry: Albums and Singles use 126px
+  /* Match the mobile Home card geometry: Albums and Singles use 145px
      square cards, while Related Artists use the 120px Home artist circle. */
   body.artist-route #artist-section .hscroll-card {
-    flex-basis: 126px;
-    width: 126px;
+    flex-basis: 145px;
+    width: 145px;
   }
   body.artist-route #artist-section .hscroll-card.related-artist-card {
     flex-basis: 120px;
