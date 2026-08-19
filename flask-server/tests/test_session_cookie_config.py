@@ -103,6 +103,30 @@ class SessionCookieConfig(unittest.TestCase):
         # auth gate — never a 401.
         self.assertNotEqual(api_response.status_code, 401)
 
+    def test_track_artwork_endpoint_authorized_by_web_session(self):
+        # /api/track/<video_id>/artwork is fetched by the SPA without the API
+        # key. It must be reachable with the logged-in web-session cookie, or
+        # the player's high-res artwork probe 401s on every page load.
+        client = self.server.app.test_client()
+        anon = client.get('/api/track/EiukAyTOzCk/artwork')
+        self.assertEqual(anon.status_code, 401)
+        with mock.patch.object(self.server, '_ytmusic_is_authenticated', return_value=False), \
+             mock.patch.object(self.server, '_totp_enabled', return_value=False):
+            response = client.post('/login/', json={
+                'username': self.server.REMOTE_USER,
+                'password': self.server.REMOTE_PASSWORD,
+                'next': '/home',
+            })
+        self.assertEqual(response.status_code, 200)
+        # Stubbed ytmusicapi has no get_song, so the handler falls back to the
+        # standard rendition URLs — the key assertion is that the session
+        # cookie passes the auth gate (no 401/403).
+        artwork = client.get('/api/track/EiukAyTOzCk/artwork')
+        self.assertEqual(artwork.status_code, 200)
+        payload = artwork.get_json()
+        self.assertTrue(payload['thumbnails'])
+        self.assertIn('EiukAyTOzCk', payload['thumbnail'])
+
 
 if __name__ == '__main__':
     unittest.main()

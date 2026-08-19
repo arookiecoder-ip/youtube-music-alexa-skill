@@ -721,7 +721,8 @@ _SESSION_PATHS = ('/remote', '/alexa/status', '/alexa/init', '/alexa/devices', '
                    '/api/youtube/browser-session/capture',
                    '/api/youtube/browser-session/authorize')
 _SESSION_PREFIXES = ('/alexa/now_playing/', '/history/', '/api/playlists/', '/recommendations/',
-                     '/api/artist/', '/api/album/', '/api/library/', '/api/explore/', '/api/home/')
+                     '/api/artist/', '/api/album/', '/api/library/', '/api/explore/', '/api/home/',
+                     '/api/track/')
 
 # API/device endpoints: the Alexa skill and web-remote JS hit these directly
 # and need a machine-readable JSON error, never an HTML redirect, on failure.

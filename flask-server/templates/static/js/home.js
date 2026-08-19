@@ -50,6 +50,12 @@
   function updateShelfArrows(shelfContent) {
     const shelf = shelfContent && shelfContent.closest('.home-shelf');
     if (!shelf) return;
+    // content-visibility: auto skips layout for shelves below the fold, so
+    // their content reports a zero clientWidth. Never disable arrows from a
+    // garbage measurement; the page-scroll refresh re-measures the shelf
+    // once the browser actually renders it.
+    if (!shelfContent.clientWidth) return;
+    shelfContent._arrowsMeasured = true;
     const maxScroll = Math.max(0, shelfContent.scrollWidth - shelfContent.clientWidth);
     const left = shelf.querySelector('.home-scroll-left');
     const right = shelf.querySelector('.home-scroll-right');
@@ -704,8 +710,30 @@
       }
     });
 
+    window.addEventListener('scroll', refreshShelfArrows, { passive: true });
+
     window.addEventListener('resize', function() {
-      rows.querySelectorAll('.home-shelf-content').forEach(updateShelfArrows);
+      rows.querySelectorAll('.home-shelf-content').forEach(function(content) {
+        content._arrowsMeasured = false;
+        updateShelfArrows(content);
+      });
+    });
+  }
+
+  // Shelves far below the fold are skipped by content-visibility: auto and
+  // measure as zero width at render time, which would leave their scroll
+  // arrows permanently disabled. Re-measure any shelf that is still
+  // unmeasured whenever the page scrolls (throttled to one pass per frame);
+  // once measured, only that shelf's own scroll/resize events refresh it.
+  let arrowRefreshPending = false;
+  function refreshShelfArrows() {
+    if (arrowRefreshPending) return;
+    arrowRefreshPending = true;
+    window.requestAnimationFrame(function() {
+      arrowRefreshPending = false;
+      rows.querySelectorAll('.home-shelf-content').forEach(function(content) {
+        if (!content._arrowsMeasured) updateShelfArrows(content);
+      });
     });
   }
 
