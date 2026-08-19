@@ -147,11 +147,63 @@
   if (playBtn) {
     playBtn.onclick = () => {
       const queryEl = document.getElementById('query');
-      const query = queryEl.value.trim();
-      if (!query) return;
       queryEl.blur();
-      if (window.runSearch) window.runSearch(query);
+      submitPlayQuery(queryEl.value);
     };
+  }
+
+  // Pasted YouTube / YT Music links play directly on the shared room queue,
+  // matching the owner remote. Jam has no device.js, so this mirrors its
+  // submitPlayQuery/playDirectLink path (/alexa/play/ is jam-allowed and
+  // resolves the shared device server-side).
+  function isYoutubeLinkLike(value) {
+    if (typeof window.isYoutubeLinkLike === 'function') return window.isYoutubeLinkLike(value);
+    return /^(https?:\/\/)?(www\.|m\.|music\.)?(youtube\.com\/|youtu\.be\/)/i.test((value || '').trim());
+  }
+
+  async function playDirectLink(query) {
+    const serial = selectedSerial();
+    if (!serial) return;
+    if (window.progress && window.progress.resetPending) window.progress.resetPending();
+    if (window.toast) window.toast('Resolving link...');
+    try {
+      const data = await window.api('/alexa/play/', { serial, query });
+      const npInfo = data.now_playing || { title: query, artist: '', thumbnail: '' };
+      if (window.preloadNowPlayingArtwork) window.preloadNowPlayingArtwork(npInfo);
+      if (window.showNowPlaying) window.showNowPlaying(npInfo);
+      if (window.progress) window.progress.resetPending(npInfo.video_id);
+      state().isPlaying = true;
+      state().lastActionIntent = true;
+      if (window.syncPlayPause) window.syncPlayPause();
+      if (window.toast) window.toast('Playing', 'ok');
+      window._lastQueueJson = '';
+      if (window.schedulePollNowPlaying) window.schedulePollNowPlaying(3000);
+    } catch (e) {
+      if (window.progress && window.progress.cancelPending) window.progress.cancelPending();
+      if (window.toast) window.toast(e.message, 'error');
+    }
+  }
+
+  function closeSearchForDirectPlay() {
+    document.body.classList.remove('mobile-search-open');
+    if (window.closeSearchSuggestions) window.closeSearchSuggestions();
+    const input = document.getElementById('query');
+    if (input) input.blur();
+    // Jam has no router or expanded now-playing overlay; closing the results
+    // panel re-shows the jam home and reveals the compact player bar once the
+    // resolved track renders.
+    if (window.closeResults) window.closeResults();
+  }
+
+  function submitPlayQuery(query) {
+    query = (query || '').trim();
+    if (!query) { if (window.toast) window.toast('Type something', 'error'); return; }
+    if (isYoutubeLinkLike(query)) {
+      closeSearchForDirectPlay();
+      playDirectLink(query);
+    } else if (window.runSearch) {
+      window.runSearch(query);
+    }
   }
 
   function syncHistoryTriggerVisibility() {}
@@ -167,4 +219,6 @@
   window.syncHistoryTriggerVisibility = syncHistoryTriggerVisibility;
   window.getRoute = getRoute;
   window.navigateTo = navigateTo;
+  window.submitPlayQuery = submitPlayQuery;
+  window.playDirectLink = playDirectLink;
 })();

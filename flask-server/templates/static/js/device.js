@@ -130,6 +130,9 @@
       state()._lastPlayAttemptVideoId = data.video_id || npInfo.video_id;
       if (window.preloadNowPlayingArtwork) window.preloadNowPlayingArtwork(npInfo);
       if (window.showNowPlaying) window.showNowPlaying(npInfo);
+      // A pasted link is an explicit play intent: reveal the playback overlay
+      // on both desktop and mobile so the user immediately sees what started.
+      if (window.navigateTo) window.navigateTo('#now-playing');
       if (window.progress) window.progress.resetPending(npInfo.video_id);
       state().isPlaying = true;
       state().lastActionIntent = true;
@@ -140,6 +143,22 @@
     } catch (e) {
       if (window.progress && window.progress.cancelPending) window.progress.cancelPending();
       toast(e.message, 'error');
+    }
+  }
+
+  // Dismiss the search UI when a pasted link plays directly: collapse the
+  // mobile search panel, drop the suggestion dropdown, and leave the search
+  // results screen so the now-playing overlay slides over Home (and closing
+  // it returns Home instead of stale results).
+  function closeSearchForDirectPlay() {
+    document.body.classList.remove('mobile-search-open');
+    if (window.closeSearchSuggestions) window.closeSearchSuggestions();
+    const input = document.getElementById('query');
+    if (input) input.blur();
+    if (window.getRoute && window.getRoute().indexOf('#search?') === 0 && window.navigateTo) {
+      window.navigateTo('#home');
+    } else if (window.closeResults) {
+      window.closeResults();
     }
   }
 
@@ -161,6 +180,7 @@
           return;
         }
       }
+      closeSearchForDirectPlay();
       playDirectLink(query);
     } else if (window.runSearch) {
       window.runSearch(query);
