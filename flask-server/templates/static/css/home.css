@@ -1952,28 +1952,47 @@
     padding-left: 0;
   }
 
+  /* Mobile Library: a vertical list instead of the desktop square-card grid.
+     Each entry is a compact row (thumb + title/subtitle) so playlists and
+     subscribed artists stack top-to-bottom. */
   body.library-route .library-grid {
-    grid-template-columns: repeat(auto-fill, 126px);
-    justify-content: center;
-    column-gap: 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
   }
-  body.library-route .library-card,
-  body.library-route .library-card-art {
-    width: 126px;
+  body.library-route .library-card {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+    padding: 6px 0;
   }
   body.library-route .library-card-art {
-    height: 126px;
+    width: 52px;
+    height: 52px;
     aspect-ratio: auto;
+    flex: none;
+    margin-bottom: 0;
+    border-radius: var(--radius-sm);
   }
-  body.library-route .library-card-artist,
   body.library-route .library-card-artist .library-card-art {
-    width: 120px;
+    width: 52px;
+    height: 52px;
+    border-radius: 50%;
   }
-  body.library-route .library-card-artist .library-card-art {
-    height: 120px;
+  body.library-route .library-card-info {
+    flex: 1;
+    min-width: 0;
+    padding: 0;
+    text-align: left;
   }
   body.library-route .library-card-artist .library-card-info {
-    text-align: center;
+    text-align: left;
+  }
+  /* A hover-reveal play button doesn't fit a compact list row. */
+  body.library-route .library-card-play {
+    display: none;
   }
 
   body.explore-route .explore-card {

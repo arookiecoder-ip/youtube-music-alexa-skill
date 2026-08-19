@@ -256,10 +256,10 @@
     border-right: none;
   }
   /* Artwork or the shared warm tint can bleed behind the mini rail on Home,
-     History, Explore, Library, Artist, the full player, and the search
+     History, Explore, Mood, Library, Artist, the full player, and the search
      results page (which uses the same warm tint as Home). Other pages use a
      stable black rail. */
-  body.rail-collapsed:not(.home-route):not(.history-route):not(.explore-route):not(.library-route):not(.artist-route):not(.now-playing-route):not(.results-open):not(.playlists-route):not(.album-route) .sidebar {
+  body.rail-collapsed:not(.home-route):not(.history-route):not(.explore-route):not(.mood-route):not(.library-route):not(.artist-route):not(.now-playing-route):not(.results-open):not(.playlists-route):not(.album-route) .sidebar {
     background: #000;
   }
   /* Text-only chrome has no icon form — hide it in the mini rail. Fade it

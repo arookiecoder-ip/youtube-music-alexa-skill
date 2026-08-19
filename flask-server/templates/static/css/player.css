@@ -1715,7 +1715,14 @@ body.results-open .player-section.is-visible { transform: none; }
     height: auto !important;
     min-height: 100dvh !important;
     overflow: visible !important;
-    padding-bottom: calc(var(--playbar-h) + 28px) !important;
+    /* Do NOT force padding-bottom here. The overlay is position:fixed and
+       covers main down to the playbar, so it needs no extra clearance. On
+       routed pages (album/playlist/artist) main reserves a different amount
+       (var(--playbar-h)); forcing calc(var(--playbar-h) + 28px) changed that
+       value and, because main transitions padding-bottom over .3s, re-laid
+       out the heavy page under the slide every frame — the visible lag when
+       opening the player from anywhere but Home. Each page keeps its own
+       correct padding, so leave it untouched. */
   }
 }
 .player-section .pp-btn:focus,

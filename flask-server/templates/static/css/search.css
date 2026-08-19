@@ -933,9 +933,11 @@
     max-width: none;
     margin: 8px -4px 4px;
   }
-  @media (hover: none) and (pointer: coarse) {
-    body:not(.mobile-search-open) .header-search-wrap { display: none !important; }
-  }
+  /* Hide the inline header search bar at every mobile width, not just on
+     touch devices. A desktop browser resized below 900px still reports
+     (hover: hover), so the bar used to stay visible as a full-width header
+     row and overlap the mobile shell. The magnifier toggle owns search here. */
+  body:not(.mobile-search-open) .header-search-wrap { display: none !important; }
   body.mobile-search-open::after {
     content: '';
     position: fixed;
