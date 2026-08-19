@@ -1329,9 +1329,6 @@
 .explore-quick-card:hover,
 .explore-quick-card:focus-visible { background:#161616; border-color:rgba(255,255,255,.18); }
 .explore-quick-icon { color:var(--accent); font-size:1.35rem; }
-.explore-context-menu { position:fixed; z-index:10000; min-width:170px; padding:6px; border:1px solid rgba(255,255,255,.12); border-radius:12px; background:#202020; box-shadow:0 18px 45px rgba(0,0,0,.5); }
-.explore-context-menu button { display:block; width:100%; padding:10px 12px; border:0; background:transparent; color:var(--text); text-align:left; font-size:.88rem; }
-.explore-context-menu button:hover { background:rgba(255,255,255,.1); }
 @media (max-width:620px) { .explore-quick-nav { grid-template-columns:repeat(2,1fr); } .explore-quick-card { min-height:58px; padding:0 12px; } }
 .explore-card-info {
   padding: 0 4px 8px;
@@ -1643,7 +1640,6 @@
 .explore-card,
 .explore-card-art,
 .explore-quick-card,
-.explore-context-menu,
 .explore-mood-card {
   border-radius: 0;
 }

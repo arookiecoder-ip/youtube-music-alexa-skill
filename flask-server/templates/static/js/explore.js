@@ -118,8 +118,8 @@
       cardContextMenu = document.createElement('div');
       cardContextMenu.className = 'result-more-menu explore-context-menu';
       cardContextMenu.innerHTML =
-        '<button type="button" class="result-menu-option" data-action="play"><svg viewBox="0 0 24 24" fill="currentColor"><polygon points="7,4 20,12 7,20"/></svg><span>Play</span></button>' +
-        '<button type="button" class="result-menu-option" data-action="open"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg><span>Open playlist</span></button>';
+        '<div class="result-menu-option" data-action="play"><svg viewBox="0 0 24 24" fill="currentColor"><polygon points="7,4 20,12 7,20"/></svg><span>Play</span></div>' +
+        '<div class="result-menu-option" data-action="open"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 18l6-6-6-6"/></svg><span>Open playlist</span></div>';
       document.body.appendChild(cardContextMenu);
       cardContextMenu.addEventListener('click', menuEvent => {
         const action = menuEvent.target.closest('[data-action]');

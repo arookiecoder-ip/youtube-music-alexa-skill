@@ -1347,8 +1347,15 @@ if (nextBtn) {
       closeList();
       const query = input.value.trim();
       if (!query) return;
-      if (typeof window._recordSearchHistory === 'function') window._recordSearchHistory(query);
-      if (window.runSearch) window.runSearch(query);
+      // A pasted YouTube / YT Music link must play directly, not be searched
+      // for. device.js exposes the shared submit path on the owner remote;
+      // jam guests (no device.js) just search as before.
+      if (window.submitPlayQuery) {
+        window.submitPlayQuery(query);
+      } else {
+        if (typeof window._recordSearchHistory === 'function') window._recordSearchHistory(query);
+        if (window.runSearch) window.runSearch(query);
+      }
     } else if (e.key === 'Escape') {
       closeList();
     }

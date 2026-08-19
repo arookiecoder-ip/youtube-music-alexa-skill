@@ -143,6 +143,30 @@
     }
   }
 
+  // Single entry point for anything submitted through the search/play box
+  // (the header search bar's Enter key, the legacy GO button, etc.). A pasted
+  // YouTube / YT Music link plays directly; plain text runs a search.
+  function submitPlayQuery(query) {
+    query = (query || '').trim();
+    if (!query) { toast('Type something', 'error'); return; }
+    if (typeof window._recordSearchHistory === 'function') window._recordSearchHistory(query);
+    if (isYoutubeLinkLike(query)) {
+      if (!window.JAM_GUEST && query.includes('list=') && confirm('This looks like a playlist. Do you want to save it to your Playlists?')) {
+        const name = prompt('Enter a name for this playlist:', 'Imported Playlist');
+        if (name) {
+          api('/api/playlists/', { name: name, source_url: query }).then(res => {
+            toast('Playlist saved. Syncing...', 'ok');
+            if (typeof window.syncPlaylist === 'function') window.syncPlaylist(res.id);
+          }).catch(() => toast('Failed to save playlist', 'error'));
+          return;
+        }
+      }
+      playDirectLink(query);
+    } else if (window.runSearch) {
+      window.runSearch(query);
+    }
+  }
+
   function playStartupReveal() {
     document.body.classList.remove('startup-reveal');
     void document.body.offsetWidth;
@@ -393,25 +417,8 @@
     if (playBtn) {
       playBtn.onclick = () => {
         const queryEl = document.getElementById('query');
-        const query = queryEl.value.trim();
-        if (!query) { toast('Type something', 'error'); return; }
-        if (typeof window._recordSearchHistory === 'function') window._recordSearchHistory(query);
         queryEl.blur();
-        if (isYoutubeLinkLike(query)) {
-          if (!window.JAM_GUEST && query.includes('list=') && confirm('This looks like a playlist. Do you want to save it to your Playlists?')) {
-            const name = prompt('Enter a name for this playlist:', 'Imported Playlist');
-            if (name) {
-              api('/api/playlists/', { name: name, source_url: query }).then(res => {
-                toast('Playlist saved. Syncing...', 'ok');
-                if (typeof window.syncPlaylist === 'function') window.syncPlaylist(res.id);
-              }).catch(() => toast('Failed to save playlist', 'error'));
-              return;
-            }
-          }
-          playDirectLink(query);
-        } else if (window.runSearch) {
-          window.runSearch(query);
-        }
+        submitPlayQuery(queryEl.value);
       };
     }
 
@@ -627,6 +634,7 @@
   window.selectedDeviceOnline = selectedDeviceOnline;
   window.loadDevices = loadDevices;
   window.playDirectLink = playDirectLink;
+  window.submitPlayQuery = submitPlayQuery;
   window.playStartupReveal = playStartupReveal;
   window.showControls = showControls;
   window._applyDevices = _applyDevices;

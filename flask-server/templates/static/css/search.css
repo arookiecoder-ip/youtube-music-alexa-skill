@@ -462,11 +462,12 @@
   .result-more-menu {
     display: block;
     position: fixed;
-    background: var(--surface);
-    border: 1px solid var(--border);
+    background: #202020;
+    border: 1px solid rgba(255,255,255,.12);
     z-index: 9999;
     min-width: 180px;
-    box-shadow: 0 8px 24px rgba(0,0,0,.5);
+    padding: 6px;
+    box-shadow: 0 18px 45px rgba(0,0,0,.5);
     opacity: 0;
     visibility: hidden;
     transform: translateY(-4px) scale(.98);
@@ -486,14 +487,14 @@
     display: flex;
     align-items: center;
     gap: 10px;
-    padding: 10px 14px;
-    font-size: .78rem;
+    padding: 10px 12px;
+    font-size: .88rem;
     color: var(--text);
     cursor: pointer;
     transition: background .1s;
     white-space: nowrap;
   }
-  .result-menu-option:hover { background: rgba(255,255,255,.06); }
+  .result-menu-option:hover { background: rgba(255,255,255,.1); }
   .result-menu-option[hidden] { display: none; }
   .result-menu-option + .result-menu-option { border-top: 1px solid var(--border); }
   .result-menu-option svg { flex: none; width: 16px; height: 16px; color: var(--muted); }

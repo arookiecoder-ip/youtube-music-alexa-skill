@@ -23,10 +23,10 @@
   .explore-card-sub { font-size: .68rem; }
 }
 
-/* Genre album shelves should use the normal card width, not six columns
-   stretched across the full desktop viewport. */
+/* Genre featured shelves (playlists and albums) should use the normal card
+   width, not six columns stretched across the full desktop viewport. */
 @media (min-width: 900px) {
-  body.mood-route .mood-albums-playlists .explore-grid--featured {
+  body.mood-route .mood-featured-playlists .explore-grid--featured {
     grid-template-columns: repeat(6, 174px);
     gap: 24px;
   }
