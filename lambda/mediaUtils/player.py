@@ -28,6 +28,15 @@ _QUEUE_BATCH = 75        # tracks fetched per window request/extension
 _MAX_STORED_TRACKS = 150  # hard bound on tracks kept in DynamoDB
 _KEEP_BEHIND = 25        # played tracks kept for "previous" before trimming
 
+# Tracks that start with less than this much remaining get their next stream
+# enqueued immediately at PlaybackStarted. Alexa only sends the
+# PlaybackNearlyFinished prompt when playback *crosses into* the final ~30s
+# window; a resume/seek that starts inside it never gets the prompt, so the
+# next track would never be queued and playback would stop at the end. Kept
+# above Alexa's threshold so the two paths overlap safely (the
+# next_stream_enqueued guard makes the later prompt a no-op).
+NEARLY_FINISHED_WINDOW_MS = 40000
+
 
 def _window_playlist(playlist: List, index: int) -> Tuple[List, int]:
     """Clamp an incoming playlist to the storable window around index,
@@ -736,6 +745,86 @@ class Controller:
             return True
         except Exception:
             logger.exception('expand_radio_queue failed')
+            return False
+
+    @staticmethod
+    def enqueue_next_stream(handler_input: HandlerInput) -> bool:
+        """Enqueue the next track in playback order (Alexa ENQUEUE directive).
+
+        Shared by the PlaybackNearlyFinished handler (Alexa's "nearly done"
+        prompt) and PlaybackStarted when a track resumes/seeks inside the final
+        ~40s — a stream that starts already inside the nearly-finished window
+        never gets that prompt, so without this the next track is never queued
+        and playback stops at the end of the current one.
+
+        Returns True iff a next stream was enqueued; False when there is
+        nothing to enqueue (already enqueued, no playlist, window extension or
+        stream lookup failed). Never raises."""
+        try:
+            playback_info = Attributes.get_playback_info(handler_input)
+            playlist = Attributes.get_playlist(handler_input)
+            playback_setting = Attributes.get_playback_setting(handler_input)
+
+            if playback_info.get("next_stream_enqueued"):
+                return False
+
+            if not playlist:
+                return False
+
+            current_index = playback_info.get("index", 0)
+            enqueue_index = (current_index + 1) % len(playlist)
+
+            if enqueue_index == 0 and not playback_setting.get("loop"):
+                # Reached the end of the stored window: page in the next batch
+                # of the source playlist from the server (or radio continuation
+                # as a fallback). This may trim long-played tracks, shifting
+                # the index.
+                if not Controller.extend_queue(handler_input):
+                    return False
+                playlist = Attributes.get_playlist(handler_input)
+                current_index = playback_info.get("index", 0)
+                enqueue_index = current_index + 1
+
+            playback_info["next_stream_enqueued"] = True
+
+            current_metadata = Attributes.get_metadata_by_play_order(handler_input, current_index)
+            enqueue_metadata = Attributes.get_metadata_by_play_order(handler_input, enqueue_index)  # playlist[enqueue_index]
+            if not current_metadata or not enqueue_metadata:
+                # Stale state; nothing sensible to enqueue. Speech is not
+                # allowed in responses to AudioPlayer events, so end quietly.
+                playback_info["next_stream_enqueued"] = False
+                return False
+            current_video_id = current_metadata.video_id
+            enqueue_video_id = enqueue_metadata.video_id
+            enqueue_stream, error = Api.get_stream(handler_input, enqueue_video_id)
+            if error:
+                logger.error(f'Could not enqueue next stream: {error}')
+                playback_info["next_stream_enqueued"] = False
+                return False
+
+            # Log all attributes ----------------------------------
+            Attributes.log_attributes(handler_input)
+            # -----------------------------------------------------
+
+            handler_input.response_builder.add_directive(
+                PlayDirective(
+                    play_behavior=PlayBehavior.ENQUEUE,
+                    audio_item=AudioItem(
+                        stream=Stream(
+                            token=enqueue_video_id,
+                            url=enqueue_stream.audio_url,
+                            offset_in_milliseconds=0,
+                            expected_previous_token=current_video_id),
+                        metadata=Attributes.get_audio_item_metadata(enqueue_metadata))))
+
+            logger.info(f'enqueue_next_stream: enqueued {enqueue_video_id} after {current_video_id} '
+                        f'(index {current_index} -> {enqueue_index})')
+            return True
+        except Exception:
+            logger.exception('enqueue_next_stream failed')
+            playback_info = Attributes.get_playback_info(handler_input)
+            if playback_info is not None:
+                playback_info["next_stream_enqueued"] = False
             return False
 
     @staticmethod

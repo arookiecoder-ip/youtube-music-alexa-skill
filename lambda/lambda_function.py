@@ -4,7 +4,6 @@ from ask_sdk_core.skill_builder import CustomSkillBuilder
 from ask_sdk_core.api_client import DefaultApiClient
 from ask_sdk_core.dispatch_components import AbstractRequestHandler, AbstractExceptionHandler, AbstractResponseInterceptor, AbstractRequestInterceptor
 from ask_sdk_core.handler_input import HandlerInput
-from ask_sdk_model.interfaces.audioplayer import PlayDirective, PlayBehavior, AudioItem, Stream
 from ask_sdk_dynamodb.adapter import DynamoDbAdapter
 from ask_sdk_model import Response
 from mediaUtils import player
@@ -615,6 +614,18 @@ class PlaybackStartedEventHandler(AbstractRequestHandler):
         # same request, so a second started webhook is unnecessary.
         player.Controller.expand_radio_queue(handler_input)
 
+        # A track that resumes/seeks inside the final ~40s never gets Alexa's
+        # PlaybackNearlyFinished prompt (it only fires when playback *crosses*
+        # into the window), so the next track would never be enqueued and
+        # playback would stop at the end. Enqueue it right away instead; the
+        # next_stream_enqueued guard makes a later NearlyFinished a no-op.
+        current_metadata = player.Attributes.get_metadata_by_play_order(handler_input)
+        duration_ms = int(getattr(current_metadata, 'duration_ms', 0) or 0) if current_metadata else 0
+        if duration_ms and int(offset_in_ms or 0) > duration_ms - player.NEARLY_FINISHED_WINDOW_MS:
+            logger.info(f'PlaybackStarted: {duration_ms - int(offset_in_ms)}ms remaining; '
+                        f'enqueueing next track now')
+            player.Controller.enqueue_next_stream(handler_input)
+
         return handler_input.response_builder.response
 
 class PlaybackFinishedEventHandler(AbstractRequestHandler):
@@ -651,6 +662,11 @@ class PlaybackStoppedEventHandler(AbstractRequestHandler):
         # playback_info["index"] = player.Attributes.get_index(handler_input)
         playback_info["offset_in_ms"] = player.Attributes.get_offset_in_ms(
             handler_input)
+        # Any stop (skill stop directive, device button, interruption) clears
+        # Alexa's AudioPlayer queue, so an already-enqueued next track is gone.
+        # Reset the flag so the next real playback re-enqueues instead of
+        # trusting a stale "already enqueued" state and stopping at the end.
+        playback_info["next_stream_enqueued"] = False
 
         # Notify server: playback stopped (voice pause, stop, or track change)
         player._notify_server(handler_input, 'stopped')
@@ -664,65 +680,11 @@ class PlaybackNearlyFinishedEventHandler(AbstractRequestHandler):
 
     def handle(self, handler_input: HandlerInput):
         logger.info("In PlaybackNearlyFinishedHandler")
-
-        playback_info = player.Attributes.get_playback_info(handler_input)
-        playlist = player.Attributes.get_playlist(handler_input)
-        playback_setting = player.Attributes.get_playback_setting(handler_input)
-
-        if playback_info.get("next_stream_enqueued"):
-            return handler_input.response_builder.response
-
-        if not playlist:
-            return handler_input.response_builder.response
-
-        current_index = playback_info.get("index", 0)
-        enqueue_index = (current_index + 1) % len(playlist)
-
-        if enqueue_index == 0 and not playback_setting.get("loop"):
-            # Reached the end of the stored window: page in the next batch of
-            # the source playlist from the server (or radio continuation as a
-            # fallback). This may trim long-played tracks, shifting the index.
-            if not player.Controller.extend_queue(handler_input):
-                return handler_input.response_builder.response
-            playlist = player.Attributes.get_playlist(handler_input)
-            current_index = playback_info.get("index", 0)
-            enqueue_index = current_index + 1
-
-        playback_info["next_stream_enqueued"] = True
-
-        current_metadata = player.Attributes.get_metadata_by_play_order(handler_input, current_index)
-        enqueue_metadata = player.Attributes.get_metadata_by_play_order(handler_input, enqueue_index) # playlist[enqueue_index]
-        if not current_metadata or not enqueue_metadata:
-            # Stale state; nothing sensible to enqueue. Speech is not allowed in
-            # responses to AudioPlayer events, so end quietly.
-            playback_info["next_stream_enqueued"] = False
-            return handler_input.response_builder.response
-        current_video_id = current_metadata.video_id
-        enqueue_video_id = enqueue_metadata.video_id
-        enqueue_stream, error = player.Api.get_stream(handler_input, enqueue_video_id)
-        if error:
-            logger.error(f'Could not enqueue next stream: {error}')
-            playback_info["next_stream_enqueued"] = False
-            return handler_input.response_builder.response
-
-        # Log all attrubutes ----------------------------------
-        player.Attributes.log_attributes(handler_input)
-        # -----------------------------------------------------
-
-        handler_input.response_builder.add_directive(
-            PlayDirective(
-                play_behavior=PlayBehavior.ENQUEUE,
-                audio_item=AudioItem(
-                    stream=Stream(
-                        token=enqueue_video_id,
-                        url=enqueue_stream.audio_url,
-                        offset_in_milliseconds=0,
-                        expected_previous_token=current_video_id),
-                    metadata=player.Attributes.get_audio_item_metadata(enqueue_metadata))))
-        
-        logger.info(f'current_video_id -> {current_video_id}, enqueue_video_id -> {enqueue_video_id}, current_index -> {current_index}, enqueue_index -> {enqueue_index}')
-
-
+        # Enqueue the next track now that this one is nearly done. Shared with
+        # PlaybackStarted (which enqueues early when a track starts inside the
+        # final window and never gets this prompt); skips internally when one
+        # is already enqueued or nothing can be enqueued.
+        player.Controller.enqueue_next_stream(handler_input)
         return handler_input.response_builder.response
 
 
