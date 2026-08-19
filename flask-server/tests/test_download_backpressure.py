@@ -1911,6 +1911,52 @@ class DispatchCoalescing(_CleanServerState):
             msg=f"the endpoint sent {len(sent)} triggers ({sent}); the Echo would "
                 f"play that many songs in turn")
 
+    def test_reused_in_flight_trigger_still_gets_a_confirmation_watchdog(self):
+        """A click that only re-arms (a trigger is already in flight) must still
+        start a confirmation watchdog for the newest song. If the in-flight
+        trigger is dropped and never serves it, the watchdog retries with a
+        fresh trigger instead of leaving the newest song silently unplayed
+        while the web remote already shows it as "playing".
+        """
+        with mock.patch.object(server, "_notify_sse"):
+            server._update_now_playing(video_id="NEWEST11111", playing=True,
+                                       playback_confirmed=False)
+        dispatched = []      # _dispatch_play_with_retry calls (initial sends)
+        sent_triggers = []   # real play_video_id calls (incl. watchdog retry)
+        # `create=True`: the test stub for alexa_remote.remote has no
+        # play_video_id; the watchdog's resend closure calls it directly.
+        with mock.patch.object(server, "_dispatch_play_with_retry",
+                               side_effect=lambda s, v, o=0: dispatched.append(v)), \
+                mock.patch.object(server.alexa_remote.remote, "play_video_id",
+                                  create=True,
+                                  side_effect=lambda s, v, o=0: sent_triggers.append(v) or None), \
+                mock.patch.object(server, "PLAYBACK_CONFIRM_TIMEOUT", 0.1), \
+                mock.patch.object(server, "PLAYBACK_CONFIRM_TIMEOUT_CACHED", 0.1), \
+                mock.patch.object(server, "PLAYBACK_CONFIRM_POLL_INTERVAL", 0.02), \
+                mock.patch.object(server, "PLAYBACK_BUFFERING_FEEDBACK_DELAY", 10.0), \
+                mock.patch.object(server.Supporting, "cached_audio_path",
+                                  staticmethod(lambda vid: None)):
+            # First click dispatches normally, leaving a trigger in flight.
+            server._schedule_play_dispatch("DEVICE1", "FIRST111111", delay=0.05)
+            time.sleep(0.25)
+            self.assertEqual(dispatched, ["FIRST111111"])
+            self.assertTrue(server._trigger_in_flight("DEVICE1"))
+            # Second click while the trigger is in flight: only re-arms, no
+            # fresh dispatch, but a confirmation watchdog must start for the
+            # newest song.
+            server._schedule_play_dispatch("DEVICE1", "NEWEST11111", delay=0.05)
+            time.sleep(0.25)
+            self.assertEqual(dispatched, ["FIRST111111"],
+                             msg="a fresh trigger must not go out while one is "
+                                 "already in flight")
+            # The in-flight trigger is never served (dropped). The watchdog for
+            # the re-armed newest song must retry it with a fresh trigger.
+            time.sleep(0.6)
+        self.assertIn("NEWEST11111", sent_triggers,
+                      msg="a re-armed song whose in-flight trigger never served "
+                          "it must be retried with a fresh trigger, not left "
+                          "silently unplayed")
+
 
 class RapidClickScenario(_CleanServerState):
     """Three rapid clicks must cost roughly one track's worth of downloads."""

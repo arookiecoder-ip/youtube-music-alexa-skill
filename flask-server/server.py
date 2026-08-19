@@ -366,8 +366,18 @@ def _schedule_play_dispatch(serial, video_id, offset_ms=0, delay=None):
         if _trigger_in_flight(serial):
             # A trigger is already on its way to Alexa and will fetch the arm we
             # just refreshed. Sending another would make the Echo play this song
-            # *and then* the next one.
+            # *and then* the next one. But that in-flight trigger can be dropped
+            # or serve an older song, so watch for confirmation: if the newest
+            # song never confirms, the watchdog retries it with a fresh trigger
+            # (or surfaces an error) instead of leaving it silently unplayed
+            # while the web remote already shows it as "playing".
             logger.info("[play-dispatch] reusing in-flight trigger for %s", video_id)
+            def _resend():
+                _arm_play(serial, video_id, offset_ms)
+                return alexa_remote.remote.play_video_id(serial, video_id, offset_ms)
+            threading.Thread(
+                target=_watch_playback_confirmation, args=(serial, video_id, _resend),
+                daemon=True).start()
             return
         try:
             _note_trigger_sent(serial)
