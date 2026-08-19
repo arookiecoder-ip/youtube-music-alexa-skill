@@ -255,6 +255,18 @@
     }, delayMs);
   }
 
+  // Restart live polling whenever the user comes back to the page. Mobile
+  // browsers can restore a backgrounded tab (or bfcache entry) with
+  // `document.hidden` still true when `visibilitychange`/`pageshow` fire, and
+  // sometimes don't fire those events at all after a long background, leaving
+  // the poller stopped and the player stuck on stale state. The `focus` event
+  // is the reliable "you returned" signal, so all three paths reconnect —
+  // `connectSSE` is idempotent, so this never double-polls.
+  function reconnectPlayback() {
+    if (!deviceEl.value) return;
+    connectSSE();
+  }
+
   document.addEventListener('visibilitychange', () => {
     // During a mixed service-worker cache update, `sse.js` can briefly run
     // alongside an older progress controller. Browsers may also expose the
@@ -263,16 +275,17 @@
       window.progress.syncLoop();
     }
     if (document.hidden) stopSSE();
-    else if (deviceEl.value) {
-      connectSSE();
+    else {
+      reconnectPlayback();
       if (window.refreshVolume) window.refreshVolume(true);
     }
   });
   window.addEventListener('pagehide', stopSSE);
-  window.addEventListener('pageshow', () => {
-    if (deviceEl.value && !document.hidden) connectSSE();
-  });
+  // pageshow fires on bfcache restore / back-navigation too: reconnect even if
+  // document.hidden is briefly true so the poller is never left stopped.
+  window.addEventListener('pageshow', reconnectPlayback);
   window.addEventListener('focus', () => {
+    reconnectPlayback();
     if (window.refreshVolume) window.refreshVolume(false);
   });
 
