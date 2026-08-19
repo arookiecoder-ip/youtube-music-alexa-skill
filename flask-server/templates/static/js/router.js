@@ -556,6 +556,7 @@
       npSection.addEventListener('transitionend', finishClose);
       npSection._closeTimer = setTimeout(finishClose, 450);
     }
+    syncPageTitle();
   };
 
   window.openNowPlayingOverlay = function() {
@@ -583,6 +584,7 @@
     // active route or the browser URL.
     if (routes['#now-playing']) routes['#now-playing']();
     if (window.syncUiState) window.syncUiState();
+    syncPageTitle();
   };
 
   window.navigateTo = function(route) {
@@ -680,6 +682,50 @@
     document.body.classList.toggle('album-route', hash.indexOf('#album/') === 0);
   }
   window.syncRouteClasses = syncRouteClasses;
+
+  // ---- Dynamic page title ----
+  // The browser tab mirrors what the user is currently viewing. Only the open
+  // now-playing screen shows the playing song (with a "- Playing" suffix); it
+  // falls back to the app name when nothing is playing there. Home and search
+  // always show the app name; detail sections show their own name (artist,
+  // playlist, album, mood, etc.) once its content has rendered.
+  var SITE_NAME = 'Music Box';
+  function syncPageTitle() {
+    var route = window.getRoute ? window.getRoute() : '#home';
+    var state = window.__appState || {};
+    var title = SITE_NAME;
+    var nowPlayingOpen = document.body.classList.contains('now-playing-route') &&
+      !document.body.classList.contains('now-playing-closing');
+
+    if (nowPlayingOpen) {
+      var track = state._currentTrack;
+      if (state.isPlaying && track && track.title) title = track.title + ' - Playing';
+    } else if (route.indexOf('#search?') === 0 || route === '#home') {
+      title = SITE_NAME;
+    } else if (route.indexOf('#artist/') === 0) {
+      var artistEl = /\/songs$/.test(route)
+        ? document.getElementById('artist-songs-title')
+        : document.querySelector('#artist-hero .artist-hero-name');
+      title = (artistEl && artistEl.textContent.trim()) || 'Artist';
+    } else if (route.indexOf('#playlist/') === 0) {
+      var playlistTitle = document.getElementById('playlist-detail-title');
+      title = (playlistTitle && playlistTitle.textContent.trim()) || 'Playlist';
+    } else if (route.indexOf('#album/') === 0) {
+      var albumTitle = document.querySelector('#collection-detail-page .playlist-detail-page-title');
+      title = (albumTitle && albumTitle.textContent.trim()) || 'Album';
+    } else if (route.indexOf('#mood/') === 0) {
+      var moodTitle = document.getElementById('mood-modal-title');
+      title = (moodTitle && moodTitle.textContent.trim()) || 'Moods and genres';
+    } else if (route === '#history') {
+      title = 'Recently Listened';
+    } else if (route === '#explore') {
+      title = 'Explore';
+    } else if (route === '#library') {
+      title = 'Library';
+    }
+    document.title = title || SITE_NAME;
+  }
+  window.syncPageTitle = syncPageTitle;
 
   function applyRoute(hash) {
     hash = hash || '#home';
@@ -909,6 +955,7 @@
     // shell after every route change so an already-playing track is restored
     // even when no new playback event arrives afterward.
     if (window.syncUiState) window.syncUiState();
+    syncPageTitle();
   }
 
   // ---- Artist links: multi-artist aware ----

@@ -548,6 +548,7 @@
     if (!overlay || !body || !params) return;
     overlay.classList.add('open');
     heading.textContent = title || 'Moods and genres';
+    if (window.syncPageTitle) window.syncPageTitle();
     const route = '#mood/' + encodeURIComponent(params) + '?title=' + encodeURIComponent(title || 'Moods and genres');
     const cached = window.consumePreload ? window.consumePreload(route) : null;
     try {

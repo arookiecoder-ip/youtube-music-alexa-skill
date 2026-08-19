@@ -325,6 +325,7 @@
         page.hidden = false;
       }
       if (titleEl) titleEl.textContent = pl.title || 'Playlist';
+      if (window.syncPageTitle) window.syncPageTitle();
 
       if (body) {
         body.innerHTML = '';
@@ -977,6 +978,7 @@
         // Update the title in the UI
         var titleEl = document.getElementById('playlist-detail-title');
         if (titleEl) titleEl.textContent = newTitle;
+        if (window.syncPageTitle) window.syncPageTitle();
         if (window.showToast) window.showToast('Playlist renamed');
         // Refresh sidebar playlists
         if (window.loadLibrary) window.loadLibrary();

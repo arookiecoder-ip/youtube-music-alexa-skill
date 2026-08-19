@@ -94,14 +94,6 @@ function _attachSwipeGesture(wrapper, inner, item) {
   const AXIS_BIAS = 1.2;
   let startX = 0, startY = 0, currentX = 0, gesture = 'pending';
 
-  const underlayNext = wrapper.querySelector('.underlay-play-next');
-  const underlayQueue = wrapper.querySelector('.underlay-add-queue');
-
-  function _setSwipeUnderlayOpacity(progress) {
-    if (underlayNext) underlayNext.style.opacity = progress > 0 ? String(Math.min(1, progress)) : '0';
-    if (underlayQueue) underlayQueue.style.opacity = progress < 0 ? String(Math.min(1, -progress)) : '0';
-  }
-
   inner.addEventListener('touchstart', (e) => {
     if (e.target.closest && e.target.closest('button, a, input, textarea, select')) return;
     if (e.touches.length !== 1) return;
@@ -113,7 +105,6 @@ function _attachSwipeGesture(wrapper, inner, item) {
     gesture = 'pending';
     wrapper.classList.remove('swiping-left', 'swiping-right');
     inner.style.transition = 'none';
-    _setSwipeUnderlayOpacity(0);
   }, { passive: true });
 
   inner.addEventListener('touchmove', (e) => {
@@ -130,7 +121,6 @@ function _attachSwipeGesture(wrapper, inner, item) {
         wrapper.classList.remove('swiping-left', 'swiping-right');
         inner.style.transition = '';
         inner.style.transform = '';
-        _setSwipeUnderlayOpacity(0);
         return;
       }
       if (absX > absY * AXIS_BIAS) gesture = 'swipe';
@@ -143,7 +133,6 @@ function _attachSwipeGesture(wrapper, inner, item) {
     wrapper.classList.toggle('swiping-right', currentX > 0);
     wrapper.classList.toggle('swiping-left', currentX < 0);
     inner.style.transform = 'translateX(' + currentX + 'px)';
-    _setSwipeUnderlayOpacity(Math.abs(currentX) / SWIPE_THRESHOLD * (currentX > 0 ? 1 : -1));
   }, { passive: false });
 
   inner.addEventListener('touchend', () => {
@@ -151,14 +140,12 @@ function _attachSwipeGesture(wrapper, inner, item) {
       inner.style.transition = '';
       inner.style.transform = '';
       wrapper.classList.remove('swiping-left', 'swiping-right');
-      _setSwipeUnderlayOpacity(0);
       gesture = 'idle';
       return;
     }
     inner.style.transition = 'transform .25s cubic-bezier(.22,1,.36,1)';
     inner.style.transform = '';
     wrapper.classList.remove('swiping-left', 'swiping-right');
-    _setSwipeUnderlayOpacity(0);
 
     // Only a committed action swipe cancels the browser's follow-up click.
     // A short horizontal wobble should still behave like a normal row tap.
@@ -184,7 +171,6 @@ function _attachSwipeGesture(wrapper, inner, item) {
     inner.style.transition = '';
     inner.style.transform = '';
     wrapper.classList.remove('swiping-left', 'swiping-right');
-    _setSwipeUnderlayOpacity(0);
     inner._swipeSuppressClick = false;
     inner._swipeAllowClick = false;
     gesture = 'idle';

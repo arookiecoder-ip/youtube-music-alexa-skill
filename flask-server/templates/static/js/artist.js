@@ -244,6 +244,7 @@
       // Do not leave a heading and arrow controls for an empty shelf.
       if (section) section.hidden = !!topSongsOnly || !Array.isArray(sectionItems[id]) || !sectionItems[id].length;
     });
+    if (window.syncPageTitle) window.syncPageTitle();
   }
 
   function renderArtistSongsPage(data) {
@@ -251,6 +252,7 @@
     var title = document.getElementById('artist-songs-title');
     if (title) title.textContent = data.artist.name || 'Songs';
     renderTopSongs(data.topSongs || [], '', true, 'artist-songs-list');
+    if (window.syncPageTitle) window.syncPageTitle();
   }
 
   function renderHero(artist) {

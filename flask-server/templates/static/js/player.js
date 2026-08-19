@@ -100,6 +100,7 @@ function syncPlayPause() {
   }
   syncTrackPlaybackIndicators();
   if (window.updateQueuePlaying) window.updateQueuePlaying(state.isPlaying);
+  if (window.syncPageTitle) window.syncPageTitle();
 }
 
 // These controls are permanent DOM nodes, so wire their proxy actions once.
@@ -310,6 +311,7 @@ function showNowPlaying(info) {
         window.closeNowPlayingOverlay();
       }
     }
+    if (window.syncPageTitle) window.syncPageTitle();
     return;
   }
   // Fingerprint: the track identity deliberately excludes the thumbnail URL.
@@ -475,6 +477,7 @@ function showNowPlaying(info) {
     syncUiState();
     updateResultsActive();
   }
+  if (window.syncPageTitle) window.syncPageTitle();
 }
 
 function refreshNpLikeButton() {

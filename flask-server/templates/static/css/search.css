@@ -330,11 +330,12 @@
     pointer-events: none;
     gap: 6px;
     z-index: 0;
-    opacity: 0;
+    visibility: hidden;
   }
   .result-swipe-wrapper.swiping-right .underlay-play-next,
   .result-swipe-wrapper.swiping-left .underlay-add-queue {
     z-index: 1;
+    visibility: visible;
   }
   .result-swipe-underlay svg { width: 16px; height: 16px; }
   .result-swipe-underlay.underlay-play-next {
@@ -955,7 +956,18 @@
     background: #050505;
   }
   body.mobile-search-open .header-search-wrap { width: 100%; overflow: visible; }
-  body.mobile-search-open .suggest-list { max-height: min(420px, calc(100dvh - 120px)); }
+  /* The fixed bar's 14px side padding insets the input from the screen edge;
+     the clear (✕) button must share that inset or it anchors to the padding-box
+     edge and floats 14px past the input's right frame, off the search bar. */
+  body.mobile-search-open .header-search-wrap .search-clear { right: 14px; }
+  /* The fixed bar's 14px side padding insets the input from the screen edge;
+     the suggestion dropdown must share that inset so it stays exactly as wide
+     as the search bar frame instead of spanning the full screen. */
+  body.mobile-search-open .suggest-list {
+    left: 14px;
+    right: 14px;
+    max-height: min(420px, calc(100dvh - 120px));
+  }
 }
 
 /* Mobile category chips: lower row, tighter padding, horizontally scrollable
@@ -1396,4 +1408,28 @@
 .hscroll-card.album-card .hscroll-card-title:hover,
 .explore-card .explore-card-title:hover {
   text-decoration-color: currentColor;
+}
+
+/* ---- Swipe: keep the row opaque while dragging ----
+   The swipe underlays are full-width layers behind the row. Rows are
+   transparent at rest (they sit on the section background), so without an
+   opaque cover the entire underlay shows through the moment a swipe starts.
+   While .swiping-* is present, force the row opaque (like .queue-item) so
+   the underlay only peeks out in the strip actually swiped. Placed at the
+   end of the file so it also beats the mobile transparent !important rules
+   (equal specificity ties resolve by source order). */
+.result-swipe-wrapper.swiping-right > .result-item-inner,
+.result-swipe-wrapper.swiping-left > .result-item-inner,
+.result-swipe-wrapper.swiping-right > .history-item,
+.result-swipe-wrapper.swiping-left > .history-item,
+.result-swipe-wrapper.swiping-right > .artist-song-row,
+.result-swipe-wrapper.swiping-left > .artist-song-row {
+  background: var(--surface) !important;
+}
+/* Search results override the row background with an ID-scoped transparent
+   rule (including a !important variant on mobile), so the same opaque cover
+   needs the #results-section scope to outrank it. */
+#results-section .result-swipe-wrapper.swiping-right > .result-item-inner,
+#results-section .result-swipe-wrapper.swiping-left > .result-item-inner {
+  background: var(--surface) !important;
 }

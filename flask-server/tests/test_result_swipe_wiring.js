@@ -48,6 +48,18 @@ check('result underlays remain available',
   !/#results-section \.result-swipe-underlay\s*\{\s*display:\s*none/.test(searchCss));
 check('artist and collection rows sit above underlay',
   /\.result-swipe-wrapper > \.history-item,\s*\.result-swipe-wrapper > \.artist-song-row/.test(searchCss));
+check('result rows turn opaque while swiping so only the swiped strip reveals the underlay',
+  /\.result-swipe-wrapper\.swiping-right > \.result-item-inner/.test(searchCss) &&
+  /\.result-swipe-wrapper\.swiping-right > \.history-item/.test(searchCss) &&
+  /\.result-swipe-wrapper\.swiping-right > \.artist-song-row/.test(searchCss) &&
+  /background: var\(--surface\) !important/.test(searchCss));
+check('search rows use an ID-scoped opaque override to beat the transparent !important rule',
+  /#results-section \.result-swipe-wrapper\.swiping-right > \.result-item-inner/.test(searchCss) &&
+  /#results-section \.result-swipe-wrapper\.swiping-left > \.result-item-inner/.test(searchCss));
+check('mobile search clear button shares the fixed bar padding so it stays inside the input frame',
+  /body\.mobile-search-open \.header-search-wrap \.search-clear \{ right: 14px; \}/.test(searchCss));
+check('mobile search suggestions match the search bar width (share the 14px inset)',
+  /body\.mobile-search-open \.suggest-list \{[\s\S]*?left: 14px;[\s\S]*?right: 14px;/.test(searchCss));
 
 check('queue right swipe toggles through toggleLike',
   /else if \(committedLike\)[\s\S]*?toggleLike\(item\)/.test(queue));

@@ -175,6 +175,8 @@
       if (window.addCollectionToQueue) window.addCollectionToQueue(tracks);
     });
     // Share the canonical YouTube Music album/single URL, not the app route.
+    if (window.syncPageTitle) window.syncPageTitle();
+
     var heroShare = hero.querySelector('.playlist-hero-share');
     if (heroShare) heroShare.addEventListener('click', async function () {
       var url = 'https://music.youtube.com/browse/' + encodeURIComponent(currentAlbumId);
