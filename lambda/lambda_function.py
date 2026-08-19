@@ -589,6 +589,9 @@ class PlaybackStartedEventHandler(AbstractRequestHandler):
 
         playback_info = player.Attributes.get_playback_info(handler_input)
         playback_info["index"] = player.Attributes.get_calculated_index(handler_input)
+        # Remember the exact token Alexa is now playing so the next ENQUEUE's
+        # expected_previous_token matches it verbatim (robust to window trims).
+        playback_info["current_token"] = handler_input.request_envelope.request.token
         playback_info["in_playback_session"] = True
         playback_info["has_previous_playback_session"] = True
         logger.info(f'playback_info -> {playback_info}')
@@ -756,6 +759,21 @@ class PlaybackFailedEventHandler(AbstractRequestHandler):
         player._notify_server(handler_input, 'stopped')
         return _without_speech(player.Controller.stop(handler_input))
 
+class ExceptionEncounteredRequestHandler(AbstractRequestHandler):
+    """Handle System.ExceptionEncountered, which Alexa sends when the skill's
+    previous response caused an error. Without a handler the dispatcher raises
+    its own DispatchException ("Unable to find a suitable request handler"),
+    masking the real error and surfacing as a second failure."""
+    def can_handle(self, handler_input):
+        return ask_utils.is_request_type("System.ExceptionEncountered")(handler_input)
+
+    def handle(self, handler_input):
+        request = handler_input.request_envelope.request
+        error = getattr(request, 'error', None)
+        cause = getattr(request, 'cause', None)
+        logger.error(f"System.ExceptionEncountered: error={error}, cause={cause}")
+        return handler_input.response_builder.response
+
 # ###################################################################
     
 
@@ -783,7 +801,9 @@ class LoadPersistenceAttributesRequestInterceptor(AbstractRequestInterceptor):
                     "next_stream_enqueued": False,
                     "in_playback_session": False,
                     "has_previous_playback_session": False,
-                    "stream_url": None
+                    "stream_url": None,
+                    "stream_url_video_id": None,
+                    "current_token": None
                 },
                 'playlist': [],
                 'saved_playlists': {},
@@ -859,6 +879,7 @@ sb.add_request_handler(PlaybackFinishedEventHandler())
 sb.add_request_handler(PlaybackStoppedEventHandler())
 sb.add_request_handler(PlaybackNearlyFinishedEventHandler())
 sb.add_request_handler(PlaybackFailedEventHandler())
+sb.add_request_handler(ExceptionEncounteredRequestHandler())
 
 # PlaybackController events (buttons in the Alexa app / on remotes)
 sb.add_request_handler(PlayCommandHandler())

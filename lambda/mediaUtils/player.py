@@ -48,6 +48,28 @@ def _window_playlist(playlist: List, index: int) -> Tuple[List, int]:
     return playlist[start:start + _MAX_STORED_TRACKS], index - start
 
 
+_TOKEN_SEPARATOR = '|'
+
+def _make_token(index: int, video_id: str) -> str:
+    """Composite AudioPlayer token encoding the logical queue index. The old
+    token was the bare video_id, so a repeated song was indistinguishable from
+    an earlier occurrence and get_calculated_index()'s .index() picked the
+    first match -- the queue then got stuck repeating that song."""
+    return f"{int(index)}{_TOKEN_SEPARATOR}{video_id}"
+
+
+def _parse_token(token: str) -> Tuple[Optional[int], str]:
+    """Return (logical_index, video_id) for a composite token, or
+    (None, token) when the token is a legacy bare video_id."""
+    if token and _TOKEN_SEPARATOR in token:
+        head, _, video_id = token.partition(_TOKEN_SEPARATOR)
+        try:
+            return int(head), video_id
+        except (TypeError, ValueError):
+            pass
+    return None, token
+
+
 def _coerce_decimals(value):
     """Recursively convert DynamoDB's Decimal (boto3's persistence adapter
     converts all numbers on save) back to int/float so dacite's strict typing
@@ -328,7 +350,11 @@ class Attributes:
 
     @staticmethod
     def get_token(handler_input: HandlerInput):
-        return handler_input.request_envelope.request.token
+        # The webhook sends this as the plain video_id; strip the composite
+        # index prefix so Flask's _valid_video_id() accepts it.
+        token = handler_input.request_envelope.request.token
+        _, video_id = _parse_token(token)
+        return video_id
 
     @staticmethod
     def get_metadata_by_play_order(handler_input: HandlerInput, index: int = None) -> player_models.Metadata:
@@ -440,17 +466,27 @@ class Attributes:
     
     @staticmethod
     def get_calculated_index(handler_input: HandlerInput) -> int:
-        current_video_id = handler_input.request_envelope.request.token
+        token = handler_input.request_envelope.request.token
+        encoded_index, video_id = _parse_token(token)
         playlist = Attributes.get_playlist(handler_input)
         play_order = Attributes.get_play_order(handler_input)
         playlist_tokens = [i.video_id for i in playlist]
+        # Composite tokens carry the logical index, which disambiguates a
+        # repeated video_id from an earlier occurrence. Trust it only while it
+        # still points at the same video (a sliding-window trim can shift the
+        # index after the token was issued).
+        if encoded_index is not None and 0 <= encoded_index < len(play_order):
+            playlist_index = play_order[encoded_index]
+            if (0 <= playlist_index < len(playlist)
+                    and playlist[playlist_index].video_id == video_id):
+                return encoded_index
         try:
-            playlist_index = playlist_tokens.index(current_video_id)
+            playlist_index = playlist_tokens.index(video_id)
             return play_order.index(playlist_index)
         except ValueError:
             # Token not in the stored playlist (state overwritten from another
             # device or a stale event); keep the current index instead of crashing.
-            logger.warning(f'Token {current_video_id} not found in stored playlist; keeping current index.')
+            logger.warning(f'Token {video_id} not found in stored playlist; keeping current index.')
             return Attributes.get_playback_info(handler_input).get("index", 0)
     
     @staticmethod
@@ -532,6 +568,7 @@ class Api:
             return None, Exception(data.SERVICE_ISSUE)
         player_info = Attributes.get_playback_info(handler_input)
         player_info['stream_url'] = stream.audio_url
+        player_info['stream_url_video_id'] = video_id
         return stream, None
 
     @staticmethod
@@ -679,6 +716,7 @@ class Controller:
             'offset_in_ms': 0,
             'play_order': [l for l in range(0, len(playlist))],
             'stream_url': song_info.stream.audio_url,
+            'stream_url_video_id': song_info.metadata.video_id,
             'queue_id': queue_id,
             'queue_offset': queue_offset,
         }
@@ -706,7 +744,8 @@ class Controller:
             'index': index,
             'offset_in_ms': max(0, int(offset_in_ms or 0)),
             'play_order': [l for l in range(0, len(playlist))],
-            'stream_url': song_info.stream.audio_url
+            'stream_url': song_info.stream.audio_url,
+            'stream_url_video_id': song_info.metadata.video_id
         }
         Attributes.set_play_order(handler_input)
         return Controller.play(handler_input, song_info, is_playback)
@@ -806,15 +845,23 @@ class Controller:
             Attributes.log_attributes(handler_input)
             # -----------------------------------------------------
 
+            enqueue_token = _make_token(enqueue_index, enqueue_video_id)
+            # expected_previous_token must equal the stream Alexa is playing
+            # right now. Reuse the exact token persisted when it started; fall
+            # back to the bare video_id for legacy sessions predating the
+            # composite-token format (their in-flight stream still has the old
+            # plain token).
+            expected_previous_token = playback_info.get('current_token') or current_video_id
+
             handler_input.response_builder.add_directive(
                 PlayDirective(
                     play_behavior=PlayBehavior.ENQUEUE,
                     audio_item=AudioItem(
                         stream=Stream(
-                            token=enqueue_video_id,
+                            token=enqueue_token,
                             url=enqueue_stream.audio_url,
                             offset_in_milliseconds=0,
-                            expected_previous_token=current_video_id),
+                            expected_previous_token=expected_previous_token),
                         metadata=Attributes.get_audio_item_metadata(enqueue_metadata))))
 
             logger.info(f'enqueue_next_stream: enqueued {enqueue_video_id} after {current_video_id} '
@@ -974,12 +1021,19 @@ class Controller:
         Attributes.log_attributes(handler_input)
         # -----------------------------------------------------
 
+        # Composite token encodes the logical index so a repeated video_id can
+        # be told apart from an earlier occurrence. Persist the exact token we
+        # send: the next ENQUEUE's expected_previous_token must match it
+        # verbatim, which stays correct even after a window trim shifts index.
+        token = _make_token(playback_info.get('index', 0), song_info.metadata.video_id)
+        playback_info['current_token'] = token
+
         response_builder.add_directive(
             PlayDirective(
                 play_behavior=play_behavior,
                 audio_item=AudioItem(
                     stream=Stream(
-                        token=song_info.metadata.video_id,
+                        token=token,
                         url=song_info.stream.audio_url,
                         offset_in_milliseconds=offset_in_ms,
                         expected_previous_token=None),
@@ -1017,7 +1071,9 @@ class Controller:
         metadata = Attributes.get_metadata_by_play_order(handler_input)
         if not metadata:
             return Controller.error_response(handler_input, data.NOTHING_TO_RESUME, is_playback)
-        if playback_info.get('stream_url'): stream = player_models.Stream(playback_info.get('stream_url'))
+        if (playback_info.get('stream_url')
+                and playback_info.get('stream_url_video_id') == metadata.video_id):
+            stream = player_models.Stream(playback_info.get('stream_url'))
         else:
             stream, error = Api.get_stream(handler_input, metadata.video_id)
             if error: return Controller.error_response(handler_input, error, is_playback)
@@ -1042,7 +1098,8 @@ class Controller:
 
         # Reuse the already-resolved stream url when we have it; only hit the API
         # when we must (avoids a round-trip on every scrub).
-        if playback_info.get('stream_url'):
+        if (playback_info.get('stream_url')
+                and playback_info.get('stream_url_video_id') == metadata.video_id):
             stream = player_models.Stream(playback_info.get('stream_url'))
         else:
             stream, error = Api.get_stream(handler_input, metadata.video_id)
