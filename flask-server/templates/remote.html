@@ -660,7 +660,10 @@
     <div class="history-page-inner">
       <div class="history-page-header"><h3>Recently Listened</h3></div>
       <div class="history-page-body" id="history-page-body">
-        <div class="history-page-empty">Loading…</div>
+        <!-- Body stays empty until the history fetch resolves. Renderer's
+             content-aware skeleton mirrors the real row layout (Today +
+             Yesterday buckets of .history-item rows), so when it lands
+             the swap is layout-stable. -->
       </div>
     </div>
   </section>

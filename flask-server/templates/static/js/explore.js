@@ -551,6 +551,7 @@
     if (window.syncPageTitle) window.syncPageTitle();
     const route = '#mood/' + encodeURIComponent(params) + '?title=' + encodeURIComponent(title || 'Moods and genres');
     const cached = window.consumePreload ? window.consumePreload(route) : null;
+    if (!cached) renderMoodPageSkeleton(body);
     try {
       const result = cached || await window.api('/api/explore/moods/?params=' + encodeURIComponent(params) + '&title=' + encodeURIComponent(title || 'music'));
       body.innerHTML = '';
@@ -589,13 +590,102 @@
     body.prepend(nav);
   }
 
+  // ── Content-aware skeletons ────────────────────────────────────────────────
+  // Mirror the real sections' dimensions so the placeholder swap is layout-
+  // stable (no reflow when real cards arrive). Both helpers return an HTML
+  // string keyed by the same classnames as the live sections.
+
+  function _exploreCardSkeletonInner() {
+    return '<div class="explore-card-skeleton">' +
+      '<div class="explore-skeleton-art"></div>' +
+      '<div class="skeleton-line skeleton-line-title"></div>' +
+      '<div class="skeleton-line skeleton-line-artist"></div>' +
+    '</div>';
+  }
+
+  function _exploreShelfSkeleton() {
+    // 6 placeholder cards fills any breakpoint's visible shelf without
+    // shrinking the last row.
+    const cards = _exploreCardSkeletonInner().repeat(6);
+    return '' +
+      '<div class="explore-section-skeleton">' +
+        '<div class="explore-section-header-skeleton">' +
+          '<div class="skeleton-line skeleton-line-heading"></div>' +
+        '</div>' +
+        '<div class="explore-grid-skeleton">' + cards + '</div>' +
+      '</div>';
+  }
+
+  function _exploreMoodsShelfSkeleton() {
+    // Mirrors the real .explore-mood-grid breakpoint count (6/4/2 cols).
+    // 24 pills = the real `visibleItems` page size on desktop.
+    const pills = '<div class="explore-mood-pill-skeleton"></div>'.repeat(24);
+    return '' +
+      '<div class="explore-section-skeleton">' +
+        '<div class="explore-section-header-skeleton">' +
+          '<div class="skeleton-line skeleton-line-heading" style="width:200px"></div>' +
+        '</div>' +
+        '<div class="explore-mood-grid-skeleton">' + pills + '</div>' +
+      '</div>';
+  }
+
+  function renderExplorePageSkeleton(body) {
+    // Quick nav (.explore-quick-nav) sits at the top of the live explore
+    // page once data is in. Mirror its 4 columns so the quick-nav row has
+    // the same vertical footprint when the rendered buttons swap in.
+    const nav = '<div class="explore-quick-nav-skeleton">' +
+      '<div class="skeleton-block"></div>'.repeat(4) +
+    '</div>';
+    // Three content shelves (New releases / Top songs / Trending) plus
+    // the Moods & genres shelf.
+    const shelves = _exploreShelfSkeleton() + _exploreShelfSkeleton() +
+      _exploreShelfSkeleton() + _exploreMoodsShelfSkeleton();
+    body.innerHTML = '' +
+      '<div class="explore-page-skeleton" role="status" aria-label="Loading Explore">' +
+        nav +
+        '<div class="explore-shelves-skeleton">' + shelves + '</div>' +
+      '</div>';
+  }
+
+  function renderMoodPageSkeleton(body) {
+    // A real mood page can show up to 4 sections: a Songs row (square
+    // song tiles in a flex shelf) and up to 3 featured tile grids
+    // (Featured / Community / Albums) using the 6/4/2-column grid.
+    // Show one of each so the placeholder's vertical rhythm matches.
+    const songsShelf =
+      '<section class="explore-section">' +
+        '<div class="explore-section-header">' +
+          '<div class="skeleton-line skeleton-line-heading" style="width:80px"></div>' +
+        '</div>' +
+        '<div class="mood-skeleton-row-shelf">' +
+          _exploreCardSkeletonInner().repeat(6) +
+        '</div>' +
+      '</section>';
+    const tileShelf = (titleWidth) =>
+      '<section class="explore-section">' +
+        '<div class="explore-section-header">' +
+          '<div class="skeleton-line skeleton-line-heading" style="width:' + titleWidth + 'px"></div>' +
+        '</div>' +
+        '<div class="mood-page-skeleton-grid">' +
+          _exploreCardSkeletonInner().repeat(6) +
+        '</div>' +
+      '</section>';
+    body.innerHTML = '' +
+      '<div class="mood-page-skeleton" role="status" aria-label="Loading">' +
+        songsShelf +
+        tileShelf(170) +
+        tileShelf(190) +
+        tileShelf(95) +
+      '</div>';
+  }
+
   async function loadExplore(force) {
     if (!state._loggedIn || loading || (loaded && !force)) return;
     const body = document.getElementById('explore-modal-body');
     if (!body) return;
     loading = true;
     const preloaded = !force && window.consumePreload && window.consumePreload('#explore');
-    if (!preloaded) body.innerHTML = '<div class="loading-spinner" role="status" aria-label="Loading"></div>';
+    if (!preloaded) renderExplorePageSkeleton(body);
     try {
       const explore = preloaded || await window.api('/api/explore/');
       if (!explore || typeof explore !== 'object') throw new Error('Empty response');

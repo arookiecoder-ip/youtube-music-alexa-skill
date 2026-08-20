@@ -2218,3 +2218,228 @@ body:not(.explore-route):not(.mood-route):not(.library-route):has(#library-modal
     overflow: visible;
   }
 }
+
+/* ============================================================
+   Content-aware skeleton loaders
+   ============================================================
+
+   The recs.css skeleton’s gradient/animation is the baseline; these rules
+   size the placeholders to match the exact shape of what each page actually
+   shows so the swap-in feels weight-stable (no layout shift, no fontwarble on
+   skeleton → real). */
+
+/* Reusable 40x40 square placeholder (matches history thumbs). */
+.skeleton-square {
+  flex: none;
+  width: 40px;
+  height: 40px;
+  border-radius: var(--radius-sm);
+  background: linear-gradient(90deg, var(--border) 25%, #2a2a2a 37%, var(--border) 63%);
+  background-size: 400% 100%;
+  animation: skeletonShimmer 1.4s ease infinite;
+}
+
+/* ---- History page skeleton (matches real .history-item rows) ---- */
+.history-page-skeleton {
+  display: flex;
+  flex-direction: column;
+}
+.history-page-skeleton .history-skeleton-bucket {
+  /* One bucket = one date group (Today, Yesterday, ...). Matches the
+     spacing the real .history-date-header sets between groups. */
+  padding: 0;
+}
+.history-page-skeleton .history-skeleton-bucket + .history-skeleton-bucket {
+  margin-top: 18px;
+}
+.history-page-skeleton .skeleton-line-heading {
+  /* Mimics the .history-date-header look (uppercase, letter-spaced) but as
+     a shimmering block. Width chosen to resemble "TODAY" / "THIS WEEK". */
+  display: block;
+  width: 78px;
+  height: 13px;
+  margin: 10px 20px var(--space-1);
+  border-radius: 4px;
+}
+.history-page-skeleton .history-skeleton-row {
+  /* Same flex layout, gap, padding as .history-item so vertical rhythm
+     stays consistent when the real list swaps in. */
+  display: flex;
+  align-items: center;
+  gap: var(--card-gap);
+  padding: var(--card-padding-y) 20px;
+}
+.history-page-skeleton .history-skeleton-row .skeleton-square {
+  background: linear-gradient(90deg, var(--border) 25%, #2a2a2a 37%, var(--border) 63%);
+  background-size: 400% 100%;
+  animation: skeletonShimmer 1.4s ease infinite;
+}
+.history-page-skeleton .history-skeleton-row .history-skeleton-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.history-page-skeleton .history-skeleton-row .skeleton-line-title {
+  width: 60%;
+  height: 13px;
+}
+.history-page-skeleton .history-skeleton-row .skeleton-line-artist {
+  width: 38%;
+  height: 11px;
+  margin-top: 0;
+}
+.history-page-skeleton .history-skeleton-row .history-skeleton-duration {
+  width: 32px;
+  height: 11px;
+  border-radius: 4px;
+}
+.history-page-skeleton .history-skeleton-row .history-skeleton-like {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  margin-left: 4px;
+}
+/* Mobile collapses the artist line to keep the row compact. */
+@media (max-width: 480px) {
+  .history-page-skeleton .history-skeleton-row .skeleton-line-artist { display: none; }
+  .history-page-skeleton .history-skeleton-row .skeleton-line-title { width: 80%; }
+}
+
+/* ---- Explore page skeleton (matches the four real sections:
+      New releases, Top songs, Trending, Moods & genres) ---- */
+.explore-page-skeleton { padding: 0 var(--space-3); }
+@media (min-width: 900px) { .explore-page-skeleton { padding: 0 40px; } }
+
+.explore-page-skeleton .explore-quick-nav-skeleton {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 14px;
+  margin-bottom: 42px;
+}
+.explore-page-skeleton .explore-quick-nav-skeleton > div {
+  height: 68px;
+  border-radius: var(--radius-sm);
+}
+@media (max-width: 620px) {
+  .explore-page-skeleton .explore-quick-nav-skeleton { grid-template-columns: repeat(2, 1fr); gap: 12px; }
+  .explore-page-skeleton .explore-quick-nav-skeleton > div { height: 58px; }
+}
+
+.explore-page-skeleton .explore-shelves-skeleton {
+  display: flex;
+  flex-direction: column;
+  gap: 26px;
+}
+.explore-page-skeleton .explore-section-skeleton + .explore-section-skeleton { margin-top: 0; }
+
+/* The real .explore-section-header is `display:flex; justify-content:space-between`.
+   The title lives on the left, scroll buttons live on the right (hidden on
+   mobile). Mirror that exact geometry so the placeholder doesn't reflow when
+   the real content swaps in. */
+.explore-page-skeleton .explore-section-header-skeleton {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 14px;
+  height: 22px;
+}
+.explore-page-skeleton .explore-section-header-skeleton .skeleton-line-heading {
+  width: 132px;
+  height: 18px;
+}
+
+/* A shelf contains a row of square cards (matching .explore-card). The
+   card width is `flex: 0 0 140px` on mobile and `174px` on desktop. Mirror
+   those dimensions so the count fits cleanly without over- or under-running
+   the viewport. */
+.explore-page-skeleton .explore-grid-skeleton {
+  display: flex;
+  gap: 16px;
+  overflow-x: hidden;
+}
+@media (min-width: 900px) { .explore-page-skeleton .explore-grid-skeleton { gap: 24px; } }
+
+.explore-page-skeleton .explore-card-skeleton {
+  flex: 0 0 140px;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+@media (min-width: 900px) { .explore-page-skeleton .explore-card-skeleton { flex-basis: 174px; } }
+
+.explore-page-skeleton .explore-card-skeleton .explore-skeleton-art {
+  width: 100%;
+  aspect-ratio: 1;
+  border-radius: 8px;
+  margin-bottom: 8px;
+  background: linear-gradient(90deg, var(--border) 25%, #2a2a2a 37%, var(--border) 63%);
+  background-size: 400% 100%;
+  animation: skeletonShimmer 1.4s ease infinite;
+}
+.explore-page-skeleton .explore-card-skeleton .skeleton-line {
+  height: 11px;
+  margin-top: 0;
+}
+.explore-page-skeleton .explore-card-skeleton .skeleton-line-title {
+  width: 80%;
+  margin-top: 8px;
+}
+.explore-page-skeleton .explore-card-skeleton .skeleton-line-artist {
+  width: 50%;
+  height: 9px;
+  margin-top: 6px;
+}
+
+/* The Moods & genres section renders as a 6-col grid of pill buttons on
+   desktop (4-col ≤1050px, 2-col ≤620px); the skeleton must match those
+   breakpoints so the grid doesn't reflow when the pills replace the
+   placeholders. */
+.explore-page-skeleton .explore-mood-grid-skeleton {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 16px 24px;
+}
+@media (max-width: 1050px) { .explore-page-skeleton .explore-mood-grid-skeleton { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; } }
+@media (max-width: 620px) { .explore-page-skeleton .explore-mood-grid-skeleton { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; } }
+.explore-page-skeleton .explore-mood-pill-skeleton {
+  height: 48px;
+  border-radius: 0;
+  background: linear-gradient(90deg, var(--border) 25%, #2a2a2a 37%, var(--border) 63%);
+  background-size: 400% 100%;
+  animation: skeletonShimmer 1.4s ease infinite;
+}
+
+/* ---- Mood/Genre page skeleton (matches shelves + featured 6-col grid) ----
+   The existing `.mood-page-skeleton-grid` rule is from an earlier version;
+   redo it to match the actual pages' card shape so the cards-to-tiles swap
+   doesn't change widths. */
+.mood-page-skeleton .mood-page-skeleton-grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 24px;
+}
+@media (max-width: 1050px) { .mood-page-skeleton .mood-page-skeleton-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 18px; } }
+@media (max-width: 620px) { .mood-page-skeleton .mood-page-skeleton-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; } }
+
+.mood-page-skeleton .mood-skeleton-row-shelf {
+  /* The songs row in real mood pages uses .home-shelf-content (horizontal
+     scroll of square song tiles), not a vertical list. Mirror that. */
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 24px;
+}
+@media (max-width: 1050px) { .mood-page-skeleton .mood-skeleton-row-shelf { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 18px; } }
+@media (max-width: 620px) { .mood-page-skeleton .mood-skeleton-row-shelf { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; } }
+
+/* Honor the user's OS preference: kill the shimmer, leave a static grey. */
+@media (prefers-reduced-motion: reduce) {
+  .skeleton-square,
+  .explore-page-skeleton .explore-card-skeleton .explore-skeleton-art,
+  .explore-page-skeleton .explore-mood-pill-skeleton {
+    animation: none;
+    background: var(--border);
+  }
+}

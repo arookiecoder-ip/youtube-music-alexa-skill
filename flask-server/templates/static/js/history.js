@@ -3,6 +3,10 @@
   const state = window.__appState = window.__appState || {};
   if (state._loggedIn === undefined) state._loggedIn = false;
   if (state._historyCache === undefined) state._historyCache = [];
+  // Track whether the history fetch has resolved at least once. Distinguishes
+  // "still loading" (show skeleton) from "loaded empty" (show the actual
+  // empty state). Flipped by `loadHistory` on either outcome.
+  if (state._historyLoaded === undefined) state._historyLoaded = false;
 
 async function loadHistory() {
   if (!state._loggedIn || window.JAM_GUEST) return;
@@ -12,6 +16,7 @@ async function loadHistory() {
     const prevTopId = state._historyCache.length ? state._historyCache[0].video_id : null;
     const newTopId  = fresh.length ? fresh[0].video_id : null;
     state._historyCache = fresh;
+    state._historyLoaded = true;
     syncHistoryTriggerVisibility();
     // Keep the page current if it is visible.
     const page = document.getElementById('history-page');
@@ -37,6 +42,12 @@ async function loadHistory() {
     }
   } catch (e) {
     console.error('Failed to load history', e);
+    state._historyLoaded = true;
+    // If the user opened the history page while the fetch was already
+    // failing, swap any stale skeleton for the empty state so the page
+    // doesn't sit at a loading indicator forever.
+    const page = document.getElementById('history-page');
+    if (page && !page.hidden) renderHistoryModalList(state._historyCache);
   }
 }
 
@@ -129,11 +140,49 @@ function _buildHistoryRow(entry) {
   return el;
 }
 
+function _renderHistorySkeletonRow() {
+  return '<div class="history-skeleton-row" aria-hidden="true">' +
+    '<span class="skeleton-square"></span>' +
+    '<span class="history-skeleton-info">' +
+      '<span class="skeleton-line skeleton-line-title"></span>' +
+      '<span class="skeleton-line skeleton-line-artist"></span>' +
+    '</span>' +
+    '<span class="skeleton-line history-skeleton-duration"></span>' +
+    '<span class="skeleton-line history-skeleton-like"></span>' +
+  '</div>';
+}
+
+function _renderHistorySkeletonBucket(rows) {
+  return '<div class="history-skeleton-bucket">' +
+    '<span class="skeleton-line skeleton-line-heading"></span>' +
+    _renderHistorySkeletonRow().repeat(rows) +
+  '</div>';
+}
+
+function renderHistoryPageSkeleton(body) {
+  // Real pages bucket rows by Today / Yesterday / This Week / Older. Until
+  // the data lands, we can’t know the exact split; show two buckets (Today +
+  // Yesterday) with sizes that approximate a typical browsing session.
+  body.innerHTML = '' +
+    '<div class="history-page-skeleton" role="status" aria-label="Loading listening history">' +
+      _renderHistorySkeletonBucket(6) +
+      _renderHistorySkeletonBucket(4) +
+    '</div>';
+}
+
 function renderHistoryModalList(history) {
   const body = document.getElementById('history-page-body');
   const items = Array.isArray(history) ? history.filter(e => e && e.video_id) : [];
   if (!body) return;
   if (items.length === 0) {
+    // Until the first fetch resolves we cannot tell "empty" apart from
+    // "still loading". Render a content-shaped skeleton (matching real
+    // .history-list rows) so the page doesn't flash a stray "No listening
+    // history yet" message during the initial load.
+    if (!state._historyLoaded) {
+      renderHistoryPageSkeleton(body);
+      return;
+    }
     body.innerHTML = '<div class="history-page-empty">No listening history yet</div>';
     return;
   }
