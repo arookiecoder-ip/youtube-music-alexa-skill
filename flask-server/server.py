@@ -5337,18 +5337,15 @@ def alexa_command():
         video_id = item.get('video_id', '')
         if not _valid_video_id(video_id):
             return error_response('That recommendation is missing a video id.', 409)
-        threading.Thread(target=Supporting.ensure_downloaded, args=(video_id,), daemon=True).start()
-        error = _dispatch_play_with_retry(serial, video_id)
-        if error:
-            return _device_dispatch_failed(error)
         thumb = item.get('thumbnail', '')
         if isinstance(thumb, dict):
             thumb = thumb.get('url', '')
-        # Record right away so "Recently Played" updates immediately, instead
-        # of waiting for the Lambda webhook (which may lag or not fire for
-        # some playback flows) -- mirrors alexa_play_queue below.
-        if not _jam_guest():
-            _record_listen(video_id, item.get('title', ''), item.get('artist', ''), thumb)
+        # Stage the optimistic now-playing first: the response the website
+        # sees is built from this snapshot, and bumping the playback
+        # generation here makes any in-flight prewarm / /proxy/ stream from
+        # the still-playing track drop instead of racing this song's audio
+        # fetch for yt-dlp slots at song-end -- the race the song-end
+        # MEDIA_ERROR_UNKNOWN crash rides on.
         _update_now_playing(playing=False,
                             title=item.get('title', ''),
                             artist=item.get('artist', ''),
@@ -5358,6 +5355,28 @@ def alexa_command():
                             position_ms=0,
                             playback_confirmed=False,
                             queue_index=target_idx)
+        # Bind the prewarm to the post-update generation (mirrors
+        # alexa_play_queue): the generation check inside ensure_downloaded
+        # then observes a *follow-up* click's bump and drops this prewarm
+        # instead of holding yt-dlp slots for a track the user already
+        # moved past.
+        generation = _current_playback_generation()
+        _ensure_audio_ready_for_play(video_id, wait=False, generation=generation)
+        # Route the trigger through the same scheduler the queue-row click
+        # path uses. Going direct (`_dispatch_play_with_retry`) bypasses the
+        # in-flight check, the debounce, and the single-confirmation
+        # watchdog -- a duplicate request during the song-end transition
+        # would otherwise stack a second REPLACE_ALL on top of the first,
+        # the second one landing while the device is still swapping between
+        # the auto-enqueued next track and the dispatched one -- and that
+        # overlap is what surfaces as AudioPlayer.PlaybackFailed /
+        # 'Device playback error' / MEDIA_ERROR_UNKNOWN.
+        _schedule_play_dispatch(serial, video_id)
+        # Record right away so "Recently Played" updates immediately, instead
+        # of waiting for the Lambda webhook (which may lag or not fire for
+        # some playback flows) -- mirrors alexa_play_queue below.
+        if not _jam_guest():
+            _record_listen(video_id, item.get('title', ''), item.get('artist', ''), thumb)
         # Queued items added without a duration (e.g. synced playlist tracks
         # that never had one) would otherwise show --:-- forever once they
         # become current -- mirrors the same fallback in alexa_play_track.
