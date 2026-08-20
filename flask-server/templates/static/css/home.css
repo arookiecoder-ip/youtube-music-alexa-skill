@@ -911,13 +911,13 @@
   body.home-route .home-shelf-viewport {
     width: auto;
     max-width: none;
-    margin: 0 16px;
+    margin: 0;
     overflow: hidden;
   }
   body.home-route .home-shelf-viewport .home-shelf-content {
     width: 100%;
     max-width: 100%;
-    padding-left: 0;
+    padding-left: 16px;
     padding-right: 0;
   }
   body.home-route,
@@ -932,12 +932,13 @@
   }
 
   /* Artist entities use circular artwork on mobile, regardless of the feed
-     shelf layout returned by the server. */
+     shelf layout returned by the server. Sized to match the other card
+     tracks (.home-item-card is 145px here) so the row reads as one grid. */
   body .home-item[data-kind="artist"] {
-    width: 120px !important;
+    width: 145px !important;
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: 7px;
     text-align: center;
   }
   body .home-item[data-kind="artist"] .home-item-img-wrapper {
@@ -1885,6 +1886,21 @@
     overflow-y: auto;
     overscroll-behavior-y: auto;
   }
+  /* Drop the global 16px body+main horizontal padding on routed pages so the
+     explore cards/section headers sit flush with the screen edge. (Home gets
+     the same treatment separately, with body padding 0 9px.) */
+  body.explore-route,
+  body.mood-route,
+  body.library-route {
+    padding-left: 0;
+    padding-right: 0;
+  }
+  body.explore-route main,
+  body.mood-route main,
+  body.library-route main {
+    padding-left: 0;
+    padding-right: 0;
+  }
   body.mood-route main {
     height: auto;
     min-height: calc(100dvh + var(--playbar-h-mobile));
@@ -2019,11 +2035,11 @@
   }
   body.mood-route .explore-grid {
     gap: 14px;
-    padding: 0 29px 6px 0;
+    padding: 0 0 6px 16px;
   }
   body.explore-route .explore-grid {
     gap: 14px;
-    padding: 0 29px 6px 0;
+    padding: 0 0 6px 16px;
     overflow-x: auto;
     overflow-y: hidden;
     touch-action: auto;
@@ -2040,6 +2056,17 @@
     touch-action: auto;
     overscroll-behavior-x: contain;
     -webkit-overflow-scrolling: touch;
+  }
+  body.explore-route .explore-section-header,
+  body.mood-route .explore-section-header {
+    padding-left: 16px;
+    padding-right: 0;
+    box-sizing: border-box;
+  }
+  body.mood-route .mood-songs-shelf .home-shelf-header {
+    padding-left: 16px;
+    padding-right: 0;
+    box-sizing: border-box;
   }
   body.explore-route .explore-card-art,
   body.mood-route .explore-card-art {
@@ -2080,7 +2107,7 @@
   body.mood-route .mood-songs-shelf .home-shelf-content {
     grid-auto-columns: 270px;
     row-gap: 1px;
-    padding: 0 29px 6px 0;
+    padding: 0 0 6px 16px;
   }
   body.mood-route .mood-songs-shelf .home-item-song .home-item-img {
     width: 42px;
@@ -2107,6 +2134,9 @@
     width: max-content;
     min-width: 100%;
     gap: 12px;
+    padding-left: 16px;
+    padding-right: 0;
+    box-sizing: border-box;
     transition: none;
     will-change: auto;
   }
@@ -2120,6 +2150,9 @@
     grid-template-columns: repeat(4, minmax(0, 1fr));
     gap: 8px;
     margin-bottom: 28px;
+    padding-left: 16px;
+    padding-right: 16px;
+    box-sizing: border-box;
   }
   body.explore-route .explore-quick-card {
     aspect-ratio: 1;

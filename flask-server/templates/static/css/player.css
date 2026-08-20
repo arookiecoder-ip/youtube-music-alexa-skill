@@ -1709,7 +1709,7 @@ body.results-open .player-section.is-visible { transform: none; }
 /* Full player overlay: preserve the page underneath completely. */
 @media (min-width: 900px) {
   body.now-playing-route,
-  body.now-playing-closing { overflow: auto !important; }
+  body.now-playing-closing { overflow: hidden !important; }
   body.now-playing-route main,
   body.now-playing-closing main {
     height: auto !important;
@@ -2012,7 +2012,7 @@ body.now-playing-route .player-section .player-expand-btn svg {
   }
   /* Safety: home route is always scrollable, even if now-playing-closing
      was not cleaned up in time (rapid navigation, timer race, etc.). */
-  body.home-route:not(.now-playing-closing) {
+  body.home-route:not(.now-playing-route):not(.now-playing-closing) {
     overflow: auto !important;
   }
   /* Do not animate the shell while the now-playing sheet is sliding away.
