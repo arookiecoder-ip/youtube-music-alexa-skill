@@ -169,26 +169,90 @@
   }
   .vol svg { flex: none; color: var(--muted); }
 
-  input[type=range] {
+  /* Scooped volume slider — desktop bar (#volume) and mobile now-playing
+     row (#mobile-np-volume). Adapted from the "Cutout Gradient Track Range
+     Slider" pen: the thumb is a hollow ring that sits in a circular cutout
+     of the track, the filled segment uses the theme accent, and the empty
+     segment uses --track-c. The fill point is driven by --val (0-100,
+     unitless), kept in sync by volume.js. Without JS (no html.js class)
+     the gradient layers collapse to zero width and a plain solid track +
+     white thumb remain as the fallback. */
+  #volume,
+  #mobile-np-volume {
+    --js: 0;
+    --not-js: calc(1 - var(--js));
+    --thumb-d: 16px;               /* thumb diameter */
+    --thumb-r: calc(var(--thumb-d) / 2);
+    --thumb-g: 4px;                /* gap between thumb edge and track cutout */
+    --track-h: 4px;                /* track height */
+    --track-r: calc(var(--thumb-r) + var(--thumb-g)); /* cutout radius */
+    --track-c: #3a302b;
+    --x: calc(var(--thumb-r) + var(--val, 50) / 100 * (100% - var(--thumb-d)));
     flex: 1;
+    min-width: 0;
     -webkit-appearance: none;
     appearance: none;
-    height: 3px;
-    background: #2a2a2a;
+    height: var(--track-h);
+    margin: 0;
+    background: transparent;
+    color: var(--accent);
+    font: inherit;
     outline: none;
     cursor: pointer;
   }
-  input[type=range]::-webkit-slider-thumb {
+  html.js #volume,
+  html.js #mobile-np-volume { --js: 1; }
+
+  #volume::-webkit-slider-runnable-track,
+  #mobile-np-volume::-webkit-slider-runnable-track {
     -webkit-appearance: none;
-    width: 14px; height: 14px;
-    background: var(--accent);
-    border: none;
+    height: var(--track-h);
+    border-radius: 999px;
+    background:
+      /* filled segment: accent up to the thumb, hole carved at its end */
+      radial-gradient(circle farthest-corner at 100% 50%,
+          transparent 0 var(--track-r), var(--accent) var(--track-r) 100%)
+        0 / calc(var(--js) * var(--x)) 100% no-repeat,
+      /* empty segment: track color after the thumb, same cutout */
+      radial-gradient(circle farthest-corner at 0 50%,
+          transparent 0 var(--track-r), var(--track-c) var(--track-r) 100%)
+        100% / calc(var(--js) * (100% - var(--x))) 100% no-repeat,
+      /* no-JS fallback: plain solid track */
+      rgba(58, 48, 43, var(--not-js));
   }
-  input[type=range]::-moz-range-thumb {
-    width: 14px; height: 14px;
-    background: var(--accent);
+  #volume::-webkit-slider-thumb,
+  #mobile-np-volume::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    box-sizing: border-box;
+    width: var(--thumb-d);
+    height: var(--thumb-d);
+    border: 3px solid;   /* ring color follows currentcolor = --accent */
+    border-radius: 50%;
+    background: rgba(255, 255, 255, var(--not-js));
+    margin-top: calc(var(--track-h) / 2 - var(--thumb-r));
+  }
+  #volume::-moz-range-track,
+  #mobile-np-volume::-moz-range-track {
+    height: var(--track-h);
     border: none;
-    border-radius: 0;
+    border-radius: 999px;
+    background:
+      radial-gradient(circle farthest-corner at 100% 50%,
+          transparent 0 var(--track-r), var(--accent) var(--track-r) 100%)
+        0 / calc(var(--js) * var(--x)) 100% no-repeat,
+      radial-gradient(circle farthest-corner at 0 50%,
+          transparent 0 var(--track-r), var(--track-c) var(--track-r) 100%)
+        100% / calc(var(--js) * (100% - var(--x))) 100% no-repeat,
+      rgba(58, 48, 43, var(--not-js));
+  }
+  #volume::-moz-range-thumb,
+  #mobile-np-volume::-moz-range-thumb {
+    box-sizing: border-box;
+    width: var(--thumb-d);
+    height: var(--thumb-d);
+    border: 3px solid;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, var(--not-js));
   }
 
 
@@ -1235,36 +1299,11 @@ main:has(#now-playing-section:not([hidden])) {
   }
   body.now-playing-route .mobile-np-volume-row input[type="range"],
   body.now-playing-closing .mobile-np-volume-row input[type="range"] {
-    --volume-level: 50%;
+    /* Visuals (scooped track + ring thumb) come from the shared
+       #mobile-np-volume rules above; this only tweaks row placement. */
     flex: 1;
     min-width: 0;
-    height: 4px;
     margin: 0;
-    border-radius: var(--radius-full);
-    background: linear-gradient(to right, var(--accent) 0 var(--volume-level), #3a302b var(--volume-level) 100%);
-    accent-color: var(--accent);
-  }
-  body.now-playing-route .mobile-np-volume-row input[type="range"]::-webkit-slider-runnable-track,
-  body.now-playing-closing .mobile-np-volume-row input[type="range"]::-webkit-slider-runnable-track {
-    height: 4px;
-    border-radius: var(--radius-full);
-    background: transparent;
-  }
-  body.now-playing-route .mobile-np-volume-row input[type="range"]::-webkit-slider-thumb,
-  body.now-playing-closing .mobile-np-volume-row input[type="range"]::-webkit-slider-thumb {
-    margin-top: -5px;
-  }
-  body.now-playing-route .mobile-np-volume-row input[type="range"]::-moz-range-track,
-  body.now-playing-closing .mobile-np-volume-row input[type="range"]::-moz-range-track {
-    height: 4px;
-    border-radius: var(--radius-full);
-    background: #3a302b;
-  }
-  body.now-playing-route .mobile-np-volume-row input[type="range"]::-moz-range-progress,
-  body.now-playing-closing .mobile-np-volume-row input[type="range"]::-moz-range-progress {
-    height: 4px;
-    border-radius: var(--radius-full);
-    background: var(--accent);
   }
   body.now-playing-route .mobile-np-volume-row .mobile-player-youtube,
   body.now-playing-closing .mobile-np-volume-row .mobile-player-youtube {

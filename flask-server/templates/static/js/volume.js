@@ -1,5 +1,8 @@
 (function () {
   'use strict';
+  // Enables the gradient-based scooped track on the volume sliders; without
+  // this class the CSS falls back to a plain solid track + thumb.
+  document.documentElement.classList.add('js');
   const state = window.__appState = window.__appState || {};
   if (state.volumeUserActive === undefined) state.volumeUserActive = false;
   if (state.volumeGraceUntil === undefined) state.volumeGraceUntil = 0;
@@ -36,9 +39,10 @@ function syncVolume(value, force) {
   clearTimeout(_volumeRepaintTimer);
   _volumeRepaintTimer = setTimeout(() => {
     volumeEl.value = v;
+    volumeEl.style.setProperty('--val', v);
     if (mobileVolumeEl) {
       mobileVolumeEl.value = v;
-      mobileVolumeEl.style.setProperty('--volume-level', v + '%');
+      mobileVolumeEl.style.setProperty('--val', v);
     }
     if (mobileVolumeValue) mobileVolumeValue.value = v;
   }, 150);
@@ -73,6 +77,7 @@ volumeEl.addEventListener('change', () => { state.volumeUserActive = false; });
 volumeEl.oninput = e => {
   state.volumeUserActive = true;
   state.volumeGraceUntil = Date.now() + state.VOLUME_GRACE_MS;
+  volumeEl.style.setProperty('--val', e.target.value);
   clearTimeout(volTimer);
   // Several separate quick clicks/taps (not one continuous drag) each land
   // more than 220ms apart, so each one's timer fired independently and sent
@@ -122,7 +127,7 @@ if (mobileVolumeEl) {
     state.volumeUserActive = true;
     state.volumeGraceUntil = Date.now() + state.VOLUME_GRACE_MS;
     volumeEl.value = e.target.value;
-    mobileVolumeEl.style.setProperty('--volume-level', e.target.value + '%');
+    mobileVolumeEl.style.setProperty('--val', e.target.value);
     if (mobileVolumeValue) mobileVolumeValue.value = e.target.value;
     clearTimeout(mobileVolTimer);
     const mySeq = ++state._volCommandSeq;
