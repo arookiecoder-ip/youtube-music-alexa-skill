@@ -730,7 +730,7 @@ _API_PATH_ROOTS = (
     '/api', '/alexa', '/proxy', '/get_stream', '/get_radio',
     '/find_stream_list', '/armed_play', '/stream_video',
     '/stream_playlist', '/get_playlist_info', '/queue_tracks',
-    '/play_genre', '/history', '/recommendations',
+    '/next_track', '/play_genre', '/history', '/recommendations',
 )
 
 
@@ -3489,6 +3489,51 @@ async def queue_tracks():
                 'duration_ms': item.get('duration_ms', 0),
             })
     return jsonify({'tracks': tracks, 'next_offset': offset + len(tracks)})
+
+
+def _resolve_next_track(queue, after_video_id):
+    """Return the authoritative next-up item in ``queue`` after ``after_video_id``.
+
+    Resolves purely from the given queue order — the server's live queue is the
+    single source of truth for what plays next, so reorders, adds/removes, and
+    shuffle all take effect immediately. Matches /queue_tracks/ by preferring
+    the *last* occurrence of the current video, so a repeated song advances to
+    the one after the occurrence that is actually playing. Returns the item
+    dict, or None when the current video isn't in the queue or is already its
+    last track (the caller then extends the queue).
+    """
+    idx = next((i for i in range(len(queue) - 1, -1, -1)
+                if queue[i].get('video_id') == after_video_id), -1)
+    if idx < 0 or idx + 1 >= len(queue):
+        return None
+    return queue[idx + 1]
+
+
+@app.route("/next_track/", methods=["GET"])
+def next_track():
+    """Authoritative next-up track in the web remote's live queue.
+
+    The Alexa skill's enqueue path is meant to call this (with
+    ``?after=<current video_id>``) to resolve what plays next, instead of
+    trusting a stale copy of the queue it holds locally. Because the answer is
+    derived from the server queue at request time, every queue mutation
+    (reorder, add/remove, shuffle) is already reflected, including changes made
+    moments before a song ends. Returns {"track": {...}} or {"track": null}
+    when the current video is gone or is last in the queue.
+    """
+    after = request.args.get("after") or ''
+    with _np_lock:
+        queue = list(_now_playing.get('queue') or [])
+    item = _resolve_next_track(queue, after)
+    if item is None:
+        return jsonify({'track': None})
+    return jsonify({'track': {
+        'title': item.get('title', ''),
+        'artist': item.get('artist', ''),
+        'video_id': item.get('video_id', ''),
+        'thumbnail': _thumbnail_metadata(item.get('thumbnail')),
+        'duration_ms': item.get('duration_ms', 0),
+    }})
 
 
 @app.route("/get_radio/", methods=["GET"])

@@ -616,6 +616,32 @@ class Api:
             return None, Exception(data.SERVICE_ISSUE)
 
     @staticmethod
+    def next_track(handler_input: HandlerInput, after_video_id: str) -> Tuple[Optional[player_models.Metadata], Optional[Exception]]:
+        """The authoritative next track as resolved by the server's live queue.
+
+        This replaces trusting the skill's own window for the immediate next
+        track. It reflects the live queue order, so a reorder / add / remove /
+        shuffle made on the web remote is already visible by the time a song
+        nearly finishes. Returns (None, None) for a genuine end-of-queue (the
+        server has no track after ``after_video_id``, or the current video is
+        no longer in its queue) — the caller then falls back to its window
+        wrap / extension logic."""
+        if not after_video_id:
+            return None, None
+        response_json, error = Api._get_json(
+            handler_input, 'next_track', {'after': after_video_id})
+        if error:
+            return None, error
+        try:
+            track = (response_json or {}).get('track')
+            if not track or not track.get('video_id'):
+                return None, None
+            return from_dict(player_models.Metadata, track), None
+        except Exception:
+            logger.exception('next_track returned unexpected shape')
+            return None, Exception(data.SERVICE_ISSUE)
+
+    @staticmethod
     def play_genre(handler_input: HandlerInput, genre: str) -> Tuple[Optional[player_models.SongInfoList], Optional[Exception]]:
         """Ask the server for a genre queue (it searches YT Music for a top
         '<genre> music' playlist and streams it). Same response shape as
@@ -811,29 +837,57 @@ class Controller:
                 return False
 
             current_index = playback_info.get("index", 0)
-            enqueue_index = (current_index + 1) % len(playlist)
-
-            if enqueue_index == 0 and not playback_setting.get("loop"):
-                # Reached the end of the stored window: page in the next batch
-                # of the source playlist from the server (or radio continuation
-                # as a fallback). This may trim long-played tracks, shifting
-                # the index.
-                if not Controller.extend_queue(handler_input):
-                    return False
-                playlist = Attributes.get_playlist(handler_input)
-                current_index = playback_info.get("index", 0)
-                enqueue_index = current_index + 1
+            current_metadata = Attributes.get_metadata_by_play_order(handler_input, current_index)
+            if not current_metadata or not current_metadata.video_id:
+                # Stale state; nothing sensible to enqueue. Speech is not
+                # allowed in responses to AudioPlayer events, so end quietly.
+                return False
+            current_video_id = current_metadata.video_id
 
             playback_info["next_stream_enqueued"] = True
 
-            current_metadata = Attributes.get_metadata_by_play_order(handler_input, current_index)
-            enqueue_metadata = Attributes.get_metadata_by_play_order(handler_input, enqueue_index)  # playlist[enqueue_index]
-            if not current_metadata or not enqueue_metadata:
-                # Stale state; nothing sensible to enqueue. Speech is not
-                # allowed in responses to AudioPlayer events, so end quietly.
+            # Authoritative next from the server's live queue. This is the
+            # single source of truth for what plays next: a reorder / add /
+            # shuffle made on the web remote (even moments before a song ends)
+            # is already reflected, and it stays correct even when the skill's
+            # window is stale.
+            authoritative, track_error = Api.next_track(handler_input, current_video_id)
+            if authoritative is not None and authoritative.video_id:
+                enqueue_index = Controller._stage_next_track(
+                    handler_input, authoritative, current_index)
+                if enqueue_index is None:
+                    playback_info["next_stream_enqueued"] = False
+                    return False
+                enqueue_metadata = Attributes.get_metadata_by_play_order(
+                    handler_input, enqueue_index)
+            else:
+                if track_error:
+                    logger.info(
+                        f'enqueue_next_stream: next_track lookup failed ({track_error}); '
+                        f'falling back to the window')
+                # No authoritative next (genuine end of queue, or current video no
+                # longer tracked): keep the previous window wrap / extension
+                # behavior so loop and radio continuation still work.
+                enqueue_index = (current_index + 1) % len(playlist)
+                if enqueue_index == 0 and not playback_setting.get("loop"):
+                    # Reached the end of the stored window: page in the next
+                    # batch from the server (or radio continuation as a
+                    # fallback). This may trim long-played tracks, shifting
+                    # the index.
+                    if not Controller.extend_queue(handler_input):
+                        playback_info["next_stream_enqueued"] = False
+                        return False
+                    playlist = Attributes.get_playlist(handler_input)
+                    current_index = playback_info.get("index", 0)
+                    enqueue_index = current_index + 1
+                enqueue_metadata = Attributes.get_metadata_by_play_order(handler_input, enqueue_index)
+                if not enqueue_metadata:
+                    playback_info["next_stream_enqueued"] = False
+                    return False
+
+            if not enqueue_metadata or not enqueue_metadata.video_id:
                 playback_info["next_stream_enqueued"] = False
                 return False
-            current_video_id = current_metadata.video_id
             enqueue_video_id = enqueue_metadata.video_id
             enqueue_stream, error = Api.get_stream(handler_input, enqueue_video_id)
             if error:
@@ -873,6 +927,66 @@ class Controller:
             if playback_info is not None:
                 playback_info["next_stream_enqueued"] = False
             return False
+
+    @staticmethod
+    def _stage_next_track(handler_input: HandlerInput, next_metadata: player_models.Metadata,
+                          current_index: int) -> Optional[int]:
+        """Reorder the skill's window so ``next_metadata`` fills the immediate
+        next play-order slot, returning that slot's index (or None if it can't
+        be staged).
+
+        Called with the authoritative next the server resolved. It makes the
+        local window agree with the live queue before enqueueing, so a
+        reorder / add / shuffle takes effect, while leaving state untouched in
+        the common case where the window already agrees. If the track isn't in
+        the window it is appended (and persisted) so enqueue bookkeeping has a
+        slot. The current track keeps its position unless a previously-played
+        slot had to move, in which case ``playback_info['index']`` is adjusted
+        to keep pointing at it.
+        """
+        try:
+            playback_info = Attributes.get_playback_info(handler_input)
+            playlist = list(Attributes.get_playlist(handler_input))
+            play_order = list(playback_info.get('play_order') or [])
+            if len(play_order) != len(playlist):
+                play_order = list(range(len(playlist)))
+            vid = next_metadata.video_id
+
+            # Already the immediate next? No mutation needed (the common case
+            # where the window and the server agree).
+            if current_index + 1 < len(play_order):
+                existing = play_order[current_index + 1]
+                if (existing < len(playlist)
+                        and playlist[existing].video_id == vid):
+                    return current_index + 1
+
+            # Ensure the track has a physical slot in the window.
+            physicals = [i for i, m in enumerate(playlist)
+                         if m.video_id == vid]
+            if not physicals:
+                playlist = playlist + [next_metadata]
+                physical = len(playlist) - 1
+                Attributes.set_playlist(handler_input, playlist)
+            else:
+                physical = physicals[0]
+
+            # Remove any existing pointer to this slot, adjusting the current
+            # index if the removed pointer sat before the current track.
+            if physical in play_order:
+                removed_at = play_order.index(physical)
+                play_order.pop(removed_at)
+                if removed_at < current_index:
+                    current_index -= 1
+                    playback_info['index'] = current_index
+
+            # Insert it into the immediate-next slot and persist the order.
+            target = min(current_index + 1, len(play_order))
+            play_order.insert(target, physical)
+            playback_info['play_order'] = play_order
+            return play_order.index(physical)
+        except Exception:
+            logger.exception('_stage_next_track failed')
+            return None
 
     @staticmethod
     def _append_tracks(handler_input: HandlerInput, new_tracks: List[player_models.Metadata]) -> bool:
