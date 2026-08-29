@@ -144,6 +144,10 @@
             if (window.broadcastQueueUpdate) window.broadcastQueueUpdate(_rafQueuedData, _rafQueuedIndex);
           } else if (window.updateQueueActive) {
             window.updateQueueActive(_rafQueuedIndex);
+            // Same queue, only the active index moved (natural advance). Keep
+            // the mobile queue sheet's highlight in step too, exactly like the
+            // queue-omitted branch below does.
+            if (window.updateQueueModalActive) window.updateQueueModalActive(_rafQueuedIndex);
             const npSection = document.getElementById('now-playing-section');
             if (npSection && !npSection.hidden && window.renderNpQueue && window._lastQueueJson) {
               try { window.renderNpQueue(JSON.parse(window._lastQueueJson), _rafQueuedIndex); } catch(_) {}

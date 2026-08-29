@@ -322,6 +322,13 @@
           window.renderNpQueue(queue, queueIndex);
         } catch(_) {}
       }
+      // Player just opened: bring the currently-playing song to the top of
+      // the inline queue when it isn't already visible, with a smooth scroll.
+      // renderNpQueue already handles a fresh full render; this covers a reopen
+      // whose queue content is unchanged (that path only does a minimal
+      // 'nearest' scroll so frequent SSE refreshes never override manual
+      // scrolling).
+      if (window.scrollQueueToCurrent) window.scrollQueueToCurrent();
     },
     '#queue': function() {
       var queueSection = document.getElementById('queue-section');

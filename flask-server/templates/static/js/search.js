@@ -1017,9 +1017,40 @@ document.addEventListener('click', _closeAllMoreMenus);
 // A context menu is anchored to the item that opened it. Dismiss it as soon
 // as the user starts interacting with a different item, even when that item
 // stops its click event before it reaches the document bubble phase.
+// Dismissing a menu must not also trigger whatever is underneath: the press
+// that closes an open menu only closes it — it never also plays a row,
+// navigates, or opens another section. By click time the menu is already
+// gone, so remember the dismissal press here and swallow that one click in
+// the capture phase below, before any section handler can see it.
+let suppressMenuDismissClick = false;
+const MENU_DISMISS_EXCLUDE = [
+  '.result-more-btn', '.queue-more-btn', '.track-more-btn',
+  '.playlist-more-btn', '.playlist-hero-more', '.np-more-btn', '.mobile-player-more'
+].join(',');
+
 document.addEventListener('pointerdown', (e) => {
-  if (!e.target.closest('.result-more-menu')) _closeAllMoreMenus();
-  if (!e.target.closest('.queue-more-menu') && window._closeAllQueueMenus) window._closeAllQueueMenus();
+  if (e.target.closest('.result-more-menu, .queue-more-menu, #np-more-menu')) return;
+  const anyMenuOpen =
+    document.querySelector('.result-more-menu.open, .queue-more-menu.open') ||
+    document.querySelector('.np-more-wrap.open, #np-more-menu.mobile-open');
+  if (anyMenuOpen &&
+      !e.target.closest(MENU_DISMISS_EXCLUDE) &&
+      !e.target.closest('input, textarea, select, [contenteditable]')) {
+    suppressMenuDismissClick = true;
+  }
+  _closeAllMoreMenus();
+  if (window._closeAllQueueMenus) window._closeAllQueueMenus();
+}, true);
+// Swallow the single click that dismissed a menu (see pointerdown above).
+// Untrusted clicks are long-press synthetic triggers and must still work.
+document.addEventListener('click', (e) => {
+  if (!suppressMenuDismissClick) return;
+  suppressMenuDismissClick = false;
+  if (!e.isTrusted) return;
+  e.preventDefault();
+  e.stopPropagation();
+  e.stopImmediatePropagation();
+  if (window._closeNpMoreMenu) window._closeNpMoreMenu();
 }, true);
 document.addEventListener('contextmenu', (e) => {
   // Only close if right-clicking outside of any menu

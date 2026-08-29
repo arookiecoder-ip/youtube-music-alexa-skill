@@ -217,37 +217,28 @@
   .ripple-overlay {
     position: absolute;
     border-radius: 50%;
-    background: rgba(0, 0, 0, 0.3);
+    background: rgba(0, 0, 0, 0.18);
     transform: scale(0);
-    animation: ripple-anim 0.45s cubic-bezier(0.25, 0.8, 0.25, 1) forwards;
+    animation: ripple-anim 0.8s cubic-bezier(0.25, 0.8, 0.25, 1) forwards;
     pointer-events: none;
     z-index: 10;
   }
 
-  /* For rounded elements, the ripple should also look rounded */
-  button:has(.ripple-overlay),
-  a:has(.ripple-overlay),
-  [role="button"]:has(.ripple-overlay),
-  .home-card:has(.ripple-overlay),
-  .explore-card:has(.ripple-overlay) {
-    border-radius: inherit;
-  }
-
   .ripple-hold {
-    background: rgba(0, 0, 0, 0.45);
-    animation: ripple-anim-hold 0.5s cubic-bezier(0.25, 0.8, 0.25, 1) forwards;
+    background: rgba(0, 0, 0, 0.28);
+    animation: ripple-anim-hold 0.9s cubic-bezier(0.25, 0.8, 0.25, 1) forwards;
   }
 
   @keyframes ripple-anim {
     to {
-      transform: scale(4);
+      transform: scale(2);
       opacity: 0;
     }
   }
 
   @keyframes ripple-anim-hold {
     0% { transform: scale(0); opacity: 1; }
-    100% { transform: scale(4); opacity: 0; }
+    100% { transform: scale(2); opacity: 0; }
   }
 
   :root {

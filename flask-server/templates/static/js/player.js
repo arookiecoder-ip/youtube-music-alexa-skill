@@ -375,49 +375,61 @@ function showNowPlaying(info) {
       const url = 'url(' + foregroundThumbnail + ')';
       const ambientUrl = 'url(' + ambientThumbnail + ')';
       const artwork = [art, npPageArt].filter(Boolean);
-      // Keep the compact player artwork on its original shelf thumbnail.
-      // Only the large expanded hero is upgraded after its HD rendition is
-      // decoded, so fetching artwork never changes the compact player.
+      // Hold both the mini-player art and the expanded hero invisible until
+      // the final image has fully loaded and decoded — never paint a
+      // half-arrived cover. A cached HD rendition was already decoded during
+      // an earlier playback update, so it is safe to paint immediately.
+      // The compact player keeps its original shelf thumbnail; only the
+      // expanded hero is upgraded after its HD rendition is decoded.
       artwork.forEach((el) => {
         el.style.backgroundImage = url;
-        el.classList.remove('image-loading');
+        el.classList.toggle('image-loading', !cachedHighRes);
         el.classList.add('has-thumb');
       });
       if (npPageArt) {
         const npPage = npPageArt.closest('.np-page');
         if (cachedHighRes) npPageArt.style.backgroundImage = 'url(' + cachedHighRes + ')';
-        npPageArt.classList.toggle('image-loading', !cachedHighRes);
         npPage.style.setProperty('--np-cover', ambientUrl);
         npPage.classList.toggle('image-loading', !cachedHighRes);
         document.body.style.setProperty('--np-cover', ambientUrl);
       }
-      // The HD image was decoded during an earlier playback update. It is
-      // already safe to paint sharply, so do not briefly blur it again.
       if (!cachedHighRes) {
       const img = new Image();
       img.onload = () => {
         if (_lastNpFingerprint !== fp) return;
+        // The shelf thumbnail is what the mini player shows — it has fully
+        // decoded, so reveal the compact art now. The expanded hero may need
+        // a sharper rendition before it is revealed.
+        if (art) art.classList.remove('image-loading');
         // Small shelf thumbnails look hazy when enlarged in the player. Keep
-        // the preview blurred while the server resolves the track's best art.
+        // the hero hidden while the server resolves the track's best art.
         const isLowResolution = img.naturalWidth < 1000 || img.naturalHeight < 600;
         if (!isLowResolution) {
           if (info.video_id) _resolvedNowPlayingArt.set(info.video_id, info.thumbnail);
-          artwork.forEach((el) => el.classList.remove('image-loading'));
-          if (npPageArt) npPageArt.closest('.np-page').classList.remove('image-loading');
+          if (npPageArt) {
+            npPageArt.classList.remove('image-loading');
+            npPageArt.closest('.np-page').classList.remove('image-loading');
+          }
           return;
         }
         upgradeLowResNowPlayingArt(info, fp, npPageArt ? [npPageArt] : [], npPageArt)
           .then((upgraded) => {
-            if (!upgraded && _lastNpFingerprint === fp) {
-              artwork.forEach((el) => el.classList.remove('image-loading'));
-              if (npPageArt) npPageArt.closest('.np-page').classList.remove('image-loading');
+            if (_lastNpFingerprint !== fp) return;
+            // The compact art was already revealed above; only the hero still
+            // needs revealing when the HD upgrade had nothing to offer.
+            if (!upgraded && npPageArt) {
+              npPageArt.classList.remove('image-loading');
+              npPageArt.closest('.np-page').classList.remove('image-loading');
             }
           });
       };
       img.onerror = () => {
         if (_lastNpFingerprint === fp) {
-          artwork.forEach((el) => el.classList.remove('image-loading'));
-          if (npPageArt) npPageArt.closest('.np-page').classList.remove('image-loading');
+          if (art) art.classList.remove('image-loading');
+          if (npPageArt) {
+            npPageArt.classList.remove('image-loading');
+            npPageArt.closest('.np-page').classList.remove('image-loading');
+          }
         }
       };
       img.src = info.thumbnail;
@@ -1642,6 +1654,9 @@ document.getElementById('shuffle-btn').addEventListener('click', async (e) => {
       menu.classList.remove('mobile-now-playing-menu');
     }
   };
+  // Exposed so a tap that dismisses an open menu (see search.js) can also
+  // close the player's more menu without re-triggering anything underneath.
+  window._closeNpMoreMenu = close;
   button.addEventListener('click', (e) => {
     e.stopPropagation();
     const open = !wrap.classList.contains('open');

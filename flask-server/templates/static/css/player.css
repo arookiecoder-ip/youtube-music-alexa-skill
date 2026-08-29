@@ -27,10 +27,16 @@
   }
   .np-art svg { color: var(--border); }
   .np-art.has-thumb svg { display: none; }
-  .np-art.image-loading { filter: blur(12px); transform: scale(1.04); }
-  .np-art { transition: filter .42s ease, transform .42s ease; }
+  /* Never expose progressive image passes: the art stays invisible until
+     its image has fully loaded and decoded, then fades in as one bitmap. */
+  .np-art.image-loading { opacity: 0; }
+  .np-art { transition: opacity .42s ease, transform .42s ease; }
 
   .np-info { flex: 1; min-width: 0; }
+  /* The compact player title is clickable (opens the full player / album).
+     Highlight it on hover like the artist name, without an underline. */
+  #np-title { cursor: pointer; transition: color .15s; }
+  #np-title:hover { color: var(--accent); }
   .np-title {
     font-weight: 600;
     font-size: var(--text-base);
@@ -597,11 +603,10 @@
 .np-page-art.has-thumb svg:not(.np-page-art-overlay svg) { display: none; }
 .np-page-art.has-thumb { box-shadow: 0 32px 80px rgba(0,0,0,.75); }
 .np-page-art.image-loading {
-  filter: blur(14px);
-  transform: scale(1.035);
+  opacity: 0;
 }
 .np-page-art {
-  transition: box-shadow .4s ease, filter .5s ease, transform .5s ease;
+  transition: box-shadow .4s ease, opacity .5s ease, transform .5s ease;
 }
 
 /* A shelf with no horizontal overflow disables both arrow buttons. Hide that
@@ -676,7 +681,13 @@
   overflow: hidden;
   text-overflow: ellipsis;
   color: var(--text);
+  cursor: pointer;
+  transition: color .15s;
 }
+/* Song title is clickable (opens the track's album in the full player). Signal
+   it on hover with a highlighted color like the artist name, never an
+   underline. */
+.np-page-title:hover { color: var(--accent); }
 
 .np-page-artist {
   font-size: .88rem;

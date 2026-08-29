@@ -236,6 +236,17 @@ function _renderedQueueRows(container) {
 // opened while mid-queue. Guarded by the row's own last-known index so
 // repeated calls with an unchanged index (frequent SSE polling) never yank
 // a user's manual scroll position back to the active row.
+//
+// `force` marks a full render (the player just opened, or the queue contents
+// themselves changed) as opposed to a lightweight highlight shift.
+//
+// IMPORTANT: the scroll must target ONLY this list's own scrollTop. Using
+// `el.scrollIntoView({ block: 'start' })` scrolls every scrollable ancestor so
+// the target lands at the top of the *viewport* — and when the list isn't its
+// own scroll area (mobile embeds the queue in the scrolling now-playing page,
+// where #np-queue-list is overflow:visible) that scrolls the ENTIRE now-playing
+// section up, shoving the artwork/header off the top. Scrolling the container
+// directly keeps the surrounding page absolutely stationary.
 function _scrollQueueRowIntoView(container, currentIndex, force) {
   if (!container) return;
   const key = String(currentIndex);
@@ -245,7 +256,26 @@ function _scrollQueueRowIntoView(container, currentIndex, force) {
   if (!row) return;
   const wrapper = row.closest('.queue-swipe-wrapper') || row;
   requestAnimationFrame(function () {
-    wrapper.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+    if (typeof container.scrollTo !== 'function') return;
+    const cRect = container.getBoundingClientRect();
+    const rRect = wrapper.getBoundingClientRect();
+    // Row fully within the list's viewport (incl. sitting below the top).
+    const fullyVisible = rRect.top >= cRect.top && rRect.bottom <= cRect.bottom;
+    if (fullyVisible) return;
+    let delta;
+    if (force) {
+      // Player opened: align the row's top with the list's top — but only if
+      // it actually fell out of view. A row already visible is left alone.
+      delta = rRect.top - cRect.top;
+    } else {
+      // Highlight shift: minimal 'nearest' adjustment so the row is visible
+      // without ever overriding manual scrolling.
+      delta = rRect.top < cRect.top
+        ? rRect.top - cRect.top
+        : rRect.bottom - cRect.bottom;
+    }
+    if (!delta) return;
+    container.scrollTo({ top: container.scrollTop + delta, behavior: 'smooth' });
   });
 }
 
@@ -483,6 +513,20 @@ function renderNpQueue(queue, currentIndex) {
   _scrollQueueRowIntoView(list, currentIndex, true);
 }
 window.renderNpQueue = renderNpQueue;
+
+// Called when the player opens/reopens so the currently-playing row sits at
+// the top of the queue. The inline queue's DOM survives a close, so a reopen
+// with unchanged content flows through renderNpQueue's `samePrefix` branch,
+// which deliberately only does a minimal 'nearest' scroll. This forces the
+// row back to the top of the visible area when it fell out of view.
+window.scrollQueueToCurrent = function (container) {
+  var list = container || document.getElementById('np-queue-list');
+  if (!list) return;
+  var currentIndex = (window.__appState && window.__appState._lastQueueIndex != null
+    ? window.__appState._lastQueueIndex
+    : (typeof window._lastQueueIndex === 'number' ? window._lastQueueIndex : 0));
+  _scrollQueueRowIntoView(list, currentIndex, true);
+};
 
 // Builds the "3-dot" more-options button + dropdown for a queue row (used by
 // both the desktop inline queue and the mobile queue popup, which otherwise
