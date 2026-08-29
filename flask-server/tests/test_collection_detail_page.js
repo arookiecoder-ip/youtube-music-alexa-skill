@@ -96,5 +96,34 @@ check('playlist route uses transparent header treatment',
 check('collection routes do not force the collapsed sidebar black',
   sidebarCss.includes(':not(.playlists-route):not(.album-route) .sidebar'));
 
+// ---- Virtualized (windowed) playlist rows (fixes jank on long playlists) ----
+// A long playlist can hold thousands of tracks; rendering and keeping every row
+// in the DOM janks the page. The renderer must window + prune rows.
+check('playlist list uses a windowed render (spacer + buildRow + renderWindow)',
+  playlists.includes('const VIRTUAL_BUFFER = 40') &&
+  playlists.includes('pl-virtual-spacer pl-virtual-top') &&
+  playlists.includes('function buildRow(track, index)') &&
+  playlists.includes('function renderWindow()') &&
+  playlists.includes('list._plVirtual = vst'));
+check('windowed render fits rows between two spacers',
+  playlists.includes('bottomSpacer.before(wrap)') &&
+  playlists.includes('topSpacer.style.height = (start * rowH) + \'px\'') &&
+  playlists.includes('bottomSpacer.style.height = ((total - end) * rowH) + \'px\''));
+check('windowed render prunes offscreen rows instead of accumulating them',
+  playlists.includes('list.querySelectorAll(\'.result-swipe-wrapper\').forEach(n => {') &&
+  playlists.includes('if (n.parentElement === list) n.remove();'));
+check('row playback source is the windowed loaded-tracks array',
+  playlists.includes('window.playCollection(vst.tracks, {') &&
+  playlists.includes('startIndex: index,'));
+check('continuation pages extend the windowed source, not raw DOM append',
+  playlists.includes('vst.tracks.push(...batch);') &&
+  !playlists.includes('appendTracks(tracks, 0)') &&
+  !playlists.includes('if (loading) list.insertBefore(wrapper, loading);'));
+check('scroll-container listeners are cleaned up between openings',
+  playlists.includes('body.__plVirtualCleanup'));
+check('spacer CSS is defined so pruned rows keep their vertical space',
+  playlistCss.includes('.pl-virtual-spacer') &&
+  playlistCss.includes('pointer-events: none'));
+
 console.log(`\ncollection-detail-page: passed=${passed} failed=${failed}`);
 process.exit(failed ? 1 : 0);

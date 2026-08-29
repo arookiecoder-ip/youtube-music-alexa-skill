@@ -333,8 +333,7 @@
         // Start row playback from the tracks already rendered/fetched in the
         // browser. Resolving every page again on the server delays the first
         // note of a large playlist substantially. Continuation pages extend
-        // this same queue source as the user scrolls.
-        const loadedTracks = tracks.slice();
+        // vst.tracks (the windowed list's source) as the user scrolls.
         const title = pl.title || 'Playlist';
         // Prefer the playlist's own/default thumbnail. Some API responses use
         // `thumbnail` while others use `thumbnails`; `image` is the fallback.
@@ -417,14 +416,32 @@
         if (tracks.length === 0) {
           list.innerHTML = '<div style="padding:24px; color:var(--muted); text-align:center;">No tracks in this playlist</div>';
         } else {
-          // Kept as the final child while paging. Rows must be inserted before
-          // it so the observer always follows the real end of the playlist.
-          let loading = null;
-          const appendTracks = (batch, startIndex) => {
-            if (startIndex > 0) loadedTracks.push(...batch);
-            batch.forEach((track, index) => {
+          // ---- Virtualized (windowed) track list --------------------------
+          // A long playlist can hold thousands of rows. Rendering every row
+          // (each carrying its own swipe/click/artist listeners and SVG action
+          // markup) and keeping them all in the DOM janks the page as scrolling
+          // accumulates them. Keep only a viewport-sized window of wrappers
+          // materialized and prune the rest. Two spacers pin the total height
+          // to trackCount * rowHeight so the scrollbar stays correct, the
+          // pagination sentinel stays at the true bottom, and pruned rows
+          // replace exactly their own vertical space — nothing visibly jumps.
+          const VIRTUAL_BUFFER = 40;
+          const topSpacer = document.createElement('div');
+          topSpacer.className = 'pl-virtual-spacer pl-virtual-top';
+          topSpacer.setAttribute('aria-hidden', 'true');
+          const bottomSpacer = document.createElement('div');
+          bottomSpacer.className = 'pl-virtual-spacer pl-virtual-bottom';
+          bottomSpacer.setAttribute('aria-hidden', 'true');
+          list.appendChild(topSpacer);
+          list.appendChild(bottomSpacer);
+
+          // Build one row for an absolute track index. Elements are reused
+          // across render passes (keyed by index), so a row keeps its loaded
+          // thumbnail and wired listeners when it scrolls back into view.
+          function buildRow(track, index) {
             const wrapper = document.createElement('div');
             wrapper.className = 'result-swipe-wrapper';
+            wrapper.dataset.index = String(index);
             const row = document.createElement('div');
             row.className = 'history-item';
             row.dataset.mobileRowPlay = 'true';
@@ -465,7 +482,7 @@
             const contextTrack = wrapper._songContextTrack;
             const trackDuration = formatTrackDuration(track);
             row.innerHTML = `
-              <div class="playlist-track-num">${startIndex + index + 1}</div>
+              <div class="playlist-track-num">${index + 1}</div>
               <div class="playlist-track-art">
                 <img data-src="${escapeHtml(thumbnail)}" class="queue-thumb" loading="lazy" alt="" onload="this.classList.add('loaded')" onerror="this.style.opacity='1'">
                 <span class="playlist-track-playback-indicator" aria-hidden="true">
@@ -480,12 +497,12 @@
               ${trackDuration ? `<div class="track-duration playlist-track-duration">${escapeHtml(trackDuration)}</div>` : ''}
               ${songActions(contextTrack, plId.toUpperCase() === 'LM')}`;
             row.onclick = () => {
-              // Use the tracks already available in the page so the selected
-              // song starts immediately. This remains a collection queue,
-              // unlike the single-song/radio playback path.
+              // Use the tracks already loaded in the page so the selected song
+              // starts immediately. This remains a collection queue, unlike
+              // the single-song/radio playback path.
               if (window.playCollection) {
-                window.playCollection(loadedTracks, {
-                  startIndex: startIndex + index,
+                window.playCollection(vst.tracks, {
+                  startIndex: index,
                   startVideoId: videoId
                 });
               }
@@ -512,21 +529,116 @@
             wireSongActions(row, contextTrack);
             if (window.attachResultSwipeGesture) window.attachResultSwipeGesture(wrapper, row, contextTrack);
             wrapper.appendChild(row);
-            if (loading) list.insertBefore(wrapper, loading);
-            else list.appendChild(wrapper);
-            });
-            if (window.syncTrackPlaybackIndicators) window.syncTrackPlaybackIndicators();
+            return wrapper;
+          }
+
+          const vst = {
+            tracks: tracks.slice(),  // all loaded tracks (grows via continuation)
+            rowH: 0,
+            rows: [],                // index -> wrapper (reused across windows)
+            startIdx: -1,
+            endIdx: -1,
+            topSpacer: topSpacer,
+            bottomSpacer: bottomSpacer,
+            bodyIsScroll: false,
+            scrollEl: null,
+            loadingNode: null
           };
-          appendTracks(tracks, 0);
-          observeLazyImages(list);
+          list._plVirtual = vst;
+
+          function bodyScrollsItself() {
+            try {
+              const ov = getComputedStyle(body).overflowY;
+              return !!ov && (ov === 'auto' || ov === 'scroll');
+            } catch (_) { return false; }
+          }
+
+          function measureRowHeight() {
+            const first = list.querySelector('.result-swipe-wrapper');
+            if (first && first.offsetHeight) return first.offsetHeight;
+            return (window.matchMedia && window.matchMedia('(max-width: 899px)').matches) ? 52 : 76;
+          }
+
+          function renderWindow() {
+            const total = vst.tracks.length;
+            if (!total) return;
+            vst.rowH = measureRowHeight();
+            const rowH = vst.rowH || 70;
+            let viewportTop = 0;
+            let viewportH = window.innerHeight || 400;
+            if (vst.bodyIsScroll && vst.scrollEl) {
+              const er = vst.scrollEl.getBoundingClientRect();
+              viewportTop = er.top;
+              if (vst.scrollEl.clientHeight) viewportH = vst.scrollEl.clientHeight;
+            }
+            const listRect = list.getBoundingClientRect();
+            let localTop = viewportTop - listRect.top;
+            if (localTop < 0) localTop = 0;
+            let start = Math.floor(localTop / rowH) - VIRTUAL_BUFFER;
+            if (start < 0) start = 0;
+            let end = Math.ceil((localTop + viewportH) / rowH) + VIRTUAL_BUFFER;
+            if (end < start) end = start;
+            if (end > total) end = total;
+            // Keep the total height == total * rowH so the scrollbar and the
+            // paginator's bottom sentinel stay correct. Updated on every pass
+            // (not only when the window moves) so continuation pages that grow
+            // the loaded set always push the sentinel to the true bottom.
+            topSpacer.style.height = (start * rowH) + 'px';
+            bottomSpacer.style.height = ((total - end) * rowH) + 'px';
+            if (start === vst.startIdx && end === vst.endIdx) return;
+            vst.startIdx = start;
+            vst.endIdx = end;
+            list.querySelectorAll('.result-swipe-wrapper').forEach(n => {
+              if (n.parentElement === list) n.remove();
+            });
+            for (let i = start; i < end; i++) {
+              let wrap = vst.rows[i];
+              if (!wrap) wrap = vst.rows[i] = buildRow(vst.tracks[i], i);
+              // Insert before the bottom spacer so the window stays between
+              // the two spacers (the continuation sentinel follows it).
+              bottomSpacer.before(wrap);
+            }
+            observeLazyImages(list);
+            if (window.syncTrackPlaybackIndicators) window.syncTrackPlaybackIndicators();
+          }
+
+          function scheduleRender() {
+            if (vst._raf) return;
+            vst._raf = requestAnimationFrame(() => {
+              vst._raf = 0;
+              renderWindow();
+            });
+          }
+
+          vst.bodyIsScroll = bodyScrollsItself();
+          vst.scrollEl = vst.bodyIsScroll ? body : (document.scrollingElement || document.documentElement);
+          const onVirtualScroll = () => scheduleRender();
+          const onVirtualResize = () => scheduleRender();
+          const onVirtualLoad = () => renderWindow();
+          // The scroll container is shared persistent DOM. Clearing the
+          // previous open's listeners prevents one callback from being added
+          // per playlist visited.
+          if (body.__plVirtualCleanup) body.__plVirtualCleanup();
+          body.__plVirtualCleanup = () => {
+            vst.scrollEl.removeEventListener('scroll', onVirtualScroll);
+            if (!vst.bodyIsScroll) window.removeEventListener('scroll', onVirtualScroll);
+            window.removeEventListener('resize', onVirtualResize);
+            window.removeEventListener('load', onVirtualLoad);
+          };
+          vst.scrollEl.addEventListener('scroll', onVirtualScroll, { passive: true });
+          if (!vst.bodyIsScroll) window.addEventListener('scroll', onVirtualScroll, { passive: true });
+          window.addEventListener('resize', onVirtualResize, { passive: true });
+          window.addEventListener('load', onVirtualLoad);
+
           // Some YouTube Music browse responses omit `has_more` despite a
           // larger declared track count. The count is authoritative for
           // keeping the continuation loader alive.
           if (pl.has_more || trackCount > tracks.length) {
-            loading = document.createElement('div');
-            loading.className = 'playlist-loading-indicator';
-            loading.innerHTML = '<span class="playlist-loading-spinner" aria-hidden="true"></span><span>Loading more songs…</span>';
-            list.appendChild(loading);
+            const loadingEl = document.createElement('div');
+            loadingEl.className = 'playlist-loading-indicator';
+            loadingEl.innerHTML = '<span class="playlist-loading-spinner" aria-hidden="true"></span><span>Loading more songs…</span>';
+            list.appendChild(loadingEl);
+            vst.loadingNode = loadingEl;
             let nextOffset = Number(pl.next_offset) || tracks.length;
             let loadingTracks = false;
             let exhausted = false;
@@ -535,20 +647,20 @@
               exhausted = true;
               loadingObserver.disconnect();
               if (scrollRoot) scrollRoot.removeEventListener('scroll', loadWhenNearEnd);
-              loading.remove();
+              if (loadingEl && loadingEl.parentElement) loadingEl.remove();
+              vst.loadingNode = null;
             };
             const loadMoreTracks = async () => {
               if (loadingTracks || exhausted || !list.isConnected) return;
               loadingTracks = true;
-              loading.classList.add('visible');
+              loadingEl.classList.add('visible');
               try {
                 const page = await window.api('/api/library/playlists/' + encodeURIComponent(plId) + '?offset=' + nextOffset + '&limit=' + PLAYLIST_PAGE_SIZE);
                 const batch = page.tracks || [];
-                // Prevent scroll anchoring from following the loading marker
-                // as it moves down. The rows currently in view must stay put.
-                const scrollTopBeforeAppend = scrollRoot ? scrollRoot.scrollTop : 0;
-                appendTracks(batch, nextOffset);
-                if (scrollRoot) scrollRoot.scrollTop = scrollTopBeforeAppend;
+                // Extend the loaded set; the windowed renderer materializes
+                // only what is near the viewport.
+                vst.tracks.push(...batch);
+                renderWindow();
                 observeLazyImages(list);
                 const returnedNextOffset = Number(page.next_offset) || (nextOffset + batch.length);
                 const declaredTotal = Number(page.trackCount) || 0;
@@ -565,12 +677,13 @@
               } catch (e) {
                 if (window.toast) window.toast('Could not load more songs', 'error');
               } finally {
-                loading.classList.remove('visible');
+                loadingEl.classList.remove('visible');
                 loadingTracks = false;
                 // Appending moves the sentinel down, which can suppress its
                 // next observer edge. Re-check after releasing the lock so a
                 // list already at the bottom continues loading.
                 requestAnimationFrame(loadWhenNearEnd);
+                scheduleRender();
               }
             };
             const loadWhenNearEnd = () => {
@@ -584,10 +697,14 @@
                 if (entry.isIntersecting) loadMoreTracks();
               });
             }, { root: scrollRoot, rootMargin: '240px 0px' });
-            loadingObserver.observe(loading);
+            loadingObserver.observe(loadingEl);
             if (scrollRoot) scrollRoot.addEventListener('scroll', loadWhenNearEnd, { passive: true });
             requestAnimationFrame(loadWhenNearEnd);
           }
+          // Render the visible window immediately; a scheduled pass reruns
+          // after the list is appended to the body so sizes are measured.
+          renderWindow();
+          scheduleRender();
           const heroPlay = renderedHero && renderedHero.querySelector('.playlist-hero-play');
           if (heroPlay) heroPlay.addEventListener('click', () => {
             if (window.playCollection) window.playCollection([], { playlistId: plId });

@@ -65,6 +65,19 @@
   transition: opacity .16s ease;
 }
 
+/* Virtualized (windowed) playlist rows: two empty spacers hold the space of
+   the pruned rows above/below the rendered window so the scrollbar length and
+   the pagination sentinel's position stay correct while far offscreen rows are
+   not materialized. Heights are set inline by playlists.js. */
+.pl-virtual-spacer {
+  flex: none;
+  height: 0;
+  margin: 0;
+  padding: 0;
+  pointer-events: none;
+}
+.pl-virtual-spacer > * { display: none; }
+
 /* Collection detail skeleton used by both cold album and playlist routes. It
    mirrors the desktop hero/track layout and collapses to the mobile stack. */
 .collection-detail-skeleton {
