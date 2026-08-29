@@ -546,7 +546,13 @@
      at the end of this component stylesheet. */
   @media (max-width: 899px) {
     body.results-open .player-section:not(.redesigned-bar) { display: none !important; }
-    body.results-open main { padding-bottom: 92px; }
+    /* The results view owns the full content width: drop the 16px side gutter
+       `main` applies to normal pages so results run edge-to-edge. */
+    body.results-open main {
+      padding-bottom: 92px;
+      padding-left: 0 !important;
+      padding-right: 0 !important;
+    }
     body.results-open .toast { bottom: calc(92px + env(safe-area-inset-bottom, 0px)); }
   }
 
@@ -557,7 +563,14 @@
       overflow: auto;
       padding-bottom: 0;
     }
-    body.results-open main { height: auto; min-height: 100dvh; }
+    /* Results own the full content width; the centered #results-section stays
+       centered on its own max-width without the surrounding main gutter. */
+    body.results-open main {
+      height: auto;
+      min-height: 100dvh;
+      padding-left: 0 !important;
+      padding-right: 0 !important;
+    }
     body.results-open .site-footer { padding: 10px 0 var(--space-5); }
     body.results-open #results-section {
       max-width: 880px;
@@ -1411,6 +1424,17 @@
 .hscroll-card.album-card .hscroll-card-title:hover,
 .explore-card .explore-card-title:hover {
   text-decoration-color: currentColor;
+}
+
+/* Mobile search artwork must not inherit the global mobile collection
+   override. The generic rule in player.css forces every .hscroll-card-art
+   square on phones; artist circles must stay round. ID-scoped +
+   higher-specificity !important beats it regardless of source order. */
+@media (max-width: 899px) {
+  #results-section .hscroll-card .hscroll-card-art.round,
+  #results-section .hscroll-card-art.round {
+    border-radius: 50% !important;
+  }
 }
 
 /* ---- Swipe: keep the row opaque while dragging ----

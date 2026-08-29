@@ -526,6 +526,16 @@ function _createSongElement(item, existingThumbsById) {
       addToQueue(item, 'last');
     });
 
+    // Like/unlike must not also start playback: stop the event from reaching
+    // the row's tap-to-play handler. Mirrors album.js/playlists.js wiring.
+    const likeBtn = inner.querySelector('.result-like-btn');
+    if (likeBtn) {
+      likeBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        if (window.toggleLike) window.toggleLike(item, likeBtn);
+      });
+    }
+
     const moreBtn = inner.querySelector('.result-more-btn');
     const moreMenu = inner.querySelector('.result-more-menu');
     moreMenu.addEventListener('click', (e) => e.stopPropagation());
@@ -989,6 +999,19 @@ function renderResults() {
     renderSearchRow('Albums', data.albums, 'album');
   } else if (state._activeCategory === 'playlists') {
     renderSearchRow('Playlists', data.playlists, 'playlist');
+  }
+
+  // Mobile: horizontal-shelf thumbnails inside a scroll container can be
+  // missed by the shared IntersectionObserver (it roots at the shelf's own
+  // scroll port), leaving artist/album/playlist cards stuck as gray skeleton
+  // placeholders indefinitely. Load them eagerly now so results always show
+  // artwork on phones — desktop keeps its lazy fade-in since the observer
+  // routes correctly there.
+  if (window.matchMedia && window.matchMedia('(max-width: 899px)').matches) {
+    list.querySelectorAll('.hscroll-card-art img[data-lazy-src]').forEach((img) => {
+      img.src = img.getAttribute('data-lazy-src');
+      img.removeAttribute('data-lazy-src');
+    });
   }
 }
 
