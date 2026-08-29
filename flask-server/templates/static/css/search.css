@@ -121,7 +121,7 @@
     max-width: none;
     height: auto;
     margin: 0 auto;
-    padding: 0 0 96px;
+    padding: 0;
     overflow: visible;
     background: none;
     border: none;
@@ -549,11 +549,10 @@
     /* The results view owns the full content width: drop the 16px side gutter
        `main` applies to normal pages so results run edge-to-edge. */
     body.results-open main {
-      padding-bottom: 92px;
+      padding-bottom: 0;
       padding-left: 0 !important;
       padding-right: 0 !important;
     }
-    body.results-open .toast { bottom: calc(92px + env(safe-area-inset-bottom, 0px)); }
   }
 
   /* Desktop redesigned results page. The legacy two-column results layout
@@ -1026,6 +1025,13 @@
   body.results-open #results-list .result-swipe-wrapper {
     touch-action: pan-y;
   }
+  /* #results-section carries a global 96px bottom padding (playbar clearance
+     for the document-scrolled desktop view). On phones the list is its own
+     scroller, so that padding only adds a blank strip below the Playlists
+     shelf — drop it. */
+  body.results-open #results-section {
+    padding-bottom: 0;
+  }
   /* Do not rely on the document's scroll height here. Some mobile WebViews
      keep the flex page root at exactly one viewport tall after a route swap,
      even when the result contents extend below it. The list is therefore the
@@ -1039,7 +1045,14 @@
     -webkit-overflow-scrolling: touch;
     overscroll-behavior-y: contain;
     touch-action: pan-y;
-    padding-bottom: calc(var(--playbar-h-mobile, 84px) + 16px);
+    padding-bottom: 0;
+  }
+  /* On phones the list is its own scroller; the shared `.hscroll-section`
+     bottom margin (var(--space-5)) would add space after the last shelf. The
+     list's own fixed height already contains the rows — drop the shelf margin
+     so the Playlists shelf ends flush with the scroll container. */
+  body.results-open #results-list .hscroll-section:last-child {
+    margin-bottom: 0;
   }
 
   .top-result-card.is-artist {
@@ -1133,6 +1146,7 @@
    ============================================================ */
 
 #results-section .section-head { padding: 0 2px; }
+#results-section .hscroll-section .section-head .label { padding-left: 16px; }
 #results-section .label {
   font-size: 1.15rem;
   font-weight: 800;
@@ -1356,6 +1370,16 @@
 /* Mobile search shelves: center artist names and keep album credits compact
    with natural wrapping for longer artist names. */
 @media (max-width: 899px) {
+  /* Artists / Playlists shelves behave like the homepage side-scrollers: cards
+     start 16px in from the left edge, but that gutter is part of the scrollable
+     area (pad on .hscroll-track), so side-swiping carries the cards under/over
+     the 16px gutters. */
+  #results-section .hscroll-track {
+    padding-left: 16px;
+    padding-right: 16px;
+    scroll-padding-inline: 16px;
+  }
+
   #results-section .hscroll-card:not(.album-card) .hscroll-card-title {
     text-align: center !important;
   }
