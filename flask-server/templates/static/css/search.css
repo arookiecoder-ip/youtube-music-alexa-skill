@@ -276,7 +276,7 @@
   }
 
   /* result-item styles now live in .result-swipe-wrapper / .result-item-inner above */
-  .result-item-inner:active { filter: brightness(1.3); transition: filter 0s; }
+  
   .result-thumb {
     width: 48px;
     height: 48px;

@@ -207,16 +207,47 @@
     user-select: none;
   }
 
-  /* Custom tap feedback for all interactive elements */
-  button:active,
-  a:active,
-  select:active,
-  .custom-select-trigger:active,
-  .custom-select-option:active,
-  .queue-item:active,
-  .suggest-item:active {
-    filter: brightness(1.3);
-    transition: filter 0s, transform 0s;
+  /* Custom tap feedback: Ripple overlay effect (YouTube Music style) */
+  .ripple-container {
+    position: relative;
+    overflow: hidden;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  .ripple-overlay {
+    position: absolute;
+    border-radius: 50%;
+    background: rgba(0, 0, 0, 0.3);
+    transform: scale(0);
+    animation: ripple-anim 0.45s cubic-bezier(0.25, 0.8, 0.25, 1) forwards;
+    pointer-events: none;
+    z-index: 10;
+  }
+
+  /* For rounded elements, the ripple should also look rounded */
+  button:has(.ripple-overlay),
+  a:has(.ripple-overlay),
+  [role="button"]:has(.ripple-overlay),
+  .home-card:has(.ripple-overlay),
+  .explore-card:has(.ripple-overlay) {
+    border-radius: inherit;
+  }
+
+  .ripple-hold {
+    background: rgba(0, 0, 0, 0.45);
+    animation: ripple-anim-hold 0.5s cubic-bezier(0.25, 0.8, 0.25, 1) forwards;
+  }
+
+  @keyframes ripple-anim {
+    to {
+      transform: scale(4);
+      opacity: 0;
+    }
+  }
+
+  @keyframes ripple-anim-hold {
+    0% { transform: scale(0); opacity: 1; }
+    100% { transform: scale(4); opacity: 0; }
   }
 
   :root {
@@ -525,7 +556,7 @@
   }
   button[hidden] { display: none; }
   button:hover { border-color: #444; }
-  button:active { filter: brightness(1.3); transition: filter 0s; }
+  button:active { /* Ripple effect handled by JS */ }
   button:disabled { opacity: .3; cursor: default; pointer-events: none; }
   /* A disabled button showing a .spin icon (Sync/Import in progress) should
      stay legible instead of fading to near-invisible like a plain disabled

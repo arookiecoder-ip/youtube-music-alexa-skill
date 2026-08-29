@@ -364,7 +364,7 @@
 .playlist-hero-shuffle:active,
 .playlist-hero-add-queue:active,
 .playlist-hero-share:active,
-.playlist-hero-more:active { transform: scale(.94); }
+.playlist-hero-more:active { /* Ripple effect handled by JS */ }
 .playlist-hero-shuffle svg,
 .playlist-hero-add-queue svg,
 .playlist-hero-share svg,

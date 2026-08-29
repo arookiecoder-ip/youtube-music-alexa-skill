@@ -713,12 +713,7 @@
   pointer-events: none;
   z-index: 1;
 }
-.home-card:active .home-card-art::before,
-.recs-tile:active .recs-tile-art::before { opacity: 1; }
-.home-card:active .home-card-art,
-.recs-tile:active .recs-tile-art {
-  box-shadow: 0 10px 28px rgba(0, 0, 0, .65);
-}
+/* Ripple effect handled by JS click-effects.js */
 
 /* YT Music-style artwork hover: darken the thumbnail without resizing it.
    The play glyph itself comes from .home-play-btn, so the overlay is
