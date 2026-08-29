@@ -480,14 +480,20 @@
     
     var displaySongs = topSongsOnly ? songs : songs.slice(0, 10);
     function playArtistSongInCollection(item, index) {
-      if (!window.playCollection) return;
-      // These rows are part of the artist's displayed song collection. Keep
-      // that collection in Up Next instead of treating the row as a fresh
-      // single-song radio request.
-      window.playCollection(songs, {
-        startIndex: index,
-        startVideoId: item.video_id || ''
-      });
+      // On the "All songs" page these rows are the whole collection, so a
+      // click keeps that collection in Up Next starting at the tapped song.
+      // On the artist page's Top songs shelf a row click must play just that
+      // song instead of dumping every top song into the queue.
+      if (topSongsOnly && window.playCollection) {
+        window.playCollection(songs, {
+          startIndex: index,
+          startVideoId: item.video_id || ''
+        });
+        return;
+      }
+      if (window.playResult) {
+        window.playResult(item, false, false);
+      }
     }
     // let, not var: the click handlers below close over `item` per iteration.
     for (let i = 0; i < displaySongs.length; i++) {

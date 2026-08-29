@@ -487,6 +487,14 @@ header {
     border-bottom: none;
     overflow: visible !important;
   }
+  /* The results view removes main's 28px side gutters (search.css), so the
+     header's -28px bleed above would shove its box past the viewport's right
+     edge and paint a horizontal scrollbar at the bottom of the page. With no
+     gutters to bleed across, the header spans main directly. */
+  body.results-open main header {
+    margin-left: 0;
+    margin-right: 0;
+  }
   /* Paint the header across the rail column too. The header DOM lives inside
      main (which starts after the rail), but visually this must be one full
      viewport row above both the sidebar and page content. */
