@@ -547,7 +547,12 @@
         var videoId = itemCard.dataset.videoId;
         var playlistId = itemCard.dataset.playlistId || '';
         var kind = itemCard.dataset.kind || '';
-        var isPlaylist = kind === 'playlist' || kind === 'station';
+        // Cards without a video id (albums, artists, unknown kinds in mixed
+        // shelves) cannot be queued or liked as individual tracks; treat them
+        // like playlists so the menu only shows Shuffle/Play (which work via
+        // the card's playlist id). Showing "Add to queue" here sent an empty
+        // video_id and the server rejected it with 400.
+        var isPlaylist = kind === 'playlist' || kind === 'station' || !videoId;
         if (isPlaylist && playlistId && window.openPlaylistContextMenu) {
           window.openPlaylistContextMenu(e, {
             id: playlistId,
