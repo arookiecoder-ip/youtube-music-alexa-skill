@@ -24,11 +24,15 @@
   }
 
   // Handle a track title before the shelf's delegated card-click handler.
-  // Cards play tracks; titles always open their album on every viewport.
+  // Cards play tracks; titles open their album on DESKTOP only. On mobile
+  // the title is part of the rectangle box and tapping it must play the
+  // track (opening the album instead made the boxes feel dead — only the
+  // small artwork/play button played).
   document.addEventListener('click', function(event) {
     const title = event.target.closest('.home-item-title');
     const card = title && title.closest('.home-item[data-kind="track"]');
     if (!card) return;
+    if (window.matchMedia && window.matchMedia('(max-width: 899px)').matches) return;
 
     event.preventDefault();
     event.stopImmediatePropagation();
@@ -365,16 +369,21 @@
           return;
       }
 
-      // Artist credits below Home songs are display-only on mobile. Prevent
-      // the delegated artist-link handler from navigating there, while
-      // preserving the existing PC behavior.
+      // Artist credits below Home songs are display-only on mobile EXCEPT on
+      // track cards, where the whole rectangle box must play on tap (the
+      // credit sits inside the box). Prevent the delegated artist-link
+      // handler from navigating on other card kinds, preserving the existing
+      // PC behavior; track-card taps fall through to the play logic below.
       var artistNameTarget = e.target.closest('.artist-name');
       if (artistNameTarget) {
-        if (window.matchMedia && window.matchMedia('(max-width: 899px)').matches) {
+        var artistCard = artistNameTarget.closest('.home-item');
+        var artistIsTrackCard = !!(artistCard && artistCard.dataset.kind === 'track');
+        var isMobileViewport = window.matchMedia && window.matchMedia('(max-width: 899px)').matches;
+        if (isMobileViewport && !artistIsTrackCard) {
           e.preventDefault();
           e.stopPropagation();
         }
-        return;
+        if (!(isMobileViewport && artistIsTrackCard)) return;
       }
 
       var playBtn = e.target.closest('.home-play-btn');
