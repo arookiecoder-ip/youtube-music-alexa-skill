@@ -1086,14 +1086,19 @@ main:has(#now-playing-section:not([hidden])) {
     box-sizing: border-box !important;
     background: #0b0503 !important;
     isolation: isolate;
+    /* YT Music-style entrance: the sheet is pre-scaled down toward the
+       bottom bar (transform-origin at bottom center) so opening it looks
+       like the mini player "building up" into the full player. */
     opacity: 0;
-    transform: translateY(100%);
-    transition: transform .32s cubic-bezier(.22,1,.36,1), opacity .2s ease;
+    transform: translateY(30%) scale(0.62);
+    transform-origin: 50% 100%;
+    transition: transform .36s cubic-bezier(.22,1,.36,1), opacity .25s ease;
     pointer-events: none;
   }
   body.now-playing-route #now-playing-section:not([hidden]) {
     opacity: 1;
-    transform: translateY(0);
+    transform: translateY(0) scale(1);
+    transform-origin: 50% 100%;
     pointer-events: auto;
   }
 
@@ -1214,36 +1219,25 @@ main:has(#now-playing-section:not([hidden])) {
     min-height: var(--playbar-h-mobile) !important;
     padding: 5px 10px !important;
     border-radius: 0 !important;
-    bottom: 0 !important;
     transform: none !important;
   }
 
-  /* Reverse the opening slide during route close. */
+  /* YT Music-style minimize: the full player folds down into the mini bar.
+     The sheet scales toward the bottom-center (the mini player's position)
+     while sliding down and fading, instead of a flat slide-off. Its z-index
+     drops below the mini bar (650) so the compact player stays fully visible
+     and the sheet collapses down BEHIND it — instead of covering the bar and
+     only popping it in at the very end (which looked like the bar being
+     pushed up). */
   body.now-playing-closing #now-playing-section:not([hidden]) {
-    opacity: 1 !important;
-    transform: translateY(100%) !important;
-    pointer-events: none !important;
-    transition: transform .32s cubic-bezier(.22,1,.36,1) !important;
-  }
-
-  /* Final cascade: compact player exits while expanded player is open. */
-  body.now-playing-route .player-section {
+    /* Simple fade-out close: the sheet stays put and just dissolves in
+       place. z-index stays below the mini bar (650) so the compact player is
+       already settled and visible underneath the whole time. */
     opacity: 0 !important;
-    transform: translateY(100%) !important;
-    pointer-events: none !important;
-    transition: transform .32s cubic-bezier(.22,1,.36,1), opacity .2s ease !important;
-  }
-  body.now-playing-closing .player-section {
-    opacity: 1 !important;
     transform: none !important;
-    pointer-events: auto !important;
-    /* The expanded sheet is the only moving layer during dismissal. Let it
-       uncover an already-settled mini player instead of starting the mini
-       player's own opacity/translate transition underneath it. */
-    transition: none !important;
-    background: #111 !important;
-    backdrop-filter: none !important;
-    -webkit-backdrop-filter: none !important;
+    pointer-events: none !important;
+    z-index: 640 !important;
+    transition: opacity .2s ease !important;
   }
 
   body.now-playing-route .mobile-player-close,
@@ -2969,10 +2963,13 @@ body.now-playing-route .player-section .player-expand-btn svg {
     -webkit-backdrop-filter: none;
   }
 
-  /* Keep compact player pinned while popup/page content scrolls. */
+  /* Keep compact player pinned while popup/page content scrolls. bottom: 0
+     matches the bar's resting rule (so removing the now-playing classes after
+     close does not roll bottom from -8px to 0px and nudge the bar up — the
+     visible "pushed up" jump at the end of minimize). */
   body.now-playing-route .player-section {
     position: fixed !important;
-    bottom: -8px !important;
+    bottom: 0 !important;
     margin-bottom: 0 !important;
     transform: none !important;
   }
@@ -2984,10 +2981,20 @@ body.now-playing-route .player-section .player-expand-btn svg {
     pointer-events: none !important;
     transition: transform .32s cubic-bezier(.22,1,.36,1), opacity .2s ease !important;
   }
+  /* Single canonical source for the compact mini-player bar during open and
+     close (Block A's duplicate was removed). While both now-playing classes
+     are on body during the close, this later rule wins the cascade, so it
+     must keep transition: none — otherwise the route rule's `transition:
+     transform .32s` animates the mini player up from translateY(100%) under
+     the folding sheet (the visible mini-player flicker on minimize). */
   body.now-playing-closing .player-section {
     opacity: 1 !important;
     transform: none !important;
     pointer-events: auto !important;
+    transition: none !important;
+    background: #111 !important;
+    backdrop-filter: none !important;
+    -webkit-backdrop-filter: none !important;
   }
 
   /* Expanded player occupies only space between persistent chrome layers. */
@@ -3311,10 +3318,10 @@ body.results-open .player-section {
        starts. The title text itself is re-enabled below so it stays clickable. */
     pointer-events: none;
   }
-  body.now-playing-route .np-page-meta .np-page-title,
-  body.now-playing-closing .np-page-meta .np-page-title {
-    pointer-events: auto;
-  }
+  /* The title text passes through too (no pointer-events re-enable): the
+     music name overlaps the banner's bottom edge, and swiping over it should
+     still skip tracks. The title is a plain div with no click handler, so
+     nothing is lost by letting touches reach the art beneath. */
   body.now-playing-route .np-page-title-row,
   body.now-playing-closing .np-page-title-row {
     grid-template-columns: 1fr;
