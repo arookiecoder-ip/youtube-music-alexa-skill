@@ -11,8 +11,6 @@ body.jam-guest {
   overflow-x: hidden;
 }
 
-body.jam-guest::before { display: none; }
-
 body.jam-guest #jam-main,
 body.jam-guest #jam-main.idle,
 body.jam-guest.results-open #jam-main {

@@ -297,15 +297,6 @@
     scrollbar-gutter: stable;
   }
 
-  body::before {
-    content: '';
-    position: fixed;
-    top: 0; left: 0; right: 0;
-    height: 3px;
-    background: var(--accent);
-    z-index: 100;
-  }
-
   main {
     width: 100%;
     max-width: 560px;
@@ -1309,11 +1300,6 @@ html { scrollbar-gutter: stable; }
    scrolling. Without a reserved gutter the scrollbar appears/disappears and
    the homepage or playlist visibly jumps sideways during close animations. */
 body { scrollbar-gutter: stable; }
-
-/* The old permanent orange brand line added visual noise. */
-body::before {
-  display: none;
-}
 
 /* Temporary request progress remains visible at the viewport edge. */
 .top-progress-bar {
