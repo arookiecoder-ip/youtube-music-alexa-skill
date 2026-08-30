@@ -104,7 +104,19 @@
     if (!btn) return;
     var heartFilled = '<svg viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="1" stroke-linecap="round"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg>';
     var heartEmpty = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg>';
-    btn.innerHTML = liked ? heartFilled : heartEmpty;
+    var svg = liked ? heartFilled : heartEmpty;
+    // Keep the label under the icon (mobile action box): swap only the heart
+    // SVG instead of replacing the whole innerHTML. Icon-only buttons (no
+    // .mobile-np-action-label) behave as before.
+    var label = btn.querySelector('.mobile-np-action-label');
+    if (label) {
+      var oldSvg = btn.querySelector('svg');
+      if (oldSvg) oldSvg.remove();
+      btn.insertAdjacentHTML('afterbegin', svg);
+      label.textContent = liked ? 'Dislike' : 'Like';
+    } else {
+      btn.innerHTML = svg;
+    }
     btn.classList.toggle('liked', !!liked);
     btn.title = liked ? 'Dislike' : 'Like';
   }
