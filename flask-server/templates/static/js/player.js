@@ -144,14 +144,35 @@ const _pendingNowPlayingArt = new Map();
 // the queue's own SSE-poll catching a remote change. Skipped while a
 // swipe-exit is still in flight so we don't yank the artwork away from the
 // gesture trajectory in the middle of its slide-off.
+let _lastSwapInAt = 0;
+
 function playArtworkSwapIn() {
   const art = document.getElementById('np-page-art');
   if (!art) return;
+  // Coalesce rapid successive updates into a single banner animation. On a
+  // track change the server can emit several correlated snapshots within a
+  // moment (a leaning one, then a richer one with slightly different artist
+  // text), each with a distinct fingerprint, so showNowPlaying() would run
+  // this animation back-to-back — the banner visibly flickers/fades twice
+  // before settling. Skipping any call within a short window after a swap
+  // just played means only the first of the burst animates; later, genuinely
+  // new tracks animate normally again.
+  const now = Date.now();
+  if (now - _lastSwapInAt < 500) return;
+  _lastSwapInAt = now;
   // The swipe-exit sets inline `translateX(\u00b1120vw)`. While that transform is
   // active, the swipe handler's transitionend hasn't run yet, so fighting
   // it with a fresh keyframe frame would clip the artwork's exit short.
   const inline = art.style.transform;
   if (inline && inline !== 'none' && inline !== '') return;
+  // Banner shift direction: a nav swipe records the direction on the artwork so
+  // the incoming banner slides in from the opposite edge ("next" -> from the
+  // right, "previous" -> from the left). Voice/auto changes default to a forward
+  // slide from the right; the recorded direction is consumed so a later change
+  // never replays a stale side.
+  const npDir = art.dataset.navDirection;
+  art.style.setProperty('--np-in-x', npDir === 'previous' ? '-70vw' : '70vw');
+  delete art.dataset.navDirection;
   const meta = document.querySelector('.np-page-meta');
   const targets = art ? [art] : [];
   if (meta) targets.push(meta);
@@ -504,9 +525,21 @@ function refreshNpLikeButton() {
     if (!btn) continue;
     btn.classList.toggle('liked', isLiked);
     btn.title = isLiked ? 'Dislike' : 'Like';
-    btn.innerHTML = id === 'np-menu-like'
-      ? svg + `<span>${isLiked ? 'Dislike' : 'Like'}</span>`
-      : svg;
+    if (id === 'np-menu-like') {
+      btn.innerHTML = svg + `<span>${isLiked ? 'Dislike' : 'Like'}</span>`;
+    } else {
+      // Mobile action box carries a label under its icon (Like/Shuffle/etc.) —
+      // swap only the heart so the label isn't wiped by the rewrite.
+      const label = btn.querySelector('.mobile-np-action-label');
+      if (label) {
+        const oldSvg = btn.querySelector('svg');
+        if (oldSvg) oldSvg.remove();
+        btn.insertAdjacentHTML('afterbegin', svg);
+        label.textContent = isLiked ? 'Dislike' : 'Like';
+      } else {
+        btn.innerHTML = svg;
+      }
+    }
   }
 }
 
@@ -1851,8 +1884,13 @@ for (const btn of document.querySelectorAll('[data-action="previous"], [data-act
   const art = document.getElementById('np-page-art');
   if (!art) return;
 
-  const SWIPE_DISTANCE_PX = 50;       // simple distance commit threshold
-  const SWIPE_VELOCITY_PX_MS = 0.45;  // flick win (avoids a 12 px jitter commit)
+  // Drag-and-release commits only once the next/previous banner has been
+  // revealed past half its width (i.e. the finger is lifted while it holds
+  // more than 50% of the banner). A quick swipe (fast flick) is a separate
+  // path and commits on velocity regardless of distance. Slow drags that never
+  // reach 50% spring back and the current song stays.
+  const SWIPE_DISTANCE_FRACTION = 0.5;  // reveal threshold = 50% of banner width
+  const SWIPE_VELOCITY_PX_MS = 0.45;    // quick-swipe flicks win on velocity
   const AXIS_LOCK_PX = 8;             // pointer must travel this far to commit axis
   const AXIS_BIAS = 1.25;             // vertical wins when |dy| > |dx| * bias
   const RESISTANCE_START_PX = 240;    // start dampening once past the artwork width
@@ -2055,6 +2093,9 @@ for (const btn of document.querySelectorAll('[data-action="previous"], [data-act
       return;
     }
     const direction = wasActive.lastX < wasActive.startX ? 'next' : 'previous';
+    // Remember the incoming-track side so the swap-in banner can slide in from
+    // the opposite edge ("next" -> from the right, "previous" -> from the left).
+    art.dataset.navDirection = direction;
     art._swipeSuppressClick = true;
     setTimeout(() => { art._swipeSuppressClick = false; }, SUPPRESS_CLICK_MS);
     // Show instantaneous confirmation (haptic + small pill) before the
@@ -2071,8 +2112,12 @@ for (const btn of document.querySelectorAll('[data-action="previous"], [data-act
     const dx = active.lastX - active.startX;
     const dt = Math.max(1, performance.now() - active.startedAt);
     const velocity = Math.abs(dx) / dt;
+    // Commit on drag-and-release only once the banner is revealed past 50% of
+    // its own width; otherwise the gesture springs back and the current song
+    // stays. A quick swipe (velocity) still commits at any distance.
+    const revealThreshold = art.clientWidth * SWIPE_DISTANCE_FRACTION;
     const committed = active.axis === 'h' &&
-      (Math.abs(dx) >= SWIPE_DISTANCE_PX || velocity >= SWIPE_VELOCITY_PX_MS);
+      (Math.abs(dx) >= revealThreshold || velocity >= SWIPE_VELOCITY_PX_MS);
     endGesture(committed);
   }
 

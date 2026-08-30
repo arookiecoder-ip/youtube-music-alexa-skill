@@ -1020,16 +1020,17 @@ main:has(#now-playing-section:not([hidden])) {
 
   /* ---- Banner change animation ----
      Any time the now-playing track changes — swipe, button, voice, or SSE
-     update — the artwork + title + artist get a brief fade-up. The .track-
-     changed class is applied briefly from player.js's showNowPlaying() on
-     fp-mismatch, then cleared on animationend. CSS animations win over the
-     `transform: none !important` reset during their runtime because the
-     keyframe layer has higher priority than the static cascade, including
-     !important declarations on the same property. So the very same artwork
-     that gets pinned to scale(1) by the route's reset still animates. */
+     update — the artwork slides in horizontally from the side the swipe came
+     from (`--np-in-x`, set by player.js: right for next, left for previous),
+     mirroring the banner shifting left/right. The title + artist fade up.
+     The .track-changed class is applied briefly from player.js's
+     showNowPlaying() on fp-mismatch, then cleared on animationend. CSS
+     animations win over the `transform: none !important` reset during their
+     runtime because the keyframe layer has higher priority than the static
+     cascade, including !important declarations on the same property. */
   @keyframes npArtSwapIn {
-    from { opacity: 0; transform: translateY(8px) scale(0.96); }
-    to   { opacity: 1; transform: translateY(0) scale(1); }
+    from { opacity: 0; transform: translateX(var(--np-in-x, 70vw)) scale(0.97); }
+    to   { opacity: 1; transform: translateX(0) scale(1); }
   }
   @keyframes npMetaSwapIn {
     from { opacity: 0; transform: translateY(4px); }
@@ -1057,10 +1058,17 @@ main:has(#now-playing-section:not([hidden])) {
      behavior locks here cover the html viewport (which body position:
      fixed does not on every browser) and stop rubber-band scroll from
      showing the underlying page on iOS. */
+  /* The expanded player is a full-screen fixed sheet, so the underlying page
+     must not scroll and must not expose its own document scrollbar beside it.
+     (overscroll-behavior + hidden overflow stop iOS rubber-band as well.) */
   body.now-playing-route,
   html:has(body.now-playing-route) {
-    overflow: auto !important;
+    overflow: hidden !important;
     overscroll-behavior: none !important;
+    scrollbar-width: none !important;
+  }
+  html:has(body.now-playing-route)::-webkit-scrollbar {
+    display: none !important;
   }
   body #now-playing-section:not([hidden]) {
     display: block !important;
@@ -1116,12 +1124,23 @@ main:has(#now-playing-section:not([hidden])) {
   body.now-playing-route .np-page::after {
     display: none !important;
   }
+  /* Route freeze: the page sheet is pinned flat. The artwork deliberately
+     EXCLUDES `transform: none !important` from this reset — a plain inline
+     transform actually loses to an author-important declaration (the cascade
+     ranks important-author above the animation layer *and* above normal
+     inline styles), so leaving transform pinned here froze both the swipe
+     exit slide and the horizontal track-change animation into place. By
+     dropping transform from the art (filter/transition stay), inline swipe
+     transforms and the track-changed keyframe both paint normally, exactly
+     as the swipe handler expected. `.np-page` keeps its own transform reset. */
   body.now-playing-route .np-page,
   body.now-playing-route .np-page-art,
   body.now-playing-route .np-page-art.image-loading {
     filter: none !important;
-    transform: none !important;
     transition: none !important;
+  }
+  body.now-playing-route .np-page {
+    transform: none !important;
   }
 
   /* Keep header geometry identical while player opens/closes. */
@@ -1470,15 +1489,16 @@ main:has(#now-playing-section:not([hidden])) {
     gap: 18px;
     padding-inline: 10px;
     box-sizing: border-box;
-    margin-top: 26px;
+    /* Pull the transport up a little, closer to the progress bar. */
+    margin-top: 16px;
   }
   body.now-playing-route .mobile-np-controls button,
   body.now-playing-closing .mobile-np-controls button {
-    width: 42px;
-    height: 42px;
-    min-width: 42px;
-    min-height: 42px;
-    padding: 9px;
+    width: 48px;
+    height: 48px;
+    min-width: 48px;
+    min-height: 48px;
+    padding: 10px;
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -1489,8 +1509,8 @@ main:has(#now-playing-section:not([hidden])) {
   }
   body.now-playing-route .mobile-np-controls button svg,
   body.now-playing-closing .mobile-np-controls button svg {
-    width: 22px;
-    height: 22px;
+    width: 28px;
+    height: 28px;
   }
   body.now-playing-route .mobile-np-controls #mobile-np-like.liked,
   body.now-playing-closing .mobile-np-controls #mobile-np-like.liked {
@@ -1498,16 +1518,20 @@ main:has(#now-playing-section:not([hidden])) {
   }
   body.now-playing-route .mobile-np-controls #mobile-np-play,
   body.now-playing-closing .mobile-np-controls #mobile-np-play {
-    width: 76px;
-    height: 76px;
-    min-width: 76px;
-    min-height: 76px;
-    padding: 16px;
+    width: 80px;
+    height: 80px;
+    min-width: 80px;
+    min-height: 80px;
+    padding: 0;
+    /* Circular ring around the play/pause glyph. */
+    border: 1.5px solid rgba(255,255,255,.5);
+    border-radius: 50%;
+    background: rgba(255,255,255,.04);
   }
   body.now-playing-route .mobile-np-controls #mobile-np-play svg,
   body.now-playing-closing .mobile-np-controls #mobile-np-play svg {
-    width: 42px;
-    height: 42px;
+    width: 50px;
+    height: 50px;
   }
   body.now-playing-route .mobile-np-pause-icon,
   body.now-playing-closing .mobile-np-pause-icon { display: none; }
@@ -1516,18 +1540,11 @@ main:has(#now-playing-section:not([hidden])) {
   body.now-playing-closing .mobile-np-progress {
     display: block !important;
     width: min(340px, calc(100% - 10px));
-    margin: 24px auto 0;
+    /* Shift the progress bar up a little. */
+    margin: 18px auto 0;
     position: relative;
-    /* Pull the mobile progress strip down a touch relative to the
-       transport controls (keeping its 24px top gap above -> transport
-       unchanged). Using `top` (the wrapper is already position:relative)
-       rather than increasing margin-top so the gap to .mobile-np-controls
-       and the gap to .mobile-np-volume-row stay exactly as they were.
-       Tuned to 14px after evaluating 8/10/14 — 14px lands squarely inside
-       the ~12–16px section-spacing grid Spotify / Apple Music / YT Music
-       use between control groups on mobile, so it reads as a deliberate
-       nudge rather than a barely-noticeable 8px tick. */
-    top: 14px;
+    /* Small downward nudge so the strip reads evenly under the transport. */
+    top: 6px;
     box-sizing: border-box;
     align-self: center;
   }
@@ -3171,5 +3188,321 @@ body.results-open .player-section {
   body #now-playing-section:not([hidden]) {
     opacity: 1 !important;
     transition: transform .32s cubic-bezier(.22, 1, .36, 1) !important;
+  }
+}
+
+/* ============================================================
+   Mobile now-playing banner — artist-page hero, content overlays it
+   The album art becomes a full-width, edge-to-edge hero roughly half the
+   screen tall at the top of the expanded player. Artist-page style: the art
+   sits in its own top strip and the title/controls overlap it (they are NOT
+   pushed below — the art carries no in-flow height). The desktop player and
+   all other sections are untouched.
+   ============================================================ */
+@media (max-width: 899px) {
+  /* The art bleeds to the true screen edges, so the sheet keeps zero side
+     padding — but its original 24px bottom clearance must stay, otherwise the
+     whole content column shifts up and the queue button sits flush against
+     the bottom edge. The sheet's dark background is left untouched. */
+  body.now-playing-route #now-playing-section,
+  body.now-playing-closing #now-playing-section {
+    padding: 0 0 24px !important;
+    /* The art's -14px bleed extends past the viewport edges; force horizontal
+       clipping so it never surfaces as a stray scrollbar, while tall content
+       can still scroll vertically. */
+    overflow-x: hidden !important;
+    /* Touch scrolling still works, but no visible scrollbar — the player is a
+       full-screen sheet, not a document. */
+    scrollbar-width: none !important;
+  }
+  body.now-playing-route #now-playing-section::-webkit-scrollbar,
+  body.now-playing-closing #now-playing-section::-webkit-scrollbar {
+    display: none !important;
+  }
+  body.now-playing-route .np-page,
+  body.now-playing-closing .np-page {
+    padding: 0 !important;
+    /* The art's -14px bleed extends past the np-page's width, and a later
+       pre-existing rule forces `overflow: auto` on .np-page — so the bleed
+       would surface as a stray horizontal scrollbar at the page's bottom
+       edge. Clip horizontal overflow here (vertical stays auto for genuinely
+       tall content). */
+    overflow-x: hidden !important;
+    scrollbar-width: none !important;
+  }
+
+  /* Left column becomes the hero canvas: relative, no inset, so the art can
+     anchor to its top-left and bleed across the full viewport width. */
+  body.now-playing-route .np-page-left,
+  body.now-playing-closing .np-page-left {
+    position: relative;
+    padding: 0 !important;
+    overflow: visible;
+  }
+
+  /* The art is taken out of flow (absolute) so it fills the top half without
+     pushing the title/controls below. Cover-cropped like the artist hero, and
+     stretched a touch past every edge (negative insets — the artist hero uses
+     `inset: -14px; scale(1.04)`) so the image truly bleeds off-screen instead
+     of ending flush with the viewport edges. */
+  body.now-playing-route .np-page-art,
+  body.now-playing-closing .np-page-art {
+    position: absolute !important;
+    /* Top edge is flush with the screen (NOT bleeded above it) — pushing it up
+       with a negative top offset would clip the top of the artwork off-screen.
+       The sides still bleed a little past the viewport edges like the artist
+       hero, and the bottom lands exactly at 50dvh so the art never protrudes
+       over the volume bar / controls below. */
+    top: 0;
+    left: -14px;
+    right: -14px;
+    width: auto !important;
+    min-width: auto !important;
+    height: 50dvh !important;
+    min-height: 220px;
+    aspect-ratio: auto !important;
+    margin: 0 !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    background-position: center 20% !important;
+    background-size: cover !important;
+    /* Own stacking context so the fade below can live inside the art without
+       covering the volume bar / controls (which paint above in-flow content). */
+    z-index: 0 !important;
+  }
+
+  /* Bottom bleed on the banner itself, copied from #artist-hero::before
+     (`linear-gradient(to top, #000 0%, rgba(0,0,0,.6) 40%, transparent 100%)`):
+     the artwork fades into the dark at the banner's bottom edge. z-index: -1
+     keeps it on the artwork only — it can never paint over the volume bar,
+     progress, or controls that sit below. */
+  body.now-playing-route .np-page-art::after,
+  body.now-playing-closing .np-page-art::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    z-index: -1;
+    pointer-events: none;
+    background: linear-gradient(to top,
+      #0b0503 0%,
+      rgba(0, 0, 0, .55) 40%,
+      rgba(0, 0, 0, 0) 100%) !important;
+  }
+
+  /* Title/artist overlay the banner's lower portion (artist hero style): the
+     meta is the first in-flow child, so give it top padding that parks it on
+     the artwork rather than at the very top. The content below it follows
+     naturally — nothing about their own spacing changes. */
+  /* The title sits on the banner's bottom edge — not floating high on the
+     art — so the volume/controls that follow land BELOW the banner instead of
+     being pushed up onto it. */
+  body.now-playing-route .np-page-meta,
+  body.now-playing-closing .np-page-meta {
+    position: relative;
+    z-index: 2;
+    padding-top: calc(50dvh - 24px);
+    text-align: left;
+    padding-left: 20px;
+    padding-right: 20px;
+    box-sizing: border-box;
+    /* The meta's large transparent padding parks the title on the banner. Let
+       touches pass through that padding to the swipe-to-skip art underneath,
+       otherwise the whole banner swallows pointer events and the swipe never
+       starts. The title text itself is re-enabled below so it stays clickable. */
+    pointer-events: none;
+  }
+  body.now-playing-route .np-page-meta .np-page-title,
+  body.now-playing-closing .np-page-meta .np-page-title {
+    pointer-events: auto;
+  }
+  body.now-playing-route .np-page-title-row,
+  body.now-playing-closing .np-page-title-row {
+    grid-template-columns: 1fr;
+    text-align: left;
+  }
+  body.now-playing-route .np-page-title-row .np-page-title,
+  body.now-playing-closing .np-page-title-row .np-page-title {
+    grid-column: auto;
+  }
+
+}
+
+/* ============================================================
+   Mobile now-playing bottom controls
+   The rectangular queue pill is replaced by a 4-square action row
+   (Like, YouTube Music, Shuffle, Queue) that sits where the volume bar used
+   to be (under the title/artist). The volume slider moves down to the bottom
+   of the player, and the transport row becomes just Previous / Play / Next.
+   Desktop and every other section are untouched.
+   ============================================================ */
+@media (max-width: 899px) {
+  /* 4 square action boxes where the volume bar used to be. */
+  body.now-playing-route .mobile-np-actions,
+  body.now-playing-closing .mobile-np-actions {
+    display: flex !important;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    width: min(340px, calc(100% - 10px));
+    margin: 16px auto 0;
+    box-sizing: border-box;
+  }
+  body.now-playing-route .mobile-np-actions > button,
+  body.now-playing-route .mobile-np-actions > a,
+  body.now-playing-closing .mobile-np-actions > button,
+  body.now-playing-closing .mobile-np-actions > a {
+    width: 70px;
+    height: 66px;
+    flex: none;
+    display: inline-flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 5px;
+    border: 1px solid rgba(255,255,255,.14);
+    border-radius: 10px;
+    background: rgba(255,255,255,.045);
+    color: var(--text);
+    text-decoration: none;
+    padding: 6px 4px;
+    box-sizing: border-box;
+    cursor: pointer;
+  }
+  body.now-playing-route .mobile-np-actions svg,
+  body.now-playing-closing .mobile-np-actions svg {
+    width: 22px;
+    height: 22px;
+    flex: none;
+    display: block;
+  }
+  /* Icon label sits under the icon inside each square, uniform across all four. */
+  body.now-playing-route .mobile-np-actions .mobile-np-action-label,
+  body.now-playing-closing .mobile-np-actions .mobile-np-action-label {
+    display: block;
+    font-size: .64rem;
+    font-weight: 500;
+    line-height: 1;
+    letter-spacing: .01em;
+    color: var(--muted);
+    white-space: nowrap;
+  }
+  /* The queue box becomes one of the squares (no more full-width pill). */
+  body.now-playing-route .mobile-np-actions .mobile-queue-button,
+  body.now-playing-closing .mobile-np-actions .mobile-queue-button {
+    width: 70px;
+    height: 66px;
+    margin: 0;
+    border: 1px solid rgba(255,255,255,.14);
+    border-radius: 10px;
+    background: rgba(255,255,255,.045);
+    font-size: .64rem;
+    font-weight: 500;
+    text-transform: none;
+    letter-spacing: .01em;
+  }
+  body.now-playing-route .mobile-np-actions .mobile-queue-button svg,
+  body.now-playing-closing .mobile-np-actions .mobile-queue-button svg {
+    width: 22px;
+    height: 22px;
+  }
+  /* Like / shuffle active states live here now (they left the transport). */
+  body.now-playing-route .mobile-np-actions #mobile-np-like.liked,
+  body.now-playing-closing .mobile-np-actions #mobile-np-like.liked,
+  body.now-playing-route .mobile-np-actions #mobile-np-shuffle.shuffle-active,
+  body.now-playing-closing .mobile-np-actions #mobile-np-shuffle.shuffle-active {
+    color: var(--accent);
+  }
+  /* A global rule hides .mobile-player-youtube everywhere (it used to be
+     shown only inside the volume row). Reveal it in the action row here; the
+     .is-hidden state below re-hides it until a track is actually loaded. */
+  body.now-playing-route .mobile-np-actions .mobile-player-youtube,
+  body.now-playing-closing .mobile-np-actions .mobile-player-youtube {
+    display: inline-flex !important;
+  }
+  body.now-playing-route .mobile-np-actions .mobile-player-youtube.is-hidden,
+  body.now-playing-closing .mobile-np-actions .mobile-player-youtube.is-hidden {
+    display: none !important;
+  }
+
+  /* Volume bar now sits at the bottom (where the queue pill was). The old
+     +14px nudge existed to align it with the progress strip above it; at the
+     bottom it has nothing to align to, so drop it. */
+  body.now-playing-route .mobile-np-volume-row,
+  body.now-playing-closing .mobile-np-volume-row {
+    margin: 16px auto 0;
+    transform: none;
+  }
+
+  /* Mobile volume slider colors: the filled segment (up to the current level;
+     white) and the empty remainder (a soft gray). Overrides the shared
+     accent-filled / dark-empty track on #mobile-np-volume only — the desktop
+     #volume slider keeps its original theme colors. The thumb ring follows
+     `color`, so setting it white makes the circular handle white too. */
+  body.now-playing-route #mobile-np-volume,
+  body.now-playing-closing #mobile-np-volume {
+    color: #ffffff;
+    --track-c: #5a5a5a;
+  }
+  body.now-playing-route #mobile-np-volume::-webkit-slider-runnable-track,
+  body.now-playing-closing #mobile-np-volume::-webkit-slider-runnable-track {
+    background:
+      /* filled — up to the thumb */
+      radial-gradient(circle farthest-corner at 100% 50%,
+          transparent 0 var(--track-r), #ffffff var(--track-r) 100%)
+        0 / calc(var(--js) * var(--x)) 100% no-repeat,
+      /* empty — after the thumb, graying */
+      radial-gradient(circle farthest-corner at 0 50%,
+          transparent 0 var(--track-r), var(--track-c) var(--track-r) 100%)
+        100% / calc(var(--js) * (100% - var(--x))) 100% no-repeat,
+      /* no-JS fallback */
+      rgba(90, 90, 90, var(--not-js));
+  }
+  body.now-playing-route #mobile-np-volume::-moz-range-track,
+  body.now-playing-closing #mobile-np-volume::-moz-range-track {
+    background:
+      radial-gradient(circle farthest-corner at 100% 50%,
+          transparent 0 var(--track-r), #ffffff var(--track-r) 100%)
+        0 / calc(var(--js) * var(--x)) 100% no-repeat,
+      radial-gradient(circle farthest-corner at 0 50%,
+          transparent 0 var(--track-r), var(--track-c) var(--track-r) 100%)
+        100% / calc(var(--js) * (100% - var(--x))) 100% no-repeat,
+      rgba(90, 90, 90, var(--not-js));
+  }
+
+  /* ---- Progress bar drag feedback (mobile now-playing only) ---- */
+  /* Keep the progress strip as-is at rest (4px). While the user presses and
+     drags (the JS adds .dragging to #mobile-np-progress-track during a seek,
+     and :active covers press-and-hold), thicken the bar a little; on release
+     it springs back to its resting 4px. */
+  body.now-playing-route .mobile-np-progress .progress-track.dragging,
+  body.now-playing-closing .mobile-np-progress .progress-track.dragging,
+  body.now-playing-route .mobile-np-progress .progress-track:active,
+  body.now-playing-closing .mobile-np-progress .progress-track:active {
+    height: 8px;
+  }
+  body.now-playing-route .mobile-np-progress .progress-track.dragging .progress-fill,
+  body.now-playing-closing .mobile-np-progress .progress-track.dragging .progress-fill,
+  body.now-playing-route .mobile-np-progress .progress-track:active .progress-fill,
+  body.now-playing-closing .mobile-np-progress .progress-track:active .progress-fill {
+    height: 8px;
+  }
+  /* Remove the circular handle on the progress bar. */
+  body.now-playing-route .mobile-np-progress .progress-handle,
+  body.now-playing-closing .mobile-np-progress .progress-handle {
+    display: none !important;
+  }
+
+  /* ---- Volume bar drag feedback (mobile now-playing only) ---- */
+  /* Thinner at rest (3px vs the shared 4px), and while the user presses and
+     drags the thumb (:active) it thickens; on release it returns to thin. The
+     whole track + cutout follow --track-h, so overriding the variable is
+     enough. */
+  body.now-playing-route #mobile-np-volume,
+  body.now-playing-closing #mobile-np-volume {
+    --track-h: 3px;
+  }
+  body.now-playing-route #mobile-np-volume:active,
+  body.now-playing-closing #mobile-np-volume:active {
+    --track-h: 9px;
   }
 }

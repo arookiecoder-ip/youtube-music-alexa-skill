@@ -992,6 +992,7 @@ main {
 .mobile-volume-popover,
 .mobile-np-controls,
 .mobile-np-progress,
+.mobile-np-actions,
 .mobile-queue-label,
 .mobile-inline-queue { display: none !important; }
 .mobile-queue-drag-region { display: none !important; }
