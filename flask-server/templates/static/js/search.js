@@ -93,11 +93,9 @@ async function runSearch(query, options) {
       : currentRoute;
     state._searchPreviousViewVisible = ['home-section', 'jam-home-section', 'recs-section',
       'artist-section', 'artist-songs-section', 'history-page',
-      'collection-detail-page', 'explore-modal-overlay',
-      'mood-modal-overlay', 'library-modal-overlay'].some(id => {
+      'collection-detail-page', 'explore-page', 'mood-page', 'library-page'].some(id => {
         const el = document.getElementById(id);
-        return el && !el.hidden &&
-          (!id.endsWith('-overlay') || el.classList.contains('open'));
+        return el && !el.hidden;
       });
     state._searchPreservePreviousView = state._searchPreviousViewVisible;
     if (window.syncUiState) window.syncUiState();
@@ -153,11 +151,9 @@ async function runSearch(query, options) {
   // opens immediately as before.
   const anyOtherViewVisible = ['home-section', 'jam-home-section', 'recs-section',
     'artist-section', 'artist-songs-section', 'history-page',
-    'collection-detail-page', 'explore-modal-overlay',
-    'mood-modal-overlay', 'library-modal-overlay'].some(id => {
+    'collection-detail-page', 'explore-page', 'mood-page', 'library-page'].some(id => {
       const el = document.getElementById(id);
-      return el && !el.hidden &&
-        (!id.endsWith('-overlay') || el.classList.contains('open'));
+      return el && !el.hidden;
     });
 
   const coldDirectSearch = options.fromRoute && !options.deferRouteHandoff &&
@@ -303,10 +299,10 @@ function openResults(options) {
   });
   // Same for the playlist detail view: it sits above the content area (z-210),
   // so results rendered behind it would be invisible until manually closed.
-  ['explore-modal-overlay',
-    'mood-modal-overlay', 'library-modal-overlay'].forEach(id => {
-    const ov = document.getElementById(id);
-    if (ov) ov.classList.remove('open');
+  ['explore-page',
+    'mood-page', 'library-page'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.hidden = true;
   });
   const collectionPage = document.getElementById('collection-detail-page');
   if (collectionPage) collectionPage.hidden = true;

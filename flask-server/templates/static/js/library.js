@@ -149,7 +149,7 @@
     // actually follow.
     if (window.JAM_GUEST) return;
 
-    const body = document.getElementById('library-modal-body');
+    const body = document.getElementById('library-page-body');
     if (!body) return;
 
     if (_loading) return;
@@ -239,21 +239,6 @@
 
   // ── public API ─────────────────────────────────────────────────────────────
   window.openLibraryPage = function (force) {
-    const overlay = document.getElementById('library-modal-overlay');
-    if (overlay && window.matchMedia('(min-width: 900px)').matches) overlay.classList.add('open');
     loadLibrary(force);
   };
-
-  window.closeLibraryPage = function () {
-    const overlay = document.getElementById('library-modal-overlay');
-    if (overlay) overlay.classList.remove('open');
-  };
-
-  // ── close button ───────────────────────────────────────────────────────────
-  const closeBtn = document.getElementById('library-modal-close');
-  if (closeBtn) {
-    closeBtn.addEventListener('click', function () {
-      window.navigateTo('#home');
-    });
-  }
 })();
