@@ -1708,67 +1708,33 @@
 
 @media (min-width: 900px) {
   /* ============================================================
-     Explore & Library: full-page routed views on desktop
-     (same treatment as history-modal-overlay). Moved from
-     redesign.css.
+     Explore, Library & Mood/Genre: full-page routed views.
+     Plain page sections in normal document flow (same treatment
+     as #collection-detail-page).
      ============================================================ */
-  #explore-modal-overlay,
-  #mood-modal-overlay,
-  #library-modal-overlay {
-    left: var(--rail-w);
-    top: calc(var(--topbar-h) + 3px);
-    right: 0;
-    bottom: 0;
-    background: transparent;
-    backdrop-filter: none;
-    -webkit-backdrop-filter: none;
-    align-items: stretch;
-    z-index: 210;
-    transition: left .25s ease;
-  }
-  body:not(.now-playing-route) #explore-modal-overlay,
-  body:not(.now-playing-route) #mood-modal-overlay,
-  body:not(.now-playing-route) #library-modal-overlay {
-    bottom: 0 !important;
-  }
-  body:has(#explore-modal-overlay.open),
-  body:has(#mood-modal-overlay.open),
-  body:has(#library-modal-overlay.open) {
-    overflow: hidden;
-  }
-  #explore-modal .history-modal-body,
-  #mood-modal .history-modal-body,
-  #library-modal .history-modal-body {
-    overscroll-behavior: contain;
-  }
-  body:has(.player-section.is-visible:not([hidden])) #explore-modal-overlay,
-  body:has(.player-section.is-visible:not([hidden])) #mood-modal-overlay,
-  body:has(.player-section.is-visible:not([hidden])) #library-modal-overlay {
-    bottom: var(--playbar-h) !important;
-  }
-  #explore-modal,
-  #mood-modal,
-  #library-modal {
+  #explore-page,
+  #library-page,
+  #mood-page {
+    position: relative;
     width: 100%;
-    max-width: none;
-    height: 100%;
-    max-height: none;
-    margin: 0 auto;
+    min-height: calc(100dvh - var(--topbar-h));
+    margin: 0;
+    padding: 0;
     background: transparent;
-    border: none;
+    border: 0;
     border-radius: 0;
     box-shadow: none;
+    overscroll-behavior: none;
   }
-  #explore-modal .history-modal-header {
-    border-bottom: none;
-    /* The overlay already begins after the desktop rail. Fill that remaining
-       viewport instead of keeping Explore artificially narrow. */
+  #explore-page .history-modal-header,
+  #library-page .history-modal-header {
     width: min(1500px, 100%);
     margin: 0 auto;
     padding: 18px 32px;
     box-sizing: border-box;
+    border-bottom: none;
   }
-  #mood-modal .history-modal-header {
+  #mood-page .history-modal-header {
     width: 100%;
     max-width: none;
     margin: 0;
@@ -1776,54 +1742,35 @@
     box-sizing: border-box;
     border-bottom: none;
   }
-  #library-modal .history-modal-header {
-    width: min(1500px, 100%);
-    margin: 0 auto;
-    padding: 18px 32px;
-    box-sizing: border-box;
-    border-bottom: 0;
-  }
-  #explore-modal .history-modal-body {
+  #explore-page .history-modal-body,
+  #library-page .history-modal-body {
     width: min(1500px, 100%);
     margin: 0 auto;
     padding-left: 32px;
     padding-right: 32px;
     box-sizing: border-box;
-    overflow-y: auto;
+    overflow-y: visible;
+    overscroll-behavior: contain;
     flex: 1;
   }
-  #mood-modal .history-modal-body {
+  #mood-page .history-modal-body {
     width: 100%;
     max-width: none;
     margin: 0;
     padding-left: 32px;
     padding-right: 32px;
     box-sizing: border-box;
-    overflow-y: auto;
+    overflow-y: visible;
+    overscroll-behavior: contain;
     flex: 1;
   }
-  #library-modal .history-modal-body {
-    width: min(1500px, 100%);
-    margin: 0 auto;
-    padding-left: 32px;
-    padding-right: 32px;
-    box-sizing: border-box;
-    overflow-y: auto;
-    flex: 1;
-  }
-  #explore-modal .history-modal-header h3,
-  #mood-modal .history-modal-header h3,
-  #library-modal .history-modal-header h3 {
+  #explore-page .history-modal-header h3,
+  #mood-page .history-modal-header h3,
+  #library-page .history-modal-header h3 {
     text-transform: none;
     letter-spacing: -.01em;
     font-size: 1.3rem;
     font-weight: 800;
-  }
-  /* Close button hidden on desktop (navigate back to go home) */
-  #explore-modal-close,
-  #mood-modal-close,
-  #library-modal-close {
-    display: none;
   }
 }
 
@@ -1903,68 +1850,39 @@
     padding-bottom: calc(var(--playbar-h-mobile) + 28px + env(safe-area-inset-bottom, 0px));
   }
 
-  body.explore-route #explore-modal-overlay,
-  body.mood-route #mood-modal-overlay,
-  body.library-route #library-modal-overlay {
-    display: block;
-    position: static;
-    inset: auto;
+  #explore-page,
+  #library-page,
+  #mood-page {
     width: 100%;
     min-height: 100dvh;
-    background: transparent;
-    backdrop-filter: none;
-    -webkit-backdrop-filter: none;
-    opacity: 1;
-    visibility: visible;
-    z-index: auto;
-  }
-
-  body.explore-route #explore-modal,
-  body.mood-route #mood-modal,
-  body.library-route #library-modal {
-    width: 100%;
-    max-width: none;
-    min-height: 100dvh;
-    max-height: none;
     margin: 0;
+    padding: 0;
     background: transparent;
     border: 0;
     border-radius: 0;
     box-shadow: none;
-    overflow: visible;
-    transform: none;
-    opacity: 1;
   }
 
-  body.explore-route #explore-modal .history-modal-body,
-  body.mood-route #mood-modal .history-modal-body,
-  body.library-route #library-modal .history-modal-body {
+  #explore-page .history-modal-body,
+  #library-page .history-modal-body,
+  #mood-page .history-modal-body {
     flex: 1;
     min-height: 0;
     overflow-y: auto;
     overscroll-behavior-y: auto;
-  }
-
-  body.explore-route #explore-modal .history-modal-body,
-  body.mood-route #mood-modal .history-modal-body,
-  body.library-route #library-modal .history-modal-body {
     padding-bottom: calc(var(--playbar-h-mobile) + 28px + env(safe-area-inset-bottom, 0px));
   }
 
-  body.explore-route #explore-modal-close,
-  body.mood-route #mood-modal-close,
-  body.library-route #library-modal-close { display: none; }
-
-  body.explore-route #explore-modal .history-modal-header {
+  #explore-page .history-modal-header,
+  #mood-page .history-modal-header {
     border-bottom: 0;
     padding-left: 0;
   }
-  body.library-route #library-modal .history-modal-header {
-    border-bottom: 0;
+  #mood-page .history-modal-header {
+    padding-left: 16px;
   }
-  body.mood-route #mood-modal .history-modal-header {
+  #library-page .history-modal-header {
     border-bottom: 0;
-    padding-left: 0;
   }
 
   /* Mobile Library: a vertical list instead of the desktop square-card grid.
@@ -1974,6 +1892,7 @@
     display: flex;
     flex-direction: column;
     gap: 2px;
+    padding-left: 16px;
   }
   body.library-route .library-card {
     display: flex;
@@ -2171,21 +2090,8 @@
   }
 }
 
-/* Explore/Library overlays own scrolling at every breakpoint. Keep the page
-   beneath them fixed so reaching the final row cannot move the outer shell. */
-body:not(.explore-route):not(.mood-route):not(.library-route):has(#explore-modal-overlay.open),
-body:not(.explore-route):not(.mood-route):not(.library-route):has(#library-modal-overlay.open) {
-  overflow: hidden;
-  overscroll-behavior: none;
-}
-#explore-modal-overlay,
-#library-modal-overlay {
-  overscroll-behavior: none;
-}
-
 @media (max-width: 899px) {
-  /* Routed mobile pages scroll as document content. The overlay lock above
-     applies only to true modal routes. */
+  /* Routed mobile pages scroll as document content. */
   html:has(body.explore-route),
   html:has(body.mood-route),
   html:has(body.library-route),

@@ -264,7 +264,7 @@
   }
 
   function hideAllViews() {
-    setHidden('#recs-section, #home-section, #idle-hero, #results-section, #queue-section, #artist-section, #artist-songs-section, #collection-detail-page', true);
+    setHidden('#recs-section, #home-section, #idle-hero, #results-section, #queue-section, #artist-section, #artist-songs-section, #collection-detail-page, #explore-page, #library-page, #mood-page', true);
   }
 
   function showHomeViews() {
@@ -283,10 +283,14 @@
     },
     '#explore': function() {
       hideAllViews();
+      var explorePage = document.getElementById('explore-page');
+      if (explorePage) explorePage.hidden = false;
       if (window.openExplorePage) window.openExplorePage();
     },
     '#library': function() {
       hideAllViews();
+      var libraryPage = document.getElementById('library-page');
+      if (libraryPage) libraryPage.hidden = false;
       if (window.openLibraryPage) window.openLibraryPage();
     },
     '#history': function() {
@@ -381,9 +385,9 @@
     if (route.indexOf('#album/') === 0) return 'collection-detail-page';
     if (route === '#now-playing') return 'now-playing-section';
     if (route === '#history') return 'history-page';
-    if (route === '#explore') return 'explore-modal';
-    if (route.indexOf('#mood/') === 0) return 'mood-modal';
-    if (route === '#library') return 'library-modal';
+    if (route === '#explore') return 'explore-page';
+    if (route.indexOf('#mood/') === 0) return 'mood-page';
+    if (route === '#library') return 'library-page';
     if (route.indexOf('#playlist/') === 0) return 'collection-detail-page';
     if (route.indexOf('#search?') === 0) return 'results-list';
     return 'main';
@@ -431,12 +435,10 @@
         !window.__appState._searchPreservePreviousView) {
       var sourceIds = ['home-section', 'jam-home-section', 'recs-section',
         'artist-section', 'artist-songs-section', 'history-page',
-        'collection-detail-page', 'explore-modal-overlay',
-        'mood-modal-overlay', 'library-modal-overlay'];
+        'collection-detail-page', 'explore-page', 'mood-page', 'library-page'];
       var sourceVisible = sourceIds.some(function(id) {
         var el = document.getElementById(id);
-        return el && !el.hidden &&
-          (id.indexOf('-overlay') === -1 || el.classList.contains('open'));
+        return el && !el.hidden;
       });
       // Routed detail/modal screens may use a visible overlay without a
       // dedicated section in the normal view list. Their body classes are a
@@ -502,14 +504,14 @@
       var hp = document.getElementById('history-page');
       if (hp) hp.hidden = false;
     } else if (returnRoute === '#explore') {
-      var eo = document.getElementById('explore-modal-overlay');
-      if (eo) eo.classList.add('open');
+      var eo = document.getElementById('explore-page');
+      if (eo) eo.hidden = false;
     } else if (returnRoute.indexOf('#mood/') === 0) {
-      var mo = document.getElementById('mood-modal-overlay');
-      if (mo) mo.classList.add('open');
+      var mo = document.getElementById('mood-page');
+      if (mo) mo.hidden = false;
     } else if (returnRoute === '#library') {
-      var lo = document.getElementById('library-modal-overlay');
-      if (lo) lo.classList.add('open');
+      var lo = document.getElementById('library-page');
+      if (lo) lo.hidden = false;
     } else if (returnRoute.indexOf('#artist/') === 0 && /\/songs$/.test(returnRoute)) {
       showArtistSongsSection();
     } else if (returnRoute.indexOf('#artist/') === 0) {
@@ -721,7 +723,7 @@
       var albumTitle = document.querySelector('#collection-detail-page .playlist-detail-page-title');
       title = (albumTitle && albumTitle.textContent.trim()) || 'Album';
     } else if (route.indexOf('#mood/') === 0) {
-      var moodTitle = document.getElementById('mood-modal-title');
+      var moodTitle = document.getElementById('mood-page-title');
       title = (moodTitle && moodTitle.textContent.trim()) || 'Moods and genres';
     } else if (route === '#history') {
       title = 'Recently Listened';
@@ -811,16 +813,16 @@
       if (historyPage) historyPage.hidden = true;
     }
     if (!preserveSearchShell && hash !== '#explore') {
-      var exploreOverlay = document.getElementById('explore-modal-overlay');
-      if (exploreOverlay) exploreOverlay.classList.remove('open');
+      var explorePage = document.getElementById('explore-page');
+      if (explorePage) explorePage.hidden = true;
     }
     if (!preserveSearchShell && hash.indexOf('#mood/') !== 0) {
-      var moodOverlay = document.getElementById('mood-modal-overlay');
-      if (moodOverlay) moodOverlay.classList.remove('open');
+      var moodPage = document.getElementById('mood-page');
+      if (moodPage) moodPage.hidden = true;
     }
     if (!preserveSearchShell && hash !== '#library') {
-      var libraryOverlay = document.getElementById('library-modal-overlay');
-      if (libraryOverlay) libraryOverlay.classList.remove('open');
+      var libraryPage = document.getElementById('library-page');
+      if (libraryPage) libraryPage.hidden = true;
     }
     if (hash !== '#now-playing') {
       // Search owns the queue/layout swap for every entry mode. Direct links
@@ -923,6 +925,9 @@
       var moodQuery = new URLSearchParams(moodQueryIndex === -1 ? '' : moodRouteValue.slice(moodQueryIndex + 1));
       var moodTitle = moodQuery.get('title') || 'Moods and genres';
       if (!moodParams) { window.navigateTo('#explore'); return; }
+      hideAllViews();
+      var moodPage = document.getElementById('mood-page');
+      if (moodPage) moodPage.hidden = false;
       if (window.openMoodPage) window.openMoodPage(moodParams, moodTitle);
     } else if (hash.indexOf('#artist/') === 0) {
       var artistRouteValue = hash.slice('#artist/'.length);

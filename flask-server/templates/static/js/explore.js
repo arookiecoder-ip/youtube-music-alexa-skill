@@ -542,11 +542,11 @@
   }
 
   async function openMoodPage(params, title) {
-    const overlay = document.getElementById('mood-modal-overlay');
-    const body = document.getElementById('mood-modal-body');
-    const heading = document.getElementById('mood-modal-title');
-    if (!overlay || !body || !params) return;
-    overlay.classList.add('open');
+    const page = document.getElementById('mood-page');
+    const body = document.getElementById('mood-page-body');
+    const heading = document.getElementById('mood-page-title');
+    if (!body || !params) return;
+    if (page) page.hidden = false;
     heading.textContent = title || 'Moods and genres';
     if (window.syncPageTitle) window.syncPageTitle();
     const route = '#mood/' + encodeURIComponent(params) + '?title=' + encodeURIComponent(title || 'Moods and genres');
@@ -681,7 +681,7 @@
 
   async function loadExplore(force) {
     if (!state._loggedIn || loading || (loaded && !force)) return;
-    const body = document.getElementById('explore-modal-body');
+    const body = document.getElementById('explore-page-body');
     if (!body) return;
     loading = true;
     const preloaded = !force && window.consumePreload && window.consumePreload('#explore');
@@ -708,17 +708,8 @@
   }
 
   window.openExplorePage = function (force) {
-    const overlay = document.getElementById('explore-modal-overlay');
-    if (overlay && window.matchMedia('(min-width: 900px)').matches) overlay.classList.add('open');
     loadExplore(force);
-  };
-  window.closeExplorePage = function () {
-    const overlay = document.getElementById('explore-modal-overlay');
-    if (overlay) overlay.classList.remove('open');
   };
   window.openMoodPage = openMoodPage;
   window.closeExploreCardContextMenu = closeCardContextMenu;
-  document.addEventListener('click', event => {
-    if (event.target.closest('#explore-modal-close')) window.navigateTo('#home');
-  });
 }());

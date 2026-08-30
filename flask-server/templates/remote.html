@@ -673,55 +673,33 @@
     </div>
   </section>
 
-  <!-- Explore Page (full-page routed view, mirrors history-modal-overlay pattern) -->
-  <div class="history-modal-overlay instant-page" id="explore-modal-overlay">
-    <div class="history-modal instant-page" id="explore-modal">
-      <div class="history-modal-header">
-        <h3>Explore</h3>
-        <div class="history-modal-header-actions">
-          <button class="history-modal-close" id="explore-modal-close" title="Close" aria-label="Close Explore">
-            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-              <line x1="18" y1="6" x2="6" y2="18"/>
-              <line x1="6" y1="6" x2="18" y2="18"/>
-            </svg>
-          </button>
-        </div>
-      </div>
-      <div class="history-modal-body" id="explore-modal-body">
-        <div class="loading-spinner"></div>
-      </div>
+  <!-- Explore Page (full-page routed view) -->
+  <section id="explore-page" hidden>
+    <div class="history-modal-header">
+      <h3>Explore</h3>
     </div>
-  </div>
+    <div class="history-modal-body" id="explore-page-body">
+      <div class="loading-spinner"></div>
+    </div>
+  </section>
 
   <!-- Library Page (full-page routed view) -->
-  <div class="history-modal-overlay instant-page" id="library-modal-overlay">
-    <div class="history-modal instant-page" id="library-modal">
-      <div class="history-modal-header">
-        <h3>Library</h3>
-        <div class="history-modal-header-actions">
-          <button class="history-modal-close" id="library-modal-close" title="Close" aria-label="Close Library">
-            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-              <line x1="18" y1="6" x2="6" y2="18"/>
-              <line x1="6" y1="6" x2="18" y2="18"/>
-            </svg>
-          </button>
-        </div>
-      </div>
-      <div class="history-modal-body" id="library-modal-body">
-        <div class="loading-spinner"></div>
-      </div>
+  <section id="library-page" hidden>
+    <div class="history-modal-header">
+      <h3>Library</h3>
     </div>
-  </div>
+    <div class="history-modal-body" id="library-page-body">
+      <div class="loading-spinner"></div>
+    </div>
+  </section>
 
   <!-- Mood/genre detail page -->
-  <div class="history-modal-overlay" id="mood-modal-overlay">
-    <div class="history-modal" id="mood-modal">
-      <div class="history-modal-header">
-        <h3 id="mood-modal-title">Moods and genres</h3>
-      </div>
-      <div class="history-modal-body" id="mood-modal-body"></div>
+  <section id="mood-page" hidden>
+    <div class="history-modal-header">
+      <h3 id="mood-page-title">Moods and genres</h3>
     </div>
-  </div>
+    <div class="history-modal-body" id="mood-page-body"></div>
+  </section>
 
 </main>
 

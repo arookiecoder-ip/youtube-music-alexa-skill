@@ -1332,6 +1332,9 @@ main {
 #artist-section[hidden],
 #artist-songs-section[hidden],
 #now-playing-section[hidden],
+#explore-page[hidden],
+#library-page[hidden],
+#mood-page[hidden],
 .auth-only[hidden],
 .sidebar-nav-btn[hidden],
 .progress[hidden] { display: none !important; }
