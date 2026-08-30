@@ -45,7 +45,7 @@
       activeButton.click();
       dispatchingLongPress = false;
       clearPress();
-    }, 550);
+    }, 350);
   }, true);
 
   document.addEventListener('pointerup', clearPress, true);

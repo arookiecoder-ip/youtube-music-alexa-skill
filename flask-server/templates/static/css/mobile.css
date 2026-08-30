@@ -11,3 +11,201 @@
     text-decoration: none !important;
   }
 }
+
+/* ============================================================
+   Mobile context menus become bottom sheets (tap-and-hold, 3-dot).
+   Pure presentation here; the presentation/dismiss lifecycle, scrim,
+   and drag-to-dismiss are driven by static/js/mobile-context-sheet.js.
+   Everything below is locked behind max-width:899px so the desktop
+   (right-click / hover) menus are completely untouched.
+   ============================================================ */
+@media (max-width: 899px) {
+  /* ---- Sheet geometry: full-width, pinned to the bottom ----
+     Every context menu surface shares this single look: song rows, queue
+     rows, playlist/explore/home cards, the playlist-detail rename/delete
+     menu, and the now-playing 3-dot. All open via `.open` except the
+     now-playing one, which player.js tags `.mobile-now-playing-menu` +
+     `.mobile-open` before appending it to <body>. */
+  .result-more-menu,
+  .queue-more-menu,
+  .playlist-more-menu,
+  #playlist-detail-more-menu,
+  #np-more-menu.mobile-open,
+  body .mobile-now-playing-menu.mobile-open {
+    position: fixed !important;
+    left: 0 !important;
+    right: 0 !important;
+    top: auto !important;
+    bottom: 0 !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    min-width: 0 !important;
+    height: auto !important;
+    margin: 0 !important;
+    z-index: 9999 !important;
+    box-sizing: border-box;
+    border-radius: 16px 16px 0 0 !important;
+    border: none !important;
+    border-top: 1px solid rgba(255, 255, 255, .1) !important;
+    background: var(--surface) !important;
+    box-shadow: 0 -8px 30px rgba(0, 0, 0, .45) !important;
+    padding: 12px 0;
+    padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+    max-height: min(70dvh, 70vh);
+    overflow-y: auto;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior: contain;
+    flex-direction: column;
+    /* Own the vertical gesture ourselves so a downward pull drags the sheet
+       instead of being swallowed by the browser as native scroll (which would
+       fire pointercancel and abort our drag/dismiss handlers). The sheet JS
+       decides between internal scroll (when scrolled) and drag (at the top). */
+    touch-action: none;
+  }
+
+  /* The np-more menu lives in a flex row (.np-more-wrap) when closed; once
+     it is a sheet it becomes a standalone bottom layer, so give it a solid
+     stacking surface and real button rows. */
+  #np-more-menu.mobile-open,
+  body .mobile-now-playing-menu.mobile-open {
+    display: flex !important;
+  }
+
+  /* Slide-up entrance / exit. The base rules use a small translate/scale
+     pop for desktop; we replace that with a true sheet rise here. --sheet-drag-y
+     is authored by JS during a pull-down-to-dismiss gesture (a no-op when
+     unset), so the drag is perfectly in sync with the open/close animation. */
+  .result-more-menu:not(.open),
+  .queue-more-menu:not(.open),
+  .playlist-more-menu:not(.open),
+  #playlist-detail-more-menu:not(.open),
+  #np-more-menu.mobile-open:not([data-sheet-dragging]),
+  body .mobile-now-playing-menu.mobile-open:not([data-sheet-dragging]) {
+    transform: translateY(101%) !important;
+  }
+  .result-more-menu.open,
+  .queue-more-menu.open,
+  .playlist-more-menu.open,
+  #playlist-detail-more-menu.open,
+  #np-more-menu.mobile-open[data-sheet-dragging],
+  body .mobile-now-playing-menu.mobile-open[data-sheet-dragging] {
+    transform: translateY(var(--sheet-drag-y, 0px)) !important;
+  }
+  /* Opening: slide up quickly. The base rules hide the menu with
+     `visibility: hidden`, so we must keep `visibility` part of the lifecycle
+     or the sheet would vanish instantly when `.open` is dropped (no visible
+     closing animation on scrim tap). Instead: open sets visibility now; the
+     closed state hides visibility only *after* the slide-down finishes. */
+  .result-more-menu,
+  .queue-more-menu,
+  .playlist-more-menu,
+  #playlist-detail-more-menu,
+  #np-more-menu.mobile-open,
+  body .mobile-now-playing-menu.mobile-open {
+    transition: transform .22s cubic-bezier(.22, .61, .36, 1),
+                opacity .18s ease,
+                visibility 0s 0s !important;
+  }
+  .result-more-menu:not(.open),
+  .queue-more-menu:not(.open),
+  .playlist-more-menu:not(.open),
+  #playlist-detail-more-menu:not(.open) {
+    transition: transform .22s cubic-bezier(.55, .06, .68, .19),
+                opacity .18s ease,
+                visibility 0s .22s !important;
+  }
+  /* While actively pulling the sheet, disable the transition so the sheet
+     follows the finger; JS restores it on release. */
+  .result-more-menu[data-sheet-dragging],
+  .queue-more-menu[data-sheet-dragging],
+  .playlist-more-menu[data-sheet-dragging],
+  #playlist-detail-more-menu[data-sheet-dragging],
+  #np-more-menu.mobile-open[data-sheet-dragging],
+  body .mobile-now-playing-menu.mobile-open[data-sheet-dragging] {
+    transition: transform 0s linear, visibility 0s 0s !important;
+  }
+
+  /* Grab handle pill at the top of the sheet. */
+  .result-more-menu::before,
+  .queue-more-menu::before,
+  .playlist-more-menu::before,
+  #playlist-detail-more-menu::before,
+  #np-more-menu.mobile-open::before,
+  body .mobile-now-playing-menu.mobile-open::before {
+    content: '';
+    display: block !important;
+    width: 40px;
+    height: 4px;
+    margin: -2px auto 10px;
+    border-radius: 999px;
+    background: rgba(255, 255, 255, .3);
+    flex: none;
+    pointer-events: none;
+  }
+
+  /* ---- Wider, taller, touch-friendly options (min 44x44 target) ---- */
+  .result-more-menu .result-menu-option,
+  .queue-more-menu .queue-menu-option,
+  .playlist-more-menu .queue-menu-option,
+  .playlist-more-menu .result-menu-option,
+  #np-more-menu.mobile-open button,
+  body .mobile-now-playing-menu.mobile-open button,
+  #np-more-menu.mobile-open a,
+  body .mobile-now-playing-menu.mobile-open a {
+    min-height: 54px;
+    width: auto;
+    margin: 0;
+    padding: 0 18px;
+    font-size: 1rem;
+    white-space: normal;
+    word-break: break-word;
+    align-items: center;
+    justify-content: flex-start;
+    text-align: left;
+  }
+  .result-menu-option + .result-menu-option,
+  .queue-menu-option + .queue-menu-option {
+    border-top: 1px solid var(--border);
+  }
+  .result-menu-option svg,
+  .queue-menu-option svg,
+  #np-more-menu.mobile-open button svg,
+  body .mobile-now-playing-menu.mobile-open button svg {
+    width: 20px;
+    height: 20px;
+    flex: none;
+  }
+}
+
+/* ---- Scrim behind an open context sheet. Its visibility is driven by
+       body.context-sheet-open (set by mobile-context-sheet.js). ---- */
+.context-sheet-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 9998;
+  background: rgba(0, 0, 0, .55);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .25s ease;
+}
+body.context-sheet-open .context-sheet-scrim {
+  opacity: 1;
+  pointer-events: auto;
+}
+body.context-sheet-open {
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
+/* Small screens: cap the sheet lower so the most common 6–9 option menus
+   comfortably fit without their own internal scroll. */
+@media (max-width: 899px) and (max-height: 620px) {
+  .result-more-menu,
+  .queue-more-menu,
+  .playlist-more-menu,
+  #playlist-detail-more-menu,
+  #np-more-menu.mobile-open,
+  body .mobile-now-playing-menu.mobile-open {
+    max-height: 78dvh;
+  }
+}
