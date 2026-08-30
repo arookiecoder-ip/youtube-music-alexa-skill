@@ -10,6 +10,7 @@ HANDOFF.md
 .storage*.db
 flask-server/api_key.txt
 flask-server/data.db
+flask-server/secret_key.txt
 lambda.zip
 .planning/
 AGENTS.md
