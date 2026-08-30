@@ -1706,6 +1706,37 @@
   .mood-page-skeleton-grid { grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); }
 }
 
+/* Routed full-page header / body primitives shared by Explore, Library and
+   Mood. These carry full-page document-flow styling directly (no inherited
+   modal-card overlay). A plain header/body keeps simple flex + baseline
+   heading styles; the routed page rules below set their widths/spacing. */
+#explore-page .page-header,
+#library-page .page-header,
+#mood-page .page-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  box-sizing: border-box;
+  padding: var(--space-4) var(--space-4) var(--space-4) 20px;
+}
+#explore-page .page-header h3,
+#library-page .page-header h3,
+#mood-page .page-header h3 {
+  margin: 0;
+  font-size: .85rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .14em;
+  color: var(--text);
+}
+#explore-page .page-body,
+#library-page .page-body,
+#mood-page .page-body {
+  flex: 1;
+  min-height: 0;
+  box-sizing: border-box;
+}
+
 @media (min-width: 900px) {
   /* ============================================================
      Explore, Library & Mood/Genre: full-page routed views.
@@ -1726,47 +1757,41 @@
     box-shadow: none;
     overscroll-behavior: none;
   }
-  #explore-page .history-modal-header,
-  #library-page .history-modal-header {
+  #explore-page .page-header,
+  #library-page .page-header {
     width: min(1500px, 100%);
     margin: 0 auto;
     padding: 18px 32px;
-    box-sizing: border-box;
     border-bottom: none;
   }
-  #mood-page .history-modal-header {
+  #mood-page .page-header {
     width: 100%;
     max-width: none;
     margin: 0;
     padding: 18px 32px;
-    box-sizing: border-box;
     border-bottom: none;
   }
-  #explore-page .history-modal-body,
-  #library-page .history-modal-body {
+  #explore-page .page-body,
+  #library-page .page-body {
     width: min(1500px, 100%);
     margin: 0 auto;
     padding-left: 32px;
     padding-right: 32px;
-    box-sizing: border-box;
     overflow-y: visible;
     overscroll-behavior: contain;
-    flex: 1;
   }
-  #mood-page .history-modal-body {
+  #mood-page .page-body {
     width: 100%;
     max-width: none;
     margin: 0;
     padding-left: 32px;
     padding-right: 32px;
-    box-sizing: border-box;
     overflow-y: visible;
     overscroll-behavior: contain;
-    flex: 1;
   }
-  #explore-page .history-modal-header h3,
-  #mood-page .history-modal-header h3,
-  #library-page .history-modal-header h3 {
+  #explore-page .page-header h3,
+  #mood-page .page-header h3,
+  #library-page .page-header h3 {
     text-transform: none;
     letter-spacing: -.01em;
     font-size: 1.3rem;
@@ -1863,9 +1888,9 @@
     box-shadow: none;
   }
 
-  #explore-page .history-modal-body,
-  #library-page .history-modal-body,
-  #mood-page .history-modal-body {
+  #explore-page .page-body,
+  #library-page .page-body,
+  #mood-page .page-body {
     flex: 1;
     min-height: 0;
     overflow-y: auto;
@@ -1873,15 +1898,15 @@
     padding-bottom: calc(var(--playbar-h-mobile) + 28px + env(safe-area-inset-bottom, 0px));
   }
 
-  #explore-page .history-modal-header,
-  #mood-page .history-modal-header {
+  #explore-page .page-header,
+  #mood-page .page-header {
     border-bottom: 0;
     padding-left: 0;
   }
-  #mood-page .history-modal-header {
+  #mood-page .page-header {
     padding-left: 16px;
   }
-  #library-page .history-modal-header {
+  #library-page .page-header {
     border-bottom: 0;
   }
 
@@ -2112,9 +2137,9 @@
     overflow: visible;
     touch-action: pan-y;
   }
-  body.explore-route .history-modal-body,
-  body.mood-route .history-modal-body,
-  body.library-route .history-modal-body {
+  body.explore-route .page-body,
+  body.mood-route .page-body,
+  body.library-route .page-body {
     flex: none;
     overflow: visible;
   }

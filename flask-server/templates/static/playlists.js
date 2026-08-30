@@ -36,7 +36,7 @@
       images.forEach(load);
       return;
     }
-    const scrollRoot = root.closest('.history-modal-body') || null;
+    const scrollRoot = root.closest('.collection-detail-body') || null;
     // The mobile playlist is a document-scrolling page, not a modal body.
     // An IntersectionObserver rooted at an overflow-visible element can
     // miss every image, leaving the data-src placeholders permanently blank.
@@ -642,7 +642,7 @@
             let nextOffset = Number(pl.next_offset) || tracks.length;
             let loadingTracks = false;
             let exhausted = false;
-            const scrollRoot = list.closest('.history-modal-body');
+            const scrollRoot = list.closest('.collection-detail-body');
             const cleanupPagination = () => {
               exhausted = true;
               loadingObserver.disconnect();
