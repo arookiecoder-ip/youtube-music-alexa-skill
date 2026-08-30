@@ -256,6 +256,26 @@
 }
 
 /* ── Playlist Detail Hero (collage + metadata) ── */
+/* Routed full-page header. Carries the flex layout the shared
+   `.history-modal-header` bundled; hidden entirely on mobile and collapsed
+   to an absolute overlay on desktop, so only the back button (kept) and the
+   moved-in header-actions wrappers rely on the flex row here. */
+#collection-detail-shell .collection-detail-page-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  box-sizing: border-box;
+}
+#collection-detail-shell .collection-detail-page-header h3 {
+  margin: 0;
+  color: var(--text);
+}
+#collection-detail-shell .collection-detail-body {
+  flex: 1;
+  min-height: 0;
+  box-sizing: border-box;
+}
+
 #collection-detail-shell {
   background: none !important;
   border: 0 !important;
@@ -573,7 +593,7 @@
   }
   #collection-detail-shell { position: relative; }
   #playlist-detail-back { display: none !important; }
-  #collection-detail-shell .history-modal-header {
+  #collection-detail-shell .collection-detail-page-header {
     position: absolute;
     inset: 14px 20px auto;
     width: auto;
@@ -581,8 +601,8 @@
     z-index: 3;
     pointer-events: none;
   }
-  #collection-detail-shell .history-modal-header > * { pointer-events: auto; }
-  #collection-detail-shell .history-modal-header h3 { display: none; }
+  #collection-detail-shell .collection-detail-page-header > * { pointer-events: auto; }
+  #collection-detail-shell .collection-detail-page-header h3 { display: none; }
   #collection-detail-shell .history-modal-header-actions { display: none; }
   #collection-detail-shell .playlist-detail-actions { display: none; }
   .collection-detail-body {
@@ -779,7 +799,7 @@
     opacity: 1;
   }
 
-  body.playlists-route #collection-detail-shell .history-modal-header {
+  body.playlists-route #collection-detail-shell .collection-detail-page-header {
     display: none;
   }
 
@@ -884,7 +904,7 @@
     overflow-y: auto;
     overflow-x: hidden;
   }
-  #collection-detail-shell .history-modal-body {
+  #collection-detail-shell .collection-detail-body {
     overscroll-behavior: contain;
   }
   /* The routed collection page must fill the viewport beneath the header so
@@ -938,20 +958,20 @@
     border-radius: 0;
     box-shadow: none;
   }
-  #collection-detail-shell .history-modal-header {
+  #collection-detail-shell .collection-detail-page-header {
     border-bottom: none;
     width: min(1100px, 100%);
     margin: 0 auto;
     padding: 18px 32px;
     box-sizing: border-box;
   }
-  #collection-detail-shell .history-modal-body {
+  #collection-detail-shell .collection-detail-body {
     width: min(1100px, 100%);
     margin: 0 auto;
     padding-left: 32px;
     padding-right: 32px;
   }
-  #collection-detail-shell .history-modal-header h3 {
+  #collection-detail-shell .collection-detail-page-header h3 {
     text-transform: none;
     letter-spacing: -.01em;
     font-size: 1.3rem;
