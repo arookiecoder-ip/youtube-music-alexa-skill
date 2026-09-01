@@ -126,12 +126,10 @@
     background: none;
     border: none;
     opacity: 0;
-    transform: translateY(8px);
-    transition: opacity .28s ease, transform .28s ease;
+    transition: opacity .28s ease;
   }
   #results-section.is-visible {
     opacity: 1;
-    transform: none;
   }
   /* Cold search routes show a stable placeholder list until the API response
      arrives. Keep the geometry close to the real "All" results layout (Top
