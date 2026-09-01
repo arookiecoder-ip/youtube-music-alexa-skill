@@ -15,6 +15,8 @@
   if (state._searchHandoffQuery === undefined) state._searchHandoffQuery = '';
   if (state._searchHandoffData === undefined) state._searchHandoffData = null;
   if (state._searchHandoffSeq === undefined) state._searchHandoffSeq = 0;
+  if (state._searchSourceRoute === undefined) state._searchSourceRoute = '';
+  if (state._searchSourceScrollY === undefined) state._searchSourceScrollY = null;
 
 const RESULTS_PER_PAGE = 10;
 
@@ -91,6 +93,14 @@ async function runSearch(query, options) {
     state._searchPreviousRoute = currentRoute.indexOf('#search?') === 0 && state._searchPreviousRoute
       ? state._searchPreviousRoute
       : currentRoute;
+    // Remember where the page was scrolled when the search started. Returning
+    // to that route after the Results handoff restores this offset; without it
+    // the router's destination-scoped scroll reset leaves the source page at
+    // the top, which reads as the page having been pushed down.
+    if (currentRoute.indexOf('#search?') !== 0) {
+      state._searchSourceRoute = currentRoute;
+      state._searchSourceScrollY = window.scrollY;
+    }
     state._searchPreviousViewVisible = ['home-section', 'jam-home-section', 'recs-section',
       'artist-section', 'artist-songs-section', 'history-page',
       'collection-detail-page', 'explore-page', 'mood-page', 'library-page'].some(id => {
