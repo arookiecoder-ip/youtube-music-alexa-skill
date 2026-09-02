@@ -669,6 +669,39 @@
 .np-page-art.image-loading {
   opacity: 0;
 }
+/* Mobile swipe-to-skip: the adjacent track's cover revealed beside the current
+   artwork while the user drags, then settled into the artwork's home position
+   on commit so the banner is never blank during the Alexa round-trip. It is
+   positioned over the artwork's exact box (set inline per gesture) and clipped
+   by .np-page-left's overflow:hidden until the drag pulls it in from the
+   screen edge. z-index: 0 matches the artwork's mobile stacking context so
+   DOM order (this layer is inserted BEFORE .np-page-art) still paints it
+   beneath the opaque artwork, while giving the layer its own context so the
+   bottom fade below can sit inside it. */
+.np-swipe-incoming {
+  position: absolute;
+  border-radius: 0;
+  background: var(--surface) center / cover no-repeat;
+  box-shadow: 0 14px 34px rgba(0,0,0,.4);
+  pointer-events: none;
+  z-index: 0;
+}
+/* Bottom bleed on the revealed cover, mirroring the artwork's own
+   .np-page-art::after fade: while the user drags (and in the brief window
+   after commit when this layer IS the banner), the incoming cover must fade
+   into the dark at its bottom edge exactly like the current artwork does.
+   Without it the bottom blend visibly vanished during swipes. */
+.np-swipe-incoming::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background: linear-gradient(to top,
+    #0b0503 0%,
+    rgba(0, 0, 0, .55) 40%,
+    rgba(0, 0, 0, 0) 100%);
+}
 .np-page-art {
   transition: box-shadow .4s ease, opacity .5s ease, transform .5s ease;
 }
