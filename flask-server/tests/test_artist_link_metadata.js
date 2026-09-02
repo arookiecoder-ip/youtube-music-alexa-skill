@@ -140,6 +140,8 @@ sandbox._resolvedNowPlayingArt = new Map();
 sandbox._ambientNowPlayingArt = new Map();
 sandbox._pendingNowPlayingArt = new Map();
 sandbox._lastNpFingerprint = '';
+sandbox._swipeOptimisticVideoId = '';
+sandbox._swipeOptimisticAt = 0;
 sandbox.preloadNowPlayingArtwork = () => {};
 sandbox.resolveNowPlayingArtwork = () => Promise.resolve('');
 sandbox.updateUrlBar = () => {};

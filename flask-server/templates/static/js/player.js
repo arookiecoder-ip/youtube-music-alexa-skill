@@ -130,6 +130,14 @@ function syncPlayPause() {
 /* ---- now-playing display (single element, no dual placeholder bug) ---- */
 // Last-rendered track fingerprint — used to skip redundant DOM writes.
 let _lastNpFingerprint = '';
+// Optimistic adjacent-track identity used by the mobile swipe-to-skip banner:
+// after a committed swipe the hero already shows the next/previous cover while
+// the Alexa round-trip is in flight, and this id lets a second quick swipe
+// compute its own neighbour from the *shown* track instead of the stale
+// server track. Cleared once a confirmed now-playing snapshot lands (or left
+// to expire so a failed nav can't poison future gestures).
+let _swipeOptimisticVideoId = '';
+let _swipeOptimisticAt = 0;
 // Keep the sharp foreground artwork and the first ambient-preview artwork
 // separately. A repeated now-playing update must not replay the blur simply
 // because the server sent the original small thumbnail again.
@@ -375,6 +383,23 @@ function showNowPlaying(info) {
   const changed = fp !== _lastNpFingerprint;
   if (changed) {
     _lastNpFingerprint = fp;
+    // A confirmed now-playing snapshot supersedes the swipe-optimistic
+    // adjacent cover: drop the optimistic identity and retire the temporary
+    // reveal layer (harmless if no swipe is in flight — the artwork paint
+    // below has already been promoted / updated). Capture whether this
+    // confirmation is for the very cover the swipe already painted on the
+    // hero — in that case the banner is already displayed, so the confirm
+    // must NOT blank it, repaint a different rendition, or replay the entrance
+    // animation (each of those reads as a flicker after the swipe).
+    const swipeBannerAlreadyShown = !!_swipeOptimisticVideoId
+      && _swipeOptimisticVideoId === (info.video_id || info.videoId);
+    _swipeOptimisticVideoId = '';
+    const swipeHero = document.getElementById('np-page-art');
+    if (swipeHero && swipeHero._swipeIncomingLayer) {
+      const stale = swipeHero._swipeIncomingLayer;
+      swipeHero._swipeIncomingLayer = null;
+      if (stale && stale.parentElement) stale.parentElement.removeChild(stale);
+    }
     np.classList.add('visible');
     document.getElementById('np-title').textContent = info.title;
     document.getElementById('np-artist').innerHTML = artistMarkup;
@@ -403,15 +428,23 @@ function showNowPlaying(info) {
       // The compact player keeps its original shelf thumbnail; only the
       // expanded hero is upgraded after its HD rendition is decoded.
       artwork.forEach((el) => {
+        // When the confirmation is for the cover the swipe already put on the
+        // hero and the HD rendition isn't resolved yet, keep that paint as-is:
+        // toggling image-loading fades the hero to transparent and reassigning
+        // the background force-swaps renditions — both look like a flicker on
+        // top of artwork that is already correct. The decode + HD upgrade path
+        // below still applies once it completes.
+        if (swipeBannerAlreadyShown && el === npPageArt && !cachedHighRes) return;
         el.style.backgroundImage = url;
-        el.classList.toggle('image-loading', !cachedHighRes);
+        el.classList.toggle('image-loading',
+          !cachedHighRes && !(swipeBannerAlreadyShown && el === npPageArt));
         el.classList.add('has-thumb');
       });
       if (npPageArt) {
         const npPage = npPageArt.closest('.np-page');
         if (cachedHighRes) npPageArt.style.backgroundImage = 'url(' + cachedHighRes + ')';
         npPage.style.setProperty('--np-cover', ambientUrl);
-        npPage.classList.toggle('image-loading', !cachedHighRes);
+        npPage.classList.toggle('image-loading', !cachedHighRes && !swipeBannerAlreadyShown);
         document.body.style.setProperty('--np-cover', ambientUrl);
       }
       if (!cachedHighRes) {
@@ -485,8 +518,16 @@ function showNowPlaying(info) {
     // Visual cue for the song change. Called AFTER background-image / text
     // updates so the artwork already shows the new cover as it animates in.
     // Skipped internally when a swipe-exit is still in flight, so a swipe
-    // and a same-frame SSE update don't fight each other.
-    playArtworkSwapIn();
+    // and a same-frame SSE update don't fight each other. A confirmation that
+    // merely officializes the swipe's own optimistic cover is NOT a fresh
+    // entrance: replaying the slide/fade here would flicker a banner that has
+    // been sitting on screen for seconds. Consume the stale direction instead
+    // so a later genuine change animates from the default side.
+    if (swipeBannerAlreadyShown) {
+      delete npPageArt.dataset.navDirection;
+    } else {
+      playArtworkSwapIn();
+    }
   }
 
   if (!changed && artistMarkupChanged) {
@@ -1900,6 +1941,185 @@ for (const btn of document.querySelectorAll('[data-action="previous"], [data-act
 
   let active = null; // {pointerId,startX,startY,lastX,lastY,startedAt,axis}
 
+  // Optimistic adjacent-track banner: while the user drags, the next/previous
+  // cover is revealed flush against the artwork and settles into place on
+  // commit, so the banner is never blank during (or right after) a swipe while
+  // the Alexa round-trip is still in flight. The layer sits directly beneath
+  // the artwork (inserted before it in DOM order), so at rest the opaque art
+  // fully hides it; the art's own `overflow:hidden` ancestors would clip it,
+  // so it lives as a sibling on .np-page-left and is clipped by that panel's
+  // overflow:hidden until the drag pulls it in from the screen edge.
+  let incomingLayer = null; // <div class="np-swipe-incoming">, reused across gestures
+  let incoming = null;     // { layer, track, direction } while a reveal is live
+
+  function queueItemThumb(item) {
+    if (!item) return '';
+    if (typeof item.thumbnail === 'string' && item.thumbnail) return item.thumbnail;
+    if (item.thumbnail && item.thumbnail.url) return item.thumbnail.url;
+    if (Array.isArray(item.thumbnails) && item.thumbnails.length) {
+      const last = item.thumbnails[item.thumbnails.length - 1];
+      return (last && last.url) || '';
+    }
+    return '';
+  }
+
+  // Fallback source for findAdjacentTrack when the server queue snapshot is
+  // empty: the nav command handler resets state._lastQueueJson, and a snapshot
+  // that omits the queue never repopulates it — but the now-playing page's
+  // rendered queue rows persist in the DOM and keep their own order/identity.
+  function adjacentTrackFromDom(direction) {
+    const list = document.getElementById('np-queue-list');
+    if (!list || !list.querySelectorAll) return null;
+    const rows = Array.prototype.slice.call(list.querySelectorAll('.queue-swipe-wrapper'));
+    if (!rows.length) return null;
+    const ordered = rows
+      .map((row) => ({
+        row,
+        index: Number(row.dataset && row.dataset.index),
+        videoId: (row.dataset && row.dataset.videoId) || '',
+      }))
+      .filter((row) => Number.isFinite(row.index))
+      .sort((a, b) => a.index - b.index);
+    if (!ordered.length) return null;
+    const optimisticId = (Date.now() - _swipeOptimisticAt < 10000) ? _swipeOptimisticVideoId : '';
+    const wantId = optimisticId || state._currentVideoId || '';
+    let pos = ordered.findIndex((row) => row.videoId === wantId);
+    if (pos < 0) {
+      // Fall back to the row the UI currently marks as playing.
+      const activeRow = rows.find((row) => {
+        const item = row.querySelector && row.querySelector('.queue-item');
+        return item && item.classList && item.classList.contains('active');
+      });
+      if (activeRow) pos = ordered.findIndex((row) => row.row === activeRow);
+    }
+    if (pos < 0) return null;
+    const target = direction === 'next' ? pos + 1 : pos - 1;
+    if (target < 0 || target >= ordered.length) return null;
+    const row = ordered[target].row;
+    const track = row._songContextTrack || {};
+    const title = (typeof track.title === 'string' && track.title)
+      ? track.title
+      : ((row.querySelector && row.querySelector('.queue-title')) || {}).textContent || '';
+    const artist = (typeof track.artist === 'string' && track.artist)
+      ? track.artist
+      : ((row.querySelector && row.querySelector('.queue-artist')) || {}).textContent || '';
+    let thumbnail = queueItemThumb(track);
+    if (!thumbnail) {
+      const img = row.querySelector && row.querySelector('img.queue-thumb');
+      thumbnail = img ? img.src || '' : '';
+    }
+    return {
+      video_id: ordered[target].videoId,
+      title,
+      artist,
+      thumbnail,
+    };
+  }
+
+  // The track a swipe in `direction` will land on, per the server queue.
+  // Returns null when there is no adjacent entry (queue start/end, empty).
+  function findAdjacentTrack(direction) {
+    let queue = [];
+    try { queue = JSON.parse(state._lastQueueJson || '[]'); } catch (_) {}
+    if (Array.isArray(queue) && queue.length) {
+      let index = state._lastQueueIndex;
+      // After a committed swipe the banner already shows the adjacent track
+      // while the round-trip is in flight; base a second swipe on that
+      // optimistic id so it reveals the *next* neighbor, not the same cover.
+      const optimisticId = (Date.now() - _swipeOptimisticAt < 10000) ? _swipeOptimisticVideoId : '';
+      const wantId = optimisticId || state._currentVideoId || '';
+      if (wantId) {
+        const byId = queue.findIndex((item) => item && (item.video_id || item.videoId) === wantId);
+        if (byId >= 0) index = byId;
+      }
+      if (index >= 0) {
+        const target = direction === 'next' ? index + 1 : index - 1;
+        if (target >= 0 && target < queue.length) return queue[target] || null;
+      }
+    }
+    // The snapshot queue can be empty here even though the app is mid-queue
+    // (see adjacentTrackFromDom); fall back to the rendered DOM rows.
+    return adjacentTrackFromDom(direction);
+  }
+
+  // Put the adjacent track's cover into the reveal layer, parked off-screen on
+  // the side `direction` enters from ("next" waits off the right edge,
+  // "previous" off the left), flush against the artwork's resting box.
+  function showIncomingLayer(direction, track) {
+    let layer = incomingLayer;
+    if (!layer) {
+      layer = document.createElement('div');
+      layer.id = 'np-swipe-incoming';
+      layer.className = 'np-swipe-incoming';
+      layer.setAttribute('aria-hidden', 'true');
+      art.parentElement.insertBefore(layer, art);
+      incomingLayer = layer;
+    } else {
+      // Re-insert to guarantee it still paints beneath the artwork.
+      if (layer.parentElement !== art.parentElement || layer.nextSibling !== art) {
+        art.parentElement.insertBefore(layer, art);
+      }
+    }
+    const artRect = art.getBoundingClientRect();
+    const parentRect = art.parentElement.getBoundingClientRect();
+    layer.style.top = (artRect.top - parentRect.top) + 'px';
+    layer.style.left = (artRect.left - parentRect.left) + 'px';
+    layer.style.width = artRect.width + 'px';
+    layer.style.height = artRect.height + 'px';
+    layer.style.visibility = 'visible';
+    layer.style.backgroundImage = 'url(' + queueItemThumb(track) + ')';
+    // Preload the confirmed artwork now so the hero paint showNowPlaying
+    // performs after the round-trip is instant (no image-loading blank).
+    const videoId = track && (track.video_id || track.videoId || '');
+    if (videoId) void resolveNowPlayingArtwork(videoId);
+    const w = artRect.width || art.clientWidth || 1;
+    layer.style.transition = 'none';
+    layer.style.transform = 'translateX(' + (direction === 'next' ? w : -w) + 'px)';
+    incoming = { layer, track, direction };
+    art._swipeIncomingLayer = layer;
+  }
+
+  function hideIncoming() {
+    if (!incoming) return false;
+    if (incoming.layer) {
+      incoming.layer.style.visibility = 'hidden';
+      incoming.layer.style.transform = '';
+      incoming.layer.style.transition = '';
+    }
+    incoming = null;
+    if (art._swipeIncomingLayer) art._swipeIncomingLayer = null;
+    return true;
+  }
+
+  // On commit the artwork itself exits off-screen; promote the adjacent track
+  // onto the art (cover + title + artist) so that when the exit transform is
+  // cleared the banner returns already showing the new cover — no blank frame
+  // while the Alexa round-trip completes. showNowPlaying() overwrites every
+  // field here the moment the server confirms the real track.
+  function promoteIncomingToArt(track) {
+    const thumb = queueItemThumb(track);
+    if (!thumb) return;
+    const videoId = track && (track.video_id || track.videoId || '');
+    const cachedHighRes = videoId && _resolvedNowPlayingArt.get(videoId);
+    art.style.backgroundImage = 'url(' + (cachedHighRes || thumb) + ')';
+    art.classList.add('has-thumb');
+    art.classList.remove('image-loading');
+    const title = (typeof track.title === 'string' && track.title) ? track.title : '';
+    const artist = (typeof track.artist === 'string' && track.artist)
+      ? track.artist
+      : (Array.isArray(track.artists)
+          ? track.artists.map((a) => a && (a.name || a)).filter(Boolean).join(', ')
+          : '');
+    const pageTitle = document.getElementById('np-page-title');
+    const pageArtist = document.getElementById('np-page-artist');
+    if (pageTitle) pageTitle.textContent = title;
+    if (pageArtist) pageArtist.textContent = artist;
+    // Remember the optimistic id so a second swipe during the round-trip asks
+    // for the track AFTER this one.
+    _swipeOptimisticVideoId = videoId || '';
+    _swipeOptimisticAt = Date.now();
+  }
+
   function canStart() {
     if (!art.isConnected || art.hidden) return false;
     if (!window.matchMedia('(max-width: 899px)').matches) return false;
@@ -1977,6 +2197,10 @@ for (const btn of document.querySelectorAll('[data-action="previous"], [data-act
     if (e.pointerType === 'mouse' && e.button !== 0) return;
     if (active) return; // Ignore secondary fingers.
     if (!canStart()) return;
+    // A new gesture starts clean: any layer left over from a previous commit
+    // (settled as the banner) or snap-back must not be reused with stale
+    // artwork — the first horizontal move rebuilds it for this gesture.
+    hideIncoming();
     // Defensive: if any descendant overlay ever becomes interactive on mobile
     // again, treat taps inside it as separate targets, not swipe starts.
     if (e.target.closest('.np-page-art-overlay')) return;
@@ -2016,13 +2240,44 @@ for (const btn of document.querySelectorAll('[data-action="previous"], [data-act
     }
     if (active.axis !== 'h') return;
     // Soft resistance past the visible artwork width so a wild fling doesn't
-    // visually leap across the page. Past RESISTANCE_START_PX, every
-    // RESISTANCE_DIVISOR_PX adds another factor of resistance (divide by 2
-    // per chunk). The artwork is ~265px on mobile, so RESISTANCE_START_PX
-    // matches that plus margin.
-    const sign = dx >= 0 ? 1 : -1;
-    const limited = dx / (1 + Math.max(0, absX - RESISTANCE_START_PX) / RESISTANCE_DIVISOR_PX);
+    // visually leap across the page: EXACT 1:1 tracking below
+    // RESISTANCE_START_PX (the artwork must follow the finger precisely), then
+    // above that each further RESISTANCE_DIVISOR_PX adds half as much visual
+    // travel as the one before (asymptotically ~RESISTANCE_START_PX + 2x
+    // DIVISOR). The offset must also stay MONOTONIC in the finger travel — an
+    // earlier dampening formula (dx/(1+over/80)) declined past ~240px, sliding
+    // the banner BACKWARD the further the finger pushed, and a first attempt at
+    // fixing it accidentally made every sub-240px drag snap to 240px instead of
+    // tracking the finger.
+    const over = Math.max(0, absX - RESISTANCE_START_PX);
+    const limitedAbs = Math.min(absX, RESISTANCE_START_PX)
+      + over / (1 + over / RESISTANCE_DIVISOR_PX);
+    const limited = (dx >= 0 ? 1 : -1) * limitedAbs;
     art.style.transform = 'translateX(' + limited.toFixed(1) + 'px)';
+    // Reveal the adjacent cover beside the artwork as it slides. Direction is
+    // re-derived on every move: if the finger reverses across the axis, the
+    // layer re-points at the other neighbour (rare, but keeps the revealed
+    // cover matching the direction the gesture will commit in).
+    const dragDirection = dx < 0 ? 'next' : 'previous';
+    if (!incoming || incoming.direction !== dragDirection) {
+      const adjacent = findAdjacentTrack(dragDirection);
+      if (adjacent && queueItemThumb(adjacent)) {
+        showIncomingLayer(dragDirection, adjacent);
+      } else {
+        hideIncoming();
+      }
+    }
+    if (incoming) {
+      // Sync the layer by the same (resistance-limited) delta so it stays
+      // flush against the artwork's moving edge, sliding in from the screen
+      // edge the incoming track should come from: "next" (swiping left) is
+      // parked off the RIGHT edge (+w), "previous" (swiping right) off the
+      // LEFT edge (-w) — the same base showIncomingLayer parked it at.
+      const w = incoming.layer.offsetWidth || art.clientWidth || 1;
+      const fromSide = dragDirection === 'next' ? w : -w;
+      incoming.layer.style.transform =
+        'translateX(' + (fromSide + limited).toFixed(1) + 'px)';
+    }
     active.lastX = e.clientX;
   }
 
@@ -2089,10 +2344,43 @@ for (const btn of document.querySelectorAll('[data-action="previous"], [data-act
     const wasActive = active;
     active = null;
     if (!commit) {
+      // Tuck the revealed cover back off-screen as the artwork springs back,
+      // so the snap doesn't pop the neighbour out from under it. The layer is
+      // removed once it has slid back under the art (identity-guarded so a
+      // queued removal can never kill a newer gesture's layer).
+      if (incoming) {
+        const layer = incoming.layer;
+        const w = layer.offsetWidth || art.clientWidth || 1;
+        const side = incoming.direction === 'next' ? 1 : -1;
+        layer.style.transition = 'transform 200ms cubic-bezier(.22,1,.36,1)';
+        layer.style.transform = 'translateX(' + (side * w) + 'px)';
+        setTimeout(() => {
+          if (incoming && incoming.layer === layer) hideIncoming();
+        }, 210);
+      }
       snapBack();
       return;
     }
     const direction = wasActive.lastX < wasActive.startX ? 'next' : 'previous';
+    // A committed gesture always settles in the layer it revealed; re-point it
+    // at the committed direction's neighbour if the finger reversed mid-drag.
+    if (incoming && incoming.direction !== direction) {
+      const adjacent = findAdjacentTrack(direction);
+      if (adjacent && queueItemThumb(adjacent)) {
+        showIncomingLayer(direction, adjacent);
+      } else {
+        hideIncoming();
+      }
+    }
+    if (incoming) {
+      const layer = incoming.layer;
+      // The neighbour settles into the artwork's home position, becoming the
+      // banner; meanwhile the artwork exits off-screen and returns with the
+      // same cover promoted onto it, so there is no blank frame either way.
+      layer.style.transition = 'transform ' + EXIT_MS + 'ms cubic-bezier(.22,1,.36,1)';
+      layer.style.transform = 'translateX(0)';
+      promoteIncomingToArt(incoming.track);
+    }
     // Remember the incoming-track side so the swap-in banner can slide in from
     // the opposite edge ("next" -> from the right, "previous" -> from the left).
     art.dataset.navDirection = direction;
@@ -2160,6 +2448,9 @@ for (const btn of document.querySelectorAll('[data-action="previous"], [data-act
     }
     if (document.body.classList.contains('now-playing-closing')) {
       hideSwipeFeedback();
+      // The route is closing mid-gesture; drop the reveal layer immediately
+      // so it can't bleed onto the page that replaces the player.
+      hideIncoming();
     }
   });
 })();
