@@ -78,7 +78,10 @@ check('confirmed now-playing snapshot retires the optimistic banner',
 check('a same-track confirmation is detected before the optimistic id is cleared',
   /const swipeBannerAlreadyShown = !!_swipeOptimisticVideoId[\s\S]*?_swipeOptimisticVideoId === \(info\.video_id \|\| info\.videoId\);\s*_swipeOptimisticVideoId = '';/.test(player));
 check('confirming the swipe\'s own cover keeps the hero paint (no blank, no rendition swap)',
-  /if \(swipeBannerAlreadyShown && el === npPageArt && !cachedHighRes\) return;[\s\S]*?el\.classList\.toggle\('image-loading',\s*!cachedHighRes && !\(swipeBannerAlreadyShown && el === npPageArt\)\);/.test(player));
+  /if \(swipeBannerAlreadyShown && el === npPageArt\) return;[\s\S]*?el\.classList\.toggle\('image-loading',\s*!cachedHighRes\);/.test(player) &&
+  /if \(cachedHighRes && !swipeBannerAlreadyShown\) \{[\s\S]*?npPageArt\.style\.backgroundImage = 'url\(' \+ cachedHighRes \+ '\)';/.test(player));
+check('the deferred HD upgrade skips the hero for the swipe\'s own cover',
+  /const heroUpgrade = \(swipeBannerAlreadyShown \|\| !npPageArt\) \? \[\] : \[npPageArt\];[\s\S]*?upgradeLowResNowPlayingArt\(info, fp, heroUpgrade,/.test(player));
 check('confirming the swipe\'s own cover skips the entrance animation (no flicker)',
   /if \(swipeBannerAlreadyShown\) \{[\s\S]*?delete npPageArt\.dataset\.navDirection;[\s\S]*?\} else \{[\s\S]*?playArtworkSwapIn\(\);\s*\}/.test(player));
 check('route close drops the reveal layer immediately',
