@@ -209,31 +209,57 @@ function resolveNowPlayingArtwork(videoId) {
   if (_resolvedNowPlayingArt.has(videoId)) return Promise.resolve(_resolvedNowPlayingArt.get(videoId));
   if (_pendingNowPlayingArt.has(videoId)) return _pendingNowPlayingArt.get(videoId);
 
-  // Probe direct image URLs immediately. Catalog lookup happens alongside the
-  // probe, so high-resolution artwork never delays the play command.
-  const directCandidates = ['maxresdefault', 'sddefault', 'hqdefault']
+  // The 16:9 maxres video banner (square album art floating on a blurred,
+  // blended canvas) shows that canvas as color blend at the left/right edges
+  // once cover-cropped into the wide hero band. It is kept only as a last
+  // resort: the catalog lookup (ranked square-first by the server) and the
+  // 4:3 renditions are both preferred over it.
+  const directCandidates = ['sddefault', 'hqdefault', 'maxresdefault']
     .map((rendition) => 'https://i.ytimg.com/vi/' + encodeURIComponent(videoId) + '/' + rendition + '.jpg');
   const catalogCandidates = !window.JAM_GUEST && typeof window.api === 'function'
     ? window.api('/api/track/' + encodeURIComponent(videoId) + '/artwork')
       .then((result) => (result && result.thumbnails || []).concat(result && result.thumbnail || []))
       .catch(() => [])
     : Promise.resolve([]);
-  const isHdArtwork = (image) => image.naturalWidth >= 1000 && image.naturalHeight >= 600;
-  const loadCandidate = (candidates, index = 0) => {
-    if (index >= candidates.length) return Promise.resolve('');
-    const highResUrl = candidates[index];
-    return new Promise((resolve) => {
-      const highResImage = new Image();
-      highResImage.onload = () => {
-        if (isHdArtwork(highResImage)) return resolve(highResUrl);
-        resolve(loadCandidate(candidates, index + 1));
-      };
-      highResImage.onerror = () => resolve(loadCandidate(candidates, index + 1));
-      highResImage.src = highResUrl;
+  // Square/near-square album art is the only thing that fills the wide hero
+  // band edge-to-edge; the 16:9 video banner paints its blurred canvas as
+  // color blend on both sides once cover-cropped. Rank every decoded
+  // candidate by weighted shape: square-ish art is always preferred over a
+  // 16:9 banner, and within the same shape sharper wins.
+  const shapeScore = (image) => {
+    const w = image.naturalWidth || 1;
+    const h = image.naturalHeight || 1;
+    const ratio = w / h;
+    // Shape dominates: distance from a 1:1 square (0 = perfect square,
+    // 16:9 ≈ 78) multiplied 20x. The resolution bonus (log-sized, < 1.5 per
+    // doubling) only breaks ties WITHIN a shape class — so a 544x544 album
+    // cover beats a 1280x720 16:9 banner, while larger 4:3 stills still beat
+    // smaller ones.
+    const shape = Math.abs(ratio - 1) * 20;
+    const quality = -Math.log(w * h);
+    return shape + quality;
+  };
+  const probeOne = (url) => new Promise((resolve) => {
+    const image = new Image();
+    image.onload = () => resolve({ url, image });
+    image.onerror = () => resolve(null);
+    image.src = url;
+  });
+  const probePass = (urls) => {
+    const unique = [...new Set(urls.filter(Boolean))];
+    return Promise.all(unique.map(probeOne)).then((loaded) => {
+      const usable = loaded.filter((entry) => entry && (entry.image.naturalWidth * entry.image.naturalHeight) >= 250 * 250);
+      usable.sort((a, b) => shapeScore(a.image) - shapeScore(b.image));
+      return usable[0] ? usable[0].url : '';
     });
   };
-  const request = loadCandidate(directCandidates)
-    .then((directUrl) => directUrl || catalogCandidates.then((urls) => loadCandidate([...new Set(urls.filter(Boolean))])))
+  // Probe the direct renditions immediately (fast paint) while the catalog
+  // lookup runs alongside; the catalog list is ranked square-first by the
+  // server, so its pick wins when it lands.
+  const directPick = probePass(directCandidates);
+  const catalogResults = catalogCandidates.then((urls) => probePass(urls));
+  const request = Promise.all([directPick, catalogResults])
+    .then(([directUrl, catalogUrl]) => catalogUrl || directUrl)
     .then((highResUrl) => {
       if (highResUrl) _resolvedNowPlayingArt.set(videoId, highResUrl);
       return highResUrl;
@@ -429,20 +455,22 @@ function showNowPlaying(info) {
       // expanded hero is upgraded after its HD rendition is decoded.
       artwork.forEach((el) => {
         // When the confirmation is for the cover the swipe already put on the
-        // hero and the HD rendition isn't resolved yet, keep that paint as-is:
-        // toggling image-loading fades the hero to transparent and reassigning
-        // the background force-swaps renditions — both look like a flicker on
-        // top of artwork that is already correct. The decode + HD upgrade path
-        // below still applies once it completes.
-        if (swipeBannerAlreadyShown && el === npPageArt && !cachedHighRes) return;
+        // hero, keep that paint untouched. Reassigning the background swaps in
+        // the HD cache rendition — the 16:9 maxres video banner — whose
+        // designed canvas leaves the square album art floating in a blurred
+        // blend around the edges; it visibly replaces the stretched cover the
+        // swipe settled on. The hero is already correct for this track, so it
+        // is never repainted (now or via the deferred HD upgrade below).
+        if (swipeBannerAlreadyShown && el === npPageArt) return;
         el.style.backgroundImage = url;
-        el.classList.toggle('image-loading',
-          !cachedHighRes && !(swipeBannerAlreadyShown && el === npPageArt));
+        el.classList.toggle('image-loading', !cachedHighRes);
         el.classList.add('has-thumb');
       });
       if (npPageArt) {
         const npPage = npPageArt.closest('.np-page');
-        if (cachedHighRes) npPageArt.style.backgroundImage = 'url(' + cachedHighRes + ')';
+        if (cachedHighRes && !swipeBannerAlreadyShown) {
+          npPageArt.style.backgroundImage = 'url(' + cachedHighRes + ')';
+        }
         npPage.style.setProperty('--np-cover', ambientUrl);
         npPage.classList.toggle('image-loading', !cachedHighRes && !swipeBannerAlreadyShown);
         document.body.style.setProperty('--np-cover', ambientUrl);
@@ -466,7 +494,13 @@ function showNowPlaying(info) {
           }
           return;
         }
-        upgradeLowResNowPlayingArt(info, fp, npPageArt ? [npPageArt] : [], npPageArt)
+        // The hero is already correct for the swipe's own confirmation (see
+        // the forEach guard above), so the deferred HD upgrade must not repaint
+        // it either — otherwise the same 16:9 banner swap lands a beat later,
+        // once the rendition resolves. Target only the compact player art.
+        const heroUpgrade = (swipeBannerAlreadyShown || !npPageArt) ? [] : [npPageArt];
+        upgradeLowResNowPlayingArt(info, fp, heroUpgrade,
+          (swipeBannerAlreadyShown || !npPageArt) ? null : npPageArt)
           .then((upgraded) => {
             if (_lastNpFingerprint !== fp) return;
             // The compact art was already revealed above; only the hero still
@@ -2540,4 +2574,5 @@ function updateUrlBar() {
   window.doClearAll = doClearAll;
   window.updateUrlBar = updateUrlBar;
   window.preloadNowPlayingArtwork = preloadNowPlayingArtwork;
+  window.resolveNowPlayingArtwork = resolveNowPlayingArtwork;
 })();

@@ -8261,11 +8261,48 @@ async def api_get_track_artwork(video_id):
 
     # These standard renditions are available independently of the catalog
     # lookup. Keep them as a guaranteed fallback when ytmusicapi is slow or
-    # temporarily unable to return video metadata.
+    # temporarily unable to return video metadata. Ordered deliberately:
+    # maxresdefault is the 16:9 video banner (square album art floating on a
+    # blurred canvas), which when cover-cropped into the wide hero band leaves
+    # that canvas visible as color blend on the left/right edges. It is kept
+    # only as a last resort, after the 4:3 renditions.
     direct_urls = [
         'https://i.ytimg.com/vi/{}/{}.jpg'.format(video_id, rendition)
-        for rendition in ('maxresdefault', 'sddefault', 'hqdefault')
+        for rendition in ('sddefault', 'hqdefault', 'maxresdefault')
     ]
+
+    def _url_dims(url):
+        # Parse width/height out of a ytimg URL. Catalog URLs carry them as
+        # `=w<W>-h<H>-...` (or `-w<W>-h<H>-`); direct i.ytimg URLs carry them
+        # in the rendition name. Fall back to (0, 0) when unknown.
+        import re as _re
+        m = _re.search(r'(?:=|-)w(\d+)(?:-h(\d+))?', url)
+        if m:
+            return (int(m.group(1)), int(m.group(2) or 0))
+        for rend, w, h in (('maxresdefault', 1280, 720), ('sddefault', 640, 480),
+                           ('hqdefault', 480, 360), ('mqdefault', 320, 180),
+                           ('default', 120, 90)):
+            if rend in url:
+                return (w, h)
+        return (0, 0)
+
+    def _shape_key(url):
+        """Classify an artwork URL by aspect: 0 = square, 1 = 4:3-ish,
+        2 = 16:9 video banner. The hero band is molded as a wide, short
+        rectangle; only square (or near-square) album art stretches across it
+        edge-to-edge without the banner canvas bleeding at the sides."""
+        width, height = _url_dims(url)
+        if width and height:
+            ratio = width / float(height)
+            if ratio <= 1.15:
+                return 0
+            if ratio <= 1.45:
+                return 1
+            return 2
+        # Unknown geometry: prefer URLs that look like catalog square crops.
+        if '.googleusercontent.com' in url or 'lh3.googleusercontent.com' in url or 'yt3.googleusercontent.com' in url:
+            return 0
+        return 2
 
     def find_artwork(client):
         song = client.get_song(video_id) or {}
@@ -8278,20 +8315,12 @@ async def api_get_track_artwork(video_id):
             url = thumb.get('url', '')
             width = int(thumb.get('width') or 0)
             height = int(thumb.get('height') or 0)
-            # ytmusicapi sometimes omits dimensions.  The YouTube rendition
-            # name is still a useful quality signal in that case.
-            name_score = {
-                'maxresdefault': 5,
-                'sddefault': 4,
-                'hqdefault': 3,
-                'mqdefault': 2,
-                'default': 1,
-            }
-            rendition_score = max(
-                (score for name, score in name_score.items() if name in url),
-                default=0,
-            )
-            return (width * height, width, height, rendition_score)
+            if not width:
+                width, height = _url_dims(url)
+            # Square album art wins even when a 16:9 banner is bigger in raw
+            # pixels — the banner canvas is what paints the edge blend.
+            shape = _shape_key(url)
+            return (10 - shape, width * height, width, height)
 
         ranked = sorted(candidates, key=quality, reverse=True)
         urls = []
@@ -8303,13 +8332,13 @@ async def api_get_track_artwork(video_id):
         # Some videos expose only a small rendition through the API even
         # though YouTube still serves a larger standard video thumbnail.
         # Add those URLs as fallbacks; the browser will verify which one
-        # actually exists before painting it.
-        catalog_direct_urls = []
-        for rendition in ('maxresdefault', 'sddefault', 'hqdefault'):
-            direct = 'https://i.ytimg.com/vi/{}/{}.jpg'.format(video_id, rendition)
-            if direct not in catalog_direct_urls:
-                catalog_direct_urls.append(direct)
-        return {'urls': catalog_direct_urls + [url for url in urls if url not in catalog_direct_urls]}
+        # actually exists before painting it. The 16:9 banner goes last.
+        catalog_direct_urls = [
+            'https://i.ytimg.com/vi/{}/{}.jpg'.format(video_id, rendition)
+            for rendition in ('sddefault', 'hqdefault', 'maxresdefault')
+        ]
+        return {'urls': [url for url in urls if url not in catalog_direct_urls]
+                + [url for url in catalog_direct_urls if url not in urls]}
 
     clients = [_get_ytmusic_home()]
     try:

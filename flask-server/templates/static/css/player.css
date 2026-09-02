@@ -938,29 +938,21 @@ main:has(#now-playing-section:not([hidden])) {
     background-image: none;
   }
 
-  body.now-playing-route #now-playing-section {
-    background: #4b1f13;
-    border: 1px solid rgba(255,255,255,.08);
-    box-sizing: border-box;
-    padding: 0 14px 24px;
-  }
-
+  /* These early mobile "now-playing card" rules (sheet padding/border, small
+     centered album art, tinted panels) are fully superseded by the full-bleed
+     expanded-player styles further down — the art is an edge-to-edge hero and
+     the sheet carries zero side padding/border so the banner truly stretches
+     to both screen edges. The .np-page / .np-page-left geometry (flex column
+     sizing, gap) is still load-bearing, so only the visual card look below is
+     gone — never resurrect the old narrow art. */
   body.now-playing-route .np-page {
     min-height: 0;
     height: auto;
     gap: 0;
-    background: rgba(20, 7, 4, .2);
   }
 
   body.now-playing-route .np-page-left {
-    padding: 22px 15px 18px;
     gap: 18px;
-    background: rgba(255,255,255,.035);
-  }
-
-  body.now-playing-route .np-page-art {
-    width: min(265px, calc(100vw - 78px));
-    box-shadow: 0 14px 34px rgba(0,0,0,.4);
   }
 
   body.now-playing-route .np-page-meta { max-width: 100%; }
@@ -1326,8 +1318,10 @@ main:has(#now-playing-section:not([hidden])) {
   body.now-playing-closing .mobile-np-volume-row {
     display: flex !important;
     align-items: center;
-    gap: 10px;
-    width: min(340px, calc(100% - 10px));
+    gap: clamp(8px, 2.6vw, 14px);
+    /* Same fluid width as the progress strip below, so the two paired
+       controls stay aligned edge-to-edge on every screen size. */
+    width: min(88vw, calc(100% - 10px));
     margin: 0 auto -2px;
     /* Match the progress strip's 14px downward shift so the two paired
        controls still read as a unit. translateY is layered on top of the
@@ -1339,8 +1333,8 @@ main:has(#now-playing-section:not([hidden])) {
   body.now-playing-route .mobile-np-volume-row > svg,
   body.now-playing-closing .mobile-np-volume-row > svg {
     flex: none;
-    width: 19px;
-    height: 19px;
+    width: clamp(17px, 4.9vw, 22px);
+    height: clamp(17px, 4.9vw, 22px);
     color: var(--muted);
   }
   body.now-playing-route .mobile-np-volume-row input[type="range"],
@@ -1349,6 +1343,7 @@ main:has(#now-playing-section:not([hidden])) {
        #mobile-np-volume rules above; this only tweaks row placement. */
     flex: 1;
     min-width: 0;
+    width: 100%;
     margin: 0;
   }
   body.now-playing-route .mobile-np-volume-row .mobile-player-youtube,
@@ -1504,8 +1499,9 @@ main:has(#now-playing-section:not([hidden])) {
   }
   body.now-playing-route .np-page-art,
   body.now-playing-closing .np-page-art {
-    width: min(270px, calc(100vw - 60px)) !important;
-    margin-top: 34px !important;
+    /* The banner is a full-bleed hero (see the hero block below); it must
+       never fall back to a narrow centered square with dark gutters on the
+       left and right. This rule keeps only the cursor, which is owned here. */
     cursor: default;
   }
   body.now-playing-route .np-page-art-overlay,
@@ -1518,7 +1514,7 @@ main:has(#now-playing-section:not([hidden])) {
     display: flex !important;
     align-items: center;
     justify-content: center;
-    gap: 18px;
+    gap: clamp(8px, 4vw, 18px);
     padding-inline: 10px;
     box-sizing: border-box;
     /* Pull the transport up a little, closer to the progress bar. */
@@ -1526,11 +1522,13 @@ main:has(#now-playing-section:not([hidden])) {
   }
   body.now-playing-route .mobile-np-controls button,
   body.now-playing-closing .mobile-np-controls button {
-    width: 48px;
-    height: 48px;
-    min-width: 48px;
-    min-height: 48px;
-    padding: 10px;
+    /* Side buttons shrink on narrow phones so the big play disk keeps its
+       ring, and grow back on larger screens. */
+    width: clamp(40px, 12.3vw, 48px);
+    height: clamp(40px, 12.3vw, 48px);
+    min-width: 40px;
+    min-height: 40px;
+    padding: clamp(7px, 2.5vw, 10px);
     display: inline-flex;
     align-items: center;
     justify-content: center;
@@ -1541,8 +1539,8 @@ main:has(#now-playing-section:not([hidden])) {
   }
   body.now-playing-route .mobile-np-controls button svg,
   body.now-playing-closing .mobile-np-controls button svg {
-    width: 28px;
-    height: 28px;
+    width: clamp(24px, 7.2vw, 28px);
+    height: clamp(24px, 7.2vw, 28px);
   }
   body.now-playing-route .mobile-np-controls #mobile-np-like.liked,
   body.now-playing-closing .mobile-np-controls #mobile-np-like.liked {
@@ -1550,10 +1548,12 @@ main:has(#now-playing-section:not([hidden])) {
   }
   body.now-playing-route .mobile-np-controls #mobile-np-play,
   body.now-playing-closing .mobile-np-controls #mobile-np-play {
-    width: 80px;
-    height: 80px;
-    min-width: 80px;
-    min-height: 80px;
+    /* The transport disk scales with the screen: smaller on narrow phones
+       (so the side buttons keep breathing room), full 80px on wider ones. */
+    width: clamp(56px, 20.5vw, 80px);
+    height: clamp(56px, 20.5vw, 80px);
+    min-width: 48px;
+    min-height: 48px;
     padding: 0;
     /* Circular ring around the play/pause glyph. */
     border: 1.5px solid rgba(255,255,255,.5);
@@ -1562,8 +1562,8 @@ main:has(#now-playing-section:not([hidden])) {
   }
   body.now-playing-route .mobile-np-controls #mobile-np-play svg,
   body.now-playing-closing .mobile-np-controls #mobile-np-play svg {
-    width: 50px;
-    height: 50px;
+    width: clamp(34px, 12.8vw, 50px);
+    height: clamp(34px, 12.8vw, 50px);
   }
   body.now-playing-route .mobile-np-pause-icon,
   body.now-playing-closing .mobile-np-pause-icon { display: none; }
@@ -1571,7 +1571,9 @@ main:has(#now-playing-section:not([hidden])) {
   body.now-playing-route .mobile-np-progress,
   body.now-playing-closing .mobile-np-progress {
     display: block !important;
-    width: min(340px, calc(100% - 10px));
+    /* Fluid width: fills the sheet on every phone instead of capping at a
+       fixed 340px, but never over-stretches on large screens. */
+    width: min(88vw, calc(100% - 10px));
     /* Shift the progress bar up a little. */
     margin: 18px auto 0;
     position: relative;
@@ -3257,6 +3259,13 @@ body.results-open .player-section {
   body.now-playing-route #now-playing-section,
   body.now-playing-closing #now-playing-section {
     padding: 0 0 24px !important;
+    /* base.css gives every routed <section> a 1px var(--border) card frame;
+       on the full-screen player that frame sits between the viewport edge and
+       the artwork, so the banner never quite reaches the left/right sides and
+       a hairline shows around it. Drop it here so the art bleeds flush to the
+       true screen edges. */
+    border: 0 !important;
+    border-radius: 0 !important;
     /* The art's -14px bleed extends past the viewport edges; force horizontal
        clipping so it never surfaces as a stray scrollbar, while tall content
        can still scroll vertically. */
@@ -3314,7 +3323,12 @@ body.results-open .player-section {
     margin: 0 !important;
     border-radius: 0 !important;
     box-shadow: none !important;
-    background-position: center 20% !important;
+    /* Cover-scale the square artwork into the wide, half-height band and
+       center it VERTICALLY too: scaling a 1:1 cover to fill the width makes it
+       taller than the band, and that overhang must be trimmed equally at the
+       top and bottom (a 20% top bias cut the artwork's lower third on wide
+       screens like 513x738). The L/R are already centered by `center`. */
+    background-position: center !important;
     background-size: cover !important;
     /* Own stacking context so the fade below can live inside the art without
        covering the volume bar / controls (which paint above in-flow content). */
@@ -3391,9 +3405,12 @@ body.results-open .player-section {
   body.now-playing-closing .mobile-np-actions {
     display: flex !important;
     align-items: center;
-    justify-content: center;
-    gap: 12px;
-    width: min(340px, calc(100% - 10px));
+    justify-content: space-between;
+    gap: 8px;
+    /* Fluid width matching the other bottom controls; the four squares split
+       it evenly instead of being four fixed 70px boxes that overflow narrow
+       phones. */
+    width: min(88vw, calc(100% - 10px));
     margin: 16px auto 0;
     box-sizing: border-box;
   }
@@ -3401,9 +3418,9 @@ body.results-open .player-section {
   body.now-playing-route .mobile-np-actions > a,
   body.now-playing-closing .mobile-np-actions > button,
   body.now-playing-closing .mobile-np-actions > a {
-    width: 70px;
-    height: 66px;
-    flex: none;
+    flex: 1 1 0;
+    min-width: 0;
+    height: clamp(56px, 16.9vw, 66px);
     display: inline-flex;
     flex-direction: column;
     align-items: center;
@@ -3414,14 +3431,14 @@ body.results-open .player-section {
     background: rgba(255,255,255,.045);
     color: var(--text);
     text-decoration: none;
-    padding: 6px 4px;
+    padding: 6px 2px;
     box-sizing: border-box;
     cursor: pointer;
   }
   body.now-playing-route .mobile-np-actions svg,
   body.now-playing-closing .mobile-np-actions svg {
-    width: 22px;
-    height: 22px;
+    width: clamp(18px, 5.6vw, 22px);
+    height: clamp(18px, 5.6vw, 22px);
     flex: none;
     display: block;
   }
@@ -3439,8 +3456,10 @@ body.results-open .player-section {
   /* The queue box becomes one of the squares (no more full-width pill). */
   body.now-playing-route .mobile-np-actions .mobile-queue-button,
   body.now-playing-closing .mobile-np-actions .mobile-queue-button {
-    width: 70px;
-    height: 66px;
+    width: auto;
+    height: clamp(56px, 16.9vw, 66px);
+    flex: 1 1 0;
+    min-width: 0;
     margin: 0;
     border: 1px solid rgba(255,255,255,.14);
     border-radius: 10px;
@@ -3452,8 +3471,8 @@ body.results-open .player-section {
   }
   body.now-playing-route .mobile-np-actions .mobile-queue-button svg,
   body.now-playing-closing .mobile-np-actions .mobile-queue-button svg {
-    width: 22px;
-    height: 22px;
+    width: clamp(18px, 5.6vw, 22px);
+    height: clamp(18px, 5.6vw, 22px);
   }
   /* Like / shuffle active states live here now (they left the transport). */
   body.now-playing-route .mobile-np-actions #mobile-np-like.liked,
