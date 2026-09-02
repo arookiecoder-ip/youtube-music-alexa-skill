@@ -1383,10 +1383,15 @@ main:has(#now-playing-section:not([hidden])) {
   body .mobile-volume-popover input[type="range"] {
     flex: 1;
     min-width: 0;
-    height: 4px;
+    /* Reserve a finger-sized hit area: the input box is 30px tall while the
+       visible 4px track is painted via content-box clipping. */
+    height: 30px;
+    padding: 13px 0;
     background: #686868;
+    background-clip: content-box;
     border-radius: var(--radius-full);
     accent-color: var(--accent);
+    touch-action: none;
   }
   body .mobile-volume-popover input[type="range"]::-webkit-slider-runnable-track {
     height: 4px;
@@ -1546,9 +1551,14 @@ main:has(#now-playing-section:not([hidden])) {
   body.now-playing-closing .mobile-np-progress .progress-track {
     position: relative;
     width: 100%;
-    height: 4px;
-    padding: 0;
+    /* Reserve the full 8px drag-expanded height in the layout at all times so
+       the thicken-on-drag feedback never pushes the times row / controls below
+       down mid-gesture. The resting bar still paints 4px via padding +
+       background-clip, the same hit-area pattern the base .progress-track uses. */
+    height: 8px;
+    padding: 2px 0;
     background: #3a302b;
+    background-clip: content-box;
     border-radius: 3px;
     cursor: pointer;
     box-sizing: border-box;
@@ -3477,15 +3487,24 @@ body.results-open .player-section {
   }
 
   /* ---- Progress bar drag feedback (mobile now-playing only) ---- */
-  /* Keep the progress strip as-is at rest (4px). While the user presses and
-     drags (the JS adds .dragging to #mobile-np-progress-track during a seek,
-     and :active covers press-and-hold), thicken the bar a little; on release
-     it springs back to its resting 4px. */
+  /* Keep the progress strip as-is at rest (4px painted, 8px reserved layout
+     height). While the user presses and drags (the JS adds .dragging to
+     #mobile-np-progress-track during a seek, and :active covers
+     press-and-hold), drop the content-box padding so the painted bar expands
+     to fill the already-reserved 8px — purely visual, zero layout shift, so
+     the times row and controls below never get pushed around. */
   body.now-playing-route .mobile-np-progress .progress-track.dragging,
   body.now-playing-closing .mobile-np-progress .progress-track.dragging,
   body.now-playing-route .mobile-np-progress .progress-track:active,
   body.now-playing-closing .mobile-np-progress .progress-track:active {
-    height: 8px;
+    padding: 0;
+  }
+  /* The processing sweep spans the track box (top:0/bottom:0); pin it to the
+     resting 4px painted bar so it doesn't read 8px tall while seeking. */
+  body.now-playing-route .mobile-np-progress.playback-processing .progress-track::after,
+  body.now-playing-closing .mobile-np-progress.playback-processing .progress-track::after {
+    top: 2px;
+    bottom: 2px;
   }
   body.now-playing-route .mobile-np-progress .progress-track.dragging .progress-fill,
   body.now-playing-closing .mobile-np-progress .progress-track.dragging .progress-fill,
@@ -3507,6 +3526,18 @@ body.results-open .player-section {
   body.now-playing-route #mobile-np-volume,
   body.now-playing-closing #mobile-np-volume {
     --track-h: 3px;
+    /* Finger-sized hit target: the input box is 34px tall while the painted
+       track stays at --track-h. WebKit top-aligns the runnable track inside
+       the input box, so it is re-centered below; Firefox centers its own
+       track automatically. */
+    height: 34px;
+    /* A vertical component in the finger movement must not hand the gesture
+       to the page scroller, which would cancel the slider drag mid-pull. */
+    touch-action: none;
+  }
+  body.now-playing-route #mobile-np-volume::-webkit-slider-runnable-track,
+  body.now-playing-closing #mobile-np-volume::-webkit-slider-runnable-track {
+    margin-top: calc((34px - var(--track-h)) / 2);
   }
   body.now-playing-route #mobile-np-volume:active,
   body.now-playing-closing #mobile-np-volume:active {

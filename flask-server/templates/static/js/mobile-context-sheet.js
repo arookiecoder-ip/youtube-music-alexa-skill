@@ -37,6 +37,13 @@
   let activeSheet = null;
   let drag = null;      // the active drag gesture (if any)
   let swallowClick = false; // swallow exactly one by-product click
+  let sheetHistoryEntry = false;
+  // Set right before history.back() is dispatched and kept until the popstate
+  // that back triggers is consumed by the router (via
+  // _closeContextSheetsFromHistory). Guards against a second closeAllSheets()
+  // landing before that popstate and dispatching another back() that would
+  // navigate a real page away.
+  let historyBackPending = false;
 
   function isMobile() {
     return !!window.matchMedia && MEDIA.matches;
@@ -61,6 +68,10 @@
   function showScrim() {
     ensureScrim();
     document.body.classList.add('context-sheet-open');
+    if (!sheetHistoryEntry && window.history && window.history.pushState) {
+      window.history.pushState({ contextSheet: true }, '', window.location.href);
+      sheetHistoryEntry = true;
+    }
   }
   function hideScrim() {
     // Drop the open class first so the scrim fades out over its own opacity
@@ -78,7 +89,20 @@
   // The canonical way this app closes its menus. Calling all three helpers is
   // idempotent — each only closes menus it owns. The playlist-detail menu is
   // not covered by any shared helper, so we close it directly.
-  function closeAllSheets() {
+  function closeAllSheets(fromHistory) {
+    if (fromHistory) {
+      // The router consumed our pushed history entry via popstate.
+      sheetHistoryEntry = false;
+      historyBackPending = false;
+    } else if (sheetHistoryEntry && !historyBackPending && window.history && window.history.back) {
+      // Leave sheetHistoryEntry armed: the popstate this back() triggers is
+      // how the router knows this close was history-driven (its mobile
+      // popstate guard checks _contextSheetHistoryOpen). Clearing it here
+      // would make that popstate fall through to the generic handler, which
+      // re-runs the current route — visibly refreshing the page underneath.
+      historyBackPending = true;
+      window.history.back();
+    }
     if (typeof window._closeAllMoreMenus === 'function') window._closeAllMoreMenus();
     if (typeof window._closeAllQueueMenus === 'function') window._closeAllQueueMenus();
     const np = document.getElementById('np-more-menu');
@@ -126,6 +150,24 @@
 
   function onPointerDown(e) {
     if (!isMobile()) return;
+    // A tap outside an open sheet must be consumed entirely. Some playlist,
+    // album, and card handlers act during pointerdown (before the later click
+    // suppression can run), so close and stop the dismissal at capture time.
+    const openSheet = currentSheet();
+    const insideSheet = e.target === openSheet ||
+      !!(e.target && e.target.closest && e.target.closest(OPEN_SELECTOR));
+    // Any press outside the sheet is a dismissal gesture, even when the
+    // background contains a song/card/link. Consume both pointerdown and the
+    // synthetic click so the underlying element cannot be activated after the
+    // sheet closes. Only descendants of the sheet itself are exempt.
+    if (openSheet && e.target !== scrim && !insideSheet) {
+      armSwallowClick();
+      e.preventDefault();
+      e.stopPropagation();
+      e.stopImmediatePropagation();
+      closeAllSheets();
+      return;
+    }
     // Track the press from its very start, even when it begins on a row/card
     // and only later reveals the sheet via long-press. Also clear any stale
     // by-product swallow from a *previous* gesture so this new press is never
@@ -307,5 +349,7 @@
   // Test hooks.
   window._reconcileContextSheets = reconcile;
   window._closeContextSheets = closeAllSheets;
+  window._closeContextSheetsFromHistory = function () { closeAllSheets(true); };
+  window._contextSheetHistoryOpen = function () { return sheetHistoryEntry; };
   window._mobileContextSheetActive = function () { return activeSheet; };
 })();

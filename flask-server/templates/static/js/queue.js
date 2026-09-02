@@ -1674,8 +1674,14 @@ function scheduleHistoryRefresh() {
     inlineMorphFrame = requestAnimationFrame(tick);
   }
 
+  let queueHistoryEntry = false;
+
   function openQueueModal(options) {
     renderQueueModal();
+    if (window.matchMedia('(max-width: 899px)').matches && !queueHistoryEntry && window.history && window.history.pushState) {
+      window.history.pushState({ queueModal: true }, '', window.location.href);
+      queueHistoryEntry = true;
+    }
     const expandFromInline = options && options.fromInline && window.matchMedia('(max-width: 899px)').matches;
     const interactive = expandFromInline && options && options.interactive;
     if (expandFromInline) {
@@ -1718,14 +1724,23 @@ function scheduleHistoryRefresh() {
     }
   }
 
-  function closeQueueModal() {
+  function closeQueueModal(fromHistory) {
     if (overlay.classList.contains('queue-origin-open') && inlineMorph) {
+      if (!fromHistory && queueHistoryEntry && window.history && window.history.back) {
+        window.history.back();
+        return;
+      }
       if (overlay.classList.contains('queue-origin-closing')) return;
       finishInlineQueueProgress(false);
       return;
     }
     overlay.classList.remove('open');
     overlay.style.removeProperty('--queue-drag-progress');
+    if (!fromHistory && queueHistoryEntry && window.history && window.history.back) {
+      window.history.back();
+      return;
+    }
+    queueHistoryEntry = false;
     if (modal) {
       modal.style.transition = '';
       modal.style.transform = '';
@@ -1844,6 +1859,11 @@ function scheduleHistoryRefresh() {
   window._renderQueueModal = renderQueueModal;
   window._openQueueModal = openQueueModal;
   window._closeQueueModal = closeQueueModal;
+  window._closeQueueModalFromHistory = function () {
+    queueHistoryEntry = false;
+    closeQueueModal(true);
+  };
+  window._queueModalHistoryOpen = function () { return queueHistoryEntry; };
   window._setInlineQueueProgress = setInlineQueueProgress;
   window._finishInlineQueueProgress = finishInlineQueueProgress;
 })();

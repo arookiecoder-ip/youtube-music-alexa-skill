@@ -78,10 +78,18 @@
   .result-more-menu:not(.open),
   .queue-more-menu:not(.open),
   .playlist-more-menu:not(.open),
-  #playlist-detail-more-menu:not(.open),
-  #np-more-menu.mobile-open:not([data-sheet-dragging]),
-  body .mobile-now-playing-menu.mobile-open:not([data-sheet-dragging]) {
+  #playlist-detail-more-menu:not(.open) {
     transform: translateY(101%) !important;
+  }
+  /* The np sheet's open state is .mobile-open itself (there is no separate
+     .open class) and the menu is display:none when closed, so the open sheet
+     must sit at translateY(0) whether or not it is mid-drag. It must NOT be
+     grouped with the closed sheets above: doing that parked the open sheet
+     just below the viewport, so the now-playing 3-dot menu rendered
+     invisibly (only the scrim showed) on mobile. */
+  #np-more-menu.mobile-open,
+  body .mobile-now-playing-menu.mobile-open {
+    transform: translateY(var(--sheet-drag-y, 0px)) !important;
   }
   .result-more-menu.open,
   .queue-more-menu.open,
