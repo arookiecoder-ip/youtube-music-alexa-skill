@@ -635,6 +635,19 @@
     }
   };
   window.addEventListener('popstate', function(e) {
+    if (window.matchMedia('(max-width: 899px)').matches) {
+      // Context menus are layered above the queue sheet. Back must dismiss
+      // only the topmost menu first; otherwise both the menu and its queue
+      // modal history entries can be consumed by one press.
+      if (window._contextSheetHistoryOpen && window._contextSheetHistoryOpen()) {
+        window._closeContextSheetsFromHistory?.();
+        return;
+      }
+      if (window._queueModalHistoryOpen && window._queueModalHistoryOpen()) {
+        window._closeQueueModalFromHistory?.();
+        return;
+      }
+    }
     if (_restoringAfterPlayerDismiss) {
       _restoringAfterPlayerDismiss = false;
       if (e.state && Number.isInteger(e.state.position)) _historyPosition = e.state.position;

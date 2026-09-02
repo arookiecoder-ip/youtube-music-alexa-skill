@@ -118,9 +118,41 @@ volumeEl.oninput = e => {
 
 if (mobileVolumeEl) {
   let mobileVolTimer;
-  mobileVolumeEl.addEventListener('pointerdown', () => { state.volumeUserActive = true; });
-  mobileVolumeEl.addEventListener('pointerup', () => { state.volumeUserActive = false; });
-  mobileVolumeEl.addEventListener('touchend', () => { state.volumeUserActive = false; });
+  let mobilePointerId = null;
+  let mobileDragging = false;
+
+  const setMobileVolumeFromPointer = (clientX) => {
+    const rect = mobileVolumeEl.getBoundingClientRect();
+    if (!rect.width) return;
+    const min = Number(mobileVolumeEl.min || 0);
+    const max = Number(mobileVolumeEl.max || 100);
+    const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+    mobileVolumeEl.value = String(Math.round(min + ratio * (max - min)));
+    mobileVolumeEl.dispatchEvent(new Event('input', { bubbles: true }));
+  };
+
+  mobileVolumeEl.addEventListener('pointerdown', (event) => {
+    if (event.pointerType === 'mouse' && event.button !== 0) return;
+    mobilePointerId = event.pointerId;
+    mobileDragging = true;
+    state.volumeUserActive = true;
+    mobileVolumeEl.setPointerCapture?.(event.pointerId);
+    setMobileVolumeFromPointer(event.clientX);
+    event.preventDefault();
+  });
+  mobileVolumeEl.addEventListener('pointermove', (event) => {
+    if (!mobileDragging || event.pointerId !== mobilePointerId) return;
+    setMobileVolumeFromPointer(event.clientX);
+    event.preventDefault();
+  });
+  const finishMobilePointer = (event) => {
+    if (!mobileDragging || (event.pointerId != null && event.pointerId !== mobilePointerId)) return;
+    mobileDragging = false;
+    mobilePointerId = null;
+    state.volumeUserActive = false;
+  };
+  mobileVolumeEl.addEventListener('pointerup', finishMobilePointer);
+  mobileVolumeEl.addEventListener('pointercancel', finishMobilePointer);
   mobileVolumeEl.addEventListener('change', () => { state.volumeUserActive = false; });
   mobileVolumeEl.oninput = e => {
     const value = +e.target.value;

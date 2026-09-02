@@ -86,6 +86,11 @@ check('closing uses the app close helpers (idempotent)',
   /window\._closeAllMoreMenus/.test(js) &&
   /window\._closeAllQueueMenus/.test(js) &&
   /window\._closeNpMoreMenu/.test(js));
+check('scrim dismissal pops history exactly once and only via popstate (no page re-render)',
+  /historyBackPending/.test(js) &&
+  /sheetHistoryEntry && !historyBackPending && window\.history && window\.history\.back/.test(js) &&
+  /if \(fromHistory\) \{[\s\S]*?sheetHistoryEntry = false;[\s\S]*?historyBackPending = false;/m.test(js) &&
+  !/sheetHistoryEntry = false;[^\n]*\n[^\n]*window\.history\.back\(\)/.test(js));
 check('dismiss threshold + velocity flick are implemented',
   /dy > threshold/.test(js) && /drag\.velocity/.test(js));
 check('scrim is detached (with a fade-out) when no sheet is open',
@@ -149,7 +154,7 @@ function makeEl(tag, cls) {
   return el;
 }
 
-function makeEnv() {
+function makeEnv(opts) {
   const state = {
     openRowMenus: [],
     npMenuMobileOpen: false,
@@ -223,6 +228,18 @@ function makeEnv() {
     _closeNpMoreMenu,
   };
 
+  if (opts && opts.withHistory) {
+    const history = {
+      pushed: 0,
+      backCalls: 0,
+      pushState() { history.pushed += 1; },
+      replaceState() {},
+      back() { history.backCalls += 1; },
+    };
+    win.history = history;
+    win.location = { href: 'https://example.com/album?browse=ABC' };
+  }
+
   const sandbox = { document, window: win, console, performance: win.performance };
   const context = vm.createContext(sandbox);
   vm.runInContext(js, context, { filename: 'mobile-context-sheet.js' });
@@ -252,7 +269,7 @@ function makeEnv() {
   menu.classes.push('result-more-menu');
   return {
     state, doc: document, body, scrimCount, isLocked, menu, closeCount, win, sandbox, listeners, dispatch,
-    flushTimers,
+    flushTimers, history: win.history,
   };
 }
 
@@ -305,9 +322,12 @@ function main() {
     env.dispatch('pointerup', { clientY: 100, clientX: 50 });
     const click = env.dispatch('click', { target: option, clientY: 100, clientX: 50, isTrusted: true });
     check('hold-release click was swallowed (option not activated)', click.defaultPrevented === true || click._stopped === true);
-    // A subsequent, deliberate option tap must still be allowed.
+    // A subsequent, deliberate option tap must still be allowed. The option
+    // lives INSIDE the sheet, so the press must not be treated as an outside
+    // dismissal: that outside-branch is what consumes the tap-to-close.
     const env2 = makeEnv();
     const opt2 = makeEl('div'); opt2.classes.push('result-menu-option');
+    opt2.closest = () => env2.menu; // descendant of the open sheet
     env2.option = opt2; env2.state._target = opt2;
     env2.state.openRowMenus.push(env2.menu);
     env2.sandbox.window._reconcileContextSheets();
@@ -336,6 +356,41 @@ function main() {
   }
 
   {
+    console.log('--- scrim dismissal keeps the history entry armed until popstate (no page refresh) ---');
+    const env = makeEnv({ withHistory: true });
+    env.state.openRowMenus.push(env.menu);
+    env.sandbox.window._reconcileContextSheets();
+    check('opening the sheet pushes exactly one history entry', env.history.pushed === 1);
+    check('router can see the sheet entry as armed', env.win._contextSheetHistoryOpen() === true);
+
+    const scrim = env.body.children.find(c => c.classes.includes('context-sheet-scrim'));
+    env.state._target = scrim;
+    env.dispatch('pointerdown', { target: scrim, clientY: 50, clientX: 50 });
+    check('scrim tap closes the menu directly', env.state.openRowMenus.length === 0);
+    check('closing dispatched exactly one back()', env.history.backCalls === 1);
+    // The entry must stay armed: if it were cleared before back(), the
+    // popstate would fall through the router guard and re-render the page.
+    check('entry stays armed until the popstate consumes it', env.win._contextSheetHistoryOpen() === true);
+
+    // A redundant close (e.g. the scrim's own click listener) landing before
+    // the popstate must not dispatch a second back and pop a real page.
+    env.sandbox.window._closeContextSheets();
+    check('redundant close before popstate does not pop another entry', env.history.backCalls === 1);
+
+    // The browser now fires popstate; the router consumes the entry.
+    env.sandbox.window._closeContextSheetsFromHistory();
+    check('popstate consumption clears the armed entry', env.win._contextSheetHistoryOpen() === false);
+    check('popstate consumption does not dispatch another back()', env.history.backCalls === 1);
+    env.flushTimers(260);
+    check('scrim element removed after the fade completes', env.scrimCount() === 0);
+
+    console.log('--- closing without an open sheet never touches history ---');
+    const env2 = makeEnv({ withHistory: true });
+    env2.sandbox.window._closeContextSheets();
+    check('no back() when no sheet entry is armed', env2.history.backCalls === 0);
+  }
+
+  {
     console.log('--- drag-to-dismiss works from a held press ---');
     const env = makeEnv();
     env.state.openRowMenus.push(env.menu);
@@ -357,6 +412,9 @@ function main() {
     const env2 = makeEnv();
     env2.state.openRowMenus.push(env2.menu);
     env2.sandbox.window._reconcileContextSheets();
+    // The pull begins ON the sheet; a press outside the sheet would instead be
+    // consumed as an outside dismissal before any drag can start.
+    env2.state._target = env2.menu;
     env2.dispatch('pointerdown', { clientY: 500, clientX: 50 });
     env2.dispatch('pointermove', { clientY: 540, clientX: 50 }); // dy 40 < threshold(120)
     env2.dispatch('pointerup', { clientY: 540, clientX: 50 });
