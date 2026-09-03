@@ -11,14 +11,14 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Music Box">
-<style>{% include "static/css/base.css" %}</style>
-<style>{% include "static/css/player.css" %}</style>
-<style>{% include "static/css/player-processing.css" %}</style>
-<style>{% include "static/css/queue.css" %}</style>
-<style>{% include "static/css/search.css" %}</style>
-<style>{% include "static/css/toast.css" %}</style>
-<style>{% include "static/css/home.css" %}</style>
-<style>{% include "static/css/jam.css" %}</style>
+<link rel="stylesheet" href="/static/css/base.css?v={{ asset_v }}">
+<link rel="stylesheet" href="/static/css/player.css?v={{ asset_v }}">
+<link rel="stylesheet" href="/static/css/player-processing.css?v={{ asset_v }}">
+<link rel="stylesheet" href="/static/css/queue.css?v={{ asset_v }}">
+<link rel="stylesheet" href="/static/css/search.css?v={{ asset_v }}">
+<link rel="stylesheet" href="/static/css/toast.css?v={{ asset_v }}">
+<link rel="stylesheet" href="/static/css/home.css?v={{ asset_v }}">
+<link rel="stylesheet" href="/static/css/jam.css?v={{ asset_v }}">
 </head>
 <body class="jam-guest home-route">
 <div id="top-progress-bar" class="top-progress-bar"></div>
@@ -200,18 +200,18 @@
   <div id="home-section"></div>
 </div>
 
-<script>{% include "static/js/api.js" %}</script>
-<script>{% include "static/js/ui-state.js" %}</script>
-<script>{% include "static/js/toast.js" %}</script>
-<script>{% include "static/js/player.js" %}</script>
-<script>{% include "static/js/volume.js" %}</script>
-<script>{% include "static/js/queue.js" %}</script>
-<script>{% include "static/js/search.js" %}</script>
-<script>{% include "static/js/sse.js" %}</script>
-<script>{% include "static/js/home-renderers.js" %}</script>
-<script>{% include "static/js/jam.js" %}</script>
-<script>{% include "static/js/song-context-menu.js" %}</script>
-<script>{% include "static/js/click-effects.js" %}</script>
+<script src="/static/js/api.js?v={{ asset_v }}"></script>
+<script src="/static/js/ui-state.js?v={{ asset_v }}"></script>
+<script src="/static/js/toast.js?v={{ asset_v }}"></script>
+<script src="/static/js/player.js?v={{ asset_v }}"></script>
+<script src="/static/js/volume.js?v={{ asset_v }}"></script>
+<script src="/static/js/queue.js?v={{ asset_v }}"></script>
+<script src="/static/js/search.js?v={{ asset_v }}"></script>
+<script src="/static/js/sse.js?v={{ asset_v }}"></script>
+<script src="/static/js/home-renderers.js?v={{ asset_v }}"></script>
+<script src="/static/js/jam.js?v={{ asset_v }}"></script>
+<script src="/static/js/song-context-menu.js?v={{ asset_v }}"></script>
+<script src="/static/js/click-effects.js?v={{ asset_v }}"></script>
 <script>
   (function () {
     if (window.initJamPage) window.initJamPage();

@@ -79,6 +79,16 @@ check('loadExplore() swaps in the explore skeleton on cold load',
 check('openMoodPage() paints a mood skeleton before fetching',
   /if\s*\(!cached\)\s*renderMoodPageSkeleton\(body\)/.test(exploreJs));
 
+// Regression: a preloaded Explore fetch must be consumed BEFORE the `loaded`
+// guard, otherwise re-opening Explore discards the fresh fetch and keeps
+// showing the first load of the session (stale Top songs on a tab/PWA left
+// open for days). A staleness TTL also re-fetches plain revisits after 5 min.
+check('loadExplore() consumes the preload before the loaded guard',
+  /const preloaded =[^;]*consumePreload\('#explore'\);[\s\S]*?const stale = loaded && \(Date\.now\(\) - loadedAt > EXPLORE_REFRESH_TTL_MS\);[\s\S]*?if \(loaded && !preloaded && !stale && !force\) return;/.test(exploreJs));
+check('explore data re-fetches after the 5-minute staleness window',
+  /EXPLORE_REFRESH_TTL_MS = 5 \* 60 \* 1000/.test(exploreJs) &&
+  /loadedAt = Date\.now\(\)/.test(exploreJs));
+
 // The explorer skeleton has to mirror the real page sections. We check the
 // structural calls + string literals instead of evaluating the function --
 // the helpers produce static HTML strings assembled at call time.

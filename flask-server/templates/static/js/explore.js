@@ -5,6 +5,7 @@
   const MOOD_ACCENTS = ['#ff8c3a', '#e80000', '#8a3ffc', '#ffe264', '#00a928', '#ffe264', '#b764ff', '#ff6500', '#00a9d7', '#9ebfff', '#b8b8b8', '#2d7cff', '#ffe264', '#8cff9b', '#666', '#ef62f5', '#9ff5a7', '#ff5700'];
   const FALLBACK_IMG = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='%23444'%3E%3Cpath d='M12 3v10.55A4 4 0 1 0 14 17V7h4V3h-6z'/%3E%3C/svg%3E";
   let loaded = false;
+  let loadedAt = 0;
   let loading = false;
   let cardContextMenu = null;
   const albumResolutionCache = new Map();
@@ -679,12 +680,22 @@
       '</div>';
   }
 
+  // Re-fetch Explore when it was last loaded more than this long ago, so a
+  // tab/PWA left open for days doesn't keep showing the first day's shelves.
+  const EXPLORE_REFRESH_TTL_MS = 5 * 60 * 1000;
+
   async function loadExplore(force) {
-    if (!state._loggedIn || loading || (loaded && !force)) return;
+    if (!state._loggedIn || loading) return;
     const body = document.getElementById('explore-page-body');
     if (!body) return;
-    loading = true;
+    // A fresh preload (the sidebar/nav preload fetches on every click) must
+    // win over the in-session copy: consume it before the `loaded` guard so a
+    // revisit shows new data instead of discarding the fetch and keeping
+    // yesterday's Top songs.
     const preloaded = !force && window.consumePreload && window.consumePreload('#explore');
+    const stale = loaded && (Date.now() - loadedAt > EXPLORE_REFRESH_TTL_MS);
+    if (loaded && !preloaded && !stale && !force) return;
+    loading = true;
     if (!preloaded) renderExplorePageSkeleton(body);
     try {
       const explore = preloaded || await window.api('/api/explore/');
@@ -698,6 +709,7 @@
       renderQuickNav(body, available);
       if (!available.size) body.innerHTML = '<div class="explore-empty">Nothing to explore right now. Please try again later.</div>';
       loaded = true;
+      loadedAt = Date.now();
     } catch (error) {
       loaded = false;
       body.innerHTML = '<div class="explore-empty">Couldn’t load Explore. Please try again.</div>';

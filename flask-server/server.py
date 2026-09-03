@@ -1,4 +1,4 @@
-import asyncio, difflib, glob, hashlib, hmac, itertools, json, math, os, random, secrets, sys, threading, time, re, subprocess, logging, copy, uuid, tempfile, shlex
+import asyncio, collections, difflib, glob, hashlib, hmac, itertools, json, math, os, random, secrets, sys, threading, time, re, subprocess, logging, copy, uuid, tempfile, shlex
 from datetime import timedelta
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
@@ -10,7 +10,8 @@ from youtube_browser_session import (BrowserController, YouTubeBrowserSessionMan
                                      browser_client_is_signed_in,
                                      is_authentication_error,
                                      promote_browser_headers)
-from flask import Flask, request, render_template, jsonify, send_file, session, redirect, Response
+from flask import (Flask, request, render_template, jsonify, send_file,
+                   send_from_directory, abort, session, redirect, Response)
 from werkzeug.exceptions import HTTPException
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
@@ -23,11 +24,15 @@ def _is_local_host(host):
     host = (host or "").split(":", 1)[0].strip().lower()
     return host in {"localhost", "127.0.0.1", "::1"}
 
-app = Flask(__name__)
-# Under waitress (debug off) Jinja caches compiled templates in memory, so
-# edits to the CSS/JS inlined into remote.html via {% include %} never reach
-# the browser until the process restarts. Auto-reload re-renders on change.
-app.config["TEMPLATES_AUTO_RELOAD"] = True
+app = Flask(__name__, static_folder=None)
+# CSS/JS are served as external, versioned files under /static/ (see
+# _TEMPLATE_STATIC_DIR below), so the compiled-template cache can no longer
+# hide asset edits: a deployed file change alters _STATIC_VERSION and the
+# browser re-fetches the new ?v= URLs. Template caching is therefore the
+# correct production default -- set TEMPLATES_AUTO_RELOAD=1 to re-render
+# templates on every request in development.
+app.config["TEMPLATES_AUTO_RELOAD"] = os.environ.get(
+    "TEMPLATES_AUTO_RELOAD", "").lower() in {"1", "true", "yes", "on"}
 
 # Signs the session cookie used by the web remote login. Prefer an explicit
 # SECRET_KEY. When it is omitted, persist an automatically generated key beside
@@ -110,6 +115,36 @@ def _compute_static_version():
     return h.hexdigest()[:12]
 
 _STATIC_VERSION = _compute_static_version()
+
+
+# ---- static asset serving ----
+# The web-remote shell loads its CSS/JS as external files under /static/,
+# versioned with ?v=<_STATIC_VERSION> so browsers can cache them long-term and
+# re-fetch exactly when a deploy changes any asset. Flask's default static
+# folder is disabled (static_folder=None above) so a single route serves the
+# real asset directory (templates/static, where the historical inlined assets
+# live) plus the legacy static/ folder for older references.
+_TEMPLATE_STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                    'templates', 'static')
+_LEGACY_STATIC_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                  'static')
+
+
+@app.route('/static/<path:filename>')
+def static_assets(filename):
+    # send_from_directory guards against path traversal and picks the correct
+    # Content-Type; conditional=True enables ETag/304 revalidation. werkzeug's
+    # send_file wants max_age in seconds, not a timedelta.
+    max_age = int(app.config['SEND_FILE_MAX_AGE_DEFAULT'].total_seconds())
+    # Local development (no PUBLIC_BASE_URL): ?v= is only recomputed on
+    # restart, so a long Cache-Control would serve stale asset edits for days.
+    if not PUBLIC_BASE_URL:
+        max_age = 0
+    for base in (_TEMPLATE_STATIC_DIR, _LEGACY_STATIC_DIR):
+        if os.path.isfile(os.path.join(base, filename)):
+            return send_from_directory(base, filename,
+                                       conditional=True, max_age=max_age)
+    abort(404)
 
 # Human login for the web remote. When both are set, /remote/ and the /alexa/*
 # endpoints accept a logged-in session cookie *instead of* the long ?key=, so
@@ -511,10 +546,28 @@ def _ensure_db():
         init_db()
         _db_initialized = True
 
+# /proxy/, /alexa/play_queue/, and the skill's 'started' webhook can each
+# record the same track within one play cycle. Every push calls get_song +
+# add_history_item on YT Music, so a per-video cooldown keeps one play from
+# pushing the same song several times (local history rows are INSERT OR
+# REPLACE, so duplicates were already harmless there).
+_listen_pushed = {}  # video_id -> time.time() of the most recent push
+_listen_pushed_lock = threading.Lock()
+_LISTEN_PUSH_COOLDOWN = 60.0  # seconds between YouTube history pushes per video
+
+
 def _record_listen(video_id, title, artist, thumbnail_url):
     from ytmusicapi.auth.types import AuthType
     if not video_id or _get_ytmusic_home().auth_type == AuthType.UNAUTHORIZED:
         return
+    with _listen_pushed_lock:
+        last = _listen_pushed.get(video_id, 0.0)
+        if time.time() - last < _LISTEN_PUSH_COOLDOWN:
+            return
+        _listen_pushed[video_id] = time.time()
+        if len(_listen_pushed) > 512:
+            for stale in list(_listen_pushed)[:-256]:
+                del _listen_pushed[stale]
     def push_bg():
         try:
             # ytmusicapi add_history_item requires a song object with tracking parameters
@@ -1097,24 +1150,63 @@ def _with_retry(fn, max_retries=2, delay=1.0, backoff=2.0, exceptions=(Exception
 
 
 # v3.1: YTMusic session factory with caching per thread
-_YT_CACHE = {}
+class _BoundedCache:
+    """Thread-safe LRU cache with a hard size cap.
+
+    The YTMusic client caches are keyed by thread id because ytmusicapi's
+    requests.Session is not safe to share across threads. Waitress's worker
+    threads are reused, so their entries stay warm -- but the per-play daemon
+    threads (metadata lookup, radio refresh, prewarm, history push) arrive
+    with a fresh thread id on every spawn, and an unbounded dict would grow
+    forever while each new entry pays a fresh auth handshake. LRU eviction
+    caps the memory without evicting the busy threads' clients.
+    """
+    def __init__(self, maxsize=32):
+        self._data = collections.OrderedDict()
+        self._maxsize = maxsize
+        self._lock = threading.Lock()
+
+    def get(self, key):
+        with self._lock:
+            if key in self._data:
+                self._data.move_to_end(key)
+                return self._data[key]
+            return None
+
+    def set(self, key, value):
+        with self._lock:
+            self._data[key] = value
+            self._data.move_to_end(key)
+            if len(self._data) > self._maxsize:
+                self._data.popitem(last=False)
+
+    def clear(self):
+        with self._lock:
+            self._data.clear()
+
+
+_YT_CACHE = _BoundedCache()
 _YT_CACHE_LOCK = threading.Lock()
 
 def _get_ytmusic():
-    """Get a cached YTMusic instance. Reuses per thread to avoid re-auth."""
+    """Get a cached YTMusic instance. Reuses per thread to avoid re-auth.
+
+    Bounded LRU: entries for dead daemon threads are evicted instead of
+    accumulating for the life of the process.
+    """
     tid = threading.get_ident()
     with _YT_CACHE_LOCK:
         inst = _YT_CACHE.get(tid)
         if inst is None:
             inst = YTMusic()
-            _YT_CACHE[tid] = inst
+            _YT_CACHE.set(tid, inst)
         return inst
 
 # Home-feed cache (defined before _get_ytmusic_home which references it)
 _home_cache = {'built_at': 0, 'data': None}
 _home_lock = threading.Lock()
 
-_YT_HOME_CACHE = {}
+_YT_HOME_CACHE = _BoundedCache()
 _YT_HOME_CACHE_LOCK = threading.Lock()
 _YT_HOME_CACHE_MTIME = 0
 
@@ -1159,7 +1251,7 @@ def _get_ytmusic_home():
             except Exception as e:
                 logger.warning(f"Failed to initialize authenticated YTMusic for home feed: {e}. Falling back to anonymous.")
                 inst = YTMusic()
-            _YT_HOME_CACHE[tid] = inst
+            _YT_HOME_CACHE.set(tid, inst)
         return inst
 
 
@@ -2296,7 +2388,7 @@ def _lookup_video_metadata(video_id):
     if queued:
         return queued
     try:
-        ytmusic = YTMusic()
+        ytmusic = _get_ytmusic()
         info = ytmusic.get_song(video_id)
         details = (info or {}).get('videoDetails') or {}
         title = details.get('title') or ''
@@ -4108,10 +4200,36 @@ def _stream_proxy_download(video_id):
     response.call_on_close(_cleanup)
     return response
 
+# ---- per-play background job dedup ----
+# A single play fans out from /proxy/, /alexa/play_queue/, and the skill's
+# 'started' webhook, and each site spawns its own background threads. Without
+# dedup, one track meant up to 3-4 concurrent metadata lookups and radio
+# builds, each making independent YTMusic network calls (and, before the cache
+# was bounded, each creating its own permanently-cached YTMusic client). These
+# single-flight/cooldown guards collapse that to exactly one run per video_id.
+_np_lookup_inflight = set()
+_np_lookup_lock = threading.Lock()
+
+_radio_refresh_inflight = set()
+_radio_refresh_lock = threading.Lock()
+_RADIO_REFRESH_COOLDOWN = 30.0  # seconds; recorded only after a successful build
+_radio_refresh_done = {}  # video_id -> time.time() of the last successful build
+_radio_refresh_done_lock = threading.Lock()
+
+
 def _lookup_and_update_np(video_id):
     """Fallback: look up song metadata from video_id."""
+    if not _valid_video_id(video_id):
+        return
+    # Single-flight per video_id: /proxy/, /alexa/play_queue/, the 'started'
+    # webhook, and the finish-promoter can all ask for the same lookup within
+    # one play cycle; one run is enough, and every run is a YTMusic round trip.
+    with _np_lookup_lock:
+        if video_id in _np_lookup_inflight:
+            return
+        _np_lookup_inflight.add(video_id)
     try:
-        ytmusic = YTMusic()
+        ytmusic = _get_ytmusic()
         info = ytmusic.get_song(video_id)
         details = (info or {}).get('videoDetails') or {}
         title = details.get('title') or ''
@@ -4213,6 +4331,9 @@ def _lookup_and_update_np(video_id):
         sys.stderr.write(f"[np] lookup FAILED: {e}\n")
         sys.stderr.flush()
         logger.exception("")
+    finally:
+        with _np_lookup_lock:
+            _np_lookup_inflight.discard(video_id)
 
 
 def _refresh_radio_queue(video_id, force=False):
@@ -4231,6 +4352,21 @@ def _refresh_radio_queue(video_id, force=False):
     """
     if not _valid_video_id(video_id):
         return False
+    # Single-flight per video_id plus a success cooldown: /proxy/, play_queue,
+    # and the 'started' webhook can each trigger a rebuild within one play
+    # cycle, and every rebuild is a full YTMusic radio fetch. force=True still
+    # bypasses the cooldown (Play Radio must replace the queue) but never runs
+    # two builds of the same track at once.
+    with _radio_refresh_lock:
+        if video_id in _radio_refresh_inflight:
+            return False
+        if not force:
+            with _radio_refresh_done_lock:
+                last = _radio_refresh_done.get(video_id, 0.0)
+            if time.time() - last < _RADIO_REFRESH_COOLDOWN:
+                return False
+        _radio_refresh_inflight.add(video_id)
+    succeeded = False
     try:
         cur = _get_now_playing()
         if cur.get('video_id') != video_id:
@@ -4241,6 +4377,7 @@ def _refresh_radio_queue(video_id, force=False):
         # followed by a fresh voice request) and must be rebuilt around the
         # new track.
         if not force and len(cur_queue) > 1 and any(q.get('video_id') == video_id for q in cur_queue):
+            succeeded = True
             return True
         playlist = asyncio.run(Supporting.get_radio_queue(video_id))
         if not playlist:
@@ -4295,9 +4432,19 @@ def _refresh_radio_queue(video_id, force=False):
             missing = [q['video_id'] for q in queue if not q.get('thumbnail')][:5]
             for vid in missing:
                 threading.Thread(target=_backfill_queue_thumbnail, args=(vid,), daemon=True).start()
+            succeeded = True
             return True
     except Exception:
         logger.exception("")
+    finally:
+        with _radio_refresh_lock:
+            _radio_refresh_inflight.discard(video_id)
+        if succeeded:
+            with _radio_refresh_done_lock:
+                _radio_refresh_done[video_id] = time.time()
+                if len(_radio_refresh_done) > 256:
+                    for stale in list(_radio_refresh_done)[:-128]:
+                        del _radio_refresh_done[stale]
     return False
 
 
@@ -6296,7 +6443,7 @@ def resolve_play_query(query: str):
     YT Music link is looked up and turned into a searchable song phrase."""
     if not re.match(r'https?://', query, re.I):
         return query, None
-    ytmusic = YTMusic()
+    ytmusic = _get_ytmusic()
     video_match = _YT_VIDEO_RE.search(query)
     list_match = _YT_LIST_RE.search(query)
     # A watch link may carry both v= and list=; the specific video wins.
@@ -6361,7 +6508,7 @@ def resolve_play_query(query: str):
 def _quick_song_lookup(query):
     """Fast metadata lookup for the now-playing display on the web remote."""
     try:
-        ytmusic = YTMusic()
+        ytmusic = _get_ytmusic()
         results = ytmusic.search(query, filter='songs', ignore_spelling=True)
         if results:
             track = results[0]
@@ -9188,12 +9335,7 @@ const SPA_PATHS = [
   '/', '/remote/', '/home', '/search', '/playlist', '/album', '/artist',
   '/artist/songs', '/explore', '/library', '/history', '/mood', '/now-playing',
 ];
-const PRECACHE = [
-  '/static/icons/icon-192.svg',
-  '/static/icons/icon-512.svg',
-  '/favicon.ico',
-  '/manifest.webmanifest',
-];
+const PRECACHE = __PRECACHE_JSON__;
 
 self.addEventListener('install', (e) => {
   e.waitUntil((async () => {
@@ -9271,7 +9413,37 @@ self.addEventListener('fetch', (e) => {
   // network — no respondWith, so the browser handles it natively.
 });
 """
-_SERVICE_WORKER = _SERVICE_WORKER_TEMPLATE.replace('__VERSION__', _STATIC_VERSION)
+def _app_shell_asset_paths():
+    """Pathnames of the external CSS/JS the shell loads (no ?v= query).
+
+    The page references these with ?v=<asset_v>; the service worker precaches
+    the bare pathnames and its fetch handler matches requests with
+    ignoreSearch, so a versioned page request hits the precached copy.
+    """
+    paths = []
+    for rel in ('css', 'js'):
+        subdir = os.path.join(_TEMPLATE_STATIC_DIR, rel)
+        try:
+            names = sorted(os.listdir(subdir))
+        except OSError:
+            continue
+        for name in names:
+            if name.endswith(('.css', '.js')):
+                paths.append('/static/%s/%s' % (rel, name))
+    if os.path.isfile(os.path.join(_TEMPLATE_STATIC_DIR, 'playlists.js')):
+        paths.append('/static/playlists.js')
+    return paths
+
+
+_SERVICE_WORKER_ASSETS = (
+    ['/static/icons/icon-192.svg', '/static/icons/icon-512.svg',
+     '/favicon.ico', '/manifest.webmanifest']
+    + _app_shell_asset_paths()
+)
+_SERVICE_WORKER = (_SERVICE_WORKER_TEMPLATE
+                   .replace('__VERSION__', _STATIC_VERSION)
+                   .replace('__PRECACHE_JSON__',
+                            json.dumps(_SERVICE_WORKER_ASSETS, indent=2)))
 
 
 @app.route("/service-worker.js")
