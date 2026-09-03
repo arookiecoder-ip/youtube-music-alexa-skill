@@ -37,20 +37,20 @@
     transition: opacity .25s ease;
   }
 </style>
-<style>{% include "static/css/base.css" %}</style>
-<style>{% include "static/css/header.css" %}</style>
-<style>{% include "static/css/player.css" %}</style>
-<style>{% include "static/css/player-processing.css" %}</style>
-<style>{% include "static/css/queue.css" %}</style>
-<style>{% include "static/css/search.css" %}</style>
-<style>{% include "static/css/sidebar.css" %}</style>
-<style>{% include "static/css/toast.css" %}</style>
-<style>{% include "static/css/recs.css" %}</style>
-<style>{% include "static/css/home.css" %}</style>
-<style>{% include "static/css/artist.css" %}</style>
-<style>{% include "static/css/playlist.css" %}</style>
-<style>{% include "static/css/explore.css" %}</style>
-<style>{% include "static/css/mobile.css" %}</style>
+<link rel="stylesheet" href="/static/css/base.css?v={{ asset_v }}">
+<link rel="stylesheet" href="/static/css/header.css?v={{ asset_v }}">
+<link rel="stylesheet" href="/static/css/player.css?v={{ asset_v }}">
+<link rel="stylesheet" href="/static/css/player-processing.css?v={{ asset_v }}">
+<link rel="stylesheet" href="/static/css/queue.css?v={{ asset_v }}">
+<link rel="stylesheet" href="/static/css/search.css?v={{ asset_v }}">
+<link rel="stylesheet" href="/static/css/sidebar.css?v={{ asset_v }}">
+<link rel="stylesheet" href="/static/css/toast.css?v={{ asset_v }}">
+<link rel="stylesheet" href="/static/css/recs.css?v={{ asset_v }}">
+<link rel="stylesheet" href="/static/css/home.css?v={{ asset_v }}">
+<link rel="stylesheet" href="/static/css/artist.css?v={{ asset_v }}">
+<link rel="stylesheet" href="/static/css/playlist.css?v={{ asset_v }}">
+<link rel="stylesheet" href="/static/css/explore.css?v={{ asset_v }}">
+<link rel="stylesheet" href="/static/css/mobile.css?v={{ asset_v }}">
 </head>
 <body class="preload{{ ' jam-guest' if jam_guest else '' }}">
 <div id="top-progress-bar" class="top-progress-bar"></div>
@@ -942,40 +942,40 @@
 <div class="toast" id="toast"></div>
 
 
-<script>{% include "static/js/api.js" %}</script>
-<script>{% include "static/js/ui-state.js" %}</script>
-<script>{% include "static/js/cache.js" %}</script>
-<script>{% include "static/js/lazy-images.js" %}</script>
-<script>{% include "static/js/router.js" %}</script>
-<script>{% include "static/js/preload-nav.js" %}</script>
-<script>{% include "static/js/toast.js" %}</script>
-<script>{% include "static/js/device.js" %}</script>
-<script>{% include "static/js/sse.js" %}</script>
-<script>{% include "static/js/player.js" %}</script>
-<script>{% include "static/js/volume.js" %}</script>
-<script>{% include "static/js/queue.js" %}</script>
-<script>{% include "static/js/song-context-menu.js" %}</script>
-<script>{% include "static/js/search.js" %}</script>
-<script>{% include "static/js/sidebar.js" %}</script>
-<script>{% include "static/js/history.js" %}</script>
-<script>{% include "static/js/recs.js" %}</script>
-<script>{% include "static/js/home-renderers.js" %}</script>
-<script>{% include "static/js/collection-renderer.js" %}</script>
-<script>{% include "static/js/home.js" %}</script>
-<script>{% include "static/js/playlist-context-menu.js" %}</script>
-<script>{% include "static/js/artist-page-config.js" %}</script>
-<script>{% include "static/js/artist.js" %}</script>
-<script>{% include "static/js/artist-top-songs.js" %}</script>
-<script>{% include "static/js/explore.js" %}</script>
-<script>{% include "static/js/library.js" %}</script>
-<script>{% include "static/js/sw-register.js" %}</script>
-<script>{% include "static/js/pwa.js" %}</script>
-<script>{% include "static/playlists.js" %}</script>
-<script>{% include "static/js/album.js" %}</script>
-<script>{% include "static/js/long-press.js" %}</script>
-<script>{% include "static/js/mobile-context-sheet.js" %}</script>
-<script>{% include "static/js/like.js" %}</script>
-<script>{% include "static/js/click-effects.js" %}</script>
+<script src="/static/js/api.js?v={{ asset_v }}"></script>
+<script src="/static/js/ui-state.js?v={{ asset_v }}"></script>
+<script src="/static/js/cache.js?v={{ asset_v }}"></script>
+<script src="/static/js/lazy-images.js?v={{ asset_v }}"></script>
+<script src="/static/js/router.js?v={{ asset_v }}"></script>
+<script src="/static/js/preload-nav.js?v={{ asset_v }}"></script>
+<script src="/static/js/toast.js?v={{ asset_v }}"></script>
+<script src="/static/js/device.js?v={{ asset_v }}"></script>
+<script src="/static/js/sse.js?v={{ asset_v }}"></script>
+<script src="/static/js/player.js?v={{ asset_v }}"></script>
+<script src="/static/js/volume.js?v={{ asset_v }}"></script>
+<script src="/static/js/queue.js?v={{ asset_v }}"></script>
+<script src="/static/js/song-context-menu.js?v={{ asset_v }}"></script>
+<script src="/static/js/search.js?v={{ asset_v }}"></script>
+<script src="/static/js/sidebar.js?v={{ asset_v }}"></script>
+<script src="/static/js/history.js?v={{ asset_v }}"></script>
+<script src="/static/js/recs.js?v={{ asset_v }}"></script>
+<script src="/static/js/home-renderers.js?v={{ asset_v }}"></script>
+<script src="/static/js/collection-renderer.js?v={{ asset_v }}"></script>
+<script src="/static/js/home.js?v={{ asset_v }}"></script>
+<script src="/static/js/playlist-context-menu.js?v={{ asset_v }}"></script>
+<script src="/static/js/artist-page-config.js?v={{ asset_v }}"></script>
+<script src="/static/js/artist.js?v={{ asset_v }}"></script>
+<script src="/static/js/artist-top-songs.js?v={{ asset_v }}"></script>
+<script src="/static/js/explore.js?v={{ asset_v }}"></script>
+<script src="/static/js/library.js?v={{ asset_v }}"></script>
+<script src="/static/js/sw-register.js?v={{ asset_v }}"></script>
+<script src="/static/js/pwa.js?v={{ asset_v }}"></script>
+<script src="/static/playlists.js?v={{ asset_v }}"></script>
+<script src="/static/js/album.js?v={{ asset_v }}"></script>
+<script src="/static/js/long-press.js?v={{ asset_v }}"></script>
+<script src="/static/js/mobile-context-sheet.js?v={{ asset_v }}"></script>
+<script src="/static/js/like.js?v={{ asset_v }}"></script>
+<script src="/static/js/click-effects.js?v={{ asset_v }}"></script>
 <script>
   (function () {
     if (window.restoreFromCache) window.restoreFromCache();

@@ -109,6 +109,12 @@ for _module_name, _original_module in _ORIGINAL_MODULES.items():
     else:
         sys.modules[_module_name] = _original_module
 
+# Since assets were externalized to versioned /static/ files, the shell no
+# longer contains the router code inline. The router <script src> reference is
+# the shell-first marker these tests assert (previously the inlined
+# `__spaRouteCodec` symbol from router.js).
+_SPA_SHELL_ROUTER_SCRIPT = b'<script src="/static/js/router.js?v='
+
 
 class SpaPathRegistration(unittest.TestCase):
     """_SPA_DOCUMENT_PATHS_ALL is the single source of truth for "this URL is a
@@ -435,7 +441,7 @@ class FlaskDispatch(unittest.TestCase):
                 with self.subTest(path=path):
                     response = self.client.get(path)
                     self.assertEqual(response.status_code, 200)
-                    self.assertIn(b'__spaRouteCodec', response.data)
+                    self.assertIn(_SPA_SHELL_ROUTER_SCRIPT, response.data)
                     self.assertTrue(
                         response.content_type.startswith('text/html')
                     )
@@ -456,7 +462,7 @@ class FlaskDispatch(unittest.TestCase):
                 with self.subTest(path=path):
                     response = self.client.get(path)
                     self.assertEqual(response.status_code, 200)
-                    self.assertIn(b'__spaRouteCodec', response.data)
+                    self.assertIn(_SPA_SHELL_ROUTER_SCRIPT, response.data)
 
     def test_valid_document_renders_shell_before_detail_fetch(self):
         # A valid document URL must not depend on detail data being available.
@@ -468,7 +474,7 @@ class FlaskDispatch(unittest.TestCase):
                                return_value=False):
             response = self.client.get('/album?browse=valid-but-unavailable')
         self.assertEqual(response.status_code, 200)
-        self.assertIn(b'__spaRouteCodec', response.data)
+        self.assertIn(_SPA_SHELL_ROUTER_SCRIPT, response.data)
         self.assertNotIn(b'detail backend down', response.data)
 
     def test_dispatch_round_trips_for_each_family(self):
@@ -569,7 +575,7 @@ class BrowserNotFound(unittest.TestCase):
                 with self.subTest(path=path):
                     response = self.client.get(path)
                     self.assertEqual(response.status_code, 200)
-                    self.assertIn(b'__spaRouteCodec', response.data)
+                    self.assertIn(_SPA_SHELL_ROUTER_SCRIPT, response.data)
 
     def test_unknown_document_path_remains_a_404(self):
         for path in ('/album-not-a-route', '/album/a/b'):
