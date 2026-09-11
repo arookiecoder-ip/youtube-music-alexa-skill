@@ -441,18 +441,44 @@ def _schedule_play_dispatch(serial, video_id, offset_ms=0, delay=None):
     return previous['video_id'] if previous else None
 
 
-def _arm_play(serial, video_id, offset_ms=0):
+def _arm_play(serial, video_id, offset_ms=0, kind='play'):
     with _ARMED_PLAYS_LOCK:
         _ARMED_PLAYS[serial] = {
             'video_id': video_id,
             'offset_ms': max(0, int(offset_ms or 0)),
             'armed_at': time.time(),
+            # 'play': a fresh track the skill plays via the app-selection
+            # trigger phrase. 'resume': the exact track+offset a web resume
+            # shows -- the skill only ever *peeks* at these on resume, so a
+            # resume can never steal a fresh play's arm.
+            'kind': kind or 'play',
         }
 
 
+def _peek_armed_play(serial=None):
+    """Return (video_id, offset_ms, armed_at, kind) for the freshest arm
+    without consuming it, or None. Powers the skill's resume self-correction:
+    unlike /armed_play/ (which pops), peeking leaves fresh-play/seek arms in
+    place for their own trigger."""
+    with _ARMED_PLAYS_LOCK:
+        if serial is not None:
+            entry = _ARMED_PLAYS.get(serial)
+        elif _ARMED_PLAYS:
+            latest_serial = max(_ARMED_PLAYS, key=lambda s: _ARMED_PLAYS[s]['armed_at'])
+            entry = _ARMED_PLAYS.get(latest_serial)
+        else:
+            entry = None
+    if not entry:
+        return None
+    if time.time() - entry['armed_at'] > ARMED_PLAY_TTL:
+        return None
+    return (entry['video_id'], entry['offset_ms'], entry['armed_at'],
+            entry.get('kind') or 'play')
+
+
 def _consume_armed_play(serial=None):
-    """Return (video_id, offset_ms) and clear the arm, or None if there is no
-    fresh arm. Expired arms (> TTL) are dropped without playing.
+    """Return (video_id, offset_ms, armed_at, kind) and clear the arm, or None
+    if there is no fresh arm. Expired arms (> TTL) are dropped without playing.
 
     The skill can't map its opaque Alexa deviceId to the AlexaPy serialNumber
     used when arming, so when ``serial`` is None (the skill's call) we return the
@@ -470,7 +496,8 @@ def _consume_armed_play(serial=None):
         return None
     if time.time() - entry['armed_at'] > ARMED_PLAY_TTL:
         return None
-    return entry['video_id'], entry['offset_ms']
+    return (entry['video_id'], entry['offset_ms'], entry['armed_at'],
+            entry.get('kind') or 'play')
 
 # ---- Recently-listened history (web remote) ----
 # Persisted to a JSON file so it survives restarts; single-user tool, so a
@@ -5690,6 +5717,19 @@ def alexa_command():
         # voice-command latency instead of serializing them.
         if _valid_video_id(staged_video_id):
             _ensure_audio_ready_for_play(staged_video_id, wait=False)
+        # Arm the exact track+offset alongside the generic transport resume.
+        # The skill's persisted AudioPlayer session can disagree with the live
+        # server state (a voice play that landed after the web client's last
+        # sync, a lost persistence save, or a second Amazon account driving
+        # voice vs web): a bare "resume" would then restart the *stale*
+        # persisted track -- e.g. the song playing before the voice request
+        # instead of the requested one. The updated skill prefers this arm when
+        # it differs from its persisted track and otherwise resumes normally,
+        # so older skills (which ignore arms on resume) are unaffected. The
+        # arm is single-slot latest-wins with a short TTL, mirroring seeks.
+        if _valid_video_id(staged_video_id):
+            _arm_play(serial, staged_video_id, resume_position_ms or 0,
+                      kind='resume')
         # Use the same Alexa transport path as a voice "resume". The previous
         # web-only implementation replayed the exact video through the
         # app-selection intent, which is a fresh fetch/play directive and races
@@ -5737,6 +5777,16 @@ def alexa_command():
                     should_notify_restore = False
             if should_notify_restore:
                 _notify_sse()
+            if action == 'play':
+                # The resume arm rides with the dispatched command. A command
+                # that never went out must not leave it behind for a later
+                # resume (or an in-flight app-selection trigger) to honor.
+                # Only drop our own arm: a newer intent may have re-armed since.
+                with _ARMED_PLAYS_LOCK:
+                    arm = _ARMED_PLAYS.get(serial)
+                    if (arm and arm.get('kind') == 'resume'
+                            and arm.get('video_id') == staged_video_id):
+                        del _ARMED_PLAYS[serial]
             return error_response(error or 'Device is offline or unreachable.', 502)
         return _device_dispatch_failed(error)
     if action == 'volume':
@@ -5835,6 +5885,25 @@ def alexa_state_event():
     sys.stderr.write(f"[np] webhook: event={event!r} video_id={body.get('video_id', '')!r}\n")
     sys.stderr.flush()
     if event == 'stopped':
+        # Newer skills report which track stopped. When a voice play
+        # interrupts the current track, Alexa emits PlaybackStopped for the
+        # *interrupted* track -- possibly after PlaybackStarted for the new
+        # one has already moved now-playing on. Freezing the anchor then would
+        # corrupt the new track's position (and flip it to paused), so a stop
+        # for any other video_id is ignored. Stops without an id (older
+        # skills, failure paths) keep the legacy behavior and always freeze.
+        stopped_for_video_id = body.get('video_id', '') or ''
+        if stopped_for_video_id and not _valid_video_id(stopped_for_video_id):
+            stopped_for_video_id = ''
+        with _np_lock:
+            current_video_id = _now_playing.get('video_id', '')
+        if (stopped_for_video_id and _valid_video_id(current_video_id)
+                and stopped_for_video_id != current_video_id):
+            sys.stderr.write(
+                f"[np] webhook: ignoring stale stopped for {stopped_for_video_id!r} "
+                f"(current={current_video_id!r})\n")
+            sys.stderr.flush()
+            return jsonify({'ok': True})
         # position_ms is a stored anchor, not a live value -- while playing,
         # the real position is only ever computed on the fly (_computed_position_ms)
         # from that anchor + elapsed wall-clock time; it's never written back.
@@ -7550,18 +7619,33 @@ def armed_play():
     API-key protected (the skill sends ?key=); not a session endpoint.
 
     The skill calls this without a serial (it can't map its Alexa deviceId to
-    the AlexaPy serial), so we return the most-recently-armed play."""
+    the AlexaPy serial), so we return the most-recently-armed play.
+
+    With ``?peek=1`` the arm is returned without consuming it. The skill's
+    resume path uses peek to self-correct when its persisted session is stale:
+    peeking (instead of consuming) guarantees a resume can never steal the arm
+    of an in-flight fresh play or seek."""
     serial = request.args.get("serial") or None
+    if (request.args.get("peek") or "") == "1":
+        peeked = _peek_armed_play(serial)
+        if not peeked:
+            return jsonify({'video_id': None})
+        video_id, offset_ms, armed_at, kind = peeked
+        return jsonify({'video_id': video_id, 'offset_ms': offset_ms,
+                        'armed_at': armed_at, 'kind': kind})
     armed = _consume_armed_play(serial)
     if not armed:
         return jsonify({'video_id': None})
-    video_id, offset_ms = armed
+    video_id, offset_ms, armed_at, kind = armed
     # The outstanding trigger has now been served, so a later click may send a
     # fresh one. Until this point additional clicks only re-arm (see
     # _trigger_in_flight), which is what stops the Echo playing every song in a
     # rapid-click burst one after another.
     _clear_trigger_inflight(serial)
-    return jsonify({'video_id': video_id, 'offset_ms': offset_ms})
+    # armed_at/kind let the skill judge freshness (a resume honors only a
+    # recent 'resume' arm); older skill versions simply ignore the extra fields.
+    return jsonify({'video_id': video_id, 'offset_ms': offset_ms,
+                    'armed_at': armed_at, 'kind': kind})
 
 
 @app.route("/alexa/search/", methods=["GET"])

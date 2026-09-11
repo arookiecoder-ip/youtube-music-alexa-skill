@@ -37,6 +37,13 @@ _KEEP_BEHIND = 25        # played tracks kept for "previous" before trimming
 # next_stream_enqueued guard makes the later prompt a no-op).
 NEARLY_FINISHED_WINDOW_MS = 40000
 
+# A web resume arms the exact track+offset it is showing (kind='resume', peeked
+# -- never consumed -- by Controller.resume below). Only arms this fresh may
+# redirect a resume: long enough to cover the voice-command round-trip plus the
+# server's one retry, short enough that yesterday's intent can never hijack
+# today's playback. Well inside the server's 60s arm TTL.
+RESUME_ARM_MAX_AGE_S = 30.0
+
 
 def _window_playlist(playlist: List, index: int) -> Tuple[List, int]:
     """Clamp an incoming playlist to the storable window around index,
@@ -675,11 +682,18 @@ class Api:
         return Api._get_json(handler_input, 'alexa/like', params)
 
     @staticmethod
-    def get_armed_play(handler_input: HandlerInput) -> Tuple[Optional[Tuple[str, int]], Optional[Exception]]:
+    def get_armed_play(handler_input: HandlerInput, peek: bool = False) -> Tuple[Optional[Tuple[str, int, Optional[float], str]], Optional[Exception]]:
         """Fetch the video id the web remote armed for a direct play. Returns
-        ((video_id, offset_ms), None) when one is pending, else (None, error).
-        The server returns the most-recently-armed play (see /armed_play/)."""
-        response_json, error = Api._get_json(handler_input, 'armed_play', {})
+        ((video_id, offset_ms, armed_age_s, kind), None) when one is pending,
+        else (None, error). ``armed_age_s`` is how old the arm was when read
+        (None when the server did not report it); ``kind`` is 'play' for a
+        fresh track or 'resume' for a web resume's exact-track hint.
+
+        With ``peek=True`` the arm is returned without consuming it, so a
+        resume can inspect the web remote's intent without stealing the arm of
+        an in-flight fresh play or seek (see /armed_play/)."""
+        params = {'peek': '1'} if peek else {}
+        response_json, error = Api._get_json(handler_input, 'armed_play', params)
         if error:
             return None, error
         video_id = (response_json or {}).get('video_id')
@@ -689,7 +703,16 @@ class Api:
             offset_ms = max(0, int((response_json or {}).get('offset_ms') or 0))
         except (TypeError, ValueError):
             offset_ms = 0
-        return (video_id, offset_ms), None
+        armed_age_s = None
+        try:
+            armed_at = (response_json or {}).get('armed_at')
+            if armed_at is not None:
+                import time as _time
+                armed_age_s = max(0.0, _time.time() - float(armed_at))
+        except (TypeError, ValueError):
+            armed_age_s = None
+        kind = (response_json or {}).get('kind') or 'play'
+        return (video_id, offset_ms, armed_age_s, kind), None
 
 
 class Controller:
@@ -1188,6 +1211,33 @@ class Controller:
         playback_info["next_stream_enqueued"] = False
 
         metadata = Attributes.get_metadata_by_play_order(handler_input)
+        # Self-correction for a stale persisted session. The web remote arms
+        # the exact track it is showing on every resume; when that names a
+        # *different* track than this session remembers (a voice play the
+        # skill never persisted, a lost save, or voice and web driving two
+        # Amazon accounts with separate persistence), resuming the persisted
+        # track would restart the wrong song -- e.g. the one playing *before*
+        # the voice request instead of the requested one. Peek (never consume)
+        # so an in-flight fresh play/seek keeps its own arm, and only honor
+        # fresh 'resume' arms so an old intent can never hijack playback.
+        try:
+            armed, _ = Api.get_armed_play(handler_input, peek=True)
+        except Exception:
+            logger.exception('resume: armed-play peek failed; using persisted session')
+            armed = None
+        if armed:
+            armed_video_id, armed_offset_ms, armed_age_s, armed_kind = armed
+            fresh = armed_age_s is None or armed_age_s <= RESUME_ARM_MAX_AGE_S
+            persisted_video_id = metadata.video_id if metadata else None
+            if (armed_kind == 'resume' and fresh and armed_video_id
+                    and armed_video_id != persisted_video_id):
+                logger.info(f'resume: persisted {persisted_video_id} disagrees with '
+                            f'armed {armed_video_id} (age {armed_age_s}); '
+                            f'playing the armed track')
+                return Controller.fetch_video_id(
+                    handler_input, armed_video_id,
+                    is_playback=is_playback,
+                    offset_in_ms=armed_offset_ms)
         if not metadata:
             return Controller.error_response(handler_input, data.NOTHING_TO_RESUME, is_playback)
         if (playback_info.get('stream_url')
@@ -1199,6 +1249,36 @@ class Controller:
         song_info = player_models.SongInfo(metadata, stream)
 
         return Controller.play(handler_input, song_info, is_playback=is_playback)
+
+    @staticmethod
+    def record_stop(handler_input: HandlerInput, token_video_id, request_offset_ms) -> bool:
+        """Record an AudioPlayer stop/pause offset. Returns True when the stop
+        is stale -- it names a *different* track than this session's current
+        one. That happens when a voice play interrupts the current track: Alexa
+        emits PlaybackStopped for the interrupted track, possibly after the new
+        track already started. A stale stop must change nothing: overwriting
+        the new track's offset with the old song's position corrupts the next
+        resume (wrong position, and -- combined with a lost persistence save --
+        the wrong song entirely). Never raises."""
+        try:
+            playback_info = Attributes.get_playback_info(handler_input)
+            metadata = Attributes.get_metadata_by_play_order(handler_input)
+            current_video_id = metadata.video_id if metadata else None
+            if (token_video_id and current_video_id
+                    and token_video_id != current_video_id):
+                logger.info(f'record_stop: ignoring stale stop for {token_video_id} '
+                            f'(current is {current_video_id})')
+                return True
+            playback_info["offset_in_ms"] = max(0, int(request_offset_ms or 0))
+            # Any stop (skill stop directive, device button, interruption) clears
+            # Alexa's AudioPlayer queue, so an already-enqueued next track is gone.
+            # Reset the flag so the next real playback re-enqueues instead of
+            # trusting a stale "already enqueued" state and stopping at the end.
+            playback_info["next_stream_enqueued"] = False
+            return False
+        except Exception:
+            logger.exception('record_stop failed')
+            return False
 
     @staticmethod
     def seek(handler_input: HandlerInput, offset_in_ms: int, is_playback=True) -> Response:

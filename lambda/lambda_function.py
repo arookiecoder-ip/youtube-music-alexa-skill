@@ -57,7 +57,7 @@ class PlaySongIntentHandler(AbstractRequestHandler):
             if error or not armed:
                 return player.Controller.error_response(
                     handler_input, error or Exception(data.NOT_FOUND), is_playback=True)
-            armed_video_id, armed_offset_ms = armed
+            armed_video_id, armed_offset_ms, _, _ = armed
             return player.Controller.fetch_video_id(
                 handler_input=handler_input,
                 video_id=armed_video_id,
@@ -661,18 +661,18 @@ class PlaybackStoppedEventHandler(AbstractRequestHandler):
         # type: (HandlerInput) -> Response
         logger.info("In PlaybackStoppedHandler")
 
-        playback_info = player.Attributes.get_playback_info(handler_input)
         # playback_info["index"] = player.Attributes.get_index(handler_input)
-        playback_info["offset_in_ms"] = player.Attributes.get_offset_in_ms(
-            handler_input)
-        # Any stop (skill stop directive, device button, interruption) clears
-        # Alexa's AudioPlayer queue, so an already-enqueued next track is gone.
-        # Reset the flag so the next real playback re-enqueues instead of
-        # trusting a stale "already enqueued" state and stopping at the end.
-        playback_info["next_stream_enqueued"] = False
+        token_video_id = player.Attributes.get_token(handler_input) or ''
+        request_offset_ms = player.Attributes.get_offset_in_ms(handler_input)
+        # A stop for an already-interrupted track (voice play landed after it)
+        # must not overwrite the current track's offset -- record_stop skips
+        # exactly that case. The server is told which track stopped so it can
+        # likewise ignore the stale event instead of freezing the new track.
+        player.Controller.record_stop(handler_input, token_video_id, request_offset_ms)
 
         # Notify server: playback stopped (voice pause, stop, or track change)
-        player._notify_server(handler_input, 'stopped')
+        player._notify_server(handler_input, 'stopped', video_id=token_video_id,
+                              offset_in_ms=request_offset_ms)
 
         return handler_input.response_builder.response
 
