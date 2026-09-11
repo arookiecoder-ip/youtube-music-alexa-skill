@@ -767,22 +767,27 @@
   window.syncRouteClasses = syncRouteClasses;
 
   // ---- Dynamic page title ----
-  // The browser tab mirrors what the user is currently viewing. Only the open
-  // now-playing screen shows the playing song (with a "- Playing" suffix); it
-  // falls back to the app name when nothing is playing there. Home and search
-  // always show the app name; detail sections show their own name (artist,
-  // playlist, album, mood, etc.) once its content has rendered.
+  // The browser tab mirrors what the user is currently hearing. While a track
+  // is playing the tab shows the song (with a "- Playing" suffix) on every
+  // route — including when the tab is backgrounded — so the header stays
+  // current as the music changes. When nothing is playing, detail sections
+  // show their own name (artist, playlist, album, mood, etc.) once content
+  // has rendered, and Home/search fall back to the app name.
   var SITE_NAME = 'Music Box';
   function syncPageTitle() {
     var route = window.getRoute ? window.getRoute() : '#home';
     var state = window.__appState || {};
+    var track = state._currentTrack;
+    if (state.isPlaying && track && track.title) {
+      document.title = track.title + ' - Playing';
+      return;
+    }
     var title = SITE_NAME;
     var nowPlayingOpen = document.body.classList.contains('now-playing-route') &&
       !document.body.classList.contains('now-playing-closing');
 
     if (nowPlayingOpen) {
-      var track = state._currentTrack;
-      if (state.isPlaying && track && track.title) title = track.title + ' - Playing';
+      if (track && track.title) title = track.title + ' - Playing';
     } else if (route.indexOf('#search?') === 0 || route === '#home') {
       title = SITE_NAME;
     } else if (route.indexOf('#artist/') === 0) {

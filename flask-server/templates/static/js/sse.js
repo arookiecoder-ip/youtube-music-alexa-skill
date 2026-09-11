@@ -5,6 +5,7 @@
   let _evtSource = null;
   let _evtSourceSerial = '';
   let _livePollTimer = null;
+  let _livePollIntervalMs = 0;
   let _lastHistoryVideoId = null;
   let _rafQueuedData = null;
   let _rafQueuedIndex = -1;
@@ -127,7 +128,10 @@
       _rafQueuedIndex = effectiveQueueIndex;
       if (!_rafPending) {
         _rafPending = true;
-        requestAnimationFrame(() => {
+        // requestAnimationFrame never fires while the tab is hidden, so a
+        // background tab would queue the update and never flush it until
+        // refocus — leaving the header/title stale. Use a timer fallback.
+        const flush = () => {
           _rafPending = false;
           const qJson = JSON.stringify(_rafQueuedData);
           if (qJson !== window._lastQueueJson) {
@@ -153,7 +157,9 @@
               try { window.renderNpQueue(JSON.parse(window._lastQueueJson), _rafQueuedIndex); } catch(_) {}
             }
           }
-        });
+        };
+        if (document.hidden) setTimeout(flush, 0);
+        else requestAnimationFrame(flush);
       }
     } else {
       // Queue omitted means only playback state changed. Resolve the active
@@ -203,25 +209,33 @@
     }
   }
 
-  function connectSSE() {
+  function connectSSE(background) {
     const serial = deviceEl.value;
     if (!serial) return;
-    if (_livePollTimer && _evtSourceSerial === serial) return;
+    const wantBackground = !!background || document.hidden;
+    const intervalMs = wantBackground ? 10000 : 3000;
+    if (_livePollTimer && _evtSourceSerial === serial && _livePollIntervalMs === intervalMs) return;
     stopSSE();
     _evtSourceSerial = serial;
+    _livePollIntervalMs = intervalMs;
     // Waitress is a threaded WSGI server: every EventSource connection pins
     // one worker, and rapid page reloads leave old streams alive until their
     // next heartbeat. Enough reloads starve normal API calls such as Search.
     // Short polling uses existing endpoint/state handling without holding a
     // worker between updates. Playback actions schedule faster one-off polls.
+    // Background tabs keep polling at a slower rate (browsers throttle hidden
+    // timers anyway) so the tab title / now-playing header still follows track
+    // changes made by Alexa, auto-advance, or another tab. Stopping entirely
+    // here left background tabs stuck on the old song until refocus.
     pollNowPlaying();
-    _livePollTimer = setInterval(pollNowPlaying, 3000);
+    _livePollTimer = setInterval(pollNowPlaying, intervalMs);
   }
 
   function stopSSE() {
     if (_evtSource) { _evtSource.close(); _evtSource = null; }
     if (_livePollTimer) { clearInterval(_livePollTimer); _livePollTimer = null; }
     _evtSourceSerial = '';
+    _livePollIntervalMs = 0;
   }
 
   async function pollNowPlaying() {
@@ -278,8 +292,12 @@
     if (window.progress && typeof window.progress.syncLoop === 'function') {
       window.progress.syncLoop();
     }
-    if (document.hidden) stopSSE();
-    else {
+    if (document.hidden) {
+      // Drop to the slower background cadence instead of stopping: a hidden
+      // tab must still learn about track changes (Alexa voice, auto-advance,
+      // another tab) so its header/tab title stays current.
+      reconnectPlayback();
+    } else {
       reconnectPlayback();
       if (window.refreshVolume) window.refreshVolume(true);
     }
