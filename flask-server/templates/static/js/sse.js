@@ -76,7 +76,7 @@
         const serverPlaying = np.playing === true && np.playback_confirmed === true;
         const contradictsIntent = inGrace && state().lastActionIntent !== null && serverPlaying !== state().lastActionIntent;
         if (!contradictsIntent && window._notifyPlayPauseServerState) {
-          window._notifyPlayPauseServerState(serverPlaying, np.state_updated_at || np.updated_at || np.confirmed_at, np.playback_revision);
+          window._notifyPlayPauseServerState(serverPlaying, np.state_updated_at || np.updated_at || np.confirmed_at, np.playback_revision, np.playback_confirmed, np.playback_processing);
         }
         if (!contradictsIntent && (serverPlaying || !inGrace)) {
           state().isPlaying = serverPlaying;
@@ -94,7 +94,7 @@
       if (np.playing !== undefined) {
         const contradictsIntent = inGrace && state().lastActionIntent !== null && np.playing !== state().lastActionIntent;
         if (!contradictsIntent && window._notifyPlayPauseServerState) {
-          window._notifyPlayPauseServerState(np.playing && np.playback_confirmed === true, np.state_updated_at || np.updated_at || np.confirmed_at, np.playback_revision);
+          window._notifyPlayPauseServerState(np.playing && np.playback_confirmed === true, np.state_updated_at || np.updated_at || np.confirmed_at, np.playback_revision, np.playback_confirmed, np.playback_processing);
         }
         if (!contradictsIntent && !inGrace) {
           state().isPlaying = np.playing === true && np.playback_confirmed === true;

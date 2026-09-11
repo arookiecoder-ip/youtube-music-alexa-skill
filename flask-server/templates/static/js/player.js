@@ -1444,16 +1444,36 @@ async function doClearAll() {
 let _playPauseBusy = false;
 let _queuedPlayPauseAction = null;
 let _playPauseDesiredState = null;
+// Last CONFIRMED server truth (a snapshot whose processing flag is settled).
+// Distinct from _playPauseServerPlaying (latest fresh snapshot, which includes
+// the unconfirmed staging state the server publishes immediately after a
+// command). Comparing desired vs confirmed tells whether the user's last
+// intent is still awaiting device confirmation (pending).
 let _confirmedPlayPauseState = null;
 let _playPauseServerPlaying = null;
+let _playPauseServerConfirmed = false;
 let _playPauseServerUpdatedAt = 0;
 let _playPauseServerRevision = 0;
 let _playPauseServerSeq = 0;
 let _playPauseWaiters = [];
 const PLAY_PAUSE_CONFIRM_TIMEOUT_MS = 3000;
 
+// A snapshot counts as confirmation only once its processing flag has
+// settled. The server stages BOTH play and pause as
+// playing=false/confirmed=false/processing=true, so a waiter for pause that
+// accepted any playing=false snapshot resolved on the staging state —
+// instantly, before the device had paused — and left the UI claiming "paused"
+// while audio still played. The next click then read the stale staged false
+// and sent play again instead of pause, wedging the button forever.
+// Snapshots without a processing flag (legacy callers / tests) count as
+// confirmed for backwards compatibility.
+function _playPauseSnapshotIsConfirmed(confirmed, processing) {
+  if (processing !== undefined && processing !== null) return processing === false;
+  return true;
+}
+
 function waitForPlayPauseServerState(expected, timeoutMs, minSeq = _playPauseServerSeq, minUpdatedAt = _playPauseServerUpdatedAt, minRevision = _playPauseServerRevision) {
-  if (_playPauseServerPlaying === expected &&
+  if (_playPauseServerPlaying === expected && _playPauseServerConfirmed &&
       (_playPauseServerRevision > minRevision || _playPauseServerUpdatedAt > minUpdatedAt || _playPauseServerSeq > minSeq)) {
     return Promise.resolve(true);
   }
@@ -1471,7 +1491,7 @@ function waitForPlayPauseServerState(expected, timeoutMs, minSeq = _playPauseSer
   });
 }
 
-function notifyPlayPauseServerState(playing, updatedAt, revision) {
+function notifyPlayPauseServerState(playing, updatedAt, revision, confirmed, processing) {
   const marker = Number(updatedAt) || 0;
   const playbackRevision = Number(revision) || 0;
   // Ignore delayed snapshots that belong to an older server state. Without
@@ -1489,15 +1509,32 @@ function notifyPlayPauseServerState(playing, updatedAt, revision) {
   const freshWithoutMarker = playbackRevision <= 0 && marker <= 0 && _playPauseServerSeq === 0;
   if (!freshByRevision && !freshByMarker && !freshWithoutMarker) return;
 
-  _playPauseServerPlaying = !!playing;
+  const snapshotConfirmed = _playPauseSnapshotIsConfirmed(confirmed, processing);
+  const newPlaying = !!playing;
+  const oldConfirmed = _confirmedPlayPauseState;
+  const oldDesired = _playPauseDesiredState;
+  _playPauseServerPlaying = newPlaying;
+  _playPauseServerConfirmed = snapshotConfirmed;
+  if (snapshotConfirmed) _confirmedPlayPauseState = newPlaying;
   // Alexa can change playback outside the website. When no web command is
   // being processed, make the next button toggle follow that authoritative
   // server state too; otherwise state.isPlaying becomes false while the
   // stale desired state still says true and the next click sends pause again.
-  // Never overwrite a live web intent or queued rapid toggle here.
+  // Never overwrite a live web intent, a queued rapid toggle, or a still
+  // unconfirmed user intent here: a heartbeat carrying the old (staging)
+  // state must not erase the pending resume/pause the user just asked for.
+  // Only adopt the server value when previously in sync (no pending intent)
+  // or establishing the baseline; when diverged, keep the user's intent and
+  // let a matching confirmation converge it.
   if (!_playPauseBusy && _queuedPlayPauseAction === null && _playPauseWaiters.length === 0) {
-    _confirmedPlayPauseState = _playPauseServerPlaying;
-    _playPauseDesiredState = _playPauseServerPlaying;
+    if (oldDesired === null) {
+      _playPauseDesiredState = newPlaying;
+    } else {
+      const wasInSync = oldConfirmed === null || oldDesired === oldConfirmed;
+      if (wasInSync) {
+        _playPauseDesiredState = newPlaying;
+      }
+    }
   }
   if (marker > _playPauseServerUpdatedAt) _playPauseServerUpdatedAt = marker;
   if (playbackRevision > _playPauseServerRevision) _playPauseServerRevision = playbackRevision;
@@ -1508,7 +1545,10 @@ function notifyPlayPauseServerState(playing, updatedAt, revision) {
     const freshByRevision = playbackRevision > 0 && playbackRevision > waiter.minRevision;
     const freshByMarker = playbackRevision <= 0 && marker > 0 && marker > waiter.minUpdatedAt;
     const freshBySequence = playbackRevision <= 0 && marker <= 0 && waiter.minSeq < currentSeq;
-    if (waiter.expected === _playPauseServerPlaying && (freshByRevision || freshByMarker || freshBySequence)) waiter.resolve(true);
+    // Only a settled (confirmed) snapshot may resolve a waiter. The staging
+    // state (processing=true) shares playing=false with a real pause and must
+    // never count as its confirmation.
+    if (waiter.expected === newPlaying && snapshotConfirmed && (freshByRevision || freshByMarker || freshBySequence)) waiter.resolve(true);
     else remaining.push(waiter);
   });
   _playPauseWaiters = remaining;
@@ -1532,7 +1572,7 @@ function applyPlayPauseIntent(action) {
 }
 
 async function drainPlayPause(action) {
-  const previousPlaying = _confirmedPlayPauseState;
+  const previousPlaying = _confirmedPlayPauseState !== null ? _confirmedPlayPauseState : state.isPlaying;
   applyPlayPauseIntent(action);
   let succeeded = false;
   let error = null;
@@ -1541,13 +1581,13 @@ async function drainPlayPause(action) {
   const commandBaselineUpdatedAt = _playPauseServerUpdatedAt;
   const commandBaselineRevision = _playPauseServerRevision;
   // Register before dispatch: /alexa/command updates the server snapshot
-  // before its HTTP response is returned, so a quick pause confirmation can
-  // otherwise arrive between the request and waiter registration. A queued
-  // Resume does not wait for the pause snapshot: the accepted Pause response
-  // already orders the next command, and waiting here made quick Resume feel
-  // broken when the snapshot was delayed.
-  const shouldWaitForConfirmation = !(action === 'pause' &&
-    _queuedPlayPauseAction && _queuedPlayPauseAction !== action);
+  // before its HTTP response is returned, so a quick confirmation can
+  // otherwise arrive between the request and waiter registration. When the
+  // user queued the opposite action while this command was being prepared
+  // (rapid pause → resume or resume → pause), don't wait for this command's
+  // confirmation first: the accepted response already orders the next command,
+  // and waiting made rapid toggles feel broken when the snapshot was delayed.
+  const shouldWaitForConfirmation = !(_queuedPlayPauseAction && _queuedPlayPauseAction !== action);
   const serverConfirmation = shouldWaitForConfirmation
     ? waitForPlayPauseServerState(
         action === 'play', PLAY_PAUSE_CONFIRM_TIMEOUT_MS,
@@ -1559,10 +1599,10 @@ async function drainPlayPause(action) {
     succeeded = true;
     if (window.schedulePollNowPlaying) window.schedulePollNowPlaying(0);
     const queuedAfterDispatch = _queuedPlayPauseAction && _queuedPlayPauseAction !== action;
-    confirmed = queuedAfterDispatch && action === 'pause'
+    confirmed = queuedAfterDispatch
       ? false
       : serverConfirmation ? await serverConfirmation : false;
-    _confirmedPlayPauseState = confirmed ? action === 'play' : previousPlaying;
+    if (confirmed) _confirmedPlayPauseState = action === 'play';
   } catch (e) {
     error = e;
   }
@@ -1571,14 +1611,14 @@ async function drainPlayPause(action) {
   // pause/apply wait must replace the older queued action, never be discarded.
   const nextAction = _queuedPlayPauseAction;
   _queuedPlayPauseAction = null;
-  if (nextAction && nextAction !== action && succeeded &&
-      (confirmed || action === 'pause')) {
-    // The first command was accepted. For pause → resume, the short settle
-    // fallback above preserves command order even if the paused snapshot is
-    // late; never drop the user's queued Resume.
+  if (nextAction && nextAction !== action && succeeded) {
+    // The first command was accepted. Dispatch the user's latest queued intent
+    // next, even when this command never confirmed: the queued action
+    // supersedes it (e.g. a resume that arrived late must not swallow the
+    // pause the user asked for afterwards). Never drop a change-of-mind.
     return drainPlayPause(nextAction);
   }
-  if (nextAction && nextAction !== action && (!succeeded || !confirmed)) {
+  if (nextAction && nextAction !== action && !succeeded) {
     _playPauseBusy = false;
     state.isPlaying = previousPlaying;
     _playPauseDesiredState = state.isPlaying;
@@ -1653,7 +1693,6 @@ function requestPlayPause(action) {
   }
   _playPauseBusy = true;
   _queuedPlayPauseAction = null;
-  _confirmedPlayPauseState = state.isPlaying;
   void drainPlayPause(action);
 }
 
@@ -1686,14 +1725,30 @@ document.addEventListener('keydown', (event) => {
 document.getElementById('pp-btn').onclick = () => {
   const serial = selectedSerial();
   if (!serial) return;
-  // Base the next toggle on the latest confirmed server state whenever the
-  // control is idle. Alexa may have paused the Echo while a website command
-  // was in flight, leaving _playPauseDesiredState stale; using the latest
-  // server value guarantees this click sends play after an external pause.
-  // During an active web command, preserve the queued user intent instead.
-  const desiredPlaying = !_playPauseBusy && _playPauseServerPlaying !== null
-    ? _playPauseServerPlaying
-    : (_playPauseDesiredState === null ? state.isPlaying : _playPauseDesiredState);
+  // Choose the toggle base so rapid clicks and clicks during processing can
+  // never wedge the button into sending the same wrong command forever:
+  // - While a web command (or queued toggle) is in flight, toggle from the
+  //   user's last intent. The on-screen icon stays "paused" with a spinner for
+  //   both directions until confirmation, so reading the icon/server snapshot
+  //   here would send play again after a resume instead of the pause the user
+  //   asked for.
+  // - While idle with a still-unconfirmed intent (desired != confirmed, e.g.
+  //   the device confirmation is slow), also toggle from the intent: the
+  //   staged server snapshot still reports the old state and would likewise
+  //   repeat the previous command instead of toggling.
+  // - While idle and in sync, follow the authoritative server value so an
+  //   external Alexa pause/resume is honoured on the very next click.
+  let desiredPlaying;
+  if (_playPauseBusy || _queuedPlayPauseAction !== null) {
+    desiredPlaying = _playPauseDesiredState === null ? state.isPlaying : _playPauseDesiredState;
+  } else if (_playPauseDesiredState !== null && _confirmedPlayPauseState !== null &&
+             _playPauseDesiredState !== _confirmedPlayPauseState) {
+    desiredPlaying = _playPauseDesiredState;
+  } else if (_playPauseServerPlaying !== null) {
+    desiredPlaying = _playPauseServerPlaying;
+  } else {
+    desiredPlaying = state.isPlaying;
+  }
   const action = desiredPlaying ? 'pause' : 'play';
   toast((action === 'pause' ? 'Pausing' : 'Resuming') + '\u2026');
   requestPlayPause(action);
@@ -1852,8 +1907,12 @@ document.getElementById('shuffle-btn').addEventListener('click', async (e) => {
   const npMenuRadio = document.getElementById('np-menu-radio');
   if (npMenuRadio) npMenuRadio.addEventListener('click', (e) => {
     if (!state._currentTrack) { e.preventDefault(); return; }
-    if (typeof playRadio === 'function') {
-      playRadio(state._currentTrack);
+    // No global playRadio() exists — radio from the current track is a forced
+    // fresh queue seeded from it, same as every other Play Radio entry point.
+    if (typeof window.playResult === 'function') {
+      window.playResult(state._currentTrack, false, true);
+    } else if (typeof playResult === 'function') {
+      playResult(state._currentTrack, false, true);
     }
     close();
   });

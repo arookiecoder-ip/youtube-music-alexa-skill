@@ -6080,6 +6080,7 @@ def alexa_state_event():
                     _reset_progress(offset_in_ms)
                     _now_playing['playing'] = True
                     _now_playing['playback_confirmed'] = True
+                    _now_playing['playback_processing'] = False
                     _now_playing['updated_at'] = time.time()
             if metadata_changed or not redundant_confirmation:
                 _notify_sse()
