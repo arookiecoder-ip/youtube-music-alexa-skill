@@ -918,8 +918,13 @@
 }
 
 /* When the now-playing page is shown, the np-page already uses exact viewport
-   height — suppress main's playbar padding so the page doesn't overflow. */
-main:has(#now-playing-section:not([hidden])) {
+   height — suppress main's playbar padding so the page doesn't overflow.
+   Scoped away from the overlay states: while the fixed overlay covers the
+   page, main must keep its normal clearance so closing the overlay doesn't
+   snap padding-bottom 0 → calc(var(--playbar-h) + 28px) with its .3s
+   transition (a visible push of the page behind the slide). The padding is
+   invisible under the overlay either way. */
+body:not(.now-playing-route):not(.now-playing-closing) main:has(#now-playing-section:not([hidden])) {
   padding-bottom: 0 !important;
 }
 
@@ -2129,11 +2134,17 @@ body.now-playing-route .player-section .player-expand-btn svg {
     transition: none !important;
   }
   /* The closing layer is the only thing allowed to animate. Freeze every
-     underlying section/card/layout transition during the handoff. */
+     underlying section/card/layout transition during the handoff.
+     Transitions only — never `animation`. Stripping animations here removes
+     finished entrance animations (homeFadeIn, heroFadeIn, npIn, …) for the
+     duration of the close, so when the closing classes are removed they all
+     RESTART at once and the whole page visibly jumps/slides (~10px over
+     .3s) the moment the overlay is gone. Finished animations already hold
+     their end state, so leaving them running is visually identical during
+     the slide and restart-free after it. */
   body.now-playing-closing main > :not(#now-playing-section),
   body.now-playing-closing main > :not(#now-playing-section) * {
     transition: none !important;
-    animation: none !important;
   }
   body.now-playing-closing .layout,
   body.now-playing-closing .player-section:not(#now-playing-section) {
@@ -2171,9 +2182,13 @@ body.now-playing-route .player-section .player-expand-btn svg {
     overflow: visible;
   }
 
-  body.now-playing-route header {
-    margin-bottom: 0;
-  }
+  /* NOTE: no `margin-bottom: 0` override on the header while the overlay is
+     open. The overlay is a fixed layer that covers the page, so the header's
+     normal 4px bottom margin is invisible underneath it — but removing the
+     margin made the whole page jump ~4-6px when the overlay closed (the
+     margin snapped back with its .25s transition). Search never had this
+     problem because `body.results-open main header` outranks any such
+     override; keeping the margin constant everywhere removes the push. */
 
   /* The floating #queue-section panel is retired — the queue lives inside
      #now-playing-section (.np-page-right). Never force it visible here: a
@@ -2188,18 +2203,35 @@ body.now-playing-route .player-section .player-expand-btn svg {
   body.playlists-route:not(.results-open):not(.header-scrolled) main header,
   body.album-route:not(.results-open):not(.header-scrolled) main header,
   /* The expanded player is a fixed artwork layer. Its header must stay
-     transparent even when the page behind it was previously scrolled. */
-  body.now-playing-route:not(.results-open) main header,
+     transparent even when the page behind it was previously scrolled or
+     came from search (results-open + header-scrolled must not force it
+     opaque). */
+  body.now-playing-route main header,
   body.home-route:not(.results-open):not(.header-scrolled) main header {
     background: transparent;
   }
   body.artist-route:not(.header-scrolled) main header::before,
   body.playlists-route:not(.results-open):not(.header-scrolled) main header::before,
   body.album-route:not(.results-open):not(.header-scrolled) main header::before,
-  body.now-playing-route:not(.results-open) main header::before,
+  body.now-playing-route main header::before,
   body.home-route:not(.results-open):not(.header-scrolled) main header::before {
     background-color: transparent;
     border-bottom-color: transparent;
+  }
+  /* Entrance hold (see armNowPlayingOpening in router.js): while the overlay
+     slides in over a scrolled — i.e. opaque-headered — page, keep the bar
+     opaque until the slide covers the content. Without this the bar flips to
+     transparent at open-start and the still-visible page shows through it
+     for a split second. Armed only when the header was actually opaque, and
+     released when the slide finishes, so unscrolled (already transparent)
+     opens are untouched. Higher specificity than the transparent rules above
+     so the hold wins regardless of source order. */
+  body.now-playing-route.now-playing-opening main header {
+    background: #000;
+  }
+  body.now-playing-route.now-playing-opening main header::before {
+    background-color: #000;
+    border-bottom-color: rgba(255, 255, 255, .08);
   }
 }
 

@@ -1,0 +1,20 @@
+{
+  "name": "youtube-music-alexa-skill",
+  "version": "1.0.0",
+  "description": "A personal Alexa skill that plays YouTube Music on Echo devices with YT Music's recommendation engine (endless radio from any song — the queue keeps extending itself with more recommendations as you approach the end), at zero monthly cost.",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/arookiecoder-ip/youtube-music-alexa-skill.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "bugs": {
+    "url": "https://github.com/arookiecoder-ip/youtube-music-alexa-skill/issues"
+  },
+  "homepage": "https://github.com/arookiecoder-ip/youtube-music-alexa-skill#readme"
+}

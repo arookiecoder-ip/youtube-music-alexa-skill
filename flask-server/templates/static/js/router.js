@@ -520,6 +520,9 @@
 
     // Trigger the closing slide-out animation
     document.body.classList.add('now-playing-closing');
+    // A rapid close during the opening slide must drop the opaque header
+    // hold immediately; the closing chrome rules own the bar from here.
+    clearNowPlayingOpening();
     playerTrace('close:closing-class-added');
 
     // Clean up queue panel state
@@ -552,7 +555,14 @@
         // handoff-only styles for one paint, then restyled it on the next.
         document.body.classList.remove('now-playing-route', 'now-playing-closing');
         if (closingMain) {
-          requestAnimationFrame(function () { closingMain.style.removeProperty('transition'); });
+          // Release the inline freeze only after the finish styles have had
+          // two paint opportunities to settle (same pattern as the
+          // layout-snap handoff). A single rAF fires before first paint, so
+          // restoring the transition there lets main's padding-bottom/margin
+          // animate instead of snapping — a visible push of the page.
+          requestAnimationFrame(function () {
+            requestAnimationFrame(function () { closingMain.style.removeProperty('transition'); });
+          });
         }
         document.documentElement.style.removeProperty('overflow');
         document.body.style.removeProperty('overflow');
@@ -567,6 +577,54 @@
     }
     syncPageTitle();
   };
+
+  // ---- Now-playing opening header hold ----
+  // While the overlay slides in over a scrolled page, the header must keep
+  // its opaque chrome until the slide covers the content. Flipping to the
+  // transparent now-playing treatment at open-start exposes the still-visible
+  // page through the bar for a split second. Only armed when the header is
+  // actually opaque (computed alpha check, read BEFORE now-playing-route is
+  // added); an unscrolled page is already transparent so there is nothing to
+  // preserve. Released when the slide finishes (transitionend or fallback).
+  function nowPlayingHeaderIsOpaque() {
+    var header = document.querySelector('main header');
+    if (!header) return false;
+    var bg = '';
+    try { bg = getComputedStyle(header).backgroundColor || ''; } catch (_) { return false; }
+    if (!bg || bg === 'transparent') return false;
+    var m = /rgba?\(([^)]+)\)/.exec(bg);
+    if (!m) return true;
+    var parts = m[1].split(',');
+    var alpha = parts.length >= 4 ? parseFloat(parts[3]) : 1;
+    return !(isNaN(alpha)) && alpha > 0.02;
+  }
+  function clearNowPlayingOpening() {
+    var npSection = document.getElementById('now-playing-section');
+    if (npSection && npSection._openTimer) {
+      clearTimeout(npSection._openTimer);
+      npSection._openTimer = null;
+    }
+    if (npSection && npSection._openCleanup) {
+      npSection.removeEventListener('transitionend', npSection._openCleanup);
+      npSection._openCleanup = null;
+    }
+    document.body.classList.remove('now-playing-opening');
+  }
+  function armNowPlayingOpening() {
+    clearNowPlayingOpening();
+    if (!nowPlayingHeaderIsOpaque()) return;
+    var npSection = document.getElementById('now-playing-section');
+    document.body.classList.add('now-playing-opening');
+    if (!npSection) return;
+    var finishOpen = function(event) {
+      if (event && (event.target !== npSection || event.propertyName !== 'transform')) return;
+      clearNowPlayingOpening();
+    };
+    npSection._openCleanup = finishOpen;
+    npSection.addEventListener('transitionend', finishOpen);
+    // Fallback for reduced motion, background tabs, or interrupted CSS.
+    npSection._openTimer = setTimeout(clearNowPlayingOpening, 500);
+  }
 
   window.openNowPlayingOverlay = function() {
     if (document.body.classList.contains('now-playing-route')) return;
@@ -585,6 +643,9 @@
       void npSection.offsetHeight;
     }
     document.body.classList.remove('now-playing-closing');
+    // Snapshot the pre-open header BEFORE now-playing-route flips it
+    // transparent, so a scrolled (opaque) bar is held through the slide.
+    armNowPlayingOpening();
     document.body.classList.add('now-playing-route');
     // Pin the body at its current scroll offset so background scrolling
     // stops on mobile before the slide-in animation even starts.
@@ -781,12 +842,19 @@
       routedNpSection.removeEventListener('transitionend', routedNpSection._closeCleanup);
       routedNpSection._closeCleanup = null;
     }
+    // Route-driven close/open supersedes any in-flight opening hold.
+    clearNowPlayingOpening();
     // Unhide the now-playing section BEFORE the body class toggles so the
     // CSS transition has a visible start state (translateY(103%)) to animate from.
     if (hash === '#now-playing' && routedNpSection) {
       routedNpSection.hidden = false;
       void routedNpSection.offsetHeight;
     }
+    // Direct route-driven open (fresh load of the player URL): arm the opaque
+    // header hold here, while body still carries the pre-open route classes
+    // so the opacity snapshot is truthful. The toggles below flip the bar
+    // transparent immediately after.
+    if (hash === '#now-playing' && !isClosingNowPlaying) armNowPlayingOpening();
     var preserveSearchShell = hash.indexOf('#search?') === 0 &&
       window.__appState && window.__appState._searchPreservePreviousView;
     var routeClassNames = ['home-route', 'now-playing-route', 'now-playing-closing',
@@ -865,7 +933,12 @@
           // normal route styles take over on the following frame.
           document.body.classList.remove('now-playing-route', 'now-playing-closing');
           if (closingMain) {
-            requestAnimationFrame(function () { closingMain.style.removeProperty('transition'); });
+            // Same two-paint freeze release as the overlay close path above:
+            // a single rAF restores the transition before first paint and
+            // lets the handoff values animate visibly.
+            requestAnimationFrame(function () {
+              requestAnimationFrame(function () { closingMain.style.removeProperty('transition'); });
+            });
           }
           // Belt-and-suspenders: restore scroll in case overflow got stuck.
           document.documentElement.style.removeProperty('overflow');

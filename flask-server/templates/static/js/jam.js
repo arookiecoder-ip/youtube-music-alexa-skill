@@ -3,6 +3,16 @@
 
   let _deviceSerial = '';
 
+  // Homepage-style header: transparent over the warm tint at the top, opaque
+  // black once scrolled — same contract as the owner remote (router.js).
+  // Without this the shared transparent-header rule matches the jam shell
+  // (body.home-route) forever and scrolled results show through the bar.
+  function syncJamHeaderScrollState() {
+    document.body.classList.toggle('header-scrolled', window.scrollY > 12);
+  }
+  window.addEventListener('scroll', syncJamHeaderScrollState, { passive: true });
+  syncJamHeaderScrollState();
+
   function state() { return window.__appState; }
 
   function showJamEnded(title, msg) {

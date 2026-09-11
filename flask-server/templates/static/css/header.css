@@ -589,26 +589,32 @@ header > .brand h1 {
   }
   /* Transparent header so content (artist hero, now-playing blurred art,
      body warm gradient) bleeds behind the sticky top bar. Opaque black
-     returns automatically when the user scrolls (header-scrolled). */
+     returns automatically when the user scrolls (header-scrolled) — history,
+     explore and library follow the same homepage rule so scrolled content
+     never shows through the bar.
+     Now-playing is a fixed artwork overlay: its header stays transparent
+     even when the page behind it was scrolled or came from search
+     (results-open + header-scrolled must not force it opaque). */
   body.artist-route:not(.header-scrolled) main header,
   body.playlists-route:not(.results-open):not(.header-scrolled) main header,
   body.album-route:not(.results-open):not(.header-scrolled) main header,
-  body.now-playing-route:not(.results-open) main header,
+  body.now-playing-route main header,
   body.results-open:not(.header-scrolled) main header,
-  body.history-route main header,
-  body.explore-route main header,
+  body.history-route:not(.header-scrolled) main header,
+  body.explore-route:not(.header-scrolled) main header,
   body.mood-route:not(.header-scrolled) main header,
-  body.library-route main header,
+  body.library-route:not(.header-scrolled) main header,
   body.home-route:not(.results-open):not(.header-scrolled) main header {
     background: transparent;
   }
   body.playlists-route:not(.results-open):not(.header-scrolled) main header::before,
   body.album-route:not(.results-open):not(.header-scrolled) main header::before,
+  body.now-playing-route main header::before,
   body.results-open:not(.header-scrolled) main header::before,
-  body.history-route main header::before,
-  body.explore-route main header::before,
+  body.history-route:not(.header-scrolled) main header::before,
+  body.explore-route:not(.header-scrolled) main header::before,
   body.mood-route:not(.header-scrolled) main header::before,
-  body.library-route main header::before {
+  body.library-route:not(.header-scrolled) main header::before {
     background-color: transparent;
     border-bottom-color: transparent;
   }
