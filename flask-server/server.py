@@ -1804,6 +1804,13 @@ _now_playing = {
     'video_id': '',
     'queue': [],        # [{title, artist, artists, thumbnail, video_id}, ...]
     'queue_index': -1,  # current position in queue (-1 = unknown)
+    # True while a web-remote queue mutation (reorder/add/remove/shuffle/play)
+    # has changed the live queue after the Alexa skill last reported an order
+    # that matched it. The skill only learns of web changes when it enqueues
+    # its next stream through /next_track/; until its 'started' snapshot
+    # agrees with the live order again, a stale skill window must never
+    # overwrite the user's chosen order (see alexa_state_event).
+    'queue_web_dirty': False,
     'updated_at': 0,
     # Monotonic playback-state revision. Unlike updated_at, this changes only
     # when playback state/identity changes, so clients can reject stale polls
@@ -5828,7 +5835,8 @@ def alexa_state_event():
                                        if item.get('video_id') == video_id), -1)
             if incoming_index >= 0:
                 skill_queue_received = True
-                cur_queue = _get_now_playing().get('queue') or []
+                cur_np = _get_now_playing()
+                cur_queue = cur_np.get('queue') or []
                 incoming_ids = [item.get('video_id') for item in normalized_queue]
                 current_ids = [item.get('video_id') for item in cur_queue]
 
@@ -5844,7 +5852,39 @@ def alexa_state_event():
                         if current_ids[start:start + len(incoming_ids)] == incoming_ids:
                             slice_offset = start
                             break
-                if slice_offset >= 0:
+
+                # Web-remote queue changes (drag reorder, add next, remove,
+                # shuffle, play) can leave the skill's persisted window stale:
+                # the skill only learns of them when it next resolves its next
+                # stream through /next_track/, and it reports its (possibly
+                # old) window on every 'started' webhook. Without a guard that
+                # stale window overwrote the user's reordered queue here, so
+                # playback (and the on-screen queue) fell back to the older
+                # order -- the reported "dragged a song below the playing one,
+                # but the next track played from the old queue" symptom.
+                #   * When the live queue already holds the current track and
+                #     a web mutation happened since the last time the skill's
+                #     window agreed with it, the server's order wins: keep the
+                #     live queue and translate the skill's index by video id.
+                #     The marker stays set until the skill's window actually
+                #     matches the live order again.
+                #   * Otherwise the skill's snapshot is authoritative (voice
+                #     shuffle / new radio), or it is a contiguous window slice
+                #     of the live queue and nothing needs replacing.
+                queue_web_dirty = bool(cur_np.get('queue_web_dirty'))
+                live_holds_current = (len(cur_queue) > 1 and any(
+                    q.get('video_id') == video_id for q in cur_queue))
+                if queue_web_dirty and live_holds_current and slice_offset < 0:
+                    translated = next(
+                        (i for i in range(len(cur_queue) - 1, -1, -1)
+                         if cur_queue[i].get('video_id') == video_id), -1)
+                    if translated >= 0:
+                        synced_queue = cur_queue
+                        queue_index = translated
+                    else:
+                        synced_queue = normalized_queue
+                        queue_index = incoming_index
+                elif slice_offset >= 0:
                     synced_queue = cur_queue
                     queue_index = slice_offset + incoming_index
                 else:
@@ -5857,11 +5897,23 @@ def alexa_state_event():
                 # SSE clients even though only the active index had changed.
                 if synced_queue != cur_queue:
                     sync_fields['queue'] = synced_queue
+                # The skill's window now genuinely agrees with the live order
+                # (exact match or a contiguous slice): the web reorder has been
+                # absorbed, so future snapshots are trusted again. When we had
+                # to keep the reordered live queue (skill still stale), leave
+                # the marker set so the next stale report cannot sneak the old
+                # order back in either.
+                if (synced_queue == cur_queue
+                        and (incoming_ids == current_ids or slice_offset >= 0)):
+                    sync_fields['queue_web_dirty'] = False
                 _update_now_playing(**sync_fields)
         same_track = video_id and video_id == _get_now_playing().get('video_id')
         if video_id and not same_track:
             # New track: pull instant metadata from the queue if we have it.
+            # prev_video_id is the just-finished track; after a web reorder the
+            # expected next is the slot right after it in the live queue.
             current_state = _get_now_playing()
+            prev_video_id = current_state.get('video_id') or ''
             queue = current_state.get('queue', [])
             preferred_index = current_state.get('queue_index', -1)
             if (0 <= preferred_index < len(queue)
@@ -5907,6 +5959,58 @@ def alexa_state_event():
                 if offset_in_ms < 5000:
                     _record_listen(video_id, '', '', '')
                 threading.Thread(target=_lookup_and_update_np, args=(video_id,), daemon=True).start()
+            # ---- Auto-skip a stale next track ----
+            # The skill's ENQUEUE directive is already sitting in the Echo's
+            # AudioPlayer queue when a web reorder lands in the final ~30-40s
+            # of the previous track; it can't be recalled. video_id (the stale
+            # track) just started -- but the user dragged a different song to
+            # be next. Skip it immediately by dispatching the true next in the
+            # live queue, mirroring the transport Next button path (same
+            # debounce, in-flight guard, and confirmation watchdog), so the
+            # dragged song plays right after the finished one instead of this
+            # uninvited track.
+            if prev_video_id:
+                live_queue = _get_now_playing().get('queue') or []
+                web_dirty = bool(_get_now_playing().get('queue_web_dirty'))
+                if web_dirty and live_queue:
+                    # Resolve the just-finished track by identity: the sync
+                    # above may have translated queue_index to the new track,
+                    # so the previous track's position must come from its id.
+                    prev_idx = next(
+                        (j for j in range(len(live_queue) - 1, -1, -1)
+                         if live_queue[j].get('video_id') == prev_video_id), -1)
+                    if prev_idx >= 0 and prev_idx + 1 < len(live_queue):
+                        expected_next = live_queue[prev_idx + 1]
+                        if expected_next and expected_next.get('video_id') != video_id:
+                            skip_serial = _effective_serial(body.get('serial'))
+                            skip_vid = expected_next.get('video_id')
+                            if skip_serial and _valid_video_id(skip_vid):
+                                logger.info(
+                                    "[np] skipping stale enqueued %s -> %s "
+                                    "(web queue changed near song end)",
+                                    video_id, skip_vid)
+                                _update_now_playing(
+                                    playing=False,
+                                    title=expected_next.get('title', ''),
+                                    artist=expected_next.get('artist', ''),
+                                    artists=expected_next.get('artists', []),
+                                    thumbnail=expected_next.get('thumbnail', ''),
+                                    video_id=skip_vid,
+                                    duration_ms=expected_next.get('duration_ms', 0),
+                                    position_ms=0,
+                                    playback_confirmed=False,
+                                    queue=live_queue,
+                                    queue_index=prev_idx + 1)
+                                _ensure_audio_ready_for_play(skip_vid, wait=False)
+                                _schedule_play_dispatch(skip_serial, skip_vid)
+                                if not _jam_guest():
+                                    _record_listen(skip_vid,
+                                                   expected_next.get('title', ''),
+                                                   expected_next.get('artist', ''),
+                                                   _thumbnail_url(expected_next.get('thumbnail')))
+                                if not int(expected_next.get('duration_ms') or 0):
+                                    threading.Thread(target=_lookup_and_update_np,
+                                                     args=(skip_vid,), daemon=True).start()
             live_queue = _get_now_playing().get('queue') or []
             has_playable_queue = (len(live_queue) > 1
                                   and any(item.get('video_id') == video_id
@@ -6787,7 +6891,10 @@ def alexa_shuffle_queue():
         _random.shuffle(queue)
         new_index = queue_index
 
-    _update_now_playing(queue=queue, queue_index=new_index)
+    # The web remote chose this order; mark it authoritative until the skill's
+    # next 'started' snapshot agrees with it (see alexa_state_event).
+    _update_now_playing(queue=queue, queue_index=new_index,
+                        queue_web_dirty=True)
     # Re-trigger lazy pre-download in the new order
     _prewarm_queue_audio(queue, current_index=new_index, limit=4)
     if _jam_guest():
@@ -6898,7 +7005,11 @@ def alexa_play_queue():
                             thumbnail=first['thumbnail'], video_id=first['video_id'],
                             duration_ms=first['duration_ms'], position_ms=0,
                             playback_confirmed=False,
-                            queue=validated_items, queue_index=target_idx)
+                            queue=validated_items, queue_index=target_idx,
+                            # The web remote installed this queue; it is
+                            # authoritative until the skill's next snapshot
+                            # agrees (see alexa_state_event).
+                            queue_web_dirty=True)
 
         serial = _effective_serial(body.get("serial"))
         if serial:
@@ -7037,7 +7148,11 @@ def alexa_play_queue():
                         position_ms=0,
                         playback_confirmed=False,
                         queue=queue,
-                        queue_index=target_idx)
+                        queue_index=target_idx,
+                        # A fresh single-track play replaces the queue; keep it
+                        # authoritative until the skill syncs (see
+                        # alexa_state_event).
+                        queue_web_dirty=True)
     # Recommendations/charts carry no duration, so the progress bar would show
     # --:-- with no total. Look the real metadata (incl. length) up in the
     # background and patch it into now-playing without blocking playback.
@@ -7146,6 +7261,7 @@ def alexa_queue_add():
                 insert_at = len(queue)
                 queue.extend(added_items)
             _now_playing['queue'] = queue
+            _now_playing['queue_web_dirty'] = True
             _now_playing['updated_at'] = time.time()
 
         _prewarm_queue_audio(queue, current_index=current_idx, limit=4)
@@ -7209,6 +7325,7 @@ def alexa_queue_add():
             queue_pos = len(queue) - 1
 
         _now_playing['queue'] = queue
+        _now_playing['queue_web_dirty'] = True
         _now_playing['updated_at'] = time.time()
 
     _notify_sse()
@@ -7263,6 +7380,7 @@ def alexa_queue_remove():
 
         _now_playing['queue'] = queue
         _now_playing['queue_index'] = current_idx
+        _now_playing['queue_web_dirty'] = True
         _now_playing['updated_at'] = time.time()
 
     _notify_sse()
@@ -7315,6 +7433,7 @@ def alexa_queue_reorder():
 
         _now_playing['queue'] = queue
         _now_playing['queue_index'] = current_idx
+        _now_playing['queue_web_dirty'] = True
         _now_playing['updated_at'] = time.time()
 
     _notify_sse()

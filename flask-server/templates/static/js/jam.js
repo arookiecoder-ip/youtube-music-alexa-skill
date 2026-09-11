@@ -189,9 +189,8 @@
     if (window.closeSearchSuggestions) window.closeSearchSuggestions();
     const input = document.getElementById('query');
     if (input) input.blur();
-    // Jam has no router or expanded now-playing overlay; closing the results
-    // panel re-shows the jam home and reveals the compact player bar once the
-    // resolved track renders.
+    // Closing the results panel re-shows the jam home and reveals the
+    // compact player bar once the resolved track renders.
     if (window.closeResults) window.closeResults();
   }
 
@@ -206,9 +205,171 @@
     }
   }
 
+  // ---- Expanded now-playing overlay (same as the normal remote) ----
+  // The compact playbar opens this full now-playing page via
+  // navigateTo('#now-playing') (player.js). Body classes drive the same
+  // slide/fade transitions as the normal remote (player.css), so the mobile
+  // experience is identical: art hero, action squares, progress, transport,
+  // volume, swipe-to-skip, and the queue modal.
+  function _isMobileViewport() {
+    return typeof window !== 'undefined' &&
+      window.matchMedia && window.matchMedia('(max-width: 899px)').matches;
+  }
+  function lockPlayerScroll() {
+    if (!_isMobileViewport()) return;
+    if (window.__npScrollLocked) return;
+    window.__npScrollLocked = true;
+    document.body.dataset.npScrollY = String(window.scrollY);
+    document.body.style.overscrollBehavior = 'none';
+    document.documentElement.style.overscrollBehavior = 'none';
+  }
+  function unlockPlayerScroll() {
+    if (!window.__npScrollLocked) return;
+    window.__npScrollLocked = false;
+    var y = parseInt(document.body.dataset.npScrollY || '0', 10);
+    document.body.style.removeProperty('overflow');
+    document.body.style.removeProperty('overscroll-behavior');
+    document.documentElement.style.removeProperty('overflow');
+    document.documentElement.style.removeProperty('overscroll-behavior');
+    delete document.body.dataset.npScrollY;
+    requestAnimationFrame(function() { window.scrollTo(0, y); });
+  }
+
+  function openNowPlayingOverlay() {
+    if (document.body.classList.contains('now-playing-route')) return;
+    window.__npReturnRoute = getRoute() || '';
+    var npSection = document.getElementById('now-playing-section');
+    if (npSection && npSection._closeTimer) {
+      clearTimeout(npSection._closeTimer);
+      npSection._closeTimer = null;
+    }
+    if (npSection && npSection._closeCleanup) {
+      npSection.removeEventListener('transitionend', npSection._closeCleanup);
+      npSection._closeCleanup = null;
+    }
+    if (npSection) {
+      npSection.hidden = false;
+      void npSection.offsetHeight;
+    }
+    document.body.classList.remove('now-playing-closing');
+    document.body.classList.add('now-playing-route');
+    lockPlayerScroll();
+    // Re-apply the current track artwork + in-page queue, mirroring the
+    // normal remote's route renderer.
+    var npPage = npSection && npSection.querySelector('.np-page');
+    var currentThumb = state() && state()._currentThumbnail;
+    if (npPage) {
+      if (currentThumb) npPage.style.setProperty('--np-cover', 'url(' + JSON.stringify(currentThumb) + ')');
+      else npPage.style.removeProperty('--np-cover');
+    }
+    var queueJson = window._lastQueueJson || (state() && state()._lastQueueJson);
+    if (queueJson && window.renderNpQueue) {
+      try {
+        var queue = JSON.parse(queueJson);
+        var queueIndex = typeof window._lastQueueIndex === 'number'
+          ? window._lastQueueIndex
+          : ((state() && state()._lastQueueIndex) || 0);
+        window.renderNpQueue(queue, queueIndex);
+      } catch (_) {}
+    }
+    if (window.scrollQueueToCurrent) window.scrollQueueToCurrent();
+    if (window.syncUiState) window.syncUiState();
+  }
+
+  function closeNowPlayingOverlay() {
+    if (!document.body.classList.contains('now-playing-route')) return;
+    var npSection = document.getElementById('now-playing-section');
+    document.body.classList.add('now-playing-closing');
+    var queueSection = document.getElementById('queue-section');
+    if (queueSection) queueSection.hidden = true;
+    if (npSection) {
+      if (npSection._closeTimer) clearTimeout(npSection._closeTimer);
+      if (npSection._closeCleanup) npSection.removeEventListener('transitionend', npSection._closeCleanup);
+      var finishClose = function(event) {
+        if (event && (event.target !== npSection || event.propertyName !== 'transform')) return;
+        if (npSection._closeTimer) clearTimeout(npSection._closeTimer);
+        npSection.removeEventListener('transitionend', finishClose);
+        npSection.hidden = true;
+        npSection._closeTimer = null;
+        npSection._closeCleanup = null;
+        document.body.classList.remove('now-playing-route', 'now-playing-closing');
+        document.documentElement.style.removeProperty('overflow');
+        document.body.style.removeProperty('overflow');
+        unlockPlayerScroll();
+      };
+      npSection._closeCleanup = finishClose;
+      npSection.addEventListener('transitionend', finishClose);
+      npSection._closeTimer = setTimeout(finishClose, 450);
+    } else {
+      document.body.classList.remove('now-playing-route', 'now-playing-closing');
+      unlockPlayerScroll();
+    }
+  }
+
   function syncHistoryTriggerVisibility() {}
-  function getRoute() { return ''; }
-  function navigateTo() {}
+  function getRoute() {
+    return document.body.classList.contains('now-playing-route') ? '#now-playing' : '';
+  }
+  function navigateTo(route) {
+    if (route === '#now-playing') {
+      openNowPlayingOverlay();
+      return;
+    }
+    if ((route === '#home' || route === '' || route == null) &&
+        document.body.classList.contains('now-playing-route')) {
+      closeNowPlayingOverlay();
+    }
+  }
+
+  var mobilePlayerClose = document.getElementById('mobile-player-close');
+  if (mobilePlayerClose) {
+    mobilePlayerClose.addEventListener('click', function(event) {
+      event.stopPropagation();
+      closeNowPlayingOverlay();
+    });
+  }
+
+  // Dismiss the expanded mobile player with Escape or a quick downward flick
+  // on the non-interactive surface — same as the normal remote.
+  document.addEventListener('keydown', function(event) {
+    if (event.key === 'Escape' && document.body.classList.contains('now-playing-route')) {
+      closeNowPlayingOverlay();
+    }
+  });
+  (function wireJamNowPlayingDismissSwipe() {
+    var npSection = document.getElementById('now-playing-section');
+    if (!npSection) return;
+    var startX = 0, startY = 0, startedAt = 0, tracking = false;
+    npSection.addEventListener('touchstart', function(event) {
+      if (!document.body.classList.contains('now-playing-route') ||
+          (window.matchMedia && window.matchMedia('(min-width: 900px)').matches) ||
+          event.touches.length !== 1 ||
+          (event.target.closest && event.target.closest('button, a, input, select, textarea, [role="slider"], .progress-track'))) {
+        tracking = false;
+        return;
+      }
+      var touch = event.touches[0];
+      startX = touch.clientX;
+      startY = touch.clientY;
+      startedAt = performance.now();
+      tracking = true;
+    }, { passive: true });
+    npSection.addEventListener('touchend', function(event) {
+      if (!tracking || !event.changedTouches.length) return;
+      tracking = false;
+      var touch = event.changedTouches[0];
+      var deltaX = touch.clientX - startX;
+      var deltaY = touch.clientY - startY;
+      var elapsed = Math.max(1, performance.now() - startedAt);
+      if (deltaY >= 72 && (deltaY / elapsed) >= 0.55 && deltaY > Math.abs(deltaX) * 1.25) {
+        closeNowPlayingOverlay();
+      }
+    }, { passive: true });
+    npSection.addEventListener('touchcancel', function() { tracking = false; }, { passive: true });
+  })();
+
+  window.openNowPlayingOverlay = openNowPlayingOverlay;
+  window.closeNowPlayingOverlay = closeNowPlayingOverlay;
 
   window.showJamEnded = showJamEnded;
   window.leaveJam = leaveJam;

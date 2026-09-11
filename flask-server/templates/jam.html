@@ -19,6 +19,7 @@
 <link rel="stylesheet" href="/static/css/toast.css?v={{ asset_v }}">
 <link rel="stylesheet" href="/static/css/home.css?v={{ asset_v }}">
 <link rel="stylesheet" href="/static/css/jam.css?v={{ asset_v }}">
+<link rel="stylesheet" href="/static/css/mobile.css?v={{ asset_v }}">
 </head>
 <body class="jam-guest home-route">
 <div id="top-progress-bar" class="top-progress-bar"></div>
@@ -66,21 +67,42 @@
     <div class="home-rows" id="jam-home-rows"></div>
   </section>
 
-  <!-- Player -->
+  <!-- Player (same persistent playbar as the normal remote; jam-guest CSS
+       hides the account-only controls like Like / Save) -->
   <section class="player-section redesigned-bar is-collapsed" id="player-section" hidden>
-      <div class="player-left np" id="now-playing">
-        <div class="np-art" id="np-art">
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor">
-            <path d="M12 3v10.55A4 4 0 1 0 14 17V7h4V3h-6z"/>
-          </svg>
-        </div>
-        <div class="np-info">
-          <div class="np-title" id="np-title"></div>
-          <div class="np-artist" id="np-artist"></div>
-          <span class="playbar-time"><span id="playbar-elapsed">0:00</span> / <span id="playbar-total">--:--</span></span>
-        </div>
+    <!-- LEFT: Art & Info -->
+    <div class="player-left np" id="now-playing">
+      <div class="np-art" id="np-art">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="currentColor">
+          <path d="M12 3v10.55A4 4 0 1 0 14 17V7h4V3h-6z"/>
+        </svg>
       </div>
-      <div class="player-center">
+      <div class="np-info">
+        <div class="np-title" id="np-title"></div>
+        <div class="np-artist" id="np-artist"></div>
+        <span class="playbar-time"><span id="playbar-elapsed">0:00</span> / <span id="playbar-total">--:--</span></span>
+      </div>
+      <button class="np-like-btn ghost-btn" id="np-like-btn" title="Like">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg>
+      </button>
+      <a class="np-ytm-btn ghost-btn" id="np-url-toggle" href="#" target="_blank" rel="noopener" title="Open on YouTube Music" style="display:none">
+        <svg viewBox="0 0 24 24" fill="currentColor">
+          <path d="M12 0C5.376 0 0 5.376 0 12s5.376 12 12 12 12-5.376 12-12S18.624 0 12 0zm0 21.6c-5.292 0-9.6-4.308-9.6-9.6S6.708 2.4 12 2.4s9.6 4.308 9.6 9.6-4.308 9.6-9.6 9.6zM9.6 16.8l7.2-4.8-7.2-4.8v9.6z"/>
+        </svg>
+      </a>
+      <button class="np-shuffle-btn ghost-btn" id="shuffle-btn" title="Shuffle">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="16 3 21 3 21 8"/>
+          <line x1="4" y1="20" x2="21" y2="3"/>
+          <polyline points="21 16 21 21 16 21"/>
+          <line x1="15" y1="15" x2="21" y2="21"/>
+          <line x1="4" y1="4" x2="9" y2="9"/>
+        </svg>
+      </button>
+    </div>
+
+    <!-- CENTER: Transport & Progress -->
+    <div class="player-center">
       <div class="transport">
         <button data-action="previous" class="ghost-btn" title="Previous">
           <svg viewBox="0 0 24 24" fill="currentColor">
@@ -88,7 +110,7 @@
             <polygon points="20,5 10,12 20,19"/>
           </svg>
         </button>
-        <button class="pp-btn" id="pp-btn" title="Play">
+        <button class="pp-btn dominant" id="pp-btn" title="Play">
           <svg class="icon-play" viewBox="0 0 24 24" fill="currentColor">
             <polygon points="7,4 20,12 7,20"/>
           </svg>
@@ -104,38 +126,61 @@
           </svg>
         </button>
       </div>
-      <div class="progress" id="progress" hidden>
-        <span id="progress-elapsed">0:00</span>
-        <div class="progress-track" id="progress-track"
-             role="slider" aria-label="Seek" tabindex="0"
-             aria-valuemin="0" aria-valuemax="0" aria-valuenow="0">
-          <div class="progress-fill" id="progress-fill"></div>
-          <div class="progress-handle" id="progress-handle"></div>
-          <div class="progress-tooltip" id="progress-tooltip">0:00</div>
+
+        <!-- Progress bar -->
+        <div class="progress" id="progress" hidden>
+          <span id="progress-elapsed">0:00</span>
+          <div class="progress-track" id="progress-track"
+               role="slider" aria-label="Seek" tabindex="0"
+               aria-valuemin="0" aria-valuemax="0" aria-valuenow="0">
+            <div class="progress-fill" id="progress-fill"></div>
+            <div class="progress-handle" id="progress-handle"></div>
+            <div class="progress-tooltip" id="progress-tooltip">0:00</div>
+          </div>
+          <span id="progress-total">0:00</span>
         </div>
-        <span id="progress-total">0:00</span>
-      </div>
+    </div>
+
+    <!-- RIGHT: Secondary Controls -->
+    <div class="player-right">
+      <div class="vol">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" stroke="none">
+          <path d="M3 9v6h4l5 5V4L7 9H3z"/>
+          <path d="M16.5 12c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02z" opacity=".6"/>
+          <path d="M19 12c0-3.04-1.73-5.66-4.26-6.96v1.87C16.74 8.14 18 9.93 18 12s-1.26 3.86-3.26 5.1v1.87C17.27 17.66 19 15.04 19 12z" opacity=".35"/>
+        </svg>
+        <input type="range" id="volume" min="0" max="100" value="50">
       </div>
 
-      <div class="player-right">
-        <div class="vol">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" stroke="none">
-            <path d="M3 9v6h4l5 5V4L7 9H3z"/>
-            <path d="M16.5 12c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02z" opacity=".6"/>
-            <path d="M19 12c0-3.04-1.73-5.66-4.26-6.96v1.87C16.74 8.14 18 9.93 18 12s-1.26 3.86-3.26 5.1v1.87C17.27 17.66 19 15.04 19 12z" opacity=".35"/>
-          </svg>
-          <input type="range" id="volume" min="0" max="100" value="50">
-        </div>
-        <button class="np-shuffle-btn ghost-btn" id="shuffle-btn" title="Shuffle">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-            <polyline points="16 3 21 3 21 8"/>
-            <line x1="4" y1="20" x2="21" y2="3"/>
-            <polyline points="21 16 21 21 16 21"/>
-            <line x1="15" y1="15" x2="21" y2="21"/>
-            <line x1="4" y1="4" x2="9" y2="9"/>
-          </svg>
+      <div class="np-more-wrap">
+        <button class="np-more-btn ghost-btn" id="np-more-btn" title="More options" aria-label="More options" aria-expanded="false">
+          <svg viewBox="0 0 24 24" fill="currentColor"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg>
         </button>
+        <div class="np-more-menu" id="np-more-menu" role="menu">
+          <button role="menuitem" id="np-menu-like" class="result-menu-option">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg><span>Like</span>
+          </button>
+          <button role="menuitem" id="np-menu-playlist" class="result-menu-option">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path><line x1="12" y1="11" x2="12" y2="17"></line><line x1="9" y1="14" x2="15" y2="14"></line></svg><span>Save to playlist</span>
+          </button>
+          <button role="menuitem" id="np-menu-album" class="result-menu-option">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="12" cy="12" r="4"/><circle cx="12" cy="12" r="1" fill="currentColor"/></svg><span>Go to album</span>
+          </button>
+          <button role="menuitem" id="np-menu-artist" class="result-menu-option">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.6-7 8-7s8 3 8 7"/></svg><span>Go to artist</span>
+          </button>
+          <button role="menuitem" id="np-menu-radio" class="result-menu-option">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4.93 19.07A10 10 0 1 1 19.07 4.93 10 10 0 0 1 4.93 19.07z"/><circle cx="12" cy="12" r="4"/><path d="M12 2v2"/><path d="M12 20v2"/><path d="M2 12h2"/><path d="M20 12h2"/></svg> Play Radio
+          </button>
+        </div>
       </div>
+
+      <button type="button" class="player-expand-btn ghost-btn" id="player-expand-btn" title="Expand player" aria-label="Expand player">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polyline points="6 15 12 9 18 15"/>
+        </svg>
+      </button>
+    </div>
   </section>
 
   <!-- Search results -->
@@ -151,7 +196,135 @@
     <div class="label">Up Next</div>
     <div class="queue-section" id="queue-list"></div>
   </section>
+
+  <!-- Now Playing page: identical to the normal remote (large album art +
+       UP NEXT queue). Jam-guest CSS hides the account-only Like control;
+       everything else (art, actions, progress, transport, volume, queue)
+       behaves exactly like the normal page, including on mobile. -->
+  <section id="now-playing-section" hidden>
+    <div class="np-page">
+      <button class="mobile-player-close" id="mobile-player-close" type="button" aria-label="Close player" title="Close player">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <path d="m6 9 6 6 6-6"></path>
+        </svg>
+      </button>
+      <button class="mobile-player-more" id="mobile-player-more" type="button" aria-label="More options" title="More options">
+        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+          <circle cx="12" cy="5" r="1.7"></circle>
+          <circle cx="12" cy="12" r="1.7"></circle>
+          <circle cx="12" cy="19" r="1.7"></circle>
+        </svg>
+      </button>
+      <div class="np-page-left">
+        <div class="np-page-art" id="np-page-art">
+          <svg width="64" height="64" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M12 3v10.55A4 4 0 1 0 14 17V7h4V3h-6z"/>
+          </svg>
+          <div class="np-page-art-overlay" id="np-page-art-overlay" title="Play/Pause">
+            <svg class="icon-play" viewBox="0 0 24 24" fill="currentColor"><polygon points="8,5 19,12 8,19"/></svg>
+            <svg class="icon-pause" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="5" width="4" height="14"/><rect x="14" y="5" width="4" height="14"/></svg>
+          </div>
+        </div>
+        <div class="np-page-meta">
+          <div class="np-page-title-row">
+            <div class="np-page-title" id="np-page-title">Nothing is playing</div>
+          </div>
+          <div class="np-page-artist" id="np-page-artist"></div>
+        </div>
+        <div class="mobile-np-actions" role="group" aria-label="Actions">
+          <button type="button" id="mobile-np-like" aria-label="Like" title="Like">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"></path></svg>
+            <span class="mobile-np-action-label">Like</span>
+          </button>
+          <a class="mobile-player-youtube ghost-btn is-hidden" id="mobile-player-youtube" href="#"
+             target="_blank" rel="noopener" title="Open on YouTube Music"
+             aria-label="Open on YouTube Music">
+            <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+              <path d="M12 0C5.376 0 0 5.376 0 12s5.376 12 12 12 12-5.376 12-12S18.624 0 12 0zm0 21.6c-5.292 0-9.6-4.308-9.6-9.6S6.708 2.4 12 2.4s9.6 4.308 9.6 9.6S17.292 21.6 12 21.6zM9.6 16.8l7.2-4.8-7.2-4.8v9.6z"/>
+            </svg>
+            <span class="mobile-np-action-label">YT Music</span>
+          </a>
+          <button type="button" id="mobile-np-shuffle" aria-label="Shuffle" title="Shuffle">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <polyline points="16 3 21 3 21 8"></polyline>
+              <line x1="4" y1="20" x2="21" y2="3"></line>
+              <polyline points="21 16 21 21 16 21"></polyline>
+              <line x1="15" y1="15" x2="21" y2="21"></line>
+              <line x1="4" y1="4" x2="9" y2="9"></line>
+            </svg>
+            <span class="mobile-np-action-label">Shuffle</span>
+          </button>
+          <button type="button" class="mobile-queue-button" id="queue-modal-btn" aria-label="Open queue" title="Open queue">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+              <path d="M4 6h16"></path>
+              <path d="M4 12h16"></path>
+              <path d="M4 18h10"></path>
+              <path d="M18 16v4"></path>
+              <path d="M16 18h4"></path>
+            </svg>
+            <span class="mobile-np-action-label">Queue</span>
+          </button>
+        </div>
+        <div class="mobile-np-progress" id="mobile-np-progress" hidden>
+          <div class="progress-track" id="mobile-np-progress-track" role="slider" aria-label="Seek" tabindex="0" aria-valuemin="0" aria-valuemax="0" aria-valuenow="0">
+            <div class="progress-fill" id="mobile-np-progress-fill"></div>
+            <div class="progress-handle" id="mobile-np-progress-handle"></div>
+          </div>
+          <div class="mobile-np-progress-times">
+            <span id="mobile-np-progress-elapsed">0:00</span>
+            <span id="mobile-np-progress-total">0:00</span>
+          </div>
+        </div>
+        <div class="mobile-np-controls" aria-label="Playback controls" hidden>
+          <button type="button" data-action="previous" aria-label="Previous">
+            <svg viewBox="0 0 24 24" fill="currentColor"><rect x="4" y="5" width="2.5" height="14"/><polygon points="20,5 10,12 20,19"/></svg>
+          </button>
+          <button type="button" id="mobile-np-play" aria-label="Play or pause">
+            <svg class="mobile-np-play-icon" viewBox="0 0 24 24" fill="currentColor"><polygon points="7,4 20,12 7,20"/></svg>
+            <svg class="mobile-np-pause-icon" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="5" width="4" height="14"/><rect x="14" y="5" width="4" height="14"/></svg>
+          </button>
+          <button type="button" data-action="next" aria-label="Next">
+            <svg viewBox="0 0 24 24" fill="currentColor"><polygon points="4,5 14,12 4,19"/><rect x="17.5" y="5" width="2.5" height="14"/></svg>
+          </button>
+        </div>
+        <div class="mobile-np-volume-row" role="group" aria-label="Volume control">
+          <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+            <path d="M3 9v6h4l5 5V4L7 9H3z"></path>
+            <path d="M16.5 12c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02z" opacity=".72"></path>
+            <path d="M19 12c0-3.04-1.73-5.66-4.26-6.96v1.87C16.74 8.14 18 9.93 18 12s-1.26 3.86-3.26 5.1v1.87C17.27 17.66 19 15.04 19 12z" opacity=".45"></path>
+          </svg>
+          <input type="range" id="mobile-np-volume" min="0" max="100" value="50" aria-label="Volume level">
+        </div>
+      </div>
+      <div class="np-page-right">
+        <div class="np-page-queue-head">UP NEXT</div>
+        <div class="np-queue-list" id="np-queue-list"></div>
+      </div>
+    </div>
+  </section>
 </main>
+
+<!-- Queue popup modal (mobile): same as the normal remote, opened from the
+     now-playing page's Queue action square -->
+<div class="queue-modal-overlay" id="queue-modal-overlay">
+  <div class="queue-modal" id="queue-modal">
+    <div class="queue-modal-drag" id="queue-modal-drag">
+      <div class="drag-bar"></div>
+    </div>
+    <div class="queue-modal-header">
+      <h3>Queue</h3>
+      <button class="queue-modal-close" id="queue-modal-close" title="Close">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+          <line x1="18" y1="6" x2="6" y2="18"/>
+          <line x1="6" y1="6" x2="18" y2="18"/>
+        </svg>
+      </button>
+    </div>
+    <div class="queue-modal-body" id="queue-modal-body">
+      <div class="queue-modal-empty">No songs in queue</div>
+    </div>
+  </div>
+</div>
 
 <!-- Jam-ended overlay -->
 <div id="jam-ended-overlay">
@@ -171,29 +344,16 @@
 
 <div class="toast" id="toast"></div>
 
-<!-- Hidden stubs: JS modules (player.js, queue.js, etc.) reference these IDs -->
+<!-- Hidden stubs: JS modules reference these IDs. The now-playing controls
+     above are real elements (same as the normal remote); only IDs with no
+     jam UI surface remain stubbed here. -->
 <div style="display:none">
-  <button id="player-expand-btn"></button>
-  <button id="np-like-btn"></button>
-  <a id="np-url-toggle"></a>
-  <div id="np-more-btn"><div id="np-more-menu">
-    <button id="np-menu-like"></button>
-    <button id="np-menu-playlist"></button>
-    <button id="np-menu-radio"></button>
-  </div></div>
   <button id="queue-toggle-btn"></button>
   <button id="clear-all-btn"></button>
   <div id="confirm-clear">
     <button id="confirm-clear-cancel"></button>
     <button id="confirm-clear-yes"></button>
   </div>
-  <div id="queue-modal-overlay">
-    <div id="queue-modal">
-      <div id="queue-modal-body"></div>
-      <button id="queue-modal-close"></button>
-    </div>
-  </div>
-  <button id="queue-modal-btn"></button>
   <button id="results-prev"></button>
   <button id="results-next"></button>
   <section id="collection-detail-page" hidden></section>
