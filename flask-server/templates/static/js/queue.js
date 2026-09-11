@@ -14,6 +14,11 @@
   if (state._historyCache === undefined) state._historyCache = [];
   if (state._hasTrack === undefined) state._hasTrack = false;
   if (state._resultsOpen === undefined) state._resultsOpen = false;
+  // Set by reorderQueue for a short window after a drag-drop: the optimistic
+  // re-render plus the confirming poll snapshot must not yank the viewport to
+  // the active row. The user just placed a song deliberately — keep the
+  // viewport where they dropped it.
+  if (state._suppressQueueScrollUntil === undefined) state._suppressQueueScrollUntil = 0;
   // Floating queue panel is retired — queue is embedded in the #now-playing page.
   state._queueOpen = false;
   try { localStorage.removeItem('queuePanelOpen'); } catch (_) {}
@@ -252,6 +257,10 @@ function _scrollQueueRowIntoView(container, currentIndex, force) {
   const key = String(currentIndex);
   if (!force && container.dataset.lastActiveIndex === key) return;
   container.dataset.lastActiveIndex = key;
+  // A drag-drop reorder holds the viewport at the drop position through its
+  // optimistic re-render and the confirming poll snapshot. Record the index
+  // above (so no delayed scroll queues up) but do not move the viewport.
+  if (Date.now() < (state._suppressQueueScrollUntil || 0)) return;
   const row = container.querySelector('.queue-item.active');
   if (!row) return;
   const wrapper = row.closest('.queue-swipe-wrapper') || row;
@@ -381,7 +390,10 @@ function _buildQueueRow(container, item, i, currentIndex, thumbsById) {
   attachQueueItemTap(el, () => {
     for (const other of container.querySelectorAll('.queue-item.active')) other.classList.remove('active');
     el.classList.add('active');
-    playFromQueue(item, i);
+    // Live position, not the build-time index: DOM-move reorders renumber
+    // rows without rebuilding them.
+    const _liveRow = Number(el.dataset.index);
+    playFromQueue(item, Number.isInteger(_liveRow) ? _liveRow : i);
   });
 
   _wireQueueMoreMenu(el, item, i);
@@ -502,6 +514,10 @@ function renderNpQueue(queue, currentIndex) {
     return;
   }
   var newChildren = [];
+  // Never shrink the rendered window on a rebuild: rendering fewer rows than
+  // are already on screen collapses the list while scrolled deep and the
+  // browser clamps scrollTop (a violent jump the drop then gets blamed for).
+  renderLimit = Math.min(queue.length, Math.max(renderLimit, renderedArr.length));
   for (var i = 0; i < renderLimit; i++) {
     newChildren.push(_buildQueueRow(list, queue[i], i, currentIndex, existingThumbsById));
   }
@@ -522,6 +538,9 @@ window.renderNpQueue = renderNpQueue;
 window.scrollQueueToCurrent = function (container) {
   var list = container || document.getElementById('np-queue-list');
   if (!list) return;
+  // Opening the player is an explicit "show me what's playing" gesture, so it
+  // opts out of any reorder scroll-suppression window still in effect.
+  state._suppressQueueScrollUntil = 0;
   var currentIndex = (window.__appState && window.__appState._lastQueueIndex != null
     ? window.__appState._lastQueueIndex
     : (typeof window._lastQueueIndex === 'number' ? window._lastQueueIndex : 0));
@@ -586,8 +605,10 @@ function _wireQueueMoreMenu(el, item, index) {
     e.stopPropagation();
     // Use the same menu as right-click and search result 3-dot controls.
     if (window.openSongContextMenu) {
+      // Live position: DOM-move reorders renumber rows without rebuilding.
+      const _liveIdx = Number(el.dataset.index);
       window.openSongContextMenu(e, Object.assign({}, item, {
-        _queueIndex: index,
+        _queueIndex: Number.isInteger(_liveIdx) ? _liveIdx : index,
         _queueIsActive: el.classList.contains('active')
       }));
       return;
@@ -647,7 +668,9 @@ function _wireQueueMoreMenu(el, item, index) {
   moreMenu.querySelector('[data-action="remove"]').addEventListener('click', (e) => {
     e.stopPropagation();
     _closeAllQueueMenus();
-    removeFromQueue(index, item.title, item.video_id);
+    // Live position (see above); removeFromQueue re-verifies by video_id too.
+    const _liveRm = Number(el.dataset.index);
+    removeFromQueue(Number.isInteger(_liveRm) ? _liveRm : index, item.title, item.video_id);
   });
   moreMenu.querySelector('[data-action="save-playlist"]').addEventListener('click', (e) => {
     e.stopPropagation();
@@ -830,9 +853,143 @@ async function removeFromQueue(index, title, videoId) {
   }
 }
 
+/* ---- Reorder scroll helpers (drop render) ----
+   A same-scrollTop rebuild already displays the new order correctly: rows the
+   move displaced sit one slot over, which is the reorder itself, not an
+   error — so there is deliberately NO scroll compensation here (an earlier
+   anchor-glue version fought the browser's own scroll anchoring and doubled
+   the very shove it tried to remove). The FLIP glide below is what makes the
+   legitimate one-row shift read as smooth motion instead of a snap. */
+
+// Commit an optimistic reorder by moving the existing DOM row into place
+// instead of rebuilding the list. Replacing dozens of rows (images, layout,
+// scroll anchoring) on every drop is what made releases jump; a single node
+// move keeps every pixel that didn't logically move exactly where it was.
+// Returns true when it handled the render (caller falls back to showQueue).
+function _moveQueueRowDom(container, queue, fromIdx, toIdx, currentIdx) {
+  try {
+    if (!container) return false;
+    const rows = Array.from(container.querySelectorAll(':scope > .queue-swipe-wrapper'));
+    if (!rows.length) return false;
+    const moving = rows.find((w) => Number(w.dataset && w.dataset.index) === fromIdx);
+    if (!moving) return false;
+    const others = rows.filter((w) => w !== moving);
+    if (toIdx < 0 || toIdx > others.length) return false;
+    // Never append past the lazy sentinel: it must stay the last child so
+    // further chunks keep paging in below.
+    const sentinel = container.querySelector(':scope > .queue-lazy-sentinel');
+    const ref = others[toIdx] || null;
+    if (ref) container.insertBefore(moving, ref);
+    else if (sentinel) container.insertBefore(moving, sentinel);
+    else container.appendChild(moving);
+    container._lazyQueue = { queue: queue, currentIndex: currentIdx };
+    // Renumber in place (positions ARE the new indices) and sync highlight.
+    const now = Array.from(container.querySelectorAll(':scope > .queue-swipe-wrapper'));
+    now.forEach((w, i) => {
+      w.dataset.index = String(i);
+      const item = w.querySelector('.queue-item');
+      if (item) {
+        item.dataset.index = String(i);
+        item.classList.toggle('active', i === currentIdx);
+        item.classList.toggle('playing', i === currentIdx && state.isPlaying);
+      }
+      const num = w.querySelector('.queue-num');
+      if (num) num.textContent = String(i + 1);
+      const rm = w.querySelector('.queue-more-menu [data-action="remove"]');
+      if (rm) rm.hidden = (i === currentIdx);
+    });
+    try { container.dataset.lastActiveIndex = String(currentIdx); } catch (_) {}
+    return true;
+  } catch (_) { return false; }
+}
+
+// FLIP-glide the optimistic reorder so the drop reads as rows sliding into
+// place instead of the list teleporting (the jerky "shifting scroll" on
+// release). Callers capture First tops before the re-render and play the
+// inversion after scroll has settled (restore + anchor glue first).
+function _captureRowTops(container) {
+  const tops = new Map();
+  try {
+    if (!container || !container.clientHeight) return tops;
+    const rows = container.querySelectorAll(':scope > .queue-swipe-wrapper');
+    for (const w of rows) {
+      const item = w.querySelector('.queue-item');
+      const raw = (w.dataset && w.dataset.index) || (item && item.dataset && item.dataset.index);
+      const idx = Number(raw);
+      if (!Number.isInteger(idx)) continue;
+      tops.set(idx, w.getBoundingClientRect().top);
+    }
+  } catch (_) {}
+  return tops;
+}
+
+function _flipReorder(container, firstTops, fromIdx, toIdx) {
+  try {
+    if (!container || !firstTops || !firstTops.size) return;
+    if (typeof window !== 'undefined' && window.matchMedia &&
+        window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    const movers = [];
+    const rows = container.querySelectorAll(':scope > .queue-swipe-wrapper');
+    for (const w of rows) {
+      const j = Number(w.dataset && w.dataset.index);
+      if (!Number.isInteger(j)) continue;
+      // Inverse map: which pre-move index now sits at post-move index j.
+      let o;
+      if (j === toIdx) o = fromIdx;
+      else if (fromIdx < toIdx) o = (j >= fromIdx && j < toIdx) ? j + 1 : j;
+      else o = (j > toIdx && j <= fromIdx) ? j - 1 : j;
+      const first = firstTops.get(o);
+      if (first === undefined) continue;
+      const dy = first - w.getBoundingClientRect().top;
+      if (!dy) continue;
+      w.style.transition = 'none';
+      w.style.transform = 'translateY(' + dy + 'px)';
+      movers.push(w);
+    }
+    if (!movers.length) return;
+    void container.offsetHeight; // commit the inversion before gliding home
+    const raf = (typeof requestAnimationFrame === 'function') ? requestAnimationFrame : (fn) => fn();
+    raf(() => {
+      for (const w of movers) {
+        if (!w.isConnected && w.isConnected !== undefined) continue;
+        w.style.transition = 'transform .28s cubic-bezier(.22,1,.36,1)';
+        w.style.transform = '';
+      }
+      setTimeout(() => {
+        for (const w of movers) {
+          try {
+            if (w.isConnected === false) continue;
+            w.style.transition = '';
+            w.style.transform = '';
+          } catch (_) {}
+        }
+      }, 350);
+    });
+  } catch (_) {}
+}
+
 /* ---- Reorder queue (drag complete) ---- */
 async function reorderQueue(fromIndex, toIndex) {
   if (fromIndex === toIndex) return;
+  // The user placed this song deliberately: hold the viewport at the drop
+  // position through the optimistic re-render below and the confirming poll
+  // snapshot (~500ms later), both of which otherwise force-scroll the list
+  // back to the active row. _scrollQueueRowIntoView honors this window.
+  state._suppressQueueScrollUntil = Date.now() + 2500;
+  // Snapshot the lists' scroll positions so the full rebuild below restores
+  // the drop viewport instead of jumping. (Same-scrollTop + same rows shows
+  // the new order correctly; no extra compensation — see the note above.)
+  const _reorderScrollTops = new Map();
+  const _reorderFirstTops = new Map();
+  for (const _id of ['np-queue-list', 'queue-list', 'queue-modal-body']) {
+    try {
+      const _c = document.getElementById(_id);
+      if (!_c) continue;
+      _reorderScrollTops.set(_c, _c.scrollTop);
+      const _t = _captureRowTops(_c);
+      if (_t.size) _reorderFirstTops.set(_c, _t);
+    } catch (_) {}
+  }
   // Optimistically reorder local queue data so the UI doesn't snap back
   // to the old position while waiting for the server to confirm.
   try {
@@ -850,9 +1007,45 @@ async function reorderQueue(fromIndex, toIndex) {
       }
       state._lastQueueJson = JSON.stringify(queue);
       state._lastQueueIndex = currentIdx;
-      // Re-render immediately with the optimistic order
-      showQueue(queue, currentIdx);
-      refreshQueueModalIfOpen();
+      // Keep the SSE/poll mirror in lockstep: it prefers window._lastQueueJson,
+      // so leaving it stale would make the confirming snapshot look "changed"
+      // and trigger a second full rebuild (plus a stale queue-modal render).
+      try {
+        window._lastQueueJson = state._lastQueueJson;
+        window._lastQueueIndex = currentIdx;
+      } catch (_) {}
+      // Commit the new order to the live DOM by moving the existing row into
+      // the reserved gap (no rebuild: no image/layout churn, no anchoring
+      // storm, nothing for the eye to catch). Falls back to a full rebuild
+      // only when the row isn't rendered (shouldn't happen — the lifted row
+      // is always on screen — but never break the reorder over rendering).
+      let _npHandled = false, _modalHandled = false;
+      try {
+        const _npList = document.getElementById('np-queue-list');
+        const _npSection = document.getElementById('now-playing-section');
+        if (_npList && _npSection && !_npSection.hidden) {
+          _npHandled = _moveQueueRowDom(_npList, queue, fromIdx, toIdx, currentIdx);
+        }
+      } catch (_) {}
+      if (!_npHandled) showQueue(queue, currentIdx);
+      try {
+        const _ov = document.getElementById('queue-modal-overlay');
+        const _mb = document.getElementById('queue-modal-body');
+        if (_ov && _ov.classList.contains('open') && _mb) {
+          _modalHandled = _moveQueueRowDom(_mb, queue, fromIdx, toIdx, currentIdx);
+        } else {
+          _modalHandled = true; // sheet closed: renders fresh on next open
+        }
+      } catch (_) {}
+      if (!_modalHandled) { try { refreshQueueModalIfOpen(); } catch (_) {} }
+      for (const [_c, _top] of _reorderScrollTops) {
+        try { _c.scrollTop = _top; } catch (_) {}
+      }
+      // Glide the rows into their new spots (FLIP) instead of teleporting:
+      // the drop reads as a smooth slide, not a shifting snap.
+      for (const [_c, _t] of _reorderFirstTops) {
+        _flipReorder(_c, _t, fromIndex, toIndex);
+      }
     }
   } catch (_) {}
   try {
@@ -999,16 +1192,29 @@ function _attachQueueDragReorder(el, listEl, originalIndex) {
 
   let dragging = false, startY = 0, initialTop = 0, cloneEl = null, placeholder = null;
   let currentOver = -1, fromIdx = originalIndex;
+  let sourceWrapper = null, draggedHeight = 0;
 
-  // Auto-scroll state
+  // Auto-scroll state. Deliberately conservative: the zone is narrow, the
+  // speed is low, and the pointer must dwell at the edge briefly before any
+  // scrolling starts — otherwise just ferrying a song a few rows near the
+  // visible edge sends the whole list drifting (and the rows sliding under a
+  // stationary finger move the drop indicator, which reads as the queue
+  // "shifting" on its own).
   let _scrollRafId = null;
   let _scrollSpeed = 0;
   let _scrollContainer = null;
-  const EDGE_ZONE = 50;   // px from container edge to trigger scroll
-  const MAX_SPEED = 12;   // px per frame at the very edge
+  let _lastDragClientY = 0;
+  let _edgeDir = 0;       // -1 (top), 1 (bottom), 0 (not at an edge)
+  let _edgeSince = 0;
+  const EDGE_ZONE = 24;   // px from container edge to trigger scroll
+  const MAX_SPEED = 6;    // px per frame at the very edge
+  const EDGE_DWELL_MS = 180; // continuous ms at the edge before scrolling
 
   function getItemElements() {
-    return Array.from(listEl.querySelectorAll('.queue-swipe-wrapper'));
+    // The lift source is collapsed (zero height) so the list already shows
+    // the post-removal order; exclude it so drop indices come out directly
+    // in post-removal coordinates with no +/-1 adjustment at release.
+    return Array.from(listEl.querySelectorAll('.queue-swipe-wrapper:not(.drag-source)'));
   }
 
   // Find the nearest scrollable ancestor of the list
@@ -1030,11 +1236,15 @@ function _attachQueueDragReorder(el, listEl, originalIndex) {
   function startAutoScroll() {
     if (_scrollRafId) return;
     function tick() {
-      if (!dragging || !_scrollContainer || _scrollSpeed === 0) {
+      if (!dragging || !_scrollContainer) {
         _scrollRafId = null;
         return;
       }
-      _scrollContainer.scrollTop += _scrollSpeed;
+      // Re-evaluate every frame from the last known pointer position: the
+      // list moves under a stationary finger while scrolling, and the dwell
+      // timer must be able to expire without waiting for another pointermove.
+      _updateScrollSpeed(_lastDragClientY);
+      if (_scrollSpeed !== 0) _scrollContainer.scrollTop += _scrollSpeed;
       _scrollRafId = requestAnimationFrame(tick);
     }
     _scrollRafId = requestAnimationFrame(tick);
@@ -1046,37 +1256,70 @@ function _attachQueueDragReorder(el, listEl, originalIndex) {
       _scrollRafId = null;
     }
     _scrollSpeed = 0;
+    _edgeDir = 0;
   }
 
-  function updateAutoScroll(clientY) {
-    if (!_scrollContainer) return;
+  function _updateScrollSpeed(clientY) {
+    if (!_scrollContainer) {
+      _scrollSpeed = 0;
+      _edgeDir = 0;
+      return;
+    }
     const rect = _scrollContainer.getBoundingClientRect();
     const distFromTop = clientY - rect.top;
     const distFromBottom = rect.bottom - clientY;
+    const canUp = _scrollContainer.scrollTop > 0;
+    const canDown = _scrollContainer.scrollTop <
+      _scrollContainer.scrollHeight - _scrollContainer.clientHeight;
 
-    if (distFromTop < EDGE_ZONE && _scrollContainer.scrollTop > 0) {
-      // Scroll up Ã¢â‚¬â€ speed increases as pointer gets closer to edge
-      const ratio = 1 - (distFromTop / EDGE_ZONE);
-      _scrollSpeed = -(MAX_SPEED * Math.max(0, Math.min(1, ratio)));
-      startAutoScroll();
-    } else if (distFromBottom < EDGE_ZONE &&
-               _scrollContainer.scrollTop < _scrollContainer.scrollHeight - _scrollContainer.clientHeight) {
-      // Scroll down
-      const ratio = 1 - (distFromBottom / EDGE_ZONE);
-      _scrollSpeed = MAX_SPEED * Math.max(0, Math.min(1, ratio));
-      startAutoScroll();
-    } else {
+    let dir = 0;
+    if (distFromTop < EDGE_ZONE && canUp) dir = -1;
+    else if (distFromBottom < EDGE_ZONE && canDown) dir = 1;
+
+    const now = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+    if (dir === 0) {
+      _edgeDir = 0;
       _scrollSpeed = 0;
+      return;
     }
+    if (dir !== _edgeDir) {
+      // Freshly entered the edge (or switched edges): wait out the dwell so
+      // a quick pass through the zone never jerks the list.
+      _edgeDir = dir;
+      _edgeSince = now;
+    }
+    if (now - _edgeSince < EDGE_DWELL_MS) {
+      _scrollSpeed = 0;
+      return;
+    }
+    // Scroll up — speed increases as pointer gets closer to edge
+    const dist = dir === -1 ? distFromTop : distFromBottom;
+    const ratio = 1 - (dist / EDGE_ZONE);
+    const next = dir * (MAX_SPEED * Math.max(0, Math.min(1, ratio)));
+    _scrollSpeed = next;
+  }
+
+  function updateAutoScroll(clientY) {
+    _lastDragClientY = clientY;
+    _updateScrollSpeed(clientY);
+    // Keep the frame loop alive while dragging so the dwell timer can expire
+    // (and the speed can track a moving container) even when the finger is
+    // momentarily stationary.
+    if (dragging && _scrollContainer && !_scrollRafId) startAutoScroll();
   }
 
   function beginDrag(clientY) {
     dragging = true;
     document.body.classList.add('drag-lock');
     startY = clientY;
-    fromIdx = originalIndex;
+    // Read the live position: a previous drop may have moved this row via a
+    // DOM move (no rebuild), leaving the build-time originalIndex stale.
+    const _srcWrap = (typeof el.closest === 'function') ? el.closest('.queue-swipe-wrapper') : null;
+    const _liveFrom = _srcWrap ? Number(_srcWrap.dataset.index) : NaN;
+    fromIdx = Number.isInteger(_liveFrom) ? _liveFrom : originalIndex;
     const rect = el.getBoundingClientRect();
     initialTop = rect.top;
+    draggedHeight = Math.max(1, Math.round(rect.height || el.offsetHeight || 0));
 
     // Create a clone to show as the dragged element
     cloneEl = el.cloneNode(true);
@@ -1089,9 +1332,18 @@ function _attachQueueDragReorder(el, listEl, originalIndex) {
     cloneEl.style.opacity = '.85';
     cloneEl.style.boxShadow = '0 8px 32px rgba(0,0,0,.5)';
     cloneEl.style.background = 'var(--surface)';
+    cloneEl.style.display = '';
     document.body.appendChild(cloneEl);
 
+    // Reserve the space up front (the user's suggestion): collapse the source
+    // slot and open a full-row gap at the target, so the list *during* the
+    // drag already shows the final order. The release re-render then swaps a
+    // same-size gap for the song instead of teleporting a full row across
+    // the list — no down/up shove on place.
+    sourceWrapper = el.closest('.queue-swipe-wrapper');
+    if (sourceWrapper) sourceWrapper.classList.add('drag-source');
     el.classList.add('dragging');
+    el.style.display = 'none';
     currentOver = fromIdx;
     _scrollContainer = findScrollContainer();
   }
@@ -1104,7 +1356,9 @@ function _attachQueueDragReorder(el, listEl, originalIndex) {
     // Auto-scroll when near the edges of the scrollable container
     updateAutoScroll(clientY);
 
-    // Find which item we're over
+    // Find which item we're over (source excluded: it is collapsed, so this
+    // index is already in post-removal coordinates — the same coordinates
+    // the server pop/insert and the optimistic splice use).
     const items = getItemElements();
     let targetIdx = fromIdx;
     for (let i = 0; i < items.length; i++) {
@@ -1113,14 +1367,16 @@ function _attachQueueDragReorder(el, listEl, originalIndex) {
       if (clientY < mid) { targetIdx = i; break; }
       targetIdx = i + 1;
     }
-    targetIdx = Math.min(targetIdx, items.length - 1);
+    targetIdx = Math.min(targetIdx, items.length);
     if (targetIdx !== currentOver) {
       // Remove old placeholder
       const old = listEl.querySelector('.queue-drop-placeholder');
       if (old) old.remove();
-      // Insert placeholder
+      // Insert a full-row gap (not a thin line): the list then shows the
+      // final order live, and the release render changes ~nothing.
       placeholder = document.createElement('div');
       placeholder.className = 'queue-drop-placeholder';
+      if (draggedHeight > 0) placeholder.style.height = draggedHeight + 'px';
       if (targetIdx < items.length) {
         listEl.insertBefore(placeholder, items[targetIdx]);
       } else {
@@ -1140,13 +1396,17 @@ function _attachQueueDragReorder(el, listEl, originalIndex) {
     if (cloneEl) { cloneEl.remove(); cloneEl = null; }
     if (placeholder) { placeholder.remove(); placeholder = null; }
 
-    // currentOver is an insertion index computed with the dragged item still
-    // occupying its old slot. The server (and the optimistic splice) remove
-    // the item first, shifting everything below it up by one Ã¢â‚¬â€ so a downward
-    // move must drop the index by 1 or the item lands one slot too low.
-    let toIdx = currentOver;
-    if (toIdx > fromIdx) toIdx -= 1;
-    toIdx = Math.max(0, Math.min(toIdx, getItemElements().length - 1));
+    // currentOver counts non-source rows before the gap, i.e. the insertion
+    // index after removal — exactly what reorderQueue/the server expect, so
+    // no -1 fiddling (and the very end of the list is reachable now).
+    // getItemElements still excludes the collapsed source here.
+    const liveCount = getItemElements().length; // N-1 while source is marked
+    let toIdx = Math.max(0, Math.min(currentOver, liveCount));
+    // Restore the source row before the re-render (the reorder rebuild
+    // replaces it anyway; the no-op path below needs it back).
+    if (sourceWrapper) sourceWrapper.classList.remove('drag-source');
+    sourceWrapper = null;
+    el.style.display = '';
     if (toIdx !== fromIdx) {
       reorderQueue(fromIdx, toIdx);
     }
@@ -1492,7 +1752,11 @@ function scheduleHistoryRefresh() {
       body.replaceChildren(empty);
       return;
     }
-    const limit = Math.min(queue.length, Math.max(QUEUE_RENDER_CHUNK, idx + 11));
+    const limit = Math.min(queue.length, Math.max(QUEUE_RENDER_CHUNK, idx + 11,
+      // Never shrink the rendered window while open: fewer rows collapse the
+      // sheet mid-scroll and the browser clamps scrollTop (same violent jump
+      // as the main list's rebuild truncation).
+      body.querySelectorAll(':scope > .queue-swipe-wrapper').length));
     body._lazyQueue = { queue, currentIndex: idx };
     const rows = [];
     for (let i = 0; i < limit; i++) rows.push(_buildQueueRow(body, queue[i], i, idx, new Map()));

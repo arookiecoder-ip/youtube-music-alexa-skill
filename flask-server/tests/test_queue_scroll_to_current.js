@@ -75,10 +75,10 @@ function makeEnv({ containerRect, rowRect, indexKey }) {
     closest(sel) { return sel === '.queue-swipe-wrapper' ? wrapper : null; },
   };
   const document = { getElementById(id) { return id === 'np-queue-list' ? container : null; } };
-  const window = { __appState: { _lastQueueIndex: indexKey } };
+  const window = { __appState: { _lastQueueIndex: indexKey, _suppressQueueScrollUntil: 0 } };
   const requestAnimationFrame = (fn) => fn();
 
-  const sandbox = { document, window, requestAnimationFrame, console };
+  const sandbox = { document, window, state: window.__appState, requestAnimationFrame, console };
   const context = vm.createContext(sandbox);
   vm.runInContext(BLOCK_SRC, context, { filename: 'queue-scroll-block.js' });
 

@@ -148,10 +148,24 @@
     transition: border-color .15s, background .15s, box-shadow .15s, transform .15s !important;
   }
   .queue-drop-placeholder {
-    height: 3px;
-    background: var(--accent);
+    /* Height is set inline to the dragged row's height: this reserves the
+       song's exact landing slot while dragging, so placing it changes
+       ~nothing in the layout (no down/up shove on release). */
+    min-height: 3px;
+    background: rgba(255,255,255,.04);
+    border: 1px dashed var(--accent);
+    border-radius: 8px;
+    box-sizing: border-box;
     margin: 0;
     transition: none;
+  }
+  /* Lift source: collapsed so the list shows the post-removal order live.
+     The dragged song itself keeps floating under the finger as a clone. */
+  .queue-swipe-wrapper.drag-source {
+    min-height: 0;
+    height: 0 !important;
+    overflow: hidden;
+    opacity: 1;
   }
 
   /* ---- Queue item: 3-dot more menu (desktop) ---- */

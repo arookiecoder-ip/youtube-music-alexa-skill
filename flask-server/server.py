@@ -7479,11 +7479,18 @@ def alexa_search():
         They are browse wrappers around playlist/radio ids (``RD...``), while
         ``get_album`` accepts only ``MPRE...`` ids.  Classify by identifier so
         the client opens/plays the collection through the playlist path.
+
+        Every genuine album carries an ``OLAK...`` companion playlist id, so
+        ``OLAK`` must never count as a playlist signal on its own — otherwise
+        all real albums are moved out of the albums tab.
         """
         browse_id = str(item.get('browseId') or '')
         playlist_id = str(item.get('playlistId') or '')
-        return (browse_id.startswith('VL') or
-                playlist_id.startswith(('PL', 'RD', 'OLAK', 'LM')))
+        # Canonical album ids are the only ones get_album() accepts.
+        if browse_id.startswith('MPRE'):
+            return False
+        return (browse_id.startswith(('VL', 'RD', 'PL')) or
+                playlist_id.startswith(('PL', 'RD', 'VL', 'LM')))
 
     def _collect_songs(raw_groups):
         results, seen = [], set()
