@@ -1175,14 +1175,16 @@ const progress = window.progress = (function () {
       clearTimeout(playPendingTimer);
       // A resume confirmation normally arrives through SSE. The timeout is a
       // safety valve for an accepted command whose device never reports back;
-      // it removes the spinner without claiming that audio started.
+      // it removes the spinner without claiming that audio started. Kept above
+      // PLAY_PAUSE_CONFIRM_TIMEOUT_MS so the spinner survives the full
+      // resume/retry wait instead of clearing early on a slow device.
       playPendingTimer = setTimeout(() => {
         playPending = false;
         playing = !!(window.__appState && window.__appState.isPlaying);
         syncProcessingVisuals();
         syncLoop();
         paint();
-      }, 10000);
+      }, 15000);
     } else {
       clearTimeout(playPendingTimer);
     }
@@ -1456,7 +1458,13 @@ let _playPauseServerUpdatedAt = 0;
 let _playPauseServerRevision = 0;
 let _playPauseServerSeq = 0;
 let _playPauseWaiters = [];
-const PLAY_PAUSE_CONFIRM_TIMEOUT_MS = 3000;
+// Resume confirmation can take much longer than a fresh play: after a long
+// pause (hours) the Echo must wake, the skill's Lambda may cold-start, a
+// swept audio cache needs a full re-download before /proxy/ serves, and the
+// server now retries a dropped resume once before giving up. The waiter must
+// cover that whole window, otherwise a slow-but-successful resume is reported
+// as unconfirmed ("Resume requested…") even though audio is about to start.
+const PLAY_PAUSE_CONFIRM_TIMEOUT_MS = 12000;
 
 // A snapshot counts as confirmation only once its processing flag has
 // settled. The server stages BOTH play and pause as

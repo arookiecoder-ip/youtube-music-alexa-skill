@@ -4843,6 +4843,85 @@ def _watch_playback_confirmation(serial, video_id, resend):
         logger.exception("")
 
 
+def _watch_resume_confirmation(serial, video_id, staged_revision):
+    """Background watchdog for the website/voice resume transport.
+
+    Unlike a fresh track play, a resume keeps the same video_id, so the
+    generic `_watch_playback_confirmation` relevance check (video_id only)
+    cannot tell "user paused again" from "device never confirmed". This
+    watcher is additionally bound to the exact staged revision: any newer
+    user intent (pause, seek, track change) bumps the revision and makes
+    this watcher give up quietly instead of resending a stale play or
+    surfacing a bogus timeout error.
+
+    On an unconfirmed resume it resends the transport resume once, then --
+    if the device still never confirms -- surfaces a terminal timeout
+    `playback_error` so every browser stops its spinner with an explanation
+    instead of sitting on (or falsely claiming) playback. Never raises."""
+    if not _valid_video_id(video_id):
+        return
+
+    def _confirmed():
+        with _np_lock:
+            return (_now_playing.get('video_id') == video_id
+                    and bool(_now_playing.get('playing'))
+                    and bool(_now_playing.get('playback_confirmed')))
+
+    def _superseded():
+        # A newer user intent (pause/seek/track change) or a different track
+        # means this resume is no longer the live request: stay quiet.
+        with _np_lock:
+            return (_now_playing.get('video_id') != video_id
+                    or int(_now_playing.get('playback_revision', 0)) != staged_revision)
+
+    def _wait_once():
+        base_timeout = (PLAYBACK_CONFIRM_TIMEOUT_CACHED
+                        if Supporting.cached_audio_path(video_id)
+                        else PLAYBACK_CONFIRM_TIMEOUT)
+        deadline = time.time() + base_timeout
+        while time.time() < deadline:
+            if _confirmed() or _superseded():
+                return True
+            # Same "don't count download time" rule as a fresh play: the Echo
+            # may be blocked on /proxy/'s first byte after a long pause
+            # evicted the cached file, and a resend mid-download would not
+            # start playback any sooner.
+            if _download_in_progress(video_id):
+                deadline = time.time() + PLAYBACK_CONFIRM_TIMEOUT
+            time.sleep(PLAYBACK_CONFIRM_POLL_INTERVAL)
+        return _confirmed() or _superseded()
+
+    try:
+        if _wait_once():
+            return
+        logger.warning("[resume-watchdog] no confirmation for %s in %ss, retrying once",
+                       video_id, PLAYBACK_CONFIRM_TIMEOUT)
+        error = alexa_remote.remote.command(serial, 'play')
+        if error:
+            logger.error("[resume-watchdog] retry dispatch failed: %s", error)
+            with _np_lock:
+                still_staged = (int(_now_playing.get('playback_revision', 0)) == staged_revision
+                                and _now_playing.get('video_id') == video_id
+                                and not _now_playing.get('playback_confirmed'))
+            if still_staged:
+                _update_now_playing(playback_error={'type': 'dispatch_error', 'message': error})
+            return
+        if _wait_once():
+            return
+        logger.warning("[resume-watchdog] retry for %s also unconfirmed", video_id)
+        with _np_lock:
+            still_staged = (int(_now_playing.get('playback_revision', 0)) == staged_revision
+                            and _now_playing.get('video_id') == video_id
+                            and not _now_playing.get('playback_confirmed'))
+        if still_staged:
+            _update_now_playing(
+                playing=False,
+                playback_error={'type': 'timeout',
+                                'message': "Couldn't resume playback. Check the device and try again."})
+    except Exception:
+        logger.exception("")
+
+
 def _auto_advance_after_failure(serial, video_id, reason):
     """Best-effort skip to the next queue item after `video_id` fails to play.
 
@@ -5600,13 +5679,36 @@ def alexa_command():
             _now_playing['playback_processing'] = True
             _now_playing['playback_revision'] = int(_now_playing.get('playback_revision', 0)) + 1
             _now_playing['updated_at'] = time.time()
+            staged_video_id = _now_playing.get('video_id', '')
+            staged_revision = int(_now_playing.get('playback_revision', 0))
         _notify_sse()
+        # Warm the audio cache while the slow Alexa round-trip is in flight.
+        # After a long pause the cached file may have been swept, and without
+        # this head start the Echo's /proxy/ fetch pays a full cold yt-dlp
+        # download (past its ~11s give-up) even though the skill reuses the
+        # same stream URL. Starting it here overlaps that download with the
+        # voice-command latency instead of serializing them.
+        if _valid_video_id(staged_video_id):
+            _ensure_audio_ready_for_play(staged_video_id, wait=False)
         # Use the same Alexa transport path as a voice "resume". The previous
         # web-only implementation replayed the exact video through the
         # app-selection intent, which is a fresh fetch/play directive and races
         # the pause directive when Resume is clicked quickly. ResumeIntent lets
         # the skill restore its persisted AudioPlayer session instead.
         error = alexa_remote.remote.command(serial, action, body.get("value"))
+        if not error and _valid_video_id(staged_video_id):
+            # The injected voice command is occasionally accepted by Amazon
+            # but never acted on (the skill is never invoked, so /proxy/ is
+            # never hit and playback silently never starts). Watch for the
+            # confirmation in the background and retry once, surfacing a
+            # timeout error instead of leaving every browser stuck -- or
+            # falsely claiming playback the user must fix with another
+            # pause/play. Bound to the staged revision so a newer user intent
+            # (pause/seek/track change) is never disturbed.
+            threading.Thread(
+                target=_watch_resume_confirmation,
+                args=(serial, staged_video_id, staged_revision),
+                daemon=True).start()
     elif action == 'pause':
         # Freeze the progress anchor before dispatch for the same reason: the
         # skill's PlaybackStopped event may arrive before the HTTP call returns.

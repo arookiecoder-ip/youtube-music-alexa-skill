@@ -198,13 +198,18 @@ def _notify_server(handler_input, event: str, **extra):
         url = f'{api_url}/alexa/state_event/?key={data.API_KEY}'
         logger.info(f'_notify_server: POST {event} to {api_url}/alexa/state_event/')
         # 'started' is the web remote's only signal that the track changed on
-        # auto-advance — a dropped POST wedges its now-playing card. Give it a
-        # slightly longer timeout and one retry; other events stay cheap.
-        timeout = urllib3.Timeout(total=3.0 if event == 'started' else 2.0)
+        # auto-advance — a dropped POST wedges its now-playing card. 'stopped'
+        # is the matching correction signal (pause, or the Echo giving up on a
+        # slow resume fetch): losing it leaves the website stuck showing
+        # "playing" for silent audio until the user toggles pause/play by hand.
+        # Both get a slightly longer timeout and one retry; other events stay
+        # cheap. Re-delivering the same state event is harmless (idempotent).
+        _retryable = event in ('started', 'stopped')
+        timeout = urllib3.Timeout(total=3.0 if _retryable else 2.0)
         # allowed_methods=None: retry POST too (urllib3 excludes it by default);
         # re-delivering the same state event is harmless.
         retries = (urllib3.Retry(total=1, backoff_factor=0.3, allowed_methods=None)
-                   if event == 'started' else False)
+                   if _retryable else False)
         resp = http.request(
             'POST', url,
             body=payload,

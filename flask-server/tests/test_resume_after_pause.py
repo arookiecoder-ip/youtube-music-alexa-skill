@@ -268,6 +268,8 @@ class ResumeDispatchAnchorsBeforeConfirmation(_CleanNowPlayingState):
 
         with mock.patch.object(server.alexa_remote.remote, 'command', side_effect=command) as command_mock, \
              mock.patch.object(server.alexa_remote.remote, 'play_video_id') as play_video_mock, \
+             mock.patch.object(server, '_ensure_audio_ready_for_play') as prewarm_mock, \
+             mock.patch.object(server, '_watch_resume_confirmation') as watchdog_mock, \
              mock.patch.object(server, '_notify_sse'):
             response = server.app.test_client().post(
                 '/alexa/command/?key=' + server.API_KEY,
@@ -277,6 +279,16 @@ class ResumeDispatchAnchorsBeforeConfirmation(_CleanNowPlayingState):
         self.assertEqual(response.status_code, 200)
         command_mock.assert_called_once_with('TEST-SERIAL', 'play', None)
         play_video_mock.assert_not_called()
+        # A long pause may have swept the cached audio: the resume must kick
+        # off a background prewarm while the slow Alexa round-trip runs.
+        prewarm_mock.assert_called_once_with('WEBRESUME001', wait=False)
+        # A dropped voice command must be retried in the background instead of
+        # leaving the remote stuck: the watchdog is armed with the staged
+        # revision so a newer user intent is never disturbed.
+        watchdog_mock.assert_called_once()
+        watchdog_args = watchdog_mock.call_args[0]
+        self.assertEqual(watchdog_args[0], 'TEST-SERIAL')
+        self.assertEqual(watchdog_args[1], 'WEBRESUME001')
         self.assertFalse(observed['playing_during_dispatch'])
         self.assertFalse(observed['confirmed_during_dispatch'])
         self.assertGreaterEqual(observed['position_during_dispatch'], 90_000)
@@ -294,12 +306,17 @@ class ResumeDispatchAnchorsBeforeConfirmation(_CleanNowPlayingState):
                 'queue': [],
             })
         with mock.patch.object(server.alexa_remote.remote, 'command', return_value='device unavailable'), \
+             mock.patch.object(server, '_ensure_audio_ready_for_play'), \
+             mock.patch.object(server, '_watch_resume_confirmation') as watchdog_mock, \
              mock.patch.object(server, '_notify_sse'):
             response = server.app.test_client().post(
                 '/alexa/command/?key=' + server.API_KEY,
                 json={'serial': 'TEST-SERIAL', 'action': 'play'},
             )
         self.assertEqual(response.status_code, 502)
+        # A rejected dispatch restores state synchronously: no background
+        # retry may run for a command that never went out.
+        watchdog_mock.assert_not_called()
         with server._np_lock:
             self.assertFalse(server._now_playing['playing'])
             self.assertTrue(server._now_playing['playback_confirmed'])
@@ -333,6 +350,90 @@ class ResumeDispatchAnchorsBeforeConfirmation(_CleanNowPlayingState):
         self.assertGreaterEqual(pos, 90_000)
         self.assertLess(pos, 91_000, msg="resume position drifted far from "
                                          "the frozen pre-pause offset")
+
+
+class WatchResumeConfirmation(_CleanNowPlayingState):
+    """Direct checks for the resume watchdog (slow resume after a long pause).
+
+    The injected "resume" voice command is occasionally accepted by Amazon
+    but never acted on, and after a hours-long pause the cached audio may be
+    gone (cold download past the Echo's ~11s give-up). Both leave silence;
+    the watchdog must retry once, then surface a clear error -- while a newer
+    user intent (pause/seek/track change, detected via playback_revision)
+    must silence it completely.
+    """
+
+    def _run_watch(self, video_id, revision):
+        with mock.patch.object(server, 'PLAYBACK_CONFIRM_TIMEOUT', 0.05), \
+             mock.patch.object(server, 'PLAYBACK_CONFIRM_TIMEOUT_CACHED', 0.05), \
+             mock.patch.object(server, 'PLAYBACK_CONFIRM_POLL_INTERVAL', 0.01):
+            server._watch_resume_confirmation('TEST-SERIAL', video_id, revision)
+
+    def _stage_resume(self, video_id, position_ms=90_000):
+        """Mirror alexa_command's play staging; return the staged revision."""
+        with server._np_lock:
+            server._now_playing.update({
+                'video_id': video_id,
+                'playing': False,
+                'playback_confirmed': False,
+                'playback_processing': True,
+                'position_ms': position_ms,
+                'started_at': server.time.time(),
+                'duration_ms': 180_000,
+                'queue': [],
+            })
+            server._now_playing['playback_revision'] = int(
+                server._now_playing.get('playback_revision', 0)) + 1
+            return int(server._now_playing['playback_revision'])
+
+    def test_confirmed_resume_needs_no_retry(self):
+        revision = self._stage_resume('WATCHOK00001')
+        with server._np_lock:
+            server._now_playing['playing'] = True
+            server._now_playing['playback_confirmed'] = True
+        with mock.patch.object(server.alexa_remote.remote, 'command') as command_mock:
+            self._run_watch('WATCHOK00001', revision)
+        command_mock.assert_not_called()
+        with server._np_lock:
+            self.assertIsNone(server._now_playing.get('playback_error'))
+
+    def test_unconfirmed_resume_retries_once_then_times_out(self):
+        revision = self._stage_resume('WATCHRETRY01')
+        with mock.patch.object(server.alexa_remote.remote, 'command',
+                               return_value=None) as command_mock:
+            self._run_watch('WATCHRETRY01', revision)
+        command_mock.assert_called_once_with('TEST-SERIAL', 'play')
+        with server._np_lock:
+            self.assertFalse(server._now_playing['playing'])
+            self.assertEqual(server._now_playing['playback_error']['type'], 'timeout')
+
+    def test_retry_dispatch_error_surfaces(self):
+        revision = self._stage_resume('WATCHERR0001')
+        with mock.patch.object(server.alexa_remote.remote, 'command',
+                               return_value='device offline') as command_mock:
+            self._run_watch('WATCHERR0001', revision)
+        command_mock.assert_called_once_with('TEST-SERIAL', 'play')
+        with server._np_lock:
+            self.assertEqual(server._now_playing['playback_error']['type'],
+                             'dispatch_error')
+
+    def test_superseded_resume_stays_quiet(self):
+        """The user paused again while the resume was in flight: no resend of
+        the stale play and no bogus timeout error."""
+        revision = self._stage_resume('WATCHSUPER01')
+        # A newer intent bumps the revision, superseding the watched resume.
+        server._update_now_playing(playing=False, playback_processing=True)
+        with mock.patch.object(server.alexa_remote.remote, 'command') as command_mock:
+            self._run_watch('WATCHSUPER01', revision)
+        command_mock.assert_not_called()
+        with server._np_lock:
+            self.assertIsNone(server._now_playing.get('playback_error'))
+
+    def test_invalid_video_id_is_ignored(self):
+        with mock.patch.object(server.alexa_remote.remote, 'command') as command_mock:
+            server._watch_resume_confirmation('TEST-SERIAL', 'has spaces', 1)
+            server._watch_resume_confirmation('TEST-SERIAL', '', 1)
+        command_mock.assert_not_called()
 
 
 if __name__ == "__main__":
