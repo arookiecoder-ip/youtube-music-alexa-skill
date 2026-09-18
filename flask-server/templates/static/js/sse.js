@@ -301,6 +301,9 @@
     if (window.progress && typeof window.progress.syncLoop === 'function') {
       window.progress.syncLoop();
     }
+    // Flip the tab title immediately from the cached track; the poll below
+    // then corrects it if the track actually changed while away.
+    if (window.syncPageTitle) window.syncPageTitle();
     if (document.hidden) {
       // Drop to the slower background cadence instead of stopping: a hidden
       // tab must still learn about track changes (Alexa voice, auto-advance,
@@ -317,6 +320,7 @@
   window.addEventListener('pageshow', reconnectPlayback);
   window.addEventListener('focus', () => {
     reconnectPlayback();
+    if (window.syncPageTitle) window.syncPageTitle();
     if (window.refreshVolume) window.refreshVolume(false);
   });
 

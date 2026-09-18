@@ -556,12 +556,28 @@ class CatchAllExceptionHandler(AbstractExceptionHandler):
         # events. A handler may have partially populated the shared builder
         # before raising, so explicitly strip every standard response property.
         request_type = handler_input.request_envelope.request.object_type or ''
-        if request_type.startswith(('AudioPlayer.', 'PlaybackController.')) or request_type == 'SessionEndedRequest':
+        if request_type.startswith(('AudioPlayer.', 'PlaybackController.')) or request_type in ('SessionEndedRequest', 'System.ExceptionEncountered'):
             response = handler_input.response_builder.response
             response.output_speech = None
             response.card = None
             response.reprompt = None
             response.should_end_session = None
+            # PlaybackStarted/PlaybackFinished allow 0 Play directives (only
+            # Stop/ClearQueue); PlaybackStopped/SessionEnded/ExceptionEncountered
+            # allow no directives at all. A Play added before the raise would
+            # otherwise surface as a second INVALID_RESPONSE ("must not contain
+            # more than 0 AudioPlayer.Play directive(s)").
+            directives = getattr(response, 'directives', None) or []
+            if request_type in ('AudioPlayer.PlaybackStarted',
+                                'AudioPlayer.PlaybackFinished'):
+                def _is_play(d):
+                    dtype = getattr(d, 'object_type', None) or getattr(d, 'type', '') or type(d).__name__
+                    return 'AudioPlayer.Play' in str(dtype) or 'PlayDirective' in str(dtype)
+                response.directives = [d for d in directives if not _is_play(d)]
+            elif request_type in ('AudioPlayer.PlaybackStopped',
+                                  'SessionEndedRequest',
+                                  'System.ExceptionEncountered'):
+                response.directives = []
             return response
 
         speak_output = "Sorry, I had trouble doing what you asked. Please try again."
@@ -617,18 +633,15 @@ class PlaybackStartedEventHandler(AbstractRequestHandler):
         # same request, so a second started webhook is unnecessary.
         player.Controller.expand_radio_queue(handler_input)
 
-        # A track that resumes/seeks inside the final ~40s never gets Alexa's
-        # PlaybackNearlyFinished prompt (it only fires when playback *crosses*
-        # into the window), so the next track would never be enqueued and
-        # playback would stop at the end. Enqueue it right away instead; the
-        # next_stream_enqueued guard makes a later NearlyFinished a no-op.
-        current_metadata = player.Attributes.get_metadata_by_play_order(handler_input)
-        duration_ms = int(getattr(current_metadata, 'duration_ms', 0) or 0) if current_metadata else 0
-        if duration_ms and int(offset_in_ms or 0) > duration_ms - player.NEARLY_FINISHED_WINDOW_MS:
-            logger.info(f'PlaybackStarted: {duration_ms - int(offset_in_ms)}ms remaining; '
-                        f'enqueueing next track now')
-            player.Controller.enqueue_next_stream(handler_input)
-
+        # NOTE: do NOT enqueue the next track here, even when this track
+        # starts inside the final ~40s (a resume/seek near the end). A
+        # response to PlaybackStarted may only contain Stop/ClearQueue --
+        # any AudioPlayer.Play directive (including ENQUEUE) fails validation
+        # with "must not contain more than 0 AudioPlayer.Play directive(s)",
+        # surfacing as System.ExceptionEncountered. The next track is enqueued
+        # from PlaybackNearlyFinished instead; worst case for a start inside
+        # the window is playback stopping at the end of this track, not an
+        # INVALID_RESPONSE error.
         return handler_input.response_builder.response
 
 class PlaybackFinishedEventHandler(AbstractRequestHandler):
@@ -683,10 +696,10 @@ class PlaybackNearlyFinishedEventHandler(AbstractRequestHandler):
 
     def handle(self, handler_input: HandlerInput):
         logger.info("In PlaybackNearlyFinishedHandler")
-        # Enqueue the next track now that this one is nearly done. Shared with
-        # PlaybackStarted (which enqueues early when a track starts inside the
-        # final window and never gets this prompt); skips internally when one
-        # is already enqueued or nothing can be enqueued.
+        # Enqueue the next track now that this one is nearly done. This is the
+        # only AudioPlayer request (besides PlaybackFailed) whose response may
+        # contain a Play directive, so all ENQUEUEs must happen here. Skips
+        # internally when one is already enqueued or nothing can be enqueued.
         player.Controller.enqueue_next_stream(handler_input)
         return handler_input.response_builder.response
 

@@ -767,28 +767,34 @@
   window.syncRouteClasses = syncRouteClasses;
 
   // ---- Dynamic page title ----
-  // The browser tab mirrors what the user is currently hearing. While a track
-  // is playing the tab shows the song (with a "- Playing" suffix) on every
-  // route — including when the tab is backgrounded — so the header stays
-  // current as the music changes. When nothing is playing, detail sections
-  // show their own name (artist, playlist, album, mood, etc.) once content
-  // has rendered, and Home/search fall back to the app name.
+  // The browser tab mirrors what the user is currently viewing, with two
+  // exceptions where it mirrors what they are hearing instead:
+  // 1. The now-playing screen is open -> show the song there.
+  // 2. The tab is backgrounded (document.hidden) while a track is playing
+  //    -> keep showing the song so the tab follows track changes made by
+  //    Alexa, auto-advance, or another tab while the user is away.
+  // A visible tab on any other route always shows that route's own name
+  // (artist, playlist, album, mood, etc., or the app name), even while
+  // music keeps playing. Showing the song on every foreground route
+  // clobbered those names on each SSE poll.
   var SITE_NAME = 'Music Box';
   function syncPageTitle() {
     var route = window.getRoute ? window.getRoute() : '#home';
     var state = window.__appState || {};
     var track = state._currentTrack;
-    if (state.isPlaying && track && track.title) {
-      document.title = track.title + ' - Playing';
-      return;
-    }
-    var title = SITE_NAME;
     var nowPlayingOpen = document.body.classList.contains('now-playing-route') &&
       !document.body.classList.contains('now-playing-closing');
 
     if (nowPlayingOpen) {
-      if (track && track.title) title = track.title + ' - Playing';
-    } else if (route.indexOf('#search?') === 0 || route === '#home') {
+      document.title = (track && track.title) ? track.title + ' - Playing' : SITE_NAME;
+      return;
+    }
+    if (document.hidden && state.isPlaying && track && track.title) {
+      document.title = track.title + ' - Playing';
+      return;
+    }
+    var title = SITE_NAME;
+    if (route.indexOf('#search?') === 0 || route === '#home') {
       title = SITE_NAME;
     } else if (route.indexOf('#artist/') === 0) {
       var artistEl = /\/songs$/.test(route)
