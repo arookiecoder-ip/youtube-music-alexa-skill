@@ -3109,8 +3109,17 @@ class Supporting:
         return paths[0] if paths else None
 
     def evict_cached_audio(video_id: str):
-        """Delete any cached audio file(s) for `video_id`. Best-effort."""
+        """Delete any finished cached audio file(s) for `video_id`. Best-effort.
+
+        Skips `*.part` files: those are in-flight yt-dlp writes (background
+        `ensure_downloaded` uses `<id>.%(ext)s.part`, streaming uses
+        `<id>.m4a.<uuid>.part`). Deleting them mid-write caused
+        `Unable to rename file ... No such file` when the truncated-stop
+        eviction raced a still-running download for the same video.
+        """
         for path in glob.glob(os.path.join(AUDIO_CACHE_DIR, f"{video_id}.*")):
+            if path.endswith('.part'):
+                continue
             try:
                 os.remove(path)
             except OSError:
@@ -3141,7 +3150,13 @@ class Supporting:
                 extractor_args.append(f"youtube:po_token=mweb.gvs+{po_token}")
 
         command = ["yt-dlp", "--no-playlist", "--quiet",
-                   "-f", "140/bestaudio[ext=m4a]/bestaudio",
+                   # 140 first (smallest m4a), then any audio-only, then anything
+                   # with audio, then anything at all. The trailing `best`
+                   # matters: SABR-only / client-specific manifests can have no
+                   # `bestaudio` entry with a URL (web client:
+                   # "Requested format is not available"), while a muxed
+                   # `best` still carries playable audio.
+                   "-f", "140/bestaudio[ext=m4a]/bestaudio/best",
                    "--remote-components", "ejs:github",
                    # A dead TCP/TLS session (VPN blip, YouTube edge reset) used
                    # to cost up to 10 retries per client before falling through
@@ -5697,11 +5712,15 @@ def alexa_command():
         # Stage the pending state before sending the command. Alexa can deliver
         # PlaybackStarted while remote.command() is still waiting for Amazon's
         # response; staging afterward used to overwrite that real confirmation
-        # with playing=False and made the website wait forever.
+        # with a pending state and made the website wait forever.
+        # The staging is deliberately distinguishable from a pause staging:
+        # play stages playing=True/confirmed=False/processing=True while pause
+        # stages playing=False (see below), so the web client's waiter for one
+        # direction can never resolve on the other's staging snapshot.
         with _np_lock:
             resume_position_ms = _computed_position_ms()
             _reset_progress(resume_position_ms)
-            _now_playing['playing'] = False
+            _now_playing['playing'] = True
             _now_playing['playback_confirmed'] = False
             _now_playing['playback_processing'] = True
             _now_playing['playback_revision'] = int(_now_playing.get('playback_revision', 0)) + 1
@@ -5830,8 +5849,9 @@ def alexa_seek():
     # anchor — resume ('play' in alexa_command) replays from
     # _computed_position_ms(), which while paused is exactly this anchor, so
     # playback picks up at the dragged position. playback_confirmed
-    # distinguishes truly-paused from a seek/resume still in flight
-    # (playing=False, confirmed=False), which must still dispatch.
+    # distinguishes truly-paused (playing=False, confirmed=True) from a
+    # seek/resume still in flight (playing=True, confirmed=False), which must
+    # still dispatch.
     if not cur.get('playing') and cur.get('playback_confirmed'):
         with _np_lock:
             # `cur` was read before entering this lock. Re-check the identity
@@ -5861,10 +5881,12 @@ def alexa_seek():
     if error:
         return _device_dispatch_failed(error)
     # Optimistically re-anchor so the bar jumps immediately; the skill's
-    # PlaybackStarted webhook will confirm/correct shortly after.
+    # PlaybackStarted webhook will confirm/correct shortly after. Staged as a
+    # play-intent (playing=True, unconfirmed) so it is distinguishable from a
+    # pause staging, like the resume path above.
     with _np_lock:
         _reset_progress(position_ms)
-        _now_playing['playing'] = False
+        _now_playing['playing'] = True
         _now_playing['playback_confirmed'] = False
         _now_playing['playback_processing'] = True
         _now_playing['playback_revision'] = int(_now_playing.get('playback_revision', 0)) + 1

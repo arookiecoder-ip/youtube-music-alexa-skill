@@ -75,7 +75,14 @@
         const inGrace = (Date.now() - state().lastActionAt) < state().GRACE_MS;
         const serverPlaying = np.playing === true && np.playback_confirmed === true;
         const contradictsIntent = inGrace && state().lastActionIntent !== null && serverPlaying !== state().lastActionIntent;
-        if (!contradictsIntent && window._notifyPlayPauseServerState) {
+        // Always feed snapshots to the play/pause waiter: it keys off fresh
+        // revision/marker/sequence, and the server stages play-intents as
+        // playing=true (pause-intents as playing=false), so a staging
+        // snapshot can never falsely resolve the opposite direction's waiter.
+        // Dropping snapshots here starved the waiter of exactly the freshness
+        // markers it needs and left it hanging until timeout (stuck spinner).
+        // Only the on-screen icon stays guarded during the grace window.
+        if (window._notifyPlayPauseServerState) {
           window._notifyPlayPauseServerState(serverPlaying, np.state_updated_at || np.updated_at || np.confirmed_at, np.playback_revision, np.playback_confirmed, np.playback_processing);
         }
         if (!contradictsIntent && (serverPlaying || !inGrace)) {
@@ -93,7 +100,9 @@
       }
       if (np.playing !== undefined) {
         const contradictsIntent = inGrace && state().lastActionIntent !== null && np.playing !== state().lastActionIntent;
-        if (!contradictsIntent && window._notifyPlayPauseServerState) {
+        // Same split as above: the waiter always gets the snapshot; only the
+        // icon update is grace-guarded.
+        if (window._notifyPlayPauseServerState) {
           window._notifyPlayPauseServerState(np.playing && np.playback_confirmed === true, np.state_updated_at || np.updated_at || np.confirmed_at, np.playback_revision, np.playback_confirmed, np.playback_processing);
         }
         if (!contradictsIntent && !inGrace) {

@@ -289,7 +289,9 @@ class ResumeDispatchAnchorsBeforeConfirmation(_CleanNowPlayingState):
         watchdog_args = watchdog_mock.call_args[0]
         self.assertEqual(watchdog_args[0], 'TEST-SERIAL')
         self.assertEqual(watchdog_args[1], 'WEBRESUME001')
-        self.assertFalse(observed['playing_during_dispatch'])
+        # Play-intent staging is distinguishable from pause staging:
+        # playing=True while unconfirmed (pause stages playing=False).
+        self.assertTrue(observed['playing_during_dispatch'])
         self.assertFalse(observed['confirmed_during_dispatch'])
         self.assertGreaterEqual(observed['position_during_dispatch'], 90_000)
 
@@ -333,10 +335,11 @@ class ResumeDispatchAnchorsBeforeConfirmation(_CleanNowPlayingState):
                 'queue': [],
             })
         # Simulate what alexa_command's 'play' branch does on resume: freeze
-        # the anchor at the previously-paused offset before dispatch.
+        # the anchor at the previously-paused offset before dispatch, staged
+        # as a play-intent (playing=True, unconfirmed).
         with server._np_lock:
             server._reset_progress(90_000)
-            server._now_playing['playing'] = False
+            server._now_playing['playing'] = True
             server._now_playing['playback_confirmed'] = False
 
         # Warm cache: /proxy/ resolves near-instantly, well before the
@@ -374,7 +377,7 @@ class WatchResumeConfirmation(_CleanNowPlayingState):
         with server._np_lock:
             server._now_playing.update({
                 'video_id': video_id,
-                'playing': False,
+                'playing': True,
                 'playback_confirmed': False,
                 'playback_processing': True,
                 'position_ms': position_ms,
