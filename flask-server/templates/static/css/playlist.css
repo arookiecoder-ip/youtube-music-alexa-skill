@@ -403,6 +403,30 @@
 .playlist-hero-share svg,
 .playlist-hero-more svg { width: 22px; height: 22px; }
 
+/* ── Playlist detail 3-dot popup (rename / delete). Icon rows like every
+     other menu, and the destructive row is red text on the dark menu — not
+     a solid red block. ── */
+#playlist-detail-more-menu .queue-menu-option svg {
+  flex: none;
+  width: 16px;
+  height: 16px;
+  color: var(--muted);
+}
+#playlist-detail-more-menu #playlist-detail-delete-opt {
+  background: transparent;
+  color: #f87171;
+}
+#playlist-detail-more-menu #playlist-detail-delete-opt:hover { background: rgba(255, 255, 255, .1); }
+#playlist-detail-more-menu #playlist-detail-delete-opt svg { color: #f87171; }
+
+/* The menu lives inside the header flex row until its first open moves it
+   to <body>. Keep the closed menu out of the flow on desktop so its
+   min-width does not stretch the header as an invisible spacer. (The open
+   handler sets position:fixed inline; mobile parks it as a bottom sheet.) */
+@media (min-width: 900px) {
+  #playlist-detail-more-menu:not(.open) { position: absolute; }
+}
+
 /* ── Track row: number cell + duration cell sit on the row's left/right
      edges so title + artist can use the full middle space. ── */
 .playlist-track-num {

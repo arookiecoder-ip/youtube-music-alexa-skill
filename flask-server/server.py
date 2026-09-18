@@ -1564,6 +1564,42 @@ def _evict_bad_cache_entry(video_id: str):
         logger.exception("failed to evict cache entry for %s", video_id)
 
 
+def _pinned_cache_video_ids():
+    """Video ids whose cache files must survive the TTL sweep.
+
+    A pause of ~AUDIO_CACHE_TTL used to evict the paused track, so a resume
+    paid a full cold yt-dlp download (past the Echo's ~11s /proxy/ give-up)
+    on both web and voice paths -- the earlier background-prewarm overlap
+    only hid ~2s of it. The current track is one small file; keeping it warm
+    makes resume instant no matter how long the pause. Read-only under
+    _np_lock; never raises."""
+    try:
+        with _np_lock:
+            current = _now_playing.get('video_id', '')
+        if _valid_video_id(current):
+            return {current}
+    except Exception:
+        pass
+    return set()
+
+
+def _touch_cached_audio(video_id: str):
+    """Refresh the cache file mtime so TTL counts from the last pause/resume.
+
+    Pinning (above) covers the live process; touching additionally gives a
+    full TTL grace across restarts (where in-memory now-playing is lost) and
+    between the pause moment and the later resume. Best-effort; never raises.
+    """
+    try:
+        if not _valid_video_id(video_id):
+            return
+        path = Supporting.cached_audio_path(video_id)
+        if path:
+            os.utime(path, None)
+    except Exception:
+        pass
+
+
 def _is_dead_video(video_id: str) -> bool:
     with _dead_video_ids_lock:
         ts = _dead_video_ids.get(video_id)
@@ -3127,8 +3163,19 @@ class Supporting:
 
     def prune_audio_cache():
         os.makedirs(AUDIO_CACHE_DIR, exist_ok=True)
+        # Never sweep the currently selected track: a long pause must resume
+        # from a warm send_file, not a cold yt-dlp download past the Echo's
+        # ~11s timeout (explicit truncation eviction still goes through
+        # _evict_bad_cache_entry, which is unaffected by this pin).
+        pinned = _pinned_cache_video_ids()
         for old in glob.glob(os.path.join(AUDIO_CACHE_DIR, "*")):
             try:
+                # Pin finished files only: *.part are in-flight/orphaned yt-dlp
+                # writes (transient, seconds old) and keep their original sweep
+                # semantics so crash orphans are still collected.
+                if (pinned and not old.endswith('.part')
+                        and os.path.basename(old).split('.')[0] in pinned):
+                    continue
                 if time.time() - os.path.getmtime(old) > AUDIO_CACHE_TTL:
                     os.remove(old)
             except OSError:
@@ -5765,8 +5812,11 @@ def alexa_command():
         # this head start the Echo's /proxy/ fetch pays a full cold yt-dlp
         # download (past its ~11s give-up) even though the skill reuses the
         # same stream URL. Starting it here overlaps that download with the
-        # voice-command latency instead of serializing them.
+        # voice-command latency instead of serializing them. The current
+        # track is additionally pinned in prune_audio_cache (and touched
+        # below) so a long pause usually resumes from a warm file instead.
         if _valid_video_id(staged_video_id):
+            _touch_cached_audio(staged_video_id)
             _ensure_audio_ready_for_play(staged_video_id, wait=False)
         # Arm the exact track+offset alongside the generic transport resume.
         # The skill's persisted AudioPlayer session can disagree with the live
@@ -5809,7 +5859,11 @@ def alexa_command():
             _now_playing['playback_processing'] = True
             _now_playing['playback_revision'] = int(_now_playing.get('playback_revision', 0)) + 1
             _now_playing['updated_at'] = time.time()
+            paused_video_id = _now_playing.get('video_id', '')
         _notify_sse()
+        # Refresh the cache mtime at pause time so TTL counts from the pause,
+        # not the original download; the file is also pinned while selected.
+        _touch_cached_audio(paused_video_id)
         error = alexa_remote.remote.command(serial, action, body.get("value"))
     else:
         error = alexa_remote.remote.command(serial, action, body.get("value"))
@@ -5902,6 +5956,7 @@ def alexa_seek():
             _now_playing['playback_revision'] = int(_now_playing.get('playback_revision', 0)) + 1
             _now_playing['updated_at'] = time.time()
         _notify_sse()
+        _touch_cached_audio(video_id)
         return jsonify({'ok': True, 'paused': True})
     # Arm the play with the seek offset before triggering. play_video_id sends a
     # short NLU-safe phrase and the skill reads the video id + offset back from
@@ -5979,6 +6034,10 @@ def alexa_state_event():
             _now_playing['playback_processing'] = False
             _now_playing['updated_at'] = time.time()
         _notify_sse()
+        # Voice pause path ("Alexa, pause" never hits /alexa/command/): refresh
+        # the cache mtime at stop time so a long pause resumes warm. The file
+        # is also pinned while it stays the current track.
+        _touch_cached_audio(stopped_video_id)
         # Genuine PlaybackStarted followed by PlaybackStopped within seconds,
         # far short of the track's real length, *can* be the signature of a
         # truncated/corrupt cached audio file (see _is_audio_file_valid):
@@ -6047,6 +6106,9 @@ def alexa_state_event():
             offset_in_ms = int(body.get('offset_in_ms') or 0)
         except (TypeError, ValueError):
             offset_in_ms = 0
+        # Keep the playing file's mtime fresh so a pause later in a long
+        # session still resumes from a warm cache (see _pinned_cache_video_ids).
+        _touch_cached_audio(video_id)
         # Voice next/previous advances the queue persisted by the Alexa skill.
         # Do not generate a second radio queue in Flask: separate radio calls
         # can yield different results, which used to replace the visible queue

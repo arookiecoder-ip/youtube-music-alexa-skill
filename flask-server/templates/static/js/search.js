@@ -22,9 +22,13 @@ const RESULTS_PER_PAGE = 10;
 
 async function runSearch(query, options) {
   // Paint a skeleton that mirrors the real "All" results layout: a Top Result
-  // hero card, a Songs shelf with 4 rows, then horizontal artist and album
-  // shelves. Reusing the same geometry as the final render avoids layout shift.
+  // hero card, a Songs shelf with 4 rows, then horizontal artist, album and
+  // playlist shelves. Reusing the same geometry as the final render avoids
+  // layout shift.
   function renderSearchLoadingState() {
+    // The hero is almost always a song (a video Top result is promoted to its
+    // song version before render), and a song hero shows a single Play button
+    // — not the two-button Shuffle/Radio pair of an artist hero.
     const hero =
       '<div class="search-skeleton-hero" aria-hidden="true">' +
         '<div class="search-skeleton-hero-art"></div>' +
@@ -33,22 +37,37 @@ async function runSearch(query, options) {
           '<div class="search-skeleton-line search-skeleton-hero-subtitle"></div>' +
           '<div class="search-skeleton-hero-actions">' +
             '<span class="search-skeleton-btn"></span>' +
-            '<span class="search-skeleton-btn"></span>' +
           '</div>' +
         '</div>' +
       '</div>';
 
+    // Mirrors .result-item-inner: thumb + title/subtitle + duration + the
+    // like/queue/more trailing actions.
     let songRows = '';
     for (let i = 0; i < 4; i++) {
       songRows += '<div class="search-skeleton-row" aria-hidden="true">' +
         '<span class="search-skeleton-thumb"></span>' +
         '<span class="search-skeleton-copy"><span class="search-skeleton-line search-skeleton-line-title"></span><span class="search-skeleton-line search-skeleton-line-subtitle"></span></span>' +
-        '<span class="search-skeleton-action"></span>' +
+        '<span class="search-skeleton-duration"></span>' +
+        '<span class="search-skeleton-row-actions">' +
+          '<span class="search-skeleton-action"></span>' +
+          '<span class="search-skeleton-action"></span>' +
+          '<span class="search-skeleton-action search-skeleton-action-more"></span>' +
+        '</span>' +
       '</div>';
     }
 
-    function shelfHead(label) {
-      return '<div class="search-skeleton-section-head" aria-hidden="true">' + escHtml(label) + '</div>';
+    function shelfHead(label, withControls) {
+      // Artist/album/playlist shelves render as .hscroll-sections whose head
+      // carries the prev/next scroll controls; the plain Songs head does not.
+      const controls = withControls
+        ? '<span class="search-skeleton-controls" aria-hidden="true">' +
+          '<span class="search-skeleton-arrow"></span>' +
+          '<span class="search-skeleton-arrow"></span>' +
+        '</span>'
+        : '';
+      return '<div class="search-skeleton-section-head' + (withControls ? ' with-controls' : '') + '" aria-hidden="true">' +
+        '<span>' + escHtml(label) + '</span>' + controls + '</div>';
     }
     function shelf(roundArt) {
       let cards = '';
@@ -64,11 +83,13 @@ async function runSearch(query, options) {
 
     return '<div class="search-results-skeleton" role="status" aria-live="polite" aria-label="Loading search results">' +
       hero +
-      shelfHead('Songs') +
+      shelfHead('Songs', false) +
       songRows +
-      shelfHead('Artists') +
+      shelfHead('Artists', true) +
       shelf(true) +
-      shelfHead('Albums') +
+      shelfHead('Albums', true) +
+      shelf(false) +
+      shelfHead('Playlists', true) +
       shelf(false) +
     '</div>';
   }
@@ -792,6 +813,15 @@ function renderResults() {
       card.dataset.playlistContext = topPlaylistId;
       card.dataset.playlistTitle = item.title || item.name || 'Playlist';
     }
+    // Album Top Result heroes get the album id so right-click/hold opens the
+    // album menu (album-context-menu.js) instead of doing nothing.
+    if (item.resultType === 'album') {
+      const topAlbumId = item.browseId || item.browse_id || item.playlistId || item.playlist_id || '';
+      if (topAlbumId) {
+        card.dataset.albumId = topAlbumId;
+        card.dataset.title = item.title || item.name || 'Album';
+      }
+    }
     if (topVideoId) {
       card.dataset.videoId = topVideoId;
       card._songContextTrack = {
@@ -808,6 +838,8 @@ function renderResults() {
       subtitle = 'Album • ' + artistCredits;
     } else if (item.resultType === 'playlist') {
       subtitle = 'Playlist' + (artistStr ? ' • ' + artistCredits : '');
+    } else if (item.resultType === 'video') {
+      subtitle = 'Video • ' + artistCredits + (item.duration ? ' • ' + escHtml(item.duration) : '');
     } else {
       subtitle = 'Song • ' + artistCredits + (item.duration ? ' • ' + escHtml(item.duration) : '');
     }
@@ -958,11 +990,51 @@ function renderResults() {
         remaining = data.all;
      }
 
+     // The hero card must play audio, not a music video. YT Music often
+     // returns resultType 'video' as the Top result even when the same track
+     // exists as resultType 'song'. Prefer the song version for the hero
+     // whenever one is available.
+     if (topResult && topResult.resultType === 'video') {
+        const _normTitle = (s) => String(s || '').toLowerCase()
+           .replace(/\(.*?\)|\[.*?\]/g, '')
+           .replace(/[^a-z0-9 ]/g, ' ')
+           .replace(/\s+/g, ' ')
+           .trim();
+        const _topNorm = _normTitle(topResult.title);
+        const _topArtistNames = new Set(
+           ((topResult.artists || []).map(a => String((a && a.name) || '').toLowerCase()))
+              .concat([String(topResult.artist || '').toLowerCase()])
+              .filter(Boolean)
+        );
+        const _songCandidates = remaining.filter(i => i && i.resultType === 'song' && (i.videoId || i.video_id));
+        if (_songCandidates.length) {
+           let _best = null;
+           let _bestScore = -1;
+           for (const _c of _songCandidates) {
+              let _score = 0;
+              const _cNorm = _normTitle(_c.title);
+              if (_cNorm && _cNorm === _topNorm) _score += 10;
+              else if (_cNorm && _topNorm && (_cNorm.includes(_topNorm) || _topNorm.includes(_cNorm))) _score += 5;
+              const _cArtists = ((Array.isArray(_c.artists) ? _c.artists : []).map(a => String((a && a.name) || '').toLowerCase()))
+                 .concat([String(_c.artist || '').toLowerCase()])
+                 .filter(Boolean);
+              if (_cArtists.some(a => _topArtistNames.has(a))) _score += 3;
+              if (_score > _bestScore) { _bestScore = _score; _best = _c; }
+           }
+           _best = _best || _songCandidates[0];
+           if (_best) {
+              remaining = [topResult].concat(remaining.filter(i => i !== _best));
+              topResult = _best;
+              topSongs = [];
+           }
+        }
+     }
+
      if (topResult) {
         list.appendChild(renderTopResultCard(topResult, topSongs));
      }
      
-     const songs = remaining.filter(i => i.resultType === 'song');
+     const songs = remaining.filter(i => i.resultType === 'song' || i.resultType === 'video');
      if (songs.length) {
         const head = document.createElement('div');
         head.className = 'section-head';
@@ -971,7 +1043,7 @@ function renderResults() {
         list.appendChild(head);
         songs.slice(0, 4).forEach(song => {
            const songItem = {
-              video_id: song.videoId,
+              video_id: song.videoId || song.video_id,
               title: song.title,
               artist: song.artist || (song.artists && song.artists.length ? song.artists.map(a=>a.name).join(' and ') : ''),
               channelId: song.channelId || song.channel_id || (song.artists && song.artists[0] && (song.artists[0].id || song.artists[0].browseId)) || '',

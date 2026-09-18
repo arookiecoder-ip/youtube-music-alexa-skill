@@ -589,6 +589,7 @@
       let item = items[i];
       var card = document.createElement('div');
       card.className = 'hscroll-card' + (type === 'artist' ? ' related-artist-card' : '') + (type === 'album' ? ' album-card' : '');
+      if (type === 'album' && item.browseId) card.dataset.albumId = item.browseId;
       var thumbUrl = '';
       var isRound = false;
       var title = '';

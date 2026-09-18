@@ -336,7 +336,16 @@
     // Song rows and cards own playback through their local click handlers.
     // Album navigation is intentionally explicit (the context menu or the
     // dedicated now-playing banner title), never a generic song-title route.
-    if (!event.target.closest('.song-context-menu')) closeMenu();
+    if (event.target.closest('.song-context-menu')) return;
+    // Tap-and-hold opens this menu while the finger is still down, so the
+    // finger's release click lands on the row underneath. That by-product
+    // click must not instantly close what just opened: this capture closer
+    // runs before the hold-release suppressors, so consult the bottom-sheet
+    // module's own by-product signal (the same one player.js honors) and
+    // stand down while it is armed. Never arms on desktop.
+    if (typeof window._contextSheetSwallowArmed === 'function' &&
+        window._contextSheetSwallowArmed()) return;
+    closeMenu();
   }, true);
   document.addEventListener('keydown', function (event) {
     if (event.key === 'Escape') closeMenu();

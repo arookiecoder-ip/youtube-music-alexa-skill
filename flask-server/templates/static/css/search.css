@@ -133,7 +133,7 @@
   }
   /* Cold search routes show a stable placeholder list until the API response
      arrives. Keep the geometry close to the real "All" results layout (Top
-     Result hero, Songs rows, artist/album shelves) to avoid layout shift. */
+     Result hero, Songs rows, artist/album/playlist shelves) to avoid layout shift. */
   .search-results-skeleton {
     display: flex;
     flex-direction: column;
@@ -171,7 +171,7 @@
   .search-skeleton-hero-actions {
     display: flex;
     gap: 12px;
-    margin-top: 8px;
+    margin-top: 12px;
   }
   .search-skeleton-btn {
     width: 92px;
@@ -185,6 +185,24 @@
     letter-spacing: -.01em;
     color: var(--text);
     opacity: .5;
+  }
+  /* Artist/album/playlist shelf heads mirror .hscroll-section .section-head:
+     label on the left, prev/next scroll controls on the right. */
+  .search-skeleton-section-head.with-controls {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  .search-skeleton-controls {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-left: auto;
+  }
+  .search-skeleton-arrow {
+    width: 32px;
+    height: 32px;
+    border-radius: 50%;
   }
   .search-skeleton-shelf {
     display: flex;
@@ -227,6 +245,8 @@
   .search-skeleton-line,
   .search-skeleton-btn,
   .search-skeleton-card-art,
+  .search-skeleton-duration,
+  .search-skeleton-arrow,
   .search-skeleton-action {
     display: block;
     background: linear-gradient(90deg, var(--border) 25%, #2a2a2a 37%, var(--border) 63%);
@@ -237,32 +257,50 @@
   .search-skeleton-copy { flex: 1; min-width: 0; }
   .search-skeleton-line-title { width: min(310px, 70%); }
   .search-skeleton-line-subtitle { width: min(180px, 45%); margin-top: 9px; }
-  .search-skeleton-action { width: 26px; height: 26px; flex: 0 0 26px; border-radius: 50%; }
+  /* Mirrors .track-duration (min-width 38px) plus the 34px like, 34px queue
+     and 32px more trailing buttons of a real song row. */
+  .search-skeleton-duration { flex: none; min-width: 38px; height: 12px; border-radius: var(--radius-sm); }
+  .search-skeleton-row-actions { flex: none; display: inline-flex; align-items: center; gap: 0; }
+  .search-skeleton-row-actions .search-skeleton-action + .search-skeleton-action { margin-left: 10px; }
+  .search-skeleton-action { width: 34px; height: 34px; flex: 0 0 34px; border-radius: 50%; }
+  .search-skeleton-action-more { width: 32px; height: 32px; flex-basis: 32px; }
   @media (max-width: 899px) {
-    /* The hero collapses to the same column layout as the real Top Result
-       card, and shelves shrink to the mobile card size. */
+    /* The hero is a song card on the common path, so it collapses to the same
+       compact row as .top-result-card.is-song on phones — not a centered
+       column. */
     .search-skeleton-hero {
-      flex-direction: column;
-      align-items: stretch;
-      text-align: center;
+      flex-direction: row;
+      align-items: center;
+      text-align: left;
       gap: 12px;
-      margin: 10px 0 16px;
-      padding: 14px 12px 16px;
-      border-radius: 2px;
+      margin: 10px 0;
+      padding: 16px 14px;
+      border-radius: 0;
+      background: transparent;
     }
     .search-skeleton-hero-art {
-      width: 120px;
-      height: 120px;
-      flex-basis: 120px;
-      align-self: center;
+      width: 84px;
+      height: 84px;
+      flex: 0 0 84px;
+      align-self: auto;
+      border-radius: 2px;
     }
-    .search-skeleton-hero-copy { align-items: center; }
+    .search-skeleton-hero-copy { align-items: flex-start; gap: 5px; }
     .search-skeleton-hero-title { width: 70%; }
     .search-skeleton-hero-subtitle { width: 50%; }
-    .search-skeleton-hero-actions { justify-content: center; }
+    .search-skeleton-hero-actions { justify-content: flex-start; margin-top: 4px; }
     .search-skeleton-card { flex: 0 0 145px; width: 145px; }
-    .search-skeleton-row { min-height: 52px; height: 52px; padding: 4px 20px; }
-    .search-skeleton-thumb { width: 44px; height: 44px; flex-basis: 44px; }
+    /* Matches the mobile song row: 64px tall with a 56px thumb. The like and
+       queue buttons are hidden on phones, so only the more-dot remains. */
+    .search-skeleton-row { min-height: 64px; height: 64px; padding: 4px 20px; }
+    .search-skeleton-thumb { width: 56px; height: 56px; flex-basis: 56px; }
+    .search-skeleton-row-actions .search-skeleton-action { display: none; }
+    .search-skeleton-row-actions .search-skeleton-action-more {
+      display: block;
+      width: 28px;
+      height: 28px;
+      flex-basis: 28px;
+    }
   }
   @media (prefers-reduced-motion: reduce) {
     .search-skeleton-hero-art,
@@ -270,6 +308,8 @@
     .search-skeleton-line,
     .search-skeleton-btn,
     .search-skeleton-card-art,
+    .search-skeleton-duration,
+    .search-skeleton-arrow,
     .search-skeleton-action { animation: none; }
   }
 
@@ -1023,34 +1063,54 @@
   body.results-open #results-list .result-swipe-wrapper {
     touch-action: pan-y;
   }
-  /* #results-section carries a global 96px bottom padding (playbar clearance
-     for the document-scrolled desktop view). On phones the list is its own
-     scroller, so that padding only adds a blank strip below the Playlists
-     shelf — drop it. */
+  /* Mobile results own the column between the fixed header (57px) and the
+     fixed mini player. Flex-fill the viewport instead of a magic-number
+     height (e.g. 100dvh-240px): any fixed subtraction leaves a blank strip
+     below the Playlists shelf whenever the tab row measures differently.
+     Player clearance lives as padding INSIDE the scroller (mostly hidden
+     beneath the fixed bar, ~12px visible) — never as margin below it. */
+  body.results-open main {
+    height: 100dvh !important;
+    min-height: 100dvh !important;
+    display: flex !important;
+    flex-direction: column !important;
+    padding-bottom: 0 !important;
+    overflow: hidden !important;
+  }
   body.results-open #results-section {
-    padding-bottom: 0;
+    flex: 1 1 auto !important;
+    min-height: 0 !important;
+    display: flex !important;
+    flex-direction: column !important;
+    margin-bottom: 0 !important;
+    padding-bottom: 0 !important;
+    overflow: hidden !important;
+  }
+  body.results-open #results-section > .section-head {
+    flex: none !important;
   }
   /* Do not rely on the document's scroll height here. Some mobile WebViews
      keep the flex page root at exactly one viewport tall after a route swap,
      even when the result contents extend below it. The list is therefore the
-     native vertical scroller on phones. The lower padding keeps the final row
-     clear of the fixed mini player. */
+     native vertical scroller on phones. */
   body.results-open #results-list {
-    height: calc(100dvh - 240px);
-    min-height: 220px;
+    flex: 1 1 auto !important;
+    min-height: 0 !important;
+    height: auto !important;
     overflow-y: auto !important;
     overflow-x: hidden;
     -webkit-overflow-scrolling: touch;
     overscroll-behavior-y: contain;
     touch-action: pan-y;
-    padding-bottom: 0;
+    /* Final shelf clears the fixed mini player; only ~12px shows above it. */
+    padding-bottom: calc(var(--playbar-h-mobile, 78px) + 12px + env(safe-area-inset-bottom, 0px)) !important;
   }
   /* On phones the list is its own scroller; the shared `.hscroll-section`
-     bottom margin (var(--space-5)) would add space after the last shelf. The
-     list's own fixed height already contains the rows — drop the shelf margin
-     so the Playlists shelf ends flush with the scroll container. */
+     bottom margin (var(--space-5)) would add space after the last shelf —
+     drop it so the Playlists shelf ends flush with the scroll padding. */
   body.results-open #results-list .hscroll-section:last-child {
-    margin-bottom: 0;
+    margin-bottom: 0 !important;
+    padding-bottom: 0 !important;
   }
 
   .top-result-card.is-artist {
