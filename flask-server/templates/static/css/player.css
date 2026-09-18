@@ -1067,12 +1067,12 @@ body:not(.now-playing-route):not(.now-playing-closing) main:has(#now-playing-sec
     to   { opacity: 1; transform: translateY(0); }
   }
   .np-page-art.track-changed {
-    animation: npArtSwapIn .7s cubic-bezier(.22, 1, .36, 1) both;
+    animation: npArtSwapIn 1.4s cubic-bezier(.22, 1, .36, 1) both;
   }
   /* Title and artist animate as descendants of .np-page-meta once the
      parent gets .track-changed — no separate rules are needed for them. */
   .np-page-meta.track-changed {
-    animation: npMetaSwapIn .7s cubic-bezier(.22, 1, .36, 1) both;
+    animation: npMetaSwapIn 1.4s cubic-bezier(.22, 1, .36, 1) both;
   }
 }
 
@@ -1167,7 +1167,12 @@ body:not(.now-playing-route):not(.now-playing-closing) main:has(#now-playing-sec
      exit slide and the horizontal track-change animation into place. By
      dropping transform from the art (filter/transition stay), inline swipe
      transforms and the track-changed keyframe both paint normally, exactly
-     as the swipe handler expected. `.np-page` keeps its own transform reset. */
+     as the swipe handler expected. `.np-page` keeps its own transform reset.
+     NOTE: `transition: none !important` below still beats the swipe's normal
+     inline transitions, so the swipe handler sets its release/commit
+     transitions as inline-!important (setArtSwipeTransition in player.js) —
+     without that every duration change is a no-op and the banner jumps
+     instantly. Do not "simplify" that helper to plain style assignment. */
   body.now-playing-route .np-page,
   body.now-playing-route .np-page-art,
   body.now-playing-route .np-page-art.image-loading {
@@ -1338,6 +1343,7 @@ body:not(.now-playing-route):not(.now-playing-closing) main:has(#now-playing-sec
   body.now-playing-route .mobile-np-volume-row > svg,
   body.now-playing-closing .mobile-np-volume-row > svg {
     flex: none;
+    display: block;
     width: clamp(17px, 4.9vw, 22px);
     height: clamp(17px, 4.9vw, 22px);
     color: var(--muted);
@@ -3610,18 +3616,24 @@ body.results-open .player-section {
   body.now-playing-route #mobile-np-volume,
   body.now-playing-closing #mobile-np-volume {
     --track-h: 3px;
-    /* Finger-sized hit target: the input box is 34px tall while the painted
-       track stays at --track-h. WebKit top-aligns the runnable track inside
-       the input box, so it is re-centered below; Firefox centers its own
-       track automatically. */
+    /* Finger-sized hit target: the input box stays 34px tall while the painted
+       track stays at --track-h. Centering is done with symmetric padding so
+       the content box is exactly track-height tall — then the runnable track
+       sits centered whether the engine top-aligns or center-aligns it inside
+       the content box, and the thumb (margined relative to the track) lands
+       on the same center as the icon. The old margin-top-on-the-track hack
+       depended on top-alignment inside the full 34px box and rode high where
+       that didn't hold. Padding follows --track-h, so :active thickening
+       stays centered with zero layout shift (total height never changes). */
     height: 34px;
+    padding: calc((34px - var(--track-h)) / 2) 0;
     /* A vertical component in the finger movement must not hand the gesture
        to the page scroller, which would cancel the slider drag mid-pull. */
     touch-action: none;
   }
   body.now-playing-route #mobile-np-volume::-webkit-slider-runnable-track,
   body.now-playing-closing #mobile-np-volume::-webkit-slider-runnable-track {
-    margin-top: calc((34px - var(--track-h)) / 2);
+    margin-top: 0;
   }
   body.now-playing-route #mobile-np-volume:active,
   body.now-playing-closing #mobile-np-volume:active {

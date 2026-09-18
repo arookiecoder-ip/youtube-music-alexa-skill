@@ -166,7 +166,7 @@ function playArtworkSwapIn() {
   // just played means only the first of the burst animates; later, genuinely
   // new tracks animate normally again.
   const now = Date.now();
-  if (now - _lastSwapInAt < 800) return;
+  if (now - _lastSwapInAt < 1500) return;
   _lastSwapInAt = now;
   // The swipe-exit sets inline `translateX(\u00b1120vw)`. While that transform is
   // active, the swipe handler's transitionend hasn't run yet, so fighting
@@ -2025,9 +2025,10 @@ for (const btn of document.querySelectorAll('[data-action="previous"], [data-act
        when the drag stayed under the distance threshold.
      - Soft resistance past the artwork's width so a wild fling doesn't
        visually leap across the screen.
-     - Exit animation is driven by inline style; the mobile route's stronger
-       `transform: none !important` rule (player.css) is intentionally
-       overridden via inline styles, which beat !important declarations.
+      - Exit/snap animations are driven by inline !important styles (see
+        setArtSwipeTransition): the mobile route pins the artwork with
+        `transition: none !important`, which beats normal inline styles, so
+        only an inline-important transition actually animates.
      - Click that the browser fires at pointerup is suppressed for ~600 ms
        after a real commit in case the np-page-art click handler ever grows
        beyond its current mobile no-op. */
@@ -2047,8 +2048,10 @@ for (const btn of document.querySelectorAll('[data-action="previous"], [data-act
   const AXIS_BIAS = 1.25;             // vertical wins when |dy| > |dx| * bias
   const RESISTANCE_START_PX = 240;    // start dampening once past the artwork width
   const RESISTANCE_DIVISOR_PX = 80;   // every additional 80px halves extra travel
-  const EXIT_MS = 480;                // slower release: banner visibly glides off on commit
-  const SNAP_MS = 420;                // slower release: snap-back / tuck-back ease on cancel
+  const EXIT_MS = 900;                // slow release: banner glides off on commit
+  const SNAP_MS = 950;                // slow, smooth revert: under-threshold drags glide home
+  const SNAP_EASE = 'cubic-bezier(.4, 0, .2, 1)'; // gentle ease-in-out so the
+                // revert never yanks — the commit path keeps its snappier curve
   const SUPPRESS_CLICK_MS = 600;      // how long after a commit to drop the synthetic click
 
   let active = null; // {pointerId,startX,startY,lastX,lastY,startedAt,axis}
@@ -2261,8 +2264,21 @@ for (const btn of document.querySelectorAll('[data-action="previous"], [data-act
     art.style.transition = '';
   }
 
+  // The mobile route pins the artwork with `transition: none !important`
+  // (player.css route freeze), and an author-!important declaration beats a
+  // normal inline style — so a plain `art.style.transition = ...` never runs:
+  // release/commit transforms applied instantly no matter the duration. An
+  // *inline !important* declaration (via setProperty priority) outranks the
+  // author rule, so swipe transitions must go through this helper. Clearing
+  // works with plain assignment, which drops the important declaration and
+  // lets the route freeze apply again at rest.
+  function setArtSwipeTransition(value) {
+    if (art.style.setProperty) art.style.setProperty('transition', value, 'important');
+    else art.style.transition = value;
+  }
+
   function snapBack() {
-    art.style.transition = 'transform ' + SNAP_MS + 'ms cubic-bezier(.22,1,.36,1)';
+    setArtSwipeTransition('transform ' + SNAP_MS + 'ms ' + SNAP_EASE);
     art.style.transform = '';
     // Clean the styling after the snap so later code that reads transitions
     // doesn't see a lingering curve.
@@ -2270,7 +2286,7 @@ for (const btn of document.querySelectorAll('[data-action="previous"], [data-act
   }
 
   function commitExit(direction) {
-    art.style.transition = 'transform ' + EXIT_MS + 'ms cubic-bezier(.22,1,.36,1)';
+    setArtSwipeTransition('transform ' + EXIT_MS + 'ms cubic-bezier(.22,1,.36,1)');
     // Match physics: swipe left (next) slides the artwork off-screen to the
     // left; swipe right (previous) slides it off-screen to the right. This
     // matches the visual convention used by iOS/Spotify/YT Music, where the
@@ -2464,7 +2480,7 @@ for (const btn of document.querySelectorAll('[data-action="previous"], [data-act
         const layer = incoming.layer;
         const w = layer.offsetWidth || art.clientWidth || 1;
         const side = incoming.direction === 'next' ? 1 : -1;
-        layer.style.transition = 'transform ' + SNAP_MS + 'ms cubic-bezier(.22,1,.36,1)';
+        layer.style.transition = 'transform ' + SNAP_MS + 'ms ' + SNAP_EASE;
         layer.style.transform = 'translateX(' + (side * w) + 'px)';
         setTimeout(() => {
           if (incoming && incoming.layer === layer) hideIncoming();
