@@ -3866,6 +3866,32 @@ def proxy_stream():
         # progress bar ticking even though yt-dlp still takes 7-8s to process.
         # Confirmation is instead deferred to the first chunk inside generate().
         #
+        # Range resumes cannot be live-streamed: the Echo retries a dropped
+        # connection with `Range: bytes=N-`, but a yt-dlp stdout pipe always
+        # starts at byte 0. Serving that as 200 feeds the wrong bytes, the
+        # Echo disconnects mid-stream ("aborting with incomplete response"
+        # in Caddy, "Client disconnected while serving /proxy/" here), and
+        # after a few retries gives up with MEDIA_ERROR_UNKNOWN. Buffer to
+        # the cache first and serve a proper 206 via send_file instead --
+        # slower, but correct. A 502 lets the Echo retry (which is then warm)
+        # instead of feeding it corrupt audio.
+        range_header = request.headers.get('Range')
+        if range_header:
+            logger.warning("proxy: Range %r for cold-cache %s -- "
+                           "buffering to cache for 206 instead of streaming",
+                           range_header, video_id)
+            path = None
+            if _stream_is_inflight(video_id):
+                path = _await_inflight_stream(video_id)
+            if not path and _download_in_progress(video_id):
+                path = _await_prewarm_cache(video_id)
+            if not path:
+                path = Supporting.ensure_downloaded(video_id)
+            if not path:
+                return error_response('download failed', 502)
+            _confirm_stream_delivery(video_id)
+            mimetype = 'audio/mp4' if path.endswith(('.m4a', '.mp4')) else 'audio/webm'
+            return send_file(path, mimetype=mimetype, conditional=True)
         # Another request is already streaming this exact track (the Echo
         # retries /proxy/, and the playback watchdog resends the play command).
         # Spawning a second yt-dlp for the same song only doubles the load that
@@ -5649,6 +5675,12 @@ def alexa_command():
     serial, action = _effective_serial(body.get("serial")), body.get("action")
     if not serial or not action:
         return error_response('missing "serial" or "action"', 400)
+    # Diagnosing duplicate-dispatch races (e.g. play_queue + command for the
+    # same track 3s apart interrupting the first stream, surfacing as an
+    # early PlaybackStopped + MEDIA_ERROR_UNKNOWN): log the intent.
+    logger.info("alexa_command: serial=%s action=%s value=%r video=%r",
+                serial, action, body.get("value"),
+                body.get("video_id") or body.get("videoId") or '')
     if action in ('next', 'previous'):
         target, target_error = _queue_neighbor(action)
         if target_error:
@@ -5948,20 +5980,52 @@ def alexa_state_event():
             _now_playing['updated_at'] = time.time()
         _notify_sse()
         # Genuine PlaybackStarted followed by PlaybackStopped within seconds,
-        # far short of the track's real length, is not a normal skip/pause --
-        # it's the signature of a truncated/corrupt cached audio file (see
-        # _is_audio_file_valid): Alexa did receive and play real audio (hence
-        # the confirmed webhook), it just ran out after a few seconds instead
-        # of minutes. Evict the cache entry so the next play re-downloads
-        # instead of serving the same broken clip forever.
+        # far short of the track's real length, *can* be the signature of a
+        # truncated/corrupt cached audio file (see _is_audio_file_valid):
+        # Alexa did receive and play real audio (hence the confirmed
+        # webhook), it just ran out after a few seconds instead of minutes.
+        # But it is also the shape of a user skip, a duplicate REPLACE_ALL
+        # race, or an Echo rebuffer that immediately retries /proxy/ with a
+        # Range resume -- all of which leave a perfectly good file behind.
+        # Evicting blindly on elapsed time turned those into a cache miss:
+        # the resume then fell into the cold streaming path (which cannot
+        # honor Range), the Echo disconnected, and playback ended with
+        # MEDIA_ERROR_UNKNOWN (observed 2026-09-18: HbgSC1D10cs stopped
+        # after 1398ms, evicted a valid file, Range bytes=30666- retry
+        # aborted after 6s). Verify with ffprobe first and only evict a
+        # file that is actually truncated; a valid file is kept so the
+        # immediate retry is a warm 206.
         if (was_confirmed and stopped_video_id and stopped_duration_ms
                 and elapsed_ms < _MIN_VALID_AUDIO_MS
                 and elapsed_ms < stopped_duration_ms * 0.5):
-            logger.warning(
-                "[np] %s stopped after only %dms of a %dms track -- "
-                "evicting cache as likely truncated", stopped_video_id,
-                elapsed_ms, stopped_duration_ms)
-            _evict_bad_cache_entry(stopped_video_id)
+            cached_path = Supporting.cached_audio_path(stopped_video_id)
+            if cached_path and _is_audio_file_valid(
+                    cached_path, stopped_duration_ms):
+                logger.info(
+                    "[np] %s stopped after only %dms of a %dms track -- "
+                    "cache file is valid (%s), keeping (likely skip/race/"
+                    "rebuffer, not truncation)", stopped_video_id,
+                    elapsed_ms, stopped_duration_ms, cached_path)
+            else:
+                if not cached_path:
+                    logger.info(
+                        "[np] %s stopped after only %dms of a %dms track -- "
+                        "no cache file to evict (already gone)", stopped_video_id,
+                        elapsed_ms, stopped_duration_ms)
+                else:
+                    logger.warning(
+                        "[np] %s stopped after only %dms of a %dms track -- "
+                        "evicting cache as likely truncated", stopped_video_id,
+                        elapsed_ms, stopped_duration_ms)
+                    _evict_bad_cache_entry(stopped_video_id)
+                # Re-download in the background so the Echo's immediate
+                # Range-resume retry (bytes=N-) lands on a warm 206 via
+                # send_file instead of a cold live stream that cannot honor
+                # Range and gets disconnected.
+                try:
+                    _ensure_audio_ready_for_play(stopped_video_id, wait=False)
+                except Exception:
+                    pass
         # A failed current track stays selected and stopped. Never replace it
         # with another upload or silently advance to another queue item.
         cur = _get_now_playing()
