@@ -166,7 +166,7 @@ function playArtworkSwapIn() {
   // just played means only the first of the burst animates; later, genuinely
   // new tracks animate normally again.
   const now = Date.now();
-  if (now - _lastSwapInAt < 500) return;
+  if (now - _lastSwapInAt < 800) return;
   _lastSwapInAt = now;
   // The swipe-exit sets inline `translateX(\u00b1120vw)`. While that transform is
   // active, the swipe handler's transitionend hasn't run yet, so fighting
@@ -2047,7 +2047,8 @@ for (const btn of document.querySelectorAll('[data-action="previous"], [data-act
   const AXIS_BIAS = 1.25;             // vertical wins when |dy| > |dx| * bias
   const RESISTANCE_START_PX = 240;    // start dampening once past the artwork width
   const RESISTANCE_DIVISOR_PX = 80;   // every additional 80px halves extra travel
-  const EXIT_MS = 220;                // match CSS feel of other route transitions
+  const EXIT_MS = 480;                // slower release: banner visibly glides off on commit
+  const SNAP_MS = 420;                // slower release: snap-back / tuck-back ease on cancel
   const SUPPRESS_CLICK_MS = 600;      // how long after a commit to drop the synthetic click
 
   let active = null; // {pointerId,startX,startY,lastX,lastY,startedAt,axis}
@@ -2261,11 +2262,11 @@ for (const btn of document.querySelectorAll('[data-action="previous"], [data-act
   }
 
   function snapBack() {
-    art.style.transition = 'transform 200ms cubic-bezier(.22,1,.36,1)';
+    art.style.transition = 'transform ' + SNAP_MS + 'ms cubic-bezier(.22,1,.36,1)';
     art.style.transform = '';
     // Clean the styling after the snap so later code that reads transitions
-    // doesn't see a lingering 200 ms curve.
-    setTimeout(clearInlineTransform, 220);
+    // doesn't see a lingering curve.
+    setTimeout(clearInlineTransform, SNAP_MS + 20);
   }
 
   function commitExit(direction) {
@@ -2463,11 +2464,11 @@ for (const btn of document.querySelectorAll('[data-action="previous"], [data-act
         const layer = incoming.layer;
         const w = layer.offsetWidth || art.clientWidth || 1;
         const side = incoming.direction === 'next' ? 1 : -1;
-        layer.style.transition = 'transform 200ms cubic-bezier(.22,1,.36,1)';
+        layer.style.transition = 'transform ' + SNAP_MS + 'ms cubic-bezier(.22,1,.36,1)';
         layer.style.transform = 'translateX(' + (side * w) + 'px)';
         setTimeout(() => {
           if (incoming && incoming.layer === layer) hideIncoming();
-        }, 210);
+        }, SNAP_MS + 20);
       }
       snapBack();
       return;

@@ -1067,12 +1067,12 @@ body:not(.now-playing-route):not(.now-playing-closing) main:has(#now-playing-sec
     to   { opacity: 1; transform: translateY(0); }
   }
   .np-page-art.track-changed {
-    animation: npArtSwapIn .36s cubic-bezier(.22, 1, .36, 1) both;
+    animation: npArtSwapIn .7s cubic-bezier(.22, 1, .36, 1) both;
   }
   /* Title and artist animate as descendants of .np-page-meta once the
      parent gets .track-changed — no separate rules are needed for them. */
   .np-page-meta.track-changed {
-    animation: npMetaSwapIn .36s cubic-bezier(.22, 1, .36, 1) both;
+    animation: npMetaSwapIn .7s cubic-bezier(.22, 1, .36, 1) both;
   }
 }
 

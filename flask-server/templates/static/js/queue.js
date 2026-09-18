@@ -261,6 +261,11 @@ function _scrollQueueRowIntoView(container, currentIndex, force) {
   // optimistic re-render and the confirming poll snapshot. Record the index
   // above (so no delayed scroll queues up) but do not move the viewport.
   if (Date.now() < (state._suppressQueueScrollUntil || 0)) return;
+  // While the user is actively scrolling the mobile sheet, never fight the
+  // gesture with a smooth auto-scroll — that yank reads as flicker/jank
+  // when scrolling up away from the active row.
+  if (!force && container.id === 'queue-modal-body' &&
+      Date.now() - (container._lastUserScrollAt || 0) < 1500) return;
   const row = container.querySelector('.queue-item.active');
   if (!row) return;
   const wrapper = row.closest('.queue-swipe-wrapper') || row;
@@ -1732,6 +1737,22 @@ function scheduleHistoryRefresh() {
   if (!overlay || !body) return;
   const modal = document.getElementById('queue-modal');
 
+  // Full modal rebuilds (replaceChildren) mid-scroll flash thumbnails and
+  // fight the gesture. Track the last user scroll so renders can defer until
+  // the scroll settles, and stamp the time on every scroll event.
+  let pendingModalRender = false;
+  let modalScrollIdleTimer = 0;
+  body.addEventListener('scroll', () => {
+    body._lastUserScrollAt = Date.now();
+    if (pendingModalRender) {
+      clearTimeout(modalScrollIdleTimer);
+      modalScrollIdleTimer = setTimeout(() => {
+        pendingModalRender = false;
+        renderQueueModal();
+      }, 350);
+    }
+  }, { passive: true });
+
   function _queueSnapshot() {
     // SSE writes window._lastQueueJson; optimistic edits write the appState
     // copy. Prefer whichever is non-empty, matching what the user last saw.
@@ -1745,6 +1766,28 @@ function scheduleHistoryRefresh() {
     const queue = _queueSnapshot();
     const idx = (typeof window._lastQueueIndex === 'number' && window._lastQueueIndex >= 0)
       ? window._lastQueueIndex : state._lastQueueIndex;
+    // The sheet is refreshed on every SSE push while open. If the user is
+    // actively scrolling (e.g. flicking up through the list), defer the full
+    // rebuild until the scroll settles — destroying/recreating all rows
+    // mid-gesture flashes thumbnails and visibly flickers. Keep the highlight
+    // fresh on the existing rows in the meantime (cheap class toggles, no
+    // image reload), then do the real rebuild once idle.
+    if (preserveOpenScroll && Date.now() - (body._lastUserScrollAt || 0) < 400) {
+      for (const el of body.querySelectorAll('.queue-item')) {
+        const isCurrent = Number(el.dataset.index) === Number(idx);
+        el.classList.toggle('active', isCurrent);
+        el.classList.toggle('playing', isCurrent && state.isPlaying);
+      }
+      if (!pendingModalRender) {
+        pendingModalRender = true;
+        clearTimeout(modalScrollIdleTimer);
+        modalScrollIdleTimer = setTimeout(() => {
+          pendingModalRender = false;
+          renderQueueModal();
+        }, 350);
+      }
+      return;
+    }
     if (!queue.length) {
       const empty = document.createElement('div');
       empty.className = 'queue-modal-empty';
@@ -1758,8 +1801,17 @@ function scheduleHistoryRefresh() {
       // as the main list's rebuild truncation).
       body.querySelectorAll(':scope > .queue-swipe-wrapper').length));
     body._lazyQueue = { queue, currentIndex: idx };
+    // Transplant already-loaded <img> elements (same as renderNpQueue) so a
+    // rebuild while open doesn't re-fetch/re-decode every cover — that
+    // opacity-0 → loaded fade on all visible rows is the flicker.
+    const thumbsById = new Map();
+    body.querySelectorAll(':scope > .queue-swipe-wrapper').forEach((w) => {
+      const id = w.dataset.videoId || '';
+      const img = w.querySelector('img.queue-thumb.loaded');
+      if (id && img && !thumbsById.has(id)) thumbsById.set(id, img);
+    });
     const rows = [];
-    for (let i = 0; i < limit; i++) rows.push(_buildQueueRow(body, queue[i], i, idx, new Map()));
+    for (let i = 0; i < limit; i++) rows.push(_buildQueueRow(body, queue[i], i, idx, thumbsById));
     body.replaceChildren(...rows);
     _syncQueueSentinel(body);
     if (preserveOpenScroll) {
@@ -1939,9 +1991,16 @@ function scheduleHistoryRefresh() {
   }
 
   let queueHistoryEntry = false;
+  // Single-flight for the history-backed close: one tap fires the backdrop's
+  // pointerdown + touchstart (+ click), and without this each of them would
+  // dispatch history.back(). The extra pop eats a real page entry, whose
+  // popstate falls through to the router's now-playing branch and minimizes
+  // the player along with the queue.
+  let queueHistoryBackPending = false;
 
   function openQueueModal(options) {
     renderQueueModal();
+    queueHistoryBackPending = false;
     if (window.matchMedia('(max-width: 899px)').matches && !queueHistoryEntry && window.history && window.history.pushState) {
       window.history.pushState({ queueModal: true }, '', window.location.href);
       queueHistoryEntry = true;
@@ -1989,8 +2048,12 @@ function scheduleHistoryRefresh() {
   }
 
   function closeQueueModal(fromHistory) {
+    // A second backdrop event from the same tap must not dispatch another
+    // history.back() while the first pop is still in flight (see above).
+    if (!fromHistory && queueHistoryBackPending) return;
     if (overlay.classList.contains('queue-origin-open') && inlineMorph) {
       if (!fromHistory && queueHistoryEntry && window.history && window.history.back) {
+        queueHistoryBackPending = true;
         window.history.back();
         return;
       }
@@ -1998,9 +2061,14 @@ function scheduleHistoryRefresh() {
       finishInlineQueueProgress(false);
       return;
     }
+    // Already closed (e.g. pointerdown already dismissed the sheet and the
+    // trailing touchstart/click from the same tap arrived before popstate):
+    // never dispatch another history.back() for it.
+    if (!fromHistory && !overlay.classList.contains('open')) return;
     overlay.classList.remove('open');
     overlay.style.removeProperty('--queue-drag-progress');
     if (!fromHistory && queueHistoryEntry && window.history && window.history.back) {
+      queueHistoryBackPending = true;
       window.history.back();
       return;
     }
@@ -2042,6 +2110,17 @@ function scheduleHistoryRefresh() {
     let dragging = false;
     let morphDragging = false;
     let bodyDragging = false;
+    // The close (cross) button lives inside the header drag surface. Drags
+    // starting on it must still move the sheet, while plain taps on it must
+    // still click through to the button's own close handler.
+    let startedOnControl = false;
+    let activePointerId = null;
+    let captureSurface = null;
+    const CONTROL_SEL = '.queue-modal-close, button, a, input, select, textarea, [contenteditable="true"]';
+    const isOnControl = (event) => {
+      const t = event && event.target;
+      return !!(t && t.closest && t.closest(CONTROL_SEL));
+    };
 
     const beginDrag = (clientY, fromBody, clientX = 0) => {
       if (fromBody && body.scrollTop > 1) return false;
@@ -2058,6 +2137,17 @@ function scheduleHistoryRefresh() {
     };
     const moveDrag = (clientY, event, clientX = startX) => {
       if (!dragging) return;
+      // Tap slop for gestures that started on the close button: a plain tap
+      // stays a click (sheet untouched), a real move becomes a sheet drag.
+      if (startedOnControl &&
+          Math.abs(clientY - startY) <= 8 && Math.abs(clientX - startX) <= 8) return;
+      // Late capture: the finger left tap slop, so this is a sheet drag now —
+      // capture to keep receiving moves even off the button.
+      if (startedOnControl && captureSurface && activePointerId != null) {
+        try { captureSurface.setPointerCapture?.(activePointerId); } catch (_) {}
+        startedOnControl = false;
+        captureSurface = null;
+      }
       lastY = clientY;
       const rawDistance = clientY - startY;
       if (bodyDragging && (
@@ -2072,7 +2162,14 @@ function scheduleHistoryRefresh() {
         event?.preventDefault?.();
         return;
       }
-      const offset = Math.max(-window.innerHeight * 0.25, Math.min(window.innerHeight * 0.9, clientY - startY));
+      // The sheet only closes downward: ignore upward drags entirely so the
+      // modal can never be pushed above its resting position.
+      const dy = clientY - startY;
+      if (dy <= 0) {
+        modal.style.transform = '';
+        return;
+      }
+      const offset = Math.min(window.innerHeight * 0.9, dy);
       modal.style.transform = `translateY(${offset}px)`;
       event?.preventDefault?.();
     };
@@ -2083,6 +2180,17 @@ function scheduleHistoryRefresh() {
       const velocity = distance / elapsed;
       dragging = false;
       bodyDragging = false;
+      const wasTapOnControl = startedOnControl;
+      startedOnControl = false;
+      activePointerId = null;
+      captureSurface = null;
+      if (wasTapOnControl && Math.abs(distance) <= 8 && Math.abs(velocity) < 0.3) {
+        // Plain tap on the close button: leave the sheet alone and let the
+        // button's own click handler close it.
+        modal.style.transition = '';
+        modal.style.transform = '';
+        return;
+      }
       if (morphDragging) {
         morphDragging = false;
         finishInlineQueueProgress(inlineMorphProgress >= .72 && velocity < .55);
@@ -2098,17 +2206,31 @@ function scheduleHistoryRefresh() {
 
     dragSurfaces.forEach(({ element: surface, fromBody }) => {
       surface.addEventListener('pointerdown', (event) => {
-        if (event.target.closest('.queue-modal-close, button, a, input, select, textarea, [contenteditable="true"]')) return;
-        if (!beginDrag(event.clientY, fromBody, event.clientX)) return;
-        if (!fromBody) surface.setPointerCapture?.(event.pointerId);
+        startedOnControl = isOnControl(event);
+        activePointerId = event.pointerId;
+        captureSurface = surface;
+        if (!beginDrag(event.clientY, fromBody, event.clientX)) {
+          startedOnControl = false;
+          activePointerId = null;
+          captureSurface = null;
+          return;
+        }
+        // Defer capture when starting on the close button so a plain tap
+        // still clicks the button; capture happens on first real move.
+        if (!startedOnControl && !fromBody) surface.setPointerCapture?.(event.pointerId);
       });
       surface.addEventListener('pointermove', (event) => moveDrag(event.clientY, event, event.clientX));
       surface.addEventListener('pointerup', endDrag);
       surface.addEventListener('pointercancel', endDrag);
 
       surface.addEventListener('touchstart', (event) => {
-        if (event.target.closest('.queue-modal-close, button, a, input, select, textarea, [contenteditable="true"]')) return;
-        if (event.touches.length) beginDrag(event.touches[0].clientY, fromBody, event.touches[0].clientX);
+        if (!event.touches.length) return;
+        startedOnControl = isOnControl(event);
+        activePointerId = null;
+        captureSurface = null;
+        if (!beginDrag(event.touches[0].clientY, fromBody, event.touches[0].clientX)) {
+          startedOnControl = false;
+        }
       }, { passive: true });
       surface.addEventListener('touchmove', (event) => {
         if (event.touches.length) {
@@ -2125,6 +2247,7 @@ function scheduleHistoryRefresh() {
   window._closeQueueModal = closeQueueModal;
   window._closeQueueModalFromHistory = function () {
     queueHistoryEntry = false;
+    queueHistoryBackPending = false;
     closeQueueModal(true);
   };
   window._queueModalHistoryOpen = function () { return queueHistoryEntry; };
