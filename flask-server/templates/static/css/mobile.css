@@ -25,13 +25,18 @@
      rows, playlist/explore/home cards, the playlist-detail rename/delete
      menu, and the now-playing 3-dot. All open via `.open` except the
      now-playing one, which player.js tags `.mobile-now-playing-menu` +
-     `.mobile-open` before appending it to <body>. */
+     `.mobile-open` before appending it to <body>. The bare
+     .mobile-now-playing-menu state (mounted but parked below the viewport)
+     needs the same geometry or the close animation would snap back to the
+     desktop dropdown styling mid-slide. */
   .result-more-menu,
   .queue-more-menu,
   .playlist-more-menu,
   #playlist-detail-more-menu,
   #np-more-menu.mobile-open,
-  body .mobile-now-playing-menu.mobile-open {
+  body .mobile-now-playing-menu.mobile-open,
+  #np-more-menu.mobile-now-playing-menu,
+  body .mobile-now-playing-menu {
     position: fixed !important;
     left: 0 !important;
     right: 0 !important;
@@ -44,7 +49,7 @@
     margin: 0 !important;
     z-index: 9999 !important;
     box-sizing: border-box;
-    border-radius: 16px 16px 0 0 !important;
+    border-radius: 0 !important;
     border: none !important;
     border-top: 1px solid rgba(255, 255, 255, .1) !important;
     background: var(--surface) !important;
@@ -64,10 +69,14 @@
   }
 
   /* The np-more menu lives in a flex row (.np-more-wrap) when closed; once
-     it is a sheet it becomes a standalone bottom layer, so give it a solid
-     stacking surface and real button rows. */
+     portaled to <body> for mobile it becomes a standalone bottom sheet.
+     Like every other sheet it stays mounted while closed — parked just
+     below the viewport via bare .mobile-now-playing-menu — so open AND
+     close both animate. .mobile-open is the open state. */
   #np-more-menu.mobile-open,
-  body .mobile-now-playing-menu.mobile-open {
+  body .mobile-now-playing-menu.mobile-open,
+  #np-more-menu.mobile-now-playing-menu,
+  body .mobile-now-playing-menu {
     display: flex !important;
   }
 
@@ -78,17 +87,20 @@
   .result-more-menu:not(.open),
   .queue-more-menu:not(.open),
   .playlist-more-menu:not(.open),
-  #playlist-detail-more-menu:not(.open) {
+  #playlist-detail-more-menu:not(.open),
+  #np-more-menu.mobile-now-playing-menu:not(.mobile-open),
+  body .mobile-now-playing-menu:not(.mobile-open) {
     transform: translateY(101%) !important;
   }
-  /* The np sheet's open state is .mobile-open itself (there is no separate
-     .open class) and the menu is display:none when closed, so the open sheet
-     must sit at translateY(0) whether or not it is mid-drag. It must NOT be
-     grouped with the closed sheets above: doing that parked the open sheet
-     just below the viewport, so the now-playing 3-dot menu rendered
-     invisibly (only the scrim showed) on mobile. */
+  /* Parked (mounted but closed) np sheets are hidden; the delayed
+     visibility below keeps them painted until the slide-down finishes. */
+  #np-more-menu.mobile-now-playing-menu:not(.mobile-open),
+  body .mobile-now-playing-menu:not(.mobile-open) {
+    visibility: hidden;
+  }
   #np-more-menu.mobile-open,
   body .mobile-now-playing-menu.mobile-open {
+    visibility: visible;
     transform: translateY(var(--sheet-drag-y, 0px)) !important;
   }
   .result-more-menu.open,
@@ -117,7 +129,9 @@
   .result-more-menu:not(.open),
   .queue-more-menu:not(.open),
   .playlist-more-menu:not(.open),
-  #playlist-detail-more-menu:not(.open) {
+  #playlist-detail-more-menu:not(.open),
+  #np-more-menu.mobile-now-playing-menu:not(.mobile-open),
+  body .mobile-now-playing-menu:not(.mobile-open) {
     transition: transform .22s cubic-bezier(.55, .06, .68, .19),
                 opacity .18s ease,
                 visibility 0s .22s !important;
@@ -133,13 +147,16 @@
     transition: transform 0s linear, visibility 0s 0s !important;
   }
 
-  /* Grab handle pill at the top of the sheet. */
+  /* Grab handle pill at the top of the sheet. The parked (closing) np
+     state keeps it so the pill doesn't blink out at close start. */
   .result-more-menu::before,
   .queue-more-menu::before,
   .playlist-more-menu::before,
   #playlist-detail-more-menu::before,
   #np-more-menu.mobile-open::before,
-  body .mobile-now-playing-menu.mobile-open::before {
+  body .mobile-now-playing-menu.mobile-open::before,
+  #np-more-menu.mobile-now-playing-menu::before,
+  body .mobile-now-playing-menu::before {
     content: '';
     display: block !important;
     width: 40px;
@@ -151,7 +168,9 @@
     pointer-events: none;
   }
 
-  /* ---- Wider, taller, touch-friendly options (min 44x44 target) ---- */
+  /* ---- Wider, taller, touch-friendly options (min 44x44 target) ----
+     Parked (closing) np selectors included: without them the rows would
+     snap back to unstyled buttons for the 240ms slide-down. */
   .result-more-menu .result-menu-option,
   .queue-more-menu .queue-menu-option,
   .playlist-more-menu .queue-menu-option,
@@ -159,7 +178,11 @@
   #np-more-menu.mobile-open button,
   body .mobile-now-playing-menu.mobile-open button,
   #np-more-menu.mobile-open a,
-  body .mobile-now-playing-menu.mobile-open a {
+  body .mobile-now-playing-menu.mobile-open a,
+  #np-more-menu.mobile-now-playing-menu button,
+  body .mobile-now-playing-menu button,
+  #np-more-menu.mobile-now-playing-menu a,
+  body .mobile-now-playing-menu a {
     min-height: 54px;
     width: auto;
     margin: 0;
@@ -178,10 +201,197 @@
   .result-menu-option svg,
   .queue-menu-option svg,
   #np-more-menu.mobile-open button svg,
-  body .mobile-now-playing-menu.mobile-open button svg {
+  body .mobile-now-playing-menu.mobile-open button svg,
+  #np-more-menu.mobile-now-playing-menu button svg,
+  body .mobile-now-playing-menu button svg {
     width: 20px;
     height: 20px;
     flex: none;
+  }
+
+  /* ---- YouTube-Music dressing: track header + quick-action grid ----
+     Injected by mobile-context-sheet.js (ytmEnhanceSheet) as the first
+     children of the open sheet. Desktop menus never contain these nodes,
+     so everything here is inherently mobile-only. */
+  .result-more-menu > .sheet-track-header,
+  .queue-more-menu > .sheet-track-header,
+  .playlist-more-menu > .sheet-track-header,
+  #playlist-detail-more-menu > .sheet-track-header,
+  #np-more-menu.mobile-open > .sheet-track-header,
+  body .mobile-now-playing-menu.mobile-open > .sheet-track-header,
+  #np-more-menu.mobile-now-playing-menu > .sheet-track-header,
+  body .mobile-now-playing-menu > .sheet-track-header {
+    display: flex !important;
+    align-items: center;
+    gap: 12px;
+    padding: 2px 18px 12px;
+    margin: 0 0 4px;
+    border-bottom: 1px solid rgba(255, 255, 255, .08);
+    text-align: left;
+  }
+  .sheet-track-art {
+    width: 48px;
+    height: 48px;
+    flex: none;
+    border-radius: 8px;
+    overflow: hidden;
+    background: #333;
+    color: var(--muted);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .sheet-track-art img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+  }
+  .sheet-track-art svg {
+    width: 24px;
+    height: 24px;
+  }
+  .sheet-track-meta {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .sheet-track-title {
+    font-size: .95rem;
+    font-weight: 700;
+    color: var(--text);
+    line-height: 1.25;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .sheet-track-subtitle {
+    font-size: .8rem;
+    color: var(--muted);
+    line-height: 1.3;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .result-more-menu > .sheet-quick-row,
+  .queue-more-menu > .sheet-quick-row,
+  .playlist-more-menu > .sheet-quick-row,
+  #np-more-menu.mobile-open > .sheet-quick-row,
+  body .mobile-now-playing-menu.mobile-open > .sheet-quick-row,
+  #np-more-menu.mobile-now-playing-menu > .sheet-quick-row,
+  body .mobile-now-playing-menu > .sheet-quick-row {
+    display: flex !important;
+    justify-content: space-around;
+    gap: 4px;
+    padding: 10px 10px 12px;
+    margin: 0 0 4px;
+    border-bottom: 1px solid rgba(255, 255, 255, .08);
+  }
+  .sheet-quick-btn {
+    flex: 1 1 0;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    background: none;
+    border: none;
+    border-radius: 12px;
+    color: var(--text);
+    font-size: .68rem;
+    font-weight: 600;
+    line-height: 1.2;
+    min-height: 64px;
+    padding: 6px 2px;
+    cursor: pointer;
+  }
+  .sheet-quick-icon {
+    width: 52px;
+    height: 52px;
+    flex: none;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, .08);
+    color: var(--text);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+  .sheet-quick-icon svg {
+    width: 22px;
+    height: 22px;
+  }
+  .sheet-quick-btn:active .sheet-quick-icon {
+    background: rgba(255, 255, 255, .16);
+  }
+  /* The now-playing sheet styles EVERY descendant button as a 54px list
+     row (#np-more-menu.mobile-open button above, ID specificity). That
+     would squash the grid buttons (wide padding, 1rem labels, 20px
+     icons) — restore the grid look with ID-beating selectors. */
+  #np-more-menu.mobile-open > .sheet-quick-row .sheet-quick-btn,
+  body .mobile-now-playing-menu.mobile-open > .sheet-quick-row .sheet-quick-btn,
+  #np-more-menu.mobile-now-playing-menu > .sheet-quick-row .sheet-quick-btn,
+  body .mobile-now-playing-menu > .sheet-quick-row .sheet-quick-btn {
+    min-height: 64px;
+    padding: 6px 2px;
+    font-size: .68rem;
+    align-items: center;
+    text-align: center;
+  }
+  #np-more-menu.mobile-open > .sheet-quick-row .sheet-quick-icon svg,
+  body .mobile-now-playing-menu.mobile-open > .sheet-quick-row .sheet-quick-icon svg,
+  #np-more-menu.mobile-now-playing-menu > .sheet-quick-row .sheet-quick-icon svg,
+  body .mobile-now-playing-menu > .sheet-quick-row .sheet-quick-icon svg {
+    width: 22px;
+    height: 22px;
+  }
+  .sheet-quick-btn.is-liked .sheet-quick-icon {
+    color: var(--accent);
+    background: rgba(232, 89, 12, .15);
+  }
+  .sheet-quick-label {
+    max-width: 100%;
+    text-align: center;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  /* Mirrored options live on inside the quick grid — hide their list rows. */
+  .result-more-menu .result-menu-option[data-sheet-quick],
+  .queue-more-menu .queue-menu-option[data-sheet-quick],
+  .playlist-more-menu .queue-menu-option[data-sheet-quick],
+  .playlist-more-menu .result-menu-option[data-sheet-quick],
+  #playlist-detail-more-menu [data-sheet-quick],
+  #np-more-menu.mobile-open button[data-sheet-quick],
+  body .mobile-now-playing-menu.mobile-open button[data-sheet-quick],
+  #np-more-menu.mobile-now-playing-menu button[data-sheet-quick],
+  body .mobile-now-playing-menu button[data-sheet-quick] {
+    display: none !important;
+  }
+  /* The quick grid owns the divider beneath it; the first remaining list
+     row (tagged .sheet-first-row by JS) drops its own top border so the
+     two don't render as a doubled line. */
+  .result-more-menu .result-menu-option.sheet-first-row,
+  .queue-more-menu .queue-menu-option.sheet-first-row,
+  .playlist-more-menu .queue-menu-option.sheet-first-row,
+  .playlist-more-menu .result-menu-option.sheet-first-row,
+  #playlist-detail-more-menu .sheet-first-row,
+  #np-more-menu.mobile-open button.sheet-first-row,
+  body .mobile-now-playing-menu.mobile-open button.sheet-first-row,
+  #np-more-menu.mobile-now-playing-menu button.sheet-first-row,
+  body .mobile-now-playing-menu button.sheet-first-row {
+    border-top: none !important;
+  }
+  /* Destructive + unavailable rows read clearly in the shorter list. */
+  .queue-more-menu .queue-menu-option.danger,
+  .result-more-menu .result-menu-option[data-action="remove-from-queue"],
+  #playlist-detail-more-menu #playlist-detail-delete-opt {
+    color: #f87171;
+  }
+  .result-menu-option.is-unavailable,
+  .queue-menu-option.is-unavailable {
+    opacity: .4;
   }
 }
 

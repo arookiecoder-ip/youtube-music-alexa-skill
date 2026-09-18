@@ -40,9 +40,9 @@ const remote = fs.readFileSync(path.join(root, 'templates', 'remote.html'), 'utf
 // ---------- static structure checks ----------
 check('mobile.css converts row menus into bottom sheets',
   /@media \(max-width: 899px\)[\s\S]*\.result-more-menu,\s*\.queue-more-menu,\s*\.playlist-more-menu,\s*#playlist-detail-more-menu,\s*#np-more-menu\.mobile-open/.test(css));
-check('sheets are pinned full-width to the bottom with rounded top corners',
+check('sheets are pinned full-width to the bottom with sharp top corners (queue-modal style)',
   /bottom: 0\s*!important/.test(css) &&
-  /border-radius: 16px 16px 0 0\s*!important/.test(css) &&
+  /border-radius: 0\s*!important/.test(css) &&
   /width: 100%\s*!important/.test(css));
 check('sheets slide up via a quick springy transform animation (< 300ms)',
   /translateY\(101%\)\s*!important/.test(css) &&
@@ -98,6 +98,22 @@ check('scrim is detached (with a fade-out) when no sheet is open',
 check('exposes test hooks',
   /window\._reconcileContextSheets = reconcile/.test(js) &&
   /window\._closeContextSheets = closeAllSheets/.test(js));
+check('dismissal by-product signal is exposed for early activators',
+  /window\._contextSheetSwallowArmed = function/.test(js));
+const playerJs = fs.readFileSync(path.join(JS_DIR, 'player.js'), 'utf8');
+check('mobile title->play delegate skips armed dismissal clicks (no click-through)',
+  /window\._contextSheetSwallowArmed && window\._contextSheetSwallowArmed\(\)/.test(playerJs));
+check('first list row under the quick grid drops its doubled divider',
+  /sheet-first-row/.test(js) && /\.sheet-first-row[\s\S]*?border-top: none/.test(css));
+check('playlist/album header uses passed artwork + subtitle (not a blank glyph)',
+  /pl\.thumbnail/.test(js) && /pl\.subtitle/.test(js));
+check('np sheet stays mounted while closed (parked below viewport, animates both ways)',
+  /\.mobile-now-playing-menu:not\(\.mobile-open\)/.test(css) &&
+  /#np-more-menu\.mobile-now-playing-menu/.test(css));
+check('player.js stages the np open (park, reflow, then rise) and delays unmount past the slide-down',
+  /void menu\.offsetHeight/.test(playerJs) &&
+  /mobile-now-playing-menu'\)/.test(playerJs) &&
+  /setTimeout\(finishMobileClose, 240\)/.test(playerJs));
 check('remote.html loads the sheet module (after long-press)',
   /long-press\.js[\s\S]*mobile-context-sheet\.js/.test(remote));
 const longPress = fs.readFileSync(path.join(JS_DIR, 'long-press.js'), 'utf8');

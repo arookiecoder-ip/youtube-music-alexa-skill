@@ -215,7 +215,12 @@
         window.openSongContextMenu(event, track);
       } else {
         if (playlistId && window.openPlaylistContextMenu) {
-          window.openPlaylistContextMenu(event, { id: playlistId, title: title });
+          window.openPlaylistContextMenu(event, {
+            id: playlistId,
+            title: title,
+            thumbnail: thumb || '',
+            subtitle: subtitle(item) || (card.classList.contains('album-card') ? 'Album' : 'Playlist')
+          });
         } else {
           openCardContextMenu(event, item);
         }

@@ -70,7 +70,14 @@
     if (!id) return;
     var title = card.dataset.playlistTitle || card.dataset.title ||
       (card.querySelector('.home-item-title, .hscroll-card-title, .library-card-title, .explore-card-title') || {}).textContent || 'Playlist';
-    window.openPlaylistContextMenu(event, { id: id, title: title.trim() });
+    var art = card.querySelector('img');
+    var sub = card.querySelector('.home-item-subtitle, .hscroll-card-artist, .library-card-subtitle, .explore-card-sub');
+    window.openPlaylistContextMenu(event, {
+      id: id,
+      title: String(title).trim(),
+      thumbnail: (art && (art.currentSrc || art.src)) || '',
+      subtitle: (sub && sub.textContent ? sub.textContent.trim() : '') || 'Playlist'
+    });
   });
   document.addEventListener('click', function (event) {
     if (menu && !event.target.closest('.playlist-context-menu')) closeMenu();

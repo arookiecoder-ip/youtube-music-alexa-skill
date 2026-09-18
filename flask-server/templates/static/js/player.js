@@ -65,6 +65,14 @@ function syncTrackPlaybackIndicators() {
 // titles are the exception: home.js owns them so they open the track album.
 document.addEventListener('click', (event) => {
   if (!window.matchMedia('(max-width: 899px)').matches) return;
+  // A tap that dismissed a context sheet closes it on pointerdown, which
+  // drops the sheet scrim out from under the finger — the tap's click is
+  // then dispatched to the title now underneath instead of the scrim. This
+  // handler runs before the sheet/search dismissal swallows (registration
+  // order), so it must skip while a dismissal by-product click is armed.
+  // Return WITHOUT stopping: the armed swallow still consumes the event.
+  // (Sheet swallows never arm on desktop, so desktop is unaffected.)
+  if (window._contextSheetSwallowArmed && window._contextSheetSwallowArmed()) return;
   const title = event.target.closest(
     '.home-item-title, .hscroll-card-title, .artist-song-title, .queue-title, .result-title, .top-result-title'
   );
@@ -1826,14 +1834,31 @@ document.getElementById('shuffle-btn').addEventListener('click', async (e) => {
   const menu = document.getElementById('np-more-menu');
   if (!wrap || !button || !menu) return;
   const mobileButton = document.getElementById('mobile-player-more');
-  const close = () => {
-    wrap.classList.remove('open');
-    menu.classList.remove('mobile-open');
-    button.setAttribute('aria-expanded', 'false');
+  // Mobile sheet close is staged so it animates like every other sheet:
+  // dropping .mobile-open starts the slide-down (the menu stays mounted,
+  // parked below the viewport, via bare .mobile-now-playing-menu); the
+  // unmount back into the player row happens after the transition.
+  let mobileCloseTimer = null;
+  const cancelMobileClose = () => {
+    if (mobileCloseTimer) { clearTimeout(mobileCloseTimer); mobileCloseTimer = null; }
+  };
+  const finishMobileClose = () => {
+    mobileCloseTimer = null;
+    menu.classList.remove('mobile-now-playing-menu');
     if (menu.parentElement === document.body) {
       document.querySelector('.player-section .np-more-wrap')?.appendChild(menu);
-      menu.classList.remove('mobile-now-playing-menu');
     }
+  };
+  const close = () => {
+    wrap.classList.remove('open');
+    button.setAttribute('aria-expanded', 'false');
+    if (menu.classList.contains('mobile-open')) {
+      menu.classList.remove('mobile-open');
+      cancelMobileClose();
+      mobileCloseTimer = setTimeout(finishMobileClose, 240);
+    }
+    // A parked (slide-down in flight) menu keeps its pending unmount;
+    // desktop menus never leave the wrap, so there is nothing else to do.
   };
   // Exposed so a tap that dismisses an open menu (see search.js) can also
   // close the player's more menu without re-triggering anything underneath.
@@ -1849,8 +1874,18 @@ document.getElementById('shuffle-btn').addEventListener('click', async (e) => {
     const open = !menu.classList.contains('mobile-open');
     close();
     if (open) {
+      // A reopened-while-closing menu must not be unmounted mid-rise.
+      cancelMobileClose();
       document.body.appendChild(menu);
-      menu.classList.add('mobile-now-playing-menu', 'mobile-open');
+      menu.classList.add('mobile-now-playing-menu');
+      // Mount parked first and commit it, so adding .mobile-open below
+      // transitions from below the viewport instead of popping in. Without
+      // this both classes land in one frame (display:none -> final) and no
+      // slide-up runs — the bug this staging fixes.
+      menu.style.removeProperty('--sheet-drag-y');
+      menu.removeAttribute('data-sheet-dragging');
+      void menu.offsetHeight;
+      menu.classList.add('mobile-open');
     }
   });
   document.addEventListener('click', (e) => { if (!wrap.contains(e.target)) close(); });

@@ -563,9 +563,13 @@
         // video_id and the server rejected it with 400.
         var isPlaylist = kind === 'playlist' || kind === 'station' || !videoId;
         if (isPlaylist && playlistId && window.openPlaylistContextMenu) {
+          var cardImg = itemCard.querySelector('img');
+          var cardSub = itemCard.querySelector('.home-item-subtitle');
           window.openPlaylistContextMenu(e, {
             id: playlistId,
-            title: itemCard.querySelector('.home-item-title')?.textContent || 'Playlist'
+            title: itemCard.querySelector('.home-item-title')?.textContent || 'Playlist',
+            thumbnail: (cardImg && (cardImg.currentSrc || cardImg.src)) || '',
+            subtitle: (cardSub && cardSub.textContent.trim()) || (kind === 'album' ? 'Album' : 'Playlist')
           });
           return;
         }

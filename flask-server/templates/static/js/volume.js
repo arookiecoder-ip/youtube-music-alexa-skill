@@ -136,6 +136,10 @@ if (mobileVolumeEl) {
     mobilePointerId = event.pointerId;
     mobileDragging = true;
     state.volumeUserActive = true;
+    // CSS :active does not survive this JS-driven drag (preventDefault +
+    // pointer capture below), so the press thickens then wrongly thins
+    // mid-hold. Drive the drag-thickening from explicit state instead.
+    mobileVolumeEl.classList.add('vol-dragging');
     mobileVolumeEl.setPointerCapture?.(event.pointerId);
     setMobileVolumeFromPointer(event.clientX);
     event.preventDefault();
@@ -149,11 +153,12 @@ if (mobileVolumeEl) {
     if (!mobileDragging || (event.pointerId != null && event.pointerId !== mobilePointerId)) return;
     mobileDragging = false;
     mobilePointerId = null;
+    mobileVolumeEl.classList.remove('vol-dragging');
     state.volumeUserActive = false;
   };
   mobileVolumeEl.addEventListener('pointerup', finishMobilePointer);
   mobileVolumeEl.addEventListener('pointercancel', finishMobilePointer);
-  mobileVolumeEl.addEventListener('change', () => { state.volumeUserActive = false; });
+  mobileVolumeEl.addEventListener('change', () => { state.volumeUserActive = false; mobileVolumeEl.classList.remove('vol-dragging'); });
   mobileVolumeEl.oninput = e => {
     const value = +e.target.value;
     state.volumeUserActive = true;

@@ -3610,9 +3610,9 @@ body.results-open .player-section {
 
   /* ---- Volume bar drag feedback (mobile now-playing only) ---- */
   /* Thinner at rest (3px vs the shared 4px), and while the user presses and
-     drags the thumb (:active) it thickens; on release it returns to thin. The
-     whole track + cutout follow --track-h, so overriding the variable is
-     enough. */
+     drags the thumb (.vol-dragging, toggled by volume.js) it thickens; on
+     release it returns to thin. The whole track + cutout follow --track-h,
+     so overriding the variable is enough. */
   body.now-playing-route #mobile-np-volume,
   body.now-playing-closing #mobile-np-volume {
     --track-h: 3px;
@@ -3623,7 +3623,7 @@ body.results-open .player-section {
        the content box, and the thumb (margined relative to the track) lands
        on the same center as the icon. The old margin-top-on-the-track hack
        depended on top-alignment inside the full 34px box and rode high where
-       that didn't hold. Padding follows --track-h, so :active thickening
+       that didn't hold. Padding follows --track-h, so drag thickening
        stays centered with zero layout shift (total height never changes). */
     height: 34px;
     padding: calc((34px - var(--track-h)) / 2) 0;
@@ -3635,8 +3635,13 @@ body.results-open .player-section {
   body.now-playing-closing #mobile-np-volume::-webkit-slider-runnable-track {
     margin-top: 0;
   }
-  body.now-playing-route #mobile-np-volume:active,
-  body.now-playing-closing #mobile-np-volume:active {
+  /* Thinner at rest (3px vs the shared 4px); while dragging it thickens
+     and returns to thin on release. Driven by the .vol-dragging class that
+     volume.js toggles with its own drag state — NOT :active, which does not
+     survive the preventDefault + pointer-capture drag there (it pressed
+     thick then wrongly thinned mid-hold). */
+  body.now-playing-route #mobile-np-volume.vol-dragging,
+  body.now-playing-closing #mobile-np-volume.vol-dragging {
     --track-h: 9px;
   }
 }
