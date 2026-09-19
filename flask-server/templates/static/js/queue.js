@@ -587,7 +587,7 @@ function _queueMoreMenuHtml(item) {
           Go to artist
         </div>
         <div class="queue-menu-option danger" data-action="remove">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
           Remove from queue
         </div>
       </div>
@@ -752,7 +752,14 @@ function _closeAllQueueMenus() {
   for (const b of document.querySelectorAll('.queue-more-btn.open')) b.classList.remove('open');
   for (const w of document.querySelectorAll('.queue-swipe-wrapper.menu-open')) w.classList.remove('menu-open');
 }
-document.addEventListener('click', _closeAllQueueMenus);
+document.addEventListener('click', function () {
+  // Tap-and-hold release guard (same signal song-context-menu.js honors): the
+  // finger's release click after a hold-open must not close the just-opened
+  // sheet. Never arms on desktop.
+  if (typeof window._contextSheetSwallowArmed === 'function' &&
+      window._contextSheetSwallowArmed()) return;
+  _closeAllQueueMenus();
+});
 
 function updateQueueActive(currentIndex) {
   // #queue-list is the retired/hidden panel. The desktop now-playing queue,

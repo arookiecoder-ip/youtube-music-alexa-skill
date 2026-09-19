@@ -1888,7 +1888,14 @@ document.getElementById('shuffle-btn').addEventListener('click', async (e) => {
       menu.classList.add('mobile-open');
     }
   });
-  document.addEventListener('click', (e) => { if (!wrap.contains(e.target)) close(); });
+  document.addEventListener('click', (e) => {
+    // Tap-and-hold release guard (same signal song-context-menu.js honors):
+    // the release click after a hold-open must not close a just-opened sheet.
+    // Never arms on desktop.
+    if (typeof window._contextSheetSwallowArmed === 'function' &&
+        window._contextSheetSwallowArmed()) return;
+    if (!wrap.contains(e.target)) close();
+  });
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape') close(); });
   // Shared by the "..." menu entry, the playbar thumb, and the now-playing
   // page thumb. toggleLike updates the clicked button itself; refresh after

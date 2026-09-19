@@ -517,6 +517,11 @@
 
     document.addEventListener('click', function(e) {
       if (sharedMoreMenu && sharedMoreMenu.classList.contains('open')) {
+        // Tap-and-hold release guard (same signal song-context-menu.js
+        // honors): the release click after a hold-open must not close the
+        // just-opened sheet. Never arms on desktop.
+        if (typeof window._contextSheetSwallowArmed === 'function' &&
+            window._contextSheetSwallowArmed()) return;
         if (!e.target.closest('.result-more-menu')) {
           sharedMoreMenu.classList.remove('open');
           activeMenuCardId = null;

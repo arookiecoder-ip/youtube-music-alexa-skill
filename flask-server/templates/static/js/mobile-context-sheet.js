@@ -831,4 +831,11 @@
   // must skip while this is armed. Read-only; safe on desktop (never arms
   // there — every arming path is mobile-gated above).
   window._contextSheetSwallowArmed = function () { return swallowClick; };
+  // Hold-to-open arm. long-press.js calls this synchronously the moment a
+  // hold opens a menu (finger still down), so the finger's release click is
+  // swallowed even when it lands before the MutationObserver/rAF reconcile
+  // above has presented the sheet. The pointerup path re-arms for long holds
+  // past this flag's grace window, and the grace timer below means a
+  // cancelled gesture can never block a later genuine tap.
+  window._armHoldReleaseSwallow = function () { armSwallowClick(); };
 })();

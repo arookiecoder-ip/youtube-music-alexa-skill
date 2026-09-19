@@ -107,7 +107,18 @@
     });
   });
   document.addEventListener('click', function (event) {
-    if (menu && !event.target.closest('.album-context-menu')) closeMenu();
-  });
+    if (!menu || !menu.classList.contains('open')) return;
+    if (event.target.closest('.album-context-menu')) return;
+    // Same tap-and-hold release guard as song-context-menu.js: the hold opens
+    // this menu while the finger is still down, so the release click lands on
+    // the card underneath. This capture closer runs before the bottom-sheet
+    // module's own by-product swallow, so consult its signal (the same one
+    // player.js honors) and stand down while it is armed. Never arms on
+    // desktop. Without this, holds on artist albums/singles and search album
+    // cards flash the sheet open then instantly close it.
+    if (typeof window._contextSheetSwallowArmed === 'function' &&
+        window._contextSheetSwallowArmed()) return;
+    closeMenu();
+  }, true);
   document.addEventListener('scroll', closeMenu, true);
 })();

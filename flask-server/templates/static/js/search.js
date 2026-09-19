@@ -1114,7 +1114,16 @@ function _closeAllMoreMenus() {
   for (const b of document.querySelectorAll('.result-more-btn.open')) b.classList.remove('open');
   for (const w of document.querySelectorAll('.result-swipe-wrapper.menu-open')) w.classList.remove('menu-open');
 }
-document.addEventListener('click', _closeAllMoreMenus);
+document.addEventListener('click', function (event) {
+  // Tap-and-hold release guard (same signal song-context-menu.js honors): the
+  // finger's release click after a hold-open must not close the just-opened
+  // album/playlist sheet. The bottom-sheet swallow normally consumes it, but
+  // this listener must also stand down while armed so ordering can never
+  // close the sheet first. Never arms on desktop.
+  if (typeof window._contextSheetSwallowArmed === 'function' &&
+      window._contextSheetSwallowArmed()) return;
+  _closeAllMoreMenus();
+});
 // A context menu is anchored to the item that opened it. Dismiss it as soon
 // as the user starts interacting with a different item, even when that item
 // stops its click event before it reaches the document bubble phase.

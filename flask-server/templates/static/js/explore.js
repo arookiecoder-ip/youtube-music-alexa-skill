@@ -210,6 +210,9 @@
           album_id: item.albumId || item.album_id || '',
           artist_id: item.channelId || item.channel_id || item.artistId || ''
         });
+        // Stop here: the document-level song handler would find no song root
+        // on this card and close the menu just opened (same flash-close the
+        // playlist/card branches below already avoid).
         event.preventDefault();
         event.stopPropagation();
         window.openSongContextMenu(event, track);
