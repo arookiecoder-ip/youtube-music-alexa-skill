@@ -4604,13 +4604,20 @@ _FINISH_PROMOTE_DELAY = 5.0          # wait for the real 'started' webhook first
 def _promote_next_track(reason, position_ms=0):
     """Fallback when the Lambda's PlaybackStarted webhook is lost: the Echo has
     started the next (pre-buffered) track but the server never heard about it,
-    so the now-playing card would stay wedged on the finished song. Promote the
-    best-known next track: prefer what /proxy/ actually saw the Echo buffer,
-    else the next visible queue item."""
+    so the now-playing card would stay wedged on the finished song.
+
+    Only promotes when there is real evidence the Echo buffered the next
+    track (a /proxy/ hit for another video_id while the finished track was
+    still current — see proxy_stream's _prefetched_next bookkeeping). Without
+    that evidence the Echo most likely went idle because PlaybackNearlyFinished
+    never ENQUEUEd anything, and blindly advancing to queue[idx+1] as playing
+    creates a split-brain: the website shows playing while the Echo is silent
+    (observed 2026-09-19: E_SbwSe15y0 finished naturally, no /next_track/,
+    no /proxy/ for go-j1EpaGVo, yet the card flipped to it as playing).
+    In that case stay stopped on the finished track and return False."""
     global _prefetched_next
     with _np_lock:
         queue = list(_now_playing.get('queue') or [])
-        idx = _now_playing.get('queue_index', -1)
         cur_id = _now_playing.get('video_id')
         pf = dict(_prefetched_next) if _prefetched_next else None
     next_item = None
@@ -4621,9 +4628,15 @@ def _promote_next_track(reason, position_ms=0):
         next_idx = next((i for i, it in enumerate(queue)
                          if it.get('video_id') == vid), -1)
         next_item = queue[next_idx] if next_idx >= 0 else {'video_id': vid}
-    elif 0 <= idx < len(queue) - 1:
-        next_idx = idx + 1
-        next_item = queue[next_idx]
+    else:
+        # No evidence the Echo ever fetched the next audio — it is idle, not
+        # silently playing queue[idx+1]. Leave the finished track selected as
+        # stopped so the website matches the device.
+        logger.warning(
+            "[np] not promoting (%s): no /proxy/ prefetch for a next track "
+            "(current=%r); staying stopped instead of guessing queue[idx+1]",
+            reason, cur_id)
+        return False
     if not next_item or next_item.get('video_id') == cur_id:
         return False
     vid = next_item['video_id']
