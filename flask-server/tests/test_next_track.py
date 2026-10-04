@@ -203,13 +203,13 @@ class ShuffleByServerOrder(NextTrackBase):
 class AppSharedQueue(NextTrackBase):
     A, B, C = 'AAAAAAAAAAA', 'BBBBBBBBBBB', 'CCCCCCCCCCC'
 
-    def _post(self, action, after, tracks, authenticated=True):
+    def _post(self, action, after, tracks, authenticated=True, **extra):
         path = '/api/app/queue/'
         if authenticated:
             path += '?key=' + server.API_KEY
         with mock.patch.object(server, '_notify_sse'):
             return self.client.post(path, json={
-                'action': action, 'after': after, 'tracks': tracks,
+                'action': action, 'after': after, 'tracks': tracks, **extra,
             })
 
     def test_start_installs_selected_track_and_full_queue_without_echo_command(self):
@@ -239,6 +239,30 @@ class AppSharedQueue(NextTrackBase):
         response = self._post('extend', self.A, [_meta(self.C)])
         self.assertEqual(response.status_code, 409)
         self.assertEqual([t['video_id'] for t in server._now_playing['queue']], [self.B])
+
+    def test_current_reports_phone_position_without_changing_shared_order(self):
+        self._set_queue([_meta(self.A), _meta(self.B)])
+        response = self._post('current', self.B, [], playing=True, position_ms=12500)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(server._now_playing['video_id'], self.B)
+        self.assertEqual(server._now_playing['queue_index'], 1)
+        self.assertEqual(server._now_playing['position_ms'], 12500)
+        anchor = server._now_playing['started_at']
+        with mock.patch.object(server.time, 'time', return_value=anchor + 5):
+            self.assertEqual(server._computed_position_ms(), 17500)
+        self.assertEqual([t['video_id'] for t in server._now_playing['queue']], [self.A, self.B])
+
+    def test_radio_fetch_can_leave_shared_queue_untouched(self):
+        self._set_queue([_meta(self.A)])
+        before = dict(server._now_playing)
+        with mock.patch.object(server.Supporting, 'get_radio_queue',
+                               new=mock.AsyncMock(return_value=[_meta(self.A), _meta(self.B)])):
+            response = self.client.get('/get_radio/', query_string={
+                'video_id': self.A, 'update_queue': '0', 'key': server.API_KEY,
+            })
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.get_json()['playlist']), 2)
+        self.assertEqual(server._now_playing, before)
 
     def test_requires_api_key(self):
         self.assertEqual(self._post('start', self.A, [_meta(self.A)],
