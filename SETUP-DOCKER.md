@@ -205,10 +205,15 @@ You should get back JSON with track info, not an error.
 ## 10. Cache cleanup
 
 No host cron job is required. The `ytmusic` service sweeps the persistent audio
-cache every 30 minutes and removes files older than two hours. Override the
-defaults with `AUDIO_CACHE_SWEEP_INTERVAL` and `AUDIO_CACHE_TTL` in `.env`
-(values are seconds) if your storage or listening patterns need a different
-retention period.
+cache every 30 minutes and removes files nobody has played for two hours (each
+play resets the clock). Override the defaults with `AUDIO_CACHE_SWEEP_INTERVAL`
+and `AUDIO_CACHE_TTL` in `.env` (values are seconds) if your storage or
+listening patterns need a different retention period.
+
+The cache is also size-bounded: above `AUDIO_CACHE_MAX_MB` (default 2048), or
+when the disk has less than `AUDIO_CACHE_MIN_FREE_MB` (default 512) free, the
+least recently played files are evicted first. The current track is never
+evicted.
 
 ---
 
