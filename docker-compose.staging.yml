@@ -1,0 +1,61 @@
+# STAGING stack for the Alexa-backend app feature branch.
+#
+# Standalone file — do NOT use `-f docker-compose.yml -f <overlay>` merge tricks.
+# No `network_mode: container:gluetun` (prod already owns those binds), no `caddy`
+# service, no hostname/DNS changes. The existing Caddy routes /staging/*
+# to this stack over the shared web network. Phone access uses HTTPS on 443.
+#
+# Deploy loop (VPS):
+#   cd /home/ubuntu/ytm-staging && git pull \
+#     && docker compose --env-file .env.staging -p staging -f docker-compose.staging.yml up -d --build
+services:
+  ytmusic-staging:
+    build: ./flask-server
+    container_name: ytmusic-staging
+    restart: unless-stopped
+    networks:
+      - web
+    env_file:
+      - path: .env.staging
+        required: true
+    environment:
+      - DB_FILE=/data/data.db
+      - YTDLP_COOKIES=/app/cookies.txt
+      - YTMUSIC_AUTH_FILE=/data/headers_auth.json
+      - YT_BROWSER_SERVICE_URL=http://youtube-browser-staging:8765
+      - YT_BROWSER_CONTROL_TOKEN=${YT_BROWSER_CONTROL_TOKEN:?set YT_BROWSER_CONTROL_TOKEN in .env.staging}
+    volumes:
+      - ./cookies.txt:/app/cookies.txt:ro
+      - staging_cache:/tmp/ytm_audio_cache
+      - staging_data:/data
+      - staging_alexa_cookies:/app/alexa_cookies
+    depends_on:
+      youtube-browser-staging:
+        condition: service_healthy
+
+  youtube-browser-staging:
+    build: ./browser-auth
+    container_name: youtube-browser-staging
+    restart: unless-stopped
+    networks:
+      - web
+    environment:
+      - YT_BROWSER_CONTROL_TOKEN=${YT_BROWSER_CONTROL_TOKEN:?set YT_BROWSER_CONTROL_TOKEN in .env.staging}
+      - YT_BROWSER_CAPTURE_TIMEOUT=${YT_BROWSER_CAPTURE_TIMEOUT:-120}
+      - YT_BROWSER_LOGIN_TIMEOUT=${YT_BROWSER_LOGIN_TIMEOUT:-240}
+      - YT_BROWSER_SUCCESS_DISPLAY=${YT_BROWSER_SUCCESS_DISPLAY:-12}
+      - SCREEN_GEOMETRY=${YT_BROWSER_SCREEN_GEOMETRY:-1365x768x24}
+    volumes:
+      - staging_chromium_profile:/profile
+    shm_size: 512mb
+
+networks:
+  web:
+    name: web
+    external: true
+
+volumes:
+  staging_cache:
+  staging_data:
+  staging_alexa_cookies:
+  staging_chromium_profile:

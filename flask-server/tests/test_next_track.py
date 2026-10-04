@@ -200,5 +200,81 @@ class ShuffleByServerOrder(NextTrackBase):
         self.assertEqual(self._track('A')['video_id'], shuffled[1]['video_id'])
 
 
+class AppSharedQueue(NextTrackBase):
+    A, B, C = 'AAAAAAAAAAA', 'BBBBBBBBBBB', 'CCCCCCCCCCC'
+
+    def _post(self, action, after, tracks, authenticated=True, **extra):
+        path = '/api/app/queue/'
+        if authenticated:
+            path += '?key=' + server.API_KEY
+        with mock.patch.object(server, '_notify_sse'):
+            return self.client.post(path, json={
+                'action': action, 'after': after, 'tracks': tracks, **extra,
+            })
+
+    def test_start_installs_selected_track_and_full_queue_without_echo_command(self):
+        with mock.patch.object(server.alexa_remote.remote, 'command', create=True) as command:
+            response = self._post('start', self.B, [_meta(self.A), _meta(self.B), _meta(self.C)])
+        self.assertEqual(response.status_code, 200)
+        command.assert_not_called()
+        self.assertEqual(server._now_playing['video_id'], self.B)
+        self.assertEqual(server._now_playing['queue_index'], 1)
+        self.assertEqual(self._track(self.B)['video_id'], self.C)
+
+    def test_phone_queue_next_is_visible_to_authoritative_endpoint(self):
+        self._set_queue([_meta(self.A), _meta(self.B)])
+        self.assertEqual(self._post('next', self.A, [_meta(self.C)]).status_code, 200)
+        self.assertEqual(self._track(self.A)['video_id'], self.C)
+        self.assertEqual(self._track(self.C)['video_id'], self.B)
+
+    def test_extend_preserves_web_order_and_deduplicates_radio(self):
+        self._set_queue([_meta(self.A), _meta(self.C)])
+        self.assertEqual(self._post('extend', self.A,
+                                   [_meta(self.A), _meta(self.B), _meta(self.B), _meta(self.C)]).status_code, 200)
+        self.assertEqual([t['video_id'] for t in server._now_playing['queue']],
+                         [self.A, self.C, self.B])
+
+    def test_stale_phone_cannot_modify_replaced_queue(self):
+        self._set_queue([_meta(self.B)])
+        response = self._post('extend', self.A, [_meta(self.C)])
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual([t['video_id'] for t in server._now_playing['queue']], [self.B])
+
+    def test_current_reports_phone_position_without_changing_shared_order(self):
+        self._set_queue([_meta(self.A), _meta(self.B)])
+        response = self._post('current', self.B, [], playing=True, position_ms=12500)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(server._now_playing['video_id'], self.B)
+        self.assertEqual(server._now_playing['queue_index'], 1)
+        self.assertEqual(server._now_playing['position_ms'], 12500)
+        anchor = server._now_playing['started_at']
+        with mock.patch.object(server.time, 'time', return_value=anchor + 5):
+            self.assertEqual(server._computed_position_ms(), 17500)
+        self.assertEqual([t['video_id'] for t in server._now_playing['queue']], [self.A, self.B])
+
+    def test_radio_fetch_can_leave_shared_queue_untouched(self):
+        self._set_queue([_meta(self.A)])
+        before = dict(server._now_playing)
+        with mock.patch.object(server.Supporting, 'get_radio_queue',
+                               new=mock.AsyncMock(return_value=[_meta(self.A), _meta(self.B)])):
+            response = self.client.get('/get_radio/', query_string={
+                'video_id': self.A, 'update_queue': '0', 'key': server.API_KEY,
+            })
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(response.get_json()['playlist']), 2)
+        self.assertEqual(server._now_playing, before)
+
+    def test_requires_api_key(self):
+        self.assertEqual(self._post('start', self.A, [_meta(self.A)],
+                                    authenticated=False).status_code, 401)
+
+    def test_invalid_start_or_track_leaves_existing_queue_intact(self):
+        self._set_queue([_meta(self.B)])
+        for tracks in ([], [_meta(self.C)], [dict(_meta(self.A), video_id=123)],
+                       [dict(_meta(self.A), duration_ms='invalid')]):
+            self.assertEqual(self._post('start', self.A, tracks).status_code, 400)
+            self.assertEqual([t['video_id'] for t in server._now_playing['queue']], [self.B])
+
+
 if __name__ == '__main__':
     unittest.main()

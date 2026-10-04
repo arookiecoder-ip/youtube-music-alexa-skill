@@ -6,6 +6,7 @@ __pycache__
 .venv
 HANDOFF.md
 .env
+.env.staging
 .code-review-graph/
 .storage*.db
 flask-server/api_key.txt
@@ -24,3 +25,4 @@ BUG_REPORT.md
 FRONTEND_REPORT.md
 test_images/
 cookies_premium.txt
+plan.md
