@@ -3697,6 +3697,71 @@ def _resolve_next_track(queue, after_video_id):
     return queue[idx + 1]
 
 
+@app.route("/api/app/queue/", methods=["POST"])
+def app_queue():
+    """Update the shared queue for phone playback without issuing Echo commands."""
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        return error_response('JSON object required', 400)
+    action = body.get('action')
+    if action not in ('start', 'next', 'extend'):
+        return error_response('invalid queue action', 400)
+    after = body.get('after') or ''
+    raw_tracks = body.get('tracks')
+    if not _valid_video_id(after) or not isinstance(raw_tracks, list) or not 1 <= len(raw_tracks) <= 200:
+        return error_response('valid after and 1-200 tracks required', 400)
+    tracks = []
+    for raw in raw_tracks:
+        if not isinstance(raw, dict) or not _valid_video_id(raw.get('video_id')):
+            return error_response('invalid queue track', 400)
+        try:
+            duration = max(0, int(raw.get('duration_ms') or 0))
+        except (TypeError, ValueError):
+            return error_response('invalid duration_ms', 400)
+        tracks.append({
+            'video_id': raw['video_id'],
+            'title': str(raw.get('title') or ''),
+            'artist': str(raw.get('artist') or ''),
+            'thumbnail': _thumbnail_url(raw.get('thumbnail')),
+            'duration_ms': duration,
+        })
+    with _np_lock:
+        queue = list(_now_playing.get('queue') or [])
+        idx = next((i for i in range(len(queue) - 1, -1, -1)
+                    if queue[i].get('video_id') == after), -1)
+        if action == 'start':
+            queue = tracks
+            idx = next((i for i, t in enumerate(queue) if t['video_id'] == after), -1)
+            if idx < 0:
+                return error_response('starting track must be in tracks', 400)
+            current = queue[idx]
+            _now_playing.update({
+                'queue': queue, 'queue_index': idx, 'video_id': after,
+                'title': current['title'], 'artist': current['artist'],
+                'thumbnail': current['thumbnail'], 'duration_ms': current['duration_ms'],
+                'playing': False, 'playback_confirmed': False,
+                'playback_processing': False, 'position_ms': 0,
+                'queue_web_dirty': True, 'updated_at': time.time(),
+            })
+        elif idx < 0:
+            # A stale phone must not resurrect a queue replaced by the web remote.
+            return error_response('current track is no longer in the shared queue', 409)
+        else:
+            if action == 'next':
+                queue[idx + 1:idx + 1] = tracks
+            else:
+                existing = {t.get('video_id') for t in queue}
+                for track in tracks:
+                    if track['video_id'] not in existing:
+                        queue.append(track)
+                        existing.add(track['video_id'])
+            _now_playing['queue'] = queue
+            _now_playing['queue_web_dirty'] = True
+            _now_playing['updated_at'] = time.time()
+    _notify_sse()
+    return jsonify({'ok': True})
+
+
 @app.route("/next_track/", methods=["GET"])
 def next_track():
     """Authoritative next-up track in the web remote's live queue.

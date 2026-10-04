@@ -2,12 +2,12 @@
 #
 # Standalone file — do NOT use `-f docker-compose.yml -f <overlay>` merge tricks.
 # No `network_mode: container:gluetun` (prod already owns those binds), no `caddy`
-# service (Caddy is never touched by this plan), no hostname/DNS changes.
-# Phone access is direct: http://<vps-ip>:<STAGING_PORT> (published below).
+# service, no hostname/DNS changes. The existing Caddy routes /staging/*
+# to this stack over the shared web network. Phone access uses HTTPS on 443.
 #
 # Deploy loop (VPS):
 #   cd /home/ubuntu/ytm-staging && git pull \
-#     && docker compose -p staging -f docker-compose.staging.yml up -d --build
+#     && docker compose --env-file .env.staging -p staging -f docker-compose.staging.yml up -d --build
 services:
   ytmusic-staging:
     build: ./flask-server
@@ -15,10 +15,6 @@ services:
     restart: unless-stopped
     networks:
       - web
-    ports:
-      # Direct phone access WITHOUT a hostname. Phone-test APK talks to
-      # http://<vps-ip>:5005 (PUBLIC_BASE_URL in .env.staging).
-      - "5005:5000"
     env_file:
       - path: .env.staging
         required: true
@@ -56,6 +52,7 @@ services:
 networks:
   web:
     name: web
+    external: true
 
 volumes:
   staging_cache:
