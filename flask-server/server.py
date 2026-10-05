@@ -812,7 +812,7 @@ _SESSION_PATHS = ('/remote', '/alexa/status', '/alexa/init', '/alexa/devices', '
                   '/alexa/queue_reorder', '/history', '/recommendations',
                   '/alexa/jam/start', '/alexa/jam/stop', '/alexa/jam/status',
                   '/alexa/jam/qr', '/api/home', '/api/library',
-                  '/api/subscribed_artists',
+                  '/api/subscribed_artists', '/api/app/output',
                   '/alexa/like', '/api/liked_songs', '/api/profile_status',
                   '/api/youtube/download-cookies', '/api/youtube/download-cookies/status',
 '/alexa/amazon_signout',
@@ -1963,6 +1963,8 @@ _now_playing = {
 }
 _volume_by_serial = {}
 _np_lock = threading.Lock()
+from playback_output import PlaybackOutput, OutputConflict
+_playback_output = PlaybackOutput()
 
 # Version counter for the local Liked Songs playlist, included in SSE
 # snapshots. Open remotes re-fetch /api/playlists/ when it changes so a like
@@ -2027,7 +2029,12 @@ def _np_snapshot(serial=None):
         volume = s.get('volume')
     playback_error = s.get('playback_error')
     s['playback_error'] = None  # one-shot: clear once surfaced
+    output = _playback_output.snapshot()
+    if output['playback_output'] == 'phone' and not output['phone_lease_ms']:
+        _reset_progress(_computed_position_ms())
+        s.update(playing=False, playback_confirmed=True, playback_processing=False)
     return {
+        **output,
         'playing': s['playing'], 'title': s['title'],
         'artist': s['artist'], 'artists': s.get('artists', []),
         'thumbnail': s['thumbnail'],
@@ -2229,6 +2236,70 @@ def _update_now_playing(**kwargs):
 def _get_now_playing():
     with _np_lock:
         return dict(_now_playing)
+
+
+def _claim_alexa_output(serial='', wait=True):
+    def changed():
+        with _np_lock:
+            if _playback_output.snapshot()['playback_output'] != 'alexa':
+                return  # A newer phone intent already superseded this handoff.
+            _reset_progress(_computed_position_ms())
+            _now_playing.update(playing=False, playback_confirmed=True, playback_processing=False)
+            _now_playing['playback_revision'] = int(_now_playing.get('playback_revision', 0)) + 1
+            _now_playing['updated_at'] = time.time()
+        _notify_sse()
+    return _playback_output.alexa(serial or '', on_change=changed, wait=wait)
+
+
+@app.errorhandler(OutputConflict)
+def handle_output_conflict(error):
+    return jsonify({'error': {'code': 'output_changed', 'message': str(error)},
+                    **_playback_output.snapshot()}), 409
+
+
+@app.route('/api/app/output/', methods=['GET', 'POST'], strict_slashes=False)
+def app_playback_output():
+    if request.method == 'GET':
+        return jsonify(_playback_output.snapshot())
+    body = request.get_json(silent=True) or {}
+    owner = body.get('output_owner')
+    if not isinstance(owner, str) or not 1 <= len(owner) <= 128:
+        return error_response('output_owner required', 400)
+    action = body.get('action')
+    if action == 'claim':
+        def pause_echo():
+            current = _get_now_playing()
+            if not current.get('playing') and not current.get('playback_processing'):
+                return
+            serial = _playback_output.snapshot()['output_serial'] or body.get('serial')
+            if not serial:
+                raise OutputConflict('Choose an Alexa device before moving active playback to the phone.')
+            _cancel_pending_dispatch(serial)
+            error = alexa_remote.remote.command(serial, 'pause')
+            if error:
+                raise OutputConflict('The Echo could not pause. Playback stayed on Alexa.')
+            deadline = time.monotonic() + 4
+            while True:
+                stopped = _get_now_playing()
+                if not stopped.get('playing') and not stopped.get('playback_processing'):
+                    break
+                if time.monotonic() >= deadline:
+                    raise OutputConflict('Waiting for the Echo to pause. Retry playback.')
+                time.sleep(0.05)
+        result = _playback_output.phone(owner, pause_echo, str(body.get('serial') or ''))
+        with _np_lock:
+            _reset_progress(_computed_position_ms())
+            _now_playing.update(playing=False, playback_confirmed=True, playback_processing=False)
+            _now_playing['playback_revision'] = int(_now_playing.get('playback_revision', 0)) + 1
+            _now_playing['updated_at'] = time.time()
+        _bump_playback_generation()
+        _notify_sse()
+        return jsonify(result)
+    if action == 'heartbeat':
+        return jsonify(_playback_output.heartbeat(owner, body.get('output_token')))
+    if action == 'ack':
+        return jsonify(_playback_output.acknowledge(owner, body.get('output_token')))
+    return error_response('invalid output action', 400)
 
 
 # Uncaught errors (ytmusicapi hiccups, YouTube layout changes, etc.) become
@@ -3619,6 +3690,7 @@ async def _stream_playlist_payload(playlist_id, limit):
     """Resolve a playlist into the skill's SongInfoList payload, mirroring the
     full track list into the web remote's queue. Returns None when the playlist
     is unknown/empty. Shared by /stream_playlist/ and /play_genre/."""
+    _claim_alexa_output()
     response = await Supporting.stream_playlist(playlist_id)
     if response is None:
         return None
@@ -3714,6 +3786,7 @@ async def get_stream():
         return error_response('missing required parameter "video_id"', 400)
     if not _valid_video_id(video_id):
         return error_response('invalid "video_id"', 400)
+    _claim_alexa_output()
     response = await Supporting.get_stream(video_id)
     logger.info('Completed request in %.2f seconds.', time.time() - start_time)
     if response is None:
@@ -3832,6 +3905,11 @@ def app_queue():
     action = body.get('action')
     if action not in ('start', 'next', 'extend', 'current'):
         return error_response('invalid queue action', 400)
+    owner, output_token = body.get('output_owner'), body.get('output_token')
+    output = _playback_output.snapshot()
+    if owner is not None or output['playback_output'] == 'phone':
+        if not _playback_output.owns_phone(owner, output_token):
+            raise OutputConflict('Playback moved to another output. Refresh before changing the queue.')
     after = body.get('after')
     raw_tracks = body.get('tracks', [])
     if not _valid_video_id(after) or not isinstance(raw_tracks, list):
@@ -3840,6 +3918,9 @@ def app_queue():
     if (action == 'current' and raw_tracks) or (action != 'current' and not 1 <= len(raw_tracks) <= max_tracks):
         return error_response('current requires no tracks; start requires 1-5000 tracks; edits require 1-200 tracks', 400)
     playing = body.get('playing')
+    buffering = body.get('buffering', False)
+    if not isinstance(buffering, bool):
+        return error_response('buffering must be boolean', 400)
     position = body.get('position_ms')
     if playing is not None and not isinstance(playing, bool):
         return error_response('playing must be boolean', 400)
@@ -3861,6 +3942,8 @@ def app_queue():
                        'artist': str(raw.get('artist') or ''),
                        'thumbnail': _thumbnail_url(raw.get('thumbnail')), 'duration_ms': duration})
     with _np_lock:
+        if owner is not None and not _playback_output.owns_phone(owner, output_token):
+            raise OutputConflict('Playback moved to another output.')
         queue = tracks if action == 'start' else list(_now_playing.get('queue') or [])
         current_index = _now_playing.get('queue_index', -1)
         if requested_index is not None:
@@ -3890,7 +3973,8 @@ def app_queue():
                                  'duration_ms': item.get('duration_ms', 0), 'playback_processing': False})
             if playing is not None:
                 _now_playing['playing'] = playing
-                _now_playing['playback_confirmed'] = playing
+                _now_playing['playback_confirmed'] = not buffering
+                _now_playing['playback_processing'] = buffering
             elif action == 'start':
                 _now_playing.update(playing=False, playback_confirmed=False)
             _reset_progress(position if position is not None else (0 if changed else live_position))
@@ -3907,6 +3991,8 @@ def app_queue():
             _now_playing.update(queue=queue, queue_web_dirty=True)
         _now_playing['updated_at'] = time.time()
     _notify_sse()
+    if owner is not None:
+        _playback_output.heartbeat(owner, output_token)
     return jsonify({'ok': True})
 
 
@@ -3952,6 +4038,9 @@ async def get_radio():
     logger.info('Completed get_radio in %.2f seconds.', time.time() - start_time)
     if not playlist:
         return error_response('no radio queue found', 404)
+    if request.args.get('update_queue', '1') == '0':
+        return jsonify({'playlist': playlist})
+    _claim_alexa_output()
     # Refresh the web remote's "Up Next" queue now that we have the full list
     # (find_stream_list only knew the seed). Keep the currently-playing track as
     # index 0; the radio queue is seeded from it so it's normally first anyway.
@@ -3992,6 +4081,7 @@ async def find_stream_list():
         return error_response('missing required parameter "query"', 400)
     if filter not in ('songs', 'artists', 'albums'):
         return error_response(f'unknown filter "{filter}"', 400)
+    _claim_alexa_output()
     response = _get_cached_stream_list(query, filter)
     if response is None:
         pending = _pending_stream_list_event(query, filter)
@@ -4063,6 +4153,10 @@ def proxy_stream():
     video_id = request.args.get("video_id")
     if not _valid_video_id(video_id):
         return error_response('missing or invalid "video_id"', 400)
+    output = _playback_output.snapshot()
+    if output['playback_output'] == 'phone':
+        return error_response('Phone owns playback; stale Echo stream ignored.', 409)
+    _playback_output.wait_released(output['output_token'])
     # Track playback state. Check queue first for instant metadata.
     with _np_lock:
         current_video_id = _now_playing.get('video_id')
@@ -6161,6 +6255,8 @@ def alexa_command():
     serial, action = _effective_serial(body.get("serial")), body.get("action")
     if not serial or not action:
         return error_response('missing "serial" or "action"', 400)
+    if action in ('play', 'next', 'previous'):
+        _claim_alexa_output(serial)
     # Diagnosing duplicate-dispatch races (e.g. play_queue + command for the
     # same track 3s apart interrupting the first stream, surfacing as an
     # early PlaybackStopped + MEDIA_ERROR_UNKNOWN): log the intent.
@@ -6352,6 +6448,7 @@ def alexa_seek():
     serial = _effective_serial(body.get("serial"))
     if not serial:
         return error_response('missing "serial"', 400)
+    _claim_alexa_output(serial)
     # Coerce inside the try: a JSON *string* like "12" for position_seconds
     # would otherwise be string-repeated by * 1000 (Python), and int() would
     # then parse the 2000-char result as an absurd position instead of 12000.
@@ -6428,6 +6525,12 @@ def alexa_state_event():
     body = request.get_json(silent=True) or {}
     # Auth already handled by require_api_key middleware (key in ?key= param).
     event = body.get('event', '')
+    if event == 'started':
+        # An actual Alexa/voice start changes output, even if the app is closed.
+        _claim_alexa_output(body.get('serial'), wait=False)
+    elif _playback_output.snapshot()['playback_output'] == 'phone':
+        # A delayed Echo stop/queue snapshot must not overwrite phone playback.
+        return jsonify({'ok': True, 'ignored': 'phone owns playback'})
     if 'volume' in body:
         _record_volume_state(body.get('serial'), body.get('volume'), notify=True)
     sys.stderr.write(f"[np] webhook: event={event!r} video_id={body.get('video_id', '')!r}\n")
@@ -7673,6 +7776,9 @@ def alexa_play_queue():
     if not _claim_play_intent(_effective_serial(body.get("serial")), _intent_seq):
         logger.info("play_queue: ignoring superseded click (intent_seq=%s)", _intent_seq)
         return jsonify({'ok': True, 'superseded': True})
+
+    if body.get('serial'):
+        _claim_alexa_output(_effective_serial(body.get('serial')))
 
     queue_items = body.get('queue_items')
     playlist_id = str(body.get('playlist_id') or '').strip()

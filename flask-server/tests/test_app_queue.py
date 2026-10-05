@@ -6,8 +6,11 @@ import re
 import threading
 import time
 import unittest
+import sys
 from unittest.mock import Mock
 from flask import Flask, jsonify, request
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from playback_output import PlaybackOutput, OutputConflict
 
 A, B, C, D = 'aaaaaaaaaaa', 'bbbbbbbbbbb', 'ccccccccccc', 'ddddddddddd'
 
@@ -21,22 +24,60 @@ class PhoneQueueTests(unittest.TestCase):
                       'playing': True, 'position_ms': 7000, 'playback_revision': 0}
         self.notify = Mock()
         self.echo = Mock()
+        self.output = PlaybackOutput()
         namespace = {'app': self.app, 'request': request, 'jsonify': jsonify, 'time': time,
             'error_response': lambda message, status: (jsonify({'error': message}), status),
             '_np_lock': threading.RLock(), '_now_playing': self.state, '_notify_sse': self.notify,
             '_thumbnail_url': lambda raw: raw.get('url', '') if isinstance(raw, dict) else (raw or ''),
             '_valid_video_id': lambda value: isinstance(value, str) and bool(re.fullmatch(r'[A-Za-z0-9_-]{11}', value)),
             '_reset_progress': lambda position: self.state.update(position_ms=position, started_at=time.time()),
-            '_computed_position_ms': lambda: self.state['position_ms'], 'alexa_remote': self.echo}
+            '_computed_position_ms': lambda: self.state['position_ms'], 'alexa_remote': self.echo,
+            '_playback_output': self.output, 'OutputConflict': OutputConflict}
         source = Path(__file__).resolve().parents[1] / 'server.py'
-        route = next(node for node in ast.parse(source.read_text()).body
-                     if isinstance(node, ast.FunctionDef) and node.name == 'app_queue')
-        exec(compile(ast.Module(body=[route], type_ignores=[]), str(source), 'exec'), namespace)
+        routes = [node for node in ast.parse(source.read_text()).body
+                  if isinstance(node, ast.FunctionDef) and node.name in ('app_queue', 'handle_output_conflict')]
+        exec(compile(ast.Module(body=routes, type_ignores=[]), str(source), 'exec'), namespace)
+        self.namespace = namespace
         self.client = self.app.test_client()
 
     def post(self, action, after=A, tracks=None, **extra):
         return self.client.post('/api/app/queue/', json={'action': action, 'after': after,
             'tracks': [] if tracks is None else tracks, **extra})
+
+    def claim(self):
+        return self.output.phone('phone-one', lambda: None)['output_token']
+
+    def test_delayed_phone_updates_cannot_overwrite_alexa_takeover(self):
+        token = self.claim()
+        self.output.alexa(wait=False)
+        before = copy.deepcopy(self.state)
+        for action, items in [('start', [track(C)]), ('current', []), ('extend', [track(C)])]:
+            result = self.post(action, after=C if action == 'start' else A, tracks=items,
+                               output_owner='phone-one', output_token=token)
+            self.assertEqual(result.status_code, 409)
+            self.assertEqual(result.json['error']['code'], 'output_changed')
+        self.assertEqual(self.state, before)
+        self.notify.assert_not_called()
+
+    def test_phone_local_order_wins_without_dispatching_an_echo(self):
+        token = self.claim()
+        result = self.post('start', after=C, tracks=[track(C), track(A), track(B)], queue_index=0,
+                           output_owner='phone-one', output_token=token, playing=True)
+        self.assertEqual(result.status_code, 200)
+        self.assertEqual([row['video_id'] for row in self.state['queue']], [C, A, B])
+        self.assertTrue(self.state['playback_confirmed'])
+        self.assertFalse(self.state['playback_processing'])
+        self.assertEqual(self.echo.mock_calls, [])
+
+    def test_phone_pause_is_settled_but_real_buffering_is_not(self):
+        token = self.claim()
+        extra = dict(output_owner='phone-one', output_token=token)
+        self.assertEqual(self.post('current', playing=False, buffering=False, **extra).status_code, 200)
+        self.assertTrue(self.state['playback_confirmed'])
+        self.assertFalse(self.state['playback_processing'])
+        self.assertEqual(self.post('current', playing=False, buffering=True, **extra).status_code, 200)
+        self.assertFalse(self.state['playback_confirmed'])
+        self.assertTrue(self.state['playback_processing'])
 
     def test_canonical_queue_url_updates_without_redirect(self):
         response = self.client.post('/api/app/queue', json={
