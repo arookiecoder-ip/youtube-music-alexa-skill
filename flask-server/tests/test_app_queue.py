@@ -47,6 +47,21 @@ class PhoneQueueTests(unittest.TestCase):
         self.assertEqual(self.state['position_ms'], 9000)
         self.assertEqual(self.echo.mock_calls, [])
 
+    def test_full_collection_start_is_atomic_and_preserves_duplicate_cursor(self):
+        tracks = [track(A)] * 5000
+        response = self.post('start', tracks=tracks, queue_index=4999, playing=True, position_ms=12000)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(self.state['queue']), 5000)
+        self.assertEqual(self.state['queue_index'], 4999)
+        self.assertEqual(self.state['position_ms'], 12000)
+        self.assertEqual(self.echo.mock_calls, [])
+
+    def test_full_start_and_incremental_edits_keep_distinct_limits(self):
+        before = copy.deepcopy(self.state)
+        self.assertEqual(self.post('start', tracks=[track(A)] * 5001).status_code, 400)
+        self.assertEqual(self.post('extend', tracks=[track(C)] * 201).status_code, 400)
+        self.assertEqual(self.state, before)
+
     def test_start_publishes_queue_and_selected_track_without_echo_command(self):
         result = self.post('start', after=B, tracks=[track(A), track(B, 'Selected')])
         self.assertEqual(result.status_code, 200)

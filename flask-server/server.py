@@ -3836,8 +3836,9 @@ def app_queue():
     raw_tracks = body.get('tracks', [])
     if not _valid_video_id(after) or not isinstance(raw_tracks, list):
         return error_response('valid after and tracks array required', 400)
-    if (action == 'current' and raw_tracks) or (action != 'current' and not 1 <= len(raw_tracks) <= 200):
-        return error_response('current requires no tracks; queue changes require 1-200 tracks', 400)
+    max_tracks = 5000 if action == 'start' else 200
+    if (action == 'current' and raw_tracks) or (action != 'current' and not 1 <= len(raw_tracks) <= max_tracks):
+        return error_response('current requires no tracks; start requires 1-5000 tracks; edits require 1-200 tracks', 400)
     playing = body.get('playing')
     position = body.get('position_ms')
     if playing is not None and not isinstance(playing, bool):
