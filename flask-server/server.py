@@ -9567,12 +9567,17 @@ async def api_artist_releases(channel_id):
         return jsonify({'error': 'Invalid page.'}), 400
     try:
         yt = _get_ytmusic() if _jam_guest() else _get_ytmusic_home()
-        artist = await asyncio.to_thread(yt.get_artist, channel_id)
-        section = (artist or {}).get(kind) or {}
+        # Use the same renderer/authentication fallbacks as the artist page.
+        artist_response = await api_get_artist(channel_id)
+        if isinstance(artist_response, tuple):
+            return artist_response
+        artist = artist_response.get_json().get('artist') or {}
+        section = artist.get(kind) or {}
         params = section.get('params')
         browse_id = section.get('browseId')
         if params and browse_id:
-            releases = await asyncio.to_thread(yt.get_artist_albums, browse_id, params, offset + limit + 1)
+            from artist_releases import get_artist_releases
+            releases = await asyncio.to_thread(get_artist_releases, yt, browse_id, params, offset + limit + 1)
         else:
             releases = section.get('results') or []
         page = releases[offset:offset + limit]
