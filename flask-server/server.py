@@ -9566,12 +9566,12 @@ async def api_artist_releases(channel_id):
     except (TypeError, ValueError):
         return jsonify({'error': 'Invalid page.'}), 400
     try:
-        yt = _get_ytmusic() if _jam_guest() else _get_ytmusic_home()
         # Use the same renderer/authentication fallbacks as the artist page.
         artist_response = await api_get_artist(channel_id)
         if isinstance(artist_response, tuple):
             return artist_response
         artist = artist_response.get_json().get('artist') or {}
+        yt = _get_ytmusic() if _jam_guest() else _get_ytmusic_home()
         section = artist.get(kind) or {}
         params = section.get('params')
         browse_id = section.get('browseId')

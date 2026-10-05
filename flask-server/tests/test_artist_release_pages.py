@@ -46,6 +46,18 @@ class ReleaseRendererTests(unittest.TestCase):
         self.assertEqual(normalized['items'], [release()])
         self.assertEqual(normalized['continuations'][0]['nextContinuationData']['continuation'], 'next')
 
+    def test_following_carousel_continuation_loads_remaining_releases(self):
+        first = response({'musicCarouselShelfRenderer': {
+            'contents': [release('First', 'MPREone')],
+            'continuations': [{'nextContinuationData': {'continuation': 'next'}}]}})
+        following = {'continuationContents': {'musicCarouselShelfContinuation': {
+            'contents': [release('Second', 'MPREtwo')]}}}
+        client = Mock()
+        client._send_request.side_effect = [first, following]
+        result = get_artist_releases(client, 'UCartist', 'params', 31)
+        self.assertEqual([item['browseId'] for item in result], ['MPREone', 'MPREtwo'])
+        self.assertEqual(client._send_request.call_count, 2)
+
     def test_playlist_browse_identity_is_preserved(self):
         client = Mock()
         client._send_request.return_value = response({'gridRenderer': {'items': [release('Playlist', 'VLPLplaylist')]}})
