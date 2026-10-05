@@ -38,6 +38,15 @@ class PhoneQueueTests(unittest.TestCase):
         return self.client.post('/api/app/queue/', json={'action': action, 'after': after,
             'tracks': [] if tracks is None else tracks, **extra})
 
+    def test_canonical_queue_url_updates_without_redirect(self):
+        response = self.client.post('/api/app/queue', json={
+            'action': 'current', 'after': A, 'tracks': [], 'queue_index': 0,
+            'playing': True, 'position_ms': 9000})
+        self.assertEqual(response.status_code, 200)
+        self.assertIsNone(response.headers.get('Location'))
+        self.assertEqual(self.state['position_ms'], 9000)
+        self.assertEqual(self.echo.mock_calls, [])
+
     def test_start_publishes_queue_and_selected_track_without_echo_command(self):
         result = self.post('start', after=B, tracks=[track(A), track(B, 'Selected')])
         self.assertEqual(result.status_code, 200)
