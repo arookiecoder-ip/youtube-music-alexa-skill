@@ -143,11 +143,13 @@
           <div class="profile-menu-status jam-owner-only">
             <div><strong>Amazon</strong> <span id="status-amazon">Checking...</span></div>
             <div><strong>YouTube</strong> <span id="status-yt-headers">Checking...</span></div>
-            <div><strong>YT Cookies</strong> <span id="status-yt-cookies">Checking...</span></div>
+            <div><strong>Download cookies</strong> <span id="status-yt-cookies">Checking...</span></div>
           </div>
           <button class="jam-owner-only" id="amazon-signin" type="button" style="display: none;">Sign in to Amazon</button>
           <button class="jam-owner-only" id="amazon-signout" type="button" style="display: none;">Sign out of Amazon</button>
           <button class="jam-owner-only" id="youtube-browser-auth" type="button">Connect YouTube Music</button>
+          <button class="jam-owner-only" id="download-cookies-replace" type="button">Replace download cookies</button>
+          <button class="jam-owner-only" id="download-cookies-check" type="button">Test audio download</button>
           <button id="logout" type="button">{{ 'Leave Jam' if jam_guest else 'Sign out of Web Remote' }}</button>
         </div>
       </div>
@@ -164,6 +166,25 @@
   <!-- Mobile sidebar -->
   <div class="sidebar-overlay" id="sidebar-overlay"></div>
 
+  {% if not jam_guest %}
+  <div class="login-modal-wrap" id="download-cookies-modal" hidden>
+    <div class="login-modal browser-auth-modal" role="dialog" aria-modal="true" aria-labelledby="download-cookies-title">
+      <div class="login-modal-header">
+        <h2 id="download-cookies-title">Replace download cookies</h2>
+        <button class="login-modal-close" id="download-cookies-close" type="button" aria-label="Close">×</button>
+      </div>
+      <form class="login-modal-body" id="download-cookies-form">
+        <p>Choose a cookies.txt export or paste it below. We will download an audio sample before saving. If the test fails, your existing cookies stay in place.</p>
+        <label for="download-cookies-file">Cookies file</label>
+        <input id="download-cookies-file" type="file" accept=".txt,text/plain">
+        <label for="download-cookies-text">Or paste Netscape cookies</label>
+        <textarea id="download-cookies-text" class="browser-auth-input" rows="8" spellcheck="false" autocomplete="off"></textarea>
+        <button id="download-cookies-save" class="browser-auth-save" type="submit">Test and save</button>
+        <p id="download-cookies-message" class="auth-status" role="status" aria-live="polite"></p>
+      </form>
+    </div>
+  </div>
+  {% endif %}
   {% if not jam_guest %}<div class="login-modal-wrap" id="youtube-browser-auth-modal-wrap" hidden>
     <div class="login-modal browser-auth-modal" role="dialog" aria-modal="true" aria-labelledby="youtube-browser-auth-title">
       <div class="login-modal-header">
@@ -957,6 +978,7 @@
 <script src="/static/js/song-context-menu.js?v={{ asset_v }}"></script>
 <script src="/static/js/search.js?v={{ asset_v }}"></script>
 <script src="/static/js/sidebar.js?v={{ asset_v }}"></script>
+<script src="/static/js/download-cookies.js?v={{ asset_v }}"></script>
 <script src="/static/js/history.js?v={{ asset_v }}"></script>
 <script src="/static/js/recs.js?v={{ asset_v }}"></script>
 <script src="/static/js/home-renderers.js?v={{ asset_v }}"></script>
