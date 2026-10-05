@@ -8462,7 +8462,14 @@ async def api_get_library():
                 and account_name
                 and account_name in author_names
             )
-        return jsonify({"playlists": playlists})
+        # Saved albums belong to the authenticated account, just like playlists.
+        # Keep playlists usable if this optional browse surface is unavailable.
+        try:
+            albums = await asyncio.to_thread(yt.get_library_albums, 100)
+        except Exception as album_error:
+            logger.warning("YouTube saved albums unavailable: %s", album_error)
+            albums = []
+        return jsonify({"playlists": playlists, "albums": albums or []})
     except Exception as e:
         # Browser-header auth may reject some browse endpoints; show LM fallback.
         message = str(e)
