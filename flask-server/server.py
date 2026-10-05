@@ -9529,6 +9529,10 @@ async def api_track_metadata(video_id):
     metadata = await asyncio.to_thread(_lookup_video_metadata, video_id)
     if not metadata:
         return jsonify({'error': 'Song metadata unavailable.'}), 404
+    if not metadata.get('duration_ms'):
+        probed = await asyncio.to_thread(Supporting.probe_metadata, video_id)
+        if probed and probed.get('duration_ms'):
+            metadata = {**metadata, 'duration_ms': probed['duration_ms']}
     return jsonify(metadata)
 
 
