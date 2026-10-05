@@ -1,3 +1,4 @@
+import download_cookies
 import asyncio, collections, difflib, glob, hashlib, hmac, itertools, json, math, os, random, secrets, shutil, sys, threading, time, re, subprocess, logging, copy, uuid, tempfile, shlex
 from datetime import timedelta
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
@@ -813,6 +814,7 @@ _SESSION_PATHS = ('/remote', '/alexa/status', '/alexa/init', '/alexa/devices', '
                   '/alexa/jam/qr', '/api/home', '/api/library',
                   '/api/subscribed_artists',
                   '/alexa/like', '/api/liked_songs', '/api/profile_status',
+                  '/api/youtube/download-cookies', '/api/youtube/download-cookies/status',
 '/alexa/amazon_signout',
                    '/api/youtube/browser-auth',
                    '/api/youtube/browser-session/start',
@@ -3035,6 +3037,7 @@ class Supporting:
                       or os.environ.get("YTDLP_COOKIES"))
         server_dir = os.path.dirname(os.path.abspath(__file__))
         candidates = [
+            str(download_cookies.saved_path()),
             configured,
             os.path.join(server_dir, "cookies.txt"),
             os.path.join(os.path.dirname(server_dir), "cookies.txt"),
@@ -5906,6 +5909,53 @@ def alexa_amazon_signout():
     alexa_remote.remote.logout()
     return jsonify({"success": True})
 
+def _configure_cookie_probe(command):
+    Supporting.add_ytdlp_js_runtime(command)
+    Supporting.add_ytdlp_pot_provider(command)
+
+
+def _download_cookie_owner():
+    supplied = request.args.get('key') or request.headers.get('X-Api-Key') or ''
+    return _logged_in() or bool(API_KEY and hmac.compare_digest(supplied, API_KEY))
+
+
+@app.route("/api/youtube/download-cookies/status", methods=["GET"])
+def download_cookie_status():
+    if not _download_cookie_owner():
+        return error_response('Owner session or API key required.', 401)
+    try:
+        result = download_cookies.status(Supporting.get_ytdlp_cookies_file(), _configure_cookie_probe,
+                                        force=request.args.get('refresh') == '1')
+    except download_cookies.ProbeBusy as exc:
+        return error_response(str(exc), 429)
+    return jsonify(result)
+
+
+@app.route("/api/youtube/download-cookies", methods=["POST"])
+def replace_download_cookies():
+    if not _download_cookie_owner():
+        return error_response('Owner session or API key required.', 401)
+    if request.content_length and request.content_length > 1024 * 1024:
+        return error_response('Cookie upload is too large.', 413)
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        return error_response('JSON object required.', 400)
+    try:
+        result = download_cookies.replace(body.get('cookies'), _configure_cookie_probe)
+    except download_cookies.ProbeBusy as exc:
+        return error_response(str(exc), 429)
+    except ValueError as exc:
+        return error_response(str(exc), 400)
+    except OSError:
+        return error_response('Could not save cookies. Existing cookies were kept.', 500)
+    if not result['valid']:
+        return error_response(result['message'], 422)
+    with _flaky_video_ids_lock:
+        _flaky_video_ids.clear()
+    _reset_rate_limit_cooldown()
+    return jsonify(success=True, **result)
+
+
 @app.route("/api/profile_status/", methods=["GET"])
 def profile_status():
     """Returns auth statuses for Amazon, YouTube headers, and yt-dlp cookies."""
@@ -5925,33 +5975,14 @@ def profile_status():
         # background capture browser as though it were the login browser.
     headers_debug = f"auth_type={auth_type_str}"
 
-    # A signed-in-only feed verifies current acceptance. Public videos still
-    # work with expired cookies, so they cannot provide an honest status.
     cookies_file = Supporting.get_ytdlp_cookies_file()
-    cookies_working = False
-    cookies_debug = "No cookies.txt file found"
-    if cookies_file:
-        command = [
-            "yt-dlp", "--flat-playlist", "--playlist-end", "1",
-            "--print", "%(id)s",
-        ]
-        # Use the normal temporary copy so read-only Docker mounts are never
-        # touched when yt-dlp saves its cookie jar on exit.
-        Supporting.add_ytdlp_cookies(command)
-        command += ["--", "https://www.youtube.com/feed/history"]
-        try:
-            result = subprocess.run(command, capture_output=True, text=True, timeout=15)
-            # An empty/disabled watch history can legitimately print no IDs;
-            # successful extraction itself proves the signed-in feed opened.
-            cookies_working = result.returncode == 0
-            cookies_debug = ("YouTube accepted cookies"
-                             if cookies_working
-                             else "YouTube rejected cookies; upload a fresh cookies.txt")
-        except subprocess.TimeoutExpired:
-            cookies_debug = "Cookie check timed out; try again"
-        except OSError:
-            cookies_debug = "yt-dlp is unavailable"
-    
+    try:
+        cookie_test = download_cookies.status(cookies_file, _configure_cookie_probe)
+    except download_cookies.ProbeBusy as exc:
+        cookie_test = {'valid': False, 'message': str(exc)}
+    cookies_working = cookie_test['valid']
+    cookies_debug = cookie_test['message']
+
     browser_status = _youtube_browser_sessions.status()
     return jsonify({
         "amazon_connected": amazon_connected,
