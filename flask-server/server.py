@@ -8285,6 +8285,8 @@ def alexa_search():
                     # surface as separate clickable artists.
                     'artists': _artist_entries_from_item(track),
                     'video_id': video_id,
+                    'resultType': track.get('resultType') or 'song',
+                    'videoType': track.get('videoType') or '',
                     'thumbnail': _last_thumbnail(track),
                     'duration_ms': Supporting.duration_ms(track),
                     'channelId': (track.get('artists') or [{}])[0].get('id', ''),
@@ -8437,6 +8439,17 @@ def alexa_search():
             logger.warning('[alexa/search] exact search failed for %r: %s', query, exc)
             all_raw = []
         results = _categorize(all_raw)
+
+    # Mixed search may return only artists/albums or music videos. Fetch the
+    # audio category only when it is absent; keep successful mixed results if
+    # this optional request fails rather than blanking the Search page.
+    if not any(item.get('resultType') == 'song' for item in all_raw):
+        try:
+            audio_raw = ytmusic.search(query=query, filter='songs',
+                                      ignore_spelling=False, limit=40) or []
+            results['songs'] = _collect_songs([audio_raw, all_raw])
+        except Exception as exc:
+            logger.warning('[alexa/search] audio fallback failed: %s', exc)
 
     if not _has_results(results) and not all_raw:
         return error_response('no results found', 404)
