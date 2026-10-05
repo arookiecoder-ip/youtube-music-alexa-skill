@@ -9521,6 +9521,22 @@ async def api_resolve_artist():
     return jsonify({'name': match['artist'], 'channel_id': match['browseId']})
 
 
+@app.route("/api/track/<video_id>/listen", methods=["POST"])
+def api_track_listen(video_id):
+    """Phone playback uses the same YouTube history reporting as confirmed Echo plays."""
+    if not _logged_in() or _jam_guest():
+        return jsonify({'error': 'Account sign-in required.'}), 401
+    if not _valid_video_id(video_id):
+        return jsonify({'error': 'Invalid video id.'}), 400
+    from ytmusicapi.auth.types import AuthType
+    if _get_ytmusic_home().auth_type == AuthType.UNAUTHORIZED:
+        return jsonify({'error': 'YouTube Music authentication required.'}), 403
+    body = request.get_json(silent=True) or {}
+    _record_listen(video_id, str(body.get('title') or '')[:500],
+                   str(body.get('artist') or '')[:500], str(body.get('thumbnail') or '')[:2000])
+    return jsonify({'ok': True})
+
+
 @app.route("/api/track/<video_id>/metadata", methods=["GET"])
 async def api_track_metadata(video_id):
     """Read-only duration/credits lookup for artist previews with missing lengths."""
