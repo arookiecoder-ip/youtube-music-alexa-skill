@@ -849,7 +849,8 @@ def _is_web_session_path(path):
     """True for endpoints intended to be called by the logged-in web remote."""
     normalized = path.rstrip('/') or '/'
     return (normalized in {p.rstrip('/') for p in _SESSION_PATHS} or
-            any(normalized.startswith(prefix.rstrip('/') + '/')
+            any(normalized == prefix.rstrip('/') or
+                normalized.startswith(prefix.rstrip('/') + '/')
                 for prefix in _SESSION_PREFIXES))
 
 
@@ -1114,7 +1115,7 @@ def require_api_key():
         session.pop('jam', None)
         return _no_store(app.make_response((_JAM_ENDED_HTML, 410)))
     # A valid session cookie authorizes the remote page and its /alexa/* calls.
-    if _logged_in() and (path in _SESSION_PATHS or any(request.path.startswith(p) for p in _SESSION_PREFIXES)):
+    if _logged_in() and _is_web_session_path(request.path):
         # Mutating requests must be JSON. A cross-site HTML form or plain
         # <script> fetch cannot set Content-Type: application/json without
         # triggering a CORS preflight that our lack of CORS headers would
@@ -3822,7 +3823,7 @@ def _resolve_next_track(queue, after_video_id):
     return queue[idx + 1]
 
 
-@app.route("/api/app/queue/", methods=["POST"])
+@app.route("/api/app/queue/", methods=["POST"], strict_slashes=False)
 def app_queue():
     """Publish phone playback to the shared queue; never dispatch an Echo command."""
     body = request.get_json(silent=True)
