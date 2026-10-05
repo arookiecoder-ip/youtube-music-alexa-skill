@@ -5976,10 +5976,15 @@ def profile_status():
     headers_debug = f"auth_type={auth_type_str}"
 
     cookies_file = Supporting.get_ytdlp_cookies_file()
-    try:
-        cookie_test = download_cookies.status(cookies_file, _configure_cookie_probe)
-    except download_cookies.ProbeBusy as exc:
-        cookie_test = {'valid': False, 'message': str(exc)}
+    if request.args.get('audio_check') == '0':
+        # Native startup only needs account linkage. Download probes are an
+        # explicit profile action and can take up to 50 seconds.
+        cookie_test = {'valid': False, 'message': 'Audio download has not been tested.'}
+    else:
+        try:
+            cookie_test = download_cookies.status(cookies_file, _configure_cookie_probe)
+        except download_cookies.ProbeBusy as exc:
+            cookie_test = {'valid': False, 'message': str(exc)}
     cookies_working = cookie_test['valid']
     cookies_debug = cookie_test['message']
 
