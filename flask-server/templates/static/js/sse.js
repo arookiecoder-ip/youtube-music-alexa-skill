@@ -43,7 +43,7 @@
       _lastHistoryVideoId = npVideoId;
       if (window.loadHistory) setTimeout(window.loadHistory, 1500);
     }
-    if (np.playing && window.selectedDeviceOnline && !window.selectedDeviceOnline()) {
+    if (np.playback_output !== 'phone' && np.playing && window.selectedDeviceOnline && !window.selectedDeviceOnline()) {
       np = Object.assign({}, np, { playing: false });
     }
     if (np.volume !== undefined && np.volume !== null && window.syncVolume) window.syncVolume(np.volume);
