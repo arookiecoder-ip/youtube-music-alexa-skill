@@ -411,6 +411,8 @@
     
     if (open && window.api && !window.JAM_GUEST) {
       try {
+        const cookieStatus = document.getElementById('status-yt-cookies');
+        if (cookieStatus) cookieStatus.textContent = 'Testing audio…';
         const status = await window.api('/api/profile_status/');
         
         const amzEl = document.getElementById('status-amazon');
@@ -438,7 +440,7 @@
         const ytcEl = document.getElementById('status-yt-cookies');
         if (ytcEl) {
           const cookiesOk = status.youtube_cookies_working;
-          ytcEl.textContent = cookiesOk ? 'Valid' : (status.youtube_cookies_present ? 'Invalid' : 'Not Found');
+          ytcEl.textContent = cookiesOk ? 'Download OK' : (status.youtube_cookies_present ? 'Download failed' : 'Not Found');
           ytcEl.style.color = cookiesOk ? '#4ade80' : '#ff6b6b';
           ytcEl.style.backgroundColor = cookiesOk ? 'rgba(74, 222, 128, 0.1)' : 'rgba(255, 107, 107, 0.1)';
           if (status.debug && status.debug.cookies) ytcEl.title = status.debug.cookies;
@@ -451,6 +453,8 @@
         
       } catch (err) {
         console.error("Failed to load profile status", err);
+        const cookieStatus = document.getElementById("status-yt-cookies");
+        if (cookieStatus) cookieStatus.textContent = "Check failed";
       }
     }
   });
