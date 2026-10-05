@@ -30,6 +30,8 @@ class QueueSessionAuthTests(unittest.TestCase):
         # A no-op handler proves the middleware passed without queue side effects.
         self.app.add_url_rule('/api/app/queue/', 'queue_probe',
                               lambda: jsonify(ok=True), methods=['POST'], strict_slashes=False)
+        self.app.add_url_rule('/api/app/output/', 'output_probe',
+                              lambda: jsonify(ok=True), methods=['GET', 'POST'], strict_slashes=False)
         self.client = self.app.test_client()
 
     def test_owner_json_queue_post_accepts_both_path_forms(self):
@@ -56,6 +58,15 @@ class QueueSessionAuthTests(unittest.TestCase):
         response = self.client.post('/api/app/queue/', json={}, headers={'X-Api-Key': 'wrong'})
         self.assertEqual(response.status_code, 401)
         self.assertEqual(response.json['error']['code'], 'unauthorized')
+
+    def test_output_endpoint_accepts_session_and_machine_key_without_public_access(self):
+        for path in ['/api/app/output', '/api/app/output/']:
+            self.assertEqual(self.client.get(path).status_code, 401)
+            self.assertEqual(self.client.post(path, json={}, headers={'X-Api-Key': 'test-machine-key'}).status_code, 200)
+        with self.client.session_transaction() as saved:
+            saved['owner'] = True
+        self.assertEqual(self.client.post('/api/app/output/', json={}).status_code, 200)
+        self.assertFalse(self.is_session_path('/api/app/output-unsafe'))
 
     def test_lookalike_paths_are_not_authorized_as_queue(self):
         self.assertFalse(self.is_session_path('/api/app/queue-unsafe'))

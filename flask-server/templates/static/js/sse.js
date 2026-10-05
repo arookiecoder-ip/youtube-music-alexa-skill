@@ -43,7 +43,7 @@
       _lastHistoryVideoId = npVideoId;
       if (window.loadHistory) setTimeout(window.loadHistory, 1500);
     }
-    if (np.playing && window.selectedDeviceOnline && !window.selectedDeviceOnline()) {
+    if (np.playback_output !== 'phone' && np.playing && window.selectedDeviceOnline && !window.selectedDeviceOnline()) {
       np = Object.assign({}, np, { playing: false });
     }
     if (np.volume !== undefined && np.volume !== null && window.syncVolume) window.syncVolume(np.volume);
@@ -73,7 +73,7 @@
       if (window.showNowPlaying) window.showNowPlaying(np);
       if (np.playing !== undefined) {
         const inGrace = (Date.now() - state().lastActionAt) < state().GRACE_MS;
-        const serverPlaying = np.playing === true && np.playback_confirmed === true;
+        const serverPlaying = np.playback_output !== 'phone' && np.playing === true && np.playback_confirmed === true;
         const contradictsIntent = inGrace && state().lastActionIntent !== null && serverPlaying !== state().lastActionIntent;
         // Always feed snapshots to the play/pause waiter: it keys off fresh
         // revision/marker/sequence, and the server stages play-intents as
@@ -103,10 +103,10 @@
         // Same split as above: the waiter always gets the snapshot; only the
         // icon update is grace-guarded.
         if (window._notifyPlayPauseServerState) {
-          window._notifyPlayPauseServerState(np.playing && np.playback_confirmed === true, np.state_updated_at || np.updated_at || np.confirmed_at, np.playback_revision, np.playback_confirmed, np.playback_processing);
+          window._notifyPlayPauseServerState(np.playback_output !== 'phone' && np.playing && np.playback_confirmed === true, np.state_updated_at || np.updated_at || np.confirmed_at, np.playback_revision, np.playback_confirmed, np.playback_processing);
         }
         if (!contradictsIntent && !inGrace) {
-          state().isPlaying = np.playing === true && np.playback_confirmed === true;
+          state().isPlaying = np.playback_output !== 'phone' && np.playing === true && np.playback_confirmed === true;
           if (window.syncPlayPause) window.syncPlayPause();
         }
       }

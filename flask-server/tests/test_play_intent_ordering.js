@@ -141,6 +141,25 @@ function makeContext() {
  * The intent primitives
  * ------------------------------------------------------------------ */
 
+console.log('--- shared phone output ---');
+{
+  const { sandbox, renders } = makeContext();
+  const observations = [];
+  sandbox._notifyPlayPauseServerState = (...values) => observations.push(values);
+  const phone = { video_id: 'AAAAAAAAAAA', title: 'Phone song', playing: true,
+    playback_confirmed: true, playback_processing: false, playback_output: 'phone' };
+  sandbox.selectedDeviceOnline = () => false;
+  sandbox.handleNpUpdate(phone);
+  checkTrue('phone playback leaves web Play available for Alexa handoff', !sandbox.__appState.isPlaying);
+  checkTrue('phone playback has no false pending state', observations.at(-1)[3] === true && observations.at(-1)[4] === false);
+  checkTrue('phone progress still advances from actual playback state', renders.progress.at(-1).playing);
+  sandbox.selectedDeviceOnline = () => true;
+  sandbox.handleNpUpdate({ ...phone, playback_output: 'alexa', playback_confirmed: false, playback_processing: true });
+  checkTrue('actual Alexa buffering remains pending', observations.at(-1)[3] === false && observations.at(-1)[4] === true);
+  sandbox.handleNpUpdate({ ...phone, playback_output: 'alexa' });
+  checkTrue('confirmed Alexa playback shows Pause', sandbox.__appState.isPlaying);
+}
+
 console.log('--- play-intent primitives ---');
 {
   const { sandbox } = makeContext();
