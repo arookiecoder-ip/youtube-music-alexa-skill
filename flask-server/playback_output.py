@@ -34,6 +34,8 @@ class PlaybackOutput:
     def phone(self, owner, pause_echo, serial=''):
         with self.condition:
             if self.mode == 'phone' and self.owner == owner:
+                # An explicit new phone play supersedes in-flight reports from its previous song.
+                self.token = secrets.token_hex(16)
                 if serial:
                     self.serial = serial
                 self.lease_until = self.clock() + self.lease_seconds
