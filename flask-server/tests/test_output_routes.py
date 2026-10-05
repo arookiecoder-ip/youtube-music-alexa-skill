@@ -13,6 +13,10 @@ from test_app_queue import PhoneQueueTests, A, B, track
 class OutputRoutesTests(PhoneQueueTests):
     def setUp(self):
         super().setUp()
+        self.arm = Mock()
+        self.namespace.update(copy=copy, threading=threading, logger=Mock(), _effective_serial=lambda serial: serial,
+            _touch_cached_audio=Mock(), _ensure_audio_ready_for_play=Mock(), _arm_play=self.arm,
+            _watch_resume_confirmation=Mock(), _ARMED_PLAYS_LOCK=threading.Lock(), _ARMED_PLAYS={})
         self.command = Mock(side_effect=lambda *args: self.state.update(playing=False, playback_processing=False))
         self.namespace.update(alexa_remote=SimpleNamespace(remote=SimpleNamespace(command=self.command)),
                               _get_now_playing=lambda: dict(self.state),
@@ -20,7 +24,7 @@ class OutputRoutesTests(PhoneQueueTests):
         source = Path(__file__).resolve().parents[1] / 'server.py'
         functions = [node for node in ast.parse(source.read_text()).body
                      if isinstance(node, ast.FunctionDef) and node.name in
-                     ('app_playback_output', '_claim_alexa_output')]
+                     ('app_playback_output', '_claim_alexa_output', 'alexa_command')]
         exec(compile(ast.Module(body=functions, type_ignores=[]), str(source), 'exec'), self.namespace)
 
     def output_request(self, action, token=''):
@@ -119,3 +123,39 @@ class OutputRoutesTests(PhoneQueueTests):
         self.assertFalse(worker.is_alive())
         self.assertEqual(responses[0].status_code, 200)
         self.assertEqual(responses[0].json['playback_output'], 'phone')
+
+    def run_real_web_play(self, error=None):
+        self.output_request('claim')
+        changed = threading.Event()
+        self.namespace['_notify_sse'] = changed.set
+        self.command.side_effect = None
+        self.command.return_value = error
+        responses = []
+        def play():
+            with self.app.test_client() as client:
+                responses.append(client.post('/alexa/command/', json={'serial': 'echo-one', 'action': 'play'}))
+        worker = threading.Thread(target=play)
+        worker.start()
+        self.assertTrue(changed.wait(1))
+        self.command.assert_called_once_with('echo-one', 'pause')
+        output = self.client.get('/api/app/output/').json
+        self.assertEqual(self.output_request('ack', output['output_token']).status_code, 200)
+        worker.join(1)
+        self.assertFalse(worker.is_alive())
+        return responses[0]
+
+    def test_real_web_play_arms_phone_song_and_offset_and_keeps_true_loading(self):
+        result = self.run_real_web_play()
+        self.assertEqual(result.status_code, 200)
+        self.arm.assert_called_once_with('echo-one', A, 7000, kind='resume')
+        self.assertTrue(self.state['playing'])
+        self.assertFalse(self.state['playback_confirmed'])
+        self.assertTrue(self.state['playback_processing'])
+        self.command.assert_called_with('echo-one', 'play', None)
+
+    def test_failed_web_play_does_not_leave_phone_mirror_loading_forever(self):
+        result = self.run_real_web_play('offline')
+        self.assertEqual(result.status_code, 502)
+        self.assertFalse(self.state['playing'])
+        self.assertTrue(self.state['playback_confirmed'])
+        self.assertFalse(self.state['playback_processing'])
