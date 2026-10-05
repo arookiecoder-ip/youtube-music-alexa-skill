@@ -73,7 +73,7 @@ def get_artist_releases(client, browse_id, params, limit):
     contents = initial.get('contents', {}).get('singleColumnBrowseResultsRenderer', {}).get('tabs', [])
     if contents:
         grid = contents[0].get('tabRenderer', {}).get('content', {}).get('sectionListRenderer', {}).get('contents', [])
-        if grid and not grid[0].get('gridRenderer', {}).get('items') and not grid[0].get('gridRenderer', {}).get('continuations'):
+        if grid and 'gridRenderer' in grid[0] and not grid[0].get('gridRenderer', {}).get('items') and not grid[0].get('gridRenderer', {}).get('continuations'):
             return []
     parser = YTMusic()
     first = True
