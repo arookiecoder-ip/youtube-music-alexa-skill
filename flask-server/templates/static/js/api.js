@@ -142,7 +142,8 @@
   function _fetchWithTimeout(url, opts) {
     _showProgress(url);
     var controller = new AbortController();
-    var timer = setTimeout(function() { controller.abort(); }, API_TIMEOUT_MS);
+    var cookieProbe = url.includes("/api/youtube/download-cookies") || url.includes("/api/profile_status");
+    var timer = setTimeout(function() { controller.abort(); }, cookieProbe ? 75000 : API_TIMEOUT_MS);
     return fetch(url, Object.assign({}, opts, { signal: controller.signal }))
       .then(function(res) { clearTimeout(timer); _hideProgress(url); return res; })
       .catch(function(err) {
