@@ -824,7 +824,7 @@ _SESSION_PATHS = ('/remote', '/alexa/status', '/alexa/init', '/alexa/devices', '
                    '/api/youtube/browser-session/authorize')
 _SESSION_PREFIXES = ('/alexa/now_playing/', '/history/', '/api/playlists/', '/recommendations/',
                      '/api/artist/', '/api/album/', '/api/library/', '/api/explore/', '/api/home/',
-                     '/api/track/')
+                     '/api/track/', '/api/app/queue/')
 
 # API/device endpoints: the Alexa skill and web-remote JS hit these directly
 # and need a machine-readable JSON error, never an HTML redirect, on failure.
@@ -3817,6 +3817,79 @@ def _resolve_next_track(queue, after_video_id):
     if idx < 0 or idx + 1 >= len(queue):
         return None
     return queue[idx + 1]
+
+
+@app.route("/api/app/queue/", methods=["POST"])
+def app_queue():
+    """Publish phone playback to the shared queue; never dispatch an Echo command."""
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        return error_response('JSON object required', 400)
+    action = body.get('action')
+    if action not in ('start', 'next', 'extend', 'current'):
+        return error_response('invalid queue action', 400)
+    after = body.get('after')
+    raw_tracks = body.get('tracks', [])
+    if not _valid_video_id(after) or not isinstance(raw_tracks, list):
+        return error_response('valid after and tracks array required', 400)
+    if (action == 'current' and raw_tracks) or (action != 'current' and not 1 <= len(raw_tracks) <= 200):
+        return error_response('current requires no tracks; queue changes require 1-200 tracks', 400)
+    playing = body.get('playing')
+    position = body.get('position_ms')
+    if playing is not None and not isinstance(playing, bool):
+        return error_response('playing must be boolean', 400)
+    if position is not None and (isinstance(position, bool) or not isinstance(position, int) or position < 0):
+        return error_response('position_ms must be a nonnegative integer', 400)
+    tracks = []
+    for raw in raw_tracks:
+        if not isinstance(raw, dict) or not _valid_video_id(raw.get('video_id')):
+            return error_response('invalid queue track', 400)
+        try:
+            duration = max(0, int(raw.get('duration_ms') or 0))
+        except (TypeError, ValueError, OverflowError):
+            return error_response('invalid duration_ms', 400)
+        tracks.append({'video_id': raw['video_id'], 'title': str(raw.get('title') or ''),
+                       'artist': str(raw.get('artist') or ''),
+                       'thumbnail': _thumbnail_url(raw.get('thumbnail')), 'duration_ms': duration})
+    with _np_lock:
+        queue = tracks if action == 'start' else list(_now_playing.get('queue') or [])
+        current_index = _now_playing.get('queue_index', -1)
+        idx = current_index if (isinstance(current_index, int) and 0 <= current_index < len(queue)
+                               and queue[current_index].get('video_id') == after and action != 'start') else next(
+            (i for i, item in enumerate(queue) if item.get('video_id') == after), -1)
+        if idx < 0:
+            return error_response('starting track must be in tracks' if action == 'start' else
+                                  'current track is no longer in the shared queue', 400 if action == 'start' else 409)
+        if action in ('next', 'extend') and _now_playing.get('video_id') != after:
+            return error_response('phone queue edit is stale', 409)
+        live_position = _computed_position_ms()
+        changed = action == 'start' or (action == 'current' and _now_playing.get('video_id') != after)
+        if action in ('start', 'current'):
+            item = queue[idx]
+            _now_playing.update({'video_id': after, 'queue_index': idx,
+                                 'title': item.get('title', ''), 'artist': item.get('artist', ''),
+                                 'artists': item.get('artists', []), 'thumbnail': item.get('thumbnail', ''),
+                                 'duration_ms': item.get('duration_ms', 0), 'playback_processing': False})
+            if playing is not None:
+                _now_playing['playing'] = playing
+                _now_playing['playback_confirmed'] = playing
+            elif action == 'start':
+                _now_playing.update(playing=False, playback_confirmed=False)
+            _reset_progress(position if position is not None else (0 if changed else live_position))
+            if changed or playing is not None:
+                _now_playing['playback_revision'] = int(_now_playing.get('playback_revision', 0)) + 1
+        if action == 'next':
+            queue[idx + 1:idx + 1] = tracks
+        elif action == 'extend':
+            existing = {item.get('video_id') for item in queue}
+            for track in tracks:
+                if track['video_id'] not in existing:
+                    queue.append(track); existing.add(track['video_id'])
+        if action != 'current':
+            _now_playing.update(queue=queue, queue_web_dirty=True)
+        _now_playing['updated_at'] = time.time()
+    _notify_sse()
+    return jsonify({'ok': True})
 
 
 @app.route("/next_track/", methods=["GET"])
