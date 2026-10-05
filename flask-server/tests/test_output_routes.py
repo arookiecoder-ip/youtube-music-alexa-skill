@@ -13,6 +13,8 @@ from test_app_queue import PhoneQueueTests, A, B, track
 class OutputRoutesTests(PhoneQueueTests):
     def setUp(self):
         super().setUp()
+        self.seek_dispatch = Mock(return_value=None)
+        self.namespace['_dispatch_play_with_retry'] = self.seek_dispatch
         self.arm = Mock()
         self.namespace.update(copy=copy, threading=threading, logger=Mock(), _effective_serial=lambda serial: serial,
             _touch_cached_audio=Mock(), _ensure_audio_ready_for_play=Mock(), _arm_play=self.arm,
@@ -24,7 +26,7 @@ class OutputRoutesTests(PhoneQueueTests):
         source = Path(__file__).resolve().parents[1] / 'server.py'
         functions = [node for node in ast.parse(source.read_text()).body
                      if isinstance(node, ast.FunctionDef) and node.name in
-                     ('app_playback_output', '_claim_alexa_output', 'alexa_command')]
+                     ('app_playback_output', '_claim_alexa_output', 'alexa_command', 'alexa_seek')]
         exec(compile(ast.Module(body=functions, type_ignores=[]), str(source), 'exec'), self.namespace)
 
     def output_request(self, action, token=''):
@@ -159,3 +161,24 @@ class OutputRoutesTests(PhoneQueueTests):
         self.assertFalse(self.state['playing'])
         self.assertTrue(self.state['playback_confirmed'])
         self.assertFalse(self.state['playback_processing'])
+
+    def test_seek_after_phone_pause_only_moves_cursor_and_never_starts_alexa(self):
+        self.output_request('claim')
+        changed = threading.Event()
+        self.namespace['_notify_sse'] = changed.set
+        responses = []
+        def seek():
+            with self.app.test_client() as client:
+                responses.append(client.post('/alexa/seek/', json={'serial': 'echo-one', 'position_ms': 42000}))
+        worker = threading.Thread(target=seek)
+        worker.start()
+        self.assertTrue(changed.wait(1))
+        output = self.client.get('/api/app/output/').json
+        self.assertEqual(self.output_request('ack', output['output_token']).status_code, 200)
+        worker.join(1)
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(responses[0].status_code, 200)
+        self.assertTrue(responses[0].json['paused'])
+        self.assertFalse(self.state['playing'])
+        self.assertEqual(self.state['position_ms'], 42000)
+        self.seek_dispatch.assert_not_called()

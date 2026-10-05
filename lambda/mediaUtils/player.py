@@ -1238,6 +1238,10 @@ class Controller:
                     handler_input, armed_video_id,
                     is_playback=is_playback,
                     offset_in_ms=armed_offset_ms)
+            if armed_kind == 'resume' and fresh and armed_video_id == persisted_video_id:
+                # Phone playback advances independently of Alexa's persisted stop offset.
+                # Keep the cached URL, but resume at the authoritative shared cursor.
+                playback_info['offset_in_ms'] = max(0, int(armed_offset_ms or 0))
         if not metadata:
             return Controller.error_response(handler_input, data.NOTHING_TO_RESUME, is_playback)
         if (playback_info.get('stream_url')

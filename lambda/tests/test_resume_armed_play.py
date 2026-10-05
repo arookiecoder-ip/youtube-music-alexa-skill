@@ -229,6 +229,19 @@ class ResumeHonorsFreshResumeArm(unittest.TestCase):
         self.assertIn(NEW_SONG, stream.token)
         self.assertEqual(stream.url, 'http://stream-new')
 
+    def test_same_song_phone_handoff_uses_shared_offset_without_refetch(self):
+        hi = _make_handler_input(_user_attr(
+            [_raw(NEW_SONG)], index=0, play_order=[0], offset_ms=5000,
+            stream_url='http://stream-new', stream_url_video_id=NEW_SONG))
+        with mock.patch.object(player.Api, 'get_armed_play', return_value=_armed(NEW_SONG, offset_ms=85000)), \
+             mock.patch.object(player.Api, 'stream_video') as stream_mock, \
+             mock.patch.object(player.Api, 'get_stream') as get_stream_mock:
+            player.Controller.resume(hi, is_playback=True)
+        stream_mock.assert_not_called()
+        get_stream_mock.assert_not_called()
+        self.assertEqual(_played_stream(hi).offset_in_milliseconds, 85000)
+        self.assertEqual(_played_stream(hi).url, 'http://stream-new')
+
     def test_no_arm_keeps_normal_session_resume(self):
         """Voice resumes (and old servers) arm nothing: behavior unchanged."""
         hi = _make_handler_input(_user_attr(
