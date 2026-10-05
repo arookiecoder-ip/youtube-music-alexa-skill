@@ -3843,6 +3843,10 @@ def app_queue():
         return error_response('playing must be boolean', 400)
     if position is not None and (isinstance(position, bool) or not isinstance(position, int) or position < 0):
         return error_response('position_ms must be a nonnegative integer', 400)
+    requested_index = body.get('queue_index')
+    if requested_index is not None and (isinstance(requested_index, bool)
+                                        or not isinstance(requested_index, int) or requested_index < 0):
+        return error_response('queue_index must be a nonnegative integer', 400)
     tracks = []
     for raw in raw_tracks:
         if not isinstance(raw, dict) or not _valid_video_id(raw.get('video_id')):
@@ -3857,16 +3861,25 @@ def app_queue():
     with _np_lock:
         queue = tracks if action == 'start' else list(_now_playing.get('queue') or [])
         current_index = _now_playing.get('queue_index', -1)
-        idx = current_index if (isinstance(current_index, int) and 0 <= current_index < len(queue)
-                               and queue[current_index].get('video_id') == after and action != 'start') else next(
-            (i for i, item in enumerate(queue) if item.get('video_id') == after), -1)
+        if requested_index is not None:
+            # Phone playback supplies the exact occurrence, including duplicate songs.
+            # Reject a stale cursor without moving now-playing or truncating the shared queue.
+            if (requested_index >= len(queue) or queue[requested_index].get('video_id') != after):
+                return error_response('phone queue cursor is stale', 409)
+            idx = requested_index
+        else:
+            # Retain compatibility with existing clients that send only a video id.
+            idx = current_index if (isinstance(current_index, int) and 0 <= current_index < len(queue)
+                                   and queue[current_index].get('video_id') == after and action != 'start') else next(
+                (i for i, item in enumerate(queue) if item.get('video_id') == after), -1)
         if idx < 0:
             return error_response('starting track must be in tracks' if action == 'start' else
                                   'current track is no longer in the shared queue', 400 if action == 'start' else 409)
         if action in ('next', 'extend') and _now_playing.get('video_id') != after:
             return error_response('phone queue edit is stale', 409)
         live_position = _computed_position_ms()
-        changed = action == 'start' or (action == 'current' and _now_playing.get('video_id') != after)
+        changed = action == 'start' or (action == 'current' and
+            (_now_playing.get('video_id') != after or current_index != idx))
         if action in ('start', 'current'):
             item = queue[idx]
             _now_playing.update({'video_id': after, 'queue_index': idx,
