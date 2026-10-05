@@ -93,6 +93,11 @@ class OutputRoutesTests(PhoneQueueTests):
         self.assertEqual(self.state, before)
         self.assertTrue(self.output.owns_phone('phone-one', claim['output_token']))
         self.namespace['_update_now_playing'].assert_not_called()
+        with self.app.test_request_context('/get_radio/?video_id=' + A):
+            response = asyncio.run(self.namespace['get_radio']())
+        self.assertEqual(response.json['playlist'], [track(B)])
+        self.assertEqual(self.state, before)
+        self.assertTrue(self.output.owns_phone('phone-one', claim['output_token']))
 
     def test_phone_cannot_start_before_actual_echo_stop_confirmation(self):
         accepted = threading.Event()

@@ -4038,9 +4038,9 @@ async def get_radio():
     logger.info('Completed get_radio in %.2f seconds.', time.time() - start_time)
     if not playlist:
         return error_response('no radio queue found', 404)
-    if request.args.get('update_queue', '1') == '0':
+    if (request.args.get('update_queue', '1') == '0'
+            or _playback_output.snapshot()['playback_output'] == 'phone'):
         return jsonify({'playlist': playlist})
-    _claim_alexa_output()
     # Refresh the web remote's "Up Next" queue now that we have the full list
     # (find_stream_list only knew the seed). Keep the currently-playing track as
     # index 0; the radio queue is seeded from it so it's normally first anyway.
