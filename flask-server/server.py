@@ -8462,7 +8462,14 @@ async def api_get_library():
                 and account_name
                 and account_name in author_names
             )
-        return jsonify({"playlists": playlists})
+        # Saved albums belong to the authenticated account, just like playlists.
+        # Keep playlists usable if this optional browse surface is unavailable.
+        try:
+            albums = await asyncio.to_thread(yt.get_library_albums, 100)
+        except Exception as album_error:
+            logger.warning("YouTube saved albums unavailable: %s", album_error)
+            albums = []
+        return jsonify({"playlists": playlists, "albums": albums or []})
     except Exception as e:
         # Browser-header auth may reject some browse endpoints; show LM fallback.
         message = str(e)
@@ -9512,6 +9519,69 @@ async def api_resolve_artist():
             time.time() + _ARTIST_RESOLVE_CACHE_TTL,
             (match['artist'], match['browseId']))
     return jsonify({'name': match['artist'], 'channel_id': match['browseId']})
+
+
+@app.route("/api/track/<video_id>/listen", methods=["POST"])
+def api_track_listen(video_id):
+    """Phone playback uses the same YouTube history reporting as confirmed Echo plays."""
+    if not _logged_in() or _jam_guest():
+        return jsonify({'error': 'Account sign-in required.'}), 401
+    if not _valid_video_id(video_id):
+        return jsonify({'error': 'Invalid video id.'}), 400
+    from ytmusicapi.auth.types import AuthType
+    if _get_ytmusic_home().auth_type == AuthType.UNAUTHORIZED:
+        return jsonify({'error': 'YouTube Music authentication required.'}), 403
+    body = request.get_json(silent=True) or {}
+    _record_listen(video_id, str(body.get('title') or '')[:500],
+                   str(body.get('artist') or '')[:500], str(body.get('thumbnail') or '')[:2000])
+    return jsonify({'ok': True})
+
+
+@app.route("/api/track/<video_id>/metadata", methods=["GET"])
+async def api_track_metadata(video_id):
+    """Read-only duration/credits lookup for artist previews with missing lengths."""
+    if not _valid_video_id(video_id):
+        return jsonify({'error': 'Invalid video id.'}), 400
+    metadata = await asyncio.to_thread(_lookup_video_metadata, video_id)
+    if not metadata:
+        return jsonify({'error': 'Song metadata unavailable.'}), 404
+    if not metadata.get('duration_ms'):
+        probed = await asyncio.to_thread(Supporting.probe_metadata, video_id)
+        if probed and probed.get('duration_ms'):
+            metadata = {**metadata, 'duration_ms': probed['duration_ms']}
+    return jsonify(metadata)
+
+
+@app.route("/api/artist/<channel_id>/releases", methods=["GET"])
+async def api_artist_releases(channel_id):
+    """Return bounded pages of an artist's complete album/single collection."""
+    if not _detail_id_has_known_shape('artist', channel_id):
+        return jsonify({'error': 'Artist not found.'}), 404
+    kind = request.args.get('kind', 'albums')
+    if kind not in ('albums', 'singles', 'playlists'):
+        return jsonify({'error': 'Invalid release category.'}), 400
+    try:
+        offset = max(0, int(request.args.get('offset', 0)))
+        limit = min(100, max(1, int(request.args.get('limit', 30))))
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Invalid page.'}), 400
+    try:
+        yt = _get_ytmusic() if _jam_guest() else _get_ytmusic_home()
+        artist = await asyncio.to_thread(yt.get_artist, channel_id)
+        section = (artist or {}).get(kind) or {}
+        params = section.get('params')
+        browse_id = section.get('browseId')
+        if params and browse_id:
+            releases = await asyncio.to_thread(yt.get_artist_albums, browse_id, params, offset + limit + 1)
+        else:
+            releases = section.get('results') or []
+        page = releases[offset:offset + limit]
+        next_offset = offset + len(page)
+        return jsonify({'items': page, 'next_offset': next_offset,
+                        'has_more': next_offset < len(releases)})
+    except Exception as error:
+        logger.warning('Artist releases unavailable for %s: %s', channel_id, error)
+        return jsonify({'error': 'Artist releases temporarily unavailable. Please retry.'}), 502
 
 
 @app.route("/api/artist/<channel_id>/songs", methods=["GET"])
