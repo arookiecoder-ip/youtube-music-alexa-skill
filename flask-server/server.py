@@ -1,4 +1,4 @@
-import asyncio, collections, difflib, glob, hashlib, hmac, itertools, json, math, os, random, secrets, sys, threading, time, re, subprocess, logging, copy, uuid, tempfile, shlex
+import asyncio, collections, difflib, glob, hashlib, hmac, itertools, json, math, os, random, secrets, shutil, sys, threading, time, re, subprocess, logging, copy, uuid, tempfile, shlex
 from datetime import timedelta
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
@@ -215,6 +215,28 @@ def _cache_seconds_env(name, default):
 # previously documented 30-minute cron / two-hour retention policy.
 AUDIO_CACHE_TTL = _cache_seconds_env("AUDIO_CACHE_TTL", 7200)
 AUDIO_CACHE_SWEEP_INTERVAL = _cache_seconds_env("AUDIO_CACHE_SWEEP_INTERVAL", 1800)
+
+
+def _cache_megabytes_env(name, default):
+    """Read a non-negative size in MB; 0 disables that limit."""
+    try:
+        value = float(os.environ.get(name, default))
+    except (TypeError, ValueError):
+        return int(default) * 1024 * 1024
+    if not math.isfinite(value) or value < 0:
+        value = float(default)
+    return int(value * 1024 * 1024)
+
+
+# LRU bounds on top of the idle TTL. Every cache hit marks the file as used,
+# so the TTL counts from the last play (not the download) and, once the cache
+# is over budget, the least recently played files go first. Pinned (current)
+# tracks are never evicted. 0 disables a limit.
+AUDIO_CACHE_MAX_BYTES = _cache_megabytes_env("AUDIO_CACHE_MAX_MB", 2048)
+AUDIO_CACHE_MIN_FREE_BYTES = _cache_megabytes_env("AUDIO_CACHE_MIN_FREE_MB", 512)
+# A file younger than this is never evicted for space: its requester may not
+# have opened it yet (download finished, send_file not started).
+_AUDIO_CACHE_EVICT_MIN_AGE = 60.0
 
 # When set, every request must carry ?key=<API_KEY> (or X-Api-Key header).
 # Key rides in the URL because Alexa devices fetch /proxy/ with no custom headers.
@@ -807,7 +829,7 @@ _SESSION_PREFIXES = ('/alexa/now_playing/', '/history/', '/api/playlists/', '/re
 # API/device endpoints: the Alexa skill and web-remote JS hit these directly
 # and need a machine-readable JSON error, never an HTML redirect, on failure.
 _API_PATH_ROOTS = (
-    '/api', '/alexa', '/proxy', '/get_stream', '/get_radio',
+    '/api', '/alexa', '/proxy', '/audio', '/get_stream', '/get_radio',
     '/find_stream_list', '/armed_play', '/stream_video',
     '/stream_playlist', '/get_playlist_info', '/queue_tracks',
     '/next_track', '/play_genre', '/history', '/recommendations',
@@ -1400,6 +1422,7 @@ _rate_limiter = _RateLimiter()
 _RATE_LIMITS = {
     'api':      (120, 60),    # /alexa/*, /api/* - general API
     'proxy':    (30, 60),     # /proxy/ - expensive audio downloads
+    'audio':    (60, 60),     # /audio/ - app audio (searches, info and downloads)
     'poll':     (200, 60),   # /alexa/now_playing/ - SSE-alike polling
     'static':   (0, 0),       # No limit for static assets
     'browser_session': (0, 0), # Owner-only noVNC/session polling is frequent
@@ -1411,6 +1434,8 @@ def _rate_limit_group(path: str) -> str:
         return 'static'
     if path == '/proxy' or path.startswith('/proxy'):
         return 'proxy'
+    if path == '/audio' or path.startswith('/audio/'):
+        return 'audio'
     if path.startswith('/api/youtube/browser-session/'):
         return 'browser_session'
     # `path` arrives with its trailing slash already stripped, so match the
@@ -1598,6 +1623,42 @@ def _touch_cached_audio(video_id: str):
             os.utime(path, None)
     except Exception:
         pass
+
+
+def _audio_last_used(st) -> float:
+    """When a cache file was last used: written (mtime) or served (atime).
+
+    Hits are recorded in atime (see `_mark_audio_used`) rather than mtime so
+    the file's Last-Modified/ETag stay stable for HTTP range requests and
+    validators. atime set explicitly via utime is honoured on noatime/relatime
+    mounts too; the automatic atime update on a read only ever makes a file
+    look *more* recent, which is also correct for LRU."""
+    return max(st.st_atime, st.st_mtime)
+
+
+def _mark_audio_used(path):
+    """Record a cache hit for LRU without changing the file's mtime."""
+    try:
+        st = os.stat(path)
+        os.utime(path, (time.time(), st.st_mtime))
+    except OSError:
+        pass
+
+
+_audio_prune_lock = threading.Lock()
+
+
+def _schedule_audio_cache_prune():
+    """Enforce the size/free-space budget soon after a new file lands.
+
+    Runs off-thread so the request that produced the file never waits on a
+    directory scan. If a prune is already running it covers this one too."""
+    def run():
+        try:
+            Supporting.prune_audio_cache()
+        except Exception:
+            logger.exception("Audio cache prune failed")
+    threading.Thread(target=run, daemon=True, name="audio-cache-prune").start()
 
 
 def _is_dead_video(video_id: str) -> bool:
@@ -3162,24 +3223,84 @@ class Supporting:
                 pass
 
     def prune_audio_cache():
-        os.makedirs(AUDIO_CACHE_DIR, exist_ok=True)
-        # Never sweep the currently selected track: a long pause must resume
-        # from a warm send_file, not a cold yt-dlp download past the Echo's
-        # ~11s timeout (explicit truncation eviction still goes through
-        # _evict_bad_cache_entry, which is unaffected by this pin).
-        pinned = _pinned_cache_video_ids()
-        for old in glob.glob(os.path.join(AUDIO_CACHE_DIR, "*")):
-            try:
+        """Idle-TTL sweep, then least-recently-used eviction down to budget.
+
+        1. Any file idle (not written or played) for AUDIO_CACHE_TTL goes.
+        2. If the finished files still exceed AUDIO_CACHE_MAX_BYTES, or the
+           disk has less than AUDIO_CACHE_MIN_FREE_BYTES free, the least
+           recently used files are evicted until both limits hold.
+        Returns (files_removed, bytes_removed).
+        """
+        if not _audio_prune_lock.acquire(blocking=False):
+            return 0, 0  # a concurrent prune is already doing this work
+        try:
+            os.makedirs(AUDIO_CACHE_DIR, exist_ok=True)
+            # Never sweep the currently selected track: a long pause must resume
+            # from a warm send_file, not a cold yt-dlp download past the Echo's
+            # ~11s timeout (explicit truncation eviction still goes through
+            # _evict_bad_cache_entry, which is unaffected by this pin).
+            pinned = _pinned_cache_video_ids()
+            now = time.time()
+            removed_files = removed_bytes = 0
+            total = 0
+            candidates = []  # (last_used, size, path) of evictable finished files
+            for old in glob.glob(os.path.join(AUDIO_CACHE_DIR, "*")):
+                try:
+                    st = os.stat(old)
+                except OSError:
+                    continue
+                is_part = old.endswith('.part')
                 # Pin finished files only: *.part are in-flight/orphaned yt-dlp
                 # writes (transient, seconds old) and keep their original sweep
                 # semantics so crash orphans are still collected.
-                if (pinned and not old.endswith('.part')
-                        and os.path.basename(old).split('.')[0] in pinned):
+                if not is_part and pinned and os.path.basename(old).split('.')[0] in pinned:
+                    total += st.st_size
                     continue
-                if time.time() - os.path.getmtime(old) > AUDIO_CACHE_TTL:
-                    os.remove(old)
-            except OSError:
-                pass
+                last_used = st.st_mtime if is_part else _audio_last_used(st)
+                if now - last_used > AUDIO_CACHE_TTL:
+                    try:
+                        os.remove(old)
+                        removed_files += 1
+                        removed_bytes += st.st_size
+                    except OSError:
+                        pass
+                    continue
+                if not is_part:
+                    total += st.st_size
+                    candidates.append((last_used, st.st_size, old))
+
+            over = max(0, total - AUDIO_CACHE_MAX_BYTES) if AUDIO_CACHE_MAX_BYTES else 0
+            short = 0
+            if AUDIO_CACHE_MIN_FREE_BYTES:
+                try:
+                    free = shutil.disk_usage(AUDIO_CACHE_DIR).free
+                    short = max(0, AUDIO_CACHE_MIN_FREE_BYTES - free)
+                except OSError:
+                    short = 0
+            need = max(over, short)
+            if need:
+                for last_used, size, path in sorted(candidates):
+                    if need <= 0:
+                        break
+                    if now - last_used < _AUDIO_CACHE_EVICT_MIN_AGE:
+                        break  # everything after this is even more recent
+                    try:
+                        os.remove(path)
+                    except OSError:
+                        continue
+                    need -= size
+                    removed_files += 1
+                    removed_bytes += size
+                if need > 0:
+                    logger.warning("audio cache: still %.1f MB over budget after LRU eviction "
+                                   "(remaining files are pinned or just written)",
+                                   need / (1024 * 1024))
+            if removed_files:
+                logger.info("audio cache: evicted %d file(s), %.1f MB",
+                            removed_files, removed_bytes / (1024 * 1024))
+            return removed_files, removed_bytes
+        finally:
+            _audio_prune_lock.release()
 
     def ytdlp_download_command(video_id: str, output, client: str = "default",
                                 retries: int = 2, socket_timeout: int = 10):
@@ -3396,6 +3517,7 @@ class Supporting:
                     if downloaded:
                         # Throughput is back; stop suppressing prefetch.
                         _reset_rate_limit_cooldown()
+                        _schedule_audio_cache_prune()
                     return Supporting.cached_audio_path(video_id)
         finally:
             if prefetch_slot is not None:
@@ -3697,90 +3819,6 @@ def _resolve_next_track(queue, after_video_id):
     return queue[idx + 1]
 
 
-@app.route("/api/app/queue/", methods=["POST"])
-def app_queue():
-    """Update the shared queue for phone playback without issuing Echo commands."""
-    body = request.get_json(silent=True)
-    if not isinstance(body, dict):
-        return error_response('JSON object required', 400)
-    action = body.get('action')
-    if action not in ('start', 'next', 'extend', 'current'):
-        return error_response('invalid queue action', 400)
-    after = body.get('after') or ''
-    raw_tracks = body.get('tracks')
-    if not _valid_video_id(after) or not isinstance(raw_tracks, list) or not (
-            (action == 'current' and len(raw_tracks) == 0) or 1 <= len(raw_tracks) <= 200):
-        return error_response('valid after and 1-200 tracks required', 400)
-    tracks = []
-    for raw in raw_tracks:
-        if not isinstance(raw, dict) or not _valid_video_id(raw.get('video_id')):
-            return error_response('invalid queue track', 400)
-        try:
-            duration = max(0, int(raw.get('duration_ms') or 0))
-        except (TypeError, ValueError):
-            return error_response('invalid duration_ms', 400)
-        tracks.append({
-            'video_id': raw['video_id'],
-            'title': str(raw.get('title') or ''),
-            'artist': str(raw.get('artist') or ''),
-            'thumbnail': _thumbnail_url(raw.get('thumbnail')),
-            'duration_ms': duration,
-        })
-    with _np_lock:
-        queue = list(_now_playing.get('queue') or [])
-        idx = next((i for i in range(len(queue) - 1, -1, -1)
-                    if queue[i].get('video_id') == after), -1)
-        if action == 'start':
-            queue = tracks
-            idx = next((i for i, t in enumerate(queue) if t['video_id'] == after), -1)
-            if idx < 0:
-                return error_response('starting track must be in tracks', 400)
-            current = queue[idx]
-            _now_playing.update({
-                'queue': queue, 'queue_index': idx, 'video_id': after,
-                'title': current['title'], 'artist': current['artist'],
-                'thumbnail': current['thumbnail'], 'duration_ms': current['duration_ms'],
-                'playing': False, 'playback_confirmed': False,
-                'playback_processing': False, 'position_ms': 0,
-                'queue_web_dirty': True, 'updated_at': time.time(),
-            })
-            _reset_progress(0)
-        elif idx < 0:
-            # A stale phone must not resurrect a queue replaced by the web remote.
-            return error_response('current track is no longer in the shared queue', 409)
-        elif action == 'current':
-            try:
-                position_ms = max(0, int(body.get('position_ms') or 0))
-            except (TypeError, ValueError):
-                return error_response('invalid position_ms', 400)
-            if not isinstance(body.get('playing'), bool):
-                return error_response('playing must be a boolean', 400)
-            current = queue[idx]
-            _now_playing.update({
-                'queue_index': idx, 'video_id': after,
-                'title': current['title'], 'artist': current['artist'],
-                'thumbnail': current['thumbnail'], 'duration_ms': current['duration_ms'],
-                'playing': body['playing'], 'playback_confirmed': body['playing'],
-                'playback_processing': False, 'position_ms': position_ms,
-                'updated_at': time.time(),
-            })
-            _reset_progress(position_ms)
-        else:
-            if action == 'next':
-                queue[idx + 1:idx + 1] = tracks
-            else:
-                existing = {t.get('video_id') for t in queue}
-                for track in tracks:
-                    if track['video_id'] not in existing:
-                        queue.append(track)
-                        existing.add(track['video_id'])
-            _now_playing['queue'] = queue
-            _now_playing['queue_web_dirty'] = True
-            _now_playing['updated_at'] = time.time()
-    _notify_sse()
-    return jsonify({'ok': True})
-
-
 @app.route("/next_track/", methods=["GET"])
 def next_track():
     """Authoritative next-up track in the web remote's live queue.
@@ -3823,9 +3861,6 @@ async def get_radio():
     logger.info('Completed get_radio in %.2f seconds.', time.time() - start_time)
     if not playlist:
         return error_response('no radio queue found', 404)
-    # Phone callers install/extend their shared queue explicitly after fetching radio.
-    if request.args.get('update_queue', '1') == '0':
-        return jsonify({'playlist': playlist})
     # Refresh the web remote's "Up Next" queue now that we have the full list
     # (find_stream_list only knew the seed). Keep the currently-playing track as
     # index 0; the radio queue is seeded from it so it's normally first anyway.
@@ -4066,9 +4101,180 @@ def proxy_stream():
         path = Supporting.ensure_downloaded(video_id)
     if not path:
         return error_response('download failed', 502)
+    _mark_audio_used(path)
     _confirm_stream_delivery(video_id)
     mimetype = 'audio/mp4' if path.endswith(('.m4a', '.mp4')) else 'audio/webm'
     return send_file(path, mimetype=mimetype, conditional=True)
+
+
+# ---- /audio/: side-effect-free audio for app clients (e.g. the JUKE app) ----
+# /proxy/ is the Echo's endpoint: every request rewrites now-playing, refreshes
+# the radio queue and confirms Echo playback, so an app fetching through it
+# would hijack the Echo's state. /audio/ serves the same yt-dlp cache with none
+# of that, plus things a phone app needs: search by text (with a duration hint
+# to pick the right version), YouTube links, a JSON resolve mode, stable
+# validators and byte ranges on cached files, and cache/metadata headers.
+
+_AUDIO_SEARCH_TTL = 1800.0
+_audio_search_cache = _BoundedCache(maxsize=512)
+
+
+def _audio_truthy(value) -> bool:
+    return (value or '').strip().lower() in ('1', 'true', 'yes', 'on')
+
+
+def _audio_search_song(query: str, duration_s: int = 0):
+    """Best YouTube Music song for `query`, or None.
+
+    With `duration_s` (the length the app expects, e.g. from Spotify), the
+    first of the top results whose length is within max(8 s, 7 %) wins, else
+    the closest one. That keeps live/remix/extended uploads from beating the
+    studio track. Cached for _AUDIO_SEARCH_TTL so repeated lookups are free.
+    """
+    key = (query.strip().lower(), int(duration_s or 0))
+    hit = _audio_search_cache.get(key)
+    if hit and time.time() - hit[0] < _AUDIO_SEARCH_TTL:
+        return hit[1]
+    ytmusic = _get_ytmusic()
+    results, error = _with_retry(
+        lambda: ytmusic.search(query, filter='songs', limit=5, ignore_spelling=True))
+    if error:
+        logger.warning("audio: search failed for %r: %s", query, error)
+        return None
+    songs = []
+    for item in results or []:
+        vid = item.get('videoId')
+        if not _valid_video_id(vid):
+            continue
+        songs.append({
+            'video_id': vid,
+            'title': item.get('title', ''),
+            'artist': _artist_credit_from_list(item.get('artists')),
+            'duration_ms': int(item.get('duration_seconds') or 0) * 1000,
+        })
+        if len(songs) == 5:
+            break
+    if not songs:
+        return None
+    best = songs[0]
+    if duration_s:
+        target_ms = int(duration_s) * 1000
+        tolerance = max(8000, target_ms * 0.07)
+        timed = [s for s in songs if s['duration_ms']]
+        within = [s for s in timed if abs(s['duration_ms'] - target_ms) <= tolerance]
+        if within:
+            best = within[0]
+        elif timed:
+            best = min(timed, key=lambda s: abs(s['duration_ms'] - target_ms))
+    _audio_search_cache.set(key, (time.time(), best))
+    return best
+
+
+def _audio_meta_headers(video_id, meta, cache_state):
+    headers = {'X-Video-Id': video_id, 'X-Cache': cache_state}
+    if meta:
+        # Percent-encoded: HTTP header values are Latin-1, titles are not.
+        headers['X-Title'] = quote(meta.get('title') or '', safe='')
+        headers['X-Artist'] = quote(meta.get('artist') or '', safe='')
+        if meta.get('duration_ms'):
+            headers['X-Duration-Ms'] = str(meta['duration_ms'])
+    return headers
+
+
+@app.route("/audio/", methods=["GET", "HEAD"])
+def audio_stream():
+    """Audio for app clients.
+
+    Pick the track with one of:
+      video_id=<11-char id>
+      url=<any YouTube / YouTube Music link>
+      q=<"title artist">[&duration=<seconds>]   (top YouTube Music song match)
+
+    Options:
+      info=1  JSON {video_id, title, artist, duration_ms, cached, audio_url}
+              instead of audio (no download); audio_url carries no API key.
+      wait=1  on a cache miss, finish the download first and serve the file
+              with Content-Length and byte ranges (instead of a live stream
+              that can't be seeked until it ends). Range requests and HEAD
+              always do this.
+
+    Cache hits are served with range support and a stable ETag, and count as
+    a use for the LRU cache. Headers: X-Video-Id, X-Cache (HIT/MISS) and, for
+    searches, percent-encoded X-Title / X-Artist plus X-Duration-Ms.
+    """
+    video_id = request.args.get("video_id")
+    meta = None
+    if not video_id and request.args.get("url"):
+        video_id = extract_youtube_video_id(request.args.get("url"))
+        if not video_id:
+            return error_response('"url" is not a YouTube video link', 400)
+    if not video_id and request.args.get("q"):
+        try:
+            duration_s = max(0, int(float(request.args.get("duration") or 0)))
+        except ValueError:
+            return error_response('invalid "duration"', 400)
+        meta = _audio_search_song(request.args["q"], duration_s)
+        if not meta:
+            return error_response('no matching song', 404)
+        video_id = meta['video_id']
+    if not _valid_video_id(video_id):
+        return error_response('provide "video_id", "url" or "q"', 400)
+    if _is_dead_video(video_id):
+        return error_response('video unavailable', 404)
+
+    path = Supporting.cached_audio_path(video_id)
+    cache_state = 'HIT' if path else 'MISS'
+    # Every client failed for this video moments ago. Answer at once instead of
+    # running the whole yt-dlp fallback chain again (a live stream would also
+    # have to report it as an empty 200), so the app can try another source.
+    if not path and _is_flaky_video(video_id) and not _audio_truthy(request.args.get("info")):
+        response, status = error_response('download recently failed; retry later', 503)
+        response.status_code = status
+        response.headers['Retry-After'] = str(int(_FLAKY_VIDEO_TTL))
+        return response
+
+    if _audio_truthy(request.args.get("info")):
+        base = PUBLIC_BASE_URL or request.url_root.rstrip('/')
+        body = dict(meta or {'video_id': video_id})
+        body['cached'] = bool(path)
+        body['audio_url'] = f"{base}/audio/?video_id={video_id}"
+        return jsonify(body)
+
+    headers = _audio_meta_headers(video_id, meta, cache_state)
+    if not path:
+        wants_file = (_audio_truthy(request.args.get("wait"))
+                      or request.headers.get('Range') or request.method == 'HEAD')
+        if not wants_file:
+            # Live stream for the fastest first byte; it also lands in the cache.
+            if _stream_is_inflight(video_id):
+                path = _await_inflight_stream(video_id)
+            if not path:
+                response = _stream_proxy_download(video_id, confirm=False, cancellable=False)
+                response.headers.update(headers)
+                return response
+        if not path and _stream_is_inflight(video_id):
+            path = _await_inflight_stream(video_id)
+        if not path and _download_in_progress(video_id):
+            path = _await_prewarm_cache(video_id)
+        if not path:
+            path = Supporting.ensure_downloaded(video_id)
+        if not path:
+            return error_response('download failed', 502)
+
+    _mark_audio_used(path)
+    mimetype = 'audio/mp4' if path.endswith(('.m4a', '.mp4')) else 'audio/webm'
+    try:
+        size = os.path.getsize(path)
+    except OSError:
+        return error_response('download failed', 502)
+    # ETag from id + size, not mtime: pause/resume touches mtime, and a
+    # changing validator would turn an app's resumed Range request into a
+    # full 200 re-download.
+    response = send_file(path, mimetype=mimetype, conditional=True,
+                         etag=f"{video_id}-{size}", max_age=86400)
+    response.headers.update(headers)
+    response.headers['Cache-Control'] = 'private, max-age=86400, immutable'
+    return response
 
 
 def _await_inflight_stream(video_id):
@@ -4137,7 +4343,7 @@ def _stream_superseded(video_id) -> bool:
     return True
 
 
-def _stream_abandon_watchdog(video_id, proc, generation, stop_event):
+def _stream_abandon_watchdog(video_id, proc, generation, stop_event, cancellable=True):
     """Kill a cold-cache yt-dlp process once nobody is waiting for its output.
 
     Without this, an abandoned stream holds a waitress worker thread and a live
@@ -4159,6 +4365,8 @@ def _stream_abandon_watchdog(video_id, proc, generation, stop_event):
                            video_id, _STREAM_MAX_SECONDS)
             _kill_process(proc)
             return
+        if not cancellable:
+            continue  # app (/audio/) streams don't follow the Echo; hard cap only
         stale = _generation_superseded(generation) and _stream_superseded(video_id)
         if not stale:
             superseded_since = None
@@ -4234,8 +4442,12 @@ def _is_audio_file_valid(path: str, expected_duration_ms: int = 0) -> bool:
     return True
 
 
-def _stream_proxy_download(video_id):
+def _stream_proxy_download(video_id, confirm=True, cancellable=True):
     """Stream a cold-cache yt-dlp download straight to the Echo response.
+
+    `confirm=False` / `cancellable=False` are for app clients (/audio/): they
+    must not mark Echo playback as confirmed, and must not be killed when the
+    Echo moves on to another track, since they are not playing on the Echo.
 
     Buffers the same bytes to the audio cache (atomic via a .part rename) so
     subsequent plays of this song take the fast send_file path. The Echo
@@ -4287,7 +4499,7 @@ def _stream_proxy_download(video_id):
             logger.info("proxy: trying %s fallback for %s", client, video_id)
         threading.Thread(
             target=_stream_abandon_watchdog,
-            args=(video_id, proc, generation, stop_watchdog),
+            args=(video_id, proc, generation, stop_watchdog, cancellable),
             name=f"proxy-watchdog-{video_id}-{client}", daemon=True,
         ).start()
 
@@ -4334,11 +4546,13 @@ def _stream_proxy_download(video_id):
                 # to start ticking 7-8 seconds before audio actually played.
                 if not confirmed:
                     confirmed = True
-                    _confirm_stream_delivery(video_id)
+                    if confirm:
+                        _confirm_stream_delivery(video_id)
                 yield chunk
                 # Fast-path abandonment check. The watchdog thread covers the
                 # (common) case where this loop is blocked in read() instead.
-                if _generation_superseded(generation) and _stream_superseded(video_id):
+                if (cancellable and _generation_superseded(generation)
+                        and _stream_superseded(video_id)):
                     logger.info("proxy: stopping superseded stream of %s", video_id)
                     break
             proc.wait()
@@ -4354,6 +4568,7 @@ def _stream_proxy_download(video_id):
             if proc.returncode == 0 and os.path.exists(temp_path) and _is_audio_file_valid(temp_path):
                 try:
                     os.replace(temp_path, cache_path)
+                    _schedule_audio_cache_prune()
                 except OSError:
                     pass
             else:
@@ -8247,7 +8462,14 @@ async def api_get_library():
                 and account_name
                 and account_name in author_names
             )
-        return jsonify({"playlists": playlists})
+        # Saved albums belong to the authenticated account, just like playlists.
+        # Keep playlists usable if this optional browse surface is unavailable.
+        try:
+            albums = await asyncio.to_thread(yt.get_library_albums, 100)
+        except Exception as album_error:
+            logger.warning("YouTube saved albums unavailable: %s", album_error)
+            albums = []
+        return jsonify({"playlists": playlists, "albums": albums or []})
     except Exception as e:
         # Browser-header auth may reject some browse endpoints; show LM fallback.
         message = str(e)
@@ -9297,6 +9519,74 @@ async def api_resolve_artist():
             time.time() + _ARTIST_RESOLVE_CACHE_TTL,
             (match['artist'], match['browseId']))
     return jsonify({'name': match['artist'], 'channel_id': match['browseId']})
+
+
+@app.route("/api/track/<video_id>/listen", methods=["POST"])
+def api_track_listen(video_id):
+    """Phone playback uses the same YouTube history reporting as confirmed Echo plays."""
+    if not _logged_in() or _jam_guest():
+        return jsonify({'error': 'Account sign-in required.'}), 401
+    if not _valid_video_id(video_id):
+        return jsonify({'error': 'Invalid video id.'}), 400
+    from ytmusicapi.auth.types import AuthType
+    if _get_ytmusic_home().auth_type == AuthType.UNAUTHORIZED:
+        return jsonify({'error': 'YouTube Music authentication required.'}), 403
+    body = request.get_json(silent=True) or {}
+    _record_listen(video_id, str(body.get('title') or '')[:500],
+                   str(body.get('artist') or '')[:500], str(body.get('thumbnail') or '')[:2000])
+    return jsonify({'ok': True})
+
+
+@app.route("/api/track/<video_id>/metadata", methods=["GET"])
+async def api_track_metadata(video_id):
+    """Read-only duration/credits lookup for artist previews with missing lengths."""
+    if not _valid_video_id(video_id):
+        return jsonify({'error': 'Invalid video id.'}), 400
+    metadata = await asyncio.to_thread(_lookup_video_metadata, video_id)
+    if not metadata:
+        return jsonify({'error': 'Song metadata unavailable.'}), 404
+    if not metadata.get('duration_ms'):
+        probed = await asyncio.to_thread(Supporting.probe_metadata, video_id)
+        if probed and probed.get('duration_ms'):
+            metadata = {**metadata, 'duration_ms': probed['duration_ms']}
+    return jsonify(metadata)
+
+
+@app.route("/api/artist/<channel_id>/releases", methods=["GET"])
+async def api_artist_releases(channel_id):
+    """Return bounded pages of an artist's complete album/single collection."""
+    if not _detail_id_has_known_shape('artist', channel_id):
+        return jsonify({'error': 'Artist not found.'}), 404
+    kind = request.args.get('kind', 'albums')
+    if kind not in ('albums', 'singles', 'playlists'):
+        return jsonify({'error': 'Invalid release category.'}), 400
+    try:
+        offset = max(0, int(request.args.get('offset', 0)))
+        limit = min(100, max(1, int(request.args.get('limit', 30))))
+    except (TypeError, ValueError):
+        return jsonify({'error': 'Invalid page.'}), 400
+    try:
+        # Use the same renderer/authentication fallbacks as the artist page.
+        artist_response = await api_get_artist(channel_id)
+        if isinstance(artist_response, tuple):
+            return artist_response
+        artist = artist_response.get_json().get('artist') or {}
+        yt = _get_ytmusic() if _jam_guest() else _get_ytmusic_home()
+        section = artist.get(kind) or {}
+        params = section.get('params')
+        browse_id = section.get('browseId')
+        if params and browse_id:
+            from artist_releases import get_artist_releases
+            releases = await asyncio.to_thread(get_artist_releases, yt, browse_id, params, offset + limit + 1)
+        else:
+            releases = section.get('results') or []
+        page = releases[offset:offset + limit]
+        next_offset = offset + len(page)
+        return jsonify({'items': page, 'next_offset': next_offset,
+                        'has_more': next_offset < len(releases)})
+    except Exception as error:
+        logger.warning('Artist releases unavailable for %s: %s', channel_id, error)
+        return jsonify({'error': 'Artist releases temporarily unavailable. Please retry.'}), 502
 
 
 @app.route("/api/artist/<channel_id>/songs", methods=["GET"])
