@@ -47,15 +47,45 @@ def normalize_release_response(response):
                 normalized.append(item)
         return normalized
 
+    def continuation_token(node):
+        if isinstance(node, dict):
+            if 'continuationCommand' in node:
+                return node['continuationCommand'].get('token')
+            for child in node.values():
+                token = continuation_token(child)
+                if token:
+                    return token
+        elif isinstance(node, list):
+            for child in node:
+                token = continuation_token(child)
+                if token:
+                    return token
+        return None
+
+    def normalize_grid(grid):
+        items = grid.get('items') or []
+        token = next((continuation_token(item['continuationItemRenderer']) for item in items
+                      if 'continuationItemRenderer' in item), None)
+        grid['items'] = normalize_items(items)
+        if token and not grid.get('continuations'):
+            grid['continuations'] = [{'nextContinuationData': {'continuation': token}}]
+
     shelf = find_shelf(response.get('contents', {}))
     if shelf is not None:
-        shelf['items'] = normalize_items(shelf.get('items') or [])
+        normalize_grid(shelf)
         # get_artist_albums assumes a single-column grid, even when its own
         # contents lookup successfully found a carousel. Preserve pagination.
         response['contents'] = {'singleColumnBrowseResultsRenderer': {'tabs': [
             {'tabRenderer': {'content': {'sectionListRenderer': {'contents': [
                 {'gridRenderer': shelf}]}}}}]}}
-    continuations = response.get('continuationContents', {})
+    continuations = response.setdefault('continuationContents', {})
+    # Newer YouTube responses append renderer items rather than returning a
+    # gridContinuation. Translate both the footer token and the next page.
+    for action in response.get('onResponseReceivedActions', []) + response.get('onResponseReceivedEndpoints', []):
+        append = action.get('appendContinuationItemsAction')
+        if append is not None:
+            continuations['gridContinuation'] = {'items': append.get('continuationItems') or []}
+            break
     for kind in ('musicCarouselShelfContinuation', 'musicShelfContinuation'):
         if kind not in continuations:
             continue
@@ -63,7 +93,7 @@ def normalize_release_response(response):
         continuations['gridContinuation'] = {**shelf, 'items': shelf.get('contents', [])}
     if 'gridContinuation' in continuations:
         grid = continuations['gridContinuation']
-        grid['items'] = normalize_items(grid.get('items') or [])
+        normalize_grid(grid)
     return response
 
 
