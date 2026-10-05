@@ -65,6 +65,35 @@ class PhoneQueueTests(unittest.TestCase):
         self.assertEqual(self.state['position_ms'], 23000)
         self.assertTrue(self.state['playback_confirmed'])
 
+    def test_current_moves_to_exact_duplicate_occurrence_without_reordering(self):
+        self.state['queue'] = [track(A), track(B), track(A, 'Repeated song'), track(C)]
+        self.state.update(video_id=B, queue_index=1)
+        queue = self.state['queue']
+        self.assertEqual(self.post('current', after=A, queue_index=2, playing=True, position_ms=23000).status_code, 200)
+        self.assertIs(self.state['queue'], queue)
+        self.assertEqual((self.state['queue_index'], self.state['title']), (2, 'Repeated song'))
+        self.assertEqual(self.state['position_ms'], 23000)
+        self.assertEqual(self.echo.mock_calls, [])
+
+    def test_same_video_new_occurrence_resets_progress(self):
+        self.state['queue'] = [track(A), track(B), track(A)]
+        self.assertEqual(self.post('current', after=A, queue_index=2).status_code, 200)
+        self.assertEqual(self.state['position_ms'], 0)
+        self.assertEqual(self.state['queue_index'], 2)
+
+    def test_stale_duplicate_cursor_does_not_change_playback(self):
+        before = copy.deepcopy(self.state)
+        for index in (1, 200):
+            self.assertEqual(self.post('current', after=A, queue_index=index, playing=True).status_code, 409)
+        self.assertEqual(self.state, before)
+        self.notify.assert_not_called()
+
+    def test_invalid_cursor_is_rejected_before_state_changes(self):
+        before = copy.deepcopy(self.state)
+        for index in (-1, True, '0', 0.5):
+            self.assertEqual(self.post('current', queue_index=index).status_code, 400)
+        self.assertEqual(self.state, before)
+
     def test_current_pause_keeps_position(self):
         self.assertEqual(self.post('current', playing=False, position_ms=18000).status_code, 200)
         self.assertEqual(self.state['position_ms'], 18000)
