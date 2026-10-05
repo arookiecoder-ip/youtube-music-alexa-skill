@@ -826,7 +826,7 @@ _SESSION_PATHS = ('/remote', '/alexa/status', '/alexa/init', '/alexa/devices', '
                    '/api/youtube/browser-session/authorize')
 _SESSION_PREFIXES = ('/alexa/now_playing/', '/history/', '/api/playlists/', '/recommendations/',
                      '/api/artist/', '/api/album/', '/api/library/', '/api/explore/', '/api/home/',
-                     '/api/track/')
+                     '/api/track/', '/api/app/queue/')
 
 # API/device endpoints: the Alexa skill and web-remote JS hit these directly
 # and need a machine-readable JSON error, never an HTML redirect, on failure.
@@ -849,7 +849,8 @@ def _is_web_session_path(path):
     """True for endpoints intended to be called by the logged-in web remote."""
     normalized = path.rstrip('/') or '/'
     return (normalized in {p.rstrip('/') for p in _SESSION_PATHS} or
-            any(normalized.startswith(prefix.rstrip('/') + '/')
+            any(normalized == prefix.rstrip('/') or
+                normalized.startswith(prefix.rstrip('/') + '/')
                 for prefix in _SESSION_PREFIXES))
 
 
@@ -1114,7 +1115,7 @@ def require_api_key():
         session.pop('jam', None)
         return _no_store(app.make_response((_JAM_ENDED_HTML, 410)))
     # A valid session cookie authorizes the remote page and its /alexa/* calls.
-    if _logged_in() and (path in _SESSION_PATHS or any(request.path.startswith(p) for p in _SESSION_PREFIXES)):
+    if _logged_in() and _is_web_session_path(request.path):
         # Mutating requests must be JSON. A cross-site HTML form or plain
         # <script> fetch cannot set Content-Type: application/json without
         # triggering a CORS preflight that our lack of CORS headers would
@@ -3822,6 +3823,93 @@ def _resolve_next_track(queue, after_video_id):
     return queue[idx + 1]
 
 
+@app.route("/api/app/queue/", methods=["POST"], strict_slashes=False)
+def app_queue():
+    """Publish phone playback to the shared queue; never dispatch an Echo command."""
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        return error_response('JSON object required', 400)
+    action = body.get('action')
+    if action not in ('start', 'next', 'extend', 'current'):
+        return error_response('invalid queue action', 400)
+    after = body.get('after')
+    raw_tracks = body.get('tracks', [])
+    if not _valid_video_id(after) or not isinstance(raw_tracks, list):
+        return error_response('valid after and tracks array required', 400)
+    max_tracks = 5000 if action == 'start' else 200
+    if (action == 'current' and raw_tracks) or (action != 'current' and not 1 <= len(raw_tracks) <= max_tracks):
+        return error_response('current requires no tracks; start requires 1-5000 tracks; edits require 1-200 tracks', 400)
+    playing = body.get('playing')
+    position = body.get('position_ms')
+    if playing is not None and not isinstance(playing, bool):
+        return error_response('playing must be boolean', 400)
+    if position is not None and (isinstance(position, bool) or not isinstance(position, int) or position < 0):
+        return error_response('position_ms must be a nonnegative integer', 400)
+    requested_index = body.get('queue_index')
+    if requested_index is not None and (isinstance(requested_index, bool)
+                                        or not isinstance(requested_index, int) or requested_index < 0):
+        return error_response('queue_index must be a nonnegative integer', 400)
+    tracks = []
+    for raw in raw_tracks:
+        if not isinstance(raw, dict) or not _valid_video_id(raw.get('video_id')):
+            return error_response('invalid queue track', 400)
+        try:
+            duration = max(0, int(raw.get('duration_ms') or 0))
+        except (TypeError, ValueError, OverflowError):
+            return error_response('invalid duration_ms', 400)
+        tracks.append({'video_id': raw['video_id'], 'title': str(raw.get('title') or ''),
+                       'artist': str(raw.get('artist') or ''),
+                       'thumbnail': _thumbnail_url(raw.get('thumbnail')), 'duration_ms': duration})
+    with _np_lock:
+        queue = tracks if action == 'start' else list(_now_playing.get('queue') or [])
+        current_index = _now_playing.get('queue_index', -1)
+        if requested_index is not None:
+            # Phone playback supplies the exact occurrence, including duplicate songs.
+            # Reject a stale cursor without moving now-playing or truncating the shared queue.
+            if (requested_index >= len(queue) or queue[requested_index].get('video_id') != after):
+                return error_response('phone queue cursor is stale', 409)
+            idx = requested_index
+        else:
+            # Retain compatibility with existing clients that send only a video id.
+            idx = current_index if (isinstance(current_index, int) and 0 <= current_index < len(queue)
+                                   and queue[current_index].get('video_id') == after and action != 'start') else next(
+                (i for i, item in enumerate(queue) if item.get('video_id') == after), -1)
+        if idx < 0:
+            return error_response('starting track must be in tracks' if action == 'start' else
+                                  'current track is no longer in the shared queue', 400 if action == 'start' else 409)
+        if action in ('next', 'extend') and _now_playing.get('video_id') != after:
+            return error_response('phone queue edit is stale', 409)
+        live_position = _computed_position_ms()
+        changed = action == 'start' or (action == 'current' and
+            (_now_playing.get('video_id') != after or current_index != idx))
+        if action in ('start', 'current'):
+            item = queue[idx]
+            _now_playing.update({'video_id': after, 'queue_index': idx,
+                                 'title': item.get('title', ''), 'artist': item.get('artist', ''),
+                                 'artists': item.get('artists', []), 'thumbnail': item.get('thumbnail', ''),
+                                 'duration_ms': item.get('duration_ms', 0), 'playback_processing': False})
+            if playing is not None:
+                _now_playing['playing'] = playing
+                _now_playing['playback_confirmed'] = playing
+            elif action == 'start':
+                _now_playing.update(playing=False, playback_confirmed=False)
+            _reset_progress(position if position is not None else (0 if changed else live_position))
+            if changed or playing is not None:
+                _now_playing['playback_revision'] = int(_now_playing.get('playback_revision', 0)) + 1
+        if action == 'next':
+            queue[idx + 1:idx + 1] = tracks
+        elif action == 'extend':
+            existing = {item.get('video_id') for item in queue}
+            for track in tracks:
+                if track['video_id'] not in existing:
+                    queue.append(track); existing.add(track['video_id'])
+        if action != 'current':
+            _now_playing.update(queue=queue, queue_web_dirty=True)
+        _now_playing['updated_at'] = time.time()
+    _notify_sse()
+    return jsonify({'ok': True})
+
+
 @app.route("/next_track/", methods=["GET"])
 def next_track():
     """Authoritative next-up track in the web remote's live queue.
@@ -5903,10 +5991,15 @@ def profile_status():
     headers_debug = f"auth_type={auth_type_str}"
 
     cookies_file = Supporting.get_ytdlp_cookies_file()
-    try:
-        cookie_test = download_cookies.status(cookies_file, _configure_cookie_probe)
-    except download_cookies.ProbeBusy as exc:
-        cookie_test = {'valid': False, 'message': str(exc)}
+    if request.args.get('audio_check') == '0':
+        # Native startup only needs account linkage. Download probes are an
+        # explicit profile action and can take up to 50 seconds.
+        cookie_test = {'valid': False, 'message': 'Audio download has not been tested.'}
+    else:
+        try:
+            cookie_test = download_cookies.status(cookies_file, _configure_cookie_probe)
+        except download_cookies.ProbeBusy as exc:
+            cookie_test = {'valid': False, 'message': str(exc)}
     cookies_working = cookie_test['valid']
     cookies_debug = cookie_test['message']
 
@@ -8194,6 +8287,8 @@ def alexa_search():
                     # surface as separate clickable artists.
                     'artists': _artist_entries_from_item(track),
                     'video_id': video_id,
+                    'resultType': track.get('resultType') or 'song',
+                    'videoType': track.get('videoType') or '',
                     'thumbnail': _last_thumbnail(track),
                     'duration_ms': Supporting.duration_ms(track),
                     'channelId': (track.get('artists') or [{}])[0].get('id', ''),
@@ -8346,6 +8441,17 @@ def alexa_search():
             logger.warning('[alexa/search] exact search failed for %r: %s', query, exc)
             all_raw = []
         results = _categorize(all_raw)
+
+    # Mixed search may return only artists/albums or music videos. Fetch the
+    # audio category only when it is absent; keep successful mixed results if
+    # this optional request fails rather than blanking the Search page.
+    if not any(item.get('resultType') == 'song' for item in all_raw):
+        try:
+            audio_raw = ytmusic.search(query=query, filter='songs',
+                                      ignore_spelling=False, limit=40) or []
+            results['songs'] = _collect_songs([audio_raw, all_raw])
+        except Exception as exc:
+            logger.warning('[alexa/search] audio fallback failed: %s', exc)
 
     if not _has_results(results) and not all_raw:
         return error_response('no results found', 404)

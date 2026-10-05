@@ -58,6 +58,32 @@ class ReleaseRendererTests(unittest.TestCase):
         self.assertEqual([item['browseId'] for item in result], ['MPREone', 'MPREtwo'])
         self.assertEqual(client._send_request.call_count, 2)
 
+    def test_empty_grid_is_a_successful_empty_collection(self):
+        client = Mock()
+        client._send_request.return_value = response({'gridRenderer': {'items': []}})
+        self.assertEqual(get_artist_releases(client, 'UCartist', 'params', 31), [])
+
+    def test_responsive_album_rows_are_parsed(self):
+        client = Mock()
+        row = {'musicResponsiveListItemRenderer': {
+            'navigationEndpoint': {'browseEndpoint': {'browseId': 'MPREalbum'}},
+            'flexColumns': [{'musicResponsiveListItemFlexColumnRenderer': {'text': {'runs': [{'text': 'Album'}]}}}],
+            'thumbnail': {'musicThumbnailRenderer': {'thumbnail': {'thumbnails': [{'url': 'image'}]}}}}}
+        client._send_request.return_value = response({'musicShelfRenderer': {'contents': [row]}})
+        self.assertEqual(get_artist_releases(client, 'UCartist', 'params', 31)[0]['browseId'], 'MPREalbum')
+
+    def test_footer_tokens_and_append_actions_load_all_release_pages(self):
+        footer = {'continuationItemRenderer': {'continuationEndpoint': {
+            'continuationCommand': {'token': 'next-page'}}}}
+        client = Mock()
+        client._send_request.side_effect = [
+            response({'gridRenderer': {'items': [release('First', 'MPREone'), footer]}}),
+            {'onResponseReceivedActions': [{'appendContinuationItemsAction': {
+                'continuationItems': [release('Second', 'MPREtwo')]}}]}]
+        result = get_artist_releases(client, 'UCartist', 'params', 31)
+        self.assertEqual([item['browseId'] for item in result], ['MPREone', 'MPREtwo'])
+        self.assertEqual(client._send_request.call_count, 2)
+
     def test_playlist_browse_identity_is_preserved(self):
         client = Mock()
         client._send_request.return_value = response({'gridRenderer': {'items': [release('Playlist', 'VLPLplaylist')]}})
