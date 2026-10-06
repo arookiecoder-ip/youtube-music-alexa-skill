@@ -124,6 +124,15 @@ Fill in at least:
 
 Save and exit (`Ctrl+O`, `Enter`, `Ctrl+X` in `nano`).
 
+Tip: `./scripts/setup-secrets.sh` fills in any missing `API_KEY` / `SECRET_KEY`
+in `.env` for you (existing entries are kept, values are never printed, the file
+stays `0600`). Generated `api_key.txt` / `secret_key.txt` fallbacks beside the
+database are also `0600`.
+
+Rotation: change `API_KEY` in **both** `lambda/api_key.py` (Alexa console →
+Deploy) **and** the server `.env`, then `docker compose up -d ytmusic`. Changing
+`SECRET_KEY` signs out all web-remote sessions (expected — log in again).
+
 ---
 
 ## 6. Get your YouTube cookies

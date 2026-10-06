@@ -233,8 +233,33 @@ def _cache_megabytes_env(name, default):
 # so the TTL counts from the last play (not the download) and, once the cache
 # is over budget, the least recently played files go first. Pinned (current)
 # tracks are never evicted. 0 disables a limit.
-AUDIO_CACHE_MAX_BYTES = _cache_megabytes_env("AUDIO_CACHE_MAX_MB", 2048)
+#
+# Two logical pools share one directory/filesystem (no DB, no new volume):
+# requested (real plays, `AUDIO_CACHE_TTL`) and warmup (speculative prefetch,
+# `WARMUP_TTL`, capped inside the total by `WARMUP_MAX_MB`). A real play
+# promotes a warmup file in place (marker delete + atime touch, zero copy).
+# Warmup-marked files are evicted first when over budget.
+AUDIO_CACHE_MAX_BYTES = _cache_megabytes_env("AUDIO_CACHE_MAX_MB", 5120)
 AUDIO_CACHE_MIN_FREE_BYTES = _cache_megabytes_env("AUDIO_CACHE_MIN_FREE_MB", 512)
+WARMUP_TTL = _cache_seconds_env("WARMUP_TTL", 7200)
+WARMUP_MAX_BYTES = _cache_megabytes_env("WARMUP_MAX_MB", 1024)
+
+
+def _audio_wait_seconds_env():
+    """Bounded server wait for a cold /audio/ miss on the wait path."""
+    try:
+        value = float(os.environ.get("AUDIO_WAIT_SECONDS", 25))
+    except (TypeError, ValueError):
+        return 25.0
+    if not math.isfinite(value):
+        return 25.0
+    return max(1.0, value)
+
+
+# Bounded server wait for a cold /audio/ miss on the wait/Range/HEAD path (fits
+# inside the app's 60 s socket timeout; the download keeps running after a 503
+# so a retry lands warm). Plain misses keep live-streaming; /proxy/ is untouched.
+AUDIO_WAIT_SECONDS = _audio_wait_seconds_env()
 # A file younger than this is never evicted for space: its requester may not
 # have opened it yet (download finished, send_file not started).
 _AUDIO_CACHE_EVICT_MIN_AGE = 60.0
@@ -253,6 +278,10 @@ if not API_KEY:
             API_KEY = secrets.token_hex(16)
             with open(api_key_path, 'w') as f:
                 f.write(API_KEY)
+            try:
+                os.chmod(api_key_path, 0o600)
+            except OSError:
+                pass
     except Exception:
         API_KEY = secrets.token_hex(16)
 
@@ -1173,7 +1202,8 @@ def require_api_key():
                     'code': 'web_session_required',
                     'message': 'Web session required.'
                 }}), 401
-            return jsonify({'error': {'code': 'unauthorized', 'message': 'unauthorized'}}), 401
+            return jsonify({'error': {'code': 'unauthorized', 'message': 'unauthorized',
+                                            'retryable': False}}), 401
         # Let browser document misses reach Flask's 404 handler. This keeps a
         # typo such as /not-a-real-page from being mistaken for an auth failure
         # and lets the user see the helpful 404 page before its safe /home
@@ -1200,7 +1230,8 @@ def _check_rate_limit():
     ip = request.remote_addr or 'unknown'
     allowed, retry_after = _rate_limiter.check(ip, group, max_req, window)
     if not allowed:
-        resp = jsonify({'error': {'code': 'rate_limited', 'message': f'Rate limit exceeded. Try again in {retry_after}s.'}})
+        resp, _ = error_response(f'Rate limit exceeded. Try again in {retry_after}s.',
+                                 429, retryable=True)
         resp.status_code = 429
         resp.headers['Retry-After'] = str(retry_after)
         logger.warning('[rate-limit] %s %s from %s exceeded (%s, retry-after=%s)',
@@ -1682,6 +1713,44 @@ def _mark_audio_used(path):
     try:
         st = os.stat(path)
         os.utime(path, (time.time(), st.st_mtime))
+    except OSError:
+        pass
+    # A real play promotes a speculative warmup file in place (zero copy):
+    # drop the marker so the requested TTL/cap applies from now on.
+    try:
+        base = os.path.basename(path).split('.')[0]
+        if _valid_video_id(base):
+            _promote_warmup(base)
+    except Exception:
+        pass
+
+
+def _warmup_marker_path(video_id: str) -> str:
+    """Sidecar marking a cache file as speculative (warmup pool)."""
+    return os.path.join(AUDIO_CACHE_DIR, f"{video_id}.warmup")
+
+
+def _is_warmup(video_id: str) -> bool:
+    return os.path.isfile(_warmup_marker_path(video_id))
+
+
+def _mark_warmup(video_id: str):
+    """Mark a freshly downloaded file as warmup. Never extends an existing mark
+    (duplicate warmups keep the original expiry) and never marks an already
+    promoted (requested) file."""
+    try:
+        marker = _warmup_marker_path(video_id)
+        if not os.path.exists(marker) and Supporting.cached_audio_path(video_id):
+            with open(marker, 'w'):
+                pass
+    except OSError:
+        pass
+
+
+def _promote_warmup(video_id: str):
+    """Promote a warmup file to requested (delete marker, zero copy)."""
+    try:
+        os.remove(_warmup_marker_path(video_id))
     except OSError:
         pass
 
@@ -2428,8 +2497,21 @@ def handle_uncaught(error):
     return jsonify({'error': {'code': 'internal_error', 'message': 'internal server error'}}), 500
 
 
-def error_response(message: str, status: int, code: str = ''):
-    return jsonify({'error': {'code': code or _error_code_for_status(status), 'message': message}}), status
+def error_response(message: str, status: int, code: str = '', retryable: bool = False):
+    return jsonify({'error': {'code': code or _error_code_for_status(status),
+                              'message': message, 'retryable': retryable}}), status
+
+
+def pending_response(message: str = 'download in progress; retry shortly',
+                     retry_after: int = 5):
+    """503 + Retry-After for work that is still running (admission-full or the
+    bounded /audio/ wait expired while the background download continues).
+    The app should wait out Retry-After and retry, then fall back to its next
+    source only on a terminal (non-retryable) error."""
+    response, status = error_response(message, 503, code='pending', retryable=True)
+    response.status_code = status
+    response.headers['Retry-After'] = str(int(retry_after))
+    return response
 
 
 def _error_code_for_status(status: int) -> str:
@@ -3155,6 +3237,22 @@ class Supporting:
         # YouTube this avoids a guaranteed failed cookie-free android_vr probe
         # before every download. Keep android_vr second because it can expose
         # AAC/M4A formats when the authenticated default manifest is image-only.
+        # YTDLP_CLIENT_ORDER (comma-separated) allows order trials without a code
+        # change, e.g. tv_simply first when the bgutil provider is verified.
+        # Unknown names are dropped; a fully-invalid value falls back to the
+        # default instead of yielding zero clients (universal 502s).
+        configured = os.environ.get("YTDLP_CLIENT_ORDER")
+        if configured is not None:
+            known = {"default", "android_vr", "web", "tv", "tv_simply",
+                     "web_embedded", "ios", "mweb", "tv_embedded"}
+            ordered = []
+            for name in (c.strip() for c in configured.split(",")):
+                if name in known and name not in ordered:
+                    ordered.append(name)
+            if ordered:
+                return ordered
+            logger.warning("yt-dlp: ignoring invalid YTDLP_CLIENT_ORDER %r",
+                           configured)
         return ["default", "android_vr", "web", "tv"]
 
 
@@ -3337,7 +3435,7 @@ class Supporting:
 
     def cached_audio_path(video_id: str):
         paths = [p for p in glob.glob(os.path.join(AUDIO_CACHE_DIR, f"{video_id}.*"))
-                 if not p.endswith('.part')]
+                 if not p.endswith('.part') and not p.endswith('.warmup')]
         return paths[0] if paths else None
 
     def evict_cached_audio(video_id: str):
@@ -3348,6 +3446,7 @@ class Supporting:
         `<id>.m4a.<uuid>.part`). Deleting them mid-write caused
         `Unable to rename file ... No such file` when the truncated-stop
         eviction raced a still-running download for the same video.
+        Also removes the `*.warmup` sidecar marker (it is bookkeeping, not audio).
         """
         for path in glob.glob(os.path.join(AUDIO_CACHE_DIR, f"{video_id}.*")):
             if path.endswith('.part'):
@@ -3360,10 +3459,16 @@ class Supporting:
     def prune_audio_cache():
         """Idle-TTL sweep, then least-recently-used eviction down to budget.
 
-        1. Any file idle (not written or played) for AUDIO_CACHE_TTL goes.
-        2. If the finished files still exceed AUDIO_CACHE_MAX_BYTES, or the
-           disk has less than AUDIO_CACHE_MIN_FREE_BYTES free, the least
-           recently used files are evicted until both limits hold.
+        Two logical pools share one directory (see config block above):
+        1. Warmup-marked files idle for WARMUP_TTL go; requested files idle for
+           AUDIO_CACHE_TTL go. Pinned (current) tracks never go via sweep.
+        2. If the finished files still exceed AUDIO_CACHE_MAX_BYTES (5 GB), or the
+           disk has less than AUDIO_CACHE_MIN_FREE_BYTES free, warmup-marked files
+           are evicted first (oldest first), then the least recently used files.
+        3. Warmup-marked bytes are additionally capped at WARMUP_MAX_BYTES (1 GB
+           inside the total), oldest first.
+        `*.warmup` sidecars are bookkeeping (never counted, never served); deleting
+        an audio file deletes its marker with it, and orphan markers are collected.
         Returns (files_removed, bytes_removed).
         """
         if not _audio_prune_lock.acquire(blocking=False):
@@ -3377,32 +3482,81 @@ class Supporting:
             pinned = _pinned_cache_video_ids()
             now = time.time()
             removed_files = removed_bytes = 0
+
+            def _remove_audio(path, size):
+                nonlocal removed_files, removed_bytes
+                try:
+                    os.remove(path)
+                except OSError:
+                    return
+                removed_files += 1
+                removed_bytes += size
+                try:
+                    os.remove(os.path.join(
+                        AUDIO_CACHE_DIR,
+                        f"{os.path.basename(path).split('.')[0]}.warmup"))
+                except OSError:
+                    pass
+
             total = 0
+            warmup_total = 0
             candidates = []  # (last_used, size, path) of evictable finished files
+            warmup_candidates = []  # (last_used, size, path) of warmup-marked files
+            part_count = part_bytes = 0
+            oldest_part_age = 0.0
             for old in glob.glob(os.path.join(AUDIO_CACHE_DIR, "*")):
                 try:
                     st = os.stat(old)
                 except OSError:
                     continue
+                if old.endswith('.warmup'):
+                    continue  # bookkeeping; collected with its audio / as orphan below
                 is_part = old.endswith('.part')
                 # Pin finished files only: *.part are in-flight/orphaned yt-dlp
                 # writes (transient, seconds old) and keep their original sweep
                 # semantics so crash orphans are still collected.
                 if not is_part and pinned and os.path.basename(old).split('.')[0] in pinned:
                     total += st.st_size
+                    if _is_warmup(os.path.basename(old).split('.')[0]):
+                        warmup_total += st.st_size
                     continue
                 last_used = st.st_mtime if is_part else _audio_last_used(st)
-                if now - last_used > AUDIO_CACHE_TTL:
-                    try:
-                        os.remove(old)
-                        removed_files += 1
-                        removed_bytes += st.st_size
-                    except OSError:
-                        pass
-                    continue
+                if not is_part:
+                    ttl = (WARMUP_TTL
+                           if _is_warmup(os.path.basename(old).split('.')[0])
+                           else AUDIO_CACHE_TTL)
+                    if now - last_used > ttl:
+                        _remove_audio(old, st.st_size)
+                        continue
+                else:
+                    if now - last_used > AUDIO_CACHE_TTL:
+                        try:
+                            os.remove(old)
+                            removed_files += 1
+                            removed_bytes += st.st_size
+                        except OSError:
+                            pass
+                        continue
+                    part_count += 1
+                    part_bytes += st.st_size
+                    oldest_part_age = max(oldest_part_age, now - last_used)
                 if not is_part:
                     total += st.st_size
-                    candidates.append((last_used, st.st_size, old))
+                    entry = (last_used, st.st_size, old)
+                    candidates.append(entry)
+                    if _is_warmup(os.path.basename(old).split('.')[0]):
+                        warmup_total += st.st_size
+                        warmup_candidates.append(entry)
+
+            # Orphan markers whose audio is gone (manual delete, crash between
+            # writes) carry no bytes; collect them so they can't accumulate.
+            for marker in glob.glob(os.path.join(AUDIO_CACHE_DIR, "*.warmup")):
+                audio_id = os.path.basename(marker)[:-len('.warmup')]
+                if not _valid_video_id(audio_id) or not Supporting.cached_audio_path(audio_id):
+                    try:
+                        os.remove(marker)
+                    except OSError:
+                        pass
 
             over = max(0, total - AUDIO_CACHE_MAX_BYTES) if AUDIO_CACHE_MAX_BYTES else 0
             short = 0
@@ -3413,19 +3567,39 @@ class Supporting:
                 except OSError:
                     short = 0
             need = max(over, short)
+            # Warmup cap inside the total: speculative bytes never squeeze out
+            # more than WARMUP_MAX_BYTES of real plays.
+            warmup_over = (max(0, warmup_total - WARMUP_MAX_BYTES)
+                           if WARMUP_MAX_BYTES else 0)
+            if warmup_over:
+                for last_used, size, path in sorted(warmup_candidates):
+                    if warmup_over <= 0:
+                        break
+                    if now - last_used < _AUDIO_CACHE_EVICT_MIN_AGE:
+                        break  # everything after this is even more recent
+                    _remove_audio(path, size)
+                    try:
+                        candidates.remove((last_used, size, path))
+                    except ValueError:
+                        pass
+                    try:
+                        warmup_candidates.remove((last_used, size, path))
+                    except ValueError:
+                        pass
+                    total -= size
+                    warmup_total -= size
+                    need = max(need - size, 0)
             if need:
-                for last_used, size, path in sorted(candidates):
+                # Warmup-marked files go first (oldest first), then plain LRU.
+                ordered = (sorted(warmup_candidates)
+                           + [c for c in sorted(candidates) if c not in warmup_candidates])
+                for last_used, size, path in ordered:
                     if need <= 0:
                         break
                     if now - last_used < _AUDIO_CACHE_EVICT_MIN_AGE:
                         break  # everything after this is even more recent
-                    try:
-                        os.remove(path)
-                    except OSError:
-                        continue
+                    _remove_audio(path, size)
                     need -= size
-                    removed_files += 1
-                    removed_bytes += size
                 if need > 0:
                     logger.warning("audio cache: still %.1f MB over budget after LRU eviction "
                                    "(remaining files are pinned or just written)",
@@ -3433,6 +3607,10 @@ class Supporting:
             if removed_files:
                 logger.info("audio cache: evicted %d file(s), %.1f MB",
                             removed_files, removed_bytes / (1024 * 1024))
+            if part_count:
+                logger.info("audio cache: %d in-flight/orphan .part file(s), "
+                            "%.1f MB, oldest %.0fs old",
+                            part_count, part_bytes / (1024 * 1024), oldest_part_age)
             return removed_files, removed_bytes
         finally:
             _audio_prune_lock.release()
@@ -3547,6 +3725,10 @@ class Supporting:
                 with lock:
                     path = Supporting.cached_audio_path(video_id)
                     if path:
+                        # A requested play promotes a warmup file in place;
+                        # a duplicate warmup leaves the original expiry alone.
+                        if not prefetch:
+                            _promote_warmup(video_id)
                         return path
                     # Re-check dead/flaky status now that the per-id lock is
                     # held: a concurrent caller for the same id (prewarm from
@@ -3572,9 +3754,11 @@ class Supporting:
                     rate_limited = False
                     last_error = ""
                     for index, client in enumerate(clients):
+                        client_started = time.time()
                         result = subprocess.run(
                             Supporting.ytdlp_download_command(video_id, output, client=client),
                             capture_output=True, text=True)
+                        client_elapsed = time.time() - client_started
                         if result.returncode == 0:
                             written_path = Supporting.cached_audio_path(video_id)
                             # returncode 0 is not proof of a complete file --
@@ -3585,8 +3769,13 @@ class Supporting:
                             if written_path and _is_audio_file_valid(written_path):
                                 downloaded = True
                                 if index:
-                                    logger.info("yt-dlp download succeeded with %s fallback for %s",
-                                                client, video_id)
+                                    logger.info("yt-dlp download succeeded with %s fallback for %s "
+                                                "(%.1fs, %d/%d clients tried)",
+                                                client, video_id, client_elapsed,
+                                                index + 1, len(clients))
+                                else:
+                                    logger.debug("yt-dlp download succeeded with %s for %s (%.1fs)",
+                                                 client, video_id, client_elapsed)
                                 break
                             if written_path:
                                 logger.warning(
@@ -3652,6 +3841,11 @@ class Supporting:
                     if downloaded:
                         # Throughput is back; stop suppressing prefetch.
                         _reset_rate_limit_cooldown()
+                        if prefetch:
+                            # New speculative file only (existing files returned
+                            # early above): mark warmup without touching an
+                            # existing mark's mtime on duplicates.
+                            _mark_warmup(video_id)
                         _schedule_audio_cache_prune()
                     return Supporting.cached_audio_path(video_id)
         finally:
@@ -4474,10 +4668,14 @@ def audio_stream():
     Options:
       info=1  JSON {video_id, title, artist, duration_ms, cached, audio_url}
               instead of audio (no download); audio_url carries no API key.
+      prefetch=1  speculative warmup (query param only): start a best-effort
+              background download and answer at once with 202 (or 200 + cached
+              when already warm); never streams, never blocks, never touches
+              Echo state or the LRU clock. Fire-and-forget: ignore 202/429.
       wait=1  on a cache miss, finish the download first and serve the file
               with Content-Length and byte ranges (instead of a live stream
               that can't be seeked until it ends). Range requests and HEAD
-              always do this.
+              always do this. Precedence: info > prefetch > wait.
 
     Cache hits are served with range support and a stable ETag, and count as
     a use for the LRU cache. Headers: X-Video-Id, X-Cache (HIT/MISS) and, for
@@ -4497,6 +4695,14 @@ def audio_stream():
         meta = _audio_search_song(request.args["q"], duration_s)
         if not meta:
             return error_response('no matching song', 404)
+        if duration_s and meta.get('duration_ms'):
+            # The resolver falls back to the closest match when nothing is within
+            # tolerance; refuse to serve a audibly wrong version as the requested
+            # song so the app falls through to its next source instead.
+            tolerance_ms = max(8000, int(duration_s) * 1000 * 0.07)
+            if abs(meta['duration_ms'] - int(duration_s) * 1000) > tolerance_ms:
+                return error_response('no version matches the expected duration', 422,
+                                      code='match_rejected')
         video_id = meta['video_id']
     if not _valid_video_id(video_id):
         return error_response('provide "video_id", "url" or "q"', 400)
@@ -4509,7 +4715,8 @@ def audio_stream():
     # running the whole yt-dlp fallback chain again (a live stream would also
     # have to report it as an empty 200), so the app can try another source.
     if not path and _is_flaky_video(video_id) and not _audio_truthy(request.args.get("info")):
-        response, status = error_response('download recently failed; retry later', 503)
+        response, status = error_response('download recently failed; retry later', 503,
+                                          retryable=True)
         response.status_code = status
         response.headers['Retry-After'] = str(int(_FLAKY_VIDEO_TTL))
         return response
@@ -4520,6 +4727,26 @@ def audio_stream():
         body['cached'] = bool(path)
         body['audio_url'] = f"{base}/audio/?video_id={video_id}"
         return jsonify(body)
+
+    if _audio_truthy(request.args.get("prefetch")):
+        # Explicit speculative mode (query param only): fire-and-forget warmup.
+        # Starts a best-effort background download and answers at once; never
+        # streams, never blocks, never touches Echo state or the LRU clock.
+        # The legacy X-MusicBox-Prefetch header alone keeps its blocking
+        # behavior in the download path below until app task APP1 ships (the
+        # preloader still sends wait=1 with it; a 202 JSON there would be cached
+        # as audio by ExoPlayer's CacheWriter).
+        if path:
+            base = PUBLIC_BASE_URL or request.url_root.rstrip('/')
+            return jsonify({'video_id': video_id, 'cached': True,
+                            'audio_url': f"{base}/audio/?video_id={video_id}"})
+        _ensure_audio_ready_for_play(video_id, wait=False, generation=None,
+                                     prefetch=True)
+        response, status = error_response('prefetch deferred', 202,
+                                          code='prefetch_deferred', retryable=True)
+        response.status_code = status
+        response.headers['Retry-After'] = '5'
+        return response
 
     headers = _audio_meta_headers(video_id, meta, cache_state)
     if not path:
@@ -4533,18 +4760,62 @@ def audio_stream():
                 response = _stream_proxy_download(video_id, confirm=False, cancellable=False)
                 response.headers.update(headers)
                 return response
+        # One shared deadline for every join below so a cold wait=1/Range/HEAD
+        # miss answers within AUDIO_WAIT_SECONDS instead of holding a worker
+        # indefinitely. /proxy/ callers keep their own defaults (untouched).
+        wait_deadline = time.time() + AUDIO_WAIT_SECONDS
         if not path and _stream_is_inflight(video_id):
-            path = _await_inflight_stream(video_id)
+            remaining = wait_deadline - time.time()
+            if remaining > 0:
+                path = _await_inflight_stream(video_id, timeout=remaining)
         if not path and _download_in_progress(video_id):
-            path = _await_prewarm_cache(video_id)
+            remaining = wait_deadline - time.time()
+            if remaining > 0:
+                path = _await_prewarm_cache(video_id, timeout=remaining)
         if not path:
             prefetch = request.headers.get('X-MusicBox-Prefetch') == '1'
-            path = Supporting.ensure_downloaded(video_id, prefetch=True) if prefetch else Supporting.ensure_downloaded(video_id)
-            if not path and prefetch:
-                response, status = error_response('prefetch deferred', 503)
-                response.status_code = status
-                response.headers['Retry-After'] = '5'
-                return response
+            if prefetch:
+                path = Supporting.ensure_downloaded(video_id, prefetch=True)
+                if not path:
+                    response, status = error_response('prefetch deferred', 503,
+                                                      code='prefetch_deferred',
+                                                      retryable=True)
+                    response.status_code = status
+                    response.headers['Retry-After'] = '5'
+                    return response
+            elif (wait_deadline - time.time()) <= 0:
+                # The joins above already spent the whole budget: make sure a
+                # download is running for the retry before answering pending.
+                if (not _download_in_progress(video_id)
+                        and not _stream_is_inflight(video_id)):
+                    _ensure_audio_ready_for_play(video_id, wait=False, generation=None,
+                                                 prefetch=False)
+                return pending_response()
+            else:
+                if not _download_backpressure():
+                    # Saturated: fail fast with a retryable 503 so the retry
+                    # lands on a drained queue instead of holding this worker
+                    # behind a dozen queued downloads. Prefetch already drops
+                    # first (slot + cooldown); this gate is for requested plays.
+                    return pending_response()
+                # Requested play: fetch in the background and poll for the file
+                # instead of blocking this worker past the deadline. A 503 here
+                # leaves the download running, so a retry lands warm.
+                _ensure_audio_ready_for_play(video_id, wait=False, generation=None,
+                                             prefetch=False)
+                path = _await_prewarm_cache(
+                    video_id, timeout=wait_deadline - time.time(), startup_grace=2.0)
+                if not path:
+                    if _is_dead_video(video_id):
+                        return error_response('video unavailable', 404)
+                    if _is_flaky_video(video_id):
+                        response, status = error_response(
+                            'download recently failed; retry later', 503,
+                            retryable=True)
+                        response.status_code = status
+                        response.headers['Retry-After'] = str(int(_FLAKY_VIDEO_TTL))
+                        return response
+                    return pending_response()
         if not path:
             return error_response('download failed', 502)
 
@@ -4564,14 +4835,14 @@ def audio_stream():
     return response
 
 
-def _await_inflight_stream(video_id):
+def _await_inflight_stream(video_id, timeout=_STREAM_DUPLICATE_WAIT):
     """Wait for an in-flight cold-cache stream to publish its cache file.
 
     Returns the cached path, or None if the in-flight stream ended without one
     (it failed) or took too long. Callers fall back to their own download, so a
     None result stays correct — it just costs an extra yt-dlp run.
     """
-    deadline = time.time() + _STREAM_DUPLICATE_WAIT
+    deadline = time.time() + timeout
     while time.time() < deadline:
         path = Supporting.cached_audio_path(video_id)
         if path:
@@ -4581,11 +4852,11 @@ def _await_inflight_stream(video_id):
             return Supporting.cached_audio_path(video_id)
         time.sleep(_STREAM_DUPLICATE_POLL)
     logger.warning("proxy: gave up waiting %.0fs for the in-flight stream of %s",
-                   _STREAM_DUPLICATE_WAIT, video_id)
+                   timeout, video_id)
     return None
 
 
-def _await_prewarm_cache(video_id):
+def _await_prewarm_cache(video_id, timeout=_PREWARM_WAIT_SECONDS, startup_grace=0.0):
     """Wait for an in-flight background prewarm to publish its cache file.
 
     `ensure_downloaded` is kicked off at click time (and again by get_stream),
@@ -4595,22 +4866,26 @@ def _await_prewarm_cache(video_id):
     left superseded streams stuck for 150s and pushed first byte out past the
     point where the prewarm had already finished.
 
-    Returns the cached path, or None when the prewarm ended without a file (it
-    failed) or is taking too long. A None result falls back to a stream, so it
-    stays correct — it just costs an extra yt-dlp run.
+    `startup_grace` tolerates a just-spawned fetcher that has not registered
+    itself in `_download_in_progress` yet (0.0 preserves the historical
+    instant-exit for all existing callers). Returns the cached path, or None
+    when the prewarm ended without a file (it failed) or is taking too long.
+    A None result falls back to a stream, so it stays correct — it just costs
+    an extra yt-dlp run.
     """
-    deadline = time.time() + _PREWARM_WAIT_SECONDS
+    deadline = time.time() + timeout
+    started = time.time()
     while time.time() < deadline:
         path = Supporting.cached_audio_path(video_id)
         if path:
             return path
-        if not _download_in_progress(video_id):
+        if not _download_in_progress(video_id) and time.time() - started >= startup_grace:
             # The prewarm finished (success or failure); one last look in case
             # the final rename just landed.
             return Supporting.cached_audio_path(video_id)
         time.sleep(_PREWARM_POLL)
     logger.warning("proxy: gave up waiting %.0fs for the prewarm of %s",
-                   _PREWARM_WAIT_SECONDS, video_id)
+                   timeout, video_id)
     return None
 
 

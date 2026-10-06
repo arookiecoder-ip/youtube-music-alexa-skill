@@ -235,16 +235,18 @@ class AudioEndpoint(_CacheDir):
         dl.assert_not_called()
 
     def test_wait_downloads_then_serves_file_with_length(self):
-        def download(video_id):
-            return self.make(video_id, size=2048, written_ago=0, used_ago=0)
-        with mock.patch.object(server.Supporting, "ensure_downloaded",
-                               side_effect=download) as dl, \
+        def spawn(video_id, **kw):
+            self.make(video_id, size=2048, written_ago=0, used_ago=0)
+            return False
+        with mock.patch.object(server, "_ensure_audio_ready_for_play",
+                               side_effect=spawn) as ready, \
              mock.patch.object(server, "_stream_proxy_download") as stream:
             resp = self.get(f"video_id={VID}&wait=1")
         self.assertEqual(resp.status_code, 200)
         self.assertEqual(resp.headers["Content-Length"], "2048")
         self.assertEqual(resp.headers["X-Cache"], "MISS")
-        dl.assert_called_once_with(VID)
+        ready.assert_called_once_with(VID, wait=False, generation=None,
+                                      prefetch=False)
         stream.assert_not_called()
 
     def test_recently_failed_video_is_503_without_new_ytdlp_run(self):
@@ -258,10 +260,17 @@ class AudioEndpoint(_CacheDir):
         stream.assert_not_called()
         dl.assert_not_called()
 
-    def test_failed_download_is_502(self):
-        with mock.patch.object(server.Supporting, "ensure_downloaded", return_value=None):
+    def test_failed_download_is_pending_while_retry_runs(self):
+        # Bounded wait: a download that yields nothing answers retryable 503
+        # (the fetch keeps running, so a retry lands warm) instead of 502.
+        with mock.patch.object(server, "_ensure_audio_ready_for_play",
+                               return_value=False):
             resp = self.get(f"video_id={VID}&wait=1")
-        self.assertEqual(resp.status_code, 502)
+        self.assertEqual(resp.status_code, 503)
+        err = resp.get_json()["error"]
+        self.assertEqual(err["code"], "pending")
+        self.assertTrue(err["retryable"])
+        self.assertEqual(resp.headers["Retry-After"], "5")
 
 
 class AudioSearch(_CacheDir):
