@@ -129,6 +129,14 @@ class NextTrackEndpoint(NextTrackBase):
         self._set_queue([_meta('A'), _meta('C'), _meta('B')], current_index=1)
         self.assertEqual(self._track('A')['video_id'], 'C')
 
+    def test_first_duplicate_advances_to_its_successor_not_the_last_duplicate(self):
+        self._set_queue([_meta('A'), _meta('B'), _meta('A'), _meta('C')], current_index=0)
+        self.assertEqual(self._track('A')['video_id'], 'B')
+        window = self.client.get('/queue_tracks/', query_string={'after': 'A', 'limit': 2, 'key': server.API_KEY})
+        self.assertEqual([row['video_id'] for row in window.json['tracks']], ['B', 'A'])
+        self._set_queue([_meta('A'), _meta('B'), _meta('A'), _meta('C')], current_index=2)
+        self.assertEqual(self._track('A')['video_id'], 'C')
+
     def test_prefers_last_occurrence_of_duplicate(self):
         # B appears twice; the playing occurrence is the second one, so next is
         # the track after it (matches /queue_tracks/).
