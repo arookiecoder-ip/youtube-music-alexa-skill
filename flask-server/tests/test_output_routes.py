@@ -205,3 +205,22 @@ class OutputRoutesTests(PhoneQueueTests):
         self.assertEqual(self.state, before)
         self.assertTrue(self.state['playing'])
         self.assertFalse(self.state['playback_processing'])
+
+    def test_app_handoff_dispatches_without_a_background_poll_ack(self):
+        claim = self.output_request('claim').json
+        self.command.side_effect = None
+        self.command.return_value = None
+        result = self.client.post('/alexa/command/', json={'serial': 'echo-one', 'action': 'play',
+            'output_owner': 'phone-one', 'output_token': claim['output_token'], 'phone_paused': True})
+        self.assertEqual(result.status_code, 200)
+        self.command.assert_called_with('echo-one', 'play', None)
+        self.arm.assert_called_once_with('echo-one', A, 7000, kind='resume')
+        self.assertEqual(self.output.snapshot()['playback_output'], 'alexa')
+
+    def test_stale_pause_ack_cannot_skip_a_newer_phone_owner(self):
+        old = self.output_request('claim').json
+        latest = self.output_request('claim').json
+        result = self.client.post('/alexa/command/', json={'serial': 'echo-one', 'action': 'play',
+            'output_owner': 'phone-one', 'output_token': old['output_token'], 'phone_paused': True})
+        self.assertEqual(result.status_code, 409)
+        self.assertTrue(self.output.owns_phone('phone-one', latest['output_token']))
