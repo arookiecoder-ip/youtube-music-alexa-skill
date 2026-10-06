@@ -92,3 +92,23 @@ class PlaybackOutputTests(unittest.TestCase):
         with self.assertRaises(OutputConflict):
             output.phone('second', lambda: None)
         self.assertTrue(output.owns_phone('first', first['output_token']))
+
+    def test_new_phone_play_rejects_old_same_phone_cursor_reports(self):
+        output = PlaybackOutput()
+        pause = Mock()
+        old = output.phone('mobile', pause)
+        current = output.phone('mobile', pause)
+        self.assertNotEqual(old['output_token'], current['output_token'])
+        self.assertFalse(output.owns_phone('mobile', old['output_token']))
+        self.assertTrue(output.owns_phone('mobile', current['output_token']))
+        with self.assertRaises(OutputConflict):
+            output.heartbeat('mobile', old['output_token'])
+        pause.assert_called_once()
+
+    def test_guarded_app_handoff_cannot_steal_a_newer_phone_play(self):
+        output = PlaybackOutput()
+        old = output.phone('mobile', lambda: None)
+        latest = output.phone('mobile', lambda: None)
+        with self.assertRaises(OutputConflict):
+            output.alexa(expected_owner='mobile', expected_token=old['output_token'])
+        self.assertTrue(output.owns_phone('mobile', latest['output_token']))
