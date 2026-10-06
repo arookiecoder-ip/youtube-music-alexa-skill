@@ -1168,6 +1168,8 @@ def _check_rate_limit():
     group = _rate_limit_group(path)
     if group == 'static':
         return None
+    if group == 'audio':
+        group = _audio_delivery_rate_group(request.args.get('video_id'), request.headers.get('X-MusicBox-Download') == '1')
     max_req, window = _RATE_LIMITS.get(group, _RATE_LIMITS['default'])
     if max_req <= 0:
         return None
@@ -1425,12 +1427,22 @@ _rate_limiter = _RateLimiter()
 _RATE_LIMITS = {
     'api':      (120, 60),    # /alexa/*, /api/* - general API
     'proxy':    (30, 60),     # /proxy/ - expensive audio downloads
+    'cached_download': (600, 60), # Bulk offline copies cannot consume foreground stream range reads.
+    'cached_audio': (600, 60), # Disk-only range reads and album downloads are inexpensive.
     'audio':    (60, 60),     # /audio/ - app audio (searches, info and downloads)
+    'shared_playback': (240, 60), # Ownership heartbeats/cursors must not starve interactive browsing.
     'poll':     (200, 60),   # /alexa/now_playing/ - SSE-alike polling
     'static':   (0, 0),       # No limit for static assets
     'browser_session': (0, 0), # Owner-only noVNC/session polling is frequent
     'default':  (300, 60),    # Catch-all
 }
+
+def _audio_delivery_rate_group(video_id, download=False):
+    # Only complete server-cached files get the burst budget. Cold downloads keep their limit.
+    if _valid_video_id(video_id) and Supporting.cached_audio_path(video_id):
+        return 'cached_download' if download else 'cached_audio'
+    return 'audio'
+
 
 def _rate_limit_group(path: str) -> str:
     if path.startswith('/static/') or path in ('/manifest.webmanifest', '/service-worker.js'):
@@ -1439,6 +1451,8 @@ def _rate_limit_group(path: str) -> str:
         return 'proxy'
     if path == '/audio' or path.startswith('/audio/'):
         return 'audio'
+    if path in ('/api/app/output', '/api/app/queue'):
+        return 'shared_playback'
     if path.startswith('/api/youtube/browser-session/'):
         return 'browser_session'
     # `path` arrives with its trailing slash already stripped, so match the
@@ -9157,18 +9171,11 @@ async def api_get_library_playlist(pl_id):
         return jsonify({'error': 'Liked Music is private to the host account.'}), 403
     try:
         yt = _get_ytmusic() if _jam_guest() else _get_ytmusic_home()
+        from playlist_paging import playlist_page_request
         try:
-            # Always page this endpoint. YouTube Music commonly returns only
-            # its first browse batch unless a bounded continuation request is
-            # made, which previously left large/liked playlists stuck around
-            # 90-100 songs with no `has_more` signal for the browser.
-            page_limit = min(100, max(1, int(request.args.get('limit', 30) or 30)))
+            page_limit, page_offset = playlist_page_request(request.args)
         except (TypeError, ValueError):
-            page_limit = 0
-        try:
-            page_offset = max(0, int(request.args.get('offset', 0) or 0))
-        except (TypeError, ValueError):
-            page_offset = 0
+            return jsonify({'error': 'Invalid playlist page parameters.'}), 400
 
         def page_response(info):
             """Return one browser page plus an explicit continuation signal."""
