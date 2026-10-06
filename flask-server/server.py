@@ -6639,8 +6639,13 @@ def alexa_state_event():
         event_at = None
     if event_at is not None:
         with _np_lock:
-            watermark = max(float(_now_playing.get('alexa_intent_at') or 0),
-                            float(_now_playing.get('alexa_event_at') or 0))
+            intent_at = float(_now_playing.get('alexa_intent_at') or 0)
+            # Some Alexa request timestamps have only whole-second precision.
+            # Accept events created in the intent's second instead of rejecting
+            # a genuine immediate start/pause due to lost fractional precision.
+            if '.' not in str(body.get('event_timestamp', '')):
+                intent_at = int(intent_at)
+            watermark = max(intent_at, float(_now_playing.get('alexa_event_at') or 0))
             if event_at < watermark:
                 return jsonify({'ok': True, 'ignored': 'stale Alexa event'})
             _now_playing['alexa_event_at'] = event_at

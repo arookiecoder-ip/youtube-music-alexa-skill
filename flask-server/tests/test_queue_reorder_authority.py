@@ -378,3 +378,11 @@ class SameSongHandoffEventTests(ReorderAuthorityBase):
                                          event_timestamp='1970-01-01T00:33:21+00:00')
         self.assertEqual(response.status_code, 200)
         self.assertFalse(server._get_now_playing()['playing'])
+
+    def test_second_precision_timestamp_accepts_immediate_pause(self):
+        self._set_state(video_id='abcdefghijk', playing=True, playback_processing=True,
+                        alexa_intent_at=2000.9)
+        response = self._post_state_event('stopped', video_id='abcdefghijk',
+                                         event_timestamp='1970-01-01T00:33:20+00:00')
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(server._get_now_playing()['playing'])
