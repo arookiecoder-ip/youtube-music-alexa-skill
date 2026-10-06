@@ -2301,6 +2301,9 @@ def _claim_alexa_output(serial='', wait=True, expected_owner=None, expected_toke
                 return  # A newer phone intent already superseded this handoff.
             _reset_progress(_computed_position_ms())
             _now_playing.update(playing=False, playback_confirmed=True, playback_processing=False)
+            # A start created before this confirmed handoff cannot reclaim
+            # Alexa ownership merely because its webhook arrives late.
+            _now_playing['alexa_intent_at'] = time.time()
             _now_playing['playback_revision'] = int(_now_playing.get('playback_revision', 0)) + 1
             _now_playing['updated_at'] = time.time()
         _notify_sse()

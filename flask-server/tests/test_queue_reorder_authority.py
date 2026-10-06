@@ -386,3 +386,12 @@ class SameSongHandoffEventTests(ReorderAuthorityBase):
                                          event_timestamp='1970-01-01T00:33:20+00:00')
         self.assertEqual(response.status_code, 200)
         self.assertFalse(server._get_now_playing()['playing'])
+
+    def test_delayed_start_cannot_reclaim_output_after_newer_handoff(self):
+        self._set_state(video_id='abcdefghijk', playing=False, alexa_intent_at=2000.0)
+        with mock.patch.object(server, '_claim_alexa_output') as claim:
+            response = self._post_state_event('started', video_id='abcdefghijk',
+                                             event_timestamp='1970-01-01T00:33:19+00:00')
+        self.assertEqual(response.status_code, 200)
+        claim.assert_not_called()
+        self.assertFalse(server._get_now_playing()['playing'])
