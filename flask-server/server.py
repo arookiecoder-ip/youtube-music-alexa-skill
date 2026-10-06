@@ -1169,7 +1169,7 @@ def _check_rate_limit():
     if group == 'static':
         return None
     if group == 'audio':
-        group = _audio_delivery_rate_group(request.args.get('video_id'))
+        group = _audio_delivery_rate_group(request.args.get('video_id'), request.headers.get('X-MusicBox-Download') == '1')
     max_req, window = _RATE_LIMITS.get(group, _RATE_LIMITS['default'])
     if max_req <= 0:
         return None
@@ -1427,6 +1427,7 @@ _rate_limiter = _RateLimiter()
 _RATE_LIMITS = {
     'api':      (120, 60),    # /alexa/*, /api/* - general API
     'proxy':    (30, 60),     # /proxy/ - expensive audio downloads
+    'cached_download': (600, 60), # Bulk offline copies cannot consume foreground stream range reads.
     'cached_audio': (600, 60), # Disk-only range reads and album downloads are inexpensive.
     'audio':    (60, 60),     # /audio/ - app audio (searches, info and downloads)
     'shared_playback': (240, 60), # Ownership heartbeats/cursors must not starve interactive browsing.
@@ -1436,10 +1437,10 @@ _RATE_LIMITS = {
     'default':  (300, 60),    # Catch-all
 }
 
-def _audio_delivery_rate_group(video_id):
+def _audio_delivery_rate_group(video_id, download=False):
     # Only complete server-cached files get the burst budget. Cold downloads keep their limit.
     if _valid_video_id(video_id) and Supporting.cached_audio_path(video_id):
-        return 'cached_audio'
+        return 'cached_download' if download else 'cached_audio'
     return 'audio'
 
 

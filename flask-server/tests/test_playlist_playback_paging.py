@@ -63,4 +63,6 @@ class PlaylistPlaybackPagingTests(unittest.TestCase):
         self.assertEqual(group('bbbbbbbbbbb'), 'audio')
         self.assertEqual(group(None), 'audio')
         self.assertEqual(group('../path'), 'audio')
-        self.assertEqual(cached.call_count, 2)
+        self.assertEqual(group('aaaaaaaaaaa', download=True), 'cached_download')
+        self.assertEqual(group('bbbbbbbbbbb', download=True), 'audio')
+        self.assertEqual(cached.call_count, 4)
