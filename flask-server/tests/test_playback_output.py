@@ -104,3 +104,11 @@ class PlaybackOutputTests(unittest.TestCase):
         with self.assertRaises(OutputConflict):
             output.heartbeat('mobile', old['output_token'])
         pause.assert_called_once()
+
+    def test_guarded_app_handoff_cannot_steal_a_newer_phone_play(self):
+        output = PlaybackOutput()
+        old = output.phone('mobile', lambda: None)
+        latest = output.phone('mobile', lambda: None)
+        with self.assertRaises(OutputConflict):
+            output.alexa(expected_owner='mobile', expected_token=old['output_token'])
+        self.assertTrue(output.owns_phone('mobile', latest['output_token']))

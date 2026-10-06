@@ -182,3 +182,26 @@ class OutputRoutesTests(PhoneQueueTests):
         self.assertFalse(self.state['playing'])
         self.assertEqual(self.state['position_ms'], 42000)
         self.seek_dispatch.assert_not_called()
+
+    def test_superseded_app_resume_cannot_dispatch_or_replace_latest_phone_state(self):
+        old = self.output_request('claim').json
+        latest = self.output_request('claim').json
+        before = copy.deepcopy(self.state)
+        result = self.client.post('/alexa/command/', json={'serial': 'echo-one', 'action': 'play',
+            'output_owner': 'phone-one', 'output_token': old['output_token']})
+        self.assertEqual(result.status_code, 409)
+        self.assertEqual(self.state, before)
+        self.assertTrue(self.output.owns_phone('phone-one', latest['output_token']))
+        self.command.assert_called_once_with('echo-one', 'pause')
+
+    def test_echo_cleanup_does_not_pause_or_mark_the_phone_as_loading(self):
+        claim = self.output_request('claim').json
+        self.post('current', playing=True, output_owner='phone-one', output_token=claim['output_token'])
+        before = copy.deepcopy(self.state)
+        self.command.side_effect = None
+        self.command.return_value = None
+        result = self.client.post('/alexa/command/', json={'serial': 'echo-one', 'action': 'pause'})
+        self.assertEqual(result.status_code, 200)
+        self.assertEqual(self.state, before)
+        self.assertTrue(self.state['playing'])
+        self.assertFalse(self.state['playback_processing'])
