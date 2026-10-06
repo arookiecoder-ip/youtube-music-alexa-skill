@@ -38,14 +38,14 @@ class PlaylistPlaybackPagingTests(unittest.TestCase):
         node = next(n for n in ast.parse(source.read_text()).body if isinstance(n, ast.AsyncFunctionDef) and n.name == 'api_get_library_playlist')
         node.decorator_list = []
         tracks = [{'videoId': str(i)} for i in range(1000)]
-        provider = SimpleNamespace(get_playlist=Mock(return_value={'title': 'Large mix', 'tracks': tracks, 'trackCount': 1000}))
+        provider = SimpleNamespace(get_playlist=Mock(return_value={'title': 'Large mix', 'tracks': tracks, 'trackCount': 6000}))
         scope = dict(asyncio=asyncio, jsonify=jsonify, request=request,
             _detail_id_has_known_shape=lambda *args: True, _jam_guest=lambda: False, _get_ytmusic_home=lambda: provider)
         exec(compile(ast.Module(body=[node], type_ignores=[]), str(source), 'exec'), scope)
         app = Flask(__name__)
         with app.test_request_context('/api/library/playlists/PL123?playback=1&limit=5000'):
             result = asyncio.run(scope['api_get_library_playlist']('PL123'))
-        provider.get_playlist.assert_called_once_with('PL123', 5001)
+        provider.get_playlist.assert_called_once_with('PL123', None)
         self.assertEqual(result.json['tracks'], tracks)
         self.assertFalse(result.json['has_more'])
 
