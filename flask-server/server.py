@@ -1168,6 +1168,8 @@ def _check_rate_limit():
     group = _rate_limit_group(path)
     if group == 'static':
         return None
+    if group == 'audio':
+        group = _audio_delivery_rate_group(request.args.get('video_id'))
     max_req, window = _RATE_LIMITS.get(group, _RATE_LIMITS['default'])
     if max_req <= 0:
         return None
@@ -1425,6 +1427,7 @@ _rate_limiter = _RateLimiter()
 _RATE_LIMITS = {
     'api':      (120, 60),    # /alexa/*, /api/* - general API
     'proxy':    (30, 60),     # /proxy/ - expensive audio downloads
+    'cached_audio': (600, 60), # Disk-only range reads and album downloads are inexpensive.
     'audio':    (60, 60),     # /audio/ - app audio (searches, info and downloads)
     'shared_playback': (240, 60), # Ownership heartbeats/cursors must not starve interactive browsing.
     'poll':     (200, 60),   # /alexa/now_playing/ - SSE-alike polling
@@ -1432,6 +1435,13 @@ _RATE_LIMITS = {
     'browser_session': (0, 0), # Owner-only noVNC/session polling is frequent
     'default':  (300, 60),    # Catch-all
 }
+
+def _audio_delivery_rate_group(video_id):
+    # Only complete server-cached files get the burst budget. Cold downloads keep their limit.
+    if _valid_video_id(video_id) and Supporting.cached_audio_path(video_id):
+        return 'cached_audio'
+    return 'audio'
+
 
 def _rate_limit_group(path: str) -> str:
     if path.startswith('/static/') or path in ('/manifest.webmanifest', '/service-worker.js'):

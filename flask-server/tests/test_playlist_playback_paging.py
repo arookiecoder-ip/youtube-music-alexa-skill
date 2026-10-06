@@ -48,3 +48,19 @@ class PlaylistPlaybackPagingTests(unittest.TestCase):
         provider.get_playlist.assert_called_once_with('PL123', 5001)
         self.assertEqual(result.json['tracks'], tracks)
         self.assertFalse(result.json['has_more'])
+
+    def test_cached_audio_bursts_do_not_consume_cold_download_budget(self):
+        from types import SimpleNamespace
+        from unittest.mock import Mock
+        source = Path(__file__).resolve().parents[1] / 'server.py'
+        node = next(n for n in ast.parse(source.read_text()).body if isinstance(n, ast.FunctionDef) and n.name == '_audio_delivery_rate_group')
+        cached = Mock(side_effect=lambda video: '/audio/song.m4a' if video == 'aaaaaaaaaaa' else None)
+        scope = {'_valid_video_id': lambda video: isinstance(video, str) and len(video) == 11,
+                 'Supporting': SimpleNamespace(cached_audio_path=cached)}
+        exec(compile(ast.Module(body=[node], type_ignores=[]), str(source), 'exec'), scope)
+        group = scope['_audio_delivery_rate_group']
+        self.assertEqual(group('aaaaaaaaaaa'), 'cached_audio')
+        self.assertEqual(group('bbbbbbbbbbb'), 'audio')
+        self.assertEqual(group(None), 'audio')
+        self.assertEqual(group('../path'), 'audio')
+        self.assertEqual(cached.call_count, 2)
