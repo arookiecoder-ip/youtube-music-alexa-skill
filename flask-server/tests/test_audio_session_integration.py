@@ -40,6 +40,20 @@ class ScopedAudioIntegrationTests(unittest.TestCase):
             server._session_close('owner-session')
             self.assertEqual(self.client.get('/audio/?video_id=' + VID, headers=headers).status_code, 401)
 
+    def test_unchanged_poll_omits_queue_but_mutations_send_complete_metadata(self):
+        state = dict(server._now_playing, queue=[{'video_id': VID, 'title': 'Song'}])
+        headers = {'X-Api-Key': server.API_KEY}
+        with patch.object(server, '_now_playing', state), patch.object(server, '_queue_seen_obj', None), patch.object(server, '_queue_version', 0):
+            first = self.client.get('/alexa/now_playing/?serial=echo', headers=headers).json
+            self.assertEqual(len(first['queue']), 1)
+            slim = self.client.get('/alexa/now_playing/?serial=echo&queue_version=' + str(first['queue_version']), headers=headers).json
+            self.assertNotIn('queue', slim)
+            state['queue'] = [dict(state['queue'][0]), {'video_id': 'bbbbbbbbbbb'}]
+            changed = self.client.get('/alexa/now_playing/?serial=echo&queue_version=' + str(first['queue_version']), headers=headers).json
+            self.assertEqual(len(changed['queue']), 2)
+            self.assertEqual(first['queue'][0]['entry_id'], changed['queue'][0]['entry_id'])
+            self.assertGreater(changed['queue_version'], first['queue_version'])
+
     def test_machine_key_cannot_mint_owner_tokens(self):
         response = self.client.post('/api/app/audio-token/', json={}, headers={'X-Api-Key': server.API_KEY})
         self.assertEqual(response.status_code, 401)

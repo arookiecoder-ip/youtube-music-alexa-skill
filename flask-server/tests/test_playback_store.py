@@ -9,6 +9,11 @@ class PlaybackStoreTests(unittest.TestCase):
         self.assertEqual(stable_queue_entries(list(reversed(rows)))[0]['entry_id'], rows[1]['entry_id'])
         self.assertEqual(len({r['entry_id'] for r in stable_queue_entries([rows[0], rows[0]])}), 2)
 
+    def test_legacy_skill_metadata_refresh_keeps_existing_occurrence_ids(self):
+        before = stable_queue_entries([{'video_id': 'a'}, {'video_id': 'b'}, {'video_id': 'a'}])
+        after = stable_queue_entries([{'video_id': 'b'}, {'video_id': 'a'}, {'video_id': 'a'}], before)
+        self.assertEqual([row['entry_id'] for row in after], [before[1]['entry_id'], before[0]['entry_id'], before[2]['entry_id']])
+
     def test_restart_preserves_cursor_metadata_without_active_lease(self):
         with tempfile.TemporaryDirectory() as directory:
             path = directory + '/state.db'

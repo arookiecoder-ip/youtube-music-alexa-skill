@@ -2060,7 +2060,7 @@ def _queue_version_locked():
     global _queue_seen_obj, _queue_version
     q = _now_playing.get('queue')
     if q is not _queue_seen_obj:
-        normalized = stable_queue_entries(q)
+        normalized = stable_queue_entries(q, _queue_seen_obj)
         # Preserve list identity so normalization itself does not advance the revision.
         if isinstance(q, list):
             q[:] = normalized

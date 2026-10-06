@@ -6,14 +6,22 @@ import time
 import uuid
 
 
-def stable_queue_entries(queue):
+def stable_queue_entries(queue, previous=None):
+    from collections import defaultdict, deque
+    prior = defaultdict(deque)
+    for item in previous or []:
+        if item.get('entry_id'):
+            prior[item.get('video_id')].append(item['entry_id'])
     seen = set()
     result = []
     for raw in queue or []:
         item = dict(raw)
         key = item.get('entry_id')
         if not isinstance(key, str) or not key or len(key) > 128 or key in seen:
-            key = uuid.uuid4().hex
+            candidates = prior[item.get('video_id')]
+            while candidates and candidates[0] in seen:
+                candidates.popleft()
+            key = candidates.popleft() if candidates else uuid.uuid4().hex
         item['entry_id'] = key
         seen.add(key)
         result.append(item)
