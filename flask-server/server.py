@@ -8306,12 +8306,21 @@ def alexa_play_queue():
                                first['artist'], first['thumbnail'])
             _prewarm_queue_audio(validated_items, target_idx)
 
-        return jsonify({
+        response = {
             'ok': True,
-            'queue': validated_items,
             'queue_index': target_idx,
             'now_playing': first,
-        })
+        }
+        # Bulk installs (Play All / shuffle on very large playlists) pay for
+        # the full queue three times: request upload, server validation, and
+        # this response echoed back. Clients that already hold the tracks
+        # (they just uploaded them) can opt out of the echo: the queue is
+        # still installed in full, only the response stays small.
+        if body.get('brief_response'):
+            response['queue_count'] = len(validated_items)
+        else:
+            response['queue'] = validated_items
+        return jsonify(response)
 
     serial = _effective_serial(body.get("serial"))
     video_id = body.get("video_id")
