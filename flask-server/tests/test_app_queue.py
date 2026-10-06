@@ -11,6 +11,7 @@ from unittest.mock import Mock
 from flask import Flask, jsonify, request
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from playback_output import PlaybackOutput, OutputConflict
+from queue_commands import QueueCommands
 
 A, B, C, D = 'aaaaaaaaaaa', 'bbbbbbbbbbb', 'ccccccccccc', 'ddddddddddd'
 
@@ -32,7 +33,8 @@ class PhoneQueueTests(unittest.TestCase):
             '_valid_video_id': lambda value: isinstance(value, str) and bool(re.fullmatch(r'[A-Za-z0-9_-]{11}', value)),
             '_reset_progress': lambda position: self.state.update(position_ms=position, started_at=time.time()),
             '_computed_position_ms': lambda: self.state['position_ms'], 'alexa_remote': self.echo,
-            '_playback_output': self.output, 'OutputConflict': OutputConflict}
+            '_playback_output': self.output, 'OutputConflict': OutputConflict,
+            '_queue_commands': QueueCommands(), '_queue_version_locked': lambda: 1}
         source = Path(__file__).resolve().parents[1] / 'server.py'
         routes = [node for node in ast.parse(source.read_text()).body
                   if isinstance(node, ast.FunctionDef) and node.name in ('app_queue', 'handle_output_conflict')]
@@ -46,6 +48,27 @@ class PhoneQueueTests(unittest.TestCase):
 
     def claim(self):
         return self.output.phone('phone-one', lambda: None)['output_token']
+
+    def test_revision_conflicts_cannot_apply_edits_but_phone_full_publication_wins(self):
+        before = copy.deepcopy(self.state)
+        self.assertEqual(self.post('next', tracks=[track(C)], expected_queue_version=0).status_code, 409)
+        self.assertEqual(self.state, before)
+        self.assertEqual(self.post('start', tracks=[track(A), track(C)], expected_queue_version=0).status_code, 200)
+
+    def test_stale_duplicate_entry_id_cannot_move_the_cursor(self):
+        self.state['queue'] = [dict(track(A), entry_id='first'), dict(track(A), entry_id='second')]
+        self.assertEqual(self.post('current', queue_index=1, current_entry_id='first').status_code, 409)
+        self.assertEqual(self.state['queue_index'], 0)
+        self.assertEqual(self.post('current', queue_index=1, current_entry_id='second').status_code, 200)
+        self.assertEqual(self.state['queue_index'], 1)
+
+    def test_repeated_modern_insert_is_applied_once(self):
+        response = self.post('next', tracks=[track(C)], command_id='insert-one')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.post('next', tracks=[track(C)], command_id='insert-one').status_code, 200)
+        self.assertEqual([row['video_id'] for row in self.state['queue']], [A, C, B])
+        self.assertEqual(self.post('next', tracks=[track(D)], command_id='insert-one').status_code, 409)
+        self.assertEqual([row['video_id'] for row in self.state['queue']], [A, C, B])
 
     def test_delayed_phone_updates_cannot_overwrite_alexa_takeover(self):
         token = self.claim()

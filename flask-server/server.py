@@ -257,7 +257,7 @@ if not API_KEY:
         API_KEY = secrets.token_hex(16)
 
 if not os.environ.get("API_KEY"):
-    logger.warning("NO API KEY SET IN ENV. USING AUTO-GENERATED KEY: %s", API_KEY)
+    logger.warning("No API key configured in environment; using persistent generated credential.")
 
 # ---- Armed-play store (web-remote direct plays) ----
 # The web remote can't reliably smuggle a video id through Alexa's speech NLU
@@ -812,7 +812,7 @@ _SESSION_PATHS = ('/remote', '/alexa/status', '/alexa/init', '/alexa/devices', '
                   '/alexa/queue_reorder', '/history', '/recommendations',
                   '/alexa/jam/start', '/alexa/jam/stop', '/alexa/jam/status',
                   '/alexa/jam/qr', '/api/home', '/api/library',
-                  '/api/subscribed_artists', '/api/app/output',
+                  '/api/subscribed_artists', '/api/app/output', '/api/app/audio-token',
                   '/alexa/like', '/api/liked_songs', '/api/profile_status',
                   '/api/youtube/download-cookies', '/api/youtube/download-cookies/status',
 '/alexa/amazon_signout',
@@ -1092,6 +1092,25 @@ def _jam_safe_now_playing(snapshot):
     return dict(snapshot or {})
 
 
+from audio_credentials import AudioCredentials
+_audio_credentials = AudioCredentials(app.secret_key)
+
+def _audio_session_valid(sid):
+    if not isinstance(sid, str) or not sid:
+        return False
+    with get_db() as conn:
+        return conn.execute('SELECT 1 FROM web_sessions WHERE sid = ? AND created_at >= ?',
+                            (sid, time.time() - _SID_MAX_AGE)).fetchone() is not None
+
+@app.route('/api/app/audio-token/', methods=['POST'], strict_slashes=False)
+def app_audio_token():
+    if not _logged_in():
+        return error_response('Web session required.', 401)
+    body = request.get_json(silent=True) or {}
+    download = body.get('download') is True
+    return _no_store(jsonify({'token': _audio_credentials.issue(session.get('sid'), download),
+                              'expires_in': 86400 if download else 7200}))
+
 @app.before_request
 def require_api_key():
     _ensure_db()
@@ -1114,6 +1133,11 @@ def require_api_key():
             not _logged_in() and session.get('jam') and not _jam_guest()):
         session.pop('jam', None)
         return _no_store(app.make_response((_JAM_ENDED_HTML, 410)))
+    if path in ('/audio', '/get_radio', '/queue_tracks', '/next_track'):
+        token = request.headers.get('X-MusicBox-Audio-Token', '')
+        if token and _audio_credentials.verify(token, path, _audio_session_valid):
+            request.environ['musicbox.audio_scoped'] = True
+            return None
     # A valid session cookie authorizes the remote page and its /alexa/* calls.
     if _logged_in() and _is_web_session_path(request.path):
         # Mutating requests must be JSON. A cross-site HTML form or plain
@@ -1977,8 +2001,19 @@ _now_playing = {
 }
 _volume_by_serial = {}
 _np_lock = threading.Lock()
+from queue_commands import QueueCommands
+_queue_commands = QueueCommands()
+from playback_store import PlaybackStore, PlaybackPersistence, stable_queue_entries
 from playback_output import PlaybackOutput, OutputConflict
 _playback_output = PlaybackOutput()
+_playback_store = PlaybackStore(DB_FILE)
+try:
+    _restored_playback = _playback_store.load()
+    _now_playing.update(_restored_playback)
+    _playback_output.serial = _restored_playback.get('output_serial') or ''
+except (sqlite3.Error, ValueError, OSError):
+    logger.exception('Could not restore playback metadata')
+_playback_persistence = PlaybackPersistence(_playback_store, lambda: logger.error('Could not persist playback metadata'))
 
 # Version counter for the local Liked Songs playlist, included in SSE
 # snapshots. Open remotes re-fetch /api/playlists/ when it changes so a like
@@ -2025,6 +2060,10 @@ def _queue_version_locked():
     global _queue_seen_obj, _queue_version
     q = _now_playing.get('queue')
     if q is not _queue_seen_obj:
+        normalized = stable_queue_entries(q)
+        # Preserve list identity so normalization itself does not advance the revision.
+        if isinstance(q, list):
+            q[:] = normalized
         _queue_seen_obj = q
         _queue_version += 1
     return _queue_version
@@ -2098,6 +2137,9 @@ def _computed_position_ms():
 
 def _notify_sse():
     """Push current state to all SSE subscriber queues (non-blocking)."""
+    with _np_lock:
+        _queue_version_locked()
+        _playback_persistence.submit(_now_playing, _playback_output.snapshot(), _computed_position_ms())
     with _sse_lock:
         subscribers = list(_sse_subscribers.items())
     # Snapshot (and clear the one-shot playback_error) once per broadcast, not
@@ -3925,6 +3967,9 @@ def app_queue():
     if owner is not None or output['playback_output'] == 'phone':
         if not _playback_output.owns_phone(owner, output_token):
             raise OutputConflict('Playback moved to another output. Refresh before changing the queue.')
+    command_id = body.get('command_id')
+    if command_id is not None and (not isinstance(command_id, str) or not 1 <= len(command_id) <= 128):
+        return error_response('invalid command_id', 400)
     after = body.get('after')
     raw_tracks = body.get('tracks', [])
     if not _valid_video_id(after) or not isinstance(raw_tracks, list):
@@ -3955,10 +4000,24 @@ def app_queue():
             return error_response('invalid duration_ms', 400)
         tracks.append({'video_id': raw['video_id'], 'title': str(raw.get('title') or ''),
                        'artist': str(raw.get('artist') or ''),
-                       'thumbnail': _thumbnail_url(raw.get('thumbnail')), 'duration_ms': duration})
+                       'thumbnail': _thumbnail_url(raw.get('thumbnail')), 'duration_ms': duration,
+                       'entry_id': raw.get('entry_id')})
     with _np_lock:
         if owner is not None and not _playback_output.owns_phone(owner, output_token):
             raise OutputConflict('Playback moved to another output.')
+        if command_id:
+            try:
+                replay, digest = _queue_commands.replay(command_id, body)
+            except ValueError as error:
+                return error_response(str(error), 409)
+            if replay is not None:
+                return jsonify(replay)
+        expected_version = body.get('expected_queue_version')
+        if expected_version is not None and action != 'start':
+            if isinstance(expected_version, bool) or not isinstance(expected_version, int):
+                return error_response('invalid expected_queue_version', 400)
+            if expected_version != _queue_version_locked():
+                return error_response('shared queue revision changed', 409)
         queue = tracks if action == 'start' else list(_now_playing.get('queue') or [])
         current_index = _now_playing.get('queue_index', -1)
         if requested_index is not None:
@@ -3972,6 +4031,9 @@ def app_queue():
             idx = current_index if (isinstance(current_index, int) and 0 <= current_index < len(queue)
                                    and queue[current_index].get('video_id') == after and action != 'start') else next(
                 (i for i, item in enumerate(queue) if item.get('video_id') == after), -1)
+        current_entry_id = body.get('current_entry_id')
+        if current_entry_id and idx >= 0 and queue[idx].get('entry_id') and queue[idx]['entry_id'] != current_entry_id:
+            return error_response('phone queue occurrence is stale', 409)
         if idx < 0:
             return error_response('starting track must be in tracks' if action == 'start' else
                                   'current track is no longer in the shared queue', 400 if action == 'start' else 409)
@@ -4005,10 +4067,15 @@ def app_queue():
         if action != 'current':
             _now_playing.update(queue=queue, queue_web_dirty=True)
         _now_playing['updated_at'] = time.time()
+        if command_id:
+            response = {'ok': True, 'queue_version': _queue_version_locked()}
+            _queue_commands.record(command_id, digest, response)
+        else:
+            response = {'ok': True}
     _notify_sse()
     if owner is not None:
         _playback_output.heartbeat(owner, output_token)
-    return jsonify({'ok': True})
+    return jsonify(response)
 
 
 @app.route("/next_track/", methods=["GET"])
@@ -4054,6 +4121,7 @@ async def get_radio():
     if not playlist:
         return error_response('no radio queue found', 404)
     if (request.args.get('update_queue', '1') == '0'
+            or request.environ.get('musicbox.audio_scoped')
             or _playback_output.snapshot()['playback_output'] == 'phone'):
         return jsonify({'playlist': playlist})
     # Refresh the web remote's "Up Next" queue now that we have the full list
@@ -4457,7 +4525,13 @@ def audio_stream():
         if not path and _download_in_progress(video_id):
             path = _await_prewarm_cache(video_id)
         if not path:
-            path = Supporting.ensure_downloaded(video_id)
+            prefetch = request.headers.get('X-MusicBox-Prefetch') == '1'
+            path = Supporting.ensure_downloaded(video_id, prefetch=True) if prefetch else Supporting.ensure_downloaded(video_id)
+            if not path and prefetch:
+                response, status = error_response('prefetch deferred', 503)
+                response.status_code = status
+                response.headers['Retry-After'] = '5'
+                return response
         if not path:
             return error_response('download failed', 502)
 
@@ -7366,6 +7440,8 @@ def alexa_now_playing():
     # fallback keeps the bar in sync just like the live stream does.
     with _np_lock:
         snapshot = _np_snapshot(serial)
+        if request.args.get('queue_version') == str(snapshot['queue_version']):
+            snapshot.pop('queue', None)
         return jsonify(_jam_safe_now_playing(snapshot) if is_jam else snapshot)
 
 
