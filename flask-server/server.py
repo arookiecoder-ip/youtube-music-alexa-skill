@@ -6650,6 +6650,8 @@ def alexa_state_event():
             if '.' not in str(body.get('event_timestamp', '')):
                 intent_at = int(intent_at)
             watermark = max(intent_at, float(_now_playing.get('alexa_event_at') or 0))
+            if '.' not in str(body.get('event_timestamp', '')):
+                watermark = int(watermark)
             if event_at < watermark:
                 return jsonify({'ok': True, 'ignored': 'stale Alexa event'})
             _now_playing['alexa_event_at'] = event_at
