@@ -1,6 +1,6 @@
 import download_cookies
 import asyncio, collections, difflib, glob, hashlib, hmac, itertools, json, math, os, random, secrets, shutil, sys, threading, time, re, subprocess, logging, copy, uuid, tempfile, shlex
-from datetime import timedelta
+from datetime import timedelta, datetime
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
 import home_feed
@@ -6442,6 +6442,7 @@ def alexa_command():
             _now_playing['playback_processing'] = True
             _now_playing['playback_revision'] = int(_now_playing.get('playback_revision', 0)) + 1
             _now_playing['updated_at'] = time.time()
+            _now_playing['alexa_intent_at'] = time.time()
             staged_video_id = _now_playing.get('video_id', '')
             staged_revision = int(_now_playing.get('playback_revision', 0))
         _notify_sse()
@@ -6630,6 +6631,19 @@ def alexa_state_event():
     body = request.get_json(silent=True) or {}
     # Auth already handled by require_api_key middleware (key in ?key= param).
     event = body.get('event', '')
+    # Alexa request creation time, not webhook delivery time: an old stop may
+    # arrive after a same-song resume and must not pause the new playback.
+    try:
+        event_at = datetime.fromisoformat(str(body.get('event_timestamp', '')).replace('Z', '+00:00')).timestamp()
+    except (ValueError, TypeError, OverflowError):
+        event_at = None
+    if event_at is not None:
+        with _np_lock:
+            watermark = max(float(_now_playing.get('alexa_intent_at') or 0),
+                            float(_now_playing.get('alexa_event_at') or 0))
+            if event_at < watermark:
+                return jsonify({'ok': True, 'ignored': 'stale Alexa event'})
+            _now_playing['alexa_event_at'] = event_at
     if event == 'started':
         # An actual Alexa/voice start changes output, even if the app is closed.
         _claim_alexa_output(body.get('serial'), wait=False)

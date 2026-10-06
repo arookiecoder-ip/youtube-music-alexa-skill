@@ -360,3 +360,21 @@ class VoiceShuffleStillAuthoritative(ReorderAuthorityBase):
 
 if __name__ == '__main__':
     unittest.main()
+
+class SameSongHandoffEventTests(ReorderAuthorityBase):
+    def test_delayed_stop_cannot_pause_same_song_after_resume(self):
+        self._set_state(video_id='abcdefghijk', playing=True, playback_processing=True,
+                        alexa_intent_at=2000.0)
+        response = self._post_state_event('stopped', video_id='abcdefghijk',
+                                         event_timestamp='1970-01-01T00:33:19+00:00')
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(server._get_now_playing()['playing'])
+        self.assertEqual(response.json['ignored'], 'stale Alexa event')
+
+    def test_genuine_new_pause_is_accepted(self):
+        self._set_state(video_id='abcdefghijk', playing=True, playback_processing=True,
+                        alexa_intent_at=2000.0)
+        response = self._post_state_event('stopped', video_id='abcdefghijk',
+                                         event_timestamp='1970-01-01T00:33:21+00:00')
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(server._get_now_playing()['playing'])

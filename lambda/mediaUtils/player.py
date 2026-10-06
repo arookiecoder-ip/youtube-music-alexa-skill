@@ -201,6 +201,10 @@ def _notify_server(handler_input, event: str, **extra):
             volume = _request_volume(handler_input)
             if volume is not None:
                 extra['volume'] = volume
+        request_event = getattr(handler_input.request_envelope, 'request', None)
+        timestamp = getattr(request_event, 'timestamp', None)
+        if timestamp is not None:
+            extra['event_timestamp'] = timestamp.isoformat() if hasattr(timestamp, 'isoformat') else str(timestamp)
         payload = json.dumps({'event': event, **extra})
         url = f'{api_url}/alexa/state_event/?key={data.API_KEY}'
         logger.info(f'_notify_server: POST {event} to {api_url}/alexa/state_event/')
@@ -889,10 +893,13 @@ class Controller:
                 enqueue_metadata = Attributes.get_metadata_by_play_order(
                     handler_input, enqueue_index)
             else:
+                if not track_error:
+                    Controller._discard_stale_successors(handler_input)
+                    playlist = Attributes.get_playlist(handler_input)
+                    current_index = playback_info.get("index", 0)
                 if track_error:
-                    logger.info(
-                        f'enqueue_next_stream: next_track lookup failed ({track_error}); '
-                        f'falling back to the window')
+                    playback_info["next_stream_enqueued"] = False
+                    return False
                 # No authoritative next (genuine end of queue, or current video no
                 # longer tracked): keep the previous window wrap / extension
                 # behavior so loop and radio continuation still work.
@@ -1312,6 +1319,17 @@ class Controller:
         return Controller.play(handler_input, song_info, is_playback=is_playback)
 
     @staticmethod
+    def _discard_stale_successors(handler_input):
+        """An authoritative queue end invalidates every locally stored successor."""
+        info = Attributes.get_playback_info(handler_input)
+        playlist = Attributes.get_playlist(handler_input)
+        order = info.get("play_order") or list(range(len(playlist)))
+        kept = [playlist[i] for i in order[:info.get("index", 0) + 1] if 0 <= i < len(playlist)]
+        Attributes.get_user_attributes(handler_input)["playlist"] = [asdict(item) for item in kept]
+        info["play_order"] = list(range(len(kept)))
+        info["index"] = max(0, len(kept) - 1)
+
+    @staticmethod
     def play_next(handler_input: HandlerInput, is_playback=False) -> Response:
         playlist = Attributes.get_playlist(handler_input)
         if not playlist:
@@ -1319,19 +1337,25 @@ class Controller:
         playback_info = Attributes.get_playback_info(handler_input)
         playback_setting = Attributes.get_playback_setting(handler_input)
         current_index = playback_info.get("index", 0)
-        next_index = (current_index + 1) % len(playlist)
-
-        if next_index == 0 and not playback_setting.get("loop"):
+        current = Attributes.get_metadata_by_play_order(handler_input, current_index)
+        if not current:
+            return Controller.error_response(handler_input, data.NOTHING_TO_RESUME, is_playback)
+        authoritative, error = Api.next_track(handler_input, current.video_id)
+        if error:
+            # Fail closed: a stale skill window may contain deleted tracks.
+            return Controller.error_response(handler_input, error, is_playback)
+        if authoritative is not None and authoritative.video_id:
+            next_index = Controller._stage_next_track(handler_input, authoritative, current_index)
+            if next_index is None:
+                return Controller.error_response(handler_input, data.NOTHING_TO_RESUME, is_playback)
+        else:
+            Controller._discard_stale_successors(handler_input)
             if Controller.extend_queue(handler_input):
-                playlist = Attributes.get_playlist(handler_input)
-                # extend_queue may have trimmed played tracks, shifting index.
                 next_index = playback_info.get("index", 0) + 1
             else:
                 if not is_playback:
                     handler_input.response_builder.speak(data.PLAYBACK_NEXT_END)
-
-                return handler_input.response_builder.add_directive(
-                    StopDirective()).response
+                return handler_input.response_builder.add_directive(StopDirective()).response
 
         playback_info["index"] = next_index
         playback_info["offset_in_ms"] = 0

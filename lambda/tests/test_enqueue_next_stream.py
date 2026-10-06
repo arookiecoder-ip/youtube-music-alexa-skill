@@ -255,14 +255,35 @@ class EnqueueNextStreamTests(unittest.TestCase):
         self.assertEqual(attrs['playback_info']['play_order'], [0, 2, 1])
         self.assertEqual(attrs['playback_info']['next_stream_enqueued'], True)
 
-    def test_falls_back_to_window_when_server_has_no_next(self):
+    def test_deleted_successors_never_return_from_stale_window(self):
         hi = self._hi([_raw('A'), _raw('B'), _raw('C')], index=0,
                       play_order=[0, 1, 2], current_token='0|A')
-        with mock.patch.object(player.Api, 'next_track',
-                               return_value=(None, None)), \
-             self._patch_stream():
-            self.assertTrue(player.Controller.enqueue_next_stream(hi))
-        self.assertEqual(self._enqueued(hi).token, '1|B')
+        with mock.patch.object(player.Api, 'next_track', return_value=(None, None)), \
+             mock.patch.object(player.Controller, 'extend_queue', return_value=False), \
+             self._patch_stream() as stream:
+            self.assertFalse(player.Controller.enqueue_next_stream(hi))
+            stream.assert_not_called()
+        self.assertEqual([m.video_id for m in player.Attributes.get_playlist(hi)], ['A'])
+
+    def test_voice_next_obeys_server_after_deletion_on_every_request(self):
+        hi = self._hi([_raw('A'), _raw('B'), _raw('C'), _raw('D')], index=0,
+                      play_order=[0, 1, 2, 3], current_token='0|A')
+        with mock.patch.object(player.Api, 'next_track', side_effect=[(_meta('C'), None), (_meta('D'), None)]) as lookup, \
+             self._patch_stream() as stream, \
+             mock.patch.object(player.Controller, 'play', return_value='played'):
+            self.assertEqual(player.Controller.play_next(hi), 'played')
+            self.assertEqual(player.Controller.play_next(hi), 'played')
+        self.assertEqual([c.args[1] for c in lookup.call_args_list], ['A', 'C'])
+        self.assertEqual([c.args[1] for c in stream.call_args_list], ['C', 'D'])
+
+    def test_queue_lookup_failure_does_not_play_deleted_local_song(self):
+        hi = self._hi([_raw('A'), _raw('B')], index=0, play_order=[0, 1])
+        with mock.patch.object(player.Api, 'next_track', return_value=(None, 'offline')), \
+             self._patch_stream() as stream, \
+             mock.patch.object(player.Controller, 'error_response', return_value='offline'):
+            self.assertEqual(player.Controller.play_next(hi), 'offline')
+            self.assertFalse(player.Controller.enqueue_next_stream(hi))
+            stream.assert_not_called()
 
     def test_loop_wraps_at_window_end(self):
         hi = self._hi([_raw('A'), _raw('B')], index=1, play_order=[0, 1],
