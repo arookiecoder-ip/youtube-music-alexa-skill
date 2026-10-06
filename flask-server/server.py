@@ -9191,7 +9191,7 @@ async def api_get_library_playlist(pl_id):
             result['trackCount'] = total
             next_offset = page_offset + len(result['tracks'])
             result['next_offset'] = next_offset
-            result['has_more'] = next_offset < fetched_count or next_offset < total
+            result['has_more'] = next_offset < fetched_count if request.args.get('playback') == '1' else (next_offset < fetched_count or next_offset < total)
             return result
 
         # 'LM' is the special Liked Music virtual playlist — requires auth.
@@ -9201,7 +9201,7 @@ async def api_get_library_playlist(pl_id):
             try:
                 # Fetch only enough of the continuation chain for this page;
                 # later scrolls extend the prefix as needed.
-                fetch_limit = page_offset + page_limit + 1
+                fetch_limit = None if request.args.get('playback') == '1' else page_offset + page_limit + 1
                 raw = await asyncio.to_thread(yt.get_liked_songs, fetch_limit)
             except Exception as liked_error:
                 if "invalid argument" in str(liked_error).lower():
@@ -9233,7 +9233,7 @@ async def api_get_library_playlist(pl_id):
                 'tracks': tracks,
             }))
         try:
-            fetch_limit = page_offset + page_limit + 1
+            fetch_limit = None if request.args.get('playback') == '1' else page_offset + page_limit + 1
             info = await asyncio.to_thread(yt.get_playlist, pl_id, fetch_limit)
         except Exception as browse_err:
             if "invalid argument" in str(browse_err).lower():
