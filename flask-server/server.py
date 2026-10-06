@@ -3920,8 +3920,10 @@ async def queue_tracks():
 
     with _np_lock:
         queue = list(_now_playing.get('queue') or [])
-    idx = next((i for i in range(len(queue) - 1, -1, -1)
-                if queue[i].get('video_id') == after), -1)
+        current_index = _now_playing.get('queue_index') if _now_playing.get('video_id') == after else None
+    idx = current_index if (isinstance(current_index, int) and 0 <= current_index < len(queue)
+                            and queue[current_index].get('video_id') == after) else next(
+        (i for i in range(len(queue) - 1, -1, -1) if queue[i].get('video_id') == after), -1)
     tracks = []
     if idx >= 0:
         for item in queue[idx + 1:idx + 1 + limit]:
@@ -3931,23 +3933,25 @@ async def queue_tracks():
                 'video_id': item.get('video_id', ''),
                 'thumbnail': _thumbnail_metadata(item.get('thumbnail')),
                 'duration_ms': item.get('duration_ms', 0),
+                'entry_id': item.get('entry_id'),
             })
     return jsonify({'tracks': tracks, 'next_offset': offset + len(tracks)})
 
 
-def _resolve_next_track(queue, after_video_id):
+def _resolve_next_track(queue, after_video_id, current_index=None):
     """Return the authoritative next-up item in ``queue`` after ``after_video_id``.
 
     Resolves purely from the given queue order — the server's live queue is the
     single source of truth for what plays next, so reorders, adds/removes, and
-    shuffle all take effect immediately. Matches /queue_tracks/ by preferring
-    the *last* occurrence of the current video, so a repeated song advances to
-    the one after the occurrence that is actually playing. Returns the item
+    shuffle all take effect immediately. A matching authoritative cursor selects
+    the actual duplicate occurrence; legacy callers without a cursor retain
+    the last-occurrence fallback. Returns the item
     dict, or None when the current video isn't in the queue or is already its
     last track (the caller then extends the queue).
     """
-    idx = next((i for i in range(len(queue) - 1, -1, -1)
-                if queue[i].get('video_id') == after_video_id), -1)
+    idx = current_index if (isinstance(current_index, int) and 0 <= current_index < len(queue)
+                            and queue[current_index].get('video_id') == after_video_id) else next(
+        (i for i in range(len(queue) - 1, -1, -1) if queue[i].get('video_id') == after_video_id), -1)
     if idx < 0 or idx + 1 >= len(queue):
         return None
     return queue[idx + 1]
@@ -4093,7 +4097,8 @@ def next_track():
     after = request.args.get("after") or ''
     with _np_lock:
         queue = list(_now_playing.get('queue') or [])
-    item = _resolve_next_track(queue, after)
+        current_index = _now_playing.get('queue_index') if _now_playing.get('video_id') == after else None
+    item = _resolve_next_track(queue, after, current_index)
     if item is None:
         return jsonify({'track': None})
     return jsonify({'track': {
@@ -4102,6 +4107,7 @@ def next_track():
         'video_id': item.get('video_id', ''),
         'thumbnail': _thumbnail_metadata(item.get('thumbnail')),
         'duration_ms': item.get('duration_ms', 0),
+        'entry_id': item.get('entry_id'),
     }})
 
 
