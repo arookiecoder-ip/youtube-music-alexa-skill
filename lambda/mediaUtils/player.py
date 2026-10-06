@@ -645,7 +645,8 @@ class Api:
         if not after_video_id:
             return None, None
         response_json, error = Api._get_json(
-            handler_input, 'next_track', {'after': after_video_id})
+            handler_input, 'next_track', {'after': after_video_id,
+                'loop': '1' if Attributes.get_playback_setting(handler_input).get('loop') else '0'})
         if error:
             return None, error
         try:
@@ -893,6 +894,9 @@ class Controller:
                 enqueue_metadata = Attributes.get_metadata_by_play_order(
                     handler_input, enqueue_index)
             else:
+                if not track_error and playback_setting.get("loop"):
+                    playback_info["next_stream_enqueued"] = False
+                    return False
                 if not track_error:
                     Controller._discard_stale_successors(handler_input)
                     playlist = Attributes.get_playlist(handler_input)
@@ -1348,6 +1352,10 @@ class Controller:
             next_index = Controller._stage_next_track(handler_input, authoritative, current_index)
             if next_index is None:
                 return Controller.error_response(handler_input, data.NOTHING_TO_RESUME, is_playback)
+        elif playback_setting.get("loop"):
+            # Older servers may not support authoritative loop resolution.
+            # Do not replay the old window: a deleted first row may live there.
+            return Controller.error_response(handler_input, data.NOTHING_TO_RESUME, is_playback)
         else:
             Controller._discard_stale_successors(handler_input)
             if Controller.extend_queue(handler_input):

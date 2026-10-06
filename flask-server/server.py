@@ -4099,6 +4099,10 @@ def next_track():
         queue = list(_now_playing.get('queue') or [])
         current_index = _now_playing.get('queue_index') if _now_playing.get('video_id') == after else None
     item = _resolve_next_track(queue, after, current_index)
+    if item is None and request.args.get('loop') == '1' and queue:
+        last_index = len(queue) - 1
+        if queue[last_index].get('video_id') == after and (current_index is None or current_index == last_index):
+            item = queue[0]
     if item is None:
         return jsonify({'track': None})
     return jsonify({'track': {

@@ -289,10 +289,10 @@ class EnqueueNextStreamTests(unittest.TestCase):
         hi = self._hi([_raw('A'), _raw('B')], index=1, play_order=[0, 1],
                       loop=True, current_token='1|B')
         with mock.patch.object(player.Api, 'next_track',
-                               return_value=(None, None)), \
+                               return_value=(_meta('A'), None)), \
              self._patch_stream():
             self.assertTrue(player.Controller.enqueue_next_stream(hi))
-        self.assertEqual(self._enqueued(hi).token, '0|A')
+        self.assertTrue(self._enqueued(hi).token.endswith('|A'))
 
     def test_extends_window_at_end_then_enqueues(self):
         hi = self._hi([_raw('A'), _raw('B')], index=1, play_order=[0, 1],

@@ -115,6 +115,19 @@ class NextTrackBase(unittest.TestCase):
 
 
 class NextTrackEndpoint(NextTrackBase):
+    def test_loop_wraps_to_authoritative_first_row_after_deletion(self):
+        self._set_queue([_meta('B'), _meta('C')], current_index=1)
+        response = self.client.get('/next_track/', query_string={
+            'after': 'C', 'loop': '1', 'key': server.API_KEY})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json['track']['video_id'], 'B')
+
+    def test_loop_does_not_resurrect_absent_current_song(self):
+        self._set_queue([_meta('B'), _meta('C')], current_index=1)
+        response = self.client.get('/next_track/', query_string={
+            'after': 'deleted', 'loop': '1', 'key': server.API_KEY})
+        self.assertIsNone(response.json['track'])
+
     def test_returns_metadata_of_track_after_current(self):
         self._set_queue([_meta('A'), _meta('B'), _meta('C')], current_index=0)
         track = self._track('A')
