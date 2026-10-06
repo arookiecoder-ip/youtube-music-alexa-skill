@@ -1,6 +1,6 @@
 import download_cookies
 import asyncio, collections, difflib, glob, hashlib, hmac, itertools, json, math, os, random, secrets, shutil, sys, threading, time, re, subprocess, logging, copy, uuid, tempfile, shlex
-from datetime import timedelta
+from datetime import timedelta, datetime
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
 import home_feed
@@ -2301,6 +2301,9 @@ def _claim_alexa_output(serial='', wait=True, expected_owner=None, expected_toke
                 return  # A newer phone intent already superseded this handoff.
             _reset_progress(_computed_position_ms())
             _now_playing.update(playing=False, playback_confirmed=True, playback_processing=False)
+            # A start created before this confirmed handoff cannot reclaim
+            # Alexa ownership merely because its webhook arrives late.
+            _now_playing['alexa_intent_at'] = time.time()
             _now_playing['playback_revision'] = int(_now_playing.get('playback_revision', 0)) + 1
             _now_playing['updated_at'] = time.time()
         _notify_sse()
@@ -4099,6 +4102,10 @@ def next_track():
         queue = list(_now_playing.get('queue') or [])
         current_index = _now_playing.get('queue_index') if _now_playing.get('video_id') == after else None
     item = _resolve_next_track(queue, after, current_index)
+    if item is None and request.args.get('loop') == '1' and queue:
+        last_index = len(queue) - 1
+        if queue[last_index].get('video_id') == after and (current_index is None or current_index == last_index):
+            item = queue[0]
     if item is None:
         return jsonify({'track': None})
     return jsonify({'track': {
@@ -6442,6 +6449,7 @@ def alexa_command():
             _now_playing['playback_processing'] = True
             _now_playing['playback_revision'] = int(_now_playing.get('playback_revision', 0)) + 1
             _now_playing['updated_at'] = time.time()
+            _now_playing['alexa_intent_at'] = time.time()
             staged_video_id = _now_playing.get('video_id', '')
             staged_revision = int(_now_playing.get('playback_revision', 0))
         _notify_sse()
@@ -6630,6 +6638,26 @@ def alexa_state_event():
     body = request.get_json(silent=True) or {}
     # Auth already handled by require_api_key middleware (key in ?key= param).
     event = body.get('event', '')
+    # Alexa request creation time, not webhook delivery time: an old stop may
+    # arrive after a same-song resume and must not pause the new playback.
+    try:
+        event_at = datetime.fromisoformat(str(body.get('event_timestamp', '')).replace('Z', '+00:00')).timestamp()
+    except (ValueError, TypeError, OverflowError):
+        event_at = None
+    if event_at is not None:
+        with _np_lock:
+            intent_at = float(_now_playing.get('alexa_intent_at') or 0)
+            # Some Alexa request timestamps have only whole-second precision.
+            # Accept events created in the intent's second instead of rejecting
+            # a genuine immediate start/pause due to lost fractional precision.
+            if '.' not in str(body.get('event_timestamp', '')):
+                intent_at = int(intent_at)
+            watermark = max(intent_at, float(_now_playing.get('alexa_event_at') or 0))
+            if '.' not in str(body.get('event_timestamp', '')):
+                watermark = int(watermark)
+            if event_at < watermark:
+                return jsonify({'ok': True, 'ignored': 'stale Alexa event'})
+            _now_playing['alexa_event_at'] = event_at
     if event == 'started':
         # An actual Alexa/voice start changes output, even if the app is closed.
         _claim_alexa_output(body.get('serial'), wait=False)

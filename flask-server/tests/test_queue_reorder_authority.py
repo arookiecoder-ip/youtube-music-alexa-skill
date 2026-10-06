@@ -360,3 +360,38 @@ class VoiceShuffleStillAuthoritative(ReorderAuthorityBase):
 
 if __name__ == '__main__':
     unittest.main()
+
+class SameSongHandoffEventTests(ReorderAuthorityBase):
+    def test_delayed_stop_cannot_pause_same_song_after_resume(self):
+        self._set_state(video_id='abcdefghijk', playing=True, playback_processing=True,
+                        alexa_intent_at=2000.0)
+        response = self._post_state_event('stopped', video_id='abcdefghijk',
+                                         event_timestamp='1970-01-01T00:33:19+00:00')
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(server._get_now_playing()['playing'])
+        self.assertEqual(response.json['ignored'], 'stale Alexa event')
+
+    def test_genuine_new_pause_is_accepted(self):
+        self._set_state(video_id='abcdefghijk', playing=True, playback_processing=True,
+                        alexa_intent_at=2000.0)
+        response = self._post_state_event('stopped', video_id='abcdefghijk',
+                                         event_timestamp='1970-01-01T00:33:21+00:00')
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(server._get_now_playing()['playing'])
+
+    def test_second_precision_timestamp_accepts_immediate_pause(self):
+        self._set_state(video_id='abcdefghijk', playing=True, playback_processing=True,
+                        alexa_intent_at=2000.9)
+        response = self._post_state_event('stopped', video_id='abcdefghijk',
+                                         event_timestamp='1970-01-01T00:33:20+00:00')
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(server._get_now_playing()['playing'])
+
+    def test_delayed_start_cannot_reclaim_output_after_newer_handoff(self):
+        self._set_state(video_id='abcdefghijk', playing=False, alexa_intent_at=2000.0)
+        with mock.patch.object(server, '_claim_alexa_output') as claim:
+            response = self._post_state_event('started', video_id='abcdefghijk',
+                                             event_timestamp='1970-01-01T00:33:19+00:00')
+        self.assertEqual(response.status_code, 200)
+        claim.assert_not_called()
+        self.assertFalse(server._get_now_playing()['playing'])
