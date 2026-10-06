@@ -2238,7 +2238,7 @@ def _get_now_playing():
         return dict(_now_playing)
 
 
-def _claim_alexa_output(serial='', wait=True, expected_owner=None, expected_token=None):
+def _claim_alexa_output(serial='', wait=True, expected_owner=None, expected_token=None, source_paused=False):
     def changed():
         with _np_lock:
             if _playback_output.snapshot()['playback_output'] != 'alexa':
@@ -2249,7 +2249,7 @@ def _claim_alexa_output(serial='', wait=True, expected_owner=None, expected_toke
             _now_playing['updated_at'] = time.time()
         _notify_sse()
     return _playback_output.alexa(serial or '', on_change=changed, wait=wait,
-                                   expected_owner=expected_owner, expected_token=expected_token)
+                                   expected_owner=expected_owner, expected_token=expected_token, source_paused=source_paused)
 
 
 @app.errorhandler(OutputConflict)
@@ -6258,7 +6258,8 @@ def alexa_command():
         return error_response('missing "serial" or "action"', 400)
     if action in ('play', 'next', 'previous'):
         _claim_alexa_output(serial, expected_owner=body.get('output_owner'),
-                            expected_token=body.get('output_token'))
+                            expected_token=body.get('output_token'),
+                            source_paused=body.get('phone_paused') is True)
     if action == 'pause' and _playback_output.snapshot()['playback_output'] == 'phone':
         # Stop a stale Echo transport without rewriting the active phone's mirrored state.
         error = alexa_remote.remote.command(serial, action, body.get('value'))
@@ -6457,7 +6458,8 @@ def alexa_seek():
     if not serial:
         return error_response('missing "serial"', 400)
     _claim_alexa_output(serial, expected_owner=body.get('output_owner'),
-                        expected_token=body.get('output_token'))
+                        expected_token=body.get('output_token'),
+                            source_paused=body.get('phone_paused') is True)
     # Coerce inside the try: a JSON *string* like "12" for position_seconds
     # would otherwise be string-repeated by * 1000 (Python), and int() would
     # then parse the 2000-char result as an absurd position instead of 12000.

@@ -66,13 +66,15 @@ class PlaybackOutput:
             return self.snapshot()
 
     def alexa(self, serial='', on_change=lambda: None, wait=True, timeout=4,
-              expected_owner=None, expected_token=None):
+              expected_owner=None, expected_token=None, source_paused=False):
         with self.condition:
             if expected_token is not None and not self.owns_phone(expected_owner, expected_token):
                 raise OutputConflict('A newer phone play superseded this handoff.')
+            if source_paused and expected_token is None:
+                raise OutputConflict('A phone pause acknowledgement requires its current ownership token.')
             changed = self.mode != 'alexa'
             if changed:
-                self.pending_owner = self.owner
+                self.pending_owner = '' if source_paused else self.owner
                 self.pending_until = self.lease_until
                 self.mode, self.owner = 'alexa', ''
                 self.token = secrets.token_hex(16)
