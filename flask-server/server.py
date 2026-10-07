@@ -2536,9 +2536,10 @@ def app_mobile_devices():
                     current.pop('playback_error', None)
                     current.pop('_disconnected_phone_token', None)
                     current.update(playing=False, playback_confirmed=True, playback_processing=False)
+                snapshot = _np_snapshot(body.get('serial'))
             if selected:
                 _notify_sse()
-            return jsonify(default_selected=selected, now_playing=_np_snapshot(body.get('serial')), **result)
+            return jsonify(default_selected=selected, now_playing=snapshot, **result)
         if action == 'online':
             commands = _mobile_devices.online(owner, session_id, body.get('name'), body.get('ack', []), body.get('volume'))
             if body.get('wait') is True and not commands and body.get('output_token') == _playback_output.snapshot()['output_token']:
