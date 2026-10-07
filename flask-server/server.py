@@ -5973,7 +5973,8 @@ def _watch_playback_confirmation(serial, video_id, resend):
         # Give up quietly if the user has since moved on to another track.
         with _np_lock:
             return (_now_playing.get('video_id') == video_id
-                    and not _now_playing.get('playback_error'))
+                    and (not _now_playing.get('playback_error') or
+                         _now_playing['playback_error'].get('type') == 'buffering'))
 
     def _wait_once():
         # A cache hit has nothing left to wait on but the trigger + /proxy/
