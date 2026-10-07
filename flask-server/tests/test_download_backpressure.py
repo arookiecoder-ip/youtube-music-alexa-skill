@@ -1265,9 +1265,16 @@ class WarmCacheNeverBlocks(_CleanServerState):
         """Guards the sweep race: the file can vanish between the cache check
         and the send, and that must still produce audio rather than a 502."""
         paths = ["/tmp/warm.m4a", None]
+        request_thread = threading.get_ident()
+
+        def cached_path(video_id):
+            # Background prefetch threads must not consume this request's race.
+            if video_id != "warmvid0002" or threading.get_ident() != request_thread:
+                return None
+            return paths.pop(0) if paths else None
 
         with mock.patch.object(server.Supporting, "cached_audio_path",
-                               staticmethod(lambda vid: paths.pop(0) if paths else None)), \
+                               staticmethod(cached_path)), \
                 mock.patch.object(server.Supporting, "ensure_downloaded",
                                   staticmethod(lambda vid, **kw: "/tmp/redownloaded.m4a")) as _, \
                 mock.patch.object(server, "send_file",
