@@ -254,3 +254,9 @@ class MobileDeviceRoutesTests(OutputRoutesTests):
         with self.assertRaises(self.namespace['OutputConflict']):
             self.output.select_idle_phone('phone-two', old)
         self.assertEqual(self.output.snapshot()['output_owner'], 'phone-one')
+
+    def test_online_route_exposes_actual_target_volume_levels(self):
+        reply = self.device('online', volume=66, volume_steps=15).json
+        device = next(d for d in reply['devices'] if d['id'] == 'phone-one')
+        self.assertEqual(device['volume'], 66)
+        self.assertEqual(device['volume_steps'], 15)
