@@ -2482,13 +2482,17 @@ def _pause_echo_for_mobile(serial):
 
 def _reconcile_mobile_output(closed_owner=''):
     output = _playback_output.snapshot()
-    if output['playback_output'] != 'phone' or not output.get('output_controller'):
+    if output['playback_output'] != 'phone':
         return
     online = {d['id'] for d in _mobile_devices.list()}
     owner, controller = output['output_owner'], output['output_controller']
     if owner in online and owner != closed_owner:
         with _np_lock:
             _now_playing.pop('_disconnected_phone_token', None)
+        return
+    # Presence can arrive after the first lease claim. Do not declare a live
+    # lease disconnected solely because registration has not arrived yet.
+    if owner and owner != closed_owner and output['phone_lease_ms'] > 0 and not controller:
         return
     # Losing the target never grants an audible fallback to the controller.
     # Preserve its queue/cursor and require an explicit output choice to resume.
@@ -2547,6 +2551,29 @@ def app_mobile_devices():
                 commands = _mobile_devices.online(owner, session_id, body.get('name'), body.get('ack', []), body.get('volume'), body.get('volume_steps'))
                 _reconcile_mobile_output()
             return jsonify(devices=_mobile_devices.list(), commands=commands, revision=_mobile_devices.revision, **_playback_output.snapshot())
+        if action == 'resume':
+            # Explicit Play may recover an orphaned output, but background
+            # presence never grants another phone permission to start audio.
+            _mobile_devices.online(owner, session_id, body.get('name'), [])
+            with _np_lock:
+                before = _playback_output.snapshot()
+                if body.get('output_token') != before['output_token']:
+                    raise OutputConflict('Playback changed. Refresh and retry.')
+                if before['playback_output'] != 'phone' or before['handoff_pending']:
+                    raise OutputConflict('Playback moved to another output.')
+                target = before['output_owner']
+                online = {d['id'] for d in _mobile_devices.list()}
+                if target and target in online and target != owner:
+                    _mobile_devices.command(target, before['output_token'], 'play', {}, body.get('command_id'))
+                    return jsonify(default_selected=False, **before)
+                if target != owner and before['phone_lease_ms'] > 0:
+                    raise OutputConflict('Waiting for the previous playback device to stop. Retry playback.')
+                result = before if target == owner else _playback_output.select_idle_phone(owner, before['output_token'])
+                _now_playing.pop('playback_error', None)
+                _now_playing.pop('_disconnected_phone_token', None)
+                snapshot = _np_snapshot(body.get('serial'))
+            _notify_sse()
+            return jsonify(default_selected=True, now_playing=snapshot, **result)
         if action == 'offline':
             removed = _mobile_devices.offline(owner, session_id)
             if removed:
