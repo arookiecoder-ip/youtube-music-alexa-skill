@@ -260,3 +260,82 @@ class MobileDeviceRoutesTests(OutputRoutesTests):
         device = next(d for d in reply['devices'] if d['id'] == 'phone-one')
         self.assertEqual(device['volume'], 66)
         self.assertEqual(device['volume_steps'], 15)
+
+    def test_resume_after_local_owner_closes_selects_controller_without_autoplay(self):
+        self.device('online')
+        self.device('online', owner='phone-two')
+        self.output_request('claim')
+        self.state.update(playing=True, position_ms=42000)
+        self.device('offline')
+        closed = self.output.snapshot()
+        self.assertFalse(self.state['playing'])
+        self.command.reset_mock()
+        reply = self.device('resume', owner='phone-two', output_token=closed['output_token'])
+        self.assertEqual(reply.status_code, 200)
+        self.assertTrue(reply.json['default_selected'])
+        self.assertEqual(reply.json['output_owner'], 'phone-two')
+        self.assertEqual(reply.json['now_playing']['position_ms'], 42000)
+        self.assertFalse(self.state['playing'])  # Only the client starts audible audio.
+        self.command.assert_not_called()
+
+    def test_resume_live_target_delivers_play_without_selecting_controller(self):
+        self.device('online')
+        self.device('online', owner='phone-two')
+        claim = self.output_request('claim').json
+        self.state['playing'] = False
+        reply = self.device('resume', owner='phone-two', output_token=claim['output_token'], command_id='resume-live')
+        self.assertEqual(reply.status_code, 200)
+        self.assertFalse(reply.json['default_selected'])
+        self.assertEqual(self.output.snapshot()['output_owner'], 'phone-one')
+        commands = self.device('online').json['commands']
+        self.assertEqual(commands[0]['action'], 'play')
+
+    def test_resume_stale_token_cannot_steal_new_output(self):
+        self.device('online')
+        claim = self.output_request('claim').json
+        self.device('offline')
+        reply = self.device('resume', owner='phone-two', output_token=claim['output_token'])
+        self.assertEqual(reply.status_code, 409)
+        self.assertEqual(self.output.snapshot()['output_owner'], '')
+
+    def test_expired_local_owner_presence_freezes_playback_without_controller(self):
+        self.device('online')
+        self.output_request('claim')
+        self.state['playing'] = True
+        self.registry.offline('phone-one', 'session-phone-one')
+        self.output.lease_until = self.output.clock() - 1
+        self.client.get('/api/app/devices/')
+        self.assertFalse(self.state['playing'])
+        self.assertEqual(self.state['playback_error']['type'], 'device_offline')
+        reply = self.device('resume', owner='phone-two', output_token=self.output.snapshot()['output_token'])
+        self.assertEqual(reply.status_code, 200)
+        self.assertEqual(reply.json['output_owner'], 'phone-two')
+
+    def test_missing_presence_with_live_lease_cannot_start_second_phone(self):
+        self.device('online')
+        claim = self.output_request('claim').json
+        self.registry.offline('phone-one', 'session-phone-one')
+        self.state['playing'] = True
+        reply = self.device('resume', owner='phone-two', output_token=claim['output_token'])
+        self.assertEqual(reply.status_code, 409)
+        self.assertTrue(self.state['playing'])
+        self.assertEqual(self.output.snapshot()['output_owner'], 'phone-one')
+
+    def test_ack_delayed_past_source_lease_cannot_rewind_target_playback(self):
+        now = [100.0]
+        self.output.clock = lambda: now[0]
+        self.device('online')
+        self.device('online', owner='phone-two')
+        claim = self.output_request('claim').json
+        with self.assertRaises(self.namespace['OutputConflict']):
+            self.output.transfer_phone('phone-two', claim['output_token'], lambda: None, timeout=0)
+        transfer = self.output.snapshot()
+        now[0] = 113.0
+        self.state.update(playing=True, position_ms=73000)
+        reply = self.client.post('/api/app/output/', json={'action': 'ack',
+            'output_owner': 'phone-one', 'output_token': transfer['output_token'],
+            'position_ms': 42000, 'playing': True})
+        self.assertEqual(reply.status_code, 409)
+        self.assertEqual(self.state['position_ms'], 73000)
+        self.assertTrue(self.state['playing'])
+        self.assertTrue(self.output.owns_phone('phone-two', transfer['output_token']))
