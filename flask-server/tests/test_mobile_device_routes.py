@@ -97,18 +97,18 @@ class MobileDeviceRoutesTests(OutputRoutesTests):
         self.assertEqual(response.json['output_controller'], 'phone-one')
         self.command.assert_called_once_with('echo-one', 'pause')
 
-    def test_closing_controlled_phone_returns_playback_to_online_controller(self):
+    def test_closing_controlled_phone_pauses_without_starting_controller(self):
         self.test_alexa_to_remote_phone_preserves_active_playback_without_starting_echo()
         old = self.output.snapshot()
         self.command.reset_mock()
         self.device('offline', owner='phone-two')
         latest = self.output.snapshot()
-        self.assertEqual(latest['output_owner'], 'phone-one')
-        self.assertNotEqual(old['output_token'], latest['output_token'])
-        self.assertTrue(self.state['playing'])
+        self.assertEqual(latest['output_owner'], '')
+        self.assertFalse(self.state['playing'])
+        self.assertEqual(self.state['playback_error']['type'], 'device_offline')
         self.command.assert_not_called()
 
-    def test_expired_controlled_phone_falls_back_only_after_source_lease(self):
+    def test_expired_controlled_phone_never_auto_starts_the_controller(self):
         self.test_alexa_to_remote_phone_preserves_active_playback_without_starting_echo()
         now = [100.0]
         self.registry.clock = self.output.clock = lambda: now[0]
@@ -120,7 +120,9 @@ class MobileDeviceRoutesTests(OutputRoutesTests):
         self.assertEqual(self.output.snapshot()['output_owner'], 'phone-two')
         now[0] = 113
         self.client.get('/api/app/devices/')
-        self.assertEqual(self.output.snapshot()['output_owner'], 'phone-one')
+        self.assertEqual(self.output.snapshot()['output_owner'], 'phone-two')
+        self.assertFalse(self.state['playing'])
+        self.assertIn('Choose an online device', self.state['playback_error']['message'])
 
     def test_closed_controller_does_not_steal_playback_back_from_target(self):
         self.test_alexa_to_remote_phone_preserves_active_playback_without_starting_echo()

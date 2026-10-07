@@ -2486,13 +2486,17 @@ def _reconcile_mobile_output(closed_owner=''):
     owner, controller = output['output_owner'], output['output_controller']
     if owner in online and owner != closed_owner:
         return
-    if controller in online and _playback_output.fallback_phone(output['output_token'], controller, source_closed=owner == closed_owner):
-        with _np_lock:
-            _reset_progress(_computed_position_ms())
-            saved = _now_playing.pop('_offline_phone_playing', None)
-            playing = saved[1] if saved and saved[0] == output['output_token'] else bool(_now_playing.get('playing'))
-            _now_playing.update(playing=playing, playback_confirmed=True, playback_processing=False)
-        _notify_sse()
+    # Losing the target never grants an audible fallback to the controller.
+    # Preserve its queue/cursor and require an explicit output choice to resume.
+    with _np_lock:
+        if (_now_playing.get('playback_error') or {}).get('offline_owner') == owner:
+            return
+        _reset_progress(_computed_position_ms())
+        _now_playing.pop('_offline_phone_playing', None)
+        _now_playing.update(playing=False, playback_confirmed=True, playback_processing=False,
+            playback_error={'type': 'device_offline', 'offline_owner': owner,
+                'message': 'The playback device disconnected. Choose an online device and tap play.'})
+    _notify_sse()
 
 
 @app.route('/api/app/devices/', methods=['GET', 'POST'], strict_slashes=False)
