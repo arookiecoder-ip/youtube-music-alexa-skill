@@ -2541,10 +2541,10 @@ def app_mobile_devices():
                 _notify_sse()
             return jsonify(default_selected=selected, now_playing=snapshot, **result)
         if action == 'online':
-            commands = _mobile_devices.online(owner, session_id, body.get('name'), body.get('ack', []), body.get('volume'))
+            commands = _mobile_devices.online(owner, session_id, body.get('name'), body.get('ack', []), body.get('volume'), body.get('volume_steps'))
             if body.get('wait') is True and not commands and body.get('output_token') == _playback_output.snapshot()['output_token']:
                 _mobile_devices.wait(body.get('revision'), 2)
-                commands = _mobile_devices.online(owner, session_id, body.get('name'), body.get('ack', []), body.get('volume'))
+                commands = _mobile_devices.online(owner, session_id, body.get('name'), body.get('ack', []), body.get('volume'), body.get('volume_steps'))
                 _reconcile_mobile_output()
             return jsonify(devices=_mobile_devices.list(), commands=commands, revision=_mobile_devices.revision, **_playback_output.snapshot())
         if action == 'offline':
