@@ -5751,31 +5751,30 @@ def _confirm_stream_delivery(video_id):
                 if matched and matched.get('duration_ms'):
                     _now_playing['duration_ms'] = int(matched['duration_ms'])
                     _now_playing['updated_at'] = time.time()
-                    _notify_sse()
-            return
-        if not _now_playing.get('duration_ms'):
-            queue = _now_playing.get('queue', [])
-            matched = next((item for item in queue if item.get('video_id') == video_id), None)
-            if matched and matched.get('duration_ms'):
-                _now_playing['duration_ms'] = int(matched['duration_ms'])
-        # Re-anchor the clock to now, but keep whatever position was already
-        # recorded -- NOT a hardcoded 0. A fresh play already anchors position
-        # to 0 before /proxy/ is ever hit (see the next/previous, queue-click,
-        # and proxy "not in queue" branches), so this is a no-op for that case.
-        # But a *resume* after pause anchors position to the frozen offset in
-        # alexa_command's 'play' handler before dispatching -- and because a
-        # warm-cache /proxy/ hit lands here well before Lambda's slower
-        # PlaybackStarted webhook, forcing position back to 0 here clobbered
-        # that resume offset. If the webhook is then late or lost (more likely
-        # after a long pause, where the device/session round-trip is slower),
-        # the bar was left confirmed and ticking from the wrong anchor while
-        # the device may not be playing from where the user actually paused.
-        _reset_progress(_now_playing.get('position_ms', 0))
-        _now_playing['playing'] = True
-        _now_playing['playback_confirmed'] = True
-        _now_playing['playback_processing'] = False
-        _now_playing['playback_revision'] = int(_now_playing.get('playback_revision', 0)) + 1
-        _now_playing['updated_at'] = time.time()
+        else:
+            if not _now_playing.get('duration_ms'):
+                queue = _now_playing.get('queue', [])
+                matched = next((item for item in queue if item.get('video_id') == video_id), None)
+                if matched and matched.get('duration_ms'):
+                    _now_playing['duration_ms'] = int(matched['duration_ms'])
+            # Re-anchor the clock to now, but keep whatever position was already
+            # recorded -- NOT a hardcoded 0. A fresh play already anchors position
+            # to 0 before /proxy/ is ever hit (see the next/previous, queue-click,
+            # and proxy "not in queue" branches), so this is a no-op for that case.
+            # But a *resume* after pause anchors position to the frozen offset in
+            # alexa_command's 'play' handler before dispatching -- and because a
+            # warm-cache /proxy/ hit lands here well before Lambda's slower
+            # PlaybackStarted webhook, forcing position back to 0 here clobbered
+            # that resume offset. If the webhook is then late or lost (more likely
+            # after a long pause, where the device/session round-trip is slower),
+            # the bar was left confirmed and ticking from the wrong anchor while
+            # the device may not be playing from where the user actually paused.
+            _reset_progress(_now_playing.get('position_ms', 0))
+            _now_playing['playing'] = True
+            _now_playing['playback_confirmed'] = True
+            _now_playing['playback_processing'] = False
+            _now_playing['playback_revision'] = int(_now_playing.get('playback_revision', 0)) + 1
+            _now_playing['updated_at'] = time.time()
     _notify_sse()
 
 
