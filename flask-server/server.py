@@ -4074,7 +4074,9 @@ class Supporting:
         # incoming public HTTPS origin instead of returning an IP-locked URL.
         base = PUBLIC_BASE_URL
         if not base and has_request_context():
-            base = request.url_root.rstrip('/')
+            # Caddy terminates TLS; its internal request may be plain HTTP.
+            # Echo AudioPlayer still requires the public HTTPS origin.
+            base = 'https://' + request.host
         if base:
             # Answer immediately; pre-warm the cache so the device's fetch is fast.
             threading.Thread(target=Supporting.ensure_downloaded, args=(video_id,), daemon=True).start()
@@ -5964,6 +5966,9 @@ def _watch_playback_confirmation(serial, video_id, resend):
     if not _valid_video_id(video_id):
         return
 
+    with _np_lock:
+        intent_revision = int(_now_playing.get('playback_revision', 0))
+
     def _confirmed():
         with _np_lock:
             return (_now_playing.get('video_id') == video_id
@@ -5973,8 +5978,7 @@ def _watch_playback_confirmation(serial, video_id, resend):
         # Give up quietly if the user has since moved on to another track.
         with _np_lock:
             return (_now_playing.get('video_id') == video_id
-                    and (not _now_playing.get('playback_error') or
-                         _now_playing['playback_error'].get('type') == 'buffering'))
+                    and int(_now_playing.get('failed_playback_revision', 0)) <= intent_revision)
 
     def _wait_once():
         # A cache hit has nothing left to wait on but the trigger + /proxy/
@@ -7191,6 +7195,7 @@ def alexa_state_event():
                     'message': str(body.get('error_message') or 'Echo could not play the audio stream.')[:300]},
                 updated_at=time.time())
             _now_playing['playback_revision'] = int(_now_playing.get('playback_revision', 0)) + 1
+            _now_playing['failed_playback_revision'] = _now_playing['playback_revision']
         logger.warning('Echo playback failed: video=%s type=%s', failed_id, body.get('error_type'))
         _notify_sse()
         return jsonify({'ok': True})

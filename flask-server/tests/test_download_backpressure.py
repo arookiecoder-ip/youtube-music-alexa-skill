@@ -2157,7 +2157,7 @@ class PlaybackFailureAutoAdvance(_CleanServerState):
         self.assertTrue(errors)
         self.assertEqual(errors[-1]['type'], 'unavailable')
 
-    def test_final_timeout_auto_advances_to_next_track(self):
+    def test_final_transport_timeout_preserves_queue_for_explicit_retry(self):
         current, nxt = "TIMEOUTTIME", "AFTERAFTERA"
         self._install_queue(current, nxt)
         dispatched = []
@@ -2178,9 +2178,13 @@ class PlaybackFailureAutoAdvance(_CleanServerState):
             # confirmed, so the second _wait_once also times out.
             server._watch_playback_confirmation(
                 "DEVICE1", current, lambda: dispatched.append(current) or None)
-        self.assertEqual(dispatched, [current, nxt],
-                         msg="expected one resend of the original track, then "
-                             "an auto-advance dispatch to the next queue item")
+        self.assertEqual(dispatched, [current],
+                         msg="a transport outage must retry once, then stop instead of skipping every song")
+        snap = server._get_now_playing()
+        self.assertEqual(snap['video_id'], current)
+        self.assertFalse(snap['playing'])
+        self.assertEqual(snap['playback_error']['type'], 'timeout')
+        self.assertEqual([t['video_id'] for t in snap['queue']], [current, nxt])
 
 
 class PlaybackFailureRateLimit(_CleanServerState):

@@ -31,7 +31,7 @@ class EchoStreamFailureTests(unittest.TestCase):
               'threading': SimpleNamespace(Thread=Mock(return_value=Mock())), 'API_KEY': 'test-key',
               'Supporting': SimpleNamespace(ensure_downloaded=Mock(), resolve_direct_url=direct), 'asyncio': asyncio}
         exec(compile(ast.Module(body=[fn], type_ignores=[]), str(SOURCE), 'exec'), ns)
-        with Flask(__name__).test_request_context('/', base_url='https://alexa.synthora.in'):
+        with Flask(__name__).test_request_context('/', base_url='http://alexa.synthora.in'):
             result = asyncio.run(ns['get_stream']('abcdefghijk'))
         self.assertEqual(result['audio_url'], 'https://alexa.synthora.in/proxy/?video_id=abcdefghijk&key=test-key')
         direct.assert_not_called()
