@@ -196,3 +196,61 @@ class MobileDeviceRoutesTests(OutputRoutesTests):
         self.assertTrue(response.json['now_playing']['playing'])
         self.assertFalse(self.state['playing'])
         self.assertTrue(self.output.owns_phone('phone-one', response.json['output_token']))
+
+    def test_foreground_after_target_closed_selects_current_phone_silently(self):
+        self.test_alexa_to_remote_phone_preserves_active_playback_without_starting_echo()
+        self.device('offline', owner='phone-two')
+        self.command.reset_mock()
+        queue = list(self.state['queue'])
+        reply = self.device('foreground').json
+        self.assertTrue(reply['default_selected'])
+        self.assertEqual(reply['output_owner'], 'phone-one')
+        self.assertFalse(self.state['playing'])
+        self.assertEqual(self.state['queue'], queue)
+        self.assertNotIn('playback_error', self.state)
+        self.command.assert_not_called()
+
+    def test_foreground_preserves_playing_and_buffering_devices(self):
+        self.test_alexa_to_remote_phone_preserves_active_playback_without_starting_echo()
+        token = self.output.snapshot()['output_token']
+        for playing, buffering in ((True, False), (False, True)):
+            self.state.update(playing=playing, playback_processing=buffering)
+            reply = self.device('foreground').json
+            self.assertFalse(reply['default_selected'])
+            self.assertEqual(reply['output_owner'], 'phone-two')
+            self.assertEqual(reply['output_token'], token)
+
+    def test_recently_paused_phone_is_preserved_but_idle_phone_can_change(self):
+        import time
+        self.test_alexa_to_remote_phone_preserves_active_playback_without_starting_echo()
+        self.state.update(playing=False, playback_processing=False, _last_playback_activity_at=time.time())
+        self.assertFalse(self.device('foreground').json['default_selected'])
+        self.state['_last_playback_activity_at'] = time.time() - 31
+        reply = self.device('foreground').json
+        self.assertTrue(reply['default_selected'])
+        self.assertEqual(reply['output_owner'], 'phone-one')
+        self.assertFalse(self.state['playing'])
+
+    def test_foreground_keeps_active_alexa_but_selects_phone_when_idle(self):
+        self.device('online')
+        self.assertFalse(self.device('foreground').json['default_selected'])
+        self.state.update(playing=False, playback_processing=False, _last_playback_activity_at=0)
+        self.command.reset_mock()
+        reply = self.device('foreground').json
+        self.assertTrue(reply['default_selected'])
+        self.assertEqual(reply['playback_output'], 'phone')
+        self.command.assert_not_called()
+
+    def test_repeated_idle_foreground_does_not_invalidate_current_phone_token(self):
+        self.state.update(playing=False, playback_processing=False, _last_playback_activity_at=0)
+        first = self.device('foreground').json
+        second = self.device('foreground').json
+        self.assertTrue(second['default_selected'])
+        self.assertEqual(first['output_token'], second['output_token'])
+
+    def test_idle_selection_rejects_stale_handoff_token(self):
+        old = self.output.snapshot()['output_token']
+        self.output.select_idle_phone('phone-one', old)
+        with self.assertRaises(self.namespace['OutputConflict']):
+            self.output.select_idle_phone('phone-two', old)
+        self.assertEqual(self.output.snapshot()['output_owner'], 'phone-one')

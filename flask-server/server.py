@@ -2340,6 +2340,8 @@ def _update_now_playing(**kwargs):
         new_video_id = kwargs.get('video_id')
         track_changed = (new_video_id is not None
                          and new_video_id != _now_playing.get('video_id'))
+        if kwargs.get('playing') or _now_playing.get('playing') or kwargs.get('playback_processing'):
+            _now_playing['_last_playback_activity_at'] = time.time()
         _now_playing.update(kwargs)
         if kwargs.get('playback_confirmed') is True:
             _now_playing['playback_processing'] = False
@@ -2514,6 +2516,29 @@ def app_mobile_devices():
         return error_response('device_id required', 400)
     action = body.get('action')
     try:
+        if action == 'foreground':
+            # A foreground visit is a preference change, never a play command.
+            # Keep active/buffering audio and recently paused sessions elsewhere.
+            _mobile_devices.online(owner, session_id, body.get('name'), [], body.get('volume'))
+            with _np_lock:
+                before = _playback_output.snapshot()
+                current = _now_playing
+                online = {d['id'] for d in _mobile_devices.list()}
+                missing_phone = before['playback_output'] == 'phone' and (
+                    not before['output_owner'] or before['output_owner'] not in online)
+                recent = time.time() - float(current.get('_last_playback_activity_at', current.get('updated_at', 0)) or 0) < 30
+                blocked = (current.get('playing') or current.get('playback_processing') or before['handoff_pending'] or
+                    (recent and not missing_phone))
+                selected = not blocked
+                changed = selected and not (before['playback_output'] == 'phone' and before['output_owner'] == owner)
+                result = _playback_output.select_idle_phone(owner, before['output_token']) if changed else before
+                if selected:
+                    current.pop('playback_error', None)
+                    current.pop('_disconnected_phone_token', None)
+                    current.update(playing=False, playback_confirmed=True, playback_processing=False)
+            if selected:
+                _notify_sse()
+            return jsonify(default_selected=selected, now_playing=_np_snapshot(body.get('serial')), **result)
         if action == 'online':
             commands = _mobile_devices.online(owner, session_id, body.get('name'), body.get('ack', []), body.get('volume'))
             if body.get('wait') is True and not commands and body.get('output_token') == _playback_output.snapshot()['output_token']:
@@ -4486,6 +4511,8 @@ def app_queue():
                                  'duration_ms': item.get('duration_ms', 0), 'playback_processing': False})
             if playing is not None:
                 _now_playing.pop('_offline_phone_playing', None)
+                if playing or _now_playing.get('playing'):
+                    _now_playing['_last_playback_activity_at'] = time.time()
                 _now_playing['playing'] = playing
                 _now_playing['playback_confirmed'] = not buffering
                 _now_playing['playback_processing'] = buffering
