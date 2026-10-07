@@ -554,7 +554,8 @@ class AlexaRemote:
         error = await self._ensure_login()
         if error:
             return None, error
-        if refresh or not self._devices_raw:
+        status_ttl = 5 if any(not d.get("online") for d in self._devices_raw) else _DEVICE_STATE_TTL
+        if refresh or not self._devices_raw or time.monotonic() - self._devices_fetched_at >= status_ttl:
             raw = await self._fetch_devices()
             if raw is None:
                 return None, "Could not fetch the device list from Amazon."
