@@ -639,8 +639,6 @@ class AlexaRemote:
                 except (TypeError, ValueError):
                     return "Volume must be a number between 0 and 100."
                 await api.set_volume(volume / 100, queue_delay=0)
-            elif action in ("pause", "stop"):
-                await api.pause()
             elif action in _TRANSPORT_TEXT:
                 await api.run_custom(f"ask {SKILL_INVOCATION_NAME} to {_TRANSPORT_TEXT[action]}", queue_delay=0)
             else:
