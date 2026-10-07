@@ -107,3 +107,27 @@ class MobileDevicesTests(unittest.TestCase):
         self.assertFalse(output.owns_phone('one', state['output_token']))
         self.assertEqual(output.snapshot()['playback_output'], 'phone')
         self.assertEqual(output.snapshot()['output_owner'], '')
+
+    def test_target_cannot_bypass_source_pause_with_an_explicit_claim(self):
+        output = PlaybackOutput()
+        source = output.phone('one', lambda: None)
+        with self.assertRaises(OutputConflict):
+            output.transfer_phone('two', source['output_token'], lambda: None, timeout=0.01)
+        with self.assertRaises(OutputConflict):
+            output.phone('two', lambda: None)
+        pending = output.snapshot()
+        output.acknowledge('one', pending['output_token'])
+        target = output.phone('two', lambda: None)
+        with self.assertRaises(OutputConflict):
+            output.acknowledge('one', target['output_token'])
+        self.assertTrue(output.owns_phone('two', target['output_token']))
+
+    def test_switch_to_alexa_during_phone_transfer_still_waits_for_actual_source(self):
+        output = PlaybackOutput()
+        source = output.phone('one', lambda: None)
+        with self.assertRaises(OutputConflict):
+            output.transfer_phone('two', source['output_token'], lambda: None, timeout=0.01)
+        latest = output.alexa(wait=False)
+        output.acknowledge('one', latest['output_token'])
+        output.wait_released(latest['output_token'], timeout=0.01)
+        self.assertEqual(output.snapshot()['playback_output'], 'alexa')

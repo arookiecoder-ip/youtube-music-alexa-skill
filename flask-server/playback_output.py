@@ -35,6 +35,10 @@ class PlaybackOutput:
     def phone(self, owner, pause_echo, serial=''):
         with self.condition:
             if self.mode == 'phone' and self.owner == owner:
+                if self.pending_owner and self.pending_until > self.clock():
+                    raise OutputConflict('The source device has not paused yet.')
+                self.pending_owner = ''
+                self.pending_until = 0
                 # An explicit new phone play supersedes in-flight reports from its previous song.
                 self.token = secrets.token_hex(16)
                 if serial:
@@ -75,8 +79,10 @@ class PlaybackOutput:
                 raise OutputConflict('A phone pause acknowledgement requires its current ownership token.')
             changed = self.mode != 'alexa'
             if changed:
-                self.pending_owner = '' if source_paused else self.owner
-                self.pending_until = self.lease_until
+                previous_pending = self.pending_owner if self.pending_until > self.clock() else ''
+                self.pending_owner = '' if source_paused else (previous_pending or self.owner)
+                if not previous_pending:
+                    self.pending_until = self.lease_until
                 self.mode, self.owner = 'alexa', ''
                 self.token = secrets.token_hex(16)
             if serial:
