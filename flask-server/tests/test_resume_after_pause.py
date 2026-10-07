@@ -104,6 +104,7 @@ class _CleanNowPlayingState(unittest.TestCase):
     def setUp(self):
         with server._np_lock:
             self._saved = dict(server._now_playing)
+            server._now_playing.clear()
 
     def tearDown(self):
         with server._np_lock:

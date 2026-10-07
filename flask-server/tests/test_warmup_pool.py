@@ -198,3 +198,13 @@ class WarmupPool(_WarmupDir):
 
 if __name__ == "__main__":
     unittest.main()
+
+class RecentWarmupEvictionTests(_WarmupDir):
+    def test_recent_warmup_does_not_block_older_requested_eviction(self):
+        old = self.make('olderplay01', used_ago=600)
+        recent = self.make('warmup00001', used_ago=10)
+        server._mark_warmup('warmup00001')
+        with mock.patch.object(server, 'AUDIO_CACHE_MAX_BYTES', MB):
+            server.Supporting.prune_audio_cache()
+        self.assertFalse(os.path.exists(old))
+        self.assertTrue(os.path.exists(recent))

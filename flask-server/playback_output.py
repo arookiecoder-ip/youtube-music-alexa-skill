@@ -13,29 +13,39 @@ class PlaybackOutput:
         self.clock = clock
         self.lease_seconds = lease_seconds
         self.condition = threading.Condition()
+        self.epoch = secrets.token_hex(8)
+        self.revision = 0
         self.mode = 'alexa'
         self.owner = ''
         self.token = secrets.token_hex(16)
+        self.revision += 1
         self.serial = ''
         self.lease_until = 0
         self.pending_owner = ''
         self.pending_until = 0
+        self.controller = ''
 
     def snapshot(self):
         with self.condition:
             return {'playback_output': self.mode, 'output_owner': self.owner,
-                    'output_token': self.token, 'output_serial': self.serial,
+                    'output_token': self.token, 'output_revision': self.revision, 'output_epoch': self.epoch, 'output_serial': self.serial, 'output_controller': self.controller,
+                    'handoff_pending': bool(self.pending_owner and self.pending_until > self.clock()),
                     'phone_lease_ms': max(0, int((self.lease_until - self.clock()) * 1000))}
 
     def owns_phone(self, owner, token):
         with self.condition:
-            return self.mode == 'phone' and bool(owner) and self.owner == owner and self.token == token
+            return self.mode == 'phone' and bool(owner) and self.owner == owner and self.token == token and not (self.pending_owner and self.pending_until > self.clock())
 
     def phone(self, owner, pause_echo, serial=''):
         with self.condition:
             if self.mode == 'phone' and self.owner == owner:
+                if self.pending_owner and self.pending_until > self.clock():
+                    raise OutputConflict('The source device has not paused yet.')
+                self.pending_owner = ''
+                self.pending_until = 0
                 # An explicit new phone play supersedes in-flight reports from its previous song.
                 self.token = secrets.token_hex(16)
+                self.revision += 1
                 if serial:
                     self.serial = serial
                 self.lease_until = self.clock() + self.lease_seconds
@@ -53,6 +63,7 @@ class PlaybackOutput:
             if serial:
                 self.serial = serial
             self.token = secrets.token_hex(16)
+            self.revision += 1
             self.lease_until = self.clock() + self.lease_seconds
             self.pending_owner = ''
             self.condition.notify_all()
@@ -74,10 +85,13 @@ class PlaybackOutput:
                 raise OutputConflict('A phone pause acknowledgement requires its current ownership token.')
             changed = self.mode != 'alexa'
             if changed:
-                self.pending_owner = '' if source_paused else self.owner
-                self.pending_until = self.lease_until
+                previous_pending = self.pending_owner if self.pending_until > self.clock() else ''
+                self.pending_owner = '' if source_paused else (previous_pending or self.owner)
+                if not previous_pending:
+                    self.pending_until = self.lease_until
                 self.mode, self.owner = 'alexa', ''
                 self.token = secrets.token_hex(16)
+                self.revision += 1
             if serial:
                 self.serial = serial
             token = self.token
@@ -92,6 +106,9 @@ class PlaybackOutput:
             if token != self.token or owner != self.pending_owner:
                 raise OutputConflict('This handoff is no longer current.')
             self.pending_owner = ''
+            self.revision += 1
+            if self.mode == 'phone':
+                self.lease_until = self.clock() + self.lease_seconds
             self.condition.notify_all()
             return self.snapshot()
 
@@ -107,3 +124,66 @@ class PlaybackOutput:
                 self.condition.wait(remaining)
             if self.token != token:
                 raise OutputConflict('A newer output handoff replaced this request.')
+
+    def transfer_phone(self, target, expected_token, pause_echo, on_change=lambda: None, timeout=4, controller=''):
+        """Invalidate source writes, wait for a real pause ack, then permit target audio."""
+        with self.condition:
+            if expected_token != self.token:
+                raise OutputConflict('Playback changed before this device switch.')
+            if self.pending_owner and self.pending_until > self.clock():
+                raise OutputConflict('Another device switch is still in progress.')
+            if self.mode != 'phone':
+                source = None
+            else:
+                source = self.owner
+                if source == target:
+                    return self.snapshot()
+                source_until = self.lease_until
+                self.controller = controller
+                self.mode, self.owner = 'phone', target
+                self.pending_owner, self.pending_until = source, source_until
+                self.token = secrets.token_hex(16)
+                self.revision += 1
+                self.lease_until = max(source_until, self.clock()) + self.lease_seconds
+                token = self.token
+        if source is None:
+            result = self.phone(target, pause_echo)
+            with self.condition:
+                if self.token != result['output_token']:
+                    raise OutputConflict('Playback changed during transfer.')
+                self.controller = controller
+                return self.snapshot()
+        on_change()
+        self.wait_released(token, timeout)
+        return self.snapshot()
+
+    def close_phone(self, owner):
+        with self.condition:
+            if self.pending_owner == owner:
+                self.pending_owner = ''
+                self.revision += 1
+            if self.mode == 'phone' and self.owner == owner:
+                self.owner = ''
+                self.token = secrets.token_hex(16)
+                self.revision += 1
+                self.lease_until = 0
+                self.pending_owner = ''
+            self.condition.notify_all()
+
+    def fallback_phone(self, expected_token, target, source_closed=False):
+        """A missing controlled phone can only fall back after its lease or confirmed close."""
+        with self.condition:
+            if self.mode != 'phone' or self.token != expected_token:
+                return False
+            if not source_closed and self.lease_until > self.clock():
+                return False
+            if not target or target == self.owner:
+                return False
+            self.mode, self.owner, self.controller = 'phone', target, ''
+            self.token = secrets.token_hex(16)
+            self.revision += 1
+            self.pending_owner = ''
+            self.pending_until = 0
+            self.lease_until = self.clock() + self.lease_seconds
+            self.condition.notify_all()
+            return True

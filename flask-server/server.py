@@ -316,7 +316,7 @@ _PLAY_INTENT_SEQS = {}
 _PLAY_INTENT_LOCK = threading.Lock()
 
 
-def _claim_play_intent(serial, seq):
+def _claim_play_intent(serial, seq, client_id=''):
     """True when this play request is the newest for `serial`.
 
     `seq` is the client's play-intent sequence number. None means "unsequenced"
@@ -329,7 +329,7 @@ def _claim_play_intent(serial, seq):
         seq = int(seq)
     except (TypeError, ValueError):
         return True
-    key = serial or ''
+    key = (serial or '', str(client_id)[:128]) if client_id else (serial or '')
     with _PLAY_INTENT_LOCK:
         previous = _PLAY_INTENT_SEQS.get(key)
         if previous is not None and seq <= previous:
@@ -841,7 +841,7 @@ _SESSION_PATHS = ('/remote', '/alexa/status', '/alexa/init', '/alexa/devices', '
                   '/alexa/queue_reorder', '/history', '/recommendations',
                   '/alexa/jam/start', '/alexa/jam/stop', '/alexa/jam/status',
                   '/alexa/jam/qr', '/api/home', '/api/library',
-                  '/api/subscribed_artists', '/api/app/output', '/api/app/audio-token',
+                  '/api/subscribed_artists', '/api/app/output', '/api/app/devices', '/api/app/audio-token',
                   '/alexa/like', '/api/liked_songs', '/api/profile_status',
                   '/api/youtube/download-cookies', '/api/youtube/download-cookies/status',
 '/alexa/amazon_signout',
@@ -1506,7 +1506,7 @@ def _rate_limit_group(path: str) -> str:
         return 'proxy'
     if path == '/audio' or path.startswith('/audio/'):
         return 'audio'
-    if path in ('/api/app/output', '/api/app/queue'):
+    if path in ('/api/app/output', '/api/app/queue', '/api/app/devices'):
         return 'shared_playback'
     if path.startswith('/api/youtube/browser-session/'):
         return 'browser_session'
@@ -2152,6 +2152,12 @@ def _np_snapshot(serial=None):
     playback_error = s.get('playback_error')
     s['playback_error'] = None  # one-shot: clear once surfaced
     output = _playback_output.snapshot()
+    if output['playback_output'] == 'phone' and '_mobile_devices' in globals():
+        volume = next((d.get('volume') for d in _mobile_devices.list() if d['id'] == output['output_owner']), None)
+    if output['playback_output'] == 'phone' and output.get('output_controller') and output['phone_lease_ms'] <= 4000 and '_offline_phone_playing' not in s:
+        s['_offline_phone_playing'] = (output['output_token'], bool(s.get('playing')))
+        _reset_progress(_computed_position_ms())
+        s.update(playing=False, playback_confirmed=True, playback_processing=False)
     if output['playback_output'] == 'phone' and not output['phone_lease_ms']:
         _reset_progress(_computed_position_ms())
         s.update(playing=False, playback_confirmed=True, playback_processing=False)
@@ -2163,6 +2169,7 @@ def _np_snapshot(serial=None):
         'video_id': s.get('video_id', ''),
         'queue': s.get('queue', []), 'queue_index': s.get('queue_index', -1),
         'queue_version': _queue_version_locked(),
+        'queue_session_id': s.get('queue_session_id', ''),
         'duration_ms': s.get('duration_ms', 0),
         'position_ms': _computed_position_ms(),
         'started_at': now,
@@ -2206,6 +2213,8 @@ def _computed_position_ms():
 
 def _notify_sse():
     """Push current state to all SSE subscriber queues (non-blocking)."""
+    if "_mobile_devices" in globals():
+        _mobile_devices.wake()
     with _np_lock:
         _queue_version_locked()
         _playback_persistence.submit(_now_playing, _playback_output.snapshot(), _computed_position_ms())
@@ -2396,6 +2405,7 @@ def app_playback_output():
         return error_response('output_owner required', 400)
     action = body.get('action')
     if action == 'claim':
+        source_playing = bool(_get_now_playing().get('playing'))
         def pause_echo():
             current = _get_now_playing()
             if not current.get('playing') and not current.get('playback_processing'):
@@ -2407,14 +2417,6 @@ def app_playback_output():
             error = alexa_remote.remote.command(serial, 'pause')
             if error:
                 raise OutputConflict('The Echo could not pause. Playback stayed on Alexa.')
-            deadline = time.monotonic() + 4
-            while True:
-                stopped = _get_now_playing()
-                if not stopped.get('playing') and not stopped.get('playback_processing'):
-                    break
-                if time.monotonic() >= deadline:
-                    raise OutputConflict('Waiting for the Echo to pause. Retry playback.')
-                time.sleep(0.05)
         result = _playback_output.phone(owner, pause_echo, str(body.get('serial') or ''))
         with _np_lock:
             _reset_progress(_computed_position_ms())
@@ -2423,12 +2425,222 @@ def app_playback_output():
             _now_playing['updated_at'] = time.time()
         _bump_playback_generation()
         _notify_sse()
+        if body.get('include_state') is True:
+            with _np_lock:
+                snapshot = _np_snapshot(body.get('serial'))
+            snapshot['playing'] = source_playing
+            return jsonify(**result, now_playing=snapshot)
         return jsonify(result)
     if action == 'heartbeat':
         return jsonify(_playback_output.heartbeat(owner, body.get('output_token')))
     if action == 'ack':
-        return jsonify(_playback_output.acknowledge(owner, body.get('output_token')))
+        position = body.get('position_ms')
+        playing = body.get('playing')
+        if position is not None and (isinstance(position, bool) or not isinstance(position, int) or position < 0):
+            return error_response('invalid pause acknowledgement position', 400)
+        if playing is not None and not isinstance(playing, bool):
+            return error_response('invalid pause acknowledgement state', 400)
+        with _np_lock:
+            result = _playback_output.acknowledge(owner, body.get('output_token'))
+            # Commit the actual paused source cursor before the target can read it.
+            if position is not None:
+                _reset_progress(position)
+            if result['playback_output'] == 'phone':
+                if playing is not None:
+                    _now_playing['playing'] = playing
+        _notify_sse()
+        return jsonify(result)
     return error_response('invalid output action', 400)
+
+
+from mobile_devices import MobileDevices
+_mobile_devices = MobileDevices()
+
+
+def _pause_echo_for_mobile(serial):
+    current = _get_now_playing()
+    if not current.get('playing') and not current.get('playback_processing'):
+        return
+    serial = _playback_output.snapshot()['output_serial'] or serial
+    if not serial:
+        raise OutputConflict('Choose an Alexa device first.')
+    _cancel_pending_dispatch(serial)
+    if alexa_remote.remote.command(serial, 'pause'):
+        raise OutputConflict('The Echo could not pause. Playback stayed on Alexa.')
+    # Native PauseCommand is acknowledged by Amazon directly; the custom skill's
+    # PlaybackStopped webhook can arrive seconds later and is not a handoff gate.
+    with _np_lock:
+        _reset_progress(_computed_position_ms())
+        _now_playing.update(playing=False, playback_confirmed=True, playback_processing=False)
+
+
+def _reconcile_mobile_output(closed_owner=''):
+    output = _playback_output.snapshot()
+    if output['playback_output'] != 'phone' or not output.get('output_controller'):
+        return
+    online = {d['id'] for d in _mobile_devices.list()}
+    owner, controller = output['output_owner'], output['output_controller']
+    if owner in online and owner != closed_owner:
+        return
+    if controller in online and _playback_output.fallback_phone(output['output_token'], controller, source_closed=owner == closed_owner):
+        with _np_lock:
+            _reset_progress(_computed_position_ms())
+            saved = _now_playing.pop('_offline_phone_playing', None)
+            playing = saved[1] if saved and saved[0] == output['output_token'] else bool(_now_playing.get('playing'))
+            _now_playing.update(playing=playing, playback_confirmed=True, playback_processing=False)
+        _notify_sse()
+
+
+@app.route('/api/app/devices/', methods=['GET', 'POST'], strict_slashes=False)
+def app_mobile_devices():
+    _reconcile_mobile_output()
+    if request.method == 'GET':
+        return jsonify(devices=_mobile_devices.list(), **_playback_output.snapshot())
+    body = request.get_json(silent=True) or {}
+    owner = body.get('device_id')
+    session_id = body.get('session_id')
+    if not isinstance(owner, str) or not 1 <= len(owner) <= 128:
+        return error_response('device_id required', 400)
+    action = body.get('action')
+    try:
+        if action == 'online':
+            commands = _mobile_devices.online(owner, session_id, body.get('name'), body.get('ack', []), body.get('volume'))
+            if body.get('wait') is True and not commands and body.get('output_token') == _playback_output.snapshot()['output_token']:
+                _mobile_devices.wait(body.get('revision'), 2)
+                commands = _mobile_devices.online(owner, session_id, body.get('name'), body.get('ack', []), body.get('volume'))
+                _reconcile_mobile_output()
+            return jsonify(devices=_mobile_devices.list(), commands=commands, revision=_mobile_devices.revision, **_playback_output.snapshot())
+        if action == 'offline':
+            removed = _mobile_devices.offline(owner, session_id)
+            if removed:
+                _reconcile_mobile_output(closed_owner=owner)
+                _playback_output.close_phone(owner)
+                with _np_lock:
+                    latest = _playback_output.snapshot()
+                    if latest['playback_output'] == 'phone' and not latest['output_owner']:
+                        _reset_progress(_computed_position_ms())
+                        _now_playing.update(playing=False, playback_confirmed=True, playback_processing=False)
+                _notify_sse()
+            return jsonify(ok=True)
+        if action == 'alexa':
+            before = _playback_output.snapshot()
+            if body.get('output_token') != before['output_token']:
+                raise OutputConflict('Playback changed before this switch.')
+            serial = str(body.get('serial') or '')
+            if not serial or serial.startswith('mobile:'):
+                return error_response('Choose an Alexa device.', 400)
+            was_playing = bool(_get_now_playing().get('playing'))
+            if before['playback_output'] == 'alexa' and before['output_serial'] and before['output_serial'] != serial:
+                _pause_echo_for_mobile(before['output_serial'])
+            result = _claim_alexa_output(serial)
+            if was_playing:
+                current = _get_now_playing()
+                video = current.get('video_id')
+                if _valid_video_id(video):
+                    with _np_lock:
+                        position = _computed_position_ms()
+                    _update_now_playing(playing=True, playback_confirmed=False, playback_processing=True)
+                    _schedule_play_dispatch(serial, video, position, delay=0)
+            _notify_sse()
+            return jsonify(result)
+        target = body.get('target_id')
+        if action in ('transfer', 'command') and (not isinstance(target, str) or not 1 <= len(target) <= 128):
+            return error_response('target_id required', 400)
+        if action == 'transfer':
+            before = _playback_output.snapshot()
+            was_playing = bool(_get_now_playing().get('playing'))
+            _mobile_devices.require_online(target)
+            result = _playback_output.transfer_phone(target, body.get('output_token'),
+                lambda: _pause_echo_for_mobile(str(body.get('serial') or '')), on_change=_notify_sse, controller=owner if any(d['id'] == owner for d in _mobile_devices.list()) else '')
+            if before['playback_output'] == 'alexa' and _playback_output.snapshot()['output_token'] == result['output_token']:
+                with _np_lock:
+                    _now_playing.update(playing=was_playing, playback_confirmed=True, playback_processing=False)
+            _notify_sse()
+            return jsonify(result)
+        if action == 'command':
+            output = _playback_output.snapshot()
+            if output['playback_output'] != 'phone' or output['output_owner'] != target or output['handoff_pending']:
+                raise OutputConflict('Playback output changed. Refresh and retry.')
+            if body.get('output_token') != output['output_token']:
+                raise OutputConflict('This control belongs to an older playback session.')
+            command = body.get('command')
+            if command not in ('play', 'pause', 'next', 'previous', 'seek', 'song', 'queue', 'next_items', 'append', 'remove', 'reorder', 'shuffle', 'repeat', 'tool', 'volume'):
+                return error_response('invalid device command', 400)
+            payload = body.get('payload') or {}
+            if not isinstance(payload, dict) or len(json.dumps(payload)) > 2_000_000:
+                return error_response('invalid device command payload', 400)
+            if command == 'volume' and (isinstance(payload.get('value'), bool) or not isinstance(payload.get('value'), int) or not 0 <= payload['value'] <= 100):
+                return error_response('invalid device volume', 400)
+            _mobile_devices.command(target, output['output_token'], command, payload, body.get('command_id'))
+            return jsonify(ok=True)
+    except ValueError as error:
+        return error_response(str(error), 400)
+    return error_response('invalid device action', 400)
+
+
+@app.before_request
+def route_mobile_web_controls():
+    """Reuse all web music actions while directing them to the selected phone, never Echo."""
+    paths = {'/alexa/command': 'transport', '/alexa/seek': 'seek', '/alexa/play': 'song',
+             '/alexa/play_queue': 'queue', '/alexa/queue_add': 'append',
+             '/alexa/queue_remove': 'remove', '/alexa/queue_reorder': 'reorder',
+             '/alexa/shuffle_queue': 'shuffle', '/alexa/volume': 'volume'}
+    action = paths.get(request.path.rstrip('/'))
+    if not action:
+        return
+    body = request.get_json(silent=True) or {} if request.method == 'POST' else {}
+    serial = str(body.get('serial') or request.args.get('serial') or '')
+    if not serial.startswith('mobile:'):
+        return
+    output = _playback_output.snapshot()
+    target = serial[len('mobile:'):]
+    if output['playback_output'] != 'phone' or output['output_owner'] != target or output['handoff_pending']:
+        raise OutputConflict('Playback changed. Select the active device again.')
+    try:
+        _mobile_devices.require_online(target)
+    except ValueError as error:
+        return error_response(str(error), 409)
+    if request.method == 'GET':
+        if action != 'volume':
+            return error_response('invalid mobile control', 400)
+        volume = next((d.get('volume') for d in _mobile_devices.list() if d['id'] == target), None)
+        return jsonify(volume=volume, available=volume is not None)
+    if body.get('output_token') != output['output_token']:
+        raise OutputConflict('This control belongs to an older playback session.')
+    if action in ('remove', 'reorder') and body.get('expected_queue_version') is not None:
+        with _np_lock:
+            if body['expected_queue_version'] != _queue_version_locked():
+                raise OutputConflict('The queue changed before this edit. Retry.')
+    payload = dict(body)
+    if action == 'transport':
+        action = body.get('action')
+        if action not in ('play', 'pause', 'next', 'previous', 'volume'):
+            return error_response('invalid mobile transport', 400)
+    elif action == 'seek':
+        try:
+            payload['position_ms'] = max(0, int(body.get('position_ms', float(body.get('position_seconds') or 0) * 1000)))
+        except (ValueError, TypeError):
+            return error_response('invalid seek position', 400)
+    elif action == 'append':
+        action = 'next_items' if body.get('position') == 'next' else 'append'
+    elif action == 'remove':
+        queue = _get_now_playing().get('queue') or []
+        index = body.get('index')
+        if isinstance(index, bool) or not isinstance(index, int) or not 0 <= index < len(queue):
+            return error_response('invalid queue index', 400)
+        item = queue[index]
+        if body.get('video_id') and body['video_id'] != item.get('video_id'):
+            raise OutputConflict('The queue changed before this removal.')
+        payload['id'] = item.get('entry_id') or item.get('video_id')
+    elif action == 'reorder':
+        payload.update({'from': body.get('from_index'), 'to': body.get('to_index')})
+    if action == 'volume' and (isinstance(payload.get('value'), bool) or not isinstance(payload.get('value'), int) or not 0 <= payload['value'] <= 100):
+        return error_response('invalid device volume', 400)
+    if len(json.dumps(payload)) > 2_000_000:
+        return error_response('device command too large', 400)
+    _mobile_devices.command(target, output['output_token'], action, payload, body.get('command_id'))
+    candidate = (body.get('queue_items') or [{}])[0] if action == 'queue' else body
+    return jsonify(ok=True, remote_device=True, now_playing=candidate)
 
 
 # Uncaught errors (ytmusicapi hiccups, YouTube layout changes, etc.) become
@@ -3597,7 +3809,7 @@ class Supporting:
                     if need <= 0:
                         break
                     if now - last_used < _AUDIO_CACHE_EVICT_MIN_AGE:
-                        break  # everything after this is even more recent
+                        continue  # The next requested file can be older than this warmup.
                     _remove_audio(path, size)
                     need -= size
                 if need > 0:
@@ -4241,6 +4453,7 @@ def app_queue():
         if action in ('next', 'extend') and _now_playing.get('video_id') != after:
             return error_response('phone queue edit is stale', 409)
         live_position = _computed_position_ms()
+        audio_changed = _now_playing.get('video_id') != after
         changed = action == 'start' or (action == 'current' and
             (_now_playing.get('video_id') != after or current_index != idx))
         if action in ('start', 'current'):
@@ -4250,6 +4463,7 @@ def app_queue():
                                  'artists': item.get('artists', []), 'thumbnail': item.get('thumbnail', ''),
                                  'duration_ms': item.get('duration_ms', 0), 'playback_processing': False})
             if playing is not None:
+                _now_playing.pop('_offline_phone_playing', None)
                 _now_playing['playing'] = playing
                 _now_playing['playback_confirmed'] = not buffering
                 _now_playing['playback_processing'] = buffering
@@ -4261,10 +4475,13 @@ def app_queue():
         if action == 'next':
             queue[idx + 1:idx + 1] = tracks
         elif action == 'extend':
-            existing = {item.get('video_id') for item in queue}
+            existing = {item.get('entry_id') or item.get('video_id') for item in queue}
             for track in tracks:
-                if track['video_id'] not in existing:
-                    queue.append(track); existing.add(track['video_id'])
+                identity = track.get('entry_id') or track['video_id']
+                if identity not in existing:
+                    queue.append(track); existing.add(identity)
+        if action == 'start':
+            _now_playing['queue_session_id'] = secrets.token_hex(16)
         if action != 'current':
             _now_playing.update(queue=queue, queue_web_dirty=True)
         _now_playing['updated_at'] = time.time()
@@ -4276,6 +4493,11 @@ def app_queue():
     _notify_sse()
     if owner is not None:
         _playback_output.heartbeat(owner, output_token)
+    if audio_changed:
+        _bump_playback_generation()
+    if action == 'start' or audio_changed:
+        # Phone state is mirrored here, but this never arms or dispatches Alexa.
+        _ensure_audio_ready_for_play(after, wait=False)
     return jsonify(response)
 
 
@@ -4842,8 +5064,8 @@ def _await_inflight_stream(video_id, timeout=_STREAM_DUPLICATE_WAIT):
     (it failed) or took too long. Callers fall back to their own download, so a
     None result stays correct — it just costs an extra yt-dlp run.
     """
-    deadline = time.time() + timeout
-    while time.time() < deadline:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
         path = Supporting.cached_audio_path(video_id)
         if path:
             return path
@@ -4936,7 +5158,9 @@ def _stream_abandon_watchdog(video_id, proc, generation, stop_event, cancellable
         if superseded_since is None:
             superseded_since = now
         elif now - superseded_since >= _STREAM_SUPERSEDE_GRACE:
-            pass
+            logger.info("proxy: cancelling abandoned stream of %s", video_id)
+            _kill_process(proc)
+            return
 
 
 def _kill_process(proc):
@@ -5653,31 +5877,30 @@ def _confirm_stream_delivery(video_id):
                 if matched and matched.get('duration_ms'):
                     _now_playing['duration_ms'] = int(matched['duration_ms'])
                     _now_playing['updated_at'] = time.time()
-                    _notify_sse()
-            return
-        if not _now_playing.get('duration_ms'):
-            queue = _now_playing.get('queue', [])
-            matched = next((item for item in queue if item.get('video_id') == video_id), None)
-            if matched and matched.get('duration_ms'):
-                _now_playing['duration_ms'] = int(matched['duration_ms'])
-        # Re-anchor the clock to now, but keep whatever position was already
-        # recorded -- NOT a hardcoded 0. A fresh play already anchors position
-        # to 0 before /proxy/ is ever hit (see the next/previous, queue-click,
-        # and proxy "not in queue" branches), so this is a no-op for that case.
-        # But a *resume* after pause anchors position to the frozen offset in
-        # alexa_command's 'play' handler before dispatching -- and because a
-        # warm-cache /proxy/ hit lands here well before Lambda's slower
-        # PlaybackStarted webhook, forcing position back to 0 here clobbered
-        # that resume offset. If the webhook is then late or lost (more likely
-        # after a long pause, where the device/session round-trip is slower),
-        # the bar was left confirmed and ticking from the wrong anchor while
-        # the device may not be playing from where the user actually paused.
-        _reset_progress(_now_playing.get('position_ms', 0))
-        _now_playing['playing'] = True
-        _now_playing['playback_confirmed'] = True
-        _now_playing['playback_processing'] = False
-        _now_playing['playback_revision'] = int(_now_playing.get('playback_revision', 0)) + 1
-        _now_playing['updated_at'] = time.time()
+        else:
+            if not _now_playing.get('duration_ms'):
+                queue = _now_playing.get('queue', [])
+                matched = next((item for item in queue if item.get('video_id') == video_id), None)
+                if matched and matched.get('duration_ms'):
+                    _now_playing['duration_ms'] = int(matched['duration_ms'])
+            # Re-anchor the clock to now, but keep whatever position was already
+            # recorded -- NOT a hardcoded 0. A fresh play already anchors position
+            # to 0 before /proxy/ is ever hit (see the next/previous, queue-click,
+            # and proxy "not in queue" branches), so this is a no-op for that case.
+            # But a *resume* after pause anchors position to the frozen offset in
+            # alexa_command's 'play' handler before dispatching -- and because a
+            # warm-cache /proxy/ hit lands here well before Lambda's slower
+            # PlaybackStarted webhook, forcing position back to 0 here clobbered
+            # that resume offset. If the webhook is then late or lost (more likely
+            # after a long pause, where the device/session round-trip is slower),
+            # the bar was left confirmed and ticking from the wrong anchor while
+            # the device may not be playing from where the user actually paused.
+            _reset_progress(_now_playing.get('position_ms', 0))
+            _now_playing['playing'] = True
+            _now_playing['playback_confirmed'] = True
+            _now_playing['playback_processing'] = False
+            _now_playing['playback_revision'] = int(_now_playing.get('playback_revision', 0)) + 1
+            _now_playing['updated_at'] = time.time()
     _notify_sse()
 
 
@@ -8183,13 +8406,14 @@ def alexa_play_queue():
     # move now-playing, dispatch to Alexa, or record a listen -- otherwise the
     # Echo plays every song in a rapid-click burst and the UI replays them.
     _intent_seq = _play_intent_seq_arg(body)
-    if not _claim_play_intent(_effective_serial(body.get("serial")), _intent_seq):
+    if not _claim_play_intent(_effective_serial(body.get("serial")), _intent_seq, body.get("intent_client")):
         logger.info("play_queue: ignoring superseded click (intent_seq=%s)", _intent_seq)
         return jsonify({'ok': True, 'superseded': True})
 
     if body.get('serial'):
         _claim_alexa_output(_effective_serial(body.get('serial')))
 
+    _intent_queue_session = str(body.get('queue_session_id') or secrets.token_hex(16))[:128]
     queue_items = body.get('queue_items')
     playlist_id = str(body.get('playlist_id') or '').strip()
     if playlist_id.startswith('VL'):
@@ -8274,7 +8498,7 @@ def alexa_play_queue():
                 target_idx = requested_index
 
         first = validated_items[target_idx]
-        _update_now_playing(playing=False,
+        _update_now_playing(queue_session_id=_intent_queue_session, playing=False,
                             title=first['title'], artist=first['artist'],
                             artists=first.get('artists', []),
                             thumbnail=first['thumbnail'], video_id=first['video_id'],
@@ -8422,7 +8646,7 @@ def alexa_play_queue():
     # duplicate call from the webhook is harmless.
     if not _jam_guest():
         _record_listen(video_id, item.get('title', ''), item.get('artist', ''), thumb)
-    _update_now_playing(playing=False,
+    _update_now_playing(queue_session_id=_intent_queue_session, playing=False,
                         title=item.get('title', ''),
                         artist=item.get('artist', ''),
                         artists=item.get('artists', []),
@@ -8536,6 +8760,9 @@ def alexa_queue_add():
             return error_response('collection has no playable tracks', 400)
 
         with _np_lock:
+            expected_session = body.get('expected_queue_session')
+            if expected_session and (_now_playing.get('queue_session_id') != expected_session or _playback_output.snapshot()['playback_output'] != 'alexa'):
+                return error_response('playlist playback was superseded', 409)
             queue = list(_now_playing.get('queue') or [])
             current_idx = _now_playing.get('queue_index', -1)
             if position == 'next':
@@ -8593,6 +8820,9 @@ def alexa_queue_add():
                                 generation=_current_playback_generation())
 
     with _np_lock:
+        expected_session = body.get('expected_queue_session')
+        if expected_session and (_now_playing.get('queue_session_id') != expected_session or _playback_output.snapshot()['playback_output'] != 'alexa'):
+            return error_response('playlist playback was superseded', 409)
         queue = list(_now_playing.get('queue') or [])
         current_idx = _now_playing.get('queue_index', -1)
 

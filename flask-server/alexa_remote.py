@@ -638,9 +638,11 @@ class AlexaRemote:
                     volume = min(100, max(0, int(value)))
                 except (TypeError, ValueError):
                     return "Volume must be a number between 0 and 100."
-                await api.set_volume(volume / 100)
+                await api.set_volume(volume / 100, queue_delay=0)
+            elif action in ("pause", "stop"):
+                await api.pause()
             elif action in _TRANSPORT_TEXT:
-                await api.run_custom(f"ask {SKILL_INVOCATION_NAME} to {_TRANSPORT_TEXT[action]}")
+                await api.run_custom(f"ask {SKILL_INVOCATION_NAME} to {_TRANSPORT_TEXT[action]}", queue_delay=0)
             else:
                 return f'Unknown action "{action}".'
         except asyncio.TimeoutError:
@@ -775,7 +777,7 @@ class AlexaRemote:
         if error:
             return error
         try:
-            await api.run_custom(text)
+            await api.run_custom(text, queue_delay=0)
         except asyncio.TimeoutError:
             self._login_checked_at = 0.0
             logger.exception("text_command %r timed out", text)
