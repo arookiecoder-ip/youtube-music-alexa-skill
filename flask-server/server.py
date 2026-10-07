@@ -1,3 +1,4 @@
+from flask import has_request_context
 import download_cookies
 import asyncio, collections, difflib, glob, hashlib, hmac, itertools, json, math, os, random, secrets, shutil, sys, threading, time, re, subprocess, logging, copy, uuid, tempfile, shlex
 from datetime import timedelta, datetime
@@ -200,7 +201,9 @@ def _totp_verify(code: str, window: int = 1) -> bool:
 # instead of the direct googlevideo URL. googlevideo URLs are IP-locked to the
 # machine that resolved them (and direct fetches 403 from datacenter IPs even
 # then), so devices can only play via the proxy, which serves yt-dlp downloads.
-PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "").rstrip('/')
+PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "").strip().rstrip('/')
+if PUBLIC_BASE_URL and '://' not in PUBLIC_BASE_URL:
+    PUBLIC_BASE_URL = 'https://' + PUBLIC_BASE_URL
 
 AUDIO_CACHE_DIR = os.environ.get("AUDIO_CACHE_DIR", "/tmp/ytm_audio_cache")
 def _cache_seconds_env(name, default):
@@ -4066,11 +4069,17 @@ class Supporting:
             _dec_download_depth()
 
     async def get_stream(video_id: str):
-        if PUBLIC_BASE_URL:
+        # Direct googlevideo URLs are bound to the server's egress IP. An Echo
+        # cannot use them. When deployment omits PUBLIC_BASE_URL, use the
+        # incoming public HTTPS origin instead of returning an IP-locked URL.
+        base = PUBLIC_BASE_URL
+        if not base and has_request_context():
+            base = request.url_root.rstrip('/')
+        if base:
             # Answer immediately; pre-warm the cache so the device's fetch is fast.
             threading.Thread(target=Supporting.ensure_downloaded, args=(video_id,), daemon=True).start()
             key_param = f"&key={API_KEY}" if API_KEY else ""
-            return {'audio_url': f"{PUBLIC_BASE_URL}/proxy/?video_id={video_id}{key_param}"}
+            return {'audio_url': f"{base}/proxy/?video_id={video_id}{key_param}"}
         url = await asyncio.to_thread(Supporting.resolve_direct_url, video_id)
         if not url:
             return None
@@ -4288,6 +4297,9 @@ async def stream_video():
                     if item.get('video_id') == video_id), 0)
         start = max(0, idx - _SKILL_QUEUE_BEHIND)
         queue = queue[start:start + _SKILL_QUEUE_WINDOW]
+    from urllib.parse import urlsplit
+    destination = urlsplit(stream.get('audio_url', ''))
+    logger.info('Echo stream destination: video=%s host=%s path=%s', video_id, destination.hostname, destination.path)
     logger.info('Completed stream_video in %.2f seconds.', time.time() - start_time)
     return jsonify({'song_info': {'metadata': metadata, 'stream': stream}, 'playlist': queue})
 
@@ -5960,7 +5972,8 @@ def _watch_playback_confirmation(serial, video_id, resend):
     def _still_relevant():
         # Give up quietly if the user has since moved on to another track.
         with _np_lock:
-            return _now_playing.get('video_id') == video_id
+            return (_now_playing.get('video_id') == video_id
+                    and not _now_playing.get('playback_error'))
 
     def _wait_once():
         # A cache hit has nothing left to wait on but the trigger + /proxy/
@@ -6051,9 +6064,8 @@ def _watch_playback_confirmation(serial, video_id, resend):
         if not _still_relevant():
             return
         logger.warning("[playback-watchdog] retry for %s also unconfirmed", video_id)
-        if not _auto_advance_after_failure(serial, video_id, 'timeout'):
-            _update_now_playing(
-                playback_error={'type': 'timeout', 'message': "Playback didn't start. Check the device and try again."})
+        _update_now_playing(playing=False, playback_processing=False,
+            playback_error={'type': 'timeout', 'message': "Echo could not start the audio stream. Check the public stream URL and connection, then retry."})
     except Exception:
         logger.exception("")
 
@@ -7166,6 +7178,21 @@ def alexa_state_event():
         _record_volume_state(body.get('serial'), body.get('volume'), notify=True)
     sys.stderr.write(f"[np] webhook: event={event!r} video_id={body.get('video_id', '')!r}\n")
     sys.stderr.flush()
+    if event == 'failed':
+        failed_id = body.get('video_id', '')
+        with _np_lock:
+            if not _valid_video_id(failed_id) or failed_id != _now_playing.get('video_id'):
+                return jsonify({'ok': True, 'ignored': 'stale or unidentified playback failure'})
+            _reset_progress(_computed_position_ms())
+            _now_playing.update(playing=False, playback_processing=False,
+                playback_confirmed=False,
+                playback_error={'type': str(body.get('error_type') or 'device_playback_error')[:100],
+                    'message': str(body.get('error_message') or 'Echo could not play the audio stream.')[:300]},
+                updated_at=time.time())
+            _now_playing['playback_revision'] = int(_now_playing.get('playback_revision', 0)) + 1
+        logger.warning('Echo playback failed: video=%s type=%s', failed_id, body.get('error_type'))
+        _notify_sse()
+        return jsonify({'ok': True})
     if event == 'stopped':
         # Newer skills report which track stopped. When a voice play
         # interrupts the current track, Alexa emits PlaybackStopped for the
