@@ -96,6 +96,13 @@ class _CleanState(unittest.TestCase):
     """Isolate module-level now-playing + armed-play state between tests."""
 
     def setUp(self):
+        # These tests exercise transport/session identity, not live YouTube downloads.
+        warm = mock.patch.object(server, '_ensure_audio_ready_for_play', return_value=False)
+        warm.start()
+        self.addCleanup(warm.stop)
+        download = mock.patch.object(server.Supporting, 'ensure_downloaded', return_value=None)
+        download.start()
+        self.addCleanup(download.stop)
         with server._np_lock:
             self._saved_np = dict(server._now_playing)
         with server._ARMED_PLAYS_LOCK:
