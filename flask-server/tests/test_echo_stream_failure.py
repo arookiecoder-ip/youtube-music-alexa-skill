@@ -42,7 +42,10 @@ class EchoStreamFailureTests(unittest.TestCase):
     def test_failed_current_stream_stops_spinner_and_preserves_queue(self):
         self._failure_case('newtrack001', ignored=False)
 
-    def _failure_case(self, video, ignored):
+    def test_pending_failure_retry_is_cancelled_by_new_transport_intent(self):
+        self._failure_case('newtrack001', ignored=False, cancel_retry=True)
+
+    def _failure_case(self, video, ignored, cancel_retry=False):
         tree = ast.parse(SOURCE.read_text())
         fn = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == 'alexa_state_event')
         fn.decorator_list = []
@@ -50,11 +53,15 @@ class EchoStreamFailureTests(unittest.TestCase):
                  'playback_revision': 3, 'queue': [{'video_id': 'newtrack001'}, {'video_id': 'nexttrack01'}]}
         original_queue = copy.deepcopy(state['queue'])
         notify = Mock()
+        callbacks = []
+        timer = Mock(side_effect=lambda seconds, callback: callbacks.append(callback) or Mock())
+        advance = Mock()
         ns = {'request': request, 'jsonify': jsonify, 'datetime': datetime, 'time': time, 'sys': sys,
               '_np_lock': threading.RLock(), '_now_playing': state,
-              '_playback_output': SimpleNamespace(snapshot=lambda: {'playback_output': 'alexa'}),
+              '_playback_output': SimpleNamespace(snapshot=lambda: {'playback_output': 'alexa', 'output_serial': 'echo'}),
               '_valid_video_id': lambda x: isinstance(x, str) and len(x) == 11,
-              '_computed_position_ms': lambda: 2000, '_reset_progress': Mock(), '_notify_sse': notify, 'logger': Mock()}
+              '_computed_position_ms': lambda: 2000, '_reset_progress': Mock(), '_notify_sse': notify, 'logger': Mock(), 'threading': SimpleNamespace(Timer=timer),
+              '_still_relevant_video': lambda vid: state['video_id'] == vid, '_auto_advance_after_failure': advance}
         exec(compile(ast.Module(body=[fn], type_ignores=[]), str(SOURCE), 'exec'), ns)
         with Flask(__name__).test_request_context('/', method='POST', json={
             'event': 'failed', 'video_id': video, 'error_type': 'MEDIA_ERROR_SERVICE_UNAVAILABLE'}):
@@ -66,5 +73,11 @@ class EchoStreamFailureTests(unittest.TestCase):
             self.assertFalse(state['playing']); self.assertFalse(state['playback_processing'])
             self.assertEqual(state['playback_error']['type'], 'MEDIA_ERROR_SERVICE_UNAVAILABLE')
             notify.assert_called_once()
+            self.assertEqual(len(callbacks), 1)
+            if cancel_retry:
+                state['playback_revision'] += 1
+            callbacks[0]()
+            if cancel_retry: advance.assert_not_called()
+            else: advance.assert_called_once_with('echo', video, 'MEDIA_ERROR_SERVICE_UNAVAILABLE')
 
 if __name__ == '__main__': unittest.main()
