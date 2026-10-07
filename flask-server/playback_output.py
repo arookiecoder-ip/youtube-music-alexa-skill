@@ -69,6 +69,19 @@ class PlaybackOutput:
             self.condition.notify_all()
             return self.snapshot()
 
+    def select_idle_phone(self, owner, expected_token):
+        """Select a silent default without reviving the saved queue."""
+        with self.condition:
+            if self.token != expected_token or (self.pending_owner and self.pending_until > self.clock()):
+                raise OutputConflict('Playback changed while selecting the default device.')
+            self.mode, self.owner, self.controller = 'phone', owner, ''
+            self.token = secrets.token_hex(16)
+            self.revision += 1
+            self.lease_until = self.clock() + self.lease_seconds
+            self.pending_owner, self.pending_until = '', 0
+            self.condition.notify_all()
+            return self.snapshot()
+
     def heartbeat(self, owner, token):
         with self.condition:
             if not self.owns_phone(owner, token):
