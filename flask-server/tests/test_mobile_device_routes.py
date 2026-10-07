@@ -71,3 +71,15 @@ class MobileDeviceRoutesTests(OutputRoutesTests):
         self.assertEqual(self.state['position_ms'], 42000)
         self.assertFalse(self.state['playing'])
         self.assertTrue(self.output.owns_phone('phone-two', pending['output_token']))
+
+    def test_queue_tools_are_delivered_to_owner_without_alexa_dispatch(self):
+        self.device('online')
+        claim = self.output_request('claim').json
+        self.command.reset_mock()
+        response = self.device('command', owner='controller', target_id='phone-one',
+            output_token=claim['output_token'], command='tool', payload={'tool': 'CLEAR_PLAYED'})
+        self.assertEqual(response.status_code, 200)
+        queued = self.device('online').json['commands'][0]
+        self.assertEqual(queued['action'], 'tool')
+        self.assertEqual(queued['payload']['tool'], 'CLEAR_PLAYED')
+        self.command.assert_not_called()

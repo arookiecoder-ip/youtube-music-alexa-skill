@@ -2506,7 +2506,7 @@ def app_mobile_devices():
             if body.get('output_token') != output['output_token']:
                 raise OutputConflict('This control belongs to an older playback session.')
             command = body.get('command')
-            if command not in ('play', 'pause', 'next', 'previous', 'seek', 'song', 'queue', 'next_items', 'append', 'remove', 'reorder', 'shuffle', 'repeat'):
+            if command not in ('play', 'pause', 'next', 'previous', 'seek', 'song', 'queue', 'next_items', 'append', 'remove', 'reorder', 'shuffle', 'repeat', 'tool'):
                 return error_response('invalid device command', 400)
             payload = body.get('payload') or {}
             if not isinstance(payload, dict) or len(json.dumps(payload)) > 2_000_000:
