@@ -2428,7 +2428,22 @@ def app_playback_output():
     if action == 'heartbeat':
         return jsonify(_playback_output.heartbeat(owner, body.get('output_token')))
     if action == 'ack':
-        return jsonify(_playback_output.acknowledge(owner, body.get('output_token')))
+        position = body.get('position_ms')
+        playing = body.get('playing')
+        if position is not None and (isinstance(position, bool) or not isinstance(position, int) or position < 0):
+            return error_response('invalid pause acknowledgement position', 400)
+        if playing is not None and not isinstance(playing, bool):
+            return error_response('invalid pause acknowledgement state', 400)
+        with _np_lock:
+            result = _playback_output.acknowledge(owner, body.get('output_token'))
+            # Commit the actual paused source cursor before the target can read it.
+            if position is not None:
+                _reset_progress(position)
+            if result['playback_output'] == 'phone':
+                if playing is not None:
+                    _now_playing['playing'] = playing
+        _notify_sse()
+        return jsonify(result)
     return error_response('invalid output action', 400)
 
 

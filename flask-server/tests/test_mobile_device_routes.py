@@ -59,3 +59,15 @@ class MobileDeviceRoutesTests(OutputRoutesTests):
         reply = self.device('online').json
         self.assertEqual(reply['commands'][0]['action'], 'next')
         self.assertEqual(self.device('online', ack=['next-1']).json['commands'], [])
+
+    def test_transfer_ack_commits_actual_source_position_and_pause_state(self):
+        first = self.output_request('claim').json
+        with self.assertRaises(self.namespace['OutputConflict']):
+            self.output.transfer_phone('phone-two', first['output_token'], lambda: None, timeout=0.01)
+        pending = self.output.snapshot()
+        response = self.client.post('/api/app/output/', json={'action': 'ack', 'output_owner': 'phone-one',
+            'output_token': pending['output_token'], 'position_ms': 42000, 'playing': False})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.state['position_ms'], 42000)
+        self.assertFalse(self.state['playing'])
+        self.assertTrue(self.output.owns_phone('phone-two', pending['output_token']))
