@@ -769,7 +769,15 @@ class PlaybackFailedEventHandler(AbstractRequestHandler):
         # A failed current track is terminal. Clear Alexa's AudioPlayer queue so
         # an already-enqueued next item cannot start automatically, and leave
         # the failed item selected for an explicit user retry or selection.
-        player._notify_server(handler_input, 'stopped')
+        failed = handler_input.request_envelope.request
+        error = getattr(failed, 'error', None)
+        token = getattr(failed, 'token', None)
+        # Failure must carry its own stream identity; an unscoped 'stopped'
+        # could pause a newer selection and conceal the reason from clients.
+        player._notify_server(handler_input, 'failed',
+            video_id=player._parse_token(token or playback_info.get('current_token', ''))[1],
+            error_type=str(getattr(error, 'object_type', '') or ''),
+            error_message=str(getattr(error, 'message', '') or 'Device playback error'))
         return _without_speech(player.Controller.stop(handler_input))
 
 class ExceptionEncounteredRequestHandler(AbstractRequestHandler):

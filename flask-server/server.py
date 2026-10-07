@@ -1,4 +1,6 @@
+from flask import has_request_context
 import download_cookies
+from playback_failover import PlaybackFailoverBudget
 import asyncio, collections, difflib, glob, hashlib, hmac, itertools, json, math, os, random, secrets, shutil, sys, threading, time, re, subprocess, logging, copy, uuid, tempfile, shlex
 from datetime import timedelta, datetime
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
@@ -200,7 +202,9 @@ def _totp_verify(code: str, window: int = 1) -> bool:
 # instead of the direct googlevideo URL. googlevideo URLs are IP-locked to the
 # machine that resolved them (and direct fetches 403 from datacenter IPs even
 # then), so devices can only play via the proxy, which serves yt-dlp downloads.
-PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "").rstrip('/')
+PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "").strip().rstrip('/')
+if PUBLIC_BASE_URL and '://' not in PUBLIC_BASE_URL:
+    PUBLIC_BASE_URL = 'https://' + PUBLIC_BASE_URL
 
 AUDIO_CACHE_DIR = os.environ.get("AUDIO_CACHE_DIR", "/tmp/ytm_audio_cache")
 def _cache_seconds_env(name, default):
@@ -4066,11 +4070,19 @@ class Supporting:
             _dec_download_depth()
 
     async def get_stream(video_id: str):
-        if PUBLIC_BASE_URL:
+        # Direct googlevideo URLs are bound to the server's egress IP. An Echo
+        # cannot use them. When deployment omits PUBLIC_BASE_URL, use the
+        # incoming public HTTPS origin instead of returning an IP-locked URL.
+        base = PUBLIC_BASE_URL
+        if not base and has_request_context():
+            # Caddy terminates TLS; its internal request may be plain HTTP.
+            # Echo AudioPlayer still requires the public HTTPS origin.
+            base = 'https://' + request.host
+        if base:
             # Answer immediately; pre-warm the cache so the device's fetch is fast.
             threading.Thread(target=Supporting.ensure_downloaded, args=(video_id,), daemon=True).start()
             key_param = f"&key={API_KEY}" if API_KEY else ""
-            return {'audio_url': f"{PUBLIC_BASE_URL}/proxy/?video_id={video_id}{key_param}"}
+            return {'audio_url': f"{base}/proxy/?video_id={video_id}{key_param}"}
         url = await asyncio.to_thread(Supporting.resolve_direct_url, video_id)
         if not url:
             return None
@@ -4288,6 +4300,9 @@ async def stream_video():
                     if item.get('video_id') == video_id), 0)
         start = max(0, idx - _SKILL_QUEUE_BEHIND)
         queue = queue[start:start + _SKILL_QUEUE_WINDOW]
+    from urllib.parse import urlsplit
+    destination = urlsplit(stream.get('audio_url', ''))
+    logger.info('Echo stream destination: video=%s host=%s path=%s', video_id, destination.hostname, destination.path)
     logger.info('Completed stream_video in %.2f seconds.', time.time() - start_time)
     return jsonify({'song_info': {'metadata': metadata, 'stream': stream}, 'playlist': queue})
 
@@ -5952,6 +5967,9 @@ def _watch_playback_confirmation(serial, video_id, resend):
     if not _valid_video_id(video_id):
         return
 
+    with _np_lock:
+        intent_revision = int(_now_playing.get('playback_revision', 0))
+
     def _confirmed():
         with _np_lock:
             return (_now_playing.get('video_id') == video_id
@@ -5960,7 +5978,8 @@ def _watch_playback_confirmation(serial, video_id, resend):
     def _still_relevant():
         # Give up quietly if the user has since moved on to another track.
         with _np_lock:
-            return _now_playing.get('video_id') == video_id
+            return (_now_playing.get('video_id') == video_id
+                    and int(_now_playing.get('failed_playback_revision', 0)) <= intent_revision)
 
     def _wait_once():
         # A cache hit has nothing left to wait on but the trigger + /proxy/
@@ -6052,8 +6071,8 @@ def _watch_playback_confirmation(serial, video_id, resend):
             return
         logger.warning("[playback-watchdog] retry for %s also unconfirmed", video_id)
         if not _auto_advance_after_failure(serial, video_id, 'timeout'):
-            _update_now_playing(
-                playback_error={'type': 'timeout', 'message': "Playback didn't start. Check the device and try again."})
+            _update_now_playing(playing=False, playback_processing=False,
+                playback_error={'type': 'timeout', 'message': _playback_failure_message('timeout')})
     except Exception:
         logger.exception("")
 
@@ -6137,6 +6156,20 @@ def _watch_resume_confirmation(serial, video_id, staged_revision):
         logger.exception("")
 
 
+_playback_failover_budget = PlaybackFailoverBudget(limit=5)
+
+
+def _playback_failure_message(reason, stopped=False):
+    text = {
+        'offline': 'Alexa is offline. Reconnect the Echo and try again.',
+        'timeout': 'Alexa did not reply. Check the Echo connection and try again.',
+        'server_issue': 'The audio server could not serve this song. Check the server and try again.',
+        'MEDIA_ERROR_SERVICE_UNAVAILABLE': 'Alexa could not reach the audio service. Check the Echo connection and server.',
+        'unavailable': 'This song is unavailable.'
+    }.get(reason, 'Alexa could not play the song. Check the device connection and audio server.')
+    return ('Stopped after 5 consecutive failed songs. ' if stopped else '') + text
+
+
 def _auto_advance_after_failure(serial, video_id, reason):
     """Best-effort skip to the next queue item after `video_id` fails to play.
 
@@ -6148,6 +6181,16 @@ def _auto_advance_after_failure(serial, video_id, reason):
     """
     if not _still_relevant_video(video_id):
         return False
+    with _np_lock:
+        occurrence = (serial, video_id, _now_playing.get('queue_index', -1))
+    count, fresh = _playback_failover_budget.fail(occurrence)
+    if not fresh:
+        return True  # Duplicate webhook/watchdog for the same failed occurrence.
+    if count >= _playback_failover_budget.limit:
+        _update_now_playing(playing=False, playback_processing=False,
+            playback_error={'type': reason, 'message': _playback_failure_message(reason, stopped=True),
+                            'consecutive_failures': count})
+        return True  # Handled terminally; caller must not overwrite the message.
     target, err = _queue_neighbor('next')
     if not target:
         logger.info("[playback-watchdog] no next track to auto-advance to "
@@ -6165,12 +6208,14 @@ def _auto_advance_after_failure(serial, video_id, reason):
         thumbnail=next_item.get('thumbnail', ''),
         duration_ms=next_item.get('duration_ms', 0),
         playback_confirmed=False,
-        playback_error={'type': reason, 'message': "Skipped a track that wouldn't play.",
-                        'skipped_video_id': video_id})
+        playback_error={'type': reason, 'message': f'Song failed ({count}/5). Trying the next song.',
+                        'terminal': False, 'skipped_video_id': video_id})
     dispatch_error = _dispatch_play_with_retry(serial, next_id)
     if dispatch_error:
         logger.error("[playback-watchdog] auto-advance dispatch failed: %s", dispatch_error)
-        _update_now_playing(playback_error={'type': 'dispatch_error', 'message': dispatch_error})
+        _update_now_playing(playing=False, playback_processing=False, playback_error={
+            'type': 'offline' if 'offline' in str(dispatch_error).lower() else 'dispatch_error',
+            'message': str(dispatch_error)})
     return True
 
 
@@ -6856,6 +6901,7 @@ def alexa_command():
     if not serial or not action:
         return error_response('missing "serial" or "action"', 400)
     if action in ('play', 'next', 'previous'):
+        _playback_failover_budget.reset()
         _claim_alexa_output(serial, expected_owner=body.get('output_owner'),
                             expected_token=body.get('output_token'),
                             source_paused=body.get('phone_paused') is True)
@@ -7166,6 +7212,33 @@ def alexa_state_event():
         _record_volume_state(body.get('serial'), body.get('volume'), notify=True)
     sys.stderr.write(f"[np] webhook: event={event!r} video_id={body.get('video_id', '')!r}\n")
     sys.stderr.flush()
+    if event == 'failed':
+        failed_id = body.get('video_id', '')
+        with _np_lock:
+            if not _valid_video_id(failed_id) or failed_id != _now_playing.get('video_id'):
+                return jsonify({'ok': True, 'ignored': 'stale or unidentified playback failure'})
+            _reset_progress(_computed_position_ms())
+            _now_playing.update(playing=False, playback_processing=False,
+                playback_confirmed=False,
+                playback_error={'type': str(body.get('error_type') or 'device_playback_error')[:100],
+                    'message': str(body.get('error_message') or 'Echo could not play the audio stream.')[:300]},
+                updated_at=time.time())
+            _now_playing['playback_revision'] = int(_now_playing.get('playback_revision', 0)) + 1
+            _now_playing['failed_playback_revision'] = _now_playing['playback_revision']
+            failed_revision = _now_playing['playback_revision']
+        logger.warning('Echo playback failed: video=%s type=%s', failed_id, body.get('error_type'))
+        _notify_sse()
+        serial = body.get('serial') or _playback_output.snapshot().get('output_serial')
+        if serial:
+            def recover_failure():
+                if (_still_relevant_video(failed_id)
+                        and _now_playing.get('playback_revision') == failed_revision
+                        and _playback_output.snapshot()['playback_output'] == 'alexa'):
+                    _auto_advance_after_failure(serial, failed_id, str(body.get('error_type') or 'server_issue'))
+            timer = threading.Timer(1.0, recover_failure)
+            timer.daemon = True
+            timer.start()
+        return jsonify({'ok': True})
     if event == 'stopped':
         # Newer skills report which track stopped. When a voice play
         # interrupts the current track, Alexa emits PlaybackStopped for the
@@ -7268,6 +7341,7 @@ def alexa_state_event():
                 playback_error={'type': 'unavailable',
                                 'message': "This song isn't available. Playback stopped."})
     elif event == 'started':
+        _playback_failover_budget.reset()
         video_id = body.get('video_id', '')
         if video_id and not _valid_video_id(video_id):
             # Malformed id from a bad/forged webhook call: ignore the id but
@@ -8399,6 +8473,7 @@ def alexa_shuffle_queue():
 
 @app.route("/alexa/play_queue/", methods=["POST"])
 def alexa_play_queue():
+    _playback_failover_budget.reset()
     body = request.get_json(silent=True) or {}
 
     # Claim the intent before any slow work (playlist expansion below can take

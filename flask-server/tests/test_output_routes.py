@@ -8,11 +8,13 @@ import asyncio
 import copy
 
 from test_app_queue import PhoneQueueTests, A, B, track
+from playback_failover import PlaybackFailoverBudget
 
 
 class OutputRoutesTests(PhoneQueueTests):
     def setUp(self):
         super().setUp()
+        self.namespace["_playback_failover_budget"] = PlaybackFailoverBudget()
         self.seek_dispatch = Mock(return_value=None)
         self.namespace['_dispatch_play_with_retry'] = self.seek_dispatch
         self.arm = Mock()

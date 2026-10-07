@@ -117,6 +117,7 @@ class _CleanServerState(unittest.TestCase):
     """
 
     def setUp(self):
+        server._playback_failover_budget.reset()
         server._reset_rate_limit_cooldown()
         with server._dead_video_ids_lock:
             server._dead_video_ids.clear()
@@ -129,6 +130,7 @@ class _CleanServerState(unittest.TestCase):
         self.addCleanup(self._restore)
 
     def _restore(self):
+        server._playback_failover_budget.reset()
         server._reset_rate_limit_cooldown()
         with server._dead_video_ids_lock:
             server._dead_video_ids.clear()
@@ -2109,6 +2111,25 @@ class PlaybackFailureAutoAdvance(_CleanServerState):
                 queue=[{'video_id': current_id, 'title': 'Current'},
                        {'video_id': upcoming_id, 'title': 'Next', 'artist': 'A'}])
 
+    def test_five_failures_stop_without_consuming_the_rest_of_queue(self):
+        queue = [{'video_id': f'song{i:07d}', 'title': str(i)} for i in range(10)]
+        with mock.patch.object(server, '_notify_sse'), mock.patch.object(server, '_dispatch_play_with_retry') as dispatch:
+            server._update_now_playing(video_id=queue[0]['video_id'], queue_index=0, playing=True, queue=queue)
+            for i in range(5):
+                self.assertTrue(server._auto_advance_after_failure('serial', queue[i]['video_id'], 'timeout'))
+                # Duplicate failure callbacks cannot count or advance again.
+                server._auto_advance_after_failure('serial', queue[i]['video_id'], 'timeout')
+            self.assertEqual(dispatch.call_count, 4)
+            state = server._get_now_playing()
+            self.assertFalse(state['playing'])
+            self.assertEqual(state['video_id'], queue[4]['video_id'])
+            self.assertEqual(len(state['queue']), 10)
+            self.assertIn('5 consecutive failed songs', state['playback_error']['message'])
+            self.assertIn('did not reply', state['playback_error']['message'])
+            server._playback_failover_budget.reset()
+            server._auto_advance_after_failure('serial', queue[4]['video_id'], 'timeout')
+            self.assertEqual(dispatch.call_count, 5)
+
     def test_dead_video_auto_advances_to_next_track(self):
         current, nxt = "DEADDEADDEA", "NEXTNEXTNEX"
         self._install_queue(current, nxt)
@@ -2157,7 +2178,7 @@ class PlaybackFailureAutoAdvance(_CleanServerState):
         self.assertTrue(errors)
         self.assertEqual(errors[-1]['type'], 'unavailable')
 
-    def test_final_timeout_auto_advances_to_next_track(self):
+    def test_final_transport_timeout_advances_with_bounded_failure_budget(self):
         current, nxt = "TIMEOUTTIME", "AFTERAFTERA"
         self._install_queue(current, nxt)
         dispatched = []
@@ -2178,9 +2199,12 @@ class PlaybackFailureAutoAdvance(_CleanServerState):
             # confirmed, so the second _wait_once also times out.
             server._watch_playback_confirmation(
                 "DEVICE1", current, lambda: dispatched.append(current) or None)
-        self.assertEqual(dispatched, [current, nxt],
-                         msg="expected one resend of the original track, then "
-                             "an auto-advance dispatch to the next queue item")
+        self.assertEqual(dispatched, [current, nxt])
+        snap = server._get_now_playing()
+        self.assertEqual(snap['video_id'], nxt)
+        self.assertTrue(snap['playing'])
+        self.assertEqual(snap['playback_error']['type'], 'timeout')
+        self.assertEqual([t['video_id'] for t in snap['queue']], [current, nxt])
 
 
 class PlaybackFailureRateLimit(_CleanServerState):
