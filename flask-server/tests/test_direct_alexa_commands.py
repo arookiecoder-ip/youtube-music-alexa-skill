@@ -19,23 +19,24 @@ class DirectAlexaCommandTests(unittest.IsolatedAsyncioTestCase):
         self.api = SimpleNamespace(pause=AsyncMock(), run_custom=AsyncMock(), set_volume=AsyncMock())
         self.remote = SimpleNamespace(_api_for=AsyncMock(return_value=(self.api, None)), _login_checked_at=1)
 
-    async def test_pause_uses_native_transport_and_waits_for_its_response(self):
+    async def test_pause_uses_custom_skill_and_waits_for_its_response(self):
         accepted, acknowledge = asyncio.Event(), asyncio.Event()
-        async def pause():
+        async def pause(*args, **kwargs):
             accepted.set()
             await acknowledge.wait()
-        self.api.pause.side_effect = pause
+        self.api.run_custom.side_effect = pause
         task = asyncio.create_task(self.command(self.remote, 'echo', 'pause', None))
         await asyncio.wait_for(accepted.wait(), 1)
         self.assertFalse(task.done())
         acknowledge.set()
         self.assertIsNone(await task)
-        self.api.run_custom.assert_not_called()
+        self.api.pause.assert_not_called()
+        self.api.run_custom.assert_awaited_once_with('ask music box to pause', queue_delay=0)
 
-    async def test_rejected_native_pause_is_not_success(self):
-        self.api.pause.side_effect = RuntimeError('offline')
+    async def test_rejected_skill_pause_is_not_success(self):
+        self.api.run_custom.side_effect = RuntimeError('offline')
         self.assertIsNotNone(await self.command(self.remote, 'echo', 'pause', None))
-        self.api.run_custom.assert_not_called()
+        self.api.pause.assert_not_called()
 
     async def test_resume_still_uses_the_custom_skill(self):
         self.assertIsNone(await self.command(self.remote, 'echo', 'play', None))
