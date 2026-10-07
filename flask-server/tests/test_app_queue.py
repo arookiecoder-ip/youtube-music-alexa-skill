@@ -1,6 +1,7 @@
 """Exercise the actual queue route without starting Alexa or downloading audio."""
 import ast
 import copy
+import secrets
 from pathlib import Path
 import re
 import threading
@@ -26,7 +27,7 @@ class PhoneQueueTests(unittest.TestCase):
         self.notify = Mock()
         self.echo = Mock()
         self.output = PlaybackOutput()
-        namespace = {'app': self.app, 'request': request, 'jsonify': jsonify, 'time': time,
+        namespace = {'secrets': secrets, 'app': self.app, 'request': request, 'jsonify': jsonify, 'time': time,
             'error_response': lambda message, status: (jsonify({'error': message}), status),
             '_np_lock': threading.RLock(), '_now_playing': self.state, '_notify_sse': self.notify,
             '_thumbnail_url': lambda raw: raw.get('url', '') if isinstance(raw, dict) else (raw or ''),
@@ -34,6 +35,7 @@ class PhoneQueueTests(unittest.TestCase):
             '_reset_progress': lambda position: self.state.update(position_ms=position, started_at=time.time()),
             '_computed_position_ms': lambda: self.state['position_ms'], 'alexa_remote': self.echo,
             '_playback_output': self.output, 'OutputConflict': OutputConflict,
+            '_bump_playback_generation': Mock(), '_ensure_audio_ready_for_play': Mock(),
             '_queue_commands': QueueCommands(), '_queue_version_locked': lambda: 1}
         source = Path(__file__).resolve().parents[1] / 'server.py'
         routes = [node for node in ast.parse(source.read_text()).body
@@ -206,6 +208,23 @@ class PhoneQueueTests(unittest.TestCase):
 
     def test_next_for_a_noncurrent_song_is_rejected(self):
         self.assertEqual(self.post('next', after=B, tracks=[track(C)]).status_code, 409)
+
+    def test_phone_publish_warms_current_audio_without_dispatching_echo(self):
+        token = self.claim()
+        response = self.post('start', tracks=[track(A)], playing=True, output_owner='phone-one', output_token=token)
+        self.assertEqual(response.status_code, 200)
+        self.namespace['_ensure_audio_ready_for_play'].assert_called_once_with(A, wait=False)
+        self.echo.assert_not_called()
+
+    def test_extend_keeps_distinct_playlist_occurrences_and_retry_does_not_duplicate(self):
+        token = self.claim()
+        initial = dict(track(A), entry_id='first')
+        repeated = dict(track(A), entry_id='second')
+        self.post('start', tracks=[initial], output_owner='phone-one', output_token=token)
+        for _ in range(2):
+            response = self.post('extend', tracks=[repeated], output_owner='phone-one', output_token=token)
+            self.assertEqual(response.status_code, 200)
+        self.assertEqual([t['entry_id'] for t in self.state['queue']], ['first', 'second'])
 
 if __name__ == '__main__':
     unittest.main()
