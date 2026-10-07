@@ -131,3 +131,57 @@ class MobileDevicesTests(unittest.TestCase):
         output.acknowledge('one', latest['output_token'])
         output.wait_released(latest['output_token'], timeout=0.01)
         self.assertEqual(output.snapshot()['playback_output'], 'alexa')
+
+class PresenceWakeTests(unittest.TestCase):
+    def test_waiting_request_wakes_on_command_without_a_poll_delay(self):
+        registry = MobileDevices()
+        registry.online('target', 'session', 'Phone', [])
+        revision = registry.revision
+        ready, finished = threading.Event(), threading.Event()
+        def wait():
+            ready.set()
+            registry.wait(revision, 2)
+            finished.set()
+        worker = threading.Thread(target=wait)
+        worker.start()
+        self.assertTrue(ready.wait(1))
+        registry.command('target', 'token', 'play', {})
+        self.assertTrue(finished.wait(.5))
+        worker.join(1)
+
+    def test_volume_update_wakes_controllers_but_unchanged_heartbeat_does_not(self):
+        registry = MobileDevices()
+        registry.online('target', 'session', 'Phone', [], volume=20)
+        revision = registry.revision
+        registry.online('target', 'session', 'Phone', [], volume=20)
+        self.assertEqual(registry.revision, revision)
+        registry.online('target', 'session', 'Phone', [], volume=72)
+        self.assertGreater(registry.revision, revision)
+        self.assertEqual(registry.list()[0]['volume'], 72)
+
+    def test_invalid_volume_cannot_create_a_broken_presence_record(self):
+        registry = MobileDevices()
+        with self.assertRaises(ValueError):
+            registry.online('target', 'session', 'Phone', [], volume=-1)
+        self.assertEqual(registry.list(), [])
+
+    def test_delayed_fallback_cannot_replace_a_newer_explicit_play(self):
+        now = [100.0]
+        output = PlaybackOutput(clock=lambda: now[0])
+        old = output.phone('two', lambda: None)
+        now[0] = 113
+        new = output.phone('one', lambda: None)
+        self.assertFalse(output.fallback_phone(old['output_token'], 'controller', source_closed=True))
+        self.assertTrue(output.owns_phone('one', new['output_token']))
+        self.assertGreater(new['output_revision'], old['output_revision'])
+
+    def test_ack_resets_target_lease_so_dead_targets_do_not_hold_a_double_lease(self):
+        output = PlaybackOutput()
+        source = output.phone('one', lambda: None)
+        with self.assertRaises(OutputConflict):
+            output.transfer_phone('two', source['output_token'], lambda: None, timeout=.01)
+        pending = output.snapshot()
+        output.acknowledge('one', pending['output_token'])
+        self.assertLessEqual(output.snapshot()['phone_lease_ms'], 12000)
+        self.assertGreater(output.snapshot()['phone_lease_ms'], 11900)
+        self.assertGreater(output.snapshot()['output_revision'], pending['output_revision'])
