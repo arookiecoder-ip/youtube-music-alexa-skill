@@ -25,15 +25,20 @@ class PlaybackOutput:
         with self.condition:
             return {'playback_output': self.mode, 'output_owner': self.owner,
                     'output_token': self.token, 'output_serial': self.serial,
+                    'handoff_pending': bool(self.pending_owner and self.pending_until > self.clock()),
                     'phone_lease_ms': max(0, int((self.lease_until - self.clock()) * 1000))}
 
     def owns_phone(self, owner, token):
         with self.condition:
-            return self.mode == 'phone' and bool(owner) and self.owner == owner and self.token == token
+            return self.mode == 'phone' and bool(owner) and self.owner == owner and self.token == token and not (self.pending_owner and self.pending_until > self.clock())
 
     def phone(self, owner, pause_echo, serial=''):
         with self.condition:
             if self.mode == 'phone' and self.owner == owner:
+                if self.pending_owner and self.pending_until > self.clock():
+                    raise OutputConflict('The source device has not paused yet.')
+                self.pending_owner = ''
+                self.pending_until = 0
                 # An explicit new phone play supersedes in-flight reports from its previous song.
                 self.token = secrets.token_hex(16)
                 if serial:
@@ -74,8 +79,10 @@ class PlaybackOutput:
                 raise OutputConflict('A phone pause acknowledgement requires its current ownership token.')
             changed = self.mode != 'alexa'
             if changed:
-                self.pending_owner = '' if source_paused else self.owner
-                self.pending_until = self.lease_until
+                previous_pending = self.pending_owner if self.pending_until > self.clock() else ''
+                self.pending_owner = '' if source_paused else (previous_pending or self.owner)
+                if not previous_pending:
+                    self.pending_until = self.lease_until
                 self.mode, self.owner = 'alexa', ''
                 self.token = secrets.token_hex(16)
             if serial:
@@ -107,3 +114,39 @@ class PlaybackOutput:
                 self.condition.wait(remaining)
             if self.token != token:
                 raise OutputConflict('A newer output handoff replaced this request.')
+
+    def transfer_phone(self, target, expected_token, pause_echo, on_change=lambda: None, timeout=4):
+        """Invalidate source writes, wait for a real pause ack, then permit target audio."""
+        with self.condition:
+            if expected_token != self.token:
+                raise OutputConflict('Playback changed before this device switch.')
+            if self.pending_owner and self.pending_until > self.clock():
+                raise OutputConflict('Another device switch is still in progress.')
+            if self.mode != 'phone':
+                source = None
+            else:
+                source = self.owner
+                if source == target:
+                    return self.snapshot()
+                source_until = self.lease_until
+                self.mode, self.owner = 'phone', target
+                self.pending_owner, self.pending_until = source, source_until
+                self.token = secrets.token_hex(16)
+                self.lease_until = max(source_until, self.clock()) + self.lease_seconds
+                token = self.token
+        if source is None:
+            return self.phone(target, pause_echo)
+        on_change()
+        self.wait_released(token, timeout)
+        return self.snapshot()
+
+    def close_phone(self, owner):
+        with self.condition:
+            if self.pending_owner == owner:
+                self.pending_owner = ''
+            if self.mode == 'phone' and self.owner == owner:
+                self.owner = ''
+                self.token = secrets.token_hex(16)
+                self.lease_until = 0
+                self.pending_owner = ''
+            self.condition.notify_all()

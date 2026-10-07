@@ -142,7 +142,8 @@ class _BaseScenario(unittest.TestCase):
         self.addCleanup(self._restore_now_playing)
 
     def tearDown(self):
-        for p in self._patches:
+        # Unwind nested patches in reverse order so the original function is restored.
+        for p in reversed(self._patches):
             p.stop()
         self._patches.clear()
 

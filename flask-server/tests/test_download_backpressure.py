@@ -527,8 +527,13 @@ class EnsureDownloadedRateLimit(_CleanServerState):
     def test_success_clears_the_cooldown(self):
         server._note_rate_limited("earlier")
         self.assertTrue(server._ytdlp_rate_limited())
-        with mock.patch.object(server.subprocess, "run",
-                               return_value=_FakeCompleted(0, "")):
+        downloaded = [False]
+        def successful_run(*args, **kwargs):
+            downloaded[0] = True
+            return _FakeCompleted(0, "")
+        with mock.patch.object(server.subprocess, "run", side_effect=successful_run), \
+                mock.patch.object(server.Supporting, "cached_audio_path", side_effect=lambda vid: '/tmp/goodvid.m4a' if downloaded[0] else None), \
+                mock.patch.object(server, "_is_audio_file_valid", return_value=True):
             server.Supporting.ensure_downloaded("goodvid")
         self.assertFalse(server._ytdlp_rate_limited(),
                          msg="throughput is back; prefetch must resume")
@@ -980,7 +985,7 @@ class StreamInflightRegistry(_CleanServerState):
                 mock.patch.object(server.Supporting, "cached_audio_path",
                                   staticmethod(lambda vid: None)):
             started = time.time()
-            path = server._await_inflight_stream("vidstream01")
+            path = server._await_inflight_stream("vidstream01", timeout=0.4)
             elapsed = time.time() - started
         self.assertIsNone(path)
         self.assertLess(elapsed, 3.0,
@@ -1260,9 +1265,16 @@ class WarmCacheNeverBlocks(_CleanServerState):
         """Guards the sweep race: the file can vanish between the cache check
         and the send, and that must still produce audio rather than a 502."""
         paths = ["/tmp/warm.m4a", None]
+        request_thread = threading.get_ident()
+
+        def cached_path(video_id):
+            # Background prefetch threads must not consume this request's race.
+            if video_id != "warmvid0002" or threading.get_ident() != request_thread:
+                return None
+            return paths.pop(0) if paths else None
 
         with mock.patch.object(server.Supporting, "cached_audio_path",
-                               staticmethod(lambda vid: paths.pop(0) if paths else None)), \
+                               staticmethod(cached_path)), \
                 mock.patch.object(server.Supporting, "ensure_downloaded",
                                   staticmethod(lambda vid, **kw: "/tmp/redownloaded.m4a")) as _, \
                 mock.patch.object(server, "send_file",
@@ -1427,6 +1439,7 @@ class ForegroundDownloadPriority(_CleanServerState):
         release = threading.Event()
         prefetch_started = threading.Semaphore(0)
         foreground_ran = []
+        downloaded = set()
 
         # One patch for the whole test, dispatching on the video_id in the
         # command, so prewarm threads that outlive the click stay stubbed
@@ -1435,14 +1448,18 @@ class ForegroundDownloadPriority(_CleanServerState):
             video_id = cmd[-1]
             if video_id == "clickedsong":
                 foreground_ran.append(video_id)
+                downloaded.add(video_id)
                 return _FakeCompleted(0, "")
             prefetch_started.release()
             release.wait(10)
+            downloaded.add(video_id)
             return _FakeCompleted(0, "")
 
         threads = []
         try:
-            with mock.patch.object(server.subprocess, "run", side_effect=dispatch_run):
+            with mock.patch.object(server.subprocess, "run", side_effect=dispatch_run), \
+                    mock.patch.object(server.Supporting, "cached_audio_path", side_effect=lambda vid: '/tmp/' + vid + '.m4a' if vid in downloaded else None), \
+                    mock.patch.object(server, "_is_audio_file_valid", return_value=True):
                 # Saturate prefetch with more work than it has slots for.
                 for i in range(server._DOWNLOAD_CONCURRENCY * 2):
                     t = threading.Thread(
@@ -1544,6 +1561,13 @@ class PlayIntentClaim(_CleanServerState):
         server._claim_play_intent(serial, 5)
         self.assertTrue(server._claim_play_intent(serial, 6),
                         msg="the next genuine click must not be swallowed")
+
+    def test_web_timestamp_does_not_reject_mobile_client_and_mobile_restarts_are_ordered(self):
+        self.assertTrue(server._claim_play_intent("DEVICE1", 1800000000000))
+        self.assertTrue(server._claim_play_intent("DEVICE1", 1, 'mobile-client'))
+        self.assertTrue(server._claim_play_intent("DEVICE1", 2, 'mobile-client'))
+        self.assertFalse(server._claim_play_intent("DEVICE1", 1, 'mobile-client'))
+        self.assertTrue(server._claim_play_intent("DEVICE1", 1, 'other-mobile'))
 
     def test_seq_registry_is_memory_bounded(self):
         for i in range(200):
