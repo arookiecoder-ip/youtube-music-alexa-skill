@@ -7,6 +7,7 @@
   let _livePollTimer = null;
   let _livePollIntervalMs = 0;
   let _lastHistoryVideoId = null;
+  let _queueVersion = null;
   let _rafQueuedData = null;
   let _rafQueuedIndex = -1;
   let _rafPending = false;
@@ -18,6 +19,7 @@
   function state() { return window.__appState; }
 
   function handleNpUpdate(np) {
+    if (window.observeSharedOutput && window.observeSharedOutput(np) === false) return;
     const npVideoId = (np && np.video_id) || null;
     // Drop snapshots describing a track the user has already clicked away
     // from. The server needs a moment to catch up after each click, so during
@@ -31,6 +33,7 @@
       }
       return;
     }
+    if (np.queue_version !== undefined && np.queue !== undefined) _queueVersion = np.queue_version;
     // The server agrees with local intent (or intent has expired): stop
     // outranking it, so a later genuine track change — the queue advancing on
     // its own, a voice command — is applied immediately.
@@ -43,7 +46,7 @@
       _lastHistoryVideoId = npVideoId;
       if (window.loadHistory) setTimeout(window.loadHistory, 1500);
     }
-    if (np.playback_output !== 'phone' && np.playing && window.selectedDeviceOnline && !window.selectedDeviceOnline()) {
+    if ((np.playback_output !== 'phone' || (window.mobileOutputSelected && window.mobileOutputSelected(np))) && np.playing && window.selectedDeviceOnline && !window.selectedDeviceOnline()) {
       np = Object.assign({}, np, { playing: false });
     }
     if (np.volume !== undefined && np.volume !== null && window.syncVolume) window.syncVolume(np.volume);
@@ -73,7 +76,7 @@
       if (window.showNowPlaying) window.showNowPlaying(np);
       if (np.playing !== undefined) {
         const inGrace = (Date.now() - state().lastActionAt) < state().GRACE_MS;
-        const serverPlaying = np.playback_output !== 'phone' && np.playing === true && np.playback_confirmed === true;
+        const serverPlaying = (np.playback_output !== 'phone' || (window.mobileOutputSelected && window.mobileOutputSelected(np))) && np.playing === true && np.playback_confirmed === true;
         const contradictsIntent = inGrace && state().lastActionIntent !== null && serverPlaying !== state().lastActionIntent;
         // Always feed snapshots to the play/pause waiter: it keys off fresh
         // revision/marker/sequence, and the server stages play-intents as
@@ -103,10 +106,10 @@
         // Same split as above: the waiter always gets the snapshot; only the
         // icon update is grace-guarded.
         if (window._notifyPlayPauseServerState) {
-          window._notifyPlayPauseServerState(np.playback_output !== 'phone' && np.playing && np.playback_confirmed === true, np.state_updated_at || np.updated_at || np.confirmed_at, np.playback_revision, np.playback_confirmed, np.playback_processing);
+          window._notifyPlayPauseServerState((np.playback_output !== 'phone' || (window.mobileOutputSelected && window.mobileOutputSelected(np))) && np.playing && np.playback_confirmed === true, np.state_updated_at || np.updated_at || np.confirmed_at, np.playback_revision, np.playback_confirmed, np.playback_processing);
         }
         if (!contradictsIntent && !inGrace) {
-          state().isPlaying = np.playback_output !== 'phone' && np.playing === true && np.playback_confirmed === true;
+          state().isPlaying = (np.playback_output !== 'phone' || (window.mobileOutputSelected && window.mobileOutputSelected(np))) && np.playing === true && np.playback_confirmed === true;
           if (window.syncPlayPause) window.syncPlayPause();
         }
       }
@@ -256,7 +259,7 @@
     }
     _pollNowPlayingInFlight = true;
     try {
-      const np = await window.api('/alexa/now_playing/?serial=' + encodeURIComponent(serial));
+      const np = await window.api('/alexa/now_playing/?serial=' + encodeURIComponent(serial) + (_queueVersion === null ? '' : '&queue_version=' + encodeURIComponent(_queueVersion)));
       handleNpUpdate(np);
       if (window.refreshVolume) window.refreshVolume(false);
     } catch (_) {

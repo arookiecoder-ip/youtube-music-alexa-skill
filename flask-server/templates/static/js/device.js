@@ -224,6 +224,7 @@
   }
 
   function _applyDevices(devices, preferSerial) {
+    window._connectEchoDevices = devices.filter(d => !String(d.serial).startsWith('mobile:'));
     deviceEl.innerHTML = '';
     if (!devices.length) {
       deviceEl.innerHTML = '<option value="">No devices found</option>';
@@ -398,7 +399,7 @@
   }
 
   async function doClearAll() {
-    const serial = deviceEl.value || null;
+    const serial = (window.activeAlexaSerial ? window.activeAlexaSerial() : deviceEl.value) || null;
     toast('Clearing...');
     try {
       const data = await api('/alexa/clear/', serial ? { serial } : {});

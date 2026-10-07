@@ -16,7 +16,7 @@ class OutputRoutesTests(PhoneQueueTests):
         self.seek_dispatch = Mock(return_value=None)
         self.namespace['_dispatch_play_with_retry'] = self.seek_dispatch
         self.arm = Mock()
-        self.namespace.update(copy=copy, threading=threading, logger=Mock(), _effective_serial=lambda serial: serial,
+        self.namespace.update(_np_snapshot=lambda serial=None: copy.deepcopy(self.state), copy=copy, threading=threading, logger=Mock(), _effective_serial=lambda serial: serial,
             _touch_cached_audio=Mock(), _ensure_audio_ready_for_play=Mock(), _arm_play=self.arm,
             _watch_resume_confirmation=Mock(), _ARMED_PLAYS_LOCK=threading.Lock(), _ARMED_PLAYS={})
         self.command = Mock(side_effect=lambda *args: self.state.update(playing=False, playback_processing=False))
@@ -105,11 +105,17 @@ class OutputRoutesTests(PhoneQueueTests):
         self.assertEqual(self.state, before)
         self.assertTrue(self.output.owns_phone('phone-one', claim['output_token']))
 
-    def test_phone_cannot_start_before_actual_echo_stop_confirmation(self):
+    def test_phone_waits_for_native_pause_ack_without_waiting_for_skill_webhook(self):
         accepted = threading.Event()
         finished = threading.Event()
         responses = []
-        self.command.side_effect = lambda *args: accepted.set() and None
+        native_ack = threading.Event()
+        def pause(*args):
+            accepted.set()
+            if not native_ack.wait(1):
+                return 'Native pause request timed out'
+            return None
+        self.command.side_effect = pause
         def claim_phone():
             with self.app.test_client() as client:
                 responses.append(client.post('/api/app/output/', json={
@@ -120,11 +126,12 @@ class OutputRoutesTests(PhoneQueueTests):
         self.assertTrue(accepted.wait(1))
         self.assertFalse(finished.is_set())
         self.assertEqual(self.output.snapshot()['playback_output'], 'alexa')
-        self.state.update(playing=False, playback_processing=False)
+        native_ack.set()  # The delayed skill webhook is deliberately absent.
         worker.join(1)
         self.assertFalse(worker.is_alive())
         self.assertEqual(responses[0].status_code, 200)
         self.assertEqual(responses[0].json['playback_output'], 'phone')
+        self.assertFalse(self.state['playing'])
 
     def run_real_web_play(self, error=None):
         self.output_request('claim')

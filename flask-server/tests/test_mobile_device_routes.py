@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 from unittest.mock import Mock
 from test_output_routes import OutputRoutesTests
+from test_app_queue import A, B, track
 from mobile_devices import MobileDevices
 
 
@@ -14,7 +15,7 @@ class MobileDeviceRoutesTests(OutputRoutesTests):
         self.namespace.update(_mobile_devices=self.registry, json=json)
         path = Path(__file__).resolve().parents[1] / 'server.py'
         nodes = [n for n in ast.parse(path.read_text()).body if isinstance(n, ast.FunctionDef)
-                 and n.name in ('app_mobile_devices', '_pause_echo_for_mobile')]
+                 and n.name in ('app_mobile_devices', '_pause_echo_for_mobile', '_reconcile_mobile_output', 'route_mobile_web_controls')]
         exec(compile(ast.Module(body=nodes, type_ignores=[]), str(path), 'exec'), self.namespace)
 
     def device(self, action, owner='phone-one', **extra):
@@ -83,3 +84,101 @@ class MobileDeviceRoutesTests(OutputRoutesTests):
         self.assertEqual(queued['action'], 'tool')
         self.assertEqual(queued['payload']['tool'], 'CLEAR_PLAYED')
         self.command.assert_not_called()
+
+    def test_alexa_to_remote_phone_preserves_active_playback_without_starting_echo(self):
+        self.device('online', owner='phone-one')
+        self.device('online', owner='phone-two')
+        self.state['playing'] = True
+        initial = self.output.snapshot()
+        response = self.device('transfer', target_id='phone-two', output_token=initial['output_token'], serial='echo-one')
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(self.state['playing'])
+        self.assertFalse(self.state['playback_processing'])
+        self.assertEqual(response.json['output_controller'], 'phone-one')
+        self.command.assert_called_once_with('echo-one', 'pause')
+
+    def test_closing_controlled_phone_returns_playback_to_online_controller(self):
+        self.test_alexa_to_remote_phone_preserves_active_playback_without_starting_echo()
+        old = self.output.snapshot()
+        self.command.reset_mock()
+        self.device('offline', owner='phone-two')
+        latest = self.output.snapshot()
+        self.assertEqual(latest['output_owner'], 'phone-one')
+        self.assertNotEqual(old['output_token'], latest['output_token'])
+        self.assertTrue(self.state['playing'])
+        self.command.assert_not_called()
+
+    def test_expired_controlled_phone_falls_back_only_after_source_lease(self):
+        self.test_alexa_to_remote_phone_preserves_active_playback_without_starting_echo()
+        now = [100.0]
+        self.registry.clock = self.output.clock = lambda: now[0]
+        self.output.lease_until = 112
+        self.registry.devices['phone-one']['until'] = 200
+        self.registry.devices['phone-two']['until'] = 104
+        now[0] = 105
+        self.client.get('/api/app/devices/')
+        self.assertEqual(self.output.snapshot()['output_owner'], 'phone-two')
+        now[0] = 113
+        self.client.get('/api/app/devices/')
+        self.assertEqual(self.output.snapshot()['output_owner'], 'phone-one')
+
+    def test_closed_controller_does_not_steal_playback_back_from_target(self):
+        self.test_alexa_to_remote_phone_preserves_active_playback_without_starting_echo()
+        self.device('offline', owner='phone-one')
+        self.assertEqual(self.output.snapshot()['output_owner'], 'phone-two')
+        self.device('offline', owner='phone-two')
+        self.assertEqual(self.output.snapshot()['output_owner'], '')
+
+    def test_remote_volume_targets_only_the_active_phone_and_rejects_stale_session(self):
+        self.device('online', volume=20)
+        claim = self.output_request('claim').json
+        self.command.reset_mock()
+        response = self.device('command', owner='controller', target_id='phone-one',
+            output_token=claim['output_token'], command='volume', payload={'value': 72})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.device('online').json['commands'][0]['payload'], {'value': 72})
+        self.assertEqual(self.device('command', owner='controller', target_id='phone-one',
+            output_token='old', command='volume', payload={'value': 72}).status_code, 409)
+        self.assertEqual(self.device('command', target_id='phone-one', output_token=claim['output_token'],
+            command='volume', payload={'value': 101}).status_code, 400)
+        self.command.assert_not_called()
+
+    def test_web_mobile_controls_do_not_dispatch_or_claim_alexa(self):
+        self.device('online', volume=32)
+        claim = self.output_request('claim').json
+        self.command.reset_mock()
+        # These are the webapp's existing routes, using the selected output token.
+        response = self.client.post('/alexa/command/', json={'serial': 'mobile:phone-one',
+            'action': 'next', 'output_token': claim['output_token']})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.device('online').json['commands'][0]['action'], 'next')
+        self.assertEqual(self.client.get('/alexa/volume/?serial=mobile:phone-one').json['volume'], 32)
+        stale = self.client.post('/alexa/command/', json={'serial': 'mobile:phone-one',
+            'action': 'pause', 'output_token': 'stale'})
+        self.assertEqual(stale.status_code, 409)
+        self.assertTrue(self.output.owns_phone('phone-one', claim['output_token']))
+        self.command.assert_not_called()
+
+    def test_web_seek_and_large_playlist_are_delivered_to_phone(self):
+        self.device('online')
+        claim = self.output_request('claim').json
+        for path, body in [('/alexa/seek/', {'position_seconds': 4.5}),
+                           ('/alexa/play_queue/', {'playlist_id': 'PL1000', 'shuffle': True})]:
+            response = self.client.post(path, json={'serial': 'mobile:phone-one', 'output_token': claim['output_token'], **body})
+            self.assertEqual(response.status_code, 200)
+        commands = self.device('online').json['commands']
+        self.assertEqual(commands[0]['payload']['position_ms'], 4500)
+        self.assertEqual(commands[1]['payload']['playlist_id'], 'PL1000')
+        self.assertTrue(commands[1]['payload']['shuffle'])
+
+    def test_handoff_claim_returns_the_latest_queue_cursor_and_original_play_state(self):
+        self.state.update(playing=True, video_id=A, position_ms=42000, queue=[track(A), track(B)], queue_index=0)
+        response = self.client.post('/api/app/output/', json={'action': 'claim', 'output_owner': 'phone-one',
+            'serial': 'echo-one', 'include_state': True})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json['now_playing']['video_id'], A)
+        self.assertEqual(response.json['now_playing']['position_ms'], 42000)
+        self.assertEqual(len(response.json['now_playing']['queue']), 2)
+        self.assertTrue(response.json['now_playing']['playing'])
+        self.assertFalse(self.state['playing'])
+        self.assertTrue(self.output.owns_phone('phone-one', response.json['output_token']))
