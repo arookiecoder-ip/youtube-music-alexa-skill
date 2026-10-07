@@ -185,3 +185,18 @@ class PresenceWakeTests(unittest.TestCase):
         self.assertLessEqual(output.snapshot()['phone_lease_ms'], 12000)
         self.assertGreater(output.snapshot()['phone_lease_ms'], 11900)
         self.assertGreater(output.snapshot()['output_revision'], pending['output_revision'])
+
+    def test_actual_volume_steps_are_reported_and_retained(self):
+        self.registry = MobileDevices()
+        self.registry.online('one', 'session', 'Phone', [], 66, 15)
+        self.assertEqual(self.registry.list()[0]['volume_steps'], 15)
+        self.registry.online('one', 'session', 'Phone', [])
+        self.assertEqual(self.registry.list()[0]['volume_steps'], 15)
+
+    def test_invalid_volume_steps_do_not_replace_presence(self):
+        self.registry = MobileDevices()
+        self.registry.online('one', 'session', 'Phone', [])
+        for invalid in (0, -1, True, '15', 1001):
+            with self.assertRaises(ValueError):
+                self.registry.online('one', 'session', 'Phone', [], 50, invalid)
+        self.assertIsNone(self.registry.list()[0]['volume_steps'])

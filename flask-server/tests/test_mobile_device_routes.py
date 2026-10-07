@@ -97,18 +97,18 @@ class MobileDeviceRoutesTests(OutputRoutesTests):
         self.assertEqual(response.json['output_controller'], 'phone-one')
         self.command.assert_called_once_with('echo-one', 'pause')
 
-    def test_closing_controlled_phone_returns_playback_to_online_controller(self):
+    def test_closing_controlled_phone_pauses_without_starting_controller(self):
         self.test_alexa_to_remote_phone_preserves_active_playback_without_starting_echo()
         old = self.output.snapshot()
         self.command.reset_mock()
         self.device('offline', owner='phone-two')
         latest = self.output.snapshot()
-        self.assertEqual(latest['output_owner'], 'phone-one')
-        self.assertNotEqual(old['output_token'], latest['output_token'])
-        self.assertTrue(self.state['playing'])
+        self.assertEqual(latest['output_owner'], '')
+        self.assertFalse(self.state['playing'])
+        self.assertEqual(self.state['playback_error']['type'], 'device_offline')
         self.command.assert_not_called()
 
-    def test_expired_controlled_phone_falls_back_only_after_source_lease(self):
+    def test_expired_controlled_phone_never_auto_starts_the_controller(self):
         self.test_alexa_to_remote_phone_preserves_active_playback_without_starting_echo()
         now = [100.0]
         self.registry.clock = self.output.clock = lambda: now[0]
@@ -120,7 +120,21 @@ class MobileDeviceRoutesTests(OutputRoutesTests):
         self.assertEqual(self.output.snapshot()['output_owner'], 'phone-two')
         now[0] = 113
         self.client.get('/api/app/devices/')
-        self.assertEqual(self.output.snapshot()['output_owner'], 'phone-one')
+        self.assertEqual(self.output.snapshot()['output_owner'], 'phone-two')
+        self.assertFalse(self.state['playing'])
+        self.assertIn('Choose an online device', self.state['playback_error']['message'])
+
+    def test_disconnected_target_reports_once_even_after_error_is_consumed(self):
+        self.test_alexa_to_remote_phone_preserves_active_playback_without_starting_echo()
+        self.registry.offline('phone-two', 'session-phone-two')
+        notify = Mock()
+        self.namespace['_notify_sse'] = notify
+        self.namespace['_reconcile_mobile_output']()
+        self.state['playback_error'] = None  # Snapshot errors are consumed once.
+        self.namespace['_reconcile_mobile_output']()
+        notify.assert_called_once()
+        self.assertFalse(self.state['playing'])
+        self.assertEqual(self.output.snapshot()['output_owner'], 'phone-two')
 
     def test_closed_controller_does_not_steal_playback_back_from_target(self):
         self.test_alexa_to_remote_phone_preserves_active_playback_without_starting_echo()
@@ -182,3 +196,67 @@ class MobileDeviceRoutesTests(OutputRoutesTests):
         self.assertTrue(response.json['now_playing']['playing'])
         self.assertFalse(self.state['playing'])
         self.assertTrue(self.output.owns_phone('phone-one', response.json['output_token']))
+
+    def test_foreground_after_target_closed_selects_current_phone_silently(self):
+        self.test_alexa_to_remote_phone_preserves_active_playback_without_starting_echo()
+        self.device('offline', owner='phone-two')
+        self.command.reset_mock()
+        queue = list(self.state['queue'])
+        reply = self.device('foreground').json
+        self.assertTrue(reply['default_selected'])
+        self.assertEqual(reply['output_owner'], 'phone-one')
+        self.assertFalse(self.state['playing'])
+        self.assertEqual(self.state['queue'], queue)
+        self.assertNotIn('playback_error', self.state)
+        self.command.assert_not_called()
+
+    def test_foreground_preserves_playing_and_buffering_devices(self):
+        self.test_alexa_to_remote_phone_preserves_active_playback_without_starting_echo()
+        token = self.output.snapshot()['output_token']
+        for playing, buffering in ((True, False), (False, True)):
+            self.state.update(playing=playing, playback_processing=buffering)
+            reply = self.device('foreground').json
+            self.assertFalse(reply['default_selected'])
+            self.assertEqual(reply['output_owner'], 'phone-two')
+            self.assertEqual(reply['output_token'], token)
+
+    def test_recently_paused_phone_is_preserved_but_idle_phone_can_change(self):
+        import time
+        self.test_alexa_to_remote_phone_preserves_active_playback_without_starting_echo()
+        self.state.update(playing=False, playback_processing=False, _last_playback_activity_at=time.time())
+        self.assertFalse(self.device('foreground').json['default_selected'])
+        self.state['_last_playback_activity_at'] = time.time() - 31
+        reply = self.device('foreground').json
+        self.assertTrue(reply['default_selected'])
+        self.assertEqual(reply['output_owner'], 'phone-one')
+        self.assertFalse(self.state['playing'])
+
+    def test_foreground_keeps_active_alexa_but_selects_phone_when_idle(self):
+        self.device('online')
+        self.assertFalse(self.device('foreground').json['default_selected'])
+        self.state.update(playing=False, playback_processing=False, _last_playback_activity_at=0)
+        self.command.reset_mock()
+        reply = self.device('foreground').json
+        self.assertTrue(reply['default_selected'])
+        self.assertEqual(reply['playback_output'], 'phone')
+        self.command.assert_not_called()
+
+    def test_repeated_idle_foreground_does_not_invalidate_current_phone_token(self):
+        self.state.update(playing=False, playback_processing=False, _last_playback_activity_at=0)
+        first = self.device('foreground').json
+        second = self.device('foreground').json
+        self.assertTrue(second['default_selected'])
+        self.assertEqual(first['output_token'], second['output_token'])
+
+    def test_idle_selection_rejects_stale_handoff_token(self):
+        old = self.output.snapshot()['output_token']
+        self.output.select_idle_phone('phone-one', old)
+        with self.assertRaises(self.namespace['OutputConflict']):
+            self.output.select_idle_phone('phone-two', old)
+        self.assertEqual(self.output.snapshot()['output_owner'], 'phone-one')
+
+    def test_online_route_exposes_actual_target_volume_levels(self):
+        reply = self.device('online', volume=66, volume_steps=15).json
+        device = next(d for d in reply['devices'] if d['id'] == 'phone-one')
+        self.assertEqual(device['volume'], 66)
+        self.assertEqual(device['volume_steps'], 15)
