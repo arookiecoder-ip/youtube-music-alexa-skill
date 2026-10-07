@@ -7225,10 +7225,10 @@ def alexa_state_event():
                 updated_at=time.time())
             _now_playing['playback_revision'] = int(_now_playing.get('playback_revision', 0)) + 1
             _now_playing['failed_playback_revision'] = _now_playing['playback_revision']
+            failed_revision = _now_playing['playback_revision']
         logger.warning('Echo playback failed: video=%s type=%s', failed_id, body.get('error_type'))
         _notify_sse()
         serial = body.get('serial') or _playback_output.snapshot().get('output_serial')
-        failed_revision = _now_playing.get('playback_revision')
         if serial:
             def recover_failure():
                 if (_still_relevant_video(failed_id)
