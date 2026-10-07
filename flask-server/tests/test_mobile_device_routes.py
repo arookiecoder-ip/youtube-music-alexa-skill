@@ -124,6 +124,18 @@ class MobileDeviceRoutesTests(OutputRoutesTests):
         self.assertFalse(self.state['playing'])
         self.assertIn('Choose an online device', self.state['playback_error']['message'])
 
+    def test_disconnected_target_reports_once_even_after_error_is_consumed(self):
+        self.test_alexa_to_remote_phone_preserves_active_playback_without_starting_echo()
+        self.registry.offline('phone-two', 'session-phone-two')
+        notify = Mock()
+        self.namespace['_notify_sse'] = notify
+        self.namespace['_reconcile_mobile_output']()
+        self.state['playback_error'] = None  # Snapshot errors are consumed once.
+        self.namespace['_reconcile_mobile_output']()
+        notify.assert_called_once()
+        self.assertFalse(self.state['playing'])
+        self.assertEqual(self.output.snapshot()['output_owner'], 'phone-two')
+
     def test_closed_controller_does_not_steal_playback_back_from_target(self):
         self.test_alexa_to_remote_phone_preserves_active_playback_without_starting_echo()
         self.device('offline', owner='phone-one')

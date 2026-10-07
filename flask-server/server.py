@@ -2485,12 +2485,15 @@ def _reconcile_mobile_output(closed_owner=''):
     online = {d['id'] for d in _mobile_devices.list()}
     owner, controller = output['output_owner'], output['output_controller']
     if owner in online and owner != closed_owner:
+        with _np_lock:
+            _now_playing.pop('_disconnected_phone_token', None)
         return
     # Losing the target never grants an audible fallback to the controller.
     # Preserve its queue/cursor and require an explicit output choice to resume.
     with _np_lock:
-        if (_now_playing.get('playback_error') or {}).get('offline_owner') == owner:
+        if _now_playing.get('_disconnected_phone_token') == output['output_token']:
             return
+        _now_playing['_disconnected_phone_token'] = output['output_token']
         _reset_progress(_computed_position_ms())
         _now_playing.pop('_offline_phone_playing', None)
         _now_playing.update(playing=False, playback_confirmed=True, playback_processing=False,
