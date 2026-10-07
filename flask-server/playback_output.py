@@ -116,7 +116,7 @@ class PlaybackOutput:
 
     def acknowledge(self, owner, token):
         with self.condition:
-            if token != self.token or owner != self.pending_owner:
+            if token != self.token or owner != self.pending_owner or self.pending_until <= self.clock():
                 raise OutputConflict('This handoff is no longer current.')
             self.pending_owner = ''
             self.revision += 1

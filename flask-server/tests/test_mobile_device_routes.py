@@ -320,3 +320,22 @@ class MobileDeviceRoutesTests(OutputRoutesTests):
         self.assertEqual(reply.status_code, 409)
         self.assertTrue(self.state['playing'])
         self.assertEqual(self.output.snapshot()['output_owner'], 'phone-one')
+
+    def test_ack_delayed_past_source_lease_cannot_rewind_target_playback(self):
+        now = [100.0]
+        self.output.clock = lambda: now[0]
+        self.device('online')
+        self.device('online', owner='phone-two')
+        claim = self.output_request('claim').json
+        with self.assertRaises(self.namespace['OutputConflict']):
+            self.output.transfer_phone('phone-two', claim['output_token'], lambda: None, timeout=0)
+        transfer = self.output.snapshot()
+        now[0] = 113.0
+        self.state.update(playing=True, position_ms=73000)
+        reply = self.client.post('/api/app/output/', json={'action': 'ack',
+            'output_owner': 'phone-one', 'output_token': transfer['output_token'],
+            'position_ms': 42000, 'playing': True})
+        self.assertEqual(reply.status_code, 409)
+        self.assertEqual(self.state['position_ms'], 73000)
+        self.assertTrue(self.state['playing'])
+        self.assertTrue(self.output.owns_phone('phone-two', transfer['output_token']))
