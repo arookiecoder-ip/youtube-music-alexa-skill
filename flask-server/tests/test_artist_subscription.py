@@ -127,10 +127,17 @@ class ArtistSubscriptionEndpoint(unittest.TestCase):
         }])
         response = self._request(
             'DELETE', '/api/subscribed_artists/?channel_id=UC_TEST', fake,
+            headers={'Content-Type': 'application/json'},
         )
         self.assertIn(response.status_code, (200, 202))
         self.assertEqual(fake.unsubscribed, [['UC_TEST']])
         self.assertFalse(response.get_json()['subscribed'])
+
+    def test_cookie_authorized_unsubscribe_without_json_is_rejected(self):
+        fake = FakeYouTubeMusic()
+        response = self._request('DELETE', '/api/subscribed_artists/?channel_id=UC_TEST', fake)
+        self.assertEqual(response.status_code, 401)
+        self.assertEqual(fake.unsubscribed, [])
 
     def test_frontend_preserves_pending_subscription_state(self):
         artist_source = Path(__file__).parents[1].joinpath(
