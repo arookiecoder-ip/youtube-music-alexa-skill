@@ -2508,6 +2508,20 @@ def _reconcile_mobile_output(closed_owner=''):
     _notify_sse()
 
 
+def _mobile_handoff_snapshot(expected_token):
+    """Read the stopped source cursor and queue under the same state lock."""
+    with _np_lock:
+        current = _playback_output.snapshot()
+        if current['output_token'] != expected_token or current['handoff_pending']:
+            raise OutputConflict('A newer device switch superseded this handoff.')
+        snapshot = copy.deepcopy(_np_snapshot('phone'))
+        # Output ownership has its own lock and can change while queue state
+        # is copied. Never pair that newer ownership with an older response.
+        if _playback_output.snapshot()['output_token'] != expected_token:
+            raise OutputConflict('A newer device switch superseded this handoff.')
+        return snapshot
+
+
 @app.route('/api/app/devices/', methods=['GET', 'POST'], strict_slashes=False)
 def app_mobile_devices():
     _reconcile_mobile_output()
@@ -2547,10 +2561,21 @@ def app_mobile_devices():
         if action == 'online':
             commands = _mobile_devices.online(owner, session_id, body.get('name'), body.get('ack', []), body.get('volume'), body.get('volume_steps'))
             if body.get('wait') is True and not commands and body.get('output_token') == _playback_output.snapshot()['output_token']:
-                _mobile_devices.wait(body.get('revision'), 2)
-                commands = _mobile_devices.online(owner, session_id, body.get('name'), body.get('ack', []), body.get('volume'), body.get('volume_steps'))
+                # Opt-in keeps older clients' six-second HTTP deadline compatible.
+                requested_wait = body.get('wait_seconds', 2)
+                wait_seconds = min(8, max(0, requested_wait)) if isinstance(requested_wait, (int, float)) and not isinstance(requested_wait, bool) else 2
+                _mobile_devices.wait(body.get('revision'), wait_seconds)
+                commands = _mobile_devices.pending_commands(owner, session_id)
                 _reconcile_mobile_output()
-            return jsonify(devices=_mobile_devices.list(), commands=commands, revision=_mobile_devices.revision, **_playback_output.snapshot())
+            output = _playback_output.snapshot()
+            extra = {}
+            # Send the full queue once to the newly granted destination. Stable
+            # presence requests remain small, including while paused or playing.
+            if (body.get('include_handoff_state') is True and output['playback_output'] == 'phone'
+                    and output['output_owner'] == owner and not output['handoff_pending']
+                    and body.get('accepted_token') != output['output_token']):
+                extra['now_playing'] = _mobile_handoff_snapshot(output['output_token'])
+            return jsonify(devices=_mobile_devices.list(), commands=commands, revision=_mobile_devices.revision, presence_wait_seconds=8, **extra, **output)
         if action == 'resume':
             # Explicit Play may recover an orphaned output, but background
             # presence never grants another phone permission to start audio.
@@ -2620,6 +2645,8 @@ def app_mobile_devices():
                 with _np_lock:
                     _now_playing.update(playing=was_playing, playback_confirmed=True, playback_processing=False)
             _notify_sse()
+            if body.get('include_state') is True:
+                return jsonify(**result, now_playing=_mobile_handoff_snapshot(result['output_token']))
             return jsonify(result)
         if action == 'command':
             output = _playback_output.snapshot()

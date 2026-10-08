@@ -65,6 +65,16 @@ class MobileDevices:
             device['commands'] = [c for c in device['commands'] if c['id'] not in ack and c['until'] > self.clock()]
             return copy.deepcopy(device['commands'])
 
+    def pending_commands(self, device_id, session_id):
+        """A waiting HTTP request is not a new heartbeat from the phone."""
+        with self.lock:
+            self._prune()
+            device = self.devices.get(device_id)
+            if device is None or device['session'] != session_id:
+                raise ValueError('This app session was closed or replaced.')
+            device['commands'] = [c for c in device['commands'] if c['until'] > self.clock()]
+            return copy.deepcopy(device['commands'])
+
     def offline(self, device_id, session_id):
         with self.lock:
             device = self.devices.get(device_id)
@@ -97,6 +107,7 @@ class MobileDevices:
             self.changed.notify_all()
 
     def wait(self, revision, timeout=2):
-        # Finite waits free WSGI workers regularly; output/command changes wake immediately.
+        # Stay below presence TTL with headroom for request/response latency.
+        # Commands, explicit close, output and volume changes wake immediately.
         with self.changed:
-            self.changed.wait_for(lambda: self.revision != revision, timeout=min(2, max(0, timeout)))
+            self.changed.wait_for(lambda: self.revision != revision, timeout=min(8, max(0, timeout)))
