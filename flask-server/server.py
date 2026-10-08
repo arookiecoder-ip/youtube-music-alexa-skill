@@ -2549,7 +2549,7 @@ def app_mobile_devices():
                 _mobile_devices.wait(body.get('revision'), wait_seconds)
                 commands = _mobile_devices.online(owner, session_id, body.get('name'), body.get('ack', []), body.get('volume'), body.get('volume_steps'))
                 _reconcile_mobile_output()
-            return jsonify(devices=_mobile_devices.list(), commands=commands, revision=_mobile_devices.revision, **_playback_output.snapshot())
+            return jsonify(devices=_mobile_devices.list(), commands=commands, revision=_mobile_devices.revision, presence_wait_seconds=8, **_playback_output.snapshot())
         if action == 'offline':
             removed = _mobile_devices.offline(owner, session_id)
             if removed:

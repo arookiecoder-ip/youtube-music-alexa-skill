@@ -29,6 +29,7 @@ class MobileDeviceRoutesTests(OutputRoutesTests):
             reply = self.device('online', wait=True, output_token=token, **extra)
             self.assertEqual(reply.status_code, 200)
             self.assertEqual(self.registry.wait.call_args.args[1], expected)
+            self.assertEqual(reply.json["presence_wait_seconds"], 8)
 
     def test_online_listing_and_close_stop_phone_state_without_echo_command(self):
         claim = self.output_request('claim').json
