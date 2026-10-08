@@ -41,6 +41,15 @@ class MobileDevicesTests(unittest.TestCase):
         self.assertEqual(len(first), 1)
         self.assertEqual(self.registry.online('one', 'session', 'Phone', ['command-1']), [])
 
+    def test_wait_response_does_not_extend_dead_phone_presence(self):
+        original_deadline = self.registry.devices['one']['until']
+        self.now[0] += 8
+        self.assertEqual(self.registry.pending_commands('one', 'session'), [])
+        self.assertEqual(self.registry.devices['one']['until'], original_deadline)
+        self.registry.offline('one', 'session')
+        with self.assertRaises(ValueError):
+            self.registry.pending_commands('one', 'session')
+
     def test_commands_expire(self):
         self.registry.command('one', 'token', 'play', {})
         self.now[0] += 10

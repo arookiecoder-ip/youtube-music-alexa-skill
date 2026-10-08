@@ -65,6 +65,16 @@ class MobileDevices:
             device['commands'] = [c for c in device['commands'] if c['id'] not in ack and c['until'] > self.clock()]
             return copy.deepcopy(device['commands'])
 
+    def pending_commands(self, device_id, session_id):
+        """A waiting HTTP request is not a new heartbeat from the phone."""
+        with self.lock:
+            self._prune()
+            device = self.devices.get(device_id)
+            if device is None or device['session'] != session_id:
+                raise ValueError('This app session was closed or replaced.')
+            device['commands'] = [c for c in device['commands'] if c['until'] > self.clock()]
+            return copy.deepcopy(device['commands'])
+
     def offline(self, device_id, session_id):
         with self.lock:
             device = self.devices.get(device_id)

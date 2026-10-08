@@ -2547,7 +2547,7 @@ def app_mobile_devices():
                 requested_wait = body.get('wait_seconds', 2)
                 wait_seconds = min(8, max(0, requested_wait)) if isinstance(requested_wait, (int, float)) and not isinstance(requested_wait, bool) else 2
                 _mobile_devices.wait(body.get('revision'), wait_seconds)
-                commands = _mobile_devices.online(owner, session_id, body.get('name'), body.get('ack', []), body.get('volume'), body.get('volume_steps'))
+                commands = _mobile_devices.pending_commands(owner, session_id)
                 _reconcile_mobile_output()
             return jsonify(devices=_mobile_devices.list(), commands=commands, revision=_mobile_devices.revision, presence_wait_seconds=8, **_playback_output.snapshot())
         if action == 'offline':
