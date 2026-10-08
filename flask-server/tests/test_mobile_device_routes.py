@@ -78,6 +78,16 @@ class MobileDeviceRoutesTests(OutputRoutesTests):
         with self.assertRaises(OutputConflict):
             self.namespace['_mobile_handoff_snapshot'](pending['output_token'])
 
+    def test_output_change_during_snapshot_copy_is_rejected(self):
+        from playback_output import OutputConflict
+        claim = self.output_request('claim').json
+        def changed_during_copy(serial):
+            self.output.phone('phone-one', lambda: None)
+            return dict(self.state)
+        self.namespace['_np_snapshot'] = changed_during_copy
+        with self.assertRaises(OutputConflict):
+            self.namespace['_mobile_handoff_snapshot'](claim['output_token'])
+
     def test_expired_source_ack_cannot_jump_the_destination_cursor(self):
         from playback_output import OutputConflict
         claim = self.output_request('claim').json

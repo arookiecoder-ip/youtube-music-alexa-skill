@@ -2510,7 +2510,12 @@ def _mobile_handoff_snapshot(expected_token):
         current = _playback_output.snapshot()
         if current['output_token'] != expected_token or current['handoff_pending']:
             raise OutputConflict('A newer device switch superseded this handoff.')
-        return copy.deepcopy(_np_snapshot('phone'))
+        snapshot = copy.deepcopy(_np_snapshot('phone'))
+        # Output ownership has its own lock and can change while queue state
+        # is copied. Never pair that newer ownership with an older response.
+        if _playback_output.snapshot()['output_token'] != expected_token:
+            raise OutputConflict('A newer device switch superseded this handoff.')
+        return snapshot
 
 
 @app.route('/api/app/devices/', methods=['GET', 'POST'], strict_slashes=False)
