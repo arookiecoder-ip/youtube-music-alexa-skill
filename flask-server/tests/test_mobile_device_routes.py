@@ -15,7 +15,7 @@ class MobileDeviceRoutesTests(OutputRoutesTests):
         self.namespace.update(_mobile_devices=self.registry, json=json)
         path = Path(__file__).resolve().parents[1] / 'server.py'
         nodes = [n for n in ast.parse(path.read_text()).body if isinstance(n, ast.FunctionDef)
-                 and n.name in ('app_mobile_devices', '_pause_echo_for_mobile', '_reconcile_mobile_output', 'route_mobile_web_controls')]
+                 and n.name in ('app_mobile_devices', '_mobile_handoff_snapshot', '_pause_echo_for_mobile', '_reconcile_mobile_output', 'route_mobile_web_controls')]
         exec(compile(ast.Module(body=nodes, type_ignores=[]), str(path), 'exec'), self.namespace)
 
     def device(self, action, owner='phone-one', **extra):
@@ -49,6 +49,34 @@ class MobileDeviceRoutesTests(OutputRoutesTests):
         self.device('offline')
         self.assertTrue(self.state['playing'])
         self.command.assert_not_called()
+
+    def test_new_destination_gets_queue_in_transfer_and_presence_but_not_every_heartbeat(self):
+        self.device('online', owner='phone-two')
+        initial = self.output.snapshot()
+        self.state.update(queue=[track(A), track(B)], queue_index=1, video_id=B, position_ms=42000, playing=True)
+        transferred = self.device('transfer', target_id='phone-two', output_token=initial['output_token'], serial='echo-one', include_state=True)
+        self.assertEqual(transferred.status_code, 200)
+        self.assertEqual(transferred.json['now_playing']['position_ms'], 42000)
+        self.assertEqual(transferred.json['now_playing']['video_id'], B)
+        self.assertTrue(transferred.json['now_playing']['playing'])
+        token = transferred.json['output_token']
+        receiver = self.device('online', owner='phone-two', include_handoff_state=True, accepted_token='old')
+        self.assertEqual(receiver.json['now_playing']['queue'], self.state['queue'])
+        settled = self.device('online', owner='phone-two', include_handoff_state=True, accepted_token=token)
+        self.assertNotIn('now_playing', settled.json)
+        controller = self.device('online', include_handoff_state=True, accepted_token='old')
+        self.assertNotIn('now_playing', controller.json)
+
+    def test_snapshot_cannot_be_read_for_a_superseded_or_unacknowledged_transfer(self):
+        from playback_output import OutputConflict
+        claim = self.output_request('claim').json
+        with self.assertRaises(OutputConflict):
+            self.namespace['_mobile_handoff_snapshot']('old')
+        with self.assertRaises(OutputConflict):
+            self.output.transfer_phone('phone-two', claim['output_token'], lambda: None, timeout=.01)
+        pending = self.output.snapshot()
+        with self.assertRaises(OutputConflict):
+            self.namespace['_mobile_handoff_snapshot'](pending['output_token'])
 
     def test_offline_target_and_stale_transfer_leave_current_owner_unchanged(self):
         claim = self.output_request('claim').json

@@ -2504,6 +2504,15 @@ def _reconcile_mobile_output(closed_owner=''):
     _notify_sse()
 
 
+def _mobile_handoff_snapshot(expected_token):
+    """Read the stopped source cursor and queue under the same state lock."""
+    with _np_lock:
+        current = _playback_output.snapshot()
+        if current['output_token'] != expected_token or current['handoff_pending']:
+            raise OutputConflict('A newer device switch superseded this handoff.')
+        return copy.deepcopy(_np_snapshot('phone'))
+
+
 @app.route('/api/app/devices/', methods=['GET', 'POST'], strict_slashes=False)
 def app_mobile_devices():
     _reconcile_mobile_output()
@@ -2549,7 +2558,15 @@ def app_mobile_devices():
                 _mobile_devices.wait(body.get('revision'), wait_seconds)
                 commands = _mobile_devices.pending_commands(owner, session_id)
                 _reconcile_mobile_output()
-            return jsonify(devices=_mobile_devices.list(), commands=commands, revision=_mobile_devices.revision, presence_wait_seconds=8, **_playback_output.snapshot())
+            output = _playback_output.snapshot()
+            extra = {}
+            # Send the full queue once to the newly granted destination. Stable
+            # presence requests remain small, including while paused or playing.
+            if (body.get('include_handoff_state') is True and output['playback_output'] == 'phone'
+                    and output['output_owner'] == owner and not output['handoff_pending']
+                    and body.get('accepted_token') != output['output_token']):
+                extra['now_playing'] = _mobile_handoff_snapshot(output['output_token'])
+            return jsonify(devices=_mobile_devices.list(), commands=commands, revision=_mobile_devices.revision, presence_wait_seconds=8, **extra, **output)
         if action == 'offline':
             removed = _mobile_devices.offline(owner, session_id)
             if removed:
@@ -2596,6 +2613,8 @@ def app_mobile_devices():
                 with _np_lock:
                     _now_playing.update(playing=was_playing, playback_confirmed=True, playback_processing=False)
             _notify_sse()
+            if body.get('include_state') is True:
+                return jsonify(**result, now_playing=_mobile_handoff_snapshot(result['output_token']))
             return jsonify(result)
         if action == 'command':
             output = _playback_output.snapshot()
