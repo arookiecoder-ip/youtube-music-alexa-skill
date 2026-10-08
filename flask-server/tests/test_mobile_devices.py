@@ -133,6 +133,28 @@ class MobileDevicesTests(unittest.TestCase):
         self.assertEqual(output.snapshot()['playback_output'], 'alexa')
 
 class PresenceWakeTests(unittest.TestCase):
+    def test_long_wait_is_bounded_below_device_expiry(self):
+        registry = MobileDevices()
+        registry.changed.wait_for = Mock()
+        registry.wait(registry.revision, 25)
+        self.assertEqual(registry.changed.wait_for.call_args.kwargs['timeout'], 8)
+        self.assertLess(8, registry.ttl)
+        registry.wait(registry.revision, -1)
+        self.assertEqual(registry.changed.wait_for.call_args.kwargs['timeout'], 0)
+
+    def test_explicit_close_wakes_a_long_request_and_cannot_resurrect_session(self):
+        registry = MobileDevices()
+        registry.online('target', 'session', 'Phone', [])
+        revision = registry.revision
+        done = threading.Event()
+        worker = threading.Thread(target=lambda: (registry.wait(revision, 8), done.set()))
+        worker.start()
+        registry.offline('target', 'session')
+        self.assertTrue(done.wait(.5))
+        worker.join(1)
+        with self.assertRaises(ValueError):
+            registry.online('target', 'session', 'Phone', [])
+
     def test_waiting_request_wakes_on_command_without_a_poll_delay(self):
         registry = MobileDevices()
         registry.online('target', 'session', 'Phone', [])

@@ -22,6 +22,14 @@ class MobileDeviceRoutesTests(OutputRoutesTests):
         return self.client.post('/api/app/devices/', json={'action': action,
             'device_id': owner, 'session_id': 'session-' + owner, 'name': owner, **extra})
 
+    def test_wait_budget_is_opt_in_bounded_and_compatible_with_old_clients(self):
+        self.registry.wait = Mock()
+        token = self.output.snapshot()['output_token']
+        for extra, expected in (({}, 2), ({'wait_seconds': 8}, 8), ({'wait_seconds': 100}, 8), ({'wait_seconds': 'bad'}, 2)):
+            reply = self.device('online', wait=True, output_token=token, **extra)
+            self.assertEqual(reply.status_code, 200)
+            self.assertEqual(self.registry.wait.call_args.args[1], expected)
+
     def test_online_listing_and_close_stop_phone_state_without_echo_command(self):
         claim = self.output_request('claim').json
         self.device('online')

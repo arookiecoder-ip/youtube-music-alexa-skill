@@ -97,6 +97,7 @@ class MobileDevices:
             self.changed.notify_all()
 
     def wait(self, revision, timeout=2):
-        # Finite waits free WSGI workers regularly; output/command changes wake immediately.
+        # Stay below presence TTL with headroom for request/response latency.
+        # Commands, explicit close, output and volume changes wake immediately.
         with self.changed:
-            self.changed.wait_for(lambda: self.revision != revision, timeout=min(2, max(0, timeout)))
+            self.changed.wait_for(lambda: self.revision != revision, timeout=min(8, max(0, timeout)))
