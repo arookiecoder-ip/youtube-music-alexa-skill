@@ -78,6 +78,30 @@ class MobileDeviceRoutesTests(OutputRoutesTests):
         with self.assertRaises(OutputConflict):
             self.namespace['_mobile_handoff_snapshot'](pending['output_token'])
 
+    def test_expired_source_ack_cannot_jump_the_destination_cursor(self):
+        from playback_output import OutputConflict
+        claim = self.output_request('claim').json
+        with self.assertRaises(OutputConflict):
+            self.output.transfer_phone('phone-two', claim['output_token'], lambda: None, timeout=.01)
+        pending = self.output.snapshot()
+        self.state['position_ms'] = 42000
+        self.output.clock = lambda: self.output.pending_until + 1
+        response = self.client.post('/api/app/output/', json={'action': 'ack', 'output_owner': 'phone-one',
+            'output_token': pending['output_token'], 'position_ms': 1000, 'playing': False})
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(self.state['position_ms'], 42000)
+
+    def test_paused_transfer_snapshot_does_not_request_playback(self):
+        self.device('online', owner='phone-two')
+        self.state['playing'] = False
+        self.state['playback_processing'] = False
+        before = self.output.snapshot()
+        self.command.reset_mock()
+        response = self.device('transfer', target_id='phone-two', output_token=before['output_token'], include_state=True)
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(response.json['now_playing']['playing'])
+        self.command.assert_not_called()
+
     def test_offline_target_and_stale_transfer_leave_current_owner_unchanged(self):
         claim = self.output_request('claim').json
         result = self.device('transfer', target_id='offline', output_token=claim['output_token'])
