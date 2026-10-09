@@ -45,11 +45,13 @@ def _install_stubs():
         audioplayer = types.ModuleType('ask_sdk_model.interfaces.audioplayer')
         audioplayer.PlayDirective = _Kwargs
         audioplayer.PlayBehavior = types.SimpleNamespace(
-            ENQUEUE='ENQUEUE', REPLACE_ALL='REPLACE_ALL')
+            ENQUEUE='ENQUEUE', REPLACE_ALL='REPLACE_ALL', REPLACE_ENQUEUED='REPLACE_ENQUEUED')
         audioplayer.AudioItem = _Kwargs
         audioplayer.Stream = _Kwargs
         audioplayer.AudioItemMetadata = _Kwargs
         audioplayer.StopDirective = _Kwargs
+        audioplayer.ClearQueueDirective = _Kwargs
+        audioplayer.ClearBehavior = types.SimpleNamespace(CLEAR_ENQUEUED='CLEAR_ENQUEUED')
         interfaces.audioplayer = audioplayer
         sys.modules['ask_sdk_model.interfaces.audioplayer'] = audioplayer
 
