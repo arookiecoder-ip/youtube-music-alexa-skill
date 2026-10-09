@@ -57,7 +57,9 @@ class PlaySongIntentHandler(AbstractRequestHandler):
             if error or not armed:
                 return player.Controller.error_response(
                     handler_input, error or Exception(data.NOT_FOUND), is_playback=True)
-            armed_video_id, armed_offset_ms, _, _ = armed
+            armed_video_id, armed_offset_ms, _, armed_kind = armed
+            if armed_kind.startswith('queue_sync:'):
+                return player.Controller.replace_pending(handler_input, armed_kind.partition(':')[2])
             return player.Controller.fetch_video_id(
                 handler_input=handler_input,
                 video_id=armed_video_id,
@@ -134,19 +136,9 @@ class StartPlaybackHandler(AbstractRequestHandler):
 
     def handle(self, handler_input):
         logger.info("In StartPlaybackHandler")
-        # A track already actively playing means this "play"/"resume" wasn't
-        # resuming from a pause at all -- resume() always re-issues a fresh
-        # PlayDirective from the last *stopped* offset (stale/0 if nothing was
-        # ever paused this session), so calling it while already playing
-        # restarted the current track from that stale point instead of being
-        # a harmless no-op. Guard it here rather than in resume() itself,
-        # since other callers (e.g. the app's explicit play button after a
-        # real pause) still need the restart-from-offset behavior.
-        if player.Attributes.get_playback_info(handler_input).get('in_playback_session'):
-            return handler_input.response_builder.set_should_end_session(True).response
-        # No spoken "Resuming..." — resume is triggered from the app's play
-        # button and should be silent; the audio resuming is feedback enough.
-        return player.Controller.resume(handler_input=handler_input, is_playback=True)
+        # Actual device context can disagree with persisted session state after
+        # lost callbacks. A fresh server resume arm takes precedence.
+        return player.Controller.resume(handler_input=handler_input, is_playback=True, guard_active=True)
     
 class PausePlaybackHandler(AbstractRequestHandler):
     def can_handle(self, handler_input: HandlerInput) -> Response:
@@ -604,6 +596,7 @@ class PlaybackStartedEventHandler(AbstractRequestHandler):
         logger.info("In PlaybackStartedHandler")
 
         playback_info = player.Attributes.get_playback_info(handler_input)
+        before_start = dict(playback_info)
         playback_info["index"] = player.Attributes.get_calculated_index(handler_input)
         # Remember the exact token Alexa is now playing so the next ENQUEUE's
         # expected_previous_token matches it verbatim (robust to window trims).
@@ -621,10 +614,18 @@ class PlaybackStartedEventHandler(AbstractRequestHandler):
         # Report the track before the lazy radio lookup below. get_radio may
         # take many seconds; putting the webhook after it leaves the website
         # showing the previous hero and queue until that network call returns.
-        player._notify_server(
+        reconciliation = player._notify_server(
             handler_input, 'started', video_id=token, offset_in_ms=offset_in_ms,
             queue=player.Attributes.get_queue_snapshot(handler_input),
             queue_index=playback_info.get('index', 0))
+
+        if reconciliation and reconciliation.get('ignored'):
+            playback_info.clear()
+            playback_info.update(before_start)
+            actual = getattr(getattr(handler_input.request_envelope.context, 'audio_player', None), 'token', None)
+            if reconciliation.get('stop') and actual == handler_input.request_envelope.request.token:
+                return handler_input.response_builder.add_directive(player.StopDirective()).response
+            return handler_input.response_builder.response
 
         # The seed track started fast (find_stream_list returned only it). Now
         # that audio is playing, lazily fill the radio/autoplay queue so tracks
@@ -655,6 +656,9 @@ class PlaybackFinishedEventHandler(AbstractRequestHandler):
 
         playback_info = player.Attributes.get_playback_info(handler_input)
 
+        token = getattr(handler_input.request_envelope.request, 'token', None)
+        if token and playback_info.get('current_token') and token != playback_info['current_token']:
+            return handler_input.response_builder.response
         playback_info["in_playback_session"] = False
         playback_info["has_previous_playback_session"] = False
         playback_info["next_stream_enqueued"] = False
