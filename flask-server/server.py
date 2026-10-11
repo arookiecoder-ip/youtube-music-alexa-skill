@@ -2084,6 +2084,8 @@ _now_playing = {
     'playback_error': None,
 }
 _volume_by_serial = {}
+_alexa_volume_lock = threading.RLock()
+_alexa_volume_grace = {}
 _np_lock = threading.Lock()
 from queue_commands import QueueCommands
 _queue_commands = QueueCommands()
@@ -2361,13 +2363,37 @@ def _record_volume_state(serial, volume, notify=False):
     return volume
 
 
+def _command_alexa_volume(serial, value):
+    # Keep concurrent controllers ordered, and shield the shared UI from Amazon's
+    # briefly stale volume reads after a successful command.
+    if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= 100:
+        return error_response('invalid device volume', 400)
+    with _alexa_volume_lock:
+        error = alexa_remote.remote.command(serial, 'volume', value)
+        if error:
+            return error_response(error, 502)
+        _alexa_volume_grace[serial] = time.monotonic() + 4
+        _record_volume_state(serial, value, notify=True)
+    return jsonify(ok=True)
+
+
+def _read_alexa_volume(serial):
+    with _alexa_volume_lock:
+        if time.monotonic() < _alexa_volume_grace.get(serial, 0):
+            return _get_volume_state(serial), None
+        volume, error = alexa_remote.remote.volume(serial)
+        if not error:
+            _record_volume_state(serial, volume, notify=True)
+        return volume, error
+
+
 def _refresh_volume(serial, notify=False):
     if not serial:
         return None
-    volume, error = alexa_remote.remote.volume(serial)
+    volume, error = _read_alexa_volume(serial)
     if error:
         return None
-    return _record_volume_state(serial, volume, notify=notify)
+    return volume
 
 # Periodic re-sync so multiple open pages (laptop + phone, etc.) don't drift
 # apart while a song plays without any events. This only re-broadcasts local
@@ -2620,9 +2646,11 @@ def app_mobile_devices():
                 online = {d['id'] for d in _mobile_devices.list()}
                 missing_phone = before['playback_output'] == 'phone' and (
                     not before['output_owner'] or before['output_owner'] not in online)
-                recent = time.time() - float(current.get('_last_playback_activity_at', current.get('updated_at', 0)) or 0) < 30
+                # A chosen paused output is still a preference. Only orphaned phones
+                # or an empty initial session fall back on a foreground visit.
+                selected_session = bool(current.get('video_id')) and not missing_phone
                 blocked = (current.get('playing') or current.get('playback_processing') or before['handoff_pending'] or
-                    (recent and not missing_phone))
+                    selected_session)
                 selected = not blocked
                 changed = selected and not (before['playback_output'] == 'phone' and before['output_owner'] == owner)
                 result = _playback_output.select_idle_phone(owner, before['output_token']) if changed else before
@@ -7121,7 +7149,7 @@ def alexa_volume():
     serial = _effective_serial(request.args.get("serial"))
     if not serial:
         return error_response('missing "serial"', 400)
-    volume, error = alexa_remote.remote.volume(serial)
+    volume, error = _read_alexa_volume(serial)
     if error:
         cached_volume = _get_volume_state(serial)
         return jsonify({
@@ -7130,7 +7158,6 @@ def alexa_volume():
             'stale': cached_volume is not None,
             'error': error,
         })
-    _record_volume_state(serial, volume, notify=True)
     return jsonify({'volume': volume, 'available': True, 'stale': False})
 
 
@@ -7149,6 +7176,8 @@ def alexa_command():
     serial, action = _effective_serial(body.get("serial")), body.get("action")
     if not serial or not action:
         return error_response('missing "serial" or "action"', 400)
+    if action == 'volume':
+        return _command_alexa_volume(serial, body.get('value'))
     if action in ('play', 'next', 'previous'):
         _playback_failover_budget.reset()
         _claim_alexa_output(serial, expected_owner=body.get('output_owner'),
@@ -7369,6 +7398,10 @@ def alexa_seek():
         return error_response('"position_ms" must be a number', 400)
     cur = _get_now_playing()
     video_id = cur.get('video_id', '')
+    if body.get('expected_queue_index') is not None and body['expected_queue_index'] != cur.get('queue_index'):
+        return error_response('queue changed while seeking', 409)
+    if body.get('video_id') and body['video_id'] != video_id:
+        return error_response('playback changed while seeking', 409)
     if not _valid_video_id(video_id):
         return error_response('nothing is playing to seek', 409)
     duration_ms = int(cur.get('duration_ms') or 0)
@@ -7408,21 +7441,31 @@ def alexa_seek():
     # arming here the seek would replay from the start (or do nothing).
     global _last_reposition_at
     _last_reposition_at = time.time()
-    error = _dispatch_play_with_retry(serial, video_id, position_ms)
-    if error:
-        return _device_dispatch_failed(error)
-    # Optimistically re-anchor so the bar jumps immediately; the skill's
-    # PlaybackStarted webhook will confirm/correct shortly after. Staged as a
-    # play-intent (playing=True, unconfirmed) so it is distinguishable from a
-    # pause staging, like the resume path above.
+    # Stage before dispatch: PlaybackStarted can arrive before Amazon's HTTP reply.
     with _np_lock:
+        if _now_playing.get('video_id') != video_id:
+            return error_response('playback changed while seeking', 409)
+        previous = copy.deepcopy(_now_playing)
         _reset_progress(position_ms)
         _now_playing['playing'] = True
         _now_playing['playback_confirmed'] = False
         _now_playing['playback_processing'] = True
-        _now_playing['playback_revision'] = int(_now_playing.get('playback_revision', 0)) + 1
+        revision = int(_now_playing.get('playback_revision', 0)) + 1
+        _now_playing['playback_revision'] = revision
         _now_playing['updated_at'] = time.time()
     _notify_sse()
+    error = _dispatch_play_with_retry(serial, video_id, position_ms)
+    if error:
+        with _np_lock:
+            restore = (_now_playing.get('video_id') == video_id and
+                       _now_playing.get('playback_revision') == revision and
+                       not _now_playing.get('playback_confirmed'))
+            if restore:
+                _now_playing.clear()
+                _now_playing.update(previous)
+        if restore:
+            _notify_sse()
+        return error_response(error or 'Device is offline or unreachable.', 502)
     return jsonify({'ok': True})
 
 

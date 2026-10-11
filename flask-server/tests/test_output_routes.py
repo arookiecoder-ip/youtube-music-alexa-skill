@@ -17,6 +17,8 @@ class OutputRoutesTests(PhoneQueueTests):
         self.namespace["_playback_failover_budget"] = PlaybackFailoverBudget()
         self.seek_dispatch = Mock(return_value=None)
         self.namespace['_dispatch_play_with_retry'] = self.seek_dispatch
+        self.namespace.update(_alexa_volume_lock=threading.RLock(), _alexa_volume_grace={},
+            _record_volume_state=Mock())
         self.arm = Mock()
         self.namespace.update(_np_snapshot=lambda serial=None: copy.deepcopy(self.state), copy=copy, threading=threading, logger=Mock(), _effective_serial=lambda serial: serial,
             _touch_cached_audio=Mock(), _ensure_audio_ready_for_play=Mock(), _arm_play=self.arm,
@@ -28,7 +30,7 @@ class OutputRoutesTests(PhoneQueueTests):
         source = Path(__file__).resolve().parents[1] / 'server.py'
         functions = [node for node in ast.parse(source.read_text()).body
                      if isinstance(node, ast.FunctionDef) and node.name in
-                     ('app_playback_output', '_claim_alexa_output', 'alexa_command', 'alexa_seek')]
+                     ('app_playback_output', '_claim_alexa_output', 'alexa_command', 'alexa_seek', '_command_alexa_volume')]
         exec(compile(ast.Module(body=functions, type_ignores=[]), str(source), 'exec'), self.namespace)
 
     def output_request(self, action, token=''):
@@ -233,3 +235,105 @@ class OutputRoutesTests(PhoneQueueTests):
             'output_owner': 'phone-one', 'output_token': old['output_token'], 'phone_paused': True})
         self.assertEqual(result.status_code, 409)
         self.assertTrue(self.output.owns_phone('phone-one', latest['output_token']))
+
+    def test_seek_stages_before_dispatch_and_preserves_early_confirmation(self):
+        self.state.update(playing=True, playback_confirmed=True)
+        def confirm(serial, video, position):
+            self.assertEqual(self.state['position_ms'], 42000)
+            self.assertTrue(self.state['playback_processing'])
+            self.state.update(position_ms=42500, playback_confirmed=True, playback_processing=False,
+                              playback_revision=self.state['playback_revision'] + 1)
+        self.seek_dispatch.side_effect = confirm
+        reply = self.client.post('/alexa/seek/', json={'serial':'echo-one', 'position_ms':42000, 'video_id': A})
+        self.assertEqual(reply.status_code, 200)
+        self.assertEqual(self.state['position_ms'], 42500)
+        self.assertTrue(self.state['playback_confirmed'])
+        self.assertFalse(self.state['playback_processing'])
+
+    def test_failed_seek_restores_cursor_but_not_a_newer_track(self):
+        self.state.update(playing=True, playback_confirmed=True)
+        previous = dict(self.state)
+        self.seek_dispatch.return_value = 'offline'
+        reply = self.client.post('/alexa/seek/', json={'serial':'echo-one', 'position_ms':42000})
+        self.assertEqual(reply.status_code, 502)
+        self.assertEqual(self.state, previous)
+        def changed(*args):
+            self.state.update(video_id=B, position_ms=0, playback_revision=99, playback_confirmed=True)
+            return 'offline'
+        self.seek_dispatch.side_effect = changed
+        self.client.post('/alexa/seek/', json={'serial':'echo-one', 'position_ms':42000})
+        self.assertEqual(self.state['video_id'], B)
+        self.assertEqual(self.state['position_ms'], 0)
+
+    def test_seek_for_an_old_track_is_rejected_without_dispatch(self):
+        reply = self.client.post('/alexa/seek/', json={'serial':'echo-one', 'position_ms':42000, 'video_id': B})
+        self.assertEqual(reply.status_code, 409)
+        self.seek_dispatch.assert_not_called()
+
+    def test_volume_failure_does_not_stop_music_or_publish_success(self):
+        self.command.side_effect = None
+        self.command.return_value = 'offline'
+        previous = dict(self.state)
+        reply = self.client.post('/alexa/command/', json={'serial':'echo-one', 'action':'volume', 'value':70})
+        self.assertEqual(reply.status_code, 502)
+        self.assertEqual(self.state, previous)
+        self.namespace['_record_volume_state'].assert_not_called()
+
+    def test_volume_rejects_non_integer_and_out_of_range_values(self):
+        self.command.reset_mock()
+        for value in (True, '70', -1, 101, None):
+            reply = self.client.post('/alexa/command/', json={'serial':'echo-one', 'action':'volume', 'value':value})
+            self.assertEqual(reply.status_code, 400)
+        self.command.assert_not_called()
+
+    def test_volume_reads_keep_successful_target_then_reconcile_external_changes(self):
+        import time
+        source = Path(__file__).resolve().parents[1] / 'server.py'
+        read_fn = next(n for n in ast.parse(source.read_text()).body if isinstance(n, ast.FunctionDef) and n.name == '_read_alexa_volume')
+        exec(compile(ast.Module(body=[read_fn], type_ignores=[]), str(source), 'exec'), self.namespace)
+        values = {'echo-one':40}
+        self.namespace['_get_volume_state'] = lambda serial: values[serial]
+        self.namespace['_record_volume_state'] = lambda serial, value, notify=False: values.update({serial:value})
+        self.namespace['alexa_remote'].remote.volume = Mock(return_value=(40, None))
+        self.command.side_effect = None
+        self.command.return_value = None
+        reply = self.client.post('/alexa/command/', json={'serial':'echo-one', 'action':'volume', 'value':70})
+        self.assertEqual(reply.status_code, 200)
+        self.assertEqual(self.namespace['_read_alexa_volume']('echo-one'), (70, None))
+        self.namespace['alexa_remote'].remote.volume.assert_not_called()
+        self.namespace['_alexa_volume_grace']['echo-one'] = time.monotonic() - 1
+        self.assertEqual(self.namespace['_read_alexa_volume']('echo-one'), (40, None))
+        self.assertEqual(values['echo-one'], 40)
+
+    def test_overlapping_volume_commands_finish_in_order(self):
+        started, release = threading.Event(), threading.Event()
+        sent = []
+        def dispatch(serial, action, value):
+            sent.append(value)
+            if value == 40:
+                started.set()
+                self.assertTrue(release.wait(2))
+        self.command.side_effect = dispatch
+        def send(value):
+            with self.app.test_client() as client:
+                reply = client.post('/alexa/command/', json={'serial':'echo-one', 'action':'volume', 'value':value})
+                self.assertEqual(reply.status_code, 200)
+        first = threading.Thread(target=send, args=(40,))
+        second = threading.Thread(target=send, args=(70,))
+        first.start()
+        self.assertTrue(started.wait(2))
+        second.start()
+        self.assertEqual(sent, [40])
+        release.set()
+        first.join(2)
+        second.join(2)
+        self.assertFalse(first.is_alive())
+        self.assertFalse(second.is_alive())
+        self.assertEqual(sent, [40,70])
+        self.assertEqual(self.namespace['_record_volume_state'].call_args.args, ('echo-one',70))
+
+    def test_seek_does_not_reposition_a_different_occurrence_of_the_same_song(self):
+        reply = self.client.post('/alexa/seek/', json={'serial':'echo-one', 'position_ms':42000,
+            'video_id':A, 'expected_queue_index':1})
+        self.assertEqual(reply.status_code, 409)
+        self.seek_dispatch.assert_not_called()

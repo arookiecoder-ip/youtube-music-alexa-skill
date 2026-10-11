@@ -291,28 +291,29 @@ class MobileDeviceRoutesTests(OutputRoutesTests):
             self.assertEqual(reply['output_owner'], 'phone-two')
             self.assertEqual(reply['output_token'], token)
 
-    def test_recently_paused_phone_is_preserved_but_idle_phone_can_change(self):
+    def test_paused_online_phone_is_preserved_even_after_idle_timeout(self):
         import time
         self.test_alexa_to_remote_phone_preserves_active_playback_without_starting_echo()
         self.state.update(playing=False, playback_processing=False, _last_playback_activity_at=time.time())
         self.assertFalse(self.device('foreground').json['default_selected'])
         self.state['_last_playback_activity_at'] = time.time() - 31
         reply = self.device('foreground').json
-        self.assertTrue(reply['default_selected'])
-        self.assertEqual(reply['output_owner'], 'phone-one')
+        self.assertFalse(reply['default_selected'])
+        self.assertEqual(reply['output_owner'], 'phone-two')
         self.assertFalse(self.state['playing'])
 
-    def test_foreground_keeps_active_alexa_but_selects_phone_when_idle(self):
+    def test_foreground_preserves_paused_alexa(self):
         self.device('online')
         self.assertFalse(self.device('foreground').json['default_selected'])
         self.state.update(playing=False, playback_processing=False, _last_playback_activity_at=0)
         self.command.reset_mock()
         reply = self.device('foreground').json
-        self.assertTrue(reply['default_selected'])
-        self.assertEqual(reply['playback_output'], 'phone')
+        self.assertFalse(reply['default_selected'])
+        self.assertEqual(reply['playback_output'], 'alexa')
         self.command.assert_not_called()
 
     def test_repeated_idle_foreground_does_not_invalidate_current_phone_token(self):
+        self.state['video_id'] = ''
         self.state.update(playing=False, playback_processing=False, _last_playback_activity_at=0)
         first = self.device('foreground').json
         second = self.device('foreground').json
