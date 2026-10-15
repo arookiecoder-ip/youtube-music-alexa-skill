@@ -33,7 +33,7 @@
       message(''); render(data);
     } catch (error) {
       if (!dialog.open || epoch !== dialogEpoch) return;
-      message(error.status === 404 ? 'This entry expired or is no longer retained.' : 'Could not load details. Use refresh or reopen to retry.');
+      message(error.status === 401 || error.status === 403 ? 'Your owner session expired or access was denied. Sign in again, then reopen these details.' : error.status === 404 ? 'This entry expired or is no longer retained.' : 'Could not load details. Use refresh or reopen to retry.');
     } finally { clearTimeout(timeout); }
   }
   dialog.addEventListener('close', () => { dialogEpoch++; if (dialogController) dialogController.abort(); });

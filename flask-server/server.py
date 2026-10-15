@@ -901,7 +901,7 @@ _SESSION_PATHS = ('/status', '/api/status', '/remote', '/alexa/status', '/alexa/
                    '/api/youtube/browser-session/open-youtube',
                    '/api/youtube/browser-session/capture',
                    '/api/youtube/browser-session/authorize')
-_SESSION_PREFIXES = ('/alexa/now_playing/', '/history/', '/api/playlists/', '/recommendations/',
+_SESSION_PREFIXES = ('/api/status/', '/alexa/now_playing/', '/history/', '/api/playlists/', '/recommendations/',
                      '/api/artist/', '/api/album/', '/api/library/', '/api/explore/', '/api/home/',
                      '/api/track/', '/api/app/queue/')
 

@@ -28,7 +28,9 @@ def live_server():
         (root/'BBBBBBBBBBB.warmup').write_bytes(b'')
         (root/'CCCCCCCCCCC.part').write_bytes(b'c'*128)
         database = root/'state.db'
-        with sqlite3.connect(database) as conn: conn.execute('create table fixture (id integer)')
+        with sqlite3.connect(database) as conn:
+            conn.execute('create table fixture (id integer)')
+            conn.execute('create table web_sessions (sid text primary key, created_at real)')
         journal=Journal(root/'journal.sqlite3',start=False)
         journal.record('INFO','fixture','Before audio failure')
         journal.record('ERROR','fixture','Audio decoder failed',trace='ParserException: invalid packet')
@@ -38,6 +40,9 @@ def live_server():
             stack.enter_context(mock.patch.object(server, name, value))
         stack.enter_context(mock.patch.object(server.Supporting, 'get_ytdlp_cookies_file', return_value=None))
         stack.enter_context(mock.patch.object(server, '_ensure_db'))
+        stack.enter_context(mock.patch.object(server, '_valid_sids', set()))
+        stack.enter_context(mock.patch.object(server, '_totp_enabled', return_value=False))
+        stack.enter_context(mock.patch.dict(server.app.config, {'SESSION_COOKIE_SECURE':False}))
         server.Supporting.cached_audio_path('AAAAAAAAAAA')
         server.Supporting.cached_audio_path('DDDDDDDDDDD')
         app = make_server('127.0.0.1', 0, server.app, threaded=True)
@@ -50,7 +55,10 @@ def live_server():
 def browser_page(live_server):
     with playwright.sync_playwright() as driver:
         browser = driver.chromium.launch(headless=True)
-        context = browser.new_context(viewport={'width':1440,'height':1050}, extra_http_headers={'X-Api-Key':server.API_KEY})
+        context = browser.new_context(viewport={'width':1440,'height':1050})
+        login=context.request.post(live_server+'/login/', form={'username':server.REMOTE_USER,'password':server.REMOTE_PASSWORD})
+        assert login.status==200 and login.json()['ok']
+        assert context.cookies(), 'Browser must use its real signed owner cookie'
         page = context.new_page()
         errors = []; page.on('pageerror', lambda error: errors.append(str(error)))
         yield page, live_server, errors
@@ -289,4 +297,28 @@ def test_paused_logs_do_not_resume_on_visibility_changes_or_timer_ticks(browser_
     page.evaluate("Object.defineProperty(document,'hidden',{configurable:true,value:false});document.dispatchEvent(new Event('visibilitychange'))")
     page.clock.fast_forward(6000)
     assert len(calls)==before
+    assert not errors
+
+
+def test_account_client_details_use_cookie_session_without_api_key(browser_page):
+    page,base,errors=browser_page
+    requests=[]
+    page.on('request',lambda request:requests.append(request) if '/api/status/cache/' in request.url else None)
+    ready(page,base)
+    page.locator('[data-cache-name="account_ytmusic_clients"]').click()
+    playwright.expect(page.locator('#dialog-body')).to_contain_text('Since restart:')
+    playwright.expect(page.locator('#dialog-state')).to_have_text('')
+    assert len(requests)==1
+    assert 'key=' not in requests[0].url
+    assert 'x-api-key' not in requests[0].headers
+    assert not errors
+
+
+def test_expired_owner_session_has_actionable_cache_dialog_message(browser_page):
+    page,base,errors=browser_page
+    ready(page,base)
+    page.route('**/api/status/cache/**',lambda route:route.fulfill(status=401,json={'error':'expired'}))
+    page.locator('[data-cache-name="account_ytmusic_clients"]').click()
+    playwright.expect(page.locator('#dialog-state')).to_contain_text('Your owner session expired or access was denied')
+    playwright.expect(page.locator('#dialog-state')).to_contain_text('Sign in again')
     assert not errors
