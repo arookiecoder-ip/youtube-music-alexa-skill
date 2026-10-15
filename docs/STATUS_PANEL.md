@@ -156,14 +156,31 @@ loss counters and watchdog condition suppression are process-local.
 
 ### Responsive workspace
 
-Desktop navigation stays in a fixed sidebar. At 900 px and below the same links
+Desktop navigation stays in a horizontal sticky top navbar with smooth section scrolling (instant when reduced motion is enabled). At 900 px and below the same links
 move into a modal navigation drawer, with Escape, focus restoration and a close
 button. Resizing closes the drawer before moving the links. Resource,
 authentication and retention details open in a separate dialog; their live data
 nodes move into it and return on close, so snapshot updates continue without
-expanding dashboard rows. Tables and busy activity panels scroll within bounded
-areas. Cache layers span a full row with responsive columns.
+expanding dashboard rows. Tables and activity lists scroll within bounded areas; whole cards do not have nested scrollbars. Cache layers span a full row with responsive columns.
 
 Chromium regression checks cover 320, 390, 768, 1024, 1440 and 1920 px, page
 overflow, unchanged dashboard positions when details open, and mobile/desktop
 navigation transitions. The dialogs and navigation require no extra API calls.
+
+
+### Interpreting cache and fetch activity
+
+Cache detail dialogs explain exactly which paths use each cache. Song-name audio
+resolution, voice stream lists and skill playlist expansion are separate from
+normal app search, video-ID playback and app playlist browsing. Related endpoint
+requests are shown separately and never counted as hits or misses. An unused
+cache has an explicit empty state; a blank lookup history does not indicate a
+failed data request. Details remain on demand and retain the owner-only rules.
+
+Fetching shows active background attempts and active streams, plus the latest
+60 completed background download attempts since process start (12 displayed).
+This separate bounded history survives HTTP-event traffic and makes downloads
+that finish between refreshes visible. Prefetch and requested download attempts
+are distinguished. A cached song does not cause another download. Downloader
+exit success remains separate from audio integrity validation. Stream counts
+are current activity, not a count of playing devices.

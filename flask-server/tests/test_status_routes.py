@@ -1,4 +1,5 @@
 import json
+import asyncio
 from pathlib import Path
 import sqlite3
 import tempfile
@@ -241,3 +242,40 @@ class StatusRoutesTests(unittest.TestCase):
             server._session_close(sid)
             for path in ['/api/status/cache/account_ytmusic_clients','/api/status/logs','/api/status/errors']:
                 self.assertEqual(401,self.client.get(path).status_code,path)
+
+
+class StatusCacheIntegrationTests(unittest.TestCase):
+    setUp = StatusRoutesTests.setUp
+    def test_specialized_lookup_paths_populate_clickable_details(self):
+        yt = mock.Mock()
+        yt.search.return_value = [{'videoId': 'AAAAAAAAAAA', 'title': 'Fixture', 'artists': [{'name': 'Artist'}], 'duration_seconds': 120}]
+        yt.get_playlist.return_value = {'tracks': yt.search.return_value}
+        with mock.patch.object(server, '_audio_search_cache', server._BoundedCache(maxsize=512, name='audio_search')), \
+             mock.patch.object(server, '_stream_list_cache', {}), \
+             mock.patch.object(server, '_stream_list_pending', {}), \
+             mock.patch.object(server, '_playlist_tracks_cache', {}), \
+             mock.patch.object(server, '_playlist_tracks_pending', {}), \
+             mock.patch.object(server, '_get_ytmusic', return_value=yt), \
+             mock.patch.object(server, '_get_ytmusic_home', return_value=yt), \
+             mock.patch.object(server.Supporting, 'find_stream_list', new=mock.AsyncMock(return_value={'queue': ['AAAAAAAAAAA']})):
+            for _ in range(2):
+                self.assertEqual('AAAAAAAAAAA', server._audio_search_song('private fixture query')['video_id'])
+                self.assertIsNotNone(server._prepare_stream_list_cache('private fixture query'))
+                self.assertIsNotNone(asyncio.run(server.Supporting.get_playlist_tracks('PLfixture')))
+            for name in ('audio_search', 'stream_search', 'playlist_tracks'):
+                response = self.client.get('/api/status/cache/'+name, headers=self.headers)
+                self.assertEqual(200, response.status_code)
+                self.assertEqual({'hits': 1, 'misses': 1}, response.json['totals'])
+                self.assertEqual(2, len(response.json['entries']))
+                self.assertTrue(response.json['usage']['description'])
+                self.assertNotIn('private fixture query', response.get_data(as_text=True))
+
+    def test_related_playlist_browse_requests_are_not_reported_as_cache_hits(self):
+        metrics = server._operational
+        metrics.finish_request(metrics.begin_request(), 'GET', '/api/library/playlists/<pl_id>', 200)
+        data = self.client.get('/api/status/cache/playlist_tracks', headers=self.headers).json
+        self.assertEqual({}, data['totals'])
+        self.assertEqual(1, data['usage']['activity'][0]['requests'])
+        self.assertIn('bypass', data['usage']['description'])
+        snapshot = self.client.get('/api/status', headers=self.headers).json
+        self.assertNotIn('activity', snapshot['cache_scopes']['playlist_tracks'])

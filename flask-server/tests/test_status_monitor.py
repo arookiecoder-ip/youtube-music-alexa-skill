@@ -40,6 +40,22 @@ class MetricsTests(unittest.TestCase):
         self.assertFalse(data['active_fetches'])
         self.assertNotIn('private-url', json.dumps(data))
 
+    def test_fetch_history_survives_http_events_and_stays_bounded(self):
+        metrics = Metrics()
+        for i in range(70):
+            with metrics.fetch('android', 'AAAAAAAAAAA', kind='prefetch') as attempt:
+                attempt['ok'] = True
+        for i in range(100):
+            metrics.finish_request(metrics.begin_request(), 'GET', '/test/', 500)
+        data = metrics.snapshot()
+        self.assertEqual(60, len(data['recent_fetches']))
+        self.assertEqual('prefetch', data['recent_fetches'][0]['mode'])
+        self.assertEqual('succeeded', data['recent_fetches'][0]['status'])
+        self.assertEqual(70, data['fetches']['succeeded'])
+        self.assertEqual([], data['active_fetches'])
+        data['recent_fetches'].clear()
+        self.assertEqual(60, len(metrics.snapshot()['recent_fetches']))
+
     def test_counters_thread_safe_and_snapshot_independent(self):
         metrics = Metrics()
         def work():

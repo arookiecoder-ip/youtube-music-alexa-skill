@@ -285,7 +285,7 @@ def test_closing_loading_cache_dialog_ignores_late_response(browser_page):
     playwright.expect(page.locator('#dialog-title')).to_have_text('Audio resolver results')
     playwright.expect(page.locator('#dialog-state')).to_have_text('Loading…')
     pending[-1].fulfill(json={'entries':[], 'totals':{},'next_before':None})
-    playwright.expect(page.locator('#dialog-body')).to_contain_text('No retained lookups')
+    playwright.expect(page.locator('#dialog-body')).to_contain_text('has not been used')
     try: pending[0].abort()
     except Exception: pass  # Browser already cancelled the old request.
     assert not errors
@@ -362,7 +362,7 @@ def test_navigation_and_details_do_not_move_dashboard(browser_page, width, tmp_p
         toggle.click()
         page.set_viewport_size({'width': 1440, 'height': 950})
         playwright.expect(page.locator('#nav-drawer')).not_to_be_visible()
-        playwright.expect(page.locator('#desktop-sidebar #status-nav')).to_have_count(1)
+        playwright.expect(page.locator('#desktop-navigation #status-nav')).to_have_count(1)
         page.set_viewport_size({'width': width, 'height': 950})
         playwright.expect(page.locator('#drawer-links #status-nav')).to_have_count(1)
     else:
@@ -389,4 +389,68 @@ def test_open_panel_details_receive_refresh_without_moving_cards(browser_page):
     page.keyboard.press('Escape')
     page.get_by_role('button', name='Resource details', exact=True).click()
     playwright.expect(page.locator('#panel-dialog #system')).to_contain_text('999')
+    assert not errors
+
+
+@pytest.mark.parametrize('width', [390, 1440])
+def test_navigation_scrolls_to_section_clear_of_fixed_header(browser_page, width):
+    page, base, errors = browser_page
+    page.set_viewport_size({'width': width, 'height': 950})
+    ready(page, base)
+    assert page.locator('#desktop-sidebar').count() == 0
+    if width <= 900:
+        page.get_by_label('Open status navigation').click()
+    else:
+        assert page.locator('#status-nav').evaluate('el => getComputedStyle(el).flexDirection') == 'row'
+    page.locator('#status-nav a[href="#inventory-section"]').click()
+    padding = 84 if width <= 900 else 152
+    page.evaluate('''padding => new Promise((resolve, reject) => {
+      const start = performance.now();
+      function check() {
+        if (Math.abs(document.querySelector('#inventory-section').getBoundingClientRect().top - padding) < 3) return resolve();
+        if (performance.now() - start > 5000) return reject(new Error('Section did not clear the fixed header'));
+        requestAnimationFrame(check);
+      }
+      check();
+    })''', padding)
+    playwright.expect(page.locator('#status-nav a[aria-current]')).to_have_text('Cached songs')
+    assert not errors
+
+
+def test_fetch_history_and_specialized_cache_details_are_real_and_on_demand(browser_page):
+    page, base, errors = browser_page
+    ready(page, base)
+    page.locator('#pause').click()
+    payload = page.request.get(base+'/api/status').json()
+    payload['recent_fetches'] = [{'video_id': 'ZZZZZZZZZZZ', 'client': 'android', 'mode': 'prefetch', 'status': 'succeeded', 'at': payload['generated_at'], 'duration_ms': 450}]
+    payload['fetches'] = {'succeeded': 1, 'failed': 0}
+    page.route('**/api/status', lambda route: route.fulfill(json=payload))
+    page.locator('#refresh').click()
+    playwright.expect(page.locator('#active-fetches')).to_contain_text('ZZZZZZZZZZZ · prefetch · succeeded')
+    assert page.locator('#fetch-section').evaluate('el => getComputedStyle(el).overflowY') == 'visible'
+    for name in ['audio_search', 'stream_search', 'playlist_tracks']:
+        page.locator(f'[data-cache-name="{name}"]').click()
+        playwright.expect(page.locator('#status-dialog')).to_be_visible()
+        playwright.expect(page.locator('#dialog-body')).to_contain_text('bypass')
+        playwright.expect(page.locator('#dialog-body')).not_to_contain_text('Could not load')
+        page.keyboard.press('Escape')
+    page.get_by_role('button', name='Fetching details', exact=True).click()
+    playwright.expect(page.locator('#panel-dialog #fetching')).to_contain_text('Download / prefetch / stream budgets')
+    assert page.locator('#pool').evaluate('el => getComputedStyle(el).appearance') == 'none'
+    assert not errors
+
+
+
+def test_control_icons_load_under_status_security_policy(browser_page):
+    page, base, errors = browser_page
+    violations = []
+    page.on('console', lambda message: violations.append(message.text) if 'Content Security Policy' in message.text else None)
+    ready(page, base)
+    image = page.locator('#interval').evaluate('el => getComputedStyle(el).backgroundImage')
+    assert 'status-chevron.svg' in image and 'data:' not in image
+    assert page.request.get(base+'/static/icons/status-chevron.svg').status == 200
+    page.locator('#error-inbox').click()
+    playwright.expect(page.locator('#status-dialog')).to_be_visible()
+    assert page.locator('#dialog-close svg').count() == 1
+    assert not violations
     assert not errors
