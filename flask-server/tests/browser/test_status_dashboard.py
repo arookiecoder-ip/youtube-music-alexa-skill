@@ -15,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from test_next_track import server
 from status_monitor import Metrics, CachedCollector
+from status_journal import Journal
 from werkzeug.serving import make_server
 
 
@@ -28,7 +29,12 @@ def live_server():
         (root/'CCCCCCCCCCC.part').write_bytes(b'c'*128)
         database = root/'state.db'
         with sqlite3.connect(database) as conn: conn.execute('create table fixture (id integer)')
-        for name, value in [('DB_FILE', str(database)), ('AUDIO_CACHE_DIR', directory), ('_operational', Metrics()), ('_status_storage', CachedCollector())]:
+        journal=Journal(root/'journal.sqlite3',start=False)
+        journal.record('INFO','fixture','Before audio failure')
+        journal.record('ERROR','fixture','Audio decoder failed',trace='ParserException: invalid packet')
+        journal.record('INFO','fixture','After audio failure')
+        journal.drain()
+        for name, value in [('_status_journal',journal), ('DB_FILE', str(database)), ('AUDIO_CACHE_DIR', directory), ('_operational', Metrics()), ('_status_storage', CachedCollector())]:
             stack.enter_context(mock.patch.object(server, name, value))
         stack.enter_context(mock.patch.object(server.Supporting, 'get_ytdlp_cookies_file', return_value=None))
         stack.enter_context(mock.patch.object(server, '_ensure_db'))
@@ -185,4 +191,102 @@ def test_capacity_meter_sampled_over_budget_unlimited_and_unavailable(browser_pa
     page.locator('#refresh').click()
     playwright.expect(page.locator('#cache-used')).to_have_text('—')
     playwright.expect(page.locator('#cache-capacity-note')).to_contain_text('unavailable')
+    assert not errors
+
+
+def test_cache_detail_is_lazy_shows_loader_and_filters_only_selected_cache(browser_page, tmp_path):
+    page, base, errors=browser_page
+    calls=[]
+    page.on('request',lambda request:calls.append(request.url) if '/api/status/cache/' in request.url else None)
+    ready(page,base)
+    assert not calls
+    pending=[]
+    page.route('**/api/status/cache/**',lambda route:pending.append(route))
+    page.locator('[data-cache-name="audio_lookups"]').click()
+    playwright.expect(page.locator('#status-dialog')).to_be_visible()
+    playwright.expect(page.locator('#dialog-state')).to_have_text('Loading…')
+    assert len(pending)==1
+    pending.pop().fulfill(json={'entries':[{'at':1790000000,'outcome':'hit','key':'abc','video_id':'AAAAAAAAAAA','reason':'lookup'}], 'totals':{'hits':1,'misses':0},'next_before':None})
+    playwright.expect(page.locator('#dialog-body')).to_contain_text('AAAAAAAAAAA')
+    screenshot(page, 'musicbox-status-cache-details.png', tmp_path)
+    page.get_by_label('Cache outcome').select_option('miss')
+    playwright.expect(page.locator('#dialog-state')).to_have_text('Loading…')
+    assert 'outcome=miss' in pending[0].request.url
+    pending.pop().fulfill(json={'entries':[], 'totals':{'hits':1,'misses':0},'next_before':None})
+    playwright.expect(page.locator('#dialog-body')).to_contain_text('No retained lookups')
+    page.keyboard.press('Escape');playwright.expect(page.locator('#status-dialog')).not_to_be_visible()
+    assert not errors
+
+
+def test_error_details_context_and_explicit_seen_with_mobile_dialog(browser_page, tmp_path):
+    page,base,errors=browser_page
+    page.set_viewport_size({'width':390,'height':844})
+    ready(page,base)
+    playwright.expect(page.locator('#error-count')).to_have_text('1')
+    page.locator('#error-inbox').click()
+    playwright.expect(page.locator('#dialog-body')).to_contain_text('Audio decoder failed')
+    page.get_by_text('View error & context',exact=True).click()
+    playwright.expect(page.locator('#dialog-body')).to_contain_text('ParserException')
+    playwright.expect(page.locator('#error-count')).to_have_text('1')
+    page.get_by_text('Earlier retained logs (1)',exact=True).click()
+    playwright.expect(page.locator('#dialog-body')).to_contain_text('Before audio failure')
+    page.get_by_text('Following retained logs (1)',exact=True).click()
+    playwright.expect(page.locator('#dialog-body')).to_contain_text('After audio failure')
+    assert page.locator('#status-dialog').evaluate('el=>el.scrollWidth<=el.clientWidth')
+    screenshot(page, 'musicbox-status-error-details-mobile.png', tmp_path)
+    page.get_by_text('Mark as seen',exact=True).click()
+    playwright.expect(page.locator('#error-count')).to_have_text('0')
+    playwright.expect(page.get_by_text('Already seen',exact=True)).to_be_visible()
+    page.locator('#dialog-close').click()
+    assert not errors
+
+
+def test_logs_load_on_demand_search_literal_and_severity_filter(browser_page):
+    page,base,errors=browser_page
+    calls=[]
+    page.on('request',lambda request:calls.append(request.url) if '/api/status/logs?' in request.url else None)
+    ready(page,base)
+    assert not calls
+    page.locator('#log-refresh').click()
+    playwright.expect(page.locator('#live-logs')).to_contain_text('Before audio failure')
+    page.locator('#log-level').select_option('ERROR')
+    playwright.expect(page.locator('#live-logs .log-row')).to_have_count(1)
+    page.locator('#log-search').fill('no such log')
+    playwright.expect(page.locator('#live-logs')).to_contain_text('No retained logs match')
+    page.locator('#log-search').fill('decoder')
+    playwright.expect(page.locator('#live-logs')).to_contain_text('Audio decoder failed')
+    assert not errors
+
+
+def test_closing_loading_cache_dialog_ignores_late_response(browser_page):
+    page,base,errors=browser_page
+    ready(page,base)
+    pending=[]
+    page.route('**/api/status/cache/**',lambda route:pending.append(route))
+    page.locator('#audio-cache-details').click()
+    playwright.expect(page.locator('#dialog-state')).to_have_text('Loading…')
+    page.locator('#dialog-close').click()
+    page.locator('[data-cache-name="audio_search"]').click()
+    playwright.expect(page.locator('#dialog-title')).to_have_text('Audio resolver results')
+    playwright.expect(page.locator('#dialog-state')).to_have_text('Loading…')
+    pending[-1].fulfill(json={'entries':[], 'totals':{},'next_before':None})
+    playwright.expect(page.locator('#dialog-body')).to_contain_text('No retained lookups')
+    try: pending[0].abort()
+    except Exception: pass  # Browser already cancelled the old request.
+    assert not errors
+
+
+def test_paused_logs_do_not_resume_on_visibility_changes_or_timer_ticks(browser_page):
+    page,base,errors=browser_page
+    page.clock.install()
+    calls=[]
+    page.on('request',lambda request:calls.append(request.url) if '/api/status/logs?' in request.url else None)
+    ready(page,base)
+    page.locator('#log-refresh').click()
+    playwright.expect(page.locator('#live-logs')).to_contain_text('Before audio failure')
+    before=len(calls)
+    page.evaluate("Object.defineProperty(document,'hidden',{configurable:true,value:true});document.dispatchEvent(new Event('visibilitychange'))")
+    page.evaluate("Object.defineProperty(document,'hidden',{configurable:true,value:false});document.dispatchEvent(new Event('visibilitychange'))")
+    page.clock.fast_forward(6000)
+    assert len(calls)==before
     assert not errors

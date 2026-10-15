@@ -1,5 +1,7 @@
 from flask import has_request_context
 import download_cookies
+import traceback
+from status_journal import Journal, JournalHandler
 from status_monitor import AUDIO_EXTENSIONS, Metrics, CachedCollector, file_info, scan_audio, system_snapshot
 from playback_failover import PlaybackFailoverBudget
 import asyncio, collections, difflib, glob, hashlib, hmac, itertools, json, math, os, random, secrets, shutil, sys, threading, time, re, subprocess, logging, copy, uuid, tempfile, shlex
@@ -35,8 +37,9 @@ _status_storage = CachedCollector(10)
 
 @app.before_request
 def _operational_request_start():
-    if not request.path.startswith('/static/') and request.path.rstrip('/') not in ('/status', '/api/status'):
+    if not request.path.startswith('/static/') and request.path.rstrip('/') != '/status' and not request.path.startswith('/api/status'):
         request.environ['musicbox.metrics_start'] = _operational.begin_request()
+        request.environ['musicbox.trace'] = uuid.uuid4().hex
 
 
 @app.after_request
@@ -45,9 +48,14 @@ def _operational_request_end(response):
     if started is not None:
         route = str(request.url_rule) if request.url_rule else '/unmatched'
         _operational.finish_request(started, request.method, route, response.status_code)
+        journal = globals().get('_status_journal')
+        if journal:
+            journal.record('ERROR' if response.status_code >= 500 else 'WARNING' if response.status_code >= 400 else 'INFO',
+                'http', f'{request.method} {route} → {response.status_code}',
+                request_id=request.environ.get('musicbox.trace', ''), route=route)
         cache = response.headers.get('X-Cache', '').upper()
         if cache in ('HIT', 'MISS'):
-            _operational.cache('audio_responses', cache == 'HIT')
+            _operational.cache('audio_responses', cache == 'HIT', item=request.args.get('video_id') or request.args.get('id'))
     return response
 
 
@@ -1101,7 +1109,7 @@ def _valid_key_supplied():
     if not API_KEY:
         return False
     supplied = request.args.get('key') or request.headers.get('X-Api-Key')
-    return hmac.compare_digest(supplied or "", API_KEY)
+    return hmac.compare_digest((supplied or "").encode(), API_KEY.encode())
 
 
 def _jam_url(token):
@@ -1184,7 +1192,7 @@ def app_audio_token():
 def require_api_key():
     path = request.path.rstrip('/') or '/'
     # Keep diagnostics available to a valid owner key during a database outage.
-    if path in ('/status', '/api/status') and _valid_key_supplied():
+    if (path == '/status' or path == '/api/status' or path.startswith('/api/status/')) and _valid_key_supplied():
         return None
     _ensure_db()
     # Let the shared shell renderer apply the same owner/jam/login policy as
@@ -1233,7 +1241,7 @@ def require_api_key():
     if not API_KEY:
         return None
     supplied = request.args.get('key') or request.headers.get('X-Api-Key')
-    if not hmac.compare_digest(supplied or "", API_KEY):
+    if not _valid_key_supplied():
         # Device/skill endpoints must get a JSON error, never an HTML redirect.
         if _is_api_path(request.path):
             # Keep API/device auth failures machine-readable and distinguish
@@ -1319,9 +1327,11 @@ class _BoundedCache:
         self._maxsize = maxsize
         self._lock = threading.Lock()
 
-    def get(self, key):
+    def get(self, key, max_age=None):
         with self._lock:
-            _operational.cache(self._name, key in self._data)
+            expired = max_age is not None and key in self._data and time.time() - self._data[key][0] >= max_age
+            if expired: self._data.pop(key, None)
+            _operational.cache(self._name, key in self._data, item=key, reason='expired' if expired else 'lookup')
             if key in self._data:
                 self._data.move_to_end(key)
                 return self._data[key]
@@ -3007,6 +3017,8 @@ def _get_cached_stream_list(query: str, filter_name: str):
     key = _stream_list_cache_key(query, filter_name)
     with _stream_list_cache_lock:
         item = _stream_list_cache.get(key)
+        _operational.cache('stream_search', bool(item and item[0] >= time.time()), item=key,
+                           reason='expired' if item and item[0] < time.time() else 'lookup')
         if not item:
             return None
         expires_at, response = item
@@ -3034,6 +3046,8 @@ def _prepare_stream_list_cache(query: str, filter_name: str = 'songs'):
     key = _stream_list_cache_key(query, filter_name)
     with _stream_list_cache_lock:
         cached = _stream_list_cache.get(key)
+        _operational.cache('stream_search', bool(cached and cached[0] >= time.time()), item=key,
+                           reason='expired' if cached and cached[0] < time.time() else 'lookup')
         if cached and cached[0] >= time.time():
             return cached[1]
         event = _stream_list_pending.get(key)
@@ -3577,6 +3591,8 @@ class Supporting:
         now = time.time()
         with _playlist_tracks_cache_lock:
             cached = _playlist_tracks_cache.get(cache_key)
+            _operational.cache('playlist_tracks', bool(cached and cached[0] >= now), item=cache_key,
+                               reason='expired' if cached and cached[0] < now else 'lookup')
             if cached and cached[0] >= now:
                 return cached[1]
             if cached:
@@ -3872,7 +3888,7 @@ class Supporting:
     def cached_audio_path(video_id: str):
         paths = [p for p in glob.glob(os.path.join(AUDIO_CACHE_DIR, f"{video_id}.*"))
                  if not p.endswith('.part') and not p.endswith('.warmup')]
-        _operational.cache('audio_lookups', bool(paths))
+        _operational.cache('audio_lookups', bool(paths), item=video_id)
         return paths[0] if paths else None
 
     def evict_cached_audio(video_id: str):
@@ -5076,7 +5092,7 @@ def _audio_search_song(query: str, duration_s: int = 0):
     studio track. Cached for _AUDIO_SEARCH_TTL so repeated lookups are free.
     """
     key = (query.strip().lower(), int(duration_s or 0))
-    hit = _audio_search_cache.get(key)
+    hit = _audio_search_cache.get(key, max_age=_AUDIO_SEARCH_TTL)
     if hit and time.time() - hit[0] < _AUDIO_SEARCH_TTL:
         return hit[1]
     ytmusic = _get_ytmusic()
@@ -11333,6 +11349,33 @@ def _render_root_shell():
     return redirect('/login/?next=' + quote(target, safe=''))
 
 
+# Dedicated bounded journal: the request/playback threads only enqueue records.
+_status_journal = Journal(os.environ.get('STATUS_LOG_DB') or os.path.join(os.path.dirname(DB_FILE), 'status_logs.sqlite3'),
+                          secrets=lambda: (API_KEY, app.secret_key))
+
+
+def _status_log_context():
+    if not has_request_context(): return {}
+    quiet = request.path.startswith(('/api/status', '/static/')) or request.path.rstrip('/') == '/status'
+    return {'request_id': request.environ.get('musicbox.trace', ''),
+            'route': str(request.url_rule) if request.url_rule else '/unmatched', 'quiet': quiet}
+
+
+_status_log_handler = JournalHandler(lambda: _status_journal, _status_log_context)
+logging.getLogger().addHandler(_status_log_handler)
+_status_original_thread_hook = threading.excepthook
+
+
+def _status_thread_exception(args):
+    frames = traceback.extract_tb(args.exc_traceback)[-12:]
+    _status_journal.record('ERROR', 'thread', f'Background thread {getattr(getattr(args, "thread", None), "name", "unknown")} failed: {args.exc_type.__name__}: {args.exc_value}',
+        trace='\n'.join(f'{os.path.basename(frame.filename)}:{frame.lineno} in {frame.name}' for frame in frames))
+    _status_original_thread_hook(args)
+
+
+threading.excepthook = _status_thread_exception
+
+
 def _status_cache_sizes():
     rows = []
     for label, cache in [('public_ytmusic_clients', _YT_CACHE), ('account_ytmusic_clients', _YT_HOME_CACHE), ('audio_search', _audio_search_cache)]:
@@ -11376,7 +11419,12 @@ def _status_snapshot():
                     'confirmed': bool(_now_playing.get('playback_confirmed'))}
     reserve = storage.get('system', {}).get('disk', {}).get('free_bytes')
     cooldown = _ytdlp_cooldown_remaining()
+    inbox = read_component('error journal', _status_journal.summary, {'available': False, 'unseen': None})
     alerts = [{'level': 'warning', 'title': name + ' unavailable', 'detail': 'This local collector could not complete. Other metrics remain available.'} for name in unavailable]
+    if not inbox.get('available'):
+        alerts.append({'level': 'warning', 'title': 'Operational log storage unavailable', 'detail': 'Error counts and log history cannot currently be read. Playback continues independently.'})
+    if inbox.get('dropped', 0):
+        alerts.append({'level': 'warning', 'title': 'Some operational logs were dropped', 'detail': 'The bounded log queue or storage could not retain every event. The log section reports the process-local dropped count.'})
     audio = storage.get('audio', {})
     if AUDIO_CACHE_MAX_BYTES and audio.get('ready_bytes', 0) > AUDIO_CACHE_MAX_BYTES:
         alerts.append({'level': 'warning', 'title': 'Music cache is over budget', 'detail': 'Cleanup retries automatically. Current tracks, active fetches and recently written files are protected.'})
@@ -11401,6 +11449,9 @@ def _status_snapshot():
     return dict(telemetry, generated_at=now, uptime_seconds=max(0, now - _start_time_epoch),
         health='critical' if any(row['level'] == 'critical' for row in alerts) else ('warning' if alerts else 'healthy'),
         alerts=alerts, storage=storage, cache_sizes=_status_cache_sizes(),
+        error_inbox=inbox,
+        search_activity=next(({'requests': row['requests'], 'errors': row['errors'], 'average_ms': row['average_ms']}
+                              for row in telemetry['routes'] if row['route'] == 'GET /alexa/search/'), {'requests': 0, 'errors': 0, 'average_ms': None}),
         limits={'audio_bytes': AUDIO_CACHE_MAX_BYTES, 'warmup_bytes': WARMUP_MAX_BYTES,
                 'reserve_bytes': AUDIO_CACHE_MIN_FREE_BYTES, 'retention_policy': 'capacity_lru',
                 'audio_ttl_seconds': None, 'warmup_ttl_seconds': None,
@@ -11433,6 +11484,116 @@ def status_api():
     response = _no_store(jsonify(_status_snapshot()))
     response.headers['Referrer-Policy'] = 'no-referrer'
     return response
+
+
+_STATUS_CACHE_NAMES = {'audio_lookups', 'audio_responses', 'public_ytmusic_clients', 'account_ytmusic_clients',
+                       'audio_search', 'stream_search', 'playlist_tracks'}
+
+
+def _status_owner_error():
+    if not (_valid_key_supplied() or _logged_in()):
+        return _no_store(app.make_response(error_response('Owner access required.', 401)))
+
+
+def _status_args():
+    try:
+        limit = int(request.args.get('limit', 50))
+        before = int(request.args['before']) if request.args.get('before') else None
+        if not 1 <= limit <= 100 or (before is not None and not 1 <= before <= 9223372036854775807): raise ValueError()
+        return limit, before
+    except (ValueError, TypeError):
+        raise ValueError('Invalid pagination') from None
+
+
+def _status_journal_response(function):
+    denied = _status_owner_error()
+    if denied is not None: return denied
+    try:
+        if not _status_journal.available:
+            return _no_store(app.make_response(error_response('Log storage is temporarily unavailable.', 503)))
+        return _no_store(jsonify(function()))
+    except ValueError:
+        return _no_store(app.make_response(error_response('Invalid log filter or cursor.', 400)))
+    except Exception:
+        return _no_store(app.make_response(error_response('Log storage is temporarily unavailable.', 503)))
+
+
+@app.route('/api/status/logs')
+@app.route('/api/status/errors')
+def status_logs():
+    def read():
+        limit, before = _status_args()
+        level, source, search = request.args.get('level', ''), request.args.get('source', ''), request.args.get('q', '')
+        if level not in ('', 'INFO', 'WARNING', 'ERROR', 'CRITICAL') or len(source)>80 or len(search)>200: raise ValueError()
+        return _status_journal.query(errors=request.path.endswith('/errors'), level=level, source=source, search=search, before=before, limit=limit)
+    return _status_journal_response(read)
+
+
+@app.route('/api/status/errors/<ident>')
+def status_error_detail(ident):
+    denied = _status_owner_error()
+    if denied is not None: return denied
+    if not re.fullmatch(r'[a-f0-9]{32}', ident):
+        return _no_store(app.make_response(error_response('Error not found.', 404)))
+    result = _status_journal_response(lambda: _status_journal.detail(ident))
+    if result.status_code == 200 and result.get_json() is None:
+        return _no_store(app.make_response(error_response('Error expired or is no longer retained.', 404)))
+    return result
+
+
+@app.route('/api/status/errors/seen', methods=['POST'])
+def status_error_seen():
+    def mark():
+        body = request.get_json(silent=True) or {}
+        ids = body.get('ids') if isinstance(body, dict) else None
+        if not isinstance(ids, list) or not 1 <= len(ids) <= 100 or any(not isinstance(ident, str) or not re.fullmatch(r'[a-f0-9]{32}', ident) for ident in ids): raise ValueError()
+        return _status_journal.seen(ids)
+    return _status_journal_response(mark)
+
+
+@app.route('/api/status/cache/<name>')
+def status_cache_detail(name):
+    denied = _status_owner_error()
+    if denied is not None: return denied
+    if name not in _STATUS_CACHE_NAMES:
+        return _no_store(app.make_response(error_response('Unknown cache.', 404)))
+    try:
+        limit, before = _status_args()
+        outcome = request.args.get('outcome', '')
+        if outcome not in ('', 'hit', 'miss'): raise ValueError()
+        return _no_store(jsonify(_operational.cache_details(name, outcome, before, limit)))
+    except ValueError:
+        return _no_store(app.make_response(error_response('Invalid cache filter or cursor.', 400)))
+
+
+_status_watchdog_keys = set()
+
+
+def _status_watchdog_once():
+    global _status_watchdog_keys
+    snapshot = _status_snapshot()
+    active = {}
+    for alert in snapshot['alerts']:
+        if alert['level'] == 'critical': active['health:'+alert['title']] = alert['title'] + ': ' + alert['detail']
+    for attempt in snapshot['active_fetches']:
+        if time.time()-attempt['started_at'] > 120:
+            active['fetch:'+attempt['video_id']] = 'Audio fetch has been active for more than 120 seconds: ' + attempt['video_id']
+    for key in _status_watchdog_keys | active.keys():
+        _status_journal.condition(key, key in active, active.get(key, ''))
+    _status_watchdog_keys = set(active)
+
+
+def _status_watchdog_loop():
+    while True:
+        time.sleep(60)
+        try: _status_watchdog_once()
+        except Exception:
+            _status_journal.condition('watchdog-collector', True, 'The server health watchdog could not collect local health data.')
+        else:
+            _status_journal.condition('watchdog-collector', False, '')
+
+
+threading.Thread(target=_status_watchdog_loop, daemon=True, name='status-watchdog').start()
 
 
 @app.route("/", methods=["GET"])

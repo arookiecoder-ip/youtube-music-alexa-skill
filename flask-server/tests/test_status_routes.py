@@ -7,6 +7,7 @@ import unittest
 from unittest import mock
 from test_next_track import server
 from status_monitor import Metrics, CachedCollector
+from status_journal import Journal
 
 class StatusRoutesTests(unittest.TestCase):
     def setUp(self):
@@ -15,6 +16,8 @@ class StatusRoutesTests(unittest.TestCase):
         with sqlite3.connect(self.db) as conn: conn.execute('create table t (id integer)')
         for name,value in [('AUDIO_CACHE_DIR', str(self.directory)), ('DB_FILE', str(self.db)), ('_operational',Metrics()), ('_status_storage', CachedCollector())]:
             patcher=mock.patch.object(server,name,value); patcher.start(); self.addCleanup(patcher.stop)
+        self.journal=Journal(self.directory/'logs.sqlite3', secrets=lambda:(server.API_KEY,), start=False); self.journal.drain()
+        patcher=mock.patch.object(server,'_status_journal',self.journal);patcher.start();self.addCleanup(patcher.stop)
         self.client=server.app.test_client(); self.headers={'X-Api-Key':server.API_KEY}
 
     def test_owner_only_no_store_and_key_page_without_credentials(self):
@@ -112,3 +115,107 @@ class StatusRoutesTests(unittest.TestCase):
             data = self.client.get('/api/status', headers=self.headers).json
         self.assertIn('Music cache is over budget', [row['title'] for row in data['alerts']])
         self.assertEqual('warning', data['health'])
+
+    def test_log_cache_and_error_endpoints_are_owner_only_and_no_store(self):
+        self.journal.record('ERROR','fixture','failure');self.journal.drain()
+        ident=self.journal.query(errors=True)['entries'][0]['id']
+        for path in ['/api/status/logs','/api/status/errors','/api/status/errors/'+ident,'/api/status/cache/audio_lookups']:
+            self.assertEqual(401,self.client.get(path).status_code)
+            with mock.patch.object(server,'_jam_guest',return_value=True):self.assertEqual(401,self.client.get(path).status_code)
+            response=self.client.get(path,headers=self.headers)
+            self.assertEqual(200,response.status_code);self.assertIn('no-store',response.headers['Cache-Control'])
+        self.assertEqual(401,self.client.post('/api/status/errors/seen',json={'ids':[ident]}).status_code)
+        self.assertEqual(1,self.journal.summary()['unseen'])
+        response=self.client.post('/api/status/errors/seen',json={'ids':[ident]},headers=self.headers)
+        self.assertEqual(0,response.json['unseen'])
+
+    def test_bad_filters_cursors_and_seen_payloads_are_rejected(self):
+        for query in ['limit=0','limit=101','before=-1','before=99999999999999999999999','level=unknown','q='+('x'*201)]:
+            self.assertEqual(400,self.client.get('/api/status/logs?'+query,headers=self.headers).status_code)
+        self.assertEqual(404,self.client.get('/api/status/cache/unknown',headers=self.headers).status_code)
+        self.assertEqual(400,self.client.get('/api/status/cache/audio_lookups?outcome=invalid',headers=self.headers).status_code)
+        for payload in [{}, {'ids':[]}, {'ids':['bad']}, {'ids':['a'*32]*101}]:
+            self.assertEqual(400,self.client.post('/api/status/errors/seen',headers=self.headers,json=payload).status_code)
+        self.assertEqual(404,self.client.get('/api/status/errors/'+'a'*32,headers=self.headers).status_code)
+        self.assertEqual(404,self.client.get('/api/status/errors/not-an-id',headers=self.headers).status_code)
+
+    def test_http_errors_and_logger_errors_capture_context_without_status_poll_spam(self):
+        with mock.patch.object(server,'_ensure_db'):
+            self.client.get('/not-a-route?key='+server.API_KEY,headers=self.headers)
+        server.logger.error('Failed audio decoding')
+        self.client.get('/api/status',headers=self.headers)
+        self.client.get('/api/status/logs',headers=self.headers)
+        self.journal.drain()
+        rows=self.journal.query()['entries']
+        self.assertTrue(any(row['source']=='http' for row in rows))
+        self.assertTrue(any(row['message']=='Failed audio decoding' for row in rows))
+        self.assertFalse(any('/api/status' in row['route'] for row in rows))
+        self.assertNotIn(server.API_KEY,json.dumps(rows))
+
+    def test_log_storage_outage_does_not_break_status_and_recovery_is_visible(self):
+        self.journal.available=False
+        self.assertEqual(503,self.client.get('/api/status/logs',headers=self.headers).status_code)
+        self.assertEqual(200,self.client.get('/api/status',headers=self.headers).status_code)
+        self.journal.drain()
+        self.assertEqual(200,self.client.get('/api/status/logs',headers=self.headers).status_code)
+
+    def test_expired_error_is_not_acknowledged_or_returned(self):
+        self.journal.record('ERROR','fixture','old failure');self.journal.drain()
+        ident=self.journal.query(errors=True)['entries'][0]['id']
+        with mock.patch.object(self.journal,'clock',return_value=time.time()+86401):
+            self.assertEqual(404,self.client.get('/api/status/errors/'+ident,headers=self.headers).status_code)
+            self.assertEqual(0,self.client.post('/api/status/errors/seen',headers=self.headers,json={'ids':[ident]}).json['unseen'])
+
+    def test_cache_details_do_not_leak_raw_keys_and_expiry_is_a_miss(self):
+        cache=server._BoundedCache(name='audio_search');cache.set(('private search query',123),(time.time()-200,'value'))
+        self.assertIsNone(cache.get(('private search query',123),max_age=100))
+        response=self.client.get('/api/status/cache/audio_search?outcome=miss',headers=self.headers)
+        self.assertEqual(1,len(response.json['entries']))
+        self.assertEqual('expired',response.json['entries'][0]['reason'])
+        self.assertNotIn('private search query',response.get_data(as_text=True))
+        self.assertNotIn('entries',self.client.get('/api/status',headers=self.headers).json['caches'][0])
+
+    def test_watchdog_reports_health_and_stuck_fetches_without_spam(self):
+        snapshot={'alerts':[{'level':'critical','title':'Disk low','detail':'Below reserve'}],
+                  'active_fetches':[{'started_at':time.time()-130,'video_id':'AAAAAAAAAAA'}]}
+        with mock.patch.object(server,'_status_snapshot',return_value=snapshot), mock.patch.object(server,'_status_watchdog_keys',set()):
+            server._status_watchdog_once();server._status_watchdog_once();self.journal.drain()
+            self.assertEqual(2,self.journal.summary()['unseen'])
+            snapshot['alerts']=[];snapshot['active_fetches']=[];server._status_watchdog_once()
+            snapshot['alerts']=[{'level':'critical','title':'Disk low','detail':'Below reserve'}]
+            server._status_watchdog_once();self.journal.drain();self.assertEqual(3,self.journal.summary()['unseen'])
+
+    def test_normal_search_activity_is_reported_separately_from_cache_lookups(self):
+        server._operational.finish_request(server._operational.begin_request(),'GET','/alexa/search/',200)
+        data=self.client.get('/api/status',headers=self.headers).json
+        self.assertEqual(1,data['search_activity']['requests'])
+        self.assertEqual([],data['caches'])
+
+    def test_background_thread_exception_is_captured_without_hiding_original_hook(self):
+        import types
+        try:raise RuntimeError('audio worker failed')
+        except RuntimeError as error:
+            args=types.SimpleNamespace(exc_type=type(error),exc_value=error,exc_traceback=error.__traceback__)
+            with mock.patch.object(server,'_status_original_thread_hook') as original:
+                server._status_thread_exception(args);original.assert_called_once_with(args)
+        self.journal.drain()
+        self.assertTrue(any(row['source']=='thread' for row in self.journal.query(errors=True)['entries']))
+
+    def test_cookie_session_acknowledgement_requires_json(self):
+        with mock.patch.object(server,'_logged_in',return_value=True):
+            response=self.client.post('/api/status/errors/seen',data={'ids':'a'*32})
+        self.assertEqual(401,response.status_code)
+
+    def test_unhandled_http_500_is_recorded_with_correlated_exception(self):
+        with mock.patch.object(server,'_ensure_db',side_effect=RuntimeError('storage failure')), mock.patch.dict(server.app.config,{'PROPAGATE_EXCEPTIONS':False}):
+            response=self.client.get('/api/app/devices/',headers=self.headers)
+        self.assertEqual(500,response.status_code)
+        self.journal.drain()
+        errors=self.journal.query(errors=True)['entries']
+        http=next(row for row in errors if row['source']=='http')
+        self.assertEqual(32,len(http['request_id']))
+        self.assertTrue(any(row['request_id']==http['request_id'] and 'RuntimeError' in row['trace'] for row in errors))
+
+    def test_non_ascii_invalid_api_key_is_rejected_without_server_error(self):
+        for path in ['/api/status','/api/status/logs','/api/status/errors','/api/status/cache/audio_lookups']:
+            self.assertEqual(401,self.client.get(path,headers={'X-Api-Key':'invalid-☃'}).status_code)
