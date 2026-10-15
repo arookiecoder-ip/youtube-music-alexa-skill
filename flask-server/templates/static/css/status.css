@@ -236,3 +236,52 @@ footer .icon { width: 18px; }
   .back-link span { display: none; }
 }
 @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
+/* Operational details stay off the initial render and load on demand. */
+.error-inbox-button { margin-left: auto; font-size: 12px; }
+.error-inbox-button span { min-width: 22px; padding: 1px 6px; border-radius: 4px; background: #333; }
+.error-inbox-button.has-errors { border-color: #8a3c27; color: #ffae85; }
+.error-inbox-button.has-errors span { background: #652b18; color: #fff; }
+.back-link { margin-left: 0; }
+.cache-layer-button { display: block; width: 100%; text-align: left; padding: 10px; border: 1px solid transparent; background: transparent; border-radius: 6px; }
+.cache-layer-button:hover { border-color: #555; background: #202020; }
+#search-activity { margin: 0 0 12px; padding-bottom: 12px; border-bottom: 1px solid var(--line); }
+#status-dialog { background: #151515; border: 1px solid #444; border-radius: 12px; color: #fff; width: min(900px, calc(100vw - 32px)); max-height: 85dvh; padding: 22px; overflow: auto; }
+#status-dialog::backdrop { background: #000b; }
+.dialog-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; position: sticky; top: -22px; background: #151515; padding: 12px 0; z-index: 1; }
+#dialog-controls { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+#dialog-state { color: var(--muted); }
+.loading-state { display: flex; align-items: center; gap: 9px; min-height: 24px; }
+.loading-state::before { content: ''; width: 14px; height: 14px; flex-shrink: 0; border: 2px solid #555; border-top-color: var(--accent); border-radius: 50%; animation: log-spin .8s linear infinite; }
+@keyframes log-spin { to { transform: rotate(360deg); } }
+.log-filters { margin-top: 16px; }
+.log-list { max-height: 520px; overflow: auto; }
+.log-row { padding: 14px 0; border-bottom: 1px solid #333; overflow-wrap: anywhere; }
+.log-row-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: #aaa; font-size: 11px; }
+.log-row pre { white-space: pre-wrap; overflow-wrap: anywhere; font: 12px/1.6 ui-monospace, monospace; margin: 8px 0; }
+.log-row small { display: block; }
+.log-row button { font-size: 11px; margin-top: 8px; min-height: 36px; }
+.log-level { font-size: 10px; padding: 2px 6px; border-radius: 3px; background: #333; text-transform: uppercase; }
+.level-ERROR, .level-CRITICAL, .miss { background: #48251b; color: #ffb091; }
+.level-WARNING { background: #3a301b; color: var(--yellow); }
+.hit { background: #203527; color: #b8dbbf; }
+.focused-log { border: 1px solid #713f2d; padding: 16px; border-radius: 6px; }
+.log-correlation { color: #888; font-family: ui-monospace, monospace; }
+.exception-trace { color: #ccc; background: #222; padding: 12px; border-radius: 4px; }
+.cache-event { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; border-bottom: 1px solid #333; padding: 12px 0; font-size: 12px; }
+.cache-event strong { font-weight: 500; }
+.cache-event time { color: #aaa; font-size: 11px; }
+#dialog-more, #log-older { margin-top: 16px; }
+@media (max-width:700px) {
+  .topbar { gap: 10px; flex-wrap: wrap; }
+  .error-inbox-button { min-height: 38px; padding: 7px 9px; }
+  .back-link span { display: none; }
+  #status-dialog { width: calc(100vw - 16px); max-height: 92dvh; padding: 16px; }
+  .dialog-head { top: -16px; }
+  #dialog-controls > button { flex: 1; font-size: 11px; }
+  .log-filters > select { flex: 1; }
+  .log-filters > button { flex-basis: 100%; }
+}
+@media (prefers-reduced-motion:reduce) { .loading-state::before { animation: none; border-color: var(--accent); } }
+
+.hit-card > button { margin-top: 12px; font-size: 12px; }
+@media(max-width:700px) { .hit-card > button { grid-column: 2; padding: 6px; min-height: 34px; font-size: 11px; } }

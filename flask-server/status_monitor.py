@@ -3,6 +3,8 @@ from collections import Counter, OrderedDict, deque
 from contextlib import contextmanager, closing
 import copy
 import heapq
+import hashlib
+import re
 import math
 import os
 from pathlib import Path
@@ -25,6 +27,7 @@ class Metrics:
         self.latencies = deque(maxlen=1024)
         self.minutes = OrderedDict()
         self.caches = {}
+        self.cache_events = {}
         self.fetches = Counter()
         self.active_fetches = {}
         self.events = deque(maxlen=60)
@@ -63,9 +66,27 @@ class Metrics:
                 self.events.appendleft({'at': self.wall(), 'kind': 'http', 'label': key,
                                         'status': status, 'duration_ms': round(elapsed, 1)})
 
-    def cache(self, name, hit):
+    def cache(self, name, hit, item=None, reason=''):
         with self._lock:
+            if name not in self.caches and len(self.caches) >= 16:
+                return
             self.caches.setdefault(name, Counter())['hits' if hit else 'misses'] += 1
+            key = hashlib.sha256(str(item)[:512].encode()).hexdigest()[:12] if item is not None else None
+            video = item if isinstance(item, str) and re.fullmatch(r'[A-Za-z0-9_-]{11}', item) else None
+            events = self.cache_events.setdefault(name, deque(maxlen=200))
+            self.sequence += 1
+            events.appendleft({'id': self.sequence, 'at': self.wall(), 'outcome': 'hit' if hit else 'miss',
+                              'key': key, 'video_id': video, 'reason': reason})
+
+    def cache_details(self, name, outcome='', before=None, limit=50):
+        with self._lock:
+            rows = [dict(row) for row in self.cache_events.get(name, ()) if row['at'] > self.wall()-86400
+                    and (not outcome or row['outcome'] == outcome) and (before is None or row['id'] < before)]
+            totals = dict(self.caches.get(name, {}))
+        return {'entries': rows[:limit], 'retained': len(rows),
+                'next_before': rows[limit-1]['id'] if len(rows)>limit else None,
+                'scope': 'current_process', 'max_events': 200,
+                'totals': totals}
 
     @contextmanager
     def fetch(self, client, video_id):
@@ -91,6 +112,9 @@ class Metrics:
 
     def snapshot(self):
         with self._lock:
+            for events in self.cache_events.values():
+                while events and events[-1]['at'] <= self.wall()-86400:
+                    events.pop()
             latency = sorted(self.latencies)
             def percentile(p):
                 return round(latency[max(0, math.ceil(len(latency) * p) - 1)], 1) if latency else None

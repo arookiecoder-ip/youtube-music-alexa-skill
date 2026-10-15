@@ -80,3 +80,74 @@ runs the tests and uploads screenshots plus browser JUnit results. Existing
 playback regressions remain in a separate job and isolated module processes.
 
 Deploy the backend branch to expose the panel; no Android build is required.
+
+
+## Live logs, errors and lazy cache details
+
+Cache labels describe what is measured: saved audio checks, audio-response
+caching, account/public API client objects, audio resolver results, playback
+stream lists and playlist track lists. Normal `/alexa/search/` activity is shown
+separately using request counters; it is not counted as a cached search.
+
+Click a cache (or View lookup details) to fetch hit/miss events into a dialog.
+No detail history is in the initial status snapshot. A spinner covers pending
+requests; closed/replaced dialogs ignore late responses. Filters and stable
+cursors support hits/misses and older entries. Each cache retains at most 200
+process-local events for 24 hours; cumulative counters can therefore exceed
+available details. Identifiers are hashed except valid video IDs. Expired audio
+resolver entries count as misses. These are lookups, not unique plays.
+
+The Current server logs section loads only when requested. Live mode polls every
+5 seconds while the section and tab are visible. Search covers messages, routes, exception text and request IDs; it is literal,
+debounced and bounded to 200 characters. Severity/source filters run on the server. Older
+pages pause live mode and the browser retains at most 300 displayed entries.
+
+The Errors button shows unseen ERROR/CRITICAL records, including HTTP 5xx,
+Python logging exceptions and unhandled Python background-thread exceptions.
+Opening an error does not acknowledge it. Mark individual errors, or only the
+currently displayed errors, as seen. New arrivals are never silently marked by
+a blanket acknowledgement. Seen state is stored in SQLite and survives restarts.
+Details include exception type/frames and up to 10 retained entries on each side
+in journal arrival order. Compare timestamps/request IDs: nearby entries may
+belong to concurrent requests, and asynchronous arrival/retention can truncate
+context. Refresh context to see logs written after opening.
+
+A local watchdog checks every 60 seconds for critical storage/database health
+and yt-dlp attempts older than 120 seconds. It records one error per active
+condition, then allows a new alert after recovery and recurrence. It does not
+restart services, interrupt playback or contact upstream systems. SIGKILL,
+container termination and whole-host failure cannot reliably be recorded by an
+in-process watchdog; use external monitoring for those cases.
+
+`STATUS_LOG_DB` selects a dedicated journal database. By default it is
+`status_logs.sqlite3` beside `DB_FILE`, so existing persistent database mounts
+also persist the journal. Records are redacted before enqueue/storage; known
+application secrets, authentication payloads, URLs, paths and common identity
+fields are removed. HTTP entries retain registered route patterns, never query
+arguments. Some authentication messages are deliberately omitted in full.
+This is sanitized application logging, not raw container stdout/stderr or logs
+from other containers. Status polls are excluded to prevent feedback noise.
+
+Producers never wait for SQLite: separate bounded queues feed one background
+writer. The journal retains up to 4,000 ordinary and 1,000 error records, with
+an additional SQLite page cap of approximately 32 MiB plus a bounded WAL.
+**Retention is up to 24 hours**: size caps may discard the oldest entries sooner;
+queue saturation/storage failures report dropped counts. Info floods cannot
+consume the error-row budget. Expired rows disappear from API results exactly
+at the cutoff, even if seen, and background cleanup removes them within the next
+minute. Incremental vacuum/checkpointing reclaims free space; allocated database
+pages may remain reserved within the cap. This policy does not rotate Docker or
+host logs maintained outside the application.
+
+Log/error APIs are owner-only and `no-store`:
+- `GET /api/status/logs?level=&source=&q=&before=&limit=50`
+- `GET /api/status/errors?before=&limit=50`
+- `GET /api/status/errors/<id>`
+- `POST /api/status/errors/seen` with JSON `{"ids":["..."]}` (at most 100)
+- `GET /api/status/cache/<name>?outcome=hit|miss&before=&limit=50`
+
+Failures preserve playback and existing browser snapshots. Read-only/full/missing
+journal storage produces an unavailable state and bounded retries, not a logging
+exception on request threads. Per-process cache counters and multi-worker caveats
+still apply; shared journal paths aggregate records from workers, while queue
+loss counters and watchdog condition suppression are process-local.

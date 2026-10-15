@@ -99,3 +99,18 @@ class InventoryTests(unittest.TestCase):
         try: self.assertEqual({'files': 1}, cache.get(collect))
         finally: cache._lock.release()
         cache.get(collect); self.assertEqual(2, collect.call_count)
+
+
+class CacheDetailTests(unittest.TestCase):
+    def test_details_are_bounded_private_filterable_and_use_stable_cursors(self):
+        now=[1000000.];metrics=Metrics(wall=lambda:now[0])
+        for i in range(250):metrics.cache('audio_search',i%2==0,item=('private query',i))
+        first=metrics.cache_details('audio_search',limit=50)
+        self.assertEqual(200,first['retained']);self.assertEqual(50,len(first['entries']))
+        self.assertNotIn('private query',json.dumps(first))
+        metrics.cache('audio_search',True,item=('new private query',1))
+        second=metrics.cache_details('audio_search',before=first['next_before'],limit=50)
+        self.assertFalse({r['id'] for r in first['entries']} & {r['id'] for r in second['entries']})
+        self.assertTrue(all(r['outcome']=='miss' for r in metrics.cache_details('audio_search','miss')['entries']))
+        now[0]+=86401;self.assertEqual([],metrics.cache_details('audio_search')['entries'])
+        self.assertEqual(251,metrics.snapshot()['caches'][0]['hits']+metrics.snapshot()['caches'][0]['misses'])

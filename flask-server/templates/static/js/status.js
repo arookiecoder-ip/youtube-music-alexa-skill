@@ -150,8 +150,11 @@
     const names = new Set([...array(data.caches).map(row => row.name), ...array(data.cache_sizes).map(row => row.name)]);
     for (const name of names) {
       const value = array(data.caches).find(row => row.name === name) || {}, size = array(data.cache_sizes).find(row => row.name === name) || {};
-      const card = document.createElement('div'), top = document.createElement('div'), title = document.createElement('strong'), rate = document.createElement('span'), track = document.createElement('div'), fill = document.createElement('div'), bottom = document.createElement('div'), counts = document.createElement('span'), entries = document.createElement('span');
-      top.className = 'layer-top'; title.textContent = name.replaceAll('_', ' '); rate.textContent = Number.isFinite(value.hit_rate) ? `${number(value.hit_rate, 1)}% hits` : 'No lookups';
+      const card = document.createElement('button'), top = document.createElement('div'), title = document.createElement('strong'), rate = document.createElement('span'), track = document.createElement('div'), fill = document.createElement('div'), bottom = document.createElement('div'), counts = document.createElement('span'), entries = document.createElement('span');
+      card.type = 'button'; card.className = 'cache-layer-button'; card.dataset.cacheName = name;
+      const labels = {audio_lookups:'Saved audio file checks', audio_responses:'Audio response cache', account_ytmusic_clients:'Account API clients', public_ytmusic_clients:'Public API clients', audio_search:'Audio resolver results', stream_search:'Playback stream lists', playlist_tracks:'Playlist track lists'};
+      card.setAttribute('aria-label', `View ${labels[name] || name} hit and miss details`);
+      top.className = 'layer-top'; title.textContent = labels[name] || name.replaceAll('_', ' '); rate.textContent = Number.isFinite(value.hit_rate) ? `${number(value.hit_rate, 1)}% hits` : 'No recorded lookups';
       top.append(title, rate); track.className = 'meter'; fill.style.width = percentWidth(value.hit_rate); track.append(fill);
       bottom.className = 'layer-bottom'; counts.textContent = `${number(value.hits)} hits · ${number(value.misses)} misses`;
       entries.textContent = Number.isFinite(size.entries) ? `${number(size.entries)}${size.capacity ? ` / ${number(size.capacity)}` : ''} entries` : 'Disk lookup';
@@ -166,6 +169,8 @@
     el('health').className = `badge ${status === 'healthy' ? '' : status}`;
     text('health', {healthy: 'Operational', warning: 'Needs attention', critical: 'Critical'}[status]);
     text('updated', `Updated ${time(data.generated_at)}`);
+    text('search-activity', `${number((data.search_activity || {}).requests || 0)} song search requests · ${(data.search_activity || {}).average_ms == null ? 'no timing yet' : number(data.search_activity.average_ms)+' ms average'} · uncached requests`);
+    root.dispatchEvent(new CustomEvent('status-snapshot', {detail: data.error_inbox || {}}));
     text('uptime', `Up ${duration(data.uptime_seconds)}`);
     text('rpm', number((array(data.history).at(-1) || {}).requests || 0));
     text('request-total', `${number(request.total || 0)} total · ${number(request.active || 0)} active handlers`);
@@ -208,12 +213,13 @@
   const url = new URL(root.location.href), apiKey = url.searchParams.get('key');
   if (apiKey) { url.searchParams.delete('key'); root.history.replaceState(null, '', url.pathname + url.search + url.hash); }
   const headers = apiKey ? {'X-Api-Key': apiKey} : {};
-  async function get(path, signal) {
-    const response = await fetch(path, {credentials: 'same-origin', cache: 'no-store', headers, signal});
+  async function get(path, signal, options = {}) {
+    const response = await fetch(path, {...options, credentials: 'same-origin', cache: 'no-store', headers: {...headers, ...(options.headers || {})}, signal});
     if (!response.ok) { const error = new Error(`Status request failed (HTTP ${response.status})`); error.status = response.status; throw error; }
     if (!(response.headers.get('content-type') || '').includes('application/json')) throw new Error('Invalid status response');
     return response.json();
   }
+  root.StatusDashboard.request = get;
   const poller = new Poller({load: async signal => { const data = await get('/api/status', signal); if (!Number.isFinite(data.generated_at) || !data.requests) throw new Error('Incomplete status response'); return data; },
     onData: render, onError: error => { el('notice').hidden = false; text('notice', error.status === 401 || error.status === 403 ? 'Your owner session expired. Sign in again, then reload this page.' : `Status is temporarily unavailable. ${snapshot ? `Keeping the snapshot from ${time(snapshot.generated_at)}.` : 'Retrying automatically.'}`); text('health', 'Connection interrupted'); el('health').className = 'badge warning'; },
     visible: () => !document.hidden, interval: () => Number(el('interval').value) * 1000,
