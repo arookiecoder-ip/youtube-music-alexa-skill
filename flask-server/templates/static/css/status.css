@@ -285,3 +285,90 @@ footer .icon { width: 18px; }
 
 .hit-card > button { margin-top: 12px; font-size: 12px; }
 @media(max-width:700px) { .hit-card > button { grid-column: 2; padding: 6px; min-height: 34px; font-size: 11px; } }
+
+/* Dashboard shell: navigation stays separate from the data workspace. */
+html { scrollbar-gutter: stable; scroll-padding-top: 100px; }
+.topbar { position: sticky; top: 0; z-index: 5; height: 72px; padding: 12px 28px; background: #0b0b0bf5; flex-wrap: nowrap; }
+#nav-toggle { display: none; }
+#desktop-sidebar { position: fixed; top: 72px; bottom: 0; left: 0; width: 204px; padding: 30px 16px; border-right: 1px solid #252525; background: #0b0b0b; overflow-y: auto; }
+.sidebar-label { margin: 0 12px 16px; font-size: 10px; letter-spacing: 1.6px; color: #777; }
+.section-nav { display: flex; flex-direction: column; gap: 5px; margin: 0; border: 0; }
+.section-nav a { display: block; padding: 12px; border-radius: 6px; color: #aaa; font-size: 13px; }
+.section-nav a:hover { background: #191919; color: #fff; }
+.section-nav a[aria-current] { border: 0; background: #2a1b12; color: #ffb17e; box-shadow: inset 2px 0 var(--accent); }
+main { max-width: 1660px; margin: 0 auto 0 204px; padding: 32px clamp(20px, 3vw, 48px); }
+.heading { margin-bottom: 24px; }
+.toolbar { padding: 14px 0; border-top: 1px solid #252525; border-bottom: 1px solid #252525; margin-bottom: 24px; }
+.overview-grid { grid-template-columns: minmax(0, 2fr) minmax(240px, 1fr); }
+.grid { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; align-items: stretch; }
+.grid > .wide { grid-column: auto; }
+.grid > .panel:not(.full) { height: 420px; overflow: auto; scrollbar-gutter: stable; }
+.panel, .cache-card, .hit-card { border-color: #292929; background: #121212; }
+.panel-head { min-height: 32px; align-items: center; }
+.panel-head h2 { min-width: 0; }
+.panel-head > .muted { font-size: 11px; }
+.detail-slot { margin-top: 16px; border-top: 1px solid var(--line); }
+.detail-button { width: 100%; justify-content: space-between; text-align: left; background: transparent; border: 0; border-radius: 0; padding: 14px 0; color: #ccc; font-size: 12px; }
+.detail-button:hover { color: var(--warm); }
+.detail-button > span:last-child { font-size: 17px; }
+#panel-dialog { background: #151515; border: 1px solid #444; border-radius: 12px; color: #fff; width: min(680px, calc(100vw - 32px)); max-height: 85dvh; padding: 22px; overflow: auto; }
+#panel-dialog::backdrop, #nav-drawer::backdrop { background: #000b; }
+body:has(dialog[open]) { overflow: hidden; }
+.inventory { height: 360px; }
+.log-list { height: 360px; }
+.log-list:empty::before { content: 'Load the latest logs or start live updates to view server activity.'; display: grid; place-items: center; height: 100%; padding: 24px; text-align: center; color: #777; font-size: 13px; border: 1px dashed #303030; border-radius: 6px; }
+.hit-card { align-items: stretch; }
+@media (min-width: 901px) and (max-width: 1200px) {
+  .stats article { padding: 14px; gap: 10px; }
+  .stats strong { font-size: 22px; }
+  .stats .icon { display: none; }
+  .panel-head { flex-wrap: wrap; }
+}
+@media (max-width: 900px) {
+  #desktop-sidebar { display: none; }
+  #nav-toggle { display: inline-flex; flex-shrink: 0; width: 42px; padding: 8px; font-size: 19px; }
+  .topbar { padding: 10px 16px; gap: 12px; height: 64px; min-height: 64px; }
+  .topbar .page-label, .topbar .back-link { display: none; }
+  .brand { font-size: 18px; letter-spacing: -.4px; }
+  .brand img { width: 28px; height: 28px; }
+  .error-inbox-button { margin-left: auto; white-space: nowrap; }
+  main { margin: 0; padding: 24px; }
+  #nav-drawer { position: fixed; inset: 0 auto 0 0; margin: 0; height: 100dvh; max-height: 100dvh; width: min(300px, 88vw); max-width: 100vw; padding: max(20px, env(safe-area-inset-top)) 16px max(20px, env(safe-area-inset-bottom)); border: 0; border-right: 1px solid #333; background: #121212; color: #fff; }
+  .drawer-heading { display: flex; align-items: center; justify-content: space-between; margin-bottom: 28px; padding-left: 12px; }
+  .drawer-heading strong { font-size: 18px; }
+  #nav-close { background: transparent; border-color: transparent; }
+  .drawer-back { display: block; border-top: 1px solid #333; margin-top: 24px; padding: 20px 12px; color: #aaa; font-size: 13px; }
+}
+@media (max-width: 700px) {
+  html { scroll-padding-top: 84px; }
+  main { padding: 22px 16px; }
+  .heading { gap: 12px; margin-bottom: 20px; }
+  .toolbar { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 42px 42px; gap: 8px; padding: 12px 0; }
+  .toolbar label, .toolbar select, .toolbar button { min-width: 0; width: 100%; }
+  .toolbar #export { margin: 0; padding: 8px; }
+  #scope-label { grid-column: 1/-1; margin: 2px 0 0; }
+  .overview-grid, .grid { grid-template-columns: minmax(0, 1fr); gap: 16px; }
+  .grid > .panel:not(.full) { height: auto; max-height: 420px; }
+  #activity-section { height: 280px; }
+  .cache-card, .hit-card, .panel { padding: 18px; }
+  .hit-card { grid-template-columns: 96px minmax(0, 1fr); gap: 5px 12px; }
+  .hit-display { width: 92px; height: 92px; grid-row: 1/5; }
+  .hit-card .panel-head, .hit-card > .help, .hit-card > button, .hit-card .hit-key { grid-column: 2; margin: 0; }
+  .hit-card .hit-key { flex-wrap: wrap; gap: 8px; padding-top: 3px; }
+  .panel-head { flex-wrap: wrap; }
+  .inventory { height: 360px; }
+  .log-list { height: 320px; }
+  #panel-dialog { padding: 16px; max-height: 90dvh; }
+}
+@media (max-width: 360px) {
+  .topbar { gap: 8px; padding-inline: 12px; }
+  .brand img { display: none; }
+  main { padding-inline: 12px; }
+  .cache-card, .hit-card, .panel { padding: 14px; }
+}
+
+/* Cache diagnostics use the full row instead of leaving an empty grid cell. */
+#cache-layers-section .layer-list { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px 20px; }
+#cache-layers-section .help { max-width: 85ch; }
+@media (max-width: 1200px) { #cache-layers-section .layer-list { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 700px) { #cache-layers-section .layer-list { grid-template-columns: minmax(0, 1fr); gap: 8px; } }

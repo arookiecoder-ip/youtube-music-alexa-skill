@@ -153,3 +153,17 @@ journal storage produces an unavailable state and bounded retries, not a logging
 exception on request threads. Per-process cache counters and multi-worker caveats
 still apply; shared journal paths aggregate records from workers, while queue
 loss counters and watchdog condition suppression are process-local.
+
+### Responsive workspace
+
+Desktop navigation stays in a fixed sidebar. At 900 px and below the same links
+move into a modal navigation drawer, with Escape, focus restoration and a close
+button. Resizing closes the drawer before moving the links. Resource,
+authentication and retention details open in a separate dialog; their live data
+nodes move into it and return on close, so snapshot updates continue without
+expanding dashboard rows. Tables and busy activity panels scroll within bounded
+areas. Cache layers span a full row with responsive columns.
+
+Chromium regression checks cover 320, 390, 768, 1024, 1440 and 1920 px, page
+overflow, unchanged dashboard positions when details open, and mobile/desktop
+navigation transitions. The dialogs and navigation require no extra API calls.
