@@ -372,3 +372,6 @@ body:has(dialog[open]) { overflow: hidden; }
 #cache-layers-section .help { max-width: 85ch; }
 @media (max-width: 1200px) { #cache-layers-section .layer-list { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 700px) { #cache-layers-section .layer-list { grid-template-columns: minmax(0, 1fr); gap: 8px; } }
+
+.log-pagination { min-height: 58px; }
+#log-state { min-height: 38px; }

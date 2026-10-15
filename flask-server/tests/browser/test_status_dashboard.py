@@ -155,11 +155,11 @@ def test_responsive_layout_capacity_and_expandable_details(browser_page, width):
     playwright.expect(page.locator('#cache-used')).to_have_text('6 KiB')
     playwright.expect(page.locator('#cache-budget')).to_have_text('of 5 GiB used')
     assert page.locator('#cache-meter').get_attribute('aria-valuenow') is not None
-    page.get_by_text('Capacity & cleanup policy', exact=True).click()
+    page.get_by_role('button', name='Capacity & cleanup policy', exact=True).click()
     playwright.expect(page.locator('#retention')).to_contain_text('Until space is needed · LRU')
     playwright.expect(page.locator('#retention')).to_contain_text('Shared with total music cache')
     page.get_by_label('Close panel details').click()
-    page.get_by_text('Resource details', exact=True).click()
+    page.get_by_role('button', name='Resource details', exact=True).click()
     playwright.expect(page.locator('#system')).to_be_visible()
     page.get_by_label('Close panel details').click()
     if width <= 900:
@@ -338,7 +338,7 @@ def test_navigation_and_details_do_not_move_dashboard(browser_page, width, tmp_p
     ready(page, base)
     page.locator('#pause').click()
     before = page.locator('#inventory-section').evaluate('el => el.getBoundingClientRect().top + scrollY')
-    page.get_by_text('Resource details', exact=True).click()
+    page.get_by_role('button', name='Resource details', exact=True).click()
     playwright.expect(page.locator('#panel-dialog')).to_be_visible()
     playwright.expect(page.locator('#system')).to_be_visible()
     assert page.locator('#inventory-section').evaluate('el => el.getBoundingClientRect().top + scrollY') == before
@@ -378,15 +378,15 @@ def test_open_panel_details_receive_refresh_without_moving_cards(browser_page):
     ready(page, base)
     page.locator('#pause').click()
     payload = page.request.get(base+'/api/status').json()
-    payload['system']['cpu_count'] = 999
+    payload['storage']['system']['cpu_count'] = 999
     page.route('**/api/status', lambda route: route.fulfill(json=payload))
-    page.get_by_text('Resource details', exact=True).click()
+    page.get_by_role('button', name='Resource details', exact=True).click()
     before = page.locator('#inventory-section').evaluate('el => el.getBoundingClientRect().top + scrollY')
     # An automatic snapshot refresh uses the same path while the page is inert.
     page.locator('#refresh').evaluate('el => el.click()')
     playwright.expect(page.locator('#panel-dialog #system')).to_contain_text('999')
     assert page.locator('#inventory-section').evaluate('el => el.getBoundingClientRect().top + scrollY') == before
     page.keyboard.press('Escape')
-    page.get_by_text('Resource details', exact=True).click()
+    page.get_by_role('button', name='Resource details', exact=True).click()
     playwright.expect(page.locator('#panel-dialog #system')).to_contain_text('999')
     assert not errors
