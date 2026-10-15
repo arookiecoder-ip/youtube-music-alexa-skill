@@ -171,3 +171,10 @@ class JournalTests(unittest.TestCase):
         self.assertIn('require_api_key',rows[1]['trace'])
         self.assertNotIn('private-cookie',json.dumps(rows))
         self.assertNotIn('multiline-secret',json.dumps(rows))
+
+    def test_multibyte_messages_and_exception_details_are_bounded_in_bytes(self):
+        self.journal.record('ERROR','fixture','音'*10000,trace='音'*10000)
+        self.journal.drain()
+        row=self.journal.query(errors=True)['entries'][0]
+        self.assertLessEqual(len(row['message'].encode('utf-8')),2048)
+        self.assertLessEqual(len(row['trace'].encode('utf-8')),2048)

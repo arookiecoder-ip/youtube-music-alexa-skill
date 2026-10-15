@@ -29,7 +29,7 @@ def redact(value, secrets=()):
     text = re.sub(r'[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}', '[email]', text)
     text = re.sub(r'(?i)(?:[A-Z]:\\|/)(?:[^\s\'"<>:,]+[/\\])+[^\s\'"<>:,]*', '[path]', text)
     text = re.sub(r'[\x00-\x08\x0b-\x1f\x7f]', '', text)
-    return text[:2048]
+    return text.encode('utf-8', errors='replace')[:2048].decode('utf-8', errors='ignore')
 
 
 class Journal:
@@ -89,7 +89,7 @@ class Journal:
                 safe_frames = [frame if not any(isinstance(secret, str) and len(secret)>=4 and secret in frame for secret in secrets) else '[Frame omitted]' for frame in frames[-12:]]
                 safe_trace += '\n' + '\n'.join(safe_frames)
             row = (uuid.uuid4().hex, self.clock(), level if level in LEVELS else 'INFO',
-                   redact(source, secrets)[:80], redact(message, secrets), safe_trace[:2048],
+                   redact(source, secrets)[:80], redact(message, secrets), safe_trace.encode('utf-8', errors='replace')[:2048].decode('utf-8', errors='ignore'),
                    request_id if re.fullmatch(r'[a-f0-9]{32}', request_id) else '',
                    route[:160] if re.fullmatch(r'/[A-Za-z0-9_/< >:.\-]*', route) else '', int(level in ('ERROR', 'CRITICAL')))
             (self.errors if row[-1] else self.normal).put_nowait(row)
