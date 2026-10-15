@@ -861,7 +861,8 @@ body.library-route #nav-library-btn::before {
   letter-spacing: 0.5px;
 }
 
-.profile-menu button {
+.profile-menu button,
+.profile-menu .profile-menu-link {
   width: 100%;
   margin-top: 8px;
   padding: 12px 14px;
@@ -878,7 +879,7 @@ body.library-route #nav-library-btn::before {
   align-items: center;
   gap: 10px;
 }
-.profile-menu button:hover { background: #222; border-color: var(--accent); color: var(--accent); }
+.profile-menu button:hover, .profile-menu .profile-menu-link:hover { background: #222; border-color: var(--accent); color: var(--accent); }
 
 .profile-menu #amazon-signout {
   color: #ff6b6b;
@@ -894,3 +895,5 @@ body.library-route #nav-library-btn::before {
   text-align: center;
 }
 .profile-menu #logout:hover { background: #ff5a55; border-color: #ff5a55; color: #000; }
+
+.profile-menu .profile-menu-link { text-decoration: none; }

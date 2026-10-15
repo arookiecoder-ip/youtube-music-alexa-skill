@@ -134,3 +134,49 @@ def replace(raw, configure_command):
             return dict(result)
         finally:
             candidate.unlink(missing_ok=True)
+
+
+def inspection(path):
+    """Passive status only: no network probe, cookie values or file paths."""
+    result = {'present': False, 'bytes': 0, 'modified_at': None,
+              'validation': None, 'validation_age_seconds': None, 'probe_busy': False}
+    if not path:
+        return result
+    try:
+        stat = Path(path).stat()
+        result.update(present=Path(path).is_file(), bytes=stat.st_size, modified_at=stat.st_mtime)
+    except OSError:
+        return result
+    # Parse only a bounded export, and expose counts/expiry, never cookie values.
+    result.update(format_valid=None, cookie_count=0, expired_count=0,
+                  session_count=0, youtube_active=0, next_expiry=None)
+    if stat.st_size <= MAX_BYTES:
+        try:
+            jar = http.cookiejar.MozillaCookieJar(str(path))
+            with warnings.catch_warnings():
+                warnings.simplefilter('ignore')
+                jar.load(ignore_discard=True, ignore_expires=True)
+            result['format_valid'] = True
+            expiries = []
+            for cookie in jar:
+                result['cookie_count'] += 1
+                result['expired_count'] += cookie.is_expired()
+                result['session_count'] += cookie.expires is None
+                if cookie.domain.lstrip('.') in ('youtube.com', 'music.youtube.com', 'www.youtube.com') and not cookie.is_expired():
+                    result['youtube_active'] += 1
+                    if cookie.expires is not None:
+                        expiries.append(cookie.expires)
+            result['next_expiry'] = min(expiries) if expiries else None
+        except (OSError, ValueError, http.cookiejar.LoadError):
+            result['format_valid'] = False
+    if not _probe_lock.acquire(blocking=False):
+        result['probe_busy'] = True
+        return result
+    try:
+        cached = _cache.get((str(path), stat.st_mtime_ns, stat.st_size, stat.st_ino))
+        if cached:
+            result['validation'] = cached[1].get('valid')
+            result['validation_age_seconds'] = max(0, time.monotonic() - cached[0])
+    finally:
+        _probe_lock.release()
+    return result

@@ -35,3 +35,40 @@ jobs:
         run: python -m unittest discover -s lambda/tests -p 'test_*.py' -q
       - name: Python compilation
         run: python -m py_compile flask-server/server.py lambda/mediaUtils/player.py lambda/lambda_function.py
+
+  status-dashboard-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      STATUS_SCREENSHOT_DIR: ${{ github.workspace }}/status-artifacts
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+          cache-dependency-path: |
+            flask-server/requirements.txt
+            flask-server/tests/requirements-status.txt
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: python -m pip install -r flask-server/requirements.txt -r flask-server/tests/requirements-status.txt
+      - run: python -m playwright install --with-deps chromium
+      - name: Status metrics, access control and failure paths
+        working-directory: flask-server
+        env:
+          PYTHONPATH: tests:.
+        run: python -m unittest discover -s tests -p 'test_status*.py' -q
+      - name: Dashboard refresh and visibility behavior
+        run: |
+          node --check flask-server/templates/static/js/status.js
+          node flask-server/tests/test_status_ui.js
+      - name: Desktop and mobile Chromium checks
+        run: python -m pytest -q flask-server/tests/browser/test_status_dashboard.py --junitxml=status-artifacts/browser-tests.xml
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: status-dashboard-test-results
+          path: status-artifacts/
+          if-no-files-found: ignore
