@@ -1,0 +1,36 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="color-scheme" content="dark"><meta name="robots" content="noindex,nofollow">
+  <title>Service status · Music Box</title>
+  <link rel="stylesheet" href="/static/css/status.css?v={{ asset_v }}">
+  <script defer src="/static/js/status.js?v={{ asset_v }}"></script>
+</head>
+<body>
+<header class="topbar"><a class="brand" href="/">◈ <span>MUSIC BOX</span></a><span class="scope">OPERATIONS / STATUS</span><a href="/">Back to music ↗</a></header>
+<main>
+  <section class="heading"><div><p class="eyebrow">LIVE SERVICE OBSERVABILITY</p><h1>Inside Music Box<span>.</span></h1><p class="subtitle">Playback infrastructure, from the first request to the last cached byte.</p></div><div class="connection"><span id="health" class="badge neutral">Connecting</span><p id="updated">Waiting for first snapshot</p></div></section>
+  <section class="toolbar" aria-label="Dashboard controls"><label>Refresh <select id="interval"><option value="5">Every 5 seconds</option><option value="15" selected>Every 15 seconds</option><option value="30">Every 30 seconds</option><option value="60">Every minute</option></select></label><button id="pause" type="button" aria-pressed="false">Pause updates</button><button id="refresh" type="button">Refresh now</button><button id="export" type="button" disabled>Export snapshot ↓</button><span id="scope-label">Current server process · counters reset on restart</span></section>
+  <p id="notice" class="notice" role="status" hidden></p>
+  <div id="alerts" class="alerts" aria-live="polite"></div>
+  <section class="stats" aria-label="Key metrics">
+    <article><p>REQUESTS / LAST MINUTE</p><strong id="rpm">—</strong><small id="request-total">Waiting for traffic</small></article>
+    <article><p>AUDIO LOOKUP HIT RATE</p><strong id="hit-rate">—</strong><small id="hit-detail">Internal disk lookups, including prefetch</small></article>
+    <article><p>RESPONSE LATENCY / P95</p><strong id="latency">—</strong><small>Headers ready · latest 1,024 responses</small></article>
+    <article><p>FREE DISK SPACE</p><strong id="free-disk">—</strong><small id="disk-detail">Filesystem containing the audio cache</small></article>
+  </section>
+  <div class="grid">
+    <section class="panel wide"><div class="panel-head"><div><p class="eyebrow">TRAFFIC & RELIABILITY</p><h2>Request activity</h2></div><span class="legend"><i></i>Requests <i class="red"></i>Errors · 60 minutes</span></div><canvas id="traffic" height="180" aria-label="Requests and errors over the past hour" role="img"></canvas><div class="chart-footer"><span>60 minutes ago</span><span id="request-health">—</span><span>Now</span></div></section>
+    <section class="panel"><div class="panel-head"><div><p class="eyebrow">RESOURCE PRESSURE</p><h2>Runtime & storage</h2></div><span id="uptime" class="muted">—</span></div><dl id="system"></dl><div class="meter" aria-hidden="true"><div id="disk-meter"></div></div><p class="help">Load and /proc memory describe the host. Container memory limits are listed separately. Storage sampling refreshes at most every 10 seconds.</p></section>
+    <section class="panel"><div class="panel-head"><div><p class="eyebrow">IDENTITY & ACCESS</p><h2>Cookie health</h2></div><button id="cookie-check" type="button">Test audio access</button></div><dl id="cookies"></dl><p id="cookie-result" class="help" role="status">Automatic refresh is passive. A manual test downloads a small audio sample and may take up to 50 seconds.</p></section>
+    <section class="panel"><div class="panel-head"><div><p class="eyebrow">FETCH PIPELINE</p><h2>Downloads & streaming</h2></div><span id="cooldown" class="badge neutral">—</span></div><dl id="fetching"></dl><div id="active-fetches" class="activity-list"></div><p class="help">Fetch attempts report yt-dlp process exit status, not decoded-audio validity. Queued + running counts include waiting/coalesced calls. Streams are tracked separately.</p></section>
+    <section class="panel"><div class="panel-head"><div><p class="eyebrow">CACHE LAYERS</p><h2>Efficiency & capacity</h2></div></div><div class="table-wrap"><table><thead><tr><th>Layer</th><th>Hits</th><th>Misses</th><th>Hit rate</th><th>Entries</th></tr></thead><tbody id="cache-layers"></tbody></table></div><dl id="retention"></dl><p class="help">No traffic means no measured hit rate. Audio-response counters use X-Cache headers where present; lookup counters also include internal probes.</p></section>
+    <section class="panel full"><div class="panel-head"><div><p class="eyebrow">ON-DISK INVENTORY</p><h2>Cached audio</h2></div><span id="inventory-summary" class="muted">—</span></div><div class="filters"><input id="search" type="search" placeholder="Filter by video ID or format" aria-label="Filter cached audio"><select id="pool" aria-label="Cache pool"><option value="all">All pools</option><option value="requested">Requested</option><option value="warmup">Warmup</option><option value="partial">Partial downloads</option><option value="pinned">Pinned tracks</option></select><select id="sort" aria-label="Inventory order"><option value="newest">Recently written</option><option value="size">Largest first</option><option value="idle">Longest idle</option></select></div><div class="table-wrap inventory"><table><thead><tr><th>Video ID</th><th>Format</th><th>Size</th><th>State</th><th>Pool</th><th>Idle</th><th>Last written</th></tr></thead><tbody id="inventory"></tbody></table></div><p id="inventory-note" class="help">Newest 200 audio files are retained for display. Symlinks are excluded and the scan is bounded by time and entry count.</p></section>
+    <section class="panel wide"><div class="panel-head"><div><p class="eyebrow">REQUEST BREAKDOWN</p><h2>Routes & response time</h2></div><span class="muted">Since process start</span></div><div class="table-wrap"><table><thead><tr><th>Route</th><th>Requests</th><th>Errors</th><th>Average</th><th>Maximum</th></tr></thead><tbody id="routes"></tbody></table></div></section>
+    <section class="panel"><div class="panel-head"><div><p class="eyebrow">RECENT SIGNALS</p><h2>Errors & fetch outcomes</h2></div><span class="muted">Latest 60</span></div><div id="events" class="activity-list"></div></section>
+  </div>
+  <footer>Owner-only diagnostics · Read-only local snapshots · No cookie values, account identifiers, API keys or raw upstream errors are included.<br>Request latency ends when response headers are ready; it excludes streamed body duration. This process is not a cluster-wide metrics aggregator.</footer>
+</main>
+</body>
+</html>

@@ -1,5 +1,6 @@
 from flask import has_request_context
 import download_cookies
+from status_monitor import Metrics, CachedCollector, file_info, scan_audio, system_snapshot
 from playback_failover import PlaybackFailoverBudget
 import asyncio, collections, difflib, glob, hashlib, hmac, itertools, json, math, os, random, secrets, shutil, sys, threading, time, re, subprocess, logging, copy, uuid, tempfile, shlex
 from datetime import timedelta, datetime
@@ -28,6 +29,35 @@ def _is_local_host(host):
     return host in {"localhost", "127.0.0.1", "::1"}
 
 app = Flask(__name__, static_folder=None)
+_operational = Metrics()
+_status_storage = CachedCollector(10)
+
+
+@app.before_request
+def _operational_request_start():
+    if not request.path.startswith('/static/') and request.path.rstrip('/') not in ('/status', '/api/status'):
+        request.environ['musicbox.metrics_start'] = _operational.begin_request()
+
+
+@app.after_request
+def _operational_request_end(response):
+    started = request.environ.pop('musicbox.metrics_start', None)
+    if started is not None:
+        route = str(request.url_rule) if request.url_rule else '/unmatched'
+        _operational.finish_request(started, request.method, route, response.status_code)
+        cache = response.headers.get('X-Cache', '').upper()
+        if cache in ('HIT', 'MISS'):
+            _operational.cache('audio_responses', cache == 'HIT')
+    return response
+
+
+@app.teardown_request
+def _operational_request_abort(error):
+    started = request.environ.pop('musicbox.metrics_start', None)
+    if started is not None:
+        _operational.finish_request(started, request.method,
+            str(request.url_rule) if request.url_rule else '/unmatched', 500)
+
 # CSS/JS are served as external, versioned files under /static/ (see
 # _TEMPLATE_STATIC_DIR below), so the compiled-template cache can no longer
 # hide asset edits: a deployed file change alters _STATIC_VERSION and the
@@ -847,7 +877,7 @@ def _safe_spa_target(value, default='/home'):
 
 # Endpoints reachable with a logged-in web-remote session cookie (so the long
 # API key stays out of the browser URL). Everything here plus the remote page.
-_SESSION_PATHS = ('/remote', '/alexa/status', '/alexa/init', '/alexa/devices', '/alexa/command',
+_SESSION_PATHS = ('/status', '/api/status', '/remote', '/alexa/status', '/alexa/init', '/alexa/devices', '/alexa/command',
                   '/alexa/play', '/alexa/suggest', '/alexa/proxy_login',
                   '/alexa/proxy_check', '/alexa/now_playing', '/alexa/state_event',
                   '/alexa/seek', '/alexa/volume', '/alexa/play_queue',
@@ -1157,8 +1187,11 @@ def app_audio_token():
 
 @app.before_request
 def require_api_key():
-    _ensure_db()
     path = request.path.rstrip('/') or '/'
+    # Keep diagnostics available to a valid owner key during a database outage.
+    if path in ('/status', '/api/status') and _valid_key_supplied():
+        return None
+    _ensure_db()
     # Let the shared shell renderer apply the same owner/jam/login policy as
     # the public root document. The SPA bypass accepts both the slash-less
     # canonical paths (`/album`) and their slashed variants (`/album/`) so a
@@ -1285,13 +1318,15 @@ class _BoundedCache:
     forever while each new entry pays a fresh auth handshake. LRU eviction
     caps the memory without evicting the busy threads' clients.
     """
-    def __init__(self, maxsize=32):
+    def __init__(self, maxsize=32, name="client_cache"):
+        self._name = name
         self._data = collections.OrderedDict()
         self._maxsize = maxsize
         self._lock = threading.Lock()
 
     def get(self, key):
         with self._lock:
+            _operational.cache(self._name, key in self._data)
             if key in self._data:
                 self._data.move_to_end(key)
                 return self._data[key]
@@ -1309,7 +1344,7 @@ class _BoundedCache:
             self._data.clear()
 
 
-_YT_CACHE = _BoundedCache()
+_YT_CACHE = _BoundedCache(name="public_ytmusic_clients")
 _YT_CACHE_LOCK = threading.Lock()
 
 def _get_ytmusic():
@@ -1330,7 +1365,7 @@ def _get_ytmusic():
 _home_cache = {'built_at': 0, 'data': None}
 _home_lock = threading.Lock()
 
-_YT_HOME_CACHE = _BoundedCache()
+_YT_HOME_CACHE = _BoundedCache(name="account_ytmusic_clients")
 _YT_HOME_CACHE_LOCK = threading.Lock()
 _YT_HOME_CACHE_MTIME = 0
 
@@ -3843,6 +3878,7 @@ class Supporting:
     def cached_audio_path(video_id: str):
         paths = [p for p in glob.glob(os.path.join(AUDIO_CACHE_DIR, f"{video_id}.*"))
                  if not p.endswith('.part') and not p.endswith('.warmup')]
+        _operational.cache('audio_lookups', bool(paths))
         return paths[0] if paths else None
 
     def evict_cached_audio(video_id: str):
@@ -4162,9 +4198,11 @@ class Supporting:
                     last_error = ""
                     for index, client in enumerate(clients):
                         client_started = time.time()
-                        result = subprocess.run(
-                            Supporting.ytdlp_download_command(video_id, output, client=client),
-                            capture_output=True, text=True)
+                        with _operational.fetch(client, video_id) as attempt:
+                            result = subprocess.run(
+                                Supporting.ytdlp_download_command(video_id, output, client=client),
+                                capture_output=True, text=True)
+                            attempt['ok'] = result.returncode == 0
                         client_elapsed = time.time() - client_started
                         if result.returncode == 0:
                             written_path = Supporting.cached_audio_path(video_id)
@@ -5087,7 +5125,7 @@ def proxy_stream():
 # validators and byte ranges on cached files, and cache/metadata headers.
 
 _AUDIO_SEARCH_TTL = 1800.0
-_audio_search_cache = _BoundedCache(maxsize=512)
+_audio_search_cache = _BoundedCache(maxsize=512, name="audio_search")
 
 
 def _audio_truthy(value) -> bool:
@@ -11358,6 +11396,105 @@ def _render_root_shell():
     if target == '/':
         return redirect('/login/')
     return redirect('/login/?next=' + quote(target, safe=''))
+
+
+def _status_cache_sizes():
+    rows = []
+    for label, cache in [('public_ytmusic_clients', _YT_CACHE), ('account_ytmusic_clients', _YT_HOME_CACHE), ('audio_search', _audio_search_cache)]:
+        with cache._lock:
+            rows.append({'name': label, 'entries': len(cache._data), 'capacity': cache._maxsize})
+    for label, cache, lock in [('stream_search', _stream_list_cache, _stream_list_cache_lock),
+                                ('playlist_tracks', _playlist_tracks_cache, _playlist_tracks_cache_lock)]:
+        with lock:
+            rows.append({'name': label, 'entries': len(cache)})
+    return rows
+
+
+def _status_snapshot():
+    now = time.time()
+    telemetry = _operational.snapshot()
+    unavailable = []
+    def read_component(name, function, fallback):
+        try:
+            return function()
+        except Exception:
+            unavailable.append(name)
+            return fallback
+    storage = read_component('storage', lambda: _status_storage.get(lambda: {
+        'captured_at': time.time(), 'audio': scan_audio(AUDIO_CACHE_DIR, _pinned_cache_video_ids()),
+        'system': system_snapshot(AUDIO_CACHE_DIR, DB_FILE)}), {'available': False})
+    with _stream_inflight_lock:
+        streams = [{'video_id': video, 'age_seconds': max(0, now - started)}
+                   for video, started in list(_stream_inflight.items())[:64]]
+        stream_count = len(_stream_inflight)
+    cookie = read_component('download cookies', lambda: download_cookies.inspection(Supporting.get_ytdlp_cookies_file()), {'present': False})
+    amazon = read_component('Amazon session', alexa_remote.remote.is_logged_in, None)
+    if isinstance(amazon, tuple):
+        amazon = amazon[0]
+    with _dead_video_ids_lock:
+        dead = len(_dead_video_ids)
+    with _flaky_video_ids_lock:
+        flaky = len(_flaky_video_ids)
+    with _np_lock:
+        queue_length = len(_now_playing.get('queue') or [])
+        playback = {'playing': bool(_now_playing.get('playing')), 'queue_length': queue_length,
+                    'confirmed': bool(_now_playing.get('playback_confirmed'))}
+    reserve = storage.get('system', {}).get('disk', {}).get('free_bytes')
+    cooldown = _ytdlp_cooldown_remaining()
+    alerts = [{'level': 'warning', 'title': name + ' unavailable', 'detail': 'This local collector could not complete. Other metrics remain available.'} for name in unavailable]
+    audio = storage.get('audio', {})
+    if audio.get('available') is False:
+        alerts.append({'level': 'warning', 'title': 'Audio cache unavailable', 'detail': 'The directory is missing or unreadable; storage totals may be unavailable.'})
+    if storage.get('system', {}).get('database', {}).get('readable') is False:
+        alerts.append({'level': 'critical', 'title': 'Database read check failed', 'detail': 'The read-only database check could not complete.'})
+    if reserve is not None and reserve < AUDIO_CACHE_MIN_FREE_BYTES:
+        alerts.append({'level': 'critical', 'title': 'Storage reserve is low', 'detail': 'Free disk space is below the configured audio-cache reserve.'})
+    if cooldown:
+        alerts.append({'level': 'warning', 'title': 'YouTube cooldown active', 'detail': 'Speculative fetching is paused after upstream rate limiting.'})
+    if not cookie['present']:
+        alerts.append({'level': 'warning', 'title': 'Download cookies are not configured', 'detail': 'Some YouTube formats may require authenticated downloads.'})
+    elif cookie.get('format_valid') is False:
+        alerts.append({'level': 'warning', 'title': 'Cookie export format is invalid', 'detail': 'Replace it with a Netscape-format YouTube cookie export.'})
+    elif cookie.get('format_valid') and not cookie.get('youtube_active'):
+        alerts.append({'level': 'warning', 'title': 'No unexpired YouTube cookies', 'detail': 'The saved export has no active YouTube cookies. Session cookies may still require a fresh validation.'})
+    elif cookie.get('validation') is False:
+        alerts.append({'level': 'warning', 'title': 'Last cookie validation failed', 'detail': 'Run a fresh audio check or replace the cookie export from your account menu.'})
+    if storage.get('audio', {}).get('complete') is False:
+        alerts.append({'level': 'warning', 'title': 'Cache inventory is sampled', 'detail': 'The scan reached its time or entry limit; totals are lower bounds.'})
+    return dict(telemetry, generated_at=now, uptime_seconds=max(0, now - _start_time_epoch),
+        health='critical' if any(row['level'] == 'critical' for row in alerts) else ('warning' if alerts else 'healthy'),
+        alerts=alerts, storage=storage, cache_sizes=_status_cache_sizes(),
+        limits={'audio_bytes': AUDIO_CACHE_MAX_BYTES, 'warmup_bytes': WARMUP_MAX_BYTES,
+                'reserve_bytes': AUDIO_CACHE_MIN_FREE_BYTES, 'audio_ttl_seconds': AUDIO_CACHE_TTL,
+                'warmup_ttl_seconds': WARMUP_TTL, 'sweep_seconds': AUDIO_CACHE_SWEEP_INTERVAL},
+        fetching={'queued_and_running': _download_queue_size(), 'download_slots': _DOWNLOAD_CONCURRENCY,
+                  'prefetch_slots': _PREFETCH_CONCURRENCY, 'stream_slots': _STREAM_CONCURRENCY,
+                  'active_streams': stream_count, 'streams': streams, 'cooldown_seconds': cooldown,
+                  'known_dead': dead, 'temporarily_flaky': flaky},
+        cookies={'downloads': cookie, 'youtube_headers': file_info(os.environ.get('YTMUSIC_AUTH_FILE') or 'headers_auth.json'),
+                 'amazon_session_in_memory': bool(amazon)}, playback=playback)
+
+
+@app.route('/status', methods=['GET'])
+@app.route('/status/', methods=['GET'])
+def status_panel():
+    if not (_valid_key_supplied() or _logged_in()):
+        return _no_store(redirect('/login/?next=%2Fstatus'))
+    response = _no_store(app.make_response(render_template('status.html', asset_v=_STATIC_VERSION)))
+    response.headers['Referrer-Policy'] = 'no-referrer'
+    response.headers['X-Frame-Options'] = 'DENY'
+    response.headers['Content-Security-Policy'] = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'"
+    return response
+
+
+@app.route('/api/status', methods=['GET'])
+@app.route('/api/status/', methods=['GET'])
+def status_api():
+    if not (_valid_key_supplied() or _logged_in()):
+        return _no_store(app.make_response(error_response('Owner access required.', 401)))
+    response = _no_store(jsonify(_status_snapshot()))
+    response.headers['Referrer-Policy'] = 'no-referrer'
+    return response
 
 
 @app.route("/", methods=["GET"])
