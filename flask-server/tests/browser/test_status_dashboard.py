@@ -68,7 +68,10 @@ def browser_page(live_server):
 def screenshot(page, name, fallback):
     directory = Path(os.environ.get('STATUS_SCREENSHOT_DIR', str(fallback)))
     directory.mkdir(parents=True, exist_ok=True)
+    page.evaluate('scrollTo(0, 0)')
     page.screenshot(path=str(directory / name), full_page=True)
+    if name.startswith('musicbox-status-layout-'):
+        page.screenshot(path=str(directory / name.replace('.png', '-viewport.png')))
 
 
 def ready(page, base):
@@ -152,11 +155,15 @@ def test_responsive_layout_capacity_and_expandable_details(browser_page, width):
     playwright.expect(page.locator('#cache-used')).to_have_text('6 KiB')
     playwright.expect(page.locator('#cache-budget')).to_have_text('of 5 GiB used')
     assert page.locator('#cache-meter').get_attribute('aria-valuenow') is not None
-    page.get_by_text('Capacity & cleanup policy', exact=True).click()
+    page.get_by_role('button', name='Capacity & cleanup policy', exact=True).click()
     playwright.expect(page.locator('#retention')).to_contain_text('Until space is needed · LRU')
     playwright.expect(page.locator('#retention')).to_contain_text('Shared with total music cache')
-    page.get_by_text('Resource details', exact=True).click()
+    page.get_by_label('Close panel details').click()
+    page.get_by_role('button', name='Resource details', exact=True).click()
     playwright.expect(page.locator('#system')).to_be_visible()
+    page.get_by_label('Close panel details').click()
+    if width <= 900:
+        page.get_by_label('Open status navigation').click()
     page.locator('.section-nav a[href="#cache-section"]').click()
     playwright.expect(page.locator('.section-nav a[aria-current]')).to_have_text('Music cache')
     assert not errors
@@ -321,4 +328,65 @@ def test_expired_owner_session_has_actionable_cache_dialog_message(browser_page)
     page.locator('[data-cache-name="account_ytmusic_clients"]').click()
     playwright.expect(page.locator('#dialog-state')).to_contain_text('Your owner session expired or access was denied')
     playwright.expect(page.locator('#dialog-state')).to_contain_text('Sign in again')
+    assert not errors
+
+
+@pytest.mark.parametrize('width', [320, 390, 768, 1024, 1440, 1920])
+def test_navigation_and_details_do_not_move_dashboard(browser_page, width, tmp_path):
+    page, base, errors = browser_page
+    page.set_viewport_size({'width': width, 'height': 950})
+    ready(page, base)
+    page.locator('#pause').click()
+    before = page.locator('#inventory-section').evaluate('el => el.getBoundingClientRect().top + scrollY')
+    page.get_by_role('button', name='Resource details', exact=True).click()
+    playwright.expect(page.locator('#panel-dialog')).to_be_visible()
+    playwright.expect(page.locator('#system')).to_be_visible()
+    assert page.locator('#inventory-section').evaluate('el => el.getBoundingClientRect().top + scrollY') == before
+    # The live data node is moved, not copied: refreshes keep updating this dialog.
+    assert page.locator('#system').count() == 1
+    page.keyboard.press('Escape')
+    playwright.expect(page.locator('#panel-dialog')).not_to_be_visible()
+    assert page.locator('#inventory-section').evaluate('el => el.getBoundingClientRect().top + scrollY') == before
+    if width <= 900:
+        toggle = page.get_by_label('Open status navigation')
+        toggle.click()
+        playwright.expect(toggle).to_have_attribute('aria-expanded', 'true')
+        playwright.expect(page.locator('#nav-drawer')).to_be_visible()
+        page.keyboard.press('Escape')
+        playwright.expect(toggle).to_be_focused()
+        playwright.expect(toggle).to_have_attribute('aria-expanded', 'false')
+        toggle.click()
+        page.locator('#status-nav a[href="#live-log-section"]').click()
+        playwright.expect(page.locator('#nav-drawer')).not_to_be_visible()
+        playwright.expect(page.locator('#status-nav a[aria-current]')).to_have_text('Server logs')
+        toggle.click()
+        page.set_viewport_size({'width': 1440, 'height': 950})
+        playwright.expect(page.locator('#nav-drawer')).not_to_be_visible()
+        playwright.expect(page.locator('#desktop-sidebar #status-nav')).to_have_count(1)
+        page.set_viewport_size({'width': width, 'height': 950})
+        playwright.expect(page.locator('#drawer-links #status-nav')).to_have_count(1)
+    else:
+        playwright.expect(page.locator('#status-nav')).to_be_visible()
+    assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
+    page.evaluate('scrollTo(0,0)')
+    screenshot(page, f'musicbox-status-layout-{width}.png', tmp_path)
+    assert not errors
+
+
+def test_open_panel_details_receive_refresh_without_moving_cards(browser_page):
+    page, base, errors = browser_page
+    ready(page, base)
+    page.locator('#pause').click()
+    payload = page.request.get(base+'/api/status').json()
+    payload['storage']['system']['cpu_count'] = 999
+    page.route('**/api/status', lambda route: route.fulfill(json=payload))
+    page.get_by_role('button', name='Resource details', exact=True).click()
+    before = page.locator('#inventory-section').evaluate('el => el.getBoundingClientRect().top + scrollY')
+    # An automatic snapshot refresh uses the same path while the page is inert.
+    page.locator('#refresh').evaluate('el => el.click()')
+    playwright.expect(page.locator('#panel-dialog #system')).to_contain_text('999')
+    assert page.locator('#inventory-section').evaluate('el => el.getBoundingClientRect().top + scrollY') == before
+    page.keyboard.press('Escape')
+    page.get_by_role('button', name='Resource details', exact=True).click()
+    playwright.expect(page.locator('#panel-dialog #system')).to_contain_text('999')
     assert not errors
