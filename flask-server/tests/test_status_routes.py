@@ -215,3 +215,7 @@ class StatusRoutesTests(unittest.TestCase):
         http=next(row for row in errors if row['source']=='http')
         self.assertEqual(32,len(http['request_id']))
         self.assertTrue(any(row['request_id']==http['request_id'] and 'RuntimeError' in row['trace'] for row in errors))
+
+    def test_non_ascii_invalid_api_key_is_rejected_without_server_error(self):
+        for path in ['/api/status','/api/status/logs','/api/status/errors','/api/status/cache/audio_lookups']:
+            self.assertEqual(401,self.client.get(path,headers={'X-Api-Key':'invalid-☃'}).status_code)

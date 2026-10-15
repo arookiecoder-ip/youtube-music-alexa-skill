@@ -85,7 +85,9 @@ class Journal:
             for line in str(trace)[:16000].splitlines():
                 (frames if re.fullmatch(r'[A-Za-z0-9_.-]+:\d+ in [A-Za-z0-9_<>.]+', line) else text).append(line)
             safe_trace = redact('\n'.join(text), secrets)
-            if frames: safe_trace += '\n' + '\n'.join(frames[-12:])
+            if frames:
+                safe_frames = [frame if not any(isinstance(secret, str) and len(secret)>=4 and secret in frame for secret in secrets) else '[Frame omitted]' for frame in frames[-12:]]
+                safe_trace += '\n' + '\n'.join(safe_frames)
             row = (uuid.uuid4().hex, self.clock(), level if level in LEVELS else 'INFO',
                    redact(source, secrets)[:80], redact(message, secrets), safe_trace[:2048],
                    request_id if re.fullmatch(r'[a-f0-9]{32}', request_id) else '',

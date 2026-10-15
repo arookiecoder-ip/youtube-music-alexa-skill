@@ -1109,7 +1109,7 @@ def _valid_key_supplied():
     if not API_KEY:
         return False
     supplied = request.args.get('key') or request.headers.get('X-Api-Key')
-    return hmac.compare_digest(supplied or "", API_KEY)
+    return hmac.compare_digest((supplied or "").encode(), API_KEY.encode())
 
 
 def _jam_url(token):
@@ -1241,7 +1241,7 @@ def require_api_key():
     if not API_KEY:
         return None
     supplied = request.args.get('key') or request.headers.get('X-Api-Key')
-    if not hmac.compare_digest(supplied or "", API_KEY):
+    if not _valid_key_supplied():
         # Device/skill endpoints must get a JSON error, never an HTML redirect.
         if _is_api_path(request.path):
             # Keep API/device auth failures machine-readable and distinguish
