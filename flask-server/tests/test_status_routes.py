@@ -219,3 +219,25 @@ class StatusRoutesTests(unittest.TestCase):
     def test_non_ascii_invalid_api_key_is_rejected_without_server_error(self):
         for path in ['/api/status','/api/status/logs','/api/status/errors','/api/status/cache/audio_lookups']:
             self.assertEqual(401,self.client.get(path,headers={'X-Api-Key':'invalid-☃'}).status_code)
+
+    def test_real_owner_login_without_api_key_can_read_details_and_mark_seen(self):
+        with sqlite3.connect(self.db) as conn:
+            conn.execute('CREATE TABLE IF NOT EXISTS web_sessions (sid TEXT PRIMARY KEY, created_at REAL)')
+        with mock.patch.object(server,'_valid_sids',set()), mock.patch.object(server,'_totp_enabled',return_value=False):
+            login=self.client.post('/login/',json={'username':server.REMOTE_USER,'password':server.REMOTE_PASSWORD})
+            self.assertEqual(200,login.status_code);self.assertTrue(login.json['ok'])
+            self.journal.record('ERROR','fixture','session test failure');self.journal.drain()
+            ident=self.journal.query(errors=True)['entries'][0]['id']
+            for path in ['/status','/api/status','/api/status/cache/account_ytmusic_clients','/api/status/logs','/api/status/errors','/api/status/errors/'+ident]:
+                response=self.client.get(path)
+                self.assertEqual(200,response.status_code,path)
+                self.assertIn('no-store',response.headers['Cache-Control'])
+            self.assertEqual(401,self.client.post('/api/status/errors/seen',data={'ids':ident}).status_code)
+            response=self.client.post('/api/status/errors/seen',json={'ids':[ident]})
+            self.assertEqual(200,response.status_code);self.assertEqual(0,response.json['unseen'])
+            self.assertFalse(server._is_web_session_path('/api/status-not-real'))
+            self.assertFalse(server._is_web_session_path('/api/statusX/cache'))
+            with self.client.session_transaction() as session:sid=session['sid']
+            server._session_close(sid)
+            for path in ['/api/status/cache/account_ytmusic_clients','/api/status/logs','/api/status/errors']:
+                self.assertEqual(401,self.client.get(path).status_code,path)

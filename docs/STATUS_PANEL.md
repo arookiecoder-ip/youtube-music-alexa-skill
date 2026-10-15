@@ -75,7 +75,9 @@ python -m pytest -q flask-server/tests/browser/test_status_dashboard.py
 ```
 
 Browser tests use a temporary local server and fixture data, never production
-services. Set `STATUS_SCREENSHOT_DIR` to retain desktop/mobile screenshots. CI
+services. They sign in through the real login endpoint and use signed owner
+cookies without an API-key header. Status child routes are included in the
+owner session allowlist; guest and revoked sessions remain denied. Set `STATUS_SCREENSHOT_DIR` to retain desktop/mobile screenshots. CI
 runs the tests and uploads screenshots plus browser JUnit results. Existing
 playback regressions remain in a separate job and isolated module processes.
 

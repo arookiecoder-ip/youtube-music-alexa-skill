@@ -10,7 +10,7 @@ class QueueSessionAuthTests(unittest.TestCase):
     def setUp(self):
         source = Path(__file__).resolve().parents[1] / 'server.py'
         names = {'_SESSION_PATHS', '_SESSION_PREFIXES', '_API_PATH_ROOTS',
-                 '_is_web_session_path', '_is_api_path', 'require_api_key'}
+                 '_is_web_session_path', '_is_api_path', '_valid_key_supplied', 'require_api_key'}
         nodes = []
         for node in ast.parse(source.read_text()).body:
             if isinstance(node, ast.FunctionDef) and node.name in names:
