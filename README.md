@@ -67,8 +67,8 @@ Core (`server.py`):
 | `YTDLP_PO_TOKEN`  | optional — if set, overrides the default `android_vr` client and passes this as the GVS PO token for `mweb` client instead (e.g. `youtube:po_token=mweb.gvs+{token}`) |
 | `API_KEY`         | shared secret; when set, all endpoints except privacy/terms and the login flow require `?key=` (or `X-Api-Key` header) **or** a valid web-remote session cookie. Must match `API_KEY` in `lambda/api_key.py`. |
 | `AUDIO_CACHE_DIR` | audio cache location (default `/tmp/ytm_audio_cache`)                                                                                                               |
-| `AUDIO_CACHE_TTL` | seconds a cached file may sit unplayed before it is removed (default `7200`, two hours); every play resets it                                                      |
-| `AUDIO_CACHE_MAX_MB` | cache size limit; above it the least recently played files are evicted first (default `2048`, `0` = no limit)                                                   |
+| `AUDIO_PARTIAL_TTL` | abandoned partial-download cleanup timeout (default `7200` seconds); completed songs have no idle expiry. Legacy `AUDIO_CACHE_TTL` is a fallback only for partial files.                                                      |
+| `AUDIO_CACHE_MAX_MB` | cache size limit; above it the least recently played files are evicted first (default `5120` MiB / 5 GiB, `0` = no limit)                                                   |
 | `AUDIO_CACHE_MIN_FREE_MB` | evict least recently played files while the disk has less than this free (default `512`, `0` = off)                                                         |
 | `AUDIO_CACHE_SWEEP_INTERVAL` | seconds between in-service cache sweeps (default `1800`, 30 minutes)                                                                                  |
 | `HISTORY_FILE`    | listening-history JSON file location for the web remote's Recently Listened / Recommended sections (default `/tmp/ytm_listen_history.json`) — see the Docker note below |

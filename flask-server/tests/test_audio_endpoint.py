@@ -105,13 +105,13 @@ class _CacheDir(unittest.TestCase):
 
 class LruPrune(_CacheDir):
 
-    def test_idle_ttl_counts_from_last_use_not_download(self):
-        # Downloaded 3 h ago but played 5 min ago: stays. Untouched for 3 h: goes.
+    def test_completed_audio_survives_idle_time_below_capacity(self):
+        # Both recently played and long-idle completed songs stay below capacity.
         played = self.make("played00000", written_ago=3 * 3600, used_ago=300)
         stale = self.make("stale000000", written_ago=3 * 3600)
         server.Supporting.prune_audio_cache()
         self.assertTrue(os.path.exists(played))
-        self.assertFalse(os.path.exists(stale))
+        self.assertTrue(os.path.exists(stale))
 
     def test_over_budget_evicts_least_recently_used_first(self):
         server.AUDIO_CACHE_MAX_BYTES = 2 * MB

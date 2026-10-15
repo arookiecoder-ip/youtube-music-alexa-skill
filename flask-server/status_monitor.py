@@ -12,6 +12,9 @@ import threading
 import time
 
 
+AUDIO_EXTENSIONS = frozenset({'.m4a', '.mp4', '.webm', '.mp3', '.opus', '.aac', '.ogg', '.wav', '.flac'})
+
+
 class Metrics:
     def __init__(self, clock=time.monotonic, wall=time.time):
         self.clock, self.wall = clock, wall
@@ -164,7 +167,7 @@ def scan_audio(directory, pinned=(), limit=20000, time_budget=.15):
                         result['metadata_files'] += 1
                         result['metadata_bytes'] += stat.st_size
                         continue  # markers count as metadata below, not audio
-                    kind = 'partial' if suffix == '.part' else ('ready' if suffix in {'.m4a', '.mp4', '.webm', '.mp3', '.opus', '.aac', '.ogg', '.wav', '.flac'} else 'metadata')
+                    kind = 'partial' if suffix == '.part' else ('ready' if suffix in AUDIO_EXTENSIONS else 'metadata')
                     result[f'{kind}_files'] += 1
                     result[f'{kind}_bytes'] += stat.st_size
                     if kind == 'metadata':

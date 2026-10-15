@@ -128,3 +128,59 @@ def test_api_strings_are_text_and_expired_session_stops_polling(browser_page):
     page.locator('#refresh').click()
     assert not count
     assert not errors
+
+@pytest.mark.parametrize('width', [320, 390, 768, 1024])
+def test_responsive_layout_capacity_and_expandable_details(browser_page, width):
+    page, base, errors = browser_page
+    page.set_viewport_size({'width':width,'height':900})
+    ready(page, base)
+    assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
+    playwright.expect(page.locator('#cache-used')).to_have_text('6 KiB')
+    playwright.expect(page.locator('#cache-budget')).to_have_text('of 5 GiB used')
+    assert page.locator('#cache-meter').get_attribute('aria-valuenow') is not None
+    page.get_by_text('Capacity & cleanup policy', exact=True).click()
+    playwright.expect(page.locator('#retention')).to_contain_text('Until space is needed · LRU')
+    playwright.expect(page.locator('#retention')).to_contain_text('Shared with total music cache')
+    page.get_by_text('Resource details', exact=True).click()
+    playwright.expect(page.locator('#system')).to_be_visible()
+    assert not errors
+
+
+def test_capacity_meter_sampled_over_budget_unlimited_and_unavailable(browser_page, tmp_path):
+    page, base, errors = browser_page
+    ready(page, base)
+    payload = page.request.get(base+'/api/status').json()
+    mib = 1024*1024
+    payload['storage']['audio'].update(ready_bytes=512*mib, warmup_bytes=128*mib, pinned_bytes=64*mib, partial_bytes=32*mib)
+    payload['limits']['audio_bytes'] = 1024*mib
+    def respond(route): route.fulfill(json=payload)
+    page.route('**/api/status', respond)
+    page.locator('#refresh').click()
+    playwright.expect(page.locator('#cache-percent')).to_have_text('50%')
+    playwright.expect(page.locator('#cache-used')).to_have_text('512 MiB')
+    playwright.expect(page.locator('#cache-requested')).to_have_text('384 MiB')
+    playwright.expect(page.locator('#cache-warmup')).to_have_text('128 MiB')
+    assert page.locator('#cache-meter').get_attribute('aria-valuenow') == '50'
+    assert page.locator('#cache-requested-bar').evaluate('el => el.style.width') == '37.5%'
+    assert page.locator('#cache-warmup-bar').evaluate('el => el.style.width') == '12.5%'
+    screenshot(page, 'musicbox-status-capacity-desktop.png', tmp_path)
+    page.set_viewport_size({'width':390,'height':844})
+    screenshot(page, 'musicbox-status-capacity-mobile.png', tmp_path)
+    payload['storage']['audio']['complete'] = False
+    page.locator('#refresh').click()
+    playwright.expect(page.locator('#cache-used')).to_have_text('At least 512 MiB')
+    playwright.expect(page.locator('#cache-remaining')).to_have_text('Not yet known')
+    payload['storage']['audio'].update(complete=True,ready_bytes=2048*mib)
+    page.locator('#refresh').click()
+    playwright.expect(page.locator('#cache-percent')).to_have_text('200%')
+    playwright.expect(page.locator('#cache-capacity-note')).to_contain_text('Over budget')
+    assert page.locator('#cache-meter').get_attribute('aria-valuenow') == '100'
+    payload['limits']['audio_bytes'] = 0
+    page.locator('#refresh').click()
+    playwright.expect(page.locator('#cache-budget')).to_have_text('used · no size limit')
+    assert page.locator('#cache-meter').get_attribute('aria-valuenow') is None
+    payload['storage']['audio']['available'] = False
+    page.locator('#refresh').click()
+    playwright.expect(page.locator('#cache-used')).to_have_text('—')
+    playwright.expect(page.locator('#cache-capacity-note')).to_contain_text('unavailable')
+    assert not errors

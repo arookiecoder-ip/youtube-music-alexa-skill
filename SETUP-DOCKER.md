@@ -213,18 +213,24 @@ You should get back JSON with track info, not an error.
 
 ## 10. Cache cleanup
 
-No host cron job is required. The `ytmusic` service sweeps the persistent audio
-cache every 30 minutes and removes files nobody has played for two hours (each
-play resets the clock). Override the defaults with `AUDIO_CACHE_SWEEP_INTERVAL`
-and `AUDIO_CACHE_TTL` in `.env` (values are seconds) if your storage or
-listening patterns need a different retention period.
+No host cron job is required. Completed audio (including speculative prefetch)
+has no idle expiry. Files persist on the audio volume until the shared
+`AUDIO_CACHE_MAX_MB` budget (default 5120 MiB / 5 GiB) or the disk reserve
+`AUDIO_CACHE_MIN_FREE_MB` (default 512 MiB) requires space. Eviction removes
+the least recently used unprotected files across both pools. A cache hit
+refreshes recency without changing the media Last-Modified validator.
 
-The cache is also size-bounded: above `AUDIO_CACHE_MAX_MB` (default 2048), or
-when the disk has less than `AUDIO_CACHE_MIN_FREE_MB` (default 512) free, the
-least recently played files are evicted first. The current track is never
-evicted.
+Current tracks, active fetches and newly written files are protected. These can
+temporarily exceed the budget; later sweeps retry cleanup. Sweeps run every
+`AUDIO_CACHE_SWEEP_INTERVAL` seconds (default 1800) and after completed downloads.
+Only abandoned `.part` files expire after `AUDIO_PARTIAL_TTL` seconds (default
+7200). Legacy `AUDIO_CACHE_TTL` is a fallback for that partial timeout only;
+`WARMUP_TTL` and `WARMUP_MAX_MB` no longer control completed audio. Remove any old
+host cron job that independently deletes cached audio by age.
 
----
+The `/status` music-cache meter shows completed audio used against the shared
+budget. Downloading bytes and metadata are listed separately. Prefetched and
+current-track protected bytes are subsets of completed audio, not extra usage.
 
 ## 11. Create the Alexa skill
 
