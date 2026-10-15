@@ -43,7 +43,7 @@ h1 { font-size: 32px; line-height: 1.2; letter-spacing: -1px; margin: 0 0 6px; f
 .badge.neutral { color: #bbb; background: #262626; }
 .section-nav { display: flex; gap: 26px; border-bottom: 1px solid var(--line); margin: 24px 0 18px; }
 .section-nav a { padding: 10px 0 12px; color: var(--muted); font-size: 13px; white-space: nowrap; }
-.section-nav a:first-child { color: var(--text); border-bottom: 2px solid var(--accent); }
+.section-nav a[aria-current] { color: var(--text); border-bottom: 2px solid var(--accent); }
 .toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 22px; font-size: 12px; }
 .toolbar label { display: flex; align-items: center; gap: 9px; color: var(--muted); }
 .toolbar select { font-size: 12px; }

@@ -143,6 +143,8 @@ def test_responsive_layout_capacity_and_expandable_details(browser_page, width):
     playwright.expect(page.locator('#retention')).to_contain_text('Shared with total music cache')
     page.get_by_text('Resource details', exact=True).click()
     playwright.expect(page.locator('#system')).to_be_visible()
+    page.locator('.section-nav a[href="#cache-section"]').click()
+    playwright.expect(page.locator('.section-nav a[aria-current]')).to_have_text('Music cache')
     assert not errors
 
 

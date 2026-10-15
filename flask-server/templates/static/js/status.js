@@ -179,7 +179,7 @@
     text('disk-percent', Number.isFinite(disk.used_percent) ? `${number(disk.used_percent, 1)}%` : 'Unknown');
     meter('disk-usage', disk.used_percent, `${bytes(disk.used_bytes)} used of ${bytes(disk.total_bytes)}`);
     const memoryPercent = process.memory_limit_bytes > 0 && Number.isFinite(process.memory_current_bytes) ? process.memory_current_bytes / process.memory_limit_bytes * 100 : null;
-    el('memory-meter').style.width = percentWidth(memoryPercent); text('memory-value', `${bytes(process.rss_bytes)} RSS`);
+    el('memory-meter').style.width = percentWidth(memoryPercent); text('memory-value', `${bytes(process.memory_current_bytes)} / ${bytes(process.memory_limit_bytes)}`);
     meter('memory-usage', memoryPercent, memoryPercent == null ? 'Container memory limit unavailable' : `${number(memoryPercent, 1)}% of container memory limit`);
     connectionTiles(cookies);
     const slots = el('fetch-slots'); slots.replaceChildren();
@@ -223,6 +223,14 @@
   el('interval').addEventListener('change', () => { poller.clear(); if (!poller.paused) poller.refresh(true); });
   document.addEventListener('visibilitychange', () => poller.visibilityChanged());
   for (const id of ['search', 'pool', 'sort']) el(id).addEventListener(id === 'search' ? 'input' : 'change', inventory);
+  function sectionSelection() {
+    const hash = root.location.hash || '#overview';
+    for (const link of document.querySelectorAll('.section-nav a')) {
+      if (link.getAttribute('href') === hash) link.setAttribute('aria-current', 'location');
+      else link.removeAttribute('aria-current');
+    }
+  }
+  root.addEventListener('hashchange', sectionSelection); sectionSelection();
   root.addEventListener('resize', () => { if (snapshot) chart(snapshot.history); });
   el('export').addEventListener('click', () => { if (!snapshot) return; const blob = new Blob([JSON.stringify(snapshot, null, 2)], {type: 'application/json'}), link = document.createElement('a'), href = URL.createObjectURL(blob); link.href = href; link.download = `musicbox-status-${new Date().toISOString().replaceAll(':', '-')}.json`; link.click(); setTimeout(() => URL.revokeObjectURL(href), 1000); });
   el('cookie-check').addEventListener('click', async () => { const button = el('cookie-check'); if (button.disabled) return; button.disabled = true; text('cookie-result', 'Testing authenticated audio access…'); const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), 60000); try { const result = await get('/api/youtube/download-cookies/status?refresh=1', controller.signal); text('cookie-result', result.valid ? 'Audio test passed.' : 'Audio test failed. Existing cookies were kept.'); poller.refresh(true); } catch (_) { text('cookie-result', 'Audio test could not complete. Existing cookies were kept.'); } finally { clearTimeout(timeout); button.disabled = false; } });
