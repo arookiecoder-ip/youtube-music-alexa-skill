@@ -1,4 +1,4 @@
-"""Two-pool audio cache: requested (AUDIO_CACHE_TTL) + warmup (WARMUP_TTL, capped).
+"""Shared capacity audio cache: requested and warmup use one LRU budget.
 
 Run with ``pytest flask-server/tests/test_warmup_pool.py``.
 """
@@ -94,7 +94,7 @@ class _WarmupDir(unittest.TestCase):
 
 
 class WarmupPool(_WarmupDir):
-    def test_warmup_expires_while_requested_survives(self):
+    def test_idle_warmup_and_requested_survive_legacy_ttls(self):
         server.WARMUP_TTL = 3600.0
         server.AUDIO_CACHE_TTL = 7200.0
         warm = self.make("warmup00001", used_ago=4000)
@@ -103,7 +103,7 @@ class WarmupPool(_WarmupDir):
         self.assertTrue(server._is_warmup("warmup00001"))
         self.assertFalse(server._is_warmup("request0001"))
         server.Supporting.prune_audio_cache()
-        self.assertFalse(os.path.exists(warm))
+        self.assertTrue(os.path.exists(warm))
         self.assertTrue(os.path.exists(req))
 
     def test_promotion_reuses_file_and_removes_expiry(self):
@@ -155,7 +155,7 @@ class WarmupPool(_WarmupDir):
         self.assertIsNone(server.Supporting.cached_audio_path("evict0000001"))
         self.assertFalse(os.path.exists(os.path.join(self.dir, "evict0000001.warmup")))
 
-    def test_warmup_cap_enforced_inside_total(self):
+    def test_warmup_uses_shared_capacity_despite_legacy_separate_cap(self):
         server.AUDIO_CACHE_MAX_BYTES = 10 * MB
         server.WARMUP_MAX_BYTES = 1 * MB
         server._AUDIO_CACHE_EVICT_MIN_AGE = 0
@@ -166,13 +166,13 @@ class WarmupPool(_WarmupDir):
             server._mark_warmup("capwarmup0001")
             server._mark_warmup("capwarmup0002")
             server.Supporting.prune_audio_cache()
-            # 2 MB warmup over the 1 MB cap: oldest warmup goes, requested stays.
-            self.assertFalse(os.path.exists(os.path.join(self.dir, "capwarmup0001.m4a")))
+            # Legacy warmup cap cannot delete audio while the shared budget has space.
+            self.assertTrue(os.path.exists(os.path.join(self.dir, "capwarmup0001.m4a")))
             self.assertTrue(os.path.exists(req))
         finally:
             server._AUDIO_CACHE_EVICT_MIN_AGE = 60.0
 
-    def test_warmup_evicted_first_when_over_total(self):
+    def test_true_lru_across_requested_and_warmup_when_over_total(self):
         server.AUDIO_CACHE_MAX_BYTES = 1 * MB
         server._AUDIO_CACHE_EVICT_MIN_AGE = 0
         try:
@@ -180,10 +180,9 @@ class WarmupPool(_WarmupDir):
             req = self.make("firstreq00001", used_ago=2000)
             server._mark_warmup("firstwarm0001")
             server.Supporting.prune_audio_cache()
-            # 2 MB total over the 1 MB budget: warmup goes first even
-            # though the requested file is older.
-            self.assertFalse(os.path.exists(warm))
-            self.assertTrue(os.path.exists(req))
+            # Both pools share true LRU order: the older requested file goes first.
+            self.assertTrue(os.path.exists(warm))
+            self.assertFalse(os.path.exists(req))
         finally:
             server._AUDIO_CACHE_EVICT_MIN_AGE = 60.0
 
@@ -208,3 +207,112 @@ class RecentWarmupEvictionTests(_WarmupDir):
             server.Supporting.prune_audio_cache()
         self.assertFalse(os.path.exists(old))
         self.assertTrue(os.path.exists(recent))
+
+
+class CapacityRetentionEdges(_WarmupDir):
+    def test_long_idle_files_survive_repeated_sweeps_and_exact_capacity(self):
+        paths = [self.make('oldtrack001', used_ago=30*86400), self.make('oldtrack002', used_ago=20*86400)]
+        with mock.patch.object(server, 'AUDIO_CACHE_MAX_BYTES', 2*MB):
+            self.assertEqual((0, 0), server.Supporting.prune_audio_cache())
+            self.assertEqual((0, 0), server.Supporting.prune_audio_cache())
+        self.assertTrue(all(os.path.exists(path) for path in paths))
+
+    def test_failed_delete_does_not_claim_space_or_skip_next_candidate(self):
+        denied = self.make('denied00001', used_ago=1000)
+        removable = self.make('remove00001', used_ago=900)
+        newest = self.make('newest00001', used_ago=800)
+        real_remove = os.remove
+        def remove(path):
+            if path == denied: raise PermissionError('not writable')
+            return real_remove(path)
+        with mock.patch.object(server, 'AUDIO_CACHE_MAX_BYTES', 2*MB), mock.patch.object(server.os, 'remove', side_effect=remove):
+            self.assertEqual((1, MB), server.Supporting.prune_audio_cache())
+        self.assertTrue(os.path.exists(denied)); self.assertFalse(os.path.exists(removable)); self.assertTrue(os.path.exists(newest))
+
+    def test_partial_cleanup_preserves_live_stream_and_active_download(self):
+        import threading
+        live = self.make('livetrack01', suffix='.m4a.uuid.part', used_ago=9000)
+        downloading = self.make('download001', suffix='.m4a.part', used_ago=9000)
+        orphan = self.make('orphan00001', suffix='.m4a.uuid.part', used_ago=9000)
+        lock = threading.Lock(); lock.acquire()
+        try:
+            with mock.patch.dict(server._stream_inflight, {'livetrack01': time.time()}), mock.patch.dict(server._download_locks, {'download001': lock}):
+                self.assertEqual((1, MB), server.Supporting.prune_audio_cache())
+        finally: lock.release()
+        self.assertTrue(os.path.exists(live)); self.assertTrue(os.path.exists(downloading)); self.assertFalse(os.path.exists(orphan))
+
+    def test_current_track_can_temporarily_exceed_budget_then_cleanup_after_unpin(self):
+        path = self.make('current0001', used_ago=9000)
+        self.pinned.return_value = {'current0001'}
+        with mock.patch.object(server, 'AUDIO_CACHE_MAX_BYTES', 1):
+            self.assertEqual((0, 0), server.Supporting.prune_audio_cache())
+            self.assertTrue(os.path.exists(path))
+            self.pinned.return_value = set()
+            self.assertEqual((1, MB), server.Supporting.prune_audio_cache())
+
+    def test_cache_hit_changes_lru_order_without_changing_media_validator(self):
+        old = self.make('oldtrack001', used_ago=1000)
+        other = self.make('oldtrack002', used_ago=900)
+        before = os.stat(old).st_mtime
+        server._mark_audio_used(old)
+        with mock.patch.object(server, 'AUDIO_CACHE_MAX_BYTES', MB):
+            server.Supporting.prune_audio_cache()
+        self.assertTrue(os.path.exists(old)); self.assertEqual(before, os.stat(old).st_mtime)
+        self.assertFalse(os.path.exists(other))
+
+    def test_concurrent_sweep_is_nonblocking(self):
+        server._audio_prune_lock.acquire()
+        try: self.assertEqual((0, 0), server.Supporting.prune_audio_cache())
+        finally: server._audio_prune_lock.release()
+
+    def test_streaming_finished_file_is_not_evicted_under_pressure(self):
+        stream = self.make('stream00001', used_ago=1000)
+        other = self.make('other000001', used_ago=900)
+        with mock.patch.dict(server._stream_inflight, {'stream00001': time.time()}), mock.patch.object(server, 'AUDIO_CACHE_MAX_BYTES', MB):
+            server.Supporting.prune_audio_cache()
+        self.assertTrue(os.path.exists(stream)); self.assertFalse(os.path.exists(other))
+
+    def test_nonfiles_and_symlinks_do_not_count_as_evictable_audio(self):
+        os.mkdir(os.path.join(self.dir, 'directory.m4a'))
+        target = self.make('target00001', used_ago=1000)
+        link = os.path.join(self.dir, 'symlink.m4a'); os.symlink(target, link)
+        with mock.patch.object(server, 'AUDIO_CACHE_MAX_BYTES', MB):
+            self.assertEqual((0, 0), server.Supporting.prune_audio_cache())
+        self.assertTrue(os.path.islink(link)); self.assertTrue(os.path.exists(target))
+
+    def test_partial_cleanup_does_not_remove_completed_audio_marker(self):
+        audio = self.make('warmsong001', used_ago=9000)
+        self.make('warmsong001', suffix='.uuid.part', used_ago=9000)
+        server._mark_warmup('warmsong001')
+        server.Supporting.prune_audio_cache()
+        self.assertTrue(os.path.exists(audio)); self.assertTrue(server._is_warmup('warmsong001'))
+
+    def test_metadata_is_not_counted_against_music_capacity(self):
+        audio = self.make('metasong001')
+        metadata = self.make('metadata001', size=2*MB, suffix='.json')
+        with mock.patch.object(server, 'AUDIO_CACHE_MAX_BYTES', MB):
+            self.assertEqual((0, 0), server.Supporting.prune_audio_cache())
+        self.assertTrue(os.path.exists(audio)); self.assertTrue(os.path.exists(metadata))
+
+    def test_all_deletions_denied_report_zero_actual_freed_bytes(self):
+        path = self.make('denied00001')
+        with mock.patch.object(server, 'AUDIO_CACHE_MAX_BYTES', 1), mock.patch.object(server.os, 'remove', side_effect=PermissionError):
+            self.assertEqual((0, 0), server.Supporting.prune_audio_cache())
+        self.assertTrue(os.path.exists(path))
+
+    def test_pin_acquired_after_scan_is_rechecked_before_deletion(self):
+        path = self.make('newlypin001')
+        self.pinned.side_effect = [set(), {'newlypin001'}]
+        with mock.patch.object(server, 'AUDIO_CACHE_MAX_BYTES', 1):
+            self.assertEqual((0, 0), server.Supporting.prune_audio_cache())
+        self.assertTrue(os.path.exists(path))
+
+    def test_capacity_and_free_space_pressure_do_not_double_count_eviction(self):
+        from collections import namedtuple
+        self.make('pressure001', used_ago=1200)
+        self.make('pressure002', used_ago=1100)
+        self.make('pressure003', used_ago=1000)
+        usage = namedtuple('Usage', 'total used free')(100*MB, 91*MB, 9*MB)
+        with mock.patch.object(server, 'AUDIO_CACHE_MAX_BYTES', 2*MB), mock.patch.object(server, 'AUDIO_CACHE_MIN_FREE_BYTES', 10*MB), mock.patch.object(server.shutil, 'disk_usage', return_value=usage):
+            self.assertEqual((1, MB), server.Supporting.prune_audio_cache())
+        self.assertEqual(2, len([name for name in os.listdir(self.dir) if name.endswith('.m4a')]))

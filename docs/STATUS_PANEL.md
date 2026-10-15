@@ -5,6 +5,8 @@ Jam guests cannot access it. The JSON snapshot is at `/api/status`; existing own
 API-key authentication also works. Prefer the owner session over a key in a URL.
 If a key is supplied in the page URL, JavaScript removes it from browser history
 and uses it in memory for API headers. Responses are private and not cached.
+The layout uses the main site’s black/charcoal/orange theme, a shared-capacity
+bar, a cache-hit ring, connection tiles and compact mobile inventory cards.
 No cookie values, API keys, account identifiers, absolute storage paths or query
 strings are included in snapshots or exports.
 
@@ -17,9 +19,15 @@ strings are included in snapshots or exports.
 - Cache: hits/misses for audio-path lookups, audio responses with `X-Cache`, audio
   search and public/account YouTube Music clients. These are different layers,
   not a single end-to-end cache rate. Client-cache capacity and entry counts are
-  also shown. A ready file means a recognized file extension, not validated media.
+  also shown. A ready file means a recognized file extension, not validated media. The music
+  capacity meter counts completed audio; partials and metadata are separate.
+  Prefetched and protected bytes are subsets, never added twice. Completed audio
+  stays until capacity/disk pressure requires LRU eviction across both pools.
+  There is no idle expiry or separate warmup cap. Current tracks, active fetches
+  and just-written audio are protected; the budget can temporarily be exceeded.
+  Only abandoned partials have a cleanup timeout.
 - Inventory: ready/partial audio, requested/warmup pools, pinned bytes, idle ages,
-  retention settings and reserve limits. It retains the newest 200 audio rows,
+  the shared 5 GiB capacity meter and reserve limits. It retains the newest 200 audio rows,
   scans at most 20,000 directory entries or 150 ms, and marks incomplete totals
   as lower bounds. Symlinks are excluded. Metadata files count in storage totals.
 - Fetching: queued plus running downloads, concurrency limits, active yt-dlp

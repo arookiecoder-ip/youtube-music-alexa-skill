@@ -1,6 +1,6 @@
 from flask import has_request_context
 import download_cookies
-from status_monitor import Metrics, CachedCollector, file_info, scan_audio, system_snapshot
+from status_monitor import AUDIO_EXTENSIONS, Metrics, CachedCollector, file_info, scan_audio, system_snapshot
 from playback_failover import PlaybackFailoverBudget
 import asyncio, collections, difflib, glob, hashlib, hmac, itertools, json, math, os, random, secrets, shutil, sys, threading, time, re, subprocess, logging, copy, uuid, tempfile, shlex
 from datetime import timedelta, datetime
@@ -246,9 +246,11 @@ def _cache_seconds_env(name, default):
     return value if math.isfinite(value) and value >= 60.0 else float(default)
 
 
-# Keep cache retention independent of host cron. The defaults mirror the
-# previously documented 30-minute cron / two-hour retention policy.
-AUDIO_CACHE_TTL = _cache_seconds_env("AUDIO_CACHE_TTL", 7200)
+# Completed audio is capacity-retained, with no idle expiry. The legacy TTL
+# remains an orphan-part timeout for existing deployments; it never deletes a
+# completed song. Explicit AUDIO_PARTIAL_TTL takes precedence.
+AUDIO_CACHE_TTL = _cache_seconds_env("AUDIO_PARTIAL_TTL",
+    _cache_seconds_env("AUDIO_CACHE_TTL", 7200))
 AUDIO_CACHE_SWEEP_INTERVAL = _cache_seconds_env("AUDIO_CACHE_SWEEP_INTERVAL", 1800)
 
 
@@ -263,20 +265,13 @@ def _cache_megabytes_env(name, default):
     return int(value * 1024 * 1024)
 
 
-# LRU bounds on top of the idle TTL. Every cache hit marks the file as used,
-# so the TTL counts from the last play (not the download) and, once the cache
-# is over budget, the least recently played files go first. Pinned (current)
-# tracks are never evicted. 0 disables a limit.
-#
-# Two logical pools share one directory/filesystem (no DB, no new volume):
-# requested (real plays, `AUDIO_CACHE_TTL`) and warmup (speculative prefetch,
-# `WARMUP_TTL`, capped inside the total by `WARMUP_MAX_MB`). A real play
-# promotes a warmup file in place (marker delete + atime touch, zero copy).
-# Warmup-marked files are evicted first when over budget.
+# Requested and speculative audio share one LRU budget. Warmup markers only
+# label origin; they do not impose a separate expiry or size limit. Old
+# WARMUP_TTL/WARMUP_MAX_MB environment settings no longer override this policy.
 AUDIO_CACHE_MAX_BYTES = _cache_megabytes_env("AUDIO_CACHE_MAX_MB", 5120)
 AUDIO_CACHE_MIN_FREE_BYTES = _cache_megabytes_env("AUDIO_CACHE_MIN_FREE_MB", 512)
-WARMUP_TTL = _cache_seconds_env("WARMUP_TTL", 7200)
-WARMUP_MAX_BYTES = _cache_megabytes_env("WARMUP_MAX_MB", 1024)
+WARMUP_TTL = 0  # compatibility names; not enforced for completed audio
+WARMUP_MAX_BYTES = 0
 
 
 def _audio_wait_seconds_env():
@@ -1712,7 +1707,7 @@ def _evict_bad_cache_entry(video_id: str):
 
 
 def _pinned_cache_video_ids():
-    """Video ids whose cache files must survive the TTL sweep.
+    """Video ids whose cache files must survive capacity-pressure eviction.
 
     A pause of ~AUDIO_CACHE_TTL used to evict the paused track, so a resume
     paid a full cold yt-dlp download (past the Echo's ~11s /proxy/ give-up)
@@ -1731,11 +1726,10 @@ def _pinned_cache_video_ids():
 
 
 def _touch_cached_audio(video_id: str):
-    """Refresh the cache file mtime so TTL counts from the last pause/resume.
+    """Refresh recency after pause/resume, including across process restarts.
 
-    Pinning (above) covers the live process; touching additionally gives a
-    full TTL grace across restarts (where in-memory now-playing is lost) and
-    between the pause moment and the later resume. Best-effort; never raises.
+    Pinning covers the live process; touching preserves recent-use ordering
+    across restarts, where in-memory now-playing is lost. Best-effort; never raises.
     """
     try:
         if not _valid_video_id(video_id):
@@ -1766,7 +1760,7 @@ def _mark_audio_used(path):
     except OSError:
         pass
     # A real play promotes a speculative warmup file in place (zero copy):
-    # drop the marker so the requested TTL/cap applies from now on.
+    # drop the marker so status reflects a real play rather than prefetch.
     try:
         base = os.path.basename(path).split('.')[0]
         if _valid_video_id(base):
@@ -3900,102 +3894,67 @@ class Supporting:
                 pass
 
     def prune_audio_cache():
-        """Idle-TTL sweep, then least-recently-used eviction down to budget.
+        """Retain completed audio until shared capacity or disk reserve needs space.
 
-        Two logical pools share one directory (see config block above):
-        1. Warmup-marked files idle for WARMUP_TTL go; requested files idle for
-           AUDIO_CACHE_TTL go. Pinned (current) tracks never go via sweep.
-        2. If the finished files still exceed AUDIO_CACHE_MAX_BYTES (5 GB), or the
-           disk has less than AUDIO_CACHE_MIN_FREE_BYTES free, warmup-marked files
-           are evicted first (oldest first), then the least recently used files.
-        3. Warmup-marked bytes are additionally capped at WARMUP_MAX_BYTES (1 GB
-           inside the total), oldest first.
-        `*.warmup` sidecars are bookkeeping (never counted, never served); deleting
-        an audio file deletes its marker with it, and orphan markers are collected.
-        Returns (files_removed, bytes_removed).
+        Evict least recently used audio regardless of requested/warmup origin.
+        Current tracks, active fetches and newly written files are protected;
+        the budget is temporarily soft when only protected files remain.
+        Only abandoned .part files have an idle timeout. Failed deletions never
+        count as freed space. Returns actual (files_removed, bytes_removed).
         """
         if not _audio_prune_lock.acquire(blocking=False):
-            return 0, 0  # a concurrent prune is already doing this work
+            return 0, 0
         try:
             os.makedirs(AUDIO_CACHE_DIR, exist_ok=True)
-            # Never sweep the currently selected track: a long pause must resume
-            # from a warm send_file, not a cold yt-dlp download past the Echo's
-            # ~11s timeout (explicit truncation eviction still goes through
-            # _evict_bad_cache_entry, which is unaffected by this pin).
-            pinned = _pinned_cache_video_ids()
             now = time.time()
             removed_files = removed_bytes = 0
+            total = 0
+            candidates = []
 
-            def _remove_audio(path, size):
+            def busy(video):
+                if video in _pinned_cache_video_ids() or _stream_is_inflight(video):
+                    return True
+                with _locks_guard:
+                    lock = _download_locks.get(video)
+                return bool(lock and lock.locked())
+
+            def remove(path, size):
                 nonlocal removed_files, removed_bytes
                 try:
                     os.remove(path)
                 except OSError:
-                    return
+                    return False
                 removed_files += 1
                 removed_bytes += size
-                try:
-                    os.remove(os.path.join(
-                        AUDIO_CACHE_DIR,
-                        f"{os.path.basename(path).split('.')[0]}.warmup"))
-                except OSError:
-                    pass
+                if not path.endswith('.part'):
+                    try:
+                        os.remove(_warmup_marker_path(os.path.basename(path).split('.')[0]))
+                    except OSError:
+                        pass
+                return True
 
-            total = 0
-            warmup_total = 0
-            candidates = []  # (last_used, size, path) of evictable finished files
-            warmup_candidates = []  # (last_used, size, path) of warmup-marked files
-            part_count = part_bytes = 0
-            oldest_part_age = 0.0
-            for old in glob.glob(os.path.join(AUDIO_CACHE_DIR, "*")):
+            for path in glob.glob(os.path.join(AUDIO_CACHE_DIR, "*")):
                 try:
-                    st = os.stat(old)
+                    if os.path.islink(path) or not os.path.isfile(path) or path.endswith('.warmup'):
+                        continue
+                    stat = os.stat(path)
+                    video = os.path.basename(path).split('.')[0]
+                    if path.endswith('.part'):
+                        if now - stat.st_mtime > AUDIO_CACHE_TTL and not busy(video):
+                            remove(path, stat.st_size)
+                        continue
+                    if os.path.splitext(path)[1].lower() not in AUDIO_EXTENSIONS:
+                        continue  # metadata is not part of the completed-audio budget
+                    total += stat.st_size
+                    if not busy(video):
+                        candidates.append((_audio_last_used(stat), stat.st_size, path))
                 except OSError:
                     continue
-                if old.endswith('.warmup'):
-                    continue  # bookkeeping; collected with its audio / as orphan below
-                is_part = old.endswith('.part')
-                # Pin finished files only: *.part are in-flight/orphaned yt-dlp
-                # writes (transient, seconds old) and keep their original sweep
-                # semantics so crash orphans are still collected.
-                if not is_part and pinned and os.path.basename(old).split('.')[0] in pinned:
-                    total += st.st_size
-                    if _is_warmup(os.path.basename(old).split('.')[0]):
-                        warmup_total += st.st_size
-                    continue
-                last_used = st.st_mtime if is_part else _audio_last_used(st)
-                if not is_part:
-                    ttl = (WARMUP_TTL
-                           if _is_warmup(os.path.basename(old).split('.')[0])
-                           else AUDIO_CACHE_TTL)
-                    if now - last_used > ttl:
-                        _remove_audio(old, st.st_size)
-                        continue
-                else:
-                    if now - last_used > AUDIO_CACHE_TTL:
-                        try:
-                            os.remove(old)
-                            removed_files += 1
-                            removed_bytes += st.st_size
-                        except OSError:
-                            pass
-                        continue
-                    part_count += 1
-                    part_bytes += st.st_size
-                    oldest_part_age = max(oldest_part_age, now - last_used)
-                if not is_part:
-                    total += st.st_size
-                    entry = (last_used, st.st_size, old)
-                    candidates.append(entry)
-                    if _is_warmup(os.path.basename(old).split('.')[0]):
-                        warmup_total += st.st_size
-                        warmup_candidates.append(entry)
 
-            # Orphan markers whose audio is gone (manual delete, crash between
-            # writes) carry no bytes; collect them so they can't accumulate.
+            # Remove empty bookkeeping for audio already removed or lost.
             for marker in glob.glob(os.path.join(AUDIO_CACHE_DIR, "*.warmup")):
-                audio_id = os.path.basename(marker)[:-len('.warmup')]
-                if not _valid_video_id(audio_id) or not Supporting.cached_audio_path(audio_id):
+                video = os.path.basename(marker)[:-len('.warmup')]
+                if not _valid_video_id(video) or not Supporting.cached_audio_path(video):
                     try:
                         os.remove(marker)
                     except OSError:
@@ -4005,58 +3964,34 @@ class Supporting:
             short = 0
             if AUDIO_CACHE_MIN_FREE_BYTES:
                 try:
-                    free = shutil.disk_usage(AUDIO_CACHE_DIR).free
-                    short = max(0, AUDIO_CACHE_MIN_FREE_BYTES - free)
+                    short = max(0, AUDIO_CACHE_MIN_FREE_BYTES - shutil.disk_usage(AUDIO_CACHE_DIR).free)
                 except OSError:
-                    short = 0
+                    pass
             need = max(over, short)
-            # Warmup cap inside the total: speculative bytes never squeeze out
-            # more than WARMUP_MAX_BYTES of real plays.
-            warmup_over = (max(0, warmup_total - WARMUP_MAX_BYTES)
-                           if WARMUP_MAX_BYTES else 0)
-            if warmup_over:
-                for last_used, size, path in sorted(warmup_candidates):
-                    if warmup_over <= 0:
-                        break
-                    if now - last_used < _AUDIO_CACHE_EVICT_MIN_AGE:
-                        break  # everything after this is even more recent
-                    _remove_audio(path, size)
-                    try:
-                        candidates.remove((last_used, size, path))
-                    except ValueError:
-                        pass
-                    try:
-                        warmup_candidates.remove((last_used, size, path))
-                    except ValueError:
-                        pass
-                    total -= size
-                    warmup_total -= size
-                    need = max(need - size, 0)
-            if need:
-                # Warmup-marked files go first (oldest first), then plain LRU.
-                ordered = (sorted(warmup_candidates)
-                           + [c for c in sorted(candidates) if c not in warmup_candidates])
-                for last_used, size, path in ordered:
-                    if need <= 0:
-                        break
-                    if now - last_used < _AUDIO_CACHE_EVICT_MIN_AGE:
-                        continue  # The next requested file can be older than this warmup.
-                    _remove_audio(path, size)
-                    need -= size
-                if need > 0:
-                    logger.warning("audio cache: still %.1f MB over budget after LRU eviction "
-                                   "(remaining files are pinned or just written)",
-                                   need / (1024 * 1024))
+            for last_used, size, path in sorted(candidates):
+                if need <= 0:
+                    break
+                try:
+                    # Recheck after scanning: a song may have started playing,
+                    # been touched or been replaced while the sweep was running.
+                    stat = os.stat(path)
+                    video = os.path.basename(path).split('.')[0]
+                    if (busy(video) or _audio_last_used(stat) > last_used
+                            or now - _audio_last_used(stat) < _AUDIO_CACHE_EVICT_MIN_AGE):
+                        continue
+                    if remove(path, stat.st_size):
+                        need -= stat.st_size
+                except OSError:
+                    continue
+            if need > 0:
+                logger.warning("audio cache: %.1f MB still needs eviction; remaining files are protected or could not be removed",
+                               need / (1024 * 1024))
             if removed_files:
-                logger.info("audio cache: evicted %d file(s), %.1f MB",
-                            removed_files, removed_bytes / (1024 * 1024))
-            if part_count:
-                logger.info("audio cache: %d in-flight/orphan .part file(s), "
-                            "%.1f MB, oldest %.0fs old",
-                            part_count, part_bytes / (1024 * 1024), oldest_part_age)
+                logger.info("audio cache: evicted %d file(s), %.1f MB", removed_files, removed_bytes / (1024 * 1024))
             return removed_files, removed_bytes
         finally:
             _audio_prune_lock.release()
+
 
     def ytdlp_download_command(video_id: str, output, client: str = "default",
                                 retries: int = 2, socket_timeout: int = 10):
@@ -11443,6 +11378,8 @@ def _status_snapshot():
     cooldown = _ytdlp_cooldown_remaining()
     alerts = [{'level': 'warning', 'title': name + ' unavailable', 'detail': 'This local collector could not complete. Other metrics remain available.'} for name in unavailable]
     audio = storage.get('audio', {})
+    if AUDIO_CACHE_MAX_BYTES and audio.get('ready_bytes', 0) > AUDIO_CACHE_MAX_BYTES:
+        alerts.append({'level': 'warning', 'title': 'Music cache is over budget', 'detail': 'Cleanup retries automatically. Current tracks, active fetches and recently written files are protected.'})
     if audio.get('available') is False:
         alerts.append({'level': 'warning', 'title': 'Audio cache unavailable', 'detail': 'The directory is missing or unreadable; storage totals may be unavailable.'})
     if storage.get('system', {}).get('database', {}).get('readable') is False:
@@ -11465,8 +11402,9 @@ def _status_snapshot():
         health='critical' if any(row['level'] == 'critical' for row in alerts) else ('warning' if alerts else 'healthy'),
         alerts=alerts, storage=storage, cache_sizes=_status_cache_sizes(),
         limits={'audio_bytes': AUDIO_CACHE_MAX_BYTES, 'warmup_bytes': WARMUP_MAX_BYTES,
-                'reserve_bytes': AUDIO_CACHE_MIN_FREE_BYTES, 'audio_ttl_seconds': AUDIO_CACHE_TTL,
-                'warmup_ttl_seconds': WARMUP_TTL, 'sweep_seconds': AUDIO_CACHE_SWEEP_INTERVAL},
+                'reserve_bytes': AUDIO_CACHE_MIN_FREE_BYTES, 'retention_policy': 'capacity_lru',
+                'audio_ttl_seconds': None, 'warmup_ttl_seconds': None,
+                'partial_ttl_seconds': AUDIO_CACHE_TTL, 'sweep_seconds': AUDIO_CACHE_SWEEP_INTERVAL},
         fetching={'queued_and_running': _download_queue_size(), 'download_slots': _DOWNLOAD_CONCURRENCY,
                   'prefetch_slots': _PREFETCH_CONCURRENCY, 'stream_slots': _STREAM_CONCURRENCY,
                   'active_streams': stream_count, 'streams': streams, 'cooldown_seconds': cooldown,

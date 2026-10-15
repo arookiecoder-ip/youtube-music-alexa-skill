@@ -98,3 +98,17 @@ class StatusRoutesTests(unittest.TestCase):
         self.assertNotIn('private-', json.dumps(result))
         cookie.write_bytes(b'x' * (server.download_cookies.MAX_BYTES + 1))
         self.assertIsNone(server.download_cookies.inspection(cookie)['format_valid'])
+
+    def test_snapshot_describes_shared_capacity_retention_and_partial_timeout(self):
+        data = self.client.get('/api/status', headers=self.headers).json
+        self.assertEqual('capacity_lru', data['limits']['retention_policy'])
+        self.assertIsNone(data['limits']['audio_ttl_seconds'])
+        self.assertIsNone(data['limits']['warmup_ttl_seconds'])
+        self.assertEqual(0, data['limits']['warmup_bytes'])
+        self.assertEqual(server.AUDIO_CACHE_TTL, data['limits']['partial_ttl_seconds'])
+
+    def test_over_budget_cache_has_explicit_warning(self):
+        with mock.patch.object(server, 'AUDIO_CACHE_MAX_BYTES', 10), mock.patch.object(server._status_storage, 'get', return_value={'audio': {'ready_bytes': 11}, 'system': {}}):
+            data = self.client.get('/api/status', headers=self.headers).json
+        self.assertIn('Music cache is over budget', [row['title'] for row in data['alerts']])
+        self.assertEqual('warning', data['health'])

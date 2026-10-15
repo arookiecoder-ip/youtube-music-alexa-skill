@@ -23,6 +23,17 @@
       .sort((a, b) => sort === 'size' ? b.bytes - a.bytes : sort === 'idle' ? b.idle_seconds - a.idle_seconds : b.modified_at - a.modified_at);
   }
 
+  function cacheCapacity(audio = {}, limits = {}) {
+    const valid = value => Number.isFinite(value) && value >= 0;
+    const used = valid(audio.ready_bytes) && audio.available !== false ? audio.ready_bytes : null;
+    const budget = valid(limits.audio_bytes) ? limits.audio_bytes : null;
+    const warmup = used == null || !valid(audio.warmup_bytes) ? null : Math.min(used, audio.warmup_bytes);
+    const requested = used == null || warmup == null ? null : used - warmup;
+    return {used, budget, warmup, requested, complete: audio.complete !== false,
+      percent: used != null && budget > 0 ? used / budget * 100 : null,
+      remaining: used != null && budget > 0 ? Math.max(0, budget - used) : null};
+  }
+
   class Poller {
     constructor(options) { Object.assign(this, options); this.busy = false; this.paused = false; this.stopped = false; this.failures = 0; this.timer = null; this.again = false; this.epoch = 0; }
     clear() { if (this.timer !== null) this.cancel(this.timer); this.timer = null; }
@@ -55,7 +66,7 @@
       }
     }
   }
-  const exports = {bytes, duration, inventoryRows, Poller};
+  const exports = {bytes, duration, inventoryRows, cacheCapacity, Poller};
   if (typeof module !== 'undefined' && module.exports) module.exports = exports;
   root.StatusDashboard = exports;
   if (typeof document === 'undefined') return;
@@ -89,13 +100,63 @@
     const width = canvas.clientWidth || 600, height = 180, scale = Math.min(root.devicePixelRatio || 1, 2);
     canvas.width = width * scale; canvas.height = height * scale; ctx.scale(scale, scale);
     const values = array(history), peak = Math.max(1, ...values.map(row => row.requests));
-    ctx.strokeStyle = '#26313f'; ctx.lineWidth = 1;
+    ctx.strokeStyle = '#303030'; ctx.lineWidth = 1;
     for (let i = 0; i < 4; i++) { const y = 10 + i * 50; ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(width, y); ctx.stroke(); }
-    for (const [key, color] of [['requests', '#77e5b2'], ['errors', '#ff938d']]) {
+    for (const [key, color] of [['requests', '#e8590c'], ['errors', '#ff938d']]) {
       ctx.beginPath(); ctx.strokeStyle = color; ctx.lineWidth = 2;
       values.forEach((row, i) => { const x = i / Math.max(1, values.length - 1) * width, y = height - 8 - (row[key] || 0) / peak * 150; if (i) ctx.lineTo(x, y); else ctx.moveTo(x, y); }); ctx.stroke();
     }
     canvas.setAttribute('aria-label', `Requests over 60 minutes: ${values.reduce((sum, row) => sum + row.requests, 0)}; errors: ${values.reduce((sum, row) => sum + row.errors, 0)}`);
+  }
+
+  function meter(id, percent, label) {
+    const target = el(id);
+    target.setAttribute('aria-valuemin', '0'); target.setAttribute('aria-valuemax', '100');
+    if (Number.isFinite(percent)) target.setAttribute('aria-valuenow', String(Math.max(0, Math.min(100, percent))));
+    else target.removeAttribute('aria-valuenow');
+    target.setAttribute('aria-valuetext', label);
+  }
+  const percentWidth = percent => `${Number.isFinite(percent) ? Math.max(0, Math.min(100, percent)) : 0}%`;
+  function cacheOverview(cache, limits) {
+    const model = cacheCapacity(cache, limits), prefix = model.complete ? '' : 'At least ';
+    text('cache-used', prefix + bytes(model.used));
+    text('cache-budget', model.budget === 0 ? 'used · no size limit' : `of ${bytes(model.budget)} used`);
+    text('cache-percent', model.percent == null ? '—' : `${model.complete ? '' : '≥ '}${number(model.percent, 2)}%`);
+    text('cache-requested', bytes(model.requested)); text('cache-warmup', bytes(model.warmup));
+    text('cache-remaining', model.complete ? bytes(model.remaining) : 'Not yet known');
+    el('cache-requested-bar').style.width = percentWidth(model.budget > 0 && model.requested != null ? model.requested / model.budget * 100 : null);
+    el('cache-warmup-bar').style.width = percentWidth(model.budget > 0 && model.warmup != null ? Math.min(model.warmup / model.budget * 100, Math.max(0, 100 - model.requested / model.budget * 100)) : null);
+    meter('cache-meter', model.percent, `${prefix}${bytes(model.used)} used; budget ${model.budget === 0 ? 'unlimited' : bytes(model.budget)}`);
+    text('cache-file-count', `${number(cache.ready_files)} cached files`);
+    text('cache-pinned', `${bytes(cache.pinned_bytes)} current-track protected`);
+    text('cache-capacity-note', model.used == null ? 'Cache inventory unavailable. No usage estimate is shown.' :
+      `${model.complete ? '' : 'Partial scan: usage is a lower bound. '}${model.percent > 100 ? 'Over budget; protected files may delay cleanup. ' : ''}Kept until space is needed · oldest unused songs go first. ${bytes(cache.partial_bytes)} downloading, outside the completed-audio budget.`);
+  }
+  function connectionTiles(cookies) {
+    const download = cookies.downloads || {}, target = el('connection-tiles'); target.replaceChildren();
+    const entries = [
+      ['Download cookies', !download.present ? 'Not configured' : download.format_valid === false ? 'Invalid export' : download.youtube_active === 0 ? 'No active YouTube cookies' : download.validation === true ? 'Last audio test passed' : download.validation === false ? 'Last audio test failed' : 'Saved · audio access not tested', download.validation === true ? 'ok' : 'warning'],
+      ['YouTube Music', (cookies.youtube_headers || {}).present ? 'Account headers saved · not probed' : 'Account headers not configured', (cookies.youtube_headers || {}).present ? 'ok' : 'warning'],
+      ['Amazon / Alexa', cookies.amazon_session_in_memory ? 'Session loaded · reachability not probed' : 'No session loaded', cookies.amazon_session_in_memory ? 'ok' : 'warning']
+    ];
+    for (const [name, detail, state] of entries) {
+      const tile = document.createElement('div'), dot = document.createElement('i'), content = document.createElement('div'), title = document.createElement('strong'), small = document.createElement('small');
+      tile.className = `connection-tile ${state}`; dot.className = 'status-dot'; title.textContent = name; small.textContent = detail;
+      content.append(title, small); tile.append(dot, content); target.append(tile);
+    }
+  }
+  function cacheLayers(data) {
+    const target = el('cache-layer-cards'); target.replaceChildren();
+    const names = new Set([...array(data.caches).map(row => row.name), ...array(data.cache_sizes).map(row => row.name)]);
+    for (const name of names) {
+      const value = array(data.caches).find(row => row.name === name) || {}, size = array(data.cache_sizes).find(row => row.name === name) || {};
+      const card = document.createElement('div'), top = document.createElement('div'), title = document.createElement('strong'), rate = document.createElement('span'), track = document.createElement('div'), fill = document.createElement('div'), bottom = document.createElement('div'), counts = document.createElement('span'), entries = document.createElement('span');
+      top.className = 'layer-top'; title.textContent = name.replaceAll('_', ' '); rate.textContent = Number.isFinite(value.hit_rate) ? `${number(value.hit_rate, 1)}% hits` : 'No lookups';
+      top.append(title, rate); track.className = 'meter'; fill.style.width = percentWidth(value.hit_rate); track.append(fill);
+      bottom.className = 'layer-bottom'; counts.textContent = `${number(value.hits)} hits · ${number(value.misses)} misses`;
+      entries.textContent = Number.isFinite(size.entries) ? `${number(size.entries)}${size.capacity ? ` / ${number(size.capacity)}` : ''} entries` : 'Disk lookup';
+      bottom.append(counts, entries); card.append(top, track, bottom); target.append(card);
+    }
   }
   function render(data) {
     snapshot = data;
@@ -110,21 +171,33 @@
     text('request-total', `${number(request.total || 0)} total · ${number(request.active || 0)} active handlers`);
     const hits = array(data.caches).find(row => row.name === 'audio_lookups');
     text('hit-rate', hits ? `${number(hits.hit_rate, 1)}%` : '—');
+    el('hit-ring').setAttribute('stroke-dasharray', `${hits ? Math.max(0, Math.min(100, hits.hit_rate)) : 0} 100`);
     text('hit-detail', hits ? `${number(hits.hits)} hits · ${number(hits.misses)} misses · internal lookups` : 'No audio lookups recorded');
     text('latency', Number.isFinite(request.p95_ms) ? `${number(request.p95_ms)} ms` : '—');
     text('free-disk', bytes(disk.free_bytes)); text('disk-detail', `${bytes(disk.used_bytes)} used of ${bytes(disk.total_bytes)}`);
-    el('disk-meter').style.width = `${Math.max(0, Math.min(100, disk.used_percent || 0))}%`;
+    el('disk-meter').style.width = percentWidth(disk.used_percent);
+    text('disk-percent', Number.isFinite(disk.used_percent) ? `${number(disk.used_percent, 1)}%` : 'Unknown');
+    meter('disk-usage', disk.used_percent, `${bytes(disk.used_bytes)} used of ${bytes(disk.total_bytes)}`);
+    const memoryPercent = process.memory_limit_bytes > 0 && Number.isFinite(process.memory_current_bytes) ? process.memory_current_bytes / process.memory_limit_bytes * 100 : null;
+    el('memory-meter').style.width = percentWidth(memoryPercent); text('memory-value', `${bytes(process.memory_current_bytes)} / ${bytes(process.memory_limit_bytes)}`);
+    meter('memory-usage', memoryPercent, memoryPercent == null ? 'Container memory limit unavailable' : `${number(memoryPercent, 1)}% of container memory limit`);
+    connectionTiles(cookies);
+    const slots = el('fetch-slots'); slots.replaceChildren();
+    const active = array(data.active_fetches).length;
+    const budget = Number.isFinite(fetching.download_slots) ? Math.max(0, Math.min(32, fetching.download_slots)) : 0;
+    for (let i = 0; i < budget; i++) { const slot = document.createElement('span'); slot.className = i < active ? 'busy' : ''; slot.setAttribute('aria-hidden', 'true'); slots.append(slot); }
+    slots.setAttribute('aria-label', `${number(active)} active downloader attempts; ${number(fetching.download_slots)} configured slots`);
     text('request-health', `${number((request['4xx'] || 0) + (request['5xx'] || 0))} HTTP errors · p50 ${number(request.p50_ms)} ms`);
     rows('system', [['Host load · 1 / 5 / 15 min', array(system.load_average).map(v => number(v, 2)).join(' / ') || 'Unavailable'], ['Host logical CPUs', number(system.cpu_count)], ['Process RSS / threads', `${bytes(process.rss_bytes)} / ${number(system.threads)}`], ['Host available / total RAM', `${bytes(memory.MemAvailable)} / ${bytes(memory.MemTotal)}`], ['Container memory / limit', `${bytes(process.memory_current_bytes)} / ${bytes(process.memory_limit_bytes)}`], ['Container CPU quota', process.cpu_quota == null ? 'Unlimited / unavailable' : `${number(process.cpu_quota, 2)} CPUs`], ['Database size', bytes((system.database || {}).bytes)], ['Storage snapshot age', duration(Math.max(0, data.generated_at - (storage.captured_at || data.generated_at)))]]);
-    rows('cookies', [['Download export', download.present ? `Present · ${bytes(download.bytes)}` : 'Not configured'], ['Export modified', time(download.modified_at)], ['Cookie format', download.format_valid == null ? 'Not inspected' : download.format_valid ? 'Netscape export' : 'Invalid export'], ['Cookies · active YouTube / expired', `${number(download.youtube_active)} / ${number(download.expired_count)}`], ['Session cookies / next expiry', `${number(download.session_count)} / ${time(download.next_expiry)}`], ['Last audio validation', download.validation == null ? 'Not tested for this file' : download.validation ? 'Passed' : 'Failed'], ['Validation age', duration(download.validation_age_seconds)], ['Cookie probe', download.probe_busy ? 'Running' : 'Idle'], ['YouTube account headers', (cookies.youtube_headers || {}).present ? 'Configured · not probed' : 'Not configured'], ['Amazon session', cookies.amazon_session_in_memory ? 'Present in memory · not probed' : 'Not loaded']]);
+    rows('cookies', [['Download export', download.present ? `Present · ${bytes(download.bytes)}` : 'Not configured'], ['Export modified', time(download.modified_at)], ['Cookie format', download.format_valid == null ? 'Not inspected' : download.format_valid ? 'Netscape export' : 'Invalid export'], ['Cookies · active YouTube / expired', `${number(download.youtube_active)} / ${number(download.expired_count)}`], ['Session cookies / next expiry', `${number(download.session_count)} / ${Number.isFinite(download.next_expiry) ? new Date(download.next_expiry * 1000).toLocaleString() : 'No known expiry'}`], ['Last audio validation', download.validation == null ? 'Not tested for this file' : download.validation ? 'Passed' : 'Failed'], ['Validation age', duration(download.validation_age_seconds)], ['Cookie probe', download.probe_busy ? 'Running' : 'Idle'], ['YouTube account headers', (cookies.youtube_headers || {}).present ? 'Configured · not probed' : 'Not configured'], ['Amazon session', cookies.amazon_session_in_memory ? 'Present in memory · not probed' : 'Not loaded']]);
     el('cooldown').className = `badge ${fetching.cooldown_seconds > 0 ? 'warning' : 'neutral'}`;
     text('cooldown', fetching.cooldown_seconds > 0 ? `Cooldown ${duration(fetching.cooldown_seconds)}` : 'No cooldown');
     rows('fetching', [['Queued + running calls', number(fetching.queued_and_running)], ['Download / prefetch / stream budgets', `${number(fetching.download_slots)} / ${number(fetching.prefetch_slots)} / ${number(fetching.stream_slots)}`], ['Active streams', number(fetching.active_streams)], ['yt-dlp attempts · completed / failed', `${number((data.fetches || {}).succeeded || 0)} / ${number((data.fetches || {}).failed || 0)}`], ['Known dead / temporarily flaky', `${number(fetching.known_dead)} / ${number(fetching.temporarily_flaky)}`], ['Playback confirmed / queue', `${(data.playback || {}).confirmed ? 'Yes' : 'No'} / ${number((data.playback || {}).queue_length)} tracks`]]);
     activities('active-fetches', [...array(data.active_fetches).map(row => ({title: `${row.video_id} · ${row.client}`, detail: `Fetching for ${duration(data.generated_at - row.started_at)}`})), ...array(fetching.streams).map(row => ({title: `${row.video_id} · live stream`, detail: `Active ${duration(row.age_seconds)}`}))]);
-    const names = new Set([...array(data.caches).map(row => row.name), ...array(data.cache_sizes).map(row => row.name)]);
-    table('cache-layers', [...names].map(name => { const value = array(data.caches).find(row => row.name === name) || {}, size = array(data.cache_sizes).find(row => row.name === name) || {}; return [name.replaceAll('_', ' '), number(value.hits), number(value.misses), Number.isFinite(value.hit_rate) ? `${number(value.hit_rate, 1)}%` : '—', Number.isFinite(size.entries) ? `${number(size.entries)}${size.capacity ? ` / ${number(size.capacity)}` : ''}` : '—']; }), 5);
+    cacheLayers(data);
     const limits = data.limits || {};
-    rows('retention', [['Ready / partial audio', `${bytes(cache.ready_bytes)} / ${bytes(cache.partial_bytes)}`], ['Warmup / pinned audio', `${bytes(cache.warmup_bytes)} / ${bytes(cache.pinned_bytes)}`], ['Total cache budget', limits.audio_bytes === 0 ? 'Unlimited' : bytes(limits.audio_bytes)], ['Warmup budget', limits.warmup_bytes === 0 ? 'Unlimited' : bytes(limits.warmup_bytes)], ['Minimum free reserve', bytes(limits.reserve_bytes)], ['Requested / warmup idle TTL', `${duration(limits.audio_ttl_seconds)} / ${duration(limits.warmup_ttl_seconds)}`], ['Sweep interval', duration(limits.sweep_seconds)]]);
+    cacheOverview(cache, limits);
+    rows('retention', [['Ready / partial audio', `${bytes(cache.ready_bytes)} / ${bytes(cache.partial_bytes)}`], ['Warmup / pinned audio', `${bytes(cache.warmup_bytes)} / ${bytes(cache.pinned_bytes)}`], ['Total cache budget', limits.audio_bytes === 0 ? 'Unlimited' : bytes(limits.audio_bytes)], ['Prefetch budget', limits.retention_policy === 'capacity_lru' ? 'Shared with total music cache' : bytes(limits.warmup_bytes)], ['Minimum free reserve', bytes(limits.reserve_bytes)], ['Completed audio retention', limits.retention_policy === 'capacity_lru' ? 'Until space is needed · LRU' : `${duration(limits.audio_ttl_seconds)} idle`], ['Abandoned partial cleanup', duration(limits.partial_ttl_seconds)], ['Sweep interval', duration(limits.sweep_seconds)]]);
     text('inventory-summary', `${number(cache.ready_files)} ready · ${number(cache.partial_files)} partial · ${bytes(cache.bytes)} total`);
     table('routes', array(data.routes).map(row => [row.route, number(row.requests), number(row.errors), `${number(row.average_ms)} ms`, `${number(row.max_ms)} ms`]), 5);
     activities('events', array(data.events).map(row => ({title: row.kind === 'fetch' ? `${row.video_id} · ${row.client} · ${row.status}` : `${row.label} · HTTP ${row.status}`, detail: `${time(row.at)} · ${number(row.duration_ms)} ms`, error: row.status === 'failed' || row.status >= 400})));
@@ -150,6 +223,14 @@
   el('interval').addEventListener('change', () => { poller.clear(); if (!poller.paused) poller.refresh(true); });
   document.addEventListener('visibilitychange', () => poller.visibilityChanged());
   for (const id of ['search', 'pool', 'sort']) el(id).addEventListener(id === 'search' ? 'input' : 'change', inventory);
+  function sectionSelection() {
+    const hash = root.location.hash || '#overview';
+    for (const link of document.querySelectorAll('.section-nav a')) {
+      if (link.getAttribute('href') === hash) link.setAttribute('aria-current', 'location');
+      else link.removeAttribute('aria-current');
+    }
+  }
+  root.addEventListener('hashchange', sectionSelection); sectionSelection();
   root.addEventListener('resize', () => { if (snapshot) chart(snapshot.history); });
   el('export').addEventListener('click', () => { if (!snapshot) return; const blob = new Blob([JSON.stringify(snapshot, null, 2)], {type: 'application/json'}), link = document.createElement('a'), href = URL.createObjectURL(blob); link.href = href; link.download = `musicbox-status-${new Date().toISOString().replaceAll(':', '-')}.json`; link.click(); setTimeout(() => URL.revokeObjectURL(href), 1000); });
   el('cookie-check').addEventListener('click', async () => { const button = el('cookie-check'); if (button.disabled) return; button.disabled = true; text('cookie-result', 'Testing authenticated audio access…'); const controller = new AbortController(), timeout = setTimeout(() => controller.abort(), 60000); try { const result = await get('/api/youtube/download-cookies/status?refresh=1', controller.signal); text('cookie-result', result.valid ? 'Audio test passed.' : 'Audio test failed. Existing cookies were kept.'); poller.refresh(true); } catch (_) { text('cookie-result', 'Audio test could not complete. Existing cookies were kept.'); } finally { clearTimeout(timeout); button.disabled = false; } });
