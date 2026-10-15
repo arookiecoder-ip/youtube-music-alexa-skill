@@ -63,7 +63,15 @@
       fetchDialog(`/api/status/cache/${encodeURIComponent(name)}?${query}`, data => {
         entries = before ? entries.concat(data.entries) : data.entries;
         body.replaceChildren(node('p', `Since restart: ${data.totals.hits || 0} hits · ${data.totals.misses || 0} misses. Showing retained events (maximum 200, up to 24 hours).`, 'help'));
-        if (!entries.length) body.append(node('p', 'No retained lookups match this filter.', 'empty'));
+        if (data.usage && data.usage.description) body.append(node('p', data.usage.description, 'help'));
+        if (data.usage && data.usage.activity && data.usage.activity.length) {
+          const usage = node('section', null, 'cache-route-activity');
+          usage.append(node('h3', 'Related endpoint requests'));
+          usage.append(node('p', 'Request counts include calls that bypass this cache. They are not cache hits or misses.', 'help'));
+          for (const row of data.usage.activity) usage.append(node('p', `${row.route}: ${row.requests} requests · ${row.errors} errors`, 'log-correlation'));
+          body.append(usage);
+        }
+        if (!entries.length) body.append(node('p', data.totals.hits || data.totals.misses ? 'No retained lookups match this filter.' : 'This cache has not been used in this server process. Its lookup history will appear here when the described path uses it.', 'empty'));
         for (const entry of entries) {
           const row = node('article', null, 'cache-event');
           row.append(node('span', entry.outcome, `log-level ${entry.outcome}`), node('time', stamp(entry.at)), node('strong', entry.video_id || (entry.key ? `Key ${entry.key}` : 'Identifier not retained')), node('small', entry.reason || 'lookup', 'muted'));

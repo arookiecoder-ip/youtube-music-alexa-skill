@@ -29,6 +29,7 @@ class Metrics:
         self.caches = {}
         self.cache_events = {}
         self.fetches = Counter()
+        self.fetch_history = deque(maxlen=60)
         self.active_fetches = {}
         self.events = deque(maxlen=60)
         self.active_requests = 0
@@ -89,13 +90,14 @@ class Metrics:
                 'totals': totals}
 
     @contextmanager
-    def fetch(self, client, video_id):
+    def fetch(self, client, video_id, kind='download'):
         started = self.clock()
         with self._lock:
             self.sequence += 1
             token = self.sequence
             # Only these server-selected metadata fields are retained.
-            row = {'client': str(client)[:40], 'video_id': str(video_id)[:16], 'started_at': self.wall()}
+            row = {'client': str(client)[:40], 'video_id': str(video_id)[:16], 'started_at': self.wall(),
+                   'mode': 'prefetch' if kind == 'prefetch' else 'download'}
             self.fetches['started'] += 1
             if len(self.active_fetches) < 64:
                 self.active_fetches[token] = row
@@ -107,8 +109,10 @@ class Metrics:
                 self.active_fetches.pop(token, None)
                 outcome = 'succeeded' if result['ok'] else 'failed'
                 self.fetches[outcome] += 1
-                self.events.appendleft(dict(row, kind='fetch', at=self.wall(), status=outcome,
-                                            duration_ms=round(max(0, self.clock() - started) * 1000, 1)))
+                event = dict(row, kind='fetch', at=self.wall(), status=outcome,
+                             duration_ms=round(max(0, self.clock() - started) * 1000, 1))
+                self.events.appendleft(event)
+                self.fetch_history.appendleft(event)
 
     def snapshot(self):
         with self._lock:
@@ -133,7 +137,7 @@ class Metrics:
                 'requests': dict(self.requests, active=self.active_requests, p50_ms=percentile(.5),
                                  p95_ms=percentile(.95), p99_ms=percentile(.99), latency_samples=len(latency)),
                 'routes': sorted(routes, key=lambda row: row['requests'], reverse=True),
-                'caches': caches, 'fetches': dict(self.fetches),
+                'caches': caches, 'fetches': dict(self.fetches), 'recent_fetches': list(self.fetch_history),
                 'active_fetches': list(self.active_fetches.values()), 'events': list(self.events), 'history': history})
 
 

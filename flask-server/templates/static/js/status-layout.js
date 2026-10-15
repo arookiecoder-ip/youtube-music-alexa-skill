@@ -6,7 +6,7 @@
   const mobile = matchMedia('(max-width: 900px)');
   function syncNavigation() {
     if (drawer.open) drawer.close();
-    (mobile.matches ? el('drawer-links') : el('desktop-sidebar')).append(nav);
+    (mobile.matches ? el('drawer-links') : el('desktop-navigation')).append(nav);
   }
   toggle.addEventListener('click', () => {
     if (!mobile.matches || drawer.open) return;
@@ -16,7 +16,18 @@
   el('nav-close').addEventListener('click', () => drawer.close());
   drawer.addEventListener('close', () => toggle.setAttribute('aria-expanded', 'false'));
   nav.addEventListener('click', event => {
-    if (event.target.closest('a') && drawer.open) drawer.close();
+    const link = event.target.closest('a');
+    if (!link) return;
+    const target = document.querySelector(link.getAttribute('href'));
+    if (!target) return;
+    event.preventDefault();
+    if (drawer.open) drawer.close();
+    if (location.hash !== link.hash) history.pushState(null, '', link.hash);
+    window.dispatchEvent(new Event('hashchange'));
+    requestAnimationFrame(() => target.scrollIntoView({
+      behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth',
+      block: 'start'
+    }));
   });
   mobile.addEventListener('change', syncNavigation);
   syncNavigation();

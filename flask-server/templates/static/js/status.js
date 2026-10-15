@@ -154,11 +154,14 @@
       card.type = 'button'; card.className = 'cache-layer-button'; card.dataset.cacheName = name;
       const labels = {audio_lookups:'Saved audio file checks', audio_responses:'Audio response cache', account_ytmusic_clients:'Account API clients', public_ytmusic_clients:'Public API clients', audio_search:'Audio resolver results', stream_search:'Playback stream lists', playlist_tracks:'Playlist track lists'};
       card.setAttribute('aria-label', `View ${labels[name] || name} hit and miss details`);
-      top.className = 'layer-top'; title.textContent = labels[name] || name.replaceAll('_', ' '); rate.textContent = Number.isFinite(value.hit_rate) ? `${number(value.hit_rate, 1)}% hits` : 'No recorded lookups';
+      top.className = 'layer-top'; title.textContent = labels[name] || name.replaceAll('_', ' '); rate.textContent = Number.isFinite(value.hit_rate) ? `${number(value.hit_rate, 1)}% hits` : 'Not used since restart';
       top.append(title, rate); track.className = 'meter'; fill.style.width = percentWidth(value.hit_rate); track.append(fill);
-      bottom.className = 'layer-bottom'; counts.textContent = `${number(value.hits)} hits · ${number(value.misses)} misses`;
+      bottom.className = 'layer-bottom'; counts.textContent = `${number(value.hits || 0)} hits · ${number(value.misses || 0)} misses`;
       entries.textContent = Number.isFinite(size.entries) ? `${number(size.entries)}${size.capacity ? ` / ${number(size.capacity)}` : ''} entries` : 'Disk lookup';
-      bottom.append(counts, entries); card.append(top, track, bottom); target.append(card);
+      bottom.append(counts, entries); card.append(top, track, bottom);
+      const scope = document.createElement('p'); scope.className = 'cache-scope';
+      scope.textContent = ((data.cache_scopes || {})[name] || {}).description || 'Select to view recorded lookup details.';
+      card.append(scope); target.append(card);
     }
   }
   function render(data) {
@@ -198,7 +201,15 @@
     el('cooldown').className = `badge ${fetching.cooldown_seconds > 0 ? 'warning' : 'neutral'}`;
     text('cooldown', fetching.cooldown_seconds > 0 ? `Cooldown ${duration(fetching.cooldown_seconds)}` : 'No cooldown');
     rows('fetching', [['Queued + running calls', number(fetching.queued_and_running)], ['Download / prefetch / stream budgets', `${number(fetching.download_slots)} / ${number(fetching.prefetch_slots)} / ${number(fetching.stream_slots)}`], ['Active streams', number(fetching.active_streams)], ['yt-dlp attempts · completed / failed', `${number((data.fetches || {}).succeeded || 0)} / ${number((data.fetches || {}).failed || 0)}`], ['Known dead / temporarily flaky', `${number(fetching.known_dead)} / ${number(fetching.temporarily_flaky)}`], ['Playback confirmed / queue', `${(data.playback || {}).confirmed ? 'Yes' : 'No'} / ${number((data.playback || {}).queue_length)} tracks`]]);
-    activities('active-fetches', [...array(data.active_fetches).map(row => ({title: `${row.video_id} · ${row.client}`, detail: `Fetching for ${duration(data.generated_at - row.started_at)}`})), ...array(fetching.streams).map(row => ({title: `${row.video_id} · live stream`, detail: `Active ${duration(row.age_seconds)}`}))]);
+    const summary = el('fetch-summary'); summary.replaceChildren();
+    for (const [label, value] of [['Downloading', active + (fetching.active_streams || 0)], ['Waiting / running', fetching.queued_and_running || 0], ['Completed attempts', (data.fetches || {}).succeeded || 0], ['Failed attempts', (data.fetches || {}).failed || 0]]) {
+      const tile = document.createElement('div'), count = document.createElement('strong'), caption = document.createElement('span');
+      count.textContent = number(value); caption.textContent = label; tile.append(count, caption); summary.append(tile);
+    }
+    const current = [...array(data.active_fetches).map(row => ({title: `${row.video_id} · ${row.mode === 'prefetch' ? 'prefetch' : 'download'} · ${row.client}`, detail: `Active for ${duration(data.generated_at - row.started_at)}`})), ...array(fetching.streams).map(row => ({title: `${row.video_id} · live stream`, detail: `Active ${duration(row.age_seconds)}`}))];
+    const recent = array(data.recent_fetches).slice(0, 12).map(row => ({title: `${row.video_id} · ${row.mode === 'prefetch' ? 'prefetch' : 'download'} · ${row.status}`, detail: `${time(row.at)} · ${number(row.duration_ms)} ms · ${row.client}`, error: row.status === 'failed'}));
+    activities('active-fetches', [...current, ...recent]);
+    if (!current.length && !recent.length) el('active-fetches').textContent = 'No active downloads or retained attempts since restart. Playing a cached song does not start a new download.';
     cacheLayers(data);
     const limits = data.limits || {};
     cacheOverview(cache, limits);

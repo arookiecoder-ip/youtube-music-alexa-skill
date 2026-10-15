@@ -4149,7 +4149,7 @@ class Supporting:
                     last_error = ""
                     for index, client in enumerate(clients):
                         client_started = time.time()
-                        with _operational.fetch(client, video_id) as attempt:
+                        with _operational.fetch(client, video_id, kind='prefetch' if prefetch else 'download') as attempt:
                             result = subprocess.run(
                                 Supporting.ytdlp_download_command(video_id, output, client=client),
                                 capture_output=True, text=True)
@@ -11376,6 +11376,22 @@ def _status_thread_exception(args):
 threading.excepthook = _status_thread_exception
 
 
+_STATUS_CACHE_SCOPES = {
+    'audio_lookups': {'description': 'Checks for saved audio files on this server.', 'routes': ('GET /audio/', 'HEAD /audio/', 'GET /proxy/')},
+    'audio_responses': {'description': 'Cached versus network audio responses delivered by this server.', 'routes': ('GET /audio/', 'HEAD /audio/', 'GET /proxy/')},
+    'account_ytmusic_clients': {'description': 'Reusable account API connections, not saved songs or playlist responses.', 'routes': ('GET /alexa/search/', 'GET /api/library/playlists/<pl_id>')},
+    'public_ytmusic_clients': {'description': 'Reusable public API connections, not saved songs or search responses.', 'routes': ('GET /audio/', 'GET /find_stream_list/')},
+    'audio_search': {'description': 'Song-name resolution for /audio/?q=. Playback by video ID and normal app search bypass this cache.', 'routes': ('GET /audio/', 'HEAD /audio/')},
+    'stream_search': {'description': 'Prepared stream lists for skill search and voice playback. Normal app search and device queues bypass this cache.', 'routes': ('GET /find_stream_list/',)},
+    'playlist_tracks': {'description': 'Expanded playlist tracks used by skill playback. App playlist browsing uses a separate provider request and bypasses this cache.', 'routes': ('GET /stream_playlist/', 'GET /api/library/playlists/<pl_id>', 'GET /api/playlists/<pl_id>')},
+}
+
+
+def _status_cache_scope(name, routes):
+    scope = _STATUS_CACHE_SCOPES.get(name, {})
+    return dict(scope, activity=[row for row in routes if row['route'] in scope.get('routes', ())])
+
+
 def _status_cache_sizes():
     rows = []
     for label, cache in [('public_ytmusic_clients', _YT_CACHE), ('account_ytmusic_clients', _YT_HOME_CACHE), ('audio_search', _audio_search_cache)]:
@@ -11449,6 +11465,7 @@ def _status_snapshot():
     return dict(telemetry, generated_at=now, uptime_seconds=max(0, now - _start_time_epoch),
         health='critical' if any(row['level'] == 'critical' for row in alerts) else ('warning' if alerts else 'healthy'),
         alerts=alerts, storage=storage, cache_sizes=_status_cache_sizes(),
+        cache_scopes={name: {'description': scope['description']} for name, scope in _STATUS_CACHE_SCOPES.items()},
         error_inbox=inbox,
         search_activity=next(({'requests': row['requests'], 'errors': row['errors'], 'average_ms': row['average_ms']}
                               for row in telemetry['routes'] if row['route'] == 'GET /alexa/search/'), {'requests': 0, 'errors': 0, 'average_ms': None}),
@@ -11561,7 +11578,9 @@ def status_cache_detail(name):
         limit, before = _status_args()
         outcome = request.args.get('outcome', '')
         if outcome not in ('', 'hit', 'miss'): raise ValueError()
-        return _no_store(jsonify(_operational.cache_details(name, outcome, before, limit)))
+        data = _operational.cache_details(name, outcome, before, limit)
+        data['usage'] = _status_cache_scope(name, _operational.snapshot()['routes'])
+        return _no_store(jsonify(data))
     except ValueError:
         return _no_store(app.make_response(error_response('Invalid cache filter or cursor.', 400)))
 
