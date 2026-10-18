@@ -1,10 +1,10 @@
 name: Alexa playback regressions
 on:
   pull_request:
-    paths: ['flask-server/**', 'lambda/**', '.github/workflows/alexa-regressions.yml']
+    paths: ['flask-server/**', 'lambda/**', 'scripts/run-regressions.py', '.github/workflows/alexa-regressions.yml']
   push:
     branches: [master]
-    paths: ['flask-server/**', 'lambda/**', '.github/workflows/alexa-regressions.yml']
+    paths: ['flask-server/**', 'lambda/**', 'scripts/run-regressions.py', '.github/workflows/alexa-regressions.yml']
   workflow_dispatch:
 permissions:
   contents: read
@@ -22,19 +22,21 @@ jobs:
             flask-server/requirements.txt
             lambda/requirements.txt
       - run: python -m pip install -r flask-server/requirements.txt -r lambda/requirements.txt pytest
-      - name: Server playback, ownership, queue and cache regressions
-        working-directory: flask-server
-        shell: bash
-        run: |
-          set -euo pipefail
-          for test in test_alexa_queue_revision.py test_next_track.py test_queue_reorder_authority.py test_next_previous_finish_race.py test_resume_after_pause.py test_resume_plays_current_song.py test_output_routes.py test_mobile_device_routes.py test_audio_endpoint.py test_download_backpressure.py test_direct_alexa_commands.py test_warmup_pool.py test_audio_error_contract.py test_prefetch_mode.py test_bounded_wait.py test_download_admission.py test_extraction_clients.py test_session_cookie_config.py test_queue_session_auth.py; do
-            python -m unittest discover -s tests -p "$test" -q
-          done
-          python -m pytest -q tests/test_echo_presence_cache.py
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: All isolated server and web logic regressions
+        run: python scripts/run-regressions.py --results test-results
+      - name: Upload server and web regression results
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: server-web-regressions
+          path: test-results/
       - name: Skill controllers and real SDK serialization
         run: python -m unittest discover -s lambda/tests -p 'test_*.py' -q
       - name: Python compilation
-        run: python -m py_compile flask-server/server.py lambda/mediaUtils/player.py lambda/lambda_function.py
+        run: python -m compileall -q flask-server lambda browser-auth
 
   status-dashboard-tests:
     runs-on: ubuntu-latest

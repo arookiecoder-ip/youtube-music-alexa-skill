@@ -56,6 +56,43 @@
     _searchPreviousRoute: '',
   }, window.__appState || {});
 
+  // One acceptance boundary for HTTP, device and cross-tab playback snapshots.
+  // Revisions are comparable only within a server epoch and output generation.
+  let playbackSnapshot = null;
+  const retiredEpochs = [];
+  window.playbackStore = {
+    pollDelay(background, playing, processing, failures) {
+      const base = processing || (!background && playing) ? 3000 : background && !playing ? 30000 : 10000;
+      return Math.min(60000, base * Math.pow(2, Math.min(failures || 0, 5)));
+    },
+    accept(np) {
+      if (!np || typeof np !== 'object') return false;
+      const old = playbackSnapshot;
+      if (np.output_epoch && retiredEpochs.includes(np.output_epoch)) return false;
+      if (old && np.output_epoch && np.output_epoch === old.output_epoch) {
+        if (Number.isFinite(np.output_revision) && Number.isFinite(old.output_revision)) {
+          if (np.output_revision < old.output_revision) return false;
+          if (np.output_revision === old.output_revision &&
+              Number.isFinite(np.playback_revision) && Number.isFinite(old.playback_revision) &&
+              np.playback_revision < old.playback_revision) return false;
+        }
+      } else if (old && old.output_epoch && np.output_epoch) {
+        retiredEpochs.push(old.output_epoch);
+        if (retiredEpochs.length > 4) retiredEpochs.shift();
+      }
+      playbackSnapshot = Object.assign({}, np);
+      return true;
+    },
+    queue(index, json) {
+      window.__appState._lastQueueIndex = index;
+      window._lastQueueIndex = index;
+      if (json !== undefined) {
+        window.__appState._lastQueueJson = json;
+        window._lastQueueJson = json;
+      }
+    }
+  };
+
   // Player lifecycle trace. Run window.dumpPlayerDebugLogs() in the console
   // after reproducing the flicker to export the last 300 state changes.
   window.__playerDebugLog = window.__playerDebugLog || function(event, details) {

@@ -4,6 +4,8 @@ import traceback
 from status_journal import Journal, JournalHandler
 from status_monitor import AUDIO_EXTENSIONS, Metrics, CachedCollector, file_info, scan_audio, system_snapshot
 from playback_failover import PlaybackFailoverBudget
+from audio_jobs import AudioJobs
+from playback_contract import restore_snapshot
 import asyncio, collections, difflib, glob, hashlib, hmac, itertools, json, math, os, random, secrets, shutil, sys, threading, time, re, subprocess, logging, copy, uuid, tempfile, shlex
 from datetime import timedelta, datetime
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
@@ -1593,6 +1595,8 @@ _download_semaphore = threading.Semaphore(_DOWNLOAD_CONCURRENCY)
 # permanently available to user-initiated downloads.
 _PREFETCH_CONCURRENCY = 2
 _prefetch_semaphore = threading.Semaphore(_PREFETCH_CONCURRENCY)
+_audio_jobs = AudioJobs(workers=_DOWNLOAD_CONCURRENCY,
+                        prefetch_workers=_PREFETCH_CONCURRENCY)
 # Prefetch is dropped rather than queued when its own slots are taken: waiting
 # would just hold a thread to do work that the next track change may discard.
 _PREFETCH_SLOT_TIMEOUT = 0.5
@@ -3287,9 +3291,8 @@ def _ensure_audio_ready_for_play(video_id, wait=False, generation=None, prefetch
     if wait:
         return bool(Supporting.ensure_downloaded(video_id, generation=generation,
                                                  prefetch=prefetch))
-    threading.Thread(target=Supporting.ensure_downloaded, args=(video_id,),
-                     kwargs={'generation': generation, 'prefetch': prefetch},
-                     daemon=True).start()
+    _audio_jobs.submit(video_id, lambda: Supporting.ensure_downloaded(
+        video_id, generation=generation, prefetch=prefetch), prefetch=prefetch)
     return False
 
 
@@ -4260,7 +4263,7 @@ class Supporting:
             base = 'https://' + request.host
         if base:
             # Answer immediately; pre-warm the cache so the device's fetch is fast.
-            threading.Thread(target=Supporting.ensure_downloaded, args=(video_id,), daemon=True).start()
+            _ensure_audio_ready_for_play(video_id)
             key_param = f"&key={API_KEY}" if API_KEY else ""
             return {'audio_url': f"{base}/proxy/?video_id={video_id}{key_param}"}
         url = await asyncio.to_thread(Supporting.resolve_direct_url, video_id)
@@ -6218,7 +6221,7 @@ def _download_in_progress(video_id):
     and the Echo opened yet another /proxy/ request — each one spawning another
     yt-dlp process for the very same song.
     """
-    if _stream_is_inflight(video_id):
+    if _audio_jobs.contains(video_id) or _stream_is_inflight(video_id):
         return True
     with _locks_guard:
         lock = _download_locks.get(video_id)
@@ -7334,8 +7337,7 @@ def alexa_command():
             with _np_lock:
                 staged_revision = int(previous_now_playing.get('playback_revision', 0)) + 1
                 if _now_playing.get('playback_revision') == staged_revision:
-                    _now_playing.clear()
-                    _now_playing.update(previous_now_playing)
+                    restore_snapshot(_now_playing, previous_now_playing)
                     should_notify_restore = True
                 else:
                     should_notify_restore = False
@@ -7450,8 +7452,7 @@ def alexa_seek():
                        _now_playing.get('playback_revision') == revision and
                        not _now_playing.get('playback_confirmed'))
             if restore:
-                _now_playing.clear()
-                _now_playing.update(previous)
+                restore_snapshot(_now_playing, previous)
         if restore:
             _notify_sse()
         return error_response(error or 'Device is offline or unreachable.', 502)
@@ -11474,6 +11475,7 @@ def _status_snapshot():
                 'audio_ttl_seconds': None, 'warmup_ttl_seconds': None,
                 'partial_ttl_seconds': AUDIO_CACHE_TTL, 'sweep_seconds': AUDIO_CACHE_SWEEP_INTERVAL},
         fetching={'queued_and_running': _download_queue_size(), 'download_slots': _DOWNLOAD_CONCURRENCY,
+                  'preparation': _audio_jobs.snapshot(),
                   'prefetch_slots': _PREFETCH_CONCURRENCY, 'stream_slots': _STREAM_CONCURRENCY,
                   'active_streams': stream_count, 'streams': streams, 'cooldown_seconds': cooldown,
                   'known_dead': dead, 'temporarily_flaky': flaky},

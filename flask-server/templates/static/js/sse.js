@@ -1,5 +1,7 @@
 (function() {
   'use strict';
+  // Historical filename/API retained for cached clients. Transport is finite
+  // HTTP polling, never a persistent EventSource on threaded Waitress.
 
   const deviceEl = window.deviceEl || document.getElementById('device');
   let _evtSource = null;
@@ -15,11 +17,33 @@
   let _pollNowPlayingRetry = false;
   let _pollNowPlayingTimer = null;
   let _pollNowPlayingDueAt = 0;
+  let _pollGeneration = 0;
+  let _pollStopped = false;
+  let _pollFailures = 0;
+  let _background = false;
+  let _lastProcessing = false;
 
   function state() { return window.__appState; }
+  function storeQueue(index, json) {
+    if (window.playbackStore) return window.playbackStore.queue(index, json);
+    window._lastQueueIndex = state()._lastQueueIndex = index;
+    if (json !== undefined) window._lastQueueJson = state()._lastQueueJson = json;
+  }
+  function pollingDelay() {
+    return window.playbackStore ? window.playbackStore.pollDelay(_background, state().isPlaying,
+      _lastProcessing, _pollFailures) : (_background ? 10000 : 3000);
+  }
+  function updatePollingCadence() {
+    if (_pollStopped) return;
+    const delay = pollingDelay();
+    if (_livePollTimer && delay === _livePollIntervalMs) return;
+    if (_livePollTimer) clearInterval(_livePollTimer);
+    _livePollIntervalMs = delay;
+    _livePollTimer = setInterval(pollNowPlaying, delay);
+  }
 
   function handleNpUpdate(np) {
-    if (window.observeSharedOutput && window.observeSharedOutput(np) === false) return;
+    if (!np) return;
     const npVideoId = (np && np.video_id) || null;
     // Drop snapshots describing a track the user has already clicked away
     // from. The server needs a moment to catch up after each click, so during
@@ -33,6 +57,9 @@
       }
       return;
     }
+    if (window.playbackStore && !window.playbackStore.accept(np)) return;
+    if (window.observeSharedOutput && window.observeSharedOutput(np) === false) return;
+    _lastProcessing = np.playback_processing === true;
     if (np.queue_version !== undefined && np.queue !== undefined) _queueVersion = np.queue_version;
     // The server agrees with local intent (or intent has expired): stop
     // outranking it, so a later genuine track change — the queue advancing on
@@ -135,8 +162,7 @@
             return item && item.video_id === npVideoId;
           }) : -1;
       var effectiveQueueIndex = resolvedIndex >= 0 ? resolvedIndex : reportedQueueIndex;
-      window._lastQueueIndex = effectiveQueueIndex;
-      state()._lastQueueIndex = effectiveQueueIndex;
+      storeQueue(effectiveQueueIndex);
       _rafQueuedIndex = effectiveQueueIndex;
       if (!_rafPending) {
         _rafPending = true;
@@ -147,8 +173,7 @@
           _rafPending = false;
           const qJson = JSON.stringify(_rafQueuedData);
           if (qJson !== window._lastQueueJson) {
-            window._lastQueueJson = qJson;
-            state()._lastQueueJson = qJson;
+            storeQueue(_rafQueuedIndex, qJson);
             if (window.showQueue) window.showQueue(_rafQueuedData, _rafQueuedIndex);
             // Also update the inline queue on the now-playing page if visible
             const npSection = document.getElementById('now-playing-section');
@@ -187,8 +212,7 @@
             ? reportedQueueIndex
             : knownQueue.findIndex(function (item) { return item && item.video_id === npVideoId; });
           if (knownIndex >= 0) {
-            window._lastQueueIndex = knownIndex;
-            state()._lastQueueIndex = knownIndex;
+            storeQueue(knownIndex);
           }
         } catch (_) {}
       }
@@ -225,11 +249,12 @@
     const serial = deviceEl.value;
     if (!serial) return;
     const wantBackground = !!background || document.hidden;
-    const intervalMs = wantBackground ? 10000 : 3000;
-    if (_livePollTimer && _evtSourceSerial === serial && _livePollIntervalMs === intervalMs) return;
+    if (_livePollTimer && _evtSourceSerial === serial && _background === wantBackground) return;
     stopSSE();
+    _pollStopped = false;
+    _background = wantBackground;
+    _pollFailures = 0;
     _evtSourceSerial = serial;
-    _livePollIntervalMs = intervalMs;
     // Waitress is a threaded WSGI server: every EventSource connection pins
     // one worker, and rapid page reloads leave old streams alive until their
     // next heartbeat. Enough reloads starve normal API calls such as Search.
@@ -240,10 +265,16 @@
     // changes made by Alexa, auto-advance, or another tab. Stopping entirely
     // here left background tabs stuck on the old song until refocus.
     pollNowPlaying();
-    _livePollTimer = setInterval(pollNowPlaying, intervalMs);
+    updatePollingCadence();
   }
 
   function stopSSE() {
+    _pollGeneration++;
+    _pollStopped = true;
+    clearTimeout(_pollNowPlayingTimer);
+    _pollNowPlayingTimer = null;
+    _pollNowPlayingRetry = false;
+    _queueVersion = null;
     if (_evtSource) { _evtSource.close(); _evtSource = null; }
     if (_livePollTimer) { clearInterval(_livePollTimer); _livePollTimer = null; }
     _evtSourceSerial = '';
@@ -258,15 +289,24 @@
       return;
     }
     _pollNowPlayingInFlight = true;
+    const generation = _pollGeneration;
+    const intent = state()._playIntentSeq;
     try {
       const np = await window.api('/alexa/now_playing/?serial=' + encodeURIComponent(serial) + (_queueVersion === null ? '' : '&queue_version=' + encodeURIComponent(_queueVersion)));
+      if (generation !== _pollGeneration || serial !== deviceEl.value || intent !== state()._playIntentSeq) return;
+      _pollFailures = 0;
       handleNpUpdate(np);
+      updatePollingCadence();
       if (window.refreshVolume) window.refreshVolume(false);
     } catch (_) {
-      // Best-effort; SSE remains primary.
+      // Finite polling retries on the next tick or explicit user action.
+      if (generation === _pollGeneration && serial === deviceEl.value) {
+        _pollFailures++;
+        updatePollingCadence();
+      }
     } finally {
       _pollNowPlayingInFlight = false;
-      if (_pollNowPlayingRetry) {
+      if (_pollNowPlayingRetry && !_pollStopped) {
         _pollNowPlayingRetry = false;
         schedulePollNowPlaying(300);
       }
