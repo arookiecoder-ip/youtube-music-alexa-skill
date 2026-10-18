@@ -28,6 +28,7 @@ class EchoStreamFailureTests(unittest.TestCase):
         fn.decorator_list = []
         direct = Mock(side_effect=AssertionError('Echo must never receive IP-locked URL'))
         ns = {'PUBLIC_BASE_URL': '', 'has_request_context': has_request_context, 'request': request,
+              '_ensure_audio_ready_for_play': Mock(),
               'threading': SimpleNamespace(Thread=Mock(return_value=Mock())), 'API_KEY': 'test-key',
               'Supporting': SimpleNamespace(ensure_downloaded=Mock(), resolve_direct_url=direct), 'asyncio': asyncio}
         exec(compile(ast.Module(body=[fn], type_ignores=[]), str(SOURCE), 'exec'), ns)
@@ -35,6 +36,7 @@ class EchoStreamFailureTests(unittest.TestCase):
             result = asyncio.run(ns['get_stream']('abcdefghijk'))
         self.assertEqual(result['audio_url'], 'https://alexa.synthora.in/proxy/?video_id=abcdefghijk&key=test-key')
         direct.assert_not_called()
+        ns['_ensure_audio_ready_for_play'].assert_called_once_with('abcdefghijk')
 
     def test_failed_old_stream_cannot_stop_new_selection(self):
         self._failure_case('oldtrack001', ignored=True)

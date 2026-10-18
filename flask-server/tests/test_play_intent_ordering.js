@@ -524,6 +524,60 @@ console.log('\n--- reported sequence: click A, B, C with out-of-order responses 
       check('re-clicked track renders', h.renders.nowPlaying, ['T1111111111']);
     }
 
+    console.log('--- snapshot revision and lifecycle boundaries ---');
+    {
+      const { sandbox: s, renders } = makeContext();
+      const snapshot = {video_id: 'new-song', title: 'New', output_epoch: 'a', output_revision: 2, playback_revision: 10};
+      s.handleNpUpdate(snapshot);
+      s.handleNpUpdate({...snapshot, video_id: 'old-song', playback_revision: 9});
+      check('older playback revision cannot repaint the banner', renders.nowPlaying, ['new-song']);
+      s.handleNpUpdate({...snapshot, video_id: 'old-output', output_revision: 1, playback_revision: 100});
+      check('older output generation cannot repaint the banner', renders.nowPlaying, ['new-song']);
+      s.handleNpUpdate({...snapshot, video_id: 'restart', output_epoch: 'b', output_revision: 0, playback_revision: 0});
+      s.handleNpUpdate({...snapshot, video_id: 'retired-server', playback_revision: 200});
+      check('restart accepts reset revisions and rejects the retired epoch', renders.nowPlaying, ['new-song', 'restart']);
+      const delay = s.playbackStore.pollDelay;
+      check('active playback polls quickly', delay(false, true, false, 0), 3000);
+      check('foreground paused polling slows', delay(false, false, false, 0), 10000);
+      check('background paused polling slows further', delay(true, false, false, 0), 30000);
+      check('transitions remain responsive in background', delay(true, false, true, 0), 3000);
+      check('outages back off to a bounded minute', delay(false, true, false, 10), 60000);
+    }
+    {
+      const { sandbox: s, renders } = makeContext();
+      let resolve;
+      s.api = () => new Promise(done => { resolve = done; });
+      const pending = s.pollNowPlaying();
+      s.stopSSE();
+      resolve({video_id: 'stale', title: 'Stale'});
+      await pending;
+      check('pagehide/stop invalidates an outstanding poll', renders.nowPlaying, []);
+    }
+    {
+      const { sandbox: s, renders } = makeContext();
+      const device = {value: 'a', addEventListener() {}};
+      // Reload transport with a stable device element instead of the generic DOM shim.
+      s.deviceEl = device;
+      vm.runInContext(fs.readFileSync(path.join(JS_DIR, 'sse.js'), 'utf8'), s);
+      let resolve;
+      s.api = () => new Promise(done => { resolve = done; });
+      const pending = s.pollNowPlaying();
+      device.value = 'b';
+      resolve({video_id: 'device-a', title: 'A'});
+      await pending;
+      check('device selection invalidates the previous device response', renders.nowPlaying, []);
+    }
+    {
+      const { sandbox: s, renders } = makeContext();
+      let resolve;
+      s.api = () => new Promise(done => { resolve = done; });
+      const pending = s.pollNowPlaying();
+      s.beginPlayIntent('new-song');
+      resolve({video_id: 'old-song', title: 'Old'});
+      await pending;
+      check('a new play command invalidates an outstanding poll', renders.nowPlaying, []);
+    }
+
     console.log(`\nplay-intent ordering: passed=${passed} failed=${failed}`);
     process.exit(failed ? 1 : 0);
   })();

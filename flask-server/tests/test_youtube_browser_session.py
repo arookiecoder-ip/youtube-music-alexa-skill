@@ -210,7 +210,7 @@ class CaptureTests(unittest.TestCase):
         self.assertEqual(status["state"], "connected")
 
     def test_controller_rejects_missing_or_wrong_token(self):
-        path = Path(__file__).parents[1] / "browser-auth" / "service.py"
+        path = Path(__file__).parents[2] / "browser-auth" / "service.py"
         spec = importlib.util.spec_from_file_location("browser_service_test", path)
         module = importlib.util.module_from_spec(spec)
         with mock.patch.dict(os.environ, {"YT_BROWSER_CONTROL_TOKEN": "correct"}):
@@ -221,7 +221,7 @@ class CaptureTests(unittest.TestCase):
         self.assertEqual(client.get("/status", headers={"X-Control-Token": "correct"}).status_code, 200)
 
     def test_sidecar_rejects_signed_headers_without_active_account(self):
-        path = Path(__file__).parents[1] / "browser-auth" / "service.py"
+        path = Path(__file__).parents[2] / "browser-auth" / "service.py"
         spec = importlib.util.spec_from_file_location("browser_service_account_test", path)
         module = importlib.util.module_from_spec(spec)
         with mock.patch.dict(os.environ, {"YT_BROWSER_CONTROL_TOKEN": "correct"}):
@@ -234,7 +234,7 @@ class CaptureTests(unittest.TestCase):
         }]}))
 
     def test_sidecar_identifies_signed_out_account_menu(self):
-        path = Path(__file__).parents[1] / "browser-auth" / "service.py"
+        path = Path(__file__).parents[2] / "browser-auth" / "service.py"
         spec = importlib.util.spec_from_file_location("browser_service_signed_out_test", path)
         module = importlib.util.module_from_spec(spec)
         with mock.patch.dict(os.environ, {"YT_BROWSER_CONTROL_TOKEN": "correct"}):
@@ -247,7 +247,7 @@ class CaptureTests(unittest.TestCase):
         self.assertFalse(module.account_menu_reports_signed_out({}))
 
     def test_google_login_process_has_fixed_cdp_but_no_automation_flag(self):
-        path = Path(__file__).parents[1] / "browser-auth" / "service.py"
+        path = Path(__file__).parents[2] / "browser-auth" / "service.py"
         spec = importlib.util.spec_from_file_location("browser_service_launch_test", path)
         module = importlib.util.module_from_spec(spec)
         with mock.patch.dict(os.environ, {"YT_BROWSER_CONTROL_TOKEN": "correct"}):
@@ -265,7 +265,7 @@ class CaptureTests(unittest.TestCase):
         self.assertIn("--remote-debugging-port=9222", capture_command)
 
     def test_failed_capture_keeps_same_chromium_process_for_retry(self):
-        path = Path(__file__).parents[1] / "browser-auth" / "service.py"
+        path = Path(__file__).parents[2] / "browser-auth" / "service.py"
         spec = importlib.util.spec_from_file_location("browser_service_same_process", path)
         module = importlib.util.module_from_spec(spec)
         with mock.patch.dict(os.environ, {"YT_BROWSER_CONTROL_TOKEN": "correct"}):
@@ -292,7 +292,7 @@ class CaptureTests(unittest.TestCase):
         stop.assert_called_once_with()
 
     def test_capture_is_explicit_and_requires_running_plain_browser(self):
-        path = Path(__file__).parents[1] / "browser-auth" / "service.py"
+        path = Path(__file__).parents[2] / "browser-auth" / "service.py"
         spec = importlib.util.spec_from_file_location("browser_service_capture", path)
         module = importlib.util.module_from_spec(spec)
         with mock.patch.dict(os.environ, {"YT_BROWSER_CONTROL_TOKEN": "correct"}):
@@ -306,7 +306,7 @@ class CaptureTests(unittest.TestCase):
         self.assertTrue(module._capture_requested.is_set())
 
     def test_novnc_controls_use_owner_api_not_sidecar_token(self):
-        script = (Path(__file__).parents[1] / "browser-auth" / "novnc-controls.js").read_text()
+        script = (Path(__file__).parents[2] / "browser-auth" / "novnc-controls.js").read_text()
         self.assertIn("/api/youtube/browser-session/", script)
         self.assertIn('"Content-Type": "application/json"', script)
         self.assertIn('body: "{}"', script)

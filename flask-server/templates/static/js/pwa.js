@@ -28,21 +28,9 @@
           try { window.handleNpUpdate(e.data.np); } finally { _applyingRemote = false; }
         }
       } else if (type === 'queue-update' && e.data.queue) {
-        // Keep the shared queue identity/index cache in sync before rendering.
-        // Later SSE broadcasts intentionally omit an unchanged queue and rely
-        // on this cache to resolve the active row by video_id.
-        if (typeof e.data.queueIndex === 'number') {
-          var queueJson = JSON.stringify(e.data.queue);
-          window._lastQueueJson = queueJson;
-          window._lastQueueIndex = e.data.queueIndex;
-          if (window.__appState) {
-            window.__appState._lastQueueJson = queueJson;
-            window.__appState._lastQueueIndex = e.data.queueIndex;
-          }
-          if (window.showQueue) {
-            window.showQueue(e.data.queue, e.data.queueIndex);
-          }
-        }
+        // Queue-only messages from older tabs have no epoch/revision context.
+        // Treat them as invalidations; authoritative snapshots update the store.
+        if (window.schedulePollNowPlaying) window.schedulePollNowPlaying(200);
       } else if (type === 'liked-update') {
         // Trigger a playlist refresh
         if (!window.JAM_GUEST && window.loadLibrary) {
@@ -62,16 +50,10 @@
     try {
       _bc.postMessage({
         type: 'np-update',
-        np: {
-          title: np.title,
-          artist: np.artist,
-          thumbnail: np.thumbnail,
-          video_id: np.video_id,
-          playing: np.playing,
-          duration_ms: np.duration_ms,
-          position_ms: np.position_ms,
-          queue_index: np.queue_index,
-        }
+        // Preserve confirmation, ownership and revision fields. Stripping them
+        // turned confirmed playback into paused state in receiving tabs and
+        // bypassed stale-snapshot rejection.
+        np: Object.assign({}, np)
       });
     } catch (_) {}
   }

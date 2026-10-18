@@ -9,11 +9,13 @@ import copy
 
 from test_app_queue import PhoneQueueTests, A, B, track
 from playback_failover import PlaybackFailoverBudget
+from playback_contract import restore_snapshot
 
 
 class OutputRoutesTests(PhoneQueueTests):
     def setUp(self):
         super().setUp()
+        self.namespace['restore_snapshot'] = restore_snapshot
         self.namespace["_playback_failover_budget"] = PlaybackFailoverBudget()
         self.seek_dispatch = Mock(return_value=None)
         self.namespace['_dispatch_play_with_retry'] = self.seek_dispatch
@@ -256,7 +258,10 @@ class OutputRoutesTests(PhoneQueueTests):
         self.seek_dispatch.return_value = 'offline'
         reply = self.client.post('/alexa/seek/', json={'serial':'echo-one', 'position_ms':42000})
         self.assertEqual(reply.status_code, 502)
-        self.assertEqual(self.state, previous)
+        self.assertGreater(self.state['playback_revision'], previous['playback_revision'])
+        for key, value in previous.items():
+            if key not in ('playback_revision', 'updated_at'):
+                self.assertEqual(self.state[key], value, key)
         def changed(*args):
             self.state.update(video_id=B, position_ms=0, playback_revision=99, playback_confirmed=True)
             return 'offline'
