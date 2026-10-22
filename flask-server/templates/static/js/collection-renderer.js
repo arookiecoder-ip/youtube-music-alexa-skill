@@ -41,7 +41,7 @@
       '<div class="playlist-detail-hero-info">' +
         '<' + (options.titleTag || 'h2') + ' class="playlist-detail-page-title playlist-detail-hero-name">' + esc(options.title) + '</' + (options.titleTag || 'h2') + '>' +
         (options.artistHtml ? '<div class="album-artist-link">' + options.artistHtml + '</div>' : '') +
-        (options.description ? '<details class="collection-description"><summary>About this collection</summary><div class="playlist-detail-hero-desc">' + esc(options.description) + '</div></details>' : '') +
+        (options.description ? '<details class="collection-description"><summary aria-label="Read collection description">Read more</summary><div class="playlist-detail-hero-desc">' + esc(options.description) + '</div></details>' : '') +
         '<div class="playlist-detail-hero-meta">' + esc(options.meta || '') + '</div>' +
         renderActions(options) +
       '</div>' +
@@ -87,17 +87,36 @@
     floating.type = 'button';
     floating.className = 'collection-floating-play';
     floating.setAttribute('aria-label', play.getAttribute('aria-label') || 'Play collection');
-    floating.innerHTML = icons.play + '<span>Play</span>';
-    floating.hidden = true;
+    floating.innerHTML = icons.play;
+    floating.setAttribute('aria-hidden', 'true');
+    floating.tabIndex = -1;
     floating.addEventListener('click', () => play.click());
-    parent.appendChild(floating);
+    // Keep viewport-fixed controls outside transformed/scrolling collection panes.
+    document.body.appendChild(floating);
     const scrollRoot = hero.closest('.collection-detail-body');
     const root = scrollRoot && /auto|scroll/.test(getComputedStyle(scrollRoot).overflowY) ? scrollRoot : null;
+    const shell = hero.closest('#collection-detail-shell');
+    const header = shell && shell.querySelector('.collection-detail-page-header');
+    const title = hero.querySelector('.playlist-detail-hero-name');
+    const headerTitle = header && header.querySelector('h3');
+    if (headerTitle && title) headerTitle.textContent = title.textContent;
+    const description = hero.querySelector('.collection-description');
+    const updateDescription = () => {
+      const summary = description && description.querySelector('summary');
+      if (summary) summary.textContent = description.open ? 'Show less' : 'Read more';
+    };
+    if (description) description.addEventListener('toggle', updateDescription);
+    let visibilityObserver = null;
     let frame = 0;
     const scrollTarget = root || window;
     const update = () => {
       frame = 0;
-      floating.hidden = play.getBoundingClientRect().bottom >= (root ? root.getBoundingClientRect().top : 0);
+      const top = root ? root.getBoundingClientRect().top : 0;
+      const visible = play.getBoundingClientRect().bottom < top;
+      floating.classList.toggle('is-visible', visible);
+      floating.setAttribute('aria-hidden', String(!visible));
+      floating.tabIndex = visible ? 0 : -1;
+      if (header && title) header.classList.toggle('is-scrolled', title.getBoundingClientRect().bottom < top + header.offsetHeight);
     };
     const schedule = () => { if (!frame) frame = requestAnimationFrame(update); };
     // A description collapse or fast scroll can skip directly from below to
@@ -109,9 +128,17 @@
     schedule();
     const cleanup = () => {
       observer.disconnect(); cancelAnimationFrame(frame); floating.remove();
+      if (header) header.classList.remove('is-scrolled');
+      if (visibilityObserver) visibilityObserver.disconnect();
+      if (description) description.removeEventListener('toggle', updateDescription);
       scrollTarget.removeEventListener('scroll', schedule, true); window.removeEventListener('resize', schedule);
       window.removeEventListener('hashchange', cleanup);
     };
+    if (window.MutationObserver) {
+      const page = hero.closest('#collection-detail-page') || shell || parent;
+      visibilityObserver = new MutationObserver(() => { if (page.hidden || !hero.isConnected) cleanup(); });
+      visibilityObserver.observe(page, { attributes: true, attributeFilter: ['hidden'], childList: true, subtree: true });
+    }
     parent.__floatingPlayCleanup = cleanup;
     window.addEventListener('hashchange', cleanup);
   }

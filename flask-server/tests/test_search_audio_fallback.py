@@ -49,6 +49,13 @@ class SearchAudioFallbackTests(unittest.TestCase):
         result, _ = self.run_search([video], [other], query='go by atif aslam')
         self.assertEqual(result['songs'][0]['video_id'], 'AAAAAAAAAAA')
         self.assertEqual(result['all'][0]['videoId'], 'AAAAAAAAAAA')
+    def test_video_hero_fetches_audio_counterpart_even_when_mixed_results_contain_other_songs(self):
+        video = dict(self.song('video'), videoId='AAAAAAAAAAA', category='Top result')
+        unrelated = dict(self.song(), videoId='BBBBBBBBBBB', title='Different song')
+        audio = dict(self.song(), videoId='CCCCCCCCCCC')
+        result, client = self.run_search([video, unrelated], [audio])
+        self.assertEqual(client.search.call_count, 2)
+        self.assertIn('CCCCCCCCCCC', [song['video_id'] for song in result['songs']])
     def test_optional_audio_timeout_keeps_successful_mixed_results(self):
         result, _ = self.run_search([dict(resultType='album', browseId='MPRE1', title='Album')], failure=True)
         self.assertEqual(result['albums'][0]['title'], 'Album')
