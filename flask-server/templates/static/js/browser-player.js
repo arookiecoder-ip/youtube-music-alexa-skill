@@ -319,7 +319,12 @@
       publish(true).catch(() => {});
     } else publish().catch(() => {});
   });
-  for (const event of ['playing', 'pause', 'waiting', 'seeked']) audio.addEventListener(event, () => publish().catch(() => {}));
+  for (const event of ['playing', 'pause', 'waiting', 'seeked']) audio.addEventListener(event, () => {
+    if (!owns() || changingSource) return;
+    publish().then(() => {
+      if (window.schedulePollNowPlaying) window.schedulePollNowPlaying(0);
+    }).catch(() => {});
+  });
   audio.addEventListener('error', () => { audio.pause(); publish().catch(() => {}); notify('Audio could not load. Tap Play to retry.'); });
   // Independent safety clock: hung HTTP requests cannot extend audible ownership.
   const watchdog = setInterval(() => { if (!owns()) audio.pause(); }, 500);

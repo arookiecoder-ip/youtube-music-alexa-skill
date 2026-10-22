@@ -174,6 +174,8 @@
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
         };
+    // Let browser presence close even when navigation destroys the document.
+    if (path === '/api/app/devices/' && body && body.action === 'offline') opts.keepalive = true;
     let res;
     try {
       res = await _fetchWithTimeout(_withApiKey(path), opts);

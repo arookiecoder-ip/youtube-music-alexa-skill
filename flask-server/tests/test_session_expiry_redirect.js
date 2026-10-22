@@ -74,6 +74,19 @@ vm.createContext(sandbox);
 vm.runInContext(SRC, sandbox, { filename: 'api.js' });
 
 async function main() {
+  const unauthorizedFetch = sandbox.fetch, presenceRequests = [];
+  sandbox.fetch = async (url, options) => {
+    presenceRequests.push({url, options});
+    return {ok:true, status:200, headers:{get:()=>null}, json:async()=>({ok:true})};
+  };
+  await sandbox.window.api('/api/app/devices/', {action:'offline', device_id:'browser', session_id:'session'});
+  await sandbox.window.api('/api/app/devices/', {action:'online', device_id:'browser', session_id:'session'});
+  const assert = require('assert');
+  assert.equal(presenceRequests[0].options.keepalive, true, 'Offline presence must survive page navigation');
+  assert.equal(presenceRequests[0].options.credentials, 'same-origin');
+  assert.equal(presenceRequests[1].options.keepalive, undefined, 'Normal polls must retain normal request lifetime');
+  sandbox.fetch = unauthorizedFetch;
+
   await Promise.all([
     sandbox.window.api('/api/home/'),
     sandbox.window.api('/alexa/status/'),
