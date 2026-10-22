@@ -12,7 +12,8 @@
   let output = null, accepted = '', leaseUntil = 0, queue = [], index = -1;
   let ack = [], stopped = false, polling = null, generation = 0, lastReport = 0;
   let repeat = false, commandChain = Promise.resolve(), reportChain = Promise.resolve();
-  let changingSource = false, pendingSeek = null;
+  let changingSource = false, pendingSeek = null, seekingPlayback = false, desiredPlaying = false;
+  let presenceRevision = -1, pauseAck = null;
   const processing = new Set(), completed = new Set();
   const ownSerial = 'mobile:' + id;
   const owns = () => !!output && output.playback_output === 'phone' && output.output_owner === id &&
@@ -32,7 +33,7 @@
       action: replace ? 'start' : 'current', tracks: replace ? queue.map(item => ({...item})) : [],
       after: queue[index].video_id, queue_index: index, output_owner: id, output_token: token,
       position_ms: pendingSeek ? pendingSeek.position : Math.max(0, Math.round((audio.currentTime || 0) * 1000)),
-      playing: !audio.paused && !audio.ended, buffering: !audio.paused && (audio.readyState < 3 || audio.seeking === true)
+      playing: !audio.paused && !audio.ended, buffering: !audio.paused && (audio.readyState < 3 && !seekingPlayback)
     };
     // Keep pre-seek/pre-pause HTTP reports from landing after newer positions.
     const operation = reportChain.then(() => {
@@ -54,6 +55,7 @@
     applySeek();
   }
   function resume() {
+    desiredPlaying = true;
     const playGeneration = generation;
     // A cold download must not block pause, seeking, or the next selection.
     Promise.resolve(audio.play()).then(() => {
@@ -62,7 +64,7 @@
       return publish();
     }).catch(error => {
       if (generation !== playGeneration || error.name === 'AbortError') return;
-      audio.pause(); publish().catch(() => {});
+      desiredPlaying = false; audio.pause(); publish().catch(() => {});
       notify(error.name === 'NotAllowedError' ? 'Tap Play to allow audio in this browser.' : 'Could not load this track. Tap Play to retry.');
     });
   }
@@ -75,7 +77,7 @@
     changingSource = true;
     audio.pause();
     index = nextIndex;
-    pendingSeek = null;
+    pendingSeek = null; seekingPlayback = false; desiredPlaying = playing;
     audio.src = window.browserAudioUrl(selected.video_id);
     changingSource = false;
     seek(Math.max(0, position));
@@ -130,7 +132,7 @@
   async function execute(action, payload) {
     if (!owns()) throw new Error('This browser no longer owns playback.');
     if (action === 'clear') {
-      generation++; pendingSeek = null; changingSource = true; audio.pause(); audio.removeAttribute('src'); queue = []; index = -1; changingSource = false;
+      generation++; pendingSeek = null; desiredPlaying = false; seekingPlayback = false; changingSource = true; audio.pause(); audio.removeAttribute('src'); queue = []; index = -1; changingSource = false;
       await api('/api/app/queue/', { action: 'clear', output_owner: id, output_token: accepted });
       return;
     }
@@ -160,7 +162,7 @@
       if (!queue[index]) return;
       if (!audio.src || audio.error || audio.ended) await start(index);
       else { resume(); await publish(); }
-    } else if (action === 'pause') { audio.pause(); await publish(); }
+    } else if (action === 'pause') { desiredPlaying = false; audio.pause(); await publish(); }
     else if (action === 'next' || action === 'previous') {
       if (action === 'previous' && audio.currentTime > 3) { seek(0); await publish(); }
       else if (queue[index + (action === 'next' ? 1 : -1)]) await start(index + (action === 'next' ? 1 : -1));
@@ -168,6 +170,7 @@
       const value = Number(payload.position_ms !== undefined ? payload.position_ms : Number(payload.position_seconds || 0) * 1000);
       if (!Number.isFinite(value) || value < 0) throw new Error('Invalid seek position.');
       if (!queue[index]) throw new Error('Choose a track before seeking.');
+      seekingPlayback = true;
       seek(value);
       await publish();
     } else if (action === 'volume') {
@@ -188,7 +191,7 @@
       queue.splice(at, 1);
       if (at < index) index--;
       if (!queue.length) {
-        audio.pause(); audio.removeAttribute('src'); index = -1;
+        desiredPlaying = false; audio.pause(); audio.removeAttribute('src'); index = -1;
         await api('/api/app/queue/', { action: 'clear', output_owner: id, output_token: accepted });
         return;
       }
@@ -221,25 +224,33 @@
     commandChain = operation.catch(() => {});
     return operation;
   }
-  async function poll() {
+  async function poll(wait = false) {
     if (polling) return polling;
     polling = (async () => {
       const sentAcks = ack.splice(0, 32);
       let response;
       try { response = await api('/api/app/devices/', {
         action: 'online', device_id: id, session_id: session, name: 'Browser player',
+        wait, wait_seconds: 1, revision: presenceRevision, output_token: output && output.output_token,
         ack: sentAcks, volume: Math.round(audio.volume * 100), include_handoff_state: true, accepted_token: accepted
       }); } catch (error) { ack.unshift(...sentAcks); throw error; }
+      if (response.revision !== undefined) presenceRevision = response.revision;
       const previous = output;
       output = response;
       if (response.output_owner !== id || response.handoff_pending || response.playback_output !== 'phone') {
         generation++; audio.pause(); leaseUntil = 0;
-        if (previous && previous.output_owner === id && response.handoff_pending) {
-          await api('/api/app/output/', { action: 'ack', output_owner: id, output_token: response.output_token,
-            position_ms: Math.round((audio.currentTime || 0) * 1000), playing: false });
+        if (pauseAck && (!response.handoff_pending || pauseAck.output_token !== response.output_token)) pauseAck = null;
+        if (previous && previous.output_owner === id && response.handoff_pending && !pauseAck) {
+          pauseAck = { action: 'ack', output_owner: id, output_token: response.output_token,
+            position_ms: pendingSeek ? pendingSeek.position : Math.round((audio.currentTime || 0) * 1000), playing: desiredPlaying };
+        }
+        if (pauseAck) {
+          await api('/api/app/output/', pauseAck);
+          pauseAck = null;
         }
         accepted = '';
       } else {
+        pauseAck = null;
         const heartbeat = await api('/api/app/output/', { action: 'heartbeat', output_owner: id, output_token: response.output_token });
         output = heartbeat;
         leaseUntil = Date.now() + Math.max(0, heartbeat.phone_lease_ms - 4000);
@@ -288,7 +299,7 @@
       return { ok: true, volume: Math.round(audio.volume * 100) };
     }
     if (local && body && (controls[path] || path === '/alexa/command/')) {
-      await poll();
+      if (!owns()) await poll();
       const action = path === '/alexa/command/' ? body.action : path === '/alexa/queue_add/' && body.position === 'next' ? 'next_items' : controls[path];
       if (!owns() && ['song', 'queue', 'play'].includes(action) && output && !output.handoff_pending) {
         await api('/api/app/devices/', { action: 'transfer', device_id: id, target_id: id,
@@ -308,7 +319,7 @@
     if (!owns()) return;
     const next = queue[index + 1] ? index + 1 : repeat ? 0 : -1;
     if (next >= 0) start(next).catch(error => notify(error.message));
-    else publish().catch(() => {});
+    else { desiredPlaying = false; publish().catch(() => {}); }
   });
   for (const event of ['loadedmetadata', 'durationchange']) audio.addEventListener(event, () => {
     if (!owns()) return;
@@ -321,17 +332,20 @@
   });
   for (const event of ['playing', 'pause', 'waiting', 'seeked']) audio.addEventListener(event, () => {
     if (!owns() || changingSource) return;
+    if (event === 'playing') seekingPlayback = false;
+    if (event === 'pause' && audio.paused) desiredPlaying = false;
     publish().then(() => {
       if (window.schedulePollNowPlaying) window.schedulePollNowPlaying(0);
     }).catch(() => {});
   });
-  audio.addEventListener('error', () => { audio.pause(); publish().catch(() => {}); notify('Audio could not load. Tap Play to retry.'); });
+  audio.addEventListener('error', () => { desiredPlaying = false; audio.pause(); publish().catch(() => {}); notify('Audio could not load. Tap Play to retry.'); });
   // Independent safety clock: hung HTTP requests cannot extend audible ownership.
   const watchdog = setInterval(() => { if (!owns()) audio.pause(); }, 500);
   async function tick() {
     if (stopped) return;
-    try { await poll(); } catch (_) { if (!owns()) audio.pause(); }
-    if (!stopped) setTimeout(tick, 2000);
+    let failed = false;
+    try { await poll(owns()); } catch (_) { failed = true; if (!owns()) audio.pause(); }
+    if (!stopped) setTimeout(tick, failed || !owns() ? 1000 : 0);
   }
   window.addEventListener('pagehide', () => {
     stopped = true; generation++; audio.pause(); clearInterval(watchdog);

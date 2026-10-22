@@ -1047,7 +1047,9 @@ const progress = window.progress = (function () {
     dragging = false;
     _activeTrack.classList.remove('dragging');
     const target = Math.round(dragMs);
-    // Hold the bar at the target and do NOT tick yet -- the device hasn't
+    // Browser seeks reuse the current media element and retain its play state.
+    // For Alexa, hold the target until the device confirms the new stream.
+    // The device hasn't
     // actually moved to this position until the seek round-trips and the
     // real PlaybackStarted webhook confirms it. Ticking immediately (as if
     // already playing from `target`) made the bar visibly race ahead of the
@@ -1058,8 +1060,10 @@ const progress = window.progress = (function () {
     // is now false, so livePosition() just returns the frozen target.
     positionMs = target;
     anchorClientMs = Date.now();
-    playing = false;
-    seekPending = true;
+    const browserSeek = window.browserPlayback &&
+      deviceEl.value === 'mobile:' + window.browserPlayback.id;
+    if (!browserSeek) playing = false;
+    seekPending = !browserSeek;
     clearTimeout(seekPendingTimer);
     seekPendingTimer = setTimeout(() => {
       seekPending = false;

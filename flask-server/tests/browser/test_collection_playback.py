@@ -13,12 +13,12 @@ def test_description_and_floating_play(width):
     with sync_playwright() as driver:
         browser = driver.chromium.launch()
         page = browser.new_page(viewport={'width': width, 'height': 844})
-        page.set_content('<div class="collection-detail-body" style="height:320px;overflow:auto"><div id="hero"></div><div style="height:2000px">Tracks</div></div>')
+        page.set_content('<div id="collection-detail-shell"><div class="collection-detail-page-header"><button id="playlist-detail-back">Back</button><h3>Playlist</h3></div><div class="collection-detail-body" style="height:320px;overflow:auto"><div id="hero"></div><div style="height:2000px">Tracks</div></div></div>')
         page.add_style_tag(path=str(STATIC / 'css/playlist.css'))
         page.add_script_tag(path=str(STATIC / 'js/collection-renderer.js'))
         page.evaluate('''() => {
             document.querySelector('#hero').outerHTML = CollectionRenderer.renderDetailHero({
-                id: 'hero', title: 'Long playlist', description: 'Unbroken'.repeat(1000), showActions: true
+                id: 'hero', title: 'Long playlist with a title that wraps across narrow screens', description: 'Unbroken'.repeat(1000), showActions: true
             });
             window.playClicks = 0;
             const hero = document.querySelector('#hero');
@@ -28,14 +28,25 @@ def test_description_and_floating_play(width):
         expect(page.locator('.playlist-detail-hero-desc')).not_to_be_visible()
         page.locator('summary').click()
         expect(page.locator('.playlist-detail-hero-desc')).to_be_visible()
+        expect(page.locator('summary')).to_have_text('Show less')
         assert page.locator('.collection-detail-body').evaluate('(el) => el.scrollWidth <= el.clientWidth')
         page.locator('summary').click()
-        page.locator('.collection-detail-body').evaluate('(el) => { el.scrollTop = 500; }')
+        before_height = page.locator('.collection-detail-body').evaluate('(el) => el.clientHeight')
+        page.locator('.collection-detail-body').evaluate('(el) => { el.scrollTop = 900; }')
         expect(page.locator('.collection-floating-play')).to_be_visible()
+        expect(page.locator('.collection-floating-play')).to_have_css('border-radius', '50%')
+        expect(page.locator('.collection-floating-play')).to_have_css('width', '68px')
+        assert page.locator('.collection-floating-play').inner_text() == ''
+        expect(page.locator('.collection-scroll-header h3')).to_be_visible()
+        assert page.locator('.collection-scroll-header h3').evaluate('(el) => el.scrollWidth <= el.clientWidth')
+        assert page.locator('.collection-detail-body').evaluate('(el) => el.clientHeight') == before_height
+        bounds = page.locator('.collection-floating-play').bounding_box()
+        assert 0 <= bounds['y'] <= 844 - 68
         page.locator('.collection-floating-play').click()
         assert page.evaluate('playClicks') == 1
-        page.evaluate("window.dispatchEvent(new Event('hashchange'))")
+        page.evaluate("document.querySelector('#collection-detail-shell').hidden = true")
         expect(page.locator('.collection-floating-play')).to_have_count(0)
+        expect(page.locator('.collection-scroll-header')).to_have_count(0)
         browser.close()
 
 

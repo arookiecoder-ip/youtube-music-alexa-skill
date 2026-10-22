@@ -1006,7 +1006,8 @@ function renderResults() {
               .concat([String(topResult.artist || '').toLowerCase()])
               .filter(Boolean)
         );
-        const _songCandidates = remaining.filter(i => i && i.resultType === 'song' && (i.videoId || i.video_id));
+        const _songCandidates = remaining.concat(data.songs || []).filter(i => i &&
+           (i.resultType === 'song' || String(i.videoType || '').includes('ATV')) && (i.videoId || i.video_id));
         if (_songCandidates.length) {
            let _best = null;
            let _bestScore = -1;
@@ -1023,7 +1024,7 @@ function renderResults() {
            }
            // A regional catalog gap must not replace the requested video with
            // an unrelated song merely because an audio upload exists.
-           if (_best && _bestScore >= 10 && (!_topArtistNames.size ||
+           if (_best && _bestScore >= 8 && (!_topArtistNames.size ||
                ((Array.isArray(_best.artists) ? _best.artists : []).map(a => String(a.name || '').toLowerCase())
                  .concat([String(_best.artist || '').toLowerCase()])).some(a => _topArtistNames.has(a)))) {
               remaining = [topResult].concat(remaining.filter(i => i !== _best));

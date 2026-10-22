@@ -48,7 +48,8 @@ if (!progressSrc) {
   process.exit(1);
 }
 
-function makeSandbox() {
+function makeSandbox(browser = false) {
+  const events = {};
   const timers = new Map();
   let nextTimer = 1;
   const styles = {};
@@ -59,7 +60,7 @@ function makeSandbox() {
       style: { setProperty(k, v) { styles[id + ':' + k] = v; }, width: '', left: '' },
       textContent: '',
       setAttribute() {},
-      addEventListener() {},
+      addEventListener(name, fn) { events[id + ":" + name] = fn; },
       classList: { add() {}, remove() {}, toggle() {} },
       getBoundingClientRect: () => ({ left: 0, width: 100 }),
     };
@@ -78,6 +79,9 @@ function makeSandbox() {
     },
     Date,
     state: { lastActionAt: 0, lastActionIntent: null, GRACE_MS: 8000 },
+    deviceEl: {value: browser ? "mobile:browser-test" : "echo-test"},
+    api: async () => ({ok:true}), toast() {}, fmt: ms => String(ms),
+    browserPlayback: browser ? {id:"browser-test", owns:()=>true} : undefined,
     isFinite,
     setTimeout: (fn, ms) => { const id = nextTimer++; timers.set(id, { fn, ms }); return id; },
     clearTimeout: id => timers.delete(id),
@@ -87,7 +91,7 @@ function makeSandbox() {
   sandbox.window.addEventListener = () => {};
   const context = vm.createContext(sandbox);
   vm.runInContext(progressSrc, context, { filename: 'progress-controller.js' });
-  return { progress: sandbox.progress, timers, styles, state: sandbox.state };
+  return { progress: sandbox.progress, timers, styles, state: sandbox.state, events };
 }
 
 let snapshotAnchor = 0;
@@ -181,6 +185,14 @@ function main() {
   // equality with the anchor.
   checkTrue('a failed pause can leave the ticker running', recoveredPosition >= 1200);
 
+  for (const browser of [true, false]) {
+    const local = makeSandbox(browser);
+    local.progress.update(snapshot(true, true, 1000));
+    local.events['progress-track:keydown']({key:'ArrowRight', preventDefault(){}});
+    check(browser ? 'browser seeking keeps playback controls free of a loading animation' :
+      'Alexa seeking still waits for device confirmation', local.state.playbackProcessing, !browser);
+    checkTrue('seek immediately updates the displayed position', local.progress.livePosition() >= 6000);
+  }
   console.log(`\npause-progress-confirmation: passed=${passed} failed=${failed}`);
   process.exit(failed ? 1 : 0);
 }

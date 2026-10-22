@@ -9668,7 +9668,8 @@ def alexa_search():
     # Mixed search may return only artists/albums or music videos. Fetch the
     # audio category only when it is absent; keep successful mixed results if
     # this optional request fails rather than blanking the Search page.
-    if not any(item.get('resultType') == 'song' for item in all_raw):
+    if (not any(item.get('resultType') == 'song' for item in all_raw) or
+            any(item.get('category') == 'Top result' and item.get('resultType') == 'video' for item in all_raw)):
         try:
             audio_raw = ytmusic.search(query=query, filter='songs',
                                       ignore_spelling=False, limit=40) or []
