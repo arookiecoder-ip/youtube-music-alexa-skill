@@ -3,8 +3,10 @@
   'use strict';
   if (window.JAM_GUEST || !window.Audio || !window.crypto) return;
   const api = window.api;
-  const id = 'browser-' + crypto.randomUUID();
-  const session = crypto.randomUUID();
+  const uuid = () => typeof crypto.randomUUID === 'function' ? crypto.randomUUID() :
+    Array.from(crypto.getRandomValues(new Uint8Array(16)), byte => byte.toString(16).padStart(2, '0')).join('');
+  const id = 'browser-' + uuid();
+  const session = uuid();
   const audio = new Audio();
   audio.preload = 'auto';
   let output = null, accepted = '', leaseUntil = 0, queue = [], index = -1;
@@ -19,7 +21,7 @@
     title: item.title || '', artist: item.artist || '',
     thumbnail: item.thumbnail || item.thumbnailUri || '',
     duration_ms: item.duration_ms || Number(item.durationSec || item.duration_seconds || 0) * 1000,
-    entry_id: item.entry_id || item.uuid || crypto.randomUUID()
+    entry_id: item.entry_id || item.uuid || uuid()
   });
   function notify(message) { if (window.toast) window.toast(message, 'error'); }
   async function publish(replace = false) {
@@ -247,6 +249,11 @@
     if (local && body && (controls[path] || path === '/alexa/command/')) {
       await poll();
       const action = path === '/alexa/command/' ? body.action : path === '/alexa/queue_add/' && body.position === 'next' ? 'next_items' : controls[path];
+      if (!owns() && ['song', 'queue', 'play'].includes(action) && output && !output.handoff_pending) {
+        await api('/api/app/devices/', { action: 'transfer', device_id: id, target_id: id,
+          output_token: output.output_token, include_state: true });
+        await poll();
+      }
       if (!owns()) throw new Error('Device switch is still in progress. Choose this browser and retry.');
       const operation = enqueue(action, body);
       await operation;

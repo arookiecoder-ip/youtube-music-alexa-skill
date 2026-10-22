@@ -82,3 +82,26 @@ def test_pc_player_decodes_audio_and_stops_on_device_handoff():
         page.evaluate('browserPlayback.poll()')
         assert page.evaluate('browserPlayback.audio.paused && !browserPlayback.owns()')
         browser.close()
+
+
+def test_browser_controls_do_not_require_amazon_or_public_echo_url():
+    with sync_playwright() as driver:
+        browser = driver.chromium.launch()
+        page = browser.new_page()
+        page.route('https://musicbox.test/', lambda route: route.fulfill(
+            body='<select id="device"></select><section id="login-section"></section><button class="needs-login" hidden>Search music</button>',
+            content_type='text/html'))
+        page.goto('https://musicbox.test/')
+        page.evaluate('''() => {
+            window.__appState = {}; window.browserPlayback = {}; window.errors = [];
+            window.toast = text => errors.push(text);
+            window.escHtml = text => text;
+            window.api = async () => ({status: {configured: false, logged_in: false}, devices: []});
+        }''')
+        page.add_script_tag(path=str(STATIC / 'js/device.js'))
+        page.evaluate('window.initPage()')
+        expect(page.get_by_text('Search music')).to_be_visible()
+        expect(page.locator('#login-section')).not_to_be_visible()
+        assert page.evaluate('__appState._loggedIn && !__appState._alexaLoggedIn')
+        assert page.evaluate('errors') == []
+        browser.close()
