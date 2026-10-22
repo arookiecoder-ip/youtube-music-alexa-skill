@@ -97,6 +97,9 @@
         if (window.syncPlayPause) window.syncPlayPause();
       }
     }
+    // A switch briefly reports the stopped source / preparing destination.
+    // Keep its previous play icon without treating preparation as confirmation.
+    const preserveHandoff = !!(window.preserveHandoffPlayback && window.preserveHandoffPlayback(np));
     // A paused track still has a title — keep showing it. Only a missing
     // title means there is genuinely nothing to display.
     if (np.title) {
@@ -115,7 +118,7 @@
         if (window._notifyPlayPauseServerState) {
           window._notifyPlayPauseServerState(serverPlaying, np.state_updated_at || np.updated_at || np.confirmed_at, np.playback_revision, np.playback_confirmed, np.playback_processing);
         }
-        if (!contradictsIntent && (serverPlaying || !inGrace)) {
+        if (!preserveHandoff && !contradictsIntent && (serverPlaying || !inGrace)) {
           state().isPlaying = serverPlaying;
           if (window.syncPlayPause) window.syncPlayPause();
         }
@@ -135,7 +138,7 @@
         if (window._notifyPlayPauseServerState) {
           window._notifyPlayPauseServerState((np.playback_output !== 'phone' || (window.mobileOutputSelected && window.mobileOutputSelected(np))) && np.playing && np.playback_confirmed === true, np.state_updated_at || np.updated_at || np.confirmed_at, np.playback_revision, np.playback_confirmed, np.playback_processing);
         }
-        if (!contradictsIntent && !inGrace) {
+        if (!preserveHandoff && !contradictsIntent && !inGrace) {
           state().isPlaying = (np.playback_output !== 'phone' || (window.mobileOutputSelected && window.mobileOutputSelected(np))) && np.playing === true && np.playback_confirmed === true;
           if (window.syncPlayPause) window.syncPlayPause();
         }
