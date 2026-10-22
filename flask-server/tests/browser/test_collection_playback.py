@@ -37,8 +37,8 @@ def test_description_and_floating_play(width):
         expect(page.locator('.collection-floating-play')).to_have_css('border-radius', '50%')
         expect(page.locator('.collection-floating-play')).to_have_css('width', '68px')
         assert page.locator('.collection-floating-play').inner_text() == ''
-        expect(page.locator('.collection-detail-page-header h3')).to_be_visible()
-        assert page.locator('.collection-detail-page-header h3').evaluate('(el) => el.scrollWidth <= el.clientWidth')
+        expect(page.locator('.collection-scroll-header h3')).to_be_visible()
+        assert page.locator('.collection-scroll-header h3').evaluate('(el) => el.scrollWidth <= el.clientWidth')
         assert page.locator('.collection-detail-body').evaluate('(el) => el.clientHeight') == before_height
         bounds = page.locator('.collection-floating-play').bounding_box()
         assert 0 <= bounds['y'] <= 844 - 68
@@ -46,6 +46,7 @@ def test_description_and_floating_play(width):
         assert page.evaluate('playClicks') == 1
         page.evaluate("document.querySelector('#collection-detail-shell').hidden = true")
         expect(page.locator('.collection-floating-play')).to_have_count(0)
+        expect(page.locator('.collection-scroll-header')).to_have_count(0)
         browser.close()
 
 

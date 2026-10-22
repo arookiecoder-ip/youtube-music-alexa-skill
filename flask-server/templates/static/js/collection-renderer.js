@@ -96,10 +96,18 @@
     const scrollRoot = hero.closest('.collection-detail-body');
     const root = scrollRoot && /auto|scroll/.test(getComputedStyle(scrollRoot).overflowY) ? scrollRoot : null;
     const shell = hero.closest('#collection-detail-shell');
-    const header = shell && shell.querySelector('.collection-detail-page-header');
     const title = hero.querySelector('.playlist-detail-hero-name');
-    const headerTitle = header && header.querySelector('h3');
-    if (headerTitle && title) headerTitle.textContent = title.textContent;
+    const back = shell && shell.querySelector('#playlist-detail-back');
+    const header = shell && title ? document.createElement('div') : null;
+    if (header) {
+      header.className = 'collection-scroll-header';
+      const backButton = document.createElement('button');
+      backButton.type = 'button'; backButton.setAttribute('aria-label', 'Back');
+      backButton.innerHTML = back ? back.innerHTML : '‹';
+      backButton.addEventListener('click', () => { if (back) back.click(); });
+      const heading = document.createElement('h3'); heading.textContent = title.textContent;
+      header.append(backButton, heading); document.body.appendChild(header);
+    }
     const description = hero.querySelector('.collection-description');
     const updateDescription = () => {
       const summary = description && description.querySelector('summary');
@@ -116,7 +124,16 @@
       floating.classList.toggle('is-visible', visible);
       floating.setAttribute('aria-hidden', String(!visible));
       floating.tabIndex = visible ? 0 : -1;
-      if (header && title) header.classList.toggle('is-scrolled', title.getBoundingClientRect().bottom < top + header.offsetHeight);
+      if (header && title) {
+        const appHeader = document.querySelector('main > header');
+        const headerTop = appHeader ? Math.max(0, appHeader.getBoundingClientRect().bottom) : top;
+        const bounds = shell.getBoundingClientRect();
+        header.style.top = headerTop + 'px'; header.style.left = Math.max(0, bounds.left) + 'px';
+        header.style.width = Math.min(bounds.width, window.innerWidth) + 'px';
+        const scrolled = title.getBoundingClientRect().bottom < headerTop + header.offsetHeight;
+        header.classList.toggle('is-visible', scrolled);
+        header.inert = !scrolled;
+      }
     };
     const schedule = () => { if (!frame) frame = requestAnimationFrame(update); };
     // A description collapse or fast scroll can skip directly from below to
@@ -128,7 +145,7 @@
     schedule();
     const cleanup = () => {
       observer.disconnect(); cancelAnimationFrame(frame); floating.remove();
-      if (header) header.classList.remove('is-scrolled');
+      if (header) header.remove();
       if (visibilityObserver) visibilityObserver.disconnect();
       if (description) description.removeEventListener('toggle', updateDescription);
       scrollTarget.removeEventListener('scroll', schedule, true); window.removeEventListener('resize', schedule);
