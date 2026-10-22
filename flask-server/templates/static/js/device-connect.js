@@ -10,15 +10,27 @@
   const originalApply = window._applyDevices;
   window._applyDevices = function (devices, preferred) {
     echoDevices = devices.filter(d => !String(d.serial).startsWith('mobile:'));
-    return originalApply(echoDevices.concat(phones.map(d => ({ serial: 'mobile:' + d.id,
-      name: window.browserPlayback && d.id === window.browserPlayback.id ? 'This browser' : d.name, online: true }))), preferred);
+    const browser = window.browserPlayback;
+    const local = browser ? 'mobile:' + browser.id : '';
+    const devicesWithPhones = echoDevices.concat(phones.map(d => ({ serial: 'mobile:' + d.id,
+      name: browser && d.id === browser.id ? 'This browser' : d.name, online: true })));
+    if (local && !devicesWithPhones.some(d => d.serial === local)) {
+      devicesWithPhones.push({ serial: local, name: 'This browser', online: true });
+    }
+    const active = output && (output.playback_output === 'phone' && output.output_owner
+      ? 'mobile:' + output.output_owner : output.output_serial);
+    const available = serial => devicesWithPhones.some(d => d.serial === serial && d.online);
+    const value = switching ? select.value : available(active) ? active :
+      available(preferred) ? preferred : local || devicesWithPhones.find(d => d.online)?.serial || preferred;
+    return originalApply(devicesWithPhones, value);
   };
   function render() {
-    let value = select.value;
-    if (!switching && output) {
-      value = output.playback_output === 'phone' && output.output_owner ? 'mobile:' + output.output_owner : output.output_serial || value;
+    const previous = select.value;
+    window._applyDevices(window._connectEchoDevices || echoDevices, previous);
+    if (select.value !== previous) {
+      if (window.connectSSE) window.connectSSE();
+      if (window.refreshVolume) window.refreshVolume(true);
     }
-    window._applyDevices(window._connectEchoDevices || echoDevices, value);
   }
   window.activeAlexaSerial = () => output && output.output_serial || echoDevices.find(d => d.online)?.serial || "";
   window.mobileOutputSelected = function (np) {
