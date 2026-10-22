@@ -9,6 +9,18 @@ from mobile_devices import MobileDevices
 
 
 class MobileDeviceRoutesTests(OutputRoutesTests):
+    def test_last_track_clear_requires_current_phone_ownership(self):
+        claim = self.output_request('claim').json
+        self.state.update(queue=[track(A)], video_id=A, playing=True)
+        request = {'action': 'clear', 'output_owner': 'phone-one', 'output_token': 'stale'}
+        self.assertEqual(self.client.post('/api/app/queue/', json=request).status_code, 409)
+        self.assertEqual(self.state['video_id'], A)
+        request['output_token'] = claim['output_token']
+        self.assertEqual(self.client.post('/api/app/queue/', json=request).status_code, 200)
+        self.assertEqual(self.state['queue'], [])
+        self.assertFalse(self.state['playing'])
+        self.assertEqual(self.state['video_id'], '')
+
     def setUp(self):
         super().setUp()
         self.registry = MobileDevices()

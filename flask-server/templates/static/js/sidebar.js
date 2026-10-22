@@ -480,6 +480,7 @@
       wrap.classList.remove('open');
       const emailInput = document.getElementById('login-email');
       if (emailInput) {
+        document.getElementById('login-section').hidden = false;
         document.getElementById('login-section').scrollIntoView({ behavior: 'smooth' });
         setTimeout(() => emailInput.focus(), 300);
       }

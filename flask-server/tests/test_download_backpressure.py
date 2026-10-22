@@ -1889,15 +1889,18 @@ class DispatchCoalescing(_CleanServerState):
         through now-playing instead of the HTTP status."""
         with mock.patch.object(server, "_dispatch_play_with_retry",
                                return_value="Device is offline"), \
-                mock.patch.object(server, "_update_now_playing") as update, \
+                mock.patch.dict(server._now_playing, video_id="AAAAAAAAAAA", playback_processing=True), \
+                mock.patch.object(server._playback_output, 'snapshot', return_value={
+                    'playback_output': 'alexa', 'output_token': 'dispatch-output'}), \
                 mock.patch.object(server, "_notify_sse"):
             server._schedule_play_dispatch("DEVICE1", "AAAAAAAAAAA", delay=0.05)
             time.sleep(0.4)
-        errors = [c.kwargs.get('playback_error') for c in update.call_args_list
-                  if c.kwargs.get('playback_error')]
-        self.assertTrue(errors, msg="a failed dispatch reported nothing to the UI")
-        self.assertEqual(errors[0]['type'], 'dispatch_error')
-        self.assertIn('offline', errors[0]['message'])
+            error = server._now_playing['playback_error']
+            self.assertIsNotNone(error, msg="a failed dispatch reported nothing to the UI")
+            self.assertEqual(error['type'], 'dispatch_error')
+            self.assertIn('offline', error['message'])
+            self.assertFalse(server._now_playing['playing'])
+            self.assertFalse(server._now_playing['playback_processing'])
 
     def test_a_dispatch_exception_does_not_escape_the_timer_thread(self):
         with mock.patch.object(server, "_dispatch_play_with_retry",

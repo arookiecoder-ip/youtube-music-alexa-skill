@@ -709,6 +709,7 @@
           if (heroPlay) heroPlay.addEventListener('click', () => {
             if (window.playCollection) window.playCollection([], { playlistId: plId });
           });
+          if (window.CollectionRenderer.attachFloatingPlay) window.CollectionRenderer.attachFloatingPlay(renderedHero);
           // Ask the server to load the complete playlist (including pages that
           // have not been rendered yet) and randomize it before track 1 starts.
           const heroShuffle = renderedHero && renderedHero.querySelector('.playlist-hero-shuffle');

@@ -198,15 +198,17 @@
   }
 
   function showControls(loggedIn) {
-    if (loginSection) loginSection.hidden = loggedIn;
-    document.body.classList.toggle('app-logged-in', !!loggedIn);
-    for (const el of document.querySelectorAll('.needs-login')) el.hidden = !loggedIn;
-    for (const el of document.querySelectorAll('.auth-only')) el.hidden = (!loggedIn || !window.IS_AUTHENTICATED);
-    state()._loggedIn = !!loggedIn;
-    if (!loggedIn && window.closeResults) window.closeResults();
+    const canBrowse = !!loggedIn || (!window.JAM_GUEST && !!window.browserPlayback);
+    if (loginSection) loginSection.hidden = canBrowse;
+    document.body.classList.toggle('app-logged-in', canBrowse);
+    for (const el of document.querySelectorAll('.needs-login')) el.hidden = !canBrowse;
+    for (const el of document.querySelectorAll('.auth-only')) el.hidden = (!canBrowse || !window.IS_AUTHENTICATED);
+    state()._loggedIn = canBrowse;
+    state()._alexaLoggedIn = !!loggedIn;
+    if (!canBrowse && window.closeResults) window.closeResults();
     if (window.syncHistoryTriggerVisibility) window.syncHistoryTriggerVisibility();
-    if (loggedIn && window.loadHistory) window.loadHistory();
-    if (loggedIn && window.loadLibrary) window.loadLibrary();
+    if (canBrowse && window.loadHistory) window.loadHistory();
+    if (canBrowse && window.loadLibrary) window.loadLibrary();
     else {
       const recs = document.getElementById('recs-section');
       if (recs) recs.hidden = true;
@@ -250,7 +252,7 @@
   async function refreshAuth() {
     try {
       const s = await api('/alexa/status/');
-      if (!s.configured) {
+      if (!s.configured && !window.browserPlayback) {
         showControls(false);
         if (loginBtn) loginBtn.disabled = true;
         toast('Server missing PUBLIC_BASE_URL config.', 'error');
@@ -258,7 +260,7 @@
       }
       showControls(!!s.logged_in);
       if (s.logged_in) loadDevices(false);
-      else toast('Not connected to Amazon.', 'error');
+      else if (!window.browserPlayback) toast('Not connected to Amazon.', 'error');
       return !!s.logged_in;
     } catch (e) {
       if (!window._sessionExpired || !window._sessionExpired()) toast(e.message, 'error');
@@ -303,14 +305,20 @@
     try {
       const data = await api('/alexa/init/' + (savedSerial ? '?serial=' + encodeURIComponent(savedSerial) : ''));
       const s = data.status || {};
-      if (!s.configured) {
+      if (!s.configured && !window.browserPlayback) {
         showControls(false);
         if (loginBtn) loginBtn.disabled = true;
         toast('Server missing PUBLIC_BASE_URL config.', 'error');
         return;
       }
       showControls(!!s.logged_in);
-      if (!s.logged_in) { toast('Not connected to Amazon.', 'error'); return; }
+      if (!s.logged_in) {
+        if (window.browserPlayback) {
+          window._applyDevices([], savedSerial);
+          if (window.connectSSE) window.connectSSE();
+        } else toast('Not connected to Amazon.', 'error');
+        return;
+      }
 
       const ok = _applyDevices(data.devices || [], savedSerial || data.serial);
       if (!ok) { toast('No compatible devices found.', 'error'); return; }

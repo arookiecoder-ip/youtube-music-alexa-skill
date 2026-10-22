@@ -10,7 +10,7 @@ from unittest.mock import Mock
 from flask import Flask, jsonify, request
 
 class SearchAudioFallbackTests(unittest.TestCase):
-    def run_search(self, mixed, audio=None, failure=False):
+    def run_search(self, mixed, audio=None, failure=False, query='Song'):
         app = Flask(__name__)
         client = Mock()
         def search(**kwargs):
@@ -27,7 +27,7 @@ class SearchAudioFallbackTests(unittest.TestCase):
                    _valid_video_id=lambda value: bool(re.fullmatch(r'[a-zA-Z0-9_-]{11}', value or '')),
                    error_response=lambda message, status: (jsonify(error=message), status))
         exec(compile(ast.Module(body=[function], type_ignores=[]), 'server-search-route', 'exec'), env)
-        return app.test_client().get('/alexa/search/?q=Song').get_json(), client
+        return app.test_client().get('/alexa/search/', query_string={'q': query}).get_json(), client
     def song(self, kind='song'):
         return dict(resultType=kind, videoId='abcdefghijk', title='Song', artists=[dict(name='Artist')])
     def test_artist_album_only_response_still_returns_songs(self):
@@ -43,6 +43,12 @@ class SearchAudioFallbackTests(unittest.TestCase):
         result, client = self.run_search([self.song()])
         self.assertEqual(len(result['songs']), 1)
         self.assertEqual(client.search.call_count, 1)
+    def test_regional_video_matches_title_and_artist_ahead_of_unrelated_audio(self):
+        video = dict(resultType='video', videoId='AAAAAAAAAAA', title='Go (Official Video)', artists=[dict(name='Atif Aslam')])
+        other = dict(resultType='song', videoId='BBBBBBBBBBB', title='Go Away', artists=[dict(name='Other Singer')])
+        result, _ = self.run_search([video], [other], query='go by atif aslam')
+        self.assertEqual(result['songs'][0]['video_id'], 'AAAAAAAAAAA')
+        self.assertEqual(result['all'][0]['videoId'], 'AAAAAAAAAAA')
     def test_optional_audio_timeout_keeps_successful_mixed_results(self):
         result, _ = self.run_search([dict(resultType='album', browseId='MPRE1', title='Album')], failure=True)
         self.assertEqual(result['albums'][0]['title'], 'Album')

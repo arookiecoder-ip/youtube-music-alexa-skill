@@ -1,3 +1,21 @@
+.collection-description { max-width: 64ch; min-width: 0; width: 100%; }
+.collection-description summary { cursor: pointer; color: var(--muted); padding: 8px 0; }
+.collection-description .playlist-detail-hero-desc {
+  display: block !important; max-height: none !important; overflow: visible !important;
+  white-space: pre-wrap !important; overflow-wrap: anywhere; -webkit-line-clamp: unset !important;
+}
+.collection-floating-play {
+  position: fixed; right: 24px; bottom: calc(160px + env(safe-area-inset-bottom, 0px));
+  z-index: 90; display: flex; align-items: center; gap: 8px; padding: 12px 22px;
+  border: 0; border-radius: 32px; background: var(--accent); color: #fff;
+  box-shadow: 0 6px 24px #0008; cursor: pointer; font: inherit;
+}
+.collection-floating-play[hidden] { display: none; }
+.collection-floating-play svg { width: 24px; height: 24px; }
+body.playlists-route #collection-detail-shell .playlist-detail-hero {
+  position: static; max-height: none; overflow: visible;
+}
+
 /* ── Playlist Card (browsing list) ── */
 #add-to-playlist-overlay { z-index: 600; }
 

@@ -47,6 +47,18 @@ _TEST_ENV = {
 
 
 class SessionCookieConfig(unittest.TestCase):
+    def test_browser_audio_uses_owner_cookie_without_exposing_an_api_key(self):
+        client = self.server.app.test_client()
+        self.assertEqual(client.get('/audio/?video_id=bad%20id!').status_code, 401)
+        with mock.patch.object(self.server, '_ytmusic_is_authenticated', return_value=False), \
+                mock.patch.object(self.server, '_totp_enabled', return_value=False):
+            login = client.post('/login/', json={
+                'username': self.server.REMOTE_USER, 'password': self.server.REMOTE_PASSWORD,
+            })
+        self.assertEqual(login.status_code, 200)
+        # Invalid ID gives a deterministic response without any YouTube request.
+        self.assertEqual(client.get('/audio/?video_id=bad%20id!').status_code, 400)
+
     @classmethod
     def setUpClass(cls):
         cls.original_env = os.environ.copy()
