@@ -104,7 +104,7 @@
     deviceEl.innerHTML = '<option value="">Loading...</option>';
     try {
       const data = await api('/alexa/devices/' + (refresh ? '?refresh=1' : ''));
-      const ok = _applyDevices(data.devices || [], prevSerial);
+      const ok = window._applyDevices(data.devices || [], prevSerial);
       if (!ok) {
         toast('No compatible devices found.', 'error');
         return;
@@ -320,7 +320,7 @@
         return;
       }
 
-      const ok = _applyDevices(data.devices || [], savedSerial || data.serial);
+      const ok = window._applyDevices(data.devices || [], savedSerial || data.serial);
       if (!ok) { toast('No compatible devices found.', 'error'); return; }
 
       if (data.now_playing && window.handleNpUpdate) {

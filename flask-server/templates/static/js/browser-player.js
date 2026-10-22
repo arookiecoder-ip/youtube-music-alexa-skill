@@ -11,8 +11,9 @@
   audio.preload = 'auto';
   let output = null, accepted = '', leaseUntil = 0, queue = [], index = -1;
   let ack = [], stopped = false, polling = null, generation = 0, lastReport = 0;
-  let repeat = false, commandChain = Promise.resolve();
-  const processing = new Set();
+  let repeat = false, commandChain = Promise.resolve(), reportChain = Promise.resolve();
+  let changingSource = false, pendingSeek = null;
+  const processing = new Set(), completed = new Set();
   const ownSerial = 'mobile:' + id;
   const owns = () => !!output && output.playback_output === 'phone' && output.output_owner === id &&
     !output.handoff_pending && accepted === output.output_token && Date.now() < leaseUntil;
@@ -24,14 +25,45 @@
     entry_id: item.entry_id || item.uuid || uuid()
   });
   function notify(message) { if (window.toast) window.toast(message, 'error'); }
-  async function publish(replace = false) {
-    if (!owns() || !queue[index]) return;
-    const token = accepted;
-    await api('/api/app/queue/', {
-      action: replace ? 'start' : 'current', tracks: replace ? queue : [],
+  function publish(replace = false) {
+    if (!owns() || !queue[index] || changingSource) return Promise.resolve();
+    const token = accepted, capturedGeneration = generation;
+    const body = {
+      action: replace ? 'start' : 'current', tracks: replace ? queue.map(item => ({...item})) : [],
       after: queue[index].video_id, queue_index: index, output_owner: id, output_token: token,
-      position_ms: Math.max(0, Math.round((audio.currentTime || 0) * 1000)),
-      playing: !audio.paused && !audio.ended, buffering: !audio.paused && audio.readyState < 3
+      position_ms: pendingSeek ? pendingSeek.position : Math.max(0, Math.round((audio.currentTime || 0) * 1000)),
+      playing: !audio.paused && !audio.ended, buffering: !audio.paused && (audio.readyState < 3 || audio.seeking === true)
+    };
+    // Keep pre-seek/pre-pause HTTP reports from landing after newer positions.
+    const operation = reportChain.then(() => {
+      if (owns() && token === accepted && capturedGeneration === generation)
+        return api('/api/app/queue/', body);
+    });
+    reportChain = operation.catch(() => {});
+    return operation;
+  }
+  function applySeek() {
+    if (!pendingSeek || pendingSeek.generation !== generation || audio.readyState < 1) return;
+    const target = pendingSeek.position / 1000;
+    const duration = Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : target;
+    audio.currentTime = Math.min(target, duration);
+    pendingSeek = null;
+  }
+  function seek(position) {
+    pendingSeek = { position, generation };
+    applySeek();
+  }
+  function resume() {
+    const playGeneration = generation;
+    // A cold download must not block pause, seeking, or the next selection.
+    Promise.resolve(audio.play()).then(() => {
+      if (generation !== playGeneration) return;
+      if (!owns()) { audio.pause(); return; }
+      return publish();
+    }).catch(error => {
+      if (generation !== playGeneration || error.name === 'AbortError') return;
+      audio.pause(); publish().catch(() => {});
+      notify(error.name === 'NotAllowedError' ? 'Tap Play to allow audio in this browser.' : 'Could not load this track. Tap Play to retry.');
     });
   }
   async function start(nextIndex, playing = true, position = 0) {
@@ -39,24 +71,15 @@
     if (!queue[nextIndex]) return;
     const selected = queue[nextIndex];
     if (!/^[A-Za-z0-9_-]{11}$/.test(selected.video_id)) throw new Error('This track has no playable video.');
-    const playGeneration = ++generation;
-    index = nextIndex;
+    ++generation;
+    changingSource = true;
     audio.pause();
+    index = nextIndex;
+    pendingSeek = null;
     audio.src = window.browserAudioUrl(selected.video_id);
-    if (position > 0) audio.currentTime = position / 1000;
-    if (playing) {
-      try {
-        await audio.play();
-        if (generation !== playGeneration || queue[index] !== selected) return;
-        if (!owns()) { audio.pause(); return; }
-      }
-      catch (error) {
-        if (generation !== playGeneration) return;
-        audio.pause();
-        await publish();
-        throw new Error(error.name === 'NotAllowedError' ? 'Tap Play to allow audio in this browser.' : 'Could not load this track. Tap Play to retry.');
-      }
-    }
+    changingSource = false;
+    seek(Math.max(0, position));
+    if (playing) resume();
     await publish();
     prefetchNext();
   }
@@ -107,7 +130,7 @@
   async function execute(action, payload) {
     if (!owns()) throw new Error('This browser no longer owns playback.');
     if (action === 'clear') {
-      generation++; audio.pause(); audio.removeAttribute('src'); queue = []; index = -1;
+      generation++; pendingSeek = null; changingSource = true; audio.pause(); audio.removeAttribute('src'); queue = []; index = -1; changingSource = false;
       await api('/api/app/queue/', { action: 'clear', output_owner: id, output_token: accepted });
       return;
     }
@@ -136,29 +159,32 @@
     } else if (action === 'play') {
       if (!queue[index]) return;
       if (!audio.src || audio.error || audio.ended) await start(index);
-      else { await audio.play(); await publish(); }
+      else { resume(); await publish(); }
     } else if (action === 'pause') { audio.pause(); await publish(); }
     else if (action === 'next' || action === 'previous') {
-      if (action === 'previous' && audio.currentTime > 3) { audio.currentTime = 0; await publish(); }
+      if (action === 'previous' && audio.currentTime > 3) { seek(0); await publish(); }
       else if (queue[index + (action === 'next' ? 1 : -1)]) await start(index + (action === 'next' ? 1 : -1));
     } else if (action === 'seek') {
       const value = Number(payload.position_ms !== undefined ? payload.position_ms : Number(payload.position_seconds || 0) * 1000);
       if (!Number.isFinite(value) || value < 0) throw new Error('Invalid seek position.');
-      audio.currentTime = Math.min(value / 1000, Number.isFinite(audio.duration) ? audio.duration : value / 1000);
+      if (!queue[index]) throw new Error('Choose a track before seeking.');
+      seek(value);
       await publish();
     } else if (action === 'volume') {
       const value = Number(payload.value);
       if (!Number.isFinite(value)) throw new Error('Invalid volume.');
       audio.volume = Math.max(0, Math.min(1, value / 100));
     } else if (action === 'append' || action === 'next_items') {
+      const editGeneration = generation, editToken = accepted;
       const resolved = await items(payload);
-      if (!owns()) return;
+      if (!owns() || generation !== editGeneration || accepted !== editToken) return;
       queue.splice(action === 'next_items' ? index + 1 : queue.length, 0, ...resolved);
       await publish(true);
     } else if (action === 'remove') {
       const at = Number(payload.index);
       if (!Number.isInteger(at) || at < 0 || at >= queue.length) throw new Error('Queue changed. Retry removal.');
       const removedCurrent = at === index;
+      if (removedCurrent) { generation++; changingSource = true; audio.pause(); changingSource = false; pendingSeek = null; }
       queue.splice(at, 1);
       if (at < index) index--;
       if (!queue.length) {
@@ -198,11 +224,12 @@
   async function poll() {
     if (polling) return polling;
     polling = (async () => {
-      const response = await api('/api/app/devices/', {
+      const sentAcks = ack.splice(0, 32);
+      let response;
+      try { response = await api('/api/app/devices/', {
         action: 'online', device_id: id, session_id: session, name: 'Browser player',
-        ack, volume: Math.round(audio.volume * 100), include_handoff_state: true, accepted_token: accepted
-      });
-      ack = [];
+        ack: sentAcks, volume: Math.round(audio.volume * 100), include_handoff_state: true, accepted_token: accepted
+      }); } catch (error) { ack.unshift(...sentAcks); throw error; }
       const previous = output;
       output = response;
       if (response.output_owner !== id || response.handoff_pending || response.playback_output !== 'phone') {
@@ -220,20 +247,25 @@
         accepted = response.output_token;
         if (changed && response.now_playing) {
           queue = (response.now_playing.queue || []).map(track);
-          index = response.now_playing.queue_index || 0;
+          index = response.now_playing.queue_index ?? 0;
           if (queue[index]) {
             const snapshot = response.now_playing;
-            commandChain = commandChain.then(() => start(index, !!snapshot.playing, snapshot.position_ms || 0))
+            const handoffToken = accepted, handoffIndex = index, handoffGeneration = generation;
+            commandChain = commandChain.then(() => {
+              if (owns() && accepted === handoffToken && generation === handoffGeneration) return start(handoffIndex, !!snapshot.playing, snapshot.position_ms || 0);
+            })
               .catch(error => notify(error.message));
           }
         }
         for (const command of response.commands || []) {
           if (command.output_token !== accepted && command.token !== accepted) { ack.push(command.id); continue; }
+          if (completed.has(command.id)) { ack.push(command.id); continue; }
           if (processing.has(command.id)) continue;
           processing.add(command.id);
           const commandToken = accepted;
           enqueue(command.action, command.payload || {}, commandToken).catch(error => notify(error.message)).finally(() => {
-            ack.push(command.id); processing.delete(command.id);
+            ack.push(command.id); processing.delete(command.id); completed.add(command.id);
+            if (completed.size > 128) completed.delete(completed.values().next().value);
           });
         }
         if (Date.now() - lastReport > 4000) { lastReport = Date.now(); await publish(); }
@@ -246,6 +278,15 @@
   window.api = async function (path, body) {
     const select = document.getElementById('device');
     const local = select && select.value === ownSerial;
+    if (local && !body && path.startsWith('/alexa/volume/')) {
+      return { available: true, volume: Math.round(audio.volume * 100) };
+    }
+    if (local && body && path === '/alexa/command/' && body.action === 'volume') {
+      const value = Number(body.value);
+      if (!Number.isFinite(value)) throw new Error('Invalid volume.');
+      audio.volume = Math.max(0, Math.min(1, value / 100));
+      return { ok: true, volume: Math.round(audio.volume * 100) };
+    }
     if (local && body && (controls[path] || path === '/alexa/command/')) {
       await poll();
       const action = path === '/alexa/command/' ? body.action : path === '/alexa/queue_add/' && body.position === 'next' ? 'next_items' : controls[path];
@@ -257,7 +298,9 @@
       if (!owns()) throw new Error('Device switch is still in progress. Choose this browser and retry.');
       const operation = enqueue(action, body);
       await operation;
-      return { ok: true, now_playing: queue[index] || {}, video_id: queue[index] && queue[index].video_id };
+      if (window.schedulePollNowPlaying) window.schedulePollNowPlaying(0);
+      return { ok: true, paused: audio.paused, now_playing: queue[index] || {},
+        video_id: queue[index] && queue[index].video_id };
     }
     return api(path, body);
   };
@@ -267,7 +310,21 @@
     if (next >= 0) start(next).catch(error => notify(error.message));
     else publish().catch(() => {});
   });
-  for (const event of ['playing', 'pause', 'waiting', 'seeked']) audio.addEventListener(event, () => publish().catch(() => {}));
+  for (const event of ['loadedmetadata', 'durationchange']) audio.addEventListener(event, () => {
+    if (!owns()) return;
+    applySeek();
+    if (queue[index] && Number.isFinite(audio.duration) && audio.duration > 0 &&
+        !queue[index].duration_ms) {
+      queue[index].duration_ms = Math.round(audio.duration * 1000);
+      publish(true).catch(() => {});
+    } else publish().catch(() => {});
+  });
+  for (const event of ['playing', 'pause', 'waiting', 'seeked']) audio.addEventListener(event, () => {
+    if (!owns() || changingSource) return;
+    publish().then(() => {
+      if (window.schedulePollNowPlaying) window.schedulePollNowPlaying(0);
+    }).catch(() => {});
+  });
   audio.addEventListener('error', () => { audio.pause(); publish().catch(() => {}); notify('Audio could not load. Tap Play to retry.'); });
   // Independent safety clock: hung HTTP requests cannot extend audible ownership.
   const watchdog = setInterval(() => { if (!owns()) audio.pause(); }, 500);
