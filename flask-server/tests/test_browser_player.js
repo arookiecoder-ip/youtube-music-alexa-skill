@@ -4,7 +4,8 @@ const vm = require('vm');
 const path = require('path');
 
 async function main() {
-  let reportGate = null;
+  let reportGate = null, presenceGate = null, failAckOnce = false;
+  let pending = false;
   let now = 1000, owner = 'browser-id1', token = 'lease1', sequence = 0, commands = [];
   const calls = [], timers = [], events = {};
   const audio = {
@@ -14,11 +15,17 @@ async function main() {
     addEventListener(name, handler) { (events[name] ||= []).push(handler); }, removeAttribute(name) { this[name] = ''; }
   };
   const state = () => ({ playback_output: 'phone', output_owner: owner,
-    output_token: token, handoff_pending: false, phone_lease_ms: 20000 });
+    output_token: token, handoff_pending: pending, phone_lease_ms: 20000 });
   const api = async (url, body) => {
     calls.push({url, body});
-    if (url === '/api/app/devices/') return { ...state(), commands, now_playing: {queue: []} };
-    if (url === '/api/app/output/') return state();
+    if (url === '/api/app/devices/') {
+      if (body.wait && presenceGate) await presenceGate;
+      return { ...state(), commands, now_playing: {queue: []} };
+    }
+    if (url === '/api/app/output/') {
+      if (body.action === 'ack' && failAckOnce) { failAckOnce = false; throw new Error('connection lost'); }
+      return state();
+    }
     if (url === '/api/app/queue/' && reportGate) await reportGate;
     return {ok: true};
   };
@@ -37,6 +44,18 @@ async function main() {
   await player.execute('queue', {queue_items: [{video_id: 'AAAAAAAAAAA'}, {video_id: 'BBBBBBBBBBB'}]});
   assert.equal(audio.src, '/audio/?video_id=AAAAAAAAAAA&wait=1');
   assert.equal(audio.paused, false);
+  let releasePresence;
+  presenceGate = new Promise(resolve => { releasePresence = resolve; });
+  const backgroundPresence = player.poll(true);
+  let seekFinished = false;
+  const immediateSeek = window.api('/alexa/seek/', {position_ms:1000}).then(() => { seekFinished = true; });
+  for (let n = 0; n < 30; n++) await Promise.resolve();
+  assert(seekFinished, 'Local seek must not wait for a background presence request');
+  const longPoll = calls.filter(call => call.url === '/api/app/devices/').at(-1).body;
+  assert.equal(longPoll.wait, true);
+  assert.equal(longPoll.wait_seconds, 1, 'Ownership watch must be finite and bounded');
+  presenceGate = null; releasePresence();
+  await Promise.all([backgroundPresence, immediateSeek]);
   await player.execute('seek', {position_ms: 4000});
   assert.equal(audio.currentTime, 4);
   // Metadata can be unavailable during a cold audio download. Retain the
@@ -44,6 +63,7 @@ async function main() {
   audio.readyState = 0;
   await player.execute('seek', {position_ms: 9000});
   assert.equal(audio.currentTime, 4);
+  assert.equal(calls.filter(call => call.url === '/api/app/queue/').at(-1).body.buffering, false, 'Seeking must not be reported as a new playback load');
   assert.equal(calls.filter(call => call.url === '/api/app/queue/').at(-1).body.position_ms, 9000);
   audio.readyState = 4; audio.duration = 20;
   for (const listener of events.loadedmetadata) listener();
@@ -113,7 +133,25 @@ async function main() {
   await assert.rejects(player.execute('play', {}), /no longer owns/);
   await player.poll();
   assert(player.owns());
-  owner = 'another-phone'; token = 'lease2';
+  await player.execute('play', {});
+  owner = 'another-phone'; token = 'lease2'; pending = true;
+  // The watchdog may silence the old lease before the presence response.
+  audio.pause();
+  failAckOnce = true;
+  await assert.rejects(player.poll(), /connection lost/);
+  assert(audio.paused && !player.owns(), 'Failed acknowledgement must keep the old source silent');
+  await player.poll();
+  assert.equal(calls.filter(call => call.url === '/api/app/output/' && call.body.action === 'ack').at(-1).body.playing, true,
+    'Handoff acknowledgment must preserve the pre-stop play intent even after the watchdog pauses audio');
+  owner = player.id; token = 'lease3'; pending = false;
+  await player.poll();
+  await player.execute('queue', {queue_items:[{video_id:'AAAAAAAAAAA'}]});
+  await player.execute('pause', {});
+  owner = 'another-phone'; token = 'lease4'; pending = true;
+  await player.poll();
+  assert.equal(calls.filter(call => call.url === '/api/app/output/' && call.body.action === 'ack').at(-1).body.playing, false,
+    'Moving an already paused queue must keep the destination paused');
+  owner = 'another-phone'; token = 'lease5'; pending = false;
   await player.poll();
   assert(!player.owns());
   assert(audio.paused);

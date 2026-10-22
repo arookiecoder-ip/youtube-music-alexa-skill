@@ -1,4 +1,4 @@
-/* Account device control. Phones keep ownership of their audio; the browser is a remote. */
+/* Account device control for acknowledged browser, phone and Alexa outputs. */
 (function () {
   'use strict';
   if (window.JAM_GUEST) return;
@@ -74,6 +74,9 @@
     } catch (error) { if (window.toast) window.toast(error.message, 'error'); }
     finally {
       switching = false;
+      if (window.browserPlayback && select.value === 'mobile:' + window.browserPlayback.id) {
+        await window.browserPlayback.poll().catch(() => {});
+      }
       if (trigger) trigger.removeAttribute('aria-busy');
       render();
       if (window.connectSSE) window.connectSSE();
