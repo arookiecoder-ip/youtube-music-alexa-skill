@@ -997,7 +997,7 @@ function renderResults() {
      if (topResult && topResult.resultType === 'video') {
         const _normTitle = (s) => String(s || '').toLowerCase()
            .replace(/\(.*?\)|\[.*?\]/g, '')
-           .replace(/[^a-z0-9 ]/g, ' ')
+           .replace(/[^\p{L}\p{N} ]/gu, ' ')
            .replace(/\s+/g, ' ')
            .trim();
         const _topNorm = _normTitle(topResult.title);
@@ -1021,8 +1021,11 @@ function renderResults() {
               if (_cArtists.some(a => _topArtistNames.has(a))) _score += 3;
               if (_score > _bestScore) { _bestScore = _score; _best = _c; }
            }
-           _best = _best || _songCandidates[0];
-           if (_best) {
+           // A regional catalog gap must not replace the requested video with
+           // an unrelated song merely because an audio upload exists.
+           if (_best && _bestScore >= 10 && (!_topArtistNames.size ||
+               ((Array.isArray(_best.artists) ? _best.artists : []).map(a => String(a.name || '').toLowerCase())
+                 .concat([String(_best.artist || '').toLowerCase()])).some(a => _topArtistNames.has(a)))) {
               remaining = [topResult].concat(remaining.filter(i => i !== _best));
               topResult = _best;
               topSongs = [];

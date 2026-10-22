@@ -41,7 +41,7 @@
       '<div class="playlist-detail-hero-info">' +
         '<' + (options.titleTag || 'h2') + ' class="playlist-detail-page-title playlist-detail-hero-name">' + esc(options.title) + '</' + (options.titleTag || 'h2') + '>' +
         (options.artistHtml ? '<div class="album-artist-link">' + options.artistHtml + '</div>' : '') +
-        (options.description ? '<div class="playlist-detail-hero-desc">' + esc(options.description) + '</div>' : '') +
+        (options.description ? '<details class="collection-description"><summary>About this collection</summary><div class="playlist-detail-hero-desc">' + esc(options.description) + '</div></details>' : '') +
         '<div class="playlist-detail-hero-meta">' + esc(options.meta || '') + '</div>' +
         renderActions(options) +
       '</div>' +
@@ -78,10 +78,49 @@
     '</div>';
   }
 
+  function attachFloatingPlay(hero) {
+    const play = hero && hero.querySelector('.playlist-hero-play');
+    if (!play || !window.IntersectionObserver) return;
+    const parent = hero.parentElement;
+    if (parent.__floatingPlayCleanup) parent.__floatingPlayCleanup();
+    const floating = document.createElement('button');
+    floating.type = 'button';
+    floating.className = 'collection-floating-play';
+    floating.setAttribute('aria-label', play.getAttribute('aria-label') || 'Play collection');
+    floating.innerHTML = icons.play + '<span>Play</span>';
+    floating.hidden = true;
+    floating.addEventListener('click', () => play.click());
+    parent.appendChild(floating);
+    const scrollRoot = hero.closest('.collection-detail-body');
+    const root = scrollRoot && /auto|scroll/.test(getComputedStyle(scrollRoot).overflowY) ? scrollRoot : null;
+    let frame = 0;
+    const scrollTarget = root || window;
+    const update = () => {
+      frame = 0;
+      floating.hidden = play.getBoundingClientRect().bottom >= (root ? root.getBoundingClientRect().top : 0);
+    };
+    const schedule = () => { if (!frame) frame = requestAnimationFrame(update); };
+    // A description collapse or fast scroll can skip directly from below to
+    // above the viewport without crossing an observed intersection threshold.
+    const observer = new IntersectionObserver(schedule, { root });
+    observer.observe(play);
+    scrollTarget.addEventListener('scroll', schedule, { passive: true, capture: true });
+    window.addEventListener('resize', schedule);
+    schedule();
+    const cleanup = () => {
+      observer.disconnect(); cancelAnimationFrame(frame); floating.remove();
+      scrollTarget.removeEventListener('scroll', schedule, true); window.removeEventListener('resize', schedule);
+      window.removeEventListener('hashchange', cleanup);
+    };
+    parent.__floatingPlayCleanup = cleanup;
+    window.addEventListener('hashchange', cleanup);
+  }
+
   window.CollectionRenderer = {
     esc: esc,
     renderDetailHero: renderDetailHero,
     renderLoadingState: renderLoadingState,
-    renderCard: renderCard
+    renderCard: renderCard,
+    attachFloatingPlay: attachFloatingPlay
   };
 })();

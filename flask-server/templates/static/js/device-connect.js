@@ -10,7 +10,8 @@
   const originalApply = window._applyDevices;
   window._applyDevices = function (devices, preferred) {
     echoDevices = devices.filter(d => !String(d.serial).startsWith('mobile:'));
-    return originalApply(echoDevices.concat(phones.map(d => ({ serial: 'mobile:' + d.id, name: d.name, online: true }))), preferred);
+    return originalApply(echoDevices.concat(phones.map(d => ({ serial: 'mobile:' + d.id,
+      name: window.browserPlayback && d.id === window.browserPlayback.id ? 'This browser' : d.name, online: true }))), preferred);
   };
   function render() {
     let value = select.value;

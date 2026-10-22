@@ -479,6 +479,9 @@ def _schedule_play_dispatch(serial, video_id, offset_ms=0, delay=None, expected_
         with _np_lock:
             _now_playing['alexa_intent_at'] = time.time()
             _now_playing.pop('_alexa_finished_token', None)
+    with _np_lock:
+        dispatch_intent = _now_playing.get('alexa_intent_at')
+        dispatch_output = _playback_output.snapshot()['output_token']
     key = serial or ''
     if delay is None:
         delay = PLAY_DISPATCH_DEBOUNCE
@@ -522,11 +525,12 @@ def _schedule_play_dispatch(serial, video_id, offset_ms=0, delay=None, expected_
             if error:
                 _clear_trigger_inflight(serial)
                 logger.error("[play-dispatch] %s failed: %s", video_id, error)
-                _update_now_playing(
-                    playback_error={'type': 'dispatch_error', 'message': error})
+                _fail_play_dispatch(video_id, dispatch_intent, dispatch_output, error)
         except Exception:
             _clear_trigger_inflight(serial)
             logger.exception("[play-dispatch] unexpected failure for %s", video_id)
+            _fail_play_dispatch(video_id, dispatch_intent, dispatch_output,
+                                'Alexa could not start playback. Check the device is online and retry.')
 
     token = object()
     timer = threading.Timer(delay, _fire)
@@ -882,7 +886,7 @@ def _safe_spa_target(value, default='/home'):
 
 # Endpoints reachable with a logged-in web-remote session cookie (so the long
 # API key stays out of the browser URL). Everything here plus the remote page.
-_SESSION_PATHS = ('/status', '/api/status', '/remote', '/alexa/status', '/alexa/init', '/alexa/devices', '/alexa/command',
+_SESSION_PATHS = ('/audio', '/get_radio', '/status', '/api/status', '/remote', '/alexa/status', '/alexa/init', '/alexa/devices', '/alexa/command',
                   '/alexa/play', '/alexa/suggest', '/alexa/proxy_login',
                   '/alexa/proxy_check', '/alexa/now_playing', '/alexa/state_event',
                   '/alexa/seek', '/alexa/volume', '/alexa/play_queue',
@@ -1250,7 +1254,7 @@ def require_api_key():
             # a missing web session from an invalid API key. The browser uses
             # this code to avoid calling every unrelated 401 "session expired".
             supplied_key = request.args.get('key') or request.headers.get('X-Api-Key')
-            if _is_web_session_path(request.path) and not supplied_key:
+            if _is_web_session_path(request.path) and path not in ('/audio', '/get_radio') and not supplied_key:
                 return jsonify({'error': {
                     'code': 'web_session_required',
                     'message': 'Web session required.'
@@ -4571,13 +4575,26 @@ def app_queue():
     if not isinstance(body, dict):
         return error_response('JSON object required', 400)
     action = body.get('action')
-    if action not in ('start', 'next', 'extend', 'current'):
+    if action not in ('start', 'next', 'extend', 'current', 'clear'):
         return error_response('invalid queue action', 400)
     owner, output_token = body.get('output_owner'), body.get('output_token')
     output = _playback_output.snapshot()
     if owner is not None or output['playback_output'] == 'phone':
         if not _playback_output.owns_phone(owner, output_token):
             raise OutputConflict('Playback moved to another output. Refresh before changing the queue.')
+    if action == 'clear':
+        with _np_lock:
+            if not _playback_output.owns_phone(owner, output_token):
+                raise OutputConflict('Playback moved to another output.')
+            _now_playing.update(playing=False, playback_processing=False, playback_confirmed=True,
+                video_id='', title='', artist='', artists=[], thumbnail='', duration_ms=0,
+                queue=[], queue_index=-1, queue_web_dirty=True, playback_error=None)
+            _reset_progress(0)
+            _now_playing['playback_revision'] = int(_now_playing.get('playback_revision', 0)) + 1
+            _now_playing['updated_at'] = time.time()
+        _bump_playback_generation()
+        _notify_sse()
+        return jsonify(ok=True)
     command_id = body.get('command_id')
     if command_id is not None and (not isinstance(command_id, str) or not 1 <= len(command_id) <= 128):
         return error_response('invalid command_id', 400)
@@ -7153,12 +7170,32 @@ def alexa_volume():
     return jsonify({'volume': volume, 'available': True, 'stale': False})
 
 
+def _fail_play_dispatch(video_id, intent, output_token, error):
+    """A late offline response must never stop a newer song or phone handoff."""
+    with _np_lock:
+        output = _playback_output.snapshot()
+        if (output['playback_output'] != 'alexa' or output['output_token'] != output_token
+                or _now_playing.get('video_id') != video_id
+                or _now_playing.get('alexa_intent_at') != intent):
+            return False
+        _reset_progress(_computed_position_ms())
+        _now_playing.update(playing=False, playback_processing=False, playback_confirmed=False,
+            playback_error={'type': 'dispatch_error', 'message': str(error)})
+        _now_playing['playback_revision'] = int(_now_playing.get('playback_revision', 0)) + 1
+        _now_playing['updated_at'] = time.time()
+    _notify_sse()
+    return True
+
+
 def _device_dispatch_failed(error):
     """A command to the Echo failed (usually offline/unreachable). Playback is
     no longer under our control, so stop claiming it's live — this freezes the
     progress bar on every open remote instead of ticking on forever — then
     surface a clear 502."""
-    _update_now_playing(playing=False)
+    with _np_lock:
+        _reset_progress(_computed_position_ms())
+        _now_playing.update(playing=False, playback_processing=False, playback_confirmed=False)
+    _update_now_playing(playing=False, playback_processing=False, playback_confirmed=False)
     return error_response(error or 'Device is offline or unreachable.', 502)
 
 
@@ -9674,6 +9711,18 @@ def alexa_search():
         return cleaned
 
     results['all'] = [_clean_all_item(item) for item in all_raw]
+    # A video-only regional release can match both the requested title and
+    # artist while the songs filter returns unrelated catalog audio. Keep
+    # exact query coverage ahead of the provider/category preference.
+    query_words = set(re.findall(r'[^\W_]+', query.casefold())) - {'by'}
+
+    def query_coverage(item):
+        names = ' '.join(str(artist.get('name') or '') for artist in item.get('artists') or [])
+        text = ' '.join((str(item.get('title') or ''), str(item.get('artist') or ''), names))
+        words = set(re.findall(r'[^\W_]+', text.casefold()))
+        return len(query_words & words) / max(1, len(query_words))
+
+    results['songs'].sort(key=query_coverage, reverse=True)
 
     # Unfiltered "Top result" entries occasionally omit their artist credit
     # even though the filtered songs response contains the same track with

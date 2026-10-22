@@ -4,12 +4,19 @@
   // Legacy key-in-URL entry: capture before router.js canonicalizes the
   // address, then attach only to same-origin application requests.
   var _legacyApiKey = new URL(location.href).searchParams.get('key') || '';
+  window.browserAudioUrl = function (videoId) {
+    var url = new URL('/audio/', location.origin);
+    url.searchParams.set('video_id', videoId);
+    url.searchParams.set('wait', '1');
+    if (_legacyApiKey) url.searchParams.set('key', _legacyApiKey);
+    return url.pathname + url.search;
+  };
   function _withApiKey(path) {
     if (!_legacyApiKey) return path;
     var target;
     try { target = new URL(path, location.href); } catch (_) { return path; }
     if (target.origin !== location.origin) return path;
-    if (!/^\/(?:alexa|api|history|recommendations)(?:\/|$)/.test(target.pathname)) return path;
+    if (!/^\/(?:alexa|api|history|recommendations|get_radio)(?:\/|$)/.test(target.pathname)) return path;
     target.searchParams.set('key', _legacyApiKey);
     return target.pathname + target.search + target.hash;
   }
