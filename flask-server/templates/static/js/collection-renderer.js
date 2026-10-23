@@ -41,7 +41,7 @@
       '<div class="playlist-detail-hero-info">' +
         '<' + (options.titleTag || 'h2') + ' class="playlist-detail-page-title playlist-detail-hero-name">' + esc(options.title) + '</' + (options.titleTag || 'h2') + '>' +
         (options.artistHtml ? '<div class="album-artist-link">' + options.artistHtml + '</div>' : '') +
-        (options.description ? '<details class="collection-description"><summary aria-label="Read collection description">Read more</summary><div class="playlist-detail-hero-desc">' + esc(options.description) + '</div></details>' : '') +
+        (options.description ? '<details class="collection-description"><summary>About this collection</summary><div class="playlist-detail-hero-desc">' + esc(options.description) + '</div></details>' : '') +
         '<div class="playlist-detail-hero-meta">' + esc(options.meta || '') + '</div>' +
         renderActions(options) +
       '</div>' +
@@ -87,53 +87,17 @@
     floating.type = 'button';
     floating.className = 'collection-floating-play';
     floating.setAttribute('aria-label', play.getAttribute('aria-label') || 'Play collection');
-    floating.innerHTML = icons.play;
-    floating.setAttribute('aria-hidden', 'true');
-    floating.tabIndex = -1;
+    floating.innerHTML = icons.play + '<span>Play</span>';
+    floating.hidden = true;
     floating.addEventListener('click', () => play.click());
-    // Keep viewport-fixed controls outside transformed/scrolling collection panes.
-    document.body.appendChild(floating);
+    parent.appendChild(floating);
     const scrollRoot = hero.closest('.collection-detail-body');
     const root = scrollRoot && /auto|scroll/.test(getComputedStyle(scrollRoot).overflowY) ? scrollRoot : null;
-    const shell = hero.closest('#collection-detail-shell');
-    const title = hero.querySelector('.playlist-detail-hero-name');
-    const back = shell && shell.querySelector('#playlist-detail-back');
-    const header = shell && title ? document.createElement('div') : null;
-    if (header) {
-      header.className = 'collection-scroll-header';
-      const backButton = document.createElement('button');
-      backButton.type = 'button'; backButton.setAttribute('aria-label', 'Back');
-      backButton.innerHTML = back ? back.innerHTML : '‹';
-      backButton.addEventListener('click', () => { if (back) back.click(); });
-      const heading = document.createElement('h3'); heading.textContent = title.textContent;
-      header.append(backButton, heading); document.body.appendChild(header);
-    }
-    const description = hero.querySelector('.collection-description');
-    const updateDescription = () => {
-      const summary = description && description.querySelector('summary');
-      if (summary) summary.textContent = description.open ? 'Show less' : 'Read more';
-    };
-    if (description) description.addEventListener('toggle', updateDescription);
-    let visibilityObserver = null;
     let frame = 0;
     const scrollTarget = root || window;
     const update = () => {
       frame = 0;
-      const top = root ? root.getBoundingClientRect().top : 0;
-      const visible = play.getBoundingClientRect().bottom < top;
-      floating.classList.toggle('is-visible', visible);
-      floating.setAttribute('aria-hidden', String(!visible));
-      floating.tabIndex = visible ? 0 : -1;
-      if (header && title) {
-        const appHeader = document.querySelector('main > header');
-        const headerTop = appHeader ? Math.max(0, appHeader.getBoundingClientRect().bottom) : top;
-        const bounds = shell.getBoundingClientRect();
-        header.style.top = headerTop + 'px'; header.style.left = Math.max(0, bounds.left) + 'px';
-        header.style.width = Math.min(bounds.width, window.innerWidth) + 'px';
-        const scrolled = title.getBoundingClientRect().bottom < headerTop + header.offsetHeight;
-        header.classList.toggle('is-visible', scrolled);
-        header.inert = !scrolled;
-      }
+      floating.hidden = play.getBoundingClientRect().bottom >= (root ? root.getBoundingClientRect().top : 0);
     };
     const schedule = () => { if (!frame) frame = requestAnimationFrame(update); };
     // A description collapse or fast scroll can skip directly from below to
@@ -145,17 +109,9 @@
     schedule();
     const cleanup = () => {
       observer.disconnect(); cancelAnimationFrame(frame); floating.remove();
-      if (header) header.remove();
-      if (visibilityObserver) visibilityObserver.disconnect();
-      if (description) description.removeEventListener('toggle', updateDescription);
       scrollTarget.removeEventListener('scroll', schedule, true); window.removeEventListener('resize', schedule);
       window.removeEventListener('hashchange', cleanup);
     };
-    if (window.MutationObserver) {
-      const page = hero.closest('#collection-detail-page') || shell || parent;
-      visibilityObserver = new MutationObserver(() => { if (page.hidden || !hero.isConnected) cleanup(); });
-      visibilityObserver.observe(page, { attributes: true, attributeFilter: ['hidden'], childList: true, subtree: true });
-    }
     parent.__floatingPlayCleanup = cleanup;
     window.addEventListener('hashchange', cleanup);
   }
