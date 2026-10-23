@@ -5,6 +5,7 @@ from status_journal import Journal, JournalHandler
 from status_monitor import AUDIO_EXTENSIONS, Metrics, CachedCollector, file_info, scan_audio, system_snapshot
 from playback_failover import PlaybackFailoverBudget
 from audio_jobs import AudioJobs
+from youtube_stream import YouTubeStream, StreamError
 from playback_contract import restore_snapshot
 import asyncio, collections, difflib, glob, hashlib, hmac, itertools, json, math, os, random, secrets, shutil, sys, threading, time, re, subprocess, logging, copy, uuid, tempfile, shlex
 from datetime import timedelta, datetime
@@ -24,6 +25,16 @@ from werkzeug.exceptions import HTTPException
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
 logger = logging.getLogger(__name__)
+
+_youtube_stream = YouTubeStream(
+    lambda: Supporting.get_ytdlp_cookies_file(),
+    enabled=os.environ.get('YOUTUBE_STREAMING', '0').lower() in ('1', 'true', 'yes'))
+
+
+def _streaming_playback():
+    # Explicit app downloads retain their existing file/cache contract.
+    return _youtube_stream.enabled and not (
+        has_request_context() and request.headers.get('X-MusicBox-Download') == '1')
 
 _start_time_epoch = time.time()
 
@@ -3333,6 +3344,17 @@ def _ensure_audio_ready_for_play(video_id, wait=False, generation=None, prefetch
     """
     if not _valid_video_id(video_id):
         return False
+    if _streaming_playback():
+        def prepare_url():
+            if not _generation_superseded(generation):
+                try:
+                    return _youtube_stream.resolve(video_id)
+                except StreamError:
+                    return None
+        if wait:
+            return bool(prepare_url())
+        _audio_jobs.submit(video_id, prepare_url, prefetch=prefetch)
+        return False
     if Supporting.cached_audio_path(video_id):
         return True
     if wait:
@@ -5070,6 +5092,8 @@ def proxy_stream():
     if not _get_now_playing().get('duration_ms'):
         threading.Thread(target=_lookup_and_update_np, args=(video_id,), daemon=True).start()
     threading.Thread(target=_refresh_radio_queue, args=(video_id,), daemon=True).start()
+    if _streaming_playback():
+        return _serve_youtube_stream(video_id, confirm=True, cancellable=True)
     if not Supporting.cached_audio_path(video_id):
         # Cold cache: stream yt-dlp output straight to the response so the
         # Echo device starts receiving audio as soon as yt-dlp produces
@@ -5277,6 +5301,14 @@ def audio_stream():
         video_id = meta['video_id']
     if not _valid_video_id(video_id):
         return error_response('provide "video_id", "url" or "q"', 400)
+    if (_streaming_playback() and not _audio_truthy(request.args.get('info'))
+            and not _audio_truthy(request.args.get('prefetch'))):
+        # Streaming owns Range/HEAD and ignores the legacy wait=1 hint. No
+        # complete download or disk cache is required, even when seeking.
+        return _serve_youtube_stream(video_id, meta=meta)
+    if _streaming_playback() and _audio_truthy(request.args.get('prefetch')) and not _audio_truthy(request.args.get('info')):
+        _ensure_audio_ready_for_play(video_id, prefetch=True)
+        return jsonify({'video_id': video_id, 'cached': False, 'streaming': True}), 202
     if _is_dead_video(video_id):
         return error_response('video unavailable', 404)
 
@@ -5575,6 +5607,51 @@ def _is_audio_file_valid(path: str, expected_duration_ms: int = 0) -> bool:
     if expected_duration_ms and duration_ms < expected_duration_ms * 0.5:
         return False
     return True
+
+
+def _serve_youtube_stream(video_id, confirm=False, cancellable=False, meta=None):
+    generation = _current_playback_generation()
+    started = time.monotonic()
+    try:
+        relay = _youtube_stream.open(video_id, method=request.method,
+            byte_range=request.headers.get('Range'), if_range=request.headers.get('If-Range'))
+    except StreamError as error:
+        # Upstream URLs/cookies never cross the API or enter the journal.
+        response, status = error_response('Audio stream is temporarily unavailable.', error.status,
+            code=error.code, retryable=error.status in (502, 503))
+        response.status_code = status
+        response.headers.update(error.headers)
+        if error.status == 503:
+            response.headers['Retry-After'] = '2'
+        return response
+
+    def generate():
+        first = True
+        try:
+            for block in relay.chunks():
+                if (cancellable and _generation_superseded(generation)
+                        and _stream_superseded(video_id)):
+                    return
+                if first:
+                    first = False
+                    if confirm:
+                        _confirm_stream_delivery(video_id)
+                    logger.info('[stream-timing] youtube first byte %.0fms for %s',
+                                (time.monotonic() - started) * 1000, video_id)
+                yield block
+        finally:
+            relay.close()
+
+    headers = _audio_meta_headers(video_id, meta, 'STREAM')
+    headers.update(relay.headers)
+    response = Response(generate() if request.method != 'HEAD' else (),
+                        status=relay.status, headers=headers)
+    # Closing an uniterated response (HEAD, device abort before first yield)
+    # must release its upstream socket and stream slot too.
+    response.call_on_close(relay.close)
+    if request.method == 'HEAD':
+        relay.close()
+    return response
 
 
 def _read_stream_chunk(stream):
@@ -12006,6 +12083,14 @@ def service_worker():
 
 
 # Main entry point
+if _youtube_stream.enabled:
+    def _initialize_youtube_stream():
+        try:
+            _youtube_stream.resolve()
+        except StreamError:
+            logger.warning('YouTube streaming client will retry initialization on playback.')
+    _audio_jobs.submit('__youtube_stream_init__', _initialize_youtube_stream)
+
 if __name__ == "__main__":
     import waitress
     # Keep enough workers for simultaneous catalog/device calls. The legacy

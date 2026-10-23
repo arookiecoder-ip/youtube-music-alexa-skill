@@ -25,6 +25,11 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: Persistent YouTube streaming client regressions
+        working-directory: flask-server/youtube-stream
+        run: |
+          npm ci --ignore-scripts
+          npm test
       - name: All isolated server and web logic regressions
         run: python scripts/run-regressions.py --results test-results
       - name: Upload server and web regression results

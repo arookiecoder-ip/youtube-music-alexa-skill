@@ -6,9 +6,17 @@ credentials and audio-cache volumes. Do not increase WSGI process count or add
 replicas: ownership leases, queue locks and provider caches are process-local.
 Multiple threads in the same process are supported.
 
+Docker playback uses the persistent YouTube streaming client described in
+[STREAMING_AUDIO.md](STREAMING_AUDIO.md). It replaces per-song yt-dlp startup
+and file buffering for playback; explicit downloads and the disabled-mode
+legacy cache path remain available. Queue preparation warms media URLs instead
+of audio files while streaming is enabled.
+
 ## Components
 
 - `server.py`: HTTP composition and existing catalog/device integrations.
+- `youtube_stream.py` and `youtube-stream/`: private persistent resolver,
+  bounded disk-free HTTP relay, byte ranges and session recovery.
 - `audio_jobs.py`: fixed background cache-preparation pool, coalesced by video ID.
   Four workers admit at most sixteen queued/running unique jobs. Speculative work
   occupies at most two workers and two queued/running jobs. Requested jobs take

@@ -1,3 +1,12 @@
+node_modules
+**/node_modules
 __pycache__
 *.pyc
+**/__pycache__
+.pytest_cache
+*.db*
+cookies*.txt
+headers_auth.json
+secret_key.txt
+api_key.txt
 alexa_cookies/
