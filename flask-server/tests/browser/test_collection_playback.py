@@ -157,3 +157,81 @@ def test_startup_device_selection_survives_init_and_refresh(mode, expected):
         if mode in ('offline', 'unavailable-phone'):
             assert not any('offline' in error for error in page.evaluate('errors'))
         browser.close()
+
+
+@pytest.mark.parametrize('paused', [False, True])
+def test_mobile_remote_seek_does_not_advance_browser_queue(paused):
+    """Catalog duration can exceed the decoded file; a seek must not land at EOF."""
+    data = io.BytesIO()
+    with wave.open(data, 'wb') as sound:
+        sound.setnchannels(1); sound.setsampwidth(2); sound.setframerate(8000)
+        sound.writeframes(b'\x00\x00' * 8000 * 10)
+    with sync_playwright() as driver:
+        browser = driver.chromium.launch()
+        page = browser.new_page()
+        page.route('https://musicbox.test/', lambda route: route.fulfill(
+            body='<select id="device"></select><button id="play">Play</button>', content_type='text/html'))
+        def audio_response(route):
+            payload = data.getvalue()
+            headers = {'Access-Control-Allow-Origin': '*', 'Accept-Ranges': 'bytes'}
+            requested = route.request.headers.get('range')
+            if requested:
+                bounds = requested.removeprefix('bytes=').split('-')
+                start, end = int(bounds[0] or 0), int(bounds[1] or len(payload) - 1)
+                end = min(end, len(payload) - 1)
+                headers['Content-Range'] = f'bytes {start}-{end}/{len(payload)}'
+                route.fulfill(status=206, body=payload[start:end + 1], content_type='audio/wav', headers=headers)
+            else:
+                route.fulfill(body=payload, content_type='audio/wav', headers=headers)
+        page.route('https://audio.example/**', audio_response)
+        page.goto('https://musicbox.test/')
+        page.evaluate('''() => {
+            window.output = null; window.sent = []; window.errors = []; window.remoteCommands = [];
+            window.toast = message => errors.push(message);
+            window.browserAudioUrl = id => 'https://audio.example/' + id + '.wav';
+            window.api = async (path, body) => {
+                if (path === '/api/app/devices/') {
+                    if (!output) output = {playback_output:'phone',output_owner:body.device_id,
+                        output_token:'lease',phone_lease_ms:20000,handoff_pending:false};
+                    return {...output,commands:remoteCommands,now_playing:{queue:[]}};
+                }
+                if (path === '/api/app/output/') return output;
+                sent.push(body); return {ok:true};
+            };
+        }''')
+        page.add_script_tag(path=str(STATIC / 'js/browser-player.js'))
+        page.wait_for_function('window.browserPlayback && browserPlayback.owns()')
+        page.evaluate('''() => {
+            document.querySelector('#device').add(new Option('This browser','mobile:'+browserPlayback.id));
+            document.querySelector('#play').onclick = () => api('/alexa/play_queue/', {queue_items:[
+                {video_id:'AAAAAAAAAAA',title:'First',duration_ms:60000},
+                {video_id:'BBBBBBBBBBB',title:'Second',duration_ms:60000}]}).catch(e=>errors.push(e.message));
+        }''')
+        page.click('#play')
+        page.wait_for_function('browserPlayback.audio.currentTime > 0.1 && !browserPlayback.audio.paused')
+        if paused:
+            page.evaluate("window.api('/alexa/command/', {action:'pause'})")
+        page.evaluate('''() => {
+            const current = sent.filter(item=>item.playback_instance).at(-1);
+            window.oldInstance = current && current.playback_instance;
+            window.remoteCommands = [{id:'mobile-seek',token:'lease',action:'seek',payload:{
+                position_ms:59000,video_id:'AAAAAAAAAAA',expected_queue_index:0,
+                expected_playback_instance:oldInstance}}];
+            browserPlayback.poll();
+        }''')
+        page.wait_for_function('browserPlayback.audio.currentTime >= 8.9 && browserPlayback.audio.currentTime < 10', timeout=5000)
+        page.wait_for_timeout(150)
+        assert page.evaluate("browserPlayback.audio.src.includes('AAAAAAAAAAA')")
+        assert page.evaluate('browserPlayback.audio.paused') == paused
+        assert page.evaluate('errors') == []
+        # Once Next has run, delayed delivery of a seek for First must leave Second alone.
+        page.evaluate("window.api('/alexa/command/', {action:'next'})")
+        page.wait_for_function("browserPlayback.audio.src.includes('BBBBBBBBBBB') && browserPlayback.audio.currentTime > 0.05")
+        page.evaluate('''() => {
+            remoteCommands = [{id:'late-mobile-seek',token:'lease',action:'seek',payload:{position_ms:5000,
+                video_id:'AAAAAAAAAAA',expected_queue_index:0,expected_playback_instance:oldInstance}}];
+            browserPlayback.poll();
+        }''')
+        page.wait_for_function('errors.some(message=>message.includes("track changed"))')
+        assert page.evaluate("browserPlayback.audio.src.includes('BBBBBBBBBBB') && browserPlayback.audio.currentTime < 3")
+        browser.close()

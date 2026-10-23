@@ -2267,6 +2267,7 @@ def _np_snapshot(serial=None, retain_errors=False):
         # delayed responses that were already in flight before a new command.
         'state_updated_at': s.get('updated_at', 0),
         'playback_revision': s.get('playback_revision', 0),
+        'playback_instance': s.get('playback_instance'),
         'playback_confirmed': bool(s.get('playback_confirmed')),
         'playback_processing': bool(s.get('playback_processing')),
         'volume': volume,
@@ -2878,9 +2879,33 @@ def route_mobile_web_controls():
             return error_response('invalid mobile transport', 400)
     elif action == 'seek':
         try:
-            payload['position_ms'] = max(0, int(body.get('position_ms', float(body.get('position_seconds') or 0) * 1000)))
-        except (ValueError, TypeError):
+            value = body.get('position_ms')
+            if value is None:
+                value = float(body.get('position_seconds') or 0) * 1000
+            if isinstance(value, bool):
+                raise ValueError('boolean position')
+            payload['position_ms'] = max(0, int(value))
+        except (ValueError, TypeError, OverflowError):
             return error_response('invalid seek position', 400)
+        # Bind at dispatch AND execution. Ownership alone does not identify a
+        # song: the same browser keeps its lease across next/previous/repeat.
+        with _np_lock:
+            current = _now_playing
+            expected_index = body.get('expected_queue_index')
+            if expected_index is not None and (isinstance(expected_index, bool)
+                    or not isinstance(expected_index, int) or expected_index != current.get('queue_index')):
+                return error_response('queue changed while seeking', 409)
+            if body.get('video_id') and body['video_id'] != current.get('video_id'):
+                return error_response('playback changed while seeking', 409)
+            if not _valid_video_id(current.get('video_id')):
+                return error_response('nothing is playing to seek', 409)
+            payload['video_id'] = current['video_id']
+            payload['expected_queue_index'] = current.get('queue_index', -1)
+            queue = current.get('queue') or []
+            at = current.get('queue_index', -1)
+            if isinstance(at, int) and 0 <= at < len(queue):
+                payload['expected_entry_id'] = queue[at].get('entry_id')
+            payload['expected_playback_instance'] = current.get('playback_instance')
     elif action == 'append':
         action = 'next_items' if body.get('position') == 'next' else 'append'
     elif action == 'remove':
@@ -4600,6 +4625,9 @@ def app_queue():
     if owner is not None or output['playback_output'] == 'phone':
         if not _playback_output.owns_phone(owner, output_token):
             raise OutputConflict('Playback moved to another output. Refresh before changing the queue.')
+    playback_instance = body.get('playback_instance')
+    if playback_instance is not None and (not isinstance(playback_instance, str) or not 1 <= len(playback_instance) <= 128):
+        return error_response('invalid playback_instance', 400)
     report_sequence = body.get('report_sequence')
     if report_sequence is not None and (owner is None or isinstance(report_sequence, bool)
             or not isinstance(report_sequence, int) or report_sequence < 1 or action not in ('start', 'current', 'clear')):
@@ -4616,7 +4644,7 @@ def app_queue():
             _now_playing.pop('_playback_error_event', None)
             _now_playing.update(playing=False, playback_processing=False, playback_confirmed=True,
                 video_id='', title='', artist='', artists=[], thumbnail='', duration_ms=0,
-                queue=[], queue_index=-1, queue_web_dirty=True, playback_error=None)
+                queue=[], queue_index=-1, queue_web_dirty=True, playback_error=None, playback_instance=None)
             _reset_progress(0)
             _now_playing['playback_revision'] = int(_now_playing.get('playback_revision', 0)) + 1
             _now_playing['updated_at'] = time.time()
@@ -4704,6 +4732,7 @@ def app_queue():
         changed = action == 'start' or (action == 'current' and
             (_now_playing.get('video_id') != after or current_index != idx))
         if action in ('start', 'current'):
+            _now_playing['playback_instance'] = playback_instance
             if report_sequence is not None:
                 _now_playing['_browser_report_sequence'] = (output_token, report_sequence)
             if not buffering:
