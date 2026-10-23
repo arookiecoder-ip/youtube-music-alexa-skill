@@ -1060,8 +1060,7 @@ const progress = window.progress = (function () {
     // is now false, so livePosition() just returns the frozen target.
     positionMs = target;
     anchorClientMs = Date.now();
-    const browserSeek = window.browserPlayback &&
-      deviceEl.value === 'mobile:' + window.browserPlayback.id;
+    const browserSeek = String(deviceEl.value).startsWith('mobile:');
     if (!browserSeek) playing = false;
     seekPending = !browserSeek;
     clearTimeout(seekPendingTimer);

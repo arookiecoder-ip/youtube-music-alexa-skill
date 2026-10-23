@@ -20,7 +20,7 @@ async function main() {
   vm.createContext(context);
   vm.runInContext(fs.readFileSync(path.join(__dirname,'../templates/static/js/device-connect.js'),'utf8'),context);
   const sse = fs.readFileSync(path.join(__dirname,'../templates/static/js/sse.js'),'utf8');
-  Object.assign(context,{state:()=>app, _lastProcessing:false, _lastHistoryVideoId:null});
+  Object.assign(context,{state:()=>app, _lastProcessing:false, _lastHistoryVideoId:null, _seenPlaybackErrors:new Set()});
   vm.runInContext(sse.slice(sse.indexOf('  function handleNpUpdate(np) {'),sse.indexOf('  function refreshQueueModalIfOpen()')),context);
   const flush = async()=>{for(let n=0;n<20;n++) await Promise.resolve();};
   await flush();
@@ -58,6 +58,15 @@ async function main() {
   await window.api('/alexa/command/',{action:'pause'}).catch(()=>{});
   context.handleNpUpdate({...destination,output_token:'remote-switch',playing:false});
   assert.equal(app.isPlaying,false,'Explicit pause must cancel the handoff presentation');
+  const errors = [];
+  window.toast = message => errors.push(message);
+  const failure = {...destination, playing:false, playback_error_id:'error-one',
+    playback_error:{type:'timeout',message:'Device failed'}};
+  context.handleNpUpdate(failure);
+  context.handleNpUpdate(failure);
+  assert.equal(errors.length,1,'Repeated status reads must not repeat the same error toast');
+  context.handleNpUpdate({...failure,playback_error_id:'error-two'});
+  assert.equal(errors.length,2,'A distinct failure must still be delivered');
   console.log('PASS handoff feedback: source stop, destination preparation, truthful confirmations, paused source, failure, expiry, remote switch and explicit pause');
 }
 main().catch(error=>{console.error(error);process.exitCode=1;});

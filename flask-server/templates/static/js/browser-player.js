@@ -13,7 +13,22 @@
   let ack = [], stopped = false, polling = null, generation = 0, lastReport = 0;
   let repeat = false, commandChain = Promise.resolve(), reportChain = Promise.resolve();
   let changingSource = false, pendingSeek = null, seekingPlayback = false, desiredPlaying = false;
-  let presenceRevision = -1, pauseAck = null;
+  let presenceRevision = -1, pauseAck = null, reportSequence = 0;
+  let pendingCurrent = null, mediaVideoId = '', preparingTrack = false, seekFeedbackUntil = 0;
+  function mediaState(snapshot) {
+    if (!owns() || !queue[index] || changingSource || preparingTrack || mediaVideoId !== queue[index].video_id || snapshot.output_token !== accepted ||
+        snapshot.video_id !== queue[index].video_id) return null;
+    const buffering = !audio.paused && audio.readyState < 3 && !(seekingPlayback && Date.now() < seekFeedbackUntil);
+    return { playing: !audio.paused && !audio.ended, playback_processing: buffering,
+      playback_confirmed: !buffering,
+      position_ms: pendingSeek ? pendingSeek.position : Math.max(0, Math.round((audio.currentTime || 0) * 1000)) };
+  }
+  function renderMedia() {
+    if (!window.handleNpUpdate || !owns() || !queue[index] || changingSource) return;
+    const snapshot = Object.assign({}, output, queue[index], { queue, queue_index: index });
+    const media = mediaState(snapshot);
+    if (media) window.handleNpUpdate(Object.assign(snapshot, media), true);
+  }
   const processing = new Set(), completed = new Set();
   const ownSerial = 'mobile:' + id;
   const owns = () => !!output && output.playback_output === 'phone' && output.output_owner === id &&
@@ -30,16 +45,27 @@
     if (!owns() || !queue[index] || changingSource) return Promise.resolve();
     const token = accepted, capturedGeneration = generation;
     const body = {
+      report_sequence: ++reportSequence,
       action: replace ? 'start' : 'current', tracks: replace ? queue.map(item => ({...item})) : [],
       after: queue[index].video_id, queue_index: index, output_owner: id, output_token: token,
       position_ms: pendingSeek ? pendingSeek.position : Math.max(0, Math.round((audio.currentTime || 0) * 1000)),
-      playing: !audio.paused && !audio.ended, buffering: !audio.paused && (audio.readyState < 3 && !seekingPlayback)
+      playing: !audio.paused && !audio.ended, buffering: preparingTrack || !audio.paused && (audio.readyState < 3 && !(seekingPlayback && Date.now() < seekFeedbackUntil))
     };
+    renderMedia();
+    // Replace unsent current-state reports; queue publications remain ordered.
+    if (!replace && pendingCurrent && pendingCurrent.token === token && pendingCurrent.generation === capturedGeneration) {
+      pendingCurrent.body = body;
+      return pendingCurrent.operation;
+    }
+    const report = { body, token, generation: capturedGeneration, operation: null };
+    if (!replace) pendingCurrent = report;
     // Keep pre-seek/pre-pause HTTP reports from landing after newer positions.
     const operation = reportChain.then(() => {
+      if (pendingCurrent === report) pendingCurrent = null;
       if (owns() && token === accepted && capturedGeneration === generation)
-        return api('/api/app/queue/', body);
+        return api('/api/app/queue/', report.body);
     });
+    report.operation = operation;
     reportChain = operation.catch(() => {});
     return operation;
   }
@@ -79,6 +105,7 @@
     index = nextIndex;
     pendingSeek = null; seekingPlayback = false; desiredPlaying = playing;
     audio.src = window.browserAudioUrl(selected.video_id);
+    mediaVideoId = selected.video_id; preparingTrack = false;
     changingSource = false;
     seek(Math.max(0, position));
     if (playing) resume();
@@ -134,7 +161,7 @@
     if (action !== 'volume' && window.clearHandoffFeedback) window.clearHandoffFeedback();
     if (action === 'clear') {
       generation++; pendingSeek = null; desiredPlaying = false; seekingPlayback = false; changingSource = true; audio.pause(); audio.removeAttribute('src'); queue = []; index = -1; changingSource = false;
-      await api('/api/app/queue/', { action: 'clear', output_owner: id, output_token: accepted });
+      await api('/api/app/queue/', { action: 'clear', output_owner: id, output_token: accepted, report_sequence: ++reportSequence });
       return;
     }
     if (action === 'song' || action === 'queue') {
@@ -156,6 +183,7 @@
       index = Math.max(0, Math.min(queue.length - 1, targetIndex >= 0 ? targetIndex :
         Number(payload.queue_index ?? payload.start_index ?? payload.index ?? 0)));
       if (!Number.isInteger(index)) throw new Error('Invalid queue position.');
+      preparingTrack = true;
       await publish(true);
       await start(index);
       if (owns() && queue === resolved && queue.length === 1 && !payload.playlist_id && !payload.collection && payload.radio !== false) seedRadio(queue[index].video_id);
@@ -171,7 +199,7 @@
       const value = Number(payload.position_ms !== undefined ? payload.position_ms : Number(payload.position_seconds || 0) * 1000);
       if (!Number.isFinite(value) || value < 0) throw new Error('Invalid seek position.');
       if (!queue[index]) throw new Error('Choose a track before seeking.');
-      seekingPlayback = true;
+      seekingPlayback = true; seekFeedbackUntil = Date.now() + 5000;
       seek(value);
       await publish();
     } else if (action === 'volume') {
@@ -193,7 +221,7 @@
       if (at < index) index--;
       if (!queue.length) {
         desiredPlaying = false; audio.pause(); audio.removeAttribute('src'); index = -1;
-        await api('/api/app/queue/', { action: 'clear', output_owner: id, output_token: accepted });
+        await api('/api/app/queue/', { action: 'clear', output_owner: id, output_token: accepted, report_sequence: ++reportSequence });
         return;
       }
       if (index >= queue.length) index = queue.length - 1;
@@ -287,7 +315,7 @@
   }
   const controls = { '/alexa/play/': 'song', '/alexa/play_queue/': 'queue', '/alexa/seek/': 'seek',
     '/alexa/queue_add/': 'append', '/alexa/queue_remove/': 'remove', '/alexa/queue_reorder/': 'reorder', '/alexa/shuffle_queue/': 'shuffle', '/alexa/clear/': 'clear' };
-  window.api = async function (path, body) {
+  window.api = async function (path, body, requestOptions) {
     const select = document.getElementById('device');
     const local = select && select.value === ownSerial;
     if (local && !body && path.startsWith('/alexa/volume/')) {
@@ -314,7 +342,7 @@
       return { ok: true, paused: audio.paused, now_playing: queue[index] || {},
         video_id: queue[index] && queue[index].video_id };
     }
-    return api(path, body);
+    return api(path, body, requestOptions);
   };
   audio.addEventListener('ended', () => {
     if (!owns()) return;
@@ -345,14 +373,14 @@
   async function tick() {
     if (stopped) return;
     let failed = false;
-    try { await poll(owns()); } catch (_) { failed = true; if (!owns()) audio.pause(); }
-    if (!stopped) setTimeout(tick, failed || !owns() ? 1000 : 0);
+    try { await poll(false); } catch (_) { failed = true; if (!owns()) audio.pause(); }
+    if (!stopped) setTimeout(tick, failed || !owns() ? 1000 : 750);
   }
   window.addEventListener('pagehide', () => {
     stopped = true; generation++; audio.pause(); clearInterval(watchdog);
     api('/api/app/devices/', { action: 'offline', device_id: id, session_id: session }).catch(() => {});
   });
   window.addEventListener('pageshow', event => { if (event.persisted) window.location.reload(); });
-  window.browserPlayback = { id, audio, owns, execute, poll };
+  window.browserPlayback = { id, audio, owns, execute, poll, mediaState };
   tick();
 })();

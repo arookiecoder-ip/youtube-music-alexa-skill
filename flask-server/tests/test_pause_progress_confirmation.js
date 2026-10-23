@@ -79,7 +79,7 @@ function makeSandbox(browser = false) {
     },
     Date,
     state: { lastActionAt: 0, lastActionIntent: null, GRACE_MS: 8000 },
-    deviceEl: {value: browser ? "mobile:browser-test" : "echo-test"},
+    deviceEl: {value: browser ? (browser === "remote" ? "mobile:other-browser" : "mobile:browser-test") : "echo-test"},
     api: async () => ({ok:true}), toast() {}, fmt: ms => String(ms),
     browserPlayback: browser ? {id:"browser-test", owns:()=>true} : undefined,
     isFinite,
@@ -185,7 +185,7 @@ function main() {
   // equality with the anchor.
   checkTrue('a failed pause can leave the ticker running', recoveredPosition >= 1200);
 
-  for (const browser of [true, false]) {
+  for (const browser of [true, "remote", false]) {
     const local = makeSandbox(browser);
     local.progress.update(snapshot(true, true, 1000));
     local.events['progress-track:keydown']({key:'ArrowRight', preventDefault(){}});

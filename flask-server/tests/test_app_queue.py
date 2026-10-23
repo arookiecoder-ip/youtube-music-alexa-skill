@@ -51,6 +51,20 @@ class PhoneQueueTests(unittest.TestCase):
     def claim(self):
         return self.output.phone('phone-one', lambda: None)['output_token']
 
+    def test_delayed_browser_reports_cannot_overwrite_newer_media_state(self):
+        token = self.claim()
+        extra = dict(output_owner='phone-one', output_token=token)
+        self.assertEqual(self.post('current', playing=True, position_ms=18000, report_sequence=4, **extra).status_code, 200)
+        stale = self.post('current', playing=False, position_ms=2000, report_sequence=3, **extra)
+        self.assertTrue(stale.json['stale_report'])
+        self.assertEqual(self.state['position_ms'], 18000)
+        self.assertTrue(self.state['playing'])
+        self.assertEqual(self.post('current', report_sequence=True, **extra).status_code, 400)
+        self.assertEqual(self.post('clear', report_sequence=5, **extra).status_code, 200)
+        self.assertTrue(self.post('start', tracks=[track(A)], report_sequence=4, **extra).json['stale_report'])
+        self.assertEqual(self.state['queue'], [])
+
+
     def test_revision_conflicts_cannot_apply_edits_but_phone_full_publication_wins(self):
         before = copy.deepcopy(self.state)
         self.assertEqual(self.post('next', tracks=[track(C)], expected_queue_version=0).status_code, 409)
