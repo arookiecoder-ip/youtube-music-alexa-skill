@@ -131,6 +131,7 @@
   }
   async function execute(action, payload) {
     if (!owns()) throw new Error('This browser no longer owns playback.');
+    if (action !== 'volume' && window.clearHandoffFeedback) window.clearHandoffFeedback();
     if (action === 'clear') {
       generation++; pendingSeek = null; desiredPlaying = false; seekingPlayback = false; changingSource = true; audio.pause(); audio.removeAttribute('src'); queue = []; index = -1; changingSource = false;
       await api('/api/app/queue/', { action: 'clear', output_owner: id, output_token: accepted });
