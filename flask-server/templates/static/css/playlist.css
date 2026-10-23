@@ -4,24 +4,14 @@
   display: block !important; max-height: none !important; overflow: visible !important;
   white-space: pre-wrap !important; overflow-wrap: anywhere; -webkit-line-clamp: unset !important;
 }
-.collection-description summary { display: inline-flex; align-items: center; min-height: 44px; padding: 8px 16px; margin: 8px 0; border: 1px solid var(--muted); border-radius: 0; font-weight: 600; }
-.collection-description summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 .collection-floating-play {
   position: fixed; right: 24px; bottom: calc(160px + env(safe-area-inset-bottom, 0px));
-  z-index: 90; display: grid; place-items: center; width: 68px; height: 68px; padding: 0;
-  border: 0; border-radius: 50%; background: var(--accent); color: #fff;
-  box-shadow: 0 6px 24px #0008; cursor: pointer; visibility: hidden; opacity: 0;
-  transform: translateY(12px) scale(.94); pointer-events: none;
-  transition: opacity 220ms ease, transform 260ms cubic-bezier(.2,.8,.2,1), visibility 220ms;
+  z-index: 90; display: flex; align-items: center; gap: 8px; padding: 12px 22px;
+  border: 0; border-radius: 32px; background: var(--accent); color: #fff;
+  box-shadow: 0 6px 24px #0008; cursor: pointer; font: inherit;
 }
-.collection-floating-play.is-visible { visibility: visible; opacity: 1; transform: translateY(0) scale(1); pointer-events: auto; }
-.collection-floating-play svg { width: 36px; height: 36px; }
-.collection-scroll-header { position: fixed; display: flex; align-items: center; gap: 10px; z-index: 91; padding: 10px 16px; box-sizing: border-box; background: var(--bg, #0a0a0a); color: var(--text, #fff); visibility: hidden; opacity: 0; transition: opacity 180ms ease, visibility 180ms; }
-.collection-scroll-header.is-visible { visibility: visible; opacity: 1; }
-.collection-scroll-header h3 { min-width: 0; flex: 1; margin: 0; white-space: normal; overflow-wrap: anywhere; font-size: 1rem; line-height: 1.3; }
-.collection-scroll-header button { flex-shrink: 0; width: 40px; height: 40px; display: grid; place-items: center; padding: 0; border: 0; background: transparent; color: inherit; cursor: pointer; }
-.collection-scroll-header svg { width: 24px; height: 24px; }
-@media (prefers-reduced-motion: reduce) { .collection-floating-play, .collection-scroll-header { transition: none; } }
+.collection-floating-play[hidden] { display: none; }
+.collection-floating-play svg { width: 24px; height: 24px; }
 body.playlists-route #collection-detail-shell .playlist-detail-hero {
   position: static; max-height: none; overflow: visible;
 }
