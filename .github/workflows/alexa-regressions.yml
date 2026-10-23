@@ -56,7 +56,9 @@ jobs:
         with:
           node-version: '20'
       - run: python -m pip install -r flask-server/requirements.txt -r flask-server/tests/requirements-status.txt
-      - run: python -m playwright install --with-deps chromium
+      # Hosted Ubuntu runners already include Chromium runtime libraries.
+      # Avoid unrelated apt upgrades/fonts downloads before every browser test.
+      - run: python -m playwright install chromium
       - name: Status metrics, access control and failure paths
         working-directory: flask-server
         env:
