@@ -34,6 +34,37 @@ class MobileDeviceRoutesTests(OutputRoutesTests):
         return self.client.post('/api/app/devices/', json={'action': action,
             'device_id': owner, 'session_id': 'session-' + owner, 'name': owner, **extra})
 
+    def test_remote_seek_preserves_mobile_track_identity_and_rejects_stale_cursor(self):
+        claim = self.output_request('claim').json
+        self.device('online')
+        self.state.update(video_id=A, queue_index=0, queue=[dict(track(A), entry_id='entry-a'), track(B)],
+                          playback_instance='play-a')
+        request = dict(serial='mobile:phone-one', output_token=claim['output_token'],
+                       video_id=A, expected_queue_index=0, position_ms=12000)
+        response = self.client.post('/alexa/seek/', json=request)
+        self.assertEqual(response.status_code, 200)
+        command = self.device('online').json['commands'][0]
+        self.assertEqual(command['action'], 'seek')
+        self.assertEqual(command['payload']['video_id'], A)
+        self.assertEqual(command['payload']['expected_queue_index'], 0)
+        self.assertEqual(command['payload']['expected_entry_id'], 'entry-a')
+        self.assertEqual(command['payload']['expected_playback_instance'], 'play-a')
+        self.state.update(video_id=B, queue_index=1)
+        self.assertEqual(self.client.post('/alexa/seek/', json=request).status_code, 409)
+        self.assertEqual(len(self.device('online').json['commands']), 1)
+
+    def test_legacy_remote_seek_is_bound_before_delivery_and_invalid_positions_fail(self):
+        claim = self.output_request('claim').json
+        self.device('online')
+        self.state.update(video_id=A, queue_index=0, queue=[track(A)])
+        request = dict(serial='mobile:phone-one', output_token=claim['output_token'], position_ms=12000)
+        self.assertEqual(self.client.post('/alexa/seek/', json=request).status_code, 200)
+        self.assertEqual(self.device('online').json['commands'][0]['payload']['video_id'], A)
+        for position in [True, 'inf', 'nan']:
+            self.assertEqual(self.client.post('/alexa/seek/', json=dict(request, position_ms=position)).status_code, 400)
+        self.state.update(video_id=A, queue_index=1, queue=[track(A), track(A)])
+        self.assertEqual(self.client.post('/alexa/seek/', json=dict(request, video_id=A, expected_queue_index=0)).status_code, 409)
+
     def test_wait_budget_is_opt_in_bounded_and_compatible_with_old_clients(self):
         self.registry.wait = Mock()
         token = self.output.snapshot()['output_token']

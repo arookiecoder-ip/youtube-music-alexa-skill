@@ -1083,7 +1083,9 @@ const progress = window.progress = (function () {
     localSeekUntil = Date.now() + 8000;
     toast('Seeking to ' + fmt(target) + '\u2026');
     try {
-      const res = await api('/alexa/seek/', { serial, position_ms: target });
+      const res = await api('/alexa/seek/', { serial, position_ms: target,
+        video_id: activeVideoId || undefined,
+        expected_queue_index: window._lastQueueIndex >= 0 ? window._lastQueueIndex : undefined });
       // paused: the server only moved the frozen anchor (no playback dispatch);
       // the track stays paused and resume will pick up from here.
       if (res && res.paused) {

@@ -15,6 +15,7 @@
   let changingSource = false, pendingSeek = null, seekingPlayback = false, desiredPlaying = false;
   let presenceRevision = -1, pauseAck = null, reportSequence = 0;
   let pendingCurrent = null, mediaVideoId = '', preparingTrack = false, seekFeedbackUntil = 0;
+  let mediaInstance = '';
   function mediaState(snapshot) {
     if (!owns() || !queue[index] || changingSource || preparingTrack || mediaVideoId !== queue[index].video_id || snapshot.output_token !== accepted ||
         snapshot.video_id !== queue[index].video_id) return null;
@@ -45,6 +46,7 @@
     if (!owns() || !queue[index] || changingSource) return Promise.resolve();
     const token = accepted, capturedGeneration = generation;
     const body = {
+      playback_instance: preparingTrack ? null : mediaInstance || null,
       report_sequence: ++reportSequence,
       action: replace ? 'start' : 'current', tracks: replace ? queue.map(item => ({...item})) : [],
       after: queue[index].video_id, queue_index: index, output_owner: id, output_token: token,
@@ -72,8 +74,10 @@
   function applySeek() {
     if (!pendingSeek || pendingSeek.generation !== generation || audio.readyState < 1) return;
     const target = pendingSeek.position / 1000;
-    const duration = Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : target;
-    audio.currentTime = Math.min(target, duration);
+    const duration = Number.isFinite(audio.duration) && audio.duration > 0 ? audio.duration : Infinity;
+    // Seeking to duration dispatches ended and advances the queue. Keep the
+    // cursor within this file, whose duration can differ from catalog metadata.
+    audio.currentTime = Math.min(target, Math.max(0, duration - 1));
     pendingSeek = null;
   }
   function seek(position) {
@@ -100,6 +104,7 @@
     const selected = queue[nextIndex];
     if (!/^[A-Za-z0-9_-]{11}$/.test(selected.video_id)) throw new Error('This track has no playable video.');
     ++generation;
+    mediaInstance = uuid();
     changingSource = true;
     audio.pause();
     index = nextIndex;
@@ -199,6 +204,12 @@
       const value = Number(payload.position_ms !== undefined ? payload.position_ms : Number(payload.position_seconds || 0) * 1000);
       if (!Number.isFinite(value) || value < 0) throw new Error('Invalid seek position.');
       if (!queue[index]) throw new Error('Choose a track before seeking.');
+      if (payload.video_id && payload.video_id !== queue[index].video_id ||
+          payload.expected_queue_index != null && payload.expected_queue_index !== index ||
+          payload.expected_entry_id && payload.expected_entry_id !== queue[index].entry_id ||
+          payload.expected_playback_instance && payload.expected_playback_instance !== mediaInstance) {
+        throw new Error('The track changed before seeking. Seek the current track again.');
+      }
       seekingPlayback = true; seekFeedbackUntil = Date.now() + 5000;
       seek(value);
       await publish();
@@ -244,7 +255,9 @@
     }
   }
   function enqueue(action, payload, token = accepted) {
+    const seekGeneration = generation;
     const run = async () => {
+      if (action === 'seek' && seekGeneration !== generation) return;
       if (token === accepted && owns()) await execute(action, payload);
     };
     // A new selection cancels a pending play instead of waiting behind a cold
@@ -345,7 +358,8 @@
     return api(path, body, requestOptions);
   };
   audio.addEventListener('ended', () => {
-    if (!owns()) return;
+    // A queued event from the prior source or a seek is not natural completion.
+    if (!owns() || changingSource || pendingSeek || audio.seeking || !audio.ended) return;
     const next = queue[index + 1] ? index + 1 : repeat ? 0 : -1;
     if (next >= 0) start(next).catch(error => notify(error.message));
     else { desiredPlaying = false; publish().catch(() => {}); }

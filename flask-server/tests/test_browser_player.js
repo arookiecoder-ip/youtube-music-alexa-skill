@@ -80,7 +80,20 @@ async function main() {
   assert.equal(audio.currentTime, 6);
   assert(audio.paused, 'Seeking while paused must not resume playback');
   await player.execute('seek', {position_ms: 999999});
-  assert.equal(audio.currentTime, 20, 'Seeks must clamp to the media duration');
+  assert.equal(audio.currentTime, 19, 'Seek must stop before EOF instead of advancing the queue');
+  const oldInstance = calls.filter(call => call.url === '/api/app/queue/').at(-1).body.playback_instance;
+  await player.execute('queue', {queue_index: 0});
+  await assert.rejects(player.execute('seek', {position_ms: 4000, video_id:'AAAAAAAAAAA',
+    expected_queue_index:0, expected_playback_instance:oldInstance}), /track changed/,
+    'A seek from an earlier playback must not affect the same song restarted at the same index');
+  const beforeStaleEnd = audio.src;
+  audio.ended = false;
+  for (const listener of events.ended) listener();
+  await Promise.resolve();
+  assert.equal(audio.src, beforeStaleEnd, 'A delayed ended event must not advance a new source');
+  await assert.rejects(player.execute('seek', {position_ms: 4000, video_id:'BBBBBBBBBBB'}), /track changed/);
+  await assert.rejects(player.execute('seek', {position_ms: 4000, expected_queue_index:1}), /track changed/);
+
   await player.execute('next', {});
   assert.equal(audio.src, '/audio/?video_id=BBBBBBBBBBB&wait=1');
   await player.execute('queue', {queue_index: 0});
@@ -141,10 +154,18 @@ async function main() {
     'Unsent media events coalesce into one final report');
   delete window.handleNpUpdate;
   await player.execute('queue', {queue_items: [{video_id: 'AAAAAAAAAAA'}, {video_id: 'BBBBBBBBBBB'}, {video_id: 'CCCCCCCCCCC'}]});
-  commands = [{id:'remote-next', token:'lease1', action:'next', payload:{}}];
+  audio.ended = true;
+  for (const listener of events.ended) listener();
+  for (let n = 0; n < 20; n++) await Promise.resolve();
+  assert.equal(audio.src, '/audio/?video_id=BBBBBBBBBBB&wait=1', 'Genuine completion must still advance normally');
+  audio.ended = false;
+  await player.execute('queue', {queue_index:0});
+  commands = [{id:'remote-next', token:'lease1', action:'next', payload:{}},
+    {id:'seek-queued-before-next',token:'lease1',action:'seek',payload:{position_ms:7000}}];
   await player.poll();
   for (let n = 0; n < 20; n++) await Promise.resolve();
   assert.equal(audio.src, '/audio/?video_id=BBBBBBBBBBB&wait=1');
+  assert.equal(audio.currentTime, 0, 'A seek queued before Next executes must not reposition the next track');
   await player.poll();
   for (let n = 0; n < 20; n++) await Promise.resolve();
   assert.equal(audio.src, '/audio/?video_id=BBBBBBBBBBB&wait=1', 'Repeated delivery must not execute next twice');
