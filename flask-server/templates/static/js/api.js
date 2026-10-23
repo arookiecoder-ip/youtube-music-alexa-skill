@@ -112,8 +112,12 @@
   let _activeRequests = 0;
   let _progressTimeout = null;
 
+  function _backgroundPlaybackRequest(url) {
+    return /\/(?:alexa\/(?:status|now_playing|command|jam\/status|volume|seek)|api\/app\/(?:devices|output|queue))(?:[/?]|$)/.test(url);
+  }
+
   function _showProgress(url) {
-    if (url.includes('/alexa/status') || url.includes('/alexa/now_playing') || url.includes('/alexa/command') || url.includes('/alexa/jam/status') || url.includes('/alexa/volume') || url.includes('/alexa/seek')) return;
+    if (_backgroundPlaybackRequest(url)) return;
     _activeRequests++;
     if (_activeRequests === 1) {
       const bar = document.getElementById('top-progress-bar');
@@ -122,7 +126,7 @@
         bar.classList.remove('done');
         requestAnimationFrame(() => {
           requestAnimationFrame(() => {
-            bar.classList.add('loading');
+            if (_activeRequests > 0) bar.classList.add('loading');
           });
         });
       }
@@ -130,7 +134,7 @@
   }
 
   function _hideProgress(url) {
-    if (url.includes('/alexa/status') || url.includes('/alexa/now_playing') || url.includes('/alexa/command') || url.includes('/alexa/jam/status') || url.includes('/alexa/volume') || url.includes('/alexa/seek')) return;
+    if (_backgroundPlaybackRequest(url)) return;
     _activeRequests = Math.max(0, _activeRequests - 1);
     if (_activeRequests === 0) {
       const bar = document.getElementById('top-progress-bar');
@@ -150,11 +154,30 @@
     _showProgress(url);
     var controller = new AbortController();
     var cookieProbe = url.includes("/api/youtube/download-cookies") || url.includes("/api/profile_status");
-    var timer = setTimeout(function() { controller.abort(); }, cookieProbe ? 75000 : API_TIMEOUT_MS);
+    const externalSignal = opts && opts.signal;
+    const abort = () => controller.abort();
+    if (externalSignal) {
+      if (externalSignal.aborted) abort();
+      else externalSignal.addEventListener('abort', abort, { once: true });
+    }
+    const statusRequest = url.includes('/alexa/now_playing') || url.includes('/api/app/queue/');
+    var timer = setTimeout(abort, cookieProbe ? 75000 : statusRequest ? 5000 : API_TIMEOUT_MS);
     return fetch(url, Object.assign({}, opts, { signal: controller.signal }))
-      .then(function(res) { clearTimeout(timer); _hideProgress(url); return res; })
+      .then(async function(res) {
+        // Keep the deadline active through the response body, not just headers.
+        const json = await res.json().catch(error => {
+          if (error.name === 'AbortError') throw error;
+          return {};
+        });
+        clearTimeout(timer);
+        if (externalSignal) externalSignal.removeEventListener('abort', abort);
+        _hideProgress(url);
+        return { ok: res.ok, status: res.status, headers: res.headers,
+          redirected: res.redirected, url: res.url, json: async () => json };
+      })
       .catch(function(err) {
         clearTimeout(timer);
+        if (externalSignal) externalSignal.removeEventListener('abort', abort);
         _hideProgress(url);
         if (err.name === 'AbortError') {
           var timeoutErr = new Error('Request timed out. Check your connection and try again.');
@@ -165,7 +188,7 @@
       });
   }
 
-  async function api(path, body) {
+  async function api(path, body, requestOptions) {
     const opts = body === undefined
       ? { credentials: 'same-origin', cache: 'no-store' }
       : {
@@ -174,6 +197,7 @@
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
         };
+    if (requestOptions && requestOptions.signal) opts.signal = requestOptions.signal;
     // Let browser presence close even when navigation destroys the document.
     if (path === '/api/app/devices/' && body && body.action === 'offline') opts.keepalive = true;
     let res;
@@ -296,8 +320,8 @@
 
   // Wrap the original api to fix URLs
   const originalApi = api;
-  window.api = async function(path, body) {
-    const json = await originalApi(path, body);
+  window.api = async function(path, body, requestOptions) {
+    const json = await originalApi(path, body, requestOptions);
     return fixUrls(json);
   };
 })();

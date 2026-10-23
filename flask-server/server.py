@@ -2208,7 +2208,7 @@ def _alexa_queue_signature_locked():
     return tuple((item.get('entry_id'), item.get('video_id')) for item in (_now_playing.get('queue') or []))
 
 
-def _np_snapshot(serial=None):
+def _np_snapshot(serial=None, retain_errors=False):
     """Return the public-facing now-playing dict.
 
     The progress anchor is normalised to *now*: position_ms is the live computed
@@ -2221,8 +2221,22 @@ def _np_snapshot(serial=None):
     if volume is None:
         volume = s.get('volume')
     playback_error = s.get('playback_error')
-    s['playback_error'] = None  # one-shot: clear once surfaced
     output = _playback_output.snapshot()
+    # Status reads are shared by independent controllers. Retain each event
+    # briefly instead of allowing the first reader to consume everyone else's error.
+    error_event = s.get('_playback_error_event')
+    if playback_error and (not error_event or error_event['source'] is not playback_error):
+        error_event = s['_playback_error_event'] = {
+            'source': playback_error, 'id': secrets.token_hex(12), 'until': now + 30,
+            'token': output['output_token'], 'video_id': s.get('video_id')}
+    if not playback_error and retain_errors and error_event:
+        playback_error = error_event['source']
+    if not retain_errors:
+        s['playback_error'] = None  # Preserve legacy app one-shot delivery.
+    if error_event and (error_event['until'] <= now or error_event['token'] != output['output_token']
+                        or error_event['video_id'] != s.get('video_id')):
+        playback_error = None
+    error_id = error_event['id'] if playback_error and error_event else None
     if output['playback_output'] == 'phone' and '_mobile_devices' in globals():
         volume = next((d.get('volume') for d in _mobile_devices.list() if d['id'] == output['output_owner']), None)
     if output['playback_output'] == 'phone' and output.get('output_controller') and output['phone_lease_ms'] <= 4000 and '_offline_phone_playing' not in s:
@@ -2257,6 +2271,7 @@ def _np_snapshot(serial=None):
         'playback_processing': bool(s.get('playback_processing')),
         'volume': volume,
         'playback_error': playback_error,
+        'playback_error_id': error_id,
         'liked_version': _liked_version,
     }
 
@@ -2491,6 +2506,9 @@ def _update_now_playing(**kwargs):
                          and new_video_id != _now_playing.get('video_id'))
         if kwargs.get('playing') or _now_playing.get('playing') or kwargs.get('playback_processing'):
             _now_playing['_last_playback_activity_at'] = time.time()
+        if 'playback_error' not in kwargs and (track_changed or kwargs.get('playback_confirmed') is True or kwargs.get('playback_processing') is True):
+            _now_playing.pop('playback_error', None)
+            _now_playing.pop('_playback_error_event', None)
         _now_playing.update(kwargs)
         if kwargs.get('playback_confirmed') is True:
             _now_playing['playback_processing'] = False
@@ -4582,10 +4600,20 @@ def app_queue():
     if owner is not None or output['playback_output'] == 'phone':
         if not _playback_output.owns_phone(owner, output_token):
             raise OutputConflict('Playback moved to another output. Refresh before changing the queue.')
+    report_sequence = body.get('report_sequence')
+    if report_sequence is not None and (owner is None or isinstance(report_sequence, bool)
+            or not isinstance(report_sequence, int) or report_sequence < 1 or action not in ('start', 'current', 'clear')):
+        return error_response('invalid report_sequence', 400)
     if action == 'clear':
         with _np_lock:
             if not _playback_output.owns_phone(owner, output_token):
                 raise OutputConflict('Playback moved to another output.')
+            if report_sequence is not None:
+                previous_report = _now_playing.get('_browser_report_sequence')
+                if previous_report and previous_report[0] == output_token and previous_report[1] >= report_sequence:
+                    return jsonify(ok=True, stale_report=True)
+                _now_playing['_browser_report_sequence'] = (output_token, report_sequence)
+            _now_playing.pop('_playback_error_event', None)
             _now_playing.update(playing=False, playback_processing=False, playback_confirmed=True,
                 video_id='', title='', artist='', artists=[], thumbnail='', duration_ms=0,
                 queue=[], queue_index=-1, queue_web_dirty=True, playback_error=None)
@@ -4633,6 +4661,10 @@ def app_queue():
     with _np_lock:
         if owner is not None and not _playback_output.owns_phone(owner, output_token):
             raise OutputConflict('Playback moved to another output.')
+        if report_sequence is not None:
+            previous_report = _now_playing.get('_browser_report_sequence')
+            if previous_report and previous_report[0] == output_token and previous_report[1] >= report_sequence:
+                return jsonify(ok=True, stale_report=True)
         if command_id:
             try:
                 replay, digest = _queue_commands.replay(command_id, body)
@@ -4672,6 +4704,11 @@ def app_queue():
         changed = action == 'start' or (action == 'current' and
             (_now_playing.get('video_id') != after or current_index != idx))
         if action in ('start', 'current'):
+            if report_sequence is not None:
+                _now_playing['_browser_report_sequence'] = (output_token, report_sequence)
+            if not buffering:
+                _now_playing.pop('playback_error', None)
+                _now_playing.pop('_playback_error_event', None)
             item = queue[idx]
             _now_playing.update({'video_id': after, 'queue_index': idx,
                                  'title': item.get('title', ''), 'artist': item.get('artist', ''),
@@ -8438,7 +8475,7 @@ def alexa_now_playing():
     # Same shape as the SSE payload (progress fields included) so the poll
     # fallback keeps the bar in sync just like the live stream does.
     with _np_lock:
-        snapshot = _np_snapshot(serial)
+        snapshot = _np_snapshot(serial, retain_errors=request.args.get('error_events') == '1')
         if request.args.get('queue_version') == str(snapshot['queue_version']):
             snapshot.pop('queue', None)
         return jsonify(_jam_safe_now_playing(snapshot) if is_jam else snapshot)

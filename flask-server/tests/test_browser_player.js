@@ -65,6 +65,12 @@ async function main() {
   assert.equal(audio.currentTime, 4);
   assert.equal(calls.filter(call => call.url === '/api/app/queue/').at(-1).body.buffering, false, 'Seeking must not be reported as a new playback load');
   assert.equal(calls.filter(call => call.url === '/api/app/queue/').at(-1).body.position_ms, 9000);
+  now += 5001;
+  for (const listener of events.waiting) listener();
+  for (let n = 0; n < 20; n++) await Promise.resolve();
+  assert.equal(calls.filter(call => call.url === '/api/app/queue/').at(-1).body.buffering, true,
+    'A stalled seek must not suppress genuine buffering forever');
+
   audio.readyState = 4; audio.duration = 20;
   for (const listener of events.loadedmetadata) listener();
   await Promise.resolve();
@@ -119,6 +125,21 @@ async function main() {
   reportGate = null; releaseReport();
   await Promise.all([seekOne, seekTwo]);
   assert.deepEqual(calls.filter(call => call.url === '/api/app/queue/').slice(-2).map(call => call.body.position_ms), [2000, 8000]);
+  // A playing event renders immediately even while its HTTP report is queued.
+  const localSnapshots = [];
+  window.handleNpUpdate = snapshot => localSnapshots.push(snapshot);
+  let releaseSlow;
+  reportGate = new Promise(resolve => { releaseSlow = resolve; });
+  const blocked = player.execute('seek', {position_ms: 3000});
+  for (let n = 0; n < 10; n++) await Promise.resolve();
+  const sentBeforeEvents = calls.filter(call => call.url === '/api/app/queue/').length;
+  for (let n = 0; n < 20; n++) for (const listener of events.playing) listener();
+  assert(localSnapshots.at(-1).playback_confirmed, 'Actual playing must render before HTTP confirmation');
+  reportGate = null; releaseSlow(); await blocked;
+  for (let n = 0; n < 30; n++) await Promise.resolve();
+  assert.equal(calls.filter(call => call.url === '/api/app/queue/').length, sentBeforeEvents + 1,
+    'Unsent media events coalesce into one final report');
+  delete window.handleNpUpdate;
   await player.execute('queue', {queue_items: [{video_id: 'AAAAAAAAAAA'}, {video_id: 'BBBBBBBBBBB'}, {video_id: 'CCCCCCCCCCC'}]});
   commands = [{id:'remote-next', token:'lease1', action:'next', payload:{}}];
   await player.poll();

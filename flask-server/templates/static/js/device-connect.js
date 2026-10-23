@@ -72,14 +72,14 @@
     return true;
   };
   const controls = new Set(['/alexa/command/', '/alexa/seek/', '/alexa/play/', '/alexa/play_queue/', '/alexa/queue_add/', '/alexa/queue_remove/', '/alexa/queue_reorder/', '/alexa/shuffle_queue/']);
-  window.api = async function (path, body) {
+  window.api = async function (path, body, requestOptions) {
     if (body && controls.has(path) && !(path === '/alexa/command/' && body.action === 'volume')) window.clearHandoffFeedback();
     if (body && controls.has(path) && select.value.startsWith('mobile:')) {
       if (switching || !output || output.handoff_pending) throw new Error('Device switch is still in progress.');
       body = Object.assign({}, body, { serial: select.value, output_token: output.output_token });
       if (['/alexa/queue_remove/', '/alexa/queue_reorder/'].includes(path) && window._mobileQueueVersion !== undefined) body.expected_queue_version = window._mobileQueueVersion;
     }
-    return rawApi(path, body);
+    return rawApi(path, body, requestOptions);
   };
   async function switchDevice(value) {
     requested = value;

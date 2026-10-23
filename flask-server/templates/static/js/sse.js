@@ -18,6 +18,8 @@
   let _pollNowPlayingTimer = null;
   let _pollNowPlayingDueAt = 0;
   let _pollGeneration = 0;
+  let _pollController = null;
+  const _seenPlaybackErrors = new Set();
   let _pollStopped = false;
   let _pollFailures = 0;
   let _background = false;
@@ -43,6 +45,7 @@
   }
 
   function handleNpUpdate(np) {
+    const localMedia = arguments[1] === true;
     if (!np) return;
     const npVideoId = (np && np.video_id) || null;
     // Drop snapshots describing a track the user has already clicked away
@@ -57,8 +60,12 @@
       }
       return;
     }
-    if (window.playbackStore && !window.playbackStore.accept(np)) return;
+    if (!localMedia && window.playbackStore && !window.playbackStore.accept(np)) return;
     if (window.observeSharedOutput && window.observeSharedOutput(np) === false) return;
+    if (window.browserPlayback && window.browserPlayback.mediaState) {
+      const media = window.browserPlayback.mediaState(np);
+      if (media) np = Object.assign({}, np, media);
+    }
     _lastProcessing = np.playback_processing === true;
     if (np.queue_version !== undefined && np.queue !== undefined) _queueVersion = np.queue_version;
     // The server agrees with local intent (or intent has expired): stop
@@ -77,7 +84,12 @@
       np = Object.assign({}, np, { playing: false });
     }
     if (np.volume !== undefined && np.volume !== null && window.syncVolume) window.syncVolume(np.volume);
-    if (np.playback_error) {
+    const errorKey = np.playback_error_id;
+    if (np.playback_error && (!errorKey || !_seenPlaybackErrors.has(errorKey))) {
+      if (errorKey) {
+        _seenPlaybackErrors.add(errorKey);
+        if (_seenPlaybackErrors.size > 64) _seenPlaybackErrors.delete(_seenPlaybackErrors.values().next().value);
+      }
       var errType = (typeof np.playback_error === 'object') ? (np.playback_error.type || 'unknown') : 'unknown';
       var errMsg = (typeof np.playback_error === 'object') ? (np.playback_error.message || '') : np.playback_error;
       // 'buffering' is informational, not a failure: the watchdog is still
@@ -273,6 +285,7 @@
 
   function stopSSE() {
     _pollGeneration++;
+    if (_pollController) _pollController.abort();
     _pollStopped = true;
     clearTimeout(_pollNowPlayingTimer);
     _pollNowPlayingTimer = null;
@@ -294,8 +307,10 @@
     _pollNowPlayingInFlight = true;
     const generation = _pollGeneration;
     const intent = state()._playIntentSeq;
+    const controller = typeof AbortController === 'function' ? new AbortController() : null;
+    _pollController = controller;
     try {
-      const np = await window.api('/alexa/now_playing/?serial=' + encodeURIComponent(serial) + (_queueVersion === null ? '' : '&queue_version=' + encodeURIComponent(_queueVersion)));
+      const np = await window.api('/alexa/now_playing/?error_events=1&serial=' + encodeURIComponent(serial) + (_queueVersion === null ? '' : '&queue_version=' + encodeURIComponent(_queueVersion)), undefined, controller ? { signal: controller.signal } : undefined);
       if (generation !== _pollGeneration || serial !== deviceEl.value || intent !== state()._playIntentSeq) return;
       _pollFailures = 0;
       handleNpUpdate(np);
@@ -303,11 +318,12 @@
       if (window.refreshVolume) window.refreshVolume(false);
     } catch (_) {
       // Finite polling retries on the next tick or explicit user action.
-      if (generation === _pollGeneration && serial === deviceEl.value) {
+      if (generation === _pollGeneration && serial === deviceEl.value && !(controller && controller.signal.aborted)) {
         _pollFailures++;
         updatePollingCadence();
       }
     } finally {
+      if (_pollController === controller) _pollController = null;
       _pollNowPlayingInFlight = false;
       if (_pollNowPlayingRetry && !_pollStopped) {
         _pollNowPlayingRetry = false;
@@ -317,6 +333,11 @@
   }
 
   function schedulePollNowPlaying(delayMs) {
+    // A command/media event needs fresh state, not a response begun before it.
+    if (delayMs === 0 && _pollNowPlayingInFlight && _pollController) {
+      _pollNowPlayingRetry = true;
+      _pollController.abort();
+    }
     const dueAt = Date.now() + delayMs;
     if (_pollNowPlayingTimer && _pollNowPlayingDueAt <= dueAt) return;
     clearTimeout(_pollNowPlayingTimer);
@@ -338,6 +359,7 @@
   function reconnectPlayback() {
     if (!deviceEl.value) return;
     connectSSE();
+    schedulePollNowPlaying(0);
   }
 
   document.addEventListener('visibilitychange', () => {

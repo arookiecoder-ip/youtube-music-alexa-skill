@@ -56,7 +56,9 @@ jobs:
         with:
           node-version: '20'
       - run: python -m pip install -r flask-server/requirements.txt -r flask-server/tests/requirements-status.txt
-      - run: python -m playwright install --with-deps chromium
+      # Hosted Ubuntu runners already include Chromium runtime libraries.
+      # Avoid unrelated apt upgrades/fonts downloads before every browser test.
+      - run: python -m playwright install chromium
       - name: Status metrics, access control and failure paths
         working-directory: flask-server
         env:
@@ -68,7 +70,7 @@ jobs:
           node --check flask-server/templates/static/js/status-activity.js
           node flask-server/tests/test_status_ui.js
       - name: Desktop and mobile Chromium checks
-        run: python -m pytest -q flask-server/tests/browser/test_status_dashboard.py flask-server/tests/browser/test_collection_playback.py --junitxml=status-artifacts/browser-tests.xml
+        run: python -m pytest -q flask-server/tests/browser/test_status_dashboard.py flask-server/tests/browser/test_collection_playback.py flask-server/tests/browser/test_shared_playback_feedback.py --junitxml=status-artifacts/browser-tests.xml
       - uses: actions/upload-artifact@v4
         if: always()
         with:
