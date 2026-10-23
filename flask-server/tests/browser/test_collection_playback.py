@@ -9,33 +9,27 @@ STATIC = Path(__file__).resolve().parents[2] / 'templates' / 'static'
 
 
 @pytest.mark.parametrize('width', [390, 1440])
-def test_description_and_floating_play(width):
+def test_original_playlist_hero_before_pr43(width):
     with sync_playwright() as driver:
         browser = driver.chromium.launch()
         page = browser.new_page(viewport={'width': width, 'height': 844})
-        page.set_content('<div class="collection-detail-body" style="height:320px;overflow:auto"><div id="hero"></div><div style="height:2000px">Tracks</div></div>')
+        page.set_content('<div id="collection-detail-shell"><div class="collection-detail-body"><div id="hero"></div><div style="height:2000px">Tracks</div></div></div>')
         page.add_style_tag(path=str(STATIC / 'css/playlist.css'))
         page.add_script_tag(path=str(STATIC / 'js/collection-renderer.js'))
-        page.evaluate('''() => {
+        page.evaluate("""() => {
             document.querySelector('#hero').outerHTML = CollectionRenderer.renderDetailHero({
-                id: 'hero', title: 'Long playlist', description: 'Unbroken'.repeat(1000), showActions: true
+                id: 'hero', title: 'Original playlist', description: 'Original description', showActions: true
             });
             window.playClicks = 0;
-            const hero = document.querySelector('#hero');
-            hero.querySelector('.playlist-hero-play').onclick = () => playClicks++;
-            CollectionRenderer.attachFloatingPlay(hero);
-        }''')
-        expect(page.locator('.playlist-detail-hero-desc')).not_to_be_visible()
-        page.locator('summary').click()
+            document.querySelector('.playlist-hero-play').onclick = () => playClicks++;
+        }""")
         expect(page.locator('.playlist-detail-hero-desc')).to_be_visible()
-        assert page.locator('.collection-detail-body').evaluate('(el) => el.scrollWidth <= el.clientWidth')
-        page.locator('summary').click()
-        page.locator('.collection-detail-body').evaluate('(el) => { el.scrollTop = 500; }')
-        expect(page.locator('.collection-floating-play')).to_be_visible()
-        page.locator('.collection-floating-play').click()
+        expect(page.locator('details, summary')).to_have_count(0)
+        page.locator('.playlist-hero-play').click()
         assert page.evaluate('playClicks') == 1
-        page.evaluate("window.dispatchEvent(new Event('hashchange'))")
-        expect(page.locator('.collection-floating-play')).to_have_count(0)
+        page.evaluate('window.scrollTo(0, 1000)')
+        expect(page.locator('.collection-floating-play, .collection-scroll-header')).to_have_count(0)
+        assert page.evaluate('CollectionRenderer.attachFloatingPlay === undefined')
         browser.close()
 
 
