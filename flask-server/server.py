@@ -1491,7 +1491,7 @@ _RATE_LIMITS = {
     'cached_download': (600, 60), # Bulk offline copies cannot consume foreground stream range reads.
     'cached_audio': (600, 60), # Disk-only range reads and album downloads are inexpensive.
     'audio':    (60, 60),     # /audio/ - app audio (searches, info and downloads)
-    'shared_playback': (240, 60), # Ownership heartbeats/cursors must not starve interactive browsing.
+    'shared_playback': (600, 60), # Bounded browser watchers and phone leases can share one NAT.
     'poll':     (600, 60),   # 500ms foreground feedback, including controllers sharing a NAT.
     'static':   (0, 0),       # No limit for static assets
     'browser_session': (0, 0), # Owner-only noVNC/session polling is frequent
