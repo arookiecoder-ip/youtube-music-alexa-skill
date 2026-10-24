@@ -81,6 +81,7 @@ async function main() {
   sandbox._notifyPlayPauseServerState(true, 2);
   await new Promise((resolve) => setTimeout(resolve, 0));
   check('final state is playing after fresh confirmation', sandbox.state.isPlaying, true);
+  check('confirmed command releases its grace intent for remote changes', sandbox.state.lastActionIntent, null);
   checkTrue('resume confirmation toast was shown', toasts.some((message) => /resumed/i.test(message)));
   check('no command was dropped or duplicated', calls.length, 2);
 

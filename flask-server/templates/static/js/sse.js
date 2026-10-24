@@ -130,7 +130,8 @@
         if (window._notifyPlayPauseServerState) {
           window._notifyPlayPauseServerState(serverPlaying, np.state_updated_at || np.updated_at || np.confirmed_at, np.playback_revision, np.playback_confirmed, np.playback_processing);
         }
-        if (!preserveHandoff && !contradictsIntent && (serverPlaying || !inGrace)) {
+        if (!preserveHandoff && (!contradictsIntent || state().lastActionIntent === null) &&
+            (serverPlaying || !inGrace || state().lastActionIntent === null)) {
           state().isPlaying = serverPlaying;
           if (window.syncPlayPause) window.syncPlayPause();
         }
@@ -150,7 +151,8 @@
         if (window._notifyPlayPauseServerState) {
           window._notifyPlayPauseServerState((np.playback_output !== 'phone' || (window.mobileOutputSelected && window.mobileOutputSelected(np))) && np.playing && np.playback_confirmed === true, np.state_updated_at || np.updated_at || np.confirmed_at, np.playback_revision, np.playback_confirmed, np.playback_processing);
         }
-        if (!preserveHandoff && !contradictsIntent && !inGrace) {
+        if (!preserveHandoff && (!contradictsIntent || state().lastActionIntent === null) &&
+            (!inGrace || state().lastActionIntent === null)) {
           state().isPlaying = (np.playback_output !== 'phone' || (window.mobileOutputSelected && window.mobileOutputSelected(np))) && np.playing === true && np.playback_confirmed === true;
           if (window.syncPlayPause) window.syncPlayPause();
         }

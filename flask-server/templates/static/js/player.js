@@ -1555,6 +1555,9 @@ function notifyPlayPauseServerState(playing, updatedAt, revision, confirmed, pro
   if (!_playPauseBusy && _queuedPlayPauseAction === null && _playPauseWaiters.length === 0) {
     if (snapshotConfirmed) {
       _playPauseDesiredState = newPlaying;
+      // A settled command no longer owns the grace window: fresh changes
+      // from another controller must immediately repaint this device.
+      state.lastActionIntent = null;
     } else if (oldDesired === null) {
       _playPauseDesiredState = newPlaying;
     }
@@ -1657,7 +1660,7 @@ async function drainPlayPause(action) {
   _playPauseBusy = false;
   if (succeeded && confirmed) {
     state.isPlaying = action === 'play';
-    state.lastActionIntent = state.isPlaying;
+    state.lastActionIntent = null;
     _playPauseDesiredState = state.isPlaying;
     if (window.progress) {
       if (window.progress.setPausePending) window.progress.setPausePending(false);

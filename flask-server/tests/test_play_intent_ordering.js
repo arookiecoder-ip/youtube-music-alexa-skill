@@ -141,6 +141,17 @@ function makeContext() {
  * The intent primitives
  * ------------------------------------------------------------------ */
 
+// A confirmed local action must not hide another device's subsequent pause.
+{
+  const { sandbox: s } = makeContext();
+  s.__appState.lastActionAt = Date.now();
+  s.__appState.lastActionIntent = null;
+  s.__appState.isPlaying = true;
+  s.handleNpUpdate({title:'Remote paused',video_id:'AAAAAAAAAAA',playing:false,
+    playback_confirmed:true,playback_processing:false,playback_output:'alexa'});
+  check('remote pause paints inside a settled local grace window', s.__appState.isPlaying, false);
+}
+
 console.log('--- shared phone output ---');
 {
   const { sandbox, renders } = makeContext();
