@@ -1,493 +1,198 @@
-# Music Box — YouTube Music on Alexa (self-hosted, zero cost)
+# Music Box backend and Alexa skill
 
-A personal Alexa skill that plays YouTube Music on Echo devices with YT Music's
-recommendation engine (endless radio from any song — the queue keeps extending
-itself with more recommendations as you approach the end), at zero monthly cost.
+Self-hosted YouTube Music catalog, progressive audio relay, web/PWA player and shared playback control for browsers, Android phones and Alexa Echo devices.
 
-Based on the original Alexa music skill project (MIT), heavily modified:
-permanent VPS backend, server-side audio proxy, PO-token/cookie handling for
-datacenter IPs, API-key auth, SSML fixes, relevance-scored search, rebuilt
-interaction models, and a browser **web remote** — protected by a
-username/password (+ optional 2FA) login — that starts and controls playback
-on the Echo from any device.
+[Architecture](ARCHITECTURE.md) · [Changelog and PR history](CHANGELOG.md) · [Android app](https://github.com/arookiecoder-ip/MusicBox-APP) · [Docker setup](SETUP-DOCKER.md)
 
----
+Reviewed 2026-10-25 against `master` at `08139f16aac382d80703d59104838c4ecd1fb40a`. The backend is documented by commit/date; Android's 2.4.50 version is not a backend release number.
 
-## Architecture
+## What it does
 
-```
-Echo / Alexa app
-      │  voice
-      ▼
-Alexa cloud ──► Alexa-hosted Lambda (Python, free tier, EU-Ireland)
-                     │  HTTPS + API key (urllib3)
-                     ▼
-              Caddy (auto Let's Encrypt TLS)          Oracle Cloud
-              https://<ip-dashes>.sslip.io            free-tier VPS
-                     │  reverse_proxy                 (Ubuntu 24.04 arm64)
-                     ▼
-              Docker Compose stack
-              ├── ytmusicapi ── search / radio / playlists
-              ├── YouTube Music client ── resolves playable AAC URLs
-              ├── /proxy/ ───── streams audio to the Echo
-              ├── current track ─ anonymous temporary bytes; replaced on next start
-              └── web remote ── /remote/ UI + /alexa/* API (AlexaPy)
-                       └── Amazon login proxy (aiohttp, port 5001,
-                           mounted publicly at /alexa/proxy/ via Caddy)
-```
+- Personalized YouTube Music Home, search/suggestions, library, artists, albums, playlists, likes and history, with supported account mutations and anonymous fallbacks.
+- Progressive AAC/MP4 audio for phone/browser (`/audio/`) and Echo (`/proxy/`) without downloading the complete song before serving it.
+- One authoritative shared queue and selected renderer, with occurrence IDs, output leases, acknowledged device commands, revision checks and guarded handoffs.
+- Browser playback on “This browser,” remote control from other clients, refresh reconnect grace and foreground-device failover after a real close/disconnect.
+- Custom Alexa skill voice controls, live-queue next-track decisions, buffered-successor reconciliation and bounded recovery from end-of-song queue races.
+- Owner login with optional TOTP, scoped app audio credentials, Jam guest sharing, protected YouTube reconnect UI and an operational status dashboard.
 
-**Why an audio proxy?** The server keeps YouTube credentials and signed URLs
-private, applies the same authentication to Echo and phone playback, and forwards
-byte ranges for seeking. Audio starts flowing immediately. Only bytes of the
-current track are retained in an anonymous temporary file, discarded when the
-next track starts. No persistent song library, audio volume or LRU sweeper is used.
-See [Streaming audio](docs/STREAMING_AUDIO.md).
+## Current audio and storage model
 
-### Docker services and volumes
+The Docker image enables the persistent YouTube.js YTMUSIC resolver in [flask-server/youtube-stream](flask-server/youtube-stream). It initializes its player/session in the background, coalesces bounded URL lookups and relays upstream bytes immediately. Metadata and the short-lived signed-URL cache are different from downloaded audio.
 
-| Piece                              | Role                                                                                |
-| ---------------------------------- | ----------------------------------------------------------------------------------- |
-| `ytmusic` container                | Flask, ytmusicapi, yt-dlp, AlexaPy, and the audio proxy                              |
-| `youtube-browser` container        | Private Chromium/noVNC service for personalized YouTube Music authentication          |
-| `caddy` container                  | HTTPS and reverse proxy for the web remote and Amazon login proxy                     |
-| `ytmusic_data` volume              | Listening history, database, and persistent YouTube Music auth headers                 |
-| `ytmusic_alexa_cookies` volume     | Persisted Amazon/Alexa session                                                          |
+**There is no persistent multi-song server audio cache.** Only received bytes of the current track can be retained in one anonymous temporary file. Confirmed next-track playback replaces it; same-song resume/handoff keeps it; URL warmup and Echo next-song prebuffering do not evict the song still playing. The 64 MiB limit is a per-current-track safety ceiling, not a retained-library budget. Explicit downloads stream to the client.
 
-### Environment variables
+The Android app independently maintains temporary current/next-five audio and persistent user downloads. Removing server song storage did not remove phone offline playback, account metadata, artwork, URL preparation or the browser's media buffer. See [Streaming audio](docs/STREAMING_AUDIO.md).
 
-Core (`server.py`):
+## Deployment layout
 
-| Var               | Purpose                                                                                                                                                              |
-| ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `PUBLIC_BASE_URL` | e.g. `https://<your-ip-with-dashes>.sslip.io`. When set, `audio_url` points to `/proxy/` and playable URLs are prepared. Unset = dev mode (returns direct googlevideo URLs). |
-| `YTDLP_COOKIES` | optional path inside the container to a mounted Netscape-format `cookies.txt` file. |
-| `YTDLP_JS_RUNTIME` | optional runtime override for YouTube signature challenges. Docker includes Deno by default. |
-| `YTMUSIC_AUTH_FILE` | optional path to a browser headers JSON file for YT Music recommendations. Warning: DO NOT store this in a public repo; browser headers give full access. |
-| `YTDLP_PO_TOKEN`  | optional — if set, overrides the default `android_vr` client and passes this as the GVS PO token for `mweb` client instead (e.g. `youtube:po_token=mweb.gvs+{token}`) |
-| `API_KEY`         | shared secret; when set, all endpoints except privacy/terms and the login flow require `?key=` (or `X-Api-Key` header) **or** a valid web-remote session cookie. Must match `API_KEY` in `lambda/api_key.py`. |
-| `HISTORY_FILE`    | listening-history JSON file location for the web remote's Recently Listened / Recommended sections (default `/tmp/ytm_listen_history.json`) — see the Docker note below |
-
-> **Docker Compose deployments:** `server.py` binds Flask to `0.0.0.0` (not
-> `127.0.0.1`) and the Amazon login proxy in `alexa_remote.py` does the same for
-> its port, since Caddy runs in a separate container and can only reach the
-> `ytmusic` container over the Docker bridge network, not via loopback.
->
-> Listening history and authentication remain on the `ytmusic_data` volume at `/data`. Temporary current-track audio is never stored there.
-
-Web-remote login (see [Web remote](#web-remote-control-the-echo-from-any-browser)) — lets you open `/remote/` with a clean URL instead of `?key=<API_KEY>`:
-
-| Var                   | Purpose                                                                                                                                    |
-| --------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| `REMOTE_USER`         | web-remote login username. **Login is enabled only when both this and `REMOTE_PASSWORD` are set**; otherwise `/remote/` falls back to `?key=`. |
-| `REMOTE_PASSWORD`     | web-remote login password                                                                                                                   |
-| `REMOTE_TOTP_SECRET`  | optional base32 secret adding a 6-digit 2FA code to the login (RFC 6238 TOTP, verified in-server, no extra dependency)                      |
-| `SECRET_KEY`          | signs the session cookie. Set it so logins survive restarts; if unset a random key is generated (sessions reset on every restart)          |
-| `COOKIE_INSECURE`     | leave unset; the Docker deployment is served over HTTPS through Caddy                 |
-
-Amazon / Echo side (`alexa_remote.py`). **Amazon credentials are NOT
-configured here** — you type them into the remote's login form and only the
-resulting session cookie is stored (see
-[Amazon login](#amazon-login-browser-driven-no-credentials-on-the-server)):
-
-| Var                     | Purpose                                                                                              |
-| ----------------------- | ---------------------------------------------------------------------------------------------------- |
-| `AMAZON_DOMAIN`         | Amazon site your account lives on: `amazon.in`, `amazon.com`, … (default `amazon.in`)                |
-| `ALEXA_PROXY_BASE_URL`  | public HTTPS origin the browser reaches the login proxy at. Falls back to `PUBLIC_BASE_URL`, so you usually don't need to set it — only if the proxy is fronted by its own hostname |
-| `ALEXA_PROXY_PORT`      | local-only port the login proxy listens on (default `5001`); Caddy forwards the public `/alexa/proxy/` path here |
-| `ALEXA_COOKIE_DIR`      | where the Amazon session cookie is persisted (default `flask-server/alexa_cookies/`)                 |
-| `SKILL_INVOCATION_NAME` | skill invocation name used in text commands (default `music box`)                                    |
-
-Docker Compose loads the repository-root `.env` through its `env_file`
-setting. Keep this file private: it contains service secrets and may reference
-credential-bearing files.
-
----
-
-## Repository layout
-
-```
-flask-server/         backend
-  server.py           search, radio, audio proxy, web-remote routes
-  data.db             SQLite database storing playlists, history, and liked songs
-  alexa_remote.py     AlexaPy bridge + Amazon login proxy for the web remote
-  templates/          setup page + /login/ + /remote/ UI
-  static/             web-remote assets (PWA icons etc.)
-  alexa_cookies/      persisted Amazon session (gitignored — never commit)
-lambda/               Alexa skill code (paste into the Alexa-hosted code editor)
-  lambda_function.py  intent + AudioPlayer event handlers
-  data.py             spoken messages, imports DEFAULT_API_URL/API_KEY
-  api_key.py          API_KEY + DEFAULT_API_URL placeholder template (tracked — never commit real values, fill them in only in the Alexa console copy)
-  mediaUtils/player.py  API client, playback controller, SSML escaping
-  models/player_models.py  dataclasses
-skill-package/interactionModels/custom/   interaction model JSON (5 locales)
-HANDOFF.md            detailed session-by-session project state
-PROJECT-PLAN.md       roadmap
+```mermaid
+flowchart LR
+    Clients[Browser and Android] --> Caddy[HTTPS / Caddy]
+    Caddy --> Flask[Flask / one Waitress process]
+    Flask --> Node[Private persistent YouTube.js worker]
+    Node --> YouTube[YouTube Music and media servers]
+    Flask --> DB[SQLite / persistent metadata]
+    Flask --> Amazon[AlexaPy / Amazon session]
+    Amazon --> Echo[Echo]
+    Echo --> Lambda[Custom skill / AWS Lambda]
+    Lambda --> Flask
+    Caddy --> Browser[Protected Chromium / noVNC sidecar]
+    Flask --> Browser
 ```
 
----
+The checked-in [Compose file](docker-compose.yml) currently puts `ytmusic` and `youtube-browser` in an **existing `gluetun` container's network namespace**. It does not create that VPN container. [Caddyfile](Caddyfile) targets `gluetun:5000`, `gluetun:5001` and `gluetun:6080`; Flask reaches the browser controller over loopback in that shared namespace. Caddy must reach `gluetun` on the external `web` network. This is not the older bridge-only `ytmusic:5000` arrangement described in historical setup notes.
 
-## Setup from scratch
+For a different topology, update Compose network mode, browser-controller URL and Caddy upstreams together. Preserve unrelated site blocks already present in Caddy. The application architecture does not require changing the host's VPN routing during a routine code update.
 
-Follow **[SETUP-DOCKER.md](SETUP-DOCKER.md)** for the complete Docker Compose
-deployment: server, Alexa skill, HTTPS, cookies, and environment setup. The
-rest of this README is Docker-focused operational reference.
+| Service / volume | Role |
+| --- | --- |
+| `ytmusic` | Python 3.12, Flask/Waitress (one process, 16 threads), catalog/auth/output APIs, AlexaPy and private Node worker. |
+| `youtube-browser` | Private Chromium, Xvfb, x11vnc/noVNC and token-protected authentication controller. |
+| `caddy` | Public HTTPS, application/login proxy and owner-authorized noVNC routing. |
+| `ytmusic_data` | SQLite state and persistent YouTube headers under `/data`. |
+| `ytmusic_alexa_cookies` | Amazon session at `/app/alexa_cookies`. |
+| `ytmusic_chromium_profile` | Saved YouTube Music browser profile. Treat it as account credentials. |
+| `caddy_data`, `caddy_config` | Caddy TLS/configuration state. |
 
-### Shared secret: the API key
+The old persistent audio-cache volume is no longer mounted. Do not remove data/auth/profile volumes as part of an audio-cache cleanup.
 
-Both setup guides have you generate one secret and use it in **two places**
-that must always match:
+## Setup
 
-```bash
-openssl rand -base64 32 | tr -d '\n'
+1. Clone this repository and review [SETUP-DOCKER.md](SETUP-DOCKER.md), applying the current network layout above. Docker Compose supports the optional `.env` file; `YT_BROWSER_CONTROL_TOKEN` is required by the checked-in configuration.
+2. Configure your HTTPS origin and private credentials in `.env`. Generate independent random values rather than using the placeholders below.
+3. Provision `cookies.txt` for the bind mount. It can be an empty file for an anonymous attempt; authenticated/restricted playback may require a valid export. Account browsing and audio cookies are separate credentials.
+4. Start the prerequisite network/VPN container for this topology, then build/start the application services.
+5. Sign in to the Web Remote, connect YouTube Music through its protected browser flow, and connect Amazon if using Echo playback.
+6. Deploy the custom skill using [lambda](lambda) and the locale-specific [interaction models](skill-package/interactionModels/custom). Configure the real API key and public backend origin only in the deployed skill's private configuration. The tracked [template](lambda/api_key.py) must remain a placeholder.
+
+Example `.env` keys:
+
+```dotenv
+SITE_ADDRESS=music.example.com
+PUBLIC_BASE_URL=https://music.example.com
+API_KEY=replace-with-an-independent-random-secret
+SECRET_KEY=replace-with-a-stable-random-session-secret
+REMOTE_USER=your-owner-name
+REMOTE_PASSWORD=replace-with-a-strong-password
+YT_BROWSER_CONTROL_TOKEN=replace-with-an-independent-random-secret
+AMAZON_DOMAIN=amazon.in
 ```
 
-- **Alexa console**: `lambda/api_key.py` → `API_KEY = "<secret>"` → Deploy.
-- **Server**: `API_KEY` in the Docker `.env`, then restart the stack.
+```sh
+# Repository root; after the topology and private files are configured.
+docker compose build ytmusic youtube-browser
+docker compose up -d
+```
 
-A mismatch here is the #1 cause of "401 everywhere" — see
-[Troubleshooting](#troubleshooting).
+For a backend-only update:
 
-### YouTube Music Authentication
+```sh
+docker compose build ytmusic
+docker compose up -d --no-deps ytmusic
+docker compose logs --tail=100 ytmusic
+```
 
-The system uses **two entirely separate authentication mechanisms** for its two different backend engines:
+Keep one authoritative Flask process. Locks, leases, queue decisions and provider caches are process-local; adding WSGI processes/replicas does not safely scale this design. The existing `ytmusic` image also runs the private resolver, so no additional audio container is needed.
 
-**1. The Interface (`ytmusicapi`)**
-This powers your personalized Home feed, playlists, history, and search results. It requires you to tell YouTube who you are.
-- **Browser Headers (`headers_auth.json`)**: Powers personalized Home, Library, Liked Music, History, and Explore. In the Web Remote, open the Profile menu and choose **Fix personalized YouTube data**, then follow the guided import. **Warning:** never commit or share this file; it grants access to your YouTube Music session.
-- **Anonymous Fallback**: If no authentication is provided, the UI gracefully falls back to generic charts and trending shelves instead of personalized content.
+## Configuration reference
 
-**2. The Downloader (`yt-dlp`)**
-This is the engine that physically downloads the audio streams. Without standard browser cookies, YouTube will eventually flag it as a bot and block your server IP (causing 502 Bad Gateway errors).
-- **Manual extraction (`cookies.txt`)**: Use a browser extension like "Get cookies.txt LOCALLY" to export your YouTube cookies, then mount it for the `ytmusic` container and set `YTDLP_COOKIES` in `.env` as described in [SETUP-DOCKER.md](SETUP-DOCKER.md).
+| Setting | Current purpose |
+| --- | --- |
+| `PUBLIC_BASE_URL` | Public HTTPS origin used in device-playable backend URLs. It must be reachable by Echo. |
+| `SITE_ADDRESS` | Caddy site address. |
+| `API_KEY` | Backend/skill shared credential; owner APIs can also use an authorized web session. Prefer headers over putting a key in a URL. |
+| `REMOTE_USER`, `REMOTE_PASSWORD` | Both are required to enable owner web login. |
+| `REMOTE_TOTP_SECRET` | Optional base32 TOTP secret. |
+| `SECRET_KEY`, `SECRET_KEY_FILE` | Stable session signing key; when omitted the server attempts to persist a generated key beside `DB_FILE`. A writable, preserved location is necessary for that fallback to survive restart. |
+| `DB_FILE` | SQLite database; Compose sets `/data/data.db`. |
+| `YTMUSIC_AUTH_FILE` | Account browser headers; Compose uses `/data/headers_auth.json`. |
+| `YTDLP_COOKIES` | Cookie-file path also used by the streaming resolver; Compose mounts the root `cookies.txt` read-only. The legacy name does not mean normal playback invokes yt-dlp per song. |
+| `YT_BROWSER_CONTROL_TOKEN` | Same private controller token in Flask and the Chromium sidecar. |
+| `YT_BROWSER_SERVICE_URL` | Private browser-controller origin; checked-in VPN topology uses `http://127.0.0.1:8765`. |
+| `AMAZON_DOMAIN` | Amazon account region, default `amazon.in`. |
+| `ALEXA_COOKIE_DIR` | Persisted Amazon session directory. |
+| `ALEXA_PROXY_BASE_URL`, `ALEXA_PROXY_PORT` | Public login-proxy origin and internal listener (default 5001). |
+| `SKILL_INVOCATION_NAME` | Text/voice invocation name, default `music box`. |
+| `PLAY_DISPATCH_DEBOUNCE` | Default 0.15 seconds; coalesces rapid selection bursts before invoking Alexa. |
+| `STATUS_LOG_DB` | Optional bounded operational-journal database path. |
 
----
+The Docker image enables the supported streaming path. Historical `AUDIO_CACHE_MAX_MB`/audio-LRU tuning is not a current song-retention feature, and `wait=1` does not restore download-first playback.
 
-## Voice commands
+## Authentication and account connection
 
-- "Alexa, ask music box to **play** _song_" — starts an endless radio queue,
-  auto-extending with more recommendations as you get near the end
-- "... **play** _song_ **by** _artist_" — artist-aware (falls back to video results for mashups/covers)
-- "... **play songs by** _artist_" / "... **play album** _album_"
-- "Alexa, **next / previous / pause / resume**"
-- "... **seek to** _N_ **seconds**" — jumps within the current track (Alexa has no
-  native seek, so this re-issues playback at the new offset; a brief re-buffer is
-  normal). Mainly driven by the web remote's scrubber.
-- "... **shuffle on/off**", "... **loop on/off**"
-- "... **what's playing**" (announce now playing)
-- "... **start playlist** _name_", "... **what are my playlists**"
-- Playlists/API URL are added via hex-encoded values from `<api_url>/setup/?key=<API_KEY>`
+- **Owner session:** `/login/`, optional TOTP, HttpOnly cookie, JSON mutation/CSRF checks and session revocation. Jam guests do not acquire owner account/status permissions.
+- **Scoped phone audio:** authenticated `/api/app/audio-token/` issues audio-only credentials (two hours playback, 24 hours download), validated against the live owner session. These do not grant queue/account mutation access. New Android builds do not embed the server-wide key.
+- **YouTube account data:** the owner launches the protected Chromium/noVNC session beneath `/youtube-login/`. Complete Google challenges there. After a validated signed-in browse capture, the server atomically promotes headers to `YTMUSIC_AUTH_FILE`. A saved profile can renew ordinary cookie rotation; revoked/challenged sessions require reconnection. Manual advanced header import remains supported.
+- **YouTube audio cookies:** independently tested/replaced through the owner flow. Failed replacements preserve the existing jar. A cookie file's format/expiry is not proof that the provider will accept audio requests.
+- **Amazon:** browser-driven login uses the internal login proxy; the resulting session is persisted in the Alexa cookie volume. Server/container outbound routing is the relevant Amazon egress path, not a browser VPN extension.
 
-Note: the first song of a session takes ~7-8 s to start (audio downloads;
-YouTube enforces an ad-skip gate of ~4-5 s on monetized videos — this fires
-regardless of yt-dlp player client and isn't bypassable: the googlevideo URL
-403s if fetched before that window opens). The default yt-dlp client is tried
-first; if it fails, the server falls back to `android_vr`, `web`, then `tv`.
-Track-to-track transitions are instant — the next song is pre-downloaded while
-the current one plays.
+Do not commit `.env`, cookie/header exports, browser profiles, database files, deployed API keys or private signing material. Preserve data/auth volumes across updates. `docker compose down -v` removes named volumes and is not an ordinary restart procedure.
 
----
+## Web, phone and Echo control
 
-## Web remote (control the Echo from any browser)
+Open `/remote/` (or the configured root UI) through HTTPS. The Web Remote can render audio on “This browser” or control another online renderer. Playback anchors tick locally and reconcile against backend snapshots; handoff loading, resume loading and ordinary seek presentation have separate rules.
 
-`https://<PUBLIC_BASE_URL>/remote/` serves a phone-friendly page (installable
-as a PWA) that can start any song, playlist, or pasted YouTube link on the
-Echo, and pause / resume / skip / set volume / seek — from anywhere, without
-speaking to the device.
+Current browsers use finite JSON polling plus bounded presence waits. The historical `/alexa/now_playing/stream` URL returns one SSE event and closes for compatibility; it is not a permanent server-push connection.
 
-Features:
+Voice examples include “Alexa, ask music box to play …”, artist/album selection, next/previous, pause/resume, shuffle/loop and now-playing requests. Remote seeking reissues `AudioPlayer.Play` at an offset. A URL warmed or HTTP command accepted is not proof that Echo has started decoding audio.
 
-- **Search with live suggestions** (proxied through `/alexa/suggest/`) and a
-  clear button; results play on the selected Echo.
-- **Live now-playing progress bar** you can drag to seek. The bar ticks
-  locally for smoothness but is anchored to server state pushed over SSE, so
-  opening the page partway through a song (or on a second device) lands on
-  the right position, and multiple open pages — phone and laptop at once —
-  stay in sync. Dragging the scrubber seeks on release (Alexa can only seek
-  by restarting the stream at the new offset, so expect a brief re-buffer).
-- **Queue view** — the upcoming radio queue, tap any entry to jump to it,
-  plus a shuffle-queue button (keeps the current song in place). On mobile,
-  swipe left to remove a song or swipe right to like it. On desktop, these
-  options are in the 3-dot menu.
-- **Pasted YouTube links** — a watch link plays directly (bypassing search);
-  a watch link with a `list=` id queues the rest of that playlist, like
-  YouTube does.
-- **Recently Listened** — a persistent, server-side history (survives page
-  reloads and server restarts) of tracks actually played, recorded only once
-  the skill confirms real playback (not on a mere play request, and not on a
-  seek or resume-from-pause). Tap an entry to replay it instantly; remove
-  individual entries or clear the whole list, with a themed confirmation
-  dialog matching the rest of the UI (no browser `confirm()` popups). On
-  mobile this section lives in the hamburger sidebar; on desktop it's in the
-  main column.
-- **Playlists & Liked Songs** — save your favorite tracks! Click the heart on
-  the main player or swipe right in the queue to instantly like a song. Create
-  custom playlists, and even paste a YouTube playlist link to automatically
-  sync and import all of its tracks into a custom playlist.
-- **Home feed** — shown only on the blank/idle screen, with a
-  shimmering skeleton while it loads. It displays your personalized YouTube Music
-  homepage (shortcuts, song grids, recommended albums/artists) directly fetched
-  via `ytmusicapi.get_home()`. It features multiple layouts and filter chips
-  (e.g., "Music", "Podcasts") mirroring the official YT Music app.
-  Cached for 30 minutes server-side. If `YTMUSIC_AUTH_FILE` is not provided, it
-  falls back to anonymous/local unauthenticated recommendations. Invalidated
-  whenever you clear your history.
+Key endpoint families:
 
-Access is gated by the **web-remote login**: with `REMOTE_USER` /
-`REMOTE_PASSWORD` set, you sign in once at `/login/` and a session cookie
-authorizes the page — the long API key never appears in the browser. Without
-those env vars, it falls back to the legacy `?key=<API_KEY>` scheme.
+| Endpoint | Contract |
+| --- | --- |
+| `/audio/` GET/HEAD | Authenticated app/browser audio; `video_id`, `url` or query selection; `info=1` metadata, `prefetch=1` URL preparation, ranges/validators and explicit client downloads. Does not claim Echo now-playing. |
+| `/proxy/` GET | Echo audio path with ownership/generation and playback-confirmation handling. |
+| `/api/app/output/` GET/POST | Shared output claims, handoff/acknowledgment and guarded explicit resume. |
+| `/api/app/devices/` GET/POST | Presence, visibility, acknowledged remote commands and negotiated waits up to eight seconds. |
+| `/api/app/queue/` POST | Atomic queue/cursor publication and authenticated queue operations, with identity/revision checks. |
+| `/api/app/audio-token/` POST | Owner-session-scoped playback/download audio credentials. |
+| `/alexa/play/`, `/alexa/play_queue/`, `/alexa/command/`, `/alexa/seek/` POST | Remote playback intents. Commands may be staged before device confirmation. |
+| `/alexa/queue_add/`, `/alexa/queue_remove/`, `/alexa/queue_reorder/`, `/alexa/shuffle_queue/` POST | Authoritative queue mutations. |
+| `/alexa/now_playing/` GET | Current state, normalized position anchor and changed queue metadata. |
+| `/alexa/state_event/` POST | Skill started/stopped/finished/failed events with token/time fencing. |
+| `/next_track/`, `/armed_play/` GET | Live successor decisions and exact armed play/seek retrieval by the skill. |
+| `/api/library/…`, `/api/artist/…`, `/alexa/search/`, `/alexa/suggest/` | Catalog/account browsing, metadata and pagination. |
+| `/history/`, `/history/<video_id>` | Listening-history reads/removal. |
+| `/status`, `/api/status/…` | Owner-only resource, streaming, cookie, request, journal and error diagnostics. |
 
-**How it works:** Amazon offers no official API for "make my Echo play
-something" (Spotify can only do it because its client is embedded in Echo
-firmware under a commercial partnership). The remote instead impersonates the
-Alexa phone app through Amazon's internal HTTP endpoints, via
-[AlexaPy](https://gitlab.com/keatontaylor/alexapy) — the open-source library
-the Home Assistant community has used for years:
+See [architecture](ARCHITECTURE.md) for token/revision invariants and [Alexa queue reconciliation](docs/alexa-queue-reconciliation.md) for the buffered-decision protocol. Web collection controls intentionally include the PR #47/#49 rollbacks; merged historical UI experiments are not all current behavior.
 
-- "Play something" sends a **text command** — literally the string
-  `ask music box to play <query>` — as if you'd typed it to Alexa, so it flows
-  through the skill and its search like a spoken request.
-- The transport buttons send the same `PlaybackController` events as the Alexa
-  app's now-playing card (the lambda handles these).
-- The scrubber seeks by sending a text command (`ask music box to seek to N
-  seconds`) that routes into the skill's `SeekIntent`, which re-issues playback
-  at the new offset — Alexa exposes no seek directive, so this stream restart is
-  the only way to reposition.
+## Tests and verification
 
-Because the API is unofficial, Amazon may occasionally change it and break
-the library until it updates. Everything is scoped to your own account and
-devices; the endpoints (`/remote/`, `/alexa/*`) sit behind the web-remote
-login or the API key.
+Use a developer/test environment; Android APK compilation stays in the app repository's GitHub Actions workflow.
 
-### Remote login (clean URL instead of a key)
+```sh
+python -m pip install -r flask-server/requirements.txt -r lambda/requirements.txt pytest
+npm ci --prefix flask-server/youtube-stream --ignore-scripts
+npm test --prefix flask-server/youtube-stream
+python scripts/run-regressions.py --results /tmp/musicbox-tests
+python -m unittest discover -s lambda/tests -p 'test_*.py' -q
+```
 
-The proxy `API_KEY` is a long secret that also rides inside the audio URLs the
-Echo fetches, so it can't be shortened — putting it in the shareable remote URL
-(`/remote/?key=<huge string>`) was clumsy. Instead, set a username and password
-and log in once:
+The isolated runner executes each server/browser-logic file in a fresh process: several older fixtures install incompatible provider stubs, so combining them all in one pytest process can produce false failures. Root `npm test` is a placeholder; use the resolver package command above.
 
-- Set `REMOTE_USER` and `REMOTE_PASSWORD` (both required to switch the login
-  on), and ideally `SECRET_KEY` so sessions survive restarts.
-- Optionally set `REMOTE_TOTP_SECRET` to add a 6-digit **2FA** code on top —
-  generate one with
-  `python3 -c "import base64,os;print(base64.b32encode(os.urandom(20)).decode())"`
-  and add that string to an authenticator app.
-- Opening `/remote/` unauthenticated redirects to `/login/`. On success the
-  server sets a signed, HttpOnly, 30-day session cookie that authorizes the
-  remote page and all `/alexa/*` calls — the API key never touches the browser.
-  A **Sign out** button on the page clears it.
+Browser checks additionally use `flask-server/tests/requirements-status.txt`, Playwright/Chromium and the commands in [Alexa playback regressions](.github/workflows/alexa-regressions.yml).
 
-Scope: the cookie only unlocks the remote (`/remote/`, `/alexa/*`). The
-YouTube-Music data-plane endpoints (`/find_stream_list/`, `/get_stream/`,
-`/proxy/`, …) still require `API_KEY`, so the Echo/Lambda path is unaffected.
-If `REMOTE_USER`/`REMOTE_PASSWORD` are unset, the login is disabled and
-`/remote/` keeps working with `?key=<API_KEY>` exactly as before.
+At the reviewed snapshot, [Actions](https://github.com/arookiecoder-ip/youtube-music-alexa-skill/actions/runs/40127521237) passed **841 Python tests, all 31 JavaScript regression files, 44 Lambda/controller tests and 35 browser tests**, plus resolver tests and compilation. The [Android companion](https://github.com/arookiecoder-ip/MusicBox-APP/actions/runs/40127897516) passed 444 JVM and 30 API 35 interaction tests. Counts are historical evidence, not permanent promises for every build.
 
-Set these variables in the Docker `.env` file, then restart the stack with
-`docker compose up -d`.
+## Operational limits and troubleshooting
 
-> Note: this login protects the **web remote** (who may control your Echo from
-> a browser). It is separate from the Amazon login below, which is how the
-> server itself talks to Amazon's API.
+| Symptom | Check |
+| --- | --- |
+| 401/session expiry | Verify the deployed skill key and backend key match; for app/owner APIs use the correct live session/scoped token and configured origin. |
+| Audio host does not resolve | Repair DNS/connectivity; cached metadata cannot make an unavailable media origin reachable. |
+| Alexa takes seconds to seek/start | Separate HTTP acknowledgment, URL resolution, first byte and device confirmation. Custom-skill seeking restarts playback; reducing local delays does not eliminate skill/device startup. |
+| Stops after a final-second queue edit | Inspect token/intent-fenced boundary recovery and live queue decisions; latest regressions cover deleted prebuffered successors and Next/finish overlap. |
+| Wrong device after refresh/close | Check foreground presence, reconnect grace, ownership token and unexpired source acknowledgment. A refresh must not be treated as an immediate device close. |
+| Personalized data absent | Reconnect the account browser session; anonymous catalog fallback is not proof of account authorization. |
+| Account works, audio fails | Test/replace audio cookies separately; inspect sanitized streaming errors and restricted/unavailable-track responses. |
+| Login/noVNC fails | Check origin, controller-token agreement, sidecar health and the current Caddy/network-namespace routing. |
+| Sessions disappear after rebuild | Verify persistent data/Alexa/profile volumes and the session-signing secret or generated-secret file. |
 
-### Amazon login (browser-driven — no credentials on the server)
+The latest single live Echo probe measured about **90 ms** for seek HTTP acknowledgment and **3.7 seconds** to server playback confirmation. It was not an audible-output benchmark or a before/after distribution. A longer live boundary probe was interrupted by a separate Pause request; the original queue and paused cursor were restored. Automated race tests passed, but that probe did not establish a successful audible transition. Streaming first-byte timings recorded in the streaming notes measure a different stage.
 
-The remote needs an Amazon session to control your Echos, but **no Amazon
-credentials are stored on the server**. Login happens interactively, in your
-own browser, through a proxied copy of Amazon's real login page:
-
-1. Open the remote and click **Log in to Amazon**; enter the account's email
-   and password in the form.
-2. The server spins up an [AlexaPy](https://gitlab.com/keatontaylor/alexapy)
-   `AlexaProxy` session (local port 5001, publicly reachable at
-   `/alexa/proxy/` through Caddy) and hands your browser the login URL.
-3. Your browser completes Amazon's actual login there — including any
-   captcha, OTP, or "approve this device" push — so nothing has to be
-   scripted blind.
-4. On success only the resulting **session cookie** is persisted (to
-   `ALEXA_COOKIE_DIR`, default `flask-server/alexa_cookies/`) and adopted as
-   the live session. The credentials you typed are used once to seed the
-   proxy login and are never written to disk.
-
-The Amazon login has two network stages. First, the browser displays Amazon's
-login page through the local proxy. After that succeeds, AlexaPy exchanges the
-authorization result with Amazon's device-registration API. The cookie is
-written only after both stages succeed. A browser success page without a cookie
-therefore means the second, server-side stage failed.
-
-Amazon's device-registration traffic originates from the Docker host, not the
-browser used to complete the proxied login. If Amazon rejects that route, use
-a host-level VPN or another outbound network for the Docker host.
-
-Later restarts reuse the persisted cookie, so this is a one-time step until
-Amazon invalidates the session. There is **one** Amazon session for the whole
-server — logging in again replaces which account controls every Echo (the API
-requires an explicit `force` flag to do that, so a stale tab can't swap
-accounts silently).
-
-Config: set `AMAZON_DOMAIN` to the Amazon site your account lives on
-(`amazon.in`, `amazon.com`, …). `ALEXA_PROXY_BASE_URL` is only needed if the
-login proxy is served from a different hostname than `PUBLIC_BASE_URL`.
-
-**Security recommendation: log in with a throwaway second account, not your
-main one.** The persisted session cookie is a logged-in Amazon session —
-anyone with root on the VPS could use it.
-
-1. Create a fresh Amazon account (new email, no payment methods).
-2. Alexa app → Settings → Your Profile & Family → add it to your **Amazon
-   Household** as a second adult (so it can see and control your Echos).
-3. Log in to the remote with *that* account.
-
-Worst-case leak then exposes an account that can only control your speaker.
-`alexa_cookies/` is gitignored territory — never commit it.
-
-### Endpoints
-
-| Route                | Method   | Purpose                                                          |
-| -------------------- | -------- | ---------------------------------------------------------------- |
-| `/login/`            | GET/POST | web-remote login page; POST `{"username","password","code"}` sets the session cookie |
-| `/logout/`           | POST/GET | clears the session cookie                                        |
-| `/remote/`           | GET      | the web UI (redirects to `/login/` when unauthenticated)         |
-| `/alexa/status/`     | GET      | login/config state (first stop when debugging)                   |
-| `/alexa/proxy_login/` | POST    | `{"email","password"}` → starts the Amazon proxy login, returns the `login_url` to open (409 + `"force": true` required if already signed in) |
-| `/alexa/proxy_check/` | GET     | poll whether the browser finished the Amazon login               |
-| `/alexa/devices/`    | GET      | Echo devices (`?refresh=1` to re-fetch from Amazon)              |
-| `/alexa/volume/`     | GET      | `?serial=…` → current volume (falls back to cached value)        |
-| `/alexa/play/`       | POST     | `{"serial", "query"}` → search text, or a YouTube link (played directly; `list=` links queue the playlist) |
-| `/alexa/play_queue/` | POST     | `{"serial", "video_id"}` → jump to a specific queue entry        |
-| `/alexa/shuffle_queue/` | POST  | shuffles the upcoming queue, keeping the current song in place   |
-| `/alexa/command/`    | POST     | `{"serial", "action"}` — play, pause, next, previous, volume (+`value` 0-100) |
-| `/alexa/seek/`       | POST     | `{"serial", "position_ms"}` (or `position_seconds`)              |
-| `/alexa/suggest/`    | GET      | `?q=…` → YT Music search suggestions for the search bar          |
-| `/alexa/now_playing/` | GET     | current track + progress anchor (`position_ms`, `duration_ms`, `started_at`) + queue |
-| `/alexa/now_playing/stream` | GET | Server-Sent Events stream of now-playing state; drives the live progress bar + queue across all open pages |
-| `/alexa/state_event/` | POST    | webhook the Lambda posts on playback `started`/`stopped`/`finished` (with the offset) so state is event-driven, not polled |
-| `/armed_play/`       | GET      | called by the skill to pick up a play the remote armed (API-key protected, not a session endpoint) |
-| `/history/`          | GET      | `?limit=…` (default 20, max 100) → recently-listened tracks, newest first  |
-| `/history/`          | DELETE   | clears all listening history                                     |
-| `/history/<video_id>` | DELETE  | removes a single track from history                              |
-| `/api/home/`         | GET      | `?refresh=1` & `?filter=all` to bypass the 30-minute cache → full v2 shelf hierarchy (shortcuts, cards, circles, song grids) |
-| `/audio/` | GET/HEAD | Authenticated audio stream for apps. Select with `video_id=`, `url=`, or `q=` plus optional duration. `info=1` returns metadata; `prefetch=1` prepares a URL only and returns 202. `wait=1` never forces a full download. Supports byte ranges and stable validators, retaining only received current-track bytes. Does not change Echo now-playing state. Explicit download requests use the same stream. |
-
----
-
-### Docker deployment behavior
-
-The supplied Docker configuration supports the same flow without publishing
-port `5001` on the host. Caddy and `ytmusic` share the `web` Docker network:
-normal requests go to `ytmusic:5000`, while `/alexa/proxy/*` goes to
-`ytmusic:5001`. The named `ytmusic_alexa_cookies` volume stores
-`/app/alexa_cookies`, so container restarts and image rebuilds retain the Amazon
-session.
-
-Docker login traffic uses the Docker host/VPS outbound public IP, not the IP or
-VPN used by the person's browser. It should work seamlessly when:
-
-- `PUBLIC_BASE_URL` and `ALEXA_PROXY_BASE_URL` use the HTTPS hostname served by Caddy.
-- Caddy can reach `ytmusic:5000` and `ytmusic:5001` on the shared network.
-- The Docker host can reach Amazon's login and device-registration APIs.
-- The `ytmusic_alexa_cookies` volume remains attached.
-
-If the VPS already completes Amazon login successfully, rebuilding the image
-will not require another login as long as that named volume is preserved.
-
----
-
-## Troubleshooting
-
-| Symptom                                                       | Check                                                                                       |
-| ------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
-| Alexa: "there was a problem with the skill's response"        | CloudWatch logs (Code tab → Logs link)                                                      |
-| Says "Playing X" but silence + `PlaybackFailed` in CloudWatch | `curl <PUBLIC_BASE_URL>/proxy/?video_id=J7p4bzqLvCw&key=<key>` from outside — should be 200 |
-| Server errors                                                 | `docker compose logs -f ytmusic`                                                            |
-| yt-dlp bot-check / "Sign in to confirm" errors return         | cookies expired → export and remount a fresh `cookies.txt`, then restart the stack         |
-| yt-dlp HTTP 403 / "GVS PO Token not provided"                 | update yt-dlp (`pip install -U yt-dlp`); the `android_vr` client doesn't need PO tokens, but if it fails too, set `YTDLP_PO_TOKEN` to use `mweb` with a manual PO token instead |
-| One yt-dlp player client returns HTTP 403                         | the server tries the default client first, then `android_vr`, `web`, and `tv` as fallbacks. Intermediate failures are warnings; only "failed with every client" means the download was lost |
-| HTTPS dead                                                    | `docker compose logs caddy` — cert renewals need ports 80/443 open                          |
-| 401 everywhere                                                | API_KEY mismatch between `lambda/api_key.py` and the Docker `.env`                          |
-| `/remote/` shows `{"error":"unauthorized"}` instead of a login | login not enabled — set **both** `REMOTE_USER` and `REMOTE_PASSWORD` in Docker `.env`, then restart the stack |
-| Web-remote login: "invalid authentication code"               | TOTP mismatch — check the phone clock, that the authenticator secret equals `REMOTE_TOTP_SECRET`, and that the code is current |
-| Signed in, but bounced back to `/login/` after a restart      | set `SECRET_KEY` (a random one is generated per boot, invalidating old cookies)             |
-| Search/queue works but no audio plays on the Echo              | `PUBLIC_BASE_URL` (Docker `.env`) and `DEFAULT_API_URL` (Lambda's `api_key.py`) must both point at the domain the Echo can actually reach — a leftover placeholder after migrating to a real domain sends Alexa `audio_url`s that resolve nowhere |
-| 502 Bad Gateway, Caddy logs `connect: connection refused` (Docker) | Flask/aiohttp bound to `127.0.0.1` instead of `0.0.0.0` — Caddy can't reach a container's loopback address over the Docker network. See the Docker note under [Environment variables](#environment-variables) |
-| Amazon login page won't load / times out                      | the Caddy `/alexa/proxy/*` → `localhost:5001` route is missing, or `ALEXA_PROXY_BASE_URL`/`PUBLIC_BASE_URL` doesn't match the origin the browser is on |
-| Amazon login refused / loops                                  | `/alexa/status/` shows the state; check `AMAZON_DOMAIN` matches the account's Amazon site, then retry the in-page login (captcha/2FA happen in your browser) |
-| Amazon browser login succeeds, but no Alexa cookie is saved locally | the server-side device-registration exchange failed. A browser VPN extension does not route Python; use a full-device VPN or another network, restart `server.py`, and perform a fresh login |
-| Local login works only while a VPN is enabled                  | expected when Amazon rejects the normal outbound route. Keep the full-device VPN connected for login; reconnect it if session renewal later fails |
-| Docker rebuild asks for Amazon login again                     | the `/app/alexa_cookies` volume is missing or was deleted; keep the `ytmusic_alexa_cookies` named volume and do not run `docker compose down -v` unless you intend to erase sessions |
-| Web remote worked, then broke after months                    | Amazon changed the internal API → `~/ytm/bin/pip install -U alexapy` and restart; if the session expired, just log in again from the page |
-
-`HANDOFF.md` has the full debugging history and the reasoning behind every
-piece of this setup.
-
----
+Open [Operational status](docs/STATUS_PANEL.md) for aggregate diagnostics. Status refresh does not actively validate Google/Amazon credentials or prove audible playback. No physical phone battery/FPS gain is claimed by backend tests.
 
 ## License
 
-MIT — see LICENSE.
-## Persistent YouTube Music browser authentication
-
-Personalized Home, Library, history, and playlists use a real Chromium profile
-instead of OAuth. Docker Compose runs `youtube-browser` privately with Xvfb,
-Chromium, x11vnc, noVNC, and a token-protected controller. Chromium connects
-directly to `https://music.youtube.com`; Caddy proxies only the remote-desktop
-UI beneath `/youtube-login/`.
-
-Set a long random `YT_BROWSER_CONTROL_TOKEN` in `.env` before starting the
-stack (for example, generate one with `openssl rand -hex 32`). The same value
-is injected into Flask and the sidecar and is never exposed to the browser.
-Optional tuning variables are:
-
-| Variable | Default | Purpose |
-| --- | ---: | --- |
-| `YT_BROWSER_CAPTURE_TIMEOUT` | `120` | Seconds the sidecar waits for a signed-in `/browse` request. |
-| `YT_BROWSER_LOGIN_TIMEOUT` | `240` | Seconds allowed for manual Google sign-in in ordinary Chromium. |
-| `YT_BROWSER_LEASE_TTL` | `300` | Lifetime of the owner-only noVNC URL cookie. |
-| `YT_BROWSER_REFRESH_TIMEOUT` | `45` | Maximum automatic saved-profile renewal wait. |
-| `YT_BROWSER_REFRESH_COOLDOWN` | `300` | Minimum interval between automatic attempts. |
-| `YT_BROWSER_CONTROL_TIMEOUT` | `10` | Flask-to-sidecar control request timeout. |
-| `YT_BROWSER_PROACTIVE_INTERVAL` | `21600` | Seconds between saved-auth validity probes (minimum 900). |
-| `YT_BROWSER_SCREEN_GEOMETRY` | `1365x768x24` | Remote Chromium desktop size. |
-
-After signing into the Web Remote as its owner, choose **Connect YouTube
-Music**, then **Open secure browser**. Complete Google login, CAPTCHA, passkey,
-or 2FA inside that remote Chromium window. Sign-in runs in ordinary Chromium,
-outside Playwright, because Google rejects automation-controlled login pages.
-Keep the window open until YouTube Music's **Sign in** button disappears. After
-YouTube's `LOGIN_INFO` marker appears, the controller attaches to that same
-running Chromium process over a loopback-only DevTools connection and captures
-a `music.youtube.com/youtubei/v1/browse` request. Chromium is not restarted
-during this handoff. The app validates the request with
-`get_account_info()`, and only then atomically replaces the persistent
-`/data/headers_auth.json`. Ordinary cookie rotation can subsequently renew from
-the saved profile without interaction. A revoked/challenged Google session is
-reported as **Reconnect required**. Manual copied-header import remains under
-the modal's Advanced disclosure.
-
-The noVNC route is protected twice: Flask must see a valid owner web session,
-and the request must carry the short-lived, HttpOnly browser-lease cookie.
-Jam guests, API-key-only callers, stale links, and signed-out browsers are
-rejected by Caddy `forward_auth`. No VNC, noVNC, Chromium debugging, or control
-port is published on the Docker host. Treat VPS/root access as highly trusted:
-root can inspect a live Google browser profile. Logs deliberately omit cookies,
-authorization headers, captured requests, screenshots, and profile contents.
-
-The `ytmusic_chromium_profile` volume survives rebuilds and normal
-`docker compose down`. Back it up only as sensitive credential material.
-Deleting that volume forces a new Google login; **`docker compose down -v`
-erases it**. Chromium/noVNC commonly consumes a few hundred MB while active;
-the compose file reserves a 512 MB shared-memory area for Chromium stability.
-
-Troubleshooting:
-
-- Blank noVNC or failed WebSocket: confirm Caddy uses `handle_path`, the URL's
-  `path=youtube-login/websockify`, and that `youtube-browser` is healthy.
-- Browser service unavailable: check `docker compose logs youtube-browser`
-  (logs are redacted) and verify both containers have the identical control
-  token.
-- Google challenge/CAPTCHA/2FA: finish it interactively; the application never
-  stores or types a Google password.
-- Reconnect keeps returning: Google revoked the profile. Close the old session,
-  reconnect interactively, and verify the VPS clock and outbound connectivity.
-- Sidecar down: personalized data falls back as before, and Advanced manual
-  header import remains available.
+[MIT](LICENSE). See Git history and the [changelog](CHANGELOG.md) for original work, integrations, reversions and subsequent fixes.
