@@ -5040,6 +5040,8 @@ def _promote_next_track(reason, position_ms=0):
             current_index = _now_playing.get('queue_index')
         if dirty:
             desired = _resolve_next_track(queue, cur_id, current_index)
+            if desired is None and pending and pending.get('loop') and queue and current_index == len(queue)-1:
+                desired = queue[0]
             if not desired or desired.get('video_id') != vid:
                 return False
         next_item = queue[next_idx] if next_idx >= 0 else {'video_id': vid}

@@ -254,3 +254,11 @@ class AlexaQueueRevisionTests(NextTrackBase):
         with mock.patch.object(server,'_prefetched_next',{'video_id':'B','at':server.time.time()}):
             self.assertFalse(server._promote_next_track('test'))
         self.assertEqual(server._now_playing['video_id'],'A')
+
+    def test_valid_loop_prefetch_survives_a_dirty_queue(self):
+        self._set_queue([_meta('A'),_meta('C')],current_index=1)
+        server._now_playing.update(playing=False,queue_web_dirty=True,_alexa_pending={
+            'current_video':'C','loop':True})
+        with mock.patch.object(server,'_prefetched_next',{'video_id':'A','at':server.time.time()}), mock.patch.object(server,'_notify_sse'), mock.patch.object(server,'_record_listen'), mock.patch.object(server.threading,'Thread'):
+            self.assertTrue(server._promote_next_track('test'))
+        self.assertEqual(server._now_playing['video_id'],'A')
