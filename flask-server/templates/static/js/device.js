@@ -227,6 +227,7 @@
 
   function _applyDevices(devices, preferSerial) {
     window._connectEchoDevices = devices.filter(d => !String(d.serial).startsWith('mobile:'));
+    devices = devices.filter(d => d.online);
     deviceEl.innerHTML = '';
     if (!devices.length) {
       deviceEl.innerHTML = '<option value="">No devices found</option>';

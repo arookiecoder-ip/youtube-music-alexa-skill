@@ -537,10 +537,10 @@ console.log('\n--- reported sequence: click A, B, C with out-of-order responses 
       s.handleNpUpdate({...snapshot, video_id: 'retired-server', playback_revision: 200});
       check('restart accepts reset revisions and rejects the retired epoch', renders.nowPlaying, ['new-song', 'restart']);
       const delay = s.playbackStore.pollDelay;
-      check('active playback polls quickly', delay(false, true, false, 0), 1000);
-      check('foreground paused playback remains responsive', delay(false, false, false, 0), 1000);
+      check('active playback polls quickly', delay(false, true, false, 0), 500);
+      check('foreground paused playback remains responsive', delay(false, false, false, 0), 500);
       check('background paused polling slows further', delay(true, false, false, 0), 30000);
-      check('transitions remain responsive in background', delay(true, false, true, 0), 1000);
+      check('transitions remain responsive in background', delay(true, false, true, 0), 500);
       check('outages back off to a bounded minute', delay(false, true, false, 10), 60000);
     }
     {

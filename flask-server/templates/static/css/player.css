@@ -3645,3 +3645,18 @@ body.results-open .player-section {
     --track-h: 9px;
   }
 }
+
+/* Extend the desktop timeline target without changing its painted thickness.
+   A pseudo-element keeps the existing drag/tooltip coordinates unchanged. */
+@media (min-width: 900px) and (pointer: fine) {
+  .player-section #progress-track::before {
+    content: "";
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: -10px;
+    bottom: -10px;
+    background: transparent;
+    cursor: pointer;
+  }
+}

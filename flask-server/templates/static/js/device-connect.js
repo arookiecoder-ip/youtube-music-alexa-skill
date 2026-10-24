@@ -35,7 +35,7 @@
     echoDevices = devices.filter(d => !String(d.serial).startsWith('mobile:'));
     const browser = window.browserPlayback;
     const local = browser ? 'mobile:' + browser.id : '';
-    const devicesWithPhones = echoDevices.concat(phones.map(d => ({ serial: 'mobile:' + d.id,
+    const devicesWithPhones = echoDevices.filter(d => d.online).concat(phones.map(d => ({ serial: 'mobile:' + d.id,
       name: browser && d.id === browser.id ? 'This browser' : d.name, online: true })));
     if (local && !devicesWithPhones.some(d => d.serial === local)) {
       devicesWithPhones.push({ serial: local, name: 'This browser', online: true });

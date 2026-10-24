@@ -241,6 +241,7 @@ class MobileDeviceRoutesTests(OutputRoutesTests):
     def test_disconnected_target_reports_once_even_after_error_is_consumed(self):
         self.test_alexa_to_remote_phone_preserves_active_playback_without_starting_echo()
         self.registry.offline('phone-two', 'session-phone-two')
+        self.output.lease_until = self.output.clock() - 1
         notify = Mock()
         self.namespace['_notify_sse'] = notify
         self.namespace['_reconcile_mobile_output']()
@@ -454,3 +455,35 @@ class MobileDeviceRoutesTests(OutputRoutesTests):
         self.assertEqual(self.state['position_ms'], 73000)
         self.assertTrue(self.state['playing'])
         self.assertTrue(self.output.owns_phone('phone-two', transfer['output_token']))
+
+    def test_controlled_phone_presence_gap_with_live_lease_is_not_disconnect(self):
+        self.test_alexa_to_remote_phone_preserves_active_playback_without_starting_echo()
+        self.registry.devices.pop('phone-two')
+        self.namespace['_reconcile_mobile_output']()
+        self.assertTrue(self.state['playing'])
+        self.assertFalse(self.state.get('playback_error'))
+
+    def test_returning_presence_clears_only_its_offline_error_and_retained_event(self):
+        self.test_alexa_to_remote_phone_preserves_active_playback_without_starting_echo()
+        error = {'type': 'device_offline', 'offline_owner': 'phone-two'}
+        self.state.update(playback_error=error, _playback_error_event={'source': error})
+        self.device('online', owner='phone-two')
+        self.assertNotIn('playback_error', self.state)
+        self.assertNotIn('_playback_error_event', self.state)
+        self.state['playback_error'] = {'type': 'dispatch_error'}
+        self.device('online', owner='phone-two')
+        self.assertEqual(self.state['playback_error']['type'], 'dispatch_error')
+
+    def test_empty_idle_selection_does_not_raise_disconnect_error(self):
+        self.output.select_idle_phone('phone-one', self.output.snapshot()['output_token'])
+        self.output.lease_until = self.output.clock() - 1
+        self.state.update(video_id='', playing=False, playback_processing=False)
+        self.namespace['_reconcile_mobile_output']()
+        self.assertFalse(self.state.get('playback_error'))
+
+    def test_already_closed_output_does_not_create_a_second_disconnect_event(self):
+        self.test_alexa_to_remote_phone_preserves_active_playback_without_starting_echo()
+        self.device('offline', owner='phone-two')
+        self.state['playback_error'] = None
+        self.namespace['_reconcile_mobile_output']()
+        self.assertFalse(self.state.get('playback_error'))

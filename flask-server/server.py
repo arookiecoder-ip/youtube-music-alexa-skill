@@ -1492,7 +1492,7 @@ _RATE_LIMITS = {
     'cached_audio': (600, 60), # Disk-only range reads and album downloads are inexpensive.
     'audio':    (60, 60),     # /audio/ - app audio (searches, info and downloads)
     'shared_playback': (240, 60), # Ownership heartbeats/cursors must not starve interactive browsing.
-    'poll':     (200, 60),   # /alexa/now_playing/ - SSE-alike polling
+    'poll':     (600, 60),   # 500ms foreground feedback, including controllers sharing a NAT.
     'static':   (0, 0),       # No limit for static assets
     'browser_session': (0, 0), # Owner-only noVNC/session polling is frequent
     'default':  (300, 60),    # Catch-all
@@ -2370,11 +2370,22 @@ def _reconcile_mobile_output(closed_owner=''):
     if owner in online and owner != closed_owner:
         with _np_lock:
             _now_playing.pop('_disconnected_phone_token', None)
+            for key in ('playback_error', '_playback_error_event'):
+                error = _now_playing.get(key)
+                source = error.get('source', error) if isinstance(error, dict) else {}
+                if isinstance(source, dict) and source.get('type') == 'device_offline' and source.get('offline_owner') == owner:
+                    _now_playing.pop(key, None)
         return
     # Presence can arrive after the first lease claim. Do not declare a live
     # lease disconnected solely because registration has not arrived yet.
-    if owner and owner != closed_owner and output['phone_lease_ms'] > 0 and not controller:
+    if owner and owner != closed_owner and output['phone_lease_ms'] > 0:
         return
+    with _np_lock:
+        # An idle selection or an already closed output is not a new playback
+        # failure. Repeated reads must not create another disconnect toast.
+        if not _now_playing.get('playing') and not _now_playing.get('playback_processing') and (
+                not owner or not _now_playing.get('video_id')):
+            return
     # Losing the target never grants an audible fallback to the controller.
     # Preserve its queue/cursor and require an explicit output choice to resume.
     with _np_lock:
@@ -2405,8 +2416,8 @@ def _mobile_handoff_snapshot(expected_token):
 
 @app.route('/api/app/devices/', methods=['GET', 'POST'], strict_slashes=False)
 def app_mobile_devices():
-    _reconcile_mobile_output()
     if request.method == 'GET':
+        _reconcile_mobile_output()
         return jsonify(devices=_mobile_devices.list(), **_playback_output.snapshot())
     body = request.get_json(silent=True) or {}
     owner = body.get('device_id')
@@ -2450,6 +2461,7 @@ def app_mobile_devices():
                 _mobile_devices.wait(body.get('revision'), wait_seconds)
                 commands = _mobile_devices.pending_commands(owner, session_id)
                 _reconcile_mobile_output()
+            _reconcile_mobile_output()
             output = _playback_output.snapshot()
             extra = {}
             # Send the full queue once to the newly granted destination. Stable

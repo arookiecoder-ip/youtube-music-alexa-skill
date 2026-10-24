@@ -62,8 +62,8 @@
   const retiredEpochs = [];
   window.playbackStore = {
     pollDelay(background, playing, processing, failures) {
-      const base = !background || processing ? 1000 : playing ? 5000 : 30000;
-      return Math.min(60000, base * Math.pow(2, Math.min(failures || 0, 6)));
+      const base = !background || processing ? 500 : playing ? 5000 : 30000;
+      return Math.min(60000, base * Math.pow(2, Math.min(failures || 0, 7)));
     },
     accept(np) {
       if (!np || typeof np !== 'object') return false;

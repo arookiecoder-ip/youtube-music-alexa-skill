@@ -3,13 +3,13 @@ const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
 async function main() {
-  let now = 10000, release, reject;
+  let now = 10000, release, reject, renderedDevices;
   const timers = [], change = {}, confirmations = [];
   const select = {value:'mobile:source', addEventListener:(name, fn)=>change[name]=fn};
   const source = {playback_output:'phone', output_owner:'source', output_token:'old', title:'Song', video_id:'AAAAAAAAAAA', playing:true, playback_confirmed:true};
   const destination = {...source, output_owner:'target', output_token:'new'};
   const app = {isPlaying:true, lastActionAt:0, lastActionIntent:null, GRACE_MS:1000};
-  const window = {__appState:app, addEventListener(){}, _applyDevices(){},
+  const window = {__appState:app, addEventListener(){}, _applyDevices(devices){ renderedDevices = devices; },
     _notifyPlayPauseServerState: playing=>confirmations.push(playing),
     api:async (url, body)=> {
       if (body && body.action === 'transfer') return new Promise((yes,no)=>{release=yes;reject=no;});
@@ -67,6 +67,12 @@ async function main() {
   assert.equal(errors.length,1,'Repeated status reads must not repeat the same error toast');
   context.handleNpUpdate({...failure,playback_error_id:'error-two'});
   assert.equal(errors.length,2,'A distinct failure must still be delivered');
+  window._applyDevices([
+    {serial:'online-echo',name:'Online Echo',online:true},
+    {serial:'offline-echo',name:'Offline Echo',online:false}
+  ]);
+  assert.deepEqual(Array.from(renderedDevices, d => d.serial), ['online-echo'],
+    'Offline Echo devices must not remain in the output picker');
   console.log('PASS handoff feedback: source stop, destination preparation, truthful confirmations, paused source, failure, expiry, remote switch and explicit pause');
 }
 main().catch(error=>{console.error(error);process.exitCode=1;});
