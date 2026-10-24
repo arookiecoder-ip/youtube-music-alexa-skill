@@ -194,3 +194,63 @@ class AlexaQueueRevisionTests(NextTrackBase):
         self.assertTrue(result['accepted'])
         self.assertEqual(result['queue_index'], 1)
         self.assertNotEqual(result['queue'][0]['entry_id'], result['queue'][1]['entry_id'])
+
+    def test_finish_during_manual_next_does_not_cancel_pending_play_or_poison_watermark(self):
+        server._now_playing.update(video_id='B',queue_index=1,playing=True,
+            playback_processing=True,playback_confirmed=False,alexa_event_at=10)
+        response=self.client.post('/alexa/state_event/',query_string={'key':server.API_KEY},json={
+            'event':'finished','video_id':'A','token':'0|A|attempt','event_timestamp':'2026-10-25T00:00:00.000Z'})
+        self.assertEqual(response.status_code,200)
+        self.assertTrue(server._now_playing['playing'])
+        self.assertTrue(server._now_playing['playback_processing'])
+        self.assertEqual(server._now_playing['alexa_event_at'],10)
+
+    def test_old_same_song_stop_during_seek_does_not_pause_seek(self):
+        server._now_playing.update(playing=True,playback_processing=True,playback_confirmed=False,position_ms=179000)
+        self.client.post('/alexa/state_event/',query_string={'key':server.API_KEY},json={
+            'event':'stopped','video_id':'A','token':'0|A|attempt'})
+        self.assertTrue(server._now_playing['playing'])
+        self.assertTrue(server._now_playing['playback_processing'])
+
+    def test_deleted_buffered_next_recovers_live_successor_if_echo_finishes_without_start(self):
+        self.decision()
+        self._set_queue([_meta('A'),_meta('C')])
+        server._now_playing.update(playing=False,_alexa_finished_token='0|A|attempt')
+        with mock.patch.object(server.time,'sleep'), mock.patch.object(server,'_promote_next_track',return_value=False), mock.patch.object(server,'_schedule_play_dispatch') as dispatch, mock.patch.object(server,'_notify_sse'):
+            server._promote_after_finish('A')
+        self.assertEqual(server._now_playing['video_id'],'C')
+        self.assertTrue(server._now_playing['playing'])
+        self.assertFalse(server._now_playing['playback_confirmed'])
+        dispatch.assert_called_once()
+        self.assertEqual(dispatch.call_args.args[:2],(self.SERIAL,'C'))
+
+    def test_pause_during_finish_grace_cancels_recovery(self):
+        server._now_playing.update(playing=False,_alexa_finished_token='0|A|attempt')
+        def pause(_): server._now_playing.update(alexa_intent_at=11)
+        with mock.patch.object(server.time,'sleep',side_effect=pause), mock.patch.object(server,'_schedule_play_dispatch') as dispatch:
+            server._promote_after_finish('A')
+        dispatch.assert_not_called()
+
+    def test_finish_recovery_never_wraps_finite_queue_or_steals_phone_output(self):
+        self._set_queue([_meta('A')])
+        server._now_playing.update(playing=False,_alexa_finished_token='0|A|attempt')
+        with mock.patch.object(server.time,'sleep'), mock.patch.object(server,'_promote_next_track',return_value=False), mock.patch.object(server,'_schedule_play_dispatch') as dispatch:
+            server._promote_after_finish('A')
+            self.output['playback_output']='phone'
+            server._promote_after_finish('A')
+        dispatch.assert_not_called()
+
+    def test_finish_after_explicit_pause_cannot_restart_or_advance(self):
+        server._now_playing.update(playing=False,alexa_intent_at=11)
+        with mock.patch.object(server.threading,'Thread') as worker:
+            self.client.post('/alexa/state_event/',query_string={'key':server.API_KEY},json={
+                'event':'finished','video_id':'A','token':'0|A|attempt'})
+        worker.assert_not_called()
+        self.assertFalse(server._now_playing['playing'])
+
+    def test_removed_prefetch_is_not_promoted_even_without_a_protocol2_decision(self):
+        self._set_queue([_meta('A'),_meta('C')])
+        server._now_playing.update(playing=False,queue_web_dirty=True)
+        with mock.patch.object(server,'_prefetched_next',{'video_id':'B','at':server.time.time()}):
+            self.assertFalse(server._promote_next_track('test'))
+        self.assertEqual(server._now_playing['video_id'],'A')

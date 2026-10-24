@@ -349,7 +349,7 @@ def _play_intent_seq_arg(body):
 # scheduled. A burst of clicks collapses into exactly one trigger phrase for
 # whatever the user landed on. The delay is short enough to be invisible next to
 # the ~9-10s cold-start path but long enough to absorb ordinary rapid clicking.
-PLAY_DISPATCH_DEBOUNCE = float(os.environ.get('PLAY_DISPATCH_DEBOUNCE', '0.7'))
+PLAY_DISPATCH_DEBOUNCE = float(os.environ.get('PLAY_DISPATCH_DEBOUNCE', '0.15'))
 _PENDING_DISPATCH = {}
 _PENDING_DISPATCH_LOCK = threading.Lock()
 
@@ -4998,7 +4998,7 @@ def _backfill_queue_thumbnail(video_id):
 _prefetched_next = None
 _PREFETCH_MAX_AGE = 15 * 60          # ignore prefetch records older than this
 _OVERRUN_GRACE_MS = 12000            # position past duration before assuming advance
-_FINISH_PROMOTE_DELAY = 5.0          # wait for the real 'started' webhook first
+_FINISH_PROMOTE_DELAY = 1.5          # wait for the real 'started' webhook first
 
 
 def _promote_next_track(reason, position_ms=0):
@@ -5035,6 +5035,13 @@ def _promote_next_track(reason, position_ms=0):
         vid = pf['video_id']
         next_idx = next((i for i, it in enumerate(queue)
                          if it.get('video_id') == vid), -1)
+        with _np_lock:
+            dirty = bool(_now_playing.get('queue_web_dirty'))
+            current_index = _now_playing.get('queue_index')
+        if dirty:
+            desired = _resolve_next_track(queue, cur_id, current_index)
+            if not desired or desired.get('video_id') != vid:
+                return False
         next_item = queue[next_idx] if next_idx >= 0 else {'video_id': vid}
     else:
         # No evidence the Echo ever fetched the next audio — it is idle, not
@@ -5089,15 +5096,51 @@ def _check_track_overrun():
         _promote_next_track('overran duration', position_ms=overshoot)
 
 
-def _promote_after_finish(prev_video_id):
-    """'finished' arrived but no 'started' followed. Give the real webhook a
-    grace period; if state still points at the finished track, promote."""
+def _promote_after_finish(prev_video_id, expected_token=None, expected_intent=None, expected_output=None):
+    """Recover a missing boundary start using the latest queue, without undoing user intent."""
+    with _np_lock:
+        if expected_token is None:
+            expected_token = _now_playing.get('alexa_token') or ''
+        if expected_intent is None:
+            expected_intent = _now_playing.get('alexa_intent_at')
+        if expected_output is None:
+            expected_output = _playback_output.snapshot()['output_token']
     time.sleep(_FINISH_PROMOTE_DELAY)
-    cur = _get_now_playing()
-    if cur.get('video_id') != prev_video_id or cur.get('playing'):
-        return  # a real webhook (or user action) already moved us on
-    _promote_next_track('finished, no started webhook',
-                        position_ms=int(_FINISH_PROMOTE_DELAY * 1000))
+    def relevant_locked():
+        output = _playback_output.snapshot()
+        return (_now_playing.get('video_id') == prev_video_id and not _now_playing.get('playing')
+                and _now_playing.get('alexa_intent_at') == expected_intent
+                and (_now_playing.get('alexa_token') or '') == expected_token
+                and _now_playing.get('_alexa_finished_token') == expected_token
+                and output['playback_output'] == 'alexa' and output['output_token'] == expected_output)
+    with _np_lock:
+        if not relevant_locked():
+            return
+    if _promote_next_track('finished, no started webhook', position_ms=int(_FINISH_PROMOTE_DELAY * 1000)):
+        return
+    with _np_lock:
+        if not relevant_locked():
+            return
+        queue = _now_playing.get('queue') or []
+        index = _now_playing.get('queue_index')
+        target = _resolve_next_track(queue, prev_video_id, index)
+        pending = _now_playing.get('_alexa_pending') or {}
+        if target is None and pending.get('loop') and queue and index == len(queue)-1:
+            target = queue[0]
+        output = _playback_output.snapshot()
+        serial = output.get('output_serial')
+        if not target or not serial:
+            return
+        intent = time.time()
+        _now_playing.update(video_id=target['video_id'], title=target.get('title',''),
+            artist=target.get('artist',''), artists=target.get('artists',[]), thumbnail=target.get('thumbnail',''),
+            duration_ms=target.get('duration_ms',0), queue_index=next(i for i,item in enumerate(queue) if item is target),
+            position_ms=0, started_at=intent, playing=True, playback_confirmed=False,
+            playback_processing=True, alexa_intent_at=intent, updated_at=intent)
+        _now_playing['playback_revision'] = int(_now_playing.get('playback_revision',0))+1
+        _now_playing.pop('_alexa_finished_token',None)
+    _notify_sse()
+    _schedule_play_dispatch(serial,target['video_id'],expected_intent=intent,expected_output=expected_output,delay=0)
 
 
 def _queue_neighbor(action):
@@ -6472,6 +6515,8 @@ def alexa_seek():
             return error_response('playback changed while seeking', 409)
         previous = copy.deepcopy(_now_playing)
         _reset_progress(position_ms)
+        _now_playing['alexa_intent_at'] = time.time()
+        _now_playing.pop('_alexa_finished_token',None)
         _now_playing['playing'] = True
         _now_playing['playback_confirmed'] = False
         _now_playing['playback_processing'] = True
@@ -6570,6 +6615,17 @@ def alexa_state_event():
         tracked_token = _now_playing.get('alexa_token') or ''
         if event in ('stopped', 'finished', 'failed') and event_token and tracked_token and event_token != tracked_token:
             return jsonify({'ok': True, 'ignored': 'stale playback token'})
+        if event == 'finished' and not _now_playing.get('playing'):
+            return jsonify({'ok': True, 'ignored': 'paused or already finished'})
+        if event in ('stopped', 'finished'):
+            incoming_video = body.get('video_id') or ''
+            if (incoming_video and _valid_video_id(incoming_video) and incoming_video != _now_playing.get('video_id') or
+                    (_now_playing.get('playing') and _now_playing.get('playback_processing')
+                     and not _now_playing.get('playback_confirmed')
+                     and (event == 'finished' or bool(event_token and tracked_token)))):
+                # The old stream can stop/finish after Next or same-song seek was staged.
+                # Ignore before advancing the webhook watermark or clearing processing.
+                return jsonify({'ok': True, 'ignored': 'superseded playback transition'})
     if event_at is not None:
         with _np_lock:
             intent_at = float(_now_playing.get('alexa_intent_at') or 0)
@@ -7015,13 +7071,17 @@ def alexa_state_event():
     elif event == 'finished':
         with _np_lock:
             _now_playing['_alexa_finished_token'] = event_token
-        prev_video_id = _now_playing.get('video_id')
-        _update_now_playing(playing=False)
+            prev_video_id = _now_playing.get('video_id')
+            finish_intent = _now_playing.get('alexa_intent_at')
+            finish_output = _playback_output.snapshot()['output_token']
+            _now_playing.update(playing=False, updated_at=time.time(), _last_playback_activity_at=time.time())
+            _now_playing['playback_revision'] = int(_now_playing.get('playback_revision',0))+1
+        _notify_sse()
         # The Echo starts the pre-buffered next track right away; if the
         # matching 'started' webhook gets lost, promote it ourselves after a
         # grace period so the card doesn't stay wedged on the finished song.
         threading.Thread(target=_promote_after_finish,
-                         args=(prev_video_id,), daemon=True).start()
+                         args=(prev_video_id,event_token,finish_intent,finish_output), daemon=True).start()
     return jsonify({'ok': True})
 
 
