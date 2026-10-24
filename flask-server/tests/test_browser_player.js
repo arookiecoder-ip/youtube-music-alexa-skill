@@ -53,7 +53,9 @@ async function main() {
   assert(seekFinished, 'Local seek must not wait for a background presence request');
   const longPoll = calls.filter(call => call.url === '/api/app/devices/').at(-1).body;
   assert.equal(longPoll.wait, true);
-  assert.equal(longPoll.wait_seconds, 1, 'Ownership watch must be finite and bounded');
+  assert.equal(longPoll.bounded_wait, true);
+  assert(Array.isArray(longPoll.busy_commands));
+  assert.equal(longPoll.wait_seconds, 2, 'Ownership watch must be finite and bounded');
   presenceGate = null; releasePresence();
   await Promise.all([backgroundPresence, immediateSeek]);
   await player.execute('seek', {position_ms: 4000});

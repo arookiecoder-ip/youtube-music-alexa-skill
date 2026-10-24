@@ -487,3 +487,61 @@ class MobileDeviceRoutesTests(OutputRoutesTests):
         self.state['playback_error'] = None
         self.namespace['_reconcile_mobile_output']()
         self.assertFalse(self.state.get('playback_error'))
+
+    def test_browser_wait_slot_exhaustion_returns_bounded_retry_without_blocking(self):
+        token = self.output.snapshot()['output_token']
+        self.registry.wait_bounded = Mock(return_value=False)
+        reply = self.device('online', wait=True, bounded_wait=True, wait_seconds=2, output_token=token)
+        self.assertEqual(reply.status_code, 200)
+        self.assertEqual(reply.json['presence_retry_ms'], 750)
+        self.registry.wait_bounded.assert_called_once()
+
+    def test_browser_wait_is_immediate_on_revision_change_and_preserves_busy_commands(self):
+        self.device('online')
+        claim = self.output_request('claim').json
+        self.registry.command('phone-one', claim['output_token'], 'seek', {'position_ms': 1000}, 'busy')
+        self.registry.wait_bounded = Mock(return_value=True)
+        reply = self.device('online', wait=True, bounded_wait=True, wait_seconds=2,
+                            output_token=claim['output_token'], busy_commands=['busy'])
+        self.registry.wait_bounded.assert_called_once()
+        self.assertEqual(reply.json['presence_retry_ms'], 50)
+        self.assertEqual(reply.json['commands'][0]['id'], 'busy')
+
+    def fast_handoff_setup(self):
+        self.device('online')
+        claim = self.output_request('claim').json
+        self.state.update(video_id=A, queue_index=0, queue=[dict(track(A), entry_id='entry-a'), track(B)])
+        dispatch = Mock()
+        self.namespace.update(_schedule_play_dispatch=dispatch, _update_now_playing=lambda **kw: self.state.update(kw))
+        return claim, dispatch
+
+    def test_paused_source_can_install_cursor_and_start_echo_in_one_request(self):
+        claim, dispatch = self.fast_handoff_setup()
+        reply = self.device('alexa_handoff', serial='echo-two', output_token=claim['output_token'],
+            source_paused=True, position_ms=12345, playing=True, video_id=A, current_entry_id='entry-a')
+        self.assertEqual(reply.status_code, 200)
+        self.assertFalse(reply.json['handoff_pending'])
+        self.assertEqual(self.state['position_ms'], 12345)
+        self.assertTrue(self.state['playing'])
+        dispatch.assert_called_once_with('echo-two', A, 12345, delay=0)
+
+    def test_paused_handoff_stays_paused_and_never_dispatches_echo_play(self):
+        claim, dispatch = self.fast_handoff_setup()
+        reply = self.device('alexa_handoff', serial='echo-two', output_token=claim['output_token'],
+            source_paused=True, position_ms=12345, playing=False, video_id=A, current_entry_id='entry-a')
+        self.assertEqual(reply.status_code, 200)
+        self.assertFalse(self.state['playing'])
+        self.assertEqual(self.state['position_ms'], 12345)
+        dispatch.assert_not_called()
+
+    def test_fast_handoff_rejects_old_tokens_wrong_owners_and_old_entries_without_switching(self):
+        claim, dispatch = self.fast_handoff_setup()
+        valid = dict(serial='echo-two', output_token=claim['output_token'], source_paused=True,
+            position_ms=1000, playing=True, video_id=A, current_entry_id='entry-a')
+        for owner, changes in [('phone-two', {}), ('phone-one', {'output_token':'old'}),
+            ('phone-one', {'source_paused':False}), ('phone-one', {'current_entry_id':'old'}),
+            ('phone-one', {'video_id':B}), ('phone-one', {'position_ms':True})]:
+            reply = self.device('alexa_handoff', owner=owner, **dict(valid, **changes))
+            self.assertIn(reply.status_code, (400, 409))
+            self.assertEqual(self.output.snapshot()['output_token'], claim['output_token'])
+        dispatch.assert_not_called()

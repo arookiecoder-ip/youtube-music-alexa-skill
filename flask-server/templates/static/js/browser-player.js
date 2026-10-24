@@ -266,6 +266,7 @@
     commandChain = operation.catch(() => {});
     return operation;
   }
+  let presenceRetryMs = 750;
   async function poll(wait = false) {
     if (polling) return polling;
     polling = (async () => {
@@ -273,9 +274,10 @@
       let response;
       try { response = await api('/api/app/devices/', {
         action: 'online', device_id: id, session_id: session, name: 'Browser player',
-        wait, wait_seconds: 1, revision: presenceRevision, output_token: output && output.output_token,
+        wait, wait_seconds: 2, bounded_wait: true, busy_commands: Array.from(processing), revision: presenceRevision, output_token: output && output.output_token,
         ack: sentAcks, volume: Math.round(audio.volume * 100), include_handoff_state: true, accepted_token: accepted
       }); } catch (error) { ack.unshift(...sentAcks); throw error; }
+      presenceRetryMs = response.presence_retry_ms === 50 ? 50 : 750;
       if (response.revision !== undefined) presenceRevision = response.revision;
       const previous = output;
       output = response;
@@ -387,8 +389,8 @@
   async function tick() {
     if (stopped) return;
     let failed = false;
-    try { await poll(false); } catch (_) { failed = true; if (!owns()) audio.pause(); }
-    if (!stopped) setTimeout(tick, failed || !owns() ? 1000 : 750);
+    try { await poll(true); } catch (_) { failed = true; if (!owns()) audio.pause(); }
+    if (!stopped) setTimeout(tick, failed ? 1000 : presenceRetryMs);
   }
   window.addEventListener('pagehide', () => {
     stopped = true; generation++; audio.pause(); clearInterval(watchdog);

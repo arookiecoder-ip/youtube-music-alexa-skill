@@ -231,3 +231,21 @@ class PresenceWakeTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 self.registry.online('one', 'session', 'Phone', [], 50, invalid)
         self.assertIsNone(self.registry.list()[0]['volume_steps'])
+
+
+def test_browser_waits_reserve_at_most_four_workers_and_release_slots_on_error():
+    from mobile_devices import MobileDevices
+    from unittest.mock import Mock
+    import pytest
+    registry = MobileDevices()
+    registry.wait = Mock()
+    for _ in range(4):
+        assert registry.browser_wait_slots.acquire(blocking=False)
+    assert registry.wait_bounded(0, 100) is False
+    registry.wait.assert_not_called()
+    registry.browser_wait_slots.release()
+    registry.wait.side_effect = RuntimeError('wait failed')
+    with pytest.raises(RuntimeError):
+        registry.wait_bounded(0, 100)
+    assert registry.browser_wait_slots.acquire(blocking=False)
+    assert registry.wait.call_args.args == (0, 2)

@@ -11,6 +11,7 @@ class MobileDevices:
         self.lock = threading.RLock()
         self.changed = threading.Condition(self.lock)
         self.revision = 0
+        self.browser_wait_slots = threading.BoundedSemaphore(4)
         self.devices = {}
         self.retired = {}
 
@@ -111,3 +112,13 @@ class MobileDevices:
         # Commands, explicit close, output and volume changes wake immediately.
         with self.changed:
             self.changed.wait_for(lambda: self.revision != revision, timeout=min(8, max(0, timeout)))
+
+    def wait_bounded(self, revision, timeout=2):
+        """Keep browser handoffs prompt without occupying every WSGI worker."""
+        if not self.browser_wait_slots.acquire(blocking=False):
+            return False
+        try:
+            self.wait(revision, min(2, max(0, timeout)))
+            return True
+        finally:
+            self.browser_wait_slots.release()

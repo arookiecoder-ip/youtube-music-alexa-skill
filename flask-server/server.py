@@ -2454,11 +2454,18 @@ def app_mobile_devices():
             return jsonify(default_selected=selected, now_playing=snapshot, **result)
         if action == 'online':
             commands = _mobile_devices.online(owner, session_id, body.get('name'), body.get('ack', []), body.get('volume'), body.get('volume_steps'))
-            if body.get('wait') is True and not commands and body.get('output_token') == _playback_output.snapshot()['output_token']:
+            retry_ms = 50
+            busy = body.get('busy_commands')
+            busy = set(busy[:32]) if isinstance(busy, list) and all(isinstance(value, str) for value in busy[:32]) else set()
+            if body.get('wait') is True and not any(command['id'] not in busy for command in commands) and body.get('output_token') == _playback_output.snapshot()['output_token']:
                 # Opt-in keeps older clients' six-second HTTP deadline compatible.
                 requested_wait = body.get('wait_seconds', 2)
                 wait_seconds = min(8, max(0, requested_wait)) if isinstance(requested_wait, (int, float)) and not isinstance(requested_wait, bool) else 2
-                _mobile_devices.wait(body.get('revision'), wait_seconds)
+                if body.get('bounded_wait') is True:
+                    if not _mobile_devices.wait_bounded(body.get('revision'), wait_seconds):
+                        retry_ms = 750
+                else:
+                    _mobile_devices.wait(body.get('revision'), wait_seconds)
                 commands = _mobile_devices.pending_commands(owner, session_id)
                 _reconcile_mobile_output()
             _reconcile_mobile_output()
@@ -2470,7 +2477,7 @@ def app_mobile_devices():
                     and output['output_owner'] == owner and not output['handoff_pending']
                     and body.get('accepted_token') != output['output_token']):
                 extra['now_playing'] = _mobile_handoff_snapshot(output['output_token'])
-            return jsonify(devices=_mobile_devices.list(), commands=commands, revision=_mobile_devices.revision, presence_wait_seconds=8, **extra, **output)
+            return jsonify(devices=_mobile_devices.list(), commands=commands, revision=_mobile_devices.revision, presence_wait_seconds=8, presence_retry_ms=retry_ms, **extra, **output)
         if action == 'resume':
             # Explicit Play may recover an orphaned output, but background
             # presence never grants another phone permission to start audio.
@@ -2506,17 +2513,39 @@ def app_mobile_devices():
                         _now_playing.update(playing=False, playback_confirmed=True, playback_processing=False)
                 _notify_sse()
             return jsonify(ok=True)
-        if action == 'alexa':
+        if action in ('alexa', 'alexa_handoff'):
             before = _playback_output.snapshot()
             if body.get('output_token') != before['output_token']:
                 raise OutputConflict('Playback changed before this switch.')
             serial = str(body.get('serial') or '')
             if not serial or serial.startswith('mobile:'):
                 return error_response('Choose an Alexa device.', 400)
-            was_playing = bool(_get_now_playing().get('playing'))
-            if before['playback_output'] == 'alexa' and before['output_serial'] and before['output_serial'] != serial:
-                _pause_echo_for_mobile(before['output_serial'])
-            result = _claim_alexa_output(serial)
+            fast = action == 'alexa_handoff'
+            if fast:
+                if (before['playback_output'] != 'phone' or before['output_owner'] != owner
+                        or body.get('source_paused') is not True or before['handoff_pending']):
+                    raise OutputConflict('Only the paused source phone may acknowledge this handoff.')
+                position, was_playing = body.get('position_ms'), body.get('playing')
+                if isinstance(position, bool) or not isinstance(position, int) or position < 0 or not isinstance(was_playing, bool):
+                    return error_response('Invalid paused handoff cursor.', 400)
+                with _np_lock:
+                    # Bind the frozen cursor to the selected queue entry before
+                    # releasing its owner. A stale switch must not seek a new song.
+                    index = _now_playing.get('queue_index', -1)
+                    queue = _now_playing.get('queue') or []
+                    entry = queue[index] if 0 <= index < len(queue) else {}
+                    if (_now_playing.get('video_id') != body.get('video_id') or
+                            (entry.get('entry_id') and entry['entry_id'] != body.get('current_entry_id'))):
+                        raise OutputConflict('The song changed before this device switch.')
+                    # Ownership and cursor commit under the same lock.
+                    result = _claim_alexa_output(serial, expected_owner=owner,
+                        expected_token=before['output_token'], source_paused=True)
+                    _reset_progress(position)
+            else:
+                was_playing = bool(_get_now_playing().get('playing'))
+                if before['playback_output'] == 'alexa' and before['output_serial'] and before['output_serial'] != serial:
+                    _pause_echo_for_mobile(before['output_serial'])
+                result = _claim_alexa_output(serial)
             if was_playing:
                 current = _get_now_playing()
                 video = current.get('video_id')
