@@ -12,14 +12,15 @@
   let output = null, accepted = '', leaseUntil = 0, queue = [], index = -1;
   let ack = [], stopped = false, polling = null, generation = 0, lastReport = 0;
   let repeat = false, commandChain = Promise.resolve(), reportChain = Promise.resolve();
-  let changingSource = false, pendingSeek = null, seekingPlayback = false, desiredPlaying = false;
+  let changingSource = false, pendingSeek = null, seekingPlayback = false, desiredPlaying = false, resumePending = false;
   let presenceRevision = -1, pauseAck = null, reportSequence = 0;
   let pendingCurrent = null, mediaVideoId = '', preparingTrack = false, seekFeedbackUntil = 0;
   let mediaInstance = '';
+  let resumeAttempt = 0;
   function mediaState(snapshot) {
     if (!owns() || !queue[index] || changingSource || preparingTrack || mediaVideoId !== queue[index].video_id || snapshot.output_token !== accepted ||
         snapshot.video_id !== queue[index].video_id) return null;
-    const buffering = !audio.paused && audio.readyState < 3 && !(seekingPlayback && Date.now() < seekFeedbackUntil);
+    const buffering = resumePending || !audio.paused && audio.readyState < 3 && !(seekingPlayback && Date.now() < seekFeedbackUntil);
     return { playing: !audio.paused && !audio.ended, playback_processing: buffering,
       playback_confirmed: !buffering,
       position_ms: pendingSeek ? pendingSeek.position : Math.max(0, Math.round((audio.currentTime || 0) * 1000)) };
@@ -51,7 +52,7 @@
       action: replace ? 'start' : 'current', tracks: replace ? queue.map(item => ({...item})) : [],
       after: queue[index].video_id, queue_index: index, output_owner: id, output_token: token,
       position_ms: pendingSeek ? pendingSeek.position : Math.max(0, Math.round((audio.currentTime || 0) * 1000)),
-      playing: !audio.paused && !audio.ended, buffering: preparingTrack || !audio.paused && (audio.readyState < 3 && !(seekingPlayback && Date.now() < seekFeedbackUntil))
+      playing: !audio.paused && !audio.ended, buffering: resumePending || preparingTrack || !audio.paused && (audio.readyState < 3 && !(seekingPlayback && Date.now() < seekFeedbackUntil))
     };
     renderMedia();
     // Replace unsent current-state reports; queue publications remain ordered.
@@ -85,16 +86,23 @@
     applySeek();
   }
   function resume() {
-    desiredPlaying = true;
-    const playGeneration = generation;
+    desiredPlaying = true; resumePending = true;
+    const playGeneration = generation, attempt = ++resumeAttempt;
     // A cold download must not block pause, seeking, or the next selection.
-    Promise.resolve(audio.play()).then(() => {
+    let started;
+    try { started = audio.play(); }
+    catch (error) { resumePending = false; desiredPlaying = false; throw error; }
+    Promise.resolve(started).then(() => {
       if (generation !== playGeneration) return;
-      if (!owns()) { audio.pause(); return; }
+      if (attempt !== resumeAttempt) { if (!desiredPlaying) audio.pause(); return; }
+      if (!owns()) { resumePending = false; audio.pause(); return; }
+      if (!desiredPlaying) { resumePending = false; audio.pause(); return publish(); }
+      if (started && typeof started.then === 'function') resumePending = false;
       return publish();
     }).catch(error => {
-      if (generation !== playGeneration || error.name === 'AbortError') return;
-      desiredPlaying = false; audio.pause(); publish().catch(() => {});
+      if (generation !== playGeneration || attempt !== resumeAttempt) return;
+      if (error.name === 'AbortError') { resumePending = false; publish().catch(() => {}); return; }
+      desiredPlaying = false; resumePending = false; audio.pause(); publish().catch(() => {});
       notify(error.name === 'NotAllowedError' ? 'Tap Play to allow audio in this browser.' : 'Could not load this track. Tap Play to retry.');
     });
   }
@@ -108,7 +116,7 @@
     changingSource = true;
     audio.pause();
     index = nextIndex;
-    pendingSeek = null; seekingPlayback = false; desiredPlaying = playing;
+    pendingSeek = null; seekingPlayback = false; resumePending = false; desiredPlaying = playing;
     audio.src = window.browserAudioUrl(selected.video_id);
     mediaVideoId = selected.video_id; preparingTrack = false;
     changingSource = false;
@@ -116,6 +124,24 @@
     if (playing) resume();
     await publish();
     prefetchNext();
+    enrichCurrentMetadata();
+  }
+  function enrichCurrentMetadata() {
+    const current = queue[index], capturedGeneration = generation, capturedToken = accepted;
+    const missingTitle = item => !item.title || item.title === item.video_id ||
+      ['youtube track', 'youtube video', 'loading…'].includes(item.title.trim().toLowerCase());
+    if (!current || !missingTitle(current) && current.duration_ms > 0) return;
+    api('/api/track/' + encodeURIComponent(current.video_id) + '/metadata').then(metadata => {
+      if (!metadata || !owns() || generation !== capturedGeneration || accepted !== capturedToken || queue[index] !== current) return;
+      let changed = false;
+      for (const item of queue.filter(item => item.video_id === current.video_id)) {
+        if (missingTitle(item) && metadata.title) { item.title = metadata.title; changed = true; }
+        for (const key of ['artist', 'thumbnail', 'duration_ms']) {
+          if (!item[key] && metadata[key]) { item[key] = metadata[key]; changed = true; }
+        }
+      }
+      if (changed) return publish(true);
+    }).catch(() => { /* Audio stays usable when metadata is unavailable. */ });
   }
   function prefetchNext() {
     const next = queue[index + 1];
@@ -165,7 +191,7 @@
     if (!owns()) throw new Error('This browser no longer owns playback.');
     if (action !== 'volume' && window.clearHandoffFeedback) window.clearHandoffFeedback();
     if (action === 'clear') {
-      generation++; pendingSeek = null; desiredPlaying = false; seekingPlayback = false; changingSource = true; audio.pause(); audio.removeAttribute('src'); queue = []; index = -1; changingSource = false;
+      generation++; pendingSeek = null; desiredPlaying = false; resumePending = false; seekingPlayback = false; changingSource = true; audio.pause(); audio.removeAttribute('src'); queue = []; index = -1; changingSource = false;
       await api('/api/app/queue/', { action: 'clear', output_owner: id, output_token: accepted, report_sequence: ++reportSequence });
       return;
     }
@@ -196,7 +222,7 @@
       if (!queue[index]) return;
       if (!audio.src || audio.error || audio.ended) await start(index);
       else { resume(); await publish(); }
-    } else if (action === 'pause') { desiredPlaying = false; audio.pause(); await publish(); }
+    } else if (action === 'pause') { ++resumeAttempt; desiredPlaying = false; resumePending = false; audio.pause(); await publish(); }
     else if (action === 'next' || action === 'previous') {
       if (action === 'previous' && audio.currentTime > 3) { seek(0); await publish(); }
       else if (queue[index + (action === 'next' ? 1 : -1)]) await start(index + (action === 'next' ? 1 : -1));
@@ -224,8 +250,21 @@
       queue.splice(action === 'next_items' ? index + 1 : queue.length, 0, ...resolved);
       await publish(true);
     } else if (action === 'remove') {
-      const at = Number(payload.index);
-      if (!Number.isInteger(at) || at < 0 || at >= queue.length) throw new Error('Queue changed. Retry removal.');
+      let at = typeof payload.index === 'number' ? payload.index : NaN;
+      const entry = payload.id || payload.entry_id;
+      if (entry) {
+        const matches = queue.map((item, position) => item.entry_id === entry ? position : -1).filter(position => position >= 0);
+        const exact = matches.length === 1 ? matches[0] : -1;
+        if (matches.length > 1) throw new Error('Queue changed. Retry removal.');
+        const videos = queue.map((item, position) => item.video_id === entry ? position : -1).filter(position => position >= 0);
+        if (exact >= 0) at = exact;
+        else if (Number.isInteger(at) && queue[at] && queue[at].video_id === entry) { /* Bound legacy index. */ }
+        else if (videos.length === 1) at = videos[0];
+        else throw new Error('Queue changed. Retry removal.');
+      }
+      if (!Number.isInteger(at) || at < 0 || at >= queue.length ||
+          payload.video_id && queue[at].video_id !== payload.video_id) throw new Error('Queue changed. Retry removal.');
+      const wasPlaying = desiredPlaying && !audio.paused;
       const removedCurrent = at === index;
       if (removedCurrent) { generation++; changingSource = true; audio.pause(); changingSource = false; pendingSeek = null; }
       queue.splice(at, 1);
@@ -237,7 +276,7 @@
       }
       if (index >= queue.length) index = queue.length - 1;
       await publish(true);
-      if (removedCurrent) await start(index);
+      if (removedCurrent) await start(index, wasPlaying);
     } else if (action === 'reorder') {
       const from = Number(payload.from_index ?? payload.from), to = Number(payload.to_index ?? payload.to);
       if (![from, to].every(n => Number.isInteger(n) && n >= 0 && n < queue.length)) throw new Error('Queue changed. Retry reordering.');
@@ -282,7 +321,7 @@
       const previous = output;
       output = response;
       if (response.output_owner !== id || response.handoff_pending || response.playback_output !== 'phone') {
-        generation++; audio.pause(); leaseUntil = 0;
+        generation++; resumePending = false; audio.pause(); leaseUntil = 0;
         if (pauseAck && (!response.handoff_pending || pauseAck.output_token !== response.output_token)) pauseAck = null;
         if (previous && previous.output_owner === id && response.handoff_pending && !pauseAck) {
           pauseAck = { action: 'ack', output_owner: id, output_token: response.output_token,
@@ -377,13 +416,13 @@
   });
   for (const event of ['playing', 'pause', 'waiting', 'seeked']) audio.addEventListener(event, () => {
     if (!owns() || changingSource) return;
-    if (event === 'playing') seekingPlayback = false;
+    if (event === 'playing') { seekingPlayback = false; resumePending = false; }
     if (event === 'pause' && audio.paused) desiredPlaying = false;
     publish().then(() => {
       if (window.schedulePollNowPlaying) window.schedulePollNowPlaying(0);
     }).catch(() => {});
   });
-  audio.addEventListener('error', () => { desiredPlaying = false; audio.pause(); publish().catch(() => {}); notify('Audio could not load. Tap Play to retry.'); });
+  audio.addEventListener('error', () => { desiredPlaying = false; resumePending = false; audio.pause(); publish().catch(() => {}); notify('Audio could not load. Tap Play to retry.'); });
   // Independent safety clock: hung HTTP requests cannot extend audible ownership.
   const watchdog = setInterval(() => { if (!owns()) audio.pause(); }, 500);
   async function tick() {
@@ -393,8 +432,10 @@
     if (!stopped) setTimeout(tick, failed ? 1000 : presenceRetryMs);
   }
   window.addEventListener('pagehide', () => {
-    stopped = true; generation++; audio.pause(); clearInterval(watchdog);
-    api('/api/app/devices/', { action: 'offline', device_id: id, session_id: session }).catch(() => {});
+    const position = pendingSeek ? pendingSeek.position : Math.round((audio.currentTime || 0) * 1000);
+    stopped = true; generation++; resumePending = false; audio.pause(); clearInterval(watchdog);
+    api('/api/app/devices/', { action: 'offline', reason: 'pagehide', device_id: id, session_id: session,
+      output_token: accepted, position_ms: position }).catch(() => {});
   });
   window.addEventListener('pageshow', event => { if (event.persisted) window.location.reload(); });
   window.browserPlayback = { id, audio, owns, execute, poll, mediaState };

@@ -4,10 +4,10 @@ const vm = require('vm');
 const path = require('path');
 
 async function main() {
-  let reportGate = null, presenceGate = null, failAckOnce = false;
+  let reportGate = null, presenceGate = null, metadataGate = null, failAckOnce = false;
   let pending = false;
   let now = 1000, owner = 'browser-id1', token = 'lease1', sequence = 0, commands = [];
-  const calls = [], timers = [], events = {};
+  const calls = [], timers = [], events = {}, windowEvents = {};
   const audio = {
     paused: true, ended: false, currentTime: 0, volume: 1, readyState: 4, src: '',
     pause() { this.paused = true; },
@@ -18,6 +18,7 @@ async function main() {
     output_token: token, handoff_pending: pending, phone_lease_ms: 20000 });
   const api = async (url, body) => {
     calls.push({url, body});
+    if (url.startsWith('/api/track/') && metadataGate) return await metadataGate;
     if (url === '/api/app/devices/') {
       if (body.wait && presenceGate) await presenceGate;
       return { ...state(), commands, now_playing: {queue: []} };
@@ -29,7 +30,7 @@ async function main() {
     if (url === '/api/app/queue/' && reportGate) await reportGate;
     return {ok: true};
   };
-  const window = { api, crypto: {}, Audio: function () { return audio; }, addEventListener() {},
+  const window = { api, crypto: {}, Audio: function () { return audio; }, addEventListener(name, handler) { windowEvents[name] = handler; },
     browserAudioUrl: id => '/audio/?video_id=' + id + '&wait=1' };
   const context = { window, Audio: window.Audio, crypto: { randomUUID: () => 'id' + (++sequence) },
     Date: { now: () => now }, setInterval: fn => { timers.push(fn); return 1; },
@@ -128,6 +129,49 @@ async function main() {
   assert.equal(audio.paused, false, 'Superseded playback failure must not pause the latest selection');
   audio.play = originalPlay; audio.pause = originalPause;
   await player.execute('queue', {queue_items: [{video_id: 'AAAAAAAAAAA'}]});
+  // Entry identities distinguish duplicate videos, and stale/ambiguous edits fail safely.
+  await player.execute('queue', {queue_items: [
+    {video_id:'AAAAAAAAAAA', entry_id:'first'}, {video_id:'AAAAAAAAAAA', entry_id:'second'},
+    {video_id:'BBBBBBBBBBB', entry_id:'third'}]});
+  await assert.rejects(player.execute('remove', {id:'AAAAAAAAAAA'}), /Queue changed/);
+  await assert.rejects(player.execute('remove', {index:true}), /Queue changed/);
+  await assert.rejects(player.execute('remove', {id:'second', video_id:'BBBBBBBBBBB'}), /Queue changed/);
+  await player.execute('remove', {id:'second'});
+  assert.equal(calls.filter(call => call.url === '/api/app/queue/').at(-1).body.tracks.length, 2);
+  await player.execute('pause', {});
+  await player.execute('remove', {id:'first'});
+  assert(audio.paused, 'Deleting a paused current entry must not start its replacement');
+  assert.equal(audio.src, '/audio/?video_id=BBBBBBBBBBB&wait=1');
+  let finishResume;
+  audio.play = function () { return new Promise(resolve => { finishResume = () => { this.paused = false; resolve(); }; }); };
+  await player.execute('play', {});
+  assert(player.mediaState({output_token:token, video_id:'BBBBBBBBBBB'}).playback_processing, 'Resume must show loading while play() is pending');
+  await player.execute('pause', {});
+  finishResume();
+  for (let n = 0; n < 20; n++) await Promise.resolve();
+  assert(audio.paused, 'An old resume promise must not override a newer pause');
+  assert(!player.mediaState({output_token:token, video_id:'BBBBBBBBBBB'}).playback_processing, 'Canceled resume must clear its loading indicator');
+  audio.play = originalPlay;
+  await player.execute('queue', {queue_items:[{video_id:'AAAAAAAAAAA'}]});
+  let finishMetadata;
+  metadataGate = new Promise(resolve => { finishMetadata = resolve; });
+  await player.execute('queue', {queue_items:[{video_id:'AAAAAAAAAAA', title:'YouTube track'}]});
+  await player.execute('seek', {position_ms:7000});
+  finishMetadata({title:'Recovered title',artist:'Recovered artist',duration_ms:123000});
+  for (let n = 0; n < 40; n++) await Promise.resolve();
+  let recovered = calls.filter(call => call.url === '/api/app/queue/' && call.body.action === 'start').at(-1).body;
+  assert.equal(recovered.tracks[0].title, 'Recovered title');
+  assert.equal(recovered.tracks[0].duration_ms, 123000);
+  assert.equal(recovered.position_ms, 7000, 'Metadata repair must preserve a later seek');
+  metadataGate = new Promise(resolve => { finishMetadata = resolve; });
+  await player.execute('queue', {queue_items:[{video_id:'AAAAAAAAAAA',title:'YouTube track'}]});
+  await player.execute('queue', {queue_items:[{video_id:'BBBBBBBBBBB',title:'New song',duration_ms:20000}]});
+  finishMetadata({title:'Stale title',duration_ms:999000});
+  for (let n = 0; n < 40; n++) await Promise.resolve();
+  recovered = calls.filter(call => call.url === '/api/app/queue/' && call.body.action === 'start').at(-1).body;
+  assert.equal(recovered.tracks[0].title,'New song', 'Late metadata must not overwrite the next song');
+  metadataGate = null;
+  await player.execute('queue', {queue_items:[{video_id:'AAAAAAAAAAA'}]});
   // A slow old report must complete before a newer seek reaches the server.
   let releaseReport;
   reportGate = new Promise(resolve => { releaseReport = resolve; });
@@ -199,6 +243,13 @@ async function main() {
   await player.poll();
   assert(!player.owns());
   assert(audio.paused);
+  owner = player.id; token = 'lease6';
+  await player.poll();
+  windowEvents.pagehide();
+  const offline = calls.filter(call => call.url === '/api/app/devices/' && call.body.action === 'offline').at(-1).body;
+  assert.equal(offline.reason, 'pagehide');
+  assert.equal(offline.output_token, 'lease6', 'Unload must identify the accepted playback lease');
+  assert(Number.isInteger(offline.position_ms));
   console.log('PASS browser playback: local queue, seek, removal, fenced clear, lease expiry and handoff');
 }
 main().catch(error => { console.error(error); process.exitCode = 1; });

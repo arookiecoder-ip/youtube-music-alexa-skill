@@ -30,6 +30,14 @@ class Streaming(unittest.TestCase):
         self.stream.resolve = Mock(return_value=MEDIA)
         self.addCleanup(self.stream.close)
 
+    def test_public_metadata_never_exposes_the_signed_stream_url(self):
+        self.stream.resolve.return_value = {**MEDIA, 'metadata': {'title':'Song', 'duration_ms':123000, 'url':MEDIA['url'], 'cookies':'private'}}
+        result = self.stream.metadata(VID)
+        self.assertEqual(result['title'], 'Song')
+        self.assertEqual(result['duration_ms'], 123000)
+        self.assertNotIn('url', result)
+        self.assertNotIn('cookies', result)
+
     def test_first_bytes_and_close_uniterated_release_socket_and_slot(self):
         up=Upstream();self.opener.open.return_value=up
         relay=self.stream.open(VID)

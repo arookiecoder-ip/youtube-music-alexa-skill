@@ -10,7 +10,7 @@ function fixture(options = {}) {
   const client = { session:{player:{}}, getBasicInfo:async(id, profile)=>{
     state.calls++; assert.equal(profile.client,'YTMUSIC');
     if(state.failure)throw new Error('secret signed URL must never be logged');
-    return {chooseFormat:opts=>{assert.equal(opts.itag,140);return format;}};
+    return {basic_info:{title:'Resolved title',author:'Artist',duration:123,thumbnail:[{url:'https://images.example/cover.jpg'}]},chooseFormat:opts=>{assert.equal(opts.itag,140);return format;}};
   }};
   const resolve = createResolver({createClient:async()=>{state.sessions++;return client;},
     readFile:()=>'.youtube.com\tTRUE\t/\tTRUE\t0\tSID\tprivate',
@@ -92,4 +92,12 @@ test('bounds simultaneous distinct resolutions instead of unbounded queueing',as
  const tasks=['aaaaaaaaaaa','bbbbbbbbbbb','ccccccccccc','ddddddddddd'].map(video_id=>resolve({...request,video_id}).catch(()=>{}));
  await new Promise(r=>setImmediate(r));
  await assert.rejects(resolve(request),/busy/);release();await Promise.all(tasks);
+});
+
+test('resolver returns public title/duration alongside an already-resolved stream',async()=>{
+  const {resolve,request}=fixture();
+  const result=await resolve(request);
+  assert.equal(result.metadata.title,'Resolved title');
+  assert.equal(result.metadata.duration_ms,123000);
+  assert(!Object.hasOwn(result.metadata,'url'));
 });

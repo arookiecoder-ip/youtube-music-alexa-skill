@@ -2433,12 +2433,9 @@ def app_mobile_devices():
             with _np_lock:
                 before = _playback_output.snapshot()
                 current = _now_playing
-                online = {d['id'] for d in _mobile_devices.list()}
-                missing_phone = before['playback_output'] == 'phone' and (
-                    not before['output_owner'] or before['output_owner'] not in online)
-                # A chosen paused output is still a preference. Only orphaned phones
-                # or an empty initial session fall back on a foreground visit.
-                selected_session = bool(current.get('video_id')) and not missing_phone
+                # A saved queue requires explicit resume, even if its browser closed.
+                # Only an empty initial session may follow a foreground visit.
+                selected_session = bool(current.get('video_id') or current.get('queue'))
                 blocked = (current.get('playing') or current.get('playback_processing') or before['handoff_pending'] or
                     selected_session)
                 selected = not blocked
@@ -2504,7 +2501,26 @@ def app_mobile_devices():
         if action == 'offline':
             removed = _mobile_devices.offline(owner, session_id)
             if removed:
-                _reconcile_mobile_output(closed_owner=owner)
+                with _np_lock:
+                    output = _playback_output.snapshot()
+                    deliberate = (body.get('reason') == 'pagehide' and owner.startswith('browser-')
+                        and output['playback_output'] == 'phone' and output['output_owner'] == owner
+                        and not output['handoff_pending'] and body.get('output_token') == output['output_token'])
+                    if deliberate:
+                        position = body.get('position_ms')
+                        if isinstance(position, int) and not isinstance(position, bool) and position >= 0:
+                            _reset_progress(position)
+                        else:
+                            _reset_progress(_computed_position_ms())
+                        _now_playing.update(playing=False, playback_confirmed=True, playback_processing=False)
+                        _now_playing['playback_revision'] = int(_now_playing.get('playback_revision', 0)) + 1
+                        _now_playing['updated_at'] = time.time()
+                        error = _now_playing.get('playback_error') or {}
+                        if isinstance(error, dict) and error.get('type') == 'device_offline':
+                            _now_playing.pop('playback_error', None)
+                            _now_playing.pop('_playback_error_event', None)
+                if not deliberate:
+                    _reconcile_mobile_output(closed_owner=owner)
                 _playback_output.close_phone(owner)
                 with _np_lock:
                     latest = _playback_output.snapshot()
@@ -2986,35 +3002,56 @@ def _metadata_from_queue(video_id):
 def _lookup_video_metadata(video_id):
     if not _valid_video_id(video_id):
         return None
-    queued = _metadata_from_queue(video_id)
-    if queued:
-        return queued
-    try:
-        ytmusic = _get_ytmusic()
-        info = ytmusic.get_song(video_id)
-        details = (info or {}).get('videoDetails') or {}
-        title = details.get('title') or ''
-        author = _clean_artist_credit(details.get('author'))
-        thumbs = details.get('thumbnail', {}).get('thumbnails', [])
-        thumb = thumbs[-1] if thumbs else None
+    result = dict(_metadata_from_queue(video_id) or {})
+    result['video_id'] = video_id
+    result.setdefault('duration_ms', 0)
+    def title_known(value):
+        return bool(value and str(value).strip() and str(value).strip() != video_id and
+                    str(value).strip().lower() not in ('youtube video', 'youtube track', 'loading…') and
+                    (str(value).strip().lower() != 'untitled' or result.get('artist')))
+    def duration(value):
         try:
-            duration_ms = int(details.get('lengthSeconds') or 0) * 1000
-        except (TypeError, ValueError):
-            duration_ms = 0
-        if title:
-            return {
-                'title': title,
-                'artist': author,
-                'video_id': video_id,
-                'thumbnail': thumb,
-                'duration_ms': duration_ms,
-            }
+            return max(0, int(value)) if not isinstance(value, bool) else 0
+        except (TypeError, ValueError, OverflowError):
+            return 0
+    def merge(candidate):
+        if not isinstance(candidate, dict):
+            return
+        if not title_known(result.get('title')) and candidate.get('title'):
+            result['title'] = candidate['title']
+        for key in ('artist', 'artists', 'thumbnail'):
+            if not result.get(key) and candidate.get(key):
+                result[key] = candidate[key]
+        if not duration(result.get('duration_ms')) and duration(candidate.get('duration_ms')):
+            result['duration_ms'] = duration(candidate['duration_ms'])
+        if candidate.get('is_live') is True:
+            result['is_live'] = True
+    def complete():
+        return title_known(result.get('title')) and (duration(result.get('duration_ms')) > 0 or result.get('is_live') is True)
+    if complete() and result.get('artist'):
+        return result
+    relay = globals().get('_youtube_stream')
+    if relay is not None and getattr(relay, 'enabled', False):
+        try:
+            merge(relay.metadata(video_id))
+        except Exception:
+            logger.debug('Streaming metadata unavailable for %s', video_id)
+    if complete():
+        return result
+    try:
+        details = (_get_ytmusic().get_song(video_id) or {}).get('videoDetails') or {}
+        thumbs = details.get('thumbnail', {}).get('thumbnails') or []
+        merge({'title': details.get('title'), 'artist': _clean_artist_credit(details.get('author')),
+               'thumbnail': thumbs[-1] if thumbs else None,
+               'duration_ms': duration(details.get('lengthSeconds')) * 1000})
     except Exception:
-        logger.exception("")
-    # ytmusicapi only knows YT Music catalog tracks; arbitrary YouTube links
-    # (what a pasted URL usually is) have no get_song entry, so fall back to
-    # yt-dlp for the title/artist/thumbnail instead of showing "YouTube video".
-    return Supporting.probe_metadata(video_id)
+        logger.debug('Catalog metadata unavailable for %s', video_id)
+    if not complete():
+        try:
+            merge(Supporting.probe_metadata(video_id))
+        except Exception:
+            logger.debug('Fallback metadata unavailable for %s', video_id)
+    return result if title_known(result.get('title')) else None
 
 
 def _current_queue_for_video(video_id):
@@ -4691,119 +4728,54 @@ _radio_refresh_done_lock = threading.Lock()
 
 
 def _lookup_and_update_np(video_id):
-    """Fallback: look up song metadata from video_id."""
+    """Fill missing current/queue metadata without moving a playback cursor."""
     if not _valid_video_id(video_id):
         return
-    # Single-flight per video_id: /proxy/, /alexa/play_queue/, the 'started'
-    # webhook, and the finish-promoter can all ask for the same lookup within
-    # one play cycle; one run is enough, and every run is a YTMusic round trip.
     with _np_lookup_lock:
         if video_id in _np_lookup_inflight:
             return
         _np_lookup_inflight.add(video_id)
     try:
-        ytmusic = _get_ytmusic()
-        info = ytmusic.get_song(video_id)
-        details = (info or {}).get('videoDetails') or {}
-        title = details.get('title') or ''
-        author = _clean_artist_credit(details.get('author'))
-        structured_artists = []
-        # `get_song()` exposes the uploader in videoDetails.author, not always
-        # the recording artist or its channel ID. A watch-playlist lookup is a
-        # best-effort exact-video enrichment for tracks that reached playback
-        # without queue metadata; failures still use the existing author fallback.
-        try:
-            watch = ytmusic.get_watch_playlist(videoId=video_id, limit=25) or {}
-            watch_tracks = watch.get('tracks') or []
-            watch_track = next((track for track in watch_tracks
-                                if track.get('videoId') == video_id), None)
-            if watch_track:
-                structured_artists = _artist_entries_from_item(watch_track)
-                if not author:
-                    author = _clean_artist_credit(watch_track.get('author'))
-        except Exception:
-            logger.debug("exact artist lookup failed for %s", video_id, exc_info=True)
-        thumb = ''
-        thumbs = details.get('thumbnail', {}).get('thumbnails', [])
-        if thumbs:
-            thumb = thumbs[-1].get('url', '')
-        # lengthSeconds drives the progress bar's total. Absent/garbage -> 0
-        # (bar falls back to counting elapsed time with no fill target).
-        try:
-            duration_ms = int(details.get('lengthSeconds') or 0) * 1000
-        except (TypeError, ValueError):
-            duration_ms = 0
-        # ytmusicapi only knows YT Music catalog tracks. For a pasted/arbitrary
-        # YouTube link get_song returns no title (and often no duration), so fall
-        # back to yt-dlp for whatever's missing — but only while this is still the
-        # current track, since the probe is a subprocess and can take a moment.
-        still_current = _get_now_playing().get('video_id') == video_id
-        if still_current and (not title or not duration_ms):
-            probed = Supporting.probe_metadata(video_id)
-            if probed:
-                if not title:
-                    title = probed.get('title') or ''
-                    author = probed.get('artist') or author
-                    thumb = _thumbnail_url(probed.get('thumbnail')) or thumb
-                if not duration_ms:
-                    duration_ms = probed.get('duration_ms', 0)
-        if title:
-            # The lookup can be slow; if the track changed while it ran, writing
-            # these fields would revert now_playing to the previous song (wrong
-            # card + progress reset) even though the queue moved on. Drop it.
-            current = _get_now_playing()
-            if current.get('video_id') != video_id:
-                sys.stderr.write(f"[np] lookup discarded (track changed): {video_id}\n")
-                sys.stderr.flush()
+        metadata = _lookup_video_metadata(video_id)
+        if not metadata:
+            return
+        metadata = dict(metadata)
+        if metadata.get('thumbnail'):
+            metadata['thumbnail'] = _thumbnail_url(metadata['thumbnail'])
+        with _np_lock:
+            if _now_playing.get('video_id') != video_id:
                 return
-            # Playlist/search metadata is more authoritative than videoDetails.
-            # Its `author` field identifies the uploader/channel and can contain
-            # a generic label such as "Release" instead of the recording artist.
-            # Preserve known metadata and use the lookup only to fill blanks.
-            fields = {'video_id': video_id}
-            if not current.get('title') or current.get('title') == video_id:
-                fields['title'] = title
-            current_artist = str(current.get('artist') or '').strip()
-            lookup_artist = _clean_artist_credit(author)
-            current_artists = current.get('artists') or []
-            if structured_artists:
-                # Merge exact IDs by artist name so a partial lookup cannot
-                # erase a collaborator ID already received from the queue.
-                known_by_name = {
-                    str(entry.get('name') or '').strip().lower(): entry
-                    for entry in current_artists if isinstance(entry, dict)
-                }
-                merged_artists = []
-                for entry in structured_artists:
-                    key = str(entry.get('name') or '').strip().lower()
-                    merged_artists.append({
-                        'name': entry.get('name', ''),
-                        'id': entry.get('id') or (known_by_name.get(key) or {}).get('id', ''),
-                    })
-                fields['artists'] = merged_artists
-                if not current_artist:
-                    fields['artist'] = _artist_credit_from_list(
-                        merged_artists, fallback=lookup_artist
-                    )
-            elif not current_artist and lookup_artist:
-                fields['artist'] = lookup_artist
-                fields['artists'] = _artist_entries_from_item({'artist': lookup_artist})
-            # Don't overwrite an already-known thumbnail with a blank one just
-            # because this particular lookup came back without one (ytmusicapi
-            # occasionally returns an empty thumbnails list transiently).
-            if thumb and not current.get('thumbnail'):
-                fields['thumbnail'] = thumb
-            if duration_ms:
-                fields['duration_ms'] = duration_ms
-            _update_now_playing(**fields)
-            sys.stderr.write(f"[np] lookup OK: {title!r} dur={duration_ms}ms\n")
-        else:
-            sys.stderr.write(f"[np] lookup: no title for {video_id}\n")
-        sys.stderr.flush()
-    except Exception as e:
-        sys.stderr.write(f"[np] lookup FAILED: {e}\n")
-        sys.stderr.flush()
-        logger.exception("")
+            fields = {}
+            for target in [_now_playing] + [row for row in _now_playing.get('queue', []) if row.get('video_id') == video_id]:
+                title = str(target.get('title') or '').strip()
+                if (not title or title == video_id or title.lower() in ('youtube video', 'youtube track', 'untitled', 'loading…')) and metadata.get('title'):
+                    target['title'] = metadata['title']
+                for key in ('artist', 'artists', 'thumbnail', 'duration_ms'):
+                    if not target.get(key) and metadata.get(key):
+                        target[key] = metadata[key]
+            fields.update(title=_now_playing.get('title', ''), artist=_now_playing.get('artist', ''),
+                thumbnail=_now_playing.get('thumbnail', ''), duration_ms=_now_playing.get('duration_ms', 0))
+            _now_playing.update(fields, updated_at=time.time())
+        _notify_sse()
+        # Channel IDs are useful but cannot delay the title and duration above.
+        try:
+            watch = _get_ytmusic().get_watch_playlist(videoId=video_id, limit=25) or {}
+            row = next((item for item in watch.get('tracks', []) if item.get('videoId') == video_id), None)
+            credits = _artist_entries_from_item(row) if row else []
+        except Exception:
+            credits = []
+        if credits:
+            with _np_lock:
+                if _now_playing.get('video_id') != video_id:
+                    return
+                known = {str(item.get('name', '')).strip().lower(): item for item in _now_playing.get('artists', []) if isinstance(item, dict)}
+                merged = [dict(item, id=item.get('id') or known.get(str(item.get('name', '')).strip().lower(), {}).get('id', '')) for item in credits]
+                _now_playing.update(artists=merged, updated_at=time.time())
+                if not _now_playing.get('artist'):
+                    _now_playing['artist'] = _artist_credit_from_list(merged)
+            _notify_sse()
+    except Exception:
+        logger.exception('Current metadata enrichment failed')
     finally:
         with _np_lookup_lock:
             _np_lookup_inflight.discard(video_id)
@@ -9807,10 +9779,6 @@ async def api_track_metadata(video_id):
     metadata = await asyncio.to_thread(_lookup_video_metadata, video_id)
     if not metadata:
         return jsonify({'error': 'Song metadata unavailable.'}), 404
-    if not metadata.get('duration_ms'):
-        probed = await asyncio.to_thread(Supporting.probe_metadata, video_id)
-        if probed and probed.get('duration_ms'):
-            metadata = {**metadata, 'duration_ms': probed['duration_ms']}
     return jsonify(metadata)
 
 

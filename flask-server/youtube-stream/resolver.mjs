@@ -72,8 +72,16 @@ export function createResolver({ createClient = options => Innertube.create(opti
       const expiry = Number(url.searchParams.get('expire')) * 1000;
       const expires_at = Math.min(now()+300000, expiry ? expiry-60000 : now()+60000);
       if (expires_at <= now()) throw new Error('expired');
+      const basic = info.basic_info || {};
+      const thumbs = basic.thumbnail || basic.thumbnails || [];
+      const seconds = Number(basic.duration ?? basic.length_seconds);
+      const metadata = { video_id: video, title: String(basic.title || ''),
+        artist: String(basic.author || basic.channel?.name || ''),
+        thumbnail: Array.isArray(thumbs) ? String(thumbs.at(-1)?.url || '') : '',
+        duration_ms: Number.isFinite(seconds) && seconds > 0 ? Math.round(seconds * 1000) : 0,
+        is_live: basic.is_live === true };
       const result = { url: media, itag: 140, length: format.content_length,
-        modified: format.last_modified_ms, mime: 'audio/mp4', expires_at };
+        modified: format.last_modified_ms, mime: 'audio/mp4', expires_at, metadata };
       // A credential rotation while this awaited must not pollute the new cache.
       currentCache.set(key, result);
       while (currentCache.size > capacity) currentCache.delete(currentCache.keys().next().value);

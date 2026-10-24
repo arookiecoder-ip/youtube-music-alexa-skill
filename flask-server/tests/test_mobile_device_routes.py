@@ -312,16 +312,19 @@ class MobileDeviceRoutesTests(OutputRoutesTests):
         self.assertFalse(self.state['playing'])
         self.assertTrue(self.output.owns_phone('phone-one', response.json['output_token']))
 
-    def test_foreground_after_target_closed_selects_current_phone_silently(self):
+    def test_foreground_after_target_closed_requires_an_explicit_resume(self):
         self.test_alexa_to_remote_phone_preserves_active_playback_without_starting_echo()
         self.device('offline', owner='phone-two')
         self.command.reset_mock()
         queue = list(self.state['queue'])
         reply = self.device('foreground').json
-        self.assertTrue(reply['default_selected'])
-        self.assertEqual(reply['output_owner'], 'phone-one')
+        self.assertFalse(reply['default_selected'])
+        self.assertEqual(reply['output_owner'], '')
         self.assertFalse(self.state['playing'])
         self.assertEqual(self.state['queue'], queue)
+        explicit = self.device('resume', output_token=reply['output_token']).json
+        self.assertTrue(explicit['default_selected'])
+        self.assertEqual(explicit['output_owner'], 'phone-one')
         self.assertNotIn('playback_error', self.state)
         self.command.assert_not_called()
 
@@ -357,7 +360,7 @@ class MobileDeviceRoutesTests(OutputRoutesTests):
         self.command.assert_not_called()
 
     def test_repeated_idle_foreground_does_not_invalidate_current_phone_token(self):
-        self.state['video_id'] = ''
+        self.state.update(video_id='', queue=[])
         self.state.update(playing=False, playback_processing=False, _last_playback_activity_at=0)
         first = self.device('foreground').json
         second = self.device('foreground').json
@@ -545,3 +548,33 @@ class MobileDeviceRoutesTests(OutputRoutesTests):
             self.assertIn(reply.status_code, (400, 409))
             self.assertEqual(self.output.snapshot()['output_token'], claim['output_token'])
         dispatch.assert_not_called()
+
+    def test_browser_refresh_closes_silently_and_no_other_foreground_device_takes_the_queue(self):
+        self.device('online', owner='browser-one')
+        claim=self.client.post('/api/app/output/', json={'action':'claim','output_owner':'browser-one','serial':'echo-one'}).json
+        self.state.update(video_id=A, playing=True, position_ms=5000)
+        reply=self.device('offline', owner='browser-one', reason='pagehide', output_token=claim['output_token'], position_ms=8000)
+        self.assertEqual(reply.status_code,200)
+        self.assertFalse(self.state['playing'])
+        self.assertEqual(self.state['position_ms'],8000)
+        self.assertFalse(self.state.get('playback_error'))
+        foreground=self.device('foreground', owner='phone-two').json
+        self.assertFalse(foreground['default_selected'])
+        self.assertEqual(self.output.snapshot()['output_owner'],'')
+        resumed=self.device('resume', owner='phone-two', output_token=self.output.snapshot()['output_token']).json
+        self.assertTrue(resumed['default_selected'])
+        self.assertEqual(self.output.snapshot()['output_owner'],'phone-two')
+
+    def test_stale_unload_cannot_close_a_new_browser_presence_session(self):
+        self.device('online', owner='browser-one')
+        self.output.phone('browser-one', lambda:None)
+        self.state.update(playing=True)
+        self.device('online', owner='browser-one', session_id='new-session')
+        reply=self.device('offline', owner='browser-one', reason='pagehide', output_token=self.output.snapshot()['output_token'])
+        self.assertEqual(reply.status_code, 200)
+        self.assertEqual(self.output.snapshot()['output_owner'], 'browser-one')
+        self.assertTrue(self.state['playing'])
+
+    def test_foreground_cannot_claim_a_saved_queue_with_no_current_video(self):
+        self.state.update(video_id='', playing=False, playback_processing=False)
+        self.assertFalse(self.device('foreground').json['default_selected'])

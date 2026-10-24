@@ -220,6 +220,11 @@ class YouTubeStream:
             with self._lock:
                 self._pending.pop(request_id, None)
 
+    def metadata(self, video_id):
+        """Public metadata only; signed transport URLs never leave the relay."""
+        metadata = self.resolve(video_id).get('metadata') or {}
+        return {key: metadata[key] for key in ('video_id', 'title', 'artist', 'thumbnail', 'duration_ms', 'is_live') if key in metadata}
+
     def open(self, video_id, method='GET', byte_range=None, if_range=None):
         if byte_range and not re.fullmatch(r'bytes=(?:\d+-\d*|-\d+)', byte_range):
             raise StreamError('invalid_range', 416)

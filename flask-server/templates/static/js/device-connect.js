@@ -43,8 +43,12 @@
     const active = output && (output.playback_output === 'phone' && output.output_owner
       ? 'mobile:' + output.output_owner : output.output_serial);
     const available = serial => devicesWithPhones.some(d => d.serial === serial && d.online);
-    const value = switching ? select.value : available(active) ? active :
-      available(preferred) ? preferred : local || devicesWithPhones.find(d => d.online)?.serial || preferred;
+    const orphan = output && output.playback_output === 'phone' &&
+      (!output.output_owner || !phones.some(d => d.id === output.output_owner));
+    // An abandoned browser session stays idle. Rendering a picker never grants
+    // another online device permission to take over its saved queue.
+    const value = switching ? select.value : orphan && local ? local : available(active) ? active :
+      available(preferred) ? preferred : local || '';
     return originalApply(devicesWithPhones, value);
   };
   function render() {
