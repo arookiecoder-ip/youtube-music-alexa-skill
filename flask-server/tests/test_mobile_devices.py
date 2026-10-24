@@ -249,3 +249,33 @@ def test_browser_waits_reserve_at_most_four_workers_and_release_slots_on_error()
         registry.wait_bounded(0, 100)
     assert registry.browser_wait_slots.acquire(blocking=False)
     assert registry.wait.call_args.args == (0, 2)
+
+class ForegroundFailoverTests(unittest.TestCase):
+    def test_only_live_foreground_devices_are_eligible_and_controller_has_priority(self):
+        clock=[10.0]
+        devices=MobileDevices(clock=lambda:clock[0],ttl=15)
+        devices.online('background','bg','Background',[])
+        devices.online('first','s1','First',[],foreground=True)
+        clock[0]+=1
+        devices.online('second','s2','Second',[],foreground=True)
+        self.assertEqual(devices.foreground_candidate('source'),'second')
+        self.assertEqual(devices.foreground_candidate('source','first'),'first')
+        devices.online('second','s2','Second',[],foreground=False)
+        self.assertEqual(devices.foreground_candidate('source'),'first')
+        devices.online('first','replacement','First',[])
+        self.assertEqual(devices.foreground_candidate('source'),'')
+        clock[0]+=16
+        self.assertEqual(devices.foreground_candidate('source'),'')
+
+    def test_delayed_visibility_and_heartbeats_cannot_reenable_a_hidden_phone(self):
+        devices=MobileDevices()
+        devices.online('phone','session','Phone',[],foreground=True,visibility_revision=1)
+        self.assertTrue(devices.visibility('phone','session',False,3))
+        devices.online('phone','session','Phone',[],foreground=True,visibility_revision=2)
+        self.assertEqual(devices.foreground_candidate('source'),'')
+        self.assertFalse(devices.visibility('phone','old-session',True,999))
+        self.assertTrue(devices.visibility('phone','session',True,4))
+        self.assertEqual(devices.foreground_candidate('source'),'phone')
+        revision=devices.revision
+        devices.online('phone','session','Phone',[],foreground=True,visibility_revision=5)
+        self.assertEqual(devices.revision,revision,'Unchanged visibility must not defeat presence long polling')

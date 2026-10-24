@@ -27,19 +27,52 @@ class MobileDevices:
             self._prune()
             return [{'id': key, 'name': value['name'], 'volume': value.get('volume'), 'volume_steps': value.get('volume_steps')} for key, value in self.devices.items()]
 
+    def visibility(self, device_id, session_id, foreground, revision=None):
+        if not isinstance(foreground, bool):
+            raise ValueError('foreground must be boolean')
+        if revision is not None and (isinstance(revision, bool) or not isinstance(revision, int) or revision < 0):
+            raise ValueError('invalid visibility revision')
+        with self.lock:
+            self._prune()
+            device = self.devices.get(device_id)
+            if device is None or device['session'] != session_id:
+                return False
+            changed = bool(device.get('foreground')) != foreground
+            if revision is not None and revision <= device.get('visibility_revision', -1):
+                return False
+            if revision is not None:
+                device['visibility_revision'] = revision
+            if foreground and not device.get('foreground'):
+                device['foreground_at'] = self.clock()
+            device['foreground'] = foreground
+            if changed:
+                self.wake()
+            return True
+
+    def foreground_candidate(self, excluded, preferred=''):
+        with self.lock:
+            self._prune()
+            candidates = {key: value for key, value in self.devices.items()
+                          if key != excluded and value.get('foreground')}
+            if preferred in candidates:
+                return preferred
+            return max(candidates, key=lambda key: candidates[key].get('foreground_at', 0), default='')
+
     def require_online(self, device_id):
         with self.lock:
             self._prune()
             if device_id not in self.devices:
                 raise ValueError('This device is offline. Refresh the device list.')
 
-    def online(self, device_id, session_id, name, ack=(), volume=None, volume_steps=None):
+    def online(self, device_id, session_id, name, ack=(), volume=None, volume_steps=None, foreground=None, visibility_revision=None):
         if not isinstance(session_id, str) or not 1 <= len(session_id) <= 128:
             raise ValueError('session_id required')
         if not isinstance(ack, list) or len(ack) > 32:
             raise ValueError('invalid command acknowledgements')
         if volume is not None and (isinstance(volume, bool) or not isinstance(volume, int) or not 0 <= volume <= 100):
             raise ValueError('invalid device volume')
+        if foreground is not None and not isinstance(foreground, bool):
+            raise ValueError('foreground must be boolean')
         if volume_steps is not None and (isinstance(volume_steps, bool) or not isinstance(volume_steps, int) or not 1 <= volume_steps <= 1000):
             raise ValueError('invalid volume steps')
         with self.lock:
@@ -63,6 +96,8 @@ class MobileDevices:
             if new_session or old_volume != (device.get('volume'), device.get('volume_steps')):
                 self.wake()
             device['until'] = self.clock() + self.ttl
+            if foreground is not None:
+                self.visibility(device_id, session_id, foreground, visibility_revision)
             device['commands'] = [c for c in device['commands'] if c['id'] not in ack and c['until'] > self.clock()]
             return copy.deepcopy(device['commands'])
 

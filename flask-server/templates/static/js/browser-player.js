@@ -16,7 +16,7 @@
   let presenceRevision = -1, pauseAck = null, reportSequence = 0;
   let pendingCurrent = null, mediaVideoId = '', preparingTrack = false, seekFeedbackUntil = 0;
   let mediaInstance = '';
-  let resumeAttempt = 0;
+  let resumeAttempt = 0, visibilityRevision = 0;
   function mediaState(snapshot) {
     if (!owns() || !queue[index] || changingSource || preparingTrack || mediaVideoId !== queue[index].video_id || snapshot.output_token !== accepted ||
         snapshot.video_id !== queue[index].video_id) return null;
@@ -312,7 +312,7 @@
       const sentAcks = ack.splice(0, 32);
       let response;
       try { response = await api('/api/app/devices/', {
-        action: 'online', device_id: id, session_id: session, name: 'Browser player',
+        action: 'online', device_id: id, session_id: session, name: 'Browser player', foreground: document.visibilityState === 'visible', visibility_revision: ++visibilityRevision,
         wait, wait_seconds: 2, bounded_wait: true, busy_commands: Array.from(processing), revision: presenceRevision, output_token: output && output.output_token,
         ack: sentAcks, volume: Math.round(audio.volume * 100), include_handoff_state: true, accepted_token: accepted
       }); } catch (error) { ack.unshift(...sentAcks); throw error; }
@@ -431,6 +431,9 @@
     try { await poll(true); } catch (_) { failed = true; if (!owns()) audio.pause(); }
     if (!stopped) setTimeout(tick, failed ? 1000 : presenceRetryMs);
   }
+  document.addEventListener && document.addEventListener('visibilitychange', () => {
+    api('/api/app/devices/', {action:'visibility', device_id:id, session_id:session, foreground:document.visibilityState === 'visible', visibility_revision:++visibilityRevision}).catch(() => {});
+  });
   window.addEventListener('pagehide', () => {
     const position = pendingSeek ? pendingSeek.position : Math.round((audio.currentTime || 0) * 1000);
     stopped = true; generation++; resumePending = false; audio.pause(); clearInterval(watchdog);

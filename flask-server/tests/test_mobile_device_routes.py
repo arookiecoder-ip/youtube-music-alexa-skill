@@ -578,3 +578,109 @@ class MobileDeviceRoutesTests(OutputRoutesTests):
     def test_foreground_cannot_claim_a_saved_queue_with_no_current_video(self):
         self.state.update(video_id='', playing=False, playback_processing=False)
         self.assertFalse(self.device('foreground').json['default_selected'])
+
+    def test_closed_browser_fails_over_to_current_foreground_phone_with_exact_cursor(self):
+        self.device('online', owner='browser-one')
+        self.device('online', owner='phone-two', foreground=True)
+        claim=self.output.phone('browser-one', lambda:None)
+        self.state.update(video_id=A, playing=True, position_ms=5000)
+        result=self.device('offline', owner='browser-one', reason='pagehide', output_token=claim['output_token'], position_ms=8123)
+        self.assertEqual(result.status_code,200)
+        self.assertEqual(self.output.snapshot()['output_owner'],'phone-two')
+        self.assertTrue(self.state['playing'])
+        self.assertEqual(self.state['position_ms'],8123)
+        self.assertFalse(self.state.get('playback_error'))
+        self.assertFalse(self.output.owns_phone('browser-one', claim['output_token']))
+        grant=self.device('online', owner='phone-two', include_handoff_state=True, accepted_token='').json
+        self.assertEqual(grant['now_playing']['video_id'],A)
+        self.assertTrue(grant['now_playing']['playing'])
+
+    def test_closed_paused_browser_selects_current_phone_without_autoplay(self):
+        self.device('online', owner='browser-one')
+        self.device('online', owner='phone-two', foreground=True)
+        claim=self.output.phone('browser-one', lambda:None)
+        self.state.update(video_id=A, playing=False, playback_processing=False)
+        self.device('offline', owner='browser-one', reason='pagehide', output_token=claim['output_token'])
+        self.assertEqual(self.output.snapshot()['output_owner'],'phone-two')
+        self.assertFalse(self.state['playing'])
+        self.assertFalse(self.state['playback_processing'])
+
+    def test_unconfirmed_network_absence_cannot_grant_two_audible_owners(self):
+        self.device('online', owner='browser-one')
+        self.device('online', owner='phone-two', foreground=True)
+        claim=self.output.phone('browser-one', lambda:None)
+        self.registry.offline('browser-one','session-browser-one')
+        self.namespace['_reconcile_mobile_output']()
+        self.assertEqual(self.output.snapshot()['output_owner'],'browser-one')
+        self.output.lease_until=0
+        self.namespace['_reconcile_mobile_output']()
+        self.assertEqual(self.output.snapshot()['output_owner'],'phone-two')
+        self.assertFalse(self.output.owns_phone('browser-one',claim['output_token']))
+
+    def test_offline_echo_selects_current_phone_only_after_server_verifies_presence(self):
+        self.output.serial='echo-one'
+        self.command.reset_mock()
+        self.namespace['alexa_remote'].remote.devices=Mock(return_value=([{'serial':'echo-one','online':False}],None))
+        result=self.device('foreground',offline_alexa='echo-one').json
+        self.assertTrue(result['default_selected'])
+        self.assertEqual(result['output_owner'],'phone-one')
+        self.assertFalse(self.state['playing'])
+        self.command.assert_not_called()
+
+    def test_online_echo_or_presence_error_cannot_be_claimed_as_offline(self):
+        self.output.serial='echo-one'
+        for response in [([{'serial':'echo-one','online':True}],None),(None,'network error')]:
+            self.namespace['alexa_remote'].remote.devices=Mock(return_value=response)
+            result=self.device('foreground',offline_alexa='echo-one').json
+            self.assertFalse(result['default_selected'])
+            self.assertEqual(result['playback_output'],'alexa')
+
+    def test_confirmed_offline_echo_does_not_block_explicit_phone_play_with_a_pause_error(self):
+        self.output.serial='echo-one'
+        self.state.update(video_id=A,playing=True)
+        self.namespace['alexa_remote'].remote.devices=Mock(return_value=([{'serial':'echo-one','online':False}],None))
+        self.command.return_value='offline'
+        self.command.side_effect=None
+        self.namespace['_pause_echo_for_mobile']('echo-one')
+        self.command.assert_not_called()
+        self.assertFalse(self.state['playing'])
+
+    def test_idle_closed_browser_still_selects_an_open_foreground_phone(self):
+        self.device('online',owner='browser-one')
+        self.device('online',owner='phone-two',foreground=True)
+        claim=self.output.phone('browser-one',lambda:None)
+        self.state.update(video_id='',queue=[],playing=False,playback_processing=False)
+        self.device('offline',owner='browser-one',reason='pagehide',output_token=claim['output_token'])
+        self.assertEqual(self.output.snapshot()['output_owner'],'phone-two')
+        self.assertFalse(self.state['playing'])
+
+    def test_closing_a_buffering_browser_preserves_its_play_intent(self):
+        self.device('online',owner='browser-one')
+        self.device('online',owner='phone-two',foreground=True)
+        claim=self.output.phone('browser-one',lambda:None)
+        self.state.update(video_id=A,playing=False,playback_processing=True,playback_confirmed=False)
+        self.device('offline',owner='browser-one',reason='pagehide',output_token=claim['output_token'])
+        self.assertEqual(self.output.snapshot()['output_owner'],'phone-two')
+        self.assertTrue(self.state['playing'])
+        self.assertTrue(self.state['playback_processing'])
+
+    def test_abrupt_loss_recovers_last_reported_cursor_instead_of_skipping_the_outage(self):
+        self.device('online',owner='browser-one')
+        self.device('online',owner='phone-two',foreground=True)
+        claim=self.output.phone('browser-one',lambda:None)
+        self.state.update(video_id=A,playing=True,position_ms=27000,
+            _phone_report_cursor=(claim['output_token'],'browser-one',12345))
+        self.registry.offline('browser-one','session-browser-one')
+        self.output.lease_until=0
+        self.namespace['_reconcile_mobile_output']()
+        self.assertEqual(self.output.snapshot()['output_owner'],'phone-two')
+        self.assertEqual(self.state['position_ms'],12345)
+
+    def test_offline_echo_with_missing_server_serial_does_not_strand_a_saved_queue(self):
+        self.output.serial=''
+        self.namespace['alexa_remote'].remote.devices=Mock(return_value=([{'serial':'echo-one','online':False}],None))
+        result=self.device('foreground',offline_alexa='echo-one').json
+        self.assertTrue(result['default_selected'])
+        self.assertEqual(result['output_owner'],'phone-one')
+        self.assertTrue(self.state['queue'])
+        self.assertFalse(self.state['playing'])

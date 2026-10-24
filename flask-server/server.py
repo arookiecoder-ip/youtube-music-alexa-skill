@@ -2352,7 +2352,14 @@ def _pause_echo_for_mobile(serial):
     if not serial:
         raise OutputConflict('Choose an Alexa device first.')
     _cancel_pending_dispatch(serial)
-    if alexa_remote.remote.command(serial, 'pause'):
+    offline = False
+    try:
+        devices, error = alexa_remote.remote.devices()
+        offline = not error and isinstance(devices, list) and any(
+            device.get('serial') == serial and device.get('online') is False for device in devices)
+    except Exception:
+        pass  # Unknown presence still requires the normal pause acknowledgment.
+    if not offline and alexa_remote.remote.command(serial, 'pause'):
         raise OutputConflict('The Echo could not pause. Playback stayed on Alexa.')
     # Native PauseCommand is acknowledged by Amazon directly; the custom skill's
     # PlaybackStopped webhook can arrive seconds later and is not a handoff gate.
@@ -2361,7 +2368,7 @@ def _pause_echo_for_mobile(serial):
         _now_playing.update(playing=False, playback_confirmed=True, playback_processing=False)
 
 
-def _reconcile_mobile_output(closed_owner=''):
+def _reconcile_mobile_output(closed_owner='', quiet=False):
     output = _playback_output.snapshot()
     if output['playback_output'] != 'phone':
         return
@@ -2383,19 +2390,45 @@ def _reconcile_mobile_output(closed_owner=''):
     with _np_lock:
         # An idle selection or an already closed output is not a new playback
         # failure. Repeated reads must not create another disconnect toast.
-        if not _now_playing.get('playing') and not _now_playing.get('playback_processing') and (
-                not owner or not _now_playing.get('video_id')):
+        if not owner:
             return
-    # Losing the target never grants an audible fallback to the controller.
-    # Preserve its queue/cursor and require an explicit output choice to resume.
+    # Only a currently foreground device may receive automatic failover.
+    # A live lease fences network failures; a confirmed close releases it early.
+    target = _mobile_devices.foreground_candidate(owner, controller) if owner else ''
+    if target and not output['handoff_pending']:
+        with _np_lock:
+            saved = _now_playing.get('_offline_phone_playing')
+            was_playing = saved[1] if saved and saved[0] == output['output_token'] else bool(_now_playing.get('playing') or _now_playing.get('playback_processing'))
+            cursor = _now_playing.get('_phone_report_cursor')
+            position = (cursor[2] if owner != closed_owner and cursor and cursor[:2] == (output['output_token'], owner)
+                        else _computed_position_ms())
+            if _playback_output.fallback_phone(output['output_token'], target, source_closed=owner == closed_owner):
+                _reset_progress(position)
+                _now_playing.pop('_offline_phone_playing', None)
+                _now_playing.pop('playback_error', None)
+                _now_playing.pop('_playback_error_event', None)
+                _now_playing.update(playing=was_playing, playback_confirmed=not was_playing,
+                    playback_processing=was_playing, updated_at=time.time())
+                _now_playing['playback_revision'] = int(_now_playing.get('playback_revision', 0)) + 1
+                changed = True
+            else:
+                return  # A concurrent explicit device choice wins.
+        if changed:
+            _notify_sse()
+            return
+    # No eligible current device: retain the cursor without starting hidden clients.
     with _np_lock:
+        if _playback_output.snapshot()['output_token'] != output['output_token']:
+            return
+        if not _now_playing.get('video_id') and not _now_playing.get('playing') and not _now_playing.get('playback_processing'):
+            return
         if _now_playing.get('_disconnected_phone_token') == output['output_token']:
             return
         _now_playing['_disconnected_phone_token'] = output['output_token']
         _reset_progress(_computed_position_ms())
         _now_playing.pop('_offline_phone_playing', None)
         _now_playing.update(playing=False, playback_confirmed=True, playback_processing=False,
-            playback_error={'type': 'device_offline', 'offline_owner': owner,
+            playback_error=None if quiet else {'type': 'device_offline', 'offline_owner': owner,
                 'message': 'The playback device disconnected. Choose an online device and tap play.'})
     _notify_sse()
 
@@ -2426,22 +2459,35 @@ def app_mobile_devices():
         return error_response('device_id required', 400)
     action = body.get('action')
     try:
+        if action == 'visibility':
+            return jsonify(ok=_mobile_devices.visibility(owner, session_id, body.get('foreground'), body.get('visibility_revision')))
         if action == 'foreground':
             # A foreground visit is a preference change, never a play command.
             # Keep active/buffering audio and recently paused sessions elsewhere.
-            _mobile_devices.online(owner, session_id, body.get('name'), [], body.get('volume'))
+            _mobile_devices.online(owner, session_id, body.get('name'), [], body.get('volume'), foreground=True, visibility_revision=body.get('visibility_revision'))
+            offline_alexa = body.get('offline_alexa')
+            verified_offline = False
+            all_offline = False
+            if isinstance(offline_alexa, str) and offline_alexa:
+                devices, error = alexa_remote.remote.devices()
+                all_offline = not error and isinstance(devices, list) and bool(devices) and not any(d.get('online') for d in devices)
+                verified_offline = not error and isinstance(devices, list) and any(
+                    d.get('serial') == offline_alexa and d.get('online') is False for d in devices)
             with _np_lock:
                 before = _playback_output.snapshot()
                 current = _now_playing
+                unavailable = verified_offline and before['playback_output'] == 'alexa' and (before['output_serial'] == offline_alexa or not before['output_serial'] and all_offline)
                 # A saved queue requires explicit resume, even if its browser closed.
                 # Only an empty initial session may follow a foreground visit.
                 selected_session = bool(current.get('video_id') or current.get('queue'))
                 blocked = (current.get('playing') or current.get('playback_processing') or before['handoff_pending'] or
                     selected_session)
-                selected = not blocked
+                selected = not before['handoff_pending'] and (unavailable or not blocked)
                 changed = selected and not (before['playback_output'] == 'phone' and before['output_owner'] == owner)
                 result = _playback_output.select_idle_phone(owner, before['output_token']) if changed else before
                 if selected:
+                    if unavailable:
+                        _reset_progress(_computed_position_ms())
                     current.pop('playback_error', None)
                     current.pop('_disconnected_phone_token', None)
                     current.update(playing=False, playback_confirmed=True, playback_processing=False)
@@ -2450,7 +2496,7 @@ def app_mobile_devices():
                 _notify_sse()
             return jsonify(default_selected=selected, now_playing=snapshot, **result)
         if action == 'online':
-            commands = _mobile_devices.online(owner, session_id, body.get('name'), body.get('ack', []), body.get('volume'), body.get('volume_steps'))
+            commands = _mobile_devices.online(owner, session_id, body.get('name'), body.get('ack', []), body.get('volume'), body.get('volume_steps'), foreground=body.get('foreground'), visibility_revision=body.get('visibility_revision'))
             retry_ms = 50
             busy = body.get('busy_commands')
             busy = set(busy[:32]) if isinstance(busy, list) and all(isinstance(value, str) for value in busy[:32]) else set()
@@ -2512,15 +2558,13 @@ def app_mobile_devices():
                             _reset_progress(position)
                         else:
                             _reset_progress(_computed_position_ms())
-                        _now_playing.update(playing=False, playback_confirmed=True, playback_processing=False)
                         _now_playing['playback_revision'] = int(_now_playing.get('playback_revision', 0)) + 1
                         _now_playing['updated_at'] = time.time()
                         error = _now_playing.get('playback_error') or {}
                         if isinstance(error, dict) and error.get('type') == 'device_offline':
                             _now_playing.pop('playback_error', None)
                             _now_playing.pop('_playback_error_event', None)
-                if not deliberate:
-                    _reconcile_mobile_output(closed_owner=owner)
+                _reconcile_mobile_output(closed_owner=owner, quiet=deliberate)
                 _playback_output.close_phone(owner)
                 with _np_lock:
                     latest = _playback_output.snapshot()
@@ -4188,6 +4232,8 @@ def app_queue():
             elif action == 'start':
                 _now_playing.update(playing=False, playback_confirmed=False)
             _reset_progress(position if position is not None else (0 if changed else live_position))
+            if owner is not None:
+                _now_playing['_phone_report_cursor'] = (output_token, owner, _now_playing.get('position_ms', 0))
             if changed or playing is not None:
                 _now_playing['playback_revision'] = int(_now_playing.get('playback_revision', 0)) + 1
         if action == 'next':
