@@ -2,7 +2,6 @@
 from collections import Counter, OrderedDict, deque
 from contextlib import contextmanager, closing
 import copy
-import heapq
 import hashlib
 import re
 import math
@@ -14,7 +13,6 @@ import threading
 import time
 
 
-AUDIO_EXTENSIONS = frozenset({'.m4a', '.mp4', '.webm', '.mp3', '.opus', '.aac', '.ogg', '.wav', '.flac'})
 
 
 class Metrics:
@@ -171,68 +169,9 @@ def file_info(path):
         return {'present': False, 'bytes': 0, 'modified_at': None}
 
 
-def scan_audio(directory, pinned=(), limit=20000, time_budget=.15):
-    start, now = time.monotonic(), time.time()
-    result = {'available': True, 'captured_at': now, 'complete': True, 'files': 0, 'bytes': 0,
-              'ready_files': 0, 'ready_bytes': 0, 'partial_files': 0, 'partial_bytes': 0,
-              'warmup_files': 0, 'warmup_bytes': 0, 'pinned_files': 0, 'pinned_bytes': 0,
-              'metadata_files': 0, 'metadata_bytes': 0, 'errors': 0, 'entries': []}
-    newest = []
-    try:
-        with os.scandir(directory) as entries:
-            for index, entry in enumerate(entries):
-                if index >= limit or time.monotonic() - start > time_budget:
-                    result['complete'] = False
-                    break
-                try:
-                    if not entry.is_file(follow_symlinks=False):
-                        continue
-                    stat = entry.stat(follow_symlinks=False)
-                    suffix = Path(entry.name).suffix.lower()
-                    result['files'] += 1
-                    result['bytes'] += stat.st_size
-                    if suffix == '.warmup':
-                        result['metadata_files'] += 1
-                        result['metadata_bytes'] += stat.st_size
-                        continue  # markers count as metadata below, not audio
-                    kind = 'partial' if suffix == '.part' else ('ready' if suffix in AUDIO_EXTENSIONS else 'metadata')
-                    result[f'{kind}_files'] += 1
-                    result[f'{kind}_bytes'] += stat.st_size
-                    if kind == 'metadata':
-                        continue
-                    video = entry.name.split('.')[0]
-                    warm = kind == 'ready' and Path(directory, video + '.warmup').is_file()
-                    pin = video in pinned
-                    if warm:
-                        result['warmup_files'] += 1
-                        result['warmup_bytes'] += stat.st_size
-                    if pin:
-                        result['pinned_files'] += 1
-                        result['pinned_bytes'] += stat.st_size
-                    # No raw filenames; valid video IDs are the only retained identifiers.
-                    safe_id = video if len(video) == 11 and all(c.isascii() and (c.isalnum() or c in '_-') for c in video) else 'unidentified'
-                    row = {'video_id': safe_id, 'bytes': stat.st_size, 'format': suffix[1:],
-                           'state': kind, 'pool': 'warmup' if warm else 'requested', 'pinned': pin,
-                           'modified_at': stat.st_mtime, 'idle_seconds': max(0, now - max(stat.st_mtime, stat.st_atime))}
-                    candidate = (stat.st_mtime, index, row)
-                    if len(newest) < 200:
-                        heapq.heappush(newest, candidate)
-                    elif candidate[:2] > newest[0][:2]:
-                        heapq.heapreplace(newest, candidate)
-                except OSError:
-                    result['errors'] += 1
-    except FileNotFoundError:
-        result['available'] = False
-        result['reason'] = 'directory_missing'
-    except OSError:
-        result['available'] = False
-        result['reason'] = 'directory_unreadable'
-    result['entries'] = [row for _, _, row in sorted(newest, reverse=True)]
-    result['inventory_limited'] = result['ready_files'] + result['partial_files'] > len(result['entries'])
-    return result
 
 
-def system_snapshot(cache_dir, db_path):
+def system_snapshot(storage_path, db_path):
     data = {'cpu_count': os.cpu_count(), 'threads': threading.active_count(),
             'load_average': None, 'memory': {}, 'process': {}, 'disk': {}, 'database': file_info(db_path)}
     try:
@@ -262,7 +201,7 @@ def system_snapshot(cache_dir, db_path):
         except (OSError, ValueError, ZeroDivisionError):
             data['process'][key] = None
     try:
-        target = Path(cache_dir).absolute()
+        target = Path(storage_path).absolute()
         while not target.exists() and target.parent != target:
             target = target.parent
         total, used, free = shutil.disk_usage(target)

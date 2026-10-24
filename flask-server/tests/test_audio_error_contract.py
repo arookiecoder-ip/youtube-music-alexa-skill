@@ -72,18 +72,13 @@ class ErrorContract(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        for name, value in (("AUDIO_CACHE_DIR", self.tmp.name),
-                            ("AUDIO_CACHE_TTL", 7200.0),
-                            ("WARMUP_TTL", 7200.0),
-                            ("AUDIO_CACHE_MAX_BYTES", 0),
-                            ("WARMUP_MAX_BYTES", 0),
-                            ("AUDIO_CACHE_MIN_FREE_BYTES", 0)):
-            patcher = mock.patch.object(server, name, value)
-            patcher.start()
-            self.addCleanup(patcher.stop)
-        pin = mock.patch.object(server, "_pinned_cache_video_ids", return_value=set())
-        pin.start()
-        self.addCleanup(pin.stop)
+        from current_audio import CurrentAudio
+        current = CurrentAudio()
+        patcher = mock.patch.object(server._youtube_stream, 'current', current)
+        patcher.start(); self.addCleanup(patcher.stop); self.addCleanup(current.close)
+        from audio_test_support import fake_relay
+        patcher = mock.patch.object(server._youtube_stream, 'open', side_effect=fake_relay)
+        patcher.start(); self.addCleanup(patcher.stop)
         self.app = server.app.test_client()
         self.headers = {"X-Api-Key": os.environ["API_KEY"]}
 
@@ -100,16 +95,13 @@ class ErrorContract(unittest.TestCase):
         self.assertFalse(err["retryable"])
 
     def test_flaky_is_retryable_503_with_retry_after(self):
-        server._mark_video_flaky(VID)
-        try:
-            resp = self.get(f"video_id={VID}&wait=1")
-        finally:
-            with server._flaky_video_ids_lock:
-                server._flaky_video_ids.clear()
+        from youtube_stream import StreamError
+        with mock.patch.object(server._youtube_stream, 'open', side_effect=StreamError('unavailable')):
+            resp = self.get(f'video_id={VID}&wait=1')
         self.assertEqual(resp.status_code, 503)
         err = resp.get_json()["error"]
         self.assertTrue(err["retryable"])
-        self.assertEqual(resp.headers["Retry-After"], str(int(server._FLAKY_VIDEO_TTL)))
+        self.assertEqual(resp.headers["Retry-After"], "2")
 
     def test_pending_helper_shape(self):
         with server.app.test_request_context():

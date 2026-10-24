@@ -123,10 +123,6 @@ class _CleanServerState(unittest.TestCase):
             server._dead_video_ids.clear()
         with server._flaky_video_ids_lock:
             server._flaky_video_ids.clear()
-        with server._stream_inflight_lock:
-            server._stream_inflight.clear()
-        with server._download_queue_lock:
-            server._download_queue_depth = 0
         self.addCleanup(self._restore)
 
     def _restore(self):
@@ -136,10 +132,6 @@ class _CleanServerState(unittest.TestCase):
             server._dead_video_ids.clear()
         with server._flaky_video_ids_lock:
             server._flaky_video_ids.clear()
-        with server._stream_inflight_lock:
-            server._stream_inflight.clear()
-        with server._download_queue_lock:
-            server._download_queue_depth = 0
 
 
 # --------------------------------------------------------------------------
@@ -315,411 +307,12 @@ class _SemaphoreSpy:
         return False
 
 
-class EnsureDownloadedRateLimit(_CleanServerState):
-    """`ensure_downloaded` must stop walking client fallbacks on a 429."""
-
-    def setUp(self):
-        super().setUp()
-        self.clients = ["default", "android_vr", "web", "tv"]
-        p = mock.patch.object(server.Supporting, "get_ytdlp_clients",
-                              staticmethod(lambda: list(self.clients)))
-        p.start()
-        self.addCleanup(p.stop)
-        # No cache file ever appears: these downloads all "fail".
-        p2 = mock.patch.object(server.Supporting, "cached_audio_path",
-                               staticmethod(lambda vid: None))
-        p2.start()
-        self.addCleanup(p2.stop)
-        p3 = mock.patch.object(server.Supporting, "prune_audio_cache",
-                               staticmethod(lambda: None))
-        p3.start()
-        self.addCleanup(p3.stop)
-
-    def test_fatal_429_aborts_remaining_clients(self):
-        calls = []
-
-        def fake_run(cmd, **kwargs):
-            calls.append(cmd)
-            return _FakeCompleted(1, _STDERR_429_FATAL)
-
-        with mock.patch.object(server.subprocess, "run", side_effect=fake_run):
-            server.Supporting.ensure_downloaded("vidratelimit")
-
-        self.assertEqual(
-            len(calls), 1,
-            msg=f"expected 1 yt-dlp attempt before bailing on a fatal 429, got "
-                f"{len(calls)} — walking the remaining fallbacks fires three "
-                f"more bursts at an endpoint already refusing us")
-
-    def test_recoverable_429_warning_still_tries_every_client(self):
-        """Regression guard for an over-correction.
-
-        The incident's stderr carried a 429 *warning* plus a bot-check ERROR.
-        Aborting there would leave the download with a single attempt and skip
-        android_vr/web/tv, which is precisely what recovers from a bot check.
-        """
-        calls = []
-
-        def fake_run(cmd, **kwargs):
-            calls.append(cmd)
-            return _FakeCompleted(1, _STDERR_429_WARNING_THEN_BOT_CHECK)
-
-        with mock.patch.object(server.subprocess, "run", side_effect=fake_run):
-            server.Supporting.ensure_downloaded("vidwarned")
-
-        self.assertEqual(
-            len(calls), len(self.clients),
-            msg=f"a recoverable 429 warning truncated the fallback chain to "
-                f"{len(calls)} attempt(s) — the other client profiles are the "
-                f"only thing that recovers from a bot check")
-
-    def test_429_opens_the_cooldown_even_when_only_a_warning(self):
-        """A 429 anywhere is real evidence of throttling, so prefetch pauses —
-        that part is safe because it only drops best-effort work."""
-        with mock.patch.object(server.subprocess, "run",
-                               return_value=_FakeCompleted(
-                                   1, _STDERR_429_WARNING_THEN_BOT_CHECK)):
-            server.Supporting.ensure_downloaded("vidratelimit")
-        self.assertTrue(server._ytdlp_rate_limited())
-
-    def test_429_never_marks_the_video_dead(self):
-        with mock.patch.object(server.subprocess, "run",
-                               return_value=_FakeCompleted(
-                                   1, _STDERR_429_LOOKS_UNAVAILABLE)):
-            server.Supporting.ensure_downloaded("hhstADmzpqM")
-        self.assertFalse(
-            server._is_dead_video("hhstADmzpqM"),
-            msg="a rate-limited download poisoned the dead-video cache — the "
-                "song would be skipped with 'known-dead' for _DEAD_VIDEO_TTL")
-
-    def test_genuinely_dead_video_still_tries_every_client_then_dies(self):
-        calls = []
-
-        def fake_run(cmd, **kwargs):
-            calls.append(cmd)
-            return _FakeCompleted(1, _STDERR_REALLY_DEAD)
-
-        with mock.patch.object(server.subprocess, "run", side_effect=fake_run):
-            server.Supporting.ensure_downloaded("abcdefghijk")
-
-        self.assertEqual(len(calls), len(self.clients),
-                         msg="a genuine 'video unavailable' must still be "
-                             "confirmed by every client before being cached")
-        self.assertTrue(server._is_dead_video("abcdefghijk"))
-
-    def test_bot_check_does_not_abort_fallbacks(self):
-        calls = []
-
-        def fake_run(cmd, **kwargs):
-            calls.append(cmd)
-            return _FakeCompleted(1, _STDERR_BOT_CHECK)
-
-        with mock.patch.object(server.subprocess, "run", side_effect=fake_run):
-            server.Supporting.ensure_downloaded("botchecked")
-
-        self.assertEqual(len(calls), len(self.clients),
-                         msg="the bot-check challenge is exactly what the "
-                             "client-profile fallback loop exists to recover from")
-        self.assertFalse(server._is_dead_video("botchecked"))
-
-    def test_unrecognized_failure_on_every_client_is_flaky_not_dead(self):
-        """SSL resets and SABR format gaps are not permanent-unavailable
-        signals, but a video that fails every client this way still can't be
-        downloaded right now. It must land in the short-TTL flaky cache, not
-        the hour-long dead cache, and must not be silently forgotten (retried
-        forever at full 4-client cost) either."""
-        calls = []
-
-        def fake_run(cmd, **kwargs):
-            calls.append(cmd)
-            return _FakeCompleted(1, _STDERR_SSL_RESET)
-
-        with mock.patch.object(server.subprocess, "run", side_effect=fake_run):
-            server.Supporting.ensure_downloaded("flakyvideoid")
-
-        self.assertEqual(len(calls), len(self.clients),
-                         msg="an unrecognized failure must still be confirmed "
-                             "by every client before being cached as flaky")
-        self.assertFalse(
-            server._is_dead_video("flakyvideoid"),
-            msg="an SSL reset / SABR gap is not proof of permanent "
-                "unavailability and must not poison _dead_video_ids for an hour")
-        self.assertTrue(
-            server._is_flaky_video("flakyvideoid"),
-            msg="a video that failed every client without a recognized cause "
-                "must be cached as flaky so a retry loop doesn't re-run all "
-                "4 clients' retry/timeout budgets back-to-back")
-        self.assertTrue(server._is_dead_or_flaky_video("flakyvideoid"))
-
-    def test_flaky_cache_skips_the_subprocess_on_retry(self):
-        with mock.patch.object(server.subprocess, "run",
-                               return_value=_FakeCompleted(1, _STDERR_SABR_NO_FORMAT)):
-            server.Supporting.ensure_downloaded("flakyvideoid2")
-        self.assertTrue(server._is_flaky_video("flakyvideoid2"))
-
-        with mock.patch.object(server.subprocess, "run") as run:
-            result = server.Supporting.ensure_downloaded("flakyvideoid2")
-        run.assert_not_called()
-        self.assertIsNone(result)
-
-    def test_flaky_cache_expires_and_allows_retry(self):
-        with mock.patch.object(server.subprocess, "run",
-                               return_value=_FakeCompleted(1, _STDERR_SSL_RESET)):
-            server.Supporting.ensure_downloaded("flakyvideoid3")
-        self.assertTrue(server._is_flaky_video("flakyvideoid3"))
-
-        with server._flaky_video_ids_lock:
-            server._flaky_video_ids["flakyvideoid3"] = (
-                time.time() - server._FLAKY_VIDEO_TTL - 1)
-
-        self.assertFalse(server._is_flaky_video("flakyvideoid3"))
-        with mock.patch.object(server.subprocess, "run",
-                               return_value=_FakeCompleted(1, _STDERR_SSL_RESET)) as run:
-            server.Supporting.ensure_downloaded("flakyvideoid3")
-        self.assertTrue(run.called,
-                        msg="an expired flaky entry must allow a fresh attempt")
-
-    def test_concurrent_callers_for_a_doomed_id_do_not_double_run_fallback(self):
-        """Reproduces the 12:40:39-54 incident log: get_stream()'s background
-        prewarm thread and /proxy/'s own ensure_downloaded() call race for the
-        same about-to-be-dead video_id. The second caller queues behind the
-        first's per-id lock (both pass the dead-check before either has run),
-        and must see the first caller's dead/flaky verdict once it acquires
-        the lock instead of repeating all 4 clients itself."""
-        calls = []
-        release_first = threading.Event()
-        first_started = threading.Event()
-
-        def fake_run(cmd, **kwargs):
-            calls.append(cmd)
-            # Let the second caller start queuing behind the lock while the
-            # first client attempt of the first caller is still "in flight".
-            if len(calls) == 1:
-                first_started.set()
-                release_first.wait(5)
-            return _FakeCompleted(1, _STDERR_REALLY_DEAD)
-
-        results = []
-
-        def run_second_caller():
-            first_started.wait(5)
-            # Give the first caller a beat to actually acquire the per-id
-            # lock before this one tries to acquire it too.
-            time.sleep(0.05)
-            results.append(server.Supporting.ensure_downloaded("racyvideoid"))
-
-        t = threading.Thread(target=run_second_caller, daemon=True)
-        t.start()
-        try:
-            with mock.patch.object(server.subprocess, "run", side_effect=fake_run):
-                first_result = server.Supporting.ensure_downloaded("racyvideoid")
-        finally:
-            release_first.set()
-            t.join(timeout=5)
-
-        self.assertIsNone(first_result)
-        self.assertEqual(results, [None])
-        self.assertEqual(
-            len(calls), len(self.clients),
-            msg="the second caller re-ran the full client fallback loop for a "
-                "video the first caller (which it was queued behind) had "
-                "already just proven dead")
-        self.assertTrue(server._is_dead_video("racyvideoid"))
-
-    def test_success_clears_the_cooldown(self):
-        server._note_rate_limited("earlier")
-        self.assertTrue(server._ytdlp_rate_limited())
-        downloaded = [False]
-        def successful_run(*args, **kwargs):
-            downloaded[0] = True
-            return _FakeCompleted(0, "")
-        with mock.patch.object(server.subprocess, "run", side_effect=successful_run), \
-                mock.patch.object(server.Supporting, "cached_audio_path", side_effect=lambda vid: '/tmp/goodvid.m4a' if downloaded[0] else None), \
-                mock.patch.object(server, "_is_audio_file_valid", return_value=True):
-            server.Supporting.ensure_downloaded("goodvid")
-        self.assertFalse(server._ytdlp_rate_limited(),
-                         msg="throughput is back; prefetch must resume")
-
-    def test_prefetch_is_dropped_during_cooldown(self):
-        server._note_rate_limited("earlier")
-        with mock.patch.object(server.subprocess, "run") as run:
-            result = server.Supporting.ensure_downloaded("prefetchvid", prefetch=True)
-        self.assertIsNone(result)
-        run.assert_not_called()
-
-    def test_prefetch_during_cooldown_does_not_even_take_a_permit(self):
-        """Why the cooldown is checked *before* the semaphore too.
-
-        If a suppressed prefetch still queued for a permit, a burst of them
-        would sit in front of the track the user is waiting on and delay it past
-        the Echo's ~11s /proxy/ timeout — turning a throttle into an outage.
-        """
-        server._note_rate_limited("earlier")
-        spy = _SemaphoreSpy(server._DOWNLOAD_CONCURRENCY)
-        with mock.patch.object(server, "_download_semaphore", spy), \
-                mock.patch.object(server.subprocess, "run") as run:
-            result = server.Supporting.ensure_downloaded("prefetchvid",
-                                                         prefetch=True)
-        self.assertIsNone(result)
-        run.assert_not_called()
-        self.assertEqual(
-            spy.acquires, 0,
-            msg="a suppressed prefetch queued for a download permit instead of "
-                "being dropped outright")
-        self.assertEqual(server._download_queue_size(), 0)
-
-    def test_a_wanted_download_does_take_a_permit(self):
-        """Control for the test above: the permit accounting is real, so the
-        assertion there cannot pass for the wrong reason."""
-        spy = _SemaphoreSpy(server._DOWNLOAD_CONCURRENCY)
-        with mock.patch.object(server, "_download_semaphore", spy), \
-                mock.patch.object(server.subprocess, "run",
-                                  return_value=_FakeCompleted(0, "")):
-            server.Supporting.ensure_downloaded("wantedvid", prefetch=False)
-        self.assertEqual(spy.acquires, 1)
-        self.assertEqual(spy.releases, 1)
-
-    def test_foreground_download_still_runs_during_cooldown(self):
-        """The song the user is waiting on is never sacrificed to the cooldown."""
-        server._note_rate_limited("earlier")
-        with mock.patch.object(server.subprocess, "run",
-                               return_value=_FakeCompleted(0, "")) as run:
-            server.Supporting.ensure_downloaded("foregroundvid", prefetch=False)
-        self.assertTrue(run.called)
-
-    def test_queued_prefetch_rechecks_the_cooldown_after_the_semaphore(self):
-        """The cooldown is checked twice on purpose, and both checks matter.
-
-        A prefetch that was already queued when the 429 arrived must still be
-        dropped: the whole backlog is what deepens the block, and the backlog is
-        exactly what is sitting on the semaphore when the first 429 lands.
-        """
-        blockers = 0
-        for _ in range(server._DOWNLOAD_CONCURRENCY):
-            server._download_semaphore.acquire()
-            blockers += 1
-
-        def _free_permits():
-            time.sleep(0.2)
-            # The 429 arrives while this prefetch is still queued.
-            server._note_rate_limited("someothervid")
-            for _ in range(blockers):
-                server._download_semaphore.release()
-
-        freeing = threading.Thread(target=_free_permits, daemon=True)
-        freeing.start()
-        try:
-            with mock.patch.object(server.subprocess, "run") as run:
-                result = server.Supporting.ensure_downloaded("queuedprefetch",
-                                                             prefetch=True)
-            self.assertIsNone(result)
-            run.assert_not_called()
-        finally:
-            freeing.join(timeout=5)
-
-    def test_queued_foreground_download_survives_a_late_cooldown(self):
-        """Symmetry check: the same late 429 must NOT drop the track the user is
-        waiting on, or a single 429 would mute the remote for 90 seconds."""
-        blockers = 0
-        for _ in range(server._DOWNLOAD_CONCURRENCY):
-            server._download_semaphore.acquire()
-            blockers += 1
-
-        def _free_permits():
-            time.sleep(0.2)
-            server._note_rate_limited("someothervid")
-            for _ in range(blockers):
-                server._download_semaphore.release()
-
-        freeing = threading.Thread(target=_free_permits, daemon=True)
-        freeing.start()
-        try:
-            with mock.patch.object(server.subprocess, "run",
-                                   return_value=_FakeCompleted(0, "")) as run:
-                server.Supporting.ensure_downloaded("queuedforeground",
-                                                    prefetch=False)
-            self.assertTrue(run.called)
-        finally:
-            freeing.join(timeout=5)
 
 
 # --------------------------------------------------------------------------
 # Cold-stream fallback latency
 # --------------------------------------------------------------------------
 
-class StreamingFallbackLatency(_CleanServerState):
-    def test_stream_command_uses_fast_timeout_without_changing_background_defaults(self):
-        background = server.Supporting.ytdlp_download_command(
-            "backgroundvid", "-", client="default"
-        )
-        streaming = server.Supporting.ytdlp_download_command(
-            "streamingvid", "-", client="android_vr", retries=0, socket_timeout=3
-        )
-
-        def option(command, name):
-            return command[command.index(name) + 1]
-
-        self.assertEqual(option(background, "--retries"), "2")
-        self.assertEqual(option(background, "--socket-timeout"), "10")
-        self.assertEqual(option(streaming, "--retries"), "0")
-        self.assertEqual(option(streaming, "--socket-timeout"), "3")
-        self.assertIn("youtube:player_client=android_vr", streaming)
-
-    def test_stream_falls_back_when_first_profile_exits_without_audio(self):
-        class _Proc:
-            def __init__(self, chunks):
-                self.stdout = iter(chunks)
-                self.waited = False
-                self.killed = False
-                self.returncode = None
-
-            def poll(self):
-                return self.returncode
-
-            def wait(self, timeout=None):
-                self.waited = True
-                self.returncode = 0
-                return self.returncode
-
-            def kill(self):
-                self.killed = True
-                self.returncode = -9
-
-        class _Stdout:
-            def __init__(self, chunks):
-                self.chunks = iter(chunks)
-
-            def read(self, _size=None):
-                return next(self.chunks, b'')
-
-            def close(self):
-                pass
-
-        first = _Proc([])
-        first.stdout = _Stdout([])
-        second = _Proc([b'audio-bytes', b''])
-        second.stdout = _Stdout([b'audio-bytes', b''])
-        clients = ['default', 'android_vr']
-
-        with (mock.patch.object(server.Supporting, "get_ytdlp_clients",
-                                staticmethod(lambda: clients)),
-              mock.patch.object(server.subprocess, "Popen",
-                                side_effect=[first, second]) as popen,
-              mock.patch.object(server, "_stream_abandon_watchdog"),
-              mock.patch.object(server, "_is_audio_file_valid", return_value=True),
-              mock.patch.object(server, "_confirm_stream_delivery"),
-              mock.patch.object(server.os, "replace")):
-            response = server._stream_proxy_download("streamfallback1")
-            body = b''.join(response.response)
-            response.close()
-
-        self.assertEqual(body, b'audio-bytes')
-        self.assertEqual(popen.call_count, 2)
-        self.assertTrue(first.waited,
-                        msg="the failed profile must be reaped before fallback")
-        self.assertTrue(second.waited)
-        self.assertIn("youtube:player_client=android_vr",
-                      popen.call_args_list[1].args[0])
 
 
 # --------------------------------------------------------------------------
@@ -768,267 +361,22 @@ class PlaybackGeneration(_CleanServerState):
             after = server._current_playback_generation()
         self.assertEqual(after, before)
 
-    def test_superseded_download_is_dropped_before_spawning_ytdlp(self):
-        stale = server._current_playback_generation()
-        server._bump_playback_generation()
-        with mock.patch.object(server.subprocess, "run") as run, \
-                mock.patch.object(server.Supporting, "cached_audio_path",
-                                  staticmethod(lambda vid: None)):
-            result = server.Supporting.ensure_downloaded("staleviddd", generation=stale)
-        self.assertIsNone(result)
-        run.assert_not_called()
 
-    def test_queued_download_rechecks_generation_after_the_semaphore(self):
-        """The regression that actually mattered: a backlog built up by rapid
-        clicks used to drain by running every queued download, long after
-        anyone cared. The generation is re-checked once a permit frees up."""
-        gen = server._current_playback_generation()
-        released = threading.Event()
-        blockers = []
 
-        # Occupy every download permit so our call has to queue.
-        for _ in range(server._DOWNLOAD_CONCURRENCY):
-            server._download_semaphore.acquire()
-            blockers.append(True)
-
-        def _free_permits():
-            # While the caller waits for a permit, the user clicks another song.
-            time.sleep(0.2)
-            server._bump_playback_generation()
-            for _ in blockers:
-                server._download_semaphore.release()
-            released.set()
-
-        freeing = threading.Thread(target=_free_permits, daemon=True)
-        freeing.start()
-        try:
-            with mock.patch.object(server.subprocess, "run") as run, \
-                    mock.patch.object(server.Supporting, "cached_audio_path",
-                                      staticmethod(lambda vid: None)), \
-                    mock.patch.object(server.Supporting, "prune_audio_cache",
-                                      staticmethod(lambda: None)):
-                result = server.Supporting.ensure_downloaded("queuedviddd",
-                                                             generation=gen)
-            self.assertTrue(released.wait(5))
-            self.assertIsNone(result)
-            run.assert_not_called()
-        finally:
-            freeing.join(timeout=5)
-
-    def test_download_depth_is_released_on_the_superseded_path(self):
-        gen = server._current_playback_generation()
-        server._bump_playback_generation()
-        with mock.patch.object(server.subprocess, "run"), \
-                mock.patch.object(server.Supporting, "cached_audio_path",
-                                  staticmethod(lambda vid: None)):
-            server.Supporting.ensure_downloaded("staleviddd", generation=gen)
-        self.assertEqual(server._download_queue_size(), 0,
-                         msg="an abandoned download leaked queue depth, which "
-                             "would permanently wedge the backpressure gate")
 
 
 # --------------------------------------------------------------------------
 # Fix 5: backpressure is actually consulted
 # --------------------------------------------------------------------------
 
-class PrewarmBackpressure(_CleanServerState):
-    def _queue(self, n=10):
-        return [{'video_id': f"vid{i:07d}", 'title': f"t{i}"} for i in range(n)]
-
-    def setUp(self):
-        super().setUp()
-        p = mock.patch.object(server.Supporting, "cached_audio_path",
-                              staticmethod(lambda vid: None))
-        p.start()
-        self.addCleanup(p.stop)
-
-    def test_backpressure_gate_flips_with_depth(self):
-        self.assertTrue(server._download_backpressure())
-        with server._download_queue_lock:
-            server._download_queue_depth = server._DOWNLOAD_CONCURRENCY * 3 + 1
-        self.assertFalse(server._download_backpressure())
-
-    def test_prewarm_stops_when_queue_is_saturated(self):
-        with server._download_queue_lock:
-            server._download_queue_depth = server._DOWNLOAD_CONCURRENCY * 3 + 1
-        with mock.patch.object(server, "_ensure_audio_ready_for_play") as ensure:
-            warmed = server._prewarm_queue_audio(self._queue(), 0, limit=4)
-        self.assertEqual(warmed, 0)
-        ensure.assert_not_called()
-
-    def test_prewarm_runs_when_the_queue_is_idle(self):
-        with mock.patch.object(server, "_ensure_audio_ready_for_play") as ensure:
-            warmed = server._prewarm_queue_audio(self._queue(), 0, limit=4)
-        self.assertEqual(warmed, 4)
-        self.assertEqual(ensure.call_count, 4)
-
-    def test_prewarm_is_skipped_during_a_rate_limit_cooldown(self):
-        server._note_rate_limited("earlier")
-        with mock.patch.object(server, "_ensure_audio_ready_for_play") as ensure:
-            warmed = server._prewarm_queue_audio(self._queue(), 0, limit=4)
-        self.assertEqual(warmed, 0)
-        ensure.assert_not_called()
-
-    def test_prewarm_aborts_as_soon_as_playback_moves_on(self):
-        """The dominant amplifier: 8 prewarms per click, none cancelled."""
-        calls = []
-
-        def ensure(video_id, **kwargs):
-            calls.append(video_id)
-            # Simulate the user clicking another song after the first prewarm.
-            if len(calls) == 1:
-                server._bump_playback_generation()
-            return False
-
-        with mock.patch.object(server, "_ensure_audio_ready_for_play",
-                               side_effect=ensure):
-            warmed = server._prewarm_queue_audio(self._queue(), 0, limit=4)
-        self.assertEqual(len(calls), 1, msg=f"prewarm kept going after the "
-                                            f"track changed: {calls}")
-        self.assertEqual(warmed, 1)
-
-    def test_prewarm_marks_its_downloads_as_cancellable_prefetch(self):
-        with mock.patch.object(server, "_ensure_audio_ready_for_play") as ensure:
-            server._prewarm_queue_audio(self._queue(), 0, limit=1)
-        _, kwargs = ensure.call_args
-        self.assertTrue(kwargs.get('prefetch'),
-                        msg="queue prewarm must be droppable during a cooldown")
-        self.assertIsNotNone(kwargs.get('generation'),
-                             msg="queue prewarm must be cancellable on a track change")
-
-    def test_empty_queue_is_a_noop(self):
-        self.assertEqual(server._prewarm_queue_audio([], 0), 0)
 
 
 # --------------------------------------------------------------------------
 # Fix 3: one yt-dlp per video_id, and the watchdog can see streaming downloads
 # --------------------------------------------------------------------------
 
-class StreamInflightRegistry(_CleanServerState):
-    def test_first_claim_wins_and_duplicates_are_refused(self):
-        self.assertTrue(server._stream_register("vidstream01"))
-        self.assertFalse(
-            server._stream_register("vidstream01"),
-            msg="a second concurrent /proxy/ for one song claimed its own "
-                "slot — that is how 4 requests became 4 yt-dlp processes")
-        self.assertTrue(server._stream_is_inflight("vidstream01"))
-
-    def test_unregister_frees_the_claim(self):
-        server._stream_register("vidstream01")
-        server._stream_unregister("vidstream01")
-        self.assertFalse(server._stream_is_inflight("vidstream01"))
-        self.assertTrue(server._stream_register("vidstream01"))
-
-    def test_unregister_is_idempotent(self):
-        server._stream_unregister("never-registered")  # must not raise
-
-    def test_distinct_ids_do_not_collide(self):
-        self.assertTrue(server._stream_register("vidstream01"))
-        self.assertTrue(server._stream_register("vidstream02"))
-
-    def test_download_in_progress_sees_streaming_downloads(self):
-        """The watchdog blind spot: `_download_in_progress` only checked the
-        per-id lock, which the streaming path never takes. It therefore
-        resent the play command after 12 s and the Echo opened another
-        /proxy/ request, spawning another yt-dlp for the same song."""
-        self.assertFalse(server._download_in_progress("vidstream01"))
-        server._stream_register("vidstream01")
-        self.assertTrue(
-            server._download_in_progress("vidstream01"),
-            msg="a cold-cache /proxy/ stream was invisible to the playback "
-                "watchdog, so it resent the play command mid-download")
-        server._stream_unregister("vidstream01")
-        self.assertFalse(server._download_in_progress("vidstream01"))
-
-    def test_download_in_progress_still_sees_the_per_id_lock(self):
-        lock = threading.Lock()
-        with server._locks_guard:
-            server._download_locks["vidlocked01"] = lock
-        self.addCleanup(lambda: server._download_locks.pop("vidlocked01", None))
-        self.assertFalse(server._download_in_progress("vidlocked01"))
-        with lock:
-            self.assertTrue(server._download_in_progress("vidlocked01"))
-
-    def test_await_inflight_returns_the_cache_file_once_it_lands(self):
-        server._stream_register("vidstream01")
-        self.addCleanup(lambda: server._stream_unregister("vidstream01"))
-
-        def _finish():
-            time.sleep(0.3)
-            server._stream_unregister("vidstream01")
-
-        threading.Thread(target=_finish, daemon=True).start()
-        with mock.patch.object(
-                server.Supporting, "cached_audio_path",
-                staticmethod(lambda vid: "/tmp/cached.m4a"
-                             if server._stream_is_inflight(vid) is False else None)):
-            path = server._await_inflight_stream("vidstream01")
-        self.assertEqual(path, "/tmp/cached.m4a")
-
-    def test_await_inflight_gives_up_when_the_stream_fails(self):
-        """A failed in-flight stream publishes no cache file; the waiter must
-        return None so the caller can legitimately retry itself."""
-        server._stream_register("vidstream01")
-
-        def _fail():
-            time.sleep(0.2)
-            server._stream_unregister("vidstream01")
-
-        threading.Thread(target=_fail, daemon=True).start()
-        with mock.patch.object(server.Supporting, "cached_audio_path",
-                               staticmethod(lambda vid: None)):
-            path = server._await_inflight_stream("vidstream01")
-        self.assertIsNone(path)
-
-    def test_await_inflight_is_bounded(self):
-        server._stream_register("vidstream01")
-        self.addCleanup(lambda: server._stream_unregister("vidstream01"))
-        with mock.patch.object(server, "_STREAM_DUPLICATE_WAIT", 0.4), \
-                mock.patch.object(server.Supporting, "cached_audio_path",
-                                  staticmethod(lambda vid: None)):
-            started = time.time()
-            path = server._await_inflight_stream("vidstream01", timeout=0.4)
-            elapsed = time.time() - started
-        self.assertIsNone(path)
-        self.assertLess(elapsed, 3.0,
-                        msg="a duplicate request must never wait unbounded on "
-                            "an in-flight stream")
 
 
-class SemaphorePermitRelease(_CleanServerState):
-    def test_permit_release_is_idempotent(self):
-        """The permit is released from both the generator's `finally` and
-        `Response.call_on_close`; a double release would inflate the
-        semaphore and uncap download concurrency for the rest of the process."""
-        sem = threading.Semaphore(1)
-        permit = server._SemaphorePermit(sem)
-        self.assertTrue(permit.acquire(timeout=1))
-        self.assertTrue(permit.held)
-        permit.release()
-        permit.release()
-        permit.release()
-        self.assertFalse(permit.held)
-        # Exactly one permit must be available, not three.
-        self.assertTrue(sem.acquire(blocking=False))
-        self.assertFalse(sem.acquire(blocking=False))
-        sem.release()
-
-    def test_release_without_acquire_is_a_noop(self):
-        sem = threading.Semaphore(1)
-        server._SemaphorePermit(sem).release()
-        self.assertTrue(sem.acquire(blocking=False))
-        self.assertFalse(sem.acquire(blocking=False))
-
-    def test_acquire_times_out_rather_than_blocking_playback(self):
-        sem = threading.Semaphore(1)
-        sem.acquire()
-        permit = server._SemaphorePermit(sem)
-        started = time.time()
-        acquired = permit.acquire(timeout=0.2)
-        elapsed = time.time() - started
-        self.assertFalse(acquired)
-        self.assertFalse(permit.held)
-        self.assertLess(elapsed, 2.0)
 
 
 # --------------------------------------------------------------------------
@@ -1074,424 +422,16 @@ class _FakeProc:
         self._returncode = code
 
 
-class StreamSupersede(_CleanServerState):
-    def setUp(self):
-        super().setUp()
-        server._prefetched_next = None
-        self.addCleanup(lambda: setattr(server, "_prefetched_next", None))
-
-    def test_current_track_is_never_superseded(self):
-        with mock.patch.object(server, "_notify_sse"):
-            server._update_now_playing(video_id="playingnow1")
-        self.assertFalse(server._stream_superseded("playingnow1"))
-
-    def test_legitimate_next_track_prefetch_is_not_superseded(self):
-        """The Echo buffers the next track while the current one plays; killing
-        that stream would break gapless track-to-track transitions."""
-        with mock.patch.object(server, "_notify_sse"):
-            server._update_now_playing(video_id="playingnow1")
-        server._prefetched_next = {'video_id': "nexttrack1", 'at': time.time()}
-        self.assertFalse(server._stream_superseded("nexttrack1"))
-
-    def test_abandoned_track_is_superseded(self):
-        with mock.patch.object(server, "_notify_sse"):
-            server._update_now_playing(video_id="playingnow1")
-        self.assertTrue(server._stream_superseded("oldtrack01"))
-
-    def test_watchdog_kills_a_superseded_stream(self):
-        with mock.patch.object(server, "_notify_sse"):
-            server._update_now_playing(video_id="oldtrack01")
-        generation = server._current_playback_generation()
-        with mock.patch.object(server, "_notify_sse"):
-            server._update_now_playing(video_id="newtrack01")  # user clicked away
-
-        proc = _FakeProc()
-        stop = threading.Event()
-        with mock.patch.object(server, "_STREAM_SUPERSEDE_GRACE", 0.1):
-            watchdog = threading.Thread(
-                target=server._stream_abandon_watchdog,
-                args=("oldtrack01", proc, generation, stop), daemon=True)
-            watchdog.start()
-            watchdog.join(timeout=6)
-        stop.set()
-        self.assertFalse(watchdog.is_alive())
-        self.assertTrue(proc.killed,
-                        msg="an abandoned stream was left holding a waitress "
-                            "worker thread and a live yt-dlp process")
-
-    def test_watchdog_leaves_the_current_track_alone(self):
-        with mock.patch.object(server, "_notify_sse"):
-            server._update_now_playing(video_id="playingnow1")
-        generation = server._current_playback_generation()
-        proc = _FakeProc()
-        stop = threading.Event()
-        with mock.patch.object(server, "_STREAM_SUPERSEDE_GRACE", 0.1):
-            watchdog = threading.Thread(
-                target=server._stream_abandon_watchdog,
-                args=("playingnow1", proc, generation, stop), daemon=True)
-            watchdog.start()
-            time.sleep(0.6)
-            stop.set()
-            watchdog.join(timeout=5)
-        self.assertFalse(proc.killed,
-                         msg="the watchdog killed the song that is actually playing")
-
-    def test_watchdog_enforces_a_hard_time_cap(self):
-        """The 154-second streams in the incident log: even a stream nobody has
-        superseded must not own a worker thread indefinitely."""
-        with mock.patch.object(server, "_notify_sse"):
-            server._update_now_playing(video_id="playingnow1")
-        generation = server._current_playback_generation()
-        proc = _FakeProc()
-        stop = threading.Event()
-        with mock.patch.object(server, "_STREAM_MAX_SECONDS", 0.6):
-            watchdog = threading.Thread(
-                target=server._stream_abandon_watchdog,
-                args=("playingnow1", proc, generation, stop), daemon=True)
-            watchdog.start()
-            watchdog.join(timeout=6)
-        stop.set()
-        self.assertTrue(proc.killed)
-
-    def test_watchdog_exits_when_the_process_finishes(self):
-        with mock.patch.object(server, "_notify_sse"):
-            server._update_now_playing(video_id="playingnow1")
-        generation = server._current_playback_generation()
-        proc = _FakeProc()
-        proc.exit(0)
-        stop = threading.Event()
-        watchdog = threading.Thread(
-            target=server._stream_abandon_watchdog,
-            args=("playingnow1", proc, generation, stop), daemon=True)
-        watchdog.start()
-        watchdog.join(timeout=5)
-        self.assertFalse(watchdog.is_alive())
-        self.assertFalse(proc.killed)
-
-    def test_watchdog_stops_on_the_stop_event(self):
-        generation = server._current_playback_generation()
-        proc = _FakeProc()
-        stop = threading.Event()
-        watchdog = threading.Thread(
-            target=server._stream_abandon_watchdog,
-            args=("anytrack01", proc, generation, stop), daemon=True)
-        watchdog.start()
-        stop.set()
-        watchdog.join(timeout=5)
-        self.assertFalse(watchdog.is_alive())
-
-    def test_watchdog_ignores_a_non_cancellable_generation(self):
-        """generation=None means the stream is not cancellable; only the hard
-        cap may stop it."""
-        with mock.patch.object(server, "_notify_sse"):
-            server._update_now_playing(video_id="othertrack")
-        proc = _FakeProc()
-        stop = threading.Event()
-        with mock.patch.object(server, "_STREAM_SUPERSEDE_GRACE", 0.1):
-            watchdog = threading.Thread(
-                target=server._stream_abandon_watchdog,
-                args=("uncancellable", proc, None, stop), daemon=True)
-            watchdog.start()
-            time.sleep(0.5)
-            stop.set()
-            watchdog.join(timeout=5)
-        self.assertFalse(proc.killed)
-
-    def test_kill_process_tolerates_a_dead_process(self):
-        proc = _FakeProc()
-        proc.exit(0)
-        server._kill_process(proc)  # must not raise
-        self.assertFalse(proc.killed)
 
 
 # --------------------------------------------------------------------------
 # End-to-end: the exact click sequence from the incident
 # --------------------------------------------------------------------------
 
-class WarmCacheNeverBlocks(_CleanServerState):
-    """A cache hit must be served without touching the download semaphore.
-
-    `proxy_stream` used to call `ensure_downloaded()` on the warm path even
-    though it had just confirmed the file was cached. `ensure_downloaded`
-    acquires `_download_semaphore` *before* looking at the cache and with no
-    timeout, so serving an already-downloaded file queued behind up to
-    `_DOWNLOAD_CONCURRENCY` slow yt-dlp runs while holding a waitress worker
-    thread. That is what produced the incident's 154s/134s/114s /proxy/
-    responses which all completed within 9ms of each other as the backlog
-    drained — and on the device it is simply silence, because the Echo abandons
-    /proxy/ after ~11s.
-    """
-
-    def setUp(self):
-        super().setUp()
-        self.app = server.app.test_client()
-        self.key = os.environ["API_KEY"]
-
-    def test_cache_hit_is_served_while_all_download_permits_are_held(self):
-        held = 0
-        for _ in range(server._DOWNLOAD_CONCURRENCY):
-            server._download_semaphore.acquire()
-            held += 1
-        try:
-            sent = []
-
-            def fake_send_file(path, **kwargs):
-                sent.append(path)
-                return server.Response(b"audio-bytes", mimetype=kwargs.get(
-                    'mimetype', 'audio/mp4'))
-
-            started = time.time()
-            with mock.patch.object(server.Supporting, "cached_audio_path",
-                                   staticmethod(lambda vid: "/tmp/warm.m4a")), \
-                    mock.patch.object(server.Supporting, "ensure_downloaded") as ensure, \
-                    mock.patch.object(server, "send_file", side_effect=fake_send_file), \
-                    mock.patch.object(server, "_confirm_stream_delivery"), \
-                    mock.patch.object(server, "_refresh_radio_queue"), \
-                    mock.patch.object(server, "_lookup_and_update_np"), \
-                    mock.patch.object(server, "_notify_sse"):
-                resp = self.app.get(f"/proxy/?video_id=warmvid0001&key={self.key}")
-            elapsed = time.time() - started
-
-            self.assertEqual(resp.status_code, 200)
-            self.assertEqual(sent, ["/tmp/warm.m4a"])
-            ensure.assert_not_called()
-            self.assertLess(
-                elapsed, 3.0,
-                msg="a cache hit queued on the download semaphore — this is the "
-                    "multi-minute /proxy/ stall that silences the Echo")
-        finally:
-            for _ in range(held):
-                server._download_semaphore.release()
-
-    def test_cache_miss_after_the_check_falls_back_to_a_download(self):
-        """Guards the sweep race: the file can vanish between the cache check
-        and the send, and that must still produce audio rather than a 502."""
-        paths = ["/tmp/warm.m4a", None]
-        request_thread = threading.get_ident()
-
-        def cached_path(video_id):
-            # Background prefetch threads must not consume this request's race.
-            if video_id != "warmvid0002" or threading.get_ident() != request_thread:
-                return None
-            return paths.pop(0) if paths else None
-
-        with mock.patch.object(server.Supporting, "cached_audio_path",
-                               staticmethod(cached_path)), \
-                mock.patch.object(server.Supporting, "ensure_downloaded",
-                                  staticmethod(lambda vid, **kw: "/tmp/redownloaded.m4a")) as _, \
-                mock.patch.object(server, "send_file",
-                                  side_effect=lambda path, **kw: server.Response(
-                                      b"x", mimetype="audio/mp4")), \
-                mock.patch.object(server, "_confirm_stream_delivery"), \
-                mock.patch.object(server, "_refresh_radio_queue"), \
-                mock.patch.object(server, "_lookup_and_update_np"), \
-                mock.patch.object(server, "_notify_sse"):
-            resp = self.app.get(f"/proxy/?video_id=warmvid0002&key={self.key}")
-        self.assertEqual(resp.status_code, 200)
 
 
-class StreamBudgetIsSeparate(_CleanServerState):
-    def test_streams_do_not_consume_download_permits(self):
-        """Sharing one semaphore put best-effort prefetch in front of the track
-        the user is waiting on, and saturated the pool at 4.
-
-        Exercises the real `_stream_proxy_download` rather than just comparing
-        the two semaphore objects, so that swapping which one the streaming path
-        takes is actually detected.
-        """
-        proc = _FakeProc()
-        proc.stdout = _EmptyStdout()
-        proc.exit(0)
-
-        download_spy = _SemaphoreSpy(server._DOWNLOAD_CONCURRENCY)
-        stream_spy = _SemaphoreSpy(server._STREAM_CONCURRENCY)
-
-        with mock.patch.object(server, "_download_semaphore", download_spy), \
-                mock.patch.object(server, "_stream_semaphore", stream_spy), \
-                mock.patch.object(server.subprocess, "Popen", return_value=proc), \
-                mock.patch.object(server, "_confirm_stream_delivery"):
-            response = server._stream_proxy_download("streamvid001")
-            # Drain and close so the generator's cleanup runs.
-            b"".join(response.response)
-            response.close()
-
-        self.assertEqual(
-            download_spy.acquires, 0,
-            msg="a cold-cache stream took a permit from the background-download "
-                "budget, so prewarm work and playback compete for the same 4 slots")
-        self.assertEqual(stream_spy.acquires, 1)
-        self.assertEqual(stream_spy.releases, 1,
-                         msg="the stream slot leaked")
-
-    def test_stream_registry_claim_is_released_after_the_stream(self):
-        proc = _FakeProc()
-        proc.stdout = _EmptyStdout()
-        proc.exit(0)
-        with mock.patch.object(server.subprocess, "Popen", return_value=proc), \
-                mock.patch.object(server, "_confirm_stream_delivery"):
-            response = server._stream_proxy_download("streamvid002")
-            self.assertTrue(server._stream_is_inflight("streamvid002"))
-            b"".join(response.response)
-            response.close()
-        self.assertFalse(server._stream_is_inflight("streamvid002"),
-                         msg="the in-flight claim leaked, so every later request "
-                             "for this song would wait on a stream that ended")
-
-    def test_a_saturated_download_pool_does_not_block_a_stream_slot(self):
-        held = 0
-        for _ in range(server._DOWNLOAD_CONCURRENCY):
-            server._download_semaphore.acquire()
-            held += 1
-        try:
-            permit = server._SemaphorePermit(server._stream_semaphore)
-            try:
-                self.assertTrue(
-                    permit.acquire(timeout=0.5),
-                    msg="a stream could not get a slot because prewarm "
-                        "downloads had taken every permit")
-            finally:
-                permit.release()
-        finally:
-            for _ in range(held):
-                server._download_semaphore.release()
 
 
-class ForegroundDownloadPriority(_CleanServerState):
-    """The clicked song must never queue behind best-effort prefetch.
-
-    A cold-cache song costs ~9-10s of yt-dlp and the Echo abandons /proxy/ after
-    ~11s, so losing the race to a prewarm burst means the device plays silence.
-    The incident log shows exactly this: the user's track went down the cold
-    path 11s after dispatch because its background download was still stuck
-    behind other work ("streaming XOBbIb2ELs8 without a download permit").
-    """
-
-    def setUp(self):
-        super().setUp()
-        p = mock.patch.object(server.Supporting, "cached_audio_path",
-                              staticmethod(lambda vid: None))
-        p.start()
-        self.addCleanup(p.stop)
-        p2 = mock.patch.object(server.Supporting, "prune_audio_cache",
-                               staticmethod(lambda: None))
-        p2.start()
-        self.addCleanup(p2.stop)
-
-    def test_prefetch_cannot_occupy_the_whole_download_pool(self):
-        self.assertLess(
-            server._PREFETCH_CONCURRENCY, server._DOWNLOAD_CONCURRENCY,
-            msg="prefetch must be capped below the pool size, otherwise a "
-                "prewarm burst can starve the track the user is waiting on")
-
-    def test_prefetch_is_dropped_when_its_slots_are_busy(self):
-        held = 0
-        for _ in range(server._PREFETCH_CONCURRENCY):
-            server._prefetch_semaphore.acquire()
-            held += 1
-        try:
-            with mock.patch.object(server, "_PREFETCH_SLOT_TIMEOUT", 0.1), \
-                    mock.patch.object(server.subprocess, "run") as run:
-                result = server.Supporting.ensure_downloaded("extraprefetch",
-                                                             prefetch=True)
-            self.assertIsNone(result)
-            run.assert_not_called()
-            self.assertEqual(server._download_queue_size(), 0,
-                             msg="a dropped prefetch leaked queue depth")
-        finally:
-            for _ in range(held):
-                server._prefetch_semaphore.release()
-
-    def test_foreground_download_runs_while_prefetch_slots_are_saturated(self):
-        """The whole point: saturated prefetch must not delay a real play."""
-        held = 0
-        for _ in range(server._PREFETCH_CONCURRENCY):
-            server._prefetch_semaphore.acquire()
-            held += 1
-        try:
-            started = time.time()
-            with mock.patch.object(server.subprocess, "run",
-                                   return_value=_FakeCompleted(0, "")) as run:
-                server.Supporting.ensure_downloaded("clickedsong", prefetch=False)
-            elapsed = time.time() - started
-            self.assertTrue(run.called)
-            self.assertLess(elapsed, 1.0,
-                            msg="the clicked song waited on prefetch slots")
-        finally:
-            for _ in range(held):
-                server._prefetch_semaphore.release()
-
-    def test_prefetch_releases_its_slot(self):
-        with mock.patch.object(server.subprocess, "run",
-                               return_value=_FakeCompleted(0, "")):
-            server.Supporting.ensure_downloaded("prefetchdone", prefetch=True)
-        # All prefetch slots must be free again.
-        acquired = []
-        for _ in range(server._PREFETCH_CONCURRENCY):
-            acquired.append(server._prefetch_semaphore.acquire(blocking=False))
-        for got in acquired:
-            if got:
-                server._prefetch_semaphore.release()
-        self.assertTrue(all(acquired),
-                        msg="a prefetch slot leaked; prefetch would permanently "
-                            "throttle itself to zero")
-
-    def test_a_click_burst_leaves_permits_for_the_clicked_song(self):
-        """Simulates the reported sequence: a prewarm burst is in flight when the
-        user clicks, and the clicked song must still start immediately."""
-        release = threading.Event()
-        prefetch_started = threading.Semaphore(0)
-        foreground_ran = []
-        downloaded = set()
-
-        # One patch for the whole test, dispatching on the video_id in the
-        # command, so prewarm threads that outlive the click stay stubbed
-        # instead of shelling out to a real yt-dlp.
-        def dispatch_run(cmd, **kwargs):
-            video_id = cmd[-1]
-            if video_id == "clickedsong":
-                foreground_ran.append(video_id)
-                downloaded.add(video_id)
-                return _FakeCompleted(0, "")
-            prefetch_started.release()
-            release.wait(10)
-            downloaded.add(video_id)
-            return _FakeCompleted(0, "")
-
-        threads = []
-        try:
-            with mock.patch.object(server.subprocess, "run", side_effect=dispatch_run), \
-                    mock.patch.object(server.Supporting, "cached_audio_path", side_effect=lambda vid: '/tmp/' + vid + '.m4a' if vid in downloaded else None), \
-                    mock.patch.object(server, "_is_audio_file_valid", return_value=True):
-                # Saturate prefetch with more work than it has slots for.
-                for i in range(server._DOWNLOAD_CONCURRENCY * 2):
-                    t = threading.Thread(
-                        target=server.Supporting.ensure_downloaded,
-                        args=(f"prewarm{i:05d}",), kwargs={'prefetch': True},
-                        daemon=True)
-                    t.start()
-                    threads.append(t)
-                # Wait until prefetch is actually holding its slots.
-                for _ in range(server._PREFETCH_CONCURRENCY):
-                    self.assertTrue(prefetch_started.acquire(timeout=5))
-
-                started = time.time()
-                server.Supporting.ensure_downloaded("clickedsong", prefetch=False)
-                elapsed = time.time() - started
-
-                release.set()
-                for t in threads:
-                    t.join(timeout=10)
-                self.assertFalse([t for t in threads if t.is_alive()],
-                                 msg="prewarm threads outlived the patch")
-        finally:
-            release.set()
-
-        self.assertEqual(len(foreground_ran), 1,
-                         msg="the clicked song never reached yt-dlp")
-        self.assertLess(
-            elapsed, 3.0,
-            msg=f"the clicked song waited {elapsed:.1f}s behind the prewarm "
-                f"burst — past the Echo's ~11s /proxy/ window this is silence")
 
 
 class PlayIntentClaim(_CleanServerState):
@@ -1963,7 +903,7 @@ class DispatchCoalescing(_CleanServerState):
                 mock.patch.object(server, "PLAYBACK_CONFIRM_TIMEOUT_CACHED", 0.1), \
                 mock.patch.object(server, "PLAYBACK_CONFIRM_POLL_INTERVAL", 0.02), \
                 mock.patch.object(server, "PLAYBACK_BUFFERING_FEEDBACK_DELAY", 10.0), \
-                mock.patch.object(server.Supporting, "cached_audio_path",
+                mock.patch.object(server._youtube_stream.current, "has",
                                   staticmethod(lambda vid: None)):
             # First click dispatches normally, leaving a trigger in flight.
             server._schedule_play_dispatch("DEVICE1", "FIRST111111", delay=0.05)
@@ -2022,7 +962,7 @@ class RapidClickScenario(_CleanServerState):
         queue = [{'video_id': f"song{i:07d}", 'title': f"s{i}"} for i in range(12)]
         clicks = (0, 5, 9)
 
-        with mock.patch.object(server.Supporting, "cached_audio_path",
+        with mock.patch.object(server._youtube_stream.current, "has",
                                staticmethod(lambda vid: None)), \
                 mock.patch.object(server, "_ensure_audio_ready_for_play",
                                   side_effect=defer), \
@@ -2053,7 +993,7 @@ class RapidClickScenario(_CleanServerState):
 
     def test_a_429_during_the_burst_stops_all_prefetch(self):
         queue = [{'video_id': f"song{i:07d}", 'title': f"s{i}"} for i in range(12)]
-        with mock.patch.object(server.Supporting, "cached_audio_path",
+        with mock.patch.object(server._youtube_stream.current, "has",
                                staticmethod(lambda vid: None)), \
                 mock.patch.object(server, "_ensure_audio_ready_for_play") as ensure, \
                 mock.patch.object(server, "_notify_sse"):
@@ -2063,35 +1003,6 @@ class RapidClickScenario(_CleanServerState):
         self.assertEqual(warmed, 0)
         ensure.assert_not_called()
 
-    def test_watchdog_no_longer_resends_during_a_streaming_download(self):
-        """Second amplifier from the log: the watchdog resent the play command
-        because it could not see the streaming download, and the Echo opened
-        another /proxy/ request for the same song each time."""
-        server._stream_register("DRZHVrSmcWU")
-        self.addCleanup(lambda: server._stream_unregister("DRZHVrSmcWU"))
-        resends = []
-
-        with mock.patch.object(server, "_notify_sse"):
-            server._update_now_playing(video_id="DRZHVrSmcWU",
-                                       playback_confirmed=False)
-        with mock.patch.object(server, "PLAYBACK_CONFIRM_TIMEOUT", 0.3), \
-                mock.patch.object(server, "PLAYBACK_CONFIRM_POLL_INTERVAL", 0.05), \
-                mock.patch.object(server, "_notify_sse"):
-            watcher = threading.Thread(
-                target=server._watch_playback_confirmation,
-                args=("serial", "DRZHVrSmcWU", lambda: resends.append(1)),
-                daemon=True)
-            watcher.start()
-            # Well past the confirmation timeout: with the download visible, the
-            # watchdog must keep extending its deadline rather than resending.
-            time.sleep(1.0)
-            self.assertEqual(resends, [],
-                             msg="the watchdog resent the play command while "
-                                 "yt-dlp was still streaming the same song")
-            # Once the stream ends unconfirmed, the retry is legitimate again.
-            server._stream_unregister("DRZHVrSmcWU")
-            watcher.join(timeout=5)
-        self.assertEqual(len(resends), 1)
 
 
 # --------------------------------------------------------------------------
@@ -2142,7 +1053,7 @@ class PlaybackFailureAutoAdvance(_CleanServerState):
                 mock.patch.object(server, "PLAYBACK_CONFIRM_TIMEOUT_CACHED", 0.05), \
                 mock.patch.object(server, "PLAYBACK_CONFIRM_POLL_INTERVAL", 0.02), \
                 mock.patch.object(server, "PLAYBACK_BUFFERING_FEEDBACK_DELAY", 10.0), \
-                mock.patch.object(server.Supporting, "cached_audio_path",
+                mock.patch.object(server._youtube_stream.current, "has",
                                   staticmethod(lambda vid: None)), \
                 mock.patch.object(server, "_dispatch_play_with_retry",
                                   side_effect=lambda s, v, o=0: dispatched.append(v)), \
@@ -2169,7 +1080,7 @@ class PlaybackFailureAutoAdvance(_CleanServerState):
                 mock.patch.object(server, "PLAYBACK_CONFIRM_TIMEOUT_CACHED", 0.05), \
                 mock.patch.object(server, "PLAYBACK_CONFIRM_POLL_INTERVAL", 0.02), \
                 mock.patch.object(server, "PLAYBACK_BUFFERING_FEEDBACK_DELAY", 10.0), \
-                mock.patch.object(server.Supporting, "cached_audio_path",
+                mock.patch.object(server._youtube_stream.current, "has",
                                   staticmethod(lambda vid: None)), \
                 mock.patch.object(server, "_refresh_radio_queue"), \
                 mock.patch.object(server, "_notify_sse"), \
@@ -2189,7 +1100,7 @@ class PlaybackFailureAutoAdvance(_CleanServerState):
                 mock.patch.object(server, "PLAYBACK_CONFIRM_TIMEOUT_CACHED", 0.05), \
                 mock.patch.object(server, "PLAYBACK_CONFIRM_POLL_INTERVAL", 0.02), \
                 mock.patch.object(server, "PLAYBACK_BUFFERING_FEEDBACK_DELAY", 10.0), \
-                mock.patch.object(server.Supporting, "cached_audio_path",
+                mock.patch.object(server._youtube_stream.current, "has",
                                   staticmethod(lambda vid: None)), \
                 mock.patch.object(server, "_dispatch_play_with_retry",
                                   side_effect=lambda s, v, o=0: dispatched.append(v)), \
@@ -2225,7 +1136,7 @@ class PlaybackFailureRateLimit(_CleanServerState):
                 mock.patch.object(server, "PLAYBACK_CONFIRM_TIMEOUT_CACHED", 0.05), \
                 mock.patch.object(server, "PLAYBACK_CONFIRM_POLL_INTERVAL", 0.02), \
                 mock.patch.object(server, "PLAYBACK_BUFFERING_FEEDBACK_DELAY", 10.0), \
-                mock.patch.object(server.Supporting, "cached_audio_path",
+                mock.patch.object(server._youtube_stream.current, "has",
                                   staticmethod(lambda vid: None)), \
                 mock.patch.object(server, "_notify_sse"), \
                 mock.patch.object(server, "_update_now_playing",
@@ -2253,7 +1164,7 @@ class PlaybackFailureRateLimit(_CleanServerState):
                 mock.patch.object(server, "PLAYBACK_CONFIRM_TIMEOUT_CACHED", 0.05), \
                 mock.patch.object(server, "PLAYBACK_CONFIRM_POLL_INTERVAL", 0.02), \
                 mock.patch.object(server, "PLAYBACK_BUFFERING_FEEDBACK_DELAY", 10.0), \
-                mock.patch.object(server.Supporting, "cached_audio_path",
+                mock.patch.object(server._youtube_stream.current, "has",
                                   staticmethod(lambda vid: None)), \
                 mock.patch.object(server, "_notify_sse"):
             server._watch_playback_confirmation(
@@ -2275,7 +1186,7 @@ class PlaybackFailureAdaptiveTimeout(_CleanServerState):
                 mock.patch.object(server, "PLAYBACK_CONFIRM_TIMEOUT_CACHED", 0.2), \
                 mock.patch.object(server, "PLAYBACK_CONFIRM_POLL_INTERVAL", 0.02), \
                 mock.patch.object(server, "PLAYBACK_BUFFERING_FEEDBACK_DELAY", 10.0), \
-                mock.patch.object(server.Supporting, "cached_audio_path",
+                mock.patch.object(server._youtube_stream.current, "has",
                                   staticmethod(lambda vid: ("/tmp/x.m4a" if cached else None))), \
                 mock.patch.object(server, "_notify_sse"):
             server._watch_playback_confirmation(
@@ -2306,7 +1217,7 @@ class PlaybackFailureBufferingFeedback(_CleanServerState):
                 mock.patch.object(server, "PLAYBACK_CONFIRM_TIMEOUT_CACHED", 2.0), \
                 mock.patch.object(server, "PLAYBACK_CONFIRM_POLL_INTERVAL", 0.02), \
                 mock.patch.object(server, "PLAYBACK_BUFFERING_FEEDBACK_DELAY", 0.1), \
-                mock.patch.object(server.Supporting, "cached_audio_path",
+                mock.patch.object(server._youtube_stream.current, "has",
                                   staticmethod(lambda vid: None)), \
                 mock.patch.object(server, "_notify_sse"), \
                 mock.patch.object(server, "_update_now_playing",
@@ -2366,7 +1277,7 @@ class PlaybackFailureRetryRaceGuard(_CleanServerState):
                 mock.patch.object(server, "PLAYBACK_CONFIRM_TIMEOUT_CACHED", 0.05), \
                 mock.patch.object(server, "PLAYBACK_CONFIRM_POLL_INTERVAL", 0.02), \
                 mock.patch.object(server, "PLAYBACK_BUFFERING_FEEDBACK_DELAY", 10.0), \
-                mock.patch.object(server.Supporting, "cached_audio_path",
+                mock.patch.object(server._youtube_stream.current, "has",
                                   staticmethod(lambda vid: None)), \
                 mock.patch.object(server, "_download_in_progress",
                                   side_effect=fake_in_progress), \

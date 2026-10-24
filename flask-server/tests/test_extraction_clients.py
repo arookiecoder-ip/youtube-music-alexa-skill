@@ -101,48 +101,6 @@ class ClientOrder(unittest.TestCase):
                          ["tv_simply", "web_embedded", "default"])
 
 
-class FallbackLogging(unittest.TestCase):
-    def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(self.tmp.cleanup)
-        for name, value in (("AUDIO_CACHE_DIR", self.tmp.name),
-                            ("AUDIO_CACHE_TTL", 7200.0),
-                            ("WARMUP_TTL", 7200.0),
-                            ("AUDIO_CACHE_MAX_BYTES", 0),
-                            ("WARMUP_MAX_BYTES", 0),
-                            ("AUDIO_CACHE_MIN_FREE_BYTES", 0)):
-            patcher = mock.patch.object(server, name, value)
-            patcher.start()
-            self.addCleanup(patcher.stop)
-        with server._dead_video_ids_lock:
-            server._dead_video_ids.clear()
-        with server._flaky_video_ids_lock:
-            server._flaky_video_ids.clear()
-        server._last_prune[0] = time.time()
-
-    def test_fallback_win_logged_with_latency(self):
-        calls = []
-
-        def run(command, **kw):
-            calls.append(command)
-            if len(calls) == 1:
-                return subprocess.CompletedProcess(
-                    command, 1, stderr="ERROR: some transient edge reset")
-            out = command[command.index("-o") + 1].replace("%(ext)s", "m4a")
-            with open(out, "wb") as fp:
-                fp.write(b"\0" * MB)
-            return subprocess.CompletedProcess(command, 0)
-
-        with mock.patch.object(server.subprocess, "run", side_effect=run), \
-             mock.patch.object(server, "_is_audio_file_valid",
-                               return_value=True), \
-             self.assertLogs(server.logger, level="INFO") as logs:
-            path = server.Supporting.ensure_downloaded("fblog0000001")
-        self.assertIsNotNone(path)
-        self.assertEqual(len(calls), 2)
-        fallback_lines = [m for m in logs.output if "clients tried" in m]
-        self.assertTrue(fallback_lines, logs.output)
-        self.assertIn("2/4 clients tried", fallback_lines[0])
 
 
 if __name__ == "__main__":

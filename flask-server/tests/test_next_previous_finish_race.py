@@ -123,10 +123,6 @@ class _BaseScenario(unittest.TestCase):
             server._dead_video_ids.clear()
         with server._flaky_video_ids_lock:
             server._flaky_video_ids.clear()
-        with server._stream_inflight_lock:
-            server._stream_inflight.clear()
-        with server._download_queue_lock:
-            server._download_queue_depth = 0
         with server._PENDING_DISPATCH_LOCK:
             server._PENDING_DISPATCH.clear()
         with server._TRIGGER_INFLIGHT_LOCK:
@@ -180,7 +176,7 @@ class _BaseScenario(unittest.TestCase):
         # and the wrapper `_ensure_audio_ready_for_play` flow into the same
         # recorder, so a regression that swaps one for the other still hits
         # the test's asserts.
-        self._patch(server.Supporting, 'ensure_downloaded',
+        self._patch(server._youtube_stream, 'resolve',
                     self._record_download)
         self._patch(server, '_ensure_audio_ready_for_play',
                     lambda video_id, wait=False, generation=None,

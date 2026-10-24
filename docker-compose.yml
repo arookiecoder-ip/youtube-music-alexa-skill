@@ -22,7 +22,6 @@ services:
       # cookies.txt is provisioned separately in the project root and is
       # gitignored; expose that exact file to yt-dlp inside the container.
       - ./cookies.txt:/app/cookies.txt:ro
-      - ytmusic_cache:/tmp/ytm_audio_cache
       - ytmusic_data:/data
       # Amazon/Alexa login session cookie (see alexa_remote.py ALEXA_COOKIE_DIR).
       # Without this volume, every rebuild/restart wipes it and forces a fresh
@@ -78,7 +77,6 @@ networks:
     name: web
 
 volumes:
-  ytmusic_cache:
   ytmusic_data:
   ytmusic_alexa_cookies:
   ytmusic_chromium_profile:

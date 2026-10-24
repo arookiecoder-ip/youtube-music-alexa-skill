@@ -2,15 +2,14 @@
 
 The supported deployment is one owner with multiple phone/Echo devices and Jam
 guests, served by one authoritative Flask process. Keep the existing SQLite,
-credentials and audio-cache volumes. Do not increase WSGI process count or add
+credentials volumes. Do not increase WSGI process count or add
 replicas: ownership leases, queue locks and provider caches are process-local.
 Multiple threads in the same process are supported.
 
 Docker playback uses the persistent YouTube streaming client described in
 [STREAMING_AUDIO.md](STREAMING_AUDIO.md). It replaces per-song yt-dlp startup
-and file buffering for playback; explicit downloads and the disabled-mode
-legacy cache path remain available. Queue preparation warms media URLs instead
-of audio files while streaming is enabled.
+and persistent file buffering. Explicit downloads also stream directly. Only
+temporary current-track bytes are retained; queue preparation warms URLs only.
 
 ## Components
 

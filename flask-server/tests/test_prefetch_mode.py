@@ -71,110 +71,30 @@ WAIT = "waitprf0001"
 
 class PrefetchMode(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory()
-        self.addCleanup(self.tmp.cleanup)
-        for name, value in (("AUDIO_CACHE_DIR", self.tmp.name),
-                            ("AUDIO_CACHE_TTL", 7200.0),
-                            ("WARMUP_TTL", 7200.0),
-                            ("AUDIO_CACHE_MAX_BYTES", 0),
-                            ("WARMUP_MAX_BYTES", 0),
-                            ("AUDIO_CACHE_MIN_FREE_BYTES", 0)):
-            patcher = mock.patch.object(server, name, value)
-            patcher.start()
-            self.addCleanup(patcher.stop)
-        pin = mock.patch.object(server, "_pinned_cache_video_ids", return_value=set())
-        pin.start()
-        self.addCleanup(pin.stop)
-        self.app = server.app.test_client()
-        self.headers = {"X-Api-Key": os.environ["API_KEY"]}
+        self.app=server.app.test_client()
+        self.headers={'X-Api-Key':server.API_KEY}
 
-    def get(self, query, **kw):
-        headers = dict(self.headers)
-        headers.update(kw.pop("headers", {}))
-        return self.app.get(f"/audio/?{query}", headers=headers, **kw)
+    def get(self, query, **kwargs):
+        return self.app.get('/audio/?'+query, headers=self.headers, **kwargs)
 
-    def make(self, video_id, size=MB, used_ago=600.0):
-        path = os.path.join(self.tmp.name, video_id + ".m4a")
-        with open(path, "wb") as fp:
-            fp.write(b"\0" * size)
-        now = time.time()
-        os.utime(path, (now - used_ago, now - used_ago))
-        return path
+    def test_prefetch_prepares_only_a_url_and_never_opens_audio(self):
+        with mock.patch.object(server, '_ensure_audio_ready_for_play') as prepare, mock.patch.object(server._youtube_stream,'open') as audio:
+            r=self.get('video_id='+MISS+'&prefetch=1')
+            self.assertEqual(r.status_code,202);self.assertTrue(r.json['streaming'])
+            prepare.assert_called_once_with(MISS,prefetch=True);audio.assert_not_called()
 
-    def test_miss_returns_202_and_spawns_background_prefetch(self):
-        with mock.patch.object(server, "_ensure_audio_ready_for_play") as ready, \
-             mock.patch.object(server.Supporting, "ensure_downloaded") as dl:
-            started = time.time()
-            resp = self.get(f"video_id={MISS}&prefetch=1")
-            elapsed = time.time() - started
-        self.assertEqual(resp.status_code, 202)
-        body = resp.get_json()
-        self.assertEqual(body["error"]["code"], "prefetch_deferred")
-        self.assertEqual(resp.headers["Retry-After"], "5")
-        ready.assert_called_once_with(MISS, wait=False, generation=None, prefetch=True)
-        dl.assert_not_called()  # never blocks on a synchronous download
-        self.assertLess(elapsed, 5)
+    def test_info_precedes_prefetch(self):
+        with mock.patch.object(server,'_ensure_audio_ready_for_play') as prepare:
+            r=self.get('video_id='+MISS+'&info=1&prefetch=1')
+            self.assertEqual(r.status_code,200);self.assertIn('audio_url',r.json);prepare.assert_not_called()
 
-    def test_hit_returns_200_cached_without_lru_touch_or_spawn(self):
-        path = self.make(HIT, used_ago=1000)
-        before = os.stat(path).st_atime
-        with mock.patch.object(server, "_ensure_audio_ready_for_play") as ready, \
-             mock.patch.object(server.Supporting, "ensure_downloaded") as dl:
-            resp = self.get(f"video_id={HIT}&prefetch=1")
-        self.assertEqual(resp.status_code, 200)
-        body = resp.get_json()
-        self.assertTrue(body["cached"])
-        self.assertEqual(body["video_id"], HIT)
-        self.assertIn("audio_url", body)
-        ready.assert_not_called()
-        dl.assert_not_called()
-        self.assertEqual(os.stat(path).st_atime, before)
-
-    def test_info_wins_over_prefetch(self):
-        with mock.patch.object(server, "_ensure_audio_ready_for_play") as ready:
-            resp = self.get(f"video_id={MISS}&info=1&prefetch=1")
-        self.assertEqual(resp.status_code, 200)
-        body = resp.get_json()
-        self.assertIn("audio_url", body)
-        self.assertNotIn("error", body)
-        ready.assert_not_called()
-
-    def test_prefetch_wins_over_wait(self):
-        with mock.patch.object(server, "_ensure_audio_ready_for_play") as ready, \
-             mock.patch.object(server.Supporting, "ensure_downloaded") as dl:
-            resp = self.get(f"video_id={WAIT}&wait=1&prefetch=1")
-        self.assertEqual(resp.status_code, 202)
-        ready.assert_called_once_with(WAIT, wait=False, generation=None, prefetch=True)
-        dl.assert_not_called()
-
-    def test_header_alone_keeps_legacy_blocking_behavior(self):
-        # No query param: the old header path still does a synchronous
-        # (prefetch-flagged) download and answers 503 when it yields nothing.
-        # wait=1 skips the live-stream branch so the test never needs yt-dlp.
-        with mock.patch.object(server, "_ensure_audio_ready_for_play") as ready, \
-             mock.patch.object(server.Supporting, "ensure_downloaded",
-                               return_value=None) as dl:
-            resp = self.get(f"video_id={MISS}&wait=1",
-                            headers={"X-MusicBox-Prefetch": "1"})
-        self.assertEqual(resp.status_code, 503)
-        dl.assert_called_once_with(MISS, prefetch=True)
-        ready.assert_not_called()
-
-    def test_dead_video_prefetch_is_404_without_spawn(self):
-        server._mark_video_dead(MISS)
-        try:
-            with mock.patch.object(server, "_ensure_audio_ready_for_play") as ready:
-                resp = self.get(f"video_id={MISS}&prefetch=1")
-            self.assertEqual(resp.status_code, 404)
-            ready.assert_not_called()
-        finally:
-            with server._dead_video_ids_lock:
-                server._dead_video_ids.clear()
+    def test_prefetch_precedes_wait_without_touching_current(self):
+        current=server._youtube_stream.current
+        before=current.video
+        with mock.patch.object(server,'_ensure_audio_ready_for_play') as prepare:
+            r=self.get('video_id='+MISS+'&wait=1&prefetch=1')
+            self.assertEqual(r.status_code,202);prepare.assert_called_once_with(MISS,prefetch=True)
+        self.assertEqual(current.video,before)
 
     def test_requires_api_key(self):
-        resp = self.app.get(f"/audio/?video_id={MISS}&prefetch=1")
-        self.assertEqual(resp.status_code, 401)
-
-
-if __name__ == "__main__":
-    unittest.main()
+        self.assertEqual(self.app.get('/audio/?video_id='+MISS+'&prefetch=1').status_code,401)

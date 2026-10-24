@@ -23,10 +23,6 @@ from werkzeug.serving import make_server
 def live_server():
     with tempfile.TemporaryDirectory() as directory, ExitStack() as stack:
         root = Path(directory)
-        (root/'AAAAAAAAAAA.m4a').write_bytes(b'a'*4096)
-        (root/'BBBBBBBBBBB.webm').write_bytes(b'b'*2048)
-        (root/'BBBBBBBBBBB.warmup').write_bytes(b'')
-        (root/'CCCCCCCCCCC.part').write_bytes(b'c'*128)
         database = root/'state.db'
         with sqlite3.connect(database) as conn:
             conn.execute('create table fixture (id integer)')
@@ -36,15 +32,13 @@ def live_server():
         journal.record('ERROR','fixture','Audio decoder failed',trace='ParserException: invalid packet')
         journal.record('INFO','fixture','After audio failure')
         journal.drain()
-        for name, value in [('_status_journal',journal), ('DB_FILE', str(database)), ('AUDIO_CACHE_DIR', directory), ('_operational', Metrics()), ('_status_storage', CachedCollector())]:
+        for name, value in [('_status_journal',journal), ('DB_FILE', str(database)), ('_operational', Metrics()), ('_status_storage', CachedCollector())]:
             stack.enter_context(mock.patch.object(server, name, value))
         stack.enter_context(mock.patch.object(server.Supporting, 'get_ytdlp_cookies_file', return_value=None))
         stack.enter_context(mock.patch.object(server, '_ensure_db'))
         stack.enter_context(mock.patch.object(server, '_valid_sids', set()))
         stack.enter_context(mock.patch.object(server, '_totp_enabled', return_value=False))
         stack.enter_context(mock.patch.dict(server.app.config, {'SESSION_COOKIE_SECURE':False}))
-        server.Supporting.cached_audio_path('AAAAAAAAAAA')
-        server.Supporting.cached_audio_path('DDDDDDDDDDD')
         app = make_server('127.0.0.1', 0, server.app, threaded=True)
         worker = threading.Thread(target=app.serve_forever, daemon=True); worker.start()
         try: yield f'http://127.0.0.1:{app.server_port}'
@@ -54,7 +48,7 @@ def live_server():
 @pytest.fixture()
 def browser_page(live_server):
     with playwright.sync_playwright() as driver:
-        browser = driver.chromium.launch(headless=True)
+        browser = driver.chromium.launch(headless=True, executable_path=os.environ.get('PLAYWRIGHT_CHROMIUM_EXECUTABLE'))
         context = browser.new_context(viewport={'width':1440,'height':1050})
         login=context.request.post(live_server+'/login/', form={'username':server.REMOTE_USER,'password':server.REMOTE_PASSWORD})
         assert login.status==200 and login.json()['ok']
@@ -77,20 +71,14 @@ def screenshot(page, name, fallback):
 def ready(page, base):
     page.goto(base+'/status')
     playwright.expect(page.locator('#updated')).to_contain_text('Updated')
-    playwright.expect(page.locator('#inventory')).to_contain_text('AAAAAAAAAAA')
+    playwright.expect(page.locator('#request-total')).to_contain_text('total')
 
 
 def test_desktop_filters_pause_export_manual_cookie_probe_and_no_javascript_errors(browser_page, tmp_path):
     page, base, errors = browser_page
     ready(page, base)
-    playwright.expect(page.locator('#hit-rate')).to_have_text('50%')
-    page.locator('#pool').select_option('warmup')
-    playwright.expect(page.locator('#inventory tr')).to_have_count(1)
-    playwright.expect(page.locator('#inventory')).to_contain_text('BBBBBBBBBBB')
-    page.locator('#pool').select_option('partial')
-    playwright.expect(page.locator('#inventory')).to_contain_text('CCCCCCCCCCC')
-    page.locator('#search').fill('not-matching')
-    playwright.expect(page.locator('#inventory')).to_contain_text('No matching data')
+    assert page.locator('#cache-section, #inventory-section, #cache-layers-section, #hit-rate').count()==0
+    assert 'audio' not in page.request.get(base+'/api/status').json()['storage']
     page.locator('#pause').click()
     playwright.expect(page.locator('#pause')).to_have_text('Resume updates')
     page.locator('#refresh').click()
@@ -104,8 +92,6 @@ def test_desktop_filters_pause_export_manual_cookie_probe_and_no_javascript_erro
     payload=json.loads(path.read_text())
     assert payload['scope']=='current_process'
     assert server.API_KEY not in path.read_text()
-    page.locator('#search').fill('')
-    page.locator('#pool').select_option('all')
     screenshot(page, 'musicbox-status-desktop.png', tmp_path)
     assert not errors
 
@@ -117,11 +103,11 @@ def test_mobile_no_overflow_secret_url_removed_and_failed_refresh_keeps_snapshot
     playwright.expect(page.locator('#updated')).to_contain_text('Updated')
     assert 'key=' not in page.url
     assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
-    before=page.locator('#inventory-summary').inner_text()
+    before=page.locator('#request-total').inner_text()
     page.route('**/api/status', lambda route: route.fulfill(status=503,json={'error':'outage'}))
     page.locator('#refresh').click()
     playwright.expect(page.locator('#notice')).to_contain_text('Keeping the snapshot')
-    assert before==page.locator('#inventory-summary').inner_text()
+    assert before==page.locator('#request-total').inner_text()
     screenshot(page, 'musicbox-status-mobile.png', tmp_path)
     assert not errors
 
@@ -152,85 +138,19 @@ def test_responsive_layout_capacity_and_expandable_details(browser_page, width):
     page.set_viewport_size({'width':width,'height':900})
     ready(page, base)
     assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
-    playwright.expect(page.locator('#cache-used')).to_have_text('6 KiB')
-    playwright.expect(page.locator('#cache-budget')).to_have_text('of 5 GiB used')
-    assert page.locator('#cache-meter').get_attribute('aria-valuenow') is not None
-    page.get_by_role('button', name='Capacity & cleanup policy', exact=True).click()
-    playwright.expect(page.locator('#retention')).to_contain_text('Until space is needed · LRU')
-    playwright.expect(page.locator('#retention')).to_contain_text('Shared with total music cache')
-    page.get_by_label('Close panel details').click()
+    assert page.locator('#cache-section, #inventory-section').count()==0
     page.get_by_role('button', name='Resource details', exact=True).click()
     playwright.expect(page.locator('#system')).to_be_visible()
     page.get_by_label('Close panel details').click()
     if width <= 900:
         page.get_by_label('Open status navigation').click()
-    page.locator('.section-nav a[href="#cache-section"]').click()
-    playwright.expect(page.locator('.section-nav a[aria-current]')).to_have_text('Music cache')
+    page.locator('.section-nav a[href="#pipeline"]').click()
+    playwright.expect(page.locator('.section-nav a[aria-current]')).to_have_text('Connections')
     assert not errors
 
 
-def test_capacity_meter_sampled_over_budget_unlimited_and_unavailable(browser_page, tmp_path):
-    page, base, errors = browser_page
-    ready(page, base)
-    payload = page.request.get(base+'/api/status').json()
-    mib = 1024*1024
-    payload['storage']['audio'].update(ready_bytes=512*mib, warmup_bytes=128*mib, pinned_bytes=64*mib, partial_bytes=32*mib)
-    payload['limits']['audio_bytes'] = 1024*mib
-    def respond(route): route.fulfill(json=payload)
-    page.route('**/api/status', respond)
-    page.locator('#refresh').click()
-    playwright.expect(page.locator('#cache-percent')).to_have_text('50%')
-    playwright.expect(page.locator('#cache-used')).to_have_text('512 MiB')
-    playwright.expect(page.locator('#cache-requested')).to_have_text('384 MiB')
-    playwright.expect(page.locator('#cache-warmup')).to_have_text('128 MiB')
-    assert page.locator('#cache-meter').get_attribute('aria-valuenow') == '50'
-    assert page.locator('#cache-requested-bar').evaluate('el => el.style.width') == '37.5%'
-    assert page.locator('#cache-warmup-bar').evaluate('el => el.style.width') == '12.5%'
-    screenshot(page, 'musicbox-status-capacity-desktop.png', tmp_path)
-    page.set_viewport_size({'width':390,'height':844})
-    screenshot(page, 'musicbox-status-capacity-mobile.png', tmp_path)
-    payload['storage']['audio']['complete'] = False
-    page.locator('#refresh').click()
-    playwright.expect(page.locator('#cache-used')).to_have_text('At least 512 MiB')
-    playwright.expect(page.locator('#cache-remaining')).to_have_text('Not yet known')
-    payload['storage']['audio'].update(complete=True,ready_bytes=2048*mib)
-    page.locator('#refresh').click()
-    playwright.expect(page.locator('#cache-percent')).to_have_text('200%')
-    playwright.expect(page.locator('#cache-capacity-note')).to_contain_text('Over budget')
-    assert page.locator('#cache-meter').get_attribute('aria-valuenow') == '100'
-    payload['limits']['audio_bytes'] = 0
-    page.locator('#refresh').click()
-    playwright.expect(page.locator('#cache-budget')).to_have_text('used · no size limit')
-    assert page.locator('#cache-meter').get_attribute('aria-valuenow') is None
-    payload['storage']['audio']['available'] = False
-    page.locator('#refresh').click()
-    playwright.expect(page.locator('#cache-used')).to_have_text('—')
-    playwright.expect(page.locator('#cache-capacity-note')).to_contain_text('unavailable')
-    assert not errors
 
 
-def test_cache_detail_is_lazy_shows_loader_and_filters_only_selected_cache(browser_page, tmp_path):
-    page, base, errors=browser_page
-    calls=[]
-    page.on('request',lambda request:calls.append(request.url) if '/api/status/cache/' in request.url else None)
-    ready(page,base)
-    assert not calls
-    pending=[]
-    page.route('**/api/status/cache/**',lambda route:pending.append(route))
-    page.locator('[data-cache-name="audio_lookups"]').click()
-    playwright.expect(page.locator('#status-dialog')).to_be_visible()
-    playwright.expect(page.locator('#dialog-state')).to_have_text('Loading…')
-    assert len(pending)==1
-    pending.pop().fulfill(json={'entries':[{'at':1790000000,'outcome':'hit','key':'abc','video_id':'AAAAAAAAAAA','reason':'lookup'}], 'totals':{'hits':1,'misses':0},'next_before':None})
-    playwright.expect(page.locator('#dialog-body')).to_contain_text('AAAAAAAAAAA')
-    screenshot(page, 'musicbox-status-cache-details.png', tmp_path)
-    page.get_by_label('Cache outcome').select_option('miss')
-    playwright.expect(page.locator('#dialog-state')).to_have_text('Loading…')
-    assert 'outcome=miss' in pending[0].request.url
-    pending.pop().fulfill(json={'entries':[], 'totals':{'hits':1,'misses':0},'next_before':None})
-    playwright.expect(page.locator('#dialog-body')).to_contain_text('No retained lookups')
-    page.keyboard.press('Escape');playwright.expect(page.locator('#status-dialog')).not_to_be_visible()
-    assert not errors
 
 
 def test_error_details_context_and_explicit_seen_with_mobile_dialog(browser_page, tmp_path):
@@ -273,22 +193,6 @@ def test_logs_load_on_demand_search_literal_and_severity_filter(browser_page):
     assert not errors
 
 
-def test_closing_loading_cache_dialog_ignores_late_response(browser_page):
-    page,base,errors=browser_page
-    ready(page,base)
-    pending=[]
-    page.route('**/api/status/cache/**',lambda route:pending.append(route))
-    page.locator('#audio-cache-details').click()
-    playwright.expect(page.locator('#dialog-state')).to_have_text('Loading…')
-    page.locator('#dialog-close').click()
-    page.locator('[data-cache-name="audio_search"]').click()
-    playwright.expect(page.locator('#dialog-title')).to_have_text('Audio resolver results')
-    playwright.expect(page.locator('#dialog-state')).to_have_text('Loading…')
-    pending[-1].fulfill(json={'entries':[], 'totals':{},'next_before':None})
-    playwright.expect(page.locator('#dialog-body')).to_contain_text('has not been used')
-    try: pending[0].abort()
-    except Exception: pass  # Browser already cancelled the old request.
-    assert not errors
 
 
 def test_paused_logs_do_not_resume_on_visibility_changes_or_timer_ticks(browser_page):
@@ -307,28 +211,8 @@ def test_paused_logs_do_not_resume_on_visibility_changes_or_timer_ticks(browser_
     assert not errors
 
 
-def test_account_client_details_use_cookie_session_without_api_key(browser_page):
-    page,base,errors=browser_page
-    requests=[]
-    page.on('request',lambda request:requests.append(request) if '/api/status/cache/' in request.url else None)
-    ready(page,base)
-    page.locator('[data-cache-name="account_ytmusic_clients"]').click()
-    playwright.expect(page.locator('#dialog-body')).to_contain_text('Since restart:')
-    playwright.expect(page.locator('#dialog-state')).to_have_text('')
-    assert len(requests)==1
-    assert 'key=' not in requests[0].url
-    assert 'x-api-key' not in requests[0].headers
-    assert not errors
 
 
-def test_expired_owner_session_has_actionable_cache_dialog_message(browser_page):
-    page,base,errors=browser_page
-    ready(page,base)
-    page.route('**/api/status/cache/**',lambda route:route.fulfill(status=401,json={'error':'expired'}))
-    page.locator('[data-cache-name="account_ytmusic_clients"]').click()
-    playwright.expect(page.locator('#dialog-state')).to_contain_text('Your owner session expired or access was denied')
-    playwright.expect(page.locator('#dialog-state')).to_contain_text('Sign in again')
-    assert not errors
 
 
 @pytest.mark.parametrize('width', [320, 390, 768, 1024, 1440, 1920])
@@ -337,16 +221,16 @@ def test_navigation_and_details_do_not_move_dashboard(browser_page, width, tmp_p
     page.set_viewport_size({'width': width, 'height': 950})
     ready(page, base)
     page.locator('#pause').click()
-    before = page.locator('#inventory-section').evaluate('el => el.getBoundingClientRect().top + scrollY')
+    before = page.locator('#live-log-section').evaluate('el => el.getBoundingClientRect().top + scrollY')
     page.get_by_role('button', name='Resource details', exact=True).click()
     playwright.expect(page.locator('#panel-dialog')).to_be_visible()
     playwright.expect(page.locator('#system')).to_be_visible()
-    assert page.locator('#inventory-section').evaluate('el => el.getBoundingClientRect().top + scrollY') == before
+    assert page.locator('#live-log-section').evaluate('el => el.getBoundingClientRect().top + scrollY') == before
     # The live data node is moved, not copied: refreshes keep updating this dialog.
     assert page.locator('#system').count() == 1
     page.keyboard.press('Escape')
     playwright.expect(page.locator('#panel-dialog')).not_to_be_visible()
-    assert page.locator('#inventory-section').evaluate('el => el.getBoundingClientRect().top + scrollY') == before
+    assert page.locator('#live-log-section').evaluate('el => el.getBoundingClientRect().top + scrollY') == before
     if width <= 900:
         toggle = page.get_by_label('Open status navigation')
         toggle.click()
@@ -356,9 +240,9 @@ def test_navigation_and_details_do_not_move_dashboard(browser_page, width, tmp_p
         playwright.expect(toggle).to_be_focused()
         playwright.expect(toggle).to_have_attribute('aria-expanded', 'false')
         toggle.click()
-        page.locator('#status-nav a[href="#live-log-section"]').click()
+        page.locator('#status-nav a[href="#activity-section"]').click()
         playwright.expect(page.locator('#nav-drawer')).not_to_be_visible()
-        playwright.expect(page.locator('#status-nav a[aria-current]')).to_have_text('Server logs')
+        playwright.expect(page.locator('#status-nav a[aria-current]')).to_have_text('Activity')
         toggle.click()
         page.set_viewport_size({'width': 1440, 'height': 950})
         playwright.expect(page.locator('#nav-drawer')).not_to_be_visible()
@@ -381,11 +265,11 @@ def test_open_panel_details_receive_refresh_without_moving_cards(browser_page):
     payload['storage']['system']['cpu_count'] = 999
     page.route('**/api/status', lambda route: route.fulfill(json=payload))
     page.get_by_role('button', name='Resource details', exact=True).click()
-    before = page.locator('#inventory-section').evaluate('el => el.getBoundingClientRect().top + scrollY')
+    before = page.locator('#live-log-section').evaluate('el => el.getBoundingClientRect().top + scrollY')
     # An automatic snapshot refresh uses the same path while the page is inert.
     page.locator('#refresh').evaluate('el => el.click()')
     playwright.expect(page.locator('#panel-dialog #system')).to_contain_text('999')
-    assert page.locator('#inventory-section').evaluate('el => el.getBoundingClientRect().top + scrollY') == before
+    assert page.locator('#live-log-section').evaluate('el => el.getBoundingClientRect().top + scrollY') == before
     page.keyboard.press('Escape')
     page.get_by_role('button', name='Resource details', exact=True).click()
     playwright.expect(page.locator('#panel-dialog #system')).to_contain_text('999')
@@ -402,42 +286,21 @@ def test_navigation_scrolls_to_section_clear_of_fixed_header(browser_page, width
         page.get_by_label('Open status navigation').click()
     else:
         assert page.locator('#status-nav').evaluate('el => getComputedStyle(el).flexDirection') == 'row'
-    page.locator('#status-nav a[href="#inventory-section"]').click()
+    page.locator('#status-nav a[href="#activity-section"]').click()
     padding = 84 if width <= 900 else 152
     page.evaluate('''padding => new Promise((resolve, reject) => {
       const start = performance.now();
       function check() {
-        if (Math.abs(document.querySelector('#inventory-section').getBoundingClientRect().top - padding) < 3) return resolve();
+        if (Math.abs(document.querySelector('#activity-section').getBoundingClientRect().top - padding) < 3) return resolve();
         if (performance.now() - start > 5000) return reject(new Error('Section did not clear the fixed header'));
         requestAnimationFrame(check);
       }
       check();
     })''', padding)
-    playwright.expect(page.locator('#status-nav a[aria-current]')).to_have_text('Cached songs')
+    playwright.expect(page.locator('#status-nav a[aria-current]')).to_have_text('Activity')
     assert not errors
 
 
-def test_fetch_history_and_specialized_cache_details_are_real_and_on_demand(browser_page):
-    page, base, errors = browser_page
-    ready(page, base)
-    page.locator('#pause').click()
-    payload = page.request.get(base+'/api/status').json()
-    payload['recent_fetches'] = [{'video_id': 'ZZZZZZZZZZZ', 'client': 'android', 'mode': 'prefetch', 'status': 'succeeded', 'at': payload['generated_at'], 'duration_ms': 450}]
-    payload['fetches'] = {'succeeded': 1, 'failed': 0}
-    page.route('**/api/status', lambda route: route.fulfill(json=payload))
-    page.locator('#refresh').click()
-    playwright.expect(page.locator('#active-fetches')).to_contain_text('ZZZZZZZZZZZ · prefetch · succeeded')
-    assert page.locator('#fetch-section').evaluate('el => getComputedStyle(el).overflowY') == 'visible'
-    for name in ['audio_search', 'stream_search', 'playlist_tracks']:
-        page.locator(f'[data-cache-name="{name}"]').click()
-        playwright.expect(page.locator('#status-dialog')).to_be_visible()
-        playwright.expect(page.locator('#dialog-body')).to_contain_text('bypass')
-        playwright.expect(page.locator('#dialog-body')).not_to_contain_text('Could not load')
-        page.keyboard.press('Escape')
-    page.get_by_role('button', name='Fetching details', exact=True).click()
-    playwright.expect(page.locator('#panel-dialog #fetching')).to_contain_text('Download / prefetch / stream budgets')
-    assert page.locator('#pool').evaluate('el => getComputedStyle(el).appearance') == 'none'
-    assert not errors
 
 
 

@@ -5,8 +5,7 @@ Jam guests cannot access it. The JSON snapshot is at `/api/status`; existing own
 API-key authentication also works. Prefer the owner session over a key in a URL.
 If a key is supplied in the page URL, JavaScript removes it from browser history
 and uses it in memory for API headers. Responses are private and not cached.
-The layout uses the main site’s black/charcoal/orange theme, a shared-capacity
-bar, a cache-hit ring, connection tiles and compact mobile inventory cards.
+The layout uses the main site’s black/charcoal/orange theme, connection tiles, resource meters, streaming activity and owner-only logs.
 No cookie values, API keys, account identifiers, absolute storage paths or query
 strings are included in snapshots or exports.
 
@@ -16,24 +15,9 @@ strings are included in snapshots or exports.
   average/max latency; p50/p95/p99 use the latest 1,024 requests. The chart retains
   60 one-minute buckets. Latency ends at response headers, not the end of a stream.
   Status polling and static assets are excluded from request counters.
-- Cache: hits/misses for audio-path lookups, audio responses with `X-Cache`, audio
-  search and public/account YouTube Music clients. These are different layers,
-  not a single end-to-end cache rate. Client-cache capacity and entry counts are
-  also shown. A ready file means a recognized file extension, not validated media. The music
-  capacity meter counts completed audio; partials and metadata are separate.
-  Prefetched and protected bytes are subsets, never added twice. Completed audio
-  stays until capacity/disk pressure requires LRU eviction across both pools.
-  There is no idle expiry or separate warmup cap. Current tracks, active fetches
-  and just-written audio are protected; the budget can temporarily be exceeded.
-  Only abandoned partials have a cleanup timeout.
-- Inventory: ready/partial audio, requested/warmup pools, pinned bytes, idle ages,
-  the shared 5 GiB capacity meter and reserve limits. It retains the newest 200 audio rows,
-  scans at most 20,000 directory entries or 150 ms, and marks incomplete totals
-  as lower bounds. Symlinks are excluded. Metadata files count in storage totals.
-- Fetching: queued plus running downloads, concurrency limits, active yt-dlp
-  attempts and streams, cooldown and known dead/flaky video counts. Completed
-  yt-dlp success means exit code zero, not a media-integrity guarantee. Up to 64
-  active attempts and 60 recent HTTP-error/fetch events are retained.
+- Streaming: active audio responses, bounded stream slots, URL preparation jobs,
+  cooldown and known unavailable/transient track counts. Current-track byte reuse
+  remains an internal playback detail, with no saved-song inventory or cache UI.
 - Storage/runtime: disk capacity and free space, read-only SQLite availability,
   process RSS/CPU time, threads, host load and memory, and cgroup v2 limits where
   available. Host load is not container CPU utilization. Unknown values remain
@@ -84,20 +68,7 @@ playback regressions remain in a separate job and isolated module processes.
 Deploy the backend branch to expose the panel; no Android build is required.
 
 
-## Live logs, errors and lazy cache details
-
-Cache labels describe what is measured: saved audio checks, audio-response
-caching, account/public API client objects, audio resolver results, playback
-stream lists and playlist track lists. Normal `/alexa/search/` activity is shown
-separately using request counters; it is not counted as a cached search.
-
-Click a cache (or View lookup details) to fetch hit/miss events into a dialog.
-No detail history is in the initial status snapshot. A spinner covers pending
-requests; closed/replaced dialogs ignore late responses. Filters and stable
-cursors support hits/misses and older entries. Each cache retains at most 200
-process-local events for 24 hours; cumulative counters can therefore exceed
-available details. Identifiers are hashed except valid video IDs. Expired audio
-resolver entries count as misses. These are lookups, not unique plays.
+## Live logs and errors
 
 The Current server logs section loads only when requested. Live mode polls every
 5 seconds while the section and tab are visible. Search covers messages, routes, exception text and request IDs; it is literal,
@@ -146,11 +117,10 @@ Log/error APIs are owner-only and `no-store`:
 - `GET /api/status/errors?before=&limit=50`
 - `GET /api/status/errors/<id>`
 - `POST /api/status/errors/seen` with JSON `{"ids":["..."]}` (at most 100)
-- `GET /api/status/cache/<name>?outcome=hit|miss&before=&limit=50`
 
 Failures preserve playback and existing browser snapshots. Read-only/full/missing
 journal storage produces an unavailable state and bounded retries, not a logging
-exception on request threads. Per-process cache counters and multi-worker caveats
+exception on request threads. Per-process request counters and multi-worker caveats
 still apply; shared journal paths aggregate records from workers, while queue
 loss counters and watchdog condition suppression are process-local.
 
@@ -159,28 +129,17 @@ loss counters and watchdog condition suppression are process-local.
 Desktop navigation stays in a horizontal sticky top navbar with smooth section scrolling (instant when reduced motion is enabled). At 900 px and below the same links
 move into a modal navigation drawer, with Escape, focus restoration and a close
 button. Resizing closes the drawer before moving the links. Resource,
-authentication and retention details open in a separate dialog; their live data
+and authentication details open in a separate dialog; their live data
 nodes move into it and return on close, so snapshot updates continue without
-expanding dashboard rows. Tables and activity lists scroll within bounded areas; whole cards do not have nested scrollbars. Cache layers span a full row with responsive columns.
+expanding dashboard rows. Tables and activity lists scroll within bounded areas; whole cards do not have nested scrollbars.
 
 Chromium regression checks cover 320, 390, 768, 1024, 1440 and 1920 px, page
 overflow, unchanged dashboard positions when details open, and mobile/desktop
 navigation transitions. The dialogs and navigation require no extra API calls.
 
 
-### Interpreting cache and fetch activity
+### Interpreting streaming activity
 
-Cache detail dialogs explain exactly which paths use each cache. Song-name audio
-resolution, voice stream lists and skill playlist expansion are separate from
-normal app search, video-ID playback and app playlist browsing. Related endpoint
-requests are shown separately and never counted as hits or misses. An unused
-cache has an explicit empty state; a blank lookup history does not indicate a
-failed data request. Details remain on demand and retain the owner-only rules.
-
-Fetching shows active background attempts and active streams, plus the latest
-60 completed background download attempts since process start (12 displayed).
-This separate bounded history survives HTTP-event traffic and makes downloads
-that finish between refreshes visible. Prefetch and requested download attempts
-are distinguished. A cached song does not cause another download. Downloader
-exit success remains separate from audio integrity validation. Stream counts
-are current activity, not a count of playing devices.
+Stream counts describe active HTTP transfers, not playing devices. URL preparation
+counts never imply a song was downloaded. Completed track storage, LRU policies,
+cache-hit dialogs and song inventories have been removed from this dashboard.

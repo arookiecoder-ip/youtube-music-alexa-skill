@@ -56,7 +56,7 @@ class PlaylistPlaybackPagingTests(unittest.TestCase):
         node = next(n for n in ast.parse(source.read_text()).body if isinstance(n, ast.FunctionDef) and n.name == '_audio_delivery_rate_group')
         cached = Mock(side_effect=lambda video: '/audio/song.m4a' if video == 'aaaaaaaaaaa' else None)
         scope = {'_valid_video_id': lambda video: isinstance(video, str) and len(video) == 11,
-                 'Supporting': SimpleNamespace(cached_audio_path=cached)}
+                 '_youtube_stream': SimpleNamespace(current=SimpleNamespace(has=cached))}
         exec(compile(ast.Module(body=[node], type_ignores=[]), str(source), 'exec'), scope)
         group = scope['_audio_delivery_rate_group']
         self.assertEqual(group('aaaaaaaaaaa'), 'cached_audio')

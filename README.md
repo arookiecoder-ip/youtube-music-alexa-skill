@@ -28,20 +28,20 @@ Alexa cloud ──► Alexa-hosted Lambda (Python, free tier, EU-Ireland)
                      ▼
               Docker Compose stack
               ├── ytmusicapi ── search / radio / playlists
-├── yt-dlp ────── downloads audio into a local cache
-│        (default client, android_vr/web/tv fallbacks + cookies + deno)
-              ├── /proxy/ ───── serves the cached audio file to the Echo
+              ├── YouTube Music client ── resolves playable AAC URLs
+              ├── /proxy/ ───── streams audio to the Echo
+              ├── current track ─ anonymous temporary bytes; replaced on next start
               └── web remote ── /remote/ UI + /alexa/* API (AlexaPy)
                        └── Amazon login proxy (aiohttp, port 5001,
                            mounted publicly at /alexa/proxy/ via Caddy)
 ```
 
-**Why an audio proxy?** googlevideo stream URLs are IP-locked to the machine
-that resolved them — an Echo can never fetch them directly. Worse, on
-datacenter IPs even the resolving machine gets 403 on raw fetches; only
-yt-dlp's own download path (default client, falls back to android_vr, web, then tv) works. So
-the server downloads each track (~3 MB m4a) into a cache and serves the file
-itself, with Range support.
+**Why an audio proxy?** The server keeps YouTube credentials and signed URLs
+private, applies the same authentication to Echo and phone playback, and forwards
+byte ranges for seeking. Audio starts flowing immediately. Only bytes of the
+current track are retained in an anonymous temporary file, discarded when the
+next track starts. No persistent song library, audio volume or LRU sweeper is used.
+See [Streaming audio](docs/STREAMING_AUDIO.md).
 
 ### Docker services and volumes
 
@@ -50,7 +50,6 @@ itself, with Range support.
 | `ytmusic` container                | Flask, ytmusicapi, yt-dlp, AlexaPy, and the audio proxy                              |
 | `youtube-browser` container        | Private Chromium/noVNC service for personalized YouTube Music authentication          |
 | `caddy` container                  | HTTPS and reverse proxy for the web remote and Amazon login proxy                     |
-| `ytmusic_cache` volume             | TTL-swept downloaded audio cache                                                       |
 | `ytmusic_data` volume              | Listening history, database, and persistent YouTube Music auth headers                 |
 | `ytmusic_alexa_cookies` volume     | Persisted Amazon/Alexa session                                                          |
 
@@ -60,17 +59,12 @@ Core (`server.py`):
 
 | Var               | Purpose                                                                                                                                                              |
 | ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `PUBLIC_BASE_URL` | e.g. `https://<your-ip-with-dashes>.sslip.io`. When set, `audio_url` points to `/proxy/` and downloads are pre-warmed. Unset = dev mode (returns direct googlevideo URLs). |
+| `PUBLIC_BASE_URL` | e.g. `https://<your-ip-with-dashes>.sslip.io`. When set, `audio_url` points to `/proxy/` and playable URLs are prepared. Unset = dev mode (returns direct googlevideo URLs). |
 | `YTDLP_COOKIES` | optional path inside the container to a mounted Netscape-format `cookies.txt` file. |
 | `YTDLP_JS_RUNTIME` | optional runtime override for YouTube signature challenges. Docker includes Deno by default. |
 | `YTMUSIC_AUTH_FILE` | optional path to a browser headers JSON file for YT Music recommendations. Warning: DO NOT store this in a public repo; browser headers give full access. |
 | `YTDLP_PO_TOKEN`  | optional — if set, overrides the default `android_vr` client and passes this as the GVS PO token for `mweb` client instead (e.g. `youtube:po_token=mweb.gvs+{token}`) |
 | `API_KEY`         | shared secret; when set, all endpoints except privacy/terms and the login flow require `?key=` (or `X-Api-Key` header) **or** a valid web-remote session cookie. Must match `API_KEY` in `lambda/api_key.py`. |
-| `AUDIO_CACHE_DIR` | audio cache location (default `/tmp/ytm_audio_cache`)                                                                                                               |
-| `AUDIO_PARTIAL_TTL` | abandoned partial-download cleanup timeout (default `7200` seconds); completed songs have no idle expiry. Legacy `AUDIO_CACHE_TTL` is a fallback only for partial files.                                                      |
-| `AUDIO_CACHE_MAX_MB` | cache size limit; above it the least recently played files are evicted first (default `5120` MiB / 5 GiB, `0` = no limit)                                                   |
-| `AUDIO_CACHE_MIN_FREE_MB` | evict least recently played files while the disk has less than this free (default `512`, `0` = off)                                                         |
-| `AUDIO_CACHE_SWEEP_INTERVAL` | seconds between in-service cache sweeps (default `1800`, 30 minutes)                                                                                  |
 | `HISTORY_FILE`    | listening-history JSON file location for the web remote's Recently Listened / Recommended sections (default `/tmp/ytm_listen_history.json`) — see the Docker note below |
 
 > **Docker Compose deployments:** `server.py` binds Flask to `0.0.0.0` (not
@@ -78,12 +72,7 @@ Core (`server.py`):
 > its port, since Caddy runs in a separate container and can only reach the
 > `ytmusic` container over the Docker bridge network, not via loopback.
 >
-> The audio cache volume (`ytmusic_cache` → `/tmp/ytm_audio_cache`) is swept by
-> the `ytmusic` service every 30 minutes; no host cron configuration is needed.
-> Files older than the configured TTL are removed. Listening history is kept on its own
-> `ytmusic_data` volume mounted at `/data`, with `HISTORY_FILE` pointed there
-> (`docker-compose.yml` sets this up already) — otherwise history would be
-> wiped on every container recreate.
+> Listening history and authentication remain on the `ytmusic_data` volume at `/data`. Temporary current-track audio is never stored there.
 
 Web-remote login (see [Web remote](#web-remote-control-the-echo-from-any-browser)) — lets you open `/remote/` with a clean URL instead of `?key=<API_KEY>`:
 
@@ -378,7 +367,7 @@ Worst-case leak then exposes an account that can only control your speaker.
 | `/history/`          | DELETE   | clears all listening history                                     |
 | `/history/<video_id>` | DELETE  | removes a single track from history                              |
 | `/api/home/`         | GET      | `?refresh=1` & `?filter=all` to bypass the 30-minute cache → full v2 shelf hierarchy (shortcuts, cards, circles, song grids) |
-| `/audio/`            | GET/HEAD | audio for apps (API key). Pick the track with `video_id=`, `url=` (any YouTube link) or `q=` (+ optional `duration=` seconds to pick the matching version). `info=1` returns JSON metadata only; `wait=1` serves the finished file (Content-Length, ranges) instead of a live stream. `prefetch=1` (query only) starts a best-effort background warmup and answers at once — `202` + `Retry-After: 5` on a miss, `200` + `{"cached": true}` when already warm; never streams, blocks, or touches Echo state or LRU. Precedence: `info` > `prefetch` > `wait`. Cold `wait=1`/`Range`/`HEAD` misses wait up to `AUDIO_WAIT_SECONDS` (25s), then answer `503 {"code":"pending","retryable":true}` while the download continues — retry lands warm. `q=` + `duration=` outside `max(8s,7%)` answers `422 {"code":"match_rejected"}` so the app tries its next source instead of playing the wrong version. Unlike `/proxy/` it never changes the Echo's now-playing state. Headers: `X-Cache`, `X-Video-Id`, and for searches percent-encoded `X-Title`/`X-Artist` plus `X-Duration-Ms`. `503` + `Retry-After` when the video failed moments ago |
+| `/audio/` | GET/HEAD | Authenticated audio stream for apps. Select with `video_id=`, `url=`, or `q=` plus optional duration. `info=1` returns metadata; `prefetch=1` prepares a URL only and returns 202. `wait=1` never forces a full download. Supports byte ranges and stable validators, retaining only received current-track bytes. Does not change Echo now-playing state. Explicit download requests use the same stream. |
 
 ---
 

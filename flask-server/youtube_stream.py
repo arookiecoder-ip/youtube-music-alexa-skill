@@ -12,9 +12,11 @@ import queue
 import re
 import subprocess
 import threading
+import time
 import urllib.error
 import urllib.request
 from urllib.parse import urlsplit
+from current_audio import CurrentAudio, byte_bounds
 
 
 class StreamError(Exception):
@@ -42,7 +44,7 @@ class _MediaRedirect(urllib.request.HTTPRedirectHandler):
 
 
 class Relay:
-    def __init__(self, upstream, first, release):
+    def __init__(self, upstream, first, release, remember=None):
         self.upstream, self.first, self.release = upstream, first, release
         self.status = upstream.status
         self.headers = {k: upstream.headers[k] for k in (
@@ -50,6 +52,11 @@ class Relay:
             if upstream.headers.get(k)}
         self._lock = threading.Lock()
         self.closed = False
+        self._remember = remember
+
+    def remember(self, block):
+        if self._remember:
+            self._remember(block)
 
     def close(self):
         with self._lock:
@@ -76,19 +83,31 @@ class Relay:
 
 class YouTubeStream:
     def __init__(self, cookie_file, enabled=False, worker=None, timeout=10,
-                 opener=None, popen=subprocess.Popen, capacity=8):
+                 opener=None, popen=subprocess.Popen, capacity=8, current=None):
         self.enabled, self.cookie_file = enabled, cookie_file
         self.worker = worker or str(Path(__file__).with_name('youtube-stream') / 'worker.mjs')
         self.timeout, self.popen = timeout, popen
         self.opener = opener or urllib.request.build_opener(
             urllib.request.ProxyHandler({}), _MediaRedirect())
         self.slots = threading.BoundedSemaphore(capacity)
+        self.capacity = capacity
+        self.current = current or CurrentAudio()
+        self._active = {}
+        self._active_sequence = 0
         self._lock = threading.RLock()
         self._process = None
         self._cookie_path = None
         self._pending = {}
         self._sequence = 0
         atexit.register(self.close)
+        atexit.register(self.current.close)
+
+    def snapshot(self):
+        with self._lock:
+            return {'active_streams':len(self._active), 'stream_slots':self.capacity,
+                    'resolving':len(self._pending), 'streams':[
+                        {'video_id':v, 'age_seconds':max(0,time.monotonic()-started)}
+                        for v,started in self._active.values()]}
 
     def close(self):
         with self._lock:
@@ -206,8 +225,34 @@ class YouTubeStream:
             raise StreamError('invalid_range', 416)
         if not self.slots.acquire(blocking=False):
             raise StreamError('busy')
+        with self._lock:
+            self._active_sequence += 1
+            active_id = self._active_sequence
+            self._active[active_id] = (video_id, time.monotonic())
+        def release():
+            with self._lock:
+                self._active.pop(active_id, None)
+            self.slots.release()
         upstream = None
         try:
+            try:
+                cached = self.current.open(video_id, byte_range, if_range, method=='HEAD')
+            except ValueError:
+                with self.current.lock:
+                    length = self.current.length if self.current.video == video_id else 0
+                headers = {'Content-Range':f'bytes */{length}'} if length else {}
+                raise StreamError('invalid_range', 416, headers) from None
+            if cached:
+                try:
+                    first = cached.read1(16384) if method != 'HEAD' else b''
+                except OSError:
+                    cached.close()
+                else:
+                    relay = Relay(cached, first, release)
+                    relay.headers.update({'ETag':cached.headers['ETag'], 'Cache-Control':'no-store',
+                        'X-Audio-Delivery':'youtube-stream', 'X-Audio-Source':'current-track'})
+                    return relay
+            ticket = self.current.ticket(video_id)
             for attempt in range(2):
                 media = self.resolve(video_id, refresh=bool(attempt))
                 etag = '"'+hashlib.sha256(
@@ -223,16 +268,9 @@ class YouTubeStream:
                     # every supported single range into explicit byte bounds,
                     # using the fixed format's known complete length.
                     length = int(media['length'])
-                    left, right = selected_range[6:].split('-', 1)
-                    if left:
-                        start = int(left)
-                        end = min(int(right), length-1) if right else length-1
-                    else:
-                        suffix = int(right)
-                        start, end = max(0, length-suffix), length-1
-                        if suffix == 0:
-                            start = length
-                    if start >= length or end < start:
+                    try:
+                        start, end = byte_bounds(selected_range, length)
+                    except ValueError:
                         raise StreamError('invalid_range', 416, {'Content-Range':f'bytes */{length}'})
                     selected_range = f'bytes={start}-{end}'
                     expected_range = f'bytes {start}-{end}/{length}'
@@ -251,9 +289,14 @@ class YouTubeStream:
                     first = upstream.read1(16384) if method != 'HEAD' else b''
                     if method != 'HEAD' and not first:
                         raise StreamError('empty_audio', 502)
-                    relay = Relay(upstream, first, self.slots.release)
+                    offset = [start if selected_range else 0]
+                    def remember(block):
+                        self.current.write(ticket, etag, int(media['length']), offset[0], block)
+                        offset[0] += len(block)
+                    relay = Relay(upstream, first, release, remember)
                     relay.headers.update({'ETag': etag, 'Cache-Control': 'no-store',
-                                          'Accept-Ranges': 'bytes', 'X-Audio-Delivery': 'youtube-stream'})
+                        'Accept-Ranges': 'bytes', 'X-Audio-Delivery': 'youtube-stream',
+                        'X-Audio-Source':'youtube'})
                     return relay
                 except urllib.error.HTTPError as error:
                     status = error.code
@@ -266,7 +309,7 @@ class YouTubeStream:
         except Exception as error:
             if upstream:
                 upstream.close()
-            self.slots.release()
+            release()
             if isinstance(error, StreamError):
                 raise
             raise StreamError('upstream_unavailable') from None

@@ -77,20 +77,13 @@ class _CacheDir(unittest.TestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
         self.dir = self.tmp.name
-        for name, value in (("AUDIO_CACHE_DIR", self.dir),
-                            ("AUDIO_CACHE_TTL", 7200.0),
-                            ("AUDIO_CACHE_MAX_BYTES", 0),
-                            ("AUDIO_CACHE_MIN_FREE_BYTES", 0)):
-            patcher = mock.patch.object(server, name, value)
-            patcher.start()
-            self.addCleanup(patcher.stop)
-        pin = mock.patch.object(server, "_pinned_cache_video_ids", return_value=set())
-        self.pinned = pin.start()
-        self.addCleanup(pin.stop)
-        with server._dead_video_ids_lock:
-            server._dead_video_ids.clear()
-        with server._stream_inflight_lock:
-            server._stream_inflight.clear()
+        from current_audio import CurrentAudio
+        current = CurrentAudio()
+        patcher = mock.patch.object(server._youtube_stream, 'current', current)
+        patcher.start(); self.addCleanup(patcher.stop); self.addCleanup(current.close)
+        from audio_test_support import fake_relay
+        patcher = mock.patch.object(server._youtube_stream, 'open', side_effect=fake_relay)
+        patcher.start(); self.addCleanup(patcher.stop)
 
     def make(self, video_id, size=MB, written_ago=600.0, used_ago=None, suffix=".m4a"):
         path = os.path.join(self.dir, video_id + suffix)
@@ -103,174 +96,8 @@ class _CacheDir(unittest.TestCase):
         return path
 
 
-class LruPrune(_CacheDir):
-
-    def test_completed_audio_survives_idle_time_below_capacity(self):
-        # Both recently played and long-idle completed songs stay below capacity.
-        played = self.make("played00000", written_ago=3 * 3600, used_ago=300)
-        stale = self.make("stale000000", written_ago=3 * 3600)
-        server.Supporting.prune_audio_cache()
-        self.assertTrue(os.path.exists(played))
-        self.assertTrue(os.path.exists(stale))
-
-    def test_over_budget_evicts_least_recently_used_first(self):
-        server.AUDIO_CACHE_MAX_BYTES = 2 * MB
-        oldest = self.make("oldest00000", used_ago=3000)
-        middle = self.make("middle00000", used_ago=2000)
-        newest = self.make("newest00000", used_ago=1000)
-        files, size = server.Supporting.prune_audio_cache()
-        self.assertEqual((files, size), (1, MB))
-        self.assertFalse(os.path.exists(oldest))
-        self.assertTrue(os.path.exists(middle))
-        self.assertTrue(os.path.exists(newest))
-
-    def test_pinned_and_just_written_files_survive_eviction(self):
-        server.AUDIO_CACHE_MAX_BYTES = 1  # everything is over budget
-        self.pinned.return_value = {"current0000"}
-        current = self.make("current0000", used_ago=5000)
-        fresh = self.make("fresh000000", written_ago=5, used_ago=5)
-        old = self.make("old00000000", used_ago=4000)
-        server.Supporting.prune_audio_cache()
-        self.assertTrue(os.path.exists(current))
-        self.assertTrue(os.path.exists(fresh))
-        self.assertFalse(os.path.exists(old))
-
-    def test_low_disk_space_evicts_until_free_target(self):
-        server.AUDIO_CACHE_MIN_FREE_BYTES = 10 * MB
-        a = self.make("aaaaaaaaaaa", used_ago=3000)
-        b = self.make("bbbbbbbbbbb", used_ago=2000)
-        usage = collections.namedtuple("usage", "total used free")(100 * MB, 91 * MB, 9 * MB)
-        with mock.patch.object(server.shutil, "disk_usage", return_value=usage):
-            server.Supporting.prune_audio_cache()
-        self.assertFalse(os.path.exists(a))  # 1 MB short -> one LRU file
-        self.assertTrue(os.path.exists(b))
-
-    def test_partial_downloads_are_never_evicted_for_space(self):
-        server.AUDIO_CACHE_MAX_BYTES = 1
-        part = self.make("partial0000", suffix=".m4a.abc.part", used_ago=5000, written_ago=10)
-        server.Supporting.prune_audio_cache()
-        self.assertTrue(os.path.exists(part))
-
-    def test_mark_used_moves_atime_but_keeps_mtime(self):
-        path = self.make(VID, written_ago=3000)
-        before = os.stat(path).st_mtime
-        server._mark_audio_used(path)
-        st = os.stat(path)
-        self.assertEqual(st.st_mtime, before)
-        self.assertLess(time.time() - st.st_atime, 5)
 
 
-class AudioEndpoint(_CacheDir):
-
-    def setUp(self):
-        super().setUp()
-        self.app = server.app.test_client()
-        self.headers = {"X-Api-Key": os.environ["API_KEY"]}
-
-    def get(self, query, **kw):
-        headers = dict(self.headers)
-        headers.update(kw.pop("headers", {}))
-        return self.app.get(f"/audio/?{query}", headers=headers, **kw)
-
-    def test_requires_api_key_with_json_error(self):
-        resp = self.app.get(f"/audio/?video_id={VID}")
-        self.assertEqual(resp.status_code, 401)
-        self.assertEqual(resp.get_json()["error"]["code"], "unauthorized")
-
-    def test_cache_hit_serves_file_and_never_touches_echo_state(self):
-        path = self.make(VID, size=4096, used_ago=1000)
-        with mock.patch.object(server, "_update_now_playing") as np, \
-             mock.patch.object(server, "_confirm_stream_delivery") as confirm, \
-             mock.patch.object(server, "_refresh_radio_queue") as radio:
-            resp = self.get(f"video_id={VID}")
-        self.assertEqual(resp.status_code, 200)
-        self.assertEqual(len(resp.data), 4096)
-        self.assertEqual(resp.headers["X-Cache"], "HIT")
-        self.assertEqual(resp.headers["X-Video-Id"], VID)
-        self.assertEqual(resp.headers["Accept-Ranges"], "bytes")
-        np.assert_not_called()
-        confirm.assert_not_called()
-        radio.assert_not_called()
-        self.assertLess(time.time() - os.stat(path).st_atime, 5, "hit not recorded for LRU")
-
-    def test_range_on_cache_hit_returns_206(self):
-        self.make(VID, size=4096)
-        resp = self.get(f"video_id={VID}", headers={"Range": "bytes=1000-1999"})
-        self.assertEqual(resp.status_code, 206)
-        self.assertEqual(len(resp.data), 1000)
-
-    def test_etag_is_stable_across_pause_touch(self):
-        path = self.make(VID, size=4096)
-        first = self.get(f"video_id={VID}").headers["ETag"]
-        os.utime(path, None)  # what pause/resume does to the mtime
-        second = self.get(f"video_id={VID}").headers["ETag"]
-        self.assertEqual(first, second)
-
-    def test_youtube_link_is_accepted(self):
-        self.make(VID, size=10)
-        resp = self.get(f"url=https%3A%2F%2Fmusic.youtube.com%2Fwatch%3Fv%3D{VID}%26si%3Dx")
-        self.assertEqual(resp.status_code, 200)
-        self.assertEqual(resp.headers["X-Video-Id"], VID)
-
-    def test_bad_input_is_400(self):
-        self.assertEqual(self.get("url=https%3A%2F%2Fexample.com%2F").status_code, 400)
-        self.assertEqual(self.get("video_id=bad%20id%21").status_code, 400)
-        self.assertEqual(self.get("").status_code, 400)
-
-    def test_known_dead_video_is_404_without_download(self):
-        server._mark_video_dead(VID)
-        with mock.patch.object(server.Supporting, "ensure_downloaded") as dl:
-            resp = self.get(f"video_id={VID}&wait=1")
-        self.assertEqual(resp.status_code, 404)
-        dl.assert_not_called()
-
-    def test_cold_miss_streams_without_echo_side_effects(self):
-        with mock.patch.object(server, "_stream_proxy_download",
-                               return_value=server.Response(b"LIVE", mimetype="audio/mp4")) as stream, \
-             mock.patch.object(server.Supporting, "ensure_downloaded") as dl:
-            resp = self.get(f"video_id={VID}")
-        self.assertEqual(resp.get_data(), b"LIVE")
-        self.assertEqual(resp.headers["X-Cache"], "MISS")
-        stream.assert_called_once_with(VID, confirm=False, cancellable=False)
-        dl.assert_not_called()
-
-    def test_wait_downloads_then_serves_file_with_length(self):
-        def spawn(video_id, **kw):
-            self.make(video_id, size=2048, written_ago=0, used_ago=0)
-            return False
-        with mock.patch.object(server, "_ensure_audio_ready_for_play",
-                               side_effect=spawn) as ready, \
-             mock.patch.object(server, "_stream_proxy_download") as stream:
-            resp = self.get(f"video_id={VID}&wait=1")
-        self.assertEqual(resp.status_code, 200)
-        self.assertEqual(resp.headers["Content-Length"], "2048")
-        self.assertEqual(resp.headers["X-Cache"], "MISS")
-        ready.assert_called_once_with(VID, wait=False, generation=None,
-                                      prefetch=False)
-        stream.assert_not_called()
-
-    def test_recently_failed_video_is_503_without_new_ytdlp_run(self):
-        server._mark_video_flaky(VID)
-        self.addCleanup(lambda: server._flaky_video_ids.pop(VID, None))
-        with mock.patch.object(server, "_stream_proxy_download") as stream, \
-             mock.patch.object(server.Supporting, "ensure_downloaded") as dl:
-            resp = self.get(f"video_id={VID}")
-        self.assertEqual(resp.status_code, 503)
-        self.assertEqual(resp.headers["Retry-After"], str(server._FLAKY_VIDEO_TTL))
-        stream.assert_not_called()
-        dl.assert_not_called()
-
-    def test_failed_download_is_pending_while_retry_runs(self):
-        # Bounded wait: a download that yields nothing answers retryable 503
-        # (the fetch keeps running, so a retry lands warm) instead of 502.
-        with mock.patch.object(server, "_ensure_audio_ready_for_play",
-                               return_value=False):
-            resp = self.get(f"video_id={VID}&wait=1")
-        self.assertEqual(resp.status_code, 503)
-        err = resp.get_json()["error"]
-        self.assertEqual(err["code"], "pending")
-        self.assertTrue(err["retryable"])
-        self.assertEqual(resp.headers["Retry-After"], "5")
 
 
 class AudioSearch(_CacheDir):
@@ -307,8 +134,8 @@ class AudioSearch(_CacheDir):
         self.assertEqual(self.ytm.search.call_count, 1)
 
     def test_info_mode_returns_json_without_downloading(self):
-        with mock.patch.object(server.Supporting, "ensure_downloaded") as dl, \
-             mock.patch.object(server, "_stream_proxy_download") as stream:
+        with mock.patch.object(server._youtube_stream, "open") as dl, \
+             mock.patch.object(server, "_serve_youtube_stream") as stream:
             resp = self.app.get("/audio/?q=song%20a&duration=213&info=1", headers=self.headers)
         body = resp.get_json()
         self.assertEqual(body["video_id"], "studiotrack")

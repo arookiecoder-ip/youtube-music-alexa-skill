@@ -211,26 +211,18 @@ You should get back JSON with track info, not an error.
 
 ---
 
-## 10. Cache cleanup
+## 10. Temporary current-track audio
 
-No host cron job is required. Completed audio (including speculative prefetch)
-has no idle expiry. Files persist on the audio volume until the shared
-`AUDIO_CACHE_MAX_MB` budget (default 5120 MiB / 5 GiB) or the disk reserve
-`AUDIO_CACHE_MIN_FREE_MB` (default 512 MiB) requires space. Eviction removes
-the least recently used unprotected files across both pools. A cache hit
-refreshes recency without changing the media Last-Modified validator.
+There is no persistent audio cache volume, size budget, library inventory or
+sweeper. Received current-track bytes are retained in one anonymous temporary
+file, and replaced only after the next track starts. Pause/resume and same-track
+handoffs preserve it. Upcoming URL preparation and Echo next-track buffering do
+not evict the current song. No host cache-cleanup cron job is needed.
 
-Current tracks, active fetches and newly written files are protected. These can
-temporarily exceed the budget; later sweeps retry cleanup. Sweeps run every
-`AUDIO_CACHE_SWEEP_INTERVAL` seconds (default 1800) and after completed downloads.
-Only abandoned `.part` files expire after `AUDIO_PARTIAL_TTL` seconds (default
-7200). Legacy `AUDIO_CACHE_TTL` is a fallback for that partial timeout only;
-`WARMUP_TTL` and `WARMUP_MAX_MB` no longer control completed audio. Remove any old
-host cron job that independently deletes cached audio by age.
-
-The `/status` music-cache meter shows completed audio used against the shared
-budget. Downloading bytes and metadata are listed separately. Prefetched and
-current-track protected bytes are subsets of completed audio, not extra usage.
+The anonymous file is released on process exit. Storage failures or the 64 MiB
+single-track safety ceiling stop retaining extra bytes without stopping streaming.
+The status page displays streaming and resource activity, without cache widgets.
+Database, YouTube profile and Amazon session volumes remain required.
 
 ## 11. Create the Alexa skill
 

@@ -176,29 +176,7 @@ class AlexaQueueRevisionTests(NextTrackBase):
             timer.fire()
         arm.assert_not_called()
 
-    def test_stream_yields_audio_before_producer_closes_pipe(self):
-        import io
-        import os
-        from concurrent.futures import ThreadPoolExecutor
-        reader_fd, writer_fd = os.pipe()
-        reader = io.BufferedReader(os.fdopen(reader_fd, 'rb', buffering=0))
-        with ThreadPoolExecutor(max_workers=1) as pool:
-            future = pool.submit(server._read_stream_chunk, reader)
-            try:
-                os.write(writer_fd, b'audio' * 200)
-                self.assertEqual(future.result(timeout=2), b'audio' * 200)
-            finally:
-                os.close(writer_fd)
-                reader.close()
 
-    def test_stream_raw_reader_fallback_preserves_bytes(self):
-        import io
-        class Raw:
-            def __init__(self):
-                self.pipe = io.BytesIO(b'audio')
-            def read(self, count):
-                return self.pipe.read(count)
-        self.assertEqual(server._read_stream_chunk(Raw()), b'audio')
 
     def test_metadata_refresh_does_not_invalidate_or_dispatch_queue_sync(self):
         decision = self.decision()

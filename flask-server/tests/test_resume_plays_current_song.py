@@ -100,7 +100,7 @@ class _CleanState(unittest.TestCase):
         warm = mock.patch.object(server, '_ensure_audio_ready_for_play', return_value=False)
         warm.start()
         self.addCleanup(warm.stop)
-        download = mock.patch.object(server.Supporting, 'ensure_downloaded', return_value=None)
+        download = mock.patch.object(server._youtube_stream, 'resolve', return_value=None)
         download.start()
         self.addCleanup(download.stop)
         with server._np_lock:

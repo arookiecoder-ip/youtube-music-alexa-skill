@@ -72,18 +72,13 @@ class SecretHygiene(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        for name, value in (("AUDIO_CACHE_DIR", self.tmp.name),
-                            ("AUDIO_CACHE_TTL", 7200.0),
-                            ("WARMUP_TTL", 7200.0),
-                            ("AUDIO_CACHE_MAX_BYTES", 0),
-                            ("WARMUP_MAX_BYTES", 0),
-                            ("AUDIO_CACHE_MIN_FREE_BYTES", 0)):
-            patcher = mock.patch.object(server, name, value)
-            patcher.start()
-            self.addCleanup(patcher.stop)
-        pin = mock.patch.object(server, "_pinned_cache_video_ids", return_value=set())
-        pin.start()
-        self.addCleanup(pin.stop)
+        from current_audio import CurrentAudio
+        current = CurrentAudio()
+        patcher = mock.patch.object(server._youtube_stream, 'current', current)
+        patcher.start(); self.addCleanup(patcher.stop); self.addCleanup(current.close)
+        from audio_test_support import fake_relay
+        patcher = mock.patch.object(server._youtube_stream, 'open', side_effect=fake_relay)
+        patcher.start(); self.addCleanup(patcher.stop)
         self.app = server.app.test_client()
 
     def test_fresh_boot_key_files_are_0600(self):

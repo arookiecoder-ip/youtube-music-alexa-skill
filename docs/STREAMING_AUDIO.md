@@ -2,10 +2,18 @@
 
 Docker enables `YOUTUBE_STREAMING=1`. `/audio/` (web/phone) and `/proxy/`
 (Echo) resolve AAC audio with a persistent YouTube.js YTMUSIC client and relay
-upstream bytes immediately. Playback does not write audio files or wait for a
-complete download. The legacy `wait=1` playback hint no longer forces buffering
-to disk. Explicit `X-MusicBox-Download: 1` requests retain the existing download
-contract. Existing cache volumes/files are preserved for those requests and rollback.
+upstream bytes immediately. Only received current-track bytes are retained in
+one anonymous temporary file. A confirmed next track replaces it; pause/resume
+and same-track handoffs keep it. URL prefetch and Echo's next-track prebuffer do
+not evict the song still playing. HEAD/info requests never change the current
+track. Sparse byte ranges are tracked so holes are never served as audio.
+
+There is no persistent song cache, audio volume, LRU budget or sweeper. A 64 MiB
+per-current-track safety ceiling and disk-error handling let streaming continue
+without retaining additional bytes. The file is anonymous and released by the OS
+on process exit. Old generation writers cannot resurrect removed songs.
+Explicit download requests stream to the client with an attachment filename;
+they do not build a saved-song collection on the server.
 
 Flask still authorizes every media request and applies the existing Echo/phone
 ownership and generation checks. No signed upstream URL is returned to a device.
@@ -43,8 +51,8 @@ python scripts/run-regressions.py --results /tmp/musicbox-tests
 python -m unittest discover -s lambda/tests -p 'test_*.py' -q
 ```
 
-Legacy regression files exercise `YOUTUBE_STREAMING=0`; the streaming-specific
-route tests explicitly enable it and verify auth, ownership, no disk downloads,
+Offline regression files disable automatic client warmup; the streaming-specific
+route tests verify auth, ownership, no persistent downloads,
 Range/HEAD, failure contracts and connection cleanup. Worker tests cover timeout,
 death and concurrent replies. Resolver tests cover credential rotation (including
 rotation during initialization), expiry, bounds, format pinning and decipher
@@ -58,8 +66,9 @@ ranges, eight concurrent requests and worker restart were also tested.
 This first-byte measurement excludes Alexa command dispatch and device buffering;
 it is not a physical Echo click-to-audible guarantee.
 
-## Rollback
+## Deployment and data
 
-Set `YOUTUBE_STREAMING=0` in the existing deployment environment and recreate only
-`ytmusic` with `docker compose up -d --no-deps ytmusic`. The existing yt-dlp/cache
-path remains available. No database or audio-cache migration is required.
+Only `ytmusic` needs rebuilding/recreation. There is no cache-mode switch or
+legacy file-download playback path. Existing database and authentication volumes
+are unchanged. The removed audio-cache volume is no longer mounted; an unused
+old cache volume may be deleted after verifying no container references it.

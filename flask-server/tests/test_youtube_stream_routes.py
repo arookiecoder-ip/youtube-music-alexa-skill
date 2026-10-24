@@ -21,17 +21,14 @@ class StreamRoutes(unittest.TestCase):
         self.relay=Relay(self.upstream,b'audio',self.release)
         for name,value in [('enabled',True),('open',mock.Mock(return_value=self.relay))]:
             patch=mock.patch.object(server._youtube_stream,name,value);patch.start();self.addCleanup(patch.stop)
-        patch=mock.patch.object(server,'AUDIO_CACHE_DIR',self.temp.name);patch.start();self.addCleanup(patch.stop)
-        patch=mock.patch.object(server.Supporting,'ensure_downloaded',side_effect=AssertionError('download path used'))
-        self.download=patch.start();self.addCleanup(patch.stop)
         self.addCleanup(self.relay.close)
 
     def test_audio_wait_hint_streams_without_disk_or_echo_side_effects(self):
         with mock.patch.object(server,'_confirm_stream_delivery') as confirm:
             r=self.client.get('/audio/?video_id='+VID+'&wait=1',headers=self.headers)
-            self.assertEqual(r.status_code,200);self.assertEqual(r.headers['X-Cache'],'STREAM')
+            self.assertEqual(r.status_code,200);self.assertNotIn('X-Cache',r.headers)
             self.assertTrue(r.data.startswith(b'audio'));r.close();confirm.assert_not_called()
-        self.download.assert_not_called();self.assertEqual(os.listdir(self.temp.name),[])
+        self.assertEqual(os.listdir(self.temp.name),[])
 
     def test_unauthorized_requests_never_resolve_media(self):
         r=self.client.get('/audio/?video_id='+VID)
@@ -63,7 +60,7 @@ class StreamRoutes(unittest.TestCase):
         with mock.patch.object(server._audio_jobs,'submit') as submit, mock.patch.object(server._youtube_stream,'resolve') as resolve:
             server._ensure_audio_ready_for_play(VID)
             submit.call_args.args[1]()
-            resolve.assert_called_once_with(VID);self.download.assert_not_called()
+            resolve.assert_called_once_with(VID)
 
     def test_closed_uniterated_response_releases_stream(self):
         with server.app.test_request_context('/audio/?video_id='+VID):
@@ -79,9 +76,13 @@ class StreamRoutes(unittest.TestCase):
             r=server._serve_youtube_stream(VID,confirm=True,cancellable=True)
             self.assertEqual(b''.join(r.response),b'');r.close();confirm.assert_not_called()
 
-    def test_explicit_download_keeps_legacy_file_path(self):
-        with server.app.test_request_context('/audio/',headers={'X-MusicBox-Download':'1'}):
-            self.assertFalse(server._streaming_playback())
+    def test_explicit_download_streams_with_an_attachment_filename(self):
+        before=server._youtube_stream.current.video
+        r=self.client.get('/audio/?video_id='+VID,headers={**self.headers,'X-MusicBox-Download':'1'})
+        self.assertEqual(r.status_code,200)
+        self.assertIn('attachment',r.headers['Content-Disposition'])
+        self.assertTrue(r.data.startswith(b'audio'));r.close()
+        self.assertEqual(server._youtube_stream.current.video,before)
 
 
 if __name__=='__main__':unittest.main()

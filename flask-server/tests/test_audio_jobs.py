@@ -85,7 +85,7 @@ class AudioJobsTests(unittest.TestCase):
 
 
 class AudioJobIntegrationTests(unittest.TestCase):
-    def test_repeated_prepare_calls_and_stream_resolution_share_one_download(self):
+    def test_repeated_prepare_calls_share_one_url_resolution(self):
         import asyncio
         from unittest import mock
         from test_next_track import server
@@ -94,11 +94,10 @@ class AudioJobIntegrationTests(unittest.TestCase):
         def download(*args, **kwargs):
             started.set()
             release.wait(3)
-            return '/cache/song.m4a'
+            return {'url':'https://rr1.googlevideo.com/audio'}
         try:
             with mock.patch.object(server, '_audio_jobs', pool), \
-                 mock.patch.object(server.Supporting, 'cached_audio_path', return_value=None), \
-                 mock.patch.object(server.Supporting, 'ensure_downloaded', side_effect=download) as fetch, \
+                 mock.patch.object(server._youtube_stream, 'resolve', side_effect=download) as fetch, \
                  mock.patch.object(server, 'PUBLIC_BASE_URL', 'https://audio.example'):
                 server._ensure_audio_ready_for_play('AAAAAAAAAAA')
                 self.assertTrue(started.wait(1))
@@ -110,7 +109,7 @@ class AudioJobIntegrationTests(unittest.TestCase):
                 self.assertEqual(fetch.call_count, 1)
                 future = pool.submit('AAAAAAAAAAA', lambda: None)
                 release.set()
-                self.assertEqual(future.result(2), '/cache/song.m4a')
+                self.assertEqual(future.result(2), {'url':'https://rr1.googlevideo.com/audio'})
         finally:
             release.set()
             pool.close()

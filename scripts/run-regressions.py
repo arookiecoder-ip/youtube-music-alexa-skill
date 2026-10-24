@@ -29,6 +29,7 @@ def main():
                        DB_FILE=str(Path(directory) / 'state.db'),
                        AUDIO_CACHE_DIR=str(Path(directory) / 'audio'),
                        YOUTUBE_STREAMING='0',
+                       YOUTUBE_NODE='/not-used-in-offline-regressions',
                        SECRET_KEY='isolated-regression-secret',
                        STATUS_JOURNAL_FILE=str(Path(directory) / 'journal.db'))
             Path(env['AUDIO_CACHE_DIR']).mkdir()

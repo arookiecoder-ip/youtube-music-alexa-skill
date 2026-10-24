@@ -1,25 +1,8 @@
 'use strict';
 const assert = require('node:assert/strict');
-const {bytes, duration, inventoryRows, cacheCapacity, Poller} = require('../templates/static/js/status.js');
+const {bytes, duration, Poller} = require('../templates/static/js/status.js');
 assert.equal(bytes(0), '0 B'); assert.equal(bytes(null), '—'); assert.equal(bytes(-1), '—'); assert.equal(bytes(1024), '1 KiB');
 assert.equal(duration(3600), '1 hours'); assert.equal(duration(undefined), '—');
-const inventory = [{video_id:'AAAAAAAAAAA',format:'m4a',bytes:10,state:'ready',pool:'warmup',pinned:true,modified_at:1,idle_seconds:10},
- {video_id:'BBBBBBBBBBB',format:'webm',bytes:20,state:'partial',pool:'requested',pinned:false,modified_at:2,idle_seconds:20}];
-assert.equal(inventoryRows(inventory,'m4a','pinned').length,1);
-assert.equal(inventoryRows(inventory,'','partial')[0].video_id,'BBBBBBBBBBB');
-assert.equal(inventoryRows(inventory,'','all','size')[0].bytes,20);
-assert.equal(inventory[0].bytes,10,'sorting must not mutate stored snapshot');
-
-const capacity = cacheCapacity({ready_bytes: 50, warmup_bytes:20, pinned_bytes:10, partial_bytes:30}, {audio_bytes:100});
-assert.deepEqual([capacity.used, capacity.warmup, capacity.requested, capacity.percent, capacity.remaining], [50,20,30,50,50]);
-assert.equal(cacheCapacity({ready_bytes:200}, {audio_bytes:100}).remaining, 0);
-assert.equal(cacheCapacity({ready_bytes:200}, {audio_bytes:100}).percent, 200);
-assert.equal(cacheCapacity({ready_bytes:200}, {audio_bytes:0}).percent, null);
-assert.equal(cacheCapacity({ready_bytes:200,available:false}, {audio_bytes:100}).used, null);
-assert.equal(cacheCapacity({}, {}).percent, null);
-assert.equal(cacheCapacity({ready_bytes:50,complete:false}, {audio_bytes:100}).complete, false);
-assert.equal(cacheCapacity({ready_bytes:0,warmup_bytes:1}, {audio_bytes:100}).warmup, 0);
-
 (async () => {
  let visible=true, loads=0, data=[], errors=[], tasks=new Map(), serial=0, resolve;
  const poller = new Poller({visible:()=>visible,interval:()=>15000,

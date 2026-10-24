@@ -2,7 +2,7 @@ from flask import has_request_context
 import download_cookies
 import traceback
 from status_journal import Journal, JournalHandler
-from status_monitor import AUDIO_EXTENSIONS, Metrics, CachedCollector, file_info, scan_audio, system_snapshot
+from status_monitor import Metrics, CachedCollector, file_info, system_snapshot
 from playback_failover import PlaybackFailoverBudget
 from audio_jobs import AudioJobs
 from youtube_stream import YouTubeStream, StreamError
@@ -31,10 +31,6 @@ _youtube_stream = YouTubeStream(
     enabled=os.environ.get('YOUTUBE_STREAMING', '0').lower() in ('1', 'true', 'yes'))
 
 
-def _streaming_playback():
-    # Explicit app downloads retain their existing file/cache contract.
-    return _youtube_stream.enabled and not (
-        has_request_context() and request.headers.get('X-MusicBox-Download') == '1')
 
 _start_time_epoch = time.time()
 
@@ -66,9 +62,6 @@ def _operational_request_end(response):
             journal.record('ERROR' if response.status_code >= 500 else 'WARNING' if response.status_code >= 400 else 'INFO',
                 'http', f'{request.method} {route} → {response.status_code}',
                 request_id=request.environ.get('musicbox.trace', ''), route=route)
-        cache = response.headers.get('X-Cache', '').upper()
-        if cache in ('HIT', 'MISS'):
-            _operational.cache('audio_responses', cache == 'HIT', item=request.args.get('video_id') or request.args.get('id'))
     return response
 
 
@@ -249,70 +242,11 @@ def _totp_verify(code: str, window: int = 1) -> bool:
             return True
     return False
 
-# When set (e.g. https://130-162-223-226.sslip.io), audio_url points at /proxy/
-# instead of the direct googlevideo URL. googlevideo URLs are IP-locked to the
-# machine that resolved them (and direct fetches 403 from datacenter IPs even
-# then), so devices can only play via the proxy, which serves yt-dlp downloads.
+# Public authenticated audio origin used by Echo stream URLs. The server
+# relays YouTube audio and retains only temporary current-track bytes.
 PUBLIC_BASE_URL = os.environ.get("PUBLIC_BASE_URL", "").strip().rstrip('/')
 if PUBLIC_BASE_URL and '://' not in PUBLIC_BASE_URL:
     PUBLIC_BASE_URL = 'https://' + PUBLIC_BASE_URL
-
-AUDIO_CACHE_DIR = os.environ.get("AUDIO_CACHE_DIR", "/tmp/ytm_audio_cache")
-def _cache_seconds_env(name, default):
-    """Read a finite, safe cache duration without risking the sweep thread."""
-    try:
-        value = float(os.environ.get(name, default))
-    except (TypeError, ValueError):
-        return float(default)
-    return value if math.isfinite(value) and value >= 60.0 else float(default)
-
-
-# Completed audio is capacity-retained, with no idle expiry. The legacy TTL
-# remains an orphan-part timeout for existing deployments; it never deletes a
-# completed song. Explicit AUDIO_PARTIAL_TTL takes precedence.
-AUDIO_CACHE_TTL = _cache_seconds_env("AUDIO_PARTIAL_TTL",
-    _cache_seconds_env("AUDIO_CACHE_TTL", 7200))
-AUDIO_CACHE_SWEEP_INTERVAL = _cache_seconds_env("AUDIO_CACHE_SWEEP_INTERVAL", 1800)
-
-
-def _cache_megabytes_env(name, default):
-    """Read a non-negative size in MB; 0 disables that limit."""
-    try:
-        value = float(os.environ.get(name, default))
-    except (TypeError, ValueError):
-        return int(default) * 1024 * 1024
-    if not math.isfinite(value) or value < 0:
-        value = float(default)
-    return int(value * 1024 * 1024)
-
-
-# Requested and speculative audio share one LRU budget. Warmup markers only
-# label origin; they do not impose a separate expiry or size limit. Old
-# WARMUP_TTL/WARMUP_MAX_MB environment settings no longer override this policy.
-AUDIO_CACHE_MAX_BYTES = _cache_megabytes_env("AUDIO_CACHE_MAX_MB", 5120)
-AUDIO_CACHE_MIN_FREE_BYTES = _cache_megabytes_env("AUDIO_CACHE_MIN_FREE_MB", 512)
-WARMUP_TTL = 0  # compatibility names; not enforced for completed audio
-WARMUP_MAX_BYTES = 0
-
-
-def _audio_wait_seconds_env():
-    """Bounded server wait for a cold /audio/ miss on the wait path."""
-    try:
-        value = float(os.environ.get("AUDIO_WAIT_SECONDS", 25))
-    except (TypeError, ValueError):
-        return 25.0
-    if not math.isfinite(value):
-        return 25.0
-    return max(1.0, value)
-
-
-# Bounded server wait for a cold /audio/ miss on the wait/Range/HEAD path (fits
-# inside the app's 60 s socket timeout; the download keeps running after a 503
-# so a retry lands warm). Plain misses keep live-streaming; /proxy/ is untouched.
-AUDIO_WAIT_SECONDS = _audio_wait_seconds_env()
-# A file younger than this is never evicted for space: its requester may not
-# have opened it yet (download finished, send_file not started).
-_AUDIO_CACHE_EVICT_MIN_AGE = 60.0
 
 # When set, every request must carry ?key=<API_KEY> (or X-Api-Key header).
 # Key rides in the URL because Alexa devices fetch /proxy/ with no custom headers.
@@ -1566,7 +1500,7 @@ _RATE_LIMITS = {
 
 def _audio_delivery_rate_group(video_id, download=False):
     # Only complete server-cached files get the burst budget. Cold downloads keep their limit.
-    if _valid_video_id(video_id) and Supporting.cached_audio_path(video_id):
+    if _valid_video_id(video_id) and _youtube_stream.current.has(video_id):
         return 'cached_download' if download else 'cached_audio'
     return 'audio'
 
@@ -1592,29 +1526,9 @@ def _rate_limit_group(path: str) -> str:
 
 
 
-_last_prune = [0.0]
-_download_locks = {}
-_locks_guard = threading.Lock()
-# Bounds how many yt-dlp download subprocesses can run at once, independent of
-# how many distinct video_ids are requested (the per-id lock in
-# ensure_downloaded only prevents duplicate downloads of the *same* id, not
-# unbounded concurrent downloads of many different ids).
-_DOWNLOAD_CONCURRENCY = 4
-_download_semaphore = threading.Semaphore(_DOWNLOAD_CONCURRENCY)
-# Best-effort prefetch must never occupy the whole download pool. A cold-cache
-# song needs ~9-10s of yt-dlp (≈5s extraction plus a buffered transfer) and the
-# Echo abandons /proxy/ after ~11s, so if the track the user just clicked has to
-# queue behind a queue-prewarm burst it misses that window and the device plays
-# silence. Prefetch takes this smaller semaphore *in addition* to the one above,
-# which keeps (_DOWNLOAD_CONCURRENCY - _PREFETCH_CONCURRENCY) permits
-# permanently available to user-initiated downloads.
+_RESOLVE_CONCURRENCY = 4
 _PREFETCH_CONCURRENCY = 2
-_prefetch_semaphore = threading.Semaphore(_PREFETCH_CONCURRENCY)
-_audio_jobs = AudioJobs(workers=_DOWNLOAD_CONCURRENCY,
-                        prefetch_workers=_PREFETCH_CONCURRENCY)
-# Prefetch is dropped rather than queued when its own slots are taken: waiting
-# would just hold a thread to do work that the next track change may discard.
-_PREFETCH_SLOT_TIMEOUT = 0.5
+_audio_jobs = AudioJobs(workers=_RESOLVE_CONCURRENCY, prefetch_workers=_PREFETCH_CONCURRENCY)
 
 # Permanently-unavailable video ids (deleted, privated, etc.). Keyed by
 # video_id -> timestamp so they expire after a TTL (in case a video is
@@ -1725,123 +1639,30 @@ def _mark_video_dead(video_id: str):
             del _dead_video_ids[oldest]
 
 
-def _evict_bad_cache_entry(video_id: str):
-    """Delete a cached audio file suspected of being truncated/corrupt so the
-    next play re-downloads a fresh copy instead of repeating the same short
-    clip. Best-effort; never raises."""
-    try:
-        Supporting.evict_cached_audio(video_id)
-    except Exception:
-        logger.exception("failed to evict cache entry for %s", video_id)
+def _evict_bad_cache_entry(video_id):
+    """Discard only this track's temporary bytes; never another current song."""
+    _youtube_stream.current.discard(video_id)
 
 
-def _pinned_cache_video_ids():
-    """Video ids whose cache files must survive capacity-pressure eviction.
-
-    A pause of ~AUDIO_CACHE_TTL used to evict the paused track, so a resume
-    paid a full cold yt-dlp download (past the Echo's ~11s /proxy/ give-up)
-    on both web and voice paths -- the earlier background-prewarm overlap
-    only hid ~2s of it. The current track is one small file; keeping it warm
-    makes resume instant no matter how long the pause. Read-only under
-    _np_lock; never raises."""
-    try:
-        with _np_lock:
-            current = _now_playing.get('video_id', '')
-        if _valid_video_id(current):
-            return {current}
-    except Exception:
-        pass
-    return set()
 
 
-def _touch_cached_audio(video_id: str):
-    """Refresh recency after pause/resume, including across process restarts.
-
-    Pinning covers the live process; touching preserves recent-use ordering
-    across restarts, where in-memory now-playing is lost. Best-effort; never raises.
-    """
-    try:
-        if not _valid_video_id(video_id):
-            return
-        path = Supporting.cached_audio_path(video_id)
-        if path:
-            os.utime(path, None)
-    except Exception:
-        pass
 
 
-def _audio_last_used(st) -> float:
-    """When a cache file was last used: written (mtime) or served (atime).
-
-    Hits are recorded in atime (see `_mark_audio_used`) rather than mtime so
-    the file's Last-Modified/ETag stay stable for HTTP range requests and
-    validators. atime set explicitly via utime is honoured on noatime/relatime
-    mounts too; the automatic atime update on a read only ever makes a file
-    look *more* recent, which is also correct for LRU."""
-    return max(st.st_atime, st.st_mtime)
 
 
-def _mark_audio_used(path):
-    """Record a cache hit for LRU without changing the file's mtime."""
-    try:
-        st = os.stat(path)
-        os.utime(path, (time.time(), st.st_mtime))
-    except OSError:
-        pass
-    # A real play promotes a speculative warmup file in place (zero copy):
-    # drop the marker so status reflects a real play rather than prefetch.
-    try:
-        base = os.path.basename(path).split('.')[0]
-        if _valid_video_id(base):
-            _promote_warmup(base)
-    except Exception:
-        pass
 
 
-def _warmup_marker_path(video_id: str) -> str:
-    """Sidecar marking a cache file as speculative (warmup pool)."""
-    return os.path.join(AUDIO_CACHE_DIR, f"{video_id}.warmup")
 
 
-def _is_warmup(video_id: str) -> bool:
-    return os.path.isfile(_warmup_marker_path(video_id))
 
 
-def _mark_warmup(video_id: str):
-    """Mark a freshly downloaded file as warmup. Never extends an existing mark
-    (duplicate warmups keep the original expiry) and never marks an already
-    promoted (requested) file."""
-    try:
-        marker = _warmup_marker_path(video_id)
-        if not os.path.exists(marker) and Supporting.cached_audio_path(video_id):
-            with open(marker, 'w'):
-                pass
-    except OSError:
-        pass
 
 
-def _promote_warmup(video_id: str):
-    """Promote a warmup file to requested (delete marker, zero copy)."""
-    try:
-        os.remove(_warmup_marker_path(video_id))
-    except OSError:
-        pass
 
 
 _audio_prune_lock = threading.Lock()
 
 
-def _schedule_audio_cache_prune():
-    """Enforce the size/free-space budget soon after a new file lands.
-
-    Runs off-thread so the request that produced the file never waits on a
-    directory scan. If a prune is already running it covers this one too."""
-    def run():
-        try:
-            Supporting.prune_audio_cache()
-        except Exception:
-            logger.exception("Audio cache prune failed")
-    threading.Thread(target=run, daemon=True, name="audio-cache-prune").start()
 
 
 def _is_dead_video(video_id: str) -> bool:
@@ -1877,35 +1698,13 @@ def _is_flaky_video(video_id: str) -> bool:
 def _is_dead_or_flaky_video(video_id: str) -> bool:
     return _is_dead_video(video_id) or _is_flaky_video(video_id)
 # v3.1: Download queue depth tracking
-_download_queue_depth = 0
-_download_queue_lock = threading.Lock()
-
-def _download_backpressure() -> bool:
-    """Check if the download queue is under backpressure.
-    Returns False when too many downloads are queued."""
-    with _download_queue_lock:
-        global _download_queue_depth
-        if _download_queue_depth > _DOWNLOAD_CONCURRENCY * 3:
-            return False
-    return True
 
 
-def _inc_download_depth():
-    global _download_queue_depth
-    with _download_queue_lock:
-        _download_queue_depth += 1
 
 
-def _dec_download_depth():
-    global _download_queue_depth
-    with _download_queue_lock:
-        if _download_queue_depth > 0:
-            _download_queue_depth -= 1
 
 
-def _download_queue_size() -> int:
-    with _download_queue_lock:
-        return _download_queue_depth
+
 
 
 # ---------- yt-dlp rate-limit cooldown ----------
@@ -1982,104 +1781,6 @@ def _generation_superseded(generation) -> bool:
         return False
     return _current_playback_generation() != generation
 
-
-# ---------- cold-cache proxy stream registry ----------
-# /proxy/ serves a cold-cache track by streaming a yt-dlp subprocess straight
-# to the Echo. That path bypasses the per-id `_download_locks`, so N concurrent
-# requests for one video_id (the Echo's own retries plus the playback
-# watchdog's resend) used to spawn N independent yt-dlp processes for the same
-# song. Entries here make those requests visible both to each other and to
-# `_download_in_progress`.
-_stream_inflight = {}
-_stream_inflight_lock = threading.Lock()
-# How long a duplicate request waits for the in-flight stream to land a cache
-# file before giving up and doing its own download.
-_STREAM_DUPLICATE_WAIT = 25.0
-_STREAM_DUPLICATE_POLL = 0.25
-# How long a cold-cache /proxy/ request waits for an in-flight *background*
-# prewarm (ensure_downloaded, started by the play click and again by get_stream)
-# to land its cache file before starting its own stream. The prewarm begins at
-# click time and finishes in ~4s (premium) or ~8s (free), while the Echo hits
-# /proxy/ a couple of seconds later, so this is normally a short wait that just
-# lets the prewarm finish instead of spawning a redundant second yt-dlp process.
-# Bounded so that even a stuck prewarm still falls back to a stream (~4s first
-# byte) inside the Echo's ~11s /proxy/ deadline.
-_PREWARM_WAIT_SECONDS = 6.0
-_PREWARM_POLL = 0.2
-# A superseded stream is killed once it has been stale this long. The grace
-# period absorbs the brief window where /proxy/ arrives before the now-playing
-# state has been updated for the same track (voice-initiated playback).
-_STREAM_SUPERSEDE_GRACE = 8.0
-# Absolute ceiling on a single cold-cache stream. Each open stream holds one
-# waitress worker thread and one yt-dlp process; a stuck one (yt-dlp grinding
-# through its retry loop against a rate-limited endpoint) must not be able to
-# occupy them for minutes, starving every other request.
-_STREAM_MAX_SECONDS = 150.0
-# How long a cold-cache stream waits for a streaming slot before proceeding
-# anyway. The user is waiting on this audio, so the slot is a throttle, not a
-# gate: never let it delay playback past the Echo's ~11s /proxy/ timeout.
-_STREAM_PERMIT_TIMEOUT = 2.0
-# Cold-cache streams get their own budget rather than sharing
-# `_download_semaphore` with prewarm. Sharing put best-effort prefetch work
-# directly in front of the track the user is waiting on: with only
-# _DOWNLOAD_CONCURRENCY permits, a couple of streams plus prewarms saturated the
-# pool ("streaming X without a download permit"), and anything that did wait on
-# that semaphore stalled playback.
-_STREAM_CONCURRENCY = 3
-_stream_semaphore = threading.Semaphore(_STREAM_CONCURRENCY)
-
-
-def _stream_register(video_id: str) -> bool:
-    """Claim `video_id` for a cold-cache stream. False when already claimed."""
-    with _stream_inflight_lock:
-        if video_id in _stream_inflight:
-            return False
-        _stream_inflight[video_id] = time.time()
-        return True
-
-
-def _stream_unregister(video_id: str):
-    with _stream_inflight_lock:
-        _stream_inflight.pop(video_id, None)
-
-
-def _stream_is_inflight(video_id: str) -> bool:
-    with _stream_inflight_lock:
-        return video_id in _stream_inflight
-
-
-class _SemaphorePermit:
-    """Idempotently-released semaphore permit for a streaming response.
-
-    A permit taken by a view function but released inside the response
-    generator leaks whenever the WSGI server closes the response without ever
-    iterating it. The release is therefore idempotent and gets wired to both
-    the generator's `finally` and `Response.call_on_close`.
-    """
-
-    def __init__(self, semaphore):
-        self._semaphore = semaphore
-        self._lock = threading.Lock()
-        self._held = False
-
-    @property
-    def held(self) -> bool:
-        with self._lock:
-            return self._held
-
-    def acquire(self, timeout: float) -> bool:
-        acquired = self._semaphore.acquire(timeout=timeout)
-        if acquired:
-            with self._lock:
-                self._held = True
-        return acquired
-
-    def release(self):
-        with self._lock:
-            if not self._held:
-                return
-            self._held = False
-        self._semaphore.release()
 
 _stream_list_cache = {}
 _stream_list_pending = {}
@@ -2372,6 +2073,9 @@ def _notify_sse():
         _mobile_devices.wake()
     with _np_lock:
         _queue_version_locked()
+        video = _now_playing.get('video_id') or ''
+        if not video or (_now_playing.get('playing') and _now_playing.get('playback_confirmed')):
+            _youtube_stream.current.activate(video)
         _playback_persistence.submit(_now_playing, _playback_output.snapshot(), _computed_position_ms())
     _schedule_alexa_queue_sync()
     with _sse_lock:
@@ -2546,9 +2250,7 @@ def _update_now_playing(**kwargs):
                     _now_playing['playback_confirmed'] = False
         _now_playing['updated_at'] = time.time()
     if track_changed:
-        # Invalidate background download work started for the previous track:
-        # queue prewarms and cold-cache proxy streams check this and abandon
-        # themselves rather than piling more yt-dlp processes onto YouTube.
+        # Invalidate URL preparation and superseded streams for the old track.
         _bump_playback_generation()
     _notify_sse()
 
@@ -3292,76 +2994,36 @@ def _current_queue_for_video(video_id):
 
 
 def _prewarm_queue_audio(queue, current_index=0, limit=4):
-    """Best-effort pre-download of the next few queue entries.
-
-    Strictly best-effort: it must never compete with the track the user is
-    waiting on. It gives up when the download queue is saturated, while YouTube
-    is rate-limiting us, and as soon as the user moves to a different track.
-    """
-    if not queue:
+    """Prepare upcoming stream URLs, never their audio bytes."""
+    if _ytdlp_rate_limited():
         return 0
     generation = _current_playback_generation()
-    if _ytdlp_rate_limited():
-        logger.info("prewarm skipped: yt-dlp cooling down for %.0fs more",
-                    _ytdlp_cooldown_remaining())
-        return 0
     warmed = 0
-    for offset in range(1, len(queue)):
-        if warmed >= limit:
+    for offset in range(1, len(queue or [])):
+        if warmed >= limit or _generation_superseded(generation):
             break
-        # The user clicked another song: everything below is now waste that
-        # would only push us closer to a 429.
-        if _generation_superseded(generation):
-            logger.info("prewarm aborted: playback moved on after %d warm(s)", warmed)
-            break
-        # Never queue prefetch work behind an already-saturated download queue.
-        if not _download_backpressure():
-            logger.info("prewarm aborted: download queue saturated (%d queued)",
-                        _download_queue_size())
-            break
-        if _ytdlp_rate_limited():
-            logger.info("prewarm aborted: yt-dlp rate-limited")
-            break
-        item = queue[(current_index + offset) % len(queue)]
-        video_id = item.get('video_id', '')
-        if not _valid_video_id(video_id):
-            continue
-        if Supporting.cached_audio_path(video_id):
-            continue
-        _ensure_audio_ready_for_play(video_id, wait=False, generation=generation,
-                                    prefetch=True)
-        warmed += 1
+        video_id = queue[(current_index + offset) % len(queue)].get('video_id', '')
+        if _valid_video_id(video_id):
+            _ensure_audio_ready_for_play(video_id, generation=generation, prefetch=True)
+            warmed += 1
     return warmed
 
 
 def _ensure_audio_ready_for_play(video_id, wait=False, generation=None, prefetch=False):
-    """Make sure `video_id`'s audio is cached.
-
-    `generation` opts the download into cancellation: it is abandoned if the
-    current track changes before yt-dlp actually starts. Leave it None for the
-    track the user is waiting on. `prefetch=True` marks the download as
-    best-effort so it is dropped entirely during a rate-limit cooldown.
-    """
+    """Prepare a playable URL without downloading or replacing current audio."""
     if not _valid_video_id(video_id):
         return False
-    if _streaming_playback():
-        def prepare_url():
-            if not _generation_superseded(generation):
-                try:
-                    return _youtube_stream.resolve(video_id)
-                except StreamError:
-                    return None
-        if wait:
-            return bool(prepare_url())
-        _audio_jobs.submit(video_id, prepare_url, prefetch=prefetch)
+    if prefetch and _ytdlp_rate_limited():
         return False
-    if Supporting.cached_audio_path(video_id):
-        return True
+    def prepare_url():
+        if not _generation_superseded(generation):
+            try:
+                return _youtube_stream.resolve(video_id)
+            except StreamError:
+                return None
     if wait:
-        return bool(Supporting.ensure_downloaded(video_id, generation=generation,
-                                                 prefetch=prefetch))
-    _audio_jobs.submit(video_id, lambda: Supporting.ensure_downloaded(
-        video_id, generation=generation, prefetch=prefetch), prefetch=prefetch)
+        return bool(prepare_url())
+    _audio_jobs.submit(video_id, prepare_url, prefetch=prefetch)
     return False
 
 
@@ -3957,128 +3619,8 @@ class Supporting:
             'duration_ms': duration_ms,
         }
 
-    def cached_audio_path(video_id: str):
-        paths = [p for p in glob.glob(os.path.join(AUDIO_CACHE_DIR, f"{video_id}.*"))
-                 if not p.endswith('.part') and not p.endswith('.warmup')]
-        _operational.cache('audio_lookups', bool(paths), item=video_id)
-        return paths[0] if paths else None
 
-    def evict_cached_audio(video_id: str):
-        """Delete any finished cached audio file(s) for `video_id`. Best-effort.
 
-        Skips `*.part` files: those are in-flight yt-dlp writes (background
-        `ensure_downloaded` uses `<id>.%(ext)s.part`, streaming uses
-        `<id>.m4a.<uuid>.part`). Deleting them mid-write caused
-        `Unable to rename file ... No such file` when the truncated-stop
-        eviction raced a still-running download for the same video.
-        Also removes the `*.warmup` sidecar marker (it is bookkeeping, not audio).
-        """
-        for path in glob.glob(os.path.join(AUDIO_CACHE_DIR, f"{video_id}.*")):
-            if path.endswith('.part'):
-                continue
-            try:
-                os.remove(path)
-            except OSError:
-                pass
-
-    def prune_audio_cache():
-        """Retain completed audio until shared capacity or disk reserve needs space.
-
-        Evict least recently used audio regardless of requested/warmup origin.
-        Current tracks, active fetches and newly written files are protected;
-        the budget is temporarily soft when only protected files remain.
-        Only abandoned .part files have an idle timeout. Failed deletions never
-        count as freed space. Returns actual (files_removed, bytes_removed).
-        """
-        if not _audio_prune_lock.acquire(blocking=False):
-            return 0, 0
-        try:
-            os.makedirs(AUDIO_CACHE_DIR, exist_ok=True)
-            now = time.time()
-            removed_files = removed_bytes = 0
-            total = 0
-            candidates = []
-
-            def busy(video):
-                if video in _pinned_cache_video_ids() or _stream_is_inflight(video):
-                    return True
-                with _locks_guard:
-                    lock = _download_locks.get(video)
-                return bool(lock and lock.locked())
-
-            def remove(path, size):
-                nonlocal removed_files, removed_bytes
-                try:
-                    os.remove(path)
-                except OSError:
-                    return False
-                removed_files += 1
-                removed_bytes += size
-                if not path.endswith('.part'):
-                    try:
-                        os.remove(_warmup_marker_path(os.path.basename(path).split('.')[0]))
-                    except OSError:
-                        pass
-                return True
-
-            for path in glob.glob(os.path.join(AUDIO_CACHE_DIR, "*")):
-                try:
-                    if os.path.islink(path) or not os.path.isfile(path) or path.endswith('.warmup'):
-                        continue
-                    stat = os.stat(path)
-                    video = os.path.basename(path).split('.')[0]
-                    if path.endswith('.part'):
-                        if now - stat.st_mtime > AUDIO_CACHE_TTL and not busy(video):
-                            remove(path, stat.st_size)
-                        continue
-                    if os.path.splitext(path)[1].lower() not in AUDIO_EXTENSIONS:
-                        continue  # metadata is not part of the completed-audio budget
-                    total += stat.st_size
-                    if not busy(video):
-                        candidates.append((_audio_last_used(stat), stat.st_size, path))
-                except OSError:
-                    continue
-
-            # Remove empty bookkeeping for audio already removed or lost.
-            for marker in glob.glob(os.path.join(AUDIO_CACHE_DIR, "*.warmup")):
-                video = os.path.basename(marker)[:-len('.warmup')]
-                if not _valid_video_id(video) or not Supporting.cached_audio_path(video):
-                    try:
-                        os.remove(marker)
-                    except OSError:
-                        pass
-
-            over = max(0, total - AUDIO_CACHE_MAX_BYTES) if AUDIO_CACHE_MAX_BYTES else 0
-            short = 0
-            if AUDIO_CACHE_MIN_FREE_BYTES:
-                try:
-                    short = max(0, AUDIO_CACHE_MIN_FREE_BYTES - shutil.disk_usage(AUDIO_CACHE_DIR).free)
-                except OSError:
-                    pass
-            need = max(over, short)
-            for last_used, size, path in sorted(candidates):
-                if need <= 0:
-                    break
-                try:
-                    # Recheck after scanning: a song may have started playing,
-                    # been touched or been replaced while the sweep was running.
-                    stat = os.stat(path)
-                    video = os.path.basename(path).split('.')[0]
-                    if (busy(video) or _audio_last_used(stat) > last_used
-                            or now - _audio_last_used(stat) < _AUDIO_CACHE_EVICT_MIN_AGE):
-                        continue
-                    if remove(path, stat.st_size):
-                        need -= stat.st_size
-                except OSError:
-                    continue
-            if need > 0:
-                logger.warning("audio cache: %.1f MB still needs eviction; remaining files are protected or could not be removed",
-                               need / (1024 * 1024))
-            if removed_files:
-                logger.info("audio cache: evicted %d file(s), %.1f MB", removed_files, removed_bytes / (1024 * 1024))
-            return removed_files, removed_bytes
-        finally:
-            _audio_prune_lock.release()
 
 
     def ytdlp_download_command(video_id: str, output, client: str = "default",
@@ -4124,202 +3666,6 @@ class Supporting:
         command += ["-o", output, "--", video_id]
         return command
 
-    def ensure_downloaded(video_id: str, generation=None, prefetch=False):
-        """Download `video_id` into the audio cache and return its path.
-
-        `generation` (see `_current_playback_generation`) makes the download
-        cancellable: because the semaphore below can hold a caller for a long
-        time, the generation is re-checked right before yt-dlp is spawned so a
-        backlog built up by rapid song clicks drains instantly instead of
-        running downloads nobody is waiting for any more.
-
-        `prefetch=True` marks the download best-effort; it is dropped while
-        YouTube is rate-limiting this host.
-        """
-        if not _valid_video_id(video_id):
-            return None
-        # Check the dead-video and flaky-video caches first — skip the
-        # yt-dlp subprocess entirely for videos known to be permanently
-        # unavailable, or that recently failed every client without a clear
-        # cause (avoids re-running all 4 clients' retry/timeout budgets
-        # back-to-back on a hands-free retry loop).
-        if _is_dead_video(video_id):
-            logger.warning("yt-dlp: %s is known-dead, skipping download", video_id)
-            return None
-        if _is_flaky_video(video_id):
-            logger.warning("yt-dlp: %s recently failed every client, skipping download "
-                           "(flaky cache)", video_id)
-            return None
-        if prefetch and _ytdlp_rate_limited():
-            logger.info("yt-dlp: skipping prefetch of %s (rate-limit cooldown %.0fs)",
-                        video_id, _ytdlp_cooldown_remaining())
-            return None
-        if _generation_superseded(generation):
-            logger.info("yt-dlp: skipping %s, playback already moved on", video_id)
-            return None
-        now = time.time()
-        if now - _last_prune[0] > 60:
-            Supporting.prune_audio_cache()
-            _last_prune[0] = now
-        # Track queue depth: increment BEFORE acquiring the semaphore so the
-        # counter reflects queued (waiting) + active downloads, not just active.
-        _inc_download_depth()
-        prefetch_slot = None
-        try:
-            if prefetch:
-                # Cap prefetch below the pool size so the song the user is
-                # waiting on always has permits available. Best-effort: if no
-                # prefetch slot is free, drop this one instead of queueing.
-                prefetch_slot = _SemaphorePermit(_prefetch_semaphore)
-                if not prefetch_slot.acquire(timeout=_PREFETCH_SLOT_TIMEOUT):
-                    logger.info("yt-dlp: dropping prefetch of %s (%d prefetch slots busy)",
-                                video_id, _PREFETCH_CONCURRENCY)
-                    return None
-            with _download_semaphore:
-                # Re-check after the wait: by the time a permit frees up the
-                # user may have clicked several songs past this one.
-                if _generation_superseded(generation):
-                    logger.info("yt-dlp: dropping queued download of %s, playback moved on",
-                                video_id)
-                    return None
-                if prefetch and _ytdlp_rate_limited():
-                    logger.info("yt-dlp: dropping queued prefetch of %s (rate-limited)",
-                                video_id)
-                    return None
-                with _locks_guard:
-                    lock = _download_locks.setdefault(video_id, threading.Lock())
-                with lock:
-                    path = Supporting.cached_audio_path(video_id)
-                    if path:
-                        # A requested play promotes a warmup file in place;
-                        # a duplicate warmup leaves the original expiry alone.
-                        if not prefetch:
-                            _promote_warmup(video_id)
-                        return path
-                    # Re-check dead/flaky status now that the per-id lock is
-                    # held: a concurrent caller for the same id (prewarm from
-                    # get_stream() racing /proxy/'s own ensure_downloaded, for
-                    # instance) can win the lock first and mark the video
-                    # dead/flaky while this call was queued behind it. Without
-                    # this re-check the queued call runs the full 4-client
-                    # fallback loop a second time for a video the other caller
-                    # just proved was unavailable.
-                    if _is_dead_video(video_id):
-                        logger.warning("yt-dlp: %s is known-dead, skipping download "
-                                       "(caught by another caller while queued)", video_id)
-                        return None
-                    if _is_flaky_video(video_id):
-                        logger.warning("yt-dlp: %s recently failed every client, skipping "
-                                       "download (caught by another caller while queued)",
-                                       video_id)
-                        return None
-                    output = os.path.join(AUDIO_CACHE_DIR, f"{video_id}.%(ext)s")
-                    clients = Supporting.get_ytdlp_clients()
-                    permanent_failures = 0
-                    downloaded = False
-                    rate_limited = False
-                    last_error = ""
-                    for index, client in enumerate(clients):
-                        client_started = time.time()
-                        with _operational.fetch(client, video_id, kind='prefetch' if prefetch else 'download') as attempt:
-                            result = subprocess.run(
-                                Supporting.ytdlp_download_command(video_id, output, client=client),
-                                capture_output=True, text=True)
-                            attempt['ok'] = result.returncode == 0
-                        client_elapsed = time.time() - client_started
-                        if result.returncode == 0:
-                            written_path = Supporting.cached_audio_path(video_id)
-                            # returncode 0 is not proof of a complete file --
-                            # see _is_audio_file_valid. Reject a truncated
-                            # result instead of caching it, and fall through
-                            # to the next client profile like any other
-                            # failure.
-                            if written_path and _is_audio_file_valid(written_path):
-                                downloaded = True
-                                if index:
-                                    logger.info("yt-dlp download succeeded with %s fallback for %s "
-                                                "(%.1fs, %d/%d clients tried)",
-                                                client, video_id, client_elapsed,
-                                                index + 1, len(clients))
-                                else:
-                                    logger.debug("yt-dlp download succeeded with %s for %s (%.1fs)",
-                                                 client, video_id, client_elapsed)
-                                break
-                            if written_path:
-                                logger.warning(
-                                    "yt-dlp: discarding truncated/invalid download of %s "
-                                    "(client %s)", video_id, client)
-                                try:
-                                    os.unlink(written_path)
-                                except OSError:
-                                    pass
-                            last_error = "downloaded file failed integrity check"
-                            continue
-                        stderr = result.stderr.strip()
-                        last_error = stderr
-                        logger.warning("yt-dlp client %s failed for %s; trying fallback: %s",
-                                       client, video_id, stderr)
-                        # A 429 is a property of our IP, not of this client
-                        # profile. Pause best-effort prefetch either way, but
-                        # only stop trying other clients when the 429 is what
-                        # actually killed this run: yt-dlp frequently warns
-                        # about a 429 on the watch page and then extracts fine
-                        # via innertube, and the incident logs show the run that
-                        # warned about a 429 really failed on the bot check --
-                        # which the next client profile is what recovers from.
-                        if _rate_limit_warning_present(stderr):
-                            rate_limited = True
-                            _note_rate_limited(video_id)
-                        if _is_rate_limited_error(stderr):
-                            logger.warning(
-                                "yt-dlp: aborting remaining client fallbacks for %s "
-                                "(fatally rate-limited after %s)", video_id, client)
-                            break
-                        # "Video unavailable" can be client-specific: the
-                        # authenticated default profile may reject a playable
-                        # music video that android_vr can still download. Keep
-                        # trying, and only poison the dead-video cache when
-                        # every configured client independently says it is
-                        # permanently unavailable.
-                        if _is_video_permanently_unavailable(stderr):
-                            permanent_failures += 1
-                    # A rate-limited run learned nothing about the video, so it
-                    # must never reach the dead-video cache: doing so made
-                    # healthy songs unplayable for _DEAD_VIDEO_TTL.
-                    if (not downloaded and not rate_limited
-                            and permanent_failures == len(clients)):
-                        _mark_video_dead(video_id)
-                        logger.warning("yt-dlp: %s marked as permanently unavailable", video_id)
-                    elif not downloaded and rate_limited:
-                        logger.error("yt-dlp download failed for %s: rate-limited by YouTube",
-                                     video_id)
-                    elif not downloaded:
-                        # Every client failed, but not with a recognized
-                        # permanent-unavailable string (SSL reset, SABR-only
-                        # format gap, integrity check, etc.) -- this is most
-                        # likely transient, not proof the video is gone.
-                        # Cache it briefly so a hands-free retry loop doesn't
-                        # re-run all 4 clients (each with its own retry/
-                        # timeout budget) back-to-back, and so the playback
-                        # watchdog can auto-advance instead of stalling.
-                        _mark_video_flaky(video_id)
-                        logger.error("yt-dlp download failed for %s with every client "
-                                     "(no permanent-unavailable signal; caching as flaky "
-                                     "for %ds): %s", video_id, _FLAKY_VIDEO_TTL, last_error)
-                    if downloaded:
-                        # Throughput is back; stop suppressing prefetch.
-                        _reset_rate_limit_cooldown()
-                        if prefetch:
-                            # New speculative file only (existing files returned
-                            # early above): mark warmup without touching an
-                            # existing mark's mtime on duplicates.
-                            _mark_warmup(video_id)
-                        _schedule_audio_cache_prune()
-                    return Supporting.cached_audio_path(video_id)
-        finally:
-            if prefetch_slot is not None:
-                prefetch_slot.release()
-            _dec_download_depth()
 
     async def get_stream(video_id: str):
         # Direct googlevideo URLs are bound to the server's egress IP. An Echo
@@ -4384,18 +3730,7 @@ class Supporting:
         return {'id': playlist_raw['id'], 'title': playlist_raw.get('title', 'Untitled')}
 
 
-def _audio_cache_sweep_loop():
-    """Prune the persistent audio volume without relying on host cron."""
-    while True:
-        try:
-            Supporting.prune_audio_cache()
-        except Exception:
-            logger.exception("Audio cache sweep failed")
-        time.sleep(AUDIO_CACHE_SWEEP_INTERVAL)
 
-
-threading.Thread(target=_audio_cache_sweep_loop, daemon=True,
-                 name="audio-cache-sweep").start()
 
 @app.route("/get_playlist_info/", methods=["GET"])
 async def get_playlist_info():
@@ -5092,89 +4427,7 @@ def proxy_stream():
     if not _get_now_playing().get('duration_ms'):
         threading.Thread(target=_lookup_and_update_np, args=(video_id,), daemon=True).start()
     threading.Thread(target=_refresh_radio_queue, args=(video_id,), daemon=True).start()
-    if _streaming_playback():
-        return _serve_youtube_stream(video_id, confirm=True, cancellable=True)
-    if not Supporting.cached_audio_path(video_id):
-        # Cold cache: stream yt-dlp output straight to the response so the
-        # Echo device starts receiving audio as soon as yt-dlp produces
-        # bytes, instead of waiting for the full download + send_file path
-        # (which exceeded the device's ~11s /proxy/ timeout over the VPN).
-        # NOTE: _confirm_stream_delivery is intentionally NOT called here.
-        # Calling it before yt-dlp produces any bytes sets playback_confirmed=True
-        # immediately, which clears awaitingStart on the client and starts the
-        # progress bar ticking even though yt-dlp still takes 7-8s to process.
-        # Confirmation is instead deferred to the first chunk inside generate().
-        #
-        # Range resumes cannot be live-streamed: the Echo retries a dropped
-        # connection with `Range: bytes=N-`, but a yt-dlp stdout pipe always
-        # starts at byte 0. Serving that as 200 feeds the wrong bytes, the
-        # Echo disconnects mid-stream ("aborting with incomplete response"
-        # in Caddy, "Client disconnected while serving /proxy/" here), and
-        # after a few retries gives up with MEDIA_ERROR_UNKNOWN. Buffer to
-        # the cache first and serve a proper 206 via send_file instead --
-        # slower, but correct. A 502 lets the Echo retry (which is then warm)
-        # instead of feeding it corrupt audio.
-        range_header = request.headers.get('Range')
-        if range_header:
-            logger.warning("proxy: Range %r for cold-cache %s -- "
-                           "buffering to cache for 206 instead of streaming",
-                           range_header, video_id)
-            path = None
-            if _stream_is_inflight(video_id):
-                path = _await_inflight_stream(video_id)
-            if not path and _download_in_progress(video_id):
-                path = _await_prewarm_cache(video_id)
-            if not path:
-                path = Supporting.ensure_downloaded(video_id)
-            if not path:
-                return error_response('download failed', 502)
-            _confirm_stream_delivery(video_id)
-            mimetype = 'audio/mp4' if path.endswith(('.m4a', '.mp4')) else 'audio/webm'
-            return send_file(path, mimetype=mimetype, conditional=True)
-        # Another request is already streaming this exact track (the Echo
-        # retries /proxy/, and the playback watchdog resends the play command).
-        # Spawning a second yt-dlp for the same song only doubles the load that
-        # gets us rate-limited, so wait for the in-flight one to land its cache
-        # file and serve that instead.
-        if _stream_is_inflight(video_id):
-            path = _await_inflight_stream(video_id)
-            if path:
-                logger.info("proxy: served %s from the in-flight stream's cache", video_id)
-                _confirm_stream_delivery(video_id)
-                mimetype = 'audio/mp4' if path.endswith(('.m4a', '.mp4')) else 'audio/webm'
-                return send_file(path, mimetype=mimetype, conditional=True)
-        # A background prewarm (ensure_downloaded, started by the play click and
-        # again by get_stream) is already fetching this exact track. It began
-        # seconds before the Echo's /proxy/ request, so waiting for its cache
-        # file is faster than spawning a second yt-dlp stream — and avoids the
-        # double-download that left superseded streams stuck for 150s.
-        if _download_in_progress(video_id):
-            path = _await_prewarm_cache(video_id)
-            if path:
-                logger.info("proxy: served %s from the in-flight prewarm's cache", video_id)
-                _confirm_stream_delivery(video_id)
-                mimetype = 'audio/mp4' if path.endswith(('.m4a', '.mp4')) else 'audio/webm'
-                return send_file(path, mimetype=mimetype, conditional=True)
-        return _stream_proxy_download(video_id)
-    # Warm cache: serve the file directly. This must NOT go through
-    # ensure_downloaded(): that acquires _download_semaphore *before* looking at
-    # the cache, so a request for an already-downloaded file would queue behind
-    # up to _DOWNLOAD_CONCURRENCY slow yt-dlp runs, with no timeout, while
-    # holding a waitress worker thread. That is what produced the 154s/134s/114s
-    # /proxy/ responses that all completed within 9ms of each other once the
-    # download backlog drained -- and on the device it is simply silence, since
-    # the Echo gives up on /proxy/ after ~11s.
-    path = Supporting.cached_audio_path(video_id)
-    if not path:
-        # Raced with the cache sweep between the check above and here; fall back
-        # to a real download.
-        path = Supporting.ensure_downloaded(video_id)
-    if not path:
-        return error_response('download failed', 502)
-    _mark_audio_used(path)
-    _confirm_stream_delivery(video_id)
-    mimetype = 'audio/mp4' if path.endswith(('.m4a', '.mp4')) else 'audio/webm'
-    return send_file(path, mimetype=mimetype, conditional=True)
+    return _serve_youtube_stream(video_id, confirm=True, cancellable=True)
 
 
 # ---- /audio/: side-effect-free audio for app clients (e.g. the JUKE app) ----
@@ -5240,8 +4493,8 @@ def _audio_search_song(query: str, duration_s: int = 0):
     return best
 
 
-def _audio_meta_headers(video_id, meta, cache_state):
-    headers = {'X-Video-Id': video_id, 'X-Cache': cache_state}
+def _audio_meta_headers(video_id, meta):
+    headers = {'X-Video-Id': video_id}
     if meta:
         # Percent-encoded: HTTP header values are Latin-1, titles are not.
         headers['X-Title'] = quote(meta.get('title') or '', safe='')
@@ -5253,28 +4506,12 @@ def _audio_meta_headers(video_id, meta, cache_state):
 
 @app.route("/audio/", methods=["GET", "HEAD"])
 def audio_stream():
-    """Audio for app clients.
+    """Stream app audio by video_id, YouTube URL, or search query.
 
-    Pick the track with one of:
-      video_id=<11-char id>
-      url=<any YouTube / YouTube Music link>
-      q=<"title artist">[&duration=<seconds>]   (top YouTube Music song match)
-
-    Options:
-      info=1  JSON {video_id, title, artist, duration_ms, cached, audio_url}
-              instead of audio (no download); audio_url carries no API key.
-      prefetch=1  speculative warmup (query param only): start a best-effort
-              background download and answer at once with 202 (or 200 + cached
-              when already warm); never streams, never blocks, never touches
-              Echo state or the LRU clock. Fire-and-forget: ignore 202/429.
-      wait=1  on a cache miss, finish the download first and serve the file
-              with Content-Length and byte ranges (instead of a live stream
-              that can't be seeked until it ends). Range requests and HEAD
-              always do this. Precedence: info > prefetch > wait.
-
-    Cache hits are served with range support and a stable ETag, and count as
-    a use for the LRU cache. Headers: X-Video-Id, X-Cache (HIT/MISS) and, for
-    searches, percent-encoded X-Title / X-Artist plus X-Duration-Ms.
+    info=1 returns metadata only; prefetch=1 prepares a URL and returns 202.
+    The legacy wait hint never causes a complete-file download. HEAD and
+    single byte ranges work on upstream streams and retained current bytes.
+    Explicit downloads use the same stream with an attachment filename.
     """
     video_id = request.args.get("video_id")
     meta = None
@@ -5301,195 +4538,22 @@ def audio_stream():
         video_id = meta['video_id']
     if not _valid_video_id(video_id):
         return error_response('provide "video_id", "url" or "q"', 400)
-    if (_streaming_playback() and not _audio_truthy(request.args.get('info'))
-            and not _audio_truthy(request.args.get('prefetch'))):
-        # Streaming owns Range/HEAD and ignores the legacy wait=1 hint. No
-        # complete download or disk cache is required, even when seeking.
-        return _serve_youtube_stream(video_id, meta=meta)
-    if _streaming_playback() and _audio_truthy(request.args.get('prefetch')) and not _audio_truthy(request.args.get('info')):
-        _ensure_audio_ready_for_play(video_id, prefetch=True)
-        return jsonify({'video_id': video_id, 'cached': False, 'streaming': True}), 202
-    if _is_dead_video(video_id):
-        return error_response('video unavailable', 404)
-
-    path = Supporting.cached_audio_path(video_id)
-    cache_state = 'HIT' if path else 'MISS'
-    # Every client failed for this video moments ago. Answer at once instead of
-    # running the whole yt-dlp fallback chain again (a live stream would also
-    # have to report it as an empty 200), so the app can try another source.
-    if not path and _is_flaky_video(video_id) and not _audio_truthy(request.args.get("info")):
-        response, status = error_response('download recently failed; retry later', 503,
-                                          retryable=True)
-        response.status_code = status
-        response.headers['Retry-After'] = str(int(_FLAKY_VIDEO_TTL))
-        return response
-
-    if _audio_truthy(request.args.get("info")):
+    if _audio_truthy(request.args.get('info')):
         base = PUBLIC_BASE_URL or request.url_root.rstrip('/')
-        body = dict(meta or {'video_id': video_id})
-        body['cached'] = bool(path)
-        body['audio_url'] = f"{base}/audio/?video_id={video_id}"
-        return jsonify(body)
-
-    if _audio_truthy(request.args.get("prefetch")):
-        # Explicit speculative mode (query param only): fire-and-forget warmup.
-        # Starts a best-effort background download and answers at once; never
-        # streams, never blocks, never touches Echo state or the LRU clock.
-        # The legacy X-MusicBox-Prefetch header alone keeps its blocking
-        # behavior in the download path below until app task APP1 ships (the
-        # preloader still sends wait=1 with it; a 202 JSON there would be cached
-        # as audio by ExoPlayer's CacheWriter).
-        if path:
-            base = PUBLIC_BASE_URL or request.url_root.rstrip('/')
-            return jsonify({'video_id': video_id, 'cached': True,
-                            'audio_url': f"{base}/audio/?video_id={video_id}"})
-        _ensure_audio_ready_for_play(video_id, wait=False, generation=None,
-                                     prefetch=True)
-        response, status = error_response('prefetch deferred', 202,
-                                          code='prefetch_deferred', retryable=True)
-        response.status_code = status
-        response.headers['Retry-After'] = '5'
-        return response
-
-    headers = _audio_meta_headers(video_id, meta, cache_state)
-    if not path:
-        wants_file = (_audio_truthy(request.args.get("wait"))
-                      or request.headers.get('Range') or request.method == 'HEAD')
-        if not wants_file:
-            # Live stream for the fastest first byte; it also lands in the cache.
-            if _stream_is_inflight(video_id):
-                path = _await_inflight_stream(video_id)
-            if not path:
-                response = _stream_proxy_download(video_id, confirm=False, cancellable=False)
-                response.headers.update(headers)
-                return response
-        # One shared deadline for every join below so a cold wait=1/Range/HEAD
-        # miss answers within AUDIO_WAIT_SECONDS instead of holding a worker
-        # indefinitely. /proxy/ callers keep their own defaults (untouched).
-        wait_deadline = time.time() + AUDIO_WAIT_SECONDS
-        if not path and _stream_is_inflight(video_id):
-            remaining = wait_deadline - time.time()
-            if remaining > 0:
-                path = _await_inflight_stream(video_id, timeout=remaining)
-        if not path and _download_in_progress(video_id):
-            remaining = wait_deadline - time.time()
-            if remaining > 0:
-                path = _await_prewarm_cache(video_id, timeout=remaining)
-        if not path:
-            prefetch = request.headers.get('X-MusicBox-Prefetch') == '1'
-            if prefetch:
-                path = Supporting.ensure_downloaded(video_id, prefetch=True)
-                if not path:
-                    response, status = error_response('prefetch deferred', 503,
-                                                      code='prefetch_deferred',
-                                                      retryable=True)
-                    response.status_code = status
-                    response.headers['Retry-After'] = '5'
-                    return response
-            elif (wait_deadline - time.time()) <= 0:
-                # The joins above already spent the whole budget: make sure a
-                # download is running for the retry before answering pending.
-                if (not _download_in_progress(video_id)
-                        and not _stream_is_inflight(video_id)):
-                    _ensure_audio_ready_for_play(video_id, wait=False, generation=None,
-                                                 prefetch=False)
-                return pending_response()
-            else:
-                if not _download_backpressure():
-                    # Saturated: fail fast with a retryable 503 so the retry
-                    # lands on a drained queue instead of holding this worker
-                    # behind a dozen queued downloads. Prefetch already drops
-                    # first (slot + cooldown); this gate is for requested plays.
-                    return pending_response()
-                # Requested play: fetch in the background and poll for the file
-                # instead of blocking this worker past the deadline. A 503 here
-                # leaves the download running, so a retry lands warm.
-                _ensure_audio_ready_for_play(video_id, wait=False, generation=None,
-                                             prefetch=False)
-                path = _await_prewarm_cache(
-                    video_id, timeout=wait_deadline - time.time(), startup_grace=2.0)
-                if not path:
-                    if _is_dead_video(video_id):
-                        return error_response('video unavailable', 404)
-                    if _is_flaky_video(video_id):
-                        response, status = error_response(
-                            'download recently failed; retry later', 503,
-                            retryable=True)
-                        response.status_code = status
-                        response.headers['Retry-After'] = str(int(_FLAKY_VIDEO_TTL))
-                        return response
-                    return pending_response()
-        if not path:
-            return error_response('download failed', 502)
-
-    _mark_audio_used(path)
-    mimetype = 'audio/mp4' if path.endswith(('.m4a', '.mp4')) else 'audio/webm'
-    try:
-        size = os.path.getsize(path)
-    except OSError:
-        return error_response('download failed', 502)
-    # ETag from id + size, not mtime: pause/resume touches mtime, and a
-    # changing validator would turn an app's resumed Range request into a
-    # full 200 re-download.
-    response = send_file(path, mimetype=mimetype, conditional=True,
-                         etag=f"{video_id}-{size}", max_age=86400)
-    response.headers.update(headers)
-    response.headers['Cache-Control'] = 'private, max-age=86400, immutable'
+        return jsonify(dict(meta or {'video_id': video_id},
+            cached=_youtube_stream.current.has(video_id),
+            audio_url=f'{base}/audio/?video_id={video_id}'))
+    if _audio_truthy(request.args.get('prefetch')):
+        _ensure_audio_ready_for_play(video_id, prefetch=True)
+        return jsonify({'video_id':video_id, 'cached':False, 'streaming':True}), 202
+    response = _serve_youtube_stream(video_id, meta=meta)
+    if request.headers.get('X-MusicBox-Download') == '1' and response.status_code in (200,206):
+        response.headers['Content-Disposition'] = f'attachment; filename="{video_id}.m4a"'
     return response
 
 
-def _await_inflight_stream(video_id, timeout=_STREAM_DUPLICATE_WAIT):
-    """Wait for an in-flight cold-cache stream to publish its cache file.
-
-    Returns the cached path, or None if the in-flight stream ended without one
-    (it failed) or took too long. Callers fall back to their own download, so a
-    None result stays correct — it just costs an extra yt-dlp run.
-    """
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        path = Supporting.cached_audio_path(video_id)
-        if path:
-            return path
-        if not _stream_is_inflight(video_id):
-            # It finished; one last look in case the rename just landed.
-            return Supporting.cached_audio_path(video_id)
-        time.sleep(_STREAM_DUPLICATE_POLL)
-    logger.warning("proxy: gave up waiting %.0fs for the in-flight stream of %s",
-                   timeout, video_id)
-    return None
 
 
-def _await_prewarm_cache(video_id, timeout=_PREWARM_WAIT_SECONDS, startup_grace=0.0):
-    """Wait for an in-flight background prewarm to publish its cache file.
-
-    `ensure_downloaded` is kicked off at click time (and again by get_stream),
-    so by the time the Echo hits /proxy/ a couple seconds later the prewarm is
-    usually partway through. Spawning a fresh stream here instead of waiting
-    would start a second yt-dlp for the same song — the redundant download that
-    left superseded streams stuck for 150s and pushed first byte out past the
-    point where the prewarm had already finished.
-
-    `startup_grace` tolerates a just-spawned fetcher that has not registered
-    itself in `_download_in_progress` yet (0.0 preserves the historical
-    instant-exit for all existing callers). Returns the cached path, or None
-    when the prewarm ended without a file (it failed) or is taking too long.
-    A None result falls back to a stream, so it stays correct — it just costs
-    an extra yt-dlp run.
-    """
-    deadline = time.time() + timeout
-    started = time.time()
-    while time.time() < deadline:
-        path = Supporting.cached_audio_path(video_id)
-        if path:
-            return path
-        if not _download_in_progress(video_id) and time.time() - started >= startup_grace:
-            # The prewarm finished (success or failure); one last look in case
-            # the final rename just landed.
-            return Supporting.cached_audio_path(video_id)
-        time.sleep(_PREWARM_POLL)
-    logger.warning("proxy: gave up waiting %.0fs for the prewarm of %s",
-                   timeout, video_id)
-    return None
 
 
 def _stream_superseded(video_id) -> bool:
@@ -5508,105 +4572,8 @@ def _stream_superseded(video_id) -> bool:
     return True
 
 
-def _stream_abandon_watchdog(video_id, proc, generation, stop_event, cancellable=True):
-    """Kill a cold-cache yt-dlp process once nobody is waiting for its output.
-
-    Without this, an abandoned stream holds a waitress worker thread and a live
-    yt-dlp process until the Echo happens to drop the TCP connection — observed
-    at over 150 seconds each, with eight of them stacked up at once, which
-    starves every other request on the server. Note that the in-generator check
-    cannot cover this on its own: the generator is usually blocked inside
-    `proc.stdout.read()` (yt-dlp grinding through its retry loop) and only an
-    external kill unblocks it.
-    """
-    hard_deadline = time.time() + _STREAM_MAX_SECONDS
-    superseded_since = None
-    while not stop_event.wait(0.5):
-        if proc.poll() is not None:
-            return
-        now = time.time()
-        if now >= hard_deadline:
-            logger.warning("proxy: killing stream of %s after %.0fs hard cap",
-                           video_id, _STREAM_MAX_SECONDS)
-            _kill_process(proc)
-            return
-        if not cancellable:
-            continue  # app (/audio/) streams don't follow the Echo; hard cap only
-        stale = _generation_superseded(generation) and _stream_superseded(video_id)
-        if not stale:
-            superseded_since = None
-            continue
-        if superseded_since is None:
-            superseded_since = now
-        elif now - superseded_since >= _STREAM_SUPERSEDE_GRACE:
-            logger.info("proxy: cancelling abandoned stream of %s", video_id)
-            _kill_process(proc)
-            return
 
 
-def _kill_process(proc):
-    try:
-        if proc.poll() is None:
-            proc.kill()
-    except Exception:
-        pass
-
-
-# Minimum viable duration for a cached audio file to be trusted. Below this,
-# a "successful" yt-dlp run (returncode 0) is treated as a truncated/corrupt
-# download rather than a real track -- observed after a stream got killed by
-# the abandon-watchdog or superseded mid-write: yt-dlp can still exit 0 on a
-# partial pipe, and the temp file was getting promoted straight into the
-# permanent cache. Every later play of that video_id then served the same
-# few-second clip from the warm-cache path: the Echo reports genuine
-# PlaybackStarted/PlaybackStopped for it (it did play, just for a few
-# seconds), so nothing here treated it as a failure -- it looked to the user
-# like "the progress bar ran but no sound", when actually a tiny amount of
-# real (correct) audio played and then legitimately ended.
-_MIN_VALID_AUDIO_MS = 15_000
-
-
-def _probe_duration_ms(path: str):
-    """Return the audio duration of `path` in ms via ffprobe, or None if it
-    can't be determined (missing/corrupt file, ffprobe failure)."""
-    try:
-        result = subprocess.run(
-            ["ffprobe", "-v", "error", "-show_entries", "format=duration",
-             "-of", "default=noprint_wrappers=1:nokey=1", path],
-            capture_output=True, text=True, timeout=10)
-        if result.returncode != 0:
-            return None
-        duration_s = float(result.stdout.strip())
-        if duration_s <= 0:
-            return None
-        return int(duration_s * 1000)
-    except (subprocess.TimeoutExpired, ValueError, OSError):
-        return None
-
-
-def _is_audio_file_valid(path: str, expected_duration_ms: int = 0) -> bool:
-    """True when `path` looks like a complete, playable audio file.
-
-    Rejects empty/zero-byte files outright (no point calling ffprobe), then
-    checks the probed duration against `_MIN_VALID_AUDIO_MS` and, when the
-    caller knows the track's real duration, against a generous fraction of
-    it -- a stream cut off partway through is usually far short of the real
-    length, not just a few seconds off (which could be a legitimate metadata
-    mismatch and shouldn't be treated as corruption).
-    """
-    try:
-        if os.path.getsize(path) <= 0:
-            return False
-    except OSError:
-        return False
-    duration_ms = _probe_duration_ms(path)
-    if duration_ms is None:
-        return False
-    if duration_ms < _MIN_VALID_AUDIO_MS:
-        return False
-    if expected_duration_ms and duration_ms < expected_duration_ms * 0.5:
-        return False
-    return True
 
 
 def _serve_youtube_stream(video_id, confirm=False, cancellable=False, meta=None):
@@ -5636,13 +4603,21 @@ def _serve_youtube_stream(video_id, confirm=False, cancellable=False, meta=None)
                     first = False
                     if confirm:
                         _confirm_stream_delivery(video_id)
+                    # A next-track Echo prefetch must not replace the song
+                    # still playing. URL preparation and HEAD never get here.
+                    if request_download is False:
+                        with _np_lock:
+                            if _now_playing.get('video_id') == video_id:
+                                _youtube_stream.current.activate(video_id)
                     logger.info('[stream-timing] youtube first byte %.0fms for %s',
                                 (time.monotonic() - started) * 1000, video_id)
+                relay.remember(block)
                 yield block
         finally:
             relay.close()
 
-    headers = _audio_meta_headers(video_id, meta, 'STREAM')
+    request_download = request.headers.get('X-MusicBox-Download') == '1'
+    headers = _audio_meta_headers(video_id, meta)
     headers.update(relay.headers)
     response = Response(generate() if request.method != 'HEAD' else (),
                         status=relay.status, headers=headers)
@@ -5654,197 +4629,8 @@ def _serve_youtube_stream(video_id, confirm=False, cancellable=False, meta=None)
     return response
 
 
-def _read_stream_chunk(stream):
-    # BufferedReader.read(n) waits to fill n bytes on a live pipe. read1 returns
-    # available audio immediately, even while the producer is still running.
-    read = getattr(stream, 'read1', stream.read)
-    return read(16 * 1024)
 
 
-def _stream_proxy_download(video_id, confirm=True, cancellable=True):
-    """Stream a cold-cache yt-dlp download straight to the Echo response.
-
-    `confirm=False` / `cancellable=False` are for app clients (/audio/): they
-    must not mark Echo playback as confirmed, and must not be killed when the
-    Echo moves on to another track, since they are not playing on the Echo.
-
-    Buffers the same bytes to the audio cache (atomic via a .part rename) so
-    subsequent plays of this song take the fast send_file path. The Echo
-    device's /proxy/ timeout (~11s) is well below a typical VPN-only
-    yt-dlp download, so streaming first-byte responsiveness is required.
-
-    The stream is registered in `_stream_inflight` (so duplicate requests and
-    the playback watchdog can see it), counted against `_download_semaphore`
-    (so it cannot outnumber the bounded background downloads), and watched by
-    `_stream_abandon_watchdog` (so it is killed once superseded).
-    """
-    stream_started = time.monotonic()
-    os.makedirs(AUDIO_CACHE_DIR, exist_ok=True)
-    cache_path = os.path.join(AUDIO_CACHE_DIR, f"{video_id}.m4a")
-    temp_path = f"{cache_path}.{uuid.uuid4().hex}.part"
-    generation = _current_playback_generation()
-    claimed = _stream_register(video_id)
-    # Cap simultaneous streams, on their own budget so prewarm downloads can
-    # never queue in front of playback. Best-effort: if all slots are busy we
-    # proceed unthrottled rather than make the user wait.
-    permit = _SemaphorePermit(_stream_semaphore)
-    if not permit.acquire(timeout=_STREAM_PERMIT_TIMEOUT):
-        logger.warning("proxy: streaming %s without a stream slot (%d already active)",
-                       video_id, _STREAM_CONCURRENCY)
-    # The Echo gives this endpoint only about 11 seconds. A default-profile
-    # socket stall used to consume almost all of that budget before the
-    # background downloader eventually succeeded with android_vr. Streaming
-    # gets a short, no-retry attempt per profile and falls through immediately
-    # when a profile exits without producing audio.
-    stream_clients = list(Supporting.get_ytdlp_clients()) or ["default", "android_vr"]
-    stream_timeout = max(1, int(os.environ.get("YTDLP_STREAM_SOCKET_TIMEOUT", "3")))
-    stream_retries = max(0, int(os.environ.get("YTDLP_STREAM_RETRIES", "0")))
-    proc = None
-    proc_index = 0
-    stop_watchdog = threading.Event()
-
-    def launch_stream(client, index):
-        nonlocal proc
-        cmd = list(Supporting.ytdlp_download_command(
-            video_id, "-", client=client,
-            retries=stream_retries, socket_timeout=stream_timeout,
-        ))
-        proc = subprocess.Popen(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            bufsize=64 * 1024,
-        )
-        if index:
-            logger.info("proxy: trying %s fallback for %s", client, video_id)
-        threading.Thread(
-            target=_stream_abandon_watchdog,
-            args=(video_id, proc, generation, stop_watchdog, cancellable),
-            name=f"proxy-watchdog-{video_id}-{client}", daemon=True,
-        ).start()
-
-    try:
-        launch_stream(stream_clients[0], 0)
-    except Exception:
-        permit.release()
-        if claimed:
-            _stream_unregister(video_id)
-        raise
-
-    def generate():
-        nonlocal proc_index
-        cache_fp = None
-        confirmed = False
-        try:
-            cache_fp = open(temp_path, 'wb')
-            while True:
-                chunk = _read_stream_chunk(proc.stdout)
-                if not chunk:
-                    proc.wait()
-                    # Only switch profiles before the first byte. Once audio
-                    # has reached the Echo, restarting would splice two
-                    # different streams and is worse than letting that stream
-                    # finish/fail normally.
-                    if (not confirmed and proc_index + 1 < len(stream_clients)):
-                        proc_index += 1
-                        try:
-                            launch_stream(stream_clients[proc_index], proc_index)
-                        except Exception as exc:
-                            logger.warning(
-                                "proxy: %s fallback could not start for %s: %s",
-                                stream_clients[proc_index], video_id, exc,
-                            )
-                            continue
-                        continue
-                    break
-                cache_fp.write(chunk)
-                # Confirm playback only once the first audio bytes are ready
-                # to be streamed to the Echo. This is the earliest moment the
-                # device can actually start playing — confirming before this
-                # (at proxy request time) set playback_confirmed=True while
-                # yt-dlp was still processing, causing the client progress bar
-                # to start ticking 7-8 seconds before audio actually played.
-                if not confirmed:
-                    confirmed = True
-                    logger.info('[stream-timing] first byte %.0fms for %s',
-                                (time.monotonic() - stream_started) * 1000, video_id)
-                    if confirm:
-                        _confirm_stream_delivery(video_id)
-                yield chunk
-                # Fast-path abandonment check. The watchdog thread covers the
-                # (common) case where this loop is blocked in read() instead.
-                if (cancellable and _generation_superseded(generation)
-                        and _stream_superseded(video_id)):
-                    logger.info("proxy: stopping superseded stream of %s", video_id)
-                    break
-            proc.wait()
-            if cache_fp is not None:
-                cache_fp.close()
-                cache_fp = None
-            # returncode == 0 alone is not proof of a complete file: a stream
-            # killed by the abandon-watchdog or superseded mid-write can still
-            # let yt-dlp report success on a truncated pipe. Validate before
-            # promoting into the permanent cache -- otherwise every later play
-            # of this video_id serves the same truncated clip (see
-            # _is_audio_file_valid's comment).
-            if proc.returncode == 0 and os.path.exists(temp_path) and _is_audio_file_valid(temp_path):
-                try:
-                    os.replace(temp_path, cache_path)
-                    _schedule_audio_cache_prune()
-                except OSError:
-                    pass
-            else:
-                if proc.returncode == 0 and os.path.exists(temp_path):
-                    logger.warning("proxy: discarding truncated/invalid stream cache for %s",
-                                   video_id)
-                try:
-                    if os.path.exists(temp_path):
-                        os.unlink(temp_path)
-                except OSError:
-                    pass
-        finally:
-            stop_watchdog.set()
-            if cache_fp is not None:
-                try:
-                    cache_fp.close()
-                except Exception:
-                    pass
-            if os.path.exists(temp_path):
-                try:
-                    os.unlink(temp_path)
-                except OSError:
-                    pass
-            if proc.poll() is None:
-                proc.kill()
-                try:
-                    proc.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    pass
-            permit.release()
-            if claimed:
-                _stream_unregister(video_id)
-
-    response = Response(
-        generate(),
-        mimetype='audio/mp4',
-        headers={
-            'Content-Disposition': f'inline; filename="{video_id}.m4a"',
-            'Cache-Control': 'no-store',
-        },
-    )
-
-    # Belt and braces: if the WSGI server closes this response without ever
-    # iterating the generator, the `finally` above never runs and the permit
-    # plus the in-flight claim would leak. Both releases are idempotent.
-    def _cleanup():
-        stop_watchdog.set()
-        _kill_process(proc)
-        permit.release()
-        if claimed:
-            _stream_unregister(video_id)
-
-    response.call_on_close(_cleanup)
-    return response
 
 # ---- per-play background job dedup ----
 # A single play fans out from /proxy/, /alexa/play_queue/, and the skill's
@@ -6372,20 +5158,8 @@ PLAYBACK_BUFFERING_FEEDBACK_DELAY = 4.0
 
 
 def _download_in_progress(video_id):
-    """True while some thread is currently fetching video_id's audio.
-
-    Covers both download paths: the per-id `_download_locks` entry held by
-    `ensure_downloaded`, and the cold-cache `/proxy/` stream registered in
-    `_stream_inflight`. Missing the streaming path made the playback watchdog
-    believe no download was running, so it resent the play command after 12s
-    and the Echo opened yet another /proxy/ request — each one spawning another
-    yt-dlp process for the very same song.
-    """
-    if _audio_jobs.contains(video_id) or _stream_is_inflight(video_id):
-        return True
-    with _locks_guard:
-        lock = _download_locks.get(video_id)
-    return bool(lock and lock.locked())
+    """Compatibility watchdog query: only URL preparation can be pending."""
+    return _audio_jobs.contains(video_id)
 
 
 def _watch_playback_confirmation(serial, video_id, resend):
@@ -6416,7 +5190,7 @@ def _watch_playback_confirmation(serial, video_id, resend):
         # up mid-wait (handled below by resetting the deadline with the full
         # window, same as the pre-existing "don't count download time" logic).
         base_timeout = (PLAYBACK_CONFIRM_TIMEOUT_CACHED
-                        if Supporting.cached_audio_path(video_id)
+                        if _youtube_stream.current.has(video_id)
                         else PLAYBACK_CONFIRM_TIMEOUT)
         deadline = time.time() + base_timeout
         buffering_deadline = time.time() + PLAYBACK_BUFFERING_FEEDBACK_DELAY
@@ -6539,7 +5313,7 @@ def _watch_resume_confirmation(serial, video_id, staged_revision):
 
     def _wait_once():
         base_timeout = (PLAYBACK_CONFIRM_TIMEOUT_CACHED
-                        if Supporting.cached_audio_path(video_id)
+                        if _youtube_stream.current.has(video_id)
                         else PLAYBACK_CONFIRM_TIMEOUT)
         deadline = time.time() + base_timeout
         while time.time() < deadline:
@@ -7394,7 +6168,7 @@ def alexa_command():
                             playback_confirmed=False,
                             queue_index=target_idx)
         # Bind the prewarm to the post-update generation (mirrors
-        # alexa_play_queue): the generation check inside ensure_downloaded
+        # alexa_play_queue): the generation check inside URL preparation
         # then observes a *follow-up* click's bump and drops this prewarm
         # instead of holding yt-dlp slots for a track the user already
         # moved past.
@@ -7447,16 +6221,8 @@ def alexa_command():
             staged_video_id = _now_playing.get('video_id', '')
             staged_revision = int(_now_playing.get('playback_revision', 0))
         _notify_sse()
-        # Warm the audio cache while the slow Alexa round-trip is in flight.
-        # After a long pause the cached file may have been swept, and without
-        # this head start the Echo's /proxy/ fetch pays a full cold yt-dlp
-        # download (past its ~11s give-up) even though the skill reuses the
-        # same stream URL. Starting it here overlaps that download with the
-        # voice-command latency instead of serializing them. The current
-        # track is additionally pinned in prune_audio_cache (and touched
-        # below) so a long pause usually resumes from a warm file instead.
+        # Prepare the URL while Alexa handles resume; paused current bytes remain.
         if _valid_video_id(staged_video_id):
-            _touch_cached_audio(staged_video_id)
             _ensure_audio_ready_for_play(staged_video_id, wait=False)
         # Arm the exact track+offset alongside the generic transport resume.
         # The skill's persisted AudioPlayer session can disagree with the live
@@ -7505,7 +6271,6 @@ def alexa_command():
         _notify_sse()
         # Refresh the cache mtime at pause time so TTL counts from the pause,
         # not the original download; the file is also pinned while selected.
-        _touch_cached_audio(paused_video_id)
         error = alexa_remote.remote.command(serial, action, body.get("value"))
     else:
         error = alexa_remote.remote.command(serial, action, body.get("value"))
@@ -7604,7 +6369,6 @@ def alexa_seek():
             _now_playing['playback_revision'] = int(_now_playing.get('playback_revision', 0)) + 1
             _now_playing['updated_at'] = time.time()
         _notify_sse()
-        _touch_cached_audio(video_id)
         return jsonify({'ok': True, 'paused': True})
     # Arm the play with the seek offset before triggering. play_video_id sends a
     # short NLU-safe phrase and the skill reads the video id + offset back from
@@ -7810,57 +6574,6 @@ def alexa_state_event():
             _now_playing['playback_processing'] = False
             _now_playing['updated_at'] = time.time()
         _notify_sse()
-        # Voice pause path ("Alexa, pause" never hits /alexa/command/): refresh
-        # the cache mtime at stop time so a long pause resumes warm. The file
-        # is also pinned while it stays the current track.
-        _touch_cached_audio(stopped_video_id)
-        # Genuine PlaybackStarted followed by PlaybackStopped within seconds,
-        # far short of the track's real length, *can* be the signature of a
-        # truncated/corrupt cached audio file (see _is_audio_file_valid):
-        # Alexa did receive and play real audio (hence the confirmed
-        # webhook), it just ran out after a few seconds instead of minutes.
-        # But it is also the shape of a user skip, a duplicate REPLACE_ALL
-        # race, or an Echo rebuffer that immediately retries /proxy/ with a
-        # Range resume -- all of which leave a perfectly good file behind.
-        # Evicting blindly on elapsed time turned those into a cache miss:
-        # the resume then fell into the cold streaming path (which cannot
-        # honor Range), the Echo disconnected, and playback ended with
-        # MEDIA_ERROR_UNKNOWN (observed 2026-09-18: HbgSC1D10cs stopped
-        # after 1398ms, evicted a valid file, Range bytes=30666- retry
-        # aborted after 6s). Verify with ffprobe first and only evict a
-        # file that is actually truncated; a valid file is kept so the
-        # immediate retry is a warm 206.
-        if (was_confirmed and stopped_video_id and stopped_duration_ms
-                and elapsed_ms < _MIN_VALID_AUDIO_MS
-                and elapsed_ms < stopped_duration_ms * 0.5):
-            cached_path = Supporting.cached_audio_path(stopped_video_id)
-            if cached_path and _is_audio_file_valid(
-                    cached_path, stopped_duration_ms):
-                logger.info(
-                    "[np] %s stopped after only %dms of a %dms track -- "
-                    "cache file is valid (%s), keeping (likely skip/race/"
-                    "rebuffer, not truncation)", stopped_video_id,
-                    elapsed_ms, stopped_duration_ms, cached_path)
-            else:
-                if not cached_path:
-                    logger.info(
-                        "[np] %s stopped after only %dms of a %dms track -- "
-                        "no cache file to evict (already gone)", stopped_video_id,
-                        elapsed_ms, stopped_duration_ms)
-                else:
-                    logger.warning(
-                        "[np] %s stopped after only %dms of a %dms track -- "
-                        "evicting cache as likely truncated", stopped_video_id,
-                        elapsed_ms, stopped_duration_ms)
-                    _evict_bad_cache_entry(stopped_video_id)
-                # Re-download in the background so the Echo's immediate
-                # Range-resume retry (bytes=N-) lands on a warm 206 via
-                # send_file instead of a cold live stream that cannot honor
-                # Range and gets disconnected.
-                try:
-                    _ensure_audio_ready_for_play(stopped_video_id, wait=False)
-                except Exception:
-                    pass
         # A failed current track stays selected and stopped. Never replace it
         # with another upload or silently advance to another queue item.
         cur = _get_now_playing()
@@ -7889,7 +6602,6 @@ def alexa_state_event():
             offset_in_ms = 0
         # Keep the playing file's mtime fresh so a pause later in a long
         # session still resumes from a warm cache (see _pinned_cache_video_ids).
-        _touch_cached_audio(video_id)
         # Voice next/previous advances the queue persisted by the Alexa skill.
         # Do not generate a second radio queue in Flask: separate radio calls
         # can yield different results, which used to replace the visible queue
@@ -11570,37 +10282,10 @@ def _status_thread_exception(args):
 threading.excepthook = _status_thread_exception
 
 
-_STATUS_CACHE_SCOPES = {
-    'audio_lookups': {'description': 'Checks for saved audio files on this server.', 'routes': ('GET /audio/', 'HEAD /audio/', 'GET /proxy/')},
-    'audio_responses': {'description': 'Cached versus network audio responses delivered by this server.', 'routes': ('GET /audio/', 'HEAD /audio/', 'GET /proxy/')},
-    'account_ytmusic_clients': {'description': 'Reusable account API connections, not saved songs or playlist responses.', 'routes': ('GET /alexa/search/', 'GET /api/library/playlists/<pl_id>')},
-    'public_ytmusic_clients': {'description': 'Reusable public API connections, not saved songs or search responses.', 'routes': ('GET /audio/', 'GET /find_stream_list/')},
-    'audio_search': {'description': 'Song-name resolution for /audio/?q=. Playback by video ID and normal app search bypass this cache.', 'routes': ('GET /audio/', 'HEAD /audio/')},
-    'stream_search': {'description': 'Prepared stream lists for skill search and voice playback. Normal app search and device queues bypass this cache.', 'routes': ('GET /find_stream_list/',)},
-    'playlist_tracks': {'description': 'Expanded playlist tracks used by skill playback. App playlist browsing uses a separate provider request and bypasses this cache.', 'routes': ('GET /stream_playlist/', 'GET /api/library/playlists/<pl_id>', 'GET /api/playlists/<pl_id>')},
-}
-
-
-def _status_cache_scope(name, routes):
-    scope = _STATUS_CACHE_SCOPES.get(name, {})
-    return dict(scope, activity=[row for row in routes if row['route'] in scope.get('routes', ())])
-
-
-def _status_cache_sizes():
-    rows = []
-    for label, cache in [('public_ytmusic_clients', _YT_CACHE), ('account_ytmusic_clients', _YT_HOME_CACHE), ('audio_search', _audio_search_cache)]:
-        with cache._lock:
-            rows.append({'name': label, 'entries': len(cache._data), 'capacity': cache._maxsize})
-    for label, cache, lock in [('stream_search', _stream_list_cache, _stream_list_cache_lock),
-                                ('playlist_tracks', _playlist_tracks_cache, _playlist_tracks_cache_lock)]:
-        with lock:
-            rows.append({'name': label, 'entries': len(cache)})
-    return rows
-
-
 def _status_snapshot():
     now = time.time()
     telemetry = _operational.snapshot()
+    telemetry.pop('caches', None)
     unavailable = []
     def read_component(name, function, fallback):
         try:
@@ -11609,12 +10294,8 @@ def _status_snapshot():
             unavailable.append(name)
             return fallback
     storage = read_component('storage', lambda: _status_storage.get(lambda: {
-        'captured_at': time.time(), 'audio': scan_audio(AUDIO_CACHE_DIR, _pinned_cache_video_ids()),
-        'system': system_snapshot(AUDIO_CACHE_DIR, DB_FILE)}), {'available': False})
-    with _stream_inflight_lock:
-        streams = [{'video_id': video, 'age_seconds': max(0, now - started)}
-                   for video, started in list(_stream_inflight.items())[:64]]
-        stream_count = len(_stream_inflight)
+        'captured_at': time.time(), 'system': system_snapshot(tempfile.gettempdir(), DB_FILE)}), {'available': False})
+    streaming = _youtube_stream.snapshot()
     cookie = read_component('download cookies', lambda: download_cookies.inspection(Supporting.get_ytdlp_cookies_file()), {'present': False})
     amazon = read_component('Amazon session', alexa_remote.remote.is_logged_in, None)
     if isinstance(amazon, tuple):
@@ -11635,15 +10316,10 @@ def _status_snapshot():
         alerts.append({'level': 'warning', 'title': 'Operational log storage unavailable', 'detail': 'Error counts and log history cannot currently be read. Playback continues independently.'})
     if inbox.get('dropped', 0):
         alerts.append({'level': 'warning', 'title': 'Some operational logs were dropped', 'detail': 'The bounded log queue or storage could not retain every event. The log section reports the process-local dropped count.'})
-    audio = storage.get('audio', {})
-    if AUDIO_CACHE_MAX_BYTES and audio.get('ready_bytes', 0) > AUDIO_CACHE_MAX_BYTES:
-        alerts.append({'level': 'warning', 'title': 'Music cache is over budget', 'detail': 'Cleanup retries automatically. Current tracks, active fetches and recently written files are protected.'})
-    if audio.get('available') is False:
-        alerts.append({'level': 'warning', 'title': 'Audio cache unavailable', 'detail': 'The directory is missing or unreadable; storage totals may be unavailable.'})
     if storage.get('system', {}).get('database', {}).get('readable') is False:
         alerts.append({'level': 'critical', 'title': 'Database read check failed', 'detail': 'The read-only database check could not complete.'})
-    if reserve is not None and reserve < AUDIO_CACHE_MIN_FREE_BYTES:
-        alerts.append({'level': 'critical', 'title': 'Storage reserve is low', 'detail': 'Free disk space is below the configured audio-cache reserve.'})
+    if reserve is not None and reserve < 64 * 1024 * 1024:
+        alerts.append({'level':'critical', 'title':'Storage space is low', 'detail':'Less than 64 MiB remains available. Streaming continues if temporary audio cannot be retained.'})
     if cooldown:
         alerts.append({'level': 'warning', 'title': 'YouTube cooldown active', 'detail': 'Speculative fetching is paused after upstream rate limiting.'})
     if not cookie['present']:
@@ -11654,23 +10330,15 @@ def _status_snapshot():
         alerts.append({'level': 'warning', 'title': 'No unexpired YouTube cookies', 'detail': 'The saved export has no active YouTube cookies. Session cookies may still require a fresh validation.'})
     elif cookie.get('validation') is False:
         alerts.append({'level': 'warning', 'title': 'Last cookie validation failed', 'detail': 'Run a fresh audio check or replace the cookie export from your account menu.'})
-    if storage.get('audio', {}).get('complete') is False:
-        alerts.append({'level': 'warning', 'title': 'Cache inventory is sampled', 'detail': 'The scan reached its time or entry limit; totals are lower bounds.'})
     return dict(telemetry, generated_at=now, uptime_seconds=max(0, now - _start_time_epoch),
         health='critical' if any(row['level'] == 'critical' for row in alerts) else ('warning' if alerts else 'healthy'),
-        alerts=alerts, storage=storage, cache_sizes=_status_cache_sizes(),
-        cache_scopes={name: {'description': scope['description']} for name, scope in _STATUS_CACHE_SCOPES.items()},
+        alerts=alerts, storage=storage,
         error_inbox=inbox,
         search_activity=next(({'requests': row['requests'], 'errors': row['errors'], 'average_ms': row['average_ms']}
                               for row in telemetry['routes'] if row['route'] == 'GET /alexa/search/'), {'requests': 0, 'errors': 0, 'average_ms': None}),
-        limits={'audio_bytes': AUDIO_CACHE_MAX_BYTES, 'warmup_bytes': WARMUP_MAX_BYTES,
-                'reserve_bytes': AUDIO_CACHE_MIN_FREE_BYTES, 'retention_policy': 'capacity_lru',
-                'audio_ttl_seconds': None, 'warmup_ttl_seconds': None,
-                'partial_ttl_seconds': AUDIO_CACHE_TTL, 'sweep_seconds': AUDIO_CACHE_SWEEP_INTERVAL},
-        fetching={'queued_and_running': _download_queue_size(), 'download_slots': _DOWNLOAD_CONCURRENCY,
-                  'preparation': _audio_jobs.snapshot(),
-                  'prefetch_slots': _PREFETCH_CONCURRENCY, 'stream_slots': _STREAM_CONCURRENCY,
-                  'active_streams': stream_count, 'streams': streams, 'cooldown_seconds': cooldown,
+        fetching={**streaming, 'queued_and_running': _audio_jobs.snapshot()['queued'] + _audio_jobs.snapshot()['active'],
+                  'preparation': _audio_jobs.snapshot(), 'resolver_slots': _RESOLVE_CONCURRENCY,
+                  'prefetch_slots': _PREFETCH_CONCURRENCY, 'cooldown_seconds': cooldown,
                   'known_dead': dead, 'temporarily_flaky': flaky},
         cookies={'downloads': cookie, 'youtube_headers': file_info(os.environ.get('YTMUSIC_AUTH_FILE') or 'headers_auth.json'),
                  'amazon_session_in_memory': bool(amazon)}, playback=playback)
@@ -11696,10 +10364,6 @@ def status_api():
     response = _no_store(jsonify(_status_snapshot()))
     response.headers['Referrer-Policy'] = 'no-referrer'
     return response
-
-
-_STATUS_CACHE_NAMES = {'audio_lookups', 'audio_responses', 'public_ytmusic_clients', 'account_ytmusic_clients',
-                       'audio_search', 'stream_search', 'playlist_tracks'}
 
 
 def _status_owner_error():
@@ -11761,23 +10425,6 @@ def status_error_seen():
         if not isinstance(ids, list) or not 1 <= len(ids) <= 100 or any(not isinstance(ident, str) or not re.fullmatch(r'[a-f0-9]{32}', ident) for ident in ids): raise ValueError()
         return _status_journal.seen(ids)
     return _status_journal_response(mark)
-
-
-@app.route('/api/status/cache/<name>')
-def status_cache_detail(name):
-    denied = _status_owner_error()
-    if denied is not None: return denied
-    if name not in _STATUS_CACHE_NAMES:
-        return _no_store(app.make_response(error_response('Unknown cache.', 404)))
-    try:
-        limit, before = _status_args()
-        outcome = request.args.get('outcome', '')
-        if outcome not in ('', 'hit', 'miss'): raise ValueError()
-        data = _operational.cache_details(name, outcome, before, limit)
-        data['usage'] = _status_cache_scope(name, _operational.snapshot()['routes'])
-        return _no_store(jsonify(data))
-    except ValueError:
-        return _no_store(app.make_response(error_response('Invalid cache filter or cursor.', 400)))
 
 
 _status_watchdog_keys = set()

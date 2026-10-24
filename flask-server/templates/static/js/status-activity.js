@@ -52,40 +52,6 @@
     if (focus && row.trace) wrapper.append(node('pre', row.trace, 'exception-trace'));
     return wrapper;
   }
-  const labels = {audio_lookups:'Saved audio file checks', audio_responses:'Audio response cache', account_ytmusic_clients:'Account API clients', public_ytmusic_clients:'Public API clients', audio_search:'Audio resolver results', stream_search:'Playback stream lists', playlist_tracks:'Playlist track lists'};
-  function showCache(name) {
-    open(labels[name] || name);
-    const filter = node('select'); filter.setAttribute('aria-label', 'Cache outcome');
-    for (const [value, label] of [['','Hits and misses'],['hit','Hits only'],['miss','Misses only']]) { const option = node('option', label); option.value = value; filter.append(option); }
-    let entries = [];
-    function load(before) {
-      const query = new URLSearchParams({outcome: filter.value, limit: '50'}); if (before) query.set('before', before);
-      fetchDialog(`/api/status/cache/${encodeURIComponent(name)}?${query}`, data => {
-        entries = before ? entries.concat(data.entries) : data.entries;
-        body.replaceChildren(node('p', `Since restart: ${data.totals.hits || 0} hits · ${data.totals.misses || 0} misses. Showing retained events (maximum 200, up to 24 hours).`, 'help'));
-        if (data.usage && data.usage.description) body.append(node('p', data.usage.description, 'help'));
-        if (data.usage && data.usage.activity && data.usage.activity.length) {
-          const usage = node('section', null, 'cache-route-activity');
-          usage.append(node('h3', 'Related endpoint requests'));
-          usage.append(node('p', 'Request counts include calls that bypass this cache. They are not cache hits or misses.', 'help'));
-          for (const row of data.usage.activity) usage.append(node('p', `${row.route}: ${row.requests} requests · ${row.errors} errors`, 'log-correlation'));
-          body.append(usage);
-        }
-        if (!entries.length) body.append(node('p', data.totals.hits || data.totals.misses ? 'No retained lookups match this filter.' : 'This cache has not been used in this server process. Its lookup history will appear here when the described path uses it.', 'empty'));
-        for (const entry of entries) {
-          const row = node('article', null, 'cache-event');
-          row.append(node('span', entry.outcome, `log-level ${entry.outcome}`), node('time', stamp(entry.at)), node('strong', entry.video_id || (entry.key ? `Key ${entry.key}` : 'Identifier not retained')), node('small', entry.reason || 'lookup', 'muted'));
-          body.append(row);
-        }
-        body.append(node('p', 'Identifiers are hashed except valid video IDs. A lookup is not proof that media is complete or valid. Totals can exceed the retained detail history.', 'help'));
-        more.hidden = !data.next_before; loadMore = () => load(data.next_before);
-      });
-    }
-    filter.addEventListener('change', () => load());
-    controls.append(filter, button('Refresh details', () => load())); load();
-  }
-  el('audio-cache-details').addEventListener('click', () => showCache('audio_lookups'));
-  el('cache-layer-cards').addEventListener('click', event => { const card = event.target.closest('[data-cache-name]'); if (card) showCache(card.dataset.cacheName); });
   async function markSeen(ids, done) {
     if (!ids.length) return;
     await fetchDialog('/api/status/errors/seen', summary => { inboxSummary(summary); done(); }, {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({ids})});

@@ -5,7 +5,7 @@ import tempfile
 import threading
 import unittest
 from unittest import mock
-from status_monitor import Metrics, CachedCollector, file_info, scan_audio, system_snapshot
+from status_monitor import Metrics, CachedCollector, file_info, system_snapshot
 
 class MetricsTests(unittest.TestCase):
     def test_latency_errors_history_and_cardinality_are_bounded(self):
@@ -77,26 +77,7 @@ class InventoryTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory(); self.addCleanup(self.temp.cleanup)
         self.directory = Path(self.temp.name)
 
-    def test_pool_bytes_partial_pins_and_no_sensitive_names(self):
-        for name, data in [('AAAAAAAAAAA.m4a', b'a'*100), ('AAAAAAAAAAA.warmup', b'1'), ('BBBBBBBBBBB.uuid.part', b'b'*50), ('secret-key.txt', b'private'), ('CCCCCCCCCCC.webm', b'c'*25)]:
-            (self.directory / name).write_bytes(data)
-        (self.directory/'symlink.m4a').symlink_to(self.directory/'AAAAAAAAAAA.m4a')
-        data = scan_audio(self.directory, {'AAAAAAAAAAA'})
-        self.assertTrue(data['complete'])
-        self.assertEqual((2, 125, 50, 100, 100), tuple(data[k] for k in ['ready_files','ready_bytes','partial_bytes','warmup_bytes','pinned_bytes']))
-        self.assertEqual(3, len(data['entries']))
-        for value in ['private', 'secret-key', self.temp.name]: self.assertNotIn(value, json.dumps(data))
-        self.assertEqual(data['files'], data['ready_files']+data['partial_files']+data['metadata_files'])
 
-    def test_large_inventory_bounded_and_missing_unreadable_directories(self):
-        for i in range(240): (self.directory/f'{i:011}.m4a').write_bytes(b'x')
-        data = scan_audio(self.directory, limit=1000, time_budget=10)
-        self.assertEqual(240, data['ready_files']); self.assertEqual(200, len(data['entries']))
-        self.assertTrue(data['inventory_limited']); self.assertFalse(scan_audio(self.directory, limit=10)['complete'])
-        self.assertFalse(scan_audio(self.directory/'missing')['available'])
-        with mock.patch('status_monitor.os.scandir', side_effect=PermissionError):
-            self.assertEqual('directory_unreadable', scan_audio(self.directory)['reason'])
-        self.assertFalse(file_info(None)['present'])
 
     def test_disk_database_outage_and_probe_never_creates_database(self):
         db = self.directory/'state.db'
