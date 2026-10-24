@@ -27,12 +27,21 @@ class MobileDeviceRoutesTests(OutputRoutesTests):
         self.namespace.update(_mobile_devices=self.registry, json=json)
         path = Path(__file__).resolve().parents[1] / 'server.py'
         nodes = [n for n in ast.parse(path.read_text()).body if isinstance(n, ast.FunctionDef)
-                 and n.name in ('app_mobile_devices', '_mobile_handoff_snapshot', '_pause_echo_for_mobile', '_reconcile_mobile_output', 'route_mobile_web_controls')]
+                 and n.name in ('app_mobile_devices', '_finish_browser_close', '_mobile_handoff_snapshot', '_pause_echo_for_mobile', '_reconcile_mobile_output', 'route_mobile_web_controls')]
         exec(compile(ast.Module(body=nodes, type_ignores=[]), str(path), 'exec'), self.namespace)
 
     def device(self, action, owner='phone-one', **extra):
-        return self.client.post('/api/app/devices/', json={'action': action,
+        response = self.client.post('/api/app/devices/', json={'action': action,
             'device_id': owner, 'session_id': 'session-' + owner, 'name': owner, **extra})
+        if action == 'offline' and extra.get('reason') == 'pagehide' and self.state.get('_browser_closing'):
+            self.expire_browser_close()
+        return response
+
+    def expire_browser_close(self):
+        closing = self.state.get('_browser_closing')
+        if closing:
+            closing['until'] = 0
+            self.namespace['_finish_browser_close'](closing['owner'], closing['token'])
 
     def test_remote_seek_preserves_mobile_track_identity_and_rejects_stale_cursor(self):
         claim = self.output_request('claim').json
@@ -684,3 +693,20 @@ class MobileDeviceRoutesTests(OutputRoutesTests):
         self.assertEqual(result['output_owner'],'phone-one')
         self.assertTrue(self.state['queue'])
         self.assertFalse(self.state['playing'])
+
+    def test_browser_refresh_reregistration_cancels_failover_without_starting_the_phone(self):
+        self.device('online',owner='browser-one')
+        self.device('online',owner='phone-two',foreground=True)
+        claim=self.output.phone('browser-one',lambda:None)
+        self.state.update(video_id=A,playing=True)
+        response=self.client.post('/api/app/devices/',json={'action':'offline','device_id':'browser-one',
+            'session_id':'session-browser-one','reason':'pagehide','output_token':claim['output_token'],'position_ms':8123})
+        self.assertEqual(response.status_code,200)
+        self.assertEqual(self.output.snapshot()['output_owner'],'browser-one')
+        self.assertFalse(self.state['playing'])
+        self.device('online',owner='browser-one',session_id='refreshed-session')
+        self.expire_browser_close()
+        self.assertEqual(self.output.snapshot()['output_owner'],'browser-one')
+        self.assertFalse(self.state['playing'])
+        self.assertEqual(self.state['position_ms'],8123)
+        self.assertFalse(self.state.get('playback_error'))

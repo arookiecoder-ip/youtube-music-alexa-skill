@@ -5,7 +5,11 @@
   const api = window.api;
   const uuid = () => typeof crypto.randomUUID === 'function' ? crypto.randomUUID() :
     Array.from(crypto.getRandomValues(new Uint8Array(16)), byte => byte.toString(16).padStart(2, '0')).join('');
-  const id = 'browser-' + uuid();
+  let tabId;
+  try { tabId = window.sessionStorage && window.sessionStorage.getItem('musicbox_browser_id'); } catch (_) {}
+  const reload = window.performance && window.performance.getEntriesByType('navigation')[0]?.type === 'reload';
+  const id = reload && /^browser-[A-Za-z0-9-]{1,80}$/.test(tabId || '') ? tabId : 'browser-' + uuid();
+  try { if (window.sessionStorage) window.sessionStorage.setItem('musicbox_browser_id', id); } catch (_) {}
   const session = uuid();
   const audio = new Audio();
   audio.preload = 'auto';

@@ -2368,12 +2368,34 @@ def _pause_echo_for_mobile(serial):
         _now_playing.update(playing=False, playback_confirmed=True, playback_processing=False)
 
 
+def _finish_browser_close(owner, token):
+    output = _playback_output.snapshot()
+    if output['output_token'] != token or output['output_owner'] != owner:
+        return
+    _reconcile_mobile_output(quiet=True)
+    # Re-registration during refresh preserves this tab's silent selection.
+    if owner not in {device['id'] for device in _mobile_devices.list()}:
+        _playback_output.close_phone(owner)
+    _notify_sse()
+
+
 def _reconcile_mobile_output(closed_owner='', quiet=False):
     output = _playback_output.snapshot()
     if output['playback_output'] != 'phone':
         return
     online = {d['id'] for d in _mobile_devices.list()}
     owner, controller = output['output_owner'], output['output_controller']
+    with _np_lock:
+        closing = _now_playing.get('_browser_closing')
+        closing = closing if closing and closing['owner'] == owner and closing['token'] == output['output_token'] else None
+        if closing:
+            if owner in online:
+                _now_playing.pop('_browser_closing', None)
+                return
+            if time.monotonic() < closing['until']:
+                return
+            closed_owner = owner
+            quiet = True
     if owner in online and owner != closed_owner:
         with _np_lock:
             _now_playing.pop('_disconnected_phone_token', None)
@@ -2398,7 +2420,7 @@ def _reconcile_mobile_output(closed_owner='', quiet=False):
     if target and not output['handoff_pending']:
         with _np_lock:
             saved = _now_playing.get('_offline_phone_playing')
-            was_playing = saved[1] if saved and saved[0] == output['output_token'] else bool(_now_playing.get('playing') or _now_playing.get('playback_processing'))
+            was_playing = closing['playing'] if closing else saved[1] if saved and saved[0] == output['output_token'] else bool(_now_playing.get('playing') or _now_playing.get('playback_processing'))
             cursor = _now_playing.get('_phone_report_cursor')
             position = (cursor[2] if owner != closed_owner and cursor and cursor[:2] == (output['output_token'], owner)
                         else _computed_position_ms())
@@ -2558,14 +2580,23 @@ def app_mobile_devices():
                             _reset_progress(position)
                         else:
                             _reset_progress(_computed_position_ms())
+                        _now_playing['_browser_closing'] = {'owner':owner, 'token':output['output_token'],
+                            'until':time.monotonic() + .8,
+                            'playing':bool(_now_playing.get('playing') or _now_playing.get('playback_processing'))}
+                        _now_playing.update(playing=False, playback_confirmed=True, playback_processing=False)
                         _now_playing['playback_revision'] = int(_now_playing.get('playback_revision', 0)) + 1
                         _now_playing['updated_at'] = time.time()
                         error = _now_playing.get('playback_error') or {}
                         if isinstance(error, dict) and error.get('type') == 'device_offline':
                             _now_playing.pop('playback_error', None)
                             _now_playing.pop('_playback_error_event', None)
+                if deliberate:
+                    timer = threading.Timer(.85, _finish_browser_close, args=(owner, output['output_token']))
+                    timer.daemon = True
+                    timer.start()
                 _reconcile_mobile_output(closed_owner=owner, quiet=deliberate)
-                _playback_output.close_phone(owner)
+                if not deliberate:
+                    _playback_output.close_phone(owner)
                 with _np_lock:
                     latest = _playback_output.snapshot()
                     if latest['playback_output'] == 'phone' and not latest['output_owner']:
