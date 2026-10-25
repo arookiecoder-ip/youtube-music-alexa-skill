@@ -6,6 +6,12 @@ This file summarizes behavior changes, explicitly records superseded work and li
 
 ## Unreleased
 
+- Atomically validate and commit Alexa buffered starts against the live queue, retain deletions across duplicate events and backend restarts, and prevent stale corrections from cancelling newer manual selections. Cover deletion at the final-second boundary followed by a new song selection.
+
+- Fix playback-lock re-entry in stale Alexa buffered-track correction, queue artwork backfill and implicit-current-track likes. Add production-lock regressions and a guard against lock-taking helpers inside playback commits.
+
+- Match artist playlist/featured/additional shelves to the existing cover-card layout, preserve clickable artist credits, align shelf arrows beside the existing View all button style, and replace manual collection pagination with cover skeletons and automatic loading.
+
 - Expand native Home fetching from six to forty shelves, preserve one-item shelves and distinct recommendations with the same heading, and retain additional artist shelves such as live performances and library items.
 
 - Add optional artist playlists and featured-on shelves, full website collection navigation and paging, with empty sections hidden.

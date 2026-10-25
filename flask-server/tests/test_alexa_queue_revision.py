@@ -1,5 +1,6 @@
 """Protocol-2 decisions must be invalidated by queue and ownership changes."""
 from unittest import mock
+import threading
 from test_next_track import NextTrackBase, _meta, server
 
 
@@ -94,6 +95,164 @@ class AlexaQueueRevisionTests(NextTrackBase):
             server._now_playing['playing'] = False
             timer.fire()
             dispatch.assert_not_called()
+
+    def test_delete_at_boundary_old_start_then_manual_selection_dispatches_new_song(self):
+        a,b,c,d = ('A'*11,'B'*11,'C'*11,'D'*11)
+        self._set_queue([_meta(a),_meta(b),_meta(c),_meta(d)])
+        server._now_playing.update(alexa_token='0|'+a+'|attempt',alexa_intent_at=10,
+            playing=True,playback_confirmed=True,position_ms=179990)
+        decision=self.client.get('/next_track/',query_string=dict(after=a,token='0|'+a+'|attempt',protocol='2',key=server.API_KEY)).json
+        old_queue=list(server._now_playing['queue'])
+        timers=[]
+        def timer_factory(delay,fire):
+            timer=mock.Mock();timer.fire=fire;timers.append(timer);return timer
+        with mock.patch.object(server,'_PENDING_DISPATCH',{}), \
+                mock.patch.object(server.threading,'Timer',side_effect=timer_factory), \
+                mock.patch.object(server,'_notify_sse'),mock.patch.object(server,'_record_listen'), \
+                mock.patch.object(server,'_ensure_audio_ready_for_play'),mock.patch.object(server,'_arm_play'), \
+                mock.patch.object(server,'_note_trigger_sent'),mock.patch.object(server,'_trigger_in_flight',return_value=False), \
+                mock.patch.object(server,'_dispatch_play_with_retry',return_value=None) as dispatch:
+            removed=self.client.post('/alexa/queue_remove/',query_string={'key':server.API_KEY},json={'index':1,'video_id':b})
+            self.assertEqual(removed.status_code,200)
+            started=self.client.post('/alexa/state_event/',query_string={'key':server.API_KEY},json={
+                'event':'started','video_id':b,'token':'1|'+b+'|q'+decision['decision_id'],
+                'serial':self.SERIAL,'queue':old_queue,'queue_index':1})
+            self.assertTrue(started.json['correcting'])
+            correction=timers[-1]
+            self.assertEqual(server._now_playing['video_id'],c)
+            clicked=self.client.post('/alexa/play_queue/',query_string={'key':server.API_KEY},json={
+                'serial':self.SERIAL,'video_id':d,'queue_index':2,'suppress_radio':True})
+            self.assertEqual(clicked.status_code,200,clicked.json)
+            newest=timers[-1]
+            correction.fire()  # A cancelled timer can already be queued on another thread.
+            newest.fire()
+            dispatch.assert_called_once_with(self.SERIAL,d,0)
+            self.assertEqual(server._get_now_playing()['video_id'],d)
+            self.assertEqual([x['video_id'] for x in server._now_playing['queue']],[a,c,d])
+
+    def test_buffered_acceptance_commits_before_delete_and_duplicate_cannot_restore_queue(self):
+        a,b,c,d = ('A'*11,'B'*11,'C'*11,'D'*11)
+        self._set_queue([_meta(a),_meta(b),_meta(c),_meta(d)])
+        server._now_playing.update(alexa_token='0|'+a+'|attempt',alexa_intent_at=10,playing=True,playback_confirmed=True)
+        decision=self.client.get('/next_track/',query_string=dict(after=a,token='0|'+a+'|attempt',protocol='2',key=server.API_KEY)).json
+        token='1|'+b+'|q'+decision['decision_id'];old_queue=list(server._now_playing['queue'])
+        with mock.patch.object(server,'_notify_sse'),mock.patch.object(server,'_record_listen'):
+            first=self.client.post('/alexa/state_event/',query_string={'key':server.API_KEY},json={
+                'event':'started','video_id':b,'token':token,'serial':self.SERIAL,'queue':old_queue,'queue_index':1})
+            self.assertEqual(first.status_code,200)
+            self.assertEqual(server._now_playing['queue_index'],1)
+            active=self.client.post('/alexa/queue_remove/',query_string={'key':server.API_KEY},json={'index':1,'video_id':b})
+            self.assertEqual(active.status_code,400)
+            self.assertEqual(self.client.post('/alexa/queue_remove/',query_string={'key':server.API_KEY},json={'index':2,'video_id':c}).status_code,200)
+            server._now_playing['position_ms']=12000
+            duplicate=self.client.post('/alexa/state_event/',query_string={'key':server.API_KEY},json={
+                'event':'started','video_id':b,'token':token,'serial':self.SERIAL,'queue':old_queue,'queue_index':1})
+            self.assertEqual(duplicate.json['ignored'],'duplicate queued start')
+            self.assertEqual(server._now_playing['position_ms'],12000)
+            self.assertEqual([x['video_id'] for x in server._now_playing['queue']],[a,b,d])
+
+    def test_finish_before_deleted_buffer_start_uses_live_successor(self):
+        a,b,c = ('A'*11,'B'*11,'C'*11)
+        self._set_queue([_meta(a),_meta(b),_meta(c)])
+        server._now_playing.update(alexa_token='0|'+a+'|attempt',alexa_intent_at=10,playing=True,playback_confirmed=True)
+        decision=self.client.get('/next_track/',query_string=dict(after=a,token='0|'+a+'|attempt',protocol='2',key=server.API_KEY)).json
+        with mock.patch.object(server,'_notify_sse'),mock.patch.object(server.threading,'Thread'), \
+                mock.patch.object(server.threading,'Timer'),mock.patch.object(server,'_PENDING_DISPATCH',{}):
+            self.assertEqual(self.client.post('/alexa/queue_remove/',query_string={'key':server.API_KEY},json={'index':1,'video_id':b}).status_code,200)
+            self.assertEqual(self.client.post('/alexa/state_event/',query_string={'key':server.API_KEY},json={
+                'event':'finished','video_id':a,'token':'0|'+a+'|attempt'}).status_code,200)
+            response=self.client.post('/alexa/state_event/',query_string={'key':server.API_KEY},json={
+                'event':'started','video_id':b,'token':'1|'+b+'|q'+decision['decision_id']})
+            self.assertTrue(response.json['correcting'])
+            self.assertEqual(server._get_now_playing()['video_id'],c)
+            self.assertEqual(server._PENDING_DISPATCH[self.SERIAL]['video_id'],c)
+
+    def test_single_remaining_song_is_not_replaced_by_stale_skill_window(self):
+        a,b,c=('A'*11,'B'*11,'C'*11)
+        self._set_queue([_meta(b)],current_index=0)
+        server._now_playing.update(video_id=b,queue_web_dirty=True,alexa_token='1|'+b+'|old',alexa_intent_at=10,playing=True)
+        with mock.patch.object(server,'_notify_sse'),mock.patch.object(server,'_record_listen'), \
+                mock.patch.object(server.threading,'Thread'),mock.patch.object(server,'_prewarm_queue_audio'):
+            response=self.client.post('/alexa/state_event/',query_string={'key':server.API_KEY},json={
+                'event':'started','video_id':b,'token':'1|'+b+'|resume','offset_in_ms':1234,
+                'queue':[_meta(a),_meta(b),_meta(c)],'queue_index':1})
+            self.assertEqual(response.status_code,200)
+            self.assertEqual([x['video_id']for x in server._now_playing['queue']],[b])
+            self.assertEqual(server._now_playing['queue_index'],0)
+
+    def test_restart_without_decision_record_does_not_restore_deleted_successor(self):
+        a,b,c=('A'*11,'B'*11,'C'*11)
+        self._set_queue([_meta(a),_meta(c)])
+        for key in ('alexa_token','alexa_intent_at','_alexa_pending','_alexa_finished_token'):
+            server._now_playing.pop(key,None)
+        server._now_playing.update(playing=False,playback_processing=False,preferred_output='alexa')
+        with mock.patch.object(server,'_alexa_queue_decisions',{}),mock.patch.object(server,'_PENDING_DISPATCH',{}), \
+                mock.patch.object(server.threading,'Timer'),mock.patch.object(server,'_notify_sse'):
+            response=self.client.post('/alexa/state_event/',query_string={'key':server.API_KEY},json={
+                'event':'started','video_id':b,'token':'1|'+b+'|q'+'a'*24,
+                'queue':[_meta(a),_meta(b),_meta(c)],'queue_index':1})
+            self.assertTrue(response.json['correcting'])
+            self.assertEqual(server._now_playing['video_id'],c)
+            self.assertEqual([x['video_id']for x in server._now_playing['queue']],[a,c])
+
+    def test_restart_valid_queued_successor_commits_without_importing_old_window(self):
+        a,b=('A'*11,'B'*11)
+        self._set_queue([_meta(a),_meta(b)])
+        for key in ('alexa_token','alexa_intent_at','_alexa_pending','_alexa_finished_token'):
+            server._now_playing.pop(key,None)
+        server._now_playing.update(playing=False,playback_processing=False,preferred_output='alexa')
+        with mock.patch.object(server,'_alexa_queue_decisions',{}),mock.patch.object(server,'_notify_sse'),mock.patch.object(server,'_record_listen'):
+            response=self.client.post('/alexa/state_event/',query_string={'key':server.API_KEY},json={
+                'event':'started','video_id':b,'token':'1|'+b+'|q'+'b'*24,
+                'queue':[_meta(a),_meta(b),_meta('C'*11)],'queue_index':1})
+            self.assertEqual(response.status_code,200)
+            self.assertTrue(server._now_playing['playing'])
+            self.assertEqual(server._now_playing['video_id'],b)
+            self.assertEqual([x['video_id']for x in server._now_playing['queue']],[a,b])
+
+    def test_unknown_queue_token_cannot_interrupt_newer_manual_selection(self):
+        a,b,c=('A'*11,'B'*11,'C'*11)
+        self._set_queue([_meta(a),_meta(c)])
+        server._now_playing.update(video_id=c,queue_index=1,playing=False,
+            playback_processing=True,alexa_intent_at=123,alexa_token='0|'+a+'|old')
+        with mock.patch.object(server,'_alexa_queue_decisions',{}):
+            response=server._reconcile_buffered_alexa_start('1|'+b+'|q'+'a'*24)
+            self.assertTrue(response['stop'])
+            self.assertEqual(server._now_playing['video_id'],c)
+
+    def test_superseded_correction_cannot_cancel_newer_pending_selection(self):
+        newest_timer = mock.Mock()
+        pending = {'timer':newest_timer,'video_id':'D','token':object()}
+        old_timer = mock.Mock()
+        def newer_selection(*args, **kwargs):
+            server._now_playing.update(video_id='D',alexa_intent_at=11,playing=True)
+            server._PENDING_DISPATCH[self.SERIAL] = pending
+            return old_timer
+        with mock.patch.object(server, '_PENDING_DISPATCH', {}), \
+                mock.patch.object(server.threading, 'Timer', side_effect=newer_selection):
+            server._schedule_play_dispatch(self.SERIAL,'A',expected_intent=10,expected_output='owner1')
+            self.assertIs(server._PENDING_DISPATCH[self.SERIAL],pending)
+            newest_timer.cancel.assert_not_called()
+            old_timer.start.assert_not_called()
+
+    def test_stale_buffer_correction_does_not_reenter_playback_lock(self):
+        decision = self.decision()
+        self._set_queue([_meta('A'), _meta('C'), _meta('B')])
+        class ProductionLock:
+            def __init__(self): self.lock = threading.Lock()
+            def __enter__(self):
+                if not self.lock.acquire(timeout=.2):
+                    raise AssertionError('Buffered start correction re-entered playback lock')
+                return self
+            def __exit__(self, *args): self.lock.release()
+        lock = ProductionLock()
+        with mock.patch.object(server, '_np_lock', lock), mock.patch.object(server, '_PENDING_DISPATCH', {}), \
+                mock.patch.object(server.threading, 'Timer') as timer:
+            result = server._reconcile_buffered_alexa_start('1|B|q' + decision['decision_id'])
+            self.assertTrue(result['correcting'])
+            self.assertEqual(server._PENDING_DISPATCH[self.SERIAL]['video_id'], 'C')
+            self.assertEqual(server._get_now_playing()['video_id'], 'C')
+            timer.return_value.start.assert_called_once()
 
     def test_stale_buffer_started_is_corrected_once(self):
         decision = self.decision()

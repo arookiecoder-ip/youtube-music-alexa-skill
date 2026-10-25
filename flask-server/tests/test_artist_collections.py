@@ -64,3 +64,14 @@ class AdditionalArtistShelfTests(unittest.TestCase):
         self.assertEqual(len(result[0]['items']), 1)
         self.assertEqual(result[0]['items'][0]['video_id'], 'abcdefghijk')
         self.assertEqual(result[1]['items'][0]['kind'], 'album')
+
+class ArtistCreditTests(unittest.TestCase):
+    def test_artist_links_are_preserved_in_track_and_playlist_cards(self):
+        from artist_collections import artist_shelf_item
+        row = shelf('Playlists')['musicCarouselShelfRenderer']['contents'][0]
+        row['musicTwoRowItemRenderer']['subtitle'] = {'runs':[{'text':'Artist name','navigationEndpoint':{'browseEndpoint':{'browseId':'MPLAUCcredit'}}}]}
+        parsed = artist_shelf_item(row)
+        self.assertEqual(parsed['artists'],[{'name':'Artist name','id':'UCcredit'}])
+        result = collection_cards(parse_artist_collections({'contents':[{'musicCarouselShelfRenderer':{'header':{'musicCarouselShelfBasicHeaderRenderer':{'title':{'runs':[{'text':'Playlists'}]}}},'contents':[row]}}]})['playlists'])
+        self.assertEqual(result[0]['artist'],'Artist name')
+        self.assertEqual(result[0]['artists'][0]['id'],'UCcredit')

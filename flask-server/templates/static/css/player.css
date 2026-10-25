@@ -707,9 +707,10 @@
 }
 
 /* A shelf with no horizontal overflow disables both arrow buttons. Hide that
-   empty control group instead of showing non-functional navigation arrows. */
+   empty control group instead of showing non-functional navigation arrows.
+   Keep a View all action visible even when its shelf fits without scrolling. */
 @supports selector(.hscroll-controls:has(button)) {
-  .hscroll-controls:not(:has(.hscroll-scroll:not(:disabled))),
+  .hscroll-controls:not(:has(.hscroll-scroll:not(:disabled))):not(:has(.artist-view-all-btn)),
   .explore-scroll-btns:not(:has(.explore-scroll-btn:not(:disabled))) {
     display: none !important;
   }

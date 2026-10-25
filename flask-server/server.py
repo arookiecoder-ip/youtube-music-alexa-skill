@@ -480,14 +480,23 @@ def _schedule_play_dispatch(serial, video_id, offset_ms=0, delay=None, expected_
     token = object()
     timer = threading.Timer(delay, _fire)
     timer.daemon = True
-    with _PENDING_DISPATCH_LOCK:
-        previous = _PENDING_DISPATCH.get(key)
-        if previous is not None:
-            previous['timer'].cancel()
-        _PENDING_DISPATCH[key] = {
-            'timer': timer, 'token': token, 'video_id': video_id,
-            'offset_ms': offset_ms, 'scheduled_at': time.time(),
-        }
+    with _np_lock:
+        if expected_intent is not None:
+            output = _playback_output.snapshot()
+            if (_now_playing.get('alexa_intent_at') != expected_intent or
+                    not _now_playing.get('playing') or _now_playing.get('video_id') != video_id or
+                    output['playback_output'] != 'alexa' or output['output_token'] != expected_output):
+                return None
+        # Stage under the same lock as the fence: a superseded correction must
+        # not cancel a newer user's pending timer before its own fire is rejected.
+        with _PENDING_DISPATCH_LOCK:
+            previous = _PENDING_DISPATCH.get(key)
+            if previous is not None:
+                previous['timer'].cancel()
+            _PENDING_DISPATCH[key] = {
+                'timer': timer, 'token': token, 'video_id': video_id,
+                'offset_ms': offset_ms, 'scheduled_at': time.time(),
+            }
     timer.start()
     return previous['video_id'] if previous else None
 
@@ -4993,8 +5002,7 @@ def _backfill_queue_thumbnail(video_id):
                     changed = True
             if changed:
                 _now_playing['queue'] = queue
-                _notify_sse()
-        _now_playing['updated_at'] = time.time()
+                _now_playing['updated_at'] = time.time()
         if changed:
             _notify_sse()
     except Exception:
@@ -6550,7 +6558,7 @@ def alexa_seek():
 
 # Webhook from Lambda: the skill POSTs state events (started/stopped/finished)
 # directly to the server so we don't need to poll Amazon's API.
-def _reconcile_buffered_alexa_start(token):
+def _reconcile_buffered_alexa_start(token, offset_ms=0, event_at=None, second_precision=False):
     """One correction at most when Echo starts a successor superseded at the boundary.
 
     REPLACE_ENQUEUED has no expectedPreviousToken field. Even with validation,
@@ -6562,9 +6570,41 @@ def _reconcile_buffered_alexa_start(token):
     with _np_lock:
         record = _alexa_queue_decisions.get(parts[2][1:])
         if not record:
-            return None  # Restart/legacy: no evidence this decision was superseded.
+            # Decisions are process-local, but the edited queue survives a
+            # restart. Never let a recovered q-token reinstall Dynamo's old
+            # queue. Reconstruct only from a matching live predecessor or a
+            # restored Alexa selection with no newer transport intent.
+            output = _playback_output.snapshot()
+            queue = _now_playing.get('queue') or []
+            index = _now_playing.get('queue_index', -1)
+            current = _now_playing.get('video_id')
+            tracked = _now_playing.get('alexa_token')
+            intent = _now_playing.get('alexa_intent_at')
+            pending = _now_playing.get('_alexa_pending') or {}
+            predecessor = (pending.get('current_video') == current and pending.get('token') == tracked
+                and pending.get('intent_at') == intent and pending.get('output_token') == output['output_token'])
+            restored = (not tracked and not intent and not _now_playing.get('playback_processing')
+                and _now_playing.get('preferred_output') != 'phone')
+            if (output['playback_output'] != 'alexa' or not queue or not (predecessor or restored)
+                    or not isinstance(index, int) or not 0 <= index < len(queue)
+                    or queue[index].get('video_id') != current):
+                return {'ok': True, 'ignored': 'untracked queued start', 'stop': True}
+            record = dict(current_video=current, current_index=index, current_entry=queue[index].get('entry_id'),
+                token=tracked, intent_at=intent, output_token=output['output_token'],
+                loop=bool(pending.get('loop')) if predecessor else False,
+                restore_current=restored and current == parts[1])
+            _alexa_queue_decisions[parts[2][1:]] = record
+            while len(_alexa_queue_decisions) > 32:
+                _alexa_queue_decisions.popitem(last=False)
         if record.get('corrected'):
             return {'ok': True, 'ignored': 'superseded queued start', 'stop': False}
+        if (record.get('started') and _now_playing.get('alexa_token') == token
+                and _now_playing.get('video_id') == parts[1]):
+            return {'ok': True, 'ignored': 'duplicate queued start', 'stop': False}
+        watermark = max(float(_now_playing.get('alexa_intent_at') or 0),
+                        float(_now_playing.get('alexa_event_at') or 0))
+        if event_at is not None and event_at < (int(watermark) if second_precision else watermark):
+            return {'ok': True, 'ignored': 'stale Alexa event', 'stop': False}
         output = _playback_output.snapshot()
         if (output['playback_output'] != 'alexa' or output['output_token'] != record['output_token'] or
                 _now_playing.get('alexa_intent_at') != record['intent_at'] or
@@ -6575,12 +6615,29 @@ def _reconcile_buffered_alexa_start(token):
         _queue_version_locked()
         queue = _now_playing.get('queue') or []
         index = next((i for i, item in enumerate(queue) if record.get('current_entry') and item.get('entry_id') == record['current_entry']), record['current_index'])
-        desired = _resolve_next_track(queue, record['current_video'], index)
+        desired = queue[index] if record.get('restore_current') and 0 <= index < len(queue) else _resolve_next_track(queue, record['current_video'], index)
         if desired is None and record.get('loop') and queue and index == len(queue) - 1 and queue[index].get('video_id') == record['current_video']:
             desired = queue[0]
         if desired and desired.get('video_id') == parts[1]:
-            return {'accepted': True, 'queue': list(queue),
-                    'queue_index': next(i for i, item in enumerate(queue) if item is desired)}
+            target = next(i for i, item in enumerate(queue) if item is desired)
+            changed = _now_playing.get('video_id') != parts[1] or _now_playing.get('queue_index') != target
+            now = time.time()
+            # Validate and commit the occurrence atomically. A queue removal
+            # cannot slip between validation and a later stale skill snapshot.
+            _now_playing.update(video_id=parts[1], queue_index=target,
+                title=desired.get('title', ''), artist=desired.get('artist', ''),
+                artists=desired.get('artists') or [], thumbnail=desired.get('thumbnail', ''),
+                duration_ms=desired.get('duration_ms', 0), position_ms=max(0, offset_ms),
+                started_at=now, playing=True, playback_confirmed=True, playback_processing=False,
+                alexa_token=token, updated_at=now, _last_playback_activity_at=now)
+            _now_playing.pop('_alexa_finished_token', None)
+            _now_playing['playback_revision'] = int(_now_playing.get('playback_revision', 0)) + 1
+            if event_at is not None:
+                _now_playing['alexa_event_at'] = event_at
+            record['started'] = True
+            if changed:
+                _bump_playback_generation()
+            return {'accepted': True, 'queue': list(queue), 'queue_index': target, 'track_changed': changed}
         record['corrected'] = True
         if not desired:
             _now_playing.update(playing=False, playback_processing=False, playback_confirmed=True)
@@ -6595,9 +6652,12 @@ def _reconcile_buffered_alexa_start(token):
             position_ms=0, started_at=time.time(), playing=True,
             playback_processing=True, playback_confirmed=False, alexa_intent_at=time.time())
         _now_playing['playback_revision'] = int(_now_playing.get('playback_revision', 0)) + 1
-        _schedule_play_dispatch(serial, desired['video_id'], expected_intent=_now_playing['alexa_intent_at'],
-                                expected_output=output['output_token'])
-        return {'ok': True, 'ignored': 'superseded queued start', 'stop': True, 'correcting': True}
+        _bump_playback_generation()
+        video_id, intent, output_token = desired['video_id'], _now_playing['alexa_intent_at'], output['output_token']
+    # The scheduler takes _np_lock to snapshot/fence dispatch. Never call it
+    # while committing a buffered-track correction under that same Lock.
+    _schedule_play_dispatch(serial, video_id, expected_intent=intent, expected_output=output_token)
+    return {'ok': True, 'ignored': 'superseded queued start', 'stop': True, 'correcting': True}
 
 
 @app.route("/alexa/state_event/", methods=["POST"])
@@ -6613,10 +6673,25 @@ def alexa_state_event():
         event_at = None
     event_token = str(body.get('token') or '')
     if event == 'started':
-        reconciliation = _reconcile_buffered_alexa_start(event_token)
+        try:
+            queued_offset = max(0, int(body.get('offset_in_ms', body.get('position_ms', 0)) or 0))
+        except (TypeError, ValueError, OverflowError):
+            queued_offset = 0
+        reconciliation = _reconcile_buffered_alexa_start(event_token, queued_offset, event_at,
+            '.' not in str(body.get('event_timestamp', '')))
         if reconciliation and reconciliation.get('accepted'):
-            body['queue'] = reconciliation['queue']
-            body['queue_index'] = reconciliation['queue_index']
+            # The live occurrence is already committed. Never feed the skill's
+            # old queue through the generic started handler after releasing it.
+            _playback_failover_budget.reset()
+            if 'volume' in body:
+                _record_volume_state(body.get('serial'), body.get('volume'), notify=True)
+            _notify_sse()
+            item = reconciliation['queue'][reconciliation['queue_index']]
+            if queued_offset < 5000 and not _jam_guest():
+                _record_listen(item['video_id'], item.get('title', ''), item.get('artist', ''), _thumbnail_url(item.get('thumbnail')))
+            if not int(item.get('duration_ms') or 0):
+                threading.Thread(target=_lookup_and_update_np, args=(item['video_id'],), daemon=True).start()
+            return jsonify({'ok': True})
         elif reconciliation is not None:
             if reconciliation.get('correcting') or reconciliation.get('ignored') == 'queue ended':
                 _notify_sse()
@@ -6840,7 +6915,7 @@ def alexa_state_event():
                 #     shuffle / new radio), or it is a contiguous window slice
                 #     of the live queue and nothing needs replacing.
                 queue_web_dirty = bool(cur_np.get('queue_web_dirty'))
-                live_holds_current = (len(cur_queue) > 1 and any(
+                live_holds_current = (bool(cur_queue) and any(
                     q.get('video_id') == video_id for q in cur_queue))
                 if queue_web_dirty and live_holds_current and slice_offset < 0:
                     translated = next(
@@ -7407,9 +7482,8 @@ async def alexa_like():
         video_id = request.args.get('video_id', '').strip()
         action = request.args.get('action', 'LIKE').upper()
     if not video_id:
-        with _np_lock:
-            np = _get_now_playing()
-            video_id = np.get('video_id') or ''
+        np = _get_now_playing()
+        video_id = np.get('video_id') or ''
     if not video_id:
         return jsonify({'error': 'No video_id provided and nothing playing'}), 400
     if action not in ('LIKE', 'DISLIKE', 'INDIFFERENT'):
@@ -10251,13 +10325,18 @@ async def api_get_artist(channel_id):
             'thumbnail': thumb,
         })
 
+    own_playlists = collection_cards(raw.get('playlists'))
+    for playlist in own_playlists:
+        if artist_name and not playlist.get('artists') and not playlist.get('artist'):
+            playlist.update(artist=artist_name, artists=[{'name': artist_name, 'id': channel_id}])
+
     return jsonify({
         'artist': raw,
         'topSongs': top_songs,
         'topSongsBrowseId': top_songs_browse_id,
         'albums': _norm_releases(raw.get('albums')),
         'singles': _norm_releases(raw.get('singles')),
-        'playlists': collection_cards(raw.get('playlists')),
+        'playlists': own_playlists,
         'featured': collection_cards(raw.get('featured')),
         'additionalShelves': raw.get('additionalShelves') or [],
         'related': related,

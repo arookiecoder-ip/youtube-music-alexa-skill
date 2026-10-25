@@ -227,6 +227,13 @@
     }
   }
 
+  function createShelfControls() {
+    var controls = document.createElement('div');
+    controls.className = 'hscroll-controls artist-shelf-controls';
+    controls.innerHTML = '<button type="button" class="hscroll-scroll hscroll-scroll-prev" aria-label="Scroll left" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg></button><button type="button" class="hscroll-scroll hscroll-scroll-next" aria-label="Scroll right"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg></button>';
+    return controls;
+  }
+
   function renderAll(data, topSongsOnly) {
     if (!data || !data.artist) return;
     var collections = document.getElementById('artist-releases-content');
@@ -247,7 +254,7 @@
         var section = document.createElement('div'); section.className = 'hscroll-section';
         var head = document.createElement('div'); head.className = 'section-head';
         var label = document.createElement('div'); label.className = 'label'; label.textContent = shelf.title;
-        head.appendChild(label); section.appendChild(head);
+        head.appendChild(label); head.appendChild(createShelfControls()); section.appendChild(head);
         var track = document.createElement('div'); track.className = 'hscroll-track'; track.id = 'artist-extra-' + index;
         section.appendChild(track); extra.appendChild(section);
         renderHscrollSection(track.id, shelf.items, 'mixed');
@@ -269,11 +276,14 @@
         if (old) old.remove();
         if (!section.hidden) {
           var button = document.createElement('button');
-          button.type = 'button'; button.className = 'btn-ghost artist-collection-all'; button.textContent = 'View all';
+          button.type = 'button'; button.className = 'artist-view-all-btn artist-collection-all'; button.textContent = 'View all';
           button.addEventListener('click', function() {
             window.navigateTo('#artist/' + encodeURIComponent(state._currentChannelId) + '?collection=' + id.slice('artist-'.length));
           });
-          section.querySelector('.section-head').appendChild(button);
+          var controls = section.querySelector('.hscroll-controls');
+          if (!controls) { controls = createShelfControls(); section.querySelector('.section-head').appendChild(controls); }
+          controls.classList.add('artist-shelf-controls');
+          controls.appendChild(button);
         }
       }
     });
@@ -607,7 +617,7 @@
     }
   }
 
-  function renderHscrollSection(trackId, items, requestedType) {
+  function renderHscrollSection(trackId, items, requestedType, append) {
     var track = document.getElementById(trackId);
     if (!track) return;
     if (!items || !items.length) {
@@ -616,15 +626,15 @@
       return;
     }
     track.parentElement.hidden = false;
-    track.innerHTML = '';
+    if (!append) track.innerHTML = '';
     // let, not var: the click handler below closes over `item` per iteration.
     for (let i = 0; i < items.length; i++) {
       let source = items[i];
       let type = requestedType === 'mixed' ? source.kind || 'playlist' : requestedType;
       let item = Object.assign({}, source, {browseId: source.playlistId || source.browseId, thumbnail: source.thumbnail || (source.thumbnails || []).slice(-1)[0]?.url || ''});
       var card = document.createElement('div');
-      card.className = 'hscroll-card' + (type === 'artist' ? ' related-artist-card' : '') + (type === 'playlist' ? ' playlist-card' : type === 'album' ? ' album-card' : '');
-      if (type !== 'artist' && item.browseId) card.dataset.albumId = item.browseId;
+      card.className = 'hscroll-card' + (type === 'artist' ? ' related-artist-card' : '') + (type === 'playlist' ? ' artist-playlist-card' : type === 'album' ? ' album-card' : '');
+      if (type === 'album' && item.browseId) card.dataset.albumId = item.browseId;
       var thumbUrl = '';
       var isRound = false;
       var title = '';
@@ -646,7 +656,7 @@
       var playBtnHtml = (type !== 'artist') ? '<button type="button" class="hscroll-play-btn" title="Play"><svg viewBox="0 0 24 24" fill="currentColor"><polygon points="8,5 19,12 8,19"/></svg></button>' : '';
       card.innerHTML = window.CollectionRenderer
         ? window.CollectionRenderer.renderCard({
-            cardClass: (type === 'artist' ? 'related-artist-card' : type === 'playlist' ? 'playlist-card' : 'album-card'),
+            cardClass: (type === 'artist' ? 'related-artist-card' : type === 'playlist' ? 'artist-playlist-card' : 'album-card'),
             imageHtml: imgHtml,
             round: isRound,
             showPlay: type !== 'artist',
@@ -659,7 +669,7 @@
       if (type === 'track' && item.video_id) {
         card.dataset.videoId = item.video_id;
         card.removeAttribute('data-album-id');
-        card.addEventListener('click', function() { if (window.playFromQueue) window.playFromQueue(item); });
+        card.addEventListener('click', function(e) { if (e.target.closest('.artist-name')) return; if (window.playFromQueue) window.playFromQueue(item); });
       } else if (type === 'artist' && item.browseId) {
         card.addEventListener('click', function() {
           if (window.preloadNavigateArtist) window.preloadNavigateArtist(item.browseId);
@@ -669,6 +679,7 @@
         card.dataset.playlistId = item.browseId;
         card.removeAttribute('data-album-id');
         card.addEventListener('click', function(e) {
+          if (e.target.closest('.artist-name')) return;
           if (e.target.closest('.hscroll-play-btn')) {
             e.stopPropagation();
             if (window.playCollection) window.playCollection([], {playlistId: item.browseId});
@@ -678,6 +689,7 @@
         });
       } else if (type !== 'artist' && item.browseId) {
         card.addEventListener('click', function(e) {
+          if (e.target.closest('.artist-name')) return;
           if (e.target.closest('.hscroll-play-btn')) {
             e.stopPropagation();
             if (window.toast) window.toast('Loading album...', 'ok');
@@ -694,6 +706,12 @@
             else window.navigateTo('#album/' + encodeURIComponent(item.browseId));
           }
         });
+      }
+      if (type !== 'artist' && (item.artist || (item.artists || []).length)) {
+        var credits = card.querySelector('.hscroll-card-sub');
+        if (!credits) { credits = document.createElement('div'); credits.className = 'hscroll-card-sub'; card.appendChild(credits); }
+        credits.innerHTML = artistCreditsHtml(item);
+        credits.title = credits.textContent;
       }
       track.appendChild(card);
     }
@@ -770,9 +788,11 @@
 
 
   async function loadArtistReleases(channelId, kind) {
-    var allowed = ['albums', 'singles', 'playlists', 'featured'];
-    if (!allowed.includes(kind)) return;
+    if (!['albums', 'singles', 'playlists', 'featured'].includes(kind)) return;
+    if (state._artistCollectionObserver) state._artistCollectionObserver.disconnect();
     var token = ++state._artistLoadToken;
+    var route = '#artist/' + encodeURIComponent(channelId) + '?collection=' + kind;
+    var current = function() { return token === state._artistLoadToken && (!window.getRoute || window.getRoute() === route); };
     state._currentChannelId = channelId;
     state._artistLoading = false;
     showSkeleton(false);
@@ -780,31 +800,60 @@
     Array.from(content.children).forEach(function(child) { child.hidden = child.id !== 'artist-releases-content'; });
     var panel = document.getElementById('artist-releases-content');
     var title = {albums:'Albums', singles:'Singles', playlists:'Playlists by artist', featured:'Featured on'}[kind];
-    panel.innerHTML = '<button type="button" class="btn-ghost artist-collection-back">Back to artist</button><h2>' + title + '</h2><div class="hscroll-track artist-release-grid" id="artist-release-grid"></div><button type="button" class="btn-ghost artist-collection-more">Load more</button><div role="status" class="artist-collection-status"></div>';
+    panel.innerHTML = '<div class="artist-collection-header"><button type="button" class="artist-collection-back"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m14 6-6 6 6 6"/></svg><span>Back to artist</span></button><h1>' + title + '</h1></div><div class="hscroll-track artist-release-grid" id="artist-release-grid"></div><div role="status" class="artist-collection-status" aria-live="polite"></div><button type="button" class="artist-view-all-btn artist-collection-retry" hidden>Retry</button><div class="artist-collection-sentinel" aria-hidden="true"></div>';
     panel.querySelector('.artist-collection-back').onclick = function() { window.navigateTo('#artist/' + encodeURIComponent(channelId)); };
-    var items = [], offset = 0, busy = false;
-    var more = panel.querySelector('.artist-collection-more');
+    var grid = panel.querySelector('#artist-release-grid');
+    var retry = panel.querySelector('.artist-collection-retry');
     var status = panel.querySelector('.artist-collection-status');
+    var sentinel = panel.querySelector('.artist-collection-sentinel');
+    var items = [], offset = 0, busy = false, hasMore = true, failed = false;
+    function skeletons() {
+      grid.setAttribute('aria-busy', 'true');
+      for (var i = 0; i < (items.length ? 4 : 12); i++) {
+        var node = document.createElement('div'); node.className = 'hscroll-card artist-collection-skeleton'; node.setAttribute('aria-hidden', 'true');
+        node.innerHTML = '<div class="hscroll-card-art skeleton-block"></div><div class="skeleton-line skeleton-line-title"></div><div class="skeleton-line skeleton-line-artist"></div>';
+        grid.appendChild(node);
+      }
+    }
     async function nextPage() {
-      if (busy || token !== state._artistLoadToken) return;
-      busy = true; more.disabled = true; status.textContent = 'Loading…';
+      if (!current() || busy || !hasMore || failed) return;
+      busy = true; retry.hidden = true; status.textContent = ''; skeletons();
       try {
         var result = await window.api('/api/artist/' + encodeURIComponent(channelId) + '/releases?kind=' + kind + '&offset=' + offset + '&limit=30');
-        if (token !== state._artistLoadToken || !window.getRoute || window.getRoute() !== '#artist/' + encodeURIComponent(channelId) + '?collection=' + kind) return;
+        if (!current()) return;
+        grid.querySelectorAll('.artist-collection-skeleton').forEach(function(node) { node.remove(); });
         var seen = new Set(items.map(function(item) { return item.playlistId || item.browseId; }));
-        (result.items || []).forEach(function(item) { var id = item.playlistId || item.browseId; if (id && !seen.has(id)) { seen.add(id); items.push(item); } });
-        offset = result.next_offset;
-        renderHscrollSection('artist-release-grid', items, kind === 'albums' || kind === 'singles' ? 'album' : 'playlist');
+        var page = [];
+        (result.items || []).forEach(function(item) { var id = item.playlistId || item.browseId; if (id && !seen.has(id)) { seen.add(id); page.push(item); } });
+        var nextOffset = Number(result.next_offset);
+        hasMore = !!result.has_more && Number.isFinite(nextOffset) && nextOffset > offset;
+        offset = Number.isFinite(nextOffset) ? nextOffset : offset;
+        if (page.length) renderHscrollSection('artist-release-grid', page, kind === 'albums' || kind === 'singles' ? 'album' : 'playlist', items.length > 0);
+        items = items.concat(page);
         panel.hidden = false;
-        more.hidden = !result.has_more;
+        sentinel.hidden = !hasMore;
         status.textContent = items.length ? '' : 'No collections available';
       } catch (error) {
-        if (token !== state._artistLoadToken) return;
-        status.textContent = error.message || 'Could not load collections'; more.textContent = 'Retry'; more.hidden = false;
-      } finally { busy = false; more.disabled = false; }
+        if (!current()) return;
+        failed = true;
+        status.textContent = error.message || 'Could not load collections'; retry.hidden = false;
+      } finally {
+        busy = false;
+        grid.querySelectorAll('.artist-collection-skeleton').forEach(function(node) { node.remove(); });
+        grid.setAttribute('aria-busy', 'false');
+        if (current() && hasMore && !failed && sentinel.getBoundingClientRect().top < window.innerHeight + 320) window.setTimeout(nextPage, 0);
+      }
     }
-    more.onclick = nextPage;
+    retry.onclick = function() { failed = false; nextPage(); };
     await nextPage();
+    if (current() && window.IntersectionObserver) {
+      var observer = new IntersectionObserver(function(entries) {
+        if (!current()) { observer.disconnect(); return; }
+        if (entries.some(function(entry) { return entry.isIntersecting; })) nextPage();
+      }, {rootMargin:'320px'});
+      state._artistCollectionObserver = observer;
+      observer.observe(sentinel);
+    }
     if (window.syncPageTitle) window.syncPageTitle();
   }
 
