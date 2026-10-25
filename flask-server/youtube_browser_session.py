@@ -145,13 +145,18 @@ class YouTubeBrowserSessionManager:
             # Older or unavailable sidecars still need resources released.
             self._close_sidecar()
 
-    def start(self, owner_id):
+    def start(self, owner_id, viewport=None):
+        if viewport is not None:
+            if (not isinstance(viewport,dict) or type(viewport.get('width')) is not int or type(viewport.get('height')) is not int
+                    or not 320 <= viewport['width'] <= 1920 or not 480 <= viewport['height'] <= 1080):
+                raise ValueError('Invalid browser viewport')
+            viewport={key:viewport[key] for key in ('width','height')}
         token = secrets.token_urlsafe(32)
         with self._lock:
             self._lease = (str(owner_id), self._digest(token), self.clock() + self.lease_ttl)
             self._state, self._message = "connecting", None
         try:
-            sidecar = self.controller.call("/interactive/start", "POST")
+            sidecar = self.controller.call("/interactive/start", "POST", payload=viewport) if viewport else self.controller.call("/interactive/start", "POST")
             with self._lock:
                 self._state = sidecar.get("state", "waiting_for_login")
         except Exception:

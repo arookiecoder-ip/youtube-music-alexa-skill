@@ -53,7 +53,7 @@ def test_amazon_dedicated_page_and_verification_stays_responsive(account_page,wi
     expect(page.get_by_role('heading',name='Amazon',exact=True)).to_be_visible()
     page.get_by_label('Amazon email').fill('owner@example.test');page.get_by_label('Password',exact=True).fill('test-password')
     page.get_by_role('button',name='Continue to Amazon').click()
-    expect(page.locator('#amazon-page')).to_be_visible();expect(page.locator('#password')).to_have_value('')
+    expect(page.locator('#amazon-page')).to_be_visible();assert page.locator('#amazon-page').bounding_box()['height']>=420;expect(page.locator('#password')).to_have_value('')
     assert calls[0][1]=={'email':'owner@example.test','password':'test-password','force':True}
     assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
     assert page.locator('iframe[src*="vnc"]').count()==0
@@ -147,6 +147,8 @@ def test_desktop_keyboard_works_without_mobile_toolbar(account_page):
         desktop.goto(origin+'/accounts/youtube')
         desktop.get_by_role('button',name='Continue to YouTube Music').click()
         expect(desktop.locator('#frame')).to_have_attribute('data-width','480')
+        assert [body for action,body in calls if action=='start'][-1]['viewport']['width']>=960
+        assert desktop.locator('.card').bounding_box()['width']>900
         expect(desktop.locator('.keyboard-tools')).to_be_hidden()
         desktop.locator('#frame').hover()
         desktop.mouse.wheel(0,350)

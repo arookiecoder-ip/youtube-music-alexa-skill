@@ -37,7 +37,8 @@ class FakeController:
         self.calls = []
         self.delay = delay
 
-    def call(self, path, method="GET"):
+    def call(self, path, method="GET", payload=None):
+        self.last_payload=payload
         self.calls.append((path, method))
         if path == "/status":
             if self.delay: time.sleep(self.delay)
@@ -47,6 +48,13 @@ class FakeController:
 
 
 class LeaseTests(unittest.TestCase):
+    def test_viewport_is_bounded_and_passed_to_the_private_browser(self):
+        controller=FakeController();manager=YouTubeBrowserSessionManager(controller,lambda _:None)
+        manager.start('owner',viewport={'width':1280,'height':800})
+        self.assertEqual(controller.last_payload,{'width':1280,'height':800})
+        for viewport in [{'width':True,'height':800},{'width':4000,'height':800},{'width':1280,'height':0},'desktop']:
+            with self.assertRaises(ValueError):manager.start('owner',viewport=viewport)
+
     def test_owner_binding_expiry_and_revocation(self):
         now = [100.0]
         manager = YouTubeBrowserSessionManager(FakeController(), lambda _: None,

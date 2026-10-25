@@ -32,6 +32,7 @@ _candidate = None
 _worker = None
 _manual_browser = None
 _complete_requested = False
+_viewport = {"width":480,"height":900}
 _capture_requested = threading.Event()
 
 
@@ -86,7 +87,7 @@ def _plain_chromium_command(enable_capture=False):
     """Build Chromium command, keeping interactive login free of CDP."""
     command = [
         CHROMIUM, f"--user-data-dir={PROFILE_DIR}", "--no-sandbox",
-        "--disable-dev-shm-usage", "--window-size=480,900", "--window-position=0,0", "--no-first-run",
+        "--disable-dev-shm-usage", f"--window-size={_viewport['width']},{_viewport['height']}", "--window-position=0,0", "--no-first-run",
         "--hide-crash-restore-bubble", "--test-type",
         # Keep cookie encryption identical across every launch.
         "--password-store=basic", "--use-mock-keychain",
@@ -351,9 +352,41 @@ def status():
     return jsonify(_public_state())
 
 
+def _resize_signin_browser():
+    # A second controller may open desktop sign-in while the mobile browser is
+    # still alive. Resize the same browser without discarding its login state.
+    for _ in range(40):
+        if not _public_state()['interactive']:
+            return
+        try:
+            from touch_browser import geometry,run
+            window,current=geometry()
+            with _lock:
+                width,height=max(508,_viewport['width']),_viewport['height']
+            if current['WIDTH']==width and current['HEIGHT']==height:
+                return
+            run('windowsize','--sync',window,width,height)
+            return
+        except Exception:
+            time.sleep(.25)
+
+
 @app.post("/interactive/start")
 def interactive_start():
-    started = _start(True)
+    data=request.get_json(silent=True) or {}
+    width,height=data.get('width',480),data.get('height',900)
+    if type(width) is not int or type(height) is not int or not 320 <= width <= 1920 or not 480 <= height <= 1080:
+        return jsonify({'error':'invalid_viewport'}),400
+    with _lock:
+        previous=_worker if _worker and _worker.is_alive() and not _state['interactive'] else None
+    if previous:
+        previous.join(timeout=10)
+        if previous.is_alive():
+            return jsonify({'error':'previous_signin_closing'}),503
+    with _lock:
+        _viewport.update(width=width,height=height)
+        started = _start(True)
+    threading.Thread(target=_resize_signin_browser,daemon=True).start()
     return jsonify(_public_state()), (202 if started else 409)
 
 

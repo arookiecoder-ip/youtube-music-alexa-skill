@@ -148,7 +148,7 @@
         if (url.origin !== location.origin || !url.pathname.startsWith('/alexa/proxy/')) throw new Error('Invalid sign-in address');
         el('amazon-page').src = url.href;
       } else {
-        await api('/api/youtube/browser-session/start', {});
+        await api('/api/youtube/browser-session/start', {viewport: {width: innerWidth >= 900 ? Math.min(1280, Math.max(960, innerWidth - 128)) : 480, height: innerWidth >= 900 ? Math.min(1000, Math.max(640, innerHeight - 160)) : 900}});
         if (stopped || id !== run) return;
         started = true;
         frameOpenedAt = Date.now();

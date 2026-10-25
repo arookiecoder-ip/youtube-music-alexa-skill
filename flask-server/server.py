@@ -6176,7 +6176,11 @@ def _browser_owner_id():
 def youtube_browser_session_start():
     if not _logged_in():
         return error_response("Owner session required.", 401)
-    token, status = _youtube_browser_sessions.start(_browser_owner_id())
+    viewport=(request.get_json(silent=True) or {}).get('viewport')
+    try:
+        token, status = _youtube_browser_sessions.start(_browser_owner_id(), viewport=viewport) if viewport is not None else _youtube_browser_sessions.start(_browser_owner_id())
+    except ValueError:
+        return error_response('Invalid sign-in browser size.',400)
     response = jsonify(dict(status, url="/accounts/youtube"))
     response.set_cookie(_youtube_browser_sessions.COOKIE_NAME, token,
                         max_age=int(_youtube_browser_sessions.lease_ttl),
@@ -6196,7 +6200,11 @@ def youtube_browser_session_status():
 def youtube_browser_session_retry():
     if not _logged_in():
         return error_response("Owner session required.", 401)
-    token, status = _youtube_browser_sessions.start(_browser_owner_id())
+    viewport=(request.get_json(silent=True) or {}).get('viewport')
+    try:
+        token, status = _youtube_browser_sessions.start(_browser_owner_id(), viewport=viewport) if viewport is not None else _youtube_browser_sessions.start(_browser_owner_id())
+    except ValueError:
+        return error_response('Invalid sign-in browser size.',400)
     response = jsonify(dict(status, url="/accounts/youtube"))
     response.set_cookie(_youtube_browser_sessions.COOKIE_NAME, token,
                         max_age=int(_youtube_browser_sessions.lease_ttl), secure=app.config['SESSION_COOKIE_SECURE'],

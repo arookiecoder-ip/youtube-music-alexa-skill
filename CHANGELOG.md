@@ -6,6 +6,8 @@ This file summarizes behavior changes, explicitly records superseded work and li
 
 ## Unreleased
 
+- Give Amazon verification frames a guaranteed minimum height for Android WebView, size the YouTube sign-in browser for desktop versus mobile, and resize an existing browser when switching controllers. Retry only safe Amazon GET requests on temporary server errors and show a retry screen if the provider remains unavailable.
+
 - Fix cookie-authenticated access to the YouTube sign-in surface and account chooser, with a regression through the real authorization middleware. Share the original owner sign-in theme, reveal only decoded browser frames, stop on expired authorization, and retain natural page scrolling to the confirmation action.
 
 - Replace the inline account form and desktop VNC sign-in UI with dedicated responsive account pages and a leased touch/keyboard browser surface. Add explicit YouTube account selection and preserve existing Amazon credentials until a replacement verifies.

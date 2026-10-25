@@ -31,6 +31,7 @@ import httpx
 from aiohttp import web
 from alexapy import AlexaAPI, AlexaProxy
 from network_sessions import ProxyAwareAlexaLogin as AlexaLogin
+from amazon_login_transport import AmazonLoginTransport
 from alexapy.helpers import get_json_value
 
 logger = logging.getLogger(__name__)
@@ -343,7 +344,7 @@ class AlexaRemote:
         # do not land on alexapy's otherwise unrecoverable error page.
         await self._proxy.session.aclose()
         self._proxy.session = httpx.AsyncClient(
-            transport=httpx.AsyncHTTPTransport(retries=3, http2=True,
+            transport=AmazonLoginTransport(
                 proxy=os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY") or None)
         )
 
@@ -384,7 +385,16 @@ class AlexaRemote:
         if proxy is None:
             raise web.HTTPServiceUnavailable(text="Alexa login proxy is not running.")
         try:
-            return await proxy.all_handler(request)
+            response = await proxy.all_handler(request)
+            if request.method == 'GET' and response.status >= 500:
+                import html
+                retry = html.escape(str(request.rel_url), quote=True)
+                return web.Response(status=503, content_type='text/html', headers={'Cache-Control':'no-store'}, text=(
+                    '<meta name="viewport" content="width=device-width,initial-scale=1">'
+                    '<style>body{margin:0;padding:32px 24px;background:#141414;color:#e8e8e8;font:14px system-ui;line-height:1.6}a{display:inline-block;padding:10px 16px;background:#e8590c;color:white;text-decoration:none}</style>'
+                    '<h2>Amazon is temporarily unavailable</h2><p>Your account has not been changed. Retry this sign-in page.</p>'
+                    f'<a href="{retry}">Try again</a>'))
+            return response
         finally:
             login = self._proxy_login
             if login and (login.authorization_code or login.access_token):
