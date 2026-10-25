@@ -6,6 +6,8 @@ This file summarizes behavior changes, explicitly records superseded work and li
 
 ## Unreleased
 
+- Fix cookie-authenticated access to the YouTube sign-in surface and account chooser, with a regression through the real authorization middleware. Share the original owner sign-in theme, reveal only decoded browser frames, stop on expired authorization, and retain natural page scrolling to the confirmation action.
+
 - Replace the inline account form and desktop VNC sign-in UI with dedicated responsive account pages and a leased touch/keyboard browser surface. Add explicit YouTube account selection and preserve existing Amazon credentials until a replacement verifies.
 - Show a red profile outline for disconnected Amazon sessions. Keep voice-started Alexa playback visible as read-only, block transport/queue mutations with an actionable message, and retain a logged-out device entry until handoff.
 - Release signed-out Echo ownership without requiring an unavailable Amazon pause and fence open Echo streams by output token, including same-song handoffs. Already buffered Echo audio still requires Amazon access to stop immediately.

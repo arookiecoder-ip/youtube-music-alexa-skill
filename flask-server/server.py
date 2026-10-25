@@ -860,6 +860,8 @@ _SESSION_PATHS = ('/audio', '/get_radio', '/status', '/api/status', '/remote', '
                    '/api/youtube/browser-session/retry',
                    '/api/youtube/browser-session/open-youtube',
                    '/api/youtube/browser-session/capture',
+                   '/api/youtube/browser-session/surface',
+                   '/api/youtube/browser-session/choose-account',
                    '/api/youtube/browser-session/authorize')
 _SESSION_PREFIXES = ('/accounts/', '/api/status/', '/alexa/now_playing/', '/history/', '/api/playlists/', '/recommendations/',
                      '/api/artist/', '/api/album/', '/api/library/', '/api/explore/', '/api/home/',
