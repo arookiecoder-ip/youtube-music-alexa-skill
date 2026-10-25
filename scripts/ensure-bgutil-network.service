@@ -1,5 +1,5 @@
 [Unit]
-Description=Attach bgutil-provider to the web Docker network (PO token sidecar for ytmusic)
+Description=Attach bgutil-provider to Music Box service and proxy networks (PO token sidecar for ytmusic)
 After=docker.service
 Requires=docker.service
 # Best-effort: never block or fail boot if bgutil-provider/the network aren't

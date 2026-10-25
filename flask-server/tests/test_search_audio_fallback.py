@@ -60,4 +60,13 @@ class SearchAudioFallbackTests(unittest.TestCase):
         result, _ = self.run_search([dict(resultType='album', browseId='MPRE1', title='Album')], failure=True)
         self.assertEqual(result['albums'][0]['title'], 'Album')
 
+    def test_playlist_hero_fetches_actual_songs_even_with_unrelated_mixed_audio(self):
+        playlist = dict(resultType='playlist', browseId='VLplaylist', title='kulo sa sped up', category='Top result')
+        wrong = dict(self.song(), videoId='BBBBBBBBBBB', title='Ra Ma Da Sa')
+        actual = dict(self.song(), videoId='CCCCCCCCCCC', title='KU LO SA')
+        result, client = self.run_search([playlist, wrong], [wrong, actual], query='kulo sa')
+        self.assertEqual(client.search.call_count, 2)
+        self.assertEqual(result['songs'][0]['video_id'], 'CCCCCCCCCCC')
+        self.assertEqual(result['playlists'][0]['title'], 'kulo sa sped up')
+
 if __name__ == '__main__': unittest.main()

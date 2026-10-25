@@ -8878,7 +8878,7 @@ def alexa_search():
     # audio category only when it is absent; keep successful mixed results if
     # this optional request fails rather than blanking the Search page.
     if (not any(item.get('resultType') == 'song' for item in all_raw) or
-            any(item.get('category') == 'Top result' and item.get('resultType') == 'video' for item in all_raw)):
+            any(item.get('category') == 'Top result' and item.get('resultType') in ('video', 'playlist') for item in all_raw)):
         try:
             audio_raw = ytmusic.search(query=query, filter='songs',
                                       ignore_spelling=False, limit=40) or []
@@ -8930,6 +8930,16 @@ def alexa_search():
         names = ' '.join(str(artist.get('name') or '') for artist in item.get('artists') or [])
         text = ' '.join((str(item.get('title') or ''), str(item.get('artist') or ''), names))
         words = set(re.findall(r'[^\W_]+', text.casefold()))
+        # KU LO SA / KULO SA / KULOSA are equivalent title spellings.
+        # Preserve marks in non-Latin scripts and do not promote partial words.
+        import unicodedata
+        def compact(value):
+            return ''.join(ch for ch in unicodedata.normalize('NFKC', value).casefold()
+                           if ch.isalnum() or unicodedata.category(ch).startswith('M'))
+        compact_query = compact(query)
+        compact_title = compact(str(item.get('title') or ''))
+        if len(compact_query) >= 4 and compact_query == compact_title:
+            return 2
         return len(query_words & words) / max(1, len(query_words))
 
     results['songs'].sort(key=query_coverage, reverse=True)
