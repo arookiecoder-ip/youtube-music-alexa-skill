@@ -1,0 +1,154 @@
+{% extends "admin/base.html" %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Dashboard</h1>
+    <p>Identity, per-user account storage and administration. The existing single-owner playback app stays untouched while this layer is rolled out.</p>
+  </div>
+  <div class="btn-row">
+    <a class="btn primary" href="{{ base_path }}/users/new/">Create user</a>
+    <a class="btn" href="{{ base_path }}/audit/">View audit log</a>
+  </div>
+</div>
+
+{% if bootstrap.created %}
+  <div class="banner">
+    <span>⚑</span>
+    <span>
+      <strong>Bootstrap owner created.</strong>
+      {% if bootstrap.generated_password %}
+        A generated password was written to <span class="mono">{{ bootstrap.password_file or "(not writable — check container logs)" }}</span>.
+        Sign in, change it, then delete the file.
+      {% else %}
+        Credentials came from <span class="mono">MULTIUSER_ADMIN_PASSWORD</span>. Change the password after first sign-in.
+      {% endif %}
+    </span>
+  </div>
+{% endif %}
+
+<div class="grid cols-4" style="margin-bottom:16px">
+  <div class="card">
+    <div class="stat-label">Users</div>
+    <div class="stat-value">{{ counts.total }}</div>
+    <div class="stat-note">{{ counts.active }} active · {{ counts.disabled }} disabled</div>
+  </div>
+  <div class="card">
+    <div class="stat-label">Administrators</div>
+    <div class="stat-value accent">{{ counts.admins }}</div>
+    <div class="stat-note">{{ counts.owners }} owner{% if counts.owners != 1 %}s{% endif %}</div>
+  </div>
+  <div class="card">
+    <div class="stat-label">Live sessions</div>
+    <div class="stat-value green">{{ counts.sessions }}</div>
+    <div class="stat-note">Admin sessions, revocable server-side</div>
+  </div>
+  <div class="card">
+    <div class="stat-label">Linked accounts</div>
+    <div class="stat-value">{{ counts.credentials }}</div>
+    <div class="stat-note">Encrypted YouTube / Amazon credentials</div>
+  </div>
+</div>
+
+<div class="grid cols-2">
+  <div class="card flush">
+    <div class="card-head">
+      <h2>Recent users</h2>
+      <a class="btn small ghost" href="{{ base_path }}/users/">All users</a>
+    </div>
+    {% if recent_users %}
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>User</th><th>Role</th><th>Status</th><th class="right">Created</th></tr></thead>
+          <tbody>
+            {% for user in recent_users %}
+              <tr>
+                <td>
+                  <a class="table-user" href="{{ base_path }}/users/{{ user.id }}/" style="color:inherit">
+                    <span class="avatar">{{ (user.display_name or user.username)[0] }}</span>
+                    <span>
+                      <span class="name">{{ user.display_name or user.username }}</span><br>
+                      <span class="sub">@{{ user.username }}</span>
+                    </span>
+                  </a>
+                </td>
+                <td><span class="badge {{ user.role }}">{{ user.role }}</span></td>
+                <td><span class="badge {{ user.status }}">{{ user.status }}</span></td>
+                <td class="right faint nowrap">{{ user.created_at|mu_datetime }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <div class="empty"><strong>No users yet</strong>Create the first account to get started.</div>
+    {% endif %}
+  </div>
+
+  <div class="card">
+    <div class="card-head" style="padding:0 0 15px;border:0"><h2>Provider links</h2></div>
+    {% for provider in ['youtube', 'amazon'] %}
+      {% set stats = providers.get(provider, {}) %}
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;padding:11px 0;border-bottom:1px solid var(--border-soft)">
+        <div>
+          <strong style="font-size:.9rem">{{ 'YouTube Music' if provider == 'youtube' else 'Amazon / Alexa' }}</strong><br>
+          <span class="faint small">
+            {% if stats %}
+              {{ stats.get('connected', 0) }} connected{% if stats.get('error', 0) %} · {{ stats.get('error', 0) }} error{% endif %}{% if stats.get('expired', 0) %} · {{ stats.get('expired', 0) }} expired{% endif %}
+            {% else %}
+              Not linked yet
+            {% endif %}
+          </span>
+        </div>
+        <span class="badge {{ 'active' if stats.get('connected') else 'neutral' }}">{{ 'connected' if stats.get('connected') else 'none' }}</span>
+      </div>
+    {% endfor %}
+    <p class="small faint" style="margin:14px 0 0">
+      Phase 2 adds per-user Google and Amazon linking flows. Credentials are encrypted with Fernet and are never rendered in this UI.
+    </p>
+  </div>
+</div>
+
+<div class="grid cols-2" style="margin-top:16px">
+  <div class="card flush">
+    <div class="card-head">
+      <h2>Recent activity</h2>
+      <a class="btn small ghost" href="{{ base_path }}/audit/">Audit log</a>
+    </div>
+    {% if recent_audit %}
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Action</th><th>Actor</th><th>When</th></tr></thead>
+          <tbody>
+            {% for event in recent_audit %}
+              <tr>
+                <td><span class="event-action">{{ event.action }}</span></td>
+                <td class="muted">{{ event.actor_label }}</td>
+                <td class="faint nowrap">{{ event.created_at|mu_relative }}</td>
+              </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    {% else %}
+      <div class="empty"><strong>No activity yet</strong>Actions will appear here.</div>
+    {% endif %}
+  </div>
+
+  <div class="card">
+    <div class="card-head" style="padding:0 0 15px;border:0"><h2>Runtime</h2></div>
+    <dl class="kv">
+      <dt>Database</dt><dd class="mono">{{ mu_config.db_path }}</dd>
+      <dt>Size</dt><dd>{{ '%.1f KiB'|format(db_size / 1024) }}</dd>
+      <dt>Schema</dt><dd>v{{ schema[-1].version if schema else '?' }}</dd>
+      <dt>Disk free</dt><dd>{{ '%.1f GiB'|format(disk.free / 1073741824) }} of {{ '%.1f GiB'|format(disk.total / 1073741824) }}</dd>
+      <dt>Session TTL</dt><dd>{{ mu_config.session_hours }} hours</dd>
+      <dt>Bootstrap</dt><dd class="muted">{{ 'created this boot' if bootstrap.created else 'existing owner found' }}</dd>
+    </dl>
+    <div class="section-divider"></div>
+    <div class="btn-row">
+      <a class="btn" href="{{ base_path }}/system/">Health &amp; backups</a>
+      <a class="btn ghost" href="{{ base_path }}/api/health/">Health JSON</a>
+    </div>
+  </div>
+</div>
+{% endblock %}

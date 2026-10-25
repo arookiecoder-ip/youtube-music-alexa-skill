@@ -1,0 +1,125 @@
+{% extends "admin/base.html" %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Create user</h1>
+    <p>The account is created immediately. Give the temporary password to the user through a secure channel.</p>
+  </div>
+  <a class="btn ghost" href="{{ base_path }}/users/">← Back to users</a>
+</div>
+
+<div class="grid cols-2">
+  <div class="card">
+    <form class="stack" method="post" action="{{ base_path }}/users/new/">
+      <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+      <div class="form-grid">
+        <div class="field">
+          <label for="username">Username</label>
+          <input id="username" name="username" value="{{ form.username }}" required minlength="3" maxlength="32"
+                 pattern="[A-Za-z0-9][A-Za-z0-9._-]{2,31}" autocomplete="off" spellcheck="false">
+          <span class="hint">3–32 chars: letters, numbers, dot, dash, underscore.</span>
+        </div>
+        <div class="field">
+          <label for="display_name">Display name</label>
+          <input id="display_name" name="display_name" value="{{ form.display_name }}" maxlength="120" autocomplete="off">
+        </div>
+        <div class="field">
+          <label for="email">Email <span class="faint">(optional)</span></label>
+          <input id="email" name="email" type="email" value="{{ form.email }}" maxlength="254" autocomplete="off">
+        </div>
+        <div class="field">
+          <label for="role">Role</label>
+          <select id="role" name="role">
+            {% for role in allowed_roles %}
+              <option value="{{ role }}" {{ 'selected' if form.role == role else '' }}>{{ role }}</option>
+            {% endfor %}
+          </select>
+          <span class="hint">
+            {% if 'owner' not in allowed_roles %}Your role can only create standard users.{% endif %}
+          </span>
+        </div>
+      </div>
+
+      <div class="field">
+        <label for="password">Temporary password</label>
+        <div style="display:flex;gap:8px">
+          <input id="password" name="password" type="text" value="{{ form.password }}" autocomplete="new-password"
+                 minlength="10" maxlength="200" spellcheck="false" style="font-family:var(--mono)">
+          <button class="btn" type="button" id="generate-password">Generate</button>
+        </div>
+        <span class="hint">At least 10 characters with two character classes. Leave blank to auto-generate.</span>
+      </div>
+
+      <div class="muted-box" style="display:flex;flex-direction:column;gap:10px">
+        <label class="checkline">
+          <input type="checkbox" name="send_invite" id="send_invite" {{ 'checked' if form.send_invite else '' }}>
+          Send an invitation email (user chooses their own password)
+        </label>
+        <label class="checkline">
+          <input type="checkbox" name="send_verification" {{ 'checked' if form.send_verification else '' }}>
+          Send an email verification link
+        </label>
+        <span class="hint" style="margin-left:25px">
+          An email address is required for both. With verification enforced, the user cannot sign in until the address is confirmed.
+        </span>
+      </div>
+
+      <label class="checkline">
+        <input type="checkbox" name="must_change_password" {{ 'checked' if form.must_change_password else '' }}>
+        Require a password change at first sign-in
+      </label>
+
+      <div class="form-actions">
+        <button class="btn primary" type="submit">Create user</button>
+        <a class="btn ghost" href="{{ base_path }}/users/">Cancel</a>
+      </div>
+    </form>
+  </div>
+
+  <div class="card">
+    <h2 style="margin-bottom:12px">What happens next</h2>
+    <dl class="kv">
+      <dt>Password storage</dt><dd>PBKDF2-SHA256, 600,000 iterations</dd>
+      <dt>Session</dt><dd>Server-side, revocable, {{ mu_config.session_hours }}h TTL</dd>
+      <dt>Provider links</dt><dd>None until the user connects Google/Amazon in Phase 2</dd>
+      <dt>Playback data</dt><dd>Not yet isolated (Phase 2)</dd>
+      <dt>Audit</dt><dd>Creation, edits, resets and deletions are recorded</dd>
+    </dl>
+    <div class="section-divider"></div>
+    <div class="banner info" style="margin:0">
+      <span>ℹ</span>
+      <span>This preview intentionally does not change the existing playback/login flow. Users created here can access the admin panel only if given an admin role; end-user sign-in lands in Phase 2.</span>
+    </div>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+  (function () {
+    const button = document.getElementById('generate-password');
+    const field = document.getElementById('password');
+    const invite = document.getElementById('send_invite');
+    if (invite && field) {
+      const sync = function () {
+        field.disabled = invite.checked;
+        field.placeholder = invite.checked ? 'The user will choose a password from the email link' : '';
+      };
+      invite.addEventListener('change', sync);
+      sync();
+    }
+    if (!button || !field) return;
+    button.addEventListener('click', function () {
+      const alphabet = 'abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789!@#$%^&*-_=+';
+      const values = new Uint32Array(20);
+      crypto.getRandomValues(values);
+      let value = '';
+      for (let i = 0; i < values.length; i++) {
+        value += alphabet[values[i] % alphabet.length];
+      }
+      field.value = value;
+      field.focus();
+      field.select();
+    });
+  })();
+</script>
+{% endblock %}

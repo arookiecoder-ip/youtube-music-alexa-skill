@@ -1,0 +1,102 @@
+{% extends "admin/base.html" %}
+{% block topbar_actions %}
+  <a class="btn small primary" href="{{ base_path }}/users/new/">Create user</a>
+{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Users</h1>
+    <p>Create and manage accounts, roles, account status and provider links. Passwords are hashed; provider credentials are encrypted.</p>
+  </div>
+</div>
+
+<div class="card flush">
+  <div class="card-head">
+    <form class="search-form" method="get" action="{{ base_path }}/users/">
+      <input type="search" name="q" value="{{ q }}" placeholder="Search username, name or email" aria-label="Search users">
+      <select name="role" aria-label="Filter by role">
+        <option value="">All roles</option>
+        {% for role in roles %}
+          <option value="{{ role }}" {{ 'selected' if role_filter == role else '' }}>{{ role }}</option>
+        {% endfor %}
+      </select>
+      <select name="status" aria-label="Filter by status">
+        <option value="">All statuses</option>
+        {% for status in statuses %}
+          <option value="{{ status }}" {{ 'selected' if status_filter == status else '' }}>{{ status }}</option>
+        {% endfor %}
+      </select>
+      <button class="btn small" type="submit">Filter</button>
+      {% if q or role_filter or status_filter %}
+        <a class="btn small ghost" href="{{ base_path }}/users/">Clear</a>
+      {% endif %}
+    </form>
+    <span class="faint small">{{ pagination.total }} user{% if pagination.total != 1 %}s{% endif %}</span>
+  </div>
+
+  {% if users %}
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>User</th>
+            <th>Role</th>
+            <th>Status</th>
+            <th>Providers</th>
+            <th>Last sign-in</th>
+            <th>Created</th>
+            <th class="right">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for user in users %}
+            <tr>
+              <td>
+                <a class="table-user" href="{{ base_path }}/users/{{ user.id }}/" style="color:inherit">
+                  <span class="avatar">{{ (user.display_name or user.username)[0] }}</span>
+                  <span>
+                    <span class="name">{{ user.display_name or user.username }}</span><br>
+                    <span class="sub">@{{ user.username }}{% if user.email %} · {{ user.email }}{% endif %}</span>
+                  </span>
+                </a>
+              </td>
+              <td><span class="badge {{ user.role }}">{{ user.role }}</span></td>
+              <td><span class="badge {{ user.status }}">{{ user.status }}</span></td>
+              <td>
+                <div style="display:flex;gap:4px;flex-wrap:wrap">
+                  {% set yt = user.providers.get('youtube') %}
+                  {% set amz = user.providers.get('amazon') %}
+                  <span class="badge {{ yt.status if yt else 'neutral' }}" title="YouTube Music">{{ 'YouTube' if yt else 'No YouTube' }}</span>
+                  <span class="badge {{ amz.status if amz else 'neutral' }}" title="Amazon / Alexa">{{ 'Amazon' if amz else 'No Amazon' }}</span>
+                </div>
+              </td>
+              <td class="faint nowrap">{{ user.last_login_at|mu_relative }}</td>
+              <td class="faint nowrap">{{ user.created_at|mu_datetime }}</td>
+              <td class="right">
+                <a class="btn small ghost" href="{{ base_path }}/users/{{ user.id }}/">Manage</a>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <div class="pagination">
+      <span>Showing {{ pagination.start }}–{{ pagination.end }} of {{ pagination.total }}</span>
+      <span class="pages">
+        {% if pagination.has_prev %}<a class="btn small ghost" href="{{ pagination.prev_url }}">← Previous</a>{% endif %}
+        <span class="faint" style="align-self:center">Page {{ pagination.page }} / {{ pagination.pages }}</span>
+        {% if pagination.has_next %}<a class="btn small ghost" href="{{ pagination.next_url }}">Next →</a>{% endif %}
+      </span>
+    </div>
+  {% else %}
+    <div class="empty">
+      <strong>No users match this filter</strong>
+      Try clearing the search, or <a href="{{ base_path }}/users/new/">create a user</a>.
+    </div>
+  {% endif %}
+</div>
+
+<div class="muted-box" style="margin-top:16px">
+  Soft-deleted accounts are hidden here. Per-user playback data is not migrated yet; Phase 2 scopes playlists, history, likes and queues by account.
+</div>
+{% endblock %}

@@ -1,0 +1,138 @@
+{% extends "admin/base.html" %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Health &amp; backups</h1>
+    <p>Runtime state for the multi-user database, email delivery and manual backups. The single-owner application keeps its own database.</p>
+  </div>
+  <div class="btn-row">
+    <a class="btn ghost" href="{{ base_path }}/api/health/">Health JSON</a>
+  </div>
+</div>
+
+{% if bootstrap.created %}
+  <div class="banner">
+    <span>⚑</span>
+    <span>
+      <strong>Bootstrap owner created this boot.</strong>
+      {% if bootstrap.generated_password %}
+        The generated password is in <span class="mono">{{ bootstrap.password_file or "(not writable — check container logs)" }}</span>.
+        Change it and delete the file.
+      {% else %}
+        The password came from <span class="mono">MULTIUSER_ADMIN_PASSWORD</span>.
+      {% endif %}
+    </span>
+  </div>
+{% endif %}
+
+<div class="grid cols-2" style="margin-bottom:16px">
+  <div class="card">
+    <div class="card-head" style="padding:0 0 15px;border:0"><h2>Database</h2></div>
+    <dl class="kv">
+      <dt>Path</dt><dd class="mono">{{ mu_config.db_path }}</dd>
+      <dt>Size</dt><dd>{{ '%.1f KiB'|format(db_size / 1024) }}</dd>
+      <dt>Integrity</dt>
+      <dd>
+        <span class="badge {{ 'active' if db_integrity == 'ok' else 'error' }}">{{ db_integrity }}</span>
+      </dd>
+      <dt>Schema</dt>
+      <dd>
+        {% for migration in schema %}
+          <span class="badge neutral">v{{ migration.version }} · {{ migration.applied_at|mu_datetime }}</span>
+        {% else %}
+          <span class="badge error">not initialized</span>
+        {% endfor %}
+      </dd>
+      <dt>Bootstrapped</dt><dd>{{ initialized_at|mu_datetime }}</dd>
+      <dt>Disk free</dt><dd>{{ '%.1f GiB'|format(disk.free / 1073741824) }} of {{ '%.1f GiB'|format(disk.total / 1073741824) }}</dd>
+      <dt>Backup directory</dt><dd class="mono">{{ backup_dir }}</dd>
+    </dl>
+  </div>
+
+  <div class="card">
+    <div class="card-head" style="padding:0 0 15px;border:0">
+      <h2>Email delivery</h2>
+      <span class="badge {{ 'active' if mail.configured else 'invited' }}">{{ 'SMTP configured' if mail.configured else 'outbox only' }}</span>
+    </div>
+    <dl class="kv">
+      <dt>SMTP host</dt><dd class="mono">{{ mail.host or '—' }}</dd>
+      <dt>Port / security</dt><dd>{{ mail.port }} · {{ mail.security }}</dd>
+      <dt>From</dt><dd>{{ mail.from_address or '—' }}{% if mail.from_name %} <span class="faint">({{ mail.from_name }})</span>{% endif %}</dd>
+      <dt>Reply-To</dt><dd>{{ mail.reply_to or '—' }}</dd>
+      <dt>Redirect all mail</dt><dd>{{ mail.redirect_to or '—' }}</dd>
+      <dt>Outbox</dt><dd class="mono">{{ mail.outbox_dir or '—' }}{% if outbox_count %} · {{ outbox_count }} message{% if outbox_count != 1 %}s{% endif %}{% endif %}</dd>
+    </dl>
+    {% if not mail.configured %}
+      <div class="banner" style="margin:15px 0 0">
+        <span>⚑</span>
+        <span>
+          Invitations, verification, reset and magic-link messages are written as
+          <span class="mono">.eml</span> files to the local outbox instead of being sent.
+          Set <span class="mono">MULTIUSER_SMTP_HOST</span>, <span class="mono">MULTIUSER_SMTP_USERNAME</span>,
+          <span class="mono">MULTIUSER_SMTP_PASSWORD</span> and <span class="mono">MULTIUSER_MAIL_FROM</span>,
+          then restart the service.
+        </span>
+      </div>
+    {% endif %}
+    {% if mail_last %}
+      <p class="small faint" style="margin:14px 0 0">
+        Last attempt: <span class="badge {{ 'active' if mail_last.ok else 'error' }}">{{ mail_last.status }}</span>
+        {% if mail_last.detail %} — {{ mail_last.detail }}{% endif %}
+      </p>
+    {% endif %}
+    {% if admin_user.role == 'owner' %}
+      <div class="section-divider"></div>
+      <form class="stack" method="post" action="{{ base_path }}/system/test-email/">
+        <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+        <div class="field">
+          <label for="test-email">Send a test email to</label>
+          <input id="test-email" name="email" type="email" maxlength="254" required
+                 value="{{ admin_user.email or '' }}" placeholder="you@synthora.in">
+        </div>
+        <div class="form-actions">
+          <button class="btn primary" type="submit">Send test email</button>
+        </div>
+      </form>
+    {% endif %}
+  </div>
+</div>
+
+<div class="card flush">
+  <div class="card-head">
+    <h2>Backups</h2>
+    {% if admin_user.role == 'owner' %}
+      <form method="post" action="{{ base_path }}/system/backup/">
+        <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+        <button class="btn small primary" type="submit">Create backup now</button>
+      </form>
+    {% endif %}
+  </div>
+  {% if backups %}
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>File</th><th>Size</th><th>Created</th></tr></thead>
+        <tbody>
+          {% for backup in backups %}
+            <tr>
+              <td class="mono">{{ backup.name }}</td>
+              <td class="faint">{{ '%.1f KiB'|format(backup.size / 1024) }}</td>
+              <td class="faint nowrap">{{ backup.mtime|mu_datetime }}</td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  {% else %}
+    <div class="empty">
+      <strong>No backups yet</strong>
+      Create one before upgrading or migrating the database.
+    </div>
+  {% endif %}
+</div>
+
+<div class="muted-box" style="margin-top:16px">
+  <strong>Scaling note.</strong> This deployment runs one authoritative process, so SQLite,
+  the in-process rate limiter and the outbox are consistent. Horizontal replicas require
+  PostgreSQL, Redis-backed sessions/rate limits and shared object storage (roadmap Phase 5).
+</div>
+{% endblock %}

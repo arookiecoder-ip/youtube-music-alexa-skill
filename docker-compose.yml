@@ -5,7 +5,7 @@ services:
     restart: unless-stopped
     networks: [web, musicbox-egress]
     env_file:
-      - path: .env
+      - path: ${COMPOSE_ENV_FILE:-.env}
         required: false
     environment:
       - DB_FILE=/data/data.db
@@ -97,7 +97,7 @@ services:
       - "80:80"
       - "443:443"
     volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile
+      - ./${CADDYFILE:-Caddyfile}:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
       - caddy_config:/config
     networks:

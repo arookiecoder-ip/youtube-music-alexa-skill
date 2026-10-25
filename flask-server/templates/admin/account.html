@@ -1,0 +1,141 @@
+{% extends "admin/base.html" %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>My account</h1>
+    <p>Manage your own password and sessions. Account details are edited by an owner.</p>
+  </div>
+</div>
+
+<div class="grid cols-2">
+  <div style="display:flex;flex-direction:column;gap:16px">
+    <div class="card">
+      <div class="card-head" style="padding:0 0 16px;border:0"><h2>Identity</h2></div>
+      <dl class="kv">
+        <dt>Username</dt><dd>@{{ user.username }}</dd>
+        <dt>Display name</dt><dd>{{ user.display_name or '—' }}</dd>
+        <dt>Email</dt><dd>{{ user.email or '—' }} {% if user.email %}<span class="badge {{ 'active' if user.email_verified else 'invited' }}\">{{ 'verified' if user.email_verified else 'unverified' }}</span>{% endif %}</dd>
+        <dt>Role</dt><dd><span class="badge {{ user.role }}">{{ user.role }}</span></dd>
+        <dt>Status</dt><dd><span class="badge {{ user.status }}">{{ user.status }}</span></dd>
+        <dt>Last sign-in</dt><dd>{{ user.last_login_at|mu_relative }}</dd>
+        <dt>Member since</dt><dd>{{ user.created_at|mu_datetime }}</dd>
+      </dl>
+      <div class="section-divider"></div>
+      <form class="stack" method="post" action="{{ base_path }}/account/profile/">
+        <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+        <div class="form-grid">
+          <div class="field">
+            <label for="display_name">Display name</label>
+            <input id="display_name" name="display_name" value="{{ user.display_name or '' }}" maxlength="120">
+          </div>
+          <div class="field">
+            <label for="profile_email">Email</label>
+            <input id="profile_email" name="email" type="email" value="{{ user.email or '' }}" maxlength="254"
+                   placeholder="you@synthora.in">
+            <span class="hint">Changing this requires your password and re-verification.</span>
+          </div>
+        </div>
+        <div class="field">
+          <label for="profile_password">Current password <span class="faint">(required to change email)</span></label>
+          <input id="profile_password" name="current_password" type="password" maxlength="200"
+                 autocomplete="current-password">
+        </div>
+        <div class="form-actions">
+          <button class="btn primary" type="submit">Save profile</button>
+        </div>
+      </form>
+      {% if user.email and not user.email_verified and user.status == 'active' %}
+        <div class="section-divider"></div>
+        <form method="post" action="{{ base_path }}/account/email/verification/">
+          <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+          <button class="btn" type="submit">Send verification email</button>
+          {% if not mail_configured %}<span class="faint small" style="margin-left:8px">SMTP not configured — link goes to the outbox.</span>{% endif %}
+        </form>
+      {% endif %}
+    </div>
+
+    <div class="card">
+      <div class="card-head" style="padding:0 0 16px;border:0"><h2>Change password</h2></div>
+      <form class="stack" method="post" action="{{ base_path }}/account/">
+        <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+        <div class="field">
+          <label for="current_password">Current password</label>
+          <input id="current_password" name="current_password" type="password" required autocomplete="current-password">
+        </div>
+        <div class="field">
+          <label for="new_password">New password</label>
+          <input id="new_password" name="new_password" type="password" required minlength="10" maxlength="200" autocomplete="new-password">
+          <span class="hint">At least 10 characters, using two of: lowercase, uppercase, digits, symbols.</span>
+        </div>
+        <div class="field">
+          <label for="confirm_password">Confirm new password</label>
+          <input id="confirm_password" name="confirm_password" type="password" required minlength="10" maxlength="200" autocomplete="new-password">
+        </div>
+        <div class="form-actions"><button class="btn primary" type="submit">Change password</button></div>
+      </form>
+    </div>
+  </div>
+
+  <div style="display:flex;flex-direction:column;gap:16px">
+    <div class="card flush">
+      <div class="card-head">
+        <h2>My sessions</h2>
+        <form method="post" action="{{ base_path }}/account/sessions/revoke/" data-confirm="Sign out every session, including this one?">
+          <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+          <button class="btn small danger" type="submit">Sign out everywhere</button>
+        </form>
+      </div>
+      {% if sessions %}
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Created</th><th>Last seen</th><th>Client</th><th>State</th></tr></thead>
+            <tbody>
+              {% for s in sessions %}
+                <tr>
+                  <td class="faint nowrap">{{ s.created_at|mu_relative }}</td>
+                  <td class="faint nowrap">{{ s.last_seen_at|mu_relative }}</td>
+                  <td class="small"><span class="mono">{{ s.ip or '—' }}</span><br><span class="faint">{{ (s.user_agent or '—')[:60] }}</span></td>
+                  <td><span class="badge {{ 'revoked' if s.revoked_at else 'active' }}">{{ 'revoked' if s.revoked_at else 'live' }}</span></td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% else %}
+        <div class="empty"><strong>No sessions</strong></div>
+      {% endif %}
+    </div>
+
+    <div class="card flush">
+      <div class="card-head"><h2>My activity</h2></div>
+      {% if audit %}
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Action</th><th>When</th><th>IP</th></tr></thead>
+            <tbody>
+              {% for event in audit %}
+                <tr>
+                  <td><span class="event-action">{{ event.action }}</span></td>
+                  <td class="faint nowrap">{{ event.created_at|mu_relative }}</td>
+                  <td class="mono faint">{{ event.ip or '—' }}</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% else %}
+        <div class="empty"><strong>No activity</strong></div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+  document.querySelectorAll('form[data-confirm]').forEach(function (form) {
+    form.addEventListener('submit', function (event) {
+      if (!window.confirm(form.getAttribute('data-confirm'))) event.preventDefault();
+    });
+  });
+</script>
+{% endblock %}

@@ -1,0 +1,47 @@
+{% extends "admin/base.html" %}
+{% block body %}
+<div class="login-shell">
+  <div class="login-card">
+    <div class="login-brand">
+      <span class="brand-mark" style="width:38px;height:38px;border-radius:11px;display:grid;place-items:center;background:linear-gradient(145deg,var(--accent),#b23e00);font-size:1.15rem">♫</span>
+      <div>
+        <div class="brand-name">{{ mu_config.app_name }}</div>
+        <div class="brand-sub">Invitation</div>
+      </div>
+    </div>
+    <div class="card">
+      <h1>Activate your account</h1>
+      <div class="sub">Set a password for <strong>@{{ username }}</strong> ({{ email }}).</div>
+
+      {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+          <div class="flash-stack">
+            {% for category, message in messages %}
+              <div class="flash {{ category }}"><span>{{ message }}</span></div>
+            {% endfor %}
+          </div>
+        {% endif %}
+      {% endwith %}
+
+      <form class="stack" method="post" action="{{ base_path }}/invite/{{ token }}">
+        <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+        <div class="field">
+          <label for="password">Password</label>
+          <input id="password" name="password" type="password" required minlength="10" maxlength="200"
+                 autocomplete="new-password">
+          <span class="hint">At least 10 characters, using two of: lowercase, uppercase, digits, symbols.</span>
+        </div>
+        <div class="field">
+          <label for="confirm_password">Confirm password</label>
+          <input id="confirm_password" name="confirm_password" type="password" required minlength="10" maxlength="200"
+                 autocomplete="new-password">
+        </div>
+        <div class="form-actions">
+          <button class="btn primary" type="submit" style="width:100%">Activate account</button>
+        </div>
+      </form>
+    </div>
+    <div class="login-foot">This invitation can be used once and expires automatically.</div>
+  </div>
+</div>
+{% endblock %}

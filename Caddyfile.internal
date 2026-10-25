@@ -1,0 +1,29 @@
+# Fallback Caddyfile for an origin behind Cloudflare in Full (non-strict)
+# mode, used only when public ACME issuance cannot complete. Cloudflare still
+# presents a publicly trusted edge certificate to browsers; this only protects
+# the Cloudflare-to-origin hop.
+#
+# Enable with:
+#   CADDYFILE=Caddyfile.internal
+# in the deployment env file, then recreate the caddy service.
+{$SITE_ADDRESS:localhost} {
+    tls internal
+
+    handle_path /youtube-login/* {
+        forward_auth ytmusic:5000 {
+            uri /api/youtube/browser-session/authorize
+            header_up -Connection
+            header_up -Upgrade
+        }
+        header Cache-Control "no-store"
+        reverse_proxy youtube-browser:6080
+    }
+
+    handle /alexa/proxy/* {
+        reverse_proxy ytmusic:5001
+    }
+
+    handle {
+        reverse_proxy ytmusic:5000
+    }
+}

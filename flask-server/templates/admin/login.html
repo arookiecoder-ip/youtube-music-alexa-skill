@@ -1,0 +1,62 @@
+{% extends "admin/base.html" %}
+{% block body %}
+<div class="login-shell">
+  <div class="login-card">
+    <div class="login-brand">
+      <span class="brand-mark" style="width:38px;height:38px;border-radius:11px;display:grid;place-items:center;background:linear-gradient(145deg,var(--accent),#b23e00);font-size:1.15rem">♫</span>
+      <div>
+        <div class="brand-name">{{ mu_config.app_name }}</div>
+        <div class="brand-sub">Multi-user admin</div>
+      </div>
+    </div>
+    <div class="card">
+      <h1>Sign in</h1>
+      <div class="sub">Administrator access only. Sessions expire automatically.</div>
+
+      {% if not mail_configured %}
+        <div class="banner" style="margin-bottom:16px">
+          <span>⚑</span>
+          <span>Email delivery is not configured. Password resets and email sign-in links are written to the local outbox until <span class="mono">MULTIUSER_SMTP_*</span> is set.</span>
+        </div>
+      {% endif %}
+
+      {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+          <div class="flash-stack">
+            {% for category, message in messages %}
+              <div class="flash {{ category }}"><span>{{ message }}</span></div>
+            {% endfor %}
+          </div>
+        {% endif %}
+      {% endwith %}
+
+      <form class="stack" method="post" action="{{ base_path }}/login/" autocomplete="on">
+        <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+        <input type="hidden" name="next" value="{{ next_target or base_path ~ '/' }}">
+        <div class="field">
+          <label for="username">Username</label>
+          <input id="username" name="username" type="text" autocomplete="username" required autofocus
+                 maxlength="32" spellcheck="false" autocapitalize="none">
+        </div>
+        <div class="field">
+          <label for="password">Password</label>
+          <input id="password" name="password" type="password" autocomplete="current-password" required maxlength="200">
+        </div>
+        <div class="form-actions">
+          <button class="btn primary" type="submit" style="width:100%">Sign in</button>
+        </div>
+      </form>
+      <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-top:15px">
+        <a class="small" href="{{ base_path }}/forgot-password/">Forgot password?</a>
+        {% if magic_link_enabled %}
+          <a class="small" href="{{ base_path }}/email-login/">Email me a sign-in link</a>
+        {% endif %}
+      </div>
+    </div>
+    <div class="login-foot">
+      Phase 1 preview · Multi-user foundation is additive and feature-flagged.<br>
+      Single-owner web login remains available at <a href="/login/">/login/</a>.
+    </div>
+  </div>
+</div>
+{% endblock %}

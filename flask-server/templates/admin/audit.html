@@ -1,0 +1,88 @@
+{% extends "admin/base.html" %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>Audit log</h1>
+    <p>Every administrative action, sign-in attempt and email event. Entries are retained for 90 days, then pruned automatically.</p>
+  </div>
+  <div class="btn-row">
+    <a class="btn" href="{{ base_path }}/audit/export.csv">Export CSV</a>
+  </div>
+</div>
+
+<div class="card flush">
+  <div class="card-head">
+    <form class="search-form" method="get" action="{{ base_path }}/audit/">
+      <select name="action" aria-label="Filter by action">
+        <option value="">All actions</option>
+        {% for name in actions %}
+          <option value="{{ name }}" {{ 'selected' if action == name else '' }}>{{ name }}</option>
+        {% endfor %}
+      </select>
+      <input type="search" name="actor" value="{{ actor }}" placeholder="Actor username or ID" aria-label="Filter by actor">
+      <input type="search" name="target" value="{{ target }}" placeholder="Target user ID" aria-label="Filter by target user">
+      <button class="btn small" type="submit">Filter</button>
+      {% if action or actor or target %}
+        <a class="btn small ghost" href="{{ base_path }}/audit/">Clear</a>
+      {% endif %}
+    </form>
+    <span class="faint small">{{ pagination.total }} event{% if pagination.total != 1 %}s{% endif %}</span>
+  </div>
+
+  {% if events %}
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>When</th>
+            <th>Action</th>
+            <th>Actor</th>
+            <th>Target</th>
+            <th>IP</th>
+            <th>Details</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for event in events %}
+            <tr>
+              <td class="faint nowrap">{{ event.created_at|mu_datetime }}</td>
+              <td><span class="event-action">{{ event.action }}</span></td>
+              <td class="muted">
+                {{ event.actor_label }}
+                {% if event.actor_user_id %}<br><span class="faint mono">{{ event.actor_user_id[:8] }}…</span>{% endif %}
+              </td>
+              <td class="mono faint">
+                {% if event.target_user_id %}
+                  <a href="{{ base_path }}/users/{{ event.target_user_id }}/">{{ event.target_user_id[:8] }}…</a>
+                {% else %}—{% endif %}
+              </td>
+              <td class="mono faint">{{ event.ip or '—' }}</td>
+              <td>
+                {% if event.details %}
+                  <details>
+                    <summary>View</summary>
+                    <pre>{{ event.details|mu_json }}</pre>
+                  </details>
+                {% else %}—{% endif %}
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <div class="pagination">
+      <span>Showing {{ pagination.start }}–{{ pagination.end }} of {{ pagination.total }}</span>
+      <span class="pages">
+        {% if pagination.has_prev %}<a class="btn small ghost" href="{{ pagination.prev_url }}">← Previous</a>{% endif %}
+        <span class="faint" style="align-self:center">Page {{ pagination.page }} / {{ pagination.pages }}</span>
+        {% if pagination.has_next %}<a class="btn small ghost" href="{{ pagination.next_url }}">Next →</a>{% endif %}
+      </span>
+    </div>
+  {% else %}
+    <div class="empty">
+      <strong>No audit events match</strong>
+      Clear the filters to see the full journal.
+    </div>
+  {% endif %}
+</div>
+{% endblock %}

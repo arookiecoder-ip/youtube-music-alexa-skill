@@ -1142,6 +1142,11 @@ def app_audio_token():
 @app.before_request
 def require_api_key():
     path = request.path.rstrip('/') or '/'
+    # The optional multi-user admin panel owns its own session/CSRF auth. Its
+    # routes must not be blocked by the device API key middleware, but only
+    # once the layer has actually registered itself.
+    if (path == '/admin' or path.startswith('/admin/')) and app.extensions.get('multiuser'):
+        return None
     # Keep diagnostics available to a valid owner key during a database outage.
     if (path == '/status' or path == '/api/status' or path.startswith('/api/status/')) and _valid_key_supplied():
         return None
@@ -10897,6 +10902,19 @@ def service_worker():
 
 
 # Main entry point
+# The multi-user layer is additive and disabled unless MULTI_USER_ENABLED=1.
+# Initialization is deliberately guarded: a misconfiguration in this optional
+# layer must never prevent the existing single-owner application from booting.
+try:
+    from multiuser import init_multiuser as _init_multiuser
+
+    _multiuser_layer = _init_multiuser(app)
+except Exception:  # noqa: BLE001 - optional subsystem must not break startup
+    _multiuser_layer = None
+    logger.exception(
+        "[multiuser] initialization failed; continuing with the single-owner app"
+    )
+
 if _youtube_stream.enabled:
     def _initialize_youtube_stream():
         try:

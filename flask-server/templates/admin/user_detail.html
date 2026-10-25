@@ -1,0 +1,284 @@
+{% extends "admin/base.html" %}
+{% block topbar_actions %}
+  <a class="btn small ghost" href="{{ base_path }}/users/">← All users</a>
+{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div style="display:flex;align-items:center;gap:14px">
+    <span class="avatar" style="width:52px;height:52px;border-radius:14px;font-size:1.2rem">{{ (user.display_name or user.username)[0] }}</span>
+    <div>
+      <h1 style="display:flex;align-items:center;gap:9px;flex-wrap:wrap">
+        {{ user.display_name or user.username }}
+        <span class="badge {{ user.role }}">{{ user.role }}</span>
+        <span class="badge {{ user.status }}">{{ user.status }}</span>
+      </h1>
+      <p>@{{ user.username }}{% if user.email %} · {{ user.email }} {% if user.email_verified %}<span class="badge active">verified</span>{% else %}<span class="badge invited">unverified</span>{% endif %}{% endif %}</p>
+    </div>
+  </div>
+</div>
+
+<div class="grid cols-2">
+  <div style="display:flex;flex-direction:column;gap:16px">
+    <div class="card">
+      <div class="card-head" style="padding:0 0 16px;border:0"><h2>Profile</h2></div>
+      <form class="stack" method="post" action="{{ base_path }}/users/{{ user.id }}/edit/">
+        <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+        <div class="form-grid">
+          <div class="field">
+            <label for="username">Username</label>
+            <input id="username" name="username" value="{{ user.username }}" required minlength="3" maxlength="32"
+                   pattern="[A-Za-z0-9][A-Za-z0-9._-]{2,31}" {{ 'disabled' if not can_manage else '' }}>
+          </div>
+          <div class="field">
+            <label for="display_name">Display name</label>
+            <input id="display_name" name="display_name" value="{{ user.display_name }}" maxlength="120" {{ 'disabled' if not can_manage and not is_self else '' }}>
+          </div>
+          <div class="field">
+            <label for="email">Email</label>
+            <input id="email" name="email" type="email" value="{{ user.email or '' }}" maxlength="254" {{ 'disabled' if not can_manage else '' }}>
+            {% if user.email %}
+              <span class="hint">
+                {{ 'Verified' if user.email_verified else 'Not verified' }} · changing it requires re-verification.
+              </span>
+            {% endif %}
+          </div>
+          <div class="field">
+            <label for="role">Role</label>
+            <select id="role" name="role" {{ 'disabled' if is_self or not can_manage else '' }}>
+              {% for role in roles %}
+                {% if role in allowed_roles or role == user.role %}
+                  <option value="{{ role }}" {{ 'selected' if user.role == role else '' }}>{{ role }}</option>
+                {% endif %}
+              {% endfor %}
+            </select>
+          </div>
+          <div class="field">
+            <label for="status">Status</label>
+            <select id="status" name="status" {{ 'disabled' if is_self or not can_manage else '' }}>
+              {% for status in ['active', 'disabled', 'invited'] %}
+                <option value="{{ status }}" {{ 'selected' if user.status == status else '' }}>{{ status }}</option>
+              {% endfor %}
+            </select>
+            {% if user.status == 'invited' %}
+              <span class="hint">Invited users cannot sign in until they accept the email invitation.</span>
+            {% endif %}
+          </div>
+        </div>
+        {% if can_manage and not is_self %}
+          <div class="form-actions"><button class="btn primary" type="submit">Save changes</button></div>
+        {% elif is_self %}
+          <div class="muted-box">Use <a href="{{ base_path }}/account/">My account</a> to change your own password. Role and status changes require another owner.</div>
+        {% else %}
+          <div class="muted-box">You can view this account but not modify it.</div>
+        {% endif %}
+      </form>
+    </div>
+
+    <div class="card">
+      <div class="card-head" style="padding:0 0 16px;border:0">
+        <h2>Email authentication</h2>
+        <span class="badge {{ 'active' if user.email_verified else ('neutral' if not user.email else 'invited') }}">
+          {{ 'verified' if user.email_verified else ('no email' if not user.email else 'unverified') }}
+        </span>
+      </div>
+      {% if user.email %}
+        <dl class="kv" style="margin-bottom:15px">
+          <dt>Address</dt><dd>{{ user.email }}</dd>
+          <dt>Verified</dt><dd>{{ user.email_verified_at|mu_datetime if user.email_verified else 'Not yet' }}</dd>
+          <dt>Delivery</dt><dd>{{ 'SMTP configured' if mail_configured else 'Local outbox only — SMTP not configured' }}</dd>
+        </dl>
+        {% if can_manage %}
+          <div class="btn-row">
+            {% if not user.email_verified %}
+              <form method="post" action="{{ base_path }}/users/{{ user.id }}/email/verification/">
+                <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+                <button class="btn" type="submit">Send verification email</button>
+              </form>
+              <form method="post" action="{{ base_path }}/users/{{ user.id }}/email/verify-now/">
+                <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+                <button class="btn ghost" type="submit">Mark verified manually</button>
+              </form>
+            {% endif %}
+            {% if user.status == 'invited' %}
+              <form method="post" action="{{ base_path }}/users/{{ user.id }}/email/invitation/">
+                <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+                <button class="btn" type="submit">Resend invitation</button>
+              </form>
+            {% endif %}
+          </div>
+        {% endif %}
+      {% else %}
+        <div class="muted-box">No email address. Add one in the profile form to enable verification, password reset and email sign-in.</div>
+      {% endif %}
+    </div>
+
+    <div class="card">
+      <div class="card-head" style="padding:0 0 16px;border:0"><h2>Reset password</h2></div>
+      {% if can_manage and not is_self %}
+        <form class="stack" method="post" action="{{ base_path }}/users/{{ user.id }}/password/">
+          <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+          <div class="field">
+            <label for="reset-password">New password <span class="faint">(leave blank to generate)</span></label>
+            <div style="display:flex;gap:8px">
+              <input id="reset-password" name="password" type="text" minlength="10" maxlength="200"
+                     autocomplete="new-password" spellcheck="false" style="font-family:var(--mono)">
+              <button class="btn" type="button" id="generate-reset">Generate</button>
+            </div>
+          </div>
+          <div class="form-actions">
+            <button class="btn" type="submit">Reset password</button>
+            <span class="faint small">All sessions for this account will be signed out.</span>
+          </div>
+        </form>
+      {% elif is_self %}
+        <div class="muted-box">Use <a href="{{ base_path }}/account/">My account</a> to change your own password with your current password.</div>
+      {% else %}
+        <div class="muted-box">You do not have permission to reset this password.</div>
+      {% endif %}
+    </div>
+
+    <div class="card">
+      <div class="card-head" style="padding:0 0 16px;border:0"><h2>Two-factor authentication</h2></div>
+      <p class="small muted">TOTP is supported by the schema and login model. Enrollment UI arrives in Phase 6; a reset clears any stored secret.</p>
+      <form method="post" action="{{ base_path }}/users/{{ user.id }}/totp/">
+        <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+        <button class="btn ghost" type="submit" {{ 'disabled' if not can_manage and not is_self else '' }}>Reset 2FA secret</button>
+      </form>
+    </div>
+  </div>
+
+  <div style="display:flex;flex-direction:column;gap:16px">
+    <div class="card">
+      <div class="card-head" style="padding:0 0 16px;border:0"><h2>Provider accounts</h2></div>
+      {% if providers %}
+        <div style="display:flex;flex-direction:column;gap:10px">
+          {% for credential in providers %}
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;border:1px solid var(--border-soft);border-radius:9px;padding:11px 13px">
+              <div>
+                <strong>{{ 'YouTube Music' if credential.provider == 'youtube' else 'Amazon / Alexa' }}</strong><br>
+                <span class="badge {{ credential.status }}">{{ credential.status }}</span>
+                <span class="faint small">updated {{ credential.updated_at|mu_relative }}</span>
+                {% if credential.last_error %}<div class="small" style="color:var(--red)">{{ credential.last_error[:160] }}</div>{% endif %}
+              </div>
+              {% if can_manage %}
+                <form method="post" action="{{ base_path }}/users/{{ user.id }}/provider/{{ credential.provider }}/disconnect/">
+                  <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+                  <button class="btn small danger" type="submit">Disconnect</button>
+                </form>
+              {% endif %}
+            </div>
+          {% endfor %}
+        </div>
+      {% else %}
+        <div class="muted-box">No provider accounts linked. Per-user Google and Amazon connection flows are Phase 2.</div>
+      {% endif %}
+    </div>
+
+    <div class="card flush">
+      <div class="card-head">
+        <h2>Sessions</h2>
+        {% if can_manage or is_self %}
+          <form method="post" action="{{ base_path }}/users/{{ user.id }}/sessions/revoke/">
+            <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+            <button class="btn small ghost" type="submit">Revoke all</button>
+          </form>
+        {% endif %}
+      </div>
+      {% if sessions %}
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Created</th><th>Last seen</th><th>Expires</th><th>Client</th><th>State</th></tr></thead>
+            <tbody>
+              {% for s in sessions %}
+                <tr>
+                  <td class="faint nowrap">{{ s.created_at|mu_relative }}</td>
+                  <td class="faint nowrap">{{ s.last_seen_at|mu_relative }}</td>
+                  <td class="faint nowrap">{{ s.expires_at|mu_datetime }}</td>
+                  <td class="small">
+                    <span class="mono">{{ s.ip or '—' }}</span><br>
+                    <span class="faint">{{ (s.user_agent or '—')[:70] }}</span>
+                  </td>
+                  <td><span class="badge {{ 'revoked' if s.revoked_at else ('active' if s.expires_at > 0 else 'neutral') }}">{{ 'revoked' if s.revoked_at else 'live' }}</span></td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% else %}
+        <div class="empty"><strong>No sessions</strong>This account has not signed in yet.</div>
+      {% endif %}
+    </div>
+
+    {% if can_manage and not is_self %}
+      <div class="danger-zone">
+        <h2>Danger zone</h2>
+        <p class="small muted">Disabling ends access immediately but keeps the account. Deleting is a soft delete, revokes sessions and removes encrypted provider credentials.</p>
+        <div class="btn-row">
+          {% if user.status == 'active' %}
+            <form method="post" action="{{ base_path }}/users/{{ user.id }}/status/">
+              <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+              <input type="hidden" name="status" value="disabled">
+              <button class="btn" type="submit">Disable account</button>
+            </form>
+          {% else %}
+            <form method="post" action="{{ base_path }}/users/{{ user.id }}/status/">
+              <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+              <input type="hidden" name="status" value="active">
+              <button class="btn" type="submit">Enable account</button>
+            </form>
+          {% endif %}
+          <form method="post" action="{{ base_path }}/users/{{ user.id }}/delete/" data-confirm="Delete {{ user.username }}? Sessions are revoked and provider credentials removed.">
+            <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+            <button class="btn danger" type="submit">Delete user</button>
+          </form>
+        </div>
+      </div>
+    {% endif %}
+
+    <div class="card flush">
+      <div class="card-head"><h2>Recent activity</h2></div>
+      {% if audit %}
+        <div class="table-wrap">
+          <table>
+            <thead><tr><th>Action</th><th>When</th><th>Actor</th></tr></thead>
+            <tbody>
+              {% for event in audit %}
+                <tr>
+                  <td><span class="event-action">{{ event.action }}</span></td>
+                  <td class="faint nowrap">{{ event.created_at|mu_relative }}</td>
+                  <td class="muted">{{ event.actor_label }}</td>
+                </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      {% else %}
+        <div class="empty"><strong>No activity</strong>Actions for this account will appear here.</div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+{% endblock %}
+{% block scripts %}
+<script>
+  (function () {
+    const button = document.getElementById('generate-reset');
+    const field = document.getElementById('reset-password');
+    if (button && field) {
+      button.addEventListener('click', function () {
+        const alphabet = 'abcdefghijkmnopqrstuvwxyzABCDEFGHJKLMNPQRSTUVWXYZ23456789!@#$%^&*-_=+';
+        const values = new Uint32Array(20);
+        crypto.getRandomValues(values);
+        field.value = Array.from(values, v => alphabet[v % alphabet.length]).join('');
+        field.focus();
+        field.select();
+      });
+    }
+    document.querySelectorAll('form[data-confirm]').forEach(function (form) {
+      form.addEventListener('submit', function (event) {
+        if (!window.confirm(form.getAttribute('data-confirm'))) event.preventDefault();
+      });
+    });
+  })();
+</script>
+{% endblock %}

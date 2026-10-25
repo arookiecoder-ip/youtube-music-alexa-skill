@@ -6,3 +6,4 @@ alexapy
 aiohttp
 waitress
 qrcode
+cryptography>=42.0

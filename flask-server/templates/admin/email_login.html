@@ -1,0 +1,50 @@
+{% extends "admin/base.html" %}
+{% block body %}
+<div class="login-shell">
+  <div class="login-card">
+    <div class="login-brand">
+      <span class="brand-mark" style="width:38px;height:38px;border-radius:11px;display:grid;place-items:center;background:linear-gradient(145deg,var(--accent),#b23e00);font-size:1.15rem">♫</span>
+      <div>
+        <div class="brand-name">{{ mu_config.app_name }}</div>
+        <div class="brand-sub">Passwordless sign-in</div>
+      </div>
+    </div>
+    <div class="card">
+      <h1>Email sign-in link</h1>
+      <div class="sub">We'll email a one-time link. It expires in 15 minutes and only works for administrator accounts.</div>
+
+      {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+          <div class="flash-stack">
+            {% for category, message in messages %}
+              <div class="flash {{ category }}"><span>{{ message }}</span></div>
+            {% endfor %}
+          </div>
+        {% endif %}
+      {% endwith %}
+
+      {% if not mail_configured %}
+        <div class="banner" style="margin-bottom:16px">
+          <span>⚑</span>
+          <span>SMTP is not configured on this server. Links are written to the local outbox; ask the owner to configure <span class="mono">MULTIUSER_SMTP_*</span>.</span>
+        </div>
+      {% endif %}
+
+      <form class="stack" method="post" action="{{ base_path }}/email-login/">
+        <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+        <div class="field">
+          <label for="identifier">Email or username</label>
+          <input id="identifier" name="identifier" type="text" required autofocus maxlength="254"
+                 autocomplete="username" autocapitalize="none" spellcheck="false">
+        </div>
+        <div class="form-actions">
+          <button class="btn primary" type="submit" style="width:100%">Email me a sign-in link</button>
+        </div>
+      </form>
+      <div style="margin-top:14px;text-align:center">
+        <a class="small" href="{{ base_path }}/login/">← Back to sign in</a>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}
