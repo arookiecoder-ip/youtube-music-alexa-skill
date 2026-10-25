@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>{{ 'Amazon' if provider == 'amazon' else 'YouTube Music' }} · Music Box</title><link rel="stylesheet" href="/static/css/signin.css"><link rel="stylesheet" href="/static/css/account-signin.css"></head>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>{{ 'Amazon' if provider == 'amazon' else 'YouTube Music' }} · Music Box</title><link rel="stylesheet" href="/static/css/signin.css?v={{ asset_v }}"><link rel="stylesheet" href="/static/css/account-signin.css?v={{ asset_v }}"></head>
 <body class="account-signin" data-provider="{{ provider }}"><main>
 <a class="back" href="/">← Back to Music Box</a>
 <div class="brand"><div class="eq-icon" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span></div><div><h1>Music Box</h1><p>Connect your accounts</p></div></div>
@@ -25,4 +25,4 @@
 {% endif %}
 <button id="cancel" class="quiet" type="button">Cancel sign-in</button></section>
 <button id="retry" class="quiet" type="button" hidden>Try again</button>
-</div></main><script src="/static/js/account-signin.js"></script></body></html>
+</div></main><script src="/static/js/account-signin.js?v={{ asset_v }}"></script></body></html>

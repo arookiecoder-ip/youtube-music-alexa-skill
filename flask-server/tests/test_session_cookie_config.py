@@ -120,6 +120,9 @@ class SessionCookieConfig(unittest.TestCase):
         with mock.patch.object(self.server, '_ytmusic_is_authenticated', return_value=False), mock.patch.object(self.server, '_totp_enabled', return_value=False):
             response=client.post('/login/',json={'username':self.server.REMOTE_USER,'password':self.server.REMOTE_PASSWORD,'next':'/accounts/youtube'})
         self.assertEqual(response.status_code,200)
+        page=client.get('/accounts/youtube')
+        self.assertEqual(page.status_code,200)
+        self.assertIn(('account-signin.js?v='+self.server._STATIC_VERSION).encode(),page.data)
         manager=mock.Mock(COOKIE_NAME='yt_browser_lease')
         manager.authorize.return_value=True
         manager.controller.call.return_value={'image':'data:image/jpeg;base64,AA==','width':480,'height':800}

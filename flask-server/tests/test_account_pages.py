@@ -13,7 +13,7 @@ class AccountPageTests(unittest.TestCase):
         self.logged=True;self.allowed=True
         self.controller=Mock();self.controller.call.return_value={'width':480,'height':800,'image':'data:image/jpeg;base64,AA=='}
         def no_store(r):r.headers['Cache-Control']='no-store';return r
-        namespace=dict(app=app,request=request,jsonify=jsonify,redirect=redirect,render_template=render_template,abort=abort,
+        namespace=dict(_STATIC_VERSION="fixture-assets",app=app,request=request,jsonify=jsonify,redirect=redirect,render_template=render_template,abort=abort,
             _logged_in=lambda:self.logged,_browser_owner_id=lambda:'owner',_no_store=no_store,
             error_response=lambda message,status:(jsonify(error=message),status),
             _youtube_browser_sessions=SimpleNamespace(COOKIE_NAME='lease',authorize=lambda owner,token:self.allowed and token=='valid',controller=self.controller))
@@ -29,6 +29,8 @@ class AccountPageTests(unittest.TestCase):
             r=self.client.get('/accounts/'+provider);self.assertEqual(r.status_code,200)
             self.assertEqual(r.headers['Cache-Control'],'no-store');self.assertIn(b'width=device-width',r.data)
             self.assertNotIn(b'vnc.html',r.data)
+            self.assertIn(b'signin.css?v=fixture-assets',r.data)
+            self.assertIn(b'account-signin.js?v=fixture-assets',r.data)
         self.assertEqual(self.client.get('/accounts/unknown').status_code,404)
     def test_surface_requires_owner_and_current_lease(self):
         self.assertEqual(self.client.get('/api/youtube/browser-session/surface').status_code,403)

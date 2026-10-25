@@ -5630,7 +5630,7 @@ def login():
         if _logged_in():
             return redirect(_safe_spa_target(request.args.get('next')))
         return _no_store(app.make_response(render_template(
-            "login.html", totp=_totp_enabled(),
+            "login.html", totp=_totp_enabled(), asset_v=_STATIC_VERSION,
             next_target=_safe_spa_target(request.args.get('next')))))
 
     body = request.get_json(silent=True) or request.form
@@ -6259,7 +6259,7 @@ def account_signin_page(provider):
         return redirect('/login')
     if provider not in ('amazon', 'youtube'):
         abort(404)
-    return _no_store(app.make_response(render_template('account_signin.html', provider=provider)))
+    return _no_store(app.make_response(render_template('account_signin.html', provider=provider, asset_v=_STATIC_VERSION)))
 
 
 @app.post('/api/youtube/browser-session/choose-account')
