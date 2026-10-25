@@ -1,0 +1,11 @@
+[Unit]
+Description=Reattach Music Box VPN endpoint when its VPN restarts
+After=docker.service
+
+[Service]
+# Use the Docker-enabled account that owns this checkout.
+User=musicbox
+Type=oneshot
+WorkingDirectory=/opt/musicbox
+ExecStart=/usr/bin/python3 /opt/musicbox/scripts/ensure-vpn-proxy.py
+TimeoutStartSec=90

@@ -1,6 +1,8 @@
 // Private stdio protocol; there is no unauthenticated control HTTP listener.
 import readline from 'node:readline';
 import { createResolver } from './resolver.mjs';
+import { EnvHttpProxyAgent, setGlobalDispatcher } from 'undici';
+if (process.env.HTTPS_PROXY || process.env.HTTP_PROXY) setGlobalDispatcher(new EnvHttpProxyAgent());
 const resolve = createResolver();
 const input = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
 input.on('line', async line => {

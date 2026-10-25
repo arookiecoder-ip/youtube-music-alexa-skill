@@ -91,6 +91,10 @@ def _plain_chromium_command(enable_capture=False):
         # Keep cookie encryption identical across every launch.
         "--password-store=basic", "--use-mock-keychain",
     ]
+    proxy = os.environ.get("MUSICBOX_BROWSER_PROXY", "")
+    if proxy:
+        command.append("--proxy-server=" + proxy)
+        command.append("--proxy-bypass-list=localhost;127.0.0.1;[::1]")
     if enable_capture:
         # This is enabled only after Google login has completed. Playwright
         # observes the resulting YT Music request over loopback; it never

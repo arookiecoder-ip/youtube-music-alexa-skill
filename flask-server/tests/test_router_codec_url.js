@@ -180,4 +180,14 @@ if (routerSrc.includes(bootOrderGuard)) {
 
 console.log('');
 console.log('router.js codec: passed=' + pass + ' failed=' + fail);
+
+for (const kind of ['albums', 'singles', 'playlists', 'featured']) {
+  const route = '#artist/UCtest?collection=' + kind;
+  const url = codec.routeToUrl(route);
+  if (url !== '/artist?channel=UCtest&collection=' + kind || codec.urlToRoute(new URL(url, 'https://music.test')) !== route) {
+    throw new Error('Artist collection deep link failed: ' + kind);
+  }
+}
+console.log('PASS artist collection deep links round trip for all categories');
+
 process.exit(fail ? 1 : 0);

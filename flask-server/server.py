@@ -7110,7 +7110,7 @@ async def _fetch_home_sources():
             ytm = await asyncio.to_thread(_get_ytmusic_home)
             return await asyncio.wait_for(
                 asyncio.to_thread(_with_youtube_auth_renewal,
-                                  lambda: _get_ytmusic_home().get_home(limit=6)),
+                                  lambda: _get_ytmusic_home().get_home(limit=40)),
                 timeout=home_feed.SOURCE_TIMEOUTS['ytmusic_home'])
         except Exception as e:
             logger.warning(f"ytm_home failed: {e}")
@@ -9935,7 +9935,7 @@ async def api_artist_releases(channel_id):
     if not _detail_id_has_known_shape('artist', channel_id):
         return jsonify({'error': 'Artist not found.'}), 404
     kind = request.args.get('kind', 'albums')
-    if kind not in ('albums', 'singles', 'playlists'):
+    if kind not in ('albums', 'singles', 'playlists', 'featured'):
         return jsonify({'error': 'Invalid release category.'}), 400
     try:
         offset = max(0, int(request.args.get('offset', 0)))
@@ -10199,6 +10199,14 @@ async def api_get_artist(channel_id):
             logger.error('[api/artist/%s] failed: %s', channel_id, e)
             return _artist_error_response(e)
 
+    from artist_collections import get_artist_collections, collection_cards
+    try:
+        extra = await asyncio.to_thread(get_artist_collections, yt, channel_id)
+        raw = {**raw, **extra}
+    except Exception:
+        # Optional shelves must not take down an otherwise usable artist page.
+        logger.info('[api/artist/%s] optional playlist shelves unavailable', channel_id)
+
     artist_name = raw.get('name') or ''
 
     # ── Top songs ──
@@ -10249,6 +10257,9 @@ async def api_get_artist(channel_id):
         'topSongsBrowseId': top_songs_browse_id,
         'albums': _norm_releases(raw.get('albums')),
         'singles': _norm_releases(raw.get('singles')),
+        'playlists': collection_cards(raw.get('playlists')),
+        'featured': collection_cards(raw.get('featured')),
+        'additionalShelves': raw.get('additionalShelves') or [],
         'related': related,
     })
 

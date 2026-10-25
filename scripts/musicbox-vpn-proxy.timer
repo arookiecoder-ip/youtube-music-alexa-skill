@@ -1,0 +1,11 @@
+[Unit]
+Description=Check Music Box VPN endpoint lifecycle
+
+[Timer]
+OnBootSec=15s
+OnUnitActiveSec=30s
+AccuracySec=2s
+Unit=musicbox-vpn-proxy.service
+
+[Install]
+WantedBy=timers.target

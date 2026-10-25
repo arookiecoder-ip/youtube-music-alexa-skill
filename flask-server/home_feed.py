@@ -17,8 +17,8 @@ SOURCE_TIMEOUTS = {
 }
 
 # Shelf/Item constraints
-MAX_SHELVES = 12
-MIN_ITEMS_PER_SHELF = 2
+MAX_SHELVES = 64
+MIN_ITEMS_PER_SHELF = 1
 MAX_ITEMS_PER_SHELF = 24
 MAX_MOUNTED_ITEMS = 120
 
@@ -417,7 +417,8 @@ def assemble_home_feed(sources):
             else:
                 layout = 'cards'
 
-            shelf_id = hashlib.md5(title.encode('utf-8')).hexdigest()[:8]
+            shelf_identity = title + '\0' + '|'.join(item['key'] for item in normalized_contents)
+            shelf_id = hashlib.sha256(shelf_identity.encode('utf-8')).hexdigest()[:16]
             add_shelf(
                 f"ytm_{shelf_id}", title, layout, 'ytmusic_home',
                 normalized_contents, lambda item: item

@@ -28,7 +28,8 @@ from concurrent.futures import TimeoutError as FuturesTimeoutError
 
 import httpx
 from aiohttp import web
-from alexapy import AlexaAPI, AlexaLogin, AlexaProxy
+from alexapy import AlexaAPI, AlexaProxy
+from network_sessions import ProxyAwareAlexaLogin as AlexaLogin
 from alexapy.helpers import get_json_value
 
 logger = logging.getLogger(__name__)
@@ -329,7 +330,8 @@ class AlexaRemote:
         # do not land on alexapy's otherwise unrecoverable error page.
         await self._proxy.session.aclose()
         self._proxy.session = httpx.AsyncClient(
-            transport=httpx.AsyncHTTPTransport(retries=3, http2=True)
+            transport=httpx.AsyncHTTPTransport(retries=3, http2=True,
+                proxy=os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY") or None)
         )
 
         app = web.Application(middlewares=[self._proxy_autoclose_mw])

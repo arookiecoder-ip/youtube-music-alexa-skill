@@ -100,6 +100,7 @@ function _attachSwipeGesture(wrapper, inner, item) {
   let startX = 0, startY = 0, currentX = 0, gesture = 'pending';
 
   inner.addEventListener('touchstart', (e) => {
+    if (window.matchMedia && window.matchMedia('(min-width: 900px)').matches) { gesture = 'idle'; return; }
     if (e.target.closest && e.target.closest('button, a, input, textarea, select')) return;
     if (e.touches.length !== 1) return;
     inner._swipeSuppressClick = false;
@@ -141,6 +142,7 @@ function _attachSwipeGesture(wrapper, inner, item) {
   }, { passive: false });
 
   inner.addEventListener('touchend', () => {
+    if (window.matchMedia && window.matchMedia('(min-width: 900px)').matches) gesture = 'idle';
     if (gesture !== 'swipe') {
       inner.style.transition = '';
       inner.style.transform = '';
@@ -1093,6 +1095,7 @@ function _attachQueueSwipeGestures(wrapper, el, index, item, currentIndex) {
   }
 
   el.addEventListener('touchstart', (e) => {
+    if (window.matchMedia && window.matchMedia('(min-width: 900px)').matches) { resetSwipeState(); return; }
     if (wrapper._removing) return;
     if (e.target.closest('.queue-drag-handle') || e.touches.length !== 1) return;
     el._swipeSuppressClick = false;
@@ -1134,6 +1137,7 @@ function _attachQueueSwipeGestures(wrapper, el, index, item, currentIndex) {
   }, { passive: false });
 
   el.addEventListener('touchend', () => {
+    if (window.matchMedia && window.matchMedia('(min-width: 900px)').matches) { resetSwipeState(); return; }
     if (gesture !== 'swipe') {
       resetSwipeState();
       return;

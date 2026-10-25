@@ -6,6 +6,12 @@ This file summarizes behavior changes, explicitly records superseded work and li
 
 ## Unreleased
 
+- Expand native Home fetching from six to forty shelves, preserve one-item shelves and distinct recommendations with the same heading, and retain additional artist shelves such as live performances and library items.
+
+- Add optional artist playlists and featured-on shelves, full website collection navigation and paging, with empty sections hidden.
+- Keep the device selector arrow fixed for long names, disable desktop song-row swipe gestures, and give Jam its full now-playing artwork canvas.
+- Decouple Music Box ingress/startup from VPN networking, prefer authenticated VPN egress with direct fallback, and restore VPN endpoint attachment after restarts. Update Caddy deployment example and network setup documentation.
+
 - Fixed a server deadlock when switching paused or playing mobile audio to Alexa. Ownership and the frozen cursor now commit without re-entering the playback lock; stale-owner and stale-track checks remain enforced. Added a regression using a non-reentrant production-style lock.
 
 ## 2026-10-25 — Alexa final-second transitions and dispatch

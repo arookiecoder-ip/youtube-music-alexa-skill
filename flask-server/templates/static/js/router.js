@@ -75,6 +75,7 @@
     }
     if (route.indexOf('#artist/') === 0) {
       var artistValue = route.slice('#artist/'.length);
+      var collection = new URLSearchParams(artistValue.split('?')[1] || '').get('collection');
       var songs = /\/songs$/.test(artistValue);
       if (songs) artistValue = artistValue.slice(0, -'/songs'.length);
       var legacyQueryIndex = artistValue.indexOf('?');
@@ -83,7 +84,7 @@
         artistValue = artistValue.slice(0, legacyQueryIndex);
       }
       value = safeDecode(artistValue);
-      return value ? (songs ? '/artist/songs?' : '/artist?') + encodeQuery({ channel: value }) : '/home';
+      return value ? (songs ? '/artist/songs?' : '/artist?') + encodeQuery({ channel: value, collection: ['albums','singles','playlists','featured'].includes(collection) ? collection : undefined }) : '/home';
     }
     if (route.indexOf('#mood/') === 0) {
       var moodValue = route.slice('#mood/'.length);
@@ -159,7 +160,8 @@
     }
     if (pathname === '/artist') {
       value = query.get('channel') || '';
-      return validValue(value) ? '#artist/' + encodeURIComponent(value) + (pathname === '/artist/songs' ? '/songs' : '') : '#home';
+      var collection = query.get('collection');
+      return validValue(value) ? '#artist/' + encodeURIComponent(value) + (pathname === '/artist/songs' ? '/songs' : '') + (['albums','singles','playlists','featured'].includes(collection) ? '?collection=' + collection : '') : '#home';
     }
     if (pathname === '/mood') {
       value = query.get('params') || '';
@@ -1035,7 +1037,11 @@
       var channelId = decodeURIComponent(artistSongsPage ? artistPath.slice(0, -'/songs'.length) : artistPath);
       if (!channelId) { window.navigateTo('#home'); return; }
       if (legacyTopSongs) { window.navigateTo('#artist/' + encodeURIComponent(channelId) + '/songs'); return; }
-      if (artistSongsPage) {
+      var collectionKind = new URLSearchParams(artistQueryIndex === -1 ? '' : artistRouteValue.slice(artistQueryIndex + 1)).get('collection');
+      if (['albums','singles','playlists','featured'].includes(collectionKind)) {
+        showArtistSection();
+        if (window.loadArtistReleases) window.loadArtistReleases(channelId, collectionKind);
+      } else if (artistSongsPage) {
         showArtistSongsSection();
         if (window.loadArtistSongs) window.loadArtistSongs(channelId);
       } else {

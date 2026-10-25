@@ -1348,3 +1348,6 @@ main {
     overscroll-behavior-y: none !important;
   }
 }
+
+.custom-select-trigger { width: 100%; min-width: 0; box-sizing: border-box; }
+.custom-select-trigger > span:not(.cs-arrow) { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }

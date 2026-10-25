@@ -493,6 +493,7 @@
   <section id="artist-section" hidden>
     <div id="artist-skeleton"></div>
     <div id="artist-content" hidden>
+      <div id="artist-releases-content" hidden></div>
       <div id="artist-hero"></div>
       <div id="artist-top-songs">
         <div class="section-head"><div class="label">Top Songs</div></div>
@@ -518,6 +519,27 @@
         </div>
         <div class="hscroll-track" id="artist-singles-track"></div>
       </div>
+      <div class="hscroll-section" id="artist-playlists">
+        <div class="section-head">
+          <div class="label">Playlists by artist</div>
+          <div class="hscroll-controls">
+            <button type="button" class="hscroll-scroll hscroll-scroll-prev" title="Scroll left" aria-label="Scroll left" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg></button>
+            <button type="button" class="hscroll-scroll hscroll-scroll-next" title="Scroll right" aria-label="Scroll right"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg></button>
+          </div>
+        </div>
+        <div class="hscroll-track" id="artist-playlists-track"></div>
+      </div>
+      <div class="hscroll-section" id="artist-featured">
+        <div class="section-head">
+          <div class="label">Featured on</div>
+          <div class="hscroll-controls">
+            <button type="button" class="hscroll-scroll hscroll-scroll-prev" title="Scroll left" aria-label="Scroll left" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg></button>
+            <button type="button" class="hscroll-scroll hscroll-scroll-next" title="Scroll right" aria-label="Scroll right"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg></button>
+          </div>
+        </div>
+        <div class="hscroll-track" id="artist-featured-track"></div>
+      </div>
+      <div id="artist-extra-shelves"></div>
       <div class="hscroll-section" id="artist-related">
         <div class="section-head">
           <div class="label">Related Artists</div>

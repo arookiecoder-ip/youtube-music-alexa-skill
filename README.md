@@ -40,7 +40,13 @@ flowchart LR
     Flask --> Browser
 ```
 
-The checked-in [Compose file](docker-compose.yml) currently puts `ytmusic` and `youtube-browser` in an **existing `gluetun` container's network namespace**. It does not create that VPN container. [Caddyfile](Caddyfile) targets `gluetun:5000`, `gluetun:5001` and `gluetun:6080`; Flask reaches the browser controller over loopback in that shared namespace. Caddy must reach `gluetun` on the external `web` network. This is not the older bridge-only `ytmusic:5000` arrangement described in historical setup notes.
+The [Compose file](docker-compose.yml) gives `ytmusic` and `youtube-browser` independent bridge networking. [Caddyfile.example](Caddyfile.example) reaches `ytmusic:5000`, `ytmusic:5001` and `youtube-browser:6080`; the browser controller is `http://youtube-browser:8765`. Application startup and incoming API traffic do not depend on Gluetun.
+
+Outbound Python, Alexa, Node/YouTube and Chromium requests use a private HTTP CONNECT gateway. It prefers the optional VPN endpoint, falls back to normal networking if connection setup fails within 1.5 seconds, and retries VPN after a 10-second cooldown. TLS remains end to end. Existing interrupted streams reconnect through the normal media retry/Range paths; the gateway does not replay commands or partially sent requests.
+
+Set `MUSICBOX_EGRESS_TOKEN` to a randomly generated secret in `.env` (see [.env.example](.env.example)). `docker compose up -d` works without a VPN. If an existing Gluetun container is available, enable the preferred endpoint with `docker compose --profile vpn up -d --no-deps musicbox-vpn-proxy`. Its private listener uses port 5000 inside Gluetun, which must be allowed from the Docker bridge. Do not publish that proxy port to the host. Music Box does not change the VPN configuration.
+
+Install [the lifecycle timer](scripts/musicbox-vpn-proxy.timer) and adapt [its service example](scripts/musicbox-vpn-proxy.service.example) to the checkout path and Docker-enabled service user to reattach the endpoint after Gluetun restarts or is recreated. The timer manages only `musicbox-vpn-proxy`; neither the application nor direct fallback depends on the timer. Copy the Music Box block from `Caddyfile.example` into your deployment Caddyfile and retain unrelated site blocks.
 
 For a different topology, update Compose network mode, browser-controller URL and Caddy upstreams together. Preserve unrelated site blocks already present in Caddy. The application architecture does not require changing the host's VPN routing during a routine code update.
 
@@ -108,7 +114,7 @@ Keep one authoritative Flask process. Locks, leases, queue decisions and provide
 | `YTMUSIC_AUTH_FILE` | Account browser headers; Compose uses `/data/headers_auth.json`. |
 | `YTDLP_COOKIES` | Cookie-file path also used by the streaming resolver; Compose mounts the root `cookies.txt` read-only. The legacy name does not mean normal playback invokes yt-dlp per song. |
 | `YT_BROWSER_CONTROL_TOKEN` | Same private controller token in Flask and the Chromium sidecar. |
-| `YT_BROWSER_SERVICE_URL` | Private browser-controller origin; checked-in VPN topology uses `http://127.0.0.1:8765`. |
+| `YT_BROWSER_SERVICE_URL` | Private browser-controller origin; Compose uses `http://youtube-browser:8765`. |
 | `AMAZON_DOMAIN` | Amazon account region, default `amazon.in`. |
 | `ALEXA_COOKIE_DIR` | Persisted Amazon session directory. |
 | `ALEXA_PROXY_BASE_URL`, `ALEXA_PROXY_PORT` | Public login-proxy origin and internal listener (default 5001). |

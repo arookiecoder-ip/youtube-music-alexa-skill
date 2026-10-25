@@ -3,8 +3,7 @@ services:
     build: ./flask-server
     container_name: ytmusic
     restart: unless-stopped
-    # should only use when the vpn is connected
-    network_mode: "container:gluetun"
+    networks: [web, musicbox-egress]
     env_file:
       - path: .env
         required: false
@@ -12,10 +11,13 @@ services:
       - DB_FILE=/data/data.db
       - YTDLP_COOKIES=/app/cookies.txt
       - YTMUSIC_AUTH_FILE=/data/headers_auth.json
-      #should use by default
-      # - YT_BROWSER_SERVICE_URL=http://youtube-browser:8765
-      #should only use if vpn is connected
-      - YT_BROWSER_SERVICE_URL=http://127.0.0.1:8765
+      - YT_BROWSER_SERVICE_URL=http://youtube-browser:8765
+      - HTTP_PROXY=http://musicbox-egress-internal:8890
+      - http_proxy=http://musicbox-egress-internal:8890
+      - HTTPS_PROXY=http://musicbox-egress-internal:8890
+      - https_proxy=http://musicbox-egress-internal:8890
+      - NO_PROXY=localhost,127.0.0.1,::1,ytmusic,youtube-browser,musicbox-egress,musicbox-egress-internal
+      - no_proxy=localhost,127.0.0.1,::1,ytmusic,youtube-browser,musicbox-egress,musicbox-egress-internal
       - YT_BROWSER_CONTROL_TOKEN=${YT_BROWSER_CONTROL_TOKEN:?set YT_BROWSER_CONTROL_TOKEN in .env}
       - ALEXA_PROXY_BEHIND_CADDY=1
     volumes:
@@ -27,10 +29,9 @@ services:
       # Without this volume, every rebuild/restart wipes it and forces a fresh
       # Amazon login.
       - ytmusic_alexa_cookies:/app/alexa_cookies
-  # should use when the vpn is not connected
-    # networks:
-    #   - web  
     depends_on:
+      musicbox-egress:
+        condition: service_healthy
       youtube-browser:
         condition: service_healthy
 
@@ -38,20 +39,53 @@ services:
     build: ./browser-auth
     container_name: youtube-browser
     restart: unless-stopped
-    #shouldnt use normally when the vps is not connected
-    network_mode: "container:gluetun"
+    networks: [web, musicbox-egress]
     environment:
       - YT_BROWSER_CONTROL_TOKEN=${YT_BROWSER_CONTROL_TOKEN:?set YT_BROWSER_CONTROL_TOKEN in .env}
+      - MUSICBOX_BROWSER_PROXY=http://musicbox-egress-internal:8890
       - YT_BROWSER_CAPTURE_TIMEOUT=${YT_BROWSER_CAPTURE_TIMEOUT:-120}
       - YT_BROWSER_LOGIN_TIMEOUT=${YT_BROWSER_LOGIN_TIMEOUT:-240}
       - YT_BROWSER_SUCCESS_DISPLAY=${YT_BROWSER_SUCCESS_DISPLAY:-12}
       - SCREEN_GEOMETRY=${YT_BROWSER_SCREEN_GEOMETRY:-1365x768x24}
     volumes:
       - ytmusic_chromium_profile:/profile
-      #shouldnt use when vpn is being used
-    # networks:
-    #   - web  
     shm_size: 512mb
+
+  # Independent direct-network gateway. VPN is preferred when its optional
+  # endpoint is reachable; absence/failure never blocks application startup.
+  musicbox-egress:
+    build: ./network-egress
+    image: musicbox-egress:local
+    restart: unless-stopped
+    networks:
+      web: {}
+      musicbox-egress:
+        aliases: [musicbox-egress-internal]
+    environment:
+      - MUSICBOX_EGRESS_TOKEN=${MUSICBOX_EGRESS_TOKEN:?set MUSICBOX_EGRESS_TOKEN in .env}
+      - NO_PROXY=musicbox-egress-internal,127.0.0.1,localhost
+      - no_proxy=musicbox-egress-internal,127.0.0.1,localhost
+      - EGRESS_BIND=musicbox-egress-internal
+      - VPN_UPSTREAM=gluetun:5000
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://musicbox-egress-internal:8890/health', timeout=2)"]
+      interval: 10s
+      timeout: 3s
+      start_period: 5s
+      retries: 3
+
+  # Explicit opt-in: a stopped/missing VPN cannot stop the other services.
+  # Uses the former application port already permitted by Gluetun's firewall.
+  musicbox-vpn-proxy:
+    profiles: [vpn]
+    build: ./network-egress
+    image: musicbox-egress:local
+    restart: unless-stopped
+    network_mode: container:gluetun
+    environment:
+      - MUSICBOX_EGRESS_TOKEN=${MUSICBOX_EGRESS_TOKEN:?set MUSICBOX_EGRESS_TOKEN in .env}
+      - EGRESS_MODE=vpn
+      - EGRESS_PORT=5000
 
   caddy:
     image: caddy:2
@@ -73,6 +107,8 @@ services:
       - ytmusic
 
 networks:
+  musicbox-egress:
+    internal: true
   web:
     name: web
 

@@ -229,20 +229,53 @@
 
   function renderAll(data, topSongsOnly) {
     if (!data || !data.artist) return;
+    var collections = document.getElementById('artist-releases-content');
+    if (collections) collections.hidden = true;
+    ['artist-hero', 'artist-top-songs'].forEach(function(id) { var el = document.getElementById(id); if (el) el.hidden = false; });
     renderHero(data.artist);
     renderTopSongs(data.topSongs, data.topSongsBrowseId, topSongsOnly);
     renderHscrollSection('artist-albums-track', data.albums, 'album');
     renderHscrollSection('artist-singles-track', data.singles, 'album');
     renderHscrollSection('artist-related-track', data.related, 'artist');
+    renderHscrollSection('artist-playlists-track', data.playlists, 'playlist');
+    renderHscrollSection('artist-featured-track', data.featured, 'playlist');
+    var extra = document.getElementById('artist-extra-shelves');
+    if (extra) {
+      extra.innerHTML = ''; extra.hidden = !!topSongsOnly;
+      (data.additionalShelves || []).forEach(function(shelf, index) {
+        if (!Array.isArray(shelf.items) || !shelf.items.length) return;
+        var section = document.createElement('div'); section.className = 'hscroll-section';
+        var head = document.createElement('div'); head.className = 'section-head';
+        var label = document.createElement('div'); label.className = 'label'; label.textContent = shelf.title;
+        head.appendChild(label); section.appendChild(head);
+        var track = document.createElement('div'); track.className = 'hscroll-track'; track.id = 'artist-extra-' + index;
+        section.appendChild(track); extra.appendChild(section);
+        renderHscrollSection(track.id, shelf.items, 'mixed');
+      });
+    }
     var sectionItems = {
       'artist-albums': data.albums,
       'artist-singles': data.singles,
+      'artist-playlists': data.playlists,
+      'artist-featured': data.featured,
       'artist-related': data.related
     };
-    ['artist-albums', 'artist-singles', 'artist-related'].forEach(function (id) {
+    ['artist-albums', 'artist-singles', 'artist-related', 'artist-playlists', 'artist-featured'].forEach(function (id) {
       var section = document.getElementById(id);
       // Do not leave a heading and arrow controls for an empty shelf.
       if (section) section.hidden = !!topSongsOnly || !Array.isArray(sectionItems[id]) || !sectionItems[id].length;
+      if (section && id !== 'artist-related') {
+        var old = section.querySelector('.artist-collection-all');
+        if (old) old.remove();
+        if (!section.hidden) {
+          var button = document.createElement('button');
+          button.type = 'button'; button.className = 'btn-ghost artist-collection-all'; button.textContent = 'View all';
+          button.addEventListener('click', function() {
+            window.navigateTo('#artist/' + encodeURIComponent(state._currentChannelId) + '?collection=' + id.slice('artist-'.length));
+          });
+          section.querySelector('.section-head').appendChild(button);
+        }
+      }
     });
     if (window.syncPageTitle) window.syncPageTitle();
   }
@@ -574,7 +607,7 @@
     }
   }
 
-  function renderHscrollSection(trackId, items, type) {
+  function renderHscrollSection(trackId, items, requestedType) {
     var track = document.getElementById(trackId);
     if (!track) return;
     if (!items || !items.length) {
@@ -586,15 +619,17 @@
     track.innerHTML = '';
     // let, not var: the click handler below closes over `item` per iteration.
     for (let i = 0; i < items.length; i++) {
-      let item = items[i];
+      let source = items[i];
+      let type = requestedType === 'mixed' ? source.kind || 'playlist' : requestedType;
+      let item = Object.assign({}, source, {browseId: source.playlistId || source.browseId, thumbnail: source.thumbnail || (source.thumbnails || []).slice(-1)[0]?.url || ''});
       var card = document.createElement('div');
-      card.className = 'hscroll-card' + (type === 'artist' ? ' related-artist-card' : '') + (type === 'album' ? ' album-card' : '');
-      if (type === 'album' && item.browseId) card.dataset.albumId = item.browseId;
+      card.className = 'hscroll-card' + (type === 'artist' ? ' related-artist-card' : '') + (type === 'playlist' ? ' playlist-card' : type === 'album' ? ' album-card' : '');
+      if (type !== 'artist' && item.browseId) card.dataset.albumId = item.browseId;
       var thumbUrl = '';
       var isRound = false;
       var title = '';
       var sub = '';
-      if (type === 'album') {
+      if (type !== 'artist') {
         thumbUrl = item.thumbnail || '';
         title = item.title || '';
         sub = item.year || '';
@@ -608,25 +643,40 @@
       var imgHtml = thumbUrl
         ? '<img src="' + escHtml(thumbUrl) + '" alt="" loading="lazy" onload="this.classList.add(\'loaded\')">'
         : '<svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor"><path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/></svg>';
-      var playBtnHtml = (type === 'album') ? '<button type="button" class="hscroll-play-btn" title="Play"><svg viewBox="0 0 24 24" fill="currentColor"><polygon points="8,5 19,12 8,19"/></svg></button>' : '';
+      var playBtnHtml = (type !== 'artist') ? '<button type="button" class="hscroll-play-btn" title="Play"><svg viewBox="0 0 24 24" fill="currentColor"><polygon points="8,5 19,12 8,19"/></svg></button>' : '';
       card.innerHTML = window.CollectionRenderer
         ? window.CollectionRenderer.renderCard({
-            cardClass: (type === 'artist' ? 'related-artist-card' : 'album-card'),
+            cardClass: (type === 'artist' ? 'related-artist-card' : type === 'playlist' ? 'playlist-card' : 'album-card'),
             imageHtml: imgHtml,
             round: isRound,
-            showPlay: type === 'album',
+            showPlay: type !== 'artist',
             title: title,
             subtitle: sub
           }).replace(/^<div class="hscroll-card[^>]*>/, '').replace(/<\/div>$/, '')
         : '<div class="hscroll-card-art' + (isRound ? ' round' : '') + '">' + imgHtml + playBtnHtml + '</div>' +
           '<div class="hscroll-card-title">' + escHtml(title) + '</div>' +
           (sub ? '<div class="hscroll-card-sub">' + escHtml(sub) + '</div>' : '');
-      if (type === 'artist' && item.browseId) {
+      if (type === 'track' && item.video_id) {
+        card.dataset.videoId = item.video_id;
+        card.removeAttribute('data-album-id');
+        card.addEventListener('click', function() { if (window.playFromQueue) window.playFromQueue(item); });
+      } else if (type === 'artist' && item.browseId) {
         card.addEventListener('click', function() {
           if (window.preloadNavigateArtist) window.preloadNavigateArtist(item.browseId);
           else window.navigateTo('#artist/' + encodeURIComponent(item.browseId));
         });
-      } else if (type === 'album' && item.browseId) {
+      } else if (type === 'playlist' && item.browseId) {
+        card.dataset.playlistId = item.browseId;
+        card.removeAttribute('data-album-id');
+        card.addEventListener('click', function(e) {
+          if (e.target.closest('.hscroll-play-btn')) {
+            e.stopPropagation();
+            if (window.playCollection) window.playCollection([], {playlistId: item.browseId});
+            else window.navigateTo('#playlist/' + encodeURIComponent(item.browseId));
+          } else if (window.preloadNavigatePlaylist) window.preloadNavigatePlaylist(item.browseId);
+          else window.navigateTo('#playlist/' + encodeURIComponent(item.browseId));
+        });
+      } else if (type !== 'artist' && item.browseId) {
         card.addEventListener('click', function(e) {
           if (e.target.closest('.hscroll-play-btn')) {
             e.stopPropagation();
@@ -718,6 +768,47 @@
     }
   }
 
+
+  async function loadArtistReleases(channelId, kind) {
+    var allowed = ['albums', 'singles', 'playlists', 'featured'];
+    if (!allowed.includes(kind)) return;
+    var token = ++state._artistLoadToken;
+    state._currentChannelId = channelId;
+    state._artistLoading = false;
+    showSkeleton(false);
+    var content = document.getElementById('artist-content');
+    Array.from(content.children).forEach(function(child) { child.hidden = child.id !== 'artist-releases-content'; });
+    var panel = document.getElementById('artist-releases-content');
+    var title = {albums:'Albums', singles:'Singles', playlists:'Playlists by artist', featured:'Featured on'}[kind];
+    panel.innerHTML = '<button type="button" class="btn-ghost artist-collection-back">Back to artist</button><h2>' + title + '</h2><div class="hscroll-track artist-release-grid" id="artist-release-grid"></div><button type="button" class="btn-ghost artist-collection-more">Load more</button><div role="status" class="artist-collection-status"></div>';
+    panel.querySelector('.artist-collection-back').onclick = function() { window.navigateTo('#artist/' + encodeURIComponent(channelId)); };
+    var items = [], offset = 0, busy = false;
+    var more = panel.querySelector('.artist-collection-more');
+    var status = panel.querySelector('.artist-collection-status');
+    async function nextPage() {
+      if (busy || token !== state._artistLoadToken) return;
+      busy = true; more.disabled = true; status.textContent = 'Loading…';
+      try {
+        var result = await window.api('/api/artist/' + encodeURIComponent(channelId) + '/releases?kind=' + kind + '&offset=' + offset + '&limit=30');
+        if (token !== state._artistLoadToken || !window.getRoute || window.getRoute() !== '#artist/' + encodeURIComponent(channelId) + '?collection=' + kind) return;
+        var seen = new Set(items.map(function(item) { return item.playlistId || item.browseId; }));
+        (result.items || []).forEach(function(item) { var id = item.playlistId || item.browseId; if (id && !seen.has(id)) { seen.add(id); items.push(item); } });
+        offset = result.next_offset;
+        renderHscrollSection('artist-release-grid', items, kind === 'albums' || kind === 'singles' ? 'album' : 'playlist');
+        panel.hidden = false;
+        more.hidden = !result.has_more;
+        status.textContent = items.length ? '' : 'No collections available';
+      } catch (error) {
+        if (token !== state._artistLoadToken) return;
+        status.textContent = error.message || 'Could not load collections'; more.textContent = 'Retry'; more.hidden = false;
+      } finally { busy = false; more.disabled = false; }
+    }
+    more.onclick = nextPage;
+    await nextPage();
+    if (window.syncPageTitle) window.syncPageTitle();
+  }
+
+  window.loadArtistReleases = loadArtistReleases;
   window.loadArtist = loadArtist;
   window.loadArtistSongs = loadArtistSongs;
 })();
