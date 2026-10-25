@@ -10,7 +10,7 @@ ROOT=Path(__file__).resolve().parents[2]
 @pytest.fixture
 def account_page():
     app=Flask(__name__,template_folder=str(ROOT/'templates'),static_folder=str(ROOT/'templates/static'))
-    calls=[];captured=[False]
+    calls=[];captured=[False];frame_errors=[0]
     @app.get('/accounts/<provider>')
     def account(provider):return render_template('account_signin.html',provider=provider)
     @app.get('/')
@@ -25,6 +25,8 @@ def account_page():
     def youtube(action):
         calls.append((action,request.get_json(silent=True)))
         if action=='surface' and request.method=='GET':
+            if 'frame_fail' in (request.referrer or '') and frame_errors[0]==0:
+                frame_errors[0]+=1;return jsonify(error='Browser is starting'),503
             import base64
             svg=b'<svg xmlns="http://www.w3.org/2000/svg" width="480" height="800"><rect width="480" height="800" fill="white"/></svg>'
             return jsonify(width=480,height=800,image='data:image/svg+xml;base64,'+base64.b64encode(svg).decode())
@@ -60,6 +62,13 @@ def test_youtube_touch_keyboard_capture_and_cancel(account_page):
     assert any(x.get('type')=='click' for x in events)
     assert any(x=={'type':'key','key':'Enter'} for x in events)
     assert any(action=='capture' for action,_ in calls)
+
+def test_cold_browser_start_is_loading_and_recovers_without_a_stale_error(account_page):
+    page,origin,_=account_page;page.goto(origin+'/accounts/youtube?frame_fail=1')
+    page.get_by_role('button',name='Continue to YouTube Music').click()
+    expect(page.locator('#frame')).to_have_attribute('data-width','480')
+    expect(page.locator('#status')).not_to_have_class('error')
+    expect(page.locator('#status')).to_contain_text('Complete sign-in')
 
 def test_mobile_ime_composition_is_sent_once_when_committed(account_page):
     page,origin,calls=account_page;page.goto(origin+'/accounts/youtube')
