@@ -80,13 +80,13 @@ class BrowserController:
         self.token = token or ""
         self.timeout = timeout
 
-    def call(self, path, method="GET"):
+    def call(self, path, method="GET", payload=None):
         if not self.base_url or not self.token:
             raise RuntimeError("Browser sidecar is not configured")
         req = urllib.request.Request(self.base_url + path, method=method,
                                      headers={"X-Control-Token": self.token,
                                               "Content-Type": "application/json"},
-                                     data=b"{}" if method != "GET" else None)
+                                     data=json.dumps(payload or {}).encode() if method != "GET" else None)
         try:
             with urllib.request.urlopen(req, timeout=self.timeout) as response:
                 return json.load(response)

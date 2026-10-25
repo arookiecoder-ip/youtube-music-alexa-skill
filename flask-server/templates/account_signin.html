@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>{{ 'Amazon' if provider == 'amazon' else 'YouTube Music' }} · Music Box</title><link rel="stylesheet" href="/static/css/account-signin.css"></head>
+<body data-provider="{{ provider }}"><main>
+<a class="back" href="/">← Back to Music Box</a>
+<header><span class="brand">MUSIC BOX · ACCOUNTS</span><h1>{{ 'Amazon' if provider == 'amazon' else 'YouTube Music' }}</h1><p id="intro">{{ 'Connect the Amazon account that owns your Echo devices.' if provider == 'amazon' else 'Sign in to the YouTube Music account you want to use for your library and recommendations.' }}</p></header>
+<section id="setup">
+<p class="notice">Your current account stays connected until the new sign-in is verified.</p>
+{% if provider == 'amazon' %}
+<form id="amazon-form" autocomplete="on"><label for="email">Amazon email</label><input id="email" name="amazon_email" type="email" autocomplete="username" required spellcheck="false" autocapitalize="none"><label for="password">Password</label><input id="password" name="amazon_password" type="password" autocomplete="current-password" required><button id="connect" class="primary">Continue to Amazon</button></form>
+{% else %}
+<button id="connect" class="primary">Continue to YouTube Music</button>
+{% endif %}
+</section>
+<p id="status" role="status" aria-live="polite"></p>
+<section id="browser" hidden>
+{% if provider == 'amazon' %}
+<iframe id="amazon-page" title="Amazon secure sign-in" referrerpolicy="same-origin"></iframe>
+{% else %}
+<div class="browser-tools"><button id="choose-account" type="button">Switch account</button><button id="keyboard" type="button">Keyboard</button><button id="tab" type="button">Next field</button><button id="enter" type="button">Enter</button></div>
+<div id="surface"><img id="frame" alt="YouTube Music sign-in browser" draggable="false"><input id="remote-keyboard" aria-label="Type into the selected sign-in field" type="password" autocomplete="off" autocapitalize="none" spellcheck="false"></div>
+<button id="capture" class="primary" type="button">Use this YouTube Music account</button>
+<p class="hint">Complete sign-in above, then confirm the account. To switch accounts, use the account menu in YouTube Music.</p>
+{% endif %}
+<button id="cancel" class="quiet" type="button">Cancel sign-in</button></section>
+<button id="retry" class="quiet" type="button" hidden>Try again</button>
+</main><script src="/static/js/account-signin.js"></script></body></html>

@@ -3661,3 +3661,5 @@ body.results-open .player-section {
     cursor: pointer;
   }
 }
+
+.alexa-controls-unavailable :is(.transport button,#pp-btn,[data-action="next"],[data-action="previous"],#mobile-np-play,#mobile-np-next,#mobile-np-previous,.progress-track,#volume,#mobile-np-volume,.queue-item,.np-queue-item){opacity:.4;cursor:not-allowed}.custom-select-option.logged-out{opacity:.45}

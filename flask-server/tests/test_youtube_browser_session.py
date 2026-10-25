@@ -101,9 +101,9 @@ class FlaskAuthorizationTests(unittest.TestCase):
             response = self.client.post("/api/youtube/browser-session/start", json={})
         cookie = response.headers.get("Set-Cookie", "")
         self.assertEqual(response.status_code, 200)
-        self.assertIn("ui=2", response.get_json()["url"])
+        self.assertEqual("/accounts/youtube", response.get_json()["url"])
         self.assertIn("HttpOnly", cookie)
-        self.assertIn("Path=/youtube-login/", cookie)
+        self.assertIn("Path=/;", cookie)
         self.assertIn("SameSite=Lax", cookie)
 
     def test_explicit_browser_controls_require_owner_session(self):
@@ -113,12 +113,22 @@ class FlaskAuthorizationTests(unittest.TestCase):
                 response = self.client.post(path, json={})
                 self.assertIn(response.status_code, (302, 401))
 
+    def test_old_lease_cannot_cancel_or_capture_a_newer_signin(self):
+        with mock.patch.object(self.server, "_logged_in", return_value=True), \
+             mock.patch.object(self.server._youtube_browser_sessions, "authorize", return_value=False), \
+             mock.patch.object(self.server._youtube_browser_sessions, "revoke") as revoke, \
+             mock.patch.object(self.server._youtube_browser_sessions, "request_capture") as capture:
+            self.assertEqual(self.client.post('/api/youtube/browser-session/stop',json={}).status_code,403)
+            self.assertEqual(self.client.post('/api/youtube/browser-session/capture',json={}).status_code,403)
+        revoke.assert_not_called();capture.assert_not_called()
+
     def test_owner_capture_proxies_without_exposing_control_token(self):
         status = {"state": "capture_requested", "available": True,
                   "refreshing": False, "reconnect_required": False,
                   "last_successful_renewal": None, "message": None,
                   "lease_expires_at": time.time() + 300}
         with mock.patch.object(self.server, "_logged_in", return_value=True), \
+             mock.patch.object(self.server._youtube_browser_sessions, "authorize", return_value=True), \
              mock.patch.object(self.server._youtube_browser_sessions, "request_capture",
                                return_value=status) as capture:
             response = self.client.post("/api/youtube/browser-session/capture", json={})

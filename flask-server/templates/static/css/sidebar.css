@@ -897,3 +897,12 @@ body.library-route #nav-library-btn::before {
 .profile-menu #logout:hover { background: #ff5a55; border-color: #ff5a55; color: #000; }
 
 .profile-menu .profile-menu-link { text-decoration: none; }
+
+/* Account controls use compact rows and readable, intrinsic-width status text. */
+.profile-menu{width:min(340px,calc(100vw - 24px));padding:18px;background:#191919;border-color:#383838;box-shadow:0 18px 56px #0009}
+.profile-menu-user{padding-bottom:16px}.profile-menu-user>div:last-child{min-width:0}
+.profile-menu-status>div{gap:16px;min-height:30px;margin:4px 0}.profile-menu-status strong{flex:1}
+.profile-menu-status span{width:auto;max-width:150px;flex:none;white-space:nowrap;letter-spacing:0;border:0;background:transparent!important;padding:0;font-size:12px;font-weight:500}
+.profile-menu button,.profile-menu .profile-menu-link{margin:0;min-height:44px;border:0;border-radius:4px;background:transparent;padding:10px 8px;font-weight:500;justify-content:flex-start;text-align:left}
+.profile-menu #logout{background:transparent;color:#ff9992;border-top:1px solid #333;border-radius:0;margin-top:10px;padding-top:16px}
+.profile-menu-trigger.amazon-disconnected{border:2px solid #f16f65;box-shadow:0 0 0 3px #f16f6514}.profile-menu-wrap:has(.amazon-disconnected) .profile-menu-avatar{border-color:#f16f65;color:#f16f65}

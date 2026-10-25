@@ -86,8 +86,8 @@ def _plain_chromium_command(enable_capture=False):
     """Build Chromium command, keeping interactive login free of CDP."""
     command = [
         CHROMIUM, f"--user-data-dir={PROFILE_DIR}", "--no-sandbox",
-        "--disable-dev-shm-usage", "--start-maximized", "--no-first-run",
-        "--hide-crash-restore-bubble",
+        "--disable-dev-shm-usage", "--window-size=480,900", "--window-position=0,0", "--no-first-run",
+        "--hide-crash-restore-bubble", "--test-type",
         # Keep cookie encryption identical across every launch.
         "--password-store=basic", "--use-mock-keychain",
     ]
@@ -121,7 +121,7 @@ def _manual_login(enable_capture=False):
     return True
 
 
-def _open_youtube_music():
+def _open_youtube_music(target="https://music.youtube.com"):
     """Navigate the visible plain Chromium window without a DevTools channel."""
     window_ids = subprocess.check_output(
         ["xdotool", "search", "--onlyvisible", "--class", "chromium"],
@@ -134,7 +134,7 @@ def _open_youtube_music():
         ["xdotool", "windowactivate", "--sync", window_id],
         ["xdotool", "key", "--window", window_id, "ctrl+l"],
         ["xdotool", "type", "--window", window_id, "--delay", "1",
-         "https://music.youtube.com"],
+         target],
         ["xdotool", "key", "--window", window_id, "Return"],
     )
     for command in commands:
@@ -412,3 +412,39 @@ def candidate_take():
         return jsonify({"error": "candidate_not_ready"}), 404
     _set_state("candidate_taken", message=None)
     return jsonify(candidate)
+
+
+@app.get("/interactive/frame")
+def interactive_frame():
+    if not _public_state()["interactive"]:
+        return jsonify({"error":"session_expired"}), 409
+    try:
+        from touch_browser import frame
+        response=jsonify(frame());response.headers['Cache-Control']='no-store';return response
+    except Exception:
+        return jsonify({"error":"browser_starting"}), 503
+
+
+@app.post("/interactive/input")
+def interactive_input():
+    if not _public_state()["interactive"]:
+        return jsonify({"error":"session_expired"}), 409
+    try:
+        from touch_browser import input_event
+        input_event(request.get_json(silent=True) or {})
+        return jsonify({"ok":True})
+    except ValueError:
+        return jsonify({"error":"invalid_input"}), 400
+    except Exception:
+        return jsonify({"error":"browser_unavailable"}), 503
+
+
+@app.post("/interactive/choose-account")
+def choose_account():
+    if not _public_state()["interactive"]:
+        return jsonify({"error":"session_expired"}),409
+    try:
+        _open_youtube_music("https://accounts.google.com/AccountChooser?continue=https%3A%2F%2Fmusic.youtube.com%2F&service=youtube")
+        return jsonify({"ok":True})
+    except Exception:
+        return jsonify({"error":"browser_unavailable"}),503

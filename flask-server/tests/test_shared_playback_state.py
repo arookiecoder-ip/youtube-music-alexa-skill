@@ -15,7 +15,7 @@ class SharedPlaybackErrors(unittest.TestCase):
         self.output = {'playback_output': 'alexa', 'output_token': 'lease-one'}
         self.state = dict(playing=False, title='Song', artist='Artist', thumbnail='', video_id='AAAAAAAAAAA',
                           playback_error={'type': 'timeout', 'message': 'Device did not respond'})
-        self.namespace = dict(_now_playing=self.state, _volume_by_serial={}, secrets=secrets,
+        self.namespace = dict(alexa_remote=SimpleNamespace(remote=SimpleNamespace(connection_state=True)), _now_playing=self.state, _volume_by_serial={}, secrets=secrets,
                               time=SimpleNamespace(time=lambda: self.now), _liked_version=0,
                               _playback_output=SimpleNamespace(snapshot=lambda: self.output),
                               _queue_version_locked=lambda: 1, _computed_position_ms=lambda: 0)

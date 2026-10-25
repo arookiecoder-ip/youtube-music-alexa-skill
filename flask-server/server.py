@@ -861,7 +861,7 @@ _SESSION_PATHS = ('/audio', '/get_radio', '/status', '/api/status', '/remote', '
                    '/api/youtube/browser-session/open-youtube',
                    '/api/youtube/browser-session/capture',
                    '/api/youtube/browser-session/authorize')
-_SESSION_PREFIXES = ('/api/status/', '/alexa/now_playing/', '/history/', '/api/playlists/', '/recommendations/',
+_SESSION_PREFIXES = ('/accounts/', '/api/status/', '/alexa/now_playing/', '/history/', '/api/playlists/', '/recommendations/',
                      '/api/artist/', '/api/album/', '/api/library/', '/api/explore/', '/api/home/',
                      '/api/track/', '/api/app/queue/')
 
@@ -1969,6 +1969,8 @@ def _np_snapshot(serial=None, retain_errors=False):
         s.update(playing=False, playback_confirmed=True, playback_processing=False)
     return {
         **output,
+        'amazon_connected': getattr(alexa_remote.remote, 'connection_state', None),
+        'remote_control_available': not (output['playback_output'] == 'alexa' and getattr(alexa_remote.remote, 'connection_state', None) is False),
         'playing': s['playing'], 'title': s['title'],
         'artist': s['artist'], 'artists': s.get('artists', []),
         'thumbnail': s['thumbnail'],
@@ -2310,6 +2312,8 @@ def app_playback_output():
             if not serial:
                 raise OutputConflict('Choose an Alexa device before moving active playback to the phone.')
             _cancel_pending_dispatch(serial)
+            if getattr(alexa_remote.remote, 'connection_state', None) is False:
+                return
             error = alexa_remote.remote.command(serial, 'pause')
             if error:
                 raise OutputConflict('The Echo could not pause. Playback stayed on Alexa.')
@@ -2368,7 +2372,8 @@ def _pause_echo_for_mobile(serial):
             device.get('serial') == serial and device.get('online') is False for device in devices)
     except Exception:
         pass  # Unknown presence still requires the normal pause acknowledgment.
-    if not offline and alexa_remote.remote.command(serial, 'pause'):
+    logged_out = getattr(alexa_remote.remote, 'connection_state', None) is False
+    if not offline and not logged_out and alexa_remote.remote.command(serial, 'pause'):
         raise OutputConflict('The Echo could not pause. Playback stayed on Alexa.')
     # Native PauseCommand is acknowledged by Amazon directly; the custom skill's
     # PlaybackStopped webhook can arrive seconds later and is not a handoff gate.
@@ -4764,10 +4769,16 @@ def _serve_youtube_stream(video_id, confirm=False, cancellable=False, meta=None)
             response.headers['Retry-After'] = '2'
         return response
 
+    echo_output_token = _playback_output.snapshot()['output_token'] if confirm else None
+
     def generate():
         first = True
         try:
             for block in relay.chunks():
+                if confirm:
+                    owner = _playback_output.snapshot()
+                    if owner['playback_output'] != 'alexa' or owner['output_token'] != echo_output_token:
+                        return
                 if (cancellable and _generation_superseded(generation)
                         and _stream_superseded(video_id)):
                     return
@@ -5967,6 +5978,13 @@ def alexa_init():
             with _np_lock:
                 result['now_playing'] = _np_snapshot(serial)
             result['serial'] = serial
+    else:
+        retained = _active_logged_out_echo()
+        if retained:
+            result['devices'] = [retained]
+            result['serial'] = retained['serial']
+            with _np_lock:
+                result['now_playing'] = _np_snapshot(retained['serial'])
     return jsonify(result)
 
 
@@ -6148,11 +6166,11 @@ def youtube_browser_session_start():
     if not _logged_in():
         return error_response("Owner session required.", 401)
     token, status = _youtube_browser_sessions.start(_browser_owner_id())
-    response = jsonify(dict(status, url="/youtube-login/vnc.html?ui=2&autoconnect=1&resize=scale&path=youtube-login/websockify"))
+    response = jsonify(dict(status, url="/accounts/youtube"))
     response.set_cookie(_youtube_browser_sessions.COOKIE_NAME, token,
                         max_age=int(_youtube_browser_sessions.lease_ttl),
                         secure=app.config['SESSION_COOKIE_SECURE'], httponly=True,
-                        samesite='Lax', path='/youtube-login/')
+                        samesite='Lax', path='/')
     return response
 
 
@@ -6168,10 +6186,10 @@ def youtube_browser_session_retry():
     if not _logged_in():
         return error_response("Owner session required.", 401)
     token, status = _youtube_browser_sessions.start(_browser_owner_id())
-    response = jsonify(dict(status, url="/youtube-login/vnc.html?ui=2&autoconnect=1&resize=scale&path=youtube-login/websockify"))
+    response = jsonify(dict(status, url="/accounts/youtube"))
     response.set_cookie(_youtube_browser_sessions.COOKIE_NAME, token,
                         max_age=int(_youtube_browser_sessions.lease_ttl), secure=app.config['SESSION_COOKIE_SECURE'],
-                        httponly=True, samesite='Lax', path='/youtube-login/')
+                        httponly=True, samesite='Lax', path='/')
     return response
 
 
@@ -6179,9 +6197,13 @@ def youtube_browser_session_retry():
 def youtube_browser_session_stop():
     if not _logged_in():
         return error_response("Owner session required.", 401)
+    if not _youtube_browser_sessions.authorize(_browser_owner_id(), request.cookies.get(_youtube_browser_sessions.COOKIE_NAME)):
+        # Completion already revokes its lease; a late Close must not stop a
+        # newer sign-in started on another device.
+        return error_response("Sign-in session expired.", 403)
     _youtube_browser_sessions.revoke()
     response = jsonify({"success": True})
-    response.delete_cookie(_youtube_browser_sessions.COOKIE_NAME, path='/youtube-login/')
+    response.delete_cookie(_youtube_browser_sessions.COOKIE_NAME, path='/')
     return response
 
 
@@ -6189,6 +6211,10 @@ def youtube_browser_session_stop():
 def youtube_browser_session_open_youtube():
     if not _logged_in():
         return error_response("Owner session required.", 401)
+    if not _youtube_browser_sessions.authorize(_browser_owner_id(), request.cookies.get(_youtube_browser_sessions.COOKIE_NAME)):
+        # Completion already revokes its lease; a late Close must not stop a
+        # newer sign-in started on another device.
+        return error_response("Sign-in session expired.", 403)
     try:
         return jsonify(_youtube_browser_sessions.open_youtube())
     except Exception:
@@ -6199,6 +6225,10 @@ def youtube_browser_session_open_youtube():
 def youtube_browser_session_capture():
     if not _logged_in():
         return error_response("Owner session required.", 401)
+    if not _youtube_browser_sessions.authorize(_browser_owner_id(), request.cookies.get(_youtube_browser_sessions.COOKIE_NAME)):
+        # Completion already revokes its lease; a late Close must not stop a
+        # newer sign-in started on another device.
+        return error_response("Sign-in session expired.", 403)
     try:
         return jsonify(_youtube_browser_sessions.request_capture()), 202
     except Exception:
@@ -6212,13 +6242,79 @@ def youtube_browser_session_authorize():
         return Response(status=401)
     return Response(status=204)
 
+@app.get("/accounts/<provider>")
+def account_signin_page(provider):
+    if not _logged_in():
+        return redirect('/login')
+    if provider not in ('amazon', 'youtube'):
+        abort(404)
+    return _no_store(app.make_response(render_template('account_signin.html', provider=provider)))
+
+
+@app.post('/api/youtube/browser-session/choose-account')
+def youtube_browser_choose_account():
+    if not _logged_in():
+        return error_response('Owner session required.',401)
+    if not _youtube_browser_sessions.authorize(_browser_owner_id(), request.cookies.get(_youtube_browser_sessions.COOKIE_NAME)):
+        return error_response('Sign-in session expired.',403)
+    try:
+        return jsonify(_youtube_browser_sessions.controller.call('/interactive/choose-account','POST'))
+    except Exception:
+        return error_response('Sign-in browser is not ready.',503)
+
+
+@app.route('/api/youtube/browser-session/surface', methods=['GET', 'POST'])
+def youtube_browser_surface():
+    if not _logged_in():
+        return error_response('Owner session required.', 401)
+    token=request.cookies.get(_youtube_browser_sessions.COOKIE_NAME)
+    if not _youtube_browser_sessions.authorize(_browser_owner_id(), token):
+        return error_response('Sign-in session expired. Start again.', 403)
+    try:
+        path='/interactive/frame' if request.method == 'GET' else '/interactive/input'
+        data=_youtube_browser_sessions.controller.call(path, request.method,
+            payload=request.get_json(silent=True) or {}) if request.method == 'POST' else _youtube_browser_sessions.controller.call(path)
+        return _no_store(app.make_response(jsonify(data)))
+    except Exception:
+        return error_response('Sign-in browser is not ready. Try again.', 503)
+
+
+def _active_logged_out_echo():
+    output = _playback_output.snapshot()
+    if output['playback_output'] != 'alexa' or getattr(alexa_remote.remote, 'connection_state', None) is not False:
+        return None
+    current = _get_now_playing()
+    serial = output.get('output_serial')
+    if not serial or not current.get('video_id') or not (current.get('playing') or current.get('playback_processing') or (current.get('playback_confirmed') and not current.get('_alexa_finished_token'))):
+        return None
+    raw = next((d for d in getattr(alexa_remote.remote, '_devices_raw', []) if d.get('serialNumber') == serial), {})
+    return {'serial':serial, 'name':raw.get('accountName') or 'Alexa', 'online':True, 'logged_out':True, 'controllable':False}
+
+
+@app.before_request
+def guard_logged_out_echo_controls():
+    path=request.path.rstrip('/')
+    controls={'/alexa/command','/alexa/seek','/alexa/play','/alexa/play_queue','/alexa/shuffle_queue',
+              '/alexa/queue_add','/alexa/queue_remove','/alexa/queue_reorder','/alexa/clear','/api/app/queue'}
+    if request.method == 'POST' and path in controls:
+        out=_playback_output.snapshot()
+        body=request.get_json(silent=True) or {}
+        target=str(body.get('serial') or '')
+        physical_target=target and not target.startswith('mobile:') and target != 'phone'
+        if getattr(alexa_remote.remote, 'connection_state', None) is False and (physical_target or out['playback_output']=='alexa'):
+            return error_response('Sign in to Amazon to control Alexa, or choose another playback device.',409,code='amazon_login_required')
+
+
 @app.route("/alexa/devices/", methods=["GET"])
 def alexa_devices():
     refresh = request.args.get("refresh") == "1"
     devices, error = alexa_remote.remote.devices(refresh=refresh)
     if error:
+        retained = _active_logged_out_echo()
+        if getattr(alexa_remote.remote, 'connection_state', None) is False:
+            return jsonify({'devices':[retained] if retained else [], 'amazon_connected':False})
         return error_response(error, 502)
-    return jsonify({'devices': devices})
+    return jsonify({'devices': devices, 'amazon_connected':True})
 
 
 @app.route("/alexa/volume/", methods=["GET"])

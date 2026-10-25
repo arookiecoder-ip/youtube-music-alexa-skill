@@ -85,4 +85,17 @@ class StreamRoutes(unittest.TestCase):
         self.assertEqual(server._youtube_stream.current.video,before)
 
 
+
+    def test_echo_stream_closes_after_same_song_handoff_without_generation_change(self):
+        owner={'playback_output':'alexa','output_token':'echo-token'}
+        with server.app.test_request_context('/proxy/?video_id='+VID), mock.patch.object(server._playback_output,'snapshot',side_effect=lambda:dict(owner)), mock.patch.object(server,'_confirm_stream_delivery'), mock.patch.object(server._youtube_stream.current,'activate'):
+            response=server._serve_youtube_stream(VID,confirm=True,cancellable=True)
+            chunks=iter(response.response)
+            self.assertEqual(next(chunks),b'audio')
+            owner.update(playback_output='phone',output_token='phone-token')
+            self.assertEqual(list(chunks),[])
+            response.close()
+        self.assertTrue(self.upstream.closed)
+        self.release.assert_called_once()
+
 if __name__=='__main__':unittest.main()

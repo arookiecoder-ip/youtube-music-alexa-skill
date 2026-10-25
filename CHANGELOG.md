@@ -6,6 +6,10 @@ This file summarizes behavior changes, explicitly records superseded work and li
 
 ## Unreleased
 
+- Replace the inline account form and desktop VNC sign-in UI with dedicated responsive account pages and a leased touch/keyboard browser surface. Add explicit YouTube account selection and preserve existing Amazon credentials until a replacement verifies.
+- Show a red profile outline for disconnected Amazon sessions. Keep voice-started Alexa playback visible as read-only, block transport/queue mutations with an actionable message, and retain a logged-out device entry until handoff.
+- Release signed-out Echo ownership without requiring an unavailable Amazon pause and fence open Echo streams by output token, including same-song handoffs. Already buffered Echo audio still requires Amazon access to stop immediately.
+
 - Preserve saved Amazon remote-control credentials when AlexaPy resets a failed restore attempt; explicit logout still removes them. Voice-skill progress is independent of this remote-control session. Remove the empty-device discovery toast.
 
 - Atomically validate and commit Alexa buffered starts against the live queue, retain deletions across duplicate events and backend restarts, and prevent stale corrections from cancelling newer manual selections. Cover deletion at the final-second boundary followed by a new song selection.

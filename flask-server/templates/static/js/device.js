@@ -66,10 +66,12 @@
       const item = document.createElement('div');
       item.className = 'custom-select-option' + (opt.selected ? ' selected' : '');
       item.dataset.value = opt.value;
+      item.classList.toggle('logged-out', opt.dataset.loggedOut === '1');
       const isOnline = opt.dataset.online !== '0';
       item.innerHTML = (opt.value ? '<span class="cs-dot ' + (isOnline ? 'online' : 'offline') + '"></span>' : '') +
         window.escHtml(opt.textContent);
       item.addEventListener('click', () => {
+        if (opt.dataset.loggedOut === '1') { toast('Sign in to Amazon to control Alexa.', 'error'); return; }
         deviceEl.value = opt.value;
         deviceEl.dispatchEvent(new Event('change'));
         closeDropdown();
@@ -236,7 +238,8 @@
     for (const d of devices) {
       const o = document.createElement('option');
       o.value = d.serial;
-      o.textContent = d.name + (d.online ? '' : ' (offline)');
+      o.textContent = d.name + (d.logged_out ? ' (logged out)' : (d.online ? '' : ' (offline)'));
+      o.dataset.loggedOut = d.logged_out ? '1' : '0';
       o.dataset.online = d.online ? '1' : '0';
       deviceEl.appendChild(o);
     }
@@ -314,14 +317,15 @@
       showControls(!!s.logged_in);
       if (!s.logged_in) {
         if (window.browserPlayback) {
-          window._applyDevices([], savedSerial);
+          window._applyDevices(data.devices || [], savedSerial || data.serial);
+          if (data.now_playing && window.handleNpUpdate) window.handleNpUpdate(data.now_playing);
           if (window.connectSSE) window.connectSSE();
         } else toast('Not connected to Amazon.', 'error');
         return;
       }
 
       const ok = window._applyDevices(data.devices || [], savedSerial || data.serial);
-      if (!ok) { toast('No compatible devices found.', 'error'); return; }
+      if (!ok) return;
 
       if (data.now_playing && window.handleNpUpdate) {
         window.handleNpUpdate(data.now_playing);

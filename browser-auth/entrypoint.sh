@@ -2,7 +2,7 @@
 set -eu
 
 mkdir -p "${CHROME_USER_DATA_DIR:-/profile}"
-Xvfb "${DISPLAY:-:99}" -screen 0 "${SCREEN_GEOMETRY:-1365x768x24}" -nolisten tcp &
+Xvfb "${DISPLAY:-:99}" -screen 0 "${SCREEN_GEOMETRY:-1920x1080x24}" -nolisten tcp &
 # Xvfb starts asynchronously. Do not let x11vnc exit permanently while the
 # display socket is still being initialized.
 python - <<'PY'
