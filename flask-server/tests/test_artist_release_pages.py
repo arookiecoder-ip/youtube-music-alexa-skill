@@ -101,7 +101,10 @@ class ReleaseEndpointTests(unittest.TestCase):
         self.client = Mock()
         self.namespace = {'asyncio': asyncio, 'jsonify': jsonify, 'request': request,
             '_detail_id_has_known_shape': lambda *a: True, '_jam_guest': lambda: False,
-            '_get_ytmusic_home': lambda: self.client, 'api_get_artist': self.artist, 'logger': Mock()}
+            '_get_ytmusic_home': lambda: self.client,
+            '_catalog_client': lambda: self.client,
+            '_signed_in_catalog_client': lambda: self.client,
+            'api_get_artist': self.artist, 'logger': Mock()}
         exec(compile(ast.Module(body=[route], type_ignores=[]), str(source), 'exec'), self.namespace)
         self.app = Flask(__name__)
 

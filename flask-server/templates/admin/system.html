@@ -3,7 +3,7 @@
 <div class="page-head">
   <div>
     <h1>Health &amp; backups</h1>
-    <p>Runtime state for the multi-user database, email delivery and manual backups. The single-owner application keeps its own database.</p>
+    <p>Runtime state for the multi-user database, email delivery and manual backups.</p>
   </div>
   <div class="btn-row">
     <a class="btn ghost" href="{{ base_path }}/api/health/">Health JSON</a>
@@ -14,7 +14,7 @@
   <div class="banner">
     <span>⚑</span>
     <span>
-      <strong>Bootstrap owner created this boot.</strong>
+      <strong>Bootstrap account created.</strong>
       {% if bootstrap.generated_password %}
         The generated password is in <span class="mono">{{ bootstrap.password_file or "(not writable — check container logs)" }}</span>.
         Change it and delete the file.
@@ -80,9 +80,7 @@
         {% if mail_last.detail %} — {{ mail_last.detail }}{% endif %}
       </p>
     {% endif %}
-    {% if admin_user.role == 'owner' %}
-      <div class="section-divider"></div>
-      <form class="stack" method="post" action="{{ base_path }}/system/test-email/">
+    <form class="stack" method="post" action="{{ base_path }}/system/test-email/">
         <input type="hidden" name="_csrf" value="{{ csrf_token }}">
         <div class="field">
           <label for="test-email">Send a test email to</label>
@@ -93,19 +91,16 @@
           <button class="btn primary" type="submit">Send test email</button>
         </div>
       </form>
-    {% endif %}
   </div>
 </div>
 
 <div class="card flush">
   <div class="card-head">
     <h2>Backups</h2>
-    {% if admin_user.role == 'owner' %}
-      <form method="post" action="{{ base_path }}/system/backup/">
+    <form method="post" action="{{ base_path }}/system/backup/">
         <input type="hidden" name="_csrf" value="{{ csrf_token }}">
         <button class="btn small primary" type="submit">Create backup now</button>
       </form>
-    {% endif %}
   </div>
   {% if backups %}
     <div class="table-wrap">

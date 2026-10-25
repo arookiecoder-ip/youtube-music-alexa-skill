@@ -57,6 +57,7 @@ def _install_stubs():
                         type(attr, (), {"__init__": lambda self, *a, **kw: None}))
             ybs.browser_client_is_signed_in = lambda *a, **kw: False
             ybs.promote_browser_headers = lambda *a, **kw: None
+            ybs.normalize_browser_headers = lambda value: value
             sys.modules["youtube_browser_session"] = ybs
 
 
@@ -78,7 +79,7 @@ class PrefetchMode(unittest.TestCase):
         return self.app.get('/audio/?'+query, headers=self.headers, **kwargs)
 
     def test_prefetch_prepares_only_a_url_and_never_opens_audio(self):
-        with mock.patch.object(server, '_ensure_audio_ready_for_play') as prepare, mock.patch.object(server._youtube_stream,'open') as audio:
+        with mock.patch.object(server, '_ensure_audio_ready_for_play') as prepare, mock.patch.object(server._youtube_stream_for(),'open') as audio:
             r=self.get('video_id='+MISS+'&prefetch=1')
             self.assertEqual(r.status_code,202);self.assertTrue(r.json['streaming'])
             prepare.assert_called_once_with(MISS,prefetch=True);audio.assert_not_called()
@@ -89,7 +90,7 @@ class PrefetchMode(unittest.TestCase):
             self.assertEqual(r.status_code,200);self.assertIn('audio_url',r.json);prepare.assert_not_called()
 
     def test_prefetch_precedes_wait_without_touching_current(self):
-        current=server._youtube_stream.current
+        current=server._youtube_stream_for().current
         before=current.video
         with mock.patch.object(server,'_ensure_audio_ready_for_play') as prepare:
             r=self.get('video_id='+MISS+'&wait=1&prefetch=1')

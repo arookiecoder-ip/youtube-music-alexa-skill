@@ -90,6 +90,7 @@ def _install_stubs():
                         type(attr, (), {"__init__": lambda self, *a, **kw: None}))
             ybs.browser_client_is_signed_in = lambda *a, **kw: False
             ybs.promote_browser_headers = lambda *a, **kw: None
+            ybs.normalize_browser_headers = lambda value: value
             sys.modules["youtube_browser_session"] = ybs
 
 
@@ -176,7 +177,7 @@ class _BaseScenario(unittest.TestCase):
         # and the wrapper `_ensure_audio_ready_for_play` flow into the same
         # recorder, so a regression that swaps one for the other still hits
         # the test's asserts.
-        self._patch(server._youtube_stream, 'resolve',
+        self._patch(server._youtube_stream_for(), 'resolve',
                     self._record_download)
         self._patch(server, '_ensure_audio_ready_for_play',
                     lambda video_id, wait=False, generation=None,

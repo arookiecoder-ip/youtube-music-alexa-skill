@@ -34,7 +34,7 @@ class ScopedAudioIntegrationTests(unittest.TestCase):
         from current_audio import CurrentAudio
         current = CurrentAudio(); self.addCleanup(current.close); current.activate(VID)
         current.write(current.ticket(VID), '"audio"', 1000, 0, b'audio-data'*100)
-        with patch.object(server._youtube_stream, 'current', current):
+        with patch.object(server._youtube_stream_for(), 'current', current):
             response = self.client.get('/audio/?video_id=' + VID, headers=headers)
             self.assertEqual(response.status_code, 206)
             self.assertEqual(response.data, b'audio-dat')

@@ -91,7 +91,13 @@ origin `https://testalexa.synthora.in` through Cloudflare Full (non-strict).
 | Admin pages | dashboard, users, audit, system and account all `200` |
 | User lifecycle via UI | create → detail → edit → audit event → delete, all verified |
 | Owner app | `POST /login/` `200`; `/home` and `/api/status` reachable |
-| Test email | **System → Send test email** wrote one `.eml` to the outbox; file removed after inspection |
+| Test email | **System → Send test email** delivered through the Brevo relay to a real external mailbox |
+| Verify link | `GET /admin/verify-email/<token>` → `200 Email verified`, `email_verified=1` in `users` |
+| Password reset | request endpoint sent the email; `POST /admin/reset-password/<token>` → sign-in with the new password reached `Dashboard` |
+| Magic link | `GET /admin/magic/<token>` → `302 → /admin/`; dashboard and users pages `200` on a fresh cookie jar |
+| Deleted account | sign-in rejected (`401`) after deletion; tokens and sessions purged |
+| Player account login | `POST /login/` with a `user`-role account → `200 {"ok":true,"player":…}`; `/` and `/remote/` `200`; `/alexa/search/` `200` |
+| Player restrictions | `/history/`, `/api/library/`, `/api/playlists/`, `/alexa/proxy_check/` → `401`; owner login unchanged |
 | TLS | public ACME certificate issued over HTTP-01 |
 | Firewall | `musicbox-firewall.service` enabled and active |
 
@@ -107,23 +113,79 @@ code changed on this branch.
 
 ## In flight / pending
 
-- [ ] Configure SMTP for `synthora.in` (`MULTIUSER_SMTP_*`,
-      `MULTIUSER_MAIL_FROM`). Until then, links go to the local outbox.
+- [x] Configure SMTP for `synthora.in` — Brevo relay, `587`/STARTTLS,
+      sender `noreply@synthora.in`; login and delivery verified from the container.
 - [ ] Set the owner's real email from **My account → Profile** (or change the
       bootstrap `MULTIUSER_ADMIN_EMAIL`) and verify it before signing out.
-- [ ] Run invite → verify → reset → magic-link once against a real mailbox.
+- [x] Run verification → reset → magic-link against a real mailbox (disposable
+      account, then deleted). Invitations are still unexercised.
 - [ ] Commit and push both `feat/multi-user` branches.
-- [ ] Phase 2: scope playback data and add per-user YouTube/Amazon linking.
+- [x] Phase 2.0 (egalitarian rewrite): every account signs in to the player at
+      `/login/` like the owner; the owner/player split and
+      `MULTIUSER_PLAYER_LOGIN` are gone. See `PHASE2-PER-USER.md`.
+- [x] Phase 2.1 (core): `_bind_player_identity()` resolves a request to
+      `owner`, `user:<id>` (account) or the jam host (guest); `_now_playing`
+      and `_np_lock` are `player_state.py` proxies over that identity, so each
+      account has its own queue. Verified live on testalexa (user queue vs
+      owner queue diverge; jam guest adds land in the host's queue).
+- [x] Phase 2.1 (jam): `jam_tokens` carries `user_id`; opening/stopping a jam
+      only touches the caller's identity, so accounts run their own jams in
+      parallel with the owner's.
+- [x] Phase 2.1b: `playback_snapshot` is keyed by identity (the legacy single row
+      migrates to `owner`), the persistence writer queues one coalesced save per
+      identity and captures the caller's identity in `submit()` (its worker thread
+      never inherits the request context), and `_playback_output`,
+      `_volume_by_serial` and `_alexa_volume_grace` resolve per identity.
+      Verified live: an account claimed phone output while the owner stayed on
+      Alexa, each wrote its own queue, and both came back through a container
+      restart without overwriting each other.
+- [x] Phase 2.2: per-user YouTube Music. `YouTubeCredentialStore` keeps the
+      legacy auth file for `owner` and one JSON per account; `YTMusic` clients,
+      the home feed cache, listen recording, the download-cookie jar, the
+      `yt-dlp` node pool and the background audio pool are all keyed by
+      identity; the capture sidecar gets a per-account Chromium profile and
+      refuses a second concurrent sign-in with `409`. An account without linked
+      YouTube gets the public catalog instead of the owner's session. Verified
+      live on testalexa (owner captured into base `/profile`, a disposable
+      account into `/profile/<uuid>`, second start refused `409`, jar state
+      differed per account; account and profile removed afterwards).
+- [x] Phase 2.3: per-user Amazon/Alexa session and Echo devices. `AlexaRemote`
+      takes its own `cookie_dir`, and `alexa_remote.remote` is a per-identity
+      proxy: the owner keeps the legacy directory (so the persisted cookie in the
+      `ytmusic_alexa_cookies` volume stays valid) and each account gets
+      `ALEXA_COOKIE_DIR/accounts/user_<id>`, with its own event loop, device list,
+      volume and queue sync. Sign-out deletes only that identity's files. The
+      interactive login proxy still binds one port server-wide, so a second
+      concurrent sign-in is refused with `409` and the claim is reclaimed once an
+      abandoned login stops polling. Verified live on testalexa (two disposable
+      accounts each answered *"Not signed in"* on `/alexa/status/`, first login
+      `200` / second `409` / retry after sign-out `200`, sign-out removed only its
+      own `.storage`; accounts and directories removed afterwards).
+- [ ] Phase 2.3b: voice-skill routing per account. The Lambda still calls this
+      server as the install owner, so "Alexa, play … on Music Box" reaches the
+      owner's queue and devices; per-account Echo control happens from the web
+      remote. Needs skill account linking, which stays a non-goal for Phase 2.
+- [ ] Purge per-identity artifacts on account deletion. `delete_user` wipes the
+      encrypted credential rows, but the YouTube auth file, download-cookie jar,
+      Chromium profile directory, `ALEXA_COOKIE_DIR/accounts/user_<id>` and
+      `playback_snapshot` row of a deleted account survive on the data volume.
+- [ ] Phase 2.4: `user_id` on history, likes and playlist tables.
 
 ## Known limitations (by design in Phase 1)
 
-1. **No per-user playback isolation.** All users still drive the same
-   single-owner playback state. The admin panel manages identities only.
+1. **One Amazon login at a time.** Queue, now-playing, output lease, durable
+   snapshot, the YouTube layer and (since 2.3) the Amazon session and Echo devices
+   are per identity. What is still server-wide is the interactive login proxy's
+   port: while one account is mid-sign-in, another gets `409` until it finishes or
+   goes five minutes without polling. Voice commands still reach the owner's
+   devices (see 2.3b).
 2. **SQLite and in-process state.** One authoritative container. Do not scale
    replicas until Phase 5 (PostgreSQL + Redis) is done.
-3. **Email delivery is not configured.** The outbox is private (`0700`/`0600`)
-   but still contains plaintext one-time links. Configure SMTP or delete old
-   files; do not expose the data volume.
+3. **Email delivery goes through one shared relay.** Mail is sent as
+   `noreply@synthora.in` via Brevo; per-user sender identities and bounce
+   handling are out of scope for Phase 1. The outbox remains the fallback when
+   SMTP is unset, and it holds plaintext one-time links — never expose the data
+   volume.
 4. **No admin 2FA enrollment UI yet.** Schema and login model support TOTP;
    enrollment arrives in Phase 4.
 5. **Existing `/login/` logout clears the whole Flask session**, which also
@@ -133,8 +195,10 @@ code changed on this branch.
    yet enforced on the first admin session.
 7. **Rate limits are per process.** Correct for the current one-container
    deployment, insufficient after scale-out.
-8. **Email delivery is outbox-only on this host.** The live checks cover pages,
-   identity CRUD and the existing app, not delivery to a real mailbox.
+8. **Email flows verified on a disposable account only.** Verification, password
+   reset and magic-link sign-in were exercised end to end against a real mailbox
+   and the account was deleted afterwards. Invitations, and the same flows on a
+   long-lived owner account, are still unexercised.
 
 ## Verification commands
 
@@ -160,8 +224,7 @@ PY
 
 ## Next actions
 
-1. Configure SMTP for `synthora.in` and send the **System → Send test email**
-   check.
-2. Set and verify the owner email **before** signing out; keep a second owner.
-3. Run through invite → verify → reset → magic-link once with real email.
-4. Begin Phase 2 data scoping with a production-copy migration rehearsal.
+1. Set and verify a real email address on the owner (and on the second admin)
+   **before** signing out; keep a second owner.
+2. Run through invite → verify → reset → magic-link once with real email.
+3. Begin Phase 2 data scoping with a production-copy migration rehearsal.

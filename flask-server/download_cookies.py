@@ -108,12 +108,12 @@ def status(path, configure_command, force=False):
         return dict(result)
 
 
-def replace(raw, configure_command):
+def replace(raw, configure_command, destination=None):
     if not isinstance(raw, str) or not raw.strip():
         raise ValueError('Paste cookies or choose a cookies.txt file.')
     if len(raw.encode('utf-8')) > MAX_BYTES:
         raise ValueError('Cookie export must be smaller than 128 KB.')
-    destination = saved_path()
+    destination = Path(destination) if destination else saved_path()
     destination.parent.mkdir(parents=True, exist_ok=True)
     # Same filesystem ensures promotion is atomic. Failed candidates never replace the live jar.
     with _exclusive_probe():

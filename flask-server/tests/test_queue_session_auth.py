@@ -10,7 +10,8 @@ class QueueSessionAuthTests(unittest.TestCase):
     def setUp(self):
         source = Path(__file__).resolve().parents[1] / 'server.py'
         names = {'_SESSION_PATHS', '_SESSION_PREFIXES', '_API_PATH_ROOTS',
-                 '_is_web_session_path', '_is_api_path', '_valid_key_supplied', 'require_api_key'}
+                 '_is_web_session_path', '_is_api_path', '_valid_key_supplied', 'require_api_key',
+                 '_JAM_PATHS', '_JAM_PUBLIC_GET_PREFIXES', '_jam_request_allowed'}
         nodes = []
         for node in ast.parse(source.read_text()).body:
             if isinstance(node, ast.FunctionDef) and node.name in names:
@@ -24,7 +25,8 @@ class QueueSessionAuthTests(unittest.TestCase):
                  'jsonify': jsonify, 'hmac': hmac, 'API_KEY': 'test-machine-key',
                  '_ensure_db': lambda: None, '_is_spa_document_path': lambda path: False,
                  '_PUBLIC_PATHS': (), '_PUBLIC_PREFIXES': (),
-                 '_logged_in': lambda: bool(session.get('owner')), '_jam_guest': lambda: False}
+                 '_logged_in': lambda: bool(session.get('owner')), '_jam_guest': lambda: False,
+                 "_player_logged_in": lambda: bool(session.get('player'))}
         exec(compile(ast.Module(body=nodes, type_ignores=[]), str(source), 'exec'), scope)
         self.is_session_path = scope['_is_web_session_path']
         # A no-op handler proves the middleware passed without queue side effects.
@@ -33,6 +35,11 @@ class QueueSessionAuthTests(unittest.TestCase):
         self.app.add_url_rule('/api/app/output/', 'output_probe',
                               lambda: jsonify(ok=True), methods=['GET', 'POST'], strict_slashes=False)
         self.app.add_url_rule('/api/app/devices/', 'devices_probe', lambda: jsonify(ok=True), methods=['GET', 'POST'], strict_slashes=False)
+        # Phase 2.0 player accounts are authorized by the Jam guest allow-list.
+        self.app.add_url_rule('/alexa/command/', 'command_probe',
+                              lambda: jsonify(ok=True), methods=['POST'], strict_slashes=False)
+        self.app.add_url_rule('/alexa/now_playing/', 'now_playing_probe',
+                              lambda: jsonify(ok=True), methods=['GET'], strict_slashes=False)
         self.client = self.app.test_client()
 
     def test_owner_json_queue_post_accepts_both_path_forms(self):
@@ -81,6 +88,14 @@ class QueueSessionAuthTests(unittest.TestCase):
     def test_lookalike_paths_are_not_authorized_as_queue(self):
         self.assertFalse(self.is_session_path('/api/app/queue-unsafe'))
         self.assertFalse(self.is_session_path('/api/app/queues'))
+
+    def test_legacy_player_session_grants_nothing(self):
+        # The owner/player split is gone: every account is a full user, so a
+        # stale 'player' session key must not authorize any surface.
+        with self.client.session_transaction() as saved:
+            saved['player'] = True
+        self.assertEqual(self.client.post('/alexa/command/', json={}).status_code, 401)
+        self.assertEqual(self.client.get('/alexa/now_playing/').status_code, 401)
 
 
 if __name__ == '__main__':

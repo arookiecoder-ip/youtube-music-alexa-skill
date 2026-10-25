@@ -13,11 +13,12 @@ class ProfileStartupTests(unittest.TestCase):
         browser = {'available': True, 'refreshing': False, 'state': 'ready', 'reconnect_required': False, 'last_successful_renewal': 0}
         namespace = {'app': app, 'request': request, 'jsonify': jsonify,
             'alexa_remote': SimpleNamespace(remote=SimpleNamespace(status=lambda: {'logged_in': True})),
-            '_get_ytmusic_home': lambda: SimpleNamespace(auth_type='BROWSER'),
+            '_current_identity': lambda: 'owner',
+            '_get_ytmusic_home': lambda identity=None: SimpleNamespace(auth_type='BROWSER'),
             '_ytmusic_client_is_authenticated': lambda yt: True,
-            'Supporting': SimpleNamespace(get_ytdlp_cookies_file=lambda: '/cookies.txt'),
+            'Supporting': SimpleNamespace(get_ytdlp_cookies_file=lambda identity=None: '/cookies.txt'),
             'download_cookies': SimpleNamespace(status=self.probe, ProbeBusy=type('ProbeBusy', (Exception,), {})),
-            '_configure_cookie_probe': Mock(), '_youtube_browser_sessions': SimpleNamespace(status=lambda: browser)}
+            '_configure_cookie_probe': Mock(), '_youtube_browser_sessions': SimpleNamespace(status=lambda identity=None: browser)}
         source = Path(__file__).resolve().parents[1] / 'server.py'
         route = next(node for node in ast.parse(source.read_text()).body if isinstance(node, ast.FunctionDef) and node.name == 'profile_status')
         exec(compile(ast.Module(body=[route], type_ignores=[]), str(source), 'exec'), namespace)

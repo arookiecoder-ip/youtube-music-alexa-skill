@@ -341,8 +341,8 @@
     }
   }
 
-  async function startProxyLogin(email, password, force) {
-    const data = await api('/alexa/proxy_login/', { email, password, force: !!force });
+  async function startProxyLogin(email, password) {
+    const data = await api('/alexa/proxy_login/', { email, password });
     document.getElementById('login-password').value = '';
     window.open(data.login_url, '_blank', 'noopener');
     toast('Complete login in the new tab...');
@@ -471,17 +471,8 @@
         loginBtn.disabled = true;
         toast('Opening Amazon login...');
         try {
-          await startProxyLogin(email, password, false);
+          await startProxyLogin(email, password);
         } catch (e) {
-          if (e.message.includes('force') && confirm(e.message + '\n\nContinue and replace the current session?')) {
-            try {
-              await startProxyLogin(email, password, true);
-            } catch (e2) {
-              toast(e2.message, 'error');
-              loginBtn.disabled = false;
-            }
-            return;
-          }
           toast(e.message, 'error');
           loginBtn.disabled = false;
         }

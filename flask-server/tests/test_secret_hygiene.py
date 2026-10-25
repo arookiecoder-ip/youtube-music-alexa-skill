@@ -59,6 +59,7 @@ def _install_stubs():
                         type(attr, (), {"__init__": lambda self, *a, **kw: None}))
             ybs.browser_client_is_signed_in = lambda *a, **kw: False
             ybs.promote_browser_headers = lambda *a, **kw: None
+            ybs.normalize_browser_headers = lambda value: value
             sys.modules["youtube_browser_session"] = ybs
 
 
@@ -74,10 +75,10 @@ class SecretHygiene(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         from current_audio import CurrentAudio
         current = CurrentAudio()
-        patcher = mock.patch.object(server._youtube_stream, 'current', current)
+        patcher = mock.patch.object(server._youtube_stream_for(), 'current', current)
         patcher.start(); self.addCleanup(patcher.stop); self.addCleanup(current.close)
         from audio_test_support import fake_relay
-        patcher = mock.patch.object(server._youtube_stream, 'open', side_effect=fake_relay)
+        patcher = mock.patch.object(server._youtube_stream_for(), 'open', side_effect=fake_relay)
         patcher.start(); self.addCleanup(patcher.stop)
         self.app = server.app.test_client()
 

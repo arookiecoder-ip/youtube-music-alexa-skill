@@ -7,6 +7,9 @@ from playback_failover import PlaybackFailoverBudget
 from audio_jobs import AudioJobs
 from youtube_stream import YouTubeStream, StreamError
 from playback_contract import restore_snapshot
+from player_state import (IDENTITY as _PLAYER_IDENTITY, PlayerStateRegistry as _PlayerStateRegistry,
+                          PlayerStateView as _PlayerStateView, PlayerStateProxy as _PlayerStateProxy,
+                          IdentityLock as _IdentityLock, spawn as _spawn_for_identity)
 import asyncio, collections, difflib, glob, hashlib, hmac, itertools, json, math, os, random, secrets, shutil, sys, threading, time, re, subprocess, logging, copy, uuid, tempfile, shlex
 from datetime import timedelta, datetime
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
@@ -15,20 +18,79 @@ import home_feed
 from ytmusicapi import YTMusic
 
 import alexa_remote
+from youtube_credentials import OWNER as _OWNER_IDENTITY, YouTubeCredentialStore, account_user_id
 from youtube_browser_session import (BrowserController, YouTubeBrowserSessionManager,
                                      browser_client_is_signed_in,
                                      is_authentication_error,
+                                     normalize_browser_headers,
                                      promote_browser_headers)
 from flask import (Flask, request, render_template, jsonify, send_file,
-                   send_from_directory, abort, session, redirect, Response)
+                   send_from_directory, abort, session, redirect, Response, g)
 from werkzeug.exceptions import HTTPException
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
 logger = logging.getLogger(__name__)
 
-_youtube_stream = YouTubeStream(
-    lambda: Supporting.get_ytdlp_cookies_file(),
-    enabled=os.environ.get('YOUTUBE_STREAMING', '0').lower() in ('1', 'true', 'yes'))
+class _YouTubeStreamPool:
+    """One YouTube resolver worker per identity.
+
+    A worker is bound to a single cookie jar and a single activated audio file,
+    and both are account-scoped. One shared worker would restart on every switch
+    between accounts -- and a stream URL signed with one account's cookies must
+    never be handed to another."""
+    def __init__(self, factory, limit=4):
+        self._factory = factory
+        self._limit = max(1, int(limit))
+        self._streams = collections.OrderedDict()
+        self._lock = threading.Lock()
+
+    def get(self, identity=None):
+        identity = identity or _current_identity()
+        with self._lock:
+            stream = self._streams.get(identity)
+            if stream is None:
+                stream = self._streams[identity] = self._factory(identity)
+            self._streams.move_to_end(identity)
+            while len(self._streams) > self._limit:
+                _, evicted = self._streams.popitem(last=False)
+                try:
+                    evicted.close()
+                except Exception:
+                    logger.debug('Evicted YouTube resolver did not close cleanly')
+            return stream
+
+    def every(self):
+        with self._lock:
+            return list(self._streams.values())
+
+    @property
+    def enabled(self):
+        return _YOUTUBE_STREAMING_ENABLED
+
+    def snapshot(self):
+        """Aggregate view of every live worker, for the status page."""
+        streams, resolving, slots = [], 0, 0
+        for stream in self.every():
+            data = stream.snapshot()
+            streams.extend(data.get('streams') or [])
+            resolving += data.get('resolving', 0)
+            slots = max(slots, data.get('stream_slots', 0))
+        return {'active_streams': len(streams), 'stream_slots': slots,
+                'resolving': resolving, 'streams': streams, 'workers': len(self.every())}
+
+
+_YOUTUBE_STREAMING_ENABLED = os.environ.get('YOUTUBE_STREAMING', '0').lower() in ('1', 'true', 'yes')
+
+_youtube_streams = _YouTubeStreamPool(
+    lambda identity: YouTubeStream(
+        lambda: Supporting.get_ytdlp_cookies_file(identity),
+        enabled=_YOUTUBE_STREAMING_ENABLED),
+    limit=os.environ.get('YOUTUBE_STREAM_WORKERS', '4'))
+
+
+def _youtube_stream_for(identity=None):
+    """The resolver worker belonging to this identity."""
+    return _youtube_streams.get(identity)
 
 
 
@@ -460,9 +522,8 @@ def _schedule_play_dispatch(serial, video_id, offset_ms=0, delay=None, expected_
             def _resend():
                 _arm_play(serial, video_id, offset_ms)
                 return alexa_remote.remote.play_video_id(serial, video_id, offset_ms)
-            threading.Thread(
-                target=_watch_playback_confirmation, args=(serial, video_id, _resend),
-                daemon=True).start()
+            _spawn_for_identity(_current_identity(), _watch_playback_confirmation,
+                               args=(serial, video_id, _resend), name='playback-watchdog')
             return
         try:
             _note_trigger_sent(serial)
@@ -599,9 +660,14 @@ def init_db():
         conn.execute('''
             CREATE TABLE IF NOT EXISTS jam_tokens (
                 token TEXT PRIMARY KEY,
-                created_at REAL
+                created_at REAL,
+                user_id TEXT
             )
         ''')
+        try:
+            conn.execute('ALTER TABLE jam_tokens ADD COLUMN user_id TEXT')
+        except sqlite3.OperationalError:
+            pass  # column already present (fresh DB or migrated)
         conn.execute('''
             CREATE TABLE IF NOT EXISTS playlist_tracks (
                 uuid TEXT PRIMARY KEY,
@@ -629,32 +695,36 @@ def _ensure_db():
 # add_history_item on YT Music, so a per-video cooldown keeps one play from
 # pushing the same song several times (local history rows are INSERT OR
 # REPLACE, so duplicates were already harmless there).
-_listen_pushed = {}  # video_id -> time.time() of the most recent push
+_listen_pushed = {}  # (identity, video_id) -> time.time() of the most recent push
 _listen_pushed_lock = threading.Lock()
 _LISTEN_PUSH_COOLDOWN = 60.0  # seconds between YouTube history pushes per video
 
 
 def _record_listen(video_id, title, artist, thumbnail_url):
     from ytmusicapi.auth.types import AuthType
-    if not video_id or _get_ytmusic_home().auth_type == AuthType.UNAUTHORIZED:
+    identity = _current_identity()
+    if not video_id or _get_ytmusic_home(identity).auth_type == AuthType.UNAUTHORIZED:
         return
     with _listen_pushed_lock:
-        last = _listen_pushed.get(video_id, 0.0)
+        last = _listen_pushed.get((identity, video_id), 0.0)
         if time.time() - last < _LISTEN_PUSH_COOLDOWN:
             return
-        _listen_pushed[video_id] = time.time()
+        _listen_pushed[(identity, video_id)] = time.time()
         if len(_listen_pushed) > 512:
             for stale in list(_listen_pushed)[:-256]:
                 del _listen_pushed[stale]
     def push_bg():
         try:
             # ytmusicapi add_history_item requires a song object with tracking parameters
-            song = _get_ytmusic_home().get_song(video_id)
+            yt_home = _get_ytmusic_home()
+            song = yt_home.get_song(video_id)
             if song:
-                _get_ytmusic_home().add_history_item(song)
+                yt_home.add_history_item(song)
         except Exception as e:
             logger.debug("Failed to push history for %s (likely unauthenticated): %s", video_id, e)
-    threading.Thread(target=push_bg, daemon=True).start()
+    # Threads do not inherit the request identity; without this the song would land
+    # in the owner's YouTube history no matter who played it.
+    _spawn_for_identity(identity, push_bg, name='yt-history-push')
 
 
 
@@ -831,7 +901,7 @@ def _safe_spa_target(value, default='/home'):
 
 # Endpoints reachable with a logged-in web-remote session cookie (so the long
 # API key stays out of the browser URL). Everything here plus the remote page.
-_SESSION_PATHS = ('/audio', '/get_radio', '/status', '/api/status', '/remote', '/alexa/status', '/alexa/init', '/alexa/devices', '/alexa/command',
+_SESSION_PATHS = ('/api/jam/session', '/audio', '/get_radio', '/status', '/api/status', '/remote', '/alexa/status', '/alexa/init', '/alexa/devices', '/alexa/command',
                   '/alexa/play', '/alexa/suggest', '/alexa/proxy_login',
                   '/alexa/proxy_check', '/alexa/now_playing', '/alexa/state_event',
                   '/alexa/seek', '/alexa/volume', '/alexa/play_queue',
@@ -851,10 +921,11 @@ _SESSION_PATHS = ('/audio', '/get_radio', '/status', '/api/status', '/remote', '
                    '/api/youtube/browser-session/retry',
                    '/api/youtube/browser-session/open-youtube',
                    '/api/youtube/browser-session/capture',
-                   '/api/youtube/browser-session/authorize')
-_SESSION_PREFIXES = ('/api/status/', '/alexa/now_playing/', '/history/', '/api/playlists/', '/recommendations/',
-                     '/api/artist/', '/api/album/', '/api/library/', '/api/explore/', '/api/home/',
-                     '/api/track/', '/api/app/queue/')
+                   '/api/youtube/browser-session/authorize',
+)
+_SESSION_PREFIXES = ('/api/jam/', '/api/status/', '/alexa/now_playing/', '/history/', '/api/playlists/', '/recommendations/',
+                    '/api/artist/', '/api/album/', '/api/library/', '/api/explore/', '/api/home/',
+                    '/api/track/', '/api/app/queue/')
 
 # API/device endpoints: the Alexa skill and web-remote JS hit these directly
 # and need a machine-readable JSON error, never an HTML redirect, on failure.
@@ -956,7 +1027,30 @@ def _legacy_adoption_allowed():
     return not _legacy_adoption_closed
 
 
+def _mu_web_identity():
+    """The signed-in multi-user account for this request, or None.
+
+    Validates the `mu_sid` cookie against the account session table once per
+    request and caches the user on `g`. Background/CLI callers have no request
+    context and get None, which keeps them on the legacy owner path."""
+    if _multiuser_layer is None or not has_request_context():
+        return None
+    if not session.get('mu_sid'):
+        return None
+    if hasattr(g, '_mu_user_cache'):
+        return g._mu_user_cache
+    try:
+        _sess, user = _multiuser_layer.accounts.validate_session(session['mu_sid'])
+    except Exception:
+        logger.exception('multiuser session validation failed')
+        user = None
+    g._mu_user_cache = user or None
+    return g._mu_user_cache
+
+
 def _logged_in():
+    if _mu_web_identity() is not None:
+        return True
     if not (_remote_login_enabled() and session.get('remote_user') == REMOTE_USER):
         return False
     sid = session.get('sid')
@@ -993,50 +1087,74 @@ def _jam_cache():
             with get_db() as conn:
                 conn.execute('DELETE FROM jam_tokens WHERE created_at < ?',
                              (time.time() - JAM_MAX_AGE,))
-                rows = conn.execute('SELECT token, created_at FROM jam_tokens').fetchall()
+                rows = conn.execute('SELECT token, created_at, user_id FROM jam_tokens').fetchall()
                 conn.commit()
-            _valid_jams = {r['token']: r['created_at'] for r in rows}
+            _valid_jams = {r['token']: {'created_at': r['created_at'], 'user_id': r['user_id']} for r in rows}
         return _valid_jams
+
+
+def _jam_identity_id():
+    """Who a Jam belongs to on this request: the signed-in account id, or None
+    for the legacy owner. Guests never open jams; they only join one."""
+    user = _mu_web_identity()
+    return str(user['id']) if user else None
 
 
 def _jam_token_valid(token):
     if not token:
         return False
-    created = _jam_cache().get(token)
-    if created is None:
+    entry = _jam_cache().get(token)
+    if entry is None:
         return False
-    if time.time() - created > JAM_MAX_AGE:
-        _jam_close_all()  # expired: purge so guests are cut off, not just this check
+    if time.time() - entry['created_at'] > JAM_MAX_AGE:
+        _jam_purge_token(token)  # expired: purge so guests are cut off, not just this check
         return False
     return True
 
 
-def _jam_open():
-    """Start a jam (revoking any previous one) and return its share token."""
+def _jam_purge_token(token):
+    with get_db() as conn:
+        conn.execute('DELETE FROM jam_tokens WHERE token = ?', (token,))
+        conn.commit()
+    _jam_cache().pop(token, None)
+
+
+def _jam_open(user_id=None):
+    """Start this identity's jam (revoking its previous one) and return the token."""
     token = secrets.token_urlsafe(9)
     now = time.time()
+    clause = 'user_id IS NULL' if user_id is None else 'user_id = ?'
+    params = () if user_id is None else (user_id,)
     with get_db() as conn:
-        conn.execute('DELETE FROM jam_tokens')
-        conn.execute('INSERT INTO jam_tokens (token, created_at) VALUES (?, ?)', (token, now))
+        conn.execute(f'DELETE FROM jam_tokens WHERE {clause}', params)
+        conn.execute('INSERT INTO jam_tokens (token, created_at, user_id) VALUES (?, ?, ?)', (token, now, user_id))
         conn.commit()
     cache = _jam_cache()
-    cache.clear()
-    cache[token] = now
+    for existing, entry in [item for item in cache.items() if item[1]['user_id'] == user_id]:
+        cache.pop(existing, None)
+    cache[token] = {'created_at': now, 'user_id': user_id}
     return token
 
 
-def _jam_close_all():
+def _jam_close_all(user_id=None):
+    clause = 'user_id IS NULL' if user_id is None else 'user_id = ?'
+    params = () if user_id is None else (user_id,)
     with get_db() as conn:
-        conn.execute('DELETE FROM jam_tokens')
+        conn.execute(f'DELETE FROM jam_tokens WHERE {clause}', params)
         conn.commit()
-    _jam_cache().clear()
+    cache = _jam_cache()
+    for existing, entry in [item for item in cache.items() if item[1]['user_id'] == user_id]:
+        cache.pop(existing, None)
 
 
-def _jam_active_token():
+def _jam_active_token(user_id=None):
     # Copy before iterating: _jam_open()/_jam_close_all() on another thread
     # mutate the dict, which would raise RuntimeError mid-iteration.
-    for token, created in list(_jam_cache().items()):
-        if time.time() - created <= JAM_MAX_AGE:
+    for token, entry in list(_jam_cache().items()):
+        if entry['user_id'] != user_id:
+            continue
+        created_at = entry['created_at']
+        if time.time() - created_at <= JAM_MAX_AGE:
             return token
     return None
 
@@ -1139,6 +1257,65 @@ def app_audio_token():
     return _no_store(jsonify({'token': _audio_credentials.issue(session.get('sid'), download),
                               'expires_in': 86400 if download else 7200}))
 
+_owner_row_read = [0.0, '']
+
+
+def _owner_row_id():
+    """The id of the account that owns this install, or '' when there is none.
+
+    It is the one account that keeps the pre-multiuser slot -- the auth file, download
+    jar, Chromium profile and persisted queue it already built -- so switching on
+    multi-user does not ask its owner to reconnect everything. Cached because callers
+    that lack the role on hand (jam guests) resolve it per request, and a read here
+    would open a SQLite connection each time; sixty seconds is the worst a role change
+    takes to land."""
+    now = time.monotonic()
+    if now - _owner_row_read[0] < 60:
+        return _owner_row_read[1]
+    user_id = ''
+    if _multiuser_layer is not None:
+        try:
+            row = _multiuser_layer.db.fetchone(
+                "SELECT id FROM users WHERE role = 'owner' AND status = 'active' LIMIT 1")
+            user_id = str(row['id']) if row else ''
+        except Exception:
+            logger.exception('Could not look up the owning account')
+            return _owner_row_read[1]
+    _owner_row_read[0], _owner_row_read[1] = now, user_id
+    return user_id
+
+
+def _player_identity_for_user_id(user_id, role=None):
+    """The playback and provider slot belonging to one account id.
+
+    `role` is the account's role when the caller already loaded it, which is the
+    usual case for a signed-in web request."""
+    if not user_id:
+        return _OWNER_IDENTITY
+    owner = (role == 'owner') if role is not None else str(user_id) == _owner_row_id()
+    return _OWNER_IDENTITY if owner else 'user:' + str(user_id)
+
+
+@app.before_request
+def _bind_player_identity():
+    # Every request must resolve playback state to exactly one identity, and it
+    # must happen before anything touches _now_playing. A signed-in account owns
+    # its queue; a Jam guest is bound to the host's identity through the jam
+    # token; everything else (owner web session, Alexa, API keys, background
+    # threads) stays on the legacy 'owner' state.
+    user = _mu_web_identity()
+    if user is not None:
+        _PLAYER_IDENTITY.set(_player_identity_for_user_id(user['id'], user.get('role')))
+        return
+    jam_token = session.get('jam')
+    if jam_token:
+        entry = _jam_cache().get(jam_token)
+        if entry and entry.get('user_id'):
+            _PLAYER_IDENTITY.set(_player_identity_for_user_id(entry['user_id']))
+            return
+    _PLAYER_IDENTITY.set('owner')
+
+
 @app.before_request
 def require_api_key():
     path = request.path.rstrip('/') or '/'
@@ -1149,6 +1326,12 @@ def require_api_key():
         return None
     # Keep diagnostics available to a valid owner key during a database outage.
     if (path == '/status' or path == '/api/status' or path.startswith('/api/status/')) and _valid_key_supplied():
+        return None
+    # Allow jam session endpoint for authenticated users and jam guests
+    if path == '/api/jam/session' and (_logged_in() or _jam_guest()):
+        return None
+    # Allow jam home endpoint for authenticated users
+    if path == '/api/jam/home' and _logged_in():
         return None
     _ensure_db()
     # Let the shared shell renderer apply the same owner/jam/login policy as
@@ -1300,6 +1483,12 @@ class _BoundedCache:
             if len(self._data) > self._maxsize:
                 self._data.popitem(last=False)
 
+    def drop(self, predicate):
+        """Evict entries matching predicate(key). Used to forget one identity."""
+        with self._lock:
+            for key in [k for k in self._data if predicate(k)]:
+                self._data.pop(key, None)
+
     def clear(self):
         with self._lock:
             self._data.clear()
@@ -1322,56 +1511,168 @@ def _get_ytmusic():
             _YT_CACHE.set(tid, inst)
         return inst
 
-# Home-feed cache (defined before _get_ytmusic_home which references it)
-_home_cache = {'built_at': 0, 'data': None}
-_home_lock = threading.Lock()
+class _IdentitySlotCache:
+    """A TTL value and a single-flight lock per identity.
+
+    Personalized feeds cannot share one global entry: whoever hits the route next
+    would be served somebody else's library. Rebuild locks are per identity for the
+    same reason -- one account's slow rebuild must not make the others wait."""
+
+    def __init__(self):
+        self._guard = threading.Lock()
+        self._slots = {}
+
+    def _slot(self, identity):
+        with self._guard:
+            slot = self._slots.get(identity)
+            if slot is None:
+                slot = self._slots[identity] = {'built_at': 0.0, 'lock': threading.Lock(),
+                                                'value': None}
+            return slot
+
+    def lock(self, identity):
+        return self._slot(identity)['lock']
+
+    def get(self, identity):
+        slot = self._slot(identity)
+        return slot['value'], time.time() - slot['built_at']
+
+    def set(self, identity, value):
+        slot = self._slot(identity)
+        slot['value'] = value
+        slot['built_at'] = time.time()
+
+    def drop(self, identity):
+        with self._guard:
+            self._slots.pop(identity, None)
+
+
+# Home-feed cache, keyed by identity: one account's personalized shelf must never
+# be served to the next account that reaches the same code path.
+_home_cache = _IdentitySlotCache()
 
 _YT_HOME_CACHE = _BoundedCache(name="account_ytmusic_clients")
 _YT_HOME_CACHE_LOCK = threading.Lock()
-_YT_HOME_CACHE_MTIME = 0
+# identity -> mtime of the auth file its cached clients were built against. A
+# single global mtime would let one account's re-login throw everyone else's
+# authenticated clients away.
+_YT_HOME_CACHE_MTIME = {}
 
-def _get_ytmusic_home():
-    """Get a cached YTMusic instance for home feed with optional auth. Reloads if auth file changes."""
-    global _YT_HOME_CACHE_MTIME
-    tid = threading.get_ident()
-    with _YT_HOME_CACHE_LOCK:
-        auth_file = os.environ.get("YTMUSIC_AUTH_FILE") or "headers_auth.json"
-        
-        # Invalidate cache if auth file was modified (e.g., user updated cookies)
-        current_mtime = 0
-        if auth_file and os.path.isfile(auth_file):
-            current_mtime = os.path.getmtime(auth_file)
-            
-        if current_mtime > _YT_HOME_CACHE_MTIME:
-            _YT_HOME_CACHE.clear()
-            _YT_HOME_CACHE_MTIME = current_mtime
-            
-            # Also clear the home feed cache so they see new results immediately
-            with _home_lock:
-                _home_cache['data'] = None
-                _home_cache['built_at'] = 0
+_youtube_credentials = YouTubeCredentialStore(
+    os.path.join(os.path.dirname(os.path.abspath(DB_FILE)), 'youtube_auth'),
+    lambda: os.environ.get("YTMUSIC_AUTH_FILE") or "headers_auth.json",
+)
 
-        inst = _YT_HOME_CACHE.get(tid)
-        if inst is None:
-            auth_file = os.environ.get("YTMUSIC_AUTH_FILE") or "headers_auth.json"
+
+def _current_identity():
+    """Whose playback state and provider credentials this call belongs to."""
+    return _PLAYER_IDENTITY.get() or _OWNER_IDENTITY
+
+
+def _mu_provider_secret(user_id, provider):
+    """Decrypted provider payload for one account, or {} if there is none."""
+    if _multiuser_layer is None or not user_id:
+        return {}
+    try:
+        return _multiuser_layer.accounts.get_provider_secret(user_id, provider)
+    except Exception:
+        logger.exception('Provider credential lookup failed')
+        return {}
+
+
+def _write_browser_auth_file(headers_raw, dest):
+    """Turn raw browser headers into a ytmusicapi auth JSON, atomically."""
+    from ytmusicapi.auth.browser import setup_browser
+    parent = os.path.dirname(os.path.abspath(dest))
+    os.makedirs(parent, exist_ok=True)
+    fd, temp_path = tempfile.mkstemp(prefix='ytmusic-browser-', suffix='.json', dir=parent)
+    os.close(fd)
+    try:
+        setup_browser(filepath=temp_path, headers_raw=normalize_browser_headers(headers_raw))
+        os.replace(temp_path, dest)
+    finally:
+        if os.path.exists(temp_path):
+            os.unlink(temp_path)
+
+
+def _yt_auth_file(identity):
+    """This identity's auth JSON, rebuilt from its encrypted row if the file is gone.
+
+    None means "no YouTube session of your own", which callers read as public
+    catalog only. Falling back to the owner's file here would show one account's
+    library, likes and history to another account.
+
+    The encrypted `user_provider_credentials` row is the source of truth for
+    accounts; this file is a derived cache, so a restarted container or a restored
+    backup needs no re-login."""
+    path = _youtube_credentials.path_for(identity)
+    if not path:
+        return None
+    if os.path.isfile(path):
+        return path
+    if identity != _OWNER_IDENTITY:
+        headers_raw = _mu_provider_secret(account_user_id(identity), 'youtube').get('headers_raw')
+        if headers_raw:
             try:
-                if auth_file and os.path.isfile(auth_file):
-                    import json as _json
-                    with open(auth_file, 'r') as _f:
-                        _raw = _f.read(512)
-                    if _raw.strip().startswith('{') and '"access_token"' in _raw:
-                        logger.warning("Stale OAuth token detected in %s — OAuth support removed, only browser headers work. Renaming to %s.deprecated", auth_file, auth_file)
-                        import shutil as _shutil
-                        _shutil.move(auth_file, auth_file + '.deprecated')
-                        inst = YTMusic()
-                    else:
-                        inst = YTMusic(auth=auth_file)
-                else:
-                    inst = YTMusic()
-            except Exception as e:
-                logger.warning(f"Failed to initialize authenticated YTMusic for home feed: {e}. Falling back to anonymous.")
-                inst = YTMusic()
-            _YT_HOME_CACHE.set(tid, inst)
+                _write_browser_auth_file(headers_raw, path)
+                return path
+            except Exception as exc:
+                logger.warning('Could not rebuild the YouTube session for %s: %s', identity, exc)
+    return None
+
+
+def _download_cookie_path(identity=None):
+    """Where *this* identity's download-cookie jar lives, whether or not it exists yet.
+
+    The owner keeps the one file every existing install already used; accounts get a
+    sibling per user, so an uploaded export is never shared with anyone else."""
+    saved = download_cookies.saved_path()
+    user_id = account_user_id(identity or _current_identity())
+    if not user_id:
+        return str(saved)
+    return str(saved.with_name(f'download_cookies_{user_id}.txt'))
+
+
+def _ytmusic_client_from_auth(auth_file):
+    """Build a client for one auth file, degrading to anonymous when unusable."""
+    if not auth_file:
+        return YTMusic()
+    try:
+        with open(auth_file, 'r') as _f:
+            _raw = _f.read(512)
+        if _raw.strip().startswith('{') and '"access_token"' in _raw:
+            logger.warning("Stale OAuth token detected in %s — OAuth support removed, "
+                           "only browser headers work. Renaming to %s.deprecated",
+                           auth_file, auth_file)
+            shutil.move(auth_file, auth_file + '.deprecated')
+            return YTMusic()
+        return YTMusic(auth=auth_file)
+    except Exception as e:
+        logger.warning(f"Failed to initialize authenticated YTMusic: {e}. Falling back to anonymous.")
+        return YTMusic()
+
+
+def _get_ytmusic_home(identity=None):
+    """A cached YTMusic client carrying *this identity's* YouTube Music session."""
+    identity = identity or _current_identity()
+    auth_file = _yt_auth_file(identity)
+    try:
+        current_mtime = os.path.getmtime(auth_file) if auth_file else 0
+    except OSError:
+        current_mtime = 0
+    # ytmusicapi's requests.Session is not thread-safe, so clients are cached per
+    # (identity, thread) rather than per thread -- a warm owner client must not be
+    # handed to an account thread.
+    key = (identity, threading.get_ident())
+    with _YT_HOME_CACHE_LOCK:
+        if current_mtime > _YT_HOME_CACHE_MTIME.get(identity, 0):
+            _YT_HOME_CACHE.drop(lambda cached, wanted=identity: cached[0] == wanted)
+            _YT_HOME_CACHE_MTIME[identity] = current_mtime
+            _home_cache.drop(identity)
+        inst = _YT_HOME_CACHE.get(key)
+        if inst is None:
+            inst = _ytmusic_client_from_auth(auth_file)
+            _YT_HOME_CACHE.set(key, inst)
         return inst
 
 
@@ -1385,30 +1686,68 @@ def _ytmusic_client_is_authenticated(yt_home):
     return True
 
 
-def _ytmusic_is_authenticated():
-    """Return whether the configured YT Music account is currently usable."""
-    return _ytmusic_client_is_authenticated(_get_ytmusic_home())
+def _ytmusic_is_authenticated(identity=None):
+    """Return whether *this* identity's YouTube Music account is currently usable."""
+    return _ytmusic_client_is_authenticated(_get_ytmusic_home(identity))
 
 
-def _invalidate_youtube_auth_caches():
-    """Drop every thread-local authenticated client and personalized feed."""
-    global _YT_HOME_CACHE_MTIME
+def _catalog_client():
+    """The client to browse the catalog with for whoever is asking.
+
+    Jam guests stay anonymous; a signed-in account gets its own YouTube Music session,
+    or the anonymous client when it has not connected one yet."""
+    if _jam_guest():
+        return _get_ytmusic()
+    return _get_ytmusic_home()
+
+
+def _signed_in_catalog_client():
+    """Like _catalog_client, but insists on a usable session.
+
+    Reads that only make sense for a logged-in account (history, "liked", the account
+    menu) use this: an expired credential falls back to the anonymous client instead of
+    issuing a call YouTube will reject."""
+    if _jam_guest() or not _ytmusic_is_authenticated():
+        return _get_ytmusic()
+    return _get_ytmusic_home()
+
+
+def _invalidate_youtube_auth_caches(identity=None):
+    """Drop one identity's authenticated clients and personalized feeds."""
+    identity = identity or _current_identity()
     with _YT_HOME_CACHE_LOCK:
-        _YT_HOME_CACHE.clear()
-        auth_file = os.environ.get("YTMUSIC_AUTH_FILE") or "headers_auth.json"
-        _YT_HOME_CACHE_MTIME = os.path.getmtime(auth_file) if os.path.isfile(auth_file) else 0
-    with _YT_CACHE_LOCK:
-        _YT_CACHE.clear()
-    with _home_lock:
-        _home_cache['data'] = None
-        _home_cache['built_at'] = 0
+        _YT_HOME_CACHE.drop(lambda cached, wanted=identity: cached[0] == wanted)
+        path = _youtube_credentials.path_for(identity)
+        _YT_HOME_CACHE_MTIME[identity] = (os.path.getmtime(path)
+                                          if path and os.path.isfile(path) else 0)
+    _home_cache.drop(identity)
 
 
-def _promote_youtube_browser_headers(headers):
+def _remember_youtube_session(identity, headers_raw):
+    """Keep an account's own session encrypted at rest, as the source of truth."""
+    user_id = account_user_id(identity)
+    if _multiuser_layer is None or not user_id:
+        return
+    try:
+        _multiuser_layer.accounts.set_provider_credentials(
+            None, user_id, 'youtube',
+            {'headers_raw': normalize_browser_headers(headers_raw)},
+            {'kind': 'browser_headers'})
+    except Exception:
+        logger.exception('Could not store the YouTube session for %s', identity)
+
+
+def _promote_youtube_browser_headers(headers, identity=None):
+    identity = identity or _current_identity()
     from ytmusicapi.auth.browser import setup_browser
-    auth_file = os.environ.get("YTMUSIC_AUTH_FILE") or "headers_auth.json"
+    auth_file = _youtube_credentials.path_for(identity)
+    if not auth_file:
+        raise ValueError("This identity has no YouTube Music credential store.")
     promote_browser_headers(headers, auth_file, setup_browser,
                             lambda path: YTMusic(auth=path))
+    # The owner's credential stays the plain file it has always used; accounts are
+    # encrypted in the database and the file is only a cache of that row.
+    _remember_youtube_session(identity, headers)
 
 
 _youtube_browser_controller = BrowserController(
@@ -1426,29 +1765,31 @@ _youtube_browser_sessions = YouTubeBrowserSessionManager(
 
 
 def _youtube_auth_proactive_loop():
-    """Occasionally validate saved browser auth before a user needs it."""
+    """Occasionally validate each saved browser auth before its user needs it."""
     interval = max(900.0, float(os.environ.get("YT_BROWSER_PROACTIVE_INTERVAL", "21600")))
     while True:
         time.sleep(interval)
-        auth_file = os.environ.get("YTMUSIC_AUTH_FILE") or "headers_auth.json"
-        if not os.path.isfile(auth_file):
-            continue
-        try:
-            if not _ytmusic_is_authenticated():
-                _youtube_browser_sessions.refresh(wait=False)
-        except Exception:
-            # Probe failures are intentionally quiet and bounded by the
-            # manager cooldown; the normal status endpoint remains authoritative.
-            logger.debug("Proactive YouTube auth check could not complete")
+        # Threads do not inherit a request identity, so this loop names the
+        # identity explicitly for every credential it touches.
+        for identity in _youtube_credentials.identities():
+            _PLAYER_IDENTITY.set(identity)
+            try:
+                if not _ytmusic_is_authenticated(identity):
+                    _youtube_browser_sessions.refresh(identity, wait=False)
+            except Exception:
+                # Probe failures are intentionally quiet and bounded by the
+                # manager cooldown; the normal status endpoint remains authoritative.
+                logger.debug("Proactive YouTube auth check could not complete for %s", identity)
 
 
 threading.Thread(target=_youtube_auth_proactive_loop, daemon=True,
                  name="youtube-auth-proactive").start()
 
 
-def _with_youtube_auth_renewal(operation):
-    """Run a personalized operation with at most one saved-profile renewal."""
-    return _youtube_browser_sessions.call_with_one_refresh(operation)
+def _with_youtube_auth_renewal(operation, identity=None):
+    """Run a personalized operation with at most one renewal of *this* profile."""
+    return _youtube_browser_sessions.call_with_one_refresh(
+        operation, identity or _current_identity())
 
 
 def _yt_call(method, *args, timeout=15, **kwargs):
@@ -1505,7 +1846,7 @@ _RATE_LIMITS = {
 
 def _audio_delivery_rate_group(video_id, download=False):
     # Only complete server-cached files get the burst budget. Cold downloads keep their limit.
-    if _valid_video_id(video_id) and _youtube_stream.current.has(video_id):
+    if _valid_video_id(video_id) and _youtube_stream_for().current.has(video_id):
         return 'cached_download' if download else 'cached_audio'
     return 'audio'
 
@@ -1646,7 +1987,10 @@ def _mark_video_dead(video_id: str):
 
 def _evict_bad_cache_entry(video_id):
     """Discard only this track's temporary bytes; never another current song."""
-    _youtube_stream.current.discard(video_id)
+    # Only the caller's worker forgets the track: another account may be playing
+    # the same video, and dropping its protection would let the file be pruned
+    # while that user is still streaming it.
+    _youtube_stream_for().current.discard(video_id)
 
 
 
@@ -1805,7 +2149,7 @@ _PLAYLIST_TRACKS_CACHE_TTL = 300
 # Amazon's /api/np/player returns empty data for custom-skill audio, so we
 # track the state ourselves. Every stream goes through /proxy/, so we capture
 # the video_id there and look up metadata.
-_now_playing = {
+_default_playback_state = {
     'playing': False,
     'title': '',
     'artist': '',
@@ -1847,23 +2191,50 @@ _now_playing = {
     # surfaces to the client exactly once instead of re-toasting forever.
     'playback_error': None,
 }
-_volume_by_serial = {}
-_alexa_volume_lock = threading.RLock()
-_alexa_volume_grace = {}
-_np_lock = threading.Lock()
 from queue_commands import QueueCommands
 _queue_commands = QueueCommands()
 from playback_store import PlaybackStore, PlaybackPersistence, stable_queue_entries
 from playback_output import PlaybackOutput, OutputConflict
-_playback_output = PlaybackOutput()
 _playback_store = PlaybackStore(DB_FILE)
-try:
-    _restored_playback = _playback_store.load()
-    _now_playing.update(_restored_playback)
-    _playback_output.serial = _restored_playback.get('output_serial') or ''
-except (sqlite3.Error, ValueError, OSError):
-    logger.exception('Could not restore playback metadata')
+
+
+def _new_player_state(identity):
+    """A fresh playback state for one identity, restored from its own snapshot.
+
+    Keying the durable store by the same identity as the in-memory state is what
+    lets an account's queue survive a restart without ever overwriting the
+    owner's."""
+    state = dict(_default_playback_state)
+    try:
+        state.update(_playback_store.load(identity))
+    except (sqlite3.Error, ValueError, OSError):
+        logger.exception('Could not restore playback metadata for %s', identity)
+    return state
+
+
+def _new_playback_output(identity):
+    """One output lease per identity, remembering only the device it last used."""
+    output = PlaybackOutput()
+    output.serial = _player_registry.state_for(identity).get('output_serial') or ''
+    return output
+
+
+_player_registry = _PlayerStateRegistry(factory=_new_player_state)
+_now_playing = _PlayerStateView(_player_registry)
+_np_lock = _IdentityLock(_player_registry)
+_playback_output_registry = _PlayerStateRegistry(factory=_new_playback_output)
+_playback_output = _PlayerStateProxy(_playback_output_registry)
+# Device volume and the read-after-command grace window belong to whoever owns
+# the device, so they follow the identity: an account's Echo volume is never
+# read or written through another account's session.
+_volume_by_serial = _PlayerStateView(_PlayerStateRegistry(factory=lambda identity: {}))
+_alexa_volume_grace = _PlayerStateView(_PlayerStateRegistry(factory=lambda identity: {}))
+_alexa_volume_lock = threading.RLock()
 _playback_persistence = PlaybackPersistence(_playback_store, lambda: logger.error('Could not persist playback metadata'))
+# Warm the owner's entries at import: a snapshot that cannot be read is then a
+# boot-time log line rather than something that lands on whoever asks first.
+_now_playing.get('video_id')
+_playback_output.snapshot()
 
 # Version counter for the local Liked Songs playlist, included in SSE
 # snapshots. Open remotes re-fetch /api/playlists/ when it changes so a like
@@ -2015,13 +2386,14 @@ def _computed_position_ms():
         pos = min(pos, duration)
     return max(0, pos)
 
-_alexa_queue_sync_lock = threading.Lock()
-_alexa_queue_sync_timer = None
+_alexa_queue_sync_lock = _IdentityLock(_player_registry)
+# One pending timer per identity: a shared timer would let one account's queue
+# edit cancel the sync another account had just scheduled.
+_alexa_queue_sync_slot = _PlayerStateView(_PlayerStateRegistry(factory=lambda identity: {'timer': None}))
 
 
 def _schedule_alexa_queue_sync():
     """Coalesce queue edits only after a protocol-2 skill buffered a successor."""
-    global _alexa_queue_sync_timer
     with _np_lock:
         pending = _now_playing.get('_alexa_pending')
         output = _playback_output.snapshot()
@@ -2038,7 +2410,12 @@ def _schedule_alexa_queue_sync():
         serial = output.get('output_serial') or _now_playing.get('serial')
         if not serial:
             return
+    identity = _PLAYER_IDENTITY.get()
+
     def fire():
+        # A Timer thread does not inherit the requester's context, so without
+        # this an account's queue sync would read and dispatch to the owner's.
+        _PLAYER_IDENTITY.set(identity)
         with _np_lock:
             live = _now_playing.get('_alexa_pending')
             out = _playback_output.snapshot()
@@ -2065,22 +2442,26 @@ def _schedule_alexa_queue_sync():
         except Exception:
             logger.exception('[queue-sync] Echo queue replacement dispatch failed')
     with _alexa_queue_sync_lock:
-        if _alexa_queue_sync_timer:
-            _alexa_queue_sync_timer.cancel()
-        _alexa_queue_sync_timer = threading.Timer(0.15, fire)
-        _alexa_queue_sync_timer.daemon = True
-        _alexa_queue_sync_timer.start()
+        timer = _alexa_queue_sync_slot['timer']
+        if timer:
+            timer.cancel()
+        timer = threading.Timer(0.15, fire)
+        timer.daemon = True
+        _alexa_queue_sync_slot['timer'] = timer
+        timer.start()
 
 
 def _notify_sse():
     """Push current state to all SSE subscriber queues (non-blocking)."""
     if "_mobile_devices" in globals():
         _mobile_devices.wake()
+    # Each identity writes its own snapshot row and drives the queue sync of
+    # its own Echo session.
     with _np_lock:
         _queue_version_locked()
         video = _now_playing.get('video_id') or ''
         if not video or (_now_playing.get('playing') and _now_playing.get('playback_confirmed')):
-            _youtube_stream.current.activate(video)
+            _youtube_stream_for().current.activate(video)
         _playback_persistence.submit(_now_playing, _playback_output.snapshot(), _computed_position_ms())
     _schedule_alexa_queue_sync()
     with _sse_lock:
@@ -3118,8 +3499,8 @@ def _lookup_video_metadata(video_id):
         return title_known(result.get('title')) and (duration(result.get('duration_ms')) > 0 or result.get('is_live') is True)
     if complete() and result.get('artist'):
         return result
-    relay = globals().get('_youtube_stream')
-    if relay is not None and getattr(relay, 'enabled', False):
+    relay = _youtube_stream_for()
+    if relay.enabled:
         try:
             merge(relay.metadata(video_id))
         except Exception:
@@ -3175,21 +3556,31 @@ def _prewarm_queue_audio(queue, current_index=0, limit=4):
     return warmed
 
 
+def _audio_job_key(video_id):
+    """Pool key for preparing one video's stream URL.
+
+    Identity is part of it: the resolved URL is signed with that account's own
+    cookies, so coalescing two accounts onto one job would hand the second caller
+    a link it cannot use -- or one it should not have."""
+    return (_current_identity(), video_id)
+
+
 def _ensure_audio_ready_for_play(video_id, wait=False, generation=None, prefetch=False):
     """Prepare a playable URL without downloading or replacing current audio."""
     if not _valid_video_id(video_id):
         return False
     if prefetch and _ytdlp_rate_limited():
         return False
+    identity = _current_identity()
     def prepare_url():
         if not _generation_superseded(generation):
             try:
-                return _youtube_stream.resolve(video_id)
+                return _youtube_stream_for(identity).resolve(video_id)
             except StreamError:
                 return None
     if wait:
         return bool(prepare_url())
-    _audio_jobs.submit(video_id, prepare_url, prefetch=prefetch)
+    _audio_jobs.submit(_audio_job_key(video_id), prepare_url, prefetch=prefetch)
     return False
 
 
@@ -3613,8 +4004,18 @@ class Supporting:
         return client not in {"android_vr", "ios"}
 
     @staticmethod
-    def get_ytdlp_cookies_file():
-        """Return configured/discovered Netscape cookie file, if present."""
+    def get_ytdlp_cookies_file(identity=None):
+        """Return the cookie jar this identity owns, if it has one.
+
+        The candidate list (env paths, cookies.txt beside the app) is the owner's
+        legacy install. An account only ever gets its own jar: falling through to
+        the owner's file would stream one person's library -- and their account
+        standing -- as another's."""
+        identity = identity or _current_identity()
+        user_id = account_user_id(identity)
+        if user_id:
+            path = _download_cookie_path(identity)
+            return path if path and os.path.isfile(path) else None
         configured = (os.environ.get("YTDLP_COOKIES_FILE")
                       or os.environ.get("YTDLP_COOKIES"))
         server_dir = os.path.dirname(os.path.abspath(__file__))
@@ -4709,7 +5110,7 @@ def audio_stream():
     if _audio_truthy(request.args.get('info')):
         base = PUBLIC_BASE_URL or request.url_root.rstrip('/')
         return jsonify(dict(meta or {'video_id': video_id},
-            cached=_youtube_stream.current.has(video_id),
+            cached=_youtube_stream_for().current.has(video_id),
             audio_url=f'{base}/audio/?video_id={video_id}'))
     if _audio_truthy(request.args.get('prefetch')):
         _ensure_audio_ready_for_play(video_id, prefetch=True)
@@ -4748,7 +5149,7 @@ def _serve_youtube_stream(video_id, confirm=False, cancellable=False, meta=None)
     generation = _current_playback_generation()
     started = time.monotonic()
     try:
-        relay = _youtube_stream.open(video_id, method=request.method,
+        relay = _youtube_stream_for().open(video_id, method=request.method,
             byte_range=request.headers.get('Range'), if_range=request.headers.get('If-Range'))
     except StreamError as error:
         # Upstream URLs/cookies never cross the API or enter the journal.
@@ -4776,7 +5177,7 @@ def _serve_youtube_stream(video_id, confirm=False, cancellable=False, meta=None)
                     if request_download is False:
                         with _np_lock:
                             if _now_playing.get('video_id') == video_id:
-                                _youtube_stream.current.activate(video_id)
+                                _youtube_stream_for().current.activate(video_id)
                     logger.info('[stream-timing] youtube first byte %.0fms for %s',
                                 (time.monotonic() - started) * 1000, video_id)
                 relay.remember(block)
@@ -5307,7 +5708,7 @@ PLAYBACK_BUFFERING_FEEDBACK_DELAY = 4.0
 
 def _download_in_progress(video_id):
     """Compatibility watchdog query: only URL preparation can be pending."""
-    return _audio_jobs.contains(video_id)
+    return _audio_jobs.contains(_audio_job_key(video_id))
 
 
 def _watch_playback_confirmation(serial, video_id, resend):
@@ -5338,7 +5739,7 @@ def _watch_playback_confirmation(serial, video_id, resend):
         # up mid-wait (handled below by resetting the deadline with the full
         # window, same as the pre-existing "don't count download time" logic).
         base_timeout = (PLAYBACK_CONFIRM_TIMEOUT_CACHED
-                        if _youtube_stream.current.has(video_id)
+                        if _youtube_stream_for().current.has(video_id)
                         else PLAYBACK_CONFIRM_TIMEOUT)
         deadline = time.time() + base_timeout
         buffering_deadline = time.time() + PLAYBACK_BUFFERING_FEEDBACK_DELAY
@@ -5461,7 +5862,7 @@ def _watch_resume_confirmation(serial, video_id, staged_revision):
 
     def _wait_once():
         base_timeout = (PLAYBACK_CONFIRM_TIMEOUT_CACHED
-                        if _youtube_stream.current.has(video_id)
+                        if _youtube_stream_for().current.has(video_id)
                         else PLAYBACK_CONFIRM_TIMEOUT)
         deadline = time.time() + base_timeout
         while time.time() < deadline:
@@ -5588,9 +5989,8 @@ def _dispatch_play_with_retry(serial, video_id, offset_ms=0):
     error = _send()
     if error:
         return error
-    threading.Thread(
-        target=_watch_playback_confirmation, args=(serial, video_id, _send), daemon=True
-    ).start()
+    _spawn_for_identity(_current_identity(), _watch_playback_confirmation,
+                        args=(serial, video_id, _send), name='playback-watchdog')
     return None
 
 
@@ -5640,6 +6040,27 @@ def login():
     # raises TypeError on mismatched types instead of just failing the check.
     username = str(body.get("username") or "").strip()
     password = str(body.get("password") or "")
+    # Multi-user accounts sign in through the same door as the legacy owner.
+    if _multiuser_layer is not None and username:
+        mu_accounts = _multiuser_layer.accounts
+        mu_user, mu_error = mu_accounts.authenticate(
+            username, password,
+            ip=request.remote_addr or '',
+            user_agent=request.headers.get('User-Agent', '')[:400])
+        if mu_user is not None:
+            raw_sid = mu_accounts.create_session(
+                mu_user, ip=request.remote_addr or '',
+                user_agent=request.headers.get('User-Agent', '')[:400])
+            session['mu_sid'] = raw_sid
+            session['mu_user_id'] = mu_user['id']
+            session['sid'] = _session_open()
+            session.permanent = True
+            return jsonify({'ok': True, 'next': _safe_spa_target(body.get('next'))})
+        # A named failure (locked, inactive, unverified) is real feedback;
+        # the generic invalid-credentials reply may still be the legacy owner,
+        # so fall through to the REMOTE_USER comparison in that case.
+        if mu_error and mu_error != "Invalid username or password.":
+            return error_response(mu_error, 401)
     if not (hmac.compare_digest(username, REMOTE_USER) and hmac.compare_digest(password, REMOTE_PASSWORD)):
         return error_response('invalid username or password', 401)
     if _totp_enabled():
@@ -5664,11 +6085,25 @@ def logout():
     # accepted only from a JSON body (a cross-site form can't send one without
     # failing CORS preflight) and only from a currently-valid session.
     body = request.get_json(silent=True) or {}
-    owner_logged_in = _logged_in()
-    if owner_logged_in:
+    mu_user = _mu_web_identity()
+    legacy_logged_in = mu_user is None and _logged_in()
+    if mu_user is not None:
+        # An account logout must not disturb the owner's Jam or YouTube
+        # browser session — it closes this account's own jam and session only.
+        _jam_close_all(_jam_identity_id())
+        try:
+            _sess, _u = _multiuser_layer.accounts.validate_session(session.get('mu_sid'))
+            if _sess:
+                _multiuser_layer.accounts.revoke_session(_sess['sid_hash'])
+        except Exception:
+            logger.exception('multiuser session revoke failed at logout')
+        # Only the capture window closes; the account's stored YouTube session
+        # stays, so signing out of the web remote is not a forced re-login.
+        _youtube_browser_sessions.revoke(_current_identity())
+    elif legacy_logged_in:
         _jam_close_all()
-        _youtube_browser_sessions.revoke()
-    if body.get('everywhere') and owner_logged_in:
+        _youtube_browser_sessions.revoke(_current_identity())
+    if body.get('everywhere') and legacy_logged_in:
         _sessions_close_all()
     elif session.get('sid'):
         _session_close(session['sid'])
@@ -5700,10 +6135,12 @@ def remote_page():
             'remote.html', asset_v=_STATIC_VERSION,
             jam_guest=True, remote_username='Jam guest',
             is_authenticated=False)))
+    mu_user = _mu_web_identity()
     is_auth = _ytmusic_is_authenticated()
     return _no_store(app.make_response(render_template(
         "remote.html", asset_v=_STATIC_VERSION,
-        jam_guest=_jam_guest() and not _valid_key_supplied(), remote_username=REMOTE_USER,
+        jam_guest=_jam_guest() and not _valid_key_supplied(),
+        remote_username=(mu_user or {}).get('username') or REMOTE_USER,
         is_authenticated=is_auth)))
 
 
@@ -5713,7 +6150,7 @@ def remote_page():
 def jam_start():
     """Owner-only (session or API key — guests can't reach /alexa/jam/*).
     Mints a fresh share token; any previous jam is revoked in the same step."""
-    token = _jam_open()
+    token = _jam_open(_jam_identity_id())
     return jsonify({'ok': True, 'active': True, 'url': _jam_url(token)})
 
 
@@ -5721,13 +6158,13 @@ def jam_start():
 def jam_stop():
     """Revoke the jam. Every guest's next request 401s and their SSE stream
     closes on its next tick — revocation is effectively immediate."""
-    _jam_close_all()
+    _jam_close_all(_jam_identity_id())
     return jsonify({'ok': True, 'active': False})
 
 
 @app.route("/alexa/jam/status/", methods=["GET"])
 def jam_status():
-    token = _jam_active_token()
+    token = _jam_active_token(_jam_identity_id())
     if not token:
         return jsonify({'active': False})
     return jsonify({'active': True, 'url': _jam_url(token)})
@@ -5735,7 +6172,7 @@ def jam_status():
 
 @app.route("/alexa/jam/qr/", methods=["GET"])
 def jam_qr():
-    token = _jam_active_token()
+    token = _jam_active_token(_jam_identity_id())
     if not token:
         return jsonify({'error': 'no active jam'}), 404
     try:
@@ -5899,15 +6336,41 @@ def _build_jam_india_home():
 @app.route('/api/jam/session/', methods=['GET'])
 def jam_guest_session():
     status = alexa_remote.remote.status()
-    serial = _jam_device_serial() if status.get('logged_in') else None
+    # egalitarian: any authenticated user (Amazon-logged-in or with user session) can use jam guest surface
+    user_amazon_logged_in = status.get('logged_in', False)
+    user_has_session = session.get('mu_sid') is not None
+    
+    # Determine if user is authenticated (either Amazon login or user session)
+    is_authenticated = user_amazon_logged_in or user_has_session
+    
+    serial = _jam_device_serial() if is_authenticated and status.get('logged_in') else None
+    
+    # Use the same logic for all users - egalitarian approach
+    logged_in = bool(status.get('logged_in')) if is_authenticated else False
+    configured = bool(status.get('configured'))
+    
     now_playing = None
     if serial:
         with _np_lock:
             now_playing = _jam_safe_now_playing(_np_snapshot(serial))
     return jsonify({
         'status': {
-            'configured': bool(status.get('configured')),
-            'logged_in': bool(status.get('logged_in')),
+            'configured': configured,
+            'logged_in': logged_in,
+        },
+        'device_available': bool(serial),
+        'serial': 'jam' if serial else '',
+        'now_playing': now_playing,
+    })
+    
+    now_playing = None
+    if serial:
+        with _np_lock:
+            now_playing = _jam_safe_now_playing(_np_snapshot(serial))
+    return jsonify({
+        'status': {
+            'configured': configured,
+            'logged_in': logged_in,
         },
         'device_available': bool(serial),
         'serial': 'jam' if serial else '',
@@ -5978,15 +6441,6 @@ def alexa_proxy_login():
     password = str(body.get("password") or "")
     if not email or not password:
         return error_response('Enter your Amazon email and password.', 400)
-    # There is only one live Alexa session for the whole server (see
-    # AlexaRemote); logging in again silently replaces whichever Amazon
-    # account currently controls every Echo. Require an explicit 'force' from
-    # a stale tab/accidental resubmit instead of swapping accounts unnoticed.
-    if alexa_remote.remote.is_logged_in() and not body.get("force"):
-        return error_response(
-            'Already signed in to Amazon. Signing in again will replace the '
-            'current session for every device. Resubmit with "force": true '
-            'to continue.', 409)
     proxy_base_url = None
     # Direct local development exposes AlexaProxy itself on 127.0.0.1:5001.
     # In Docker Compose that port is private and Caddy publishes the proxy at
@@ -5999,7 +6453,11 @@ def alexa_proxy_login():
         email, password, base_url=proxy_base_url
     )
     if error:
-        return error_response(error, 502)
+        # Every account signs into its own Amazon session now, so re-logging in
+        # only ever replaces the caller's session. The single thing still shared
+        # is the login proxy's port: a concurrent login is refused, not queued.
+        status_code = 409 if error == alexa_remote.PROXY_PORT_BUSY else 502
+        return error_response(error, status_code)
     return jsonify({'login_url': url})
 
 
@@ -6019,15 +6477,16 @@ def _configure_cookie_probe(command):
     Supporting.add_ytdlp_pot_provider(command)
 
 
-def _download_cookie_owner():
+def _can_manage_download_cookies():
+    """Any signed-in identity may upload its own jar; an API key is the owner's tool."""
     supplied = request.args.get('key') or request.headers.get('X-Api-Key') or ''
     return _logged_in() or bool(API_KEY and hmac.compare_digest(supplied, API_KEY))
 
 
 @app.route("/api/youtube/download-cookies/status", methods=["GET"])
 def download_cookie_status():
-    if not _download_cookie_owner():
-        return error_response('Owner session or API key required.', 401)
+    if not _can_manage_download_cookies():
+        return error_response('Sign in, or supply the device API key.', 401)
     try:
         result = download_cookies.status(Supporting.get_ytdlp_cookies_file(), _configure_cookie_probe,
                                         force=request.args.get('refresh') == '1')
@@ -6038,15 +6497,18 @@ def download_cookie_status():
 
 @app.route("/api/youtube/download-cookies", methods=["POST"])
 def replace_download_cookies():
-    if not _download_cookie_owner():
-        return error_response('Owner session or API key required.', 401)
+    if not _can_manage_download_cookies():
+        return error_response('Sign in, or supply the device API key.', 401)
     if request.content_length and request.content_length > 1024 * 1024:
         return error_response('Cookie upload is too large.', 413)
     body = request.get_json(silent=True)
     if not isinstance(body, dict):
         return error_response('JSON object required.', 400)
     try:
-        result = download_cookies.replace(body.get('cookies'), _configure_cookie_probe)
+        # The caller's own jar only: writing the shared file would give every other
+        # account this one's YouTube standing.
+        result = download_cookies.replace(body.get('cookies'), _configure_cookie_probe,
+                                          destination=_download_cookie_path())
     except download_cookies.ProbeBusy as exc:
         return error_response(str(exc), 429)
     except ValueError as exc:
@@ -6063,14 +6525,18 @@ def replace_download_cookies():
 
 @app.route("/api/profile_status/", methods=["GET"])
 def profile_status():
-    """Returns auth statuses for Amazon, YouTube headers, and yt-dlp cookies."""
+    """Auth statuses for the *caller's* account: Amazon, YouTube headers, cookies.
+
+    Every YouTube figure describes this identity, so one account's "Not connected"
+    is genuinely its own and not the owner's session leaking through the UI."""
+    identity = _current_identity()
     # Amazon
     amazon_status = alexa_remote.remote.status()
     amazon_connected = bool(amazon_status.get("logged_in"))
     amazon_debug = f"logged_in={amazon_connected}, error={amazon_status.get('login_error')}"
     
     # YouTube Auth
-    yt_home = _get_ytmusic_home()
+    yt_home = _get_ytmusic_home(identity)
     auth_type_str = str(getattr(yt_home, 'auth_type', 'UNAUTHORIZED'))
     yt_auth_working = _ytmusic_client_is_authenticated(yt_home)
     if not yt_auth_working:
@@ -6080,7 +6546,7 @@ def profile_status():
         # background capture browser as though it were the login browser.
     headers_debug = f"auth_type={auth_type_str}"
 
-    cookies_file = Supporting.get_ytdlp_cookies_file()
+    cookies_file = Supporting.get_ytdlp_cookies_file(identity)
     if request.args.get('audio_check') == '0':
         # Native startup only needs account linkage. Download probes are an
         # explicit profile action and can take up to 50 seconds.
@@ -6093,7 +6559,7 @@ def profile_status():
     cookies_working = cookie_test['valid']
     cookies_debug = cookie_test['message']
 
-    browser_status = _youtube_browser_sessions.status()
+    browser_status = _youtube_browser_sessions.status(identity)
     return jsonify({
         "amazon_connected": amazon_connected,
         "youtube_auth_working": yt_auth_working,
@@ -6119,7 +6585,7 @@ def profile_status():
 def youtube_browser_auth():
     """Import YouTube Music browser request headers."""
     if not _logged_in():
-        return error_response("Owner session required.", 401)
+        return error_response("Sign in to connect YouTube Music.", 401)
     body = request.get_json(silent=True) or {}
     headers_raw = body.get("headers")
     if not isinstance(headers_raw, str) or not headers_raw.strip():
@@ -6137,15 +6603,29 @@ def youtube_browser_auth():
 
 
 def _browser_owner_id():
-    return session.get('sid') or ''
+    """The identity that owns a capture session: its own credential, its own profile.
+
+    This used to be the web session id, which is per-cookie rather than per-account:
+    two tabs of the same account would have looked like two different owners."""
+    return _current_identity()
 
 
-@app.route("/api/youtube/browser-session/start", methods=["POST"])
-def youtube_browser_session_start():
-    if not _logged_in():
-        return error_response("Owner session required.", 401)
-    token, status = _youtube_browser_sessions.start(_browser_owner_id())
-    response = jsonify(dict(status, url="/youtube-login/vnc.html?ui=2&autoconnect=1&resize=scale&path=youtube-login/websockify"))
+def _browser_profile_key():
+    """The sidecar's Chromium profile directory for this identity.
+
+    The owner keeps the base profile, where its existing Google login lives;
+    an account gets its own directory so signing in never overwrites anyone else."""
+    return account_user_id(_browser_owner_id())
+
+
+_VNC_URL = "/youtube-login/vnc.html?ui=2&autoconnect=1&resize=scale&path=youtube-login/websockify"
+
+
+def _browser_start_response(token, status):
+    if token is None:
+        # The single capture browser is busy with another account.
+        return jsonify(status), 409
+    response = jsonify(dict(status, url=_VNC_URL))
     response.set_cookie(_youtube_browser_sessions.COOKIE_NAME, token,
                         max_age=int(_youtube_browser_sessions.lease_ttl),
                         secure=app.config['SESSION_COOKIE_SECURE'], httponly=True,
@@ -6153,30 +6633,34 @@ def youtube_browser_session_start():
     return response
 
 
+@app.route("/api/youtube/browser-session/start", methods=["POST"])
+def youtube_browser_session_start():
+    if not _logged_in():
+        return error_response("Sign in to connect YouTube Music.", 401)
+    token, status = _youtube_browser_sessions.start(_browser_owner_id(), _browser_profile_key())
+    return _browser_start_response(token, status)
+
+
 @app.route("/api/youtube/browser-session/status", methods=["GET"])
 def youtube_browser_session_status():
     if not _logged_in():
-        return error_response("Owner session required.", 401)
-    return jsonify(_youtube_browser_sessions.poll())
+        return error_response("Sign in to connect YouTube Music.", 401)
+    return jsonify(_youtube_browser_sessions.poll(_browser_owner_id()))
 
 
 @app.route("/api/youtube/browser-session/retry", methods=["POST"])
 def youtube_browser_session_retry():
     if not _logged_in():
-        return error_response("Owner session required.", 401)
-    token, status = _youtube_browser_sessions.start(_browser_owner_id())
-    response = jsonify(dict(status, url="/youtube-login/vnc.html?ui=2&autoconnect=1&resize=scale&path=youtube-login/websockify"))
-    response.set_cookie(_youtube_browser_sessions.COOKIE_NAME, token,
-                        max_age=int(_youtube_browser_sessions.lease_ttl), secure=app.config['SESSION_COOKIE_SECURE'],
-                        httponly=True, samesite='Lax', path='/youtube-login/')
-    return response
+        return error_response("Sign in to connect YouTube Music.", 401)
+    token, status = _youtube_browser_sessions.start(_browser_owner_id(), _browser_profile_key())
+    return _browser_start_response(token, status)
 
 
 @app.route("/api/youtube/browser-session/stop", methods=["POST"])
 def youtube_browser_session_stop():
     if not _logged_in():
-        return error_response("Owner session required.", 401)
-    _youtube_browser_sessions.revoke()
+        return error_response("Sign in to connect YouTube Music.", 401)
+    _youtube_browser_sessions.revoke(_browser_owner_id())
     response = jsonify({"success": True})
     response.delete_cookie(_youtube_browser_sessions.COOKIE_NAME, path='/youtube-login/')
     return response
@@ -6185,9 +6669,9 @@ def youtube_browser_session_stop():
 @app.route("/api/youtube/browser-session/open-youtube", methods=["POST"])
 def youtube_browser_session_open_youtube():
     if not _logged_in():
-        return error_response("Owner session required.", 401)
+        return error_response("Sign in to connect YouTube Music.", 401)
     try:
-        return jsonify(_youtube_browser_sessions.open_youtube())
+        return jsonify(_youtube_browser_sessions.open_youtube(_browser_owner_id()))
     except Exception:
         return error_response("Browser window is unavailable.", 503)
 
@@ -6195,9 +6679,9 @@ def youtube_browser_session_open_youtube():
 @app.route("/api/youtube/browser-session/capture", methods=["POST"])
 def youtube_browser_session_capture():
     if not _logged_in():
-        return error_response("Owner session required.", 401)
+        return error_response("Sign in to connect YouTube Music.", 401)
     try:
-        return jsonify(_youtube_browser_sessions.request_capture()), 202
+        return jsonify(_youtube_browser_sessions.request_capture(_browser_owner_id())), 202
     except Exception:
         return error_response("Browser window is unavailable.", 503)
 
@@ -6347,7 +6831,7 @@ def alexa_command():
     previous_now_playing = None
     if action in ('play', 'pause'):
         with _np_lock:
-            previous_now_playing = copy.deepcopy(_now_playing)
+            previous_now_playing = copy.deepcopy(dict(_now_playing))
     if action == 'play':
         # Stage the pending state before sending the command. Alexa can deliver
         # PlaybackStarted while remote.command() is still waiting for Amazon's
@@ -6528,7 +7012,7 @@ def alexa_seek():
     with _np_lock:
         if _now_playing.get('video_id') != video_id:
             return error_response('playback changed while seeking', 409)
-        previous = copy.deepcopy(_now_playing)
+        previous = copy.deepcopy(dict(_now_playing))
         _reset_progress(position_ms)
         _now_playing['alexa_intent_at'] = time.time()
         _now_playing.pop('_alexa_finished_token',None)
@@ -7104,18 +7588,16 @@ def alexa_state_event():
 # ---- Home feed (categorized recommendation rows) ----
 _HOME_CACHE_TTL = 3 * 60
 _HOME_FORCE_MIN_INTERVAL = 30
-_home_rebuild_lock = threading.Lock() # single flight
 
-async def _fetch_home_sources():
+async def _fetch_home_sources(identity):
     sources = {}
 
     # Concurrently fetch ytmusic parts
     async def get_native_home():
         try:
-            ytm = await asyncio.to_thread(_get_ytmusic_home)
             return await asyncio.wait_for(
-                asyncio.to_thread(_with_youtube_auth_renewal,
-                                  lambda: _get_ytmusic_home().get_home(limit=40)),
+                asyncio.to_thread(lambda: _with_youtube_auth_renewal(
+                    lambda: _get_ytmusic_home(identity).get_home(limit=40), identity)),
                 timeout=home_feed.SOURCE_TIMEOUTS['ytmusic_home'])
         except Exception as e:
             logger.warning(f"ytm_home failed: {e}")
@@ -7145,18 +7627,18 @@ async def _fetch_home_sources():
 @app.route("/api/home/", methods=["GET"])
 def get_home():
     force = request.args.get('refresh') == '1'
+    identity = _current_identity()
 
-    with _home_lock:
-        data = _home_cache['data']
-        age = time.time() - _home_cache['built_at']
-
+    data, age = _home_cache.get(identity)
     fresh_enough = age < _HOME_CACHE_TTL
 
     if fresh_enough and data and (not force or age < _HOME_FORCE_MIN_INTERVAL):
         return jsonify(data)
 
-    # Single flight rebuild
-    acquired = _home_rebuild_lock.acquire(blocking=False)
+    # Single flight rebuild, per identity: one account's rebuild must neither block
+    # another account nor hand it a feed built from somebody's library.
+    rebuild = _home_cache.lock(identity)
+    acquired = rebuild.acquire(blocking=False)
     if not acquired:
         # If we have stale data, serve it immediately while rebuild happens in background
         if data:
@@ -7164,23 +7646,19 @@ def get_home():
             stale_data['stale'] = True
             return jsonify(stale_data)
         # Cold start, we must wait
-        _home_rebuild_lock.acquire()
+        rebuild.acquire()
 
     try:
         # Check cache again after acquiring lock in case it was built while waiting
-        with _home_lock:
-            data = _home_cache['data']
-            age = time.time() - _home_cache['built_at']
+        data, age = _home_cache.get(identity)
         fresh_enough = age < _HOME_CACHE_TTL
         if fresh_enough and data and (not force or age < _HOME_FORCE_MIN_INTERVAL):
             return jsonify(data)
 
-        sources = asyncio.run(_fetch_home_sources())
+        sources = asyncio.run(_fetch_home_sources(identity))
         feed = home_feed.assemble_home_feed(sources)
 
-        with _home_lock:
-            _home_cache['data'] = feed
-            _home_cache['built_at'] = time.time()
+        _home_cache.set(identity, feed)
 
         return jsonify(feed)
     except Exception as e:
@@ -7200,7 +7678,7 @@ def get_home():
             "shelves": []
         })
     finally:
-        _home_rebuild_lock.release()
+        rebuild.release()
 
 
 # ---- Blank-state recommendations (web remote) ----
@@ -7215,6 +7693,9 @@ _RECS_CACHE_TTL = 3 * 60
 # fire their own 5-radio YT Music build (and stack up waitress threads behind
 # _recs_lock). Within this window a forced refresh serves the cache instead.
 _RECS_FORCE_MIN_INTERVAL = 60
+# Deliberately shared rather than per identity: this mix is seeded from public charts
+# (the history seed below is currently empty), so splitting it would only multiply the
+# calls to YouTube. Revisit if history-based seeding comes back.
 _recs_cache = {'built_at': 0, 'items': []}
 _recs_lock = threading.Lock()
 
@@ -9295,7 +9776,7 @@ async def api_get_library_playlist(pl_id):
     if _jam_guest() and pl_id.upper() == 'LM':
         return jsonify({'error': 'Liked Music is private to the host account.'}), 403
     try:
-        yt = _get_ytmusic() if _jam_guest() else _get_ytmusic_home()
+        yt = _catalog_client()
         from playlist_paging import playlist_page_request
         try:
             page_limit, page_offset = playlist_page_request(request.args)
@@ -9547,7 +10028,7 @@ async def api_resolve_track_album(video_id):
             'artist': artists[0].get('name') or '' if artists else '',
         }
 
-    clients = [_get_ytmusic() if _jam_guest() else _get_ytmusic_home()]
+    clients = [_catalog_client()]
     try:
         from ytmusicapi import YTMusic
         clients.append(YTMusic())
@@ -9656,7 +10137,7 @@ async def api_get_track_artwork(video_id):
         return {'urls': [url for url in urls if url not in catalog_direct_urls]
                 + [url for url in catalog_direct_urls if url not in urls]}
 
-    clients = [_get_ytmusic_home()]
+    clients = [_catalog_client()]
     try:
         from ytmusicapi import YTMusic
         clients.append(YTMusic())
@@ -9700,7 +10181,7 @@ async def api_get_album(browse_id):
     # playlist classifier to a clean 404 instead of a 502 toast.
     if browse_id.upper().startswith('OLAK'):
         try:
-            yt = _get_ytmusic() if _jam_guest() else _get_ytmusic_home()
+            yt = _catalog_client()
             raw_pl = await asyncio.to_thread(yt.get_playlist, browse_id, 100)
         except Exception as e:
             message = str(e)
@@ -9714,7 +10195,7 @@ async def api_get_album(browse_id):
                 return _album_provider_error_response(e, browse_id, 'OLAK playlist load failed')
         return jsonify(_normalize_olak_album(raw_pl, browse_id))
     try:
-        yt = _get_ytmusic() if _jam_guest() else _get_ytmusic_home()
+        yt = _catalog_client()
         raw = await asyncio.to_thread(yt.get_album, browse_id)
     except Exception as e:
         message = str(e)
@@ -9875,7 +10356,7 @@ async def api_resolve_artist():
             return jsonify({'name': cached[1][0], 'channel_id': cached[1][1]})
         if cached:
             _artist_resolve_cache.pop(cache_key, None)
-    yt = _get_ytmusic() if _jam_guest() else _get_ytmusic_home()
+    yt = _catalog_client()
     try:
         results = await asyncio.to_thread(
             yt.search, query=name, filter='artists', limit=10)
@@ -9953,7 +10434,7 @@ async def api_artist_releases(channel_id):
         if isinstance(artist_response, tuple):
             return artist_response
         artist = artist_response.get_json().get('artist') or {}
-        yt = _get_ytmusic() if _jam_guest() else _get_ytmusic_home()
+        yt = _catalog_client()
         section = artist.get(kind) or {}
         params = section.get('params')
         browse_id = section.get('browseId')
@@ -9988,7 +10469,7 @@ async def api_get_artist_songs(channel_id):
 
     last_error = None
     try:
-        clients = [_get_ytmusic() if _jam_guest() else _get_ytmusic_home()]
+        clients = [_catalog_client()]
         try:
             clients.append(YTMusic())
         except Exception as error:
@@ -10175,7 +10656,7 @@ async def api_get_artist(channel_id):
         }
 
     try:
-        yt = _get_ytmusic() if _jam_guest() else _get_ytmusic_home()
+        yt = _catalog_client()
         raw = await asyncio.to_thread(yt.get_artist, channel_id)
     except Exception as e:
         message = str(e)
@@ -10275,7 +10756,7 @@ async def api_get_explore():
         # Keep Explore separate from Home.  get_home contains account-specific
         # shelves such as Liked Music and Listen again; those belong on Home,
         # not in the public discovery browser.
-        ytm = _get_ytmusic() if _jam_guest() else (_get_ytmusic_home() if _ytmusic_is_authenticated() else _get_ytmusic())
+        ytm = _signed_in_catalog_client()
         explore = await asyncio.to_thread(ytm.get_explore)
         return jsonify(explore or {})
     except Exception as e:
@@ -10293,7 +10774,7 @@ async def api_get_explore_moods():
     if not params:
         return jsonify({'error': 'A mood or genre is required.'}), 400
     try:
-        ytm = _get_ytmusic() if _jam_guest() else (_get_ytmusic_home() if _ytmusic_is_authenticated() else _get_ytmusic())
+        ytm = _signed_in_catalog_client()
         featured_playlists, community_playlists, songs, albums = await asyncio.gather(
             asyncio.to_thread(ytm.get_mood_playlists, params),
             asyncio.to_thread(ytm.search, f'{title or "music"} music', 'playlists', None, 24),
@@ -10365,7 +10846,7 @@ async def alexa_suggest():
     try:
         # Never use the host's authenticated YouTube Music session for a
         # guest's suggestions.
-        ytmusic = _get_ytmusic() if _jam_guest() else _get_ytmusic_home()
+        ytmusic = _catalog_client()
         raw = await asyncio.to_thread(ytmusic.get_search_suggestions, query)
     except Exception as e:
         logger.error("[alexa/suggest] failed: %s", e)
@@ -10407,8 +10888,11 @@ def _render_root_shell():
             is_authenticated=is_auth)))
     is_auth = _ytmusic_is_authenticated()
     if _logged_in():
+        mu_user = _mu_web_identity()
         return _no_store(app.make_response(render_template(
-            "remote.html", asset_v=_STATIC_VERSION, remote_username=REMOTE_USER, is_authenticated=is_auth)))
+            "remote.html", asset_v=_STATIC_VERSION,
+            remote_username=(mu_user or {}).get('username') or REMOTE_USER,
+            is_authenticated=is_auth)))
     if _jam_guest():
         if request.path in _JAM_PRIVATE_SPA_PATHS:
             return redirect('/')
@@ -10467,7 +10951,7 @@ def _status_snapshot():
             return fallback
     storage = read_component('storage', lambda: _status_storage.get(lambda: {
         'captured_at': time.time(), 'system': system_snapshot(tempfile.gettempdir(), DB_FILE)}), {'available': False})
-    streaming = _youtube_stream.snapshot()
+    streaming = _youtube_streams.snapshot()
     cookie = read_component('download cookies', lambda: download_cookies.inspection(Supporting.get_ytdlp_cookies_file()), {'present': False})
     amazon = read_component('Amazon session', alexa_remote.remote.is_logged_in, None)
     if isinstance(amazon, tuple):
@@ -10915,10 +11399,10 @@ except Exception:  # noqa: BLE001 - optional subsystem must not break startup
         "[multiuser] initialization failed; continuing with the single-owner app"
     )
 
-if _youtube_stream.enabled:
+if _YOUTUBE_STREAMING_ENABLED:
     def _initialize_youtube_stream():
         try:
-            _youtube_stream.resolve()
+            _youtube_stream_for(_OWNER_IDENTITY).resolve()
         except StreamError:
             logger.warning('YouTube streaming client will retry initialization on playback.')
     _audio_jobs.submit('__youtube_stream_init__', _initialize_youtube_stream)

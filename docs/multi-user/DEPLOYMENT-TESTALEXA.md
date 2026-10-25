@@ -81,10 +81,12 @@ MULTIUSER_TEST_ENVIRONMENT=1
 MULTIUSER_ENCRYPTION_KEY=...
 MULTIUSER_BACKUP_DIR=/data/backups
 MULTIUSER_MAIL_OUTBOX=/data/mail-outbox
-MULTIUSER_MAIL_FROM=no-reply@synthora.in
-MULTIUSER_SMTP_HOST=
-MULTIUSER_SMTP_USERNAME=
-MULTIUSER_SMTP_PASSWORD=
+MULTIUSER_MAIL_FROM=noreply@synthora.in
+MULTIUSER_SMTP_HOST=smtp-relay.brevo.com
+MULTIUSER_SMTP_PORT=587
+MULTIUSER_SMTP_SECURITY=starttls
+MULTIUSER_SMTP_USERNAME=<brevo-smtp-login>
+MULTIUSER_SMTP_PASSWORD=<brevo-smtp-key>
 ```
 
 `COMPOSE_ENV_FILE` makes Compose load this file into the `ytmusic` container
@@ -140,9 +142,10 @@ The stack is running as project `musicbox-test` on this host:
 | Existing owner login | `POST /login/` JSON `200`, `/home` `200`, `/api/status` `200` |
 | Firewall persistence | `musicbox-firewall.service` enabled and active |
 
-The smoke test used disposable users and removed them afterwards. The owner
-account still has no email address, and SMTP is not configured, so email flows
-have not been exercised end-to-end against a real mailbox yet.
+The smoke test used disposable users and removed them afterwards. SMTP delivery
+is configured against the Brevo relay and a test message reached a real external
+mailbox. The owner account still has no email address, so verification, reset and
+magic-link flows have not yet been exercised end-to-end against a real inbox.
 
 ## 5. TLS
 
@@ -174,7 +177,7 @@ curl -sS -o /dev/null -w '%{http_code}\n' https://testalexa.synthora.in/admin/ap
    `.env.testalexa`.
 3. Open **My account → Profile**, set your real `@synthora.in` address and a
    display name. Changing the email requires the current password and sends a
-   verification link to the outbox until SMTP is configured.
+   verification link by email.
 4. **Before signing out**, retrieve the verification link from the outbox and
    open it. Email verification is enforced at the next sign-in when an address
    is set. If you sign out first, an owner can still resend verification from
@@ -211,39 +214,65 @@ docker compose --env-file .env.testalexa -p musicbox-test exec ytmusic \
   cat /data/multiuser_admin_password.txt
 ```
 
-## 7. Configure SMTP for `synthora.in`
+## 7. Email delivery (`synthora.in` via Brevo)
 
-The domain is owned, but SMTP credentials are deployment-specific. Set:
+Delivery runs through Brevo's SMTP relay. The domain is authenticated with
+Brevo by DKIM, so any `@synthora.in` sender is allowed;
+`MULTIUSER_MAIL_FROM` is `noreply@synthora.in`.
 
 ```dotenv
-MULTIUSER_SMTP_HOST=smtp.your-provider.example
+MULTIUSER_SMTP_HOST=smtp-relay.brevo.com
 MULTIUSER_SMTP_PORT=587
-MULTIUSER_SMTP_SECURITY=starttls   # or ssl on 465, none only on a trusted network
-MULTIUSER_SMTP_USERNAME=no-reply@synthora.in
-MULTIUSER_SMTP_PASSWORD=...
-MULTIUSER_MAIL_FROM=no-reply@synthora.in
-MULTIUSER_MAIL_FROM_NAME=Music Box
+MULTIUSER_SMTP_SECURITY=starttls   # 465 + ssl also works
+MULTIUSER_SMTP_USERNAME=<login from Brevo → SMTP & API → SMTP>
+MULTIUSER_SMTP_PASSWORD=<SMTP key; not the account password or a v3 API key>
+MULTIUSER_MAIL_FROM=noreply@synthora.in
+MULTIUSER_MAIL_FROM_NAME="Music Box"
 MULTIUSER_MAIL_REPLY_TO=
 ```
 
-Then recreate the app and send a test from **System → Send test email**:
+Quote values that contain spaces: Compose strips the quotes, and it keeps the
+file safe to `source` in a shell.
+
+Recreate the app, then send a test from **System → Send test email** (owner
+accounts only):
 
 ```bash
 docker compose --env-file .env.testalexa -p musicbox-test up -d ytmusic
+docker compose --env-file .env.testalexa -p musicbox-test logs --tail=20 ytmusic \
+  | grep -E 'Email delivery configured|email sent|email delivery failed'
 ```
+
+A successful send logs `[multiuser] email sent to …` and records
+`test_email_sent` in the audit log. A failure logs `email delivery failed` with
+the SMTP error class and records `test_email_failed`.
+
+DNS state for `synthora.in` (verified):
+
+| Record | Value | Purpose |
+| --- | --- | --- |
+| `brevo-code` TXT | `brevo-code:…` | domain ownership |
+| `brevo1._domainkey` CNAME | `b1.synthora-in.dkim.brevo.com.` | DKIM |
+| `brevo2._domainkey` CNAME | `b2.synthora-in.dkim.brevo.com.` | DKIM |
+| `_dmarc` TXT | `v=DMARC1; p=none; rua=mailto:rua@dmarc.brevo.com` | DMARC reporting |
+| `MX` | `mx.zoho.in` et al. | Zoho stays the inbound mail host |
+
+SPF is intentionally left as `v=spf1 include:zoho.in ~all`. Brevo sends with
+its own Return-Path on its bounce domains, so DKIM alignment carries DMARC; an
+SPF include is only needed for a Custom Return-Path or Dedicated IP. Merging it
+into the single existing SPF record is what would risk breaking Zoho inbound
+mail.
 
 Provider checklist:
 
-- SPF and DKIM records for `synthora.in` include the provider.
-- `no-reply@synthora.in` is allowed to send (or use the provider's verified
-  sender).
+- Keep the Brevo SMTP login and sender on the same authenticated domain.
 - DMARC starts at `p=none` while testing.
 - Port 587 STARTTLS is usually the least restrictive; 465 SSL also works.
 - If the provider blocks the host, check outbound TCP 587/465 from this server.
 
-Until SMTP is configured, every one-time link is written to
-`/data/mail-outbox` inside the `ytmusic_data` volume as a `.eml` file. Treat
-those files as secrets:
+`/data/mail-outbox` inside the `ytmusic_data` volume is the fallback: when
+`MULTIUSER_SMTP_HOST` is blank, every one-time link is written there as a `.eml`
+file instead of being sent. Treat those files as secrets:
 
 ```bash
 docker compose --env-file .env.testalexa -p musicbox-test exec ytmusic \

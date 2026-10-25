@@ -13,7 +13,7 @@ def namespace(queued=None, streaming=None):
     relay = SimpleNamespace(enabled=True, metadata=Mock(return_value=streaming))
     yt = SimpleNamespace(get_song=Mock(return_value={}), get_watch_playlist=Mock(return_value={}))
     ns = dict(_valid_video_id=lambda v: v == VIDEO, _metadata_from_queue=lambda v: queued,
-        _youtube_stream=relay, _get_ytmusic=lambda: yt, _clean_artist_credit=lambda v: v or '',
+        _youtube_stream_for=lambda: relay, _get_ytmusic=lambda: yt, _clean_artist_credit=lambda v: v or '',
         Supporting=SimpleNamespace(probe_metadata=Mock(return_value=None)), logger=Mock())
     nodes = [n for n in ast.parse(SOURCE.read_text()).body if isinstance(n, ast.FunctionDef)
         and n.name in ('_lookup_video_metadata', '_lookup_and_update_np')]

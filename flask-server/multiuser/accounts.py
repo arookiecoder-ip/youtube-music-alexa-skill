@@ -6,6 +6,7 @@ a worker or admin CLI without booting the whole application.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import time
@@ -13,7 +14,7 @@ import uuid
 from typing import Any
 
 from .config import MultiUserConfig
-from .crypto import SecretBox
+from .crypto import SecretBox, SecretBoxError
 from .db import Database
 from .security import (
     generate_password,
@@ -29,6 +30,8 @@ RESERVED_USERNAMES = {"anonymous", "system", "deleted", "root", "administrator"}
 ROLES = ("owner", "admin", "user")
 STATUSES = ("active", "disabled", "invited")
 PROVIDERS = ("youtube", "amazon")
+
+logger = logging.getLogger(__name__)
 
 
 class AccountError(ValueError):
@@ -862,6 +865,44 @@ class AccountService:
                 (user_id, provider, encrypted, metadata_json, status, now),
             )
         self.audit(actor, "provider_connected", user_id, {"provider": provider, "status": status}, "", "")
+
+    def get_provider_secret(self, user_id: str, provider: str) -> dict:
+        """Return the decrypted payload for one provider, or {} when unusable.
+
+        This is the only read path that decrypts: `provider_status` deliberately
+        never touches `secret_enc`, so no admin page or user listing can leak a
+        session cookie. A decrypt failure means the encryption key changed or the
+        row is corrupt -- either way the account falls back to the public catalog
+        rather than the request failing outright."""
+        if provider not in PROVIDERS:
+            raise AccountError("Unknown provider.")
+        row = self.db.fetchone(
+            "SELECT secret_enc, status FROM user_provider_credentials "
+            "WHERE user_id = ? AND provider = ?",
+            (user_id, provider),
+        )
+        if not row or row["status"] != "connected":
+            return {}
+        try:
+            payload = self.secret_box.decrypt_json(row["secret_enc"])
+        except SecretBoxError:
+            logger.error("Stored %s credential for %s could not be decrypted",
+                         provider, user_id)
+            return {}
+        return payload if isinstance(payload, dict) else {}
+
+    def set_provider_status(self, user_id: str, provider: str, status: str,
+                            last_error: str = "") -> None:
+        """Record a credential's live state without touching the secret."""
+        if provider not in PROVIDERS:
+            raise AccountError("Unknown provider.")
+        if status not in {"connected", "expired", "error", "revoked"}:
+            raise AccountError("Invalid credential status.")
+        self.db.execute(
+            "UPDATE user_provider_credentials SET status = ?, last_error = ?, "
+            "last_validated_at = ? WHERE user_id = ? AND provider = ?",
+            (status, (last_error or "")[:400], _now(), user_id, provider),
+        )
 
     def clear_provider_credentials(
         self,

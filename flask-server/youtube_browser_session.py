@@ -80,13 +80,14 @@ class BrowserController:
         self.token = token or ""
         self.timeout = timeout
 
-    def call(self, path, method="GET"):
+    def call(self, path, method="GET", body=None):
         if not self.base_url or not self.token:
             raise RuntimeError("Browser sidecar is not configured")
         req = urllib.request.Request(self.base_url + path, method=method,
                                      headers={"X-Control-Token": self.token,
                                               "Content-Type": "application/json"},
-                                     data=b"{}" if method != "GET" else None)
+                                     data=json.dumps(body or {}).encode()
+                                     if method != "GET" else None)
         try:
             with urllib.request.urlopen(req, timeout=self.timeout) as response:
                 return json.load(response)
@@ -97,6 +98,24 @@ class BrowserController:
             raise
 
 
+class _OwnerAuth:
+    """One identity's view of the shared capture browser.
+
+    The sidecar runs a single Chromium, so the interactive flow is one-at-a-time,
+    but the *state* must not be: showing account A's "connected" verdict to account
+    B would make B believe its own YouTube Music was linked."""
+    __slots__ = ("lease", "state", "message", "last_success", "last_attempt",
+                 "refreshing")
+
+    def __init__(self):
+        self.lease = None
+        self.state = "idle"
+        self.message = None
+        self.last_success = None
+        self.last_attempt = None
+        self.refreshing = False
+
+
 class YouTubeBrowserSessionManager:
     COOKIE_NAME = "yt_browser_lease"
 
@@ -104,29 +123,34 @@ class YouTubeBrowserSessionManager:
                  refresh_timeout=45, refresh_cooldown=300, clock=time.time):
         self.controller = controller
         self.promote = promote
-        self.invalidate = invalidate or (lambda: None)
+        self.invalidate = invalidate or (lambda owner_id=None: None)
         self.lease_ttl = float(lease_ttl)
         self.refresh_timeout = float(refresh_timeout)
         self.refresh_cooldown = float(refresh_cooldown)
         self.clock = clock
         self._lock = threading.RLock()
         self._refresh_condition = threading.Condition(self._lock)
-        self._lease = None
-        self._refreshing = False
-        self._state = "idle"
-        self._message = None
-        self._last_success = None
-        self._last_attempt = None
+        self._auth = {}
+        # The sidecar's single Chromium: which identity is using it right now.
+        self._busy = None
 
     @staticmethod
     def _digest(token):
         return hashlib.sha256(token.encode()).digest()
 
-    def _expire_locked(self):
-        if self._lease and self.clock() >= self._lease[2]:
-            self._lease = None
-            if self._state not in ("connected", "reconnect_required"):
-                self._state = "idle"
+    def _auth_for(self, owner_id):
+        # Callers hold self._lock.
+        key = str(owner_id or "")
+        entry = self._auth.get(key)
+        if entry is None:
+            entry = self._auth[key] = _OwnerAuth()
+        return entry
+
+    def _expire_locked(self, entry):
+        if entry.lease and self.clock() >= entry.lease[2]:
+            entry.lease = None
+            if entry.state not in ("connected", "reconnect_required"):
+                entry.state = "idle"
             # Do not perform network I/O under the manager lock. The lease is
             # already invalid, and this bounded best-effort close releases the
             # otherwise inaccessible Chromium window/resources.
@@ -145,65 +169,98 @@ class YouTubeBrowserSessionManager:
             # Older or unavailable sidecars still need resources released.
             self._close_sidecar()
 
-    def start(self, owner_id):
+    def start(self, owner_id, profile_key=""):
         token = secrets.token_urlsafe(32)
         with self._lock:
-            self._lease = (str(owner_id), self._digest(token), self.clock() + self.lease_ttl)
-            self._state, self._message = "connecting", None
+            if self._busy not in (None, str(owner_id or "")):
+                return None, dict(self.status(owner_id),
+                                  message="Another account is connecting YouTube Music "
+                                          "right now. Try again in a minute.")
+            entry = self._auth_for(owner_id)
+            self._expire_locked(entry)
+            entry.lease = (str(owner_id or ""), self._digest(token), self.clock() + self.lease_ttl)
+            entry.state, entry.message = "connecting", None
+            self._busy = str(owner_id or "")
         try:
-            sidecar = self.controller.call("/interactive/start", "POST")
+            sidecar = self.controller.call("/interactive/start", "POST",
+                                           {"profile": profile_key or ""})
             with self._lock:
-                self._state = sidecar.get("state", "waiting_for_login")
+                entry.state = sidecar.get("state", "waiting_for_login")
         except Exception:
             with self._lock:
-                self._state, self._message = "unavailable", "Browser service is unavailable"
-        return token, self.status()
+                entry.state, entry.message = "unavailable", "Browser service is unavailable"
+                # Nothing is pending for this identity, so it must not keep the
+                # Chromium claimed and lock everyone else out until the lease dies.
+                entry.lease = None
+                self._release_busy_locked()
+        return token, self.status(owner_id)
+
+    def _release_busy_locked(self):
+        """Hand the sidecar back if no identity holds a live lease on it."""
+        for entry in self._auth.values():
+            if entry.lease or entry.refreshing:
+                return
+        self._busy = None
 
     def authorize(self, owner_id, token):
         with self._lock:
-            self._expire_locked()
-            if not self._lease or not token:
+            entry = self._auth_for(owner_id)
+            self._expire_locked(entry)
+            if not entry.lease or not token:
                 return False
-            return (hmac.compare_digest(self._lease[0], str(owner_id)) and
-                    hmac.compare_digest(self._lease[1], self._digest(token)))
+            return (hmac.compare_digest(entry.lease[0], str(owner_id)) and
+                    hmac.compare_digest(entry.lease[1], self._digest(token)))
 
-    def revoke(self, close=True):
+    def revoke(self, owner_id=None, close=True):
         with self._lock:
-            self._lease = None
-            if self._state != "connected":
-                self._state = "idle"
+            entry = self._auth_for(owner_id)
+            entry.lease = None
+            if entry.state != "connected":
+                entry.state = "idle"
+            self._release_busy_locked()
         if close:
             self._close_sidecar()
 
-    def open_youtube(self):
+    def open_youtube(self, owner_id=None):
         """Ask the visible plain browser to navigate to YouTube Music."""
         sidecar = self.controller.call("/interactive/open-youtube", "POST")
         with self._lock:
-            self._state = sidecar.get("state", self._state)
-            self._message = sidecar.get("message")
-        return self.status()
+            entry = self._auth_for(owner_id)
+            entry.state = sidecar.get("state", entry.state)
+            entry.message = sidecar.get("message")
+        return self.status(owner_id)
 
-    def request_capture(self):
+    def request_capture(self, owner_id=None):
         """Begin the explicit plain-browser to validation-browser handoff."""
         sidecar = self.controller.call("/interactive/capture", "POST")
         with self._lock:
-            self._state = sidecar.get("state", "capture_requested")
-            self._message = sidecar.get("message")
-        return self.status()
+            entry = self._auth_for(owner_id)
+            entry.state = sidecar.get("state", "capture_requested")
+            entry.message = sidecar.get("message")
+        return self.status(owner_id)
 
-    def _take_and_promote(self):
+    def _take_and_promote(self, owner_id):
         candidate = self.controller.call("/candidate/take", "POST")
         if not accepted_browse_url(candidate.get("url")):
             raise ValueError("Captured request was not a YouTube Music browse request")
-        self.promote(candidate.get("headers"))
-        self.invalidate()
+        self.promote(candidate.get("headers"), owner_id)
+        self.invalidate(owner_id)
         with self._lock:
-            self._state, self._message = "connected", None
-            self._last_success = self.clock()
-            self._lease = None
+            entry = self._auth_for(owner_id)
+            entry.state, entry.message = "connected", None
+            entry.last_success = self.clock()
+            entry.lease = None
+            self._release_busy_locked()
         self._complete_sidecar()
 
-    def poll(self):
+    def poll(self, owner_id=None):
+        with self._lock:
+            entry = self._auth_for(owner_id)
+            self._expire_locked(entry)
+            # Only the identity that owns the Chromium can read meaningful state
+            # from it; the sidecar has no per-user view.
+            if self._busy not in (None, str(owner_id or "")):
+                return self._status_locked(entry)
         try:
             sidecar = self.controller.call("/status")
             state = sidecar.get("state", "unavailable")
@@ -213,77 +270,89 @@ class YouTubeBrowserSessionManager:
                 # connected state in both cases: replacing it with the
                 # sidecar's transient "complete" status prevents the remote
                 # UI from running its successful-auth refresh path.
-                return self.status()
+                return self.status(owner_id)
             with self._lock:
-                self._expire_locked()
-                self._state = "validating" if state == "captured" else state
-                self._message = sidecar.get("message")
+                self._expire_locked(entry)
+                entry.state = "validating" if state == "captured" else state
+                entry.message = sidecar.get("message")
             if state == "captured":
-                self._take_and_promote()
+                self._take_and_promote(owner_id)
         except urllib.error.HTTPError as exc:
             if exc.code != 404:
                 with self._lock:
-                    self._state, self._message = "unavailable", "Browser service is unavailable"
+                    entry.state, entry.message = "unavailable", "Browser service is unavailable"
         except urllib.error.URLError:
             with self._lock:
-                self._state, self._message = "unavailable", "Browser service is unavailable"
+                entry.state, entry.message = "unavailable", "Browser service is unavailable"
         except Exception:
             with self._lock:
-                self._state, self._message = "reconnect_required", "Captured session was not accepted"
-        return self.status()
+                entry.state, entry.message = "reconnect_required", "Captured session was not accepted"
+        return self.status(owner_id)
 
-    def status(self):
+    def _status_locked(self, entry):
+        return {"state": entry.state, "available": entry.state != "unavailable",
+                "refreshing": entry.refreshing,
+                "reconnect_required": entry.state == "reconnect_required",
+                "last_successful_renewal": entry.last_success, "message": entry.message,
+                "lease_expires_at": entry.lease[2] if entry.lease else None}
+
+    def status(self, owner_id=None):
         with self._lock:
-            self._expire_locked()
-            return {"state": self._state, "available": self._state != "unavailable",
-                    "refreshing": self._refreshing, "reconnect_required": self._state == "reconnect_required",
-                    "last_successful_renewal": self._last_success, "message": self._message,
-                    "lease_expires_at": self._lease[2] if self._lease else None}
+            entry = self._auth_for(owner_id)
+            self._expire_locked(entry)
+            return self._status_locked(entry)
 
-    def refresh(self, wait=True):
-        """Single-flight saved-profile refresh. Waiting callers share its result."""
+    def refresh(self, owner_id=None, wait=True):
+        """Single-flight saved-profile refresh for one identity's own profile."""
+        profile_key = str(owner_id or "")
         with self._refresh_condition:
+            entry = self._auth_for(owner_id)
             now = self.clock()
-            if self._refreshing:
+            if entry.refreshing:
                 if wait:
                     self._refresh_condition.wait(timeout=self.refresh_timeout)
-                return self._state == "connected"
-            if self._last_attempt and now - self._last_attempt < self.refresh_cooldown:
-                return self._state == "connected"
-            self._refreshing, self._last_attempt = True, now
-            self._state, self._message = "refreshing", None
+                return entry.state == "connected"
+            if entry.last_attempt and now - entry.last_attempt < self.refresh_cooldown:
+                return entry.state == "connected"
+            if self._busy not in (None, profile_key):
+                # The one Chromium is busy with another account's login.
+                return entry.state == "connected"
+            entry.refreshing, entry.last_attempt = True, now
+            entry.state, entry.message = "refreshing", None
+            self._busy = profile_key
         ok = False
         try:
-            self.controller.call("/refresh", "POST")
+            self.controller.call("/refresh", "POST", {"profile": profile_key})
             deadline = self.clock() + self.refresh_timeout
             while self.clock() < deadline:
                 sidecar = self.controller.call("/status")
                 state = sidecar.get("state")
                 if state == "captured":
-                    self._take_and_promote(); ok = True; break
+                    self._take_and_promote(owner_id); ok = True; break
                 if state in ("reconnect_required", "unavailable"):
                     with self._lock:
-                        self._state = state
-                        self._message = sidecar.get("message")
+                        entry.state = state
+                        entry.message = sidecar.get("message")
                     break
                 time.sleep(0.25)
-            if not ok and self._state == "refreshing":
+            if not ok and entry.state == "refreshing":
                 with self._lock:
-                    self._state, self._message = "reconnect_required", "Google interaction is required"
+                    entry.state, entry.message = "reconnect_required", "Google interaction is required"
         except Exception:
             with self._lock:
-                self._state, self._message = "reconnect_required", "Saved browser session could not renew authentication"
+                entry.state, entry.message = "reconnect_required", "Saved browser session could not renew authentication"
         finally:
             with self._refresh_condition:
-                self._refreshing = False
+                entry.refreshing = False
+                self._release_busy_locked()
                 self._refresh_condition.notify_all()
         return ok
 
-    def call_with_one_refresh(self, operation):
+    def call_with_one_refresh(self, operation, owner_id=None):
         try:
             return operation()
         except Exception as exc:
-            if not is_authentication_error(exc) or not self.refresh():
+            if not is_authentication_error(exc) or not self.refresh(owner_id):
                 raise
         return operation()  # exactly one retry
 

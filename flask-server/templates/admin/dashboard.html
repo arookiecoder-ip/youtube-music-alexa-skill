@@ -3,7 +3,7 @@
 <div class="page-head">
   <div>
     <h1>Dashboard</h1>
-    <p>Identity, per-user account storage and administration. The existing single-owner playback app stays untouched while this layer is rolled out.</p>
+    <p>Multi-user account storage and administration. All users are treated equally.</p>
   </div>
   <div class="btn-row">
     <a class="btn primary" href="{{ base_path }}/users/new/">Create user</a>
@@ -15,7 +15,7 @@
   <div class="banner">
     <span>⚑</span>
     <span>
-      <strong>Bootstrap owner created.</strong>
+      <strong>Bootstrap account created.</strong>
       {% if bootstrap.generated_password %}
         A generated password was written to <span class="mono">{{ bootstrap.password_file or "(not writable — check container logs)" }}</span>.
         Sign in, change it, then delete the file.
@@ -35,7 +35,7 @@
   <div class="card">
     <div class="stat-label">Administrators</div>
     <div class="stat-value accent">{{ counts.admins }}</div>
-    <div class="stat-note">{{ counts.owners }} owner{% if counts.owners != 1 %}s{% endif %}</div>
+    <div class="stat-note">{{ counts.total }} users</div>
   </div>
   <div class="card">
     <div class="stat-label">Live sessions</div>

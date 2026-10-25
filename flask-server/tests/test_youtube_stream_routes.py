@@ -20,7 +20,7 @@ class StreamRoutes(unittest.TestCase):
         self.upstream=Upstream()
         self.relay=Relay(self.upstream,b'audio',self.release)
         for name,value in [('enabled',True),('open',mock.Mock(return_value=self.relay))]:
-            patch=mock.patch.object(server._youtube_stream,name,value);patch.start();self.addCleanup(patch.stop)
+            patch=mock.patch.object(server._youtube_stream_for(),name,value);patch.start();self.addCleanup(patch.stop)
         self.addCleanup(self.relay.close)
 
     def test_audio_wait_hint_streams_without_disk_or_echo_side_effects(self):
@@ -32,7 +32,7 @@ class StreamRoutes(unittest.TestCase):
 
     def test_unauthorized_requests_never_resolve_media(self):
         r=self.client.get('/audio/?video_id='+VID)
-        self.assertEqual(r.status_code,401);server._youtube_stream.open.assert_not_called()
+        self.assertEqual(r.status_code,401);server._youtube_stream_for().open.assert_not_called()
 
     def test_head_releases_upstream_and_preserves_length(self):
         r=self.client.head('/audio/?video_id='+VID,headers=self.headers)
@@ -42,10 +42,10 @@ class StreamRoutes(unittest.TestCase):
 
     def test_range_and_if_range_are_forwarded_to_relay(self):
         r=self.client.get('/audio/?video_id='+VID,headers={**self.headers,'Range':'bytes=3-','If-Range':'"same"'})
-        server._youtube_stream.open.assert_called_once_with(VID,method='GET',byte_range='bytes=3-',if_range='"same"');r.close()
+        server._youtube_stream_for().open.assert_called_once_with(VID,method='GET',byte_range='bytes=3-',if_range='"same"');r.close()
 
     def test_upstream_failure_is_structured_and_retryable(self):
-        server._youtube_stream.open.side_effect=StreamError('resolve_timeout')
+        server._youtube_stream_for().open.side_effect=StreamError('resolve_timeout')
         r=self.client.get('/audio/?video_id='+VID,headers=self.headers)
         self.assertEqual(r.status_code,503);self.assertTrue(r.json['error']['retryable'])
         self.assertEqual(r.headers['Retry-After'],'2');self.assertNotIn('googlevideo',r.get_data(as_text=True))
@@ -54,10 +54,10 @@ class StreamRoutes(unittest.TestCase):
         with mock.patch.object(server,'_ensure_audio_ready_for_play') as prepare:
             r=self.client.get('/audio/?video_id='+VID+'&prefetch=1',headers=self.headers)
             self.assertEqual(r.status_code,202);prepare.assert_called_once_with(VID,prefetch=True)
-            server._youtube_stream.open.assert_not_called()
+            server._youtube_stream_for().open.assert_not_called()
 
     def test_preparation_never_schedules_file_download(self):
-        with mock.patch.object(server._audio_jobs,'submit') as submit, mock.patch.object(server._youtube_stream,'resolve') as resolve:
+        with mock.patch.object(server._audio_jobs,'submit') as submit, mock.patch.object(server._youtube_stream_for(),'resolve') as resolve:
             server._ensure_audio_ready_for_play(VID)
             submit.call_args.args[1]()
             resolve.assert_called_once_with(VID)
@@ -77,12 +77,12 @@ class StreamRoutes(unittest.TestCase):
             self.assertEqual(b''.join(r.response),b'');r.close();confirm.assert_not_called()
 
     def test_explicit_download_streams_with_an_attachment_filename(self):
-        before=server._youtube_stream.current.video
+        before=server._youtube_stream_for().current.video
         r=self.client.get('/audio/?video_id='+VID,headers={**self.headers,'X-MusicBox-Download':'1'})
         self.assertEqual(r.status_code,200)
         self.assertIn('attachment',r.headers['Content-Disposition'])
         self.assertTrue(r.data.startswith(b'audio'));r.close()
-        self.assertEqual(server._youtube_stream.current.video,before)
+        self.assertEqual(server._youtube_stream_for().current.video,before)
 
 
 if __name__=='__main__':unittest.main()

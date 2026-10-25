@@ -2,10 +2,16 @@
 
 Only redacted lifecycle state crosses this API. Captured request headers are
 returned once and are never written to logs or the Chromium profile volume.
+
+The container runs one Chromium at a time, but each caller signs in to its *own*
+profile directory: the owner keeps the base profile it has always used, while an
+account gets ``<PROFILE_DIR>/<key>``. Without that split, whoever clicked "Connect
+YouTube Music" last would hand Google's cookies to every other account.
 """
 import hmac
 import logging
 import os
+import re
 import subprocess
 import threading
 import time
@@ -23,6 +29,10 @@ PROFILE_DIR = os.environ.get("CHROME_USER_DATA_DIR", "/profile")
 CHROMIUM = os.environ.get("CHROMIUM_EXECUTABLE", "/usr/bin/chromium")
 CDP_URL = os.environ.get("CHROMIUM_CDP_URL", "http://127.0.0.1:9222")
 
+# Profile keys arrive over the control API, so they are restricted to a plain
+# filename segment: no separators, no traversal, no leading dot.
+_PROFILE_KEY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
+
 _lock = threading.RLock()
 _state = {
     "state": "idle", "interactive": False, "started_at": None,
@@ -33,17 +43,27 @@ _worker = None
 _manual_browser = None
 _complete_requested = False
 _capture_requested = threading.Event()
+_profile_key = ""
 
 
-def _clear_profile_singleton_artifacts():
+def _profile_dir_for(key):
+    """Resolve a profile key to its directory, refusing anything unexpected."""
+    if not key:
+        return PROFILE_DIR
+    if not _PROFILE_KEY_RE.match(key):
+        raise ValueError("Invalid browser profile key.")
+    return os.path.join(PROFILE_DIR, key)
+
+
+def _clear_profile_singleton_artifacts(profile_dir):
     """Remove Chromium locks left behind after an unclean browser exit.
 
-    This controller is the only process allowed to open PROFILE_DIR, and
+    This controller is the only process allowed to open a profile directory, and
     _start() prevents concurrent workers, so artifacts present immediately
     before a new launch are stale.
     """
     for name in ("SingletonCookie", "SingletonLock", "SingletonSocket"):
-        path = os.path.join(PROFILE_DIR, name)
+        path = os.path.join(profile_dir, name)
         try:
             os.unlink(path)
         except FileNotFoundError:
@@ -82,10 +102,11 @@ def _stop_manual_browser():
         process.wait(timeout=5)
 
 
-def _plain_chromium_command(enable_capture=False):
+def _plain_chromium_command(enable_capture=False, profile_dir=PROFILE_DIR):
     """Build Chromium command, keeping interactive login free of CDP."""
+    os.makedirs(profile_dir, exist_ok=True)
     command = [
-        CHROMIUM, f"--user-data-dir={PROFILE_DIR}", "--no-sandbox",
+        CHROMIUM, f"--user-data-dir={profile_dir}", "--no-sandbox",
         "--disable-dev-shm-usage", "--start-maximized", "--no-first-run",
         "--hide-crash-restore-bubble",
         # Keep cookie encryption identical across every launch.
@@ -108,12 +129,12 @@ def _plain_chromium_command(enable_capture=False):
     return command
 
 
-def _manual_login(enable_capture=False):
+def _manual_login(enable_capture=False, profile_dir=PROFILE_DIR):
     """Launch Chromium, optionally exposing loopback CDP after login."""
     global _manual_browser
-    _clear_profile_singleton_artifacts()
+    _clear_profile_singleton_artifacts(profile_dir)
     process = subprocess.Popen(
-        _plain_chromium_command(enable_capture=enable_capture),
+        _plain_chromium_command(enable_capture=enable_capture, profile_dir=profile_dir),
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
     )
     with _lock:
@@ -271,7 +292,7 @@ def _capture_from_running_browser(interactive):
         return "timeout"
 
 
-def _capture(interactive):
+def _capture(interactive, profile_dir):
     phase = "startup"
     _set_state("waiting_for_login" if interactive else "refreshing",
                interactive=interactive, started_at=time.time(), message=None)
@@ -281,7 +302,7 @@ def _capture(interactive):
         # entered. Explicit Capture attaches to this same process only after
         # the owner has visibly confirmed the YouTube Music account.
         phase = "Chromium startup"
-        _manual_login(enable_capture=True)
+        _manual_login(enable_capture=True, profile_dir=profile_dir)
 
         while interactive and _public_state()["interactive"]:
             if not _capture_requested.wait(timeout=0.25):
@@ -327,18 +348,30 @@ def _capture(interactive):
         _stop_manual_browser()
 
 
-def _start(interactive):
-    global _worker, _candidate, _complete_requested
+def _start(interactive, profile_key=""):
+    """Launch a capture run in one identity's profile. One run at a time."""
+    global _worker, _candidate, _complete_requested, _profile_key
+    try:
+        profile_dir = _profile_dir_for(profile_key)
+    except ValueError:
+        return False
     with _lock:
         if _worker and _worker.is_alive():
             return False
         _candidate = None
         _complete_requested = False
         _capture_requested.clear()
+        _profile_key = profile_dir
         _state["interactive"] = interactive
-        _worker = threading.Thread(target=_capture, args=(interactive,), daemon=True)
+        _worker = threading.Thread(target=_capture, args=(interactive, profile_dir),
+                                   daemon=True)
         _worker.start()
         return True
+
+
+def _requested_profile():
+    body = request.get_json(silent=True)
+    return str((body or {}).get("profile") or "")
 
 
 @app.get("/health")
@@ -353,13 +386,13 @@ def status():
 
 @app.post("/interactive/start")
 def interactive_start():
-    started = _start(True)
+    started = _start(True, _requested_profile())
     return jsonify(_public_state()), (202 if started else 409)
 
 
 @app.post("/refresh")
 def refresh():
-    started = _start(False)
+    started = _start(False, _requested_profile())
     return jsonify(_public_state()), (202 if started else 409)
 
 

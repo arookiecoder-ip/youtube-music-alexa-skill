@@ -23,6 +23,7 @@ for attr in ('BrowserController', 'YouTubeBrowserSessionManager'):
 sys.modules['youtube_browser_session'].browser_client_is_signed_in = lambda *a, **k: False
 sys.modules['youtube_browser_session'].is_authentication_error = lambda *a, **k: False
 sys.modules['youtube_browser_session'].promote_browser_headers = lambda *a, **k: None
+sys.modules['youtube_browser_session'].normalize_browser_headers = lambda value: value
 
 import server  # noqa: E402
 

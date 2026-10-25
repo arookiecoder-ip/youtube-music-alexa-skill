@@ -33,6 +33,7 @@ def _install_stubs():
         setattr(ybs, attr, type(attr, (), {'__init__': lambda self, *a, **kw: None}))
     ybs.browser_client_is_signed_in = lambda *a, **kw: False
     ybs.promote_browser_headers = lambda *a, **kw: None
+    ybs.normalize_browser_headers = lambda value: value
     ybs.is_authentication_error = lambda *a, **kw: False
     sys.modules['youtube_browser_session'] = ybs
 

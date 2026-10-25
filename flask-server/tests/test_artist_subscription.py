@@ -52,6 +52,7 @@ if "youtube_browser_session" not in sys.modules:
         'authentication' in str(error).lower()
     )
     ybs.promote_browser_headers = lambda *args, **kwargs: None
+    ybs.normalize_browser_headers = lambda value: value
     sys.modules["youtube_browser_session"] = ybs
 
 import server  # noqa: E402

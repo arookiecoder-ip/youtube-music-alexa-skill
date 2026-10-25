@@ -67,7 +67,7 @@
         {% if can_manage and not is_self %}
           <div class="form-actions"><button class="btn primary" type="submit">Save changes</button></div>
         {% elif is_self %}
-          <div class="muted-box">Use <a href="{{ base_path }}/account/">My account</a> to change your own password. Role and status changes require another owner.</div>
+          <div class="muted-box">Use <a href="{{ base_path }}/account/">My account</a> to change your password.</div>
         {% else %}
           <div class="muted-box">You can view this account but not modify it.</div>
         {% endif %}

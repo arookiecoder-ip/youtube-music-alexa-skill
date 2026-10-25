@@ -53,6 +53,7 @@ if "youtube_browser_session" not in sys.modules:
     ybs.YouTubeBrowserSessionManager = type("YouTubeBrowserSessionManager", (), {"__init__": lambda self, *a, **kw: None})
     ybs.browser_client_is_signed_in = lambda *args, **kwargs: False
     ybs.promote_browser_headers = lambda *args, **kwargs: None
+    ybs.normalize_browser_headers = lambda value: value
     ybs.is_authentication_error = lambda *args, **kwargs: False
     sys.modules["youtube_browser_session"] = ybs
 
