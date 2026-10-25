@@ -2629,9 +2629,17 @@ def app_mobile_devices():
                             (entry.get('entry_id') and entry['entry_id'] != body.get('current_entry_id'))):
                         raise OutputConflict('The song changed before this device switch.')
                     # Ownership and cursor commit under the same lock.
-                    result = _claim_alexa_output(serial, expected_owner=owner,
-                        expected_token=before['output_token'], source_paused=True)
+                    # Already holding _np_lock: do not invoke the ordinary
+                    # claim callback, which acquires it again and notifies SSE.
+                    # The acknowledged source needs no wait; commit ownership,
+                    # cursor and paused state atomically, then notify below.
+                    result = _playback_output.alexa(serial, wait=False,
+                        expected_owner=owner, expected_token=before['output_token'], source_paused=True)
                     _reset_progress(position)
+                    _now_playing.update(playing=False, playback_confirmed=True, playback_processing=False)
+                    _now_playing['alexa_intent_at'] = time.time()
+                    _now_playing['playback_revision'] = int(_now_playing.get('playback_revision', 0)) + 1
+                    _now_playing['updated_at'] = time.time()
             else:
                 was_playing = bool(_get_now_playing().get('playing'))
                 if before['playback_output'] == 'alexa' and before['output_serial'] and before['output_serial'] != serial:

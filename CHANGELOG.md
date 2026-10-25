@@ -4,6 +4,10 @@ Reviewed 2026-10-25 against `master` through `08139f16aac382d80703d59104838c4ecd
 
 This file summarizes behavior changes, explicitly records superseded work and lists all 50 repository PRs plus the complete 606-commit reachable history. A merged historical PR is not proof that its old implementation is still active; direct commits after PR #50 are included below.
 
+## Unreleased
+
+- Fixed a server deadlock when switching paused or playing mobile audio to Alexa. Ownership and the frozen cursor now commit without re-entering the playback lock; stale-owner and stale-track checks remain enforced. Added a regression using a non-reentrant production-style lock.
+
 ## 2026-10-25 — Alexa final-second transitions and dispatch
 
 Commits: [`faa30f1`](https://github.com/arookiecoder-ip/youtube-music-alexa-skill/commit/faa30f14d1443a519e8661b3b348f81918956a26), [`08139f1`](https://github.com/arookiecoder-ip/youtube-music-alexa-skill/commit/08139f16aac382d80703d59104838c4ecd1fb40a).

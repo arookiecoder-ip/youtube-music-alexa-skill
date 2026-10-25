@@ -1,6 +1,7 @@
 """Exercise actual device routes with physical Echo/audio extraction stubbed."""
 import ast
 import json
+import threading
 from pathlib import Path
 from unittest.mock import Mock
 from test_output_routes import OutputRoutesTests
@@ -526,6 +527,32 @@ class MobileDeviceRoutesTests(OutputRoutesTests):
         dispatch = Mock()
         self.namespace.update(_schedule_play_dispatch=dispatch, _update_now_playing=lambda **kw: self.state.update(kw))
         return claim, dispatch
+
+    def test_fast_handoff_with_production_lock_does_not_freeze_server(self):
+        # Production uses Lock, while the older route fixture used RLock and
+        # concealed callback re-entry during the atomic ownership/cursor commit.
+        class NonReentrantLock:
+            def __init__(self):
+                self.lock = threading.Lock()
+            def __enter__(self):
+                if not self.lock.acquire(timeout=.2):
+                    raise AssertionError("Playback lock re-entered during handoff")
+                return self
+            def __exit__(self, *args):
+                self.lock.release()
+        self.namespace['_np_lock'] = NonReentrantLock()
+        for playing in (True, False):
+            claim, dispatch = self.fast_handoff_setup()
+            reply = self.device('alexa_handoff', serial='echo-two',
+                output_token=claim['output_token'], source_paused=True,
+                position_ms=12345, playing=playing, video_id=A, current_entry_id='entry-a')
+            self.assertEqual(reply.status_code, 200)
+            self.assertEqual(self.state['position_ms'], 12345)
+            self.assertEqual(self.state['playing'], playing)
+            self.assertEqual(dispatch.call_count, int(playing))
+            self.assertTrue(self.namespace['_np_lock'].lock.acquire(timeout=.2))
+            self.namespace['_np_lock'].lock.release()
+            self.assertEqual(self.client.get('/api/app/output/').status_code, 200)
 
     def test_paused_source_can_install_cursor_and_start_echo_in_one_request(self):
         claim, dispatch = self.fast_handoff_setup()
