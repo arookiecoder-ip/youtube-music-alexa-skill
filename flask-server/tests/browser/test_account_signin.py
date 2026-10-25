@@ -18,7 +18,9 @@ def account_page():
     @app.route('/alexa/proxy/<path:path>')
     def amazon(path):return '<meta name="viewport" content="width=device-width"><label>Email<input></label>'
     @app.route('/alexa/proxy_login/',methods=['POST'])
-    def proxy():calls.append((request.path,request.json));return jsonify(login_url='/alexa/proxy/signin')
+    def proxy():calls.append((request.path,request.json));return jsonify(login_url='/alexa/proxy/signin',attempt_id='attempt-one')
+    @app.post('/alexa/proxy_cancel/')
+    def cancel_amazon():calls.append((request.path,request.json));return jsonify(cancelled=True)
     @app.get('/alexa/proxy_check/')
     def check():return jsonify(logged_in=False)
     @app.route('/api/youtube/browser-session/<action>',methods=['GET','POST'])
@@ -50,6 +52,7 @@ def test_amazon_dedicated_page_and_verification_stays_responsive(account_page,wi
     assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
     assert page.locator('iframe[src*="vnc"]').count()==0
     page.get_by_role('button',name='Cancel sign-in').click();expect(page).to_have_url(origin+'/')
+    assert ('/alexa/proxy_cancel/',{'attempt_id':'attempt-one'}) in calls
 
 def test_youtube_touch_keyboard_capture_and_cancel(account_page):
     page,origin,calls=account_page;page.goto(origin+'/accounts/youtube')

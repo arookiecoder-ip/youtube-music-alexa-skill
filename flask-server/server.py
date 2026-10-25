@@ -842,7 +842,7 @@ def _safe_spa_target(value, default='/home'):
 # API key stays out of the browser URL). Everything here plus the remote page.
 _SESSION_PATHS = ('/audio', '/get_radio', '/status', '/api/status', '/remote', '/alexa/status', '/alexa/init', '/alexa/devices', '/alexa/command',
                   '/alexa/play', '/alexa/suggest', '/alexa/proxy_login',
-                  '/alexa/proxy_check', '/alexa/now_playing', '/alexa/state_event',
+                  '/alexa/proxy_cancel', '/alexa/proxy_check', '/alexa/now_playing', '/alexa/state_event',
                   '/alexa/seek', '/alexa/volume', '/alexa/play_queue',
                   '/alexa/shuffle_queue', '/alexa/search', '/alexa/clear',
                   '/alexa/queue_add', '/alexa/queue_remove',
@@ -6021,7 +6021,16 @@ def alexa_proxy_login():
     )
     if error:
         return error_response(error, 502)
-    return jsonify({'login_url': url})
+    return jsonify({'login_url': url, 'attempt_id':getattr(alexa_remote.remote, '_proxy_attempt_id', None)})
+
+
+@app.post('/alexa/proxy_cancel/')
+def alexa_proxy_cancel():
+    if not _logged_in():
+        return error_response('Owner session required.',401)
+    body=request.get_json(silent=True) or {}
+    cancelled=alexa_remote.remote.proxy_cancel(body.get('attempt_id'))
+    return jsonify({'cancelled':bool(cancelled)})
 
 
 @app.route("/alexa/proxy_check/", methods=["GET"])

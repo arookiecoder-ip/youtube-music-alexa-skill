@@ -23,7 +23,8 @@ AlexaPy's aiohttp session is bound to the event loop it was created in,
 but Flask async views each run in a throwaway loop — so all AlexaPy work
 runs on one dedicated background loop owned by this module.
 """
-import asyncio, logging, os, threading, time
+import asyncio
+import secrets, logging, os, threading, time
 from concurrent.futures import TimeoutError as FuturesTimeoutError
 
 import httpx
@@ -323,6 +324,7 @@ class AlexaRemote:
         # Keep the previous account's persisted credentials intact until the
         # replacement verifies, including failed/cancelled same-email attempts.
         import tempfile
+        self._proxy_attempt_id = secrets.token_urlsafe(24)
         self._proxy_cookie_stage = tempfile.mkdtemp(prefix="pending-", dir=ALEXA_COOKIE_DIR)
         os.makedirs(os.path.join(self._proxy_cookie_stage, ".storage"), exist_ok=True)
         stage = self._proxy_cookie_stage
@@ -534,6 +536,23 @@ class AlexaRemote:
     # public (thread-safe) wrappers
     def proxy_start_url(self, email: str, password: str, base_url: str = None):
         return self._run(self._proxy_start_url(email, password, base_url))
+
+    def proxy_cancel(self, attempt_id):
+        return self._run(self._cancel_proxy_attempt(attempt_id))
+
+    async def _cancel_proxy_attempt(self, attempt_id):
+        if not attempt_id or attempt_id != getattr(self, '_proxy_attempt_id', None):
+            return False
+        pending = self._proxy_login
+        if pending is None or pending is self._login:
+            return False
+        self._proxy_login = None  # Fence callbacks before cleanup yields.
+        self._proxy_attempt_id = None
+        self._proxy_login_complete = False
+        self._proxy_login_error = None
+        await self._stop_proxy()
+        await pending.close()
+        return True
 
     def proxy_check(self):
         return self._run(self._proxy_check())

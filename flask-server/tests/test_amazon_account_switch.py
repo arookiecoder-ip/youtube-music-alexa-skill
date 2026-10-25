@@ -36,3 +36,18 @@ class AmazonAccountSwitchTests(unittest.IsolatedAsyncioTestCase):
         self.login.test_loggedin.side_effect=verify
         self.assertFalse(await self.ns['_finalize_proxy_login'](self.owner))
         self.assertEqual(self.live.read_text(),'old-valid-session');self.assertIs(self.owner._login,self.old)
+
+    async def test_cancel_is_bound_to_the_attempt_and_keeps_existing_account(self):
+        path=Path(__file__).resolve().parents[1]/'alexa_remote.py'
+        cls=next(n for n in ast.parse(path.read_text()).body if isinstance(n,ast.ClassDef) and n.name=='AlexaRemote')
+        method=next(n for n in cls.body if isinstance(n,ast.AsyncFunctionDef) and n.name=='_cancel_proxy_attempt')
+        exec(compile(ast.Module(body=[method],type_ignores=[]),str(path),'exec'),self.ns)
+        self.owner._proxy_attempt_id='new-attempt';self.login.close=AsyncMock()
+        cancel=self.ns['_cancel_proxy_attempt']
+        self.assertFalse(await cancel(self.owner,'old-attempt'))
+        self.owner._stop_proxy.assert_not_awaited()
+        self.assertTrue(await cancel(self.owner,'new-attempt'))
+        self.assertIs(self.owner._login,self.old)
+        self.assertIsNone(self.owner._proxy_login)
+        self.assertEqual(self.live.read_text(),'old-valid-session')
+        self.login.close.assert_awaited_once()
