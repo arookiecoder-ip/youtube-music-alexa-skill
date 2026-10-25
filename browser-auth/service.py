@@ -42,6 +42,7 @@ _candidate = None
 _worker = None
 _manual_browser = None
 _complete_requested = False
+_viewport = {"width":480,"height":900}
 _capture_requested = threading.Event()
 _profile_key = ""
 
@@ -107,8 +108,9 @@ def _plain_chromium_command(enable_capture=False, profile_dir=PROFILE_DIR):
     os.makedirs(profile_dir, exist_ok=True)
     command = [
         CHROMIUM, f"--user-data-dir={profile_dir}", "--no-sandbox",
-        "--disable-dev-shm-usage", "--start-maximized", "--no-first-run",
-        "--hide-crash-restore-bubble",
+        "--disable-dev-shm-usage", f"--window-size={_viewport['width']},{_viewport['height']}",
+        "--window-position=0,0", "--no-first-run",
+        "--hide-crash-restore-bubble", "--test-type",
         # Keep cookie encryption identical across every launch.
         "--password-store=basic", "--use-mock-keychain",
     ]
@@ -142,7 +144,7 @@ def _manual_login(enable_capture=False, profile_dir=PROFILE_DIR):
     return True
 
 
-def _open_youtube_music():
+def _open_youtube_music(target="https://music.youtube.com"):
     """Navigate the visible plain Chromium window without a DevTools channel."""
     window_ids = subprocess.check_output(
         ["xdotool", "search", "--onlyvisible", "--class", "chromium"],
@@ -155,7 +157,7 @@ def _open_youtube_music():
         ["xdotool", "windowactivate", "--sync", window_id],
         ["xdotool", "key", "--window", window_id, "ctrl+l"],
         ["xdotool", "type", "--window", window_id, "--delay", "1",
-         "https://music.youtube.com"],
+         target],
         ["xdotool", "key", "--window", window_id, "Return"],
     )
     for command in commands:
@@ -384,9 +386,42 @@ def status():
     return jsonify(_public_state())
 
 
+def _resize_signin_browser():
+    # A second controller may open desktop sign-in while the mobile browser is
+    # still alive. Resize the same browser without discarding its login state.
+    for _ in range(40):
+        if not _public_state()['interactive']:
+            return
+        try:
+            from touch_browser import geometry,run
+            window,current=geometry()
+            with _lock:
+                width,height=max(508,_viewport['width']),_viewport['height']
+            if current['WIDTH']==width and current['HEIGHT']==height:
+                return
+            run('windowsize','--sync',window,width,height)
+            return
+        except Exception:
+            time.sleep(.25)
+
+
 @app.post("/interactive/start")
 def interactive_start():
-    started = _start(True, _requested_profile())
+    data = request.get_json(silent=True) or {}
+    width, height = data.get('width', 480), data.get('height', 900)
+    if type(width) is not int or type(height) is not int or not 320 <= width <= 1920 or not 480 <= height <= 1080:
+        return jsonify({'error': 'invalid_viewport'}), 400
+    profile = _requested_profile()
+    with _lock:
+        previous = _worker if _worker and _worker.is_alive() and not _state['interactive'] else None
+    if previous:
+        previous.join(timeout=10)
+        if previous.is_alive():
+            return jsonify({'error': 'previous_signin_closing'}), 503
+    with _lock:
+        _viewport.update(width=width, height=height)
+        started = _start(True, profile)
+    threading.Thread(target=_resize_signin_browser, daemon=True).start()
     return jsonify(_public_state()), (202 if started else 409)
 
 
@@ -445,3 +480,39 @@ def candidate_take():
         return jsonify({"error": "candidate_not_ready"}), 404
     _set_state("candidate_taken", message=None)
     return jsonify(candidate)
+
+
+@app.get("/interactive/frame")
+def interactive_frame():
+    if not _public_state()["interactive"]:
+        return jsonify({"error":"session_expired"}), 409
+    try:
+        from touch_browser import frame
+        response=jsonify(frame());response.headers['Cache-Control']='no-store';return response
+    except Exception:
+        return jsonify({"error":"browser_starting"}), 503
+
+
+@app.post("/interactive/input")
+def interactive_input():
+    if not _public_state()["interactive"]:
+        return jsonify({"error":"session_expired"}), 409
+    try:
+        from touch_browser import input_event
+        input_event(request.get_json(silent=True) or {})
+        return jsonify({"ok":True})
+    except ValueError:
+        return jsonify({"error":"invalid_input"}), 400
+    except Exception:
+        return jsonify({"error":"browser_unavailable"}), 503
+
+
+@app.post("/interactive/choose-account")
+def choose_account():
+    if not _public_state()["interactive"]:
+        return jsonify({"error":"session_expired"}),409
+    try:
+        _open_youtube_music("https://accounts.google.com/AccountChooser?continue=https%3A%2F%2Fmusic.youtube.com%2F&service=youtube")
+        return jsonify({"ok":True})
+    except Exception:
+        return jsonify({"error":"browser_unavailable"}),503

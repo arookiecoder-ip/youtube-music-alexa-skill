@@ -707,9 +707,10 @@
 }
 
 /* A shelf with no horizontal overflow disables both arrow buttons. Hide that
-   empty control group instead of showing non-functional navigation arrows. */
+   empty control group instead of showing non-functional navigation arrows.
+   Keep a View all action visible even when its shelf fits without scrolling. */
 @supports selector(.hscroll-controls:has(button)) {
-  .hscroll-controls:not(:has(.hscroll-scroll:not(:disabled))),
+  .hscroll-controls:not(:has(.hscroll-scroll:not(:disabled))):not(:has(.artist-view-all-btn)),
   .explore-scroll-btns:not(:has(.explore-scroll-btn:not(:disabled))) {
     display: none !important;
   }
@@ -3660,3 +3661,5 @@ body.results-open .player-section {
     cursor: pointer;
   }
 }
+
+.alexa-controls-unavailable :is(.transport button,#pp-btn,[data-action="next"],[data-action="previous"],#mobile-np-play,#mobile-np-next,#mobile-np-previous,.progress-track,#volume,#mobile-np-volume,.queue-item,.np-queue-item){opacity:.4;cursor:not-allowed}.custom-select-option.logged-out{opacity:.45}

@@ -147,7 +147,7 @@
           </div>
           <button class="jam-owner-only" id="amazon-signin" type="button" style="display: none;">Sign in to Amazon</button>
           <button class="jam-owner-only" id="amazon-signout" type="button" style="display: none;">Sign out of Amazon</button>
-          <button class="jam-owner-only" id="youtube-browser-auth" type="button">Connect YouTube Music</button>
+          <button class="jam-owner-only" id="youtube-browser-auth" type="button">YouTube Music account</button>
           <button class="jam-owner-only" id="download-cookies-replace" type="button">Replace download cookies</button>
           <button class="jam-owner-only" id="download-cookies-check" type="button">Test audio download</button>
           {% if not jam_guest %}<a class="jam-owner-only profile-menu-link" href="/status">Service status</a>{% endif %}
@@ -996,6 +996,7 @@
 <script src="/static/js/device.js?v={{ asset_v }}"></script>
 <script src="/static/js/device-connect.js?v={{ asset_v }}"></script>
 <script src="/static/js/browser-player.js?v={{ asset_v }}"></script>
+<script src="/static/js/alexa-readonly.js?v={{ asset_v }}"></script>
 <script src="/static/js/sse.js?v={{ asset_v }}"></script>
 <script src="/static/js/player.js?v={{ asset_v }}"></script>
 <script src="/static/js/volume.js?v={{ asset_v }}"></script>

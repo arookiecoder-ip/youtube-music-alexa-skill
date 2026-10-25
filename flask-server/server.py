@@ -541,14 +541,23 @@ def _schedule_play_dispatch(serial, video_id, offset_ms=0, delay=None, expected_
     token = object()
     timer = threading.Timer(delay, _fire)
     timer.daemon = True
-    with _PENDING_DISPATCH_LOCK:
-        previous = _PENDING_DISPATCH.get(key)
-        if previous is not None:
-            previous['timer'].cancel()
-        _PENDING_DISPATCH[key] = {
-            'timer': timer, 'token': token, 'video_id': video_id,
-            'offset_ms': offset_ms, 'scheduled_at': time.time(),
-        }
+    with _np_lock:
+        if expected_intent is not None:
+            output = _playback_output.snapshot()
+            if (_now_playing.get('alexa_intent_at') != expected_intent or
+                    not _now_playing.get('playing') or _now_playing.get('video_id') != video_id or
+                    output['playback_output'] != 'alexa' or output['output_token'] != expected_output):
+                return None
+        # Stage under the same lock as the fence: a superseded correction must
+        # not cancel a newer user's pending timer before its own fire is rejected.
+        with _PENDING_DISPATCH_LOCK:
+            previous = _PENDING_DISPATCH.get(key)
+            if previous is not None:
+                previous['timer'].cancel()
+            _PENDING_DISPATCH[key] = {
+                'timer': timer, 'token': token, 'video_id': video_id,
+                'offset_ms': offset_ms, 'scheduled_at': time.time(),
+            }
     timer.start()
     return previous['video_id'] if previous else None
 
@@ -903,7 +912,7 @@ def _safe_spa_target(value, default='/home'):
 # API key stays out of the browser URL). Everything here plus the remote page.
 _SESSION_PATHS = ('/api/jam/session', '/audio', '/get_radio', '/status', '/api/status', '/remote', '/alexa/status', '/alexa/init', '/alexa/devices', '/alexa/command',
                   '/alexa/play', '/alexa/suggest', '/alexa/proxy_login',
-                  '/alexa/proxy_check', '/alexa/now_playing', '/alexa/state_event',
+                  '/alexa/proxy_cancel', '/alexa/proxy_check', '/alexa/now_playing', '/alexa/state_event',
                   '/alexa/seek', '/alexa/volume', '/alexa/play_queue',
                   '/alexa/shuffle_queue', '/alexa/search', '/alexa/clear',
                   '/alexa/queue_add', '/alexa/queue_remove',
@@ -921,9 +930,11 @@ _SESSION_PATHS = ('/api/jam/session', '/audio', '/get_radio', '/status', '/api/s
                    '/api/youtube/browser-session/retry',
                    '/api/youtube/browser-session/open-youtube',
                    '/api/youtube/browser-session/capture',
+                   '/api/youtube/browser-session/surface',
+                   '/api/youtube/browser-session/choose-account',
                    '/api/youtube/browser-session/authorize',
 )
-_SESSION_PREFIXES = ('/api/jam/', '/api/status/', '/alexa/now_playing/', '/history/', '/api/playlists/', '/recommendations/',
+_SESSION_PREFIXES = ('/accounts/', '/api/jam/', '/api/status/', '/alexa/now_playing/', '/history/', '/api/playlists/', '/recommendations/',
                     '/api/artist/', '/api/album/', '/api/library/', '/api/explore/', '/api/home/',
                     '/api/track/', '/api/app/queue/')
 
@@ -1567,6 +1578,15 @@ _youtube_credentials = YouTubeCredentialStore(
 def _current_identity():
     """Whose playback state and provider credentials this call belongs to."""
     return _PLAYER_IDENTITY.get() or _OWNER_IDENTITY
+
+
+def _bg_thread(target, args=(), name=None):
+    """Run a background job as the account that asked for it.
+
+    `threading.Thread` does not copy the identity contextvar, so an unbound
+    worker reads and writes the *owner's* now-playing and the owner's YouTube
+    session. Every job that touches playback has to carry its caller instead."""
+    return _spawn_for_identity(_current_identity(), target, args=args, name=name)
 
 
 def _mu_provider_secret(user_id, provider):
@@ -2274,7 +2294,11 @@ _sse_lock = threading.Lock()
 # id from being reused by a successor allocation.
 _queue_seen_obj = None
 _queue_version = 0
-_alexa_queue_decisions = collections.OrderedDict()
+# Superseded-queue-start evidence, one ledger per identity: a queued-start token
+# recorded while one account edited its queue must never be read, evicted or
+# acted on by another account's webhook.
+_alexa_queue_decisions = _PlayerStateView(
+    _PlayerStateRegistry(factory=lambda identity: collections.OrderedDict()))
 
 def _queue_version_locked():
     """Current queue version, bumping it if the queue list was replaced.
@@ -2336,6 +2360,8 @@ def _np_snapshot(serial=None, retain_errors=False):
         s.update(playing=False, playback_confirmed=True, playback_processing=False)
     return {
         **output,
+        'amazon_connected': getattr(alexa_remote.remote, 'connection_state', None),
+        'remote_control_available': not (output['playback_output'] == 'alexa' and getattr(alexa_remote.remote, 'connection_state', None) is False),
         'playing': s['playing'], 'title': s['title'],
         'artist': s['artist'], 'artists': s.get('artists', []),
         'thumbnail': s['thumbnail'],
@@ -2687,6 +2713,8 @@ def app_playback_output():
             if not serial:
                 raise OutputConflict('Choose an Alexa device before moving active playback to the phone.')
             _cancel_pending_dispatch(serial)
+            if getattr(alexa_remote.remote, 'connection_state', None) is False:
+                return
             error = alexa_remote.remote.command(serial, 'pause')
             if error:
                 raise OutputConflict('The Echo could not pause. Playback stayed on Alexa.')
@@ -2745,7 +2773,8 @@ def _pause_echo_for_mobile(serial):
             device.get('serial') == serial and device.get('online') is False for device in devices)
     except Exception:
         pass  # Unknown presence still requires the normal pause acknowledgment.
-    if not offline and alexa_remote.remote.command(serial, 'pause'):
+    logged_out = getattr(alexa_remote.remote, 'connection_state', None) is False
+    if not offline and not logged_out and alexa_remote.remote.command(serial, 'pause'):
         raise OutputConflict('The Echo could not pause. Playback stayed on Alexa.')
     # Native PauseCommand is acknowledged by Amazon directly; the custom skill's
     # PlaybackStopped webhook can arrive seconds later and is not a handoff gate.
@@ -4985,7 +5014,7 @@ def proxy_stream():
             _update_now_playing(playing=False, video_id=video_id,
                                 title='', artist='', thumbnail='', duration_ms=0,
                                 playback_confirmed=False, queue_index=-1)
-            threading.Thread(target=_lookup_and_update_np, args=(video_id,), daemon=True).start()
+            _bg_thread(_lookup_and_update_np, args=(video_id,))
             sys.stderr.write(f"[np] proxy metadata: new video_id={video_id} (not in queue, looking up)\n")
             sys.stderr.flush()
     else:
@@ -4994,8 +5023,8 @@ def proxy_stream():
     # find_stream_list paths set title/artist but never duration_ms, so
     # without this the progress bar has no total time.
     if not _get_now_playing().get('duration_ms'):
-        threading.Thread(target=_lookup_and_update_np, args=(video_id,), daemon=True).start()
-    threading.Thread(target=_refresh_radio_queue, args=(video_id,), daemon=True).start()
+        _bg_thread(_lookup_and_update_np, args=(video_id,))
+    _bg_thread(_refresh_radio_queue, args=(video_id,))
     return _serve_youtube_stream(video_id, confirm=True, cancellable=True)
 
 
@@ -5161,10 +5190,21 @@ def _serve_youtube_stream(video_id, confirm=False, cancellable=False, meta=None)
             response.headers['Retry-After'] = '2'
         return response
 
+    echo_output_token = _playback_output.snapshot()['output_token'] if confirm else None
+    stream_identity = _current_identity()
+
     def generate():
+        # The body is iterated after the view returns, so re-bind the account this
+        # stream was opened for: its output lease, stream slot and now-playing are
+        # the only ones this loop may read or touch.
+        _PLAYER_IDENTITY.set(stream_identity)
         first = True
         try:
             for block in relay.chunks():
+                if confirm:
+                    owner = _playback_output.snapshot()
+                    if owner['playback_output'] != 'alexa' or owner['output_token'] != echo_output_token:
+                        return
                 if (cancellable and _generation_superseded(generation)
                         and _stream_superseded(video_id)):
                     return
@@ -5208,13 +5248,15 @@ def _serve_youtube_stream(video_id, confirm=False, cancellable=False, meta=None)
 # builds, each making independent YTMusic network calls (and, before the cache
 # was bounded, each creating its own permanently-cached YTMusic client). These
 # single-flight/cooldown guards collapse that to exactly one run per video_id.
+# The keys carry the identity as well: a queue or now-playing repair is decided
+# per account, so one account's in-flight build must not silently skip another's.
 _np_lookup_inflight = set()
 _np_lookup_lock = threading.Lock()
 
 _radio_refresh_inflight = set()
 _radio_refresh_lock = threading.Lock()
 _RADIO_REFRESH_COOLDOWN = 30.0  # seconds; recorded only after a successful build
-_radio_refresh_done = {}  # video_id -> time.time() of the last successful build
+_radio_refresh_done = {}  # (identity, video_id) -> time.time() of the last successful build
 _radio_refresh_done_lock = threading.Lock()
 
 
@@ -5222,10 +5264,11 @@ def _lookup_and_update_np(video_id):
     """Fill missing current/queue metadata without moving a playback cursor."""
     if not _valid_video_id(video_id):
         return
+    flight_key = (_current_identity(), video_id)
     with _np_lookup_lock:
-        if video_id in _np_lookup_inflight:
+        if flight_key in _np_lookup_inflight:
             return
-        _np_lookup_inflight.add(video_id)
+        _np_lookup_inflight.add(flight_key)
     try:
         metadata = _lookup_video_metadata(video_id)
         if not metadata:
@@ -5269,7 +5312,7 @@ def _lookup_and_update_np(video_id):
         logger.exception('Current metadata enrichment failed')
     finally:
         with _np_lookup_lock:
-            _np_lookup_inflight.discard(video_id)
+            _np_lookup_inflight.discard(flight_key)
 
 
 def _refresh_radio_queue(video_id, force=False):
@@ -5288,20 +5331,22 @@ def _refresh_radio_queue(video_id, force=False):
     """
     if not _valid_video_id(video_id):
         return False
-    # Single-flight per video_id plus a success cooldown: /proxy/, play_queue,
-    # and the 'started' webhook can each trigger a rebuild within one play
-    # cycle, and every rebuild is a full YTMusic radio fetch. force=True still
-    # bypasses the cooldown (Play Radio must replace the queue) but never runs
-    # two builds of the same track at once.
+    # Single-flight per (account, video_id) plus a success cooldown: /proxy/,
+    # play_queue, and the 'started' webhook can each trigger a rebuild within one
+    # play cycle, and every rebuild is a full YTMusic radio fetch. force=True
+    # still bypasses the cooldown (Play Radio must replace the queue) but never
+    # runs two builds of the same track at once. The account is part of the key
+    # because radio seeds are personalized: one account's build fills one queue.
+    flight_key = (_current_identity(), video_id)
     with _radio_refresh_lock:
-        if video_id in _radio_refresh_inflight:
+        if flight_key in _radio_refresh_inflight:
             return False
         if not force:
             with _radio_refresh_done_lock:
-                last = _radio_refresh_done.get(video_id, 0.0)
+                last = _radio_refresh_done.get(flight_key, 0.0)
             if time.time() - last < _RADIO_REFRESH_COOLDOWN:
                 return False
-        _radio_refresh_inflight.add(video_id)
+        _radio_refresh_inflight.add(flight_key)
     succeeded = False
     try:
         cur = _get_now_playing()
@@ -5367,17 +5412,17 @@ def _refresh_radio_queue(video_id, force=False):
             # "Up Next" doesn't permanently show a blank banner for them.
             missing = [q['video_id'] for q in queue if not q.get('thumbnail')][:5]
             for vid in missing:
-                threading.Thread(target=_backfill_queue_thumbnail, args=(vid,), daemon=True).start()
+                _bg_thread(_backfill_queue_thumbnail, args=(vid,))
             succeeded = True
             return True
     except Exception:
         logger.exception("")
     finally:
         with _radio_refresh_lock:
-            _radio_refresh_inflight.discard(video_id)
+            _radio_refresh_inflight.discard(flight_key)
         if succeeded:
             with _radio_refresh_done_lock:
-                _radio_refresh_done[video_id] = time.time()
+                _radio_refresh_done[flight_key] = time.time()
                 if len(_radio_refresh_done) > 256:
                     for stale in list(_radio_refresh_done)[:-128]:
                         del _radio_refresh_done[stale]
@@ -5399,8 +5444,7 @@ def _backfill_queue_thumbnail(video_id):
                     changed = True
             if changed:
                 _now_playing['queue'] = queue
-                _notify_sse()
-        _now_playing['updated_at'] = time.time()
+                _now_playing['updated_at'] = time.time()
         if changed:
             _notify_sse()
     except Exception:
@@ -5490,8 +5534,8 @@ def _promote_next_track(reason, position_ms=0):
     _record_listen(vid, next_item.get('title', ''), next_item.get('artist', ''),
                    _thumbnail_url(next_item.get('thumbnail')))
     if not next_item.get('title'):
-        threading.Thread(target=_lookup_and_update_np, args=(vid,), daemon=True).start()
-    threading.Thread(target=_refresh_radio_queue, args=(vid,), daemon=True).start()
+        _bg_thread(_lookup_and_update_np, args=(vid,))
+    _bg_thread(_refresh_radio_queue, args=(vid,))
     return True
 
 
@@ -5908,7 +5952,10 @@ def _watch_resume_confirmation(serial, video_id, staged_revision):
         logger.exception("")
 
 
-_playback_failover_budget = PlaybackFailoverBudget(limit=5)
+# One failover budget per identity: a stream that keeps dying for one account
+# must not exhaust the retries another account's playback is entitled to.
+_playback_failover_budget = _PlayerStateProxy(_PlayerStateRegistry(
+    factory=lambda identity: PlaybackFailoverBudget(limit=5)))
 
 
 def _playback_failure_message(reason, stopped=False):
@@ -6014,7 +6061,7 @@ def login():
         if _logged_in():
             return redirect(_safe_spa_target(request.args.get('next')))
         return _no_store(app.make_response(render_template(
-            "login.html", totp=_totp_enabled(),
+            "login.html", totp=_totp_enabled(), asset_v=_STATIC_VERSION,
             next_target=_safe_spa_target(request.args.get('next')))))
 
     body = request.get_json(silent=True) or request.form
@@ -6427,6 +6474,13 @@ def alexa_init():
             with _np_lock:
                 result['now_playing'] = _np_snapshot(serial)
             result['serial'] = serial
+    else:
+        retained = _active_logged_out_echo()
+        if retained:
+            result['devices'] = [retained]
+            result['serial'] = retained['serial']
+            with _np_lock:
+                result['now_playing'] = _np_snapshot(retained['serial'])
     return jsonify(result)
 
 
@@ -6458,7 +6512,17 @@ def alexa_proxy_login():
         # is the login proxy's port: a concurrent login is refused, not queued.
         status_code = 409 if error == alexa_remote.PROXY_PORT_BUSY else 502
         return error_response(error, status_code)
-    return jsonify({'login_url': url})
+    return jsonify({'login_url': url,
+                    'attempt_id': getattr(alexa_remote.remote, '_proxy_attempt_id', None)})
+
+
+@app.post('/alexa/proxy_cancel/')
+def alexa_proxy_cancel():
+    if not _logged_in():
+        return error_response('Sign in to cancel the login attempt.', 401)
+    body = request.get_json(silent=True) or {}
+    cancelled = alexa_remote.remote.proxy_cancel(body.get('attempt_id'))
+    return jsonify({'cancelled': bool(cancelled)})
 
 
 @app.route("/alexa/proxy_check/", methods=["GET"])
@@ -6618,18 +6682,23 @@ def _browser_profile_key():
     return account_user_id(_browser_owner_id())
 
 
-_VNC_URL = "/youtube-login/vnc.html?ui=2&autoconnect=1&resize=scale&path=youtube-login/websockify"
-
-
-def _browser_start_response(token, status):
+def _browser_session_start(owner_id):
+    """Open the touch sign-in surface for *this* identity's Chromium profile."""
+    viewport = (request.get_json(silent=True) or {}).get('viewport')
+    try:
+        token, status = _youtube_browser_sessions.start(
+            owner_id, _browser_profile_key(), viewport=viewport)
+    except ValueError:
+        return error_response('Invalid sign-in browser size.', 400)
     if token is None:
-        # The single capture browser is busy with another account.
+        # The sidecar drives one visible browser at a time, so a second account's
+        # sign-in is refused rather than silently stealing the first one's window.
         return jsonify(status), 409
-    response = jsonify(dict(status, url=_VNC_URL))
+    response = jsonify(dict(status, url="/accounts/youtube"))
     response.set_cookie(_youtube_browser_sessions.COOKIE_NAME, token,
                         max_age=int(_youtube_browser_sessions.lease_ttl),
                         secure=app.config['SESSION_COOKIE_SECURE'], httponly=True,
-                        samesite='Lax', path='/youtube-login/')
+                        samesite='Lax', path='/')
     return response
 
 
@@ -6637,8 +6706,7 @@ def _browser_start_response(token, status):
 def youtube_browser_session_start():
     if not _logged_in():
         return error_response("Sign in to connect YouTube Music.", 401)
-    token, status = _youtube_browser_sessions.start(_browser_owner_id(), _browser_profile_key())
-    return _browser_start_response(token, status)
+    return _browser_session_start(_browser_owner_id())
 
 
 @app.route("/api/youtube/browser-session/status", methods=["GET"])
@@ -6652,17 +6720,20 @@ def youtube_browser_session_status():
 def youtube_browser_session_retry():
     if not _logged_in():
         return error_response("Sign in to connect YouTube Music.", 401)
-    token, status = _youtube_browser_sessions.start(_browser_owner_id(), _browser_profile_key())
-    return _browser_start_response(token, status)
+    return _browser_session_start(_browser_owner_id())
 
 
 @app.route("/api/youtube/browser-session/stop", methods=["POST"])
 def youtube_browser_session_stop():
     if not _logged_in():
         return error_response("Sign in to connect YouTube Music.", 401)
+    if not _youtube_browser_sessions.authorize(_browser_owner_id(), request.cookies.get(_youtube_browser_sessions.COOKIE_NAME)):
+        # Completion already revokes its lease; a late Close must not stop a
+        # newer sign-in started on another device.
+        return error_response("Sign-in session expired.", 403)
     _youtube_browser_sessions.revoke(_browser_owner_id())
     response = jsonify({"success": True})
-    response.delete_cookie(_youtube_browser_sessions.COOKIE_NAME, path='/youtube-login/')
+    response.delete_cookie(_youtube_browser_sessions.COOKIE_NAME, path='/')
     return response
 
 
@@ -6670,6 +6741,11 @@ def youtube_browser_session_stop():
 def youtube_browser_session_open_youtube():
     if not _logged_in():
         return error_response("Sign in to connect YouTube Music.", 401)
+    # A late command from a stale tab must not drive another sign-in that has
+    # since replaced this identity's lease.
+    if not _youtube_browser_sessions.authorize(
+            _browser_owner_id(), request.cookies.get(_youtube_browser_sessions.COOKIE_NAME)):
+        return error_response("Sign-in session expired.", 403)
     try:
         return jsonify(_youtube_browser_sessions.open_youtube(_browser_owner_id()))
     except Exception:
@@ -6680,6 +6756,9 @@ def youtube_browser_session_open_youtube():
 def youtube_browser_session_capture():
     if not _logged_in():
         return error_response("Sign in to connect YouTube Music.", 401)
+    if not _youtube_browser_sessions.authorize(
+            _browser_owner_id(), request.cookies.get(_youtube_browser_sessions.COOKIE_NAME)):
+        return error_response("Sign-in session expired.", 403)
     try:
         return jsonify(_youtube_browser_sessions.request_capture(_browser_owner_id())), 202
     except Exception:
@@ -6693,13 +6772,80 @@ def youtube_browser_session_authorize():
         return Response(status=401)
     return Response(status=204)
 
+@app.get("/accounts/<provider>")
+def account_signin_page(provider):
+    if not _logged_in():
+        return redirect('/login')
+    if provider not in ('amazon', 'youtube'):
+        abort(404)
+    return _no_store(app.make_response(render_template('account_signin.html', provider=provider, asset_v=_STATIC_VERSION)))
+
+
+@app.post('/api/youtube/browser-session/choose-account')
+def youtube_browser_choose_account():
+    if not _logged_in():
+        return error_response('Sign in to connect YouTube Music.', 401)
+    if not _youtube_browser_sessions.authorize(
+            _browser_owner_id(), request.cookies.get(_youtube_browser_sessions.COOKIE_NAME)):
+        return error_response('Sign-in session expired.', 403)
+    try:
+        return jsonify(_youtube_browser_sessions.controller.call('/interactive/choose-account','POST'))
+    except Exception:
+        return error_response('Sign-in browser is not ready.',503)
+
+
+@app.route('/api/youtube/browser-session/surface', methods=['GET', 'POST'])
+def youtube_browser_surface():
+    if not _logged_in():
+        return error_response('Sign in to connect YouTube Music.', 401)
+    if not _youtube_browser_sessions.authorize(
+            _browser_owner_id(), request.cookies.get(_youtube_browser_sessions.COOKIE_NAME)):
+        return error_response('Sign-in session expired. Start again.', 403)
+    try:
+        path='/interactive/frame' if request.method == 'GET' else '/interactive/input'
+        data=_youtube_browser_sessions.controller.call(path, request.method,
+            payload=request.get_json(silent=True) or {}) if request.method == 'POST' else _youtube_browser_sessions.controller.call(path)
+        return _no_store(app.make_response(jsonify(data)))
+    except Exception:
+        return error_response('Sign-in browser is not ready. Try again.', 503)
+
+
+def _active_logged_out_echo():
+    output = _playback_output.snapshot()
+    if output['playback_output'] != 'alexa' or getattr(alexa_remote.remote, 'connection_state', None) is not False:
+        return None
+    current = _get_now_playing()
+    serial = output.get('output_serial')
+    if not serial or not current.get('video_id') or not (current.get('playing') or current.get('playback_processing') or (current.get('playback_confirmed') and not current.get('_alexa_finished_token'))):
+        return None
+    raw = next((d for d in getattr(alexa_remote.remote, '_devices_raw', []) if d.get('serialNumber') == serial), {})
+    return {'serial':serial, 'name':raw.get('accountName') or 'Alexa', 'online':True, 'logged_out':True, 'controllable':False}
+
+
+@app.before_request
+def guard_logged_out_echo_controls():
+    path=request.path.rstrip('/')
+    controls={'/alexa/command','/alexa/seek','/alexa/play','/alexa/play_queue','/alexa/shuffle_queue',
+              '/alexa/queue_add','/alexa/queue_remove','/alexa/queue_reorder','/alexa/clear','/api/app/queue'}
+    if request.method == 'POST' and path in controls:
+        out=_playback_output.snapshot()
+        body=request.get_json(silent=True) or {}
+        target=str(body.get('serial') or '')
+        physical_target=target and not target.startswith('mobile:') and target != 'phone'
+        if getattr(alexa_remote.remote, 'connection_state', None) is False and (physical_target or out['playback_output']=='alexa'):
+            return error_response('Sign in to Amazon to control Alexa, or choose another playback device.',409,code='amazon_login_required')
+
+
 @app.route("/alexa/devices/", methods=["GET"])
 def alexa_devices():
     refresh = request.args.get("refresh") == "1"
     devices, error = alexa_remote.remote.devices(refresh=refresh)
     if error:
+        retained = _active_logged_out_echo()
+        if getattr(alexa_remote.remote, 'connection_state', None) is False:
+            return jsonify({'devices':[retained] if retained else [], 'amazon_connected':False})
         return error_response(error, 502)
-    return jsonify({'devices': devices})
+    return jsonify({'devices': devices, 'amazon_connected':True})
 
 
 @app.route("/alexa/volume/", methods=["GET"])
@@ -6825,7 +6971,7 @@ def alexa_command():
         # that never had one) would otherwise show --:-- forever once they
         # become current -- mirrors the same fallback in alexa_play_track.
         if not int(item.get('duration_ms') or 0):
-            threading.Thread(target=_lookup_and_update_np, args=(video_id,), daemon=True).start()
+            _bg_thread(_lookup_and_update_np, args=(video_id,))
         return jsonify({'ok': True, 'now_playing': item, 'queue_index': target_idx})
     resume_position_ms = None
     previous_now_playing = None
@@ -6884,10 +7030,7 @@ def alexa_command():
             # falsely claiming playback the user must fix with another
             # pause/play. Bound to the staged revision so a newer user intent
             # (pause/seek/track change) is never disturbed.
-            threading.Thread(
-                target=_watch_resume_confirmation,
-                args=(serial, staged_video_id, staged_revision),
-                daemon=True).start()
+            _bg_thread(_watch_resume_confirmation, args=(serial, staged_video_id, staged_revision))
     elif action == 'pause':
         # Freeze the progress anchor before dispatch for the same reason: the
         # skill's PlaybackStopped event may arrive before the HTTP call returns.
@@ -7039,7 +7182,7 @@ def alexa_seek():
 
 # Webhook from Lambda: the skill POSTs state events (started/stopped/finished)
 # directly to the server so we don't need to poll Amazon's API.
-def _reconcile_buffered_alexa_start(token):
+def _reconcile_buffered_alexa_start(token, offset_ms=0, event_at=None, second_precision=False):
     """One correction at most when Echo starts a successor superseded at the boundary.
 
     REPLACE_ENQUEUED has no expectedPreviousToken field. Even with validation,
@@ -7051,9 +7194,41 @@ def _reconcile_buffered_alexa_start(token):
     with _np_lock:
         record = _alexa_queue_decisions.get(parts[2][1:])
         if not record:
-            return None  # Restart/legacy: no evidence this decision was superseded.
+            # Decisions are process-local, but the edited queue survives a
+            # restart. Never let a recovered q-token reinstall Dynamo's old
+            # queue. Reconstruct only from a matching live predecessor or a
+            # restored Alexa selection with no newer transport intent.
+            output = _playback_output.snapshot()
+            queue = _now_playing.get('queue') or []
+            index = _now_playing.get('queue_index', -1)
+            current = _now_playing.get('video_id')
+            tracked = _now_playing.get('alexa_token')
+            intent = _now_playing.get('alexa_intent_at')
+            pending = _now_playing.get('_alexa_pending') or {}
+            predecessor = (pending.get('current_video') == current and pending.get('token') == tracked
+                and pending.get('intent_at') == intent and pending.get('output_token') == output['output_token'])
+            restored = (not tracked and not intent and not _now_playing.get('playback_processing')
+                and _now_playing.get('preferred_output') != 'phone')
+            if (output['playback_output'] != 'alexa' or not queue or not (predecessor or restored)
+                    or not isinstance(index, int) or not 0 <= index < len(queue)
+                    or queue[index].get('video_id') != current):
+                return {'ok': True, 'ignored': 'untracked queued start', 'stop': True}
+            record = dict(current_video=current, current_index=index, current_entry=queue[index].get('entry_id'),
+                token=tracked, intent_at=intent, output_token=output['output_token'],
+                loop=bool(pending.get('loop')) if predecessor else False,
+                restore_current=restored and current == parts[1])
+            _alexa_queue_decisions[parts[2][1:]] = record
+            while len(_alexa_queue_decisions) > 32:
+                _alexa_queue_decisions.popitem(last=False)
         if record.get('corrected'):
             return {'ok': True, 'ignored': 'superseded queued start', 'stop': False}
+        if (record.get('started') and _now_playing.get('alexa_token') == token
+                and _now_playing.get('video_id') == parts[1]):
+            return {'ok': True, 'ignored': 'duplicate queued start', 'stop': False}
+        watermark = max(float(_now_playing.get('alexa_intent_at') or 0),
+                        float(_now_playing.get('alexa_event_at') or 0))
+        if event_at is not None and event_at < (int(watermark) if second_precision else watermark):
+            return {'ok': True, 'ignored': 'stale Alexa event', 'stop': False}
         output = _playback_output.snapshot()
         if (output['playback_output'] != 'alexa' or output['output_token'] != record['output_token'] or
                 _now_playing.get('alexa_intent_at') != record['intent_at'] or
@@ -7064,12 +7239,29 @@ def _reconcile_buffered_alexa_start(token):
         _queue_version_locked()
         queue = _now_playing.get('queue') or []
         index = next((i for i, item in enumerate(queue) if record.get('current_entry') and item.get('entry_id') == record['current_entry']), record['current_index'])
-        desired = _resolve_next_track(queue, record['current_video'], index)
+        desired = queue[index] if record.get('restore_current') and 0 <= index < len(queue) else _resolve_next_track(queue, record['current_video'], index)
         if desired is None and record.get('loop') and queue and index == len(queue) - 1 and queue[index].get('video_id') == record['current_video']:
             desired = queue[0]
         if desired and desired.get('video_id') == parts[1]:
-            return {'accepted': True, 'queue': list(queue),
-                    'queue_index': next(i for i, item in enumerate(queue) if item is desired)}
+            target = next(i for i, item in enumerate(queue) if item is desired)
+            changed = _now_playing.get('video_id') != parts[1] or _now_playing.get('queue_index') != target
+            now = time.time()
+            # Validate and commit the occurrence atomically. A queue removal
+            # cannot slip between validation and a later stale skill snapshot.
+            _now_playing.update(video_id=parts[1], queue_index=target,
+                title=desired.get('title', ''), artist=desired.get('artist', ''),
+                artists=desired.get('artists') or [], thumbnail=desired.get('thumbnail', ''),
+                duration_ms=desired.get('duration_ms', 0), position_ms=max(0, offset_ms),
+                started_at=now, playing=True, playback_confirmed=True, playback_processing=False,
+                alexa_token=token, updated_at=now, _last_playback_activity_at=now)
+            _now_playing.pop('_alexa_finished_token', None)
+            _now_playing['playback_revision'] = int(_now_playing.get('playback_revision', 0)) + 1
+            if event_at is not None:
+                _now_playing['alexa_event_at'] = event_at
+            record['started'] = True
+            if changed:
+                _bump_playback_generation()
+            return {'accepted': True, 'queue': list(queue), 'queue_index': target, 'track_changed': changed}
         record['corrected'] = True
         if not desired:
             _now_playing.update(playing=False, playback_processing=False, playback_confirmed=True)
@@ -7084,9 +7276,12 @@ def _reconcile_buffered_alexa_start(token):
             position_ms=0, started_at=time.time(), playing=True,
             playback_processing=True, playback_confirmed=False, alexa_intent_at=time.time())
         _now_playing['playback_revision'] = int(_now_playing.get('playback_revision', 0)) + 1
-        _schedule_play_dispatch(serial, desired['video_id'], expected_intent=_now_playing['alexa_intent_at'],
-                                expected_output=output['output_token'])
-        return {'ok': True, 'ignored': 'superseded queued start', 'stop': True, 'correcting': True}
+        _bump_playback_generation()
+        video_id, intent, output_token = desired['video_id'], _now_playing['alexa_intent_at'], output['output_token']
+    # The scheduler takes _np_lock to snapshot/fence dispatch. Never call it
+    # while committing a buffered-track correction under that same Lock.
+    _schedule_play_dispatch(serial, video_id, expected_intent=intent, expected_output=output_token)
+    return {'ok': True, 'ignored': 'superseded queued start', 'stop': True, 'correcting': True}
 
 
 @app.route("/alexa/state_event/", methods=["POST"])
@@ -7102,16 +7297,36 @@ def alexa_state_event():
         event_at = None
     event_token = str(body.get('token') or '')
     if event == 'started':
-        reconciliation = _reconcile_buffered_alexa_start(event_token)
+        try:
+            queued_offset = max(0, int(body.get('offset_in_ms', body.get('position_ms', 0)) or 0))
+        except (TypeError, ValueError, OverflowError):
+            queued_offset = 0
+        reconciliation = _reconcile_buffered_alexa_start(event_token, queued_offset, event_at,
+            '.' not in str(body.get('event_timestamp', '')))
         if reconciliation and reconciliation.get('accepted'):
-            body['queue'] = reconciliation['queue']
-            body['queue_index'] = reconciliation['queue_index']
+            # The live occurrence is already committed. Never feed the skill's
+            # old queue through the generic started handler after releasing it.
+            _playback_failover_budget.reset()
+            if 'volume' in body:
+                _record_volume_state(body.get('serial'), body.get('volume'), notify=True)
+            _notify_sse()
+            item = reconciliation['queue'][reconciliation['queue_index']]
+            if queued_offset < 5000 and not _jam_guest():
+                _record_listen(item['video_id'], item.get('title', ''), item.get('artist', ''), _thumbnail_url(item.get('thumbnail')))
+            if not int(item.get('duration_ms') or 0):
+                _bg_thread(_lookup_and_update_np, args=(item['video_id'],))
+            return jsonify({'ok': True})
         elif reconciliation is not None:
             if reconciliation.get('correcting') or reconciliation.get('ignored') == 'queue ended':
                 _notify_sse()
             return jsonify(reconciliation)
     with _np_lock:
         tracked_token = _now_playing.get('alexa_token') or ''
+        if (event == 'started' and event_token and event_token == tracked_token
+                and _playback_output.snapshot()['playback_output'] == 'phone'):
+            # An in-flight Started for the released current stream is not a
+            # new voice intent. It must not steal ownership back after handoff.
+            return jsonify({'ok': True, 'ignored': 'released Alexa stream', 'stop': True})
         if event in ('stopped', 'finished', 'failed') and event_token and tracked_token and event_token != tracked_token:
             return jsonify({'ok': True, 'ignored': 'stale playback token'})
         if event == 'finished' and not _now_playing.get('playing'):
@@ -7329,7 +7544,7 @@ def alexa_state_event():
                 #     shuffle / new radio), or it is a contiguous window slice
                 #     of the live queue and nothing needs replacing.
                 queue_web_dirty = bool(cur_np.get('queue_web_dirty'))
-                live_holds_current = (len(cur_queue) > 1 and any(
+                live_holds_current = (bool(cur_queue) and any(
                     q.get('video_id') == video_id for q in cur_queue))
                 if queue_web_dirty and live_holds_current and slice_offset < 0:
                     translated = next(
@@ -7399,7 +7614,7 @@ def alexa_state_event():
                 # duration up in the background, same fallback as the
                 # not-in-queue branch below.
                 if not int(matched.get('duration_ms') or 0):
-                    threading.Thread(target=_lookup_and_update_np, args=(video_id,), daemon=True).start()
+                    _bg_thread(_lookup_and_update_np, args=(video_id,))
             else:
                 # queue_index=-1: this track isn't in the visible queue, so the
                 # old highlight is wrong until _refresh_radio_queue rebuilds it.
@@ -7415,7 +7630,7 @@ def alexa_state_event():
                 # backfills the real title/artist/thumbnail once it lands.
                 if offset_in_ms < 5000:
                     _record_listen(video_id, '', '', '')
-                threading.Thread(target=_lookup_and_update_np, args=(video_id,), daemon=True).start()
+                _bg_thread(_lookup_and_update_np, args=(video_id,))
             # ---- Auto-skip a stale next track ----
             # The skill's ENQUEUE directive is already sitting in the Echo's
             # AudioPlayer queue when a web reorder lands in the final ~30-40s
@@ -7466,8 +7681,7 @@ def alexa_state_event():
                                                    expected_next.get('artist', ''),
                                                    _thumbnail_url(expected_next.get('thumbnail')))
                                 if not int(expected_next.get('duration_ms') or 0):
-                                    threading.Thread(target=_lookup_and_update_np,
-                                                     args=(skip_vid,), daemon=True).start()
+                                    _bg_thread(_lookup_and_update_np, args=(skip_vid,))
             live_queue = _get_now_playing().get('queue') or []
             has_playable_queue = (len(live_queue) > 1
                                   and any(item.get('video_id') == video_id
@@ -7478,7 +7692,7 @@ def alexa_state_event():
             # here creates two independent radio requests; whichever finishes
             # first wins, so Alexa and the website can immediately diverge.
             if not has_playable_queue and not skill_queue_received:
-                threading.Thread(target=_refresh_radio_queue, args=(video_id,), daemon=True).start()
+                _bg_thread(_refresh_radio_queue, args=(video_id,))
         else:
             # Same track re-starting (a seek) -- OR a redundant confirmation
             # for a track _confirm_stream_delivery already confirmed (that
@@ -7558,15 +7772,14 @@ def alexa_state_event():
                                       and any(item.get('video_id') == video_id
                                               for item in live_queue))
                 if not has_playable_queue and not skill_queue_received:
-                    threading.Thread(target=_refresh_radio_queue, args=(video_id,), daemon=True).start()
+                    _bg_thread(_refresh_radio_queue, args=(video_id,))
         # Pre-download the next few songs in the queue now that playback has
         # started. This gives the full song duration (~3-5 min) to download,
         # instead of racing against PlaybackNearlyFinished's ~30s window.
         queue = _now_playing.get('queue', [])
         idx = _now_playing.get('queue_index', 0)
         if len(queue) > 1:
-            threading.Thread(target=_prewarm_queue_audio,
-                             args=(queue, idx), daemon=True).start()
+            _bg_thread(_prewarm_queue_audio, args=(queue, idx))
     elif event == 'finished':
         with _np_lock:
             _now_playing['_alexa_finished_token'] = event_token
@@ -7579,8 +7792,7 @@ def alexa_state_event():
         # The Echo starts the pre-buffered next track right away; if the
         # matching 'started' webhook gets lost, promote it ourselves after a
         # grace period so the card doesn't stay wedged on the finished song.
-        threading.Thread(target=_promote_after_finish,
-                         args=(prev_video_id,event_token,finish_intent,finish_output), daemon=True).start()
+        _bg_thread(_promote_after_finish, args=(prev_video_id,event_token,finish_intent,finish_output))
     return jsonify({'ok': True})
 
 
@@ -7893,9 +8105,8 @@ async def alexa_like():
         video_id = request.args.get('video_id', '').strip()
         action = request.args.get('action', 'LIKE').upper()
     if not video_id:
-        with _np_lock:
-            np = _get_now_playing()
-            video_id = np.get('video_id') or ''
+        np = _get_now_playing()
+        video_id = np.get('video_id') or ''
     if not video_id:
         return jsonify({'error': 'No video_id provided and nothing playing'}), 400
     if action not in ('LIKE', 'DISLIKE', 'INDIFFERENT'):
@@ -8200,7 +8411,7 @@ async def alexa_play():
                 logger.exception("")
                 _update_now_playing(playing=False)
 
-        threading.Thread(target=_bg_play_direct_link, daemon=True).start()
+        _bg_thread(_bg_play_direct_link)
         logger.info("[alexa/play] dispatched direct link video_id=%s", direct_video_id)
         return jsonify({'ok': True, 'now_playing': optimistic_info})
 
@@ -8256,7 +8467,7 @@ async def alexa_play():
                     logger.exception("")
                     _update_now_playing(playing=False)
 
-            threading.Thread(target=_bg_play_playlist, daemon=True).start()
+            _bg_thread(_bg_play_playlist)
             logger.info("[alexa/play] dispatched playlist (%d tracks) video_id=%s", len(queue), first['video_id'])
             return jsonify({'ok': True, 'now_playing': first})
         # Unreadable playlist (private, radio-only id, etc.): fall through to
@@ -8327,7 +8538,7 @@ async def alexa_play():
             logger.exception("")
             _update_now_playing(playing=False)
 
-    threading.Thread(target=_bg_prepare_and_play, daemon=True).start()
+    _bg_thread(_bg_prepare_and_play)
 
     logger.info("[alexa/play] dispatched to background")
     return jsonify({'ok': True, 'now_playing': optimistic_info})
@@ -8634,14 +8845,14 @@ def alexa_play_queue():
     # --:-- with no total. Look the real metadata (incl. length) up in the
     # background and patch it into now-playing without blocking playback.
     if not int(item.get('duration_ms') or 0):
-        threading.Thread(target=_lookup_and_update_np, args=(video_id,), daemon=True).start()
+        _bg_thread(_lookup_and_update_np, args=(video_id,))
     # Build the "Up Next" radio queue for this track right away. When a song is
     # played from a recommendation/search it lands here with a single-item
     # queue; without this the UP NEXT panel stays empty until (and unless) the
     # skill's started webhook happens to rebuild it. Skipped when the caller
     # is about to build a real queue itself (see suppress_radio above).
     if not suppress_radio:
-        threading.Thread(target=_refresh_radio_queue, args=(video_id, force_radio), daemon=True).start()
+        _bg_thread(_refresh_radio_queue, args=(video_id, force_radio))
     return jsonify({'ok': True, 'now_playing': {
         'title': item.get('title', ''),
         'artist': item.get('artist', ''),
@@ -10737,13 +10948,18 @@ async def api_get_artist(channel_id):
             'thumbnail': thumb,
         })
 
+    own_playlists = collection_cards(raw.get('playlists'))
+    for playlist in own_playlists:
+        if artist_name and not playlist.get('artists') and not playlist.get('artist'):
+            playlist.update(artist=artist_name, artists=[{'name': artist_name, 'id': channel_id}])
+
     return jsonify({
         'artist': raw,
         'topSongs': top_songs,
         'topSongsBrowseId': top_songs_browse_id,
         'albums': _norm_releases(raw.get('albums')),
         'singles': _norm_releases(raw.get('singles')),
-        'playlists': collection_cards(raw.get('playlists')),
+        'playlists': own_playlists,
         'featured': collection_cards(raw.get('featured')),
         'additionalShelves': raw.get('additionalShelves') or [],
         'related': related,

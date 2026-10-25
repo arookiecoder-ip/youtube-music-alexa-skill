@@ -35,7 +35,7 @@
     echoDevices = devices.filter(d => !String(d.serial).startsWith('mobile:'));
     const browser = window.browserPlayback;
     const local = browser ? 'mobile:' + browser.id : '';
-    const devicesWithPhones = echoDevices.filter(d => d.online).concat(phones.map(d => ({ serial: 'mobile:' + d.id,
+    const devicesWithPhones = echoDevices.filter(d => d.online && (!d.logged_out || (output && output.playback_output === 'alexa' && output.output_serial === d.serial))).concat(phones.map(d => ({ serial: 'mobile:' + d.id,
       name: browser && d.id === browser.id ? 'This browser' : d.name, online: true })));
     if (local && !devicesWithPhones.some(d => d.serial === local)) {
       devicesWithPhones.push({ serial: local, name: 'This browser', online: true });
@@ -72,6 +72,10 @@
       beginHandoffFeedback(np.playback_output === 'phone' ? 'mobile:' + np.output_owner : np.output_serial);
     }
     output = np;
+    if (np.remote_control_available === false && np.playing && np.output_serial && !echoDevices.some(d => d.serial === np.output_serial)) {
+      echoDevices.push({serial:np.output_serial,name:'Alexa',online:true,logged_out:true,controllable:false});
+      window._connectEchoDevices = echoDevices;
+    }
     if (changed && !switching) render();
     return true;
   };

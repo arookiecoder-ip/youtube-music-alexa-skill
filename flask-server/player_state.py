@@ -78,6 +78,12 @@ class PlayerStateRegistry:
                 self._states[key] = state
             return state
 
+    def replace_current(self, state) -> None:
+        """Swap the calling identity's live state, leaving every other identity's
+        alone. Tests and sign-out reset one player without disturbing the rest."""
+        with self._guard:
+            self._states[self.current_key()] = state
+
     def lock_for(self, key: str) -> threading.RLock:
         with self._guard:
             lock = self._locks.get(key)
@@ -157,6 +163,10 @@ class PlayerStateView(collections.abc.MutableMapping):
 
     def pop(self, key, *args):
         return self._state().pop(key, *args)
+
+    def popitem(self, *args, **kwargs):
+        # OrderedDict-backed state (LRU eviction) needs the `last` argument.
+        return self._state().popitem(*args, **kwargs)
 
     def update(self, *args, **kwargs):
         self._state().update(*args, **kwargs)

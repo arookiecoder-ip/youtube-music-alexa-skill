@@ -108,6 +108,13 @@ class ReorderAuthorityBase(unittest.TestCase):
             p = mock.patch.object(target, attr)
             self._patches.append(p)
             p.start()
+        # The logged-out Echo guard answers 409 once any earlier module has
+        # really checked the Amazon session; queue authority is what this file
+        # tests, so declare the Echo signed in.
+        signed_in = mock.patch.object(server.alexa_remote.remote,
+                                      'connection_state', True, create=True)
+        self._patches.append(signed_in)
+        signed_in.start()
         # Record every _schedule_play_dispatch call (the auto-skip trigger).
         self.dispatches = []
         dispatch_patch = mock.patch.object(

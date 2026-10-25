@@ -82,6 +82,12 @@ class NextTrackBase(unittest.TestCase):
 
     def setUp(self):
         server._reset_rate_limit_cooldown()
+        # The logged-out Echo guard reads a real Amazon check that another test
+        # module may already have run; this file is about queue behaviour.
+        echo = server.alexa_remote.remote
+        self.addCleanup(setattr, echo, 'connection_state',
+                        getattr(echo, 'connection_state', None))
+        echo.connection_state = True
         with server._np_lock:
             server._saved_now_playing = dict(server._now_playing)
             server._now_playing.clear()

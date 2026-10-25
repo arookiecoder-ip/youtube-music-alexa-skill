@@ -47,7 +47,8 @@ def parse_artist_collections(response):
                         playlist = ((card.get('overlay') or {}).get('musicItemThumbnailOverlayRenderer') or {}).get('content') or {}
                         playlist = (((playlist.get('musicPlayButtonRenderer') or {}).get('playNavigationEndpoint') or {}).get('watchPlaylistEndpoint') or {}).get('playlistId') or ''
                         if bid or playlist:
-                            rows.append({'browseId': bid or playlist, 'playlistId': playlist or bid,
+                            metadata = artist_shelf_item(item) or {}
+                            rows.append({'artists':metadata.get('artists') or [], 'artist':metadata.get('artist') or '', 'browseId': bid or playlist, 'playlistId': playlist or bid,
                                 'title': ''.join(r.get('text', '') for r in runs),
                                 'thumbnails': (((card.get('thumbnailRenderer') or {}).get('musicThumbnailRenderer') or {}).get('thumbnail') or {}).get('thumbnails') or []})
                     sections[kind] = {'browseId': endpoint.get('browseId'), 'params': endpoint.get('params'), 'results': rows}
@@ -91,7 +92,7 @@ def artist_shelf_item(item):
     subtitle = card.get('subtitle') or column(1)
     artists = []
     for run in subtitle.get('runs') or []:
-        artist_id = ((run.get('navigationEndpoint') or {}).get('browseEndpoint') or {}).get('browseId') or ''
+        artist_id = (((run.get('navigationEndpoint') or {}).get('browseEndpoint') or {}).get('browseId') or '').removeprefix('MPLA')
         if artist_id.startswith('UC'):
             artists.append({'name':run.get('text') or '', 'id':artist_id})
     thumbnail = card.get('thumbnailRenderer') or card.get('thumbnail') or {}

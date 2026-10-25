@@ -834,9 +834,31 @@ gutter too so the artist page reaches the screen edges. Desktop keeps its
   }
 }
 
-.artist-release-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); overflow: visible; gap: 20px; padding: 12px 0; }
-.artist-release-grid .hscroll-card { width: auto; min-width: 0; }
-.artist-collection-all { margin-left: auto; }
-#artist-releases-content { padding: 24px; }
 /* Artist hero styles must not revive the previous screen above collection controls. */
 #artist-content > [hidden] { display: none !important; }
+
+/* Artist shelves use cover cards, never the compact Library playlist tile. */
+#artist-section .artist-playlist-card { display: block; padding: 0; border: 0; border-radius: 0; background: transparent; }
+#artist-section .hscroll-controls.artist-shelf-controls { display: flex; flex: none; gap: 8px; align-items: center; margin-left: auto; }
+#artist-section .section-head { gap: 16px; padding-right: 16px; }
+#artist-section .artist-shelf-controls .artist-view-all-btn { white-space: nowrap; }
+.hscroll-card-sub .artist-name { color: inherit; }
+.hscroll-card-sub .artist-name:hover { color: var(--text); text-decoration: underline; }
+#artist-releases-content { max-width: 1400px; margin: 0 auto; padding: 24px clamp(16px, 3vw, 40px) 90px; }
+.artist-collection-header { margin-bottom: 24px; }
+.artist-collection-header h1 { margin: 8px 0 0; font-size: clamp(1.75rem, 3vw, 2.5rem); }
+.artist-collection-back { display: inline-flex; align-items: center; gap: 6px; padding: 6px 0; background: transparent; border: 0; border-radius: 0; color: var(--muted); font-size: .875rem; font-weight: 500; text-transform: none; letter-spacing: normal; }
+.artist-collection-back svg { width: 20px; height: 20px; }
+.artist-collection-back:hover { color: var(--text); }
+#artist-section .artist-release-grid { display: grid; overflow: visible; grid-template-columns: repeat(auto-fill,minmax(140px,1fr)); gap: 24px 16px; padding: 0; }
+#artist-section .artist-release-grid .hscroll-card { width: auto; min-width: 0; }
+.artist-collection-skeleton .skeleton-block, .artist-collection-skeleton .skeleton-line { background: linear-gradient(90deg,rgba(255,255,255,.045),rgba(255,255,255,.10),rgba(255,255,255,.045)); background-size: 200% 100%; animation: artist-collection-shimmer 1.4s ease-in-out infinite; }
+.artist-collection-skeleton .skeleton-line { height: 12px; margin-top: 10px; width: 85%; }
+.artist-collection-skeleton .skeleton-line-artist { width: 60%; }
+.artist-collection-sentinel { height: 1px; }
+.artist-collection-status:not(:empty) { margin: 20px 0 12px; color: var(--muted); }
+@keyframes artist-collection-shimmer { to { background-position: -200% 0; } }
+@media (max-width:899px) { #artist-section .artist-shelf-controls .hscroll-scroll { display: none; } }
+@media (prefers-reduced-motion:reduce) { .artist-collection-skeleton .skeleton-block, .artist-collection-skeleton .skeleton-line { animation: none; } }
+
+#artist-section .artist-shelf-controls:not(:has(.hscroll-scroll:not(:disabled))) .hscroll-scroll { display: none; }

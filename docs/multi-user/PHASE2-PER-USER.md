@@ -240,6 +240,59 @@ account directory and the owner's directory in place; the accounts and their
 directories were deleted afterwards.
 
 
+### Upstream sync (2026-10-25) — single-architecture work adopted into per-identity — **implemented**
+
+`origin/master` moved 11 commits ahead while Phase 2 was in flight (touch
+sign-in surface, logged-out Echo read-only, Amazon attempt cancellation, stream
+handoff rejection, artist shelf unification, viewport bounds, asset versioning).
+The merge is resolved in `feat/multi-user`; every owner-scoped assumption those
+commits carried is now per identity:
+
+- **Touch sign-in** (`/accounts/youtube`, `/accounts/amazon`,
+  `/api/youtube/browser-session/*`, `browser-auth/touch_browser.py`) keeps the
+  VNC-free frame/input surface, with the per-identity profile key
+  (`_browser_profile_key`) and per-identity lease token, and upstream's viewport
+  bounds (320–1920 × 480–1080) validated in `YouTubeBrowserSessionManager.start`
+  → `400` for a bad viewport, `409` when the sidecar cannot take another window.
+  `/stop`, `/open-youtube`, `/capture`, `/choose-account` and `/surface` each
+  fence on `authorize(_browser_owner_id(), lease_cookie)` so a late close from one
+  device cannot stop another device's sign-in.
+- **Amazon sign-in** (`alexa_remote._start_proxy`, `_finalize_proxy_login`,
+  `_cancel_proxy_attempt`, `_logout`, `amazon_login_transport`) keeps the
+  attempt-id fencing and the durable email pointer, promoted into
+  `self.cookie_dir` — i.e. into the *calling identity's*
+  `ALEXA_COOKIE_DIR/accounts/user_<uuid>`, never the owner's. The single
+  `PROXY_PORT` is still claimed per identity (`409` busy), which is what makes
+  cancellation and `_stop_proxy` release ordering matter.
+- **Logged-out Echo** (`_active_logged_out_echo`,
+  `guard_logged_out_echo_controls`, `templates/static/js/alexa-readonly.js`)
+  reads `alexa_remote.remote.connection_state`, which is now a per-identity field
+  on the proxy: one account's missing Amazon session no longer greys out another
+  account's Echo, and `guard_...` returns its `409 amazon_login_required` only to
+  the identity that is actually signed out.
+- **Stream handoff** (`a5111b0`) re-binds `_PLAYER_IDENTITY` as the generator
+  starts, so the "released during handoff" check compares the caller's own output
+  lease.
+- **Background work** — the port pushed 21 `threading.Thread(...)` sites onto
+  `_bg_thread`, which runs the job under the requesting identity (`threading`
+  does not copy contextvars). Metadata lookups, radio builds, prefetch, promotion
+  and resume watching all follow the account that asked for them, and the
+  dedupe/flight keys (`_np_lookup_inflight`, `_radio_refresh_*`) carry the
+  identity alongside the video id.
+- **Newly per-identity state found by the port:** `_alexa_queue_decisions` (upstream's
+  stale-queue-transition fix) and `_playback_failover_budget`, both of which were
+  still module dicts and would have let one account's queue decisions or failover
+  exhaustion decide another's playback.
+
+Test consequence worth remembering: several suites (`test_output_routes`,
+`test_account_pages`, `test_metadata_recovery`, `test_amazon_account_switch`)
+exec a *subset* of real functions into a hand-built namespace. Any module global
+those functions touch has to be injected there, and fakes must carry the same
+attributes the per-identity code reads (`cookie_dir`, `_storage_dir`,
+`_email_file`, `connection_state`). After the port the suite is
+`Ran 835 tests … 33 failing names`, every one of them pre-existing on
+`feat/multi-user`; 11 previously failing names now pass.
+
 ### Phase 2.4 — history, likes, playlists (~2 sessions)
 
 - Schema migration adding `user_id` to the playlist/history/likes tables.

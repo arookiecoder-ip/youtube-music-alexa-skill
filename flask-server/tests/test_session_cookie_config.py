@@ -116,6 +116,29 @@ class SessionCookieConfig(unittest.TestCase):
         # auth gate — never a 401.
         self.assertNotEqual(api_response.status_code, 401)
 
+    def test_account_surface_and_account_chooser_accept_real_owner_cookie_without_api_key(self):
+        client=self.server.app.test_client()
+        with mock.patch.object(self.server, '_ytmusic_is_authenticated', return_value=False), mock.patch.object(self.server, '_totp_enabled', return_value=False):
+            response=client.post('/login/',json={'username':self.server.REMOTE_USER,'password':self.server.REMOTE_PASSWORD,'next':'/accounts/youtube'})
+        self.assertEqual(response.status_code,200)
+        page=client.get('/accounts/youtube')
+        self.assertEqual(page.status_code,200)
+        self.assertIn(('account-signin.js?v='+self.server._STATIC_VERSION).encode(),page.data)
+        manager=mock.Mock(COOKIE_NAME='yt_browser_lease')
+        manager.authorize.return_value=True
+        manager.controller.call.return_value={'image':'data:image/jpeg;base64,AA==','width':480,'height':800}
+        with mock.patch.object(self.server,'_youtube_browser_sessions',manager):
+            response=client.get('/api/youtube/browser-session/surface')
+            self.assertEqual(response.status_code,200)
+            self.assertTrue(response.json['image'].startswith('data:image/jpeg'))
+            self.assertEqual(client.post('/api/youtube/browser-session/surface',json={'type':'key','key':'Tab'}).status_code,200)
+            self.assertEqual(client.post('/api/youtube/browser-session/choose-account',json={}).status_code,200)
+        with mock.patch.object(self.server,'_youtube_browser_sessions',manager), mock.patch.object(manager,'authorize',return_value=False):
+            self.assertEqual(client.get('/api/youtube/browser-session/surface').status_code,403)
+        anonymous=self.server.app.test_client()
+        self.assertEqual(anonymous.get('/api/youtube/browser-session/surface').status_code,401)
+        self.assertEqual(anonymous.post('/api/youtube/browser-session/choose-account',json={}).status_code,401)
+
     def test_track_artwork_endpoint_authorized_by_web_session(self):
         # /api/track/<video_id>/artwork is fetched by the SPA without the API
         # key. It must be reachable with the logged-in web-session cookie, or

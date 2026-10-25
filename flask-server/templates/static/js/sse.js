@@ -66,6 +66,7 @@
       const media = window.browserPlayback.mediaState(np);
       if (media) np = Object.assign({}, np, media);
     }
+    window.updateAlexaControlState?.(np);
     _lastProcessing = np.playback_processing === true;
     if (np.queue_version !== undefined && np.queue !== undefined) _queueVersion = np.queue_version;
     // The server agrees with local intent (or intent has expired): stop

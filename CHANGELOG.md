@@ -6,6 +6,22 @@ This file summarizes behavior changes, explicitly records superseded work and li
 
 ## Unreleased
 
+- Give Amazon verification frames a guaranteed minimum height for Android WebView, size the YouTube sign-in browser for desktop versus mobile, and resize an existing browser when switching controllers. Retry only safe Amazon GET requests on temporary server errors and show a retry screen if the provider remains unavailable.
+
+- Fix cookie-authenticated access to the YouTube sign-in surface and account chooser, with a regression through the real authorization middleware. Share the original owner sign-in theme, reveal only decoded browser frames, stop on expired authorization, and retain natural page scrolling to the confirmation action.
+
+- Replace the inline account form and desktop VNC sign-in UI with dedicated responsive account pages and a leased touch/keyboard browser surface. Add explicit YouTube account selection and preserve existing Amazon credentials until a replacement verifies.
+- Show a red profile outline for disconnected Amazon sessions. Keep voice-started Alexa playback visible as read-only, block transport/queue mutations with an actionable message, and retain a logged-out device entry until handoff.
+- Release signed-out Echo ownership without requiring an unavailable Amazon pause and fence open Echo streams by output token, including same-song handoffs. Already buffered Echo audio still requires Amazon access to stop immediately.
+
+- Preserve saved Amazon remote-control credentials when AlexaPy resets a failed restore attempt; explicit logout still removes them. Voice-skill progress is independent of this remote-control session. Remove the empty-device discovery toast.
+
+- Atomically validate and commit Alexa buffered starts against the live queue, retain deletions across duplicate events and backend restarts, and prevent stale corrections from cancelling newer manual selections. Cover deletion at the final-second boundary followed by a new song selection.
+
+- Fix playback-lock re-entry in stale Alexa buffered-track correction, queue artwork backfill and implicit-current-track likes. Add production-lock regressions and a guard against lock-taking helpers inside playback commits.
+
+- Match artist playlist/featured/additional shelves to the existing cover-card layout, preserve clickable artist credits, align shelf arrows beside the existing View all button style, and replace manual collection pagination with cover skeletons and automatic loading.
+
 - Expand native Home fetching from six to forty shelves, preserve one-item shelves and distinct recommendations with the same heading, and retain additional artist shelves such as live performances and library items.
 
 - Add optional artist playlists and featured-on shelves, full website collection navigation and paging, with empty sections hidden.

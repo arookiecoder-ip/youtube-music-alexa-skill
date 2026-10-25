@@ -22,6 +22,9 @@ class OutputRoutesTests(PhoneQueueTests):
         self.namespace.update(_alexa_volume_lock=threading.RLock(), _alexa_volume_grace={},
             _record_volume_state=Mock())
         self.arm = Mock()
+        self.background = []
+        self.namespace.update(_bg_thread=lambda target, args=(), name=None: self.background.append((target, args, name)),
+            _lookup_and_update_np=Mock(), _refresh_radio_queue=Mock(), _prewarm_queue_audio=Mock())
         self.namespace.update(_np_snapshot=lambda serial=None: copy.deepcopy(self.state), copy=copy, threading=threading, logger=Mock(), _effective_serial=lambda serial: serial,
             _touch_cached_audio=Mock(), _ensure_audio_ready_for_play=Mock(), _arm_play=self.arm,
             _watch_resume_confirmation=Mock(), _ARMED_PLAYS_LOCK=threading.Lock(), _ARMED_PLAYS={})

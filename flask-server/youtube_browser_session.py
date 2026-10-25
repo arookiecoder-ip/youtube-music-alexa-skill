@@ -80,14 +80,13 @@ class BrowserController:
         self.token = token or ""
         self.timeout = timeout
 
-    def call(self, path, method="GET", body=None):
+    def call(self, path, method="GET", payload=None):
         if not self.base_url or not self.token:
             raise RuntimeError("Browser sidecar is not configured")
         req = urllib.request.Request(self.base_url + path, method=method,
                                      headers={"X-Control-Token": self.token,
                                               "Content-Type": "application/json"},
-                                     data=json.dumps(body or {}).encode()
-                                     if method != "GET" else None)
+                                     data=json.dumps(payload or {}).encode() if method != "GET" else None)
         try:
             with urllib.request.urlopen(req, timeout=self.timeout) as response:
                 return json.load(response)
@@ -169,7 +168,13 @@ class YouTubeBrowserSessionManager:
             # Older or unavailable sidecars still need resources released.
             self._close_sidecar()
 
-    def start(self, owner_id, profile_key=""):
+    def start(self, owner_id, profile_key="", viewport=None):
+        if viewport is not None:
+            if (not isinstance(viewport, dict) or type(viewport.get('width')) is not int
+                    or type(viewport.get('height')) is not int
+                    or not 320 <= viewport['width'] <= 1920 or not 480 <= viewport['height'] <= 1080):
+                raise ValueError('Invalid browser viewport')
+            viewport = {key: viewport[key] for key in ('width', 'height')}
         token = secrets.token_urlsafe(32)
         with self._lock:
             if self._busy not in (None, str(owner_id or "")):
@@ -183,7 +188,7 @@ class YouTubeBrowserSessionManager:
             self._busy = str(owner_id or "")
         try:
             sidecar = self.controller.call("/interactive/start", "POST",
-                                           {"profile": profile_key or ""})
+                                           dict({"profile": profile_key or ""}, **(viewport or {})))
             with self._lock:
                 entry.state = sidecar.get("state", "waiting_for_login")
         except Exception:

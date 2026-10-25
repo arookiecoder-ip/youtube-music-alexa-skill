@@ -111,6 +111,24 @@ image intentionally does not ship `pytest`, so the suite was not executed
 inside the running container. Frontend Node tests were not run; no frontend
 code changed on this branch.
 
+## Upstream port verification (2026-10-25)
+
+Same stack, rebuilt with `docker compose --env-file .env.testalexa -p
+musicbox-test up -d --build`. A disposable `user`-role account was created
+through **Users → New**, used for the checks and deleted afterwards; `test123`
+and the owner were not touched.
+
+| Check | Result |
+| --- | --- |
+| Player sign-in | `POST /login/` → `200 {"ok":true,"next":"/"}` |
+| Account sign-in pages | `/accounts/amazon` and `/accounts/youtube` → `200`, responsive, no `vnc.html`; both entry buttons (`#youtube-browser-auth`, `#amazon-signin`) render in the player page |
+| YouTube touch sign-in | `POST /api/youtube/browser-session/start` (412×915) → `200`, `url="/accounts/youtube"`, `state="waiting_for_login"`; `GET …/surface` returned a live JPEG frame (the sidecar clamped the viewport to its bounds); `POST …/stop` → `200 {"success":true}` |
+| Per-identity output | `/api/app/output/` epoch/token differ per account (`ae9907e2…` vs owner `eef5d08c…`); the account never saw the owner's `output_serial` |
+| Per-identity credentials | `/api/status/` for the account reported `downloads.present=false`, `youtube_headers.present=false`, `amazon_session_in_memory=false`; the owner still reported its cookie jar `present=true` |
+| Amazon sign-in endpoints | `POST /alexa/proxy_login/` validated input (`400`), `GET /alexa/proxy_check/` → `{"logged_in":false,"running":false}` for the account, `POST /alexa/proxy_cancel/` with an unknown `attempt_id` → `{"cancelled":false}` (attempt fencing holds) |
+| Logged-out Echo UI | `alexa-readonly.js` served to both identities |
+| Test suite | `Ran 835 tests` inside the container (`python3 -m unittest discover -s tests`): 33 failing names, all pre-existing on this branch, and 11 previously failing names now green |
+
 ## In flight / pending
 
 - [x] Configure SMTP for `synthora.in` — Brevo relay, `587`/STARTTLS,
@@ -161,6 +179,16 @@ code changed on this branch.
       accounts each answered *"Not signed in"* on `/alexa/status/`, first login
       `200` / second `409` / retry after sign-out `200`, sign-out removed only its
       own `.storage`; accounts and directories removed afterwards).
+- [x] Upstream sync: the 11 single-architecture commits on `origin/master`
+      (touch sign-in surface, logged-out Echo read-only, Amazon attempt
+      cancellation, stream handoff rejection, artist shelf unification,
+      viewport bounds, asset versioning) are merged into `feat/multi-user` and
+      re-expressed per identity — per-account browser profile and lease,
+      `connection_state` on the per-identity remote, attempt and proxy-port
+      claims scoped to the caller, `_bg_thread` for every background job so
+      `threading` never loses the requester, and `_alexa_queue_decisions` plus
+      `_playback_failover_budget` moved off shared module state. Details in
+      `PHASE2-PER-USER.md`.
 - [ ] Phase 2.3b: voice-skill routing per account. The Lambda still calls this
       server as the install owner, so "Alexa, play … on Music Box" reaches the
       owner's queue and devices; per-account Echo control happens from the web

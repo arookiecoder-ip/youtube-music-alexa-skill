@@ -33,11 +33,13 @@
       const item = document.createElement('div');
       item.className = 'custom-select-option' + (opt.selected ? ' selected' : '');
       item.dataset.value = opt.value;
+      item.classList.toggle('logged-out', opt.dataset.loggedOut === '1');
       const isOnline = opt.dataset.online !== '0';
       item.innerHTML = (opt.value
         ? '<span class="cs-dot ' + (isOnline ? 'online' : 'offline') + '"></span>'
         : '') + escHtml(opt.textContent);
       item.addEventListener('click', () => {
+        if (opt.dataset.loggedOut === '1') { window.toast?.('Sign in to Amazon to control Alexa.', 'error'); return; }
         deviceSidebar.value = opt.value;
         deviceEl.value = opt.value;
         deviceEl.dispatchEvent(new Event('change'));
@@ -191,6 +193,7 @@
 /* ---- Persistent YouTube browser authentication ---- */
 (function () {
   const openBtn = document.getElementById('youtube-browser-auth');
+  if (openBtn) { openBtn.addEventListener('click', () => { window.location.href = '/accounts/youtube'; }); return; }
   const modal = document.getElementById('youtube-browser-auth-modal-wrap');
   const closeBtn = document.getElementById('youtube-browser-auth-close');
   const saveBtn = document.getElementById('youtube-browser-auth-save');
@@ -413,8 +416,9 @@
       try {
         const cookieStatus = document.getElementById('status-yt-cookies');
         if (cookieStatus) cookieStatus.textContent = 'Testing audio…';
-        const status = await window.api('/api/profile_status/');
+        const status = await window.api('/api/profile_status/?audio_check=0');
         
+        window.setAmazonConnection?.(status.amazon_connected);
         const amzEl = document.getElementById('status-amazon');
         if (amzEl) {
           amzEl.textContent = status.amazon_connected ? 'Connected' : 'Disconnected';
@@ -429,7 +433,7 @@
         if (ythEl) {
           ythEl.textContent = status.youtube_browser_refreshing ? 'Refreshing' :
             (status.youtube_browser_reconnect_required ? 'Reconnect' :
-              (status.youtube_auth_working ? 'Saved session active' : 'Not connected'));
+              (status.youtube_auth_working ? 'Connected' : 'Not connected'));
           ythEl.style.color = status.youtube_auth_working ? '#4ade80' : '#ff6b6b';
           ythEl.style.backgroundColor = status.youtube_auth_working ? 'rgba(74, 222, 128, 0.1)' : 'rgba(255, 107, 107, 0.1)';
           if (status.youtube_browser_last_successful_renewal) {
@@ -440,7 +444,7 @@
         const ytcEl = document.getElementById('status-yt-cookies');
         if (ytcEl) {
           const cookiesOk = status.youtube_cookies_working;
-          ytcEl.textContent = cookiesOk ? 'Download OK' : (status.youtube_cookies_present ? 'Download failed' : 'Not Found');
+          ytcEl.textContent = status.youtube_cookies_present ? 'Saved' : 'Not connected';
           ytcEl.style.color = cookiesOk ? '#4ade80' : '#ff6b6b';
           ytcEl.style.backgroundColor = cookiesOk ? 'rgba(74, 222, 128, 0.1)' : 'rgba(255, 107, 107, 0.1)';
           if (status.debug && status.debug.cookies) ytcEl.title = status.debug.cookies;
@@ -449,7 +453,7 @@
         const amzSignout = document.getElementById('amazon-signout');
         const amzSignin = document.getElementById('amazon-signin');
         if (amzSignout) amzSignout.style.display = status.amazon_connected ? 'block' : 'none';
-        if (amzSignin) amzSignin.style.display = status.amazon_connected ? 'none' : 'block';
+        if (amzSignin) { amzSignin.style.display = 'block'; amzSignin.textContent = status.amazon_connected ? 'Change Amazon account' : 'Sign in to Amazon'; }
         
       } catch (err) {
         console.error("Failed to load profile status", err);
@@ -478,12 +482,7 @@
   if (amzSigninBtn) {
     amzSigninBtn.addEventListener('click', () => {
       wrap.classList.remove('open');
-      const emailInput = document.getElementById('login-email');
-      if (emailInput) {
-        document.getElementById('login-section').hidden = false;
-        document.getElementById('login-section').scrollIntoView({ behavior: 'smooth' });
-        setTimeout(() => emailInput.focus(), 300);
-      }
+      window.location.href = '/accounts/amazon';
     });
   }
   
@@ -535,3 +534,14 @@
 })();
 })();
 
+
+// Connection health is independent of opening the account menu. Never run an
+// audio download probe for this indicator, and do not turn a network error red.
+(() => {
+ const trigger=document.getElementById('profile-menu-trigger');
+ if(!trigger || window.JAM_GUEST)return;
+ window.setAmazonConnection=connected=>{if(typeof connected!=='boolean')return;trigger.classList.toggle('amazon-disconnected',!connected);trigger.setAttribute('aria-label',connected?'Account':'Account — Amazon disconnected');};
+ let timer;
+ async function check(){if(!document.hidden && window.api){try{const d=await window.api('/alexa/status/');window.setAmazonConnection(d.logged_in);}catch(_){}}timer=setTimeout(check,60000);}
+ check();window.addEventListener('pagehide',()=>clearTimeout(timer));
+})();

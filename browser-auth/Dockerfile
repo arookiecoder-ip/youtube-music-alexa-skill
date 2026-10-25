@@ -12,7 +12,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-COPY service.py entrypoint.sh novnc-controls.js ./
+COPY service.py touch_browser.py entrypoint.sh novnc-controls.js ./
 RUN chmod 0755 /app/entrypoint.sh \
     && mkdir -p /profile \
     && cp /app/novnc-controls.js /usr/share/novnc/novnc-controls.js \

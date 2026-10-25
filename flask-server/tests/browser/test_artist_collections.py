@@ -41,6 +41,12 @@ def page(origin):
             window.api = async path => path.includes('subscribed_artists') ? {artists:[]} : window.fixture;
             document.getElementById('artist-section').hidden=false;
         }""")
+        page.evaluate((ROOT/'templates/static/js/collection-renderer.js').read_text())
+        page.evaluate('''() => {
+            document.body.classList.add('artist-route');
+            window.artistLinksHtml = (names, ids) => { const link=document.createElement('a');link.className='artist-name';link.textContent=names;link.dataset.channelId=ids[0];link.href='#artist/'+ids[0];return link.outerHTML; };
+            document.addEventListener('click', event => { const artist=event.target.closest('.artist-name');if(artist){event.preventDefault();window._route='#artist/'+artist.dataset.channelId;} });
+        }''')
         page.evaluate((ROOT/'templates/static/js/artist.js').read_text())
         yield page
         browser.close()
@@ -50,7 +56,7 @@ def test_optional_shelves_navigate_to_playlists_and_hide_when_empty(page):
     page.evaluate("window.loadArtist('UCtest')")
     expect(page.locator('#artist-playlists')).to_be_visible()
     expect(page.locator('#artist-featured')).to_be_visible()
-    page.locator('#artist-featured-track .hscroll-card').click()
+    page.locator('#artist-featured-track .hscroll-card-title').click()
     assert page.evaluate('window._route') == '#playlist/PLfeatured'
     page.evaluate("window._route='#artist/UCtest'")
     page.locator('#artist-albums .artist-collection-all').click()
@@ -60,18 +66,19 @@ def test_optional_shelves_navigate_to_playlists_and_hide_when_empty(page):
     expect(page.locator('#artist-featured')).to_be_hidden()
 
 
-def test_collection_pages_page_deduplicate_and_keep_playlist_identity(page):
+def test_collection_pages_scroll_to_fetch_and_keep_playlist_identity(page):
     page.evaluate("""() => {
         window._route='#artist/UCtest?collection=featured';
-        window.api=async path => path.includes('offset=0') ? {items:[{playlistId:'PLone',title:'One'}],next_offset:1,has_more:true} : {items:[{playlistId:'PLone',title:'Duplicate'},{playlistId:'PLtwo',title:'Two'}],next_offset:3,has_more:false};
+        window.api=async path => path.includes('offset=0') ? {items:Array.from({length:30},(_,i)=>({playlistId:'PL'+i,title:'Playlist '+i})),next_offset:30,has_more:true} : {items:[{playlistId:'PL0',title:'Duplicate'},{playlistId:'PLtwo',title:'Two'}],next_offset:32,has_more:false};
         return window.loadArtistReleases('UCtest','featured');
     }""")
-    expect(page.locator('#artist-release-grid .hscroll-card')).to_have_count(1)
-    page.locator('.artist-collection-more').click()
-    expect(page.locator('#artist-release-grid .hscroll-card')).to_have_count(2)
-    expect(page.locator('.artist-collection-more')).to_be_hidden()
-    page.locator('#artist-release-grid .hscroll-card').nth(1).click()
+    expect(page.locator('#artist-release-grid .hscroll-card')).to_have_count(30)
+    page.locator('.artist-collection-sentinel').scroll_into_view_if_needed()
+    expect(page.locator('#artist-release-grid .hscroll-card')).to_have_count(31)
+    expect(page.locator('.artist-collection-sentinel')).to_be_hidden()
+    page.locator('#artist-release-grid .hscroll-card-title').last.click()
     assert page.evaluate('window._route') == '#playlist/PLtwo'
+    assert page.locator('.artist-collection-more').count() == 0
 
 
 def test_collection_failure_retries_without_losing_destination(page):
@@ -81,8 +88,53 @@ def test_collection_failure_retries_without_losing_destination(page):
         return window.loadArtistReleases('UCtest','albums');
     }""")
     expect(page.locator('.artist-collection-status')).to_have_text('Offline')
-    page.locator('.artist-collection-more').click()
+    page.locator('.artist-collection-retry').click()
     expect(page.locator('.artist-collection-status')).to_have_text('No collections available')
+
+
+def test_loading_uses_cover_skeletons_without_load_more_text(page):
+    page.evaluate("""() => {
+        window._route='#artist/UCtest?collection=albums';
+        window.api=()=>new Promise(resolve=>window.resolveCollection=resolve);
+        window.loadArtistReleases('UCtest','albums');
+    }""")
+    expect(page.locator('.artist-collection-skeleton')).to_have_count(12)
+    expect(page.locator('#artist-release-grid')).to_have_attribute('aria-busy','true')
+    assert page.get_by_text('Load more',exact=True).count()==0
+    page.evaluate("window.resolveCollection({items:[{browseId:'MPREtest',title:'Album'}],next_offset:1,has_more:false})")
+    expect(page.locator('.artist-collection-skeleton')).to_have_count(0)
+    expect(page.locator('#artist-release-grid')).to_have_attribute('aria-busy','false')
+
+
+def test_cover_card_geometry_controls_and_clickable_credits_match_other_shelves(page):
+    page.evaluate("""() => {
+        window.fixture.playlists=Array.from({length:20},(_,i)=>({playlistId:'PL'+i,title:'Playlist '+i,artists:[{name:'Artist name',id:'UCcredit'}]}));
+        window.fixture.featured[0].artists=[{name:'Artist name',id:'UCcredit'}];
+        window.fixture.additionalShelves=[{title:'Live performances',items:Array.from({length:20},(_,i)=>({kind:'track',video_id:'live'+i,title:'Live song '+i,artists:[{name:'Live artist',id:'UClive'}],artist:'Live artist'}))}];
+        window.playFromQueue=()=>window.played=true;
+        return window.loadArtist('UCtest');
+    }""")
+    for shelf in ('artist-albums','artist-playlists','artist-featured','artist-extra-0'):
+        art=page.locator('#'+shelf+' .hscroll-card-art').first
+        box=art.bounding_box()
+        assert abs(box['width']-box['height'])<1
+        title=page.locator('#'+shelf+' .hscroll-card-title').first.bounding_box()
+        assert title['y'] >= box['y']+box['height']
+    assert page.locator('#artist-section .playlist-card').count()==0
+    controls=page.locator('#artist-playlists .hscroll-controls')
+    assert controls.locator('.artist-view-all-btn').count()==1
+    button=controls.locator('.artist-view-all-btn').bounding_box()
+    arrow=controls.locator('.hscroll-scroll-next').bounding_box()
+    assert abs((button['y']+button['height']/2)-(arrow['y']+arrow['height']/2))<1
+    assert 0 <= button['x']-(arrow['x']+arrow['width']) <= 12
+    expect(page.locator('#artist-extra-shelves .hscroll-scroll-next')).to_be_visible()
+    page.locator('#artist-extra-0 .artist-name').first.click()
+    assert page.evaluate('window._route')=='#artist/UClive'
+    assert not page.evaluate('!!window.played')
+    import os
+    if os.environ.get('MUSICBOX_VISUAL_OUTPUT'):
+        target=Path(os.environ['MUSICBOX_VISUAL_OUTPUT']);target.mkdir(parents=True,exist_ok=True)
+        page.locator('#artist-playlists').screenshot(path=str(target/'artist-playlists-shelf.png'))
 
 
 def test_long_device_name_does_not_move_arrow(page):

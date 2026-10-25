@@ -36,7 +36,7 @@ flowchart LR
     Amazon --> Echo[Echo]
     Echo --> Lambda[Custom skill / AWS Lambda]
     Lambda --> Flask
-    Caddy --> Browser[Protected Chromium / noVNC sidecar]
+    Caddy --> Browser[Protected Chromium sign-in surface]
     Flask --> Browser
 ```
 
@@ -53,7 +53,7 @@ For a different topology, update Compose network mode, browser-controller URL an
 | Service / volume | Role |
 | --- | --- |
 | `ytmusic` | Python 3.12, Flask/Waitress (one process, 16 threads), catalog/auth/output APIs, AlexaPy and private Node worker. |
-| `youtube-browser` | Private Chromium, Xvfb, x11vnc/noVNC and token-protected authentication controller. |
+| `youtube-browser` | Private Chromium, Xvfb and token-protected touch/keyboard sign-in controller; legacy noVNC remains isolated for compatibility. |
 | `caddy` | Public HTTPS, application/login proxy and owner-authorized noVNC routing. |
 | `ytmusic_data` | SQLite state and persistent YouTube headers under `/data`. |
 | `ytmusic_alexa_cookies` | Amazon session at `/app/alexa_cookies`. |
@@ -128,7 +128,7 @@ The Docker image enables the supported streaming path. Historical `AUDIO_CACHE_M
 
 - **Owner session:** `/login/`, optional TOTP, HttpOnly cookie, JSON mutation/CSRF checks and session revocation. Jam guests do not acquire owner account/status permissions.
 - **Scoped phone audio:** authenticated `/api/app/audio-token/` issues audio-only credentials (two hours playback, 24 hours download), validated against the live owner session. These do not grant queue/account mutation access. New Android builds do not embed the server-wide key.
-- **YouTube account data:** the owner launches the protected Chromium/noVNC session beneath `/youtube-login/`. Complete Google challenges there. After a validated signed-in browse capture, the server atomically promotes headers to `YTMUSIC_AUTH_FILE`. A saved profile can renew ordinary cookie rotation; revoked/challenged sessions require reconnection. Manual advanced header import remains supported.
+- **YouTube account data:** the owner opens `/accounts/youtube`, starts the leased touch/keyboard browser surface and completes Google challenges there. Switch account opens Google’s account chooser; confirmation validates the selected account before replacing server headers. After a validated signed-in browse capture, the server atomically promotes headers to `YTMUSIC_AUTH_FILE`. A saved profile can renew ordinary cookie rotation; revoked/challenged sessions require reconnection. Manual advanced header import remains supported.
 - **YouTube audio cookies:** independently tested/replaced through the owner flow. Failed replacements preserve the existing jar. A cookie file's format/expiry is not proof that the provider will accept audio requests.
 - **Amazon:** browser-driven login uses the internal login proxy; the resulting session is persisted in the Alexa cookie volume. Server/container outbound routing is the relevant Amazon egress path, not a browser VPN extension.
 
@@ -192,7 +192,7 @@ At the reviewed snapshot, [Actions](https://github.com/arookiecoder-ip/youtube-m
 | Wrong device after refresh/close | Check foreground presence, reconnect grace, ownership token and unexpired source acknowledgment. A refresh must not be treated as an immediate device close. |
 | Personalized data absent | Reconnect the account browser session; anonymous catalog fallback is not proof of account authorization. |
 | Account works, audio fails | Test/replace audio cookies separately; inspect sanitized streaming errors and restricted/unavailable-track responses. |
-| Login/noVNC fails | Check origin, controller-token agreement, sidecar health and the current Caddy/network-namespace routing. |
+| Account sign-in fails | Check origin, controller-token agreement, sidecar health and the current Caddy/network-namespace routing. |
 | Sessions disappear after rebuild | Verify persistent data/Alexa/profile volumes and the session-signing secret or generated-secret file. |
 
 The latest single live Echo probe measured about **90 ms** for seek HTTP acknowledgment and **3.7 seconds** to server playback confirmation. It was not an audible-output benchmark or a before/after distribution. A longer live boundary probe was interrupted by a separate Pause request; the original queue and paused cursor were restored. Automated race tests passed, but that probe did not establish a successful audible transition. Streaming first-byte timings recorded in the streaming notes measure a different stage.
@@ -202,3 +202,9 @@ Open [Operational status](docs/STATUS_PANEL.md) for aggregate diagnostics. Statu
 ## License
 
 [MIT](LICENSE). See Git history and the [changelog](CHANGELOG.md) for original work, integrations, reversions and subsequent fixes.
+
+### Account controls and signed-out Alexa playback
+
+Open the profile menu to connect or change Amazon/YouTube Music accounts. Amazon uses the responsive `/accounts/amazon` page; staged credentials replace the prior account only after verification. A disconnected Amazon remote session gives the profile a red outline. Voice-started Alexa playback remains visible with a logged-out device entry and read-only controls, with a sign-in explanation on attempted commands. Switching to a phone/browser releases Echo ownership and closes open Echo streams even for the same song. Audio already buffered by the Echo cannot be forcibly paused without Amazon remote access; future stale streams/continuations remain fenced.
+
+The new YouTube sign-in surface uses short-lived, owner-bound leases for frames, input, capture and cancellation. An old page cannot cancel a newer sign-in. Frames and account pages are not cached; input is size-bounded and keys/coordinates are validated. No public Chromium debugging or private controller token is exposed.

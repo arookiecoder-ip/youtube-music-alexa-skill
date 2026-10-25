@@ -25,13 +25,14 @@ AlexaPy's aiohttp session is bound to the event loop it was created in,
 but Flask async views each run in a throwaway loop — so all AlexaPy work
 runs on one dedicated background loop owned by this module.
 """
-import asyncio, logging, os, shutil, threading, time
+import asyncio, logging, os, shutil, secrets, tempfile, threading, time
 from concurrent.futures import TimeoutError as FuturesTimeoutError
 
 import httpx
 from aiohttp import web
 from alexapy import AlexaAPI, AlexaProxy
 from network_sessions import ProxyAwareAlexaLogin as AlexaLogin
+from amazon_login_transport import AmazonLoginTransport
 from alexapy.helpers import get_json_value
 from player_state import OWNER, PlayerStateProxy, PlayerStateRegistry
 
@@ -207,6 +208,9 @@ class AlexaRemote:
         self._login_checked_at = 0.0  # monotonic time of last successful test_loggedin
         self._devices_raw = []
         self._devices_fetched_at = 0.0  # monotonic time of last device-list fetch
+        # None until this identity's session has actually been checked; the web
+        # remote reads it to tell "signed out" from "not checked yet".
+        self.connection_state = None
         # proxy-login state (all touched only on the background loop)
         self._proxy = None
         self._proxy_login = None
@@ -216,6 +220,8 @@ class AlexaRemote:
         self._proxy_finalize_task = None
         self._proxy_login_error = None
         self._proxy_login_complete = False
+        self._proxy_attempt_id = None
+        self._proxy_cookie_stage = None
 
     # ---------- background loop plumbing ----------
 
@@ -265,10 +271,12 @@ class AlexaRemote:
             if self._login:
                 fresh = (time.monotonic() - self._login_checked_at) < _LOGIN_RECHECK_TTL
                 if fresh and not force_check:
+                    self.connection_state = True
                     return None
                 try:
                     if await self._login.test_loggedin():
                         self._login_checked_at = time.monotonic()
+                        self.connection_state = True
                         return None
                 except Exception:
                     logger.exception("test_loggedin failed; will try the stored cookie")
@@ -294,6 +302,7 @@ class AlexaRemote:
             except Exception:
                 logger.exception("could not read persisted login email")
             if not email:
+                self.connection_state = False
                 return AlexaRemote.LOGIN_REQUIRED
             login = AlexaLogin(
                 url=AMAZON_DOMAIN,
@@ -302,12 +311,10 @@ class AlexaRemote:
                 outputpath=lambda name: os.path.join(self.cookie_dir, name),
             )
             try:
-                cookies = await login.load_cookie()
-                if cookies:
-                    await login.login(cookies=cookies)
-                if (login.status or {}).get("login_successful"):
+                if await login.restore_cookie_session():
                     self._login = login
                     self._login_checked_at = time.monotonic()
+                    self.connection_state = True
                     return None
             except Exception:
                 logger.exception("restoring session from cookie failed")
@@ -317,7 +324,9 @@ class AlexaRemote:
                         await login.close()
                     except Exception:
                         pass
+            self.connection_state = False
             return AlexaRemote.LOGIN_REQUIRED
+
 
     # ---------- proxy login (interactive, browser-driven) ----------
     #
@@ -398,7 +407,9 @@ class AlexaRemote:
                 and self._proxy_finalize_task.done()
                 and not self._proxy_login_complete
             )
-            if self._proxy_base_url == proxy_base_url and not finalize_failed:
+            if (self._proxy_base_url == proxy_base_url and not finalize_failed
+                    and self._proxy_login is not None and self._proxy_login.email == email
+                    and self._proxy_login.password == password):
                 _renew_proxy_claim(self)
                 return None
             await self._stop_proxy()
@@ -410,11 +421,17 @@ class AlexaRemote:
         # Fresh login object dedicated to the proxy flow; adopted as the live
         # session once the browser completes login. Credentials are held only
         # in this object for the duration of the login, never persisted.
+        # Keep the previous account's persisted credentials intact until the
+        # replacement verifies, including failed/cancelled same-email attempts.
+        self._proxy_attempt_id = secrets.token_urlsafe(24)
+        self._proxy_cookie_stage = tempfile.mkdtemp(prefix="pending-", dir=self.cookie_dir)
+        os.makedirs(os.path.join(self._proxy_cookie_stage, ".storage"), exist_ok=True)
+        stage = self._proxy_cookie_stage
         self._proxy_login = AlexaLogin(
             url=AMAZON_DOMAIN,
             email=email,
             password=password,
-            outputpath=lambda name: os.path.join(self.cookie_dir, name),
+            outputpath=lambda name: os.path.join(stage, name),
         )
         self._proxy_login_complete = False
         self._proxy_login_error = None
@@ -425,7 +442,7 @@ class AlexaRemote:
         # do not land on alexapy's otherwise unrecoverable error page.
         await self._proxy.session.aclose()
         self._proxy.session = httpx.AsyncClient(
-            transport=httpx.AsyncHTTPTransport(retries=3, http2=True,
+            transport=AmazonLoginTransport(
                 proxy=os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY") or None)
         )
 
@@ -466,7 +483,16 @@ class AlexaRemote:
         if proxy is None:
             raise web.HTTPServiceUnavailable(text="Alexa login proxy is not running.")
         try:
-            return await proxy.all_handler(request)
+            response = await proxy.all_handler(request)
+            if request.method == 'GET' and response.status >= 500:
+                import html
+                retry = html.escape(str(request.rel_url), quote=True)
+                return web.Response(status=503, content_type='text/html', headers={'Cache-Control':'no-store'}, text=(
+                    '<meta name="viewport" content="width=device-width,initial-scale=1">'
+                    '<style>body{margin:0;padding:32px 24px;background:#141414;color:#e8e8e8;font:14px system-ui;line-height:1.6}a{display:inline-block;padding:10px 16px;background:#e8590c;color:white;text-decoration:none}</style>'
+                    '<h2>Amazon is temporarily unavailable</h2><p>Your account has not been changed. Retry this sign-in page.</p>'
+                    f'<a href="{retry}">Try again</a>'))
+            return response
         finally:
             login = self._proxy_login
             if login and (login.authorization_code or login.access_token):
@@ -498,6 +524,8 @@ class AlexaRemote:
                 logger.warning("Alexa login verification attempt %s failed; retrying", attempt)
                 await asyncio.sleep(attempt)
 
+        if login is not self._proxy_login:
+            return False
         if not done:
             self._proxy_login_error = (
                 "Amazon accepted the login, but Alexa session verification failed. "
@@ -521,14 +549,41 @@ class AlexaRemote:
             logger.error(self._proxy_login_error)
             return False
 
+        if login is not self._proxy_login:
+            return False  # A newer attempt superseded this callback.
+        stage = getattr(self, '_proxy_cookie_stage', None)
+        if stage:
+            try:
+                relative = os.path.relpath(cookie_file, stage)
+                destination = os.path.join(self.cookie_dir, relative)
+                os.makedirs(os.path.dirname(destination), exist_ok=True)
+                os.replace(cookie_file, destination)
+                login._cookiefile = [os.path.join(self.cookie_dir, os.path.relpath(path, stage)) for path in login._cookiefile]
+                login._outputpath = lambda name: os.path.join(self.cookie_dir, name)
+            except OSError:
+                self._proxy_login_error = "Could not save the new account. Try again."
+                logger.exception("could not promote verified Amazon cookie")
+                return False
+
         # Persist the email separately so _ensure_login can locate alexapy's
         # email-keyed cookie file after a process restart.
         try:
             os.makedirs(self._storage_dir, exist_ok=True)
-            with open(self._email_file, "w", encoding="utf-8") as f:
+            with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8",
+                                             dir=self._storage_dir, delete=False) as f:
+                pointer = f.name
                 f.write(login.email)
+                f.flush()
+                os.fsync(f.fileno())
+            try:
+                os.replace(pointer, self._email_file)
+            finally:
+                if os.path.exists(pointer):
+                    os.unlink(pointer)
         except Exception:
+            self._proxy_login_error = "The account could not be saved. Your previous account is unchanged. Try again."
             logger.exception("could not persist login email for restore")
+            return False
 
         if self._login and self._login is not login:
             try:
@@ -536,6 +591,7 @@ class AlexaRemote:
             except Exception:
                 pass
         self._login = login
+        self.connection_state = True
         self._login_checked_at = time.monotonic()
         self._devices_raw = []
         self._proxy_login_complete = True
@@ -563,20 +619,49 @@ class AlexaRemote:
         return {"running": True, "logged_in": False}
 
     async def _stop_proxy(self):
-        _release_proxy_claim(self)
-        if self._proxy_runner:
-            try:
-                await self._proxy_runner.cleanup()
-            except Exception:
-                logger.debug("proxy runner cleanup failed", exc_info=True)
+        # Capture and detach this attempt before cleanup yields. An old callback
+        # must never clear a new attempt's runner or temporary credentials.
+        runner = self._proxy_runner
+        stage = getattr(self, '_proxy_cookie_stage', None)
+        task = self._proxy_finalize_task
+        if task is not None and not task.done() and task is not asyncio.current_task():
+            task.cancel()
         self._proxy_runner = None
         self._proxy = None
         self._proxy_started = False
         self._proxy_base_url = None
+        self._proxy_cookie_stage = None
+        if runner:
+            try:
+                await runner.cleanup()
+            except Exception:
+                logger.debug("proxy runner cleanup failed", exc_info=True)
+        if stage:
+            shutil.rmtree(stage, ignore_errors=True)
+        # Release only once the port is actually free, so the next account that
+        # claims it cannot race this runner's socket while it still closes.
+        _release_proxy_claim(self)
 
     # public (thread-safe) wrappers
     def proxy_start_url(self, email: str, password: str, base_url: str = None):
         return self._run(self._proxy_start_url(email, password, base_url))
+
+    def proxy_cancel(self, attempt_id):
+        return self._run(self._cancel_proxy_attempt(attempt_id))
+
+    async def _cancel_proxy_attempt(self, attempt_id):
+        if not attempt_id or attempt_id != getattr(self, '_proxy_attempt_id', None):
+            return False
+        pending = self._proxy_login
+        if pending is None or pending is self._login:
+            return False
+        self._proxy_login = None  # Fence callbacks before cleanup yields.
+        self._proxy_attempt_id = None
+        self._proxy_login_complete = False
+        self._proxy_login_error = None
+        await self._stop_proxy()
+        await pending.close()
+        return True
 
     def proxy_check(self):
         return self._run(self._proxy_check())
@@ -602,19 +687,28 @@ class AlexaRemote:
         self._run(self._logout())
 
     async def _logout(self):
-        if self._login is not None:
+        # A sign-in still finalizing in the background would promote its cookie
+        # right after we deleted this identity's session, so fence it first.
+        pending = self._proxy_login
+        self._proxy_login = None
+        task = self._proxy_finalize_task
+        if task is not None and not task.done():
+            task.cancel()
+        self._proxy_finalize_task = None
+        self._proxy_attempt_id = None
+        sessions = [s for s in (self._login, pending) if s is not None]
+        for session in {id(s): s for s in sessions}.values():
             try:
-                await self._login.close()
+                await session.close()
             except Exception:
                 logger.debug("Alexa login close failed", exc_info=True)
         self._clear_persisted_session()
         self._login = None
+        self.connection_state = False
         self._login_checked_at = 0.0
         self._devices_raw = []
-        self._proxy_login = None
         self._proxy_login_complete = False
         self._proxy_login_error = None
-        self._proxy_finalize_task = None
         if self._proxy_runner:
             await self._stop_proxy()
         else:
@@ -624,8 +718,9 @@ class AlexaRemote:
         """Delete this identity's saved Amazon session and nothing else.
 
         Accounts live in subdirectories of the owner's directory, so the files
-        at this level (plus alexapy's .storage tree) are the only ones this
-        identity owns; removing the directory itself would sign out everyone."""
+        at this level (plus alexapy's .storage tree and any half-finished
+        sign-in stage) are the only ones this identity owns; removing the
+        directory itself would sign out everyone."""
         try:
             entries = os.listdir(self.cookie_dir)
         except FileNotFoundError:
@@ -637,9 +732,9 @@ class AlexaRemote:
             path = os.path.join(self.cookie_dir, name)
             try:
                 if os.path.isdir(path):
-                    if name != ".storage":
+                    if name != ".storage" and not name.startswith("pending-"):
                         continue
-                    shutil.rmtree(path)
+                    shutil.rmtree(path, ignore_errors=True)
                 else:
                     os.remove(path)
             except OSError as exc:
@@ -652,7 +747,9 @@ class AlexaRemote:
                 "invocation_name": SKILL_INVOCATION_NAME}
 
     async def _status(self):
-        return self._status_result(await self._ensure_login())
+        error = await self._ensure_login()
+        self.connection_state = error is None
+        return self._status_result(error)
 
     def devices(self, refresh: bool = False):
         """Returns (device list, error string or None)."""
@@ -684,6 +781,7 @@ class AlexaRemote:
 
     async def _devices(self, refresh: bool):
         error = await self._ensure_login()
+        self.connection_state = error is None
         if error:
             return None, error
         status_ttl = 5 if any(not d.get("online") for d in self._devices_raw) else _DEVICE_STATE_TTL
