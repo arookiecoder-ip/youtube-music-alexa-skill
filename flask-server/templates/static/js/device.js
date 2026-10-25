@@ -106,7 +106,6 @@
       const data = await api('/alexa/devices/' + (refresh ? '?refresh=1' : ''));
       const ok = window._applyDevices(data.devices || [], prevSerial);
       if (!ok) {
-        toast('No compatible devices found.', 'error');
         return;
       }
       if (showStatusToast) toast(data.devices.length + ' device' + (data.devices.length > 1 ? 's' : '') + ' found', 'ok');

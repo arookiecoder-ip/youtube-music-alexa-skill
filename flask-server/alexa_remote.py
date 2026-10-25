@@ -231,10 +231,7 @@ class AlexaRemote:
                 outputpath=lambda name: os.path.join(ALEXA_COOKIE_DIR, name),
             )
             try:
-                cookies = await login.load_cookie()
-                if cookies:
-                    await login.login(cookies=cookies)
-                if (login.status or {}).get("login_successful"):
+                if await login.restore_cookie_session():
                     self._login = login
                     self._login_checked_at = time.monotonic()
                     return None

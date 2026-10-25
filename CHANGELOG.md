@@ -6,6 +6,8 @@ This file summarizes behavior changes, explicitly records superseded work and li
 
 ## Unreleased
 
+- Preserve saved Amazon remote-control credentials when AlexaPy resets a failed restore attempt; explicit logout still removes them. Voice-skill progress is independent of this remote-control session. Remove the empty-device discovery toast.
+
 - Atomically validate and commit Alexa buffered starts against the live queue, retain deletions across duplicate events and backend restarts, and prevent stale corrections from cancelling newer manual selections. Cover deletion at the final-second boundary followed by a new song selection.
 
 - Fix playback-lock re-entry in stale Alexa buffered-track correction, queue artwork backfill and implicit-current-track likes. Add production-lock regressions and a guard against lock-taking helpers inside playback commits.
