@@ -61,6 +61,15 @@ def test_youtube_touch_keyboard_capture_and_cancel(account_page):
     assert any(x=={'type':'key','key':'Enter'} for x in events)
     assert any(action=='capture' for action,_ in calls)
 
+def test_mobile_ime_composition_is_sent_once_when_committed(account_page):
+    page,origin,calls=account_page;page.goto(origin+'/accounts/youtube')
+    page.get_by_role('button',name='Continue to YouTube Music').click()
+    expect(page.locator('#frame')).to_have_attribute('data-width','480')
+    page.evaluate("""() => { const field=document.getElementById('remote-keyboard');field.value='বাংলা';field.dispatchEvent(new InputEvent('input',{data:'বাংলা',isComposing:true,inputType:'insertCompositionText'}));field.dispatchEvent(new CompositionEvent('compositionend',{data:'বাংলা'}));field.dispatchEvent(new InputEvent('input',{data:'বাংলা',isComposing:false,inputType:'insertText'})); }""")
+    page.get_by_role('button',name='Enter',exact=True).click()
+    page.wait_for_timeout(200)
+    assert [body['text'] for action,body in calls if action=='surface' and body and body.get('type')=='text']==['বাংলা']
+
 def test_readonly_controls_explain_block_and_restore_after_handoff(account_page):
     page,_,_=account_page
     page.set_content('<button id="pp-btn">Play</button><button data-action="next">Next</button><div class="progress-track" tabindex="0"></div><div class="queue-item">Song</div><button id="device">Devices</button>')
