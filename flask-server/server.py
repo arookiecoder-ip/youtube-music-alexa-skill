@@ -6794,6 +6794,11 @@ def alexa_state_event():
             return jsonify(reconciliation)
     with _np_lock:
         tracked_token = _now_playing.get('alexa_token') or ''
+        if (event == 'started' and event_token and event_token == tracked_token
+                and _playback_output.snapshot()['playback_output'] == 'phone'):
+            # An in-flight Started for the released current stream is not a
+            # new voice intent. It must not steal ownership back after handoff.
+            return jsonify({'ok': True, 'ignored': 'released Alexa stream', 'stop': True})
         if event in ('stopped', 'finished', 'failed') and event_token and tracked_token and event_token != tracked_token:
             return jsonify({'ok': True, 'ignored': 'stale playback token'})
         if event == 'finished' and not _now_playing.get('playing'):

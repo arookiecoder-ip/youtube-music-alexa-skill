@@ -269,6 +269,14 @@ class AlexaQueueRevisionTests(NextTrackBase):
             self.assertFalse(second['stop'])
             dispatch.assert_called_once()
 
+    def test_late_started_for_released_current_token_cannot_reclaim_phone(self):
+        self.output['playback_output']='phone'
+        with mock.patch.object(server,'_claim_alexa_output') as claim:
+            response=self.client.post('/alexa/state_event/',json={'event':'started','video_id':'A','token':'0|A|attempt'},headers={'X-Api-Key':server.API_KEY})
+        self.assertEqual(response.status_code,200)
+        self.assertTrue(response.json.get('stop'))
+        claim.assert_not_called()
+
     def test_superseded_buffer_does_not_reclaim_phone(self):
         decision = self.decision()
         self.output['playback_output'] = 'phone'
