@@ -13,6 +13,8 @@ def account_page():
     calls=[];captured=[False];frame_errors=[0]
     @app.get('/accounts/<provider>')
     def account(provider):return render_template('account_signin.html',provider=provider)
+    @app.get('/remote')
+    def remote():return render_template('remote.html',asset_v='test')
     @app.get('/')
     def done():return 'Connected'
     @app.route('/alexa/proxy/<path:path>')
@@ -104,3 +106,19 @@ def test_profile_outline_updates_without_opening_menu(account_page):
     expect(page.locator('#profile-menu-trigger')).to_have_class('profile-menu-trigger amazon-disconnected')
     assert page.locator('#profile-menu-trigger').evaluate('e=>getComputedStyle(e).borderTopColor')=='rgb(241, 111, 101)'
     page.evaluate('setAmazonConnection(true)');expect(page.locator('#profile-menu-trigger')).not_to_have_class('profile-menu-trigger amazon-disconnected')
+
+
+def test_sidebar_device_list_fades_and_blocks_logged_out_echo(account_page):
+    page,origin,_=account_page
+    page.route('**/*',lambda route:route.abort() if route.request.resource_type=='script' else route.continue_())
+    page.goto(origin+'/remote')
+    page.evaluate("""() => { document.body.classList.remove('preload');window.api=async()=>({});window.escHtml=text=>text;window.toast=text=>window.message=text;document.getElementById('device').innerHTML='<option value="mobile:own">This browser</option><option value="echo" data-online="1" data-logged-out="1">Alexa (logged out)</option>'; }""")
+    page.evaluate((ROOT/'templates/static/js/sidebar.js').read_text())
+    page.locator('#hamburger-btn').evaluate('element=>element.click()')
+    page.locator('#device-sidebar-trigger').evaluate('element=>element.click()')
+    entry=page.locator('#device-sidebar-menu .custom-select-option[data-value="echo"]')
+    expect(entry).to_have_class('custom-select-option logged-out')
+    assert float(entry.evaluate('e=>getComputedStyle(e).opacity'))<.6
+    entry.evaluate('element=>element.click()')
+    assert page.locator('#device').input_value()=='mobile:own'
+    assert 'Sign in to Amazon' in page.evaluate('window.message')

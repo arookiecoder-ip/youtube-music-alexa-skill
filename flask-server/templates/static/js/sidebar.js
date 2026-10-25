@@ -33,11 +33,13 @@
       const item = document.createElement('div');
       item.className = 'custom-select-option' + (opt.selected ? ' selected' : '');
       item.dataset.value = opt.value;
+      item.classList.toggle('logged-out', opt.dataset.loggedOut === '1');
       const isOnline = opt.dataset.online !== '0';
       item.innerHTML = (opt.value
         ? '<span class="cs-dot ' + (isOnline ? 'online' : 'offline') + '"></span>'
         : '') + escHtml(opt.textContent);
       item.addEventListener('click', () => {
+        if (opt.dataset.loggedOut === '1') { window.toast?.('Sign in to Amazon to control Alexa.', 'error'); return; }
         deviceSidebar.value = opt.value;
         deviceEl.value = opt.value;
         deviceEl.dispatchEvent(new Event('change'));
