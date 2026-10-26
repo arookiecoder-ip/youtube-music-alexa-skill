@@ -84,6 +84,10 @@ class RecordingStore:
         self.done = threading.Event()
         self.expected = expected
 
+    def dead(self, identity):
+        # The real store refuses a tombstoned identity; nothing here is tombstoned.
+        return False
+
     def save(self, identity, state, output, position):
         self.saved.append((identity, state['video_id']))
         if len(self.saved) >= self.expected:

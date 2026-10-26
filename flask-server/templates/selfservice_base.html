@@ -1,0 +1,37 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex">
+<title>{{ app_name }} · {% block page_title %}Account{% endblock %}</title>
+<link rel="stylesheet" href="{{ asset_url('css/signin.css') }}">
+<link rel="stylesheet" href="{{ asset_url('css/account.css') }}">
+</head>
+{# The door pages: plain HTML form POSTs, so they work with JavaScript turned
+   off. selfservice.js only adds the password meter and double-submit guard, and
+   reads its configuration from these data attributes rather than an inline
+   script, which is what lets the blueprint serve a strict CSP. #}
+<body class="door" data-csrf="{{ csrf_form }}" data-min-password="{{ password_min_length }}">
+<main>
+  <div class="brand">
+    <div class="eq-icon">
+      <span></span><span></span><span></span><span></span><span></span>
+    </div>
+    <div>
+      <h1>{{ app_name }}</h1>
+      <p>{% block brand_sub %}Account{% endblock %}</p>
+    </div>
+  </div>
+
+  <div class="card">
+    {% block card %}{% endblock %}
+  </div>
+
+  <nav class="door-links">
+    {% block door_links %}{% endblock %}
+  </nav>
+</main>
+<script src="{{ asset_url('js/selfservice.js') }}" defer></script>
+</body>
+</html>

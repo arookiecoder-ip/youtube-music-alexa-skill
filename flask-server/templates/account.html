@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="robots" content="noindex">
+<title>{{ app_name }} · Your account</title>
+<link rel="stylesheet" href="{{ asset_url('css/signin.css') }}">
+<link rel="stylesheet" href="{{ asset_url('css/account.css') }}">
+</head>
+{# The account page is a shell. Everything inside it is filled from
+   GET /api/account by account.js, so there is no server-rendered secret in the
+   HTML and nothing here needs an inline script -- which is what lets the
+   blueprint serve `script-src 'self'`. #}
+<body class="account" data-csrf="{{ csrf_form }}" data-min-password="{{ password_min_length }}"
+      data-username="{{ username }}">
+<main>
+  <div class="brand">
+    <div class="eq-icon">
+      <span></span><span></span><span></span><span></span><span></span>
+    </div>
+    <div>
+      <h1>{{ app_name }}</h1>
+      <p>Your account</p>
+    </div>
+  </div>
+
+  <div class="account-head">
+    <div class="who">
+      <h2>@<span id="head-username">{{ username }}</span></h2>
+      <p id="head-since">Loading&hellip;</p>
+    </div>
+    <div class="account-actions-top">
+      <a class="ghost-link" href="/">&#8592; Player</a>
+    </div>
+  </div>
+
+  <div class="note-stack" id="notes" aria-live="polite"></div>
+
+  <!-- ------------------------------------------------------------ profile -->
+  <section class="panel" id="panel-profile">
+    <h3>Profile</h3>
+    <p class="panel-hint">Your email address is how you get back in if you forget your
+      password. Changing it needs your password, and un-verifies the new address until
+      you click the link we send.</p>
+    <form id="form-profile" autocomplete="off">
+      <label for="display_name">Display name <span class="optional">optional</span></label>
+      <input type="text" id="display_name" name="display_name" maxlength="120">
+      <p class="field-error" id="err-display_name" hidden></p>
+
+      <label for="profile_email">Email</label>
+      <input type="email" id="profile_email" name="email" maxlength="254" required>
+      <p class="field-error" id="err-email" hidden></p>
+
+      <label for="profile_password">Confirm with your password</label>
+      <input type="password" id="profile_password" name="current_password"
+             autocomplete="current-password">
+      <p class="field-error" id="err-profile_current_password" hidden></p>
+
+      <button class="primary" type="submit" data-submit>Save profile</button>
+    </form>
+    <div class="state-line">
+      <span class="label">Email status</span>
+      <span>
+        <span class="badge" id="verify-badge">&mdash;</span>
+        <button class="tiny" id="resend-verify" type="button" hidden>Send link again</button>
+      </span>
+    </div>
+  </section>
+
+  <!-- ------------------------------------------------------------ password -->
+  <section class="panel" id="panel-password">
+    <h3>Password</h3>
+    <p class="panel-hint">Changing it signs out every other device and leaves this one
+      signed in, so a stolen password cannot keep a stranger's session alive.</p>
+    <form id="form-password" autocomplete="off" data-password-form>
+      <label for="pw_current">Current password</label>
+      <input type="password" id="pw_current" name="current_password" autocomplete="current-password">
+      <p class="field-error" id="err-current_password" hidden></p>
+
+      <label for="pw_new">New password</label>
+      <input type="password" id="pw_new" name="password" data-strength autocomplete="new-password">
+      <p class="pw-meter" data-meter-for="pw_new">
+        <span class="pw-meter-bar"></span><span class="pw-meter-text"></span>
+      </p>
+      <p class="field-help">At least {{ password_min_length }} characters, two of:
+        lowercase, uppercase, digit, symbol. Not your username.</p>
+      <p class="field-error" id="err-password" hidden></p>
+
+      <label for="pw_confirm">Type it again</label>
+      <input type="password" id="pw_confirm" name="confirm_password" autocomplete="new-password">
+      <p class="field-error" id="err-confirm_password" hidden></p>
+
+      <button class="primary" type="submit" data-submit>Change password</button>
+    </form>
+  </section>
+
+  <!-- -------------------------------------------------------------- 2FA -->
+  <section class="panel" id="panel-totp">
+    <h3>Two-factor sign-in</h3>
+    <p class="panel-hint">An authenticator app on your phone adds a six-digit code at
+      sign-in. Your password alone stops being enough.</p>
+    <div class="state-line">
+      <span class="label">Status</span>
+      <span class="badge" id="totp-badge">&mdash;</span>
+    </div>
+
+    <div id="totp-off" hidden>
+      <p class="field-help">Turn it on and you will need both your password and the code
+        to sign in, from either door.</p>
+      <form id="form-totp-begin" autocomplete="off">
+        <label for="totp_password">Your password</label>
+        <input type="password" id="totp_password" name="current_password"
+               autocomplete="current-password">
+        <p class="field-error" id="err-totp_current_password" hidden></p>
+        <button class="primary" type="submit" data-submit>Start setup</button>
+      </form>
+
+      <div class="enroll" id="enroll" hidden>
+        <div class="enroll-grid">
+          <div class="qr-frame" id="qr-frame" hidden>
+            <img id="qr-img" alt="Two-factor setup barcode" width="148" height="148">
+          </div>
+          <div class="enroll-steps">
+            <ol>
+              <li>Add a setup key in your authenticator app, or scan the code.</li>
+              <li>Otherwise type the secret below, with Time-based (TOTP) selected.</li>
+              <li>Enter the six-digit code the app shows to confirm.</li>
+            </ol>
+            <p class="secret-code" id="enroll-secret"></p>
+            <p class="qr-fallback" id="enroll-issuer"></p>
+          </div>
+        </div>
+        <form id="form-totp-confirm" autocomplete="off">
+          <label for="totp_code">Code from your app</label>
+          <input class="code-input" type="text" id="totp_code" name="code" inputmode="numeric"
+                 autocomplete="one-time-code" maxlength="6" pattern="[0-9]{6}">
+          <p class="field-error" id="err-code" hidden></p>
+          <div class="row">
+            <button class="primary" type="submit" data-submit>Confirm</button>
+            <button class="ghost" type="button" id="totp-cancel">Cancel setup</button>
+          </div>
+        </form>
+      </div>
+    </div>
+
+    <div id="totp-on" hidden>
+      <p class="field-help">Turning it off asks for both your password and a live code, so
+        a lost phone cannot be used to strip the second factor by someone who only has the
+        password.</p>
+      <form id="form-totp-disable" autocomplete="off">
+        <div class="row">
+          <div class="grow">
+            <label for="disable_password">Password</label>
+            <input type="password" id="disable_password" name="current_password"
+                   autocomplete="current-password">
+          </div>
+          <div class="grow">
+            <label for="disable_code">Code</label>
+            <input class="code-input" type="text" id="disable_code" name="code"
+                   inputmode="numeric" autocomplete="one-time-code" maxlength="6">
+          </div>
+        </div>
+        <p class="field-error" id="err-disable" hidden></p>
+        <button class="ghost destructive" type="submit" data-submit>Turn two-factor off</button>
+      </form>
+    </div>
+  </section>
+
+  <!-- --------------------------------------------------------- providers -->
+  <section class="panel" id="panel-providers">
+    <h3>Linked services</h3>
+    <p class="panel-hint">Amazon and YouTube Music belong to this account alone. Nothing
+      here links them for you &mdash; each one opens its own sign-in page, and the session
+      it hands back is stored against @{{ username }} only.</p>
+    <div class="state-line">
+      <span class="label">Amazon / Alexa</span>
+      <span class="prov-cell">
+        <span class="badge" id="prov-amazon">&mdash;</span>
+        <a class="tiny-link" id="link-amazon" href="/accounts/amazon" hidden>Connect</a>
+      </span>
+    </div>
+    <div class="state-line">
+      <span class="label">YouTube Music</span>
+      <span class="prov-cell">
+        <span class="badge" id="prov-youtube">&mdash;</span>
+        <a class="tiny-link" id="link-youtube" href="/accounts/youtube" hidden>Connect</a>
+      </span>
+    </div>
+    <div class="state-line">
+      <span class="label">Audio downloads</span>
+      <span class="prov-cell">
+        <span class="badge" id="prov-cookies">&mdash;</span>
+      </span>
+    </div>
+    <p class="field-help" id="providers-note" hidden></p>
+  </section>
+
+  <!-- ----------------------------------------------------------- devices -->
+  <section class="panel" id="panel-sessions">
+    <h3>Signed-in devices</h3>
+    <p class="panel-hint">One row per live session. Revoking a device signs it out
+      immediately; the next request it makes is bounced to the sign-in page.</p>
+    <ul class="devices" id="devices"></ul>
+    <p class="field-help" id="devices-empty" hidden>No other device is signed in.</p>
+    <p><button class="ghost destructive" id="signout-all" type="button">Sign out everywhere</button></p>
+  </section>
+
+  <details class="reveal" id="danger-details">
+    <summary>Delete this account</summary>
+    <div class="reveal-body">
+      <section class="panel danger">
+        <h3>Delete my account</h3>
+        <p class="panel-hint">This cannot be undone. Your queue, your Amazon and YouTube
+          sessions, your cookies and your credentials are removed, and every device is
+          signed out. An administrator cannot recover it afterwards.</p>
+        <div class="confirm-box">
+          <form id="form-delete" autocomplete="off">
+            <label for="del_password">Your password</label>
+            <input type="password" id="del_password" name="password" autocomplete="current-password">
+            <p class="field-error" id="err-del_password" hidden></p>
+
+            <label for="del_username">Type your username to confirm</label>
+            <input type="text" id="del_username" name="confirm_username"
+                   autocomplete="off" autocapitalize="none" spellcheck="false">
+            <p class="field-help">Exactly <strong>@{{ username }}</strong> &mdash; not your
+              password.</p>
+            <p class="field-error" id="err-confirm_username" hidden></p>
+
+            <button class="ghost destructive" type="submit" data-submit>Delete permanently</button>
+          </form>
+        </div>
+      </section>
+    </div>
+  </details>
+
+  <p class="footnote">Signed in as @{{ username }}.
+    {% if signup_open %}<a href="/signup">Create another account</a>{% endif %}
+    <a href="/logout/">Sign out of this device</a></p>
+</main>
+<script src="{{ asset_url('js/selfservice.js') }}" defer></script>
+<script src="{{ asset_url('js/account.js') }}" defer></script>
+</body>
+</html>

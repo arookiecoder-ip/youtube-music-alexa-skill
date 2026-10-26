@@ -43,11 +43,16 @@ class PlaybackStore:
         # identity -> (fingerprint, monotonic) of the last write, so a burst of
         # no-op saves coalesces per identity instead of across identities.
         self.saved = {}
+        # identity -> unix seconds it stays considered deleted. Cached from the
+        # table so a purge survives a restart and an in-flight writer cannot undo it.
+        self._dead = {}
 
     def _connection(self):
         conn = sqlite3.connect(self.path, timeout=10)
         conn.execute('CREATE TABLE IF NOT EXISTS playback_snapshot '
                      '(identity TEXT PRIMARY KEY, body TEXT NOT NULL)')
+        conn.execute('CREATE TABLE IF NOT EXISTS playback_dead '
+                     '(identity TEXT PRIMARY KEY, expires_at REAL NOT NULL)')
         self._rekey(conn)
         return conn
 
@@ -62,8 +67,51 @@ class PlaybackStore:
                      (OWNER,))
         conn.execute('DROP TABLE playback_snapshot_legacy')
 
+    def dead(self, identity):
+        """True while a tombstone hides this identity from every read and write."""
+        with self.lock:
+            deadline = self._dead.get(identity)
+            if deadline is None:
+                # Read the durable rule once per identity: a restart must not hand a
+                # deleted account back its queue.
+                with self._connection() as conn:
+                    row = conn.execute('SELECT expires_at FROM playback_dead WHERE identity=?',
+                                       (identity,)).fetchone()
+                deadline = float(row[0]) if row else 0.0
+                self._dead[identity] = deadline
+            if deadline > time.time():
+                return True
+            # Expired (or never tombstoned): drop the cache entry, and the row it came
+            # from, so the table cannot accumulate identities that are simply gone.
+            self._dead.pop(identity, None)
+            if deadline > 0.0:
+                with self._connection() as conn:
+                    conn.execute('DELETE FROM playback_dead WHERE identity=?', (identity,))
+            return False
+
+    def tombstone(self, identity, seconds=900):
+        """Erase this identity's snapshot and refuse to write it again for a while.
+
+        The deadline is the point: the purge runs while a background persistence
+        writer may still be holding a copy of the state it is about to save.
+        Re-tombstoning only ever extends it, so a slow reader cannot shorten it."""
+        if not identity:
+            return False
+        deadline = time.time() + max(0.0, float(seconds))
+        with self.lock:
+            deadline = max(deadline, float(self._dead.get(identity) or 0.0))
+            self._dead[identity] = deadline
+            self.saved.pop(identity, None)
+            with self._connection() as conn:
+                conn.execute('INSERT OR REPLACE INTO playback_dead VALUES (?, ?)',
+                             (identity, deadline))
+                conn.execute('DELETE FROM playback_snapshot WHERE identity=?', (identity,))
+        return True
+
     def load(self, identity=OWNER):
         with self.lock, self._connection() as conn:
+            if self.dead(identity):
+                return {}
             row = conn.execute('SELECT body FROM playback_snapshot WHERE identity=?',
                                (identity,)).fetchone()
             if not row:
@@ -74,6 +122,8 @@ class PlaybackStore:
 
     def save(self, identity, state, output, position):
         with self.lock:
+            if self.dead(identity):
+                return
             queue = stable_queue_entries(state.get('queue'))
             fingerprint = ([item['entry_id'] for item in queue], state.get('video_id'),
                            state.get('queue_index'), output.get('playback_output'), state.get('playing'))
@@ -108,6 +158,12 @@ class PlaybackPersistence:
     def submit(self, state, output, position, identity=None):
         # Caller holds its state lock; copy only persistent queue metadata.
         identity = identity or IDENTITY.get() or OWNER
+        if self.store.dead(identity):
+            # A heartbeat or request thread still in flight for a deleted account
+            # would otherwise re-create the snapshot row the purge just removed.
+            with self.guard:
+                self.pending.pop(identity, None)
+            return
         value = (identity, dict(state, queue=[dict(item) for item in state.get('queue') or []]),
                  dict(output), position)
         with self.guard:

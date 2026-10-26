@@ -226,6 +226,17 @@ class YouTubeBrowserSessionManager:
         if close:
             self._close_sidecar()
 
+    def forget(self, owner_id=None):
+        """Drop one identity's browser record without leaving a new one behind.
+
+        ``revoke`` goes through ``_auth_for``, which *creates* the entry it is
+        about to clear, and then closes the sidecar over the network. A purge has
+        no use for either: the identity is gone, and the entry must be gone with it."""
+        with self._lock:
+            existed = self._auth.pop(str(owner_id or ""), None) is not None
+            self._release_busy_locked()
+        return existed
+
     def open_youtube(self, owner_id=None):
         """Ask the visible plain browser to navigate to YouTube Music."""
         sidecar = self.controller.call("/interactive/open-youtube", "POST")

@@ -12,15 +12,18 @@ import re
 import time
 import uuid
 from typing import Any
+from urllib.parse import quote
 
 from .config import MultiUserConfig
 from .crypto import SecretBox, SecretBoxError
 from .db import Database
 from .security import (
     generate_password,
+    generate_totp_secret,
     hash_password,
     new_token,
     sha256_hex,
+    totp_verify,
     validate_password,
     verify_password,
 )
@@ -56,10 +59,16 @@ def _public_user(row: Any) -> dict:
     user = dict(row)
     user.pop("password_hash", None)
     user.pop("totp_secret_enc", None)
+    user.pop("totp_last_step", None)
+    user.pop("totp_pending_enc", None)
     user.pop("failed_login_count", None)
     user.pop("locked_until", None)
     user.pop("last_email_at", None)
     user["has_totp"] = bool(dict(row).get("totp_secret_enc"))
+    # An enrollment is only a live second factor once its code has been entered;
+    # until then it is a secret sitting in a drawer, and must not read as "on".
+    # Expired enrollments are swept on read, so this flag is never stale.
+    user["totp_pending"] = bool(dict(row).get("totp_pending_enc"))
     user["email_verified"] = bool(dict(row).get("email_verified"))
     return user
 
@@ -69,6 +78,7 @@ class AccountService:
         self.db = db
         self.config = config
         self.secret_box = secret_box
+        self._purge_hook = None
 
     # ------------------------------------------------------------------ setup
     def bootstrap(self) -> dict:
@@ -318,6 +328,39 @@ class AccountService:
         problem = validate_password(password, username)
         if problem:
             raise AccountError(problem)
+        user_id = self._insert_user(
+            username=username,
+            password=password,
+            email=email,
+            display_name=display_name,
+            role=role,
+            status=status,
+            must_change_password=must_change_password,
+            email_verified=email_verified,
+            created_by=actor.get("id") if actor else None,
+        )
+        self.audit(
+            actor, "user_created", user_id,
+            {"username": username, "role": role, "must_change_password": must_change_password},
+            ip, user_agent,
+        )
+        return self.get_user(user_id)
+
+    def _insert_user(
+        self,
+        *,
+        username: str,
+        password: str,
+        email: str = "",
+        display_name: str = "",
+        role: str = "user",
+        status: str = "active",
+        must_change_password: bool = True,
+        email_verified: bool = False,
+        created_by: str | None = None,
+    ) -> str:
+        """The only place a ``users`` row is written, so the columns an account
+        may not choose for itself (role, verification) stay chosen here."""
         user_id = str(uuid.uuid4())
         now = _now()
         verified = bool(email_verified and email)
@@ -339,17 +382,88 @@ class AccountService:
                     1 if must_change_password else 0,
                     now,
                     now,
-                    actor.get("id") if actor else None,
+                    created_by,
                     1 if verified else 0,
                     now if verified else 0,
                 ),
             )
-        self.audit(
-            actor, "user_created", user_id,
-            {"username": username, "role": role, "must_change_password": must_change_password},
-            ip, user_agent,
+        return user_id
+
+    # ------------------------------------------------------ self-registration
+    def recent_self_signup_count(self, seconds: int = 86400) -> int:
+        """Accounts created by open sign-up in the window.
+
+        The in-process rate limiter forgets everything on restart, so this count
+        is the durable half of the abuse control."""
+        return int(
+            self.db.scalar(
+                "SELECT COUNT(*) FROM users WHERE created_by = 'self' AND created_at >= ?",
+                (_now() - max(1, int(seconds)),),
+            )
+            or 0
+        )
+
+    def registration_open(self) -> bool:
+        if not self.config.self_signup_enabled or self.config.max_self_signups_per_day <= 0:
+            return False
+        return self.recent_self_signup_count() < self.config.max_self_signups_per_day
+
+    def register_self_service(
+        self,
+        *,
+        username: str,
+        password: str,
+        email: str,
+        display_name: str = "",
+        ip: str = "",
+        user_agent: str = "",
+    ) -> dict:
+        """Create an account with no administrator involved.
+
+        Privilege is not on offer: role, status and verification are fixed by the
+        caller, and the account cannot sign in until the address on it is
+        confirmed, so an abandoned registration is harmless.
+        """
+        if not self.registration_open():
+            raise AccountError("Sign-up is not available right now.")
+        username = self.validate_username(username)
+        email = self.validate_email(email)
+        if not email:
+            raise AccountError("An email address is required, so you can reset your password later.")
+        problem = validate_password(password, username)
+        if problem:
+            raise AccountError(problem)
+        self._ensure_unique(username, email)
+        user_id = self._insert_user(
+            username=username,
+            password=password,
+            email=email,
+            display_name=display_name,
+            role="user",
+            status="active",
+            must_change_password=False,
+            email_verified=False,
+            created_by="self",
+        )
+        self.db.audit(
+            None, username[:120], "signup", user_id,
+            json.dumps({"email_domain": email.rsplit("@", 1)[-1]}), ip, user_agent,
         )
         return self.get_user(user_id)
+
+    def verification_pending(self, user: dict | None) -> bool:
+        if not user:
+            return False
+        return bool(user.get("email")) and not user.get("email_verified") and (
+            self._must_verify(user.get("created_by"))
+        )
+
+    def _must_verify(self, created_by: Any) -> bool:
+        """Self-registered accounts always confirm their address.
+
+        An operator may turn the general requirement off, but that switch cannot
+        silently hand an unverified self-signup the right to play."""
+        return bool(self.config.require_email_verification or created_by == "self")
 
     # ------------------------------------------------------------------ update
     def update_user(
@@ -544,6 +658,9 @@ class AccountService:
         new_password: str,
         ip: str = "",
         user_agent: str = "",
+        *,
+        keep_sid_hash: str = "",
+        revoke_other_sessions: bool = True,
     ) -> None:
         row = self.db.fetchone("SELECT * FROM users WHERE id = ? AND status = 'active'", (actor.get("id", ""),))
         if not row or not verify_password(row["password_hash"], current_password):
@@ -551,13 +668,44 @@ class AccountService:
         problem = validate_password(new_password, row["username"])
         if problem:
             raise AccountError(problem)
+        now = _now()
+        keep = sha256_hex(keep_sid_hash) if keep_sid_hash else ""
         with self.db.connect() as conn:
             conn.execute(
                 "UPDATE users SET password_hash = ?, must_change_password = 0, updated_at = ? WHERE id = ?",
-                (hash_password(new_password), _now(), row["id"]),
+                (hash_password(new_password), now, row["id"]),
             )
             conn.execute("DELETE FROM user_email_tokens WHERE user_id = ?", (row["id"],))
+            if revoke_other_sessions:
+                # A password change is the moment to evict whoever else knew the old
+                # one; without it a stolen password stays usable for 12 hours.
+                conn.execute(
+                    "UPDATE user_sessions SET revoked_at = ? "
+                    "WHERE user_id = ? AND revoked_at = 0 AND sid_hash <> ?",
+                    (now, row["id"], keep),
+                )
         self.audit(actor, "password_changed", row["id"], {"self": True}, ip, user_agent)
+
+    def session_summaries(self, user_id: str, current_sid_hash: str = "") -> list[dict]:
+        """This account's live sessions, with nothing usable about them included.
+
+        A session id is the credential, so even its hash never leaves the server:
+        the browser only gets a fingerprint to tell the rows apart."""
+        summaries = []
+        for entry in self.list_sessions(user_id):
+            if entry["revoked_at"] or entry["expires_at"] <= _now():
+                continue
+            sid_hash = entry["sid_hash"]
+            summaries.append({
+                "id": sid_hash[:8],
+                "current": bool(current_sid_hash) and sid_hash == current_sid_hash,
+                "created_at": entry["created_at"],
+                "last_seen_at": entry["last_seen_at"],
+                "expires_at": entry["expires_at"],
+                "ip": entry["ip"],
+                "device": (entry["user_agent"] or "")[:120],
+            })
+        return summaries
 
     def _set_password_via_email(
         self,
@@ -628,7 +776,258 @@ class AccountService:
         )
         self.audit(actor, "totp_reset", user_id, {}, ip, user_agent)
 
+    # --------------------------------------------------------------- 2FA (TOTP)
+    def totp_is_enabled(self, user: dict | None) -> bool:
+        return bool(user and user.get("has_totp"))
+
+    def _active_row(self, actor: dict | None):
+        if not actor or not actor.get("id"):
+            raise AccountError("Sign in first.")
+        row = self.db.fetchone(
+            "SELECT * FROM users WHERE id = ? AND status = 'active'", (actor["id"],)
+        )
+        if not row:
+            raise AccountError("This account is not active.")
+        return row
+
+    def _totp_secret(self, stored: str) -> str:
+        if not stored:
+            return ""
+        try:
+            payload = self.secret_box.decrypt_json(stored)
+        except SecretBoxError:
+            logger.exception("A stored two-factor secret could not be decrypted")
+            return ""
+        return str(payload.get("secret") or "") if isinstance(payload, dict) else ""
+
+    def _sweep_totp_enrollment(self, user_id: str) -> None:
+        """Drop an enrollment whose setup window closed.
+
+        A half-finished enrollment is a secret in the database that grants
+        nothing, so expiring it silently is always the safe direction."""
+        deadline = _now() - max(1, int(self.config.totp_pending_minutes)) * 60
+        if self.db.execute(
+            "UPDATE users SET totp_pending_enc = '', totp_pending_at = 0, updated_at = ? "
+            "WHERE id = ? AND totp_pending_enc <> '' AND totp_pending_at < ?",
+            (_now(), user_id, deadline),
+        ):
+            self.db.audit(None, "system", "totp_enrollment_expired", user_id, "{}", "", "")
+
+    def begin_totp_enrollment(
+        self,
+        actor: dict,
+        *,
+        current_password: str,
+        issuer: str = "",
+        ip: str = "",
+        user_agent: str = "",
+    ) -> dict:
+        """Hand out a fresh secret, held *pending* until a code proves the clock matches.
+
+        The password is required because a hijacked session must not be able to arm
+        a second factor it alone can satisfy -- that turns 2FA into a lockout tool
+        against the real owner."""
+        row = self._active_row(actor)
+        if row["totp_secret_enc"]:
+            raise AccountError("Two-factor sign-in is already on. Turn it off first.")
+        if not verify_password(row["password_hash"], current_password):
+            self.db.audit(
+                row["id"], row["username"], "totp_enrollment_failed", row["id"],
+                json.dumps({"reason": "bad_password"}), ip, user_agent,
+            )
+            raise AccountError("Current password is incorrect.")
+        self._sweep_totp_enrollment(row["id"])
+        secret = generate_totp_secret()
+        now = _now()
+        ttl = max(1, int(self.config.totp_pending_minutes)) * 60
+        self.db.execute(
+            "UPDATE users SET totp_pending_enc = ?, totp_pending_at = ?, updated_at = ? WHERE id = ?",
+            (self.secret_box.encrypt_json({"secret": secret}), now, now, row["id"]),
+        )
+        self.audit(actor, "totp_enrollment_started", row["id"], {}, ip, user_agent)
+        issuer, uri = self._otpauth_uri(row["username"], secret, issuer)
+        return {
+            "secret": secret,
+            "account": row["username"],
+            "issuer": issuer,
+            "otpauth_uri": uri,
+            "expires_at": now + ttl,
+        }
+
+    def _otpauth_uri(self, username: str, secret: str, issuer: str = "") -> tuple[str, str]:
+        label = (issuer or self.config.app_name).strip() or "Music Box"
+        return label, (
+            f"otpauth://totp/{quote(label, safe='')}:{quote(username, safe='')}"
+            f"?secret={secret}&issuer={quote(label, safe='')}"
+            "&period=30&digits=6&algorithm=SHA1"
+        )
+
+    def pending_totp_enrollment(self, actor: dict) -> dict:
+        """The live enrollment, so the QR endpoint can render it.
+
+        The provisioning URI carries the secret in plain text, which is why this
+        is only ever served as an image from a same-origin, no-store endpoint --
+        never as JSON the page could log."""
+        row = self._active_row(actor)
+        self._sweep_totp_enrollment(row["id"])
+        fresh = self.db.fetchone(
+            "SELECT totp_pending_enc, totp_pending_at FROM users WHERE id = ?", (row["id"],)
+        )
+        secret = self._totp_secret(fresh["totp_pending_enc"]) if fresh else ""
+        if not secret:
+            return {}
+        issuer, uri = self._otpauth_uri(row["username"], secret)
+        return {
+            "account": row["username"],
+            "issuer": issuer,
+            "otpauth_uri": uri,
+            "expires_at": float(fresh["totp_pending_at"] or 0)
+            + max(1, int(self.config.totp_pending_minutes)) * 60,
+        }
+
+    def confirm_totp_enrollment(
+        self, actor: dict, *, code: str, ip: str = "", user_agent: str = ""
+    ) -> dict:
+        row = self._active_row(actor)
+        self._sweep_totp_enrollment(row["id"])
+        secret = self._totp_secret(row["totp_pending_enc"])
+        if not secret:
+            raise AccountError("Start the two-factor setup again first.")
+        if not totp_verify(secret, code):
+            self.db.audit(
+                row["id"], row["username"], "totp_enrollment_failed", row["id"],
+                json.dumps({"reason": "bad_code"}), ip, user_agent,
+            )
+            raise AccountError("That code did not match. Check the authenticator and try again.")
+        step = int(time.time()) // 30
+        self.db.execute(
+            "UPDATE users SET totp_secret_enc = ?, totp_pending_enc = '', totp_pending_at = 0, "
+            "totp_last_step = ?, updated_at = ? WHERE id = ?",
+            (self.secret_box.encrypt_json({"secret": secret}), step, _now(), row["id"]),
+        )
+        self.audit(actor, "totp_enabled", row["id"], {}, ip, user_agent)
+        return self.get_user(row["id"])
+
+    def cancel_totp_enrollment(
+        self, actor: dict, *, ip: str = "", user_agent: str = ""
+    ) -> None:
+        row = self._active_row(actor)
+        self.db.execute(
+            "UPDATE users SET totp_pending_enc = '', totp_pending_at = 0, updated_at = ? WHERE id = ?",
+            (_now(), row["id"]),
+        )
+        self.audit(actor, "totp_enrollment_cancelled", row["id"], {}, ip, user_agent)
+
+    def disable_totp(
+        self, actor: dict, *, current_password: str, code: str, ip: str = "", user_agent: str = ""
+    ) -> dict:
+        """Turn 2FA off. Both the password and a live code are required.
+
+        Either alone would let a stolen session disarm the protection, or a stolen
+        password lock the owner out of their own authenticator."""
+        row = self._active_row(actor)
+        if not row["totp_secret_enc"]:
+            raise AccountError("Two-factor sign-in is not on.")
+        secret = self._totp_secret(row["totp_secret_enc"])
+        if not verify_password(row["password_hash"], current_password) or not totp_verify(secret, code):
+            self.db.audit(
+                row["id"], row["username"], "totp_disable_failed", row["id"],
+                json.dumps({"reason": "credentials"}), ip, user_agent,
+            )
+            raise AccountError("Password or code is incorrect.")
+        self.db.execute(
+            "UPDATE users SET totp_secret_enc = '', totp_pending_enc = '', totp_pending_at = 0, "
+            "totp_last_step = 0, updated_at = ? WHERE id = ?",
+            (_now(), row["id"]),
+        )
+        self.audit(actor, "totp_disabled", row["id"], {}, ip, user_agent)
+        return self.get_user(row["id"])
+
+    def verify_totp_code(self, user_id: str, code: str) -> bool:
+        """Check a login code, and spend it: a window can only be used once."""
+        row = self.db.fetchone(
+            "SELECT totp_secret_enc, totp_last_step FROM users WHERE id = ? AND status = 'active'",
+            (user_id or "",),
+        )
+        secret = self._totp_secret(row["totp_secret_enc"]) if row else ""
+        if not secret or not totp_verify(secret, code):
+            return False
+        step = int(time.time()) // 30
+        # One atomic compare-and-set, so two logins inside the same 30s window
+        # cannot both be satisfied by one intercepted code.
+        return bool(self.db.execute(
+            "UPDATE users SET totp_last_step = ? WHERE id = ? AND totp_last_step < ?",
+            (step, user_id, step),
+        ))
+
     # ------------------------------------------------------------------ delete
+    def set_purge_hook(self, hook) -> None:
+        """Register ``hook(user_id)`` to erase an identity's non-database artifacts.
+
+        The application owns playback state, credential files and browser profiles,
+        so only it can clean them; this module must not import it.
+        """
+        self._purge_hook = hook
+
+    def _purge(self, user_id: str) -> None:
+        hook = self._purge_hook
+        if hook is None:
+            return
+        try:
+            hook(user_id)
+        except Exception:  # noqa: BLE001 - the account is gone either way
+            logger.exception("Could not purge artifacts for account %s", user_id)
+
+    def delete_own_account(
+        self,
+        actor: dict,
+        *,
+        password: str,
+        confirm_username: str,
+        ip: str = "",
+        user_agent: str = "",
+    ) -> str:
+        """Erase an account at its own request. Returns the deleted user id.
+
+        Hard rather than soft, because a person who deleted themselves must not be
+        able to be resurrected -- and a soft-deleted row keeps its username claimed
+        forever. The audit journal deliberately survives: the record that an account
+        existed and closed itself is the point of an audit log.
+        """
+        row = self._active_row(actor)
+        if not verify_password(row["password_hash"], password or ""):
+            self.db.audit(
+                row["id"], row["username"], "account_delete_failed", row["id"],
+                json.dumps({"reason": "bad_password"}), ip, user_agent,
+            )
+            raise AccountError("Password is incorrect.")
+        if (confirm_username or "").strip().lower() != str(row["username"]).lower():
+            self.db.audit(
+                row["id"], row["username"], "account_delete_failed", row["id"],
+                json.dumps({"reason": "username_mismatch"}), ip, user_agent,
+            )
+            raise AccountError("Type your username exactly to confirm.")
+        self._guard_last_owner(dict(row), {"status": "deleted"})
+        if row["role"] in {"owner", "admin"} and int(self.db.scalar(
+            "SELECT COUNT(*) FROM users WHERE role IN ('owner','admin') AND status = 'active'"
+        ) or 0) <= 1:
+            raise AccountError("The last administrator cannot delete this way. Use the admin panel.")
+        user_id = row["id"]
+        with self.db.connect() as conn:
+            conn.execute(
+                "UPDATE user_sessions SET revoked_at = ? WHERE user_id = ? AND revoked_at = 0",
+                (_now(), user_id),
+            )
+        # The row itself cascades sessions, provider credentials, preferences and
+        # email tokens (FOREIGN KEY ... ON DELETE CASCADE).
+        self.db.execute("DELETE FROM users WHERE id = ?", (user_id,))
+        self.db.audit(
+            None, str(row["username"])[:120], "account_deleted_self", None,
+            json.dumps({"username": row["username"], "role": row["role"]}), ip, user_agent,
+        )
+        self._purge(user_id)
+        return user_id
+
     def delete_user(self, actor: dict | None, user_id: str, ip: str = "", user_agent: str = "") -> None:
         target = self.get_user(user_id)
         if not target:
@@ -641,7 +1040,8 @@ class AccountService:
         with self.db.connect() as conn:
             conn.execute(
                 "UPDATE users SET status = 'deleted', deleted_at = ?, updated_at = ?, "
-                "email = NULL, totp_secret_enc = '' WHERE id = ?",
+                "email = NULL, totp_secret_enc = '', totp_pending_enc = '', "
+                "totp_pending_at = 0, totp_last_step = 0 WHERE id = ?",
                 (_now(), _now(), user_id),
             )
             conn.execute("UPDATE user_sessions SET revoked_at = ? WHERE user_id = ?", (_now(), user_id))
@@ -649,6 +1049,7 @@ class AccountService:
             conn.execute("DELETE FROM user_preferences WHERE user_id = ?", (user_id,))
             conn.execute("DELETE FROM user_email_tokens WHERE user_id = ?", (user_id,))
         self.audit(actor, "user_deleted", user_id, {"username": target.get("username")}, ip, user_agent)
+        self._purge(user_id)
 
     def restore_user(self, actor: dict | None, user_id: str, ip: str = "", user_agent: str = "") -> dict:
         if not actor or actor.get("role") != "owner":
@@ -717,15 +1118,18 @@ class AccountService:
             )
             return None, "This account is not active. Contact an administrator."
         if (
-            self.config.require_email_verification
-            and row["email"]
+            row["email"]
             and not row["email_verified"]
+            and self._must_verify(row["created_by"])
         ):
             self.db.audit(
                 row["id"], row["username"], "login_blocked", row["id"],
                 json.dumps({"reason": "email_unverified"}), ip, user_agent,
             )
-            return None, "Verify your email address before signing in. Use the link in your inbox or ask an administrator to resend it."
+            return None, (
+                "Verify your email address before signing in. Use the link we sent you, "
+                "or ask for another one from the sign-in page."
+            )
         with self.db.connect() as conn:
             conn.execute(
                 "UPDATE users SET failed_login_count = 0, locked_until = 0, "
@@ -810,6 +1214,63 @@ class AccountService:
         )
         self.audit(actor, "sessions_revoked", user_id, {"count": count}, ip, user_agent)
         return count
+
+    def revoke_own_sessions(
+        self,
+        actor: dict,
+        *,
+        keep_sid_hash: str = "",
+        only_prefix: str = "",
+        ip: str = "",
+        user_agent: str = "",
+    ) -> tuple[int, bool]:
+        """Sign this account's browsers out, optionally keeping the current one.
+
+        Returns ``(revoked, killed_current)``. ``killed_current`` is what tells the
+        caller to drop its own cookie: a device list where "sign out everywhere"
+        quietly kept the requester alive would be a lie.
+        """
+        row = self._active_row(actor)
+        prefix = (only_prefix or "").strip().lower()
+        current_hash = sha256_hex(keep_sid_hash) if keep_sid_hash else ""
+        now = _now()
+        with self.db.connect() as conn:
+            if prefix:
+                if len(prefix) < 6:
+                    raise AccountError("Pick a session to sign out.")
+                matches = conn.execute(
+                    "SELECT sid_hash FROM user_sessions WHERE user_id = ? AND revoked_at = 0 "
+                    "AND sid_hash LIKE ?",
+                    (row["id"], prefix + "%"),
+                ).fetchall()
+                if len(matches) != 1:
+                    raise AccountError("That session is not signed in anymore.")
+                target = str(matches[0]["sid_hash"])
+                count = conn.execute(
+                    "UPDATE user_sessions SET revoked_at = ? WHERE sid_hash = ? AND revoked_at = 0",
+                    (now, target),
+                ).rowcount
+                killed_current = bool(current_hash) and target == current_hash
+            else:
+                if current_hash:
+                    count = conn.execute(
+                        "UPDATE user_sessions SET revoked_at = ? "
+                        "WHERE user_id = ? AND revoked_at = 0 AND sid_hash <> ?",
+                        (now, row["id"], current_hash),
+                    ).rowcount
+                    killed_current = False
+                else:
+                    count = conn.execute(
+                        "UPDATE user_sessions SET revoked_at = ? WHERE user_id = ? AND revoked_at = 0",
+                        (now, row["id"]),
+                    ).rowcount
+                    killed_current = True
+        self.audit(
+            actor, "sessions_revoked_self", row["id"],
+            {"count": count, "kept_current": not killed_current, "one": bool(prefix)},
+            ip, user_agent,
+        )
+        return int(count or 0), killed_current
 
     def list_sessions(self, user_id: str) -> list[dict]:
         rows = self.db.fetchall(

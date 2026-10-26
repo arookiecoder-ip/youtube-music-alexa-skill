@@ -1,0 +1,23 @@
+{% extends "selfservice_base.html" %}
+
+{% block page_title %}{{ heading }}{% endblock %}
+{% block brand_sub %}Account{% endblock %}
+
+{% block card %}
+{# Every terminal state of the door flow lands here: link sent, address
+   confirmed, link expired, sign-ups closed, rate limited. Plain text only, so
+   nothing a visitor typed can be marked up. #}
+<div class="step active">
+  <p class="step-title">{{ heading }}</p>
+  <p class="step-hint">{{ message }}</p>
+  <a class="primary-link" href="{{ action_url }}">{{ action_label }}</a>
+  {% if secondary_url and secondary_label %}
+    <a class="quiet-link" href="{{ secondary_url }}">{{ secondary_label }}</a>
+  {% endif %}
+</div>
+{% endblock %}
+
+{% block door_links %}
+  <a href="/login/">Sign in</a>
+  {% if signup_open %}<a href="/signup">Create an account</a>{% endif %}
+{% endblock %}

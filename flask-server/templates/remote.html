@@ -150,6 +150,7 @@
           <button class="jam-owner-only" id="youtube-browser-auth" type="button">YouTube Music account</button>
           <button class="jam-owner-only" id="download-cookies-replace" type="button">Replace download cookies</button>
           <button class="jam-owner-only" id="download-cookies-check" type="button">Test audio download</button>
+          {% if account_available %}<a class="jam-owner-only profile-menu-link" href="/account">Your account</a>{% endif %}
           {% if not jam_guest %}<a class="jam-owner-only profile-menu-link" href="/status">Service status</a>{% endif %}
           <button id="logout" type="button">{{ 'Leave Jam' if jam_guest else 'Sign out of Web Remote' }}</button>
         </div>

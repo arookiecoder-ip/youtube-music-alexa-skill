@@ -22,18 +22,51 @@ the Alexa skill/Lambda are untouched.
     TOTP helpers and an in-process sliding-window rate limiter.
   - `crypto.py` — Fernet-encrypted provider credentials, with an HKDF-derived
     key fallback from `SECRET_KEY`.
-  - `db.py` — additive schema v1 + v2, migrations, audit, counts, integrity
-    check and online SQLite backup.
+  - `db.py` — additive schema v1 + v2 + v3 (`totp_pending_*`,
+    `idx_users_created_by`), migrations, audit, counts, integrity check and
+    online SQLite backup.
   - `accounts.py` — user CRUD, roles, statuses, last-owner protection, sessions,
-    email tokens, invitations, self-service profile and audit.
+    email tokens, invitations, self-service profile and audit, plus the
+    self-service half: `register_self_service`, the verification gate,
+    `change_own_password`, `session_summaries`, `revoke_own_sessions`,
+    `begin/confirm/cancel/disable_totp`, `verify_totp_code`,
+    `delete_own_account` and the purge hook.
   - `mailer.py` — SMTP delivery, local `.eml` outbox, branded text/HTML email.
+  - `emails.py` — the one copy each message is written in, shared by the admin
+    panel and the self-service door so the two cannot drift.
+  - `netids.py` — which client a limit or audit row keys on (proxy-peer rule,
+    rightmost `X-Forwarded-For`, opt-in Cloudflare, IPv6 /64 folding, hashed
+    buckets).
+  - `pending.py` — the single-use, browser-bound record between "password
+    accepted" and "second factor proven".
+  - `selfservice.py` — the `/signup`, `/forgot-password`, `/reset-password`,
+    `/verify-email`, `/account` and `/api/account*` blueprint, with its own
+    limiter table, CSRF surface and security headers.
   - `admin.py` — `/admin` blueprint: dashboard, users, audit, system, account,
     login/logout, verification, reset, magic link and invitations.
-- 16 admin templates (`templates/admin/`) with no external assets.
+- `flask-server/account_purge.py` — the retry queue and the path guards behind
+  account deletion; the purge itself is `server._purge_account_artifacts`.
+- 16 admin templates (`templates/admin/`) with no external assets, and the
+  self-service set (`signup`, `selfservice_base`, `selfservice_form`,
+  `selfservice_result`, `reset_password`, `account`, `_form_macros`) with
+  `templates/static/css/account.css`, `selfservice.js` and `account.js`.
+- `flask-server/serve.py` — starts waitress with
+  `clear_untrusted_proxy_headers=False`, because the CLI cannot and the address
+  rules above need the forwarded chain to reach Flask at all.
 - `server.py` integration:
   - guarded `init_multiuser(app)` at startup;
   - `/admin` bypasses the device API-key middleware only when the layer has
-    registered successfully.
+    registered successfully;
+  - the same middleware lets the self-service paths through (`/signup`,
+    `/signup/resend`, `/forgot-password`, `/verify-email/`, `/api/account/`),
+    while `/account` and `/api/account` stay 401 to an anonymous browser;
+  - `POST /login/` grew the second step for accounts that enabled TOTP, sharing
+    the administrator door's budgets and the same pending store;
+  - `_client_ip()` resolves through `multiuser.netids`, so `_check_rate_limit()`,
+    the audit trail and the login limits key on the visitor rather than on the
+    proxy container;
+  - the purge hook and its sweeper (`ACCOUNT_PURGE_SWEEP_SECONDS`) run beside the
+    YouTube auth keepalive, because a delete's file work outlives the request.
 - `cryptography>=42.0` added to `flask-server/requirements.txt`.
 - `scripts/generate-multiuser-key.py` for `MULTIUSER_ENCRYPTION_KEY`.
 - `.env.example` documents every multi-user, SMTP and token-TTL setting.
@@ -50,6 +83,15 @@ the Alexa skill/Lambda are untouched.
   token invalidation after email change, provider-credential encryption,
   audit CSV, system page, backups, configuration defaults and the
   disabled-by-default route surface.
+- Five suites for the self-service work, all passing:
+  `tests/test_netids.py` (address resolution and the launcher/Dockerfile pins),
+  `tests/test_selfservice.py` (the public door end to end, its limits and its
+  enumeration equivalence), `tests/test_login_second_factor.py` (both doors'
+  two-step sign-in and the shared budget), `tests/test_account_purge.py` (the
+  tombstone, the seven registries, the file guards, the retry queue and the
+  sidecar endpoint) and `tests/test_player_state.py` (`discard`).
+  `tests/test_playback_store.py` and `tests/test_multiuser.py` picked up the
+  tombstone and mail-env cases.
 
 ### Email authentication
 
@@ -62,6 +104,33 @@ the Alexa skill/Lambda are untouched.
   and forces re-verification.
 - Enumeration-safe responses on public reset/magic-link requests.
 - SMTP test button and outbox counters in **System**.
+
+### Self-service accounts (Phase 2.6)
+
+- Open sign-up at `/signup`, gated on a verified email address before the account
+  can sign in; a honeypot field and a minimum-fill-time nonce both answer with the
+  same "check your inbox" page, so a bot gets nothing to tune against.
+- Per-door limits: 5 sign-ups per hour per address, 3 per day per email, and a
+  daily cap counted in the database (`MULTIUSER_MAX_SELF_SIGNUPS_PER_DAY`) because
+  nothing in-process survives a restart.
+- `/forgot-password` and `/reset-password/<token>` for accounts, sharing one
+  budget with the equivalent admin requests and answering identically whether or
+  not the address exists.
+- `/account` and `/api/account`: profile (an email change re-verifies), password
+  (this browser stays, every other session is revoked), the session list with no
+  hash or token in it, resend verification, TOTP enrol/QR/confirm/cancel/disable,
+  sign-out-everywhere, and self-delete.
+- Self-delete demands the current password **and** the username typed back,
+  refuses the last owner and the last administrator, hard-deletes the row and
+  purges everything the account held outside it: durable snapshot (with a
+  tombstone that outranks a heartbeat already in flight), in-process queues,
+  output leases and volumes, the Amazon cookie directory, the YouTube auth file,
+  the download jar, the Jam tokens and the Chromium profile. Failures retry with
+  backoff for 24 hours rather than being forgotten.
+- TOTP at sign-in for both doors, with the pending record single-use and bound to
+  the address bucket and user agent that earned it.
+
+Details, live results and the stated limitations: `PHASE2-PER-USER.md`.
 
 ### Operations
 
@@ -104,12 +173,12 @@ origin `https://testalexa.synthora.in` through Cloudflare Full (non-strict).
 The smoke test created disposable users and removed them afterwards. It did not
 change the owner account or playback state.
 
-Existing Python regressions: **58/58 files passed**, run with the repository's
-per-file isolation pattern (`scripts/run-regressions.py` logic) using Python
-3.12 and a local venv containing the application dependencies. The production
-image intentionally does not ship `pytest`, so the suite was not executed
-inside the running container. Frontend Node tests were not run; no frontend
-code changed on this branch.
+Existing Python regressions: the container suite is the reference run, because the
+image is what ships. `tests/test_offline_dispatch_state.py` still needs `pytest`,
+which the production image deliberately does not carry, and
+`tests/test_home_shelf_variety.py` still imports a symbol `home_feed` does not
+export — both fail as loader errors and both predate this work. Frontend Node tests
+were not run; no frontend code changed on this branch.
 
 ## Upstream port verification (2026-10-25)
 
@@ -193,10 +262,21 @@ and the owner were not touched.
       server as the install owner, so "Alexa, play … on Music Box" reaches the
       owner's queue and devices; per-account Echo control happens from the web
       remote. Needs skill account linking, which stays a non-goal for Phase 2.
-- [ ] Purge per-identity artifacts on account deletion. `delete_user` wipes the
-      encrypted credential rows, but the YouTube auth file, download-cookie jar,
-      Chromium profile directory, `ALEXA_COOKIE_DIR/accounts/user_<id>` and
-      `playback_snapshot` row of a deleted account survive on the data volume.
+- [x] Phase 2.6: self-service accounts — open sign-up gated on email
+      verification, `/forgot-password` + `/reset-password`, `/account` with the
+      `/api/account` JSON (profile, password, sessions, TOTP, self-delete),
+      TOTP at both sign-in doors, per-client address resolution
+      (`multiuser/netids.py` + `serve.py`) and the deletion purge. Live
+      end-to-end on testalexa with a throwaway address, including the negative
+      paths; the owner's and `test123`'s artifacts were re-checked untouched after
+      the delete. Details in `PHASE2-PER-USER.md`.
+- [x] Purge per-identity artifacts on account deletion. The row is only the
+      beginning: `playback_snapshot` (plus a tombstone so a heartbeat in flight
+      cannot write it back), the seven in-process registries, the YouTube auth
+      file, the download-cookie jar, `ALEXA_COOKIE_DIR/accounts/user_<id>`, the
+      Jam tokens and the Chromium profile directory now all go, with anything that
+      fails queued in `pending_purges` and retried by a daemon with 30s→2h backoff
+      for 24 hours.
 - [ ] Phase 2.4: `user_id` on history, likes and playlist tables.
 
 ## Known limitations (by design in Phase 1)
@@ -214,19 +294,51 @@ and the owner were not touched.
    handling are out of scope for Phase 1. The outbox remains the fallback when
    SMTP is unset, and it holds plaintext one-time links — never expose the data
    volume.
-4. **No admin 2FA enrollment UI yet.** Schema and login model support TOTP;
-   enrollment arrives in Phase 4.
+4. **Second factor is enrol-yourself, not enforce.** Every account (including an
+   administrator) can turn TOTP on and off from `/account`, and there is no
+   deployment-wide requirement that it be on. Enforcement and step-up
+   authentication for destructive actions stay Phase 4 work.
 5. **Existing `/login/` logout clears the whole Flask session**, which also
    signs the same browser out of `/admin`. The reverse is not true. This is a
    known, accepted cross-interaction while the two flows coexist.
 6. **No password-change enforcement.** `must_change_password` is stored but not
    yet enforced on the first admin session.
-7. **Rate limits are per process.** Correct for the current one-container
-   deployment, insufficient after scale-out.
+7. **Rate limits are an annoyance-multiplier, not a control.** Every bucket is
+   in-process, so a container restart clears all of them and scale-out would give
+   each replica its own budget. The durable parts are deliberately in the database
+   instead: the daily sign-up cap, the lockout columns and one live token per
+   purpose. The flip side is that a legitimate user can be locked out of a
+   self-service action by their own retries — `account-delete` allows 3 per 24
+   hours, and the operator's only lever short of waiting is a restart, which resets
+   every other budget too. Insufficient after scale-out; Phase 4 replaces it with
+   Redis.
 8. **Email flows verified on a disposable account only.** Verification, password
    reset and magic-link sign-in were exercised end to end against a real mailbox
    and the account was deleted afterwards. Invitations, and the same flows on a
    long-lived owner account, are still unexercised.
+9. **Per-client addressing depends on the launcher.** `serve.py` must start
+   waitress with `clear_untrusted_proxy_headers=False`; revert to the
+   `waitress-serve` CLI and every visitor behind Caddy collapses into one address
+   bucket, which quietly disables the login and self-service limits. Two tests in
+   `tests/test_netids.py` pin both halves of that.
+10. **`MULTIUSER_TRUST_CLOUDFLARE` is a claim about the topology.** It is correct
+    only while the public origin really is proxied by Cloudflare. `netids` still
+    requires the immediate peer to be a proxy, so a direct hit on the origin port
+    is answered with the requester's own address — but if the origin is exposed and
+    this flag is on, the forwarded chain is believed from whatever peer is listed in
+    `MULTIUSER_TRUSTED_PROXY_CIDRS`.
+11. **Self-delete is hard, admin delete is soft — but both purge.** An
+    administrator's **Delete** keeps the row (`status='deleted'`, email and TOTP
+    cleared, username reserved) so **Restore** can bring the account back; the
+    snapshot, credential file, jar, cookie directory, Jam tokens and Chromium
+    profile are purged either way, because the purge hook runs after both paths.
+    What a restore therefore cannot give back is the connected providers — a
+    restored account signs in and re-links. Self-delete removes the row outright,
+    because a person who deleted themselves must not be resurrectable.
+12. **Nine pre-existing failures in `tests/test_youtube_browser_session.py`.** They
+    reproduce name-for-name and assertion-for-assertion on a clean `HEAD` checkout,
+    belong to the browser-capture work rather than this phase, and are now visible
+    in the full-suite run because that module became importable there.
 
 ## Verification commands
 

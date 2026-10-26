@@ -87,6 +87,14 @@ MULTIUSER_SMTP_PORT=587
 MULTIUSER_SMTP_SECURITY=starttls
 MULTIUSER_SMTP_USERNAME=<brevo-smtp-login>
 MULTIUSER_SMTP_PASSWORD=<brevo-smtp-key>
+
+# Public account doors (see §8). Defaults shown; both are safe to leave as-is
+# for a test stack and worth deciding before a real one.
+MULTIUSER_SELF_SIGNUP_ENABLED=1
+MULTIUSER_MAX_SELF_SIGNUPS_PER_DAY=25
+MULTIUSER_TRUSTED_PROXY_CIDRS=
+MULTIUSER_TRUST_CLOUDFLARE=1
+ACCOUNT_PURGE_SWEEP_SECONDS=60
 ```
 
 `COMPOSE_ENV_FILE` makes Compose load this file into the `ytmusic` container
@@ -281,7 +289,67 @@ docker compose --env-file .env.testalexa -p musicbox-test exec ytmusic \
 
 Never paste an `.eml` into chat or logs; it contains a working one-time link.
 
-## 8. Verify the existing app still works
+## 8. Account doors, client address and the purge queue
+
+With the layer on, the public surface is `/signup`, `/signup/resend`,
+`/verify-email/<token>`, `/forgot-password`, `/reset-password/<token>`,
+`/account` and `/api/account*`, next to `/login/` and `/admin/`. Sign-up is open
+and the account cannot sign in until its address is confirmed, so SMTP (or the
+outbox) has to be reachable — see §7. To turn self-signup off while keeping the
+rest of the layer:
+
+```bash
+MULTIUSER_SELF_SIGNUP_ENABLED=0      # /signup answers "not available"
+MULTIUSER_MAX_SELF_SIGNUPS_PER_DAY=25  # durable, counted in the database
+```
+
+**Every limit in this layer keys on the client address, so the address has to be
+right.** `multiuser/netids.py` believes `X-Forwarded-For` only when the immediate
+peer is itself a proxy (a private/loopback address, or one listed in
+`MULTIUSER_TRUSTED_PROXY_CIDRS`), and takes the **rightmost** entry — the one our
+own proxy appended — so a forged list loses. On this stack Caddy shares the
+compose network with the app, and `testalexa.synthora.in` is fronted by
+Cloudflare, so `.env.testalexa` also sets:
+
+```bash
+MULTIUSER_TRUST_CLOUDFLARE=1   # believe CF-Connecting-IP; correct only while
+                               # the origin is genuinely proxied by Cloudflare
+```
+
+`MULTIUSER_TRUSTED_PROXY_CIDRS` is not needed here (the peer is private), but it
+is the knob for a deployment whose proxy sits elsewhere.
+
+The other half is the WSGI server: waitress 3 **deletes** the forwarded headers
+from the environ unless its `trusted_proxy` option names the exact proxy address,
+and Caddy's address on a docker network is ephemeral. The image therefore starts
+`serve.py` rather than the `waitress-serve` CLI, because only `serve.py` can pass
+`clear_untrusted_proxy_headers=False`. If the CMD is ever reverted to the CLI,
+sign-in limits, audit rows and the second-factor binding all silently key on the
+Caddy container instead of the visitor. Confirm with:
+
+```bash
+docker compose --env-file .env.testalexa -p musicbox-test exec ytmusic \
+  python3 -c 'import server; print(server._client_ip.__module__ + " ok")'
+curl -s -H 'X-Forwarded-For: 203.0.113.1, 198.51.100.2' \
+  https://testalexa.synthora.in/api/status/ >/dev/null   # the audit row must show 198.51.100.2
+```
+
+**Deleting an account is a queue, not a request.** The row goes immediately; the
+snapshot, credential file, download jar, Amazon cookie directory, Jam tokens and
+Chromium profile are removed by `_purge_account_artifacts`, and whatever fails
+(e.g. Chromium still holding the profile) is recorded in `pending_purges` and
+retried by a daemon with 30s→2h backoff for up to 24 hours. Watch it:
+
+```bash
+docker compose --env-file .env.testalexa -p musicbox-test exec ytmusic \
+  python3 -c 'import sqlite3;print(sqlite3.connect("/data/data.db").execute(
+  "SELECT user_id,attempts,error FROM pending_purges").fetchall())'
+```
+
+A row that survives hours is an operator problem — the account's secrets are still
+on the volume. The sweep interval is `ACCOUNT_PURGE_SWEEP_SECONDS` (default 60).
+
+## 9. Verify the existing app still works
 
 - `https://testalexa.synthora.in/` serves the existing app shell.
 - `https://testalexa.synthora.in/login/` accepts `REMOTE_USER` /
@@ -291,10 +359,14 @@ Never paste an `.eml` into chat or logs; it contains a working one-time link.
   was changed.
 - `https://testalexa.synthora.in/admin/` redirects to the admin login when
   signed out and shows the dashboard when signed in.
-- Running `MULTI_USER_ENABLED=0` and restarting removes the admin blueprint
+- `https://testalexa.synthora.in/signup` renders, an account can be created and
+  must verify its address before signing in, and `/account` shows that account's
+  own profile, sessions and provider state.
+- Running `MULTI_USER_ENABLED=0` and restarting removes the admin blueprint, the
+  self-service doors, `/signup` and `/account` (404, and 401 for the JSON)
   without affecting the existing app.
 
-## 9. Backups
+## 10. Backups
 
 Manual backup (owner only): **System → Create backup now**, or:
 
@@ -314,7 +386,7 @@ PY
 Copy backups and the encryption key off the host. A backup without
 `MULTIUSER_ENCRYPTION_KEY` cannot restore provider credentials.
 
-## 10. Stop, roll back and remove
+## 11. Stop, roll back and remove
 
 Stop without deleting data:
 
@@ -344,15 +416,22 @@ docker compose --env-file .env.testalexa -p musicbox-test down -v
 
 Only use `-v` after taking a backup; it is irreversible.
 
-## 11. Security checklist
+## 12. Security checklist
 
 - [ ] `.env.testalexa` is `0600` and gitignored; no secrets in the repository.
 - [ ] `MULTIUSER_ENCRYPTION_KEY` backed up separately from the database.
 - [ ] Cloudflare origin certificate mode is Full or Full (Strict) with a public
       Caddy certificate; never Flexible.
+- [ ] `MULTIUSER_TRUST_CLOUDFLARE=1` only while the public origin really is
+      proxied by Cloudflare, and never with port 5000/5001 published.
 - [ ] Ports 80/443 are the only new inbound ports; 5000/5001 are not published.
 - [ ] SMTP credentials use a dedicated sender, not a personal mailbox password.
 - [ ] The outbox volume is not exposed through Caddy, SFTP or backups shared
       with third parties.
 - [ ] Admin accounts use unique passwords; owner count is at least two.
+- [ ] Every administrator enrols TOTP from `/account` — the layer supports it and
+      does not require it, so an unenforced rule is a rule nobody follows.
+- [ ] `pending_purges` is empty after an account deletion (and `/signup` is
+      closed with `MULTIUSER_SELF_SIGNUP_ENABLED=0` if the deployment is
+      invite-only).
 - [ ] Audit log reviewed after setup; unexpected logins investigated.

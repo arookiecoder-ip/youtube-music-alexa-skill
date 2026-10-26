@@ -24,4 +24,6 @@ COPY --from=youtube-client /usr/local/bin/node /usr/local/bin/node
 COPY --from=youtube-client /youtube-stream/node_modules /app/youtube-stream/node_modules
 
 EXPOSE 5000
-CMD ["waitress-serve", "--host=0.0.0.0", "--port=5000", "--threads=16", "server:app"]
+# The CLI entry point cannot disable waitress's proxy-header clearing, which would
+# hide every visitor behind Caddy as one shared address. See serve.py.
+CMD ["python3", "serve.py"]

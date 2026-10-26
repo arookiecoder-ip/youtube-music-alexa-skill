@@ -1,0 +1,370 @@
+/* Self-service account pages.
+ *
+ * signin.css owns the door (brand, card, inputs, primary button); this file adds
+ * only what the account surface needs on top: field help and errors, the
+ * password meter, the honeypot, result-page links, and the wider two-column
+ * layout of /account. There is no inline style anywhere in these templates, so
+ * the blueprint can serve `style-src 'self'`. */
+
+/* ---- shared bits ---- */
+.optional {
+  float: right;
+  font-weight: 400;
+  letter-spacing: .06em;
+  text-transform: lowercase;
+  color: var(--muted);
+}
+
+.field-help {
+  font-size: .7rem;
+  line-height: 1.5;
+  color: var(--muted);
+  margin: 6px 0 0;
+}
+
+.field-error {
+  font-size: .72rem;
+  line-height: 1.45;
+  color: var(--danger);
+  margin: 6px 0 0;
+}
+
+.form-note {
+  font-size: .72rem;
+  line-height: 1.55;
+  color: var(--muted);
+  margin: 16px 0 0;
+}
+.form-note.error { color: var(--danger); }
+.form-note.success {
+  color: var(--text);
+  border-left: 2px solid var(--accent);
+  padding-left: 12px;
+  margin: 0 0 18px;
+}
+
+/* Parked outside the viewport and hidden, so a person can neither see nor tab
+   into it. Any value at all means a script filled it in. */
+.field-honeypot {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  visibility: hidden;
+}
+
+/* ---- password meter ---- */
+.pw-meter {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0 0;
+}
+.pw-meter-bar {
+  display: block;
+  width: 74px;
+  height: 3px;
+  background: var(--border);
+  border-radius: 2px;
+  overflow: hidden;
+  position: relative;
+}
+.pw-meter-bar::after {
+  content: '';
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: var(--fill, 0%);
+  background: var(--pw-color, var(--border));
+  transition: width .18s ease-out, background .18s ease-out;
+}
+.pw-meter-text {
+  font-size: .66rem;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.pw-meter[data-state="weak"] { --pw-color: var(--danger); }
+.pw-meter[data-state="fair"] { --pw-color: var(--accent); }
+.pw-meter[data-state="good"] { --pw-color: #2f9e44; }
+
+/* ---- result pages ---- */
+.primary-link,
+.quiet-link {
+  display: block;
+  margin-top: 20px;
+  text-align: center;
+  text-decoration: none;
+  font-size: .72rem;
+  font-weight: 700;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: #fff;
+  background: var(--accent);
+  border: 1px solid var(--accent);
+  padding: 12px 14px;
+}
+.primary-link:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+.quiet-link {
+  background: none;
+  border: 0;
+  color: var(--muted);
+  font-weight: 600;
+  padding: 2px 0 0;
+  text-transform: none;
+  letter-spacing: .02em;
+}
+.quiet-link:hover { color: var(--text); }
+
+.door-links {
+  display: flex;
+  justify-content: center;
+  gap: 16px;
+  margin-top: 18px;
+}
+.door-links a {
+  color: var(--muted);
+  font-size: .72rem;
+  text-decoration: none;
+}
+.door-links a:hover { color: var(--text); text-decoration: underline; }
+
+/* ---- /account ---- */
+body.account {
+  align-items: flex-start;
+  padding-top: 32px;
+}
+body.account main { max-width: 720px; }
+
+.account-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin-bottom: 22px;
+}
+.account-head .who h2 {
+  font-size: 1rem;
+  font-weight: 600;
+  margin: 0;
+}
+.account-head .who p {
+  font-size: .72rem;
+  color: var(--muted);
+  margin: 4px 0 0;
+}
+.account-actions-top { display: flex; gap: 10px; }
+
+.panel {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  padding: 22px 22px 24px;
+  margin-bottom: 16px;
+}
+.panel > h3 {
+  font-size: .72rem;
+  font-weight: 700;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  color: var(--text);
+  margin: 0 0 4px;
+}
+.panel > .panel-hint {
+  font-size: .74rem;
+  line-height: 1.55;
+  color: var(--muted);
+  margin: 0 0 6px;
+}
+.panel.danger { border-color: #3a1d1d; }
+.panel.danger > h3 { color: #ff8787; }
+
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  align-items: flex-end;
+}
+.row > .grow { flex: 1 1 190px; }
+.row label { margin-top: 14px; }
+
+.state-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 0;
+  border-top: 1px solid var(--border);
+  font-size: .78rem;
+}
+.state-line:first-of-type { border-top: 0; }
+.state-line .label { color: var(--muted); text-transform: uppercase; font-size: .62rem; letter-spacing: .12em; font-weight: 600; }
+
+.badge {
+  display: inline-block;
+  font-size: .62rem;
+  font-weight: 700;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  padding: 3px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+.badge.ok { color: #69db7c; border-color: #2b5c36; }
+.badge.warn { color: #ffd8a8; border-color: #6b4a1c; }
+.badge.bad { color: #ff8787; border-color: #6b2222; }
+
+button.ghost,
+button.tiny {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-family: inherit;
+  font-size: .68rem;
+  font-weight: 600;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  padding: 8px 12px;
+  cursor: pointer;
+}
+button.ghost:hover,
+button.tiny:hover { border-color: var(--accent); color: var(--accent); }
+button.ghost:disabled,
+button.tiny:disabled { opacity: .4; cursor: default; }
+button.destructive {
+  border-color: #6b2222;
+  color: #ff8787;
+  background: none;
+}
+button.destructive:hover { border-color: var(--danger); color: #fff; background: var(--danger); }
+button.ghost.linkish {
+  display: inline-block;
+  text-decoration: none;
+  text-align: center;
+}
+
+/* The same two shapes as the buttons above, for links: the account page deep-links
+   to the provider sign-in pages, and a bare <a> would read as body text. */
+a.ghost-link,
+a.tiny-link {
+  display: inline-block;
+  text-decoration: none;
+  font-size: .68rem;
+  font-weight: 600;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  color: var(--text);
+}
+a.ghost-link:hover,
+a.tiny-link:hover { border-color: var(--accent); color: var(--accent); }
+a.tiny-link[hidden] { display: none; }
+.prov-cell { display: inline-flex; align-items: center; gap: 10px; }
+
+.devices { list-style: none; margin: 12px 0 0; }
+.devices li {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 0;
+  border-top: 1px solid var(--border);
+}
+.devices .device-main { min-width: 0; }
+.devices .device-title {
+  font-size: .78rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 340px;
+}
+.devices .device-meta {
+  font-size: .68rem;
+  color: var(--muted);
+  margin-top: 3px;
+}
+.devices .this-one { color: var(--accent); font-weight: 700; font-size: .62rem; letter-spacing: .1em; text-transform: uppercase; }
+
+.enroll {
+  margin-top: 16px;
+  border: 1px solid var(--border);
+  padding: 16px;
+}
+.enroll[hidden] { display: none; }
+.enroll-grid {
+  display: flex;
+  gap: 18px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+.qr-frame {
+  background: #fff;
+  padding: 10px;
+  border-radius: 6px;
+  width: 168px;
+  height: 168px;
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+}
+.qr-frame img { width: 148px; height: 148px; display: block; }
+.qr-fallback { font-size: .7rem; color: var(--muted); line-height: 1.5; }
+.enroll-steps { flex: 1 1 240px; }
+.enroll-steps ol { margin: 0 0 12px 16px; font-size: .74rem; line-height: 1.7; color: var(--muted); }
+.secret-code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: .78rem;
+  letter-spacing: .06em;
+  word-break: break-all;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  padding: 9px 10px;
+  margin: 0 0 12px;
+}
+
+.note-stack { margin-top: 14px; }
+.note {
+  font-size: .74rem;
+  line-height: 1.5;
+  padding: 10px 12px;
+  border-left: 2px solid var(--border);
+  background: rgba(255, 255, 255, .02);
+  margin: 0 0 8px;
+}
+.note.ok { border-left-color: #2f9e44; }
+.note.bad { border-left-color: var(--danger); }
+.note.warn { border-left-color: var(--accent); }
+
+details.reveal summary {
+  cursor: pointer;
+  font-size: .7rem;
+  letter-spacing: .06em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-top: 14px;
+}
+details.reveal[open] summary { color: var(--text); }
+details.reveal > .reveal-body { margin-top: 6px; }
+
+.confirm-box {
+  border: 1px dashed #6b2222;
+  padding: 16px;
+  margin-top: 14px;
+}
+.confirm-box[hidden] { display: none; }
+
+.footnote {
+  font-size: .68rem;
+  color: var(--muted);
+  line-height: 1.6;
+  margin: 4px 0 26px;
+}
+.footnote a { color: var(--muted); margin-right: 14px; }
+
+@media (max-width: 560px) {
+  .panel { padding: 18px 16px 20px; }
+  .devices .device-title { max-width: 190px; }
+  .account-head { flex-direction: column; align-items: flex-start; }
+}

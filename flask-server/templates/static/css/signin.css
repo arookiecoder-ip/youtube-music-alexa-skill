@@ -178,3 +178,21 @@
     min-height: 1.1em;
     margin-top: 14px;
   }
+
+  /* Sign-up and recovery live on the player's own door, so the two ways in are
+     offered here rather than being URLs a visitor has to guess. */
+  .door-links {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px 18px;
+    justify-content: space-between;
+    margin-top: 16px;
+    padding-top: 14px;
+    border-top: 1px solid var(--border);
+  }
+  .door-links a {
+    font-size: .76rem;
+    color: var(--muted);
+    text-decoration: none;
+  }
+  .door-links a:hover { color: var(--text); text-decoration: underline; }

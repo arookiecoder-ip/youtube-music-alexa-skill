@@ -1,0 +1,38 @@
+{% extends "selfservice_base.html" %}
+{% from "_form_macros.html" import field_error, general_error, honeypot %}
+
+{% block page_title %}{{ page_title }}{% endblock %}
+{% block brand_sub %}{{ page_title }}{% endblock %}
+
+{% block card %}
+{# One generic single-field door form: it serves both "resend the verification
+   link" and "forgot password", which differ only in copy and in which bucket
+   they spend. #}
+{% if sent_note %}
+  <div class="step active">
+    <p class="form-note success">{{ sent_note }}</p>
+    <a class="primary-link" href="{{ back_url }}">{{ back_label }}</a>
+  </div>
+{% else %}
+  <form method="post" action="{{ request.path }}" class="step active" data-password-form>
+    <input type="hidden" name="_csrf" value="{{ csrf_form }}">
+    {{ honeypot() }}
+    <p class="step-title">{{ page_title }}</p>
+    <p class="step-hint">{{ intro }}</p>
+
+    <label for="{{ field_name }}">{{ field_label }}</label>
+    <input id="{{ field_name }}" name="{{ field_name }}" type="{{ field_type }}"
+           value="{{ form_value or '' }}" autocomplete="{{ field_autocomplete }}"
+           maxlength="{{ '254' if field_type == 'email' else 120 }}" required>
+    {{ field_error(field_errors, field_name) }}
+    {{ general_error(form_error) }}
+
+    <button type="submit" class="primary" data-submit>{{ submit_label }}</button>
+  </form>
+{% endif %}
+{% endblock %}
+
+{% block door_links %}
+  <a href="{{ back_url }}">{{ back_label }}</a>
+  <a href="/signup">Create an account</a>
+{% endblock %}

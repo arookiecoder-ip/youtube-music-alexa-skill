@@ -27,13 +27,12 @@
       <label for="password">Password</label>
       <input type="password" id="password" name="password" autocomplete="current-password">
 
-      <button type="submit" class="primary" id="creds-btn">
-        {% if totp %}Continue{% else %}Sign in{% endif %}
-      </button>
+      <button type="submit" class="primary" id="creds-btn">Sign in</button>
     </form>
 
-    <!-- Step 2: 2FA code (only when TOTP is enabled) -->
-    {% if totp %}
+    <!-- Step 2: always in the page. Whether it is needed is decided per account
+         at submit time, and a deployment whose *owner* has no 2FA can still have
+         accounts that do. -->
     <form class="step" id="step-code" data-step="2">
       <button type="button" class="back" id="back-btn">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
@@ -48,14 +47,19 @@
              autocomplete="one-time-code" pattern="[0-9]*" maxlength="6" placeholder="------">
       <button type="submit" class="primary" id="code-btn">Sign in</button>
     </form>
-    {% endif %}
 
     <p id="status"></p>
+
+    {% if signup_open or forgot_url %}
+    <nav class="door-links">
+      {% if signup_open %}<a href="/signup">Create an account</a>{% endif %}
+      {% if forgot_url %}<a href="{{ forgot_url }}">Forgot password?</a>{% endif %}
+    </nav>
+    {% endif %}
   </div>
 </main>
 
 <script>
-const TOTP = {{ 'true' if totp else 'false' }};
 const NEXT_TARGET = {{ next_target|tojson }};
 const statusEl = document.getElementById('status');
 const stepCreds = document.getElementById('step-creds');
@@ -112,24 +116,27 @@ stepCreds.addEventListener('submit', async (e) => {
   }
 });
 
-if (TOTP) {
-  const stepCode = document.getElementById('step-code');
-  const codeBtn = document.getElementById('code-btn');
-  document.getElementById('back-btn').onclick = () => showStep(stepCreds);
-  stepCode.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    setError('');
-    codeBtn.disabled = true;
-    try {
-      const json = await post({ step: 'totp', code: document.getElementById('code').value.trim(), token: window._loginToken });
-      location.href = json.next || '/home';
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      codeBtn.disabled = false;
-    }
-  });
-}
+const stepCode = document.getElementById('step-code');
+const codeBtn = document.getElementById('code-btn');
+document.getElementById('back-btn').onclick = () => showStep(stepCreds);
+stepCode.addEventListener('submit', async (e) => {
+  e.preventDefault();
+  setError('');
+  codeBtn.disabled = true;
+  try {
+    const json = await post({ step: 'totp', code: document.getElementById('code').value.trim(), token: window._loginToken });
+    location.href = json.next || '/home';
+  } catch (err) {
+    // The one-time proof is spent whether the code was wrong or the wait ran
+    // out, so the only honest next step is the password again.
+    window._loginToken = '';
+    document.getElementById('code').value = '';
+    showStep(stepCreds);
+    setError(err.message);
+  } finally {
+    codeBtn.disabled = false;
+  }
+});
 </script>
 </body>
 </html>

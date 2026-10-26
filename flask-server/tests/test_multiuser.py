@@ -51,6 +51,12 @@ class MultiUserTestBase(unittest.TestCase):
             "MULTIUSER_ADMIN_EMAIL": "owner@synthora.in",
             "MULTIUSER_ENCRYPTION_KEY": Fernet.generate_key().decode("ascii"),
             "MULTIUSER_MAIL_OUTBOX": self.outbox,
+            # Blanked, not merely unset: a deployed machine has real MULTIUSER_SMTP_*
+            # in its environment, and with those set the mailer delivers over the
+            # network and never writes the outbox these tests read.
+            "MULTIUSER_SMTP_HOST": "",
+            "MULTIUSER_SMTP_USER": "",
+            "MULTIUSER_MAIL_FROM": "",
             "MULTIUSER_PUBLIC_BASE_URL": "http://localhost",
             "MULTIUSER_REQUIRE_EMAIL_VERIFICATION": "1",
             "MULTIUSER_RESET_TOKEN_MINUTES": "60",

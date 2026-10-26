@@ -13,7 +13,7 @@ import sqlite3
 import time
 from typing import Any, Iterable
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 _SCHEMA_V1 = (
     """
@@ -136,6 +136,16 @@ _SCHEMA_V2_TABLES = (
     "CREATE INDEX IF NOT EXISTS idx_email_tokens_expiry ON user_email_tokens(expires_at)",
 )
 
+# Version 3 makes an account self-serviceable.  A two-factor secret under
+# enrollment must not live in ``totp_secret_enc``: that column's truthiness *is*
+# "second factor enabled" everywhere the code reads it, so a half-finished
+# enrollment would start rejecting logins for a code nobody has set yet.
+_SCHEMA_V3_COLUMNS = (
+    ("totp_pending_enc", "ALTER TABLE users ADD COLUMN totp_pending_enc TEXT NOT NULL DEFAULT ''"),
+    ("totp_pending_at", "ALTER TABLE users ADD COLUMN totp_pending_at REAL NOT NULL DEFAULT 0"),
+    ("totp_last_step", "ALTER TABLE users ADD COLUMN totp_last_step INTEGER NOT NULL DEFAULT 0"),
+)
+
 
 class Database:
     def __init__(self, path: str):
@@ -195,6 +205,23 @@ class Database:
                     conn.execute(statement)
                 conn.execute(
                     "INSERT INTO multiuser_schema_migrations (version, applied_at) VALUES (2, ?)",
+                    (time.time(),),
+                )
+            if 3 not in applied:
+                columns = {
+                    row[1] for row in conn.execute("PRAGMA table_info(users)").fetchall()
+                }
+                for name, statement in _SCHEMA_V3_COLUMNS:
+                    if name not in columns:
+                        conn.execute(statement)
+                # The daily self-signup cap reads this on every anonymous
+                # registration, so it has to be an index rather than a scan.
+                conn.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_users_created_by "
+                    "ON users(created_by, created_at)"
+                )
+                conn.execute(
+                    "INSERT INTO multiuser_schema_migrations (version, applied_at) VALUES (3, ?)",
                     (time.time(),),
                 )
             now = time.time()

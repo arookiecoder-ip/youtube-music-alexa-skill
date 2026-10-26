@@ -1,0 +1,28 @@
+{# Field-level pieces the door pages share. Kept in one place so the honeypot and
+   the error markup cannot drift between sign-up, reset and resend. #}
+
+{% macro field_error(field_errors, name) -%}
+  {%- if field_errors and field_errors.get(name) -%}
+    <p class="field-error">{{ field_errors.get(name) }}</p>
+  {%- endif -%}
+{%- endmacro %}
+
+{% macro general_error(message) -%}
+  {%- if message -%}
+    <p class="form-note error">{{ message }}</p>
+  {%- endif -%}
+{%- endmacro %}
+
+{# Off-screen to a human, irresistible to a bot. account.css parks it outside the
+   viewport and sets visibility:hidden, so a real visitor neither sees nor tabs
+   into it; the server treats any value as a scripted submission. #}
+{% macro honeypot() -%}
+  <div class="field-honeypot" aria-hidden="true">
+    <label for="hp-website">Leave this field empty</label>
+    <input type="text" id="hp-website" name="website" tabindex="-1" autocomplete="off">
+  </div>
+{%- endmacro %}
+
+{% macro meter(for_id) -%}
+  <p class="pw-meter" data-meter-for="{{ for_id }}"><span class="pw-meter-bar"></span><span class="pw-meter-text"></span></p>
+{%- endmacro %}

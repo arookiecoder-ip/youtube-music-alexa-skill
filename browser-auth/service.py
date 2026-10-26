@@ -12,6 +12,7 @@ import hmac
 import logging
 import os
 import re
+import shutil
 import subprocess
 import threading
 import time
@@ -437,6 +438,44 @@ def close():
         _state["interactive"] = False
         _state["updated_at"] = time.time()
     return jsonify(_public_state())
+
+
+@app.post("/profile/delete")
+def profile_delete():
+    """Remove one account's Chromium profile directory for good.
+
+    The path checks are the whole endpoint: an empty key is the *owner's* base
+    profile, a symlink or a directory that is not a direct child of ``PROFILE_DIR``
+    is not a profile this service is allowed to remove, and a running Chromium
+    would simply re-create the tree behind the deletion.
+    """
+    global _profile_key
+    key = _requested_profile()
+    if not key:
+        return jsonify({"error": "profile_key_required"}), 400
+    try:
+        path = _profile_dir_for(key)
+    except ValueError:
+        return jsonify({"error": "invalid_profile_key"}), 400
+    with _lock:
+        in_flight = bool(_worker and _worker.is_alive()) or bool(_state["interactive"]) \
+            or _manual_browser is not None
+    if in_flight:
+        return jsonify({"error": "browser_in_use"}), 409
+    if os.path.islink(path):
+        return jsonify({"error": "profile_not_deletable"}), 409
+    real = os.path.realpath(path)
+    root = os.path.realpath(PROFILE_DIR)
+    if real == root or os.path.dirname(real) != root:
+        return jsonify({"error": "profile_not_deletable"}), 409
+    if not os.path.isdir(real):
+        return jsonify({"deleted": False})
+    shutil.rmtree(real)
+    with _lock:
+        if _profile_key == real:
+            _profile_key = ""
+    logger.info("Removed browser profile directory for a deleted account")
+    return jsonify({"deleted": True})
 
 
 @app.post("/interactive/open-youtube")

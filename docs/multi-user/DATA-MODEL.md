@@ -19,7 +19,10 @@ and applies additive migrations; it never drops a column or table.
 | `role` | TEXT | `owner`, `admin`, `user` |
 | `status` | TEXT | `active`, `disabled`, `invited`, `deleted` |
 | `must_change_password` | INTEGER | Stored for Phase 3 enforcement |
-| `totp_secret_enc` | TEXT | Reserved; encrypted when enrollment lands |
+| `totp_secret_enc` | TEXT | Fernet-encrypted shared secret; `has_totp` is derived from it being set and never returns the value |
+| `totp_pending_enc` | TEXT | Added in v3 — an enrolment that has been started and not confirmed. Also encrypted, and excluded from every read that feeds `has_totp`, so a half-finished enrolment cannot be used to sign in |
+| `totp_pending_at` | REAL | Added in v3; when that pending secret expires |
+| `totp_last_step` | INTEGER | Added in v3; the counter window already spent, so one code is good for one login |
 | `failed_login_count` | INTEGER | Reset on success; locks after `MULTIUSER_LOGIN_MAX_ATTEMPTS` |
 | `locked_until` | REAL | Unix timestamp |
 | `created_at`, `updated_at` | REAL | Unix timestamps |
@@ -31,9 +34,15 @@ and applies additive migrations; it never drops a column or table.
 | `last_email_at` | REAL | Added in v2; internal throttling aid |
 
 Active owners cannot be demoted, disabled or deleted while they are the last
-active owner. Deleting a user is a soft delete: the email is set to `NULL`, the
-username remains reserved, sessions and email tokens are revoked, and provider
-credentials/preferences are removed.
+active owner. Deleting a user from the panel is a soft delete: the email is set to
+`NULL`, the TOTP secret is cleared, the username remains reserved, sessions and email
+tokens are revoked, provider credentials/preferences are removed — and the artifacts
+outside this table (queue snapshot, credential file, download jar, Amazon cookie
+directory, Jam tokens, Chromium profile) are purged the same way, so a **Restored**
+account comes back without its connected providers. `/account`'s self-delete is
+different: it needs the current password and the username typed back, refuses the last
+owner and the last administrator, and removes the row outright, because a person who
+deleted themselves must not be resurrectable.
 
 ## `user_sessions`
 
@@ -113,7 +122,7 @@ Append-only administrative journal, retained for 90 days then pruned at startup.
 | --- | --- |
 | `id` | Autoincrement PK |
 | `actor_user_id`, `actor_label` | NULL/system for unauthenticated events |
-| `action` | Short event name (login, user_updated, email_verified, …) |
+| `action` | Short event name. Besides the Phase 1 set, the account doors add `signup`, `signup_honeypot`, `signup_too_fast`, `password_reset_requested`, `password_reset_requested_unknown`, `password_reset_honeypot`, `email_verified`, `password_changed`, `sessions_revoked`, `totp_enrollment_started`, `totp_enrollment_cancelled`, `totp_enabled`, `totp_disabled`, `account_delete_failed`, `account_deleted_self` and `admin_login_2fa`. A refused self-delete or a scripted sign-up is audited rather than dropped, because the attempts are the signal. |
 | `target_user_id` | Optional affected user |
 | `details_json` | Non-secret JSON details |
 | `ip`, `user_agent` | Truncated request metadata |
@@ -127,9 +136,33 @@ Exports are available at `/admin/audit/export.csv` (last 5,000 events).
 
 - **v1** — base tables above.
 - **v2** — email verification columns + `user_email_tokens`.
+- **v3** — `totp_pending_enc` / `totp_pending_at` / `totp_last_step` on `users`,
+  and `idx_users_created_by` `(created_by, created_at)`, because the daily
+  self-signup cap is counted on every anonymous registration.
 
 Migrations are additive and idempotent. The runner checks `PRAGMA table_info`
 before adding columns, so a partially applied v2 deployment can safely retry.
+
+## Tables the player layer owns in the same file
+
+`MULTI_USER_ENABLED=0` creates neither of them; both are the price of per-account
+playback and account deletion, not of the admin panel.
+
+**`playback_dead`** — `identity TEXT PRIMARY KEY, expires_at REAL`. The durable half
+of the deletion tombstone (`PlaybackStore.tombstone`, 900s by default). `save()` and
+`PlaybackPersistence.submit()` refuse an identity listed here, which is what stops a
+heartbeat that was already in flight when the account died from re-creating its
+snapshot row a moment after the purge deleted it. The in-process mirror is primed from
+this table at startup, so the refusal survives a restart; expired rows are pruned
+lazily. `playback_snapshot` is keyed by the same `identity`
+(`owner`, `user:<uuid>`, or the Jam host's).
+
+**`pending_purges`** — `user_id TEXT PRIMARY KEY, attempts, last_error, created_at,
+next_at`. One row per account whose artifacts are not gone yet. Written by
+`server._purge_account_artifacts` through `account_purge.PendingPurges`, drained by the
+`account-purge-sweeper` daemon with 30s→2h exponential backoff, and dropped with a
+logged error after 24 hours — a queue must not grow just because one filesystem is
+unwritable. `last_error` is truncated to 400 characters and never holds a secret.
 
 ## Backup and recovery
 
@@ -152,5 +185,7 @@ before adding columns, so a partially applied v2 deployment can safely retry.
 | Audit log | 90 days |
 | Expired sessions | Purged after expiry + 1 day |
 | Expired email tokens | Purged after expiry + 1 day |
+| `playback_dead` tombstones | 900 seconds after the deletion, pruned lazily |
+| `pending_purges` rows | Retried with backoff for 24 hours, then dropped with a logged error |
 | Outbox `.eml` files | Manual; configure SMTP and delete after testing |
 | Backups | Operator-defined; currently no automatic rotation |

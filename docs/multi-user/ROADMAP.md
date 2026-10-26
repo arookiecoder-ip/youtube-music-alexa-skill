@@ -74,19 +74,26 @@ default (`0`) is byte-for-byte the existing single-owner behaviour.
 - [x] `tests/test_multiuser.py`: 24 tests covering login/CSRF, roles, CRUD,
       last-owner protection, invitations, verification, reset, magic links,
       token invalidation, provider encryption, audit, backup and rate limiting.
+      Phase 2.6 added `test_netids.py`, `test_selfservice.py`,
+      `test_login_second_factor.py`, `test_account_purge.py` and
+      `test_player_state.py`; the container suite is `Ran 1005 tests`.
 - [x] Admin templates are responsive and use only first-party CSS/JS.
 - [x] Deployment documentation and progress log.
 
-## Phase 2 — Per-user playback data and provider linking (next)
+## Phase 2 — Per-user playback data and provider linking — **2.0–2.3 and 2.6 done**
 
 - [ ] Scope `playlist_tracks`, history, likes, queues and preferences by
       `users.id`; migrate the existing single-owner rows to the bootstrap owner.
-- [ ] Per-user YouTube Music authentication: browser/header capture stored in
+- [x] Per-user YouTube Music authentication: browser/header capture stored in
       `user_provider_credentials` through `SecretBox`, with connect/disconnect
-      and health checks in the admin panel.
-- [ ] Per-user Amazon/Alexa session cookie storage and validation.
-- [ ] Device/account selection API so the Android app can choose a profile.
-- [ ] Per-user rate limits and quotas for search, stream resolution and writes.
+      and health checks in the admin panel — and one credential file, download
+      jar, `yt-dlp` pool and Chromium profile per identity.
+- [x] Per-user Amazon/Alexa session cookie storage and validation.
+- [x] Device/account selection: the web remote resolves the caller's own session,
+      output lease and Echo list (`/api/profile_status/` per account).
+- [x] Per-user rate limits for sign-in, self-service and the general API, keyed on
+      the client address rather than the proxy. Quotas for search and stream
+      resolution are still open.
 - [ ] Migration command and rollback rehearsal against a copy of production
       data (never against production directly).
 
@@ -94,20 +101,32 @@ default (`0`) is byte-for-byte the existing single-owner behaviour.
 
 - [ ] Public login/refresh/logout endpoints for the Android app (short-lived
       access tokens plus rotating refresh tokens, or secure cookie sessions).
-- [ ] Account registration or invitation-only onboarding (product decision).
-- [ ] TOTP enrollment and recovery codes (schema support already exists).
-- [ ] Per-device session list and “sign out everywhere”.
+      The cookie half exists for the web remote; the app still authenticates with
+      the device API key.
+- [x] Account registration or invitation-only onboarding (product decision):
+      **open sign-up, gated on a verified email address**, plus invitations from
+      the admin panel.
+- [x] TOTP enrollment and disable, with the code demanded at both sign-in doors
+      (player `/login/` and `/admin/login/`). Recovery codes are deliberately not
+      in this pass: an account that locks itself out is an administrator's job
+      until there is a self-service reset worth trusting.
+- [x] Per-device session list and “sign out everywhere”.
+- [x] Self-delete, with the artifacts the account held outside its row.
 - [ ] Optional OAuth/Google identity if it simplifies YouTube linking.
-- [ ] Keep the existing `/login/` owner session working during the transition.
+- [x] Keep the existing `/login/` owner session working during the transition —
+      the owner signs in there and keeps the legacy `owner` identity slot.
 
 ## Phase 4 — Hardening and operations
 
 - [ ] Argon2id migration for password hashes.
-- [ ] Redis-backed rate limits and distributed login lockouts.
+- [ ] Redis-backed rate limits and distributed login lockouts. Every limit today
+      is in-process, which is correct for one container and cleared by a restart.
 - [ ] Structured logs with request IDs, metrics and alerting for failed logins,
       email failures, backup failures and database integrity.
 - [ ] Automated retention for the outbox and audit log.
-- [ ] Admin 2FA enforcement and step-up authentication for destructive actions.
+- [ ] **Enforcing** a second factor (a deployment-wide or per-role requirement,
+      and step-up re-auth for destructive actions). Enrolment, disable and the
+      code step at both doors already exist from Phase 2.6.
 - [ ] Dependency and container scanning in CI.
 - [ ] Signed backup manifests and encryption at rest for backup files.
 
@@ -162,3 +181,9 @@ Required only when one process/one SQLite file is no longer sufficient:
 | SMTP + outbox | The domain is owned, but credentials were not available at build time. The outbox keeps email flows testable without leaking tokens to logs. |
 | No per-user playback yet | The playback authority is in-memory and single-owner. Scoping it correctly is a larger change than authentication and needs its own phase. |
 | Email verification default on | Prevents typo/abandoned addresses from owning reset and magic-link flows. It can be disabled with `MULTIUSER_REQUIRE_EMAIL_VERIFICATION=0`. |
+| Open sign-up, verified email required | Owner decision. An address the person actually controls is what makes self-service password recovery safe, so verification is the price of the open door, and the daily cap plus the database counter are what bound it. |
+| Self-delete needs password **and** the username typed back | Re-authenticates the session that is asking to destroy data, and the typed name is the deliberate second act that stops a scripted or mis-clicked delete. It hard-deletes because a person who deleted themselves must not be resurrectable. |
+| Self-service in the player, not the admin panel | `/account` + `/api/account` live where the music is; `/admin/account` keeps the administrative edit. One page for both would have made either weaker. |
+| TOTP enroll/disable, no recovery codes yet | Recovery codes are a second secret-storage problem with its own loss and leak modes. Enrol/disable plus an administrator's TOTP reset is the smaller honest surface. |
+| `serve.py` instead of the `waitress-serve` CLI | waitress deletes untrusted proxy headers before Flask exists, and its `trusted_proxy` option cannot name an ephemeral docker address. Per-client limits are worth owning the launch command; two tests pin it. |
+| Purge is a queue with backoff | The row delete is transactional; the filesystem, the sidecar and the in-process state are not. A half-finished purge is a privacy failure, so it retries for 24 hours and then says so in the log. |

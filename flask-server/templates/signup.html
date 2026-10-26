@@ -1,0 +1,65 @@
+{% extends "selfservice_base.html" %}
+{% from "_form_macros.html" import field_error, general_error, honeypot, meter %}
+{# `form_error`, not `general_error`: the imported macro of that name would
+   otherwise shadow the context variable of the same name. #}
+
+{% block page_title %}Create an account{% endblock %}
+{% block brand_sub %}Create an account{% endblock %}
+
+{% block card %}
+<form method="post" action="/signup" class="step active" data-password-form>
+  <input type="hidden" name="_csrf" value="{{ csrf_form }}">
+  {{ honeypot() }}
+
+  {{ general_error(form_error) }}
+
+  <label for="username">Username</label>
+  <input id="username" name="username" type="text" value="{{ form.get('username', '') }}"
+         autocomplete="username" maxlength="32" required
+         pattern="[A-Za-z0-9][A-Za-z0-9._-]{2,31}"
+         aria-describedby="username-help">
+  <p class="field-help" id="username-help">
+    3–32 characters: letters, numbers, dot, dash or underscore. This is your
+    handle, and every player on this Music Box sees it in the queue.
+  </p>
+  {{ field_error(field_errors, 'username') }}
+
+  <label for="display_name">Display name <span class="optional">optional</span></label>
+  <input id="display_name" name="display_name" type="text"
+         value="{{ form.get('display_name', '') }}" autocomplete="nickname" maxlength="120"
+         placeholder="{{ form.get('username', '') }}">
+  {{ field_error(field_errors, 'display_name') }}
+
+  <label for="email">Email address</label>
+  <input id="email" name="email" type="email" value="{{ form.get('email', '') }}"
+         autocomplete="email" maxlength="254" required>
+  <p class="field-help">
+    Needed to reset your password later. It also has to be confirmed before this
+    account can sign in, and nothing else is ever sent to it.
+  </p>
+  {{ field_error(field_errors, 'email') }}
+
+  <label for="password">Password</label>
+  <input id="password" name="password" type="password" autocomplete="new-password"
+         maxlength="200" required data-strength>
+  {{ meter('password') }}
+  {{ field_error(field_errors, 'password') }}
+
+  <label for="confirm_password">Repeat the password</label>
+  <input id="confirm_password" name="confirm_password" type="password"
+         autocomplete="new-password" maxlength="200" required>
+  {{ field_error(field_errors, 'confirm_password') }}
+
+  <button type="submit" class="primary" data-submit>Create account</button>
+  <p class="form-note">
+    Creating an account does not connect anything yet. Once you have confirmed the
+    email address and signed in, connect your own Amazon and YouTube accounts from
+    the player.
+  </p>
+</form>
+{% endblock %}
+
+{% block door_links %}
+  <a href="/login/">Sign in</a>
+  <a href="/forgot-password">Forgot password?</a>
+{% endblock %}

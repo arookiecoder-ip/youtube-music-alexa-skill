@@ -30,6 +30,24 @@
         {% endif %}
       {% endwith %}
 
+      {% if step == 'code' %}
+      <form class="stack" method="post" action="{{ base_path }}/login/" autocomplete="off">
+        <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+        <input type="hidden" name="step" value="code">
+        <input type="hidden" name="pending" value="{{ pending }}">
+        <input type="hidden" name="next" value="{{ next_target or base_path ~ '/' }}">
+        <div class="field">
+          <label for="code">Authentication code</label>
+          <input id="code" name="code" type="text" inputmode="numeric" pattern="[0-9]*"
+                 autocomplete="one-time-code" maxlength="6" autofocus required>
+          <div class="hint">Six digits from your authenticator app. This step is single-use: a
+            wrong code ends the attempt and you enter your password again.</div>
+        </div>
+        <div class="form-actions">
+          <button class="btn primary" type="submit" style="width:100%">Verify code</button>
+        </div>
+      </form>
+      {% else %}
       <form class="stack" method="post" action="{{ base_path }}/login/" autocomplete="on">
         <input type="hidden" name="_csrf" value="{{ csrf_token }}">
         <input type="hidden" name="next" value="{{ next_target or base_path ~ '/' }}">
@@ -46,6 +64,7 @@
           <button class="btn primary" type="submit" style="width:100%">Sign in</button>
         </div>
       </form>
+      {% endif %}
       <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-top:15px">
         <a class="small" href="{{ base_path }}/forgot-password/">Forgot password?</a>
         {% if magic_link_enabled %}

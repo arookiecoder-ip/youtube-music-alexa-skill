@@ -29,12 +29,14 @@ from flask import (
     url_for,
 )
 
+from . import emails, netids, pending
 from .accounts import AccountError, AccountService, ROLES, STATUSES
 from .config import MultiUserConfig
 from .crypto import SecretBox
 from .db import Database
 from .mailer import Mailer, render_email
 from .security import RateLimiter, generate_password
+from .selfservice import build_selfservice_blueprint
 
 PAGE_SIZE = 25
 AUDIT_PAGE_SIZE = 50
@@ -45,16 +47,14 @@ def _now() -> float:
 
 
 def _client_ip() -> str:
-    return (
-        request.headers.get("CF-Connecting-IP")
-        or request.headers.get("X-Forwarded-For", "").split(",")[0].strip()
-        or request.remote_addr
-        or ""
-    )[:64]
+    # The forwarded headers a visitor controls are never believed on their own;
+    # see netids, whose rightmost-XFF rule is the only one that survives Caddy
+    # appending rather than replacing what the client sent.
+    return netids.client_ip(request)
 
 
 def _user_agent() -> str:
-    return (request.headers.get("User-Agent") or "")[:300]
+    return netids.user_agent(request)
 
 
 def _safe_next(value: str) -> str:
@@ -111,7 +111,12 @@ class MultiUser:
             os.path.dirname(os.path.abspath(config.db_path)), "mail-outbox"
         )
         self.mailer = Mailer.from_env(default_outbox_dir=default_outbox, logger=logger)
+        # Step one of sign-in at this door parks its proof here. Separate from the
+        # player door's own store, so a token issued at one can never be spent at
+        # the other.
+        self.pending = pending.PendingSecondFactor()
         self.blueprint: Blueprint | None = None
+        self.selfservice_blueprint: Blueprint | None = None
         self.bootstrap_result: dict = {}
         self.initialized_at = 0.0
 
@@ -124,6 +129,11 @@ class MultiUser:
         self.initialized_at = _now()
         self.blueprint = build_blueprint(self)
         app.register_blueprint(self.blueprint)
+        # The player's own door is a separate blueprint because it is not under
+        # /admin: /signup, /forgot-password and /account belong to the app root,
+        # where the remote already lives.
+        self.selfservice_blueprint = build_selfservice_blueprint(self)
+        app.register_blueprint(self.selfservice_blueprint)
         app.extensions["multiuser"] = self
         if self.bootstrap_result.get("created"):
             self._log(
@@ -271,7 +281,7 @@ def build_blueprint(mu: MultiUser) -> Blueprint:
             return _forbidden()
         # Coarse per-process request budget. Login has its own stricter limit.
         allowed, retry_after = mu.rate_limiter.allow(
-            "admin-request", _client_ip(), mu.config.request_max_per_minute, 60
+            "admin-request", netids.ip_bucket(_client_ip()), mu.config.request_max_per_minute, 60
         )
         if not allowed:
             if _wants_json():
@@ -353,46 +363,6 @@ def build_blueprint(mu: MultiUser) -> Blueprint:
     def _absolute(path: str) -> str:
         return mu.absolute_url(path, request.url_root)
 
-    _email_copy = {
-        "verify": (
-            "Verify your email address",
-            "Confirm this email address to finish securing your Music Box account.",
-            "Verify email",
-            "This verification link expires in {minutes} minutes.",
-            "",
-        ),
-        "reset": (
-            "Reset your Music Box password",
-            "We received a request to reset the password for your Music Box account.",
-            "Choose a new password",
-            "This password reset link expires in {minutes} minutes and can be used once.",
-            "If you did not request a reset, no action is needed — your password has not changed.",
-        ),
-        "magic": (
-            "Sign in to Music Box",
-            "Use the button below to sign in to the administrator panel. This link works once.",
-            "Sign in now",
-            "This sign-in link expires in {minutes} minutes.",
-            "Do not forward this email: anyone with the link can sign in.",
-        ),
-        "invite": (
-            "You're invited to Music Box",
-            "An administrator created a Music Box account for you. Choose a password to activate it.",
-            "Activate your account",
-            "This invitation expires in {hours} hours.",
-            "If you were not expecting this invitation, you can ignore this email.",
-        ),
-    }
-
-    def _token_path(purpose: str, token: str) -> str:
-        routes = {
-            "verify": f"{base}/verify-email/",
-            "reset": f"{base}/reset-password/",
-            "magic": f"{base}/magic/",
-            "invite": f"{base}/invite/",
-        }
-        return routes[purpose] + token
-
     def _send_token_email(
         user: dict,
         purpose: str,
@@ -402,59 +372,12 @@ def build_blueprint(mu: MultiUser) -> Blueprint:
         ip: str = "",
         user_agent: str = "",
     ):
-        heading, intro, label, expiry, warning = _email_copy[purpose]
-        if purpose == "invite":
-            expiry = expiry.format(hours=mu.config.email_token_invite_hours)
-        elif purpose == "verify":
-            expiry = expiry.format(minutes=mu.config.email_token_verify_hours * 60)
-        elif purpose == "reset":
-            expiry = expiry.format(minutes=mu.config.email_token_reset_minutes)
-        else:
-            expiry = expiry.format(minutes=mu.config.email_token_magic_minutes)
-        url = _absolute(_token_path(purpose, token))
-        subject = f"{mu.config.app_name}: {heading}"
-        text, html = render_email(
-            app_name=mu.config.app_name,
-            heading=heading,
-            intro=intro,
-            action_label=label,
-            action_url=url,
-            expiry=expiry,
-            warning=warning,
-            footer=f"Sent by {mu.config.app_name} at {mu.config.public_base_url or request.host}.",
+        return emails.send_token_email(
+            mu, user, purpose, token, base=base, actor=actor, ip=ip, user_agent=user_agent
         )
-        result = mu.mailer.send(user["email"], subject, text, html)
-        action = {
-            "verify": "verification_email",
-            "reset": "password_reset_email",
-            "magic": "magic_link_email",
-            "invite": "invitation_email",
-        }[purpose]
-        mu.accounts.audit(
-            actor,
-            f"{action}_{'sent' if result.ok else 'failed'}",
-            user["id"],
-            {
-                "delivery": result.status,
-                "outbox": bool(result.outbox_path),
-                "error": (result.detail or "")[:200] if not result.ok else "",
-            },
-            ip,
-            user_agent,
-        )
-        return result
 
     def _flash_mail(result, description: str, email: str = "") -> None:
-        if result.status == "sent":
-            flash(f"{description} sent to {email}.", "success")
-        elif result.status == "outbox":
-            flash(
-                f"SMTP is not configured, so the {description.lower()} was written to the local outbox "
-                f"({mu.mailer.config.outbox_dir}). Configure MULTIUSER_SMTP_* to deliver it.",
-                "warning",
-            )
-        else:
-            flash(f"Could not send the {description.lower()}: {result.detail}", "error")
+        emails.flash_mail(mu, result, description, email)
 
     # ------------------------------------------------------------------ pages
     @bp.route("/", methods=["GET"])
@@ -1020,53 +943,104 @@ def build_blueprint(mu: MultiUser) -> Blueprint:
     # ------------------------------------------------------------------ auth
     @bp.route("/login/", methods=["GET", "POST"])
     def login():
+        def door(next_target: str, step: str = "", pending: str = "", status: int | None = None):
+            response = render_template(
+                "admin/login.html", title="Admin sign in", next_target=next_target,
+                step=step, pending=pending,
+            )
+            return (response, status) if status is not None else response
+
         if request.method == "GET":
             raw_sid = session.get("mu_sid")
             if raw_sid:
                 _, user = mu.accounts.validate_session(raw_sid)
                 if user and AccountService.can_view_admin(user):
                     return redirect(f"{base}/")
-            return render_template(
-                "admin/login.html",
-                title="Admin sign in",
-                next_target=_safe_next(request.args.get("next", "")),
-            )
+            return door(_safe_next(request.args.get("next", "")))
+
+        ip = _client_ip()
+        bind = pending.bind_value(netids.ip_bucket(ip), _user_agent())
+
+        # Step 2: an administrator who already passed the password.
+        if (request.form.get("step") or "") == "code":
+            record = mu.pending.consume(request.form.get("pending", ""), bind)
+            next_target = _safe_next(record.get("next", "") if record else "")
+            user = mu.accounts.get_user(record.get("uid", "")) if record else None
+            # Re-read the account rather than trusting a five-minute-old answer:
+            # an admin demoted, disabled or 2FA-disabled between the steps must
+            # not reach the panel.
+            if (
+                not record
+                or not user
+                or user.get("status") != "active"
+                or not AccountService.can_view_admin(user)
+                or not mu.accounts.totp_is_enabled(user)
+                or not mu.accounts.verify_totp_code(user["id"], str(request.form.get("code") or "").strip())
+            ):
+                mu.accounts.audit(
+                    user, "admin_login_2fa_failed", (user or {}).get("id") or "",
+                    {"reason": "code" if record else "expired"}, ip, _user_agent(),
+                )
+                # One flat answer, and the pending proof is spent either way: this
+                # step is not a code oracle with a five-minute timer.
+                flash("That sign-in needs your password again.", "error")
+                return door(next_target, status=401)
+            raw_sid = mu.accounts.create_session(user, ip, _user_agent())
+            session["mu_sid"] = raw_sid
+            session["mu_user_id"] = user["id"]
+            session.permanent = True
+            rotate_csrf()
+            mu.accounts.audit(user, "admin_login_2fa", user["id"], {}, ip, _user_agent())
+            return redirect(next_target)
 
         username = (request.form.get("username") or "").strip()
         password = request.form.get("password") or ""
         next_target = _safe_next(request.form.get("next", ""))
-        ip = _client_ip()
+        account_key = netids.identifier_bucket(username)
+        ip_key = netids.ip_bucket(ip)
         # Two independent budgets: per account and per source address.
         account_allowed, account_retry = mu.rate_limiter.allow(
-            "login-account", username.lower(), mu.config.login_max_attempts, mu.config.login_window_seconds
+            "login-account", account_key, mu.config.login_max_attempts, mu.config.login_window_seconds
         )
         ip_allowed, ip_retry = mu.rate_limiter.allow(
-            "login-ip", ip, mu.config.login_max_attempts * 10, mu.config.login_window_seconds
+            "login-ip", ip_key, mu.config.login_max_attempts * 10, mu.config.login_window_seconds
         )
         if not account_allowed or not ip_allowed:
             retry = max(account_retry, ip_retry, 1)
             mu.accounts.audit(
-                None, username or "unknown", "login_rate_limited", None,
-                {"retry_after": retry}, ip, _user_agent(),
+                None, "login_rate_limited", None,
+                {"retry_after": retry, "attempted": (username or "")[:120]},
+                ip, _user_agent(),
             )
             flash(f"Too many sign-in attempts. Try again in {retry}s.", "error")
-            return render_template("admin/login.html", title="Admin sign in", next_target=next_target), 429
+            return door(next_target, status=429)
 
         user, error = mu.accounts.authenticate(username, password, ip, _user_agent())
         if not user:
             flash(error, "error")
-            return render_template("admin/login.html", title="Admin sign in", next_target=next_target), 401
+            return door(next_target, status=401)
         if not AccountService.can_view_admin(user):
             mu.accounts.audit(
                 user, "admin_login_denied", user["id"], {"reason": "role"}, ip, _user_agent()
             )
             flash("This account does not have admin access.", "error")
-            return render_template("admin/login.html", title="Admin sign in", next_target=next_target), 403
+            return door(next_target, status=403)
 
         # Successful authentication clears the per-account and per-IP budgets:
-        # they exist to slow guessing, not to cap legitimate sign-ins.
-        mu.rate_limiter.reset("login-account", username.lower())
-        mu.rate_limiter.reset("login-ip", ip)
+        # they exist to slow guessing, not to cap legitimate sign-ins.  These keys
+        # must be the bucketed ones the allow() above spent, or the reset is a
+        # silent no-op and the two doors stop sharing a cleared budget.
+        mu.rate_limiter.reset("login-account", account_key)
+        mu.rate_limiter.reset("login-ip", ip_key)
+
+        if mu.accounts.totp_is_enabled(user):
+            # The password buys a wait, not a session.
+            token = mu.pending.issue(
+                {"kind": "admin", "uid": user["id"], "next": next_target}, bind
+            )
+            mu.accounts.audit(user, "admin_login_2fa", user["id"], {"step": "issued"}, ip, _user_agent())
+            return door(next_target, step="code", pending=token)
+
         raw_sid = mu.accounts.create_session(user, ip, _user_agent())
         session["mu_sid"] = raw_sid
         session["mu_user_id"] = user["id"]
@@ -1086,9 +1060,11 @@ def build_blueprint(mu: MultiUser) -> Blueprint:
             )
         identifier = (request.form.get("identifier") or "").strip()
         ip = _client_ip()
-        allowed, retry = mu.rate_limiter.allow("forgot-ip", ip, 10, mu.config.login_window_seconds)
+        allowed, retry = mu.rate_limiter.allow(
+            "forgot-ip", netids.ip_bucket(ip), 10, mu.config.login_window_seconds
+        )
         id_allowed, id_retry = mu.rate_limiter.allow(
-            "forgot-id", identifier.lower(), 3, mu.config.login_window_seconds
+            "forgot-id", netids.identifier_bucket(identifier), 3, mu.config.login_window_seconds
         )
         if not allowed or not id_allowed:
             flash(f"Too many requests. Try again in {max(retry, id_retry, 1)}s.", "error")
@@ -1206,9 +1182,11 @@ def build_blueprint(mu: MultiUser) -> Blueprint:
             return render_template("admin/email_login.html", title="Email sign-in link")
         identifier = (request.form.get("identifier") or "").strip()
         ip = _client_ip()
-        allowed, retry = mu.rate_limiter.allow("magic-ip", ip, 10, mu.config.login_window_seconds)
+        allowed, retry = mu.rate_limiter.allow(
+            "magic-ip", netids.ip_bucket(ip), 10, mu.config.login_window_seconds
+        )
         id_allowed, id_retry = mu.rate_limiter.allow(
-            "magic-id", identifier.lower(), 3, mu.config.login_window_seconds
+            "magic-id", netids.identifier_bucket(identifier), 3, mu.config.login_window_seconds
         )
         if not allowed or not id_allowed:
             flash(f"Too many requests. Try again in {max(retry, id_retry, 1)}s.", "error")

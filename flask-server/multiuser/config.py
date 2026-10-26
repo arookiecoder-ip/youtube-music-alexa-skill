@@ -52,6 +52,10 @@ class MultiUserConfig:
     email_token_verify_hours: int = 24
     email_token_magic_minutes: int = 15
     email_token_invite_hours: int = 72
+    self_signup_enabled: bool = True
+    max_self_signups_per_day: int = 25
+    signup_min_seconds: int = 3
+    totp_pending_minutes: int = 30
     extra: dict = field(default_factory=dict)
 
     @classmethod
@@ -103,6 +107,12 @@ class MultiUserConfig:
             email_token_verify_hours=_env_int("MULTIUSER_VERIFY_TOKEN_HOURS", 24),
             email_token_magic_minutes=_env_int("MULTIUSER_MAGIC_TOKEN_MINUTES", 15),
             email_token_invite_hours=_env_int("MULTIUSER_INVITE_TOKEN_HOURS", 72),
+            self_signup_enabled=env_bool("MULTIUSER_SELF_SIGNUP_ENABLED", True),
+            max_self_signups_per_day=_env_int(
+                "MULTIUSER_MAX_SELF_SIGNUPS_PER_DAY", 25, minimum=0
+            ),
+            signup_min_seconds=_env_int("MULTIUSER_SIGNUP_MIN_SECONDS", 3),
+            totp_pending_minutes=_env_int("MULTIUSER_TOTP_PENDING_MINUTES", 30),
         )
 
     def validate(self) -> list[str]:

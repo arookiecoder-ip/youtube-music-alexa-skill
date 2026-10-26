@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ls -la /home/ubuntu/youtube-music-alexa-skill && find . -maxdepth 3 -name \"*2026-10-25*\" -o -maxdepth 3 -name \"*freebuff*\" 2>/dev/null | head -50)",
+      "Bash(cat /home/ubuntu/youtube-music-alexa-skill/.freebuff/project-id; which freebuff; freebuff --help 2>&1 | head -40)",
+      "Bash(ls -la ~/.freebuff 2>/dev/null; find ~ -maxdepth 3 -iname \"*freebuff*\" -not -path \"*/node_modules/*\" 2>/dev/null | head; find / -maxdepth 4 -name \"*2026-10-25T07-08-57*\" 2>/dev/null | head)",
+      "Read(//home/ubuntu/**)",
+      "Bash(ls -laR /home/ubuntu/.config/manicode/freebuff | head -50; cat /home/ubuntu/.config/manicode/freebuff-metadata.json 2>/dev/null | head -c 2000)"
+    ]
+  }
+}

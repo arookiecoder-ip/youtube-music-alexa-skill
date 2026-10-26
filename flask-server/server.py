@@ -1,5 +1,6 @@
 from flask import has_request_context
 import download_cookies
+import account_purge
 import traceback
 from status_journal import Journal, JournalHandler
 from status_monitor import Metrics, CachedCollector, file_info, system_snapshot
@@ -62,6 +63,22 @@ class _YouTubeStreamPool:
     def every(self):
         with self._lock:
             return list(self._streams.values())
+
+    def discard(self, identity):
+        """Close and drop one identity's resolver worker.
+
+        Eviction alone never finishes a deletion: the pool holds at most a few
+        workers and a deleted account's could sit at the warm end indefinitely,
+        still resolving with a cookie jar the purge has already removed."""
+        with self._lock:
+            stream = self._streams.pop(identity, None)
+        if stream is None:
+            return False
+        try:
+            stream.close()
+        except Exception:
+            logger.debug('Discarded YouTube resolver did not close cleanly')
+        return True
 
     @property
     def enabled(self):
@@ -742,14 +759,23 @@ def _record_listen(video_id, title, artist, thumbnail_url):
 # Endpoints that never need auth (public policy pages + the login flow itself,
 # plus the PWA manifest / service worker / icons, which the browser fetches with
 # no ?key= and which contain no private data).
+# The multi-user self-service door pages are listed here too: they are anonymous
+# by design and each enforces its own CSRF token, rate limit and email
+# verification rule inside multiuser/selfservice.py. They only exist at all when
+# MULTI_USER_ENABLED=1 registers that blueprint, so on a single-owner deployment
+# these entries match nothing and Flask answers 404.
 _PUBLIC_PATHS = ('/', '/privacy_policy', '/terms_of_use', '/login', '/logout', '/favicon.ico',
-                 '/manifest.webmanifest', '/service-worker.js', '/__not_found__')
+                 '/manifest.webmanifest', '/service-worker.js', '/__not_found__',
+                 '/signup', '/signup/resend', '/forgot-password')
 # Public path prefixes (startswith match) — static assets (CSS, JS, icons),
 # plus jam join links (/j/<token> and legacy /jam/<token> — the token itself is
 # the credential). The Amazon proxy tunnel also has to stay public so the
 # browser can reach the interactive login page directly; the proxy flow itself
 # is guarded by the generated session/cookie inside alexapy.
-_PUBLIC_PREFIXES = ('/static/', '/j/', '/jam/', '/alexa/proxy/')
+# /reset-password/ and /verify-email/ are the one-time links emailed to a
+# player: the token in the path is the whole credential, and it is single-use.
+_PUBLIC_PREFIXES = ('/static/', '/j/', '/jam/', '/alexa/proxy/',
+                    '/reset-password/', '/verify-email/', '/signup/')
 
 # Canonical SPA document URLs. These exact paths (no trailing slash) render
 # the same protected shell as `/`; nearby API paths such as `/history/` remain
@@ -936,7 +962,7 @@ _SESSION_PATHS = ('/api/jam/session', '/audio', '/get_radio', '/status', '/api/s
 )
 _SESSION_PREFIXES = ('/accounts/', '/api/jam/', '/api/status/', '/alexa/now_playing/', '/history/', '/api/playlists/', '/recommendations/',
                     '/api/artist/', '/api/album/', '/api/library/', '/api/explore/', '/api/home/',
-                    '/api/track/', '/api/app/queue/')
+                    '/api/track/', '/api/app/queue/', '/api/account/')
 
 # API/device endpoints: the Alexa skill and web-remote JS hit these directly
 # and need a machine-readable JSON error, never an HTML redirect, on failure.
@@ -1036,6 +1062,24 @@ def _legacy_adoption_allowed():
             row = conn.execute("SELECT v FROM kv WHERE k = 'sessions_revoked_all'").fetchone()
         _legacy_adoption_closed = row is not None
     return not _legacy_adoption_closed
+
+
+def _client_ip():
+    """The visitor's real address, not the reverse proxy's.
+
+    Caddy is the only published port, so `request.remote_addr` is the same
+    container address for every browser on earth. The multi-user layer owns the
+    one correct derivation; importing it lazily keeps this optional layer
+    optional, and a deployment without it falls back to the raw peer address."""
+    try:
+        from multiuser.netids import client_ip
+        return client_ip(request)
+    except Exception as exc:
+        # Worth a line when the audit trail disagrees with the access log: this
+        # fallback is what a deployment without the layer (or with a broken
+        # import) lands on, and behind a proxy it means one shared bucket.
+        logger.debug('[client-ip] address resolution fell back to the peer: %s', exc)
+        return request.remote_addr or ''
 
 
 def _mu_web_identity():
@@ -1428,7 +1472,9 @@ def _check_rate_limit():
     max_req, window = _RATE_LIMITS.get(group, _RATE_LIMITS['default'])
     if max_req <= 0:
         return None
-    ip = request.remote_addr or 'unknown'
+    # Not remote_addr: behind Caddy that is one container address shared by every
+    # visitor, which would make this a per-service budget instead of per-client.
+    ip = _client_ip() or 'unknown'
     allowed, retry_after = _rate_limiter.check(ip, group, max_req, window)
     if not allowed:
         resp, _ = error_response(f'Rate limit exceeded. Try again in {retry_after}s.',
@@ -1782,6 +1828,159 @@ _youtube_browser_sessions = YouTubeBrowserSessionManager(
     refresh_timeout=float(os.environ.get("YT_BROWSER_REFRESH_TIMEOUT", "45")),
     refresh_cooldown=float(os.environ.get("YT_BROWSER_REFRESH_COOLDOWN", "300")),
 )
+
+
+def _forget_player_identity(identity):
+    """Drop every in-process holder that belongs to one identity.
+
+    Deleting the database row cannot reach these: a queue, an output lease, a
+    volume cache, a resolver worker and an Amazon session all live in dicts keyed
+    by the identity string, and an identity is a uuid that could be issued to a
+    different person one day.
+
+    The queue-sync timer is cancelled *before* its slot is discarded -- a Timer
+    left armed would fire seconds later under a rebound identity and drive some
+    other account's Echo.
+    """
+    timer = None
+    with _player_registry.lock_for(identity):
+        slot = _alexa_queue_sync_slot_registry.peek(identity)
+        timer = slot.get('timer') if slot else None
+        if timer is not None:
+            slot['timer'] = None
+    if timer is not None:
+        try:
+            timer.cancel()
+        except Exception:
+            logger.exception('Could not cancel a queued Alexa sync for a deleted account')
+    for registry in (_player_registry, _playback_output_registry, _volume_registry,
+                     _alexa_volume_grace_registry, _alexa_queue_decisions_registry,
+                     _alexa_queue_sync_slot_registry, _playback_failover_registry,
+                     alexa_remote._remote_registry):
+        registry.discard(identity)
+    # The browser manager's own record, dropped rather than revoked: revoking
+    # would re-create the entry it is meant to clear and fire a network close.
+    _youtube_browser_sessions.forget(identity)
+    _youtube_streams.discard(identity)
+    _invalidate_youtube_auth_caches(identity)
+    with _YT_HOME_CACHE_LOCK:
+        _YT_HOME_CACHE_MTIME.pop(identity, None)
+
+
+def _purge_account_artifacts(user_id):
+    """Erase everything an account held outside the users table.
+
+    Runs after the row is gone, so it works from the id alone -- which is exactly
+    why the playback identity is the literal ``'user:' + id`` and not
+    ``_player_identity_for_user_id``: that helper maps the *bootstrap owner's* row
+    onto ``'owner'``, and after the row is deleted it could hand the human's own
+    artifacts to a purge.
+
+    Returns the steps that failed. Removing secrets at rest has to succeed or be
+    retried; the in-process drops are best effort because a restart clears them.
+    """
+    user_id = str(user_id or '')
+    identity = 'user:' + user_id
+    if not user_id or account_user_id(identity) != user_id:
+        logger.error('Refusing to purge artifacts for %r: not an account id', user_id)
+        return ['identity']
+    failures = []
+
+    # First, and before anything that could still write: the tombstone makes this
+    # identity unreadable and unwritable, so a heartbeat already in flight cannot
+    # re-create the snapshot row a moment after it was deleted.
+    try:
+        _playback_store.tombstone(identity, account_purge.TOMBSTONE_SECONDS)
+    except (sqlite3.Error, OSError, ValueError) as exc:
+        failures.append('playback: %s' % exc)
+
+    try:
+        _forget_player_identity(identity)
+    except Exception:
+        logger.exception('Could not drop in-process state for account %s', user_id)
+
+    for label, remove, path in (
+        ('youtube auth', lambda: _youtube_credentials.remove(identity),
+         _youtube_credentials.path_for(identity)),
+        ('download cookies', lambda: account_purge.remove_file(_download_cookie_path(identity)),
+         _download_cookie_path(identity)),
+        ('alexa cookies', lambda: alexa_remote.purge_cookie_dir(identity),
+         alexa_remote.cookie_dir_for(identity)),
+    ):
+        try:
+            remove()
+        except Exception as exc:
+            failures.append('%s: %s' % (label, exc))
+            continue
+        if path and os.path.exists(path):
+            # The helpers report "nothing was there", so existence is the only
+            # honest answer to "is the secret gone".
+            failures.append('%s: still present' % label)
+
+    try:
+        _jam_close_all(user_id)
+    except Exception as exc:
+        # A jam token outliving its account would let a stranger keep conducting
+        # a listening session, so this is retried like the files.
+        failures.append('jam: %s' % exc)
+
+    try:
+        result = _youtube_browser_sessions.controller.call(
+            '/profile/delete', 'POST', {'profile': user_id})
+    except Exception as exc:
+        failures.append('browser profile: %s' % exc)
+    else:
+        if not isinstance(result, dict) or 'deleted' not in result:
+            # A browser still holding the profile answers 409; the sweeper will
+            # come back for it once Chromium has let go.
+            failures.append('browser profile: %s' % (result or 'no answer'))
+
+    if failures:
+        logger.error('Purge of account %s incomplete: %s', user_id, '; '.join(failures))
+    return failures
+
+
+_pending_purges = account_purge.PendingPurges(get_db)
+
+
+def _purge_account_artifacts_hook(user_id):
+    """What the account layer calls after deleting a row: purge, or queue it."""
+    failures = _purge_account_artifacts(user_id)
+    if failures and not _pending_purges.record(user_id, '; '.join(failures)):
+        logger.error('Account %s artifacts could not be removed and will not be retried', user_id)
+
+
+def _account_purge_sweep():
+    """One pass over the retry queue. Returns the accounts whose purge finished."""
+    settled = []
+    for user_id in _pending_purges.due():
+        try:
+            failures = _purge_account_artifacts(user_id)
+        except Exception as exc:
+            failures = [str(exc)]
+            logger.exception('Purge sweep failed for account %s', user_id)
+        if not failures:
+            _pending_purges.done(user_id)
+            settled.append(user_id)
+            continue
+        if not _pending_purges.record(user_id, '; '.join(failures)):
+            logger.error('Stopped retrying the purge of account %s', user_id)
+    return settled
+
+
+_account_purge_stop = threading.Event()
+
+
+def _account_purge_sweeper():
+    """Finish the purges a delete request could not complete.
+
+    Sits next to the YouTube auth keepalive for the same reason: the work outlives
+    the request that caused it, and an unfinished purge is a privacy failure rather
+    than a cosmetic one.
+    """
+    interval = max(15.0, float(os.environ.get('ACCOUNT_PURGE_SWEEP_SECONDS', '60')))
+    while not _account_purge_stop.wait(interval):
+        _account_purge_sweep()
 
 
 def _youtube_auth_proactive_loop():
@@ -2247,8 +2446,14 @@ _playback_output = _PlayerStateProxy(_playback_output_registry)
 # Device volume and the read-after-command grace window belong to whoever owns
 # the device, so they follow the identity: an account's Echo volume is never
 # read or written through another account's session.
-_volume_by_serial = _PlayerStateView(_PlayerStateRegistry(factory=lambda identity: {}))
-_alexa_volume_grace = _PlayerStateView(_PlayerStateRegistry(factory=lambda identity: {}))
+#
+# Every per-identity holder below is bound to a *named* registry, not an inline
+# anonymous one: deleting an account has to reach the state and its lock to drop
+# them, and a purge cannot hold on to an object nothing else can name.
+_volume_registry = _PlayerStateRegistry(factory=lambda identity: {})
+_volume_by_serial = _PlayerStateView(_volume_registry)
+_alexa_volume_grace_registry = _PlayerStateRegistry(factory=lambda identity: {})
+_alexa_volume_grace = _PlayerStateView(_alexa_volume_grace_registry)
 _alexa_volume_lock = threading.RLock()
 _playback_persistence = PlaybackPersistence(_playback_store, lambda: logger.error('Could not persist playback metadata'))
 # Warm the owner's entries at import: a snapshot that cannot be read is then a
@@ -2297,8 +2502,9 @@ _queue_version = 0
 # Superseded-queue-start evidence, one ledger per identity: a queued-start token
 # recorded while one account edited its queue must never be read, evicted or
 # acted on by another account's webhook.
-_alexa_queue_decisions = _PlayerStateView(
-    _PlayerStateRegistry(factory=lambda identity: collections.OrderedDict()))
+_alexa_queue_decisions_registry = _PlayerStateRegistry(
+    factory=lambda identity: collections.OrderedDict())
+_alexa_queue_decisions = _PlayerStateView(_alexa_queue_decisions_registry)
 
 def _queue_version_locked():
     """Current queue version, bumping it if the queue list was replaced.
@@ -2415,7 +2621,8 @@ def _computed_position_ms():
 _alexa_queue_sync_lock = _IdentityLock(_player_registry)
 # One pending timer per identity: a shared timer would let one account's queue
 # edit cancel the sync another account had just scheduled.
-_alexa_queue_sync_slot = _PlayerStateView(_PlayerStateRegistry(factory=lambda identity: {'timer': None}))
+_alexa_queue_sync_slot_registry = _PlayerStateRegistry(factory=lambda identity: {'timer': None})
+_alexa_queue_sync_slot = _PlayerStateView(_alexa_queue_sync_slot_registry)
 
 
 def _schedule_alexa_queue_sync():
@@ -5954,8 +6161,9 @@ def _watch_resume_confirmation(serial, video_id, staged_revision):
 
 # One failover budget per identity: a stream that keeps dying for one account
 # must not exhaust the retries another account's playback is entitled to.
-_playback_failover_budget = _PlayerStateProxy(_PlayerStateRegistry(
-    factory=lambda identity: PlaybackFailoverBudget(limit=5)))
+_playback_failover_registry = _PlayerStateRegistry(
+    factory=lambda identity: PlaybackFailoverBudget(limit=5))
+_playback_failover_budget = _PlayerStateProxy(_playback_failover_registry)
 
 
 def _playback_failure_message(reason, stopped=False):
@@ -6046,10 +6254,48 @@ def _dispatch_play_with_retry(serial, video_id, offset_ms=0):
 # How long a password-verified login has to enter its 2FA code before the
 # pending state expires and it must start over.
 _PENDING_TTL = 300  # seconds
-# Server-side pending store (keyed by random token, NOT the session cookie)
-# so concurrent requests from other tabs can't race and lose the state.
-_pending_store = {}
-_pending_lock = threading.Lock()
+# Step one of sign-in leaves nothing in the cookie that reads as "already past
+# the password": the proof is a single-use random token handed to the browser
+# while the record behind it stays here. One store for both identities -- the
+# legacy owner and a multi-user account -- discriminated by ``kind``, so the two
+# never need separate mechanisms for the same few seconds of waiting.
+_pending_2fa = None
+
+
+def _pending_2fa_door():
+    """``(store, this browser's fingerprint)``.
+
+    Imported lazily: ``multiuser.pending`` is standard library only, but the
+    single-owner boot path should not have to care even in principle.
+    """
+    global _pending_2fa
+    from multiuser import pending as mu_pending
+    if _pending_2fa is None:
+        _pending_2fa = mu_pending.PendingSecondFactor(ttl_seconds=_PENDING_TTL)
+    # Bucketed, not raw: an IPv6 client that rotates its address inside the few
+    # minutes this waits should not have to start over, and the bucket is the same
+    # granularity the login budget is already keyed on.
+    return _pending_2fa, mu_pending.bind_value(
+        _netids().ip_bucket(_client_ip()), request.headers.get('User-Agent', ''))
+
+
+def _netids():
+    """Client-addressing, shared with the multi-user layer's own abuse controls."""
+    from multiuser import netids
+    return netids
+
+
+def _login_door_links():
+    """Whether this door has an account side: ``(signup_open, forgot_url)``.
+
+    ``account_available`` cannot be reused for that: it means "this browser
+    already holds an account session", which is false exactly where the links are
+    needed.
+    """
+    layer = _multiuser_layer
+    if layer is None:
+        return False, ''
+    return layer.accounts.registration_open(), '/forgot-password'
 
 
 @app.route("/login/", methods=["GET", "POST"])
@@ -6060,22 +6306,52 @@ def login():
     if request.method == "GET":
         if _logged_in():
             return redirect(_safe_spa_target(request.args.get('next')))
+        signup_open, forgot_url = _login_door_links()
+        # `totp` is deliberately not passed any more: which accounts need a code is
+        # a per-account fact the page cannot know before the password is typed, so
+        # step two is always in the document and revealed by the response.
         return _no_store(app.make_response(render_template(
-            "login.html", totp=_totp_enabled(), asset_v=_STATIC_VERSION,
-            next_target=_safe_spa_target(request.args.get('next')))))
+            "login.html", asset_v=_STATIC_VERSION,
+            next_target=_safe_spa_target(request.args.get('next')),
+            signup_open=signup_open, forgot_url=forgot_url)))
 
     body = request.get_json(silent=True) or request.form
 
     # Step 2: a password-verified session submitting its 2FA code.
     if body.get("step") == "totp":
-        token = str(body.get("token") or "")
-        with _pending_lock:
-            pending = _pending_store.pop(token, None)
-        if not pending or pending.get('user') != REMOTE_USER or (time.time() - pending.get('at', 0)) > _PENDING_TTL:
+        store, bind = _pending_2fa_door()
+        # consume() pops: a replay, a second tab, and a wrong code all land on
+        # None, which is why there is no code-retry oracle here.
+        pending = store.consume(str(body.get("token") or ""), bind)
+        if not pending:
             return error_response('login timed out, start again', 401)
         # str(): a JSON body can carry the 6-digit code as a number, and
         # .strip() on an int would 500 instead of failing the check cleanly.
-        if not _totp_verify(str(body.get("code") or "").strip()):
+        code = str(body.get("code") or "").strip()
+        if pending.get('kind') == 'account':
+            layer = _multiuser_layer
+            uid = str(pending.get('uid') or '')
+            if layer is None:
+                return error_response('login timed out, start again', 401)
+            if not layer.accounts.verify_totp_code(uid, code):
+                return error_response('invalid authentication code', 401)
+            # Re-read the account: it could have been disabled, deleted, or had
+            # its second factor turned off between the two steps.
+            user = layer.accounts.get_user(uid)
+            if (not user or user.get('status') != 'active'
+                    or not layer.accounts.totp_is_enabled(user)):
+                return error_response('login timed out, start again', 401)
+            raw_sid = layer.accounts.create_session(
+                user, ip=_client_ip(),
+                user_agent=request.headers.get('User-Agent', '')[:400])
+            session['mu_sid'] = raw_sid
+            session['mu_user_id'] = user['id']
+            session['sid'] = _session_open()
+            session.permanent = True
+            return jsonify({'ok': True, 'next': pending.get('next') or '/home'})
+        if pending.get('user') != REMOTE_USER:
+            return error_response('login timed out, start again', 401)
+        if not _totp_verify(code):
             return error_response('invalid authentication code', 401)
         session['remote_user'] = REMOTE_USER
         session['sid'] = _session_open()
@@ -6089,15 +6365,48 @@ def login():
     password = str(body.get("password") or "")
     # Multi-user accounts sign in through the same door as the legacy owner.
     if _multiuser_layer is not None and username:
-        mu_accounts = _multiuser_layer.accounts
-        mu_user, mu_error = mu_accounts.authenticate(
-            username, password,
-            ip=request.remote_addr or '',
-            user_agent=request.headers.get('User-Agent', '')[:400])
+        layer = _multiuser_layer
+        netids = _netids()
+        ip = _client_ip()
+        user_agent = request.headers.get('User-Agent', '')[:400]
+        # Two budgets, byte-identical to the administrator door's scope strings:
+        # one attacker does not get a fresh allowance per way into the same
+        # password, and a successful sign-in clears both.
+        account_key = netids.identifier_bucket(username)
+        ip_key = netids.ip_bucket(ip)
+        account_allowed, account_retry = layer.rate_limiter.allow(
+            "login-account", account_key,
+            layer.config.login_max_attempts, layer.config.login_window_seconds)
+        ip_allowed, ip_retry = layer.rate_limiter.allow(
+            "login-ip", ip_key,
+            layer.config.login_max_attempts * 10, layer.config.login_window_seconds)
+        if not account_allowed or not ip_allowed:
+            retry = max(account_retry, ip_retry, 1)
+            layer.accounts.audit(
+                None, 'login_rate_limited', None,
+                {'retry_after': retry, 'attempted': username[:120]}, ip, user_agent)
+            response, status = error_response(
+                f'too many sign-in attempts, try again in {retry}s', 429,
+                code='rate_limited', retryable=True)
+            response.status_code = status
+            response.headers['Retry-After'] = str(retry)
+            return response
+        mu_user, mu_error = layer.accounts.authenticate(
+            username, password, ip=ip, user_agent=user_agent)
         if mu_user is not None:
-            raw_sid = mu_accounts.create_session(
-                mu_user, ip=request.remote_addr or '',
-                user_agent=request.headers.get('User-Agent', '')[:400])
+            layer.rate_limiter.reset("login-account", account_key)
+            layer.rate_limiter.reset("login-ip", ip_key)
+            if layer.accounts.totp_is_enabled(mu_user):
+                # The password alone no longer buys a session: hold the verified
+                # identity for a few minutes under a token bound to this browser.
+                store, bind = _pending_2fa_door()
+                pending_token = store.issue({
+                    'kind': 'account', 'uid': mu_user['id'],
+                    'next': _safe_spa_target(body.get('next')),
+                }, bind)
+                return jsonify({'ok': True, 'totp_required': True, 'token': pending_token})
+            raw_sid = layer.accounts.create_session(
+                mu_user, ip=ip, user_agent=user_agent)
             session['mu_sid'] = raw_sid
             session['mu_user_id'] = mu_user['id']
             session['sid'] = _session_open()
@@ -6112,12 +6421,11 @@ def login():
         return error_response('invalid username or password', 401)
     if _totp_enabled():
         # Hold the verified identity briefly while the browser collects the code.
-        token = secrets.token_urlsafe(32)
-        with _pending_lock:
-            _pending_store[token] = {
-                'user': REMOTE_USER, 'at': time.time(),
-                'next': _safe_spa_target(body.get('next')),
-            }
+        store, bind = _pending_2fa_door()
+        token = store.issue({
+            'kind': 'owner', 'user': REMOTE_USER,
+            'next': _safe_spa_target(body.get('next')),
+        }, bind)
         return jsonify({'ok': True, 'totp_required': True, 'token': token})
     session['remote_user'] = REMOTE_USER
     session['sid'] = _session_open()
@@ -11609,6 +11917,15 @@ try:
     from multiuser import init_multiuser as _init_multiuser
 
     _multiuser_layer = _init_multiuser(app)
+    if _multiuser_layer is not None:
+        # Deleting the row is only the beginning: the queue snapshot, the Amazon
+        # session, the credential file, the download jar and the Chromium profile
+        # belong to this module, so this module is what erases them.
+        _multiuser_layer.accounts.set_purge_hook(_purge_account_artifacts_hook)
+        # Only a delete can put work in that queue, and only this layer deletes
+        # accounts -- so a single-owner install never pays for the sweep.
+        threading.Thread(target=_account_purge_sweeper, daemon=True,
+                         name='account-purge-sweeper').start()
 except Exception:  # noqa: BLE001 - optional subsystem must not break startup
     _multiuser_layer = None
     logger.exception(

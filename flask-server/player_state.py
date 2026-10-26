@@ -78,6 +78,14 @@ class PlayerStateRegistry:
                 self._states[key] = state
             return state
 
+    def peek(self, key: str):
+        """The state an identity already has, or None. Never creates one.
+
+        Reading through ``state_for`` would resurrect the very entry a purge is
+        trying to remove, so deletion asks a different question than playback."""
+        with self._guard:
+            return self._states.get(key)
+
     def replace_current(self, state) -> None:
         """Swap the calling identity's live state, leaving every other identity's
         alone. Tests and sign-out reset one player without disturbing the rest."""
@@ -101,6 +109,19 @@ class PlayerStateRegistry:
     def known_keys(self) -> list:
         with self._guard:
             return sorted(self._states)
+
+    def discard(self, key: str) -> bool:
+        """Forget one identity entirely.
+
+        Deleting an account has to drop its state *and* its lock: leaving the lock
+        behind would grow one entry per deleted account forever, and leaving the
+        state behind would hand a rebound identity (a re-created account id, or a
+        rebuilt owner row) somebody else's queue, output lease or volume.
+        """
+        with self._guard:
+            existed = self._states.pop(key, None) is not None
+            self._locks.pop(key, None)
+        return existed
 
 
 class PlayerStateProxy:

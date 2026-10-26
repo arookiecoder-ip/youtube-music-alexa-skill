@@ -134,6 +134,35 @@ def cookie_dir_for(identity: str) -> str:
     return os.path.join(ALEXA_COOKIE_DIR, ACCOUNT_COOKIE_SUBDIR, safe)
 
 
+def purge_cookie_dir(identity: str) -> bool:
+    """Delete one account's persisted Amazon session; refuse anything broader.
+
+    This is the only directory this module removes, so it is paranoid by design:
+    an empty identity means *the owner's* directory, and `ALEXA_COOKIE_DIR` itself
+    holds every account's session. A symlink is treated as an attack on the
+    layout, not as a directory with an unusual name.
+
+    Returns False when there was nothing to remove, and raises for a refusal --
+    a caller retrying a refusal would retry it forever.
+    """
+    if not identity or identity == OWNER:
+        raise ValueError("The owner's Alexa cookie directory is not purgeable")
+    path = cookie_dir_for(identity)
+    if not path.startswith(ALEXA_COOKIE_DIR + os.sep):
+        raise ValueError(f"Refusing to remove {path}: not an account cookie directory")
+    if os.path.islink(path):
+        raise ValueError(f"Refusing to remove {path}: it is a symlink")
+    root = os.path.realpath(ALEXA_COOKIE_DIR)
+    parent = os.path.realpath(os.path.join(root, ACCOUNT_COOKIE_SUBDIR))
+    real = os.path.realpath(path)
+    if os.path.dirname(real) != parent:
+        raise ValueError(f"Refusing to remove {path}: it escapes {parent}")
+    if not os.path.isdir(path):
+        return False
+    shutil.rmtree(path)
+    return True
+
+
 # Only one interactive Amazon login can be in flight on the whole server: every
 # AlexaRemote binds the same PROXY_PORT, so a second proxy would either fail to
 # bind or serve the first account's credentials. The holder renews its claim
