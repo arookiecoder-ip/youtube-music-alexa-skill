@@ -1,20 +1,49 @@
+{%- set page_theme = theme if (theme is defined and theme in ('dark', 'light')) else 'dark' -%}
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" data-theme="{{ page_theme }}">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+{# The two declarations a browser needs before it paints anything: which palette the
+   form controls and the canvas should be drawn in, and what colour to tint the
+   address bar. Without them a light page arrives with dark widgets and a dark bar. #}
+<meta name="color-scheme" content="{{ 'light dark' if page_theme == 'light' else 'dark' }}">
+<meta name="theme-color" content="{{ '#f3f3f5' if page_theme == 'light' else '#101013' }}">
 <meta name="robots" content="noindex">
 <title>{{ app_name }} · Your account</title>
+<link rel="stylesheet" href="{{ asset_url('css/theme.css') }}">
 <link rel="stylesheet" href="{{ asset_url('css/signin.css') }}">
 <link rel="stylesheet" href="{{ asset_url('css/account.css') }}">
 </head>
-{# The account page is a shell. Everything inside it is filled from
-   GET /api/account by account.js, so there is no server-rendered secret in the
-   HTML and nothing here needs an inline script -- which is what lets the
-   blueprint serve `script-src 'self'`. #}
+{# Server-rendered so the page is complete before account.js runs; the script only
+   refreshes individual sections after an action. No inline script or style anywhere,
+   which is what lets the blueprint serve `script-src 'self'` / `style-src 'self'`.
+
+   The sidebar shows one section at a time while JavaScript is running, and it does
+   that by setting `hidden` on the other four. A browser without the script, and a
+   visitor who arrived straight at /account#panel-security, gets every section on the
+   page exactly as it is written below. #}
+{% macro prov_badge(row) -%}
+  {%- if not row -%}
+    <span class="badge">Not connected</span>
+  {%- elif row.status == 'connected' -%}
+    <span class="badge ok">Connected</span>
+  {%- elif row.status == 'expired' -%}
+    <span class="badge warn">Needs signing in again</span>
+  {%- else -%}
+    <span class="badge bad">{{ row.status }}</span>
+  {%- endif -%}
+{%- endmacro %}
+{% macro chip(id, label, text, kind) -%}
+  <li class="chip">
+    <span class="chip-label">{{ label }}</span>
+    <span class="badge {{ kind }}" id="{{ id }}">{{ text }}</span>
+  </li>
+{%- endmacro %}
 <body class="account" data-csrf="{{ csrf_form }}" data-min-password="{{ password_min_length }}"
       data-username="{{ username }}">
-<main>
+<a class="skip-link" href="#account-main">Skip to account settings</a>
+<main id="account-main">
   <div class="brand">
     <div class="eq-icon">
       <span></span><span></span><span></span><span></span><span></span>
@@ -25,218 +54,342 @@
     </div>
   </div>
 
-  <div class="account-head">
+  <!-- The identity band: who you are, and at a glance whether the account is
+       healthy. Everything below is a thing you can change. -->
+  <header class="account-head">
     <div class="who">
-      <h2>@<span id="head-username">{{ username }}</span></h2>
-      <p id="head-since">Loading&hellip;</p>
+      <span class="avatar" aria-hidden="true">{{ (username or '?')[0]|upper }}</span>
+      <div>
+        <h2>@{{ username }}</h2>
+        <p id="head-since">{{ role_text }} · joined {{ created_text or 'unknown' }}
+          {%- if created_by == 'self' %} · created by you{% endif %}</p>
+      </div>
     </div>
     <div class="account-actions-top">
       <a class="ghost-link" href="/">&#8592; Player</a>
+      {# The one control up here that ends this browser's session, so account.js makes
+         the first tap say what it does and the second one go. The href stays real:
+         without the script this is the plain link it always was. #}
+      <a class="ghost-link signout-link" href="/logout/" data-arm="Tap again to sign out">Sign out</a>
+    </div>
+  </header>
+
+  <ul class="status-strip">
+    {% if not email %}
+      {{ chip('verify-badge', 'Email', 'No email address', 'bad') }}
+    {% elif email_verified %}
+      {{ chip('verify-badge', 'Email', 'Confirmed', 'ok') }}
+    {% else %}
+      {{ chip('verify-badge', 'Email', 'Unconfirmed', 'warn') }}
+    {% endif %}
+    {{ chip('totp-badge', 'Two-factor',
+            'On' if totp_enabled else ('Setup waiting' if totp_pending else 'Off'),
+            'ok' if totp_enabled else ('warn' if totp_pending else '')) }}
+    {{ chip('sum-services', 'Services',
+            (providers|length ~ ' of 2 linked') if providers else 'None linked',
+            'ok' if providers|length == 2 else ('warn' if providers else '')) }}
+    {{ chip('sum-devices', 'Devices',
+            'This one only' if sessions|length <= 1 else (sessions|length ~ ' signed in'),
+            '') }}
+  </ul>
+
+  <div class="account-shell">
+    <nav class="section-nav" aria-label="Account sections">
+      <a href="#panel-profile">Account</a>
+      <a href="#panel-providers">Services</a>
+      <a href="#panel-sessions">Devices</a>
+      <a href="#panel-security">Security</a>
+      <a href="#panel-delete" class="quiet">Delete</a>
+    </nav>
+
+    <div class="account-panes">
+      <div class="note-stack" id="notes" role="status" aria-live="polite"></div>
+
+      <!-- ------------------------------------------------------ 1. account -->
+      <section class="panel" id="panel-profile" tabindex="-1" aria-labelledby="title-profile">
+        <h3 id="title-profile">Sign-in details</h3>
+        <p class="panel-hint">You can sign in with <strong>@{{ username }}</strong> or with
+          the email address below. The address is also the only route back if you forget
+          your password, so changing it asks for the password you have, and the new
+          address stays unverified until you type the code sent there.</p>
+
+        <div class="state-line">
+          <span class="label">Username</span>
+          <span class="mono">@{{ username }}</span>
+        </div>
+
+        <form id="form-profile" autocomplete="off">
+          <label for="profile_email">Email</label>
+          <input type="email" id="profile_email" name="email" maxlength="254" required
+                 value="{{ email }}">
+          <p class="field-error" id="err-email" hidden></p>
+
+          <label>Confirm with your password
+            <input type="password" name="current_password" autocomplete="current-password">
+          </label>
+          <p class="field-error" id="err-profile_current_password" hidden></p>
+
+          <button class="primary" type="submit" data-submit>Save changes</button>
+        </form>
+
+        {# The code the email carries is typed here, not clicked: a link in a message is
+           something a stranger with access to the mailbox can follow unseen. Both the
+           code box and the resend control live in this one form, so an account with a
+           confirmed address shows no verification furniture at all. #}
+        <form id="form-verify-code" class="inline-form" autocomplete="off"
+              {{ '' if verification_pending else 'hidden' }}>
+          <div class="state-line">
+            <span class="label">Email verification</span>
+            <span class="prov-cell">
+              <button class="tiny" id="resend-verify" type="button">Send a new code</button>
+            </span>
+          </div>
+          <label for="email_code">Verification code</label>
+          <input type="text" id="email_code" name="code" inputmode="numeric" pattern="[0-9 ]*"
+                 maxlength="7" autocomplete="one-time-code" spellcheck="false" placeholder="••••••">
+          <p class="field-help" id="verify-tries"
+             {{ '' if verification and verification.attempts_left is not none else 'hidden' }}>
+            {%- if verification and verification.attempts_left is not none -%}
+              {% if verification.attempts_left %}{{ verification.attempts_left }} tries left on
+                this code{% else %}This code is spent. Send a new one.{% endif %}
+            {%- endif -%}
+          </p>
+          <p class="field-error" id="err-verify-code" hidden></p>
+          <button class="primary" type="submit" data-submit>Confirm my email</button>
+        </form>
+
+        <div class="section-notes" id="notes-profile" role="status" aria-live="polite"></div>
+      </section>
+
+      <!-- ------------------------------------------- 2. linked services -->
+      <section class="panel" id="panel-providers" tabindex="-1" aria-labelledby="title-providers">
+        <h3 id="title-providers">Linked services</h3>
+        <p class="panel-hint">Each one is signed in separately and kept private to
+          @{{ username }}. Until you connect them, playback runs on the server's own
+          session and your Echo devices are not reachable.</p>
+        <ul class="service-list">
+          <li class="service" id="service-amazon">
+            <div class="service-main">
+              <span class="service-name">Amazon / Alexa</span>
+              <span class="service-hint">Controls your Echo devices and room audio.</span>
+            </div>
+            <div class="prov-cell">
+              <span id="prov-amazon">{{ prov_badge(provider_map.get('amazon')) }}</span>
+              <a class="tiny-link" id="link-amazon" href="/accounts/amazon"
+                 {{ 'hidden' if provider_map.get('amazon') else '' }}>Sign in</a>
+              <button class="tiny destructive" id="disconnect-amazon" type="button"
+                      data-arm="Tap again to disconnect Amazon"
+                      {{ '' if provider_map.get('amazon') else 'hidden' }}>Disconnect</button>
+            </div>
+          </li>
+          <li class="service" id="service-youtube">
+            <div class="service-main">
+              <span class="service-name">YouTube Music</span>
+              <span class="service-hint">Your playlists, likes and listening history.</span>
+            </div>
+            <div class="prov-cell">
+              <span id="prov-youtube">{{ prov_badge(provider_map.get('youtube')) }}</span>
+              <a class="tiny-link" id="link-youtube" href="/accounts/youtube"
+                 {{ 'hidden' if provider_map.get('youtube') else '' }}>Sign in</a>
+              <button class="tiny destructive" id="disconnect-youtube" type="button"
+                      data-arm="Tap again to disconnect YouTube Music"
+                      {{ '' if provider_map.get('youtube') else 'hidden' }}>Disconnect</button>
+            </div>
+          </li>
+        </ul>
+        <p class="field-help" id="providers-note" hidden></p>
+        <div class="section-notes" id="notes-providers" role="status" aria-live="polite"></div>
+      </section>
+
+      <!-- ---------------------------------------------------- 3. devices -->
+      <section class="panel" id="panel-sessions" tabindex="-1" aria-labelledby="title-sessions">
+        <h3 id="title-sessions">Devices</h3>
+        <p class="panel-hint">One row per live session. Signing a device out takes effect
+          on its next request.</p>
+        {# The only list on this page with no fixed length: an account signed in from a
+           phone, a laptop, a tablet and three browsers used to push everything below it
+           off the screen. So the rows scroll inside the panel and the panel keeps one
+           height whatever the number. #}
+        <ul class="devices" id="devices">
+          {% for row in sessions %}
+            <li>
+              <div class="device-main">
+                <div class="device-line">
+                  <div class="device-title">{{ row.device or 'Unlisted browser' }}</div>
+                  {%- if row.current %} <span class="this-one">This device</span>{% endif %}
+                </div>
+                <div class="device-meta">seen {{ row.seen_text }}{% if row.ip %} · from {{ row.ip }}{% endif %}
+                  · signed in {{ row.signed_in_text }}</div>
+                {# The header the label was read from, kept one step down the page:
+                   a name is a claim, and this is the evidence behind it. #}
+                {%- if row.device_ua %}<div class="device-ua">{{ row.device_ua }}</div>{% endif %}
+              </div>
+              {% if not row.current %}
+                <button class="tiny destructive" type="button" data-revoke="{{ row.id }}"
+                        data-arm="Tap again to sign out this device">Sign out</button>
+              {% endif %}
+            </li>
+          {% endfor %}
+        </ul>
+        <p class="field-help" id="devices-empty" {{ '' if sessions|length <= 1 else 'hidden' }}>
+          No other device is signed in.</p>
+        <p><button class="ghost destructive" id="signout-others" type="button"
+                   data-arm="Tap again to sign out every other device"
+                   {{ 'disabled' if sessions|length <= 1 else '' }}>Sign out other devices</button></p>
+        <div class="section-notes" id="notes-devices" role="status" aria-live="polite"></div>
+      </section>
+
+      <!-- -------------------------------------------- 4. sign-in & security -->
+      <section class="panel" id="panel-security" tabindex="-1" aria-labelledby="title-security">
+        <h3 id="title-security">Sign-in &amp; security</h3>
+        <p class="panel-hint">Your password, and an optional second factor on top of it.</p>
+
+        {% if must_change_password %}
+          <p class="note warn" id="must-change-note">This account was created with a password
+            you did not choose. Set your own below.</p>
+        {% endif %}
+
+        <div class="security-grid">
+          <div class="security-part">
+            <h4 id="title-password">Password</h4>
+            <p class="field-help">Changing it signs out every other device and leaves this one
+              signed in, so a stolen password cannot keep a stranger's session alive.</p>
+            <form id="form-password" autocomplete="off" data-password-form>
+              <label>Current password
+                <input type="password" name="current_password" autocomplete="current-password">
+              </label>
+              <p class="field-error" id="err-current_password" hidden></p>
+
+              <label for="pw_new">New password</label>
+              <input type="password" id="pw_new" name="password" data-strength autocomplete="new-password">
+              <p class="pw-meter" data-meter-for="pw_new">
+                <span class="pw-meter-bar"></span><span class="pw-meter-text"></span>
+              </p>
+              <p class="field-help">At least {{ password_min_length }} characters, two of:
+                lowercase, uppercase, digit, symbol. Not your username.</p>
+              <p class="field-error" id="err-password" hidden></p>
+
+              <label for="pw_confirm">Type it again</label>
+              <input type="password" id="pw_confirm" name="confirm_password" autocomplete="new-password">
+              <p class="field-error" id="err-confirm_password" hidden></p>
+
+              <button class="primary" type="submit" data-submit>Change password</button>
+            </form>
+          </div>
+
+          <div class="security-part">
+            <h4 id="title-totp">Two-factor sign-in
+              <span class="badge {{ 'ok' if totp_enabled else ('warn' if totp_pending else '') }}"
+                    id="totp-state">{{ 'On' if totp_enabled else ('Setup waiting' if totp_pending else 'Off') }}</span>
+            </h4>
+            <p class="field-help">An authenticator app on your phone adds a six-digit code at
+              sign-in. Your password alone stops being enough.</p>
+
+            <div id="totp-off" {{ 'hidden' if totp_enabled else '' }}>
+              <p class="field-help">Turn it on and you will need both your password and the code
+                to sign in, from either door.</p>
+              <form id="form-totp-begin" autocomplete="off">
+                <label>Your password
+                  <input type="password" name="current_password" autocomplete="current-password">
+                </label>
+                <p class="field-error" id="err-totp_current_password" hidden></p>
+                <button class="primary" type="submit" data-submit>Start setup</button>
+              </form>
+
+              <div class="enroll" id="enroll" {{ '' if totp_pending else 'hidden' }}>
+                <div class="enroll-grid">
+                  <div class="qr-frame" id="qr-frame" {{ '' if totp_pending else 'hidden' }}>
+                    <img id="qr-img" alt="Two-factor setup barcode" width="148" height="148">
+                  </div>
+                  <div class="enroll-steps">
+                    <ol>
+                      <li>Add a setup key in your authenticator app, or scan the code.</li>
+                      <li>Otherwise type the secret below, with Time-based (TOTP) selected.</li>
+                      <li>Enter the six-digit code the app shows to confirm.</li>
+                    </ol>
+                    <p class="secret-code" id="enroll-secret" hidden></p>
+                    <p class="qr-fallback" id="enroll-issuer">
+                      {%- if totp_pending -%}
+                        A setup is already waiting. Scan the code or confirm it, or cancel and start again.
+                      {%- endif -%}
+                    </p>
+                  </div>
+                </div>
+                <form id="form-totp-confirm" autocomplete="off">
+                  <label for="totp_code">Code from your app</label>
+                  <input class="code-input" type="text" id="totp_code" name="code" inputmode="numeric"
+                         autocomplete="one-time-code" maxlength="6" pattern="[0-9]{6}">
+                  <p class="field-error" id="err-totp-code" hidden></p>
+                  <div class="row">
+                    <button class="primary" type="submit" data-submit>Confirm</button>
+                    <button class="ghost" type="button" id="totp-cancel">Cancel setup</button>
+                  </div>
+                </form>
+              </div>
+            </div>
+
+            <div id="totp-on" {{ '' if totp_enabled else 'hidden' }}>
+              <p class="field-help">Turning it off asks for both your password and a live code, so
+                a lost phone cannot be used to strip the second factor by someone who only has the
+                password.</p>
+              <form id="form-totp-disable" autocomplete="off">
+                <div class="row">
+                  <div class="grow">
+                    <label>Password
+                      <input type="password" name="current_password" autocomplete="current-password">
+                    </label>
+                  </div>
+                  <div class="grow">
+                    <label for="disable_code">Code</label>
+                    <input class="code-input" type="text" id="disable_code" name="code"
+                           inputmode="numeric" autocomplete="one-time-code" maxlength="6">
+                  </div>
+                </div>
+                <p class="field-error" id="err-disable" hidden></p>
+                <button class="ghost destructive" type="submit" data-submit>Turn two-factor off</button>
+              </form>
+            </div>
+          </div>
+        </div>
+
+        <div class="section-notes" id="notes-security" role="status" aria-live="polite"></div>
+      </section>
+
+      <!-- ------------------------------------------ 5. delete account -->
+      {# Last in the sidebar and still folded behind a disclosure: it is the one action
+         here that cannot be undone, so it stays findable without sitting in the middle
+         of anything. #}
+      <section class="panel danger" id="panel-delete" tabindex="-1" aria-labelledby="title-delete">
+        <details class="reveal">
+          <summary id="title-delete">Delete this account</summary>
+          <p class="panel-hint">This cannot be undone, and an administrator cannot recover it.
+            It removes your queue, your Amazon and YouTube sign-ins, the saved cookies and
+            browser profile on this server, and every signed-in device.</p>
+          <div class="confirm-box">
+            <form id="form-delete" autocomplete="off">
+              <label>Your password
+                <input type="password" name="current_password" autocomplete="current-password">
+              </label>
+              <p class="field-error" id="err-del_password" hidden></p>
+
+              <label for="del_username">Type your username to confirm</label>
+              <input type="text" id="del_username" name="confirm_username"
+                     autocomplete="off" autocapitalize="none" spellcheck="false">
+              <p class="field-help">Exactly <strong>@{{ username }}</strong> &mdash; not your
+                password.</p>
+              <p class="field-error" id="err-confirm_username" hidden></p>
+
+              <button class="ghost destructive" type="submit" data-submit>Delete permanently</button>
+            </form>
+          </div>
+          <div class="section-notes" id="notes-delete" role="status" aria-live="polite"></div>
+        </details>
+      </section>
     </div>
   </div>
 
-  <div class="note-stack" id="notes" aria-live="polite"></div>
-
-  <!-- ------------------------------------------------------------ profile -->
-  <section class="panel" id="panel-profile">
-    <h3>Profile</h3>
-    <p class="panel-hint">Your email address is how you get back in if you forget your
-      password. Changing it needs your password, and un-verifies the new address until
-      you click the link we send.</p>
-    <form id="form-profile" autocomplete="off">
-      <label for="display_name">Display name <span class="optional">optional</span></label>
-      <input type="text" id="display_name" name="display_name" maxlength="120">
-      <p class="field-error" id="err-display_name" hidden></p>
-
-      <label for="profile_email">Email</label>
-      <input type="email" id="profile_email" name="email" maxlength="254" required>
-      <p class="field-error" id="err-email" hidden></p>
-
-      <label for="profile_password">Confirm with your password</label>
-      <input type="password" id="profile_password" name="current_password"
-             autocomplete="current-password">
-      <p class="field-error" id="err-profile_current_password" hidden></p>
-
-      <button class="primary" type="submit" data-submit>Save profile</button>
-    </form>
-    <div class="state-line">
-      <span class="label">Email status</span>
-      <span>
-        <span class="badge" id="verify-badge">&mdash;</span>
-        <button class="tiny" id="resend-verify" type="button" hidden>Send link again</button>
-      </span>
-    </div>
-  </section>
-
-  <!-- ------------------------------------------------------------ password -->
-  <section class="panel" id="panel-password">
-    <h3>Password</h3>
-    <p class="panel-hint">Changing it signs out every other device and leaves this one
-      signed in, so a stolen password cannot keep a stranger's session alive.</p>
-    <form id="form-password" autocomplete="off" data-password-form>
-      <label for="pw_current">Current password</label>
-      <input type="password" id="pw_current" name="current_password" autocomplete="current-password">
-      <p class="field-error" id="err-current_password" hidden></p>
-
-      <label for="pw_new">New password</label>
-      <input type="password" id="pw_new" name="password" data-strength autocomplete="new-password">
-      <p class="pw-meter" data-meter-for="pw_new">
-        <span class="pw-meter-bar"></span><span class="pw-meter-text"></span>
-      </p>
-      <p class="field-help">At least {{ password_min_length }} characters, two of:
-        lowercase, uppercase, digit, symbol. Not your username.</p>
-      <p class="field-error" id="err-password" hidden></p>
-
-      <label for="pw_confirm">Type it again</label>
-      <input type="password" id="pw_confirm" name="confirm_password" autocomplete="new-password">
-      <p class="field-error" id="err-confirm_password" hidden></p>
-
-      <button class="primary" type="submit" data-submit>Change password</button>
-    </form>
-  </section>
-
-  <!-- -------------------------------------------------------------- 2FA -->
-  <section class="panel" id="panel-totp">
-    <h3>Two-factor sign-in</h3>
-    <p class="panel-hint">An authenticator app on your phone adds a six-digit code at
-      sign-in. Your password alone stops being enough.</p>
-    <div class="state-line">
-      <span class="label">Status</span>
-      <span class="badge" id="totp-badge">&mdash;</span>
-    </div>
-
-    <div id="totp-off" hidden>
-      <p class="field-help">Turn it on and you will need both your password and the code
-        to sign in, from either door.</p>
-      <form id="form-totp-begin" autocomplete="off">
-        <label for="totp_password">Your password</label>
-        <input type="password" id="totp_password" name="current_password"
-               autocomplete="current-password">
-        <p class="field-error" id="err-totp_current_password" hidden></p>
-        <button class="primary" type="submit" data-submit>Start setup</button>
-      </form>
-
-      <div class="enroll" id="enroll" hidden>
-        <div class="enroll-grid">
-          <div class="qr-frame" id="qr-frame" hidden>
-            <img id="qr-img" alt="Two-factor setup barcode" width="148" height="148">
-          </div>
-          <div class="enroll-steps">
-            <ol>
-              <li>Add a setup key in your authenticator app, or scan the code.</li>
-              <li>Otherwise type the secret below, with Time-based (TOTP) selected.</li>
-              <li>Enter the six-digit code the app shows to confirm.</li>
-            </ol>
-            <p class="secret-code" id="enroll-secret"></p>
-            <p class="qr-fallback" id="enroll-issuer"></p>
-          </div>
-        </div>
-        <form id="form-totp-confirm" autocomplete="off">
-          <label for="totp_code">Code from your app</label>
-          <input class="code-input" type="text" id="totp_code" name="code" inputmode="numeric"
-                 autocomplete="one-time-code" maxlength="6" pattern="[0-9]{6}">
-          <p class="field-error" id="err-code" hidden></p>
-          <div class="row">
-            <button class="primary" type="submit" data-submit>Confirm</button>
-            <button class="ghost" type="button" id="totp-cancel">Cancel setup</button>
-          </div>
-        </form>
-      </div>
-    </div>
-
-    <div id="totp-on" hidden>
-      <p class="field-help">Turning it off asks for both your password and a live code, so
-        a lost phone cannot be used to strip the second factor by someone who only has the
-        password.</p>
-      <form id="form-totp-disable" autocomplete="off">
-        <div class="row">
-          <div class="grow">
-            <label for="disable_password">Password</label>
-            <input type="password" id="disable_password" name="current_password"
-                   autocomplete="current-password">
-          </div>
-          <div class="grow">
-            <label for="disable_code">Code</label>
-            <input class="code-input" type="text" id="disable_code" name="code"
-                   inputmode="numeric" autocomplete="one-time-code" maxlength="6">
-          </div>
-        </div>
-        <p class="field-error" id="err-disable" hidden></p>
-        <button class="ghost destructive" type="submit" data-submit>Turn two-factor off</button>
-      </form>
-    </div>
-  </section>
-
-  <!-- --------------------------------------------------------- providers -->
-  <section class="panel" id="panel-providers">
-    <h3>Linked services</h3>
-    <p class="panel-hint">Amazon and YouTube Music belong to this account alone. Nothing
-      here links them for you &mdash; each one opens its own sign-in page, and the session
-      it hands back is stored against @{{ username }} only.</p>
-    <div class="state-line">
-      <span class="label">Amazon / Alexa</span>
-      <span class="prov-cell">
-        <span class="badge" id="prov-amazon">&mdash;</span>
-        <a class="tiny-link" id="link-amazon" href="/accounts/amazon" hidden>Connect</a>
-      </span>
-    </div>
-    <div class="state-line">
-      <span class="label">YouTube Music</span>
-      <span class="prov-cell">
-        <span class="badge" id="prov-youtube">&mdash;</span>
-        <a class="tiny-link" id="link-youtube" href="/accounts/youtube" hidden>Connect</a>
-      </span>
-    </div>
-    <div class="state-line">
-      <span class="label">Audio downloads</span>
-      <span class="prov-cell">
-        <span class="badge" id="prov-cookies">&mdash;</span>
-      </span>
-    </div>
-    <p class="field-help" id="providers-note" hidden></p>
-  </section>
-
-  <!-- ----------------------------------------------------------- devices -->
-  <section class="panel" id="panel-sessions">
-    <h3>Signed-in devices</h3>
-    <p class="panel-hint">One row per live session. Revoking a device signs it out
-      immediately; the next request it makes is bounced to the sign-in page.</p>
-    <ul class="devices" id="devices"></ul>
-    <p class="field-help" id="devices-empty" hidden>No other device is signed in.</p>
-    <p><button class="ghost destructive" id="signout-all" type="button">Sign out everywhere</button></p>
-  </section>
-
-  <details class="reveal" id="danger-details">
-    <summary>Delete this account</summary>
-    <div class="reveal-body">
-      <section class="panel danger">
-        <h3>Delete my account</h3>
-        <p class="panel-hint">This cannot be undone. Your queue, your Amazon and YouTube
-          sessions, your cookies and your credentials are removed, and every device is
-          signed out. An administrator cannot recover it afterwards.</p>
-        <div class="confirm-box">
-          <form id="form-delete" autocomplete="off">
-            <label for="del_password">Your password</label>
-            <input type="password" id="del_password" name="password" autocomplete="current-password">
-            <p class="field-error" id="err-del_password" hidden></p>
-
-            <label for="del_username">Type your username to confirm</label>
-            <input type="text" id="del_username" name="confirm_username"
-                   autocomplete="off" autocapitalize="none" spellcheck="false">
-            <p class="field-help">Exactly <strong>@{{ username }}</strong> &mdash; not your
-              password.</p>
-            <p class="field-error" id="err-confirm_username" hidden></p>
-
-            <button class="ghost destructive" type="submit" data-submit>Delete permanently</button>
-          </form>
-        </div>
-      </section>
-    </div>
-  </details>
-
   <p class="footnote">Signed in as @{{ username }}.
-    {% if signup_open %}<a href="/signup">Create another account</a>{% endif %}
-    <a href="/logout/">Sign out of this device</a></p>
+    {% if signup_open %}<a href="/signup">Create another account</a>{% endif %}</p>
 </main>
 <script src="{{ asset_url('js/selfservice.js') }}" defer></script>
 <script src="{{ asset_url('js/account.js') }}" defer></script>

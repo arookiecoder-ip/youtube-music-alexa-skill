@@ -25,7 +25,7 @@ AlexaPy's aiohttp session is bound to the event loop it was created in,
 but Flask async views each run in a throwaway loop — so all AlexaPy work
 runs on one dedicated background loop owned by this module.
 """
-import asyncio, logging, os, shutil, secrets, tempfile, threading, time
+import asyncio, base64, logging, os, re, shutil, secrets, tempfile, threading, time
 from concurrent.futures import TimeoutError as FuturesTimeoutError
 
 import httpx
@@ -210,6 +210,26 @@ def _abandoned_proxy():
     return None
 
 
+def _parse_choice_options(message):
+    """Recover the numbered options from alexapy's chooser descriptions.
+
+    ``claimspicker_message`` renders as ``* **`0`**: `value - label`.`` and
+    ``authselect_message`` as ``0:\tlabel`` -- both carry the number the caller
+    must send back, so anything shaped like that line becomes one choice."""
+    options = []
+    for line in (message or "").splitlines():
+        match = re.search(r"(\d+)[^0-9]*:\s*[`\t ]*([^`]+?)[`' ]*\.?\s*$", line.strip())
+        if not match:
+            continue
+        label = match.group(2).strip()
+        if " - " in label:
+            # claimspicker lines are `value - label`; only the label is for reading.
+            label = label.split(" - ", 1)[1].strip()
+        if label:
+            options.append({"index": match.group(1), "label": label})
+    return options
+
+
 CALL_TIMEOUT = 60  # seconds; Amazon calls can be slow but must not hang a worker
 
 
@@ -251,6 +271,10 @@ class AlexaRemote:
         self._proxy_login_complete = False
         self._proxy_attempt_id = None
         self._proxy_cookie_stage = None
+        # form-login state (scripted sign-in; touched only on the background loop)
+        self._form_login = None
+        self._form_stage = None
+        self._form_captcha = None  # (content_type, bytes) of the last captcha picture
 
     # ---------- background loop plumbing ----------
 
@@ -263,10 +287,10 @@ class AlexaRemote:
             thread.start()
             return self._loop
 
-    def _run(self, coro):
+    def _run(self, coro, timeout=CALL_TIMEOUT):
         future = asyncio.run_coroutine_threadsafe(coro, self._ensure_loop())
         try:
-            return future.result(timeout=CALL_TIMEOUT)
+            return future.result(timeout=timeout)
         except FuturesTimeoutError:
             # The whole Amazon round trip blew past CALL_TIMEOUT — usually an
             # offline/unreachable device or Amazon stalling. Stop the runaway
@@ -414,6 +438,13 @@ class AlexaRemote:
         except Exception:
             logger.exception("could not stop an abandoned Alexa login proxy")
             return False
+        # The abandoned login may have been a scripted one, which holds no proxy
+        # but does hold a staging directory and an open Amazon session.
+        try:
+            asyncio.run_coroutine_threadsafe(
+                stale._form_cleanup(), stale._ensure_loop()).result(timeout=10)
+        except Exception:
+            logger.debug("could not clean an abandoned scripted Amazon login")
         logger.info("reclaimed the Alexa login proxy from an abandoned login")
         return _proxy_claim(self)
 
@@ -580,7 +611,35 @@ class AlexaRemote:
 
         if login is not self._proxy_login:
             return False  # A newer attempt superseded this callback.
-        stage = getattr(self, '_proxy_cookie_stage', None)
+        error = await self._promote_staged_login(login, getattr(self, '_proxy_cookie_stage', None))
+        if error:
+            self._proxy_login_error = error
+            logger.error(self._proxy_login_error)
+            return False
+
+        self._proxy_login_complete = True
+        await self._stop_proxy()
+        logger.info("Alexa login finalized and cookie persisted")
+        return True
+
+    async def _promote_staged_login(self, login, stage):
+        """Persist a verified login's cookies and adopt it as the live session.
+
+        Shared by the browser-proxy and the scripted form flow, which differ
+        only in how the login got verified. The cookie files land in the
+        staging directory first, so a login that fails verification never
+        touches this identity's saved session. Returns a user-facing error,
+        or None on success."""
+        try:
+            await login.save_cookiefile()
+            cookie_files = getattr(login, "_cookiefile", [])
+            cookie_file = cookie_files[0] if cookie_files else None
+        except Exception:
+            logger.exception("could not save Alexa login cookie")
+            cookie_file = None
+        if not cookie_file or not os.path.isfile(cookie_file):
+            return "Alexa login succeeded, but its cookie file could not be saved."
+
         if stage:
             try:
                 relative = os.path.relpath(cookie_file, stage)
@@ -590,9 +649,8 @@ class AlexaRemote:
                 login._cookiefile = [os.path.join(self.cookie_dir, os.path.relpath(path, stage)) for path in login._cookiefile]
                 login._outputpath = lambda name: os.path.join(self.cookie_dir, name)
             except OSError:
-                self._proxy_login_error = "Could not save the new account. Try again."
                 logger.exception("could not promote verified Amazon cookie")
-                return False
+                return "Could not save the new account. Try again."
 
         # Persist the email separately so _ensure_login can locate alexapy's
         # email-keyed cookie file after a process restart.
@@ -610,9 +668,8 @@ class AlexaRemote:
                 if os.path.exists(pointer):
                     os.unlink(pointer)
         except Exception:
-            self._proxy_login_error = "The account could not be saved. Your previous account is unchanged. Try again."
             logger.exception("could not persist login email for restore")
-            return False
+            return "The account could not be saved. Your previous account is unchanged. Try again."
 
         if self._login and self._login is not login:
             try:
@@ -623,10 +680,7 @@ class AlexaRemote:
         self.connection_state = True
         self._login_checked_at = time.monotonic()
         self._devices_raw = []
-        self._proxy_login_complete = True
-        await self._stop_proxy()
-        logger.info("Alexa login finalized and cookie persisted")
-        return True
+        return None
 
     async def _proxy_check(self):
         """Report callback-driven finalization without performing it in a poll."""
@@ -695,6 +749,187 @@ class AlexaRemote:
     def proxy_check(self):
         return self._run(self._proxy_check())
 
+    # ---------- form login (scripted, typed answers) ----------
+    #
+    # The proxy flow mirrors Amazon's pages into the user's browser; this flow
+    # does the opposite. The user types each answer into Music Box's own form
+    # and alexapy's headless ladder submits it: password, two-step code,
+    # captcha, verification choice, device approval. Credentials arrive per
+    # request and live only inside the AlexaLogin object for the duration of
+    # the login -- never persisted, never logged, exactly like the proxy flow.
+    # The proxy claim doubles as the single-slot guard, so a scripted login and
+    # a mirrored one can never both drive Amazon at once.
+
+    FORM_STEP_TIMEOUT = 100  # seconds; a slow Amazon round trip must not 502
+
+    async def _form_state(self, login):
+        """AlexaPy's page flags, translated into the sign-in form's states."""
+        status = dict(login.status or {})
+        note = str(status.get("error_message") or "").strip()
+        if status.get("login_successful"):
+            return {"state": "connected"}
+        if status.get("securitycode_required"):
+            return {"state": "need_code", "answer": "securitycode",
+                    "message": note or "Enter the two-step code from your authenticator app or SMS."}
+        if status.get("captcha_required"):
+            fetched = await self._form_fetch_captcha(login, status.get("captcha_image_url"))
+            if fetched is None:
+                return {"state": "error",
+                        "message": "Amazon asked for a captcha picture that could not be loaded. Try again."}
+            self._form_captcha = fetched
+            return {"state": "need_captcha", "answer": "captcha",
+                    "message": note or "Type the characters you see in the picture.",
+                    "verification": bool(status.get("verification_captcha_required"))}
+        if status.get("claimspicker_required") or status.get("authselect_required"):
+            message = status.get("claimspicker_message") or status.get("authselect_message") or ""
+            options = _parse_choice_options(message)
+            result = {"state": "need_choice",
+                      "message": note or "Choose how Amazon should verify you.",
+                      "kind": "claimsoption" if status.get("claimspicker_required") else "authselectoption"}
+            if options:
+                result["options"] = options
+            else:
+                # The numbered list still reached us; the user can type the number.
+                result["raw"] = message
+            return result
+        if status.get("verificationcode_required"):
+            return {"state": "need_code", "answer": "verificationcode",
+                    "message": note or "Enter the verification code Amazon sent you."}
+        if status.get("action_required") or status.get("approval_status") is not None:
+            return {"state": "need_approval",
+                    "message": note or str(status.get("message") or "").strip()
+                               or "Amazon is waiting for you to approve this sign-in.",
+                    "approved": status.get("approval_status") == "TransactionCompleted"}
+        if note:
+            return {"state": "error", "message": note}
+        if status.get("login_failed"):
+            return {"state": "error",
+                    "message": "Amazon refused this sign-in. Check the email and password, then try again."}
+        return {"state": "error",
+                "message": "Amazon showed a page this sign-in cannot answer. Try again."}
+
+    async def _form_fetch_captcha(self, login, url):
+        """The captcha picture needs the login session's cookies, so fetch it
+        server-side and keep it for the same-origin image route."""
+        if not url:
+            return None
+        if url.startswith("/"):
+            url = f"https://www.{AMAZON_DOMAIN}{url}"
+        try:
+            response = await login._session.get(url, ssl=login._ssl)
+            data = await response.read()
+        except Exception:
+            logger.warning("could not fetch the Amazon captcha picture", exc_info=True)
+            return None
+        if not data:
+            return None
+        content_type = str(response.content_type or "image/jpeg").split(";")[0]
+        if content_type not in ("image/jpeg", "image/png", "image/gif"):
+            content_type = "image/jpeg"
+        return content_type, data
+
+    async def _form_cleanup(self):
+        """Drop a scripted login: nothing it staged may survive the attempt."""
+        login, self._form_login = self._form_login, None
+        stage, self._form_stage = self._form_stage, None
+        self._form_captcha = None
+        if login is not None:
+            try:
+                await login.close()
+            except Exception:
+                logger.debug("scripted Amazon login close failed", exc_info=True)
+        if stage:
+            shutil.rmtree(stage, ignore_errors=True)
+        _release_proxy_claim(self)
+
+    async def _form_step(self, data):
+        """One scripted exchange with Amazon, then the state its answer left."""
+        login = self._form_login
+        if login is None:
+            return {"state": "error", "message": "This sign-in has ended. Start again."}
+        _renew_proxy_claim(self)
+        try:
+            await asyncio.wait_for(login.login(data=data), timeout=self.FORM_STEP_TIMEOUT)
+        except Exception:
+            logger.exception("scripted Amazon login step failed")
+            await self._form_cleanup()
+            return {"state": "error",
+                    "message": "Amazon did not answer. Wait a moment and start again."}
+        result = await self._form_state(login)
+        if result["state"] == "connected":
+            error = await self._promote_staged_login(login, self._form_stage)
+            self._form_login = None
+            self._form_stage = None
+            self._form_captcha = None
+            _release_proxy_claim(self)
+            if error:
+                logger.error("scripted Amazon login could not be saved: %s", error)
+                return {"state": "error", "message": error}
+            logger.info("Amazon form login completed and cookie persisted")
+            return result
+        if result["state"] == "error":
+            await self._form_cleanup()
+        return result
+
+    async def _form_login_begin(self, email, password):
+        email = (email or "").strip()
+        if not email or not password:
+            return {"state": "error", "message": "Enter your Amazon email and password."}
+        # Cleanup first: it releases this identity's stale claim, so the claim
+        # below cannot be dropped again by the cleanup itself.
+        await self._form_cleanup()
+        if self._proxy_started:
+            # A mirrored login this same identity abandoned; the scripted flow
+            # takes over the one Amazon slot.
+            await self._stop_proxy()
+        if not await self._claim_proxy():
+            return {"state": "busy", "message": PROXY_PORT_BUSY}
+        stage = tempfile.mkdtemp(prefix="pending-", dir=self.cookie_dir)
+        os.makedirs(os.path.join(stage, ".storage"), exist_ok=True)
+        self._form_login = AlexaLogin(
+            url=AMAZON_DOMAIN,
+            email=email,
+            password=password,
+            outputpath=lambda name: os.path.join(stage, name),
+        )
+        self._form_stage = stage
+        return await self._form_step({})
+
+    async def _form_login_answer(self, kind, value):
+        if self._form_login is None:
+            return {"state": "error", "message": "This sign-in has ended. Start again."}
+        if not await self._claim_proxy():
+            return {"state": "busy", "message": PROXY_PORT_BUSY}
+        data = {}
+        if kind == "securitycode":
+            data["securitycode"] = value
+        elif kind == "verificationcode":
+            data["verificationcode"] = value
+        elif kind == "captcha":
+            data["captcha"] = value
+        elif kind == "claimsoption":
+            data["claimsoption"] = value
+        elif kind == "authselectoption":
+            data["authselectoption"] = value
+        elif kind != "poll":
+            return {"state": "error", "message": "Amazon is not asking for that. Start again."}
+        return await self._form_step(data)
+
+    def form_login_captcha(self):
+        """The current captcha picture as ``(content_type, bytes)``, or None."""
+        return self._form_captcha
+
+    def form_login(self, email, password):
+        return self._run(self._form_login_begin(email, password),
+                         timeout=self.FORM_STEP_TIMEOUT + 20)
+
+    def form_login_step(self, kind, value=""):
+        return self._run(self._form_login_answer(kind, value),
+                         timeout=self.FORM_STEP_TIMEOUT + 20)
+
+    def form_login_cancel(self):
+        self._run(self._form_cleanup())
+
     # ---------- public API (called from Flask views, thread-safe) ----------
 
     def status(self) -> dict:
@@ -738,6 +973,7 @@ class AlexaRemote:
         self._devices_raw = []
         self._proxy_login_complete = False
         self._proxy_login_error = None
+        await self._form_cleanup()
         if self._proxy_runner:
             await self._stop_proxy()
         else:

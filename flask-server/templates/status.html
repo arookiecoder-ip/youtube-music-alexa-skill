@@ -1,19 +1,22 @@
+{% extends "admin/base.html" %}
 {% macro icon(name) -%}
 <svg class="icon" aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"><use href="#i-{{ name }}"/></svg>
 {%- endmacro %}
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-  <meta name="color-scheme" content="dark"><meta name="theme-color" content="#030303"><meta name="robots" content="noindex,nofollow">
-  <title>Service status · Music Box</title>
-  <link rel="icon" href="/favicon.ico">
-  <link rel="stylesheet" href="/static/css/status.css?v={{ asset_v }}">
-  <script defer src="/static/js/status-layout.js?v={{ asset_v }}"></script>
-  <script defer src="/static/js/status.js?v={{ asset_v }}"></script>
-  <script defer src="/static/js/status-activity.js?v={{ asset_v }}"></script>
-</head>
-<body>
+
+{% block head %}
+  <link rel="stylesheet" href="{{ asset_url('css/status.css') }}">
+  <script defer src="{{ asset_url('js/status-layout.js') }}"></script>
+  <script defer src="{{ asset_url('js/status.js') }}"></script>
+  <script defer src="{{ asset_url('js/status-activity.js') }}"></script>
+{% endblock %}
+
+{% block body_class %}status-page{% endblock %}
+
+{% block topbar_actions %}
+<button id="error-inbox" class="btn error-inbox-button" type="button" aria-label="Open error alerts">{{ icon('alert') }}<span class="error-label">Errors</span> <span id="error-count">—</span></button>
+{% endblock %}
+
+{% block content %}
 <svg class="symbols" aria-hidden="true" xmlns="http://www.w3.org/2000/svg"><defs>
   <symbol id="i-disc" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="2.5"/><path d="M7 12a5 5 0 0 1 5-5m5 5a5 5 0 0 1-5 5"/></symbol>
   <symbol id="i-server" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="7" rx="2"/><rect x="3" y="14" width="18" height="7" rx="2"/><path d="M7 6.5h.01M7 17.5h.01M12 6.5h5M12 17.5h5"/></symbol>
@@ -29,34 +32,31 @@
   <symbol id="i-close" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></symbol>
   <symbol id="i-alert" viewBox="0 0 24 24"><path d="M12 8v5m0 3h.01M10 4 2 18a1 1 0 0 0 1 2h18a1 1 0 0 0 1-2L14 4a2 2 0 0 0-4 0Z"/></symbol>
 </defs></svg>
-<header class="topbar"><button id="nav-toggle" type="button" aria-label="Open status navigation" aria-controls="nav-drawer" aria-expanded="false">{{ icon('menu') }}</button><a class="brand" href="/"><img src="/static/icons/icon-192.svg" width="32" height="32" alt="">Music Box</a><span class="page-label">Service status</span><button id="error-inbox" class="error-inbox-button" type="button" aria-label="Open error alerts">{{ icon('alert') }}<span class="error-label">Errors</span> <span id="error-count">—</span></button><a class="back-link" href="/">{{ icon('arrow') }}<span>Back to music</span></a></header>
-<div id="desktop-navigation">  <nav id="status-nav" class="section-nav" aria-label="Status sections"><a href="#overview" aria-current="location">Overview</a><a href="#pipeline">Connections</a><a href="#fetch-section">Streaming</a><a href="#activity-section">Activity</a><a href="#live-log-section">Server logs</a></nav></div>
-<dialog id="nav-drawer" aria-label="Status navigation"><div class="drawer-heading"><strong>Service status</strong><button id="nav-close" type="button" aria-label="Close navigation">{{ icon('close') }}</button></div><div id="drawer-links"></div><a class="drawer-back" href="/">← Back to music</a></dialog>
-<main>
-  <section class="heading" id="overview"><div><h1>Service status</h1><p class="subtitle">Your music, storage and connections.</p></div><div class="connection"><span id="health" class="badge neutral">Connecting</span><p id="updated">Waiting for first snapshot</p></div></section>
 
-  <section class="toolbar" aria-label="Dashboard controls"><label><span>Auto-refresh</span><select id="interval"><option value="5">5 seconds</option><option value="15" selected>15 seconds</option><option value="30">30 seconds</option><option value="60">1 minute</option></select></label><button id="pause" type="button" aria-pressed="false">Pause updates</button><button id="refresh" class="icon-button" type="button" aria-label="Refresh now" title="Refresh now">{{ icon('refresh') }}</button><button id="export" type="button" disabled>{{ icon('download') }}<span>Export snapshot</span></button><span id="scope-label">Current process · resets on restart</span></section>
-  <p id="notice" class="notice" role="status" hidden></p><div id="alerts" class="alerts" aria-live="polite"></div>
+<nav id="status-nav" class="section-nav" aria-label="Status sections"><a href="#overview" aria-current="location">Overview</a><a href="#pipeline">Connections</a><a href="#fetch-section">Streaming</a><a href="#activity-section">Activity</a><a href="#live-log-section">Server logs</a></nav>
 
+<section class="page-head" id="overview"><div><h1>Service status</h1><p>Music, storage and connections on this server.</p></div><div class="connection"><span id="health" class="badge neutral">Connecting</span><p id="updated">Waiting for first snapshot</p></div></section>
 
-  <section class="stats" aria-label="Key metrics"><article>{{ icon('wave') }}<div><p>Requests this minute</p><strong id="rpm">—</strong><small id="request-total">Waiting for traffic</small></div></article><article>{{ icon('clock') }}<div><p>Response time · p95</p><strong id="latency">—</strong><small>Latest 1,024 responses · headers ready</small></div></article><article>{{ icon('drive') }}<div><p>Free disk space</p><strong id="free-disk">—</strong><small id="disk-detail">Temporary audio filesystem</small></div></article></section>
+<section class="toolbar" aria-label="Dashboard controls"><label class="auto-refresh"><span>Auto-refresh</span><select id="interval"><option value="5">5 seconds</option><option value="15" selected>15 seconds</option><option value="30">30 seconds</option><option value="60">1 minute</option></select></label><button id="pause" class="btn" type="button" aria-pressed="false">Pause updates</button><button id="refresh" class="btn icon" type="button" aria-label="Refresh now" title="Refresh now">{{ icon('refresh') }}</button><button id="export" class="btn" type="button" disabled>{{ icon('download') }}<span>Export snapshot</span></button><span id="scope-label">Current process · resets on restart</span></section>
+<p id="notice" class="banner" role="status" hidden></p><div id="alerts" class="alerts" aria-live="polite"></div>
 
-  <div class="grid">
-    <section class="panel wide" id="activity-section"><div class="panel-head"><h2>{{ icon('wave') }}Request activity</h2><span class="legend"><i></i>Requests <i class="red"></i>Errors</span></div><canvas id="traffic" height="180" aria-label="Requests and errors over the past hour" role="img"></canvas><div class="chart-footer"><span>60 minutes ago</span><span id="request-health">—</span><span>Now</span></div></section>
-    <section class="panel"><div class="panel-head"><h2>{{ icon('server') }}Server resources</h2><span id="uptime" class="muted">—</span></div><div class="resource-bars"><div class="resource-label"><span>Disk used</span><strong id="disk-percent">—</strong></div><div class="meter" role="meter" id="disk-usage" aria-label="Filesystem usage"><div id="disk-meter"></div></div><div class="resource-label"><span>Container memory</span><strong id="memory-value">—</strong></div><div class="meter memory-meter" role="meter" id="memory-usage" aria-label="Container memory usage"><div id="memory-meter"></div></div></div><div class="detail-slot"><button class="detail-button" type="button" data-detail-target="system"><span>Resource details</span>{{ icon('chevron') }}</button><div hidden><dl id="system"></dl></div></div><p class="help">Host load and RAM are separate from container limits. Storage is sampled every 10 seconds.</p></section>
-    <section class="panel" id="pipeline"><div class="panel-head"><h2>{{ icon('key') }}Connections</h2><button id="cookie-check" type="button">Test audio access</button></div><div id="connection-tiles" class="connection-tiles"></div><div class="detail-slot"><button class="detail-button" type="button" data-detail-target="cookies"><span>Cookies & authentication details</span>{{ icon('chevron') }}</button><div hidden><dl id="cookies"></dl></div></div><p id="cookie-result" class="help" role="status">Refresh is passive. Testing audio access downloads a sample and may take 50 seconds.</p></section>
-    <section class="panel" id="fetch-section"><div class="panel-head"><h2>{{ icon('download') }}Streaming</h2><span id="cooldown" class="badge neutral">—</span></div><div id="fetch-slots" class="fetch-slots"></div><div id="fetch-summary" class="fetch-summary"></div><h3 class="list-heading">Active audio streams</h3><div id="active-fetches" class="activity-list"></div><div class="detail-slot"><button class="detail-button" type="button" data-detail-target="fetching"><span>Fetching details</span>{{ icon('chevron') }}</button><div hidden><dl id="fetching"></dl></div></div><p class="help">Audio is streamed from YouTube. Upcoming tracks prepare URLs only; temporary current-track bytes are discarded when playback moves on.</p></section>
-    <section class="panel full" id="live-log-section"><div class="panel-head"><h2>{{ icon('wave') }}Current server logs</h2><button id="log-live" type="button" aria-pressed="false">Start live logs</button></div>
-      <p class="help">Application logs and HTTP events, loaded on demand. Live updates every 5 seconds while visible. Up to 24 hours with bounded storage; authentication content is omitted. Container stdout and other services are not included.</p>
-      <div class="filters log-filters"><input id="log-search" type="search" maxlength="200" placeholder="Search messages, routes or request ID" aria-label="Search logs"><select id="log-level" aria-label="Log severity"><option value="">All levels</option><option>INFO</option><option>WARNING</option><option>ERROR</option><option>CRITICAL</option></select><select id="log-source" aria-label="Log source"><option value="">All sources</option></select><button id="log-refresh" type="button">Load latest</button></div>
-      <p id="log-state" class="help" role="status">Not loaded.</p><div id="live-logs" class="log-list"></div><div class="log-pagination"><button id="log-older" type="button" hidden>Load older logs</button></div>
-    </section>
-    <section class="panel wide"><div class="panel-head"><h2>Routes & response time</h2><span class="muted">Since process start</span></div><div class="table-wrap"><table><thead><tr><th>Route</th><th>Requests</th><th>Errors</th><th>Average</th><th>Maximum</th></tr></thead><tbody id="routes"></tbody></table></div></section>
-    <section class="panel"><div class="panel-head"><h2>Recent events</h2><span class="muted">Latest 60</span></div><div id="events" class="activity-list"></div></section>
-  </div>
-  <footer>{{ icon('server') }}<div>Owner-only diagnostics. Credentials and account identities stay private.<br>Metrics describe this server process, not the whole cluster. Request timing excludes streamed body duration.</div></footer>
-</main>
-<dialog id="status-dialog" aria-labelledby="dialog-title"><div class="dialog-head"><h2 id="dialog-title">Details</h2><button id="dialog-close" type="button" aria-label="Close details">{{ icon('close') }}</button></div><div id="dialog-controls"></div><p id="dialog-state" role="status"></p><div id="dialog-body"></div><button id="dialog-more" type="button" hidden>Load older entries</button></dialog>
-<dialog id="panel-dialog" aria-labelledby="panel-dialog-title"><div class="dialog-head"><h2 id="panel-dialog-title">Details</h2><button id="panel-dialog-close" type="button" aria-label="Close panel details">{{ icon('close') }}</button></div><div id="panel-dialog-body"></div></dialog>
-</body>
-</html>
+<section class="stats" aria-label="Key metrics"><article>{{ icon('wave') }}<div><p>Requests this minute</p><strong id="rpm">—</strong><small id="request-total">Waiting for traffic</small></div></article><article>{{ icon('clock') }}<div><p>Response time · p95</p><strong id="latency">—</strong><small>Latest 1,024 responses · headers ready</small></div></article><article>{{ icon('drive') }}<div><p>Free disk space</p><strong id="free-disk">—</strong><small id="disk-detail">Temporary audio filesystem</small></div></article></section>
+
+<div class="grid">
+  <section class="panel wide" id="activity-section"><div class="panel-head"><h2>{{ icon('wave') }}Request activity</h2><span class="legend"><i></i>Requests <i class="red"></i>Errors</span></div><canvas id="traffic" height="180" aria-label="Requests and errors over the past hour" role="img"></canvas><div class="chart-footer"><span>60 minutes ago</span><span id="request-health">—</span><span>Now</span></div></section>
+  <section class="panel"><div class="panel-head"><h2>{{ icon('server') }}Server resources</h2><span id="uptime" class="muted">—</span></div><div class="resource-bars"><div class="resource-label"><span>Disk used</span><strong id="disk-percent">—</strong></div><div class="meter" role="meter" id="disk-usage" aria-label="Filesystem usage"><div id="disk-meter"></div></div><div class="resource-label"><span>Container memory</span><strong id="memory-value">—</strong></div><div class="meter memory-meter" role="meter" id="memory-usage" aria-label="Container memory usage"><div id="memory-meter"></div></div></div><div class="detail-slot"><button class="btn detail-button" type="button" data-detail-target="system"><span>Resource details</span>{{ icon('chevron') }}</button><div hidden><dl id="system"></dl></div></div><p class="help">Host load and RAM are separate from container limits. Storage is sampled every 10 seconds.</p></section>
+  <section class="panel" id="pipeline"><div class="panel-head"><h2>{{ icon('key') }}Connections</h2><button id="cookie-check" class="btn small" type="button">Test audio access</button></div><div id="connection-tiles" class="connection-tiles"></div><div class="detail-slot"><button class="btn detail-button" type="button" data-detail-target="cookies"><span>Cookies & authentication details</span>{{ icon('chevron') }}</button><div hidden><dl id="cookies"></dl></div></div><p id="cookie-result" class="help" role="status">Refresh is passive. Testing audio access downloads a sample and may take 50 seconds.</p></section>
+  <section class="panel" id="fetch-section"><div class="panel-head"><h2>{{ icon('download') }}Streaming</h2><span id="cooldown" class="badge neutral">—</span></div><div id="fetch-slots" class="fetch-slots"></div><div id="fetch-summary" class="fetch-summary"></div><h3 class="list-heading">Active audio streams</h3><div id="active-fetches" class="activity-list"></div><div class="detail-slot"><button class="btn detail-button" type="button" data-detail-target="fetching"><span>Fetching details</span>{{ icon('chevron') }}</button><div hidden><dl id="fetching"></dl></div></div><p class="help">Audio is streamed from YouTube. Upcoming tracks prepare URLs only; temporary current-track bytes are discarded when playback moves on.</p></section>
+  <section class="panel full" id="live-log-section"><div class="panel-head"><h2>{{ icon('wave') }}Current server logs</h2><button id="log-live" class="btn small" type="button" aria-pressed="false">Start live logs</button></div>
+    <p class="help">Application logs and HTTP events, loaded on demand. Live updates every 5 seconds while visible. Up to 24 hours with bounded storage; authentication content is omitted. Container stdout and other services are not included.</p>
+    <div class="filters log-filters"><input id="log-search" type="search" maxlength="200" placeholder="Search messages, routes or request ID" aria-label="Search logs"><select id="log-level" aria-label="Log severity"><option value="">All levels</option><option>INFO</option><option>WARNING</option><option>ERROR</option><option>CRITICAL</option></select><select id="log-source" aria-label="Log source"><option value="">All sources</option></select><button id="log-refresh" class="btn small" type="button">Load latest</button></div>
+    <p id="log-state" class="help" role="status">Not loaded.</p><div id="live-logs" class="log-list"></div><div class="log-pagination"><button id="log-older" class="btn small" type="button" hidden>Load older logs</button></div>
+  </section>
+  <section class="panel wide"><div class="panel-head"><h2>Routes & response time</h2><span class="muted">Since process start</span></div><div class="table-wrap"><table><thead><tr><th>Route</th><th>Requests</th><th>Errors</th><th>Average</th><th>Maximum</th></tr></thead><tbody id="routes"></tbody></table></div></section>
+  <section class="panel"><div class="panel-head"><h2>Recent events</h2><span class="muted">Latest 60</span></div><div id="events" class="activity-list"></div></section>
+</div>
+<footer>{{ icon('server') }}<div>Diagnostics for this server process, not the whole cluster. Request timing excludes streamed body duration; credentials and account identities stay private.</div></footer>
+
+<dialog id="status-dialog" aria-labelledby="dialog-title"><div class="dialog-head"><h2 id="dialog-title">Details</h2><button id="dialog-close" class="btn icon" type="button" aria-label="Close details">{{ icon('close') }}</button></div><div id="dialog-controls"></div><p id="dialog-state" role="status"></p><div id="dialog-body"></div><button id="dialog-more" class="btn small" type="button" hidden>Load older entries</button></dialog>
+<dialog id="panel-dialog" aria-labelledby="panel-dialog-title"><div class="dialog-head"><h2 id="panel-dialog-title">Details</h2><button id="panel-dialog-close" class="btn icon" type="button" aria-label="Close panel details">{{ icon('close') }}</button></div><div id="panel-dialog-body"></div></dialog>
+{% endblock %}

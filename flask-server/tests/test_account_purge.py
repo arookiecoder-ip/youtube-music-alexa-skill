@@ -19,6 +19,9 @@ from pathlib import Path
 from unittest import mock
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from sidecar_support import requires_sidecar  # noqa: E402
 
 import account_purge
 import alexa_remote
@@ -526,6 +529,107 @@ class ServerPurgeTests(TempDirTest):
         self.sidecar.call.assert_called_once_with(
             '/profile/delete', 'POST', {'profile': USER_ID})
 
+    def test_a_scoped_disconnect_removes_only_its_provider(self):
+        server = self.server
+        auth_path = os.path.join(self.auth_dir, USER_ID + ".json")
+        jar_path = os.path.join(self.tmp, "jars", f"download_cookies_{USER_ID}.txt")
+        with open(auth_path, "w") as handle:
+            handle.write("{}")
+        with open(jar_path, "w") as handle:
+            handle.write("#netscape")
+        account_dir = os.path.join(self.cookie_dir, IDENTITY.replace(":", "_"))
+        os.makedirs(account_dir)
+        server._playback_store.save(IDENTITY, {'video_id': 'v', 'queue': []}, {}, 0)
+        timer = self.arm_state()
+
+        self.assertEqual(server._forget_account_artifacts(USER_ID, ('youtube',)), [])
+
+        # The YouTube half is gone, browser profile included...
+        self.assertFalse(os.path.exists(auth_path))
+        self.assertFalse(os.path.exists(jar_path))
+        self.sidecar.call.assert_called_once_with(
+            '/profile/delete', 'POST', {'profile': USER_ID})
+        # ...and the Alexa half and the queue are untouched: disconnecting a
+        # provider is not deleting the account.
+        self.assertTrue(os.path.isdir(account_dir))
+        self.assertEqual(server._player_registry.peek(IDENTITY)['video_id'], 'v')
+        self.assertFalse(server._playback_store.dead(IDENTITY))
+        conn = sqlite3.connect(self.db_path)
+        try:
+            self.assertEqual(conn.execute(
+                'SELECT COUNT(*) FROM playback_snapshot WHERE identity=?',
+                (IDENTITY,)).fetchone()[0], 1)
+        finally:
+            conn.close()
+        timer.cancel.assert_not_called()
+
+    def test_an_amazon_disconnect_removes_its_cookies_and_nothing_else(self):
+        server = self.server
+        auth_path = os.path.join(self.auth_dir, USER_ID + ".json")
+        with open(auth_path, "w") as handle:
+            handle.write("{}")
+        account_dir = os.path.join(self.cookie_dir, IDENTITY.replace(":", "_"))
+        os.makedirs(account_dir)
+        with server.get_db() as conn:
+            conn.execute('INSERT INTO jam_tokens (token, created_at, user_id) VALUES (?, ?, ?)',
+                         ("jam-code", time.time(), USER_ID))
+            conn.commit()
+        server._jam_cache().clear()
+        timer = self.arm_state()
+
+        self.assertEqual(server._forget_account_artifacts(USER_ID, ('amazon',)), [])
+
+        self.assertFalse(os.path.isdir(account_dir))
+        with server.get_db() as conn:
+            self.assertEqual(conn.execute(
+                'SELECT COUNT(*) FROM jam_tokens WHERE user_id = ?', (USER_ID,)).fetchone()[0], 0)
+        # The Echo-side timer is cancelled; playback itself and the YouTube files stay.
+        timer.cancel.assert_called_once_with()
+        self.assertTrue(os.path.isfile(auth_path))
+        self.assertEqual(server._player_registry.peek(IDENTITY)['video_id'], 'v')
+        self.assertEqual(server._playback_output_registry.peek(IDENTITY).serial, 'S')
+        self.sidecar.call.assert_not_called()
+
+    def test_a_scoped_youtube_forget_leaves_the_servers_session_alone(self):
+        # The fallback session lives in the same directory as everyone's auth file;
+        # a disconnect must delete one account's file and not the shared one.
+        server = self.server
+        server_auth = os.path.join(self.auth_dir, "server.json")
+        account_auth = os.path.join(self.auth_dir, USER_ID + ".json")
+        for path in (server_auth, account_auth):
+            with open(path, "w") as handle:
+                handle.write("{}")
+        self.assertEqual(server._forget_account_artifacts(USER_ID, ('youtube',)), [])
+        self.assertFalse(os.path.exists(account_auth))
+        self.assertTrue(os.path.isfile(server_auth))
+
+    def test_a_scoped_forget_cannot_aim_at_the_owner(self):
+        server = self.server
+        server._player_registry.state_for("owner")['video_id'] = 'mine'
+        for scope in ('youtube', 'amazon', 'all'):
+            self.assertEqual(server._forget_account_artifacts("owner", (scope,)), ["identity"])
+        self.assertEqual(server._player_registry.peek("owner")['video_id'], 'mine')
+        self.assertEqual(self.sidecar.call.call_count, 0)
+
+    def test_a_queued_provider_purge_retries_its_scope_only(self):
+        server = self.server
+        queue = account_purge.PendingPurges(lambda: sqlite3.connect(self.db_path))
+        queue.record(USER_ID, "browser in use", scope="youtube")
+        self.assertEqual(queue.scopes_of(USER_ID), ("youtube",))
+        self.make_purges_due()
+        with mock.patch.object(server, "_pending_purges", queue), \
+                mock.patch.object(server, "_forget_account_artifacts",
+                                  return_value=[]) as forget:
+            self.assertEqual(server._account_purge_sweep(), [USER_ID])
+        forget.assert_called_once_with(USER_ID, ("youtube",))
+        self.assertEqual(queue.waiting(), 0)
+
+    def test_the_queue_folds_a_delete_into_a_waiting_provider_retry(self):
+        queue = account_purge.PendingPurges(lambda: sqlite3.connect(self.db_path))
+        queue.record(USER_ID, "busy", scope="youtube")
+        queue.record(USER_ID, "busy", scope="all")
+        self.assertEqual(queue.scopes_of(USER_ID), ("all",))
+
     def make_purges_due(self):
         conn = sqlite3.connect(self.db_path)
         try:
@@ -554,12 +658,16 @@ class ServerPurgeTests(TempDirTest):
             self.assertEqual(queue.waiting(), 0)
 
 
+@requires_sidecar('service.py')
 class SidecarProfileDeleteTests(TempDirTest):
     """The browser half of the purge, answered by the sidecar itself.
 
     The app treats any answer without a ``deleted`` flag as a failure worth
     retrying for a day, so a deletion that succeeds and then ends in a 500 is not
     cosmetic: it is a purge that never settles.
+
+    The sidecar lives beside the repo, not inside the app image, so in a
+    container that only ships ``flask-server`` there is nothing to load.
     """
 
     def setUp(self):
@@ -571,10 +679,19 @@ class SidecarProfileDeleteTests(TempDirTest):
         source = Path(__file__).resolve().parents[2] / "browser-auth" / "service.py"
         spec = importlib.util.spec_from_file_location("purge_sidecar_test", source)
         self.sidecar = importlib.util.module_from_spec(spec)
-        with mock.patch.dict(os.environ, {
-                "YT_BROWSER_CONTROL_TOKEN": "control",
-                "CHROME_USER_DATA_DIR": str(self.profile_root)}):
-            spec.loader.exec_module(self.sidecar)
+        # The sidecar is a script directory, not a package: load its sibling
+        # modules by path so this test works wherever the repo is checked out.
+        added = str(source.parent) not in sys.path
+        if added:
+            sys.path.insert(0, str(source.parent))
+        try:
+            with mock.patch.dict(os.environ, {
+                    "YT_BROWSER_CONTROL_TOKEN": "control",
+                    "CHROME_USER_DATA_DIR": str(self.profile_root)}):
+                spec.loader.exec_module(self.sidecar)
+        finally:
+            if added:
+                sys.path.remove(str(source.parent))
         self.client = self.sidecar.app.test_client()
 
     def delete(self, profile):
@@ -639,6 +756,35 @@ class AccountLayerHookTests(unittest.TestCase):
         service._purge_hook = explode
         with self.assertLogs("multiuser.accounts", level="ERROR"):
             service._purge(USER_ID)
+
+    def test_the_artifact_hook_receives_the_provider_and_its_failures(self):
+        # The caller flashes what is still there, so the hook's answer has to reach
+        # it; an exception becomes one failure rather than a silent success.
+        from multiuser.accounts import AccountService
+
+        seen = []
+        service = AccountService.__new__(AccountService)
+        service._artifact_hook = lambda user_id, provider: (
+            seen.append((user_id, provider)) or ["browser profile: busy"])
+        self.assertEqual(
+            service._forget_artifacts(USER_ID, "youtube"), ["browser profile: busy"])
+        self.assertEqual(seen, [(USER_ID, "youtube")])
+
+        def explode(user_id, provider):
+            raise RuntimeError("sidecar is down")
+
+        service._artifact_hook = explode
+        with self.assertLogs("multiuser.accounts", level="ERROR"):
+            self.assertEqual(
+                service._forget_artifacts(USER_ID, "amazon"),
+                ["artifacts: unexpected error"])
+
+    def test_an_unregistered_artifact_hook_is_not_a_failure(self):
+        from multiuser.accounts import AccountService
+
+        service = AccountService.__new__(AccountService)
+        service._artifact_hook = None
+        self.assertEqual(service._forget_artifacts(USER_ID, "youtube"), [])
 
 
 if __name__ == "__main__":

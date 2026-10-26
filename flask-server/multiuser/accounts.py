@@ -14,6 +14,7 @@ import uuid
 from typing import Any
 from urllib.parse import quote
 
+from . import devicename
 from .config import MultiUserConfig
 from .crypto import SecretBox, SecretBoxError
 from .db import Database
@@ -21,7 +22,9 @@ from .security import (
     generate_password,
     generate_totp_secret,
     hash_password,
+    new_numeric_code,
     new_token,
+    safe_equal,
     sha256_hex,
     totp_verify,
     validate_password,
@@ -33,6 +36,13 @@ RESERVED_USERNAMES = {"anonymous", "system", "deleted", "root", "administrator"}
 ROLES = ("owner", "admin", "user")
 STATUSES = ("active", "disabled", "invited")
 PROVIDERS = ("youtube", "amazon")
+# Six digits is what an authenticator app offers to autofill and what a person can
+# read off a phone screen in one glance.  The guess budget comes from
+# ``MULTIUSER_EMAIL_CODE_ATTEMPTS``, not from more digits.
+CODE_DIGITS = 6
+# The one row in ``system_settings`` today: the administrator's switch for the
+# public sign-up door.
+SIGNUP_SWITCH_KEY = "signup_enabled"
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +61,24 @@ def _normalize_username(username: str) -> str:
 
 def _normalize_email(email: str) -> str:
     return (email or "").strip().lower()
+
+
+def _status_transition_problem(current: str, requested: str) -> str | None:
+    """Why this status change is not one anybody should be allowed to make.
+
+    ``invited`` is a starting state meaning "no password accepted yet", so it is
+    only ever set at creation.  Putting an already-activated account back to it used
+    to lock the person out -- ``authenticate`` refuses everything that is not
+    ``active`` -- while leaving ``email_verified`` at 1, which is a row claiming to
+    be both verified and never activated.  Blocking an account is what ``disabled``
+    is for, and that one reverses.
+    """
+    if requested == "invited" and current != "invited":
+        return (
+            "An account that has already been activated cannot be set back to invited. "
+            "Disable it to block sign-in, or delete it."
+        )
+    return None
 
 
 def _public_user(row: Any) -> dict:
@@ -79,6 +107,7 @@ class AccountService:
         self.config = config
         self.secret_box = secret_box
         self._purge_hook = None
+        self._artifact_hook = None
 
     # ------------------------------------------------------------------ setup
     def bootstrap(self) -> dict:
@@ -113,16 +142,15 @@ class AccountService:
         with self.db.connect() as conn:
             bootstrap_email = _normalize_email(self.config.admin_email)
             conn.execute(
-                "INSERT INTO users (id, username, email, display_name, password_hash, role, status, "
+                "INSERT INTO users (id, username, email, password_hash, role, status, "
                 "must_change_password, totp_secret_enc, failed_login_count, locked_until, created_at, "
                 "updated_at, last_login_at, created_by, deleted_at, email_verified, email_verified_at, "
                 "last_email_at) "
-                "VALUES (?, ?, ?, ?, ?, 'owner', 'active', 1, '', 0, 0, ?, ?, 0, 'system', 0, ?, ?, 0)",
+                "VALUES (?, ?, ?, ?, 'owner', 'active', 1, '', 0, 0, ?, ?, 0, 'system', 0, ?, ?, 0)",
                 (
                     user_id,
                     username,
                     bootstrap_email,
-                    "Owner",
                     hash_password(password),
                     now,
                     now,
@@ -143,7 +171,11 @@ class AccountService:
         }
 
     # ------------------------------------------------------------------- read
-    def get_user(self, user_id: str) -> dict:
+    def get_user(self, user_id: str, include_deleted: bool = False) -> dict:
+        if include_deleted:
+            return _public_user(
+                self.db.fetchone("SELECT * FROM users WHERE id = ?", (user_id or "",))
+            )
         return _public_user(
             self.db.fetchone("SELECT * FROM users WHERE id = ? AND status <> 'deleted'", (user_id or "",))
         )
@@ -166,12 +198,18 @@ class AccountService:
     ) -> tuple[list[dict], int]:
         page = max(1, int(page or 1))
         per_page = min(100, max(5, int(per_page or 25)))
-        clauses = ["status <> 'deleted'"]
+        # ``deleted`` is a status filter like any other, but it is the one that
+        # shows soft-deleted rows instead of hiding them: that is the only place
+        # an owner can find an account to restore.
+        if status == "deleted":
+            clauses = ["status = 'deleted'"]
+        else:
+            clauses = ["status <> 'deleted'"]
         params: list[Any] = []
         if query:
             like = f"%{query.strip()}%"
-            clauses.append("(username LIKE ? OR email LIKE ? OR display_name LIKE ?)")
-            params.extend([like, like, like])
+            clauses.append("(username LIKE ? OR email LIKE ?)")
+            params.extend([like, like])
         if status in STATUSES:
             clauses.append("status = ?")
             params.append(status)
@@ -278,6 +316,18 @@ class AccountService:
             return role == "user"
         return False
 
+    @staticmethod
+    def status_options(status: str) -> list:
+        """The statuses the edit form may offer for an account that is *status*.
+
+        The service rule in ``_status_transition_problem`` is the authority; this
+        only keeps the dropdown from presenting a choice that would be refused.
+        """
+        return {
+            "invited": ["invited", "active"],
+            "active": ["active", "disabled"],
+            "disabled": ["disabled", "active"],
+        }.get(status or "", [])
     def _active_owner_count(self, excluding_user_id: str = "") -> int:
         return int(
             self.db.scalar(
@@ -302,7 +352,6 @@ class AccountService:
         username: str,
         password: str,
         email: str = "",
-        display_name: str = "",
         role: str = "user",
         must_change_password: bool = True,
         status: str = "active",
@@ -332,7 +381,6 @@ class AccountService:
             username=username,
             password=password,
             email=email,
-            display_name=display_name,
             role=role,
             status=status,
             must_change_password=must_change_password,
@@ -352,7 +400,6 @@ class AccountService:
         username: str,
         password: str,
         email: str = "",
-        display_name: str = "",
         role: str = "user",
         status: str = "active",
         must_change_password: bool = True,
@@ -366,16 +413,15 @@ class AccountService:
         verified = bool(email_verified and email)
         with self.db.connect() as conn:
             conn.execute(
-                "INSERT INTO users (id, username, email, display_name, password_hash, role, status, "
+                "INSERT INTO users (id, username, email, password_hash, role, status, "
                 "must_change_password, totp_secret_enc, failed_login_count, locked_until, created_at, "
                 "updated_at, last_login_at, created_by, deleted_at, email_verified, email_verified_at, "
                 "last_email_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, '', 0, 0, ?, ?, 0, ?, 0, ?, ?, 0)",
+                "VALUES (?, ?, ?, ?, ?, ?, ?, '', 0, 0, ?, ?, 0, ?, 0, ?, ?, 0)",
                 (
                     user_id,
                     username,
                     email,
-                    (display_name or "").strip()[:120],
                     hash_password(password),
                     role,
                     status,
@@ -390,6 +436,87 @@ class AccountService:
         return user_id
 
     # ------------------------------------------------------ self-registration
+    # ------------------------------------------------------ self-registration
+    def system_setting(self, key: str, default: str = "") -> str:
+        row = self.db.fetchone(
+            "SELECT setting_value FROM system_settings WHERE setting_key = ?", (key,)
+        )
+        return row["setting_value"] if row else default
+
+    def system_setting_row(self, key: str) -> dict:
+        """Value plus who set it and when, for the page that has to name its source."""
+        row = self.db.fetchone(
+            "SELECT s.setting_value, s.updated_at, s.updated_by, u.username "
+            "FROM system_settings s LEFT JOIN users u ON u.id = s.updated_by "
+            "WHERE s.setting_key = ?",
+            (key,),
+        )
+        return dict(row) if row else {}
+
+    def set_system_setting(
+        self,
+        actor: dict | None,
+        key: str,
+        value: str,
+        ip: str = "",
+        user_agent: str = "",
+    ) -> None:
+        before = self.system_setting(key)
+        with self.db.connect() as conn:
+            conn.execute(
+                "INSERT INTO system_settings (setting_key, setting_value, updated_at, updated_by) "
+                "VALUES (?, ?, ?, ?) ON CONFLICT(setting_key) DO UPDATE SET "
+                "setting_value = excluded.setting_value, updated_at = excluded.updated_at, "
+                "updated_by = excluded.updated_by",
+                (key[:80], (value or "")[:120], _now(), (actor or {}).get("id") or ""),
+            )
+        self.audit(
+            actor, "system_setting_changed", None,
+            {"key": key[:80], "before": before[:120], "after": (value or "")[:120]},
+            ip, user_agent,
+        )
+
+    def signup_switch_on(self) -> bool:
+        """The administrator's half of the sign-up policy.  No row means open."""
+        return self.system_setting(SIGNUP_SWITCH_KEY, "1") == "1"
+
+    def set_signup_switch(
+        self, actor: dict | None, enabled: bool, ip: str = "", user_agent: str = ""
+    ) -> None:
+        if not self.config.self_signup_enabled:
+            # The environment is the ceiling: a hijacked panel session must not be
+            # able to open a door the deployment shut on purpose.
+            raise AccountError(
+                "MULTIUSER_SELF_SIGNUP_ENABLED is 0, so this deployment has no public "
+                "sign-up to switch on. Change the environment, not the panel."
+            )
+        self.set_system_setting(
+            actor, SIGNUP_SWITCH_KEY, "1" if enabled else "0", ip, user_agent
+        )
+
+    def signup_policy(self) -> dict:
+        """Whether open sign-up may create an account, and why not if it may not.
+
+        Three separate reasons, because the page owes an applicant the truth: a
+        exhausted daily cap invites them back tomorrow, an administrator's closure
+        sends them to support, and a deployment with no sign-up at all is neither.
+        """
+        if not self.config.self_signup_enabled or self.config.max_self_signups_per_day <= 0:
+            return {"open": False, "reason": "environment", "remaining": 0}
+        if not self.signup_switch_on():
+            return {"open": False, "reason": "administrator", "remaining": 0}
+        limit = int(self.config.max_self_signups_per_day)
+        count = self.recent_self_signup_count()
+        if count >= limit:
+            return {
+                "open": False, "reason": "daily_cap", "remaining": 0,
+                "count": count, "limit": limit,
+            }
+        return {
+            "open": True, "reason": "", "remaining": limit - count,
+            "count": count, "limit": limit,
+        }
+
     def recent_self_signup_count(self, seconds: int = 86400) -> int:
         """Accounts created by open sign-up in the window.
 
@@ -404,9 +531,7 @@ class AccountService:
         )
 
     def registration_open(self) -> bool:
-        if not self.config.self_signup_enabled or self.config.max_self_signups_per_day <= 0:
-            return False
-        return self.recent_self_signup_count() < self.config.max_self_signups_per_day
+        return bool(self.signup_policy()["open"])
 
     def register_self_service(
         self,
@@ -414,7 +539,6 @@ class AccountService:
         username: str,
         password: str,
         email: str,
-        display_name: str = "",
         ip: str = "",
         user_agent: str = "",
     ) -> dict:
@@ -438,7 +562,6 @@ class AccountService:
             username=username,
             password=password,
             email=email,
-            display_name=display_name,
             role="user",
             status="active",
             must_change_password=False,
@@ -482,7 +605,7 @@ class AccountService:
         ):
             raise AccountError("You do not have permission to edit this user.")
 
-        allowed = {"username", "email", "display_name", "role", "status"}
+        allowed = {"username", "email", "role", "status"}
         changes = {key: value for key, value in (changes or {}).items() if key in allowed}
         if not changes:
             raise AccountError("Nothing to update.")
@@ -491,8 +614,6 @@ class AccountService:
             changes["username"] = self.validate_username(changes["username"])
         if "email" in changes:
             changes["email"] = self.validate_email(changes["email"])
-        if "display_name" in changes:
-            changes["display_name"] = (changes.get("display_name") or "").strip()[:120]
         if "role" in changes:
             changes["role"] = (changes.get("role") or "").strip().lower()
             if changes["role"] not in ROLES:
@@ -507,6 +628,13 @@ class AccountService:
                 raise AccountError("Invalid status.")
             if actor and actor.get("id") == user_id:
                 raise AccountError("You cannot change your own status.")
+            problem = _status_transition_problem(target.get("status") or "", changes["status"])
+            if problem:
+                raise AccountError(problem)
+            if changes["status"] == "invited" and not (
+                changes.get("email") or target.get("email")
+            ):
+                raise AccountError("An email address is required to invite an account.")
 
         self._guard_last_owner(target, changes)
         self._ensure_unique(
@@ -531,55 +659,45 @@ class AccountService:
         self,
         actor: dict | None,
         *,
-        display_name: str,
         email: str,
         current_password: str = "",
         ip: str = "",
         user_agent: str = "",
     ) -> dict:
-        """Let a signed-in administrator edit their own display name and email.
+        """Change the email address on the account you are signed in to.
 
-        A changed email address requires the current password and starts
-        unverified, so a hijacked session cannot silently take over password
-        reset or magic-link sign-in for an address the attacker controls.
+        A changed address requires the current password and starts unverified, so a
+        hijacked session cannot silently take over password reset and magic-link
+        sign-in for an address the attacker controls.  There is no display name to
+        edit: the username is the one name an account has, and it is what the queue,
+        the audit log and every other player already quote.
         """
         if not actor:
             raise AccountError("Sign in first.")
         target = self.get_user(actor.get("id", ""))
         if not target:
             raise AccountError("User not found.")
-        display_name = (display_name or "").strip()[:120]
         email = self.validate_email(email)
         email_changed = email != (target.get("email") or "").strip().lower()
-        if email_changed:
-            row = self.db.fetchone(
-                "SELECT password_hash FROM users WHERE id = ? AND status = 'active'",
-                (target["id"],),
-            )
-            if not row or not verify_password(row["password_hash"], current_password):
-                raise AccountError("Enter your current password to change the email address.")
-            self._ensure_unique(target["username"], email, exclude_id=target["id"])
+        if not email_changed:
+            return target
+        row = self.db.fetchone(
+            "SELECT password_hash FROM users WHERE id = ? AND status = 'active'",
+            (target["id"],),
+        )
+        if not row or not verify_password(row["password_hash"], current_password):
+            raise AccountError("Enter your current password to change the email address.")
+        self._ensure_unique(target["username"], email, exclude_id=target["id"])
         now = _now()
         with self.db.connect() as conn:
-            if email_changed:
-                conn.execute(
-                    "UPDATE users SET display_name = ?, email = ?, email_verified = 0, "
-                    "email_verified_at = 0, updated_at = ? WHERE id = ?",
-                    (display_name, email, now, target["id"]),
-                )
-                conn.execute("DELETE FROM user_email_tokens WHERE user_id = ?", (target["id"],))
-            else:
-                conn.execute(
-                    "UPDATE users SET display_name = ?, updated_at = ? WHERE id = ?",
-                    (display_name, now, target["id"]),
-                )
+            conn.execute(
+                "UPDATE users SET email = ?, email_verified = 0, email_verified_at = 0, "
+                "updated_at = ? WHERE id = ?",
+                (email, now, target["id"]),
+            )
+            conn.execute("DELETE FROM user_email_tokens WHERE user_id = ?", (target["id"],))
         self.audit(
-            actor,
-            "profile_updated",
-            target["id"],
-            {"email_changed": email_changed, "display_name_changed": display_name != (target.get("display_name") or "")},
-            ip,
-            user_agent,
+            actor, "profile_updated", target["id"], {"email_changed": True}, ip, user_agent
         )
         return self.get_user(target["id"])
 
@@ -613,6 +731,39 @@ class AccountService:
                     (_now(), user_id),
                 )
         self.audit(actor, "user_status_changed", user_id, {"status": status}, ip, user_agent)
+        return self.get_user(user_id)
+
+    def set_must_change_password(
+        self,
+        actor: dict | None,
+        user_id: str,
+        required: bool,
+        ip: str = "",
+        user_agent: str = "",
+    ) -> dict:
+        """Arm or clear the forced-password-change flag.
+
+        The flag is set when an account is created and cleared by the next
+        password change, but an administrator also needs to clear it when the
+        holder changed the password some other way (a reset, for instance), and to
+        arm it again after handing over a temporary one."""
+        target = self.get_user(user_id)
+        if not target:
+            raise AccountError("User not found.")
+        if not self.can_manage_user(actor, target):
+            raise AccountError("You do not have permission to change this user.")
+        self.db.execute(
+            "UPDATE users SET must_change_password = ?, updated_at = ? WHERE id = ?",
+            (1 if required else 0, _now(), user_id),
+        )
+        self.audit(
+            actor,
+            "password_change_required" if required else "password_change_cleared",
+            user_id,
+            {},
+            ip,
+            user_agent,
+        )
         return self.get_user(user_id)
 
     # ---------------------------------------------------------------- password
@@ -696,6 +847,7 @@ class AccountService:
             if entry["revoked_at"] or entry["expires_at"] <= _now():
                 continue
             sid_hash = entry["sid_hash"]
+            raw_agent = (entry["user_agent"] or "")[:120]
             summaries.append({
                 "id": sid_hash[:8],
                 "current": bool(current_sid_hash) and sid_hash == current_sid_hash,
@@ -703,7 +855,11 @@ class AccountService:
                 "last_seen_at": entry["last_seen_at"],
                 "expires_at": entry["expires_at"],
                 "ip": entry["ip"],
-                "device": (entry["user_agent"] or "")[:120],
+                # A name to scan, plus the header it was read from. The label is
+                # what a person compares against the devices they own; the raw
+                # string is what they check it against when something is off.
+                "device": devicename.describe_user_agent(raw_agent),
+                "device_ua": raw_agent,
             })
         return summaries
 
@@ -813,24 +969,62 @@ class AccountService:
         ):
             self.db.audit(None, "system", "totp_enrollment_expired", user_id, "{}", "", "")
 
+    def reauthenticate(
+        self,
+        actor: dict,
+        *,
+        password: str = "",
+        email_code: str = "",
+        ip: str = "",
+        user_agent: str = "",
+    ) -> str:
+        """Prove the person at the keyboard owns this account: password or email code.
+
+        Either one alone is enough here, which is what the panel's confirmation
+        dialog offers. A stolen session has neither: it cannot read the mailbox and
+        does not know a password the owner never typed into it."""
+        row = self._active_row(actor)
+        if email_code:
+            if self.consume_email_code(row["id"], "reauth", email_code):
+                return "email"
+            reason = "bad_code"
+        elif password:
+            if verify_password(row["password_hash"], password):
+                return "password"
+            reason = "bad_password"
+        else:
+            raise AccountError("Enter your password or the code from your email.")
+        self.db.audit(
+            row["id"], row["username"], "totp_reauth_failed", row["id"],
+            json.dumps({"reason": reason}), ip, user_agent,
+        )
+        raise AccountError(
+            "That did not verify. Re-enter your password, or ask for a fresh code."
+        )
+
     def begin_totp_enrollment(
         self,
         actor: dict,
         *,
-        current_password: str,
+        current_password: str = "",
         issuer: str = "",
         ip: str = "",
         user_agent: str = "",
+        verified: bool = False,
+        allow_existing: bool = False,
     ) -> dict:
         """Hand out a fresh secret, held *pending* until a code proves the clock matches.
 
         The password is required because a hijacked session must not be able to arm
         a second factor it alone can satisfy -- that turns 2FA into a lockout tool
-        against the real owner."""
+        against the real owner. ``verified`` says that proof was already made, by the
+        re-authentication dialog; ``allow_existing`` is the "change authenticator"
+        case, where the live secret keeps working until the new one is confirmed.
+        """
         row = self._active_row(actor)
-        if row["totp_secret_enc"]:
+        if row["totp_secret_enc"] and not allow_existing:
             raise AccountError("Two-factor sign-in is already on. Turn it off first.")
-        if not verify_password(row["password_hash"], current_password):
+        if not verified and not verify_password(row["password_hash"], current_password):
             self.db.audit(
                 row["id"], row["username"], "totp_enrollment_failed", row["id"],
                 json.dumps({"reason": "bad_password"}), ip, user_agent,
@@ -844,7 +1038,11 @@ class AccountService:
             "UPDATE users SET totp_pending_enc = ?, totp_pending_at = ?, updated_at = ? WHERE id = ?",
             (self.secret_box.encrypt_json({"secret": secret}), now, now, row["id"]),
         )
-        self.audit(actor, "totp_enrollment_started", row["id"], {}, ip, user_agent)
+        self.audit(
+            actor,
+            "totp_enrollment_replaced" if allow_existing else "totp_enrollment_started",
+            row["id"], {"via": "reauth" if verified else "password"}, ip, user_agent,
+        )
         issuer, uri = self._otpauth_uri(row["username"], secret, issuer)
         return {
             "secret": secret,
@@ -919,17 +1117,30 @@ class AccountService:
         self.audit(actor, "totp_enrollment_cancelled", row["id"], {}, ip, user_agent)
 
     def disable_totp(
-        self, actor: dict, *, current_password: str, code: str, ip: str = "", user_agent: str = ""
+        self,
+        actor: dict,
+        *,
+        current_password: str = "",
+        code: str = "",
+        ip: str = "",
+        user_agent: str = "",
+        verified: bool = False,
     ) -> dict:
         """Turn 2FA off. Both the password and a live code are required.
 
         Either alone would let a stolen session disarm the protection, or a stolen
-        password lock the owner out of their own authenticator."""
+        password lock the owner out of their own authenticator.  ``verified`` is the
+        admin panel's path: the dialog there has already checked the password *or* an
+        emailed code, so this does not ask for the factor being removed.
+        """
         row = self._active_row(actor)
         if not row["totp_secret_enc"]:
             raise AccountError("Two-factor sign-in is not on.")
         secret = self._totp_secret(row["totp_secret_enc"])
-        if not verify_password(row["password_hash"], current_password) or not totp_verify(secret, code):
+        if not verified and (
+            not verify_password(row["password_hash"], current_password)
+            or not totp_verify(secret, code)
+        ):
             self.db.audit(
                 row["id"], row["username"], "totp_disable_failed", row["id"],
                 json.dumps({"reason": "credentials"}), ip, user_agent,
@@ -977,6 +1188,26 @@ class AccountService:
             hook(user_id)
         except Exception:  # noqa: BLE001 - the account is gone either way
             logger.exception("Could not purge artifacts for account %s", user_id)
+
+    def set_artifact_hook(self, hook) -> None:
+        """Register ``hook(user_id, provider)`` to erase a provider's saved artifacts.
+
+        Disconnecting a provider deletes its row; the cookies, the Chromium profile
+        and the live playback session belong to the application, so it answers with
+        the list of steps it could not finish. Only then can the caller say what is
+        still there instead of claiming the connection is gone.
+        """
+        self._artifact_hook = hook
+
+    def _forget_artifacts(self, user_id: str, provider: str) -> list[str]:
+        hook = self._artifact_hook
+        if hook is None:
+            return []
+        try:
+            return list(hook(user_id, provider) or [])
+        except Exception:  # noqa: BLE001 - the row is gone either way
+            logger.exception("Could not erase %s artifacts for account %s", provider, user_id)
+            return ["artifacts: unexpected error"]
 
     def delete_own_account(
         self,
@@ -1127,8 +1358,8 @@ class AccountService:
                 json.dumps({"reason": "email_unverified"}), ip, user_agent,
             )
             return None, (
-                "Verify your email address before signing in. Use the link we sent you, "
-                "or ask for another one from the sign-in page."
+                "Verify your email address before signing in. Enter the six-digit code we "
+                "sent, or ask for another one from the sign-in page."
             )
         with self.db.connect() as conn:
             conn.execute(
@@ -1162,7 +1393,7 @@ class AccountService:
             return None, None
         sid_hash = sha256_hex(raw_sid)
         row = self.db.fetchone(
-            "SELECT s.*, u.username, u.role, u.status AS user_status, u.display_name, u.email "
+            "SELECT s.*, u.username, u.role, u.status AS user_status, u.email "
             "FROM user_sessions s JOIN users u ON u.id = s.user_id WHERE s.sid_hash = ?",
             (sid_hash,),
         )
@@ -1194,7 +1425,6 @@ class AccountService:
             "username": row["username"],
             "role": row["role"],
             "status": row["user_status"],
-            "display_name": row["display_name"],
             "email": row["email"],
         }
         return session, user
@@ -1372,16 +1602,53 @@ class AccountService:
         provider: str,
         ip: str = "",
         user_agent: str = "",
-    ) -> None:
-        if provider not in PROVIDERS:
-            raise AccountError("Unknown provider.")
+    ) -> tuple[list[str], bool]:
+        """Disconnect a provider from somebody else's account (admin door).
+
+        ``(failures, was_linked)`` -- the caller must not claim a removal for a
+        service this account never connected.
+        """
         if not self.can_manage_user(actor, self.get_user(user_id)):
             raise AccountError("You do not have permission to disconnect provider credentials.")
-        self.db.execute(
+        return self._disconnect_provider(actor, user_id, provider, ip, user_agent)
+
+    def clear_own_provider_credentials(
+        self,
+        actor: dict | None,
+        provider: str,
+        ip: str = "",
+        user_agent: str = "",
+    ) -> tuple[list[str], bool]:
+        """Disconnect a provider from the signed-in account (player door).
+
+        Returns ``(failures, was_linked)``. ``can_manage_user`` is false for a plain
+        user looking at their own row, so self-service needs its own entry point
+        rather than a relaxed permission check that an admin door might reuse.
+        """
+        user = self.get_user(str((actor or {}).get("id") or ""))
+        if not user or user.get("status") != "active" or not actor:
+            raise AccountError("Sign in again to manage your linked services.")
+        return self._disconnect_provider(actor, user["id"], provider, ip, user_agent)
+
+    def _disconnect_provider(
+        self, actor: dict | None, user_id: str, provider: str, ip: str, user_agent: str
+    ) -> tuple[list[str], bool]:
+        if provider not in PROVIDERS:
+            raise AccountError("Unknown provider.")
+        removed = self.db.execute(
             "DELETE FROM user_provider_credentials WHERE user_id = ? AND provider = ?",
             (user_id, provider),
         )
-        self.audit(actor, "provider_disconnected", user_id, {"provider": provider}, ip, user_agent)
+        failures = self._forget_artifacts(user_id, provider)
+        # The audit says what actually happened, because "disconnected" followed by
+        # a live session is exactly the lie this hook exists to end.
+        self.audit(
+            actor, "provider_disconnected", user_id,
+            {"provider": provider, "was_linked": bool(removed),
+             "artifacts": "removed" if not failures else "; ".join(failures)[:400]},
+            ip, user_agent,
+        )
+        return failures, bool(removed)
 
     # ------------------------------------------------------------- email tokens
     def find_user_by_email(self, email: str) -> dict:
@@ -1396,13 +1663,13 @@ class AccountService:
         )
 
     def _token_ttl(self, purpose: str) -> int:
-        if purpose == "reset":
-            return self.config.email_token_reset_minutes * 60
+        if purpose in {"verify", "reset", "reauth"}:
+            # A typed code, not a link: one million possible values, and every hour
+            # the window stays open is another hour to spend guesses in.
+            return self.config.email_code_minutes * 60
         if purpose == "magic":
             return self.config.email_token_magic_minutes * 60
-        if purpose == "invite":
-            return self.config.email_token_invite_hours * 3600
-        return self.config.email_token_verify_hours * 3600
+        return self.config.email_token_invite_hours * 3600
 
     def create_email_token(
         self,
@@ -1412,8 +1679,38 @@ class AccountService:
         ip: str = "",
         user_agent: str = "",
     ) -> str:
-        if purpose not in {"verify", "reset", "magic", "invite"}:
+        """Issue the one live *link* credential for ``purpose`` and return its token.
+
+        Only ``invite`` and ``magic`` still travel by URL.  Asking this for
+        ``verify``, ``reset`` or ``reauth`` raises rather than producing a link no route can
+        consume, so a half-migrated caller cannot quietly reintroduce a second door.
+        """
+        return self._issue_email_credential(user_id, purpose, email, ip, user_agent, False)["token"]
+
+    def create_email_code(
+        self,
+        user_id: str,
+        purpose: str,
+        email: str = "",
+        ip: str = "",
+        user_agent: str = "",
+    ) -> str:
+        """Issue the one live typed code for ``purpose`` and return it for the email.
+
+        This is the only path that hands back a code in plaintext, which is why it is
+        separate: the caller must put the value in exactly one place (the message) and
+        never in an audit row, a redirect or a page.
+        """
+        return self._issue_email_credential(user_id, purpose, email, ip, user_agent, True)["code"]
+
+    def _issue_email_credential(
+        self, user_id: str, purpose: str, email: str, ip: str, user_agent: str, code: bool
+    ) -> dict:
+        if purpose not in {"verify", "reset", "magic", "invite", "reauth"}:
             raise AccountError("Invalid email token purpose.")
+        if code != (purpose in {"verify", "reset", "reauth"}):
+            raise AccountError("Verification, reset and re-authentication are typed "
+                               "codes; links are not.")
         user = self.get_user(user_id)
         if not user:
             raise AccountError("User not found.")
@@ -1421,26 +1718,127 @@ class AccountService:
         if not email:
             raise AccountError("This account has no email address.")
         raw = new_token(32)
+        # Still the primary key even for a code row: it keeps one identity scheme for
+        # the table, and nothing about it is ever revealed to the visitor.
         now = _now()
         expires = now + self._token_ttl(purpose)
+        digits = new_numeric_code(CODE_DIGITS) if code else ""
+        # Encrypted, not hashed.  Six digits is a million values, so a digest of one
+        # can be read by trying them all; the Fernet key is not in the database file.
+        code_enc = self.secret_box.encrypt_json({"code": digits}) if code else ""
         with self.db.connect() as conn:
-            # One live token per purpose: requesting a new link invalidates the
-            # previous one, so forwarded/old messages stop working.
+            # One live credential per purpose: asking again invalidates the previous
+            # one, so forwarded messages and stale tabs stop working.
             conn.execute(
                 "DELETE FROM user_email_tokens WHERE user_id = ? AND purpose = ?",
                 (user_id, purpose),
             )
             conn.execute(
                 "INSERT INTO user_email_tokens "
-                "(token_hash, user_id, purpose, email, created_at, expires_at, used_at, ip, user_agent) "
-                "VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)",
-                (sha256_hex(raw), user_id, purpose, email, now, expires, (ip or "")[:64], (user_agent or "")[:300]),
+                "(token_hash, user_id, purpose, email, created_at, expires_at, used_at, ip, "
+                "user_agent, code_enc, code_attempts) VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?, ?, 0)",
+                (
+                    sha256_hex(raw), user_id, purpose, email, now, expires,
+                    (ip or "")[:64], (user_agent or "")[:300], code_enc,
+                ),
             )
             conn.execute(
                 "UPDATE users SET last_email_at = ? WHERE id = ?",
                 (now, user_id),
             )
-        return raw
+        return {"token": raw, "code": digits}
+
+    def _code_row(self, user_id: str, purpose: str) -> dict:
+        """The one live code row for this purpose, or {} if there is no usable one.
+
+        The same four validity rules as ``_token_row``: not spent, not expired, the
+        account not deleted, and the address unchanged since it was issued -- a
+        verification code for ``old@example.com`` must not confirm
+        ``attacker@example.com``.  Plus the attempt ceiling, which is why a code dies
+        before its window does.
+        """
+        if not user_id or purpose not in {"verify", "reset", "reauth"}:
+            return {}
+        row = self.db.fetchone(
+            "SELECT t.*, u.username, u.email AS current_email, u.status AS user_status, u.role "
+            "FROM user_email_tokens t JOIN users u ON u.id = t.user_id "
+            "WHERE t.user_id = ? AND t.purpose = ? AND t.code_enc <> ''",
+            (user_id, purpose),
+        )
+        if not row:
+            return {}
+        item = dict(row)
+        if item["used_at"] or item["expires_at"] <= _now():
+            return {}
+        if item["user_status"] == "deleted":
+            return {}
+        if int(item["code_attempts"] or 0) >= max(1, self.config.email_code_attempts):
+            return {}
+        if _normalize_email(item.get("email")) != _normalize_email(item.get("current_email") or ""):
+            return {}
+        return item
+
+    def email_code_state(self, user_id: str, purpose: str) -> dict:
+        """Whether a live code exists, for the page that must say "check your inbox"."""
+        row = self._code_row(user_id, purpose)
+        if not row:
+            return {"pending": False}
+        return {
+            "pending": True,
+            "email": row["email"],
+            "expires_at": row["expires_at"],
+            "attempts_left": max(0, self.config.email_code_attempts - int(row["code_attempts"] or 0)),
+        }
+
+    def consume_email_code(self, user_id: str, purpose: str, code: str) -> dict:
+        """Spend the live code, or return {} -- and never say which failure this was.
+
+        "No such code", "expired", "guessed too often" and "wrong" are one answer,
+        because the difference is exactly what tells an attacker that a username has a
+        pending request.  A malformed entry costs no attempt (a fat finger is not a
+        guess); a well-formed wrong one does, and reaching the ceiling spends the row
+        outright so the only way forward is a fresh code.  The account is never locked
+        for a wrong code: anyone who knows a username could then lock it for free.
+        """
+        code = (code or "").strip().replace(" ", "").replace("-", "")
+        if len(code) != CODE_DIGITS or not code.isdigit():
+            return {}
+        row = self._code_row(user_id, purpose)
+        if not row:
+            return {}
+        try:
+            stored = (self.secret_box.decrypt_json(row["code_enc"]) or {}).get("code") or ""
+        except SecretBoxError:
+            # A rotated key makes this row unreadable forever, so it is spent rather
+            # than left to be retried; a resend replaces it.
+            self.db.execute(
+                "UPDATE user_email_tokens SET used_at = ? WHERE token_hash = ? AND used_at = 0",
+                (_now(), row["token_hash"]),
+            )
+            logger.warning("Email code could not be decrypted for account %s", user_id)
+            return {}
+        if not safe_equal(stored, code):
+            ceiling = max(1, self.config.email_code_attempts)
+            with self.db.connect() as conn:
+                # One statement, incrementing the column it also tests: two parallel
+                # wrong guesses must not both read "attempt 1" and so buy more guesses
+                # than the ceiling promises.
+                conn.execute(
+                    "UPDATE user_email_tokens SET code_attempts = code_attempts + 1, "
+                    "used_at = CASE WHEN code_attempts + 1 >= ? THEN ? ELSE used_at END "
+                    "WHERE token_hash = ? AND used_at = 0",
+                    (ceiling, _now(), row["token_hash"]),
+                )
+            return {}
+        with self.db.connect() as conn:
+            changed = conn.execute(
+                "UPDATE user_email_tokens SET used_at = ? WHERE token_hash = ? AND used_at = 0",
+                (_now(), row["token_hash"]),
+            ).rowcount
+        if not changed:
+            # Two submits raced for the same code; only one may pass.
+            return {}
+        return {"user": self.get_user(user_id), "email": row["email"], "purpose": purpose}
 
     def recent_email_token_count(self, user_id: str, purpose: str, seconds: int = 60) -> int:
         return int(
@@ -1456,7 +1854,7 @@ class AccountService:
             return {}
         row = self.db.fetchone(
             "SELECT t.*, u.username, u.email AS current_email, u.status AS user_status, "
-            "u.role, u.display_name, u.email_verified "
+            "u.role, u.email_verified "
             "FROM user_email_tokens t JOIN users u ON u.id = t.user_id "
             "WHERE t.token_hash = ? AND t.purpose = ?",
             (sha256_hex(raw), purpose),

@@ -1,14 +1,24 @@
 (() => {
   'use strict';
   const provider = document.body.dataset.provider;
+  const asToken = document.body.dataset.as || '';
+  const returnTo = document.body.dataset.returnTo || '';
   const el = id => document.getElementById(id);
-  let run = 0, stopped = true, started = false, busy = false, capturing = false;
-  let pollTimer, frameTimer, pollCount = 0, frameOpenedAt = 0, frameReady = false;
-  let amazonAttempt = null, chain = Promise.resolve();
+  const panels = ['code-panel', 'captcha-panel', 'choice-panel', 'approval-panel'];
+  // Amazon's scripted steps and Google's challenge pages can each take well
+  // over a minute to answer, so the form calls get a far longer leash than
+  // ordinary API traffic.
+  let run = 0, busy = false, pollTimer = null, pollCount = 0;
+  let answerKind = 'securitycode', choiceKind = 'claimsoption';
 
-  async function api(path, body) {
+  async function api(path, body, timeout = 150000) {
+    if (asToken && path.startsWith('/api/youtube/browser-session/')) {
+      // An admin signing in for another account: the token is what makes these
+      // calls target that account's profile. It never reaches the other APIs.
+      path += (path.includes('?') ? '&' : '?') + 'as=' + encodeURIComponent(asToken);
+    }
     const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 20000);
+    const timer = setTimeout(() => controller.abort(), timeout);
     try {
       const response = await fetch(path, {
         credentials: 'same-origin', cache: 'no-store', signal: controller.signal,
@@ -18,6 +28,7 @@
       let data;
       try { data = await response.json(); } catch (_) { data = {}; }
       if (!response.ok) {
+        if (data && typeof data.state === 'string') return data;  // a form answer, not a transport error
         const message = response.status === 401 ? 'Your Music Box session has ended. Go back and sign in again.' :
           (typeof data.error === 'string' ? data.error : data.error?.message);
         const error = new Error(message || 'Connection failed. Try again.');
@@ -25,221 +36,230 @@
         throw error;
       }
       return data;
-    } finally { clearTimeout(timeout); }
+    } finally { clearTimeout(timer); }
   }
+
   function message(text, error = false) {
-    el('status').textContent = text;
+    el('status').textContent = text || '';
     el('status').classList.toggle('error', error);
   }
-  function stop() {
-    stopped = true;
-    clearTimeout(pollTimer);
-    clearTimeout(frameTimer);
-  }
-  function fail(error) {
-    stop();
-    message(error.message || 'Could not open sign-in. Try again.', true);
-    el('retry').hidden = error.status === 401;
-    if (provider === 'youtube') {
-      el('capture').disabled = true;
-      el('browser-tools').hidden = true;
-      el('browser-loading').hidden = true;
-      if (!frameReady) el('surface').hidden = true;
-    }
+  function stopPolling() { clearTimeout(pollTimer); pollTimer = null; }
+  function reset() {
+    stopPolling();
+    el('steps').hidden = true;
+    panels.forEach(id => el(id).hidden = true);
+    el('setup').hidden = false;
   }
   function finish() {
-    stop();
-    message('Connected. Returning to Music Box…');
-    location.replace('/?account_connected=' + provider);
+    stopPolling();
+    message('Connected. Returning…');
+    location.replace(returnTo || ('/account?connected=' + provider + '#panel-providers'));
   }
-  async function poll(id) {
-    if (stopped || id !== run) return;
-    if (pollCount++ > 165) { fail(new Error('Sign-in timed out. Start again.')); return; }
-    try {
-      const data = await api(provider === 'amazon' ? '/alexa/proxy_check/' : '/api/youtube/browser-session/status');
-      if (stopped || id !== run) return;
-      if (data.logged_in || data.state === 'connected') { finish(); return; }
-      if (data.error) throw new Error(data.error);
-      if (['reconnect_required', 'unavailable'].includes(data.state)) {
-        fail(new Error(data.message || 'Sign-in could not be verified. Try again.')); return;
-      }
-      if (data.message) message(data.message);
-    } catch (error) {
-      if (stopped || id !== run) return;
-      if ([401, 403].includes(error.status)) { fail(error); return; }
-      message(error.message, true);
+  function showPanel(id) {
+    el('setup').hidden = true;
+    el('steps').hidden = false;
+    panels.forEach(panel => { el(panel).hidden = panel !== id; });
+  }
+
+  function handle(data) {
+    if (!data || !data.state) {
+      message('Connection failed. Try again.', true);
+      reset();
       el('retry').hidden = false;
+      return;
     }
-    pollTimer = setTimeout(() => poll(id), 1800);
-  }
-  async function frame(id) {
-    if (stopped || id !== run || capturing) return;
-    if (!document.hidden) {
-      try {
-        const data = await api('/api/youtube/browser-session/surface');
-        if (stopped || id !== run || capturing) return;
-        if (!/^data:image\/(jpeg|png);base64,/.test(data.image || '') ||
-            !Number.isInteger(data.width) || !Number.isInteger(data.height) ||
-            data.width <= 0 || data.height <= 0 || data.width > 4096 || data.height > 4096) {
-          const error = new Error('The sign-in browser did not return a valid page. Start again.');
-          error.status = 409;
-          throw error;
+    switch (data.state) {
+      case 'connected':
+        finish();
+        return;
+      case 'need_code':
+        answerKind = data.answer || 'securitycode';
+        el('code-message').textContent = data.message || 'Enter the code.';
+        el('code').value = '';
+        showPanel('code-panel');
+        el('code').focus();
+        message('');
+        return;
+      case 'need_captcha':
+        answerKind = 'captcha';
+        el('captcha-message').textContent = data.message || 'Type the characters you see.';
+        el('captcha-image').src = '/alexa/form_login/captcha/?t=' + Date.now();
+        el('captcha').value = '';
+        showPanel('captcha-panel');
+        el('captcha').focus();
+        message('');
+        return;
+      case 'need_choice': {
+        choiceKind = data.kind || 'claimsoption';
+        el('choice-message').textContent = data.message || 'Choose how to verify.';
+        const options = el('choice-options');
+        options.textContent = '';
+        const list = Array.isArray(data.options) ? data.options : [];
+        list.forEach((option, index) => {
+          const label = document.createElement('label');
+          label.className = 'choice-option';
+          const radio = document.createElement('input');
+          radio.type = 'radio';
+          radio.name = 'choice';
+          radio.value = option.index;
+          radio.required = true;
+          if (index === 0) radio.checked = true;
+          label.appendChild(radio);
+          label.appendChild(document.createTextNode(' ' + option.label));
+          options.appendChild(label);
+        });
+        const manual = el('choice-manual');
+        el('choice-manual-label').hidden = manual.hidden = list.length > 0;
+        if (!list.length && data.raw) {
+          const pre = document.createElement('p');
+          pre.className = 'step-hint';
+          pre.textContent = data.raw;
+          options.appendChild(pre);
         }
-        const image = el('frame');
-        // Decode before revealing the page or enabling any input controls.
-        const decoded = new Image();
-        decoded.src = data.image;
-        try { await decoded.decode(); }
-        catch (_) {
-          const error = new Error('The sign-in page could not be displayed. Start again.');
-          error.status = 409;
-          throw error;
-        }
-        if (decoded.naturalWidth !== data.width || decoded.naturalHeight !== data.height) {
-          const error = new Error('The sign-in page could not be displayed. Start again.');
-          error.status = 409;
-          throw error;
-        }
-        if (stopped || id !== run || capturing) return;
-        image.src = data.image;
-        image.dataset.width = data.width;
-        image.dataset.height = data.height;
-        image.hidden = false;
-        el('surface').hidden = false;
-        el('browser-loading').hidden = true;
-        el('browser-tools').hidden = false;
-        el('capture').disabled = false;
-        if (!frameReady || el('status').classList.contains('error')) message('Finish signing in above, then confirm your account.');
-        frameReady = true;
-      } catch (error) {
-        if (stopped || id !== run || capturing) return;
-        if ([401, 403, 409].includes(error.status)) { fail(error); return; }
-        if (!frameReady && Date.now() - frameOpenedAt < 30000) message('Opening secure browser…');
-        else { fail(error); return; }
+        showPanel('choice-panel');
+        if (list.length) el('choice-submit').focus();
+        else manual.focus();
+        message('');
+        return;
       }
+      case 'need_approval':
+      case 'need_prompt':
+        el('approval-message').textContent = data.message || 'Approve this sign-in on your phone, then continue.';
+        showPanel('approval-panel');
+        message('Waiting for the approval…');
+        schedulePoll();
+        return;
+      case 'busy':
+        stopPolling();
+        reset();
+        el('retry').hidden = false;
+        message(data.message || 'The sign-in browser is busy. Try again in a minute.', true);
+        return;
+      default:  // error
+        stopPolling();
+        reset();
+        el('retry').hidden = false;
+        message(data.message || 'The sign-in could not continue. Try again.', true);
     }
-    frameTimer = setTimeout(() => frame(id), 650);
   }
-  function send(data) {
-    if (stopped || !frameReady || capturing) return Promise.resolve();
+
+  function schedulePoll() {
+    stopPolling();
+    if (pollCount++ > 80) {
+      handle({state: 'error', message: 'The approval did not arrive in time. Start again.'});
+      return;
+    }
     const id = run;
-    chain = chain.then(() => {
-      if (!stopped && id === run && !capturing) return api('/api/youtube/browser-session/surface', data);
-    }).catch(error => { if (id === run) fail(error); });
-    return chain;
+    pollTimer = setTimeout(async () => {
+      if (id !== run) return;
+      try {
+        const data = provider === 'amazon'
+          ? await api('/alexa/form_login/step/', {kind: 'poll'})
+          : await api('/api/youtube/browser-session/form/poll', {});
+        if (id !== run) return;
+        handle(data);
+      } catch (error) {
+        if (id !== run) return;
+        if (error.status === 401) { handle({state: 'error', message: error.message}); return; }
+        schedulePoll();
+      }
+    }, 4000);
   }
-  async function start(event) {
+
+  async function submit(event) {
     event?.preventDefault();
     if (busy) return;
-    stop();
     const id = ++run;
-    busy = true; stopped = false; capturing = false; pollCount = 0; frameReady = false;
-    chain = Promise.resolve();
+    busy = true;
     el('connect').disabled = true;
     el('retry').hidden = true;
+    pollCount = 0;
     try {
-      message('Opening sign-in…');
-      if (provider === 'amazon') {
-        const data = await api('/alexa/proxy_login/', {email: el('email').value.trim(), password: el('password').value, force: true});
-        if (stopped || id !== run) return;
-        amazonAttempt = data.attempt_id || null;
-        el('password').value = '';
-        const url = new URL(data.login_url, location.origin);
-        if (url.origin !== location.origin || !url.pathname.startsWith('/alexa/proxy/')) throw new Error('Invalid sign-in address');
-        el('amazon-page').src = url.href;
-      } else {
-        await api('/api/youtube/browser-session/start', {viewport: {width: innerWidth >= 900 ? Math.min(1280, Math.max(960, innerWidth - 128)) : 480, height: innerWidth >= 900 ? Math.min(1000, Math.max(640, innerHeight - 160)) : 900}});
-        if (stopped || id !== run) return;
-        started = true;
-        frameOpenedAt = Date.now();
-        el('frame').hidden = true;
-        el('frame').removeAttribute('src');
-        el('surface').hidden = false;
-        el('browser-loading').hidden = false;
-        el('browser-tools').hidden = true;
-        el('capture').disabled = true;
-      }
-      el('setup').hidden = true;
-      el('browser').hidden = false;
-      message(provider === 'amazon' ? 'Complete verification with Amazon below.' : 'Opening secure browser…');
-      if (provider === 'youtube') frame(id);
-      poll(id);
-    } catch (error) { if (id === run) fail(error); }
-    finally { busy = false; el('connect').disabled = false; }
+      message(provider === 'amazon' ? 'Contacting Amazon…' : 'Opening the sign-in…');
+      const email = el('email').value.trim();
+      const password = el('password').value;
+      el('password').value = '';
+      const data = provider === 'amazon'
+        ? await api('/alexa/form_login/', {email, password})
+        : await api('/api/youtube/browser-session/form/start', {email, password});
+      if (id !== run) return;
+      handle(data);
+    } catch (error) {
+      if (id === run) handle({state: 'error', message: error.message});
+    } finally {
+      busy = false;
+      el('connect').disabled = false;
+    }
   }
-  el('amazon-form')?.addEventListener('submit', start);
-  if (provider === 'youtube') el('connect').addEventListener('click', start);
+
+  async function answer(path, body, button) {
+    if (busy) return;
+    const id = run;
+    busy = true;
+    if (button) button.disabled = true;
+    message('Checking your answer…');
+    try {
+      const data = await api(path, body);
+      if (id !== run) return;
+      handle(data);
+    } catch (error) {
+      if (id === run) message(error.message, true);
+    } finally {
+      busy = false;
+      if (button) button.disabled = false;
+    }
+  }
+
+  el('credentials').addEventListener('submit', submit);
+  el('code-submit').onclick = () => {
+    const code = el('code').value.trim();
+    if (!code) { el('code').focus(); return; }
+    if (provider === 'amazon') answer('/alexa/form_login/step/', {kind: answerKind, value: code}, el('code-submit'));
+    else answer('/api/youtube/browser-session/form/code', {code}, el('code-submit'));
+  };
+  el('captcha-submit').onclick = () => {
+    const value = el('captcha').value.trim();
+    if (!value) { el('captcha').focus(); return; }
+    answer('/alexa/form_login/step/', {kind: 'captcha', value}, el('captcha-submit'));
+  };
+  el('choice-submit').onclick = () => {
+    const checked = el('choice-options').querySelector('input[name="choice"]:checked');
+    const manual = el('choice-manual');
+    const value = (checked ? checked.value : manual.value).trim();
+    if (value === '') { (checked ? el('choice-submit') : manual).focus(); return; }
+    answer('/alexa/form_login/step/', {kind: choiceKind, value}, el('choice-submit'));
+  };
+  el('approval-check').onclick = () => {
+    stopPolling();
+    if (provider === 'amazon') answer('/alexa/form_login/step/', {kind: 'poll'}, el('approval-check'));
+    else answer('/api/youtube/browser-session/form/poll', {}, el('approval-check'));
+  };
   el('retry').onclick = () => {
-    stop(); ++run;
-    el('browser').hidden = true;
-    el('setup').hidden = false;
+    ++run;
+    reset();
     el('retry').hidden = true;
     message('Start again when you are ready.');
+    el('email').focus();
   };
   document.querySelector('.back').onclick = event => { event.preventDefault(); el('cancel').click(); };
   el('cancel').onclick = async () => {
-    stop(); ++run;
-    if (provider === 'youtube' && started) await api('/api/youtube/browser-session/stop', {}).catch(() => {});
-    else if (amazonAttempt) await api('/alexa/proxy_cancel/', {attempt_id: amazonAttempt}).catch(() => {});
-    location.replace('/');
+    ++run;
+    stopPolling();
+    await cancelSignIn().catch(() => {});
+    location.replace(returnTo || '/account#panel-providers');
   };
-  if (provider === 'youtube') {
-    const keyboard = el('remote-keyboard'), image = el('frame');
-    let touch;
-    image.addEventListener('pointerdown', event => { touch = {x: event.clientX, y: event.clientY}; });
-    image.addEventListener('pointercancel', () => { touch = null; });
-    image.addEventListener('pointerup', event => {
-      if (!touch || !frameReady || stopped) return;
-      const deltaY = event.clientY - touch.y;
-      touch = null;
-      if (Math.abs(deltaY) > 25) { send({type: 'scroll', direction: deltaY > 0 ? 'up' : 'down'}); return; }
-      const bounds = image.getBoundingClientRect();
-      send({type: 'click',
-        x: Math.min(+image.dataset.width - 1, Math.max(0, Math.floor((event.clientX - bounds.left) / bounds.width * +image.dataset.width))),
-        y: Math.min(+image.dataset.height - 1, Math.max(0, Math.floor((event.clientY - bounds.top) / bounds.height * +image.dataset.height)))});
-      keyboard.focus({preventScroll: true});
-    });
-    keyboard.addEventListener('focus', () => { keyboard.value = '\u200b'; });
-    function commitText() {
-      const text = keyboard.value.replaceAll('\u200b', '');
-      if (text) send({type: 'text', text});
-      keyboard.value = '\u200b';
-    }
-    keyboard.addEventListener('compositionend', commitText);
-    keyboard.addEventListener('input', event => {
-      if (event.isComposing) return;
-      if (event.inputType === 'deleteContentBackward') { send({type: 'key', key: 'Backspace'}); keyboard.value = '\u200b'; }
-      else commitText();
-    });
-    keyboard.addEventListener('keydown', event => {
-      if (event.isComposing) return;
-      if (['Backspace', 'Enter', 'Tab', 'Escape', 'ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) {
-        event.preventDefault(); send({type: 'key', key: event.key});
-      }
-    });
-    el('choose-account').onclick = async () => {
-      keyboard.blur();
-      try { await chain; await api('/api/youtube/browser-session/choose-account', {}); message('Choose an account or add another one above.'); }
-      catch (error) { fail(error); }
-    };
-    el('keyboard').onclick = () => keyboard.focus({preventScroll: true});
-    el('tab').onclick = () => send({type: 'key', key: 'Tab'});
-    el('enter').onclick = () => { send({type: 'key', key: 'Enter'}); keyboard.blur(); };
-    el('capture').onclick = async () => {
-      if (!frameReady || stopped || capturing) return;
-      el('capture').disabled = true; keyboard.blur();
-      try {
-        await chain;
-        capturing = true; clearTimeout(frameTimer);
-        await api('/api/youtube/browser-session/capture', {});
-        message('Verifying your account…');
-      } catch (error) { capturing = false; fail(error); }
-    };
+  function cancelSignIn() {
+    return provider === 'amazon'
+      ? api('/alexa/form_login/cancel/', {}, 8000)
+      : api('/api/youtube/browser-session/form/stop', {}, 8000);
   }
   window.addEventListener('pagehide', () => {
-    stop(); ++run;
-    const options = {method: 'POST', credentials: 'same-origin', headers: {'Content-Type': 'application/json'}, keepalive: true};
-    if (amazonAttempt) fetch('/alexa/proxy_cancel/', {...options, body: JSON.stringify({attempt_id: amazonAttempt})}).catch(() => {});
-    if (started) fetch('/api/youtube/browser-session/stop', {...options, body: '{}'}).catch(() => {});
+    ++run;
+    stopPolling();
+    const options = {method: 'POST', credentials: 'same-origin',
+                     headers: {'Content-Type': 'application/json'}, keepalive: true};
+    if (provider === 'amazon') fetch('/alexa/form_login/cancel/', {...options, body: '{}'}).catch(() => {});
+    else fetch('/api/youtube/browser-session/form/stop', {...options, body: '{}'}).catch(() => {});
   });
+  el('email').focus();
 })();

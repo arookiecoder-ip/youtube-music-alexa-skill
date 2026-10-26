@@ -414,7 +414,7 @@
         const list = document.createElement('div');
         list.className = 'history-list';
         if (tracks.length === 0) {
-          list.innerHTML = '<div style="padding:24px; color:var(--muted); text-align:center;">No tracks in this playlist</div>';
+          list.innerHTML = '<div class="modal-note">No tracks in this playlist</div>';
         } else {
           // ---- Virtualized (windowed) track list --------------------------
           // A long playlist can hold thousands of rows. Rendering every row
@@ -807,7 +807,7 @@
       }
       console.error('Failed to load playlist', e);
       if (titleEl) titleEl.textContent = 'Error loading playlist';
-      if (body) body.innerHTML = '<div style="padding:24px; color:var(--muted); text-align:center;">Failed to load playlist</div>';
+      if (body) body.innerHTML = '<div class="modal-note">Failed to load playlist</div>';
       if (window._barAbort) window._barAbort();
     }
     if (ownsProgress && stillOwnsRoute() && window._barComplete) window._barComplete();
@@ -847,7 +847,7 @@
         return playlistId(playlist) && playlist.editable === true && !isHiddenPersonalPlaylist(playlist);
       });
       if (!writable.length) {
-        listEl.innerHTML = '<div style="color:var(--muted); padding:12px;">No playlists found. Create one above.</div>';
+        listEl.innerHTML = '<div class="modal-note tight">No playlists found. Create one above.</div>';
         return;
       }
 
@@ -855,13 +855,13 @@
         const id = playlistId(playlist);
         const row = document.createElement('button');
         row.type = 'button';
-        row.style.cssText = 'width:100%; padding:12px; border:0; border-bottom:1px solid var(--border); cursor:pointer; display:flex; align-items:center; gap:12px; color:var(--text); background:transparent; text-align:left;';
+        row.className = 'playlist-pick-row';
         const cover = imageUrl(playlist.thumbnails) || imageUrl(playlist.thumbnail) || imageUrl(playlist.image);
         row.innerHTML = cover
           ? '<img class="queue-thumb loaded" src="' + escapeHtml(cover) + '" alt="">'
-          : '<div class="queue-thumb" style="display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,.05);"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:20px;height:20px;"><path d="M9 18V5l12-2v13"></path><circle cx="6" cy="18" r="3"></circle><circle cx="18" cy="16" r="3"></circle></svg></div>';
+          : '<div class="queue-thumb playlist-pick-cover"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18V5l12-2v13"></path><circle cx="6" cy="18" r="3"></circle><circle cx="18" cy="16" r="3"></circle></svg></div>';
         const label = document.createElement('span');
-        label.style.cssText = 'flex:1;font-weight:500;';
+        label.className = 'playlist-pick-name';
         label.textContent = playlistTitle(playlist);
         row.appendChild(label);
 
@@ -887,14 +887,14 @@
     }
 
     async function loadPlaylistChoices(version) {
-      listEl.innerHTML = '<div style="color:var(--muted); padding:12px;">Loading playlists…</div>';
+      listEl.innerHTML = '<div class="modal-note tight">Loading playlists…</div>';
       try {
         const data = await window.api('/api/library/');
         renderPlaylists(data.playlists || [], version);
       } catch (error) {
         if (version !== requestVersion) return;
         console.error('Failed to load playlist choices', error);
-        listEl.innerHTML = '<div style="color:var(--muted); padding:12px;">Could not load playlists.</div>';
+        listEl.innerHTML = '<div class="modal-note tight">Could not load playlists.</div>';
         if (window.toast) window.toast(error.message || 'Could not load playlists', 'error');
       }
     }

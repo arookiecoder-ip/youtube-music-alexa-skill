@@ -1,5 +1,6 @@
 """Exercise the actual profile route without starting Alexa/browser services."""
 import ast
+import os
 from pathlib import Path
 from types import SimpleNamespace
 import unittest
@@ -17,8 +18,16 @@ class ProfileStartupTests(unittest.TestCase):
             '_get_ytmusic_home': lambda identity=None: SimpleNamespace(auth_type='BROWSER'),
             '_ytmusic_client_is_authenticated': lambda yt: True,
             'Supporting': SimpleNamespace(get_ytdlp_cookies_file=lambda identity=None: '/cookies.txt'),
-            'download_cookies': SimpleNamespace(status=self.probe, ProbeBusy=type('ProbeBusy', (Exception,), {})),
-            '_configure_cookie_probe': Mock(), '_youtube_browser_sessions': SimpleNamespace(status=lambda identity=None: browser)}
+            'download_cookies': SimpleNamespace(status=self.probe, is_usable=lambda path: bool(path),
+                                                ProbeBusy=type('ProbeBusy', (Exception,), {})),
+            '_configure_cookie_probe': Mock(),
+            'account_user_id': lambda identity: None,
+            '_download_cookie_path': lambda identity: '/account-cookies.txt',
+            '_youtube_credentials': SimpleNamespace(path_for=lambda identity: ''),
+            '_SERVER_IDENTITY': 'owner',
+            '_server_session_enabled': lambda: True,
+            'os': os,
+            '_youtube_browser_sessions': SimpleNamespace(status=lambda identity=None: browser)}
         source = Path(__file__).resolve().parents[1] / 'server.py'
         route = next(node for node in ast.parse(source.read_text()).body if isinstance(node, ast.FunctionDef) and node.name == 'profile_status')
         exec(compile(ast.Module(body=[route], type_ignores=[]), str(source), 'exec'), namespace)

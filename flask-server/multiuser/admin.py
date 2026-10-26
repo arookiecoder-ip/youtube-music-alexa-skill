@@ -11,7 +11,7 @@ import json
 import os
 import shutil
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from functools import wraps
 from urllib.parse import urlencode
 
@@ -29,8 +29,8 @@ from flask import (
     url_for,
 )
 
-from . import emails, netids, pending
-from .accounts import AccountError, AccountService, ROLES, STATUSES
+from . import devicename, emails, netids, pending
+from .accounts import AccountError, AccountService, ROLES, SIGNUP_SWITCH_KEY, STATUSES
 from .config import MultiUserConfig
 from .crypto import SecretBox
 from .db import Database
@@ -40,6 +40,9 @@ from .selfservice import build_selfservice_blueprint
 
 PAGE_SIZE = 25
 AUDIT_PAGE_SIZE = 50
+# The panel theme is a preference, not a session value, so it survives a restart
+# and follows the account between browsers.
+THEME_KEY = "admin_theme"
 
 
 def _now() -> float:
@@ -55,6 +58,23 @@ def _client_ip() -> str:
 
 def _user_agent() -> str:
     return netids.user_agent(request)
+
+
+def _theme_for(layer, user: dict | None) -> str:
+    """The panel theme this administrator last chose.
+
+    Read per render rather than kept in a session, so the choice follows the
+    account to another browser instead of being a secret one tab happens to hold.
+    An unreadable preference is not worth a 500: the dark theme is what every
+    other surface already shows.
+    """
+    if not user:
+        return "dark"
+    try:
+        stored = layer.accounts.get_preference(user["id"], THEME_KEY)
+    except Exception:
+        return "dark"
+    return stored if stored in ("dark", "light") else "dark"
 
 
 def _safe_next(value: str) -> str:
@@ -95,6 +115,111 @@ def _parse_page() -> int:
         return max(1, int(request.args.get("page", "1")))
     except (TypeError, ValueError):
         return 1
+
+
+def _dashboard_analytics(mu: "MultiUser") -> dict:
+    """Fourteen daily sign-up bars plus the role, status and provider mixes.
+
+    Deleted accounts are left out of the mixes because every list hides them,
+    but they stay in the daily bars: a sign-up that was later deleted still
+    happened. Percentages are of live accounts.
+    """
+    today = datetime.now(timezone.utc).date()
+    first = today - timedelta(days=13)
+    days = []
+    for offset in range(13, -1, -1):
+        day = today - timedelta(days=offset)
+        days.append({
+            "key": day.isoformat(),
+            "label": f"{day.day:02d}",
+            "title": day.strftime("%a %d %b"),
+            "count": 0,
+            "self": 0,
+        })
+    by_day = {item["key"]: item for item in days}
+    start = datetime.combine(first, datetime.min.time(), tzinfo=timezone.utc).timestamp()
+    try:
+        rows = mu.db.fetchall(
+            "SELECT created_at, created_by FROM users WHERE created_at >= ?", (start,)
+        )
+    except Exception:
+        rows = []
+    for row in rows:
+        try:
+            day = datetime.fromtimestamp(float(row["created_at"]), tz=timezone.utc).date()
+        except (TypeError, ValueError, OSError):
+            continue
+        item = by_day.get(day.isoformat())
+        if item is None:
+            continue
+        item["count"] += 1
+        if (row["created_by"] or "") == "self":
+            item["self"] += 1
+    peak = max((item["count"] for item in days), default=0)
+    for item in days:
+        item["pct"] = int(round(item["count"] * 100 / peak)) if peak else 0
+
+    def _mix(sql: str, names, key: str = "n") -> list[dict]:
+        try:
+            rows = mu.db.fetchall(sql)
+        except Exception:
+            return [{"name": name, "count": 0, "pct": 0} for name in names]
+        found = {row[0]: int(row[key]) for row in rows}
+        total = sum(found.values()) or 1
+        return [
+            {"name": name, "count": found.get(name, 0),
+             "pct": round(found.get(name, 0) * 100 / total)}
+            for name in names
+        ]
+
+    total_users = int(mu.db.scalar("SELECT COUNT(*) FROM users WHERE status <> 'deleted'") or 0)
+    roles = _mix(
+        "SELECT role, COUNT(*) AS n FROM users WHERE status <> 'deleted' GROUP BY role", ROLES
+    )
+    statuses = _mix(
+        "SELECT status, COUNT(*) AS n FROM users WHERE status <> 'deleted' GROUP BY status",
+        STATUSES,
+    )
+
+    provider_counts: dict[str, dict[str, int]] = {}
+    try:
+        for row in mu.db.fetchall(
+            "SELECT provider, status, COUNT(*) AS n FROM user_provider_credentials "
+            "GROUP BY provider, status"
+        ):
+            provider_counts.setdefault(row["provider"], {})[row["status"]] = int(row["n"])
+    except Exception:
+        provider_counts = {}
+    providers = []
+    for key, label in (("youtube", "YouTube Music"), ("amazon", "Amazon / Alexa")):
+        found = provider_counts.get(key, {})
+        connected = found.get("connected", 0)
+        providers.append({
+            "key": key,
+            "label": label,
+            "connected": connected,
+            "broken": found.get("expired", 0) + found.get("error", 0),
+            "pct": round(connected * 100 / total_users) if total_users else 0,
+        })
+    try:
+        linked_users = int(mu.db.scalar(
+            "SELECT COUNT(DISTINCT user_id) FROM user_provider_credentials "
+            "WHERE status = 'connected'"
+        ) or 0)
+    except Exception:
+        linked_users = 0
+
+    return {
+        "days": days,
+        "peak": peak,
+        "total_14d": sum(item["count"] for item in days),
+        "self_14d": sum(item["self"] for item in days),
+        "roles": roles,
+        "statuses": statuses,
+        "providers": providers,
+        "linked_users": linked_users,
+        "unlinked_users": max(0, total_users - linked_users),
+    }
 
 
 class MultiUser:
@@ -181,6 +306,12 @@ def build_blueprint(mu: MultiUser) -> Blueprint:
     )
     base = mu.config.base_path.rstrip("/") or "/admin"
     login_url = f"{base}/login/"
+    # The app owns the browser sidecar and the credential files, so it supplies
+    # these callables; the account layer must not import it (it is optional).
+    # Resolved per request, not captured here: the app attaches the adapter after
+    # the blueprint is built, because building this blueprint is part of init.
+    def _youtube():
+        return getattr(mu, "youtube_admin", None)
 
     # ------------------------------------------------------------- CSRF/token
     def csrf_token() -> str:
@@ -252,10 +383,8 @@ def build_blueprint(mu: MultiUser) -> Blueprint:
         "multiuser_admin.login",
         "multiuser_admin.forgot_password",
         "multiuser_admin.reset_password",
-        "multiuser_admin.verify_email",
         "multiuser_admin.email_login",
         "multiuser_admin.magic_login",
-        "multiuser_admin.accept_invite",
     }
 
     @bp.before_request
@@ -320,6 +449,7 @@ def build_blueprint(mu: MultiUser) -> Blueprint:
             "base_path": base,
             "mail_configured": mu.mailer.config.configured,
             "magic_link_enabled": mu.config.magic_link_enabled,
+            "theme": _theme_for(mu, g.get("mu_user")),
             "current_year": datetime.now(timezone.utc).year,
         }
 
@@ -352,6 +482,15 @@ def build_blueprint(mu: MultiUser) -> Blueprint:
             return f"{seconds // 3600}h ago"
         return f"{seconds // 86400}d ago"
 
+    @bp.app_template_filter("mu_device")
+    def _filter_device(value):
+        """The browser and platform a session's header declares.
+
+        A session table a person reads to spot an intruder is a scanning task,
+        and a raw User-Agent is the wrong shape for it; the header itself stays
+        available underneath as the evidence for the name."""
+        return devicename.describe_user_agent(value) or "—"
+
     @bp.app_template_filter("mu_json")
     def _filter_json(value):
         try:
@@ -372,8 +511,43 @@ def build_blueprint(mu: MultiUser) -> Blueprint:
         ip: str = "",
         user_agent: str = "",
     ):
+        # An invitation is the player's, so its URL belongs to the public door;
+        # only the administrator sign-in link lives behind /admin.
+        link_base = "" if purpose == "invite" else base
         return emails.send_token_email(
-            mu, user, purpose, token, base=base, actor=actor, ip=ip, user_agent=user_agent
+            mu, user, purpose, token, base=link_base, actor=actor, ip=ip, user_agent=user_agent
+        )
+
+    def _send_code_email(
+        user: dict,
+        purpose: str,
+        *,
+        actor: dict | None = None,
+        ip: str = "",
+        user_agent: str = "",
+    ):
+        """Issue and email a typed six-digit code. No URL is built for it.
+
+        Invitations and administrator sign-in links keep their links; verification
+        and reset are codes on both doors, because a link in an email is a
+        credential a mail reader can follow without anybody typing anything.
+        """
+        code = mu.accounts.create_email_code(
+            user["id"], purpose, user.get("email") or "", ip=ip, user_agent=user_agent
+        )
+        if purpose == "reauth":
+            where = f"the confirmation dialog on {base}/account/"
+        elif purpose == "reset":
+            where = f"the reset form on {base}/reset-password/"
+        elif AccountService.can_view_admin(user):
+            where = f"the account page of this admin panel ({base}/account/)"
+        else:
+            # An administrator can send a verification code for a *player's* account,
+            # and that person has no business being pointed at the admin door.
+            where = "the confirm-code page of your Music Box account (/verify)"
+        return emails.send_code_email(
+            mu, user, purpose, code,
+            where=where, actor=actor, ip=ip, user_agent=user_agent,
         )
 
     def _flash_mail(result, description: str, email: str = "") -> None:
@@ -384,29 +558,83 @@ def build_blueprint(mu: MultiUser) -> Blueprint:
     @admin_required
     def dashboard():
         counts = mu.accounts.counts()
-        recent_audit, _ = mu.accounts.list_audit(per_page=12)
-        recent_users, _ = mu.accounts.list_users(per_page=5)
-        provider_rows = mu.db.fetchall(
-            "SELECT provider, status, COUNT(*) AS count FROM user_provider_credentials "
-            "GROUP BY provider, status"
+        # list_audit floors its page size at ten for the log's own pagination, so
+        # the dashboard takes the five it promises rather than re-tuning that floor.
+        recent_audit, _ = mu.accounts.list_audit(per_page=5)
+        recent_audit = recent_audit[:5]
+        policy = mu.accounts.signup_policy()
+        switch = mu.accounts.system_setting_row(SIGNUP_SWITCH_KEY)
+
+        def _count(sql: str) -> int:
+            try:
+                return int(mu.db.scalar(sql) or 0)
+            except Exception:
+                return 0
+
+        # A short, honest list of things that are actually wrong. The dashboard used
+        # to re-render the user table, the audit table and the runtime block that
+        # three other pages already own; none of that answered "is anything broken?".
+        attention = []
+        unverified = _count(
+            "SELECT COUNT(*) FROM users WHERE status = 'active' "
+            "AND COALESCE(email, '') <> '' AND email_verified = 0"
         )
-        providers: dict[str, dict[str, int]] = {}
-        for row in provider_rows:
-            providers.setdefault(row["provider"], {})[row["status"]] = row["count"]
-        disk = shutil.disk_usage(os.path.dirname(os.path.abspath(mu.config.db_path)) or ".")
-        schema = mu.db.schema_versions()
+        if unverified:
+            attention.append({
+                "text": f"{unverified} active account(s) have an unverified email address.",
+                "href": url_for("multiuser_admin.users"),
+                "label": "Review users",
+            })
+        expired = _count(
+            "SELECT COUNT(*) FROM user_provider_credentials WHERE status = 'expired'"
+        )
+        if expired:
+            attention.append({
+                "text": f"{expired} linked service(s) expired and need signing in again.",
+                "href": url_for("multiuser_admin.users"),
+                "label": "Review users",
+            })
+        forced = _count(
+            "SELECT COUNT(*) FROM users WHERE status = 'active' AND must_change_password = 1"
+        )
+        if forced:
+            attention.append({
+                "text": f"{forced} account(s) must still choose a new password.",
+                "href": url_for("multiuser_admin.users"),
+                "label": "Review users",
+            })
+        purges = _count("SELECT COUNT(*) FROM pending_purges")
+        if purges:
+            attention.append({
+                "text": f"{purges} account cleanup(s) are still retrying in the background.",
+                "href": url_for("multiuser_admin.system"),
+                "label": "Open System",
+            })
+        if not policy["open"]:
+            if policy["reason"] == "environment":
+                reason = "Public sign-up is disabled for this whole deployment."
+            elif policy["reason"] == "daily_cap":
+                reason = (f"Public sign-up closed for today after {policy['count']} of "
+                          f"{policy['limit']} accounts.")
+            else:
+                reason = "Public sign-up was closed by an administrator."
+            attention.append({
+                "text": reason,
+                "href": url_for("multiuser_admin.system"),
+                "label": "Sign-up settings",
+            })
+
         return render_template(
             "admin/dashboard.html",
             page="dashboard",
             title="Dashboard",
             counts=counts,
+            analytics=_dashboard_analytics(mu),
             recent_audit=recent_audit,
-            recent_users=recent_users,
-            providers=providers,
-            disk=disk,
-            schema=schema,
-            db_size=mu.db.file_size(),
+            attention=attention,
             bootstrap=mu.bootstrap_result,
+            signup_policy=policy,
+            signup_switch=switch,
         )
 
     @bp.route("/users/", methods=["GET"])
@@ -429,7 +657,9 @@ def build_blueprint(mu: MultiUser) -> Blueprint:
             status_filter=status,
             role_filter=role,
             roles=ROLES,
-            statuses=STATUSES,
+            statuses=list(STATUSES) + ["deleted"],
+            signup_policy=mu.accounts.signup_policy(),
+            signup_switch=mu.accounts.system_setting_row(SIGNUP_SWITCH_KEY),
         )
 
     @bp.route("/users/new/", methods=["GET", "POST"])
@@ -437,7 +667,6 @@ def build_blueprint(mu: MultiUser) -> Blueprint:
     def user_new():
         form = {
             "username": "",
-            "display_name": "",
             "email": "",
             "role": "user",
             "password": "",
@@ -448,7 +677,6 @@ def build_blueprint(mu: MultiUser) -> Blueprint:
         if request.method == "POST":
             form = {
                 "username": (request.form.get("username") or "").strip(),
-                "display_name": (request.form.get("display_name") or "").strip(),
                 "email": (request.form.get("email") or "").strip(),
                 "role": (request.form.get("role") or "user").strip(),
                 "password": request.form.get("password") or "",
@@ -469,7 +697,6 @@ def build_blueprint(mu: MultiUser) -> Blueprint:
                         username=form["username"],
                         password=form["password"],
                         email=form["email"],
-                        display_name=form["display_name"],
                         role=form["role"],
                         must_change_password=form["must_change_password"],
                         status="invited" if form["send_invite"] else "active",
@@ -489,15 +716,11 @@ def build_blueprint(mu: MultiUser) -> Blueprint:
                         )
                         _flash_mail(result, "Invitation email", user["email"])
                     elif form["send_verification"] and user.get("email"):
-                        token = mu.accounts.create_email_token(
-                            user["id"], "verify", user["email"],
+                        result = _send_code_email(
+                            user, "verify", actor=g.mu_user,
                             ip=_client_ip(), user_agent=_user_agent(),
                         )
-                        result = _send_token_email(
-                            user, "verify", token, actor=g.mu_user,
-                            ip=_client_ip(), user_agent=_user_agent(),
-                        )
-                        _flash_mail(result, "Verification email", user["email"])
+                        _flash_mail(result, "Verification code", user["email"])
                     if generated_password and not form["send_invite"]:
                         flash(f"Generated temporary password: {form['password']}", "password")
                     return redirect(url_for("multiuser_admin.user_detail", user_id=user["id"]))
@@ -515,23 +738,27 @@ def build_blueprint(mu: MultiUser) -> Blueprint:
     @bp.route("/users/<user_id>/", methods=["GET"])
     @admin_required
     def user_detail(user_id):
-        user = mu.accounts.get_user(user_id)
+        user = mu.accounts.get_user(user_id, include_deleted=True)
         if not user:
             flash("User not found.", "error")
             return redirect(url_for("multiuser_admin.users"))
         if not AccountService.can_manage_user(g.mu_user, user) and g.mu_user["id"] != user_id:
             return _forbidden()
+        providers = mu.accounts.provider_status(user_id)
         return render_template(
             "admin/user_detail.html",
             page="users",
             title=user["username"],
             user=user,
+            deleted=user["status"] == "deleted",
+            can_restore=g.mu_user.get("role") == "owner",
             sessions=mu.accounts.list_sessions(user_id),
-            providers=mu.accounts.provider_status(user_id),
+            providers=providers,
             audit=mu.accounts.user_audit(user_id, limit=20),
             roles=ROLES,
             allowed_roles=[role for role in ROLES if AccountService.can_assign_role(g.mu_user, role)],
-            can_manage=AccountService.can_manage_user(g.mu_user, user),
+            status_options=AccountService.status_options(user["status"]),
+            can_manage=AccountService.can_manage_user(g.mu_user, user) and user["status"] != "deleted",
             is_self=g.mu_user["id"] == user_id,
         )
 
@@ -547,7 +774,6 @@ def build_blueprint(mu: MultiUser) -> Blueprint:
                 user_id,
                 {
                     "username": request.form.get("username"),
-                    "display_name": request.form.get("display_name"),
                     "email": request.form.get("email"),
                     "role": request.form.get("role"),
                     "status": request.form.get("status"),
@@ -577,7 +803,7 @@ def build_blueprint(mu: MultiUser) -> Blueprint:
             )
             label = "Generated password" if generated else "Password reset"
             flash(f"{label}: {password}", "password")
-            flash("All sessions for this user were signed out.", "info")
+            flash("Every device on this account was signed out.", "info")
         except AccountError as exc:
             flash(str(exc), "error")
         return redirect(url_for("multiuser_admin.user_detail", user_id=user_id))
@@ -603,6 +829,184 @@ def build_blueprint(mu: MultiUser) -> Blueprint:
             flash(str(exc), "error")
         return redirect(url_for("multiuser_admin.user_detail", user_id=user_id))
 
+    @bp.route("/users/<user_id>/password-change/", methods=["POST"])
+    @admin_required
+    def user_password_change_flag(user_id):
+        state = (request.form.get("state") or "").strip()
+        if state not in {"require", "clear"}:
+            flash("Choose whether the password change is required or cleared.", "error")
+            return redirect(url_for("multiuser_admin.user_detail", user_id=user_id))
+        try:
+            mu.accounts.set_must_change_password(
+                g.mu_user, user_id, state == "require",
+                ip=_client_ip(), user_agent=_user_agent(),
+            )
+            flash(
+                "This account must change its password at the next sign-in."
+                if state == "require"
+                else "Password change is no longer required.",
+                "success",
+            )
+        except AccountError as exc:
+            flash(str(exc), "error")
+        return redirect(url_for("multiuser_admin.user_detail", user_id=user_id))
+
+    # ------------------------------------------------------- own second factor
+    def _reauth_form() -> tuple[bool, dict]:
+        """The one credential the dialog's own choice names, never both.
+
+        Reading whichever field happened to be in the POST would let a leftover
+        password box satisfy an email-code submit, or a stale authenticator code
+        be tried as an email code."""
+        by_email = (request.form.get("verify") or "") == "email"
+        return by_email, {
+            "password": "" if by_email else request.form.get("current_password") or "",
+            "email_code": (request.form.get("code") or "") if by_email else "",
+        }
+
+    @bp.route("/account/totp/begin/", methods=["POST"])
+    @admin_required
+    def account_totp_begin():
+        try:
+            mu.accounts.begin_totp_enrollment(
+                g.mu_user,
+                current_password=request.form.get("current_password") or "",
+                issuer=mu.config.app_name,
+                ip=_client_ip(), user_agent=_user_agent(),
+            )
+            flash("Scan the code with your authenticator app, then type the code it shows.", "success")
+        except AccountError as exc:
+            flash(str(exc), "error")
+        return redirect(url_for("multiuser_admin.account"))
+
+    @bp.route("/account/totp/reauth/send/", methods=["POST"])
+    @admin_required
+    def account_totp_reauth_send():
+        """Post the code that unlocks the change-or-remove dialog.
+
+        A separate endpoint because sending is not the action itself: it only buys
+        the right to ask for that action afterwards."""
+        slug = request.form.get("action") or ""
+        back = url_for("multiuser_admin.account", reauth=slug, way="email", sent=1)
+        user = mu.accounts.get_user(g.mu_user["id"])
+        if slug not in {"disable", "replace"} or not user:
+            return redirect(url_for("multiuser_admin.account"))
+        if not user.get("email"):
+            flash("This account has no email address, so a code cannot be sent. Use your password.", "error")
+            return redirect(url_for("multiuser_admin.account", reauth=slug))
+        if mu.accounts.recent_email_token_count(user["id"], "reauth", 60):
+            flash(
+                "A code was sent less than a minute ago. Check your inbox, or use your password.",
+                "warning",
+            )
+            return redirect(url_for("multiuser_admin.account", reauth=slug, way="email"))
+        result = _send_code_email(
+            user, "reauth", actor=g.mu_user, ip=_client_ip(), user_agent=_user_agent()
+        )
+        _flash_mail(result, "Confirmation code", user["email"])
+        return redirect(back)
+
+    @bp.route("/account/totp/replace/", methods=["POST"])
+    @admin_required
+    def account_totp_replace():
+        """Start again with a different authenticator app.
+
+        The live secret keeps working until the new one is confirmed, so an
+        abandoned setup cannot lock anybody out of their own sign-in."""
+        slug = "replace"
+        by_email, credentials = _reauth_form()
+        back = url_for(
+            "multiuser_admin.account", reauth=slug,
+            way="email" if by_email else "password",
+        )
+        try:
+            mu.accounts.reauthenticate(
+                g.mu_user, ip=_client_ip(), user_agent=_user_agent(), **credentials
+            )
+            mu.accounts.begin_totp_enrollment(
+                g.mu_user,
+                issuer=mu.config.app_name,
+                verified=True, allow_existing=True,
+                ip=_client_ip(), user_agent=_user_agent(),
+            )
+            flash("Scan the new authenticator and confirm its code. Your current one still works until you do.", "success")
+            return redirect(url_for("multiuser_admin.account"))
+        except AccountError as exc:
+            flash(str(exc), "error")
+            return redirect(back)
+
+    @bp.route("/account/totp/qr/", methods=["GET"])
+    @admin_required
+    def account_totp_qr():
+        """The provisioning URI as an image, never as text.
+
+        Same rules as the player door: the URI *is* the secret, so it is only ever
+        the ``src`` of one same-origin image on a no-store response."""
+        enrollment = mu.accounts.pending_totp_enrollment(g.mu_user)
+        if not enrollment:
+            return Response("", status=409, mimetype="text/plain")
+        try:
+            import qrcode
+            import qrcode.image.svg
+        except Exception:  # noqa: BLE001 - optional dependency: degraded, not broken
+            if mu.logger:
+                mu.logger.exception("[multiuser] qrcode package unavailable")
+            return Response("", status=503, mimetype="text/plain")
+        image = qrcode.make(enrollment["otpauth_uri"], image_factory=qrcode.image.svg.SvgImage)
+        buffer = io.BytesIO()
+        image.save(buffer)
+        response = Response(buffer.getvalue(), mimetype="image/svg+xml")
+        response.headers["Cache-Control"] = "no-store"
+        return response
+
+    @bp.route("/account/totp/confirm/", methods=["POST"])
+    @admin_required
+    def account_totp_confirm():
+        try:
+            mu.accounts.confirm_totp_enrollment(
+                g.mu_user, code=request.form.get("code") or "",
+                ip=_client_ip(), user_agent=_user_agent(),
+            )
+            flash("Two-factor sign-in is on. You will be asked for a code when you sign in.", "success")
+        except AccountError as exc:
+            flash(str(exc), "error")
+        return redirect(url_for("multiuser_admin.account"))
+
+    @bp.route("/account/totp/cancel/", methods=["POST"])
+    @admin_required
+    def account_totp_cancel():
+        try:
+            mu.accounts.cancel_totp_enrollment(
+                g.mu_user, ip=_client_ip(), user_agent=_user_agent()
+            )
+            flash("Two-factor setup was cancelled.", "info")
+        except AccountError as exc:
+            flash(str(exc), "error")
+        return redirect(url_for("multiuser_admin.account"))
+
+    @bp.route("/account/totp/disable/", methods=["POST"])
+    @admin_required
+    def account_totp_disable():
+        slug = "disable"
+        by_email, credentials = _reauth_form()
+        back = url_for(
+            "multiuser_admin.account", reauth=slug,
+            way="email" if by_email else "password",
+        )
+        try:
+            mu.accounts.reauthenticate(
+                g.mu_user, ip=_client_ip(), user_agent=_user_agent(), **credentials
+            )
+            mu.accounts.disable_totp(
+                g.mu_user, verified=True,
+                ip=_client_ip(), user_agent=_user_agent(),
+            )
+            flash("Two-factor sign-in is off. Sign in with your password alone from now on.", "success")
+            return redirect(url_for("multiuser_admin.account"))
+        except AccountError as exc:
+            flash(str(exc), "error")
+            return redirect(back)
+
     @bp.route("/users/<user_id>/email/verification/", methods=["POST"])
     @admin_required
     def user_email_verification(user_id):
@@ -621,13 +1025,16 @@ def build_blueprint(mu: MultiUser) -> Blueprint:
         if mu.accounts.recent_email_token_count(user_id, "verify", 60):
             flash("A verification email was sent less than a minute ago. Check the inbox first.", "warning")
             return redirect(url_for("multiuser_admin.user_detail", user_id=user_id))
-        token = mu.accounts.create_email_token(
-            user_id, "verify", user["email"], ip=_client_ip(), user_agent=_user_agent()
+        result = _send_code_email(
+            user, "verify", actor=g.mu_user, ip=_client_ip(), user_agent=_user_agent()
         )
-        result = _send_token_email(
-            user, "verify", token, actor=g.mu_user, ip=_client_ip(), user_agent=_user_agent()
-        )
-        _flash_mail(result, "Verification email", user["email"])
+        _flash_mail(result, "Verification code", user["email"])
+        if result.status == "sent":
+            flash(
+                "The code is in their inbox. They type it into their own account page "
+                "-- there is no link for anyone to click.",
+                "info",
+            )
         return redirect(url_for("multiuser_admin.user_detail", user_id=user_id))
 
     @bp.route("/users/<user_id>/email/verify-now/", methods=["POST"])
@@ -701,7 +1108,7 @@ def build_blueprint(mu: MultiUser) -> Blueprint:
             count = mu.accounts.revoke_all_sessions(
                 g.mu_user, user_id, ip=_client_ip(), user_agent=_user_agent()
             )
-            flash(f"Revoked {count} session(s).", "success")
+            flash(f"Signed out {count} device{'s' if count != 1 else ''}.", "success")
         except AccountError as exc:
             flash(str(exc), "error")
         return redirect(url_for("multiuser_admin.user_detail", user_id=user_id))
@@ -709,13 +1116,33 @@ def build_blueprint(mu: MultiUser) -> Blueprint:
     @bp.route("/users/<user_id>/provider/<provider>/disconnect/", methods=["POST"])
     @admin_required
     def user_provider_disconnect(user_id, provider):
+        label = "YouTube Music" if provider == "youtube" else "Amazon"
         try:
-            mu.accounts.clear_provider_credentials(
+            failures, was_linked = mu.accounts.clear_provider_credentials(
                 g.mu_user, user_id, provider, ip=_client_ip(), user_agent=_user_agent()
             )
-            flash(f"{provider.title()} credentials disconnected.", "success")
         except AccountError as exc:
             flash(str(exc), "error")
+        else:
+            if failures:
+                flash(
+                    f"{label} sign-in was removed, but this server could not delete "
+                    f"everything yet: {'; '.join(failures)}. Try again, or delete the "
+                    f"account to force a complete purge.",
+                    "warning",
+                )
+            elif not was_linked:
+                flash(
+                    f"Nothing was connected to {label} on this account, so there was "
+                    f"nothing to remove.",
+                    "info",
+                )
+            else:
+                flash(
+                    f"{label} sign-in was removed, and its saved cookies and browser "
+                    f"profile on this server were deleted.",
+                    "success",
+                )
         return redirect(url_for("multiuser_admin.user_detail", user_id=user_id))
 
     @bp.route("/users/<user_id>/delete/", methods=["POST"])
@@ -734,10 +1161,10 @@ def build_blueprint(mu: MultiUser) -> Blueprint:
     def user_restore(user_id):
         try:
             mu.accounts.restore_user(g.mu_user, user_id, ip=_client_ip(), user_agent=_user_agent())
-            flash("User restored in disabled state. Set a password before enabling.", "success")
+            flash("User restored in disabled state. Set a password, then activate the account.", "success")
         except AccountError as exc:
             flash(str(exc), "error")
-        return redirect(url_for("multiuser_admin.users"))
+        return redirect(url_for("multiuser_admin.user_detail", user_id=user_id))
 
     @bp.route("/audit/", methods=["GET"])
     @admin_required
@@ -747,6 +1174,16 @@ def build_blueprint(mu: MultiUser) -> Blueprint:
         actor = (request.args.get("actor") or "").strip()
         target = (request.args.get("target") or "").strip()
         rows, total = mu.accounts.list_audit(page, AUDIT_PAGE_SIZE, action, actor, target)
+        try:
+            accounts = [
+                dict(row)
+                for row in mu.db.fetchall(
+                    "SELECT id, username FROM users "
+                    "WHERE status <> 'deleted' ORDER BY username COLLATE NOCASE LIMIT 500"
+                )
+            ]
+        except Exception:
+            accounts = []
         return render_template(
             "admin/audit.html",
             page="audit",
@@ -757,6 +1194,7 @@ def build_blueprint(mu: MultiUser) -> Blueprint:
             action=action,
             actor=actor,
             target=target,
+            accounts=accounts,
             actions=mu.accounts.audit_actions(),
         )
 
@@ -783,6 +1221,23 @@ def build_blueprint(mu: MultiUser) -> Blueprint:
             buffer.getvalue(),
             mimetype="text/csv",
             headers={"Content-Disposition": "attachment; filename=musicbox-audit.csv"},
+        )
+
+    @bp.route("/youtube/", methods=["GET"])
+    @admin_required
+    def youtube_downloads():
+        """The one Google account that supplies download cookies and fallback.
+
+        Per-account YouTube links are the account holder's own business and are
+        made from that person's account page; this page only owns the shared
+        server account.
+        """
+        hooks = _youtube()
+        return render_template(
+            "admin/youtube.html",
+            page="youtube",
+            title="YouTube downloads",
+            youtube=hooks.server_status() if hooks else None,
         )
 
     @bp.route("/system/", methods=["GET"])
@@ -819,7 +1274,83 @@ def build_blueprint(mu: MultiUser) -> Blueprint:
             mail=mu.mailer.config.summary(),
             mail_last=mu.mailer.last_result,
             outbox_count=outbox_count,
+            signup_policy=mu.accounts.signup_policy(),
+            signup_switch=mu.accounts.system_setting_row(SIGNUP_SWITCH_KEY),
         )
+
+    @bp.route("/youtube/signin/", methods=["POST"])
+    @admin_required
+    def youtube_downloads_signin():
+        """Ask the download-cookies account to sign in now instead of waiting."""
+        hooks = _youtube()
+        if hooks is None:
+            flash("Automatic YouTube sign-in is not available on this server.", "error")
+            return redirect(url_for("multiuser_admin.youtube_downloads"))
+        if g.mu_user["role"] != "owner":
+            flash("Only an owner can start the download account's YouTube sign-in.", "error")
+            return redirect(url_for("multiuser_admin.youtube_downloads"))
+        state = hooks.server_status()
+        if not state.get("configured"):
+            flash(
+                "No download Google account is configured (YOUTUBE_LOGIN_USERNAME, "
+                "YOUTUBE_LOGIN_PASSWORD, YOUTUBE_LOGIN_TOTP_CODE).",
+                "warning",
+            )
+            return redirect(url_for("multiuser_admin.youtube_downloads"))
+        if hooks.start_server_signin() != "started":
+            flash("Automatic sign-in is switched off (YOUTUBE_AUTO_LOGIN_ENABLED=0).", "warning")
+            return redirect(url_for("multiuser_admin.youtube_downloads"))
+        mu.accounts.audit(
+            g.mu_user, "youtube_server_signin_started", None, {}, _client_ip(), _user_agent(),
+        )
+        flash(
+            "The download account is signing in to YouTube Music now. Reload this page "
+            "for the result.",
+            "success",
+        )
+        return redirect(url_for("multiuser_admin.youtube_downloads"))
+
+    @bp.route("/users/signup/", methods=["POST"])
+    @admin_required
+    def users_signup():
+        """Switch the public sign-up door without touching the environment.
+
+        Owner-only, like backups: the switch governs who may obtain an account on
+        this deployment, which is not an ordinary admin action. The environment
+        stays the ceiling -- ``set_signup_switch`` refuses to open a door the
+        deployment closed.
+
+        It lives under ``/users/`` because that is where the decision is made:
+        a person closing the door is looking at the list of people who have
+        already come through it.
+        """
+        if g.mu_user["role"] != "owner":
+            flash("Only an owner can change the sign-up policy.", "error")
+            return redirect(url_for("multiuser_admin.users"))
+        state = (request.form.get("state") or "").strip().lower()
+        if state not in ("enable", "disable"):
+            flash("Choose whether to open or close public sign-ups.", "error")
+            return redirect(url_for("multiuser_admin.users"))
+        opened = state == "enable"
+        if opened and not mu.config.self_signup_enabled:
+            flash(
+                "This deployment sets MULTIUSER_SELF_SIGNUP_ENABLED=0, so public "
+                "sign-ups cannot be opened from the panel.",
+                "error",
+            )
+            return redirect(url_for("multiuser_admin.users"))
+        try:
+            mu.accounts.set_signup_switch(
+                g.mu_user, opened, _client_ip(), _user_agent()
+            )
+        except AccountError as exc:
+            flash(str(exc), "error")
+            return redirect(url_for("multiuser_admin.users"))
+        flash(
+            "Public sign-ups are open again." if opened else "Public sign-ups are now closed.",
+            "success",
+        )
+        return redirect(url_for("multiuser_admin.users"))
 
     @bp.route("/system/backup/", methods=["POST"])
     @admin_required
@@ -853,7 +1384,11 @@ def build_blueprint(mu: MultiUser) -> Blueprint:
             else:
                 try:
                     mu.accounts.change_own_password(
-                        g.mu_user, current, new, ip=_client_ip(), user_agent=_user_agent()
+                        g.mu_user, current, new, ip=_client_ip(), user_agent=_user_agent(),
+                        # Without this the session the change was made from is
+                        # revoked too, so "Password changed." was followed by a
+                        # bounce to the sign-in page.
+                        keep_sid_hash=session.get("mu_sid") or "",
                     )
                     flash("Password changed.", "success")
                     return redirect(url_for("multiuser_admin.account"))
@@ -866,6 +1401,13 @@ def build_blueprint(mu: MultiUser) -> Blueprint:
             user=mu.accounts.get_user(g.mu_user["id"]),
             sessions=mu.accounts.list_sessions(g.mu_user["id"]),
             audit=mu.accounts.user_audit(g.mu_user["id"], limit=15),
+            # Which verification dialog to reopen, and on which tab: a page reload
+            # from "send code" or a refused password would otherwise drop the person
+            # back onto the card and make them start the conversation again.
+            reauth=request.args.get("reauth") or "",
+            way=request.args.get("way") or "",
+            sent=(request.args.get("sent") or "") == "1",
+            code_minutes=mu.config.email_code_minutes,
         )
 
     @bp.route("/account/profile/", methods=["POST"])
@@ -875,7 +1417,6 @@ def build_blueprint(mu: MultiUser) -> Blueprint:
         try:
             user = mu.accounts.update_own_profile(
                 g.mu_user,
-                display_name=request.form.get("display_name") or "",
                 email=request.form.get("email") or "",
                 current_password=request.form.get("current_password") or "",
                 ip=_client_ip(),
@@ -887,15 +1428,11 @@ def build_blueprint(mu: MultiUser) -> Blueprint:
                 and user["email"].strip().lower() != previous_email
                 and not user.get("email_verified")
             ):
-                token = mu.accounts.create_email_token(
-                    user["id"], "verify", user["email"],
+                result = _send_code_email(
+                    user, "verify", actor=g.mu_user,
                     ip=_client_ip(), user_agent=_user_agent(),
                 )
-                result = _send_token_email(
-                    user, "verify", token, actor=g.mu_user,
-                    ip=_client_ip(), user_agent=_user_agent(),
-                )
-                _flash_mail(result, "Verification email", user["email"])
+                _flash_mail(result, "Verification code", user["email"])
         except AccountError as exc:
             flash(str(exc), "error")
         return redirect(url_for("multiuser_admin.account"))
@@ -916,13 +1453,36 @@ def build_blueprint(mu: MultiUser) -> Blueprint:
         if mu.accounts.recent_email_token_count(user["id"], "verify", 60):
             flash("A verification email was sent less than a minute ago. Check your inbox.", "warning")
             return redirect(url_for("multiuser_admin.account"))
-        token = mu.accounts.create_email_token(
-            user["id"], "verify", user["email"], ip=_client_ip(), user_agent=_user_agent()
+        result = _send_code_email(
+            user, "verify", actor=g.mu_user, ip=_client_ip(), user_agent=_user_agent()
         )
-        result = _send_token_email(
-            user, "verify", token, actor=g.mu_user, ip=_client_ip(), user_agent=_user_agent()
+        _flash_mail(result, "Verification code", user["email"])
+        return redirect(url_for("multiuser_admin.account"))
+
+    @bp.route("/account/email/confirm/", methods=["POST"])
+    @admin_required
+    def account_email_confirm():
+        """Type the six digits from the email, for this administrator's own address."""
+        code = (request.form.get("code") or "").strip()
+        consumed = mu.accounts.consume_email_code(
+            g.mu_user["id"], "verify", code
         )
-        _flash_mail(result, "Verification email", user["email"])
+        if not consumed:
+            flash(
+                "That code did not work. Codes are single-use, expire after "
+                f"{mu.config.email_code_minutes} minutes and stop working after "
+                f"{mu.config.email_code_attempts} wrong tries. Ask for a new one.",
+                "error",
+            )
+            return redirect(url_for("multiuser_admin.account"))
+        try:
+            mu.accounts.verify_email_with_token(
+                g.mu_user["id"], ip=_client_ip(), user_agent=_user_agent()
+            )
+        except AccountError as exc:
+            flash(str(exc), "error")
+            return redirect(url_for("multiuser_admin.account"))
+        flash("Email address confirmed.", "success")
         return redirect(url_for("multiuser_admin.account"))
 
     @bp.route("/account/sessions/revoke/", methods=["POST"])
@@ -934,11 +1494,32 @@ def build_blueprint(mu: MultiUser) -> Blueprint:
             )
             session.pop("mu_sid", None)
             session.pop("mu_user_id", None)
-            flash(f"Signed out {count} session(s), including this one.", "success")
+            flash(f"Signed out {count} device{'s' if count != 1 else ''}, including this one.", "success")
         except AccountError as exc:
             flash(str(exc), "error")
             return redirect(url_for("multiuser_admin.account"))
         return redirect(login_url)
+
+    @bp.route("/theme/", methods=["POST"])
+    @admin_required
+    def set_theme():
+        """Switch the panel between its dark and light palette.
+
+        Cosmetic, so it asks for nothing beyond the session that is already
+        here -- but it returns to the page it was pressed from, because a
+        person setting a theme mid-audit does not want to be sent to the
+        dashboard.  The ``next`` value has to be inside this blueprint: an
+        open redirect dressed up as a preference would be a new bug.
+        """
+        wanted = (request.form.get("state") or "").strip().lower()
+        target = request.form.get("next") or ""
+        if not (target.startswith(base) and not target.startswith("//")):
+            target = url_for("multiuser_admin.dashboard")
+        if wanted not in ("dark", "light"):
+            flash("Choose either the dark theme or the light theme.", "error")
+            return redirect(target)
+        mu.accounts.set_preference(g.mu_user["id"], THEME_KEY, wanted)
+        return redirect(target)
 
     # ------------------------------------------------------------------ auth
     @bp.route("/login/", methods=["GET", "POST"])
@@ -1080,12 +1661,9 @@ def build_blueprint(mu: MultiUser) -> Blueprint:
             and user.get("email")
             and mu.accounts.recent_email_token_count(user["id"], "reset", 60) == 0
         ):
-            token = mu.accounts.create_email_token(
-                user["id"], "reset", user["email"], ip=ip, user_agent=_user_agent()
-            )
-            result = _send_token_email(user, "reset", token, ip=ip, user_agent=_user_agent())
+            result = _send_code_email(user, "reset", ip=ip, user_agent=_user_agent())
             mu.accounts.audit(
-                None, "password_reset_requested", user["id"],
+                None, "password_reset_code_requested", user["id"],
                 {"delivery": result.status}, ip, _user_agent(),
             )
         elif identifier:
@@ -1095,83 +1673,87 @@ def build_blueprint(mu: MultiUser) -> Blueprint:
             )
         # Enumeration-safe response regardless of whether the account exists.
         flash(
-            "If an account matches that address, a password reset link has been sent. "
-            "The link expires in one hour.",
+            "If an account matches that address, a six-digit reset code has been sent. "
+            f"It expires in {mu.config.email_code_minutes} minutes.",
             "success",
         )
-        return redirect(login_url)
+        return redirect(f"{base}/reset-password/")
 
-    @bp.route("/reset-password/<token>", methods=["GET", "POST"])
-    def reset_password(token):
-        info = mu.accounts.peek_email_token(token, "reset")
-        if not info:
-            return (
-                render_template(
-                    "admin/email_result.html",
-                    title="Reset link expired",
-                    heading="This reset link is no longer valid",
-                    message="Reset links expire after one hour and can only be used once. Request a new one below.",
-                    action_url=f"{base}/forgot-password/",
-                    action_label="Request a new link",
-                ),
-                410,
-            )
+    @bp.route("/reset-password/", methods=["GET", "POST"])
+    def reset_password():
+        """Choose a new password by typing the emailed code. No link involved."""
+        ip = _client_ip()
         if request.method == "GET":
             return render_template(
                 "admin/reset_password.html",
                 title="Choose a new password",
-                token=token,
-                email=info["email"],
+                identifier=request.args.get("identifier") or "",
             )
+
+        allowed, retry = mu.rate_limiter.allow("code-ip", netids.ip_bucket(ip), 10, 900)
+        identifier = (request.form.get("identifier") or "").strip()
+        id_allowed, id_retry = mu.rate_limiter.allow(
+            "code-id", netids.identifier_bucket(identifier), 5, 900
+        )
+        if not allowed or not id_allowed:
+            flash(
+                f"Too many tries. Wait {max(retry, id_retry, 1)} seconds and enter the "
+                "code again.",
+                "error",
+            )
+            return render_template(
+                "admin/reset_password.html", title="Choose a new password", identifier=identifier
+            ), 429
+
+        user = (
+            mu.accounts.find_user_by_email(identifier)
+            if "@" in identifier
+            else mu.accounts.get_user_by_username(identifier)
+        )
         password = request.form.get("password") or ""
         confirm = request.form.get("confirm_password") or ""
+
+        def rejected(message: str, status: int = 410):
+            flash(message, "error")
+            return render_template(
+                "admin/reset_password.html",
+                title="Choose a new password",
+                identifier=identifier,
+                code=request.form.get("code") or "",
+            ), status
+
+        if not user or user.get("status") != "active":
+            # "no such account" and "wrong code" are one answer, and it never says
+            # which of the two the panel could not work out.
+            return rejected(
+                "That code did not work for that account. Codes are single-use and "
+                f"expire after {mu.config.email_code_minutes} minutes."
+            )
         if password != confirm:
             flash("Password and confirmation do not match.", "error")
             return render_template(
-                "admin/reset_password.html", title="Choose a new password", token=token, email=info["email"]
+                "admin/reset_password.html",
+                title="Choose a new password",
+                identifier=identifier,
+                code=request.form.get("code") or "",
             ), 400
-        consumed = mu.accounts.consume_email_token(token, "reset")
+        consumed = mu.accounts.consume_email_code(
+            user["id"], "reset", request.form.get("code") or ""
+        )
         if not consumed:
-            flash("This reset link has already been used or expired.", "error")
-            return redirect(f"{base}/forgot-password/")
+            return rejected(
+                "That code did not work. Codes are single-use, expire after "
+                f"{mu.config.email_code_minutes} minutes and stop working after "
+                f"{mu.config.email_code_attempts} wrong tries. Request a new one."
+            )
         try:
             mu.accounts.reset_password_with_token(
-                consumed["user"]["id"], password, ip=_client_ip(), user_agent=_user_agent()
+                user["id"], password, ip=ip, user_agent=_user_agent()
             )
         except AccountError as exc:
-            flash(str(exc), "error")
-            return render_template(
-                "admin/reset_password.html", title="Choose a new password", token=token, email=info["email"]
-            ), 400
+            return rejected(str(exc), 400)
         flash("Password reset. Sign in with your new password.", "success")
         return redirect(login_url)
-
-    @bp.route("/verify-email/<token>", methods=["GET"])
-    def verify_email(token):
-        consumed = mu.accounts.consume_email_token(token, "verify")
-        if not consumed:
-            return (
-                render_template(
-                    "admin/email_result.html",
-                    title="Verification link expired",
-                    heading="This verification link is no longer valid",
-                    message="Verification links expire after 24 hours and can only be used once. Ask an administrator to resend it.",
-                    action_url=login_url,
-                    action_label="Go to sign in",
-                ),
-                410,
-            )
-        mu.accounts.verify_email_with_token(
-            consumed["user"]["id"], ip=_client_ip(), user_agent=_user_agent()
-        )
-        return render_template(
-            "admin/email_result.html",
-            title="Email verified",
-            heading="Email verified",
-            message=f"{consumed['email']} is now confirmed for @{consumed['user']['username']}. You can sign in.",
-            action_url=login_url,
-            action_label="Sign in",
-        )
 
     @bp.route("/email-login/", methods=["GET", "POST"])
     def email_login():
@@ -1267,54 +1849,6 @@ def build_blueprint(mu: MultiUser) -> Blueprint:
         mu.accounts.audit(user, "magic_login", user["id"], {}, _client_ip(), _user_agent())
         flash("Signed in with a one-time email link.", "success")
         return redirect(f"{base}/")
-
-    @bp.route("/invite/<token>", methods=["GET", "POST"])
-    def accept_invite(token):
-        info = mu.accounts.peek_email_token(token, "invite")
-        if not info:
-            return (
-                render_template(
-                    "admin/email_result.html",
-                    title="Invitation expired",
-                    heading="This invitation is no longer valid",
-                    message="Invitations expire after 72 hours and can only be used once. Ask an administrator for a new one.",
-                    action_url=login_url,
-                    action_label="Go to sign in",
-                ),
-                410,
-            )
-        if request.method == "GET":
-            return render_template(
-                "admin/accept_invite.html",
-                title="Activate your account",
-                token=token,
-                email=info["email"],
-                username=info["username"],
-            )
-        password = request.form.get("password") or ""
-        confirm = request.form.get("confirm_password") or ""
-        if password != confirm:
-            flash("Password and confirmation do not match.", "error")
-            return render_template(
-                "admin/accept_invite.html", title="Activate your account", token=token,
-                email=info["email"], username=info["username"],
-            ), 400
-        consumed = mu.accounts.consume_email_token(token, "invite")
-        if not consumed:
-            flash("This invitation has already been used or expired.", "error")
-            return redirect(login_url)
-        try:
-            mu.accounts.complete_invitation(
-                consumed["user"]["id"], password, ip=_client_ip(), user_agent=_user_agent()
-            )
-        except AccountError as exc:
-            flash(str(exc), "error")
-            return render_template(
-                "admin/accept_invite.html", title="Activate your account", token=token,
-                email=info["email"], username=info["username"],
-            ), 400
-        flash("Account activated. Sign in with your new password.", "success")
-        return redirect(login_url)
 
     @bp.route("/logout/", methods=["POST"])
     def logout():

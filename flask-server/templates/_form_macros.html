@@ -26,3 +26,16 @@
 {% macro meter(for_id) -%}
   <p class="pw-meter" data-meter-for="{{ for_id }}"><span class="pw-meter-bar"></span><span class="pw-meter-text"></span></p>
 {%- endmacro %}
+
+{# One field, not six. Six boxes need script to move focus between them and break
+   the operating system's "tap the code from the notification" autofill, which is
+   the whole reason autocomplete="one-time-code" exists. account.css draws the
+   boxes with a repeating gradient so it still reads as a code, and the value
+   stays one string the server can normalise. #}
+{% macro code_field(value='', name='code', label='Code') -%}
+  <label for="{{ name }}">{{ label }}</label>
+  <input class="code-input" id="{{ name }}" name="{{ name }}" type="text"
+         inputmode="numeric" pattern="[0-9 ]*" autocomplete="one-time-code"
+         maxlength="7" spellcheck="false" placeholder="••••••"
+         value="{{ value or '' }}" required>
+{%- endmacro %}

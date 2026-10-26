@@ -154,6 +154,9 @@
     _showProgress(url);
     var controller = new AbortController();
     var cookieProbe = url.includes("/api/youtube/download-cookies") || url.includes("/api/profile_status");
+    // A scripted Amazon sign-in is a chain of real Amazon round trips and can
+    // legitimately run for minutes, like the cookie probe but longer.
+    var signinRequest = url.includes("/alexa/form_login");
     const externalSignal = opts && opts.signal;
     const abort = () => controller.abort();
     if (externalSignal) {
@@ -161,7 +164,7 @@
       else externalSignal.addEventListener('abort', abort, { once: true });
     }
     const statusRequest = url.includes('/alexa/now_playing') || url.includes('/api/app/queue/');
-    var timer = setTimeout(abort, cookieProbe ? 75000 : statusRequest ? 5000 : API_TIMEOUT_MS);
+    var timer = setTimeout(abort, signinRequest ? 150000 : cookieProbe ? 75000 : statusRequest ? 5000 : API_TIMEOUT_MS);
     return fetch(url, Object.assign({}, opts, { signal: controller.signal }))
       .then(async function(res) {
         // Keep the deadline active through the response body, not just headers.

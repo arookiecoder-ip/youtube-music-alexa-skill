@@ -5,7 +5,10 @@
       "Bash(cat /home/ubuntu/youtube-music-alexa-skill/.freebuff/project-id; which freebuff; freebuff --help 2>&1 | head -40)",
       "Bash(ls -la ~/.freebuff 2>/dev/null; find ~ -maxdepth 3 -iname \"*freebuff*\" -not -path \"*/node_modules/*\" 2>/dev/null | head; find / -maxdepth 4 -name \"*2026-10-25T07-08-57*\" 2>/dev/null | head)",
       "Read(//home/ubuntu/**)",
-      "Bash(ls -laR /home/ubuntu/.config/manicode/freebuff | head -50; cat /home/ubuntu/.config/manicode/freebuff-metadata.json 2>/dev/null | head -c 2000)"
+      "Bash(ls -laR /home/ubuntu/.config/manicode/freebuff | head -50; cat /home/ubuntu/.config/manicode/freebuff-metadata.json 2>/dev/null | head -c 2000)",
+      "Bash(cd /home/ubuntu/youtube-music-alexa-skill && ls -la && echo \"---FLASK---\" && ls -la flask-server/ && echo \"---TEMPLATES---\" && ls -la flask-server/templates/ && echo \"---STATIC---\" && find flask-server/static -type f | head -60)",
+      "Bash(cd /home/ubuntu/youtube-music-alexa-skill && echo \"=== CSS FILES \\(templates/static/css\\) ===\" && wc -l flask-server/templates/static/css/*.css | sort -n && echo \"\" && echo \"=== JS FILES ===\" && wc -l flask-server/templates/static/js/*.js | sort -n && echo \"\" && echo \"=== other static dirs? ===\" && find . -path ./.git -prune -o -name \"*.css\" -print | head -40)",
+      "Bash(ls /home/ubuntu/youtube-music-alexa-skill/flask-server/templates/static/js/ && grep -rn \"data-confirm\" /home/ubuntu/youtube-music-alexa-skill/flask-server/templates/static/js/*.js | head -30)"
     ]
   }
 }

@@ -16,8 +16,10 @@ services:
       - http_proxy=http://musicbox-egress-internal:8890
       - HTTPS_PROXY=http://musicbox-egress-internal:8890
       - https_proxy=http://musicbox-egress-internal:8890
-      - NO_PROXY=localhost,127.0.0.1,::1,ytmusic,youtube-browser,musicbox-egress,musicbox-egress-internal
-      - no_proxy=localhost,127.0.0.1,::1,ytmusic,youtube-browser,musicbox-egress,musicbox-egress-internal
+      - NO_PROXY=localhost,127.0.0.1,::1,ytmusic,youtube-browser,musicbox-egress,musicbox-egress-internal,bgutil-provider
+      - no_proxy=localhost,127.0.0.1,::1,ytmusic,youtube-browser,musicbox-egress,musicbox-egress-internal,bgutil-provider
+      - YTDLP_BGUTIL_BASE_URL=http://bgutil-provider:4416
+      - BGUTIL_POT_URL=http://bgutil-provider:4416
       - YT_BROWSER_CONTROL_TOKEN=${YT_BROWSER_CONTROL_TOKEN:?set YT_BROWSER_CONTROL_TOKEN in .env}
       - ALEXA_PROXY_BEHIND_CADDY=1
     volumes:
@@ -34,6 +36,32 @@ services:
         condition: service_healthy
       youtube-browser:
         condition: service_healthy
+      bgutil-provider:
+        condition: service_healthy
+
+  # Mints the GVS PO tokens YouTube requires before it will serve a playable
+  # media URL. Two callers: the yt-dlp plugin (downloads) and the Node stream
+  # resolver (youtubei.js). Without it both resolve fine and then get HTTP 403
+  # from googlevideo, which is exactly the "cookies work but nothing plays"
+  # failure. It needs outbound access to Google's BotGuard script, so it joins
+  # the same egress network and proxy as the app.
+  bgutil-provider:
+    image: brainicism/bgutil-ytdlp-pot-provider:latest
+    container_name: bgutil-provider
+    restart: unless-stopped
+    networks: [web, musicbox-egress]
+    environment:
+      - PORT=4416
+      - HTTP_PROXY=http://musicbox-egress-internal:8890
+      - HTTPS_PROXY=http://musicbox-egress-internal:8890
+      - NO_PROXY=localhost,127.0.0.1,bgutil-provider
+      - TOKEN_TTL=3600000
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4416/ping').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      start_period: 20s
+      retries: 5
 
   youtube-browser:
     build: ./browser-auth

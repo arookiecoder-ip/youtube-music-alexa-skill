@@ -8,6 +8,7 @@ profile directory: the owner keeps the base profile it has always used, while an
 account gets ``<PROFILE_DIR>/<key>``. Without that split, whoever clicked "Connect
 YouTube Music" last would hand Google's cookies to every other account.
 """
+import concurrent.futures
 import hmac
 import logging
 import os
@@ -16,12 +17,21 @@ import shutil
 import subprocess
 import threading
 import time
+import urllib.request
 from urllib.parse import urlparse
 
 from flask import Flask, jsonify, request
 
+import google_signin
+
 app = Flask(__name__)
 logger = logging.getLogger(__name__)
+if not logger.handlers:
+    _handler = logging.StreamHandler()
+    _handler.setFormatter(logging.Formatter("%(levelname)s:%(name)s:%(message)s"))
+    logger.addHandler(_handler)
+    logger.setLevel(logging.INFO)
+    logger.propagate = False
 CONTROL_TOKEN = os.environ.get("YT_BROWSER_CONTROL_TOKEN", "")
 CAPTURE_TIMEOUT = float(os.environ.get("YT_BROWSER_CAPTURE_TIMEOUT", "120"))
 LOGIN_TIMEOUT = float(os.environ.get("YT_BROWSER_LOGIN_TIMEOUT", "240"))
@@ -96,12 +106,28 @@ def _stop_manual_browser():
         return
     except (FileNotFoundError, subprocess.SubprocessError, UnicodeError):
         pass
-    process.terminate()
+    _signal_browser_group(process, "terminate")
     try:
         process.wait(timeout=5)
     except subprocess.TimeoutExpired:
-        process.kill()
+        _signal_browser_group(process, "kill")
         process.wait(timeout=5)
+
+
+def _signal_browser_group(process, how):
+    """Signal Chromium's whole session, not just the wrapper that spawned it.
+
+    The browser is a process group leader (``start_new_session``), and the
+    renderer/GPU children hold the profile lock: leaving them behind makes the
+    next launch exit immediately on a profile singleton that nobody owns.
+    """
+    import signal
+
+    sig = signal.SIGKILL if how == "kill" else signal.SIGTERM
+    try:
+        os.killpg(os.getpgid(process.pid), sig)
+    except (ProcessLookupError, PermissionError):
+        getattr(process, how)()
 
 
 def _plain_chromium_command(enable_capture=False, profile_dir=PROFILE_DIR):
@@ -139,6 +165,7 @@ def _manual_login(enable_capture=False, profile_dir=PROFILE_DIR):
     process = subprocess.Popen(
         _plain_chromium_command(enable_capture=enable_capture, profile_dir=profile_dir),
         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        start_new_session=True,
     )
     with _lock:
         _manual_browser = process
@@ -230,13 +257,17 @@ def _set_state(name, **extra):
         _state.update(state=name, updated_at=time.time(), **extra)
 
 
-def _capture_from_running_browser(interactive):
-    """Attach briefly to the existing Chromium process and validate YT Music."""
-    global _candidate
+def _capture_from_running_browser(interactive, connection=None):
+    """Attach briefly to the existing Chromium process and validate YT Music.
+
+    ``connection`` is the automation's ``(context, page)`` when a scripted
+    sign-in already owns this thread: Playwright's sync API allows only one
+    instance per thread, so opening a second one here would fail outright.
+    """
+    if connection is not None:
+        return _watch_for_account_headers(connection[0], connection[1], interactive)
     from playwright.sync_api import sync_playwright
 
-    captured = threading.Event()
-    signed_out = threading.Event()
     # Exiting sync_playwright disconnects its transport. Deliberately do not
     # call browser.close(): the owner keeps using this exact Chromium process.
     with sync_playwright() as pw:
@@ -251,48 +282,422 @@ def _capture_from_running_browser(interactive):
             raise RuntimeError("Chromium CDP endpoint unavailable")
         context = browser.contexts[0]
         page = context.pages[0] if context.pages else context.new_page()
+        return _watch_for_account_headers(context, page, interactive)
 
-        def on_response(response):
-            global _candidate
-            if captured.is_set():
-                return
-            try:
-                parsed = urlparse(response.url)
-                if (parsed.scheme != "https"
-                        or parsed.hostname != "music.youtube.com"
-                        or parsed.path != "/youtubei/v1/account/account_menu"):
-                    return
-                payload = response.json()
-                if account_menu_reports_signed_out(payload):
-                    signed_out.set()
-                    return
-                if not account_menu_is_signed_in(payload):
-                    return
-                headers = response.request.all_headers()
-            except Exception:
-                return
-            if not authenticated_browse_headers(headers):
-                return
-            with _lock:
-                _candidate = {"url": response.url, "headers": headers}
-            captured.set()
-            _set_state("captured", interactive=interactive, message=None)
 
-        context.on("response", on_response)
-        page.goto("https://music.youtube.com", wait_until="domcontentloaded", timeout=45000)
-        deadline = time.time() + CAPTURE_TIMEOUT
-        while not captured.is_set() and not signed_out.is_set() and time.time() < deadline:
-            if interactive and not _public_state()["interactive"]:
-                break
-            page.wait_for_timeout(250)
-        context.remove_listener("response", on_response)
+def _watch_for_account_headers(context, page, interactive):
+    """Navigate to YouTube Music and wait for the active-account menu response."""
+    global _candidate
+
+    captured = threading.Event()
+    signed_out = threading.Event()
+
+    def on_response(response):
+        global _candidate
         if captured.is_set():
-            return "captured"
-        if signed_out.is_set():
-            return "signed_out"
+            return
+        try:
+            parsed = urlparse(response.url)
+            if (parsed.scheme != "https"
+                    or parsed.hostname != "music.youtube.com"
+                    or parsed.path != "/youtubei/v1/account/account_menu"):
+                return
+            payload = response.json()
+            if account_menu_reports_signed_out(payload):
+                signed_out.set()
+                return
+            if not account_menu_is_signed_in(payload):
+                return
+            headers = response.request.all_headers()
+        except Exception:
+            return
+        if not authenticated_browse_headers(headers):
+            return
+        with _lock:
+            _candidate = {"url": response.url, "headers": headers}
+        captured.set()
+        _set_state("captured", interactive=interactive, message=None)
+
+    context.on("response", on_response)
+    page.goto("https://music.youtube.com", wait_until="domcontentloaded", timeout=45000)
+    deadline = time.time() + CAPTURE_TIMEOUT
+    while not captured.is_set() and not signed_out.is_set() and time.time() < deadline:
         if interactive and not _public_state()["interactive"]:
-            return "cancelled"
-        return "timeout"
+            break
+        page.wait_for_timeout(250)
+    context.remove_listener("response", on_response)
+    if captured.is_set():
+        return "captured"
+    if signed_out.is_set():
+        return "signed_out"
+    if interactive and not _public_state()["interactive"]:
+        return "cancelled"
+    return "timeout"
+
+
+# --------------------------------------------------------------------------
+# Automated sign-in as the server's own Google account.
+#
+# This is the deliberate exception to the rule at the top of the file. While a
+# human is signing in, no client may attach to the browser, because a DevTools
+# transport can watch what they type. Here nobody types: the credential arrives
+# from the application server over the loopback control API one step at a time,
+# so the trade being made is scripted reliability against a slightly more
+# detectable browser -- and the whole ladder can be left switched off.
+# --------------------------------------------------------------------------
+
+_automation = None
+_AUTOMATION_KINDS = ("start", "identifier", "password", "code", "choice", "consent")
+
+# Playwright's sync API is bound to the thread that started it: a page created
+# while answering one request raises "Cannot switch to a different thread" when
+# the next request lands on another waitress worker. Every scripted step (and
+# the capture and stop paths that touch the same page) therefore runs on this
+# one long-lived thread, which is what makes the ladder survive across calls.
+_google_worker = concurrent.futures.ThreadPoolExecutor(
+    max_workers=1, thread_name_prefix="google-signin")
+
+
+def _on_google_thread(work, timeout=180):
+    return _google_worker.submit(work).result(timeout=timeout)
+
+
+def _automation_usable():
+    if not _automation:
+        return False
+    try:
+        return not _automation["page"].is_closed()
+    except Exception:
+        return False
+
+
+def _cdp_ready(deadline):
+    """Wait for Chromium's DevTools port before asking Playwright to attach.
+
+    ``connect_over_cdp`` against a window that has not opened the port yet fails
+    with a driver-level error that can wedge the Playwright transport; probing
+    the HTTP endpoint first keeps a slow cold start from looking like a crash.
+    """
+    while time.time() < deadline:
+        try:
+            with urllib.request.urlopen(CDP_URL + "/json/version", timeout=1) as response:
+                if response.status == 200:
+                    return True
+        except Exception:
+            pass
+        time.sleep(0.25)
+    return False
+
+
+def _attach_automation(profile_dir):
+    """Open Chromium with CDP enabled and attach the driver that types into it."""
+    global _automation
+    from playwright.sync_api import sync_playwright
+
+    if _automation_usable() and _automation.get("profile_dir") == profile_dir:
+        return _automation["page"]
+    _detach_automation()
+    _manual_login(enable_capture=True, profile_dir=profile_dir)
+    try:
+        if not _cdp_ready(time.time() + 45):
+            raise RuntimeError("Chromium did not open its DevTools port")
+        playwright = sync_playwright().start()
+        try:
+            browser = playwright.chromium.connect_over_cdp(CDP_URL)
+            if not browser.contexts:
+                raise RuntimeError("Chromium exposed no browser context")
+            context = browser.contexts[0]
+            page = context.pages[0] if context.pages else context.new_page()
+        except Exception:
+            try:
+                playwright.stop()
+            except Exception:
+                pass
+            raise
+    except Exception:
+        _stop_manual_browser()
+        raise
+    _automation = {"playwright": playwright, "browser": browser, "context": context,
+                   "page": page, "profile_dir": profile_dir}
+    return page
+
+
+def _detach_automation():
+    """Disconnect the driver and close the browser it was driving.
+
+    Closing through :func:`_stop_manual_browser` rather than ``browser.close()``
+    is what makes the next ``/refresh`` work: the window-close path is the one
+    where Chromium writes its cookie database to the profile volume.
+    """
+    global _automation
+    with _lock:
+        auto, _automation = _automation, None
+    if auto:
+        try:
+            auto["playwright"].stop()
+        except Exception:
+            pass
+    _stop_manual_browser()
+
+
+def _netscape_jar(cookies):
+    """Render browser cookies as a Netscape jar, for yt-dlp and nothing else.
+
+    Only YouTube's own domains are exported: the Google account cookies on the
+    same browser can drive the account itself, and have no business sitting in a
+    file the download path reads.
+    """
+    lines = ["# Netscape HTTP Cookie File",
+             "# Generated by the Music Box browser service", ""]
+    seen = set()
+    horizon = int(time.time()) + 30 * 86400
+    for cookie in cookies or ():
+        domain = str(cookie.get("domain") or "")
+        name = str(cookie.get("name") or "")
+        value = str(cookie.get("value") or "")
+        if not domain or not name or not value:
+            continue
+        host = domain[1:] if domain.startswith(".") else domain
+        if host != "youtube.com" and not host.endswith(".youtube.com"):
+            continue
+        path = str(cookie.get("path") or "/")
+        key = (host, path, name)
+        if key in seen:
+            continue
+        seen.add(key)
+        try:
+            expires = float(cookie.get("expires") or 0)
+        except (TypeError, ValueError):
+            expires = 0.0
+        expiry = int(expires) if expires > 0 else horizon
+        # The HttpOnly marker is part of the file format, not decoration: a jar
+        # without it reads back as if these were script-visible cookies.
+        prefix = "#HttpOnly_" if cookie.get("httponly") else ""
+        lines.append("\t".join([
+            f"{prefix}.{host}", "TRUE", path,
+            "TRUE" if cookie.get("secure") else "FALSE", str(expiry), name, value,
+        ]))
+    return "\n".join(lines) + "\n"
+
+
+def _google_busy():
+    with _lock:
+        return bool(_worker and _worker.is_alive()) or bool(_state["interactive"])
+
+
+def _excerpt(page, secrets=()):
+    """A short, secret-free description of what the page actually says.
+
+    "Google showed a page this server does not know how to answer" is true and
+    useless. The operator reading the failure email needs the heading Google put
+    on screen, which is stable copy -- never the credential that was typed, so the
+    values we just handled are replaced before anything is kept.
+    """
+    text = ""
+    for reader in (
+        lambda: page.inner_text("body", timeout=1500),
+        lambda: page.evaluate("() => document.body ? document.body.innerText : ''"),
+        lambda: page.title(),
+    ):
+        try:
+            text = reader() or ""
+        except Exception as exc:
+            logger.warning("Could not read the sign-in page text: %s: %s",
+                           type(exc).__name__, str(exc)[:120])
+            text = ""
+        if text.strip():
+            break
+    text = re.sub(r"\s+", " ", text or "").strip()
+    for secret in secrets:
+        if secret:
+            text = text.replace(str(secret), "[redacted]")
+    return text[:280]
+
+
+def _google_step(kind, handler, profile_key="", secrets=()):
+    """Run one driver step, and never let a broken page look like a login answer."""
+    global _profile_key
+    if kind not in _AUTOMATION_KINDS and kind != "capture":
+        return jsonify({"error": "unknown_step"}), 400
+    if _google_busy():
+        return jsonify({"outcome": "browser_in_use"}), 409
+    try:
+        profile_dir = _profile_dir_for(profile_key)
+    except ValueError:
+        return jsonify({"error": "invalid_profile_key"}), 400
+
+    def work():
+        global _profile_key
+        try:
+            page = _attach_automation(profile_dir)
+        except Exception:
+            logger.warning("Could not attach the sign-in browser during %s", kind,
+                           exc_info=True)
+            return {"outcome": "crashed"}, 503
+        _profile_key = profile_dir
+        _set_state("signing_in", interactive=False, message=None)
+        try:
+            state, outcome = handler(page)
+        except Exception:
+            logger.warning("Sign-in step %s raised", kind, exc_info=True)
+            _detach_automation()
+            return {"outcome": "crashed"}, 503
+        detail = ""
+        if page.is_closed():
+            detail = "The sign-in browser window closed before this page could be read."
+        elif (outcome or "unsupported") in ("unsupported", "blocked", "captcha", "locked",
+                                            "wrong_password", "unknown_account"):
+            detail = _excerpt(page, secrets)
+        if outcome in ("crashed", "unsupported", "blocked", "captcha", "locked",
+                       "wrong_password", "unknown_account", "timeout"):
+            # Nothing further can be learned from this browser: release it so the
+            # profile is flushed and the next attempt starts from a clean window.
+            # ``signed_in`` deliberately keeps it open for the capture step.
+            _detach_automation()
+        answer = {"outcome": outcome or "unsupported",
+                  "url": _redact_url((state or {}).get("url"))}
+        if detail:
+            answer["detail"] = detail
+        logger.info("Sign-in step %s -> %s at %s", kind, answer["outcome"], answer["url"])
+        return answer, 200
+
+    answer, status = _on_google_thread(work)
+    return jsonify(answer), status
+
+
+def _redact_url(url):
+    """Keep Google's path for the status panel and drop anything it carries."""
+    try:
+        parsed = urlparse(url or "")
+    except (TypeError, ValueError):
+        return ""
+    return f"{parsed.hostname or ''}{parsed.path or ''}"[:160]
+
+
+def _capture_and_export():
+    """Capture the signed-in headers and the matching cookie jar, and hand them over once.
+
+    This is ``/candidate/take`` for the automated ladder: the candidate is cleared
+    as it is returned, so a captured session cannot be read twice by anything that
+    learns the control token later.
+    """
+    global _candidate
+    auto = _automation
+    connection = (auto["context"], auto["page"]) if auto else None
+    result = _capture_from_running_browser(False, connection=connection)
+    if result != "captured":
+        _detach_automation()
+        return {"outcome": result or "timeout"}, 200
+    cookies = ""
+    try:
+        cookies = _netscape_jar(auto["context"].cookies("https://music.youtube.com"))
+    except Exception:
+        # A signed-in browser whose jar cannot be read is still a signed-in browser:
+        # the headers alone re-authenticate the app, and the jar is a convenience.
+        logger.warning("Signed in, but the cookie jar could not be read")
+    with _lock:
+        candidate, _candidate = _candidate, None
+    _detach_automation()
+    if candidate is None:
+        # Something took the candidate mid-capture (a revoke, a stale lease).
+        return {"outcome": "timeout"}, 200
+    _set_state("candidate_taken", message=None)
+    return {"outcome": "captured", "url": candidate.get("url"),
+            "headers": candidate.get("headers") or {},
+            "cookies": cookies}, 200
+
+
+@app.post("/google/start")
+def google_start():
+    body = request.get_json(silent=True) or {}
+    return _google_step("start", google_signin.open_signin,
+                        str(body.get("profile") or ""),
+                        secrets=(str(body.get("email") or ""),))
+
+
+@app.post("/google/identifier")
+def google_identifier():
+    body = request.get_json(silent=True) or {}
+    email = str(body.get("email") or "")
+    return _google_step("identifier",
+                        lambda page: google_signin.submit_identifier(page, email),
+                        str(body.get("profile") or ""),
+                        secrets=(email,))
+
+
+@app.post("/google/password")
+def google_password():
+    body = request.get_json(silent=True) or {}
+    password = str(body.get("password") or "")
+    return _google_step("password",
+                        lambda page: google_signin.submit_password(page, password),
+                        str(body.get("profile") or ""),
+                        secrets=(password,))
+
+
+@app.post("/google/code")
+def google_code():
+    body = request.get_json(silent=True) or {}
+    code = str(body.get("code") or "")
+    if not re.fullmatch(r"[A-Za-z0-9-]{4,16}", code):
+        return jsonify({"error": "invalid_code"}), 400
+    return _google_step("code",
+                        lambda page: google_signin.submit_code(page, code),
+                        str(body.get("profile") or ""),
+                        secrets=(code,))
+
+
+@app.post("/google/choice")
+def google_choice():
+    body = request.get_json(silent=True) or {}
+    return _google_step("choice", google_signin.choose_two_step,
+                        str(body.get("profile") or ""))
+
+
+@app.post("/google/consent")
+def google_consent():
+    body = request.get_json(silent=True) or {}
+    return _google_step("consent", google_signin.accept_consent,
+                        str(body.get("profile") or ""))
+
+
+@app.post("/google/capture")
+def google_capture():
+    body = request.get_json(silent=True) or {}
+    try:
+        _profile_dir_for(str(body.get("profile") or ""))
+    except ValueError:
+        return jsonify({"error": "invalid_profile_key"}), 400
+
+    def work():
+        if not _automation_usable():
+            return {"outcome": "not_signed_in"}, 409
+        return _capture_and_export()
+
+    answer, status = _on_google_thread(work)
+    return jsonify(answer), status
+
+
+@app.post("/google/stop")
+def google_stop():
+    _on_google_thread(_detach_automation)
+    _set_state("idle", interactive=False, message=None)
+    return jsonify({"outcome": "stopped"})
+
+
+@app.get("/google/state")
+def google_state():
+    def work():
+        if not _automation_usable():
+            return {"outcome": "idle"}
+        try:
+            state = google_signin.read_page_state(_automation["page"])
+        except Exception:
+            return {"outcome": "crashed"}
+        return {"outcome": google_signin.classify_page(state),
+                "url": _redact_url(state.get("url"))}
+
+    return jsonify(_on_google_thread(work, timeout=30))
 
 
 def _capture(interactive, profile_dir):
@@ -360,6 +765,10 @@ def _start(interactive, profile_key=""):
         return False
     with _lock:
         if _worker and _worker.is_alive():
+            return False
+        if _automation is not None:
+            # One Chromium. A scripted sign-in in progress owns it, and starting a
+            # second workflow would drive the same window from two places.
             return False
         _candidate = None
         _complete_requested = False

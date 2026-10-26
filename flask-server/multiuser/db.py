@@ -13,7 +13,7 @@ import sqlite3
 import time
 from typing import Any, Iterable
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 6
 
 _SCHEMA_V1 = (
     """
@@ -21,7 +21,6 @@ _SCHEMA_V1 = (
         id TEXT PRIMARY KEY,
         username TEXT NOT NULL COLLATE NOCASE UNIQUE,
         email TEXT COLLATE NOCASE,
-        display_name TEXT NOT NULL DEFAULT '',
         password_hash TEXT NOT NULL,
         role TEXT NOT NULL DEFAULT 'user'
             CHECK (role IN ('owner', 'admin', 'user')),
@@ -117,13 +116,14 @@ _SCHEMA_V1 = (
 )
 
 # Version 2 adds email identity: verification state and single-use tokens for
-# email verification, password reset, invitations and passwordless sign-in.
+# email verification, password reset, invitations, passwordless sign-in and -- since
+# version 6 -- the code that re-opens a second-factor change.
 _SCHEMA_V2_TABLES = (
     """
     CREATE TABLE IF NOT EXISTS user_email_tokens (
         token_hash TEXT PRIMARY KEY,
         user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-        purpose TEXT NOT NULL CHECK (purpose IN ('verify', 'reset', 'magic', 'invite')),
+        purpose TEXT NOT NULL CHECK (purpose IN ('verify', 'reset', 'magic', 'invite', 'reauth')),
         email TEXT NOT NULL DEFAULT '',
         created_at REAL NOT NULL,
         expires_at REAL NOT NULL,
@@ -144,6 +144,70 @@ _SCHEMA_V3_COLUMNS = (
     ("totp_pending_enc", "ALTER TABLE users ADD COLUMN totp_pending_enc TEXT NOT NULL DEFAULT ''"),
     ("totp_pending_at", "ALTER TABLE users ADD COLUMN totp_pending_at REAL NOT NULL DEFAULT 0"),
     ("totp_last_step", "ALTER TABLE users ADD COLUMN totp_last_step INTEGER NOT NULL DEFAULT 0"),
+)
+
+# Version 4 replaces the emailed verification and reset *links* with a typed
+# numeric code.  The code is stored encrypted, not hashed: six digits is one
+# million values, so a digest of one can be read by trying all of them, while the
+# Fernet key is not inside the database file.  ``code_attempts`` is what bounds a
+# live guessing run -- the row is spent when it reaches the ceiling instead of the
+# account being locked, because anyone who knows a username could otherwise lock
+# that account for free.
+_SCHEMA_V4_COLUMNS = (
+    ("code_enc", "ALTER TABLE user_email_tokens ADD COLUMN code_enc TEXT NOT NULL DEFAULT ''"),
+    (
+        "code_attempts",
+        "ALTER TABLE user_email_tokens ADD COLUMN code_attempts INTEGER NOT NULL DEFAULT 0",
+    ),
+)
+
+# A door policy an administrator can change without a redeploy.  Deliberately not
+# per-user: ``signup_enabled`` is the only key today and it governs everyone.
+_SCHEMA_V4_TABLES = (
+    """
+    CREATE TABLE IF NOT EXISTS system_settings (
+        setting_key TEXT PRIMARY KEY,
+        setting_value TEXT NOT NULL DEFAULT '',
+        updated_at REAL NOT NULL DEFAULT 0,
+        updated_by TEXT NOT NULL DEFAULT ''
+    )
+    """,
+)
+
+# Version 6 lets an email code re-open the panel's own second-factor settings.
+# A CHECK constraint cannot be widened in place, so the table is rebuilt: same
+# columns, one more purpose.  The rebuild is written as create-then-swap rather
+# than as a fresh install because a live database holds unspent reset and
+# verification codes in it, and dropping them would silently sign people out of
+# nothing while breaking the ones that are mid-flight.
+_SCHEMA_V6_TOKENS = (
+    """
+    CREATE TABLE user_email_tokens_v6 (
+        token_hash TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        purpose TEXT NOT NULL CHECK (purpose IN ('verify', 'reset', 'magic', 'invite', 'reauth')),
+        email TEXT NOT NULL DEFAULT '',
+        created_at REAL NOT NULL,
+        expires_at REAL NOT NULL,
+        used_at REAL NOT NULL DEFAULT 0,
+        ip TEXT NOT NULL DEFAULT '',
+        user_agent TEXT NOT NULL DEFAULT '',
+        code_enc TEXT NOT NULL DEFAULT '',
+        code_attempts INTEGER NOT NULL DEFAULT 0
+    )
+    """,
+    """
+    INSERT INTO user_email_tokens_v6
+      (token_hash, user_id, purpose, email, created_at, expires_at, used_at, ip,
+       user_agent, code_enc, code_attempts)
+    SELECT token_hash, user_id, purpose, email, created_at, expires_at, used_at, ip,
+           user_agent, code_enc, code_attempts
+    FROM user_email_tokens
+    """,
+    "DROP TABLE user_email_tokens",
+    "ALTER TABLE user_email_tokens_v6 RENAME TO user_email_tokens",
+    "CREATE INDEX IF NOT EXISTS idx_email_tokens_user ON user_email_tokens(user_id, purpose)",
+    "CREATE INDEX IF NOT EXISTS idx_email_tokens_expiry ON user_email_tokens(expires_at)",
 )
 
 
@@ -222,6 +286,46 @@ class Database:
                 )
                 conn.execute(
                     "INSERT INTO multiuser_schema_migrations (version, applied_at) VALUES (3, ?)",
+                    (time.time(),),
+                )
+            if 4 not in applied:
+                columns = {
+                    row[1] for row in conn.execute("PRAGMA table_info(user_email_tokens)").fetchall()
+                }
+                for name, statement in _SCHEMA_V4_COLUMNS:
+                    if name not in columns:
+                        conn.execute(statement)
+                for statement in _SCHEMA_V4_TABLES:
+                    conn.execute(statement)
+                conn.execute(
+                    "INSERT INTO multiuser_schema_migrations (version, applied_at) VALUES (4, ?)",
+                    (time.time(),),
+                )
+            if 5 not in applied:
+                # One name per account. ``display_name`` was a second one that only
+                # ever duplicated or contradicted the handle the queue and the panel
+                # both already show, so the column goes rather than going unused.
+                columns = {
+                    row[1] for row in conn.execute("PRAGMA table_info(users)").fetchall()
+                }
+                if "display_name" in columns:
+                    try:
+                        conn.execute("ALTER TABLE users DROP COLUMN display_name")
+                    except sqlite3.OperationalError:
+                        # DROP COLUMN needs SQLite 3.35+.  Leaving an empty column
+                        # behind on an older build is cosmetic; nothing reads it.
+                        pass
+                conn.execute(
+                    "INSERT INTO multiuser_schema_migrations (version, applied_at) VALUES (5, ?)",
+                    (time.time(),),
+                )
+            if 6 not in applied:
+                # A purpose CHECK is part of the table text, so widening it takes the
+                # rebuild even though a fresh install already gets the new list.
+                for statement in _SCHEMA_V6_TOKENS:
+                    conn.execute(statement)
+                conn.execute(
+                    "INSERT INTO multiuser_schema_migrations (version, applied_at) VALUES (6, ?)",
                     (time.time(),),
                 )
             now = time.time()

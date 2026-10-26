@@ -1,0 +1,110 @@
+{% extends "admin/base.html" %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <h1>YouTube downloads</h1>
+    <p>The one Google account this server signs in to for download cookies and the shared
+      fallback session.</p>
+  </div>
+</div>
+
+<div class="muted-box mb-4">
+  <strong>This is not a per-user link.</strong> Each person connects their own YouTube Music
+  from their account page. This server account only feeds the cookie jar used by downloads and
+  stands in for accounts that have not linked their own yet.
+</div>
+
+{% if youtube %}
+<div class="card">
+  <div class="card-head plain">
+    <h2>Download account</h2>
+    <div class="btn-row">
+      <span class="badge {{ 'active' if youtube.server_session else 'invited' }}">
+        {{ 'session saved' if youtube.server_session else 'no session' }}
+      </span>
+      <span class="badge {{ 'active' if youtube.enabled else 'neutral' }}">
+        {{ 'automatic sign-in on' if youtube.enabled else 'automatic sign-in off' }}
+      </span>
+      <span class="badge {{ 'active' if youtube.fallback_enabled else 'neutral' }}">
+        {{ 'fallback in use' if youtube.fallback_enabled else 'fallback off' }}
+      </span>
+    </div>
+  </div>
+
+  {% if not youtube.configured %}
+    <div class="banner mb-4">
+      <span>⚑</span>
+      <span>
+        No download Google account is configured. Set
+        <span class="mono">YOUTUBE_LOGIN_USERNAME</span>, <span class="mono">YOUTUBE_LOGIN_PASSWORD</span> and
+        <span class="mono">YOUTUBE_LOGIN_TOTP_CODE</span>, then restart the service. Until then
+        downloads use only an account's own cookies, and unlinked accounts borrow nothing.
+      </span>
+    </div>
+  {% endif %}
+
+  <div class="grid cols-2">
+    <dl class="kv">
+      <dt>Google account</dt><dd>{{ youtube.email or '—' }}</dd>
+      <dt>Second factor</dt>
+      <dd>
+        {{ youtube.credential or '—' }}
+        {% if youtube.mode == 'secret' %}<span class="badge neutral">authenticator</span>{% endif %}
+        {% if youtube.mode == 'codes' %}<span class="badge invited">backup codes</span>{% endif %}
+      </dd>
+      <dt>Download cookies</dt><dd>{{ 'saved' if youtube.server_session else 'not saved yet' }}</dd>
+      <dt>Failure email</dt>
+      <dd>
+        {% if youtube.alert_configured %}
+          <span class="mono">LOGIN_FAIL_MAIL_ID</span> <span class="badge active">set</span>
+        {% else %}
+          <span class="badge error">not set</span> <span class="faint">failures are only logged</span>
+        {% endif %}
+      </dd>
+    </dl>
+    <dl class="kv">
+      <dt>Last attempt</dt><dd>{{ youtube.last_attempt_at or '—' }}</dd>
+      <dt>Last success</dt><dd>{{ youtube.last_success_at or '—' }}</dd>
+      <dt>Outcome</dt>
+      <dd>
+        {% if youtube.outcome_text %}
+          <span class="badge {{ 'active' if youtube.last_outcome == 'signed_in' else ('error' if youtube.needs_human else 'invited') }}">
+            {{ youtube.last_outcome }}
+          </span>
+          <span class="faint">{{ youtube.outcome_text }}</span>
+        {% else %}
+          <span class="faint">Never run</span>
+        {% endif %}
+      </dd>
+      <dt>Consecutive failures</dt><dd>{{ youtube.consecutive_failures }}</dd>
+      <dt>Next automatic attempt</dt><dd>{{ youtube.next_attempt_at_text or '—' }}</dd>
+      <dt>Last alert</dt><dd>{{ youtube.alerted_at_text or '—' }}</dd>
+    </dl>
+  </div>
+
+  <div class="form-actions mt-4">
+    {% if admin_user.role == 'owner' %}
+      <form method="post" action="{{ base_path }}/youtube/signin/"
+            data-confirm="Run an automated Google sign-in as the download account now?">
+        <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+        <button class="btn primary" type="submit"
+                {{ 'disabled' if not youtube.configured or not youtube.enabled else '' }}>Sign in now</button>
+      </form>
+    {% endif %}
+    <span class="faint small">
+      {% if admin_user.role == 'owner' %}
+        The keep-alive retries on its own when the saved session stops working, and emails
+        the failure address when it cannot get through.
+      {% else %}
+        Only an owner can start the download account's sign-in.
+      {% endif %}
+    </span>
+  </div>
+</div>
+{% else %}
+<div class="empty">
+  <strong>Automatic YouTube sign-in is unavailable</strong>
+  This build has no browser service attached, so only per-account links work.
+</div>
+{% endif %}
+{% endblock %}

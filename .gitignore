@@ -39,3 +39,4 @@ flask-server/data.db-*
 
 # Bounded operational journal and SQLite sidecars
 **/status_logs.sqlite3*
+.qoder/

@@ -27,7 +27,14 @@ from multiuser import init_multiuser
 from multiuser import netids
 from multiuser.security import totp_at
 
-TOKEN_RE = re.compile(r"/(verify-email|reset-password|magic|invite)/([A-Za-z0-9_-]+)")
+TOKEN_RE = re.compile(r"/(magic|invite)/([A-Za-z0-9_-]+)")
+CODE_RE = re.compile(r"Your code is (\d{6})")
+# What each code email says at the top, which is the only thing that tells a
+# reader of the outbox whether a six-digit code is for verification or a reset.
+CODE_HEADINGS = {
+    "verify": "Verify your email address",
+    "reset": "Reset your Music Box password",
+}
 
 PASSWORD = "Player!Passw0rd"
 NEW_PASSWORD = "Player!Passw0rd-two"
@@ -130,8 +137,8 @@ class SelfServiceTestBase(unittest.TestCase):
         payload.update(extra)
         return self.client.post("/signup", data=payload)
 
-    def newest_token(self, purpose: str) -> str:
-        """The last link of this purpose ever written to the outbox.
+    def _outbox_bodies(self) -> list[str]:
+        """The text part of every message written so far, oldest first.
 
         Searching every message rather than only the newest file: two mails in the
         same second are ordered by a random id, so "newest file" can be the wrong
@@ -139,7 +146,7 @@ class SelfServiceTestBase(unittest.TestCase):
         """
         paths = sorted(glob.glob(os.path.join(self.outbox, "*.eml")))
         self.assertTrue(paths, "expected an outbox message")
-        found: list[str] = []
+        bodies: list[str] = []
         for path in paths:
             with open(path, "rb") as handle:
                 message = email.message_from_bytes(handle.read())
@@ -147,11 +154,40 @@ class SelfServiceTestBase(unittest.TestCase):
             for part in message.walk():
                 if part.get_content_type() == "text/plain":
                     body = (part.get_payload(decode=True) or b"").decode("utf-8", "replace")
+            bodies.append(body)
+        return bodies
+
+    def newest_token(self, purpose: str) -> str:
+        """The last *link* of this purpose in the outbox: invitation or magic only.
+
+        Verification and reset are typed codes now, so asking this for them is a
+        test that has not been updated, not a product bug.
+        """
+        found: list[str] = []
+        for body in self._outbox_bodies():
             found.extend(
                 match.group(2) for match in TOKEN_RE.finditer(body) if match.group(1) == purpose
             )
-        self.assertTrue(found, f"no {purpose} link in {len(paths)} outbox messages")
+        self.assertTrue(found, f"no {purpose} link in the outbox")
         return found[-1]
+
+    def newest_code(self, purpose: str) -> str:
+        """The six digits from the newest code email of this purpose."""
+        heading = CODE_HEADINGS[purpose]
+        found: list[str] = []
+        for body in self._outbox_bodies():
+            if heading in body:
+                found.extend(match.group(1) for match in CODE_RE.finditer(body))
+        self.assertTrue(found, f"no {purpose} code in the outbox")
+        return found[-1]
+
+    def verify_by_code(self, username: str = "player1", code: str = ""):
+        """Type the verification code the way a person would, and answer the POST."""
+        return self.client.post("/verify", data={
+            "_csrf": self.form_csrf("/verify"),
+            "username": username,
+            "code": code or self.newest_code("verify"),
+        })
 
     def exhaust(self, scope: str, key: str, limit: int, window: int) -> None:
         for _ in range(limit):
@@ -172,32 +208,34 @@ class SelfServiceTestBase(unittest.TestCase):
 
 
 class SignupTests(SelfServiceTestBase):
-    def test_signup_creates_a_locked_account_and_posts_the_link(self):
+    def test_signup_creates_a_locked_account_and_sends_a_code(self):
         response = self.register("player1")
-        self.assertEqual(response.status_code, 200, response.get_data(as_text=True)[:400])
+        # 302 to the code page when mail really left the server; 200 with the
+        # "this server cannot send email" page when the message only reached the
+        # outbox -- which is exactly how this suite runs.
+        self.assertIn(response.status_code, (200, 302), response.get_data(as_text=True)[:400])
         user = self.user_row("player1")
         self.assertIsNotNone(user)
         self.assertEqual(user["role"], "user", "a self-signup can never grant itself a role")
         self.assertEqual(user["created_by"], "self")
         self.assertEqual(int(user["email_verified"]), 0)
 
-        token = self.newest_token("verify-email")
         self.assertIsNone(
             self.accounts.authenticate("player1", PASSWORD, "127.0.0.1", "pytest")[0],
             "an unverified account must not sign in",
         )
 
-        verified = self.client.get(f"/verify-email/{token}")
-        self.assertEqual(verified.status_code, 200)
+        verified = self.verify_by_code()
+        self.assertEqual(verified.status_code, 200, verified.get_data(as_text=True)[:400])
         signed_in, error = self.accounts.authenticate("player1", PASSWORD, "127.0.0.1", "pytest")
         self.assertIsNotNone(signed_in, error)
         self.assertEqual(int(self.user_row("player1")["email_verified"]), 1)
 
-    def test_the_link_works_once(self):
+    def test_a_code_works_once(self):
         self.register("player1")
-        token = self.newest_token("verify-email")
-        self.client.get(f"/verify-email/{token}")
-        second = self.client.get(f"/verify-email/{token}")
+        first = self.verify_by_code()
+        self.assertEqual(first.status_code, 200)
+        second = self.verify_by_code()
         self.assertEqual(second.status_code, 410)
 
     def test_self_signups_stay_locked_even_when_the_operator_disables_the_rule(self):
@@ -288,10 +326,13 @@ class SignupDisabledTests(SelfServiceTestBase):
     def test_a_daily_cap_of_zero_switches_the_door_shut_without_a_code_change(self):
         self.assertFalse(self.accounts.registration_open())
         response = self.client.get("/signup")
-        self.assertEqual(response.status_code, 200, "the form still renders")
-        token = self.open_signup_form()
+        # A form that cannot be used is not a courtesy: the closed page says when
+        # to come back instead of letting the visitor type into a dead door.
+        self.assertEqual(response.status_code, 503, "the form is not offered at all")
+        self.assertNotIn("<input", response.get_data(as_text=True))
         blocked = self.client.post("/signup", data={
-            "_csrf": token, "username": "nobody1", "email": "nobody1@example.test",
+            "_csrf": self.form_csrf("/signup"), "username": "nobody1",
+            "email": "nobody1@example.test",
             "password": PASSWORD, "confirm_password": PASSWORD,
         })
         self.assertEqual(blocked.status_code, 503)
@@ -326,20 +367,21 @@ class ForgotPasswordTests(SelfServiceTestBase):
         after = glob.glob(os.path.join(self.outbox, "*.eml"))
         self.assertEqual(len(after), before + 1, "only the real address gets a link")
 
-    def test_the_reset_link_sets_a_password_and_kills_other_sessions(self):
+    def test_the_reset_code_sets_a_password_and_kills_other_sessions(self):
         self.register("player1")
-        self.client.get(f"/verify-email/{self.newest_token('verify-email')}")
+        self.verify_by_code()
         user = self.user_row("player1")
         other = self.accounts.create_session(user, ip="127.0.0.1", user_agent="other-device")
 
         token = self.form_csrf("/forgot-password")
         self.client.post("/forgot-password", data={"_csrf": token, "identifier": user["email"]})
-        reset_token = self.newest_token("reset-password")
-        page = self.client.get(f"/reset-password/{reset_token}")
+        page = self.client.get("/reset-password")
         self.assertEqual(page.status_code, 200)
-        form_token = self.form_csrf(f"/reset-password/{reset_token}")
-        done = self.client.post(f"/reset-password/{reset_token}", data={
-            "_csrf": form_token, "password": NEW_PASSWORD, "confirm_password": NEW_PASSWORD,
+        done = self.client.post("/reset-password", data={
+            "_csrf": self.form_csrf("/reset-password"),
+            "identifier": user["email"],
+            "code": self.newest_code("reset"),
+            "password": NEW_PASSWORD, "confirm_password": NEW_PASSWORD,
         })
         self.assertEqual(done.status_code, 200, done.get_data(as_text=True)[:400])
 
@@ -348,20 +390,22 @@ class ForgotPasswordTests(SelfServiceTestBase):
         self.assertIsNotNone(signed_in, error)
         self.assertIsNone(self.accounts.validate_session(other)[0], "other devices must die")
 
-    def test_a_reset_link_works_once(self):
+    def test_a_reset_code_works_once(self):
         self.register("player1")
         token = self.form_csrf("/forgot-password")
         self.client.post("/forgot-password", data={
             "_csrf": token, "identifier": "player1@example.test"})
-        reset_token = self.newest_token("reset-password")
-        form_token = self.form_csrf(f"/reset-password/{reset_token}")
-        self.client.post(f"/reset-password/{reset_token}", data={
-            "_csrf": form_token, "password": NEW_PASSWORD, "confirm_password": NEW_PASSWORD})
+        code = self.newest_code("reset")
+        form_token = self.form_csrf("/reset-password")
+        self.client.post("/reset-password", data={
+            "_csrf": form_token, "identifier": "player1", "code": code,
+            "password": NEW_PASSWORD, "confirm_password": NEW_PASSWORD})
         # A successful reset rotates the page token, so the replay must carry the
-        # live one: otherwise it fails on CSRF and never reaches the used-link arm.
-        replay = self.client.post(f"/reset-password/{reset_token}", data={
-            "_csrf": self.csrf_now(), "password": NEW_PASSWORD, "confirm_password": NEW_PASSWORD})
-        self.assertEqual(replay.status_code, 410)
+        # live one: otherwise it fails on CSRF and never reaches the used-code arm.
+        replay = self.client.post("/reset-password", data={
+            "_csrf": self.csrf_now(), "identifier": "player1", "code": code,
+            "password": NEW_PASSWORD, "confirm_password": NEW_PASSWORD})
+        self.assertEqual(replay.status_code, 410, replay.get_data(as_text=True)[:400])
 
     def test_the_forgot_budget_is_shared_with_the_administrator_door(self):
         # Same scope names and the same bucket function on both doors is the design;
@@ -378,7 +422,7 @@ class AccountPageTests(SelfServiceTestBase):
     def setUp(self):
         super().setUp()
         self.register("player1")
-        self.client.get(f"/verify-email/{self.newest_token('verify-email')}")
+        self.verify_by_code()
         self.user = self.user_row("player1")
 
     def test_the_page_redirects_anonymously_instead_of_rendering_a_shell(self):
@@ -406,7 +450,13 @@ class AccountPageTests(SelfServiceTestBase):
         self.assertNotIn("sid_hash", raw)
         for row in payload["sessions"]:
             self.assertEqual(set(row), {"id", "current", "created_at", "last_seen_at",
-                                       "expires_at", "ip", "device"})
+                                       "expires_at", "ip", "device", "device_ua",
+                                       "seen_text", "signed_in_text"})
+        # The row a person scans is a name, not a header: a 120-character
+        # "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like" is
+        # evidence, and it belongs one line down where it does not hide the device.
+        labels = [row["device"] for row in payload["sessions"]]
+        self.assertTrue(all("Mozilla/5.0" not in label for label in labels), labels)
 
     def test_json_writes_need_the_page_token(self):
         self.sign_in(self.user)
@@ -481,6 +531,31 @@ class AccountPageTests(SelfServiceTestBase):
         self.assertEqual(response.get_json()["revoked"], 1)
         self.assertEqual(self.client.get("/api/account").status_code, 200)
 
+    def test_signing_out_other_devices_keeps_this_one(self):
+        self.accounts.create_session(self.user, ip="127.0.0.1", user_agent="other")
+        self.sign_in(self.user)
+        response = self.client.post("/api/account/sessions/revoke", json={"others": True},
+                                    headers=self.json_headers())
+        self.assertEqual(response.status_code, 200, response.get_data(as_text=True)[:300])
+        self.assertEqual(response.get_json()["revoked"], 1)
+        self.assertFalse(response.get_json()["signed_out"])
+        payload = self.client.get("/api/account").get_json()
+        self.assertEqual([row["current"] for row in payload["sessions"]], [True])
+
+    def test_the_page_is_complete_before_any_script_runs(self):
+        # The five sections, their headings and this account's details are in the
+        # HTML the server sends. account.js only refreshes them after an action, so
+        # a slowed or blocked script never leaves a page of empty shells.
+        self.sign_in(self.user)
+        page = self.client.get("/account").get_data(as_text=True)
+        for heading in ("Sign-in details", "Sign-in &amp; security", "Linked services",
+                        "Devices", "Delete this account"):
+            self.assertIn(heading, page)
+        self.assertIn("@player1", page)
+        self.assertIn(self.user["email"], page)
+        self.assertIn("Player", page)
+        self.assertNotIn("Loading&hellip;", page)
+
     def test_an_ambiguous_device_prefix_is_refused_instead_of_guessing(self):
         self.sign_in(self.user)
         response = self.client.post("/api/account/sessions/revoke", json={"id": "ff"},
@@ -495,12 +570,113 @@ class AccountPageTests(SelfServiceTestBase):
         self.assertIn("script-src 'self'", headers["Content-Security-Policy"])
         self.assertNotIn("unsafe-inline", headers["Content-Security-Policy"])
 
+    # ----------------------------------------------------- linked services
+    def test_disconnecting_youtube_deletes_the_row_and_its_artifacts(self):
+        self.accounts.set_provider_credentials(
+            self.user, self.user["id"], "youtube", {"headers": {"cookie": "c"}})
+        calls = []
+        self.accounts.set_artifact_hook(lambda user_id, provider: calls.append(
+            (user_id, provider)) or [])
+        self.sign_in(self.user)
+
+        response = self.client.post("/api/account/providers/youtube/disconnect",
+                                    json={}, headers=self.json_headers())
+        self.assertEqual(response.status_code, 200, response.get_data(as_text=True)[:300])
+        body = response.get_json()
+        self.assertTrue(body["complete"])
+        self.assertIn("deleted the saved cookies", body["message"])
+        self.assertEqual(self.accounts.provider_status(self.user["id"]), [])
+        self.assertEqual(calls, [(self.user["id"], "youtube")])
+
+    def test_a_disconnect_that_could_not_finish_says_so(self):
+        self.accounts.set_provider_credentials(
+            self.user, self.user["id"], "youtube", {"headers": {"cookie": "c"}})
+        self.accounts.set_artifact_hook(
+            lambda user_id, provider: ["browser profile: still open"])
+        self.sign_in(self.user)
+
+        response = self.client.post("/api/account/providers/youtube/disconnect",
+                                    json={}, headers=self.json_headers())
+        self.assertEqual(response.status_code, 200)
+        body = response.get_json()
+        self.assertFalse(body["complete"])
+        self.assertIn("browser profile: still open", body["message"])
+        # The row is gone either way; only the secrets on disk may remain.
+        self.assertEqual(self.accounts.provider_status(self.user["id"]), [])
+
+    def test_disconnecting_a_service_that_was_never_linked_says_so(self):
+        # /account already shows "Not connected" for this provider. Reporting a
+        # deletion would claim secrets were erased that the account never had.
+        calls = []
+        self.accounts.set_artifact_hook(lambda user_id, provider: calls.append(
+            (user_id, provider)) or [])
+        self.sign_in(self.user)
+
+        response = self.client.post("/api/account/providers/youtube/disconnect",
+                                    json={}, headers=self.json_headers())
+        self.assertEqual(response.status_code, 200, response.get_data(as_text=True)[:300])
+        body = response.get_json()
+        self.assertFalse(body["was_linked"])
+        self.assertIn("Nothing was connected to YouTube Music", body["message"])
+        self.assertNotIn("deleted the saved cookies", body["message"])
+        # A stale file with no row behind it is still worth erasing, so the sweep
+        # runs either way -- it is only the *message* that has to stop lying.
+        self.assertEqual(calls, [(self.user["id"], "youtube")])
+        row = self.layer.db.fetchall(
+            "SELECT details_json FROM audit_log WHERE action = 'provider_disconnected' "
+            "ORDER BY id DESC LIMIT 1"
+        )[0]
+        self.assertIn('"was_linked":false', row["details_json"])
+
+    def test_a_browser_cannot_disconnect_another_account(self):
+        other = self.accounts.create_user(
+            self.user_row("owner"), "player2", PASSWORD, email="player2@example.test",
+            role="user", status="active", email_verified=True)
+        self.accounts.set_provider_credentials(
+            other, other["id"], "amazon", {"cookies": "x"})
+        self.sign_in(self.user)
+        response = self.client.post(
+            "/api/account/providers/amazon/disconnect",
+            json={"user_id": other["id"]}, headers=self.json_headers())
+        self.assertEqual(response.status_code, 200)
+        # The endpoint only ever acts on the signed-in account, whatever the body says.
+        self.assertEqual(len(self.accounts.provider_status(other["id"])), 1)
+
+    def test_an_unknown_provider_is_refused(self):
+        self.sign_in(self.user)
+        response = self.client.post("/api/account/providers/spotify/disconnect",
+                                    json={}, headers=self.json_headers())
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(response.get_json()["error"]["code"], "invalid_provider")
+
+    def test_the_account_page_is_drawn_in_the_stored_palette(self):
+        # The choice is made once, in the administrator panel's theme control, and
+        # this page reads the same preference instead of offering a second switch.
+        self.sign_in(self.user)
+        self.assertIn('data-theme="dark"', self.client.get("/account").get_data(as_text=True))
+        self.accounts.set_preference(self.user["id"], "admin_theme", "light")
+        page = self.client.get("/account").get_data(as_text=True)
+        self.assertIn('data-theme="light"', page)
+        # A light page without these two paints dark form widgets and a dark bar.
+        self.assertIn('name="color-scheme" content="light dark"', page)
+        self.assertIn('name="theme-color" content="#f3f3f5"', page)
+
+    def test_the_account_page_holds_no_palette_switch(self):
+        self.sign_in(self.user)
+        page = self.client.get("/account").get_data(as_text=True)
+        self.assertNotIn("Switch to", page)
+        # And no route behind one: the form that used to post here is gone, so a
+        # browser that still has the old page cached gets a 404 rather than a
+        # preference written by a control nobody can see.
+        self.assertEqual(self.client.post("/account/theme", data={
+            "_csrf": self.form_csrf("/account"), "state": "light"}).status_code, 404)
+
 
 class TwoFactorTests(SelfServiceTestBase):
     def setUp(self):
         super().setUp()
         self.register("player1")
-        self.client.get(f"/verify-email/{self.newest_token('verify-email')}")
+        self.verify_by_code()
         self.user = self.user_row("player1")
         self.sign_in(self.user)
 
@@ -588,7 +764,7 @@ class DeleteAccountTests(SelfServiceTestBase):
         self.purged = []
         self.accounts.set_purge_hook(lambda user_id: self.purged.append(user_id))
         self.register("player1")
-        self.client.get(f"/verify-email/{self.newest_token('verify-email')}")
+        self.verify_by_code()
         self.user = self.user_row("player1")
         self.sign_in(self.user)
 

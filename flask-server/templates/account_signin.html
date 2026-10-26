@@ -1,28 +1,21 @@
 <!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>{{ 'Amazon' if provider == 'amazon' else 'YouTube Music' }} · Music Box</title><link rel="stylesheet" href="/static/css/signin.css?v={{ asset_v }}"><link rel="stylesheet" href="/static/css/account-signin.css?v={{ asset_v }}"></head>
-<body class="account-signin" data-provider="{{ provider }}"><main>
-<a class="back" href="/">← Back to Music Box</a>
-<div class="brand"><div class="eq-icon" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span></div><div><h1>Music Box</h1><p>Connect your accounts</p></div></div>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>{{ 'Amazon' if provider == 'amazon' else 'YouTube Music' }} · Music Box</title><link rel="stylesheet" href="/static/css/theme.css?v={{ asset_v }}"><link rel="stylesheet" href="/static/css/signin.css?v={{ asset_v }}"><link rel="stylesheet" href="/static/css/account-signin.css?v={{ asset_v }}"></head>
+<body class="account-signin" data-provider="{{ provider }}"{% if as_token %} data-as="{{ as_token }}"{% endif %}{% if return_to %} data-return-to="{{ return_to }}"{% endif %}><main>
+<a class="back" href="{{ return_to or '/account#panel-providers' }}">← {% if return_to %}Back to the admin panel{% else %}Back to your account{% endif %}</a>
+<div class="brand"><div class="eq-icon" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span></div><div><h1>Music Box</h1><p>{% if target_name %}Connecting {{ target_name }}'s accounts{% else %}Connect your accounts{% endif %}</p></div></div>
 <div class="card">
-<header class="account-heading"><h2>{{ 'Amazon' if provider == 'amazon' else 'YouTube Music' }}</h2><p id="intro" class="step-hint">{{ 'Sign in to connect your Echo devices.' if provider == 'amazon' else 'Sign in for your library, likes and recommendations.' }}</p></header>
+<header class="account-heading"><h2>{{ 'Amazon' if provider == 'amazon' else 'YouTube Music' }}</h2><p id="intro" class="step-hint">{% if target_name %}You are signing in for <strong>{{ target_name }}</strong>. Whatever account finishes this flow becomes their connection.{% elif provider == 'amazon' %}Sign in to connect your Echo devices.{% else %}Sign in for your library, likes and recommendations.{% endif %}</p></header>
 <section id="setup">
-
-{% if provider == 'amazon' %}
-<form id="amazon-form" autocomplete="on"><label for="email">Amazon email</label><input id="email" name="amazon_email" type="email" autocomplete="username" required spellcheck="false" autocapitalize="none"><label for="password">Password</label><input id="password" name="amazon_password" type="password" autocomplete="current-password" required><button id="connect" class="primary">Continue to Amazon</button></form>
-{% else %}
-<button id="connect" class="primary">Continue to YouTube Music</button>
-{% endif %}
+<form id="credentials" autocomplete="on"><label for="email">{{ 'Amazon' if provider == 'amazon' else 'Google' }} email</label><input id="email" name="email" type="email" autocomplete="username" required spellcheck="false" autocapitalize="none"><label for="password">Password</label><input id="password" name="password" type="password" autocomplete="current-password" required><button id="connect" class="primary" type="submit">Continue</button></form>
+<p class="hint">The sign-in runs on this server in the background. {{ 'Music Box keeps only the resulting Alexa session — your Amazon password is never stored.' if provider == 'amazon' else 'Music Box keeps only the resulting YouTube Music session — your Google password is never stored.' }}</p>
+</section>
+<section id="steps" hidden>
+<div id="code-panel" hidden><p id="code-message" class="step-hint"></p><label for="code">Code</label><input id="code" autocomplete="one-time-code" autocapitalize="characters" spellcheck="false" maxlength="16"><button id="code-submit" class="primary" type="button">Verify</button></div>
+<div id="captcha-panel" hidden><p id="captcha-message" class="step-hint"></p><img id="captcha-image" alt="Security check picture" width="308" height="90"><label for="captcha">Type the characters you see</label><input id="captcha" autocomplete="off" autocapitalize="none" spellcheck="false"><button id="captcha-submit" class="primary" type="button">Verify</button></div>
+<div id="choice-panel" hidden><p id="choice-message" class="step-hint"></p><div id="choice-options"></div><label id="choice-manual-label" for="choice-manual" hidden>Enter the number of your choice</label><input id="choice-manual" type="number" min="0" step="1" autocomplete="off" hidden><button id="choice-submit" class="primary" type="button">Continue</button></div>
+<div id="approval-panel" hidden><p id="approval-message" class="step-hint"></p><button id="approval-check" class="primary" type="button">I approved it — continue</button></div>
+<button id="cancel" class="quiet" type="button">Cancel sign-in</button>
 </section>
 <p id="status" role="status" aria-live="polite"></p>
-<section id="browser" hidden>
-{% if provider == 'amazon' %}
-<iframe id="amazon-page" title="Amazon secure sign-in" referrerpolicy="same-origin"></iframe>
-{% else %}
-<div class="browser-tools" id="browser-tools" hidden><button id="choose-account" type="button">Change account</button><span class="keyboard-tools"><button id="keyboard" type="button" aria-label="Keyboard" title="Keyboard">⌨</button><button id="tab" type="button" aria-label="Next field" title="Next field">⇥</button><button id="enter" type="button" aria-label="Enter" title="Enter">↵</button></span></div>
-<div id="surface"><div id="browser-loading" role="status"><span class="loading-mark" aria-hidden="true"></span><span>Opening secure browser…</span></div><img hidden id="frame" alt="YouTube Music sign-in browser" draggable="false"><input id="remote-keyboard" tabindex="-1" aria-label="Type into the selected sign-in field" type="password" autocomplete="off" autocapitalize="none" spellcheck="false"></div>
-<button id="capture" class="primary" type="button" disabled>Use this account</button>
-<p class="hint">Finish signing in above, then confirm your account.</p>
-{% endif %}
-<button id="cancel" class="quiet" type="button">Cancel sign-in</button></section>
-<button id="retry" class="quiet" type="button" hidden>Try again</button>
+<button id="retry" class="quiet" type="button" hidden>Start over</button>
 </div></main><script src="/static/js/account-signin.js?v={{ asset_v }}"></script></body></html>

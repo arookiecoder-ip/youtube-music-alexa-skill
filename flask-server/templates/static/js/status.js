@@ -118,7 +118,7 @@
     const request = data.requests || {}, storage = data.storage || {}, system = storage.system || {}, fetching = data.fetching || {}, cookies = data.cookies || {}, download = cookies.downloads || {}, disk = system.disk || {}, process = system.process || {}, memory = system.memory || {};
     el('notice').hidden = true; el('export').disabled = false;
     const status = ['healthy', 'warning', 'critical'].includes(data.health) ? data.health : 'warning';
-    el('health').className = `badge ${status === 'healthy' ? '' : status}`;
+    el('health').className = `badge ${status === 'healthy' ? 'ok' : status === 'critical' ? 'error' : 'warning'}`;
     text('health', {healthy: 'Operational', warning: 'Needs attention', critical: 'Critical'}[status]);
     text('updated', `Updated ${time(data.generated_at)}`);
     root.dispatchEvent(new CustomEvent('status-snapshot', {detail: data.error_inbox || {}}));
@@ -157,7 +157,7 @@
     table('routes', array(data.routes).map(row => [row.route, number(row.requests), number(row.errors), `${number(row.average_ms)} ms`, `${number(row.max_ms)} ms`]), 5);
     activities('events', array(data.events).map(row => ({title: row.kind === 'fetch' ? `${row.video_id} · ${row.client} · ${row.status}` : `${row.label} · HTTP ${row.status}`, detail: `${time(row.at)} · ${number(row.duration_ms)} ms`, error: row.status === 'failed' || row.status >= 400})));
     const alerts = el('alerts'); alerts.replaceChildren();
-    for (const row of array(data.alerts)) { const div = document.createElement('div'), title = document.createElement('strong'), detail = document.createElement('small'); div.className = row.level === 'critical' ? 'critical' : ''; title.textContent = row.title; detail.textContent = row.detail; div.append(title, detail); alerts.append(div); }
+    for (const row of array(data.alerts)) { const div = document.createElement('div'), title = document.createElement('strong'), detail = document.createElement('small'); div.className = `flash ${row.level === 'critical' ? 'error' : 'warning'}`; title.textContent = row.title; detail.textContent = row.detail; div.append(title, detail); alerts.append(div); }
     chart(data.history);
   }
   const url = new URL(root.location.href), apiKey = url.searchParams.get('key');

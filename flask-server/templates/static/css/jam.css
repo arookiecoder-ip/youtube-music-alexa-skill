@@ -7,7 +7,7 @@
 body.jam-guest {
   display: block;
   padding: 0;
-  background: var(--shell-bg, #030303);
+  background: var(--bg);
   overflow-x: hidden;
 }
 
@@ -18,7 +18,7 @@ body.jam-guest.results-open #jam-main {
   max-width: none;
   min-height: 100dvh;
   margin: 0;
-  padding: 0 28px calc(var(--playbar-h, 64px) + 32px);
+  padding: 0 28px calc(var(--playbar-h) + 32px);
   box-sizing: border-box;
   background-image: linear-gradient(180deg, rgba(232, 89, 12, .10), transparent 340px);
 }
@@ -37,7 +37,7 @@ body.jam-guest header {
   align-items: center;
   justify-content: space-between;
   border: 0;
-  background: #000;
+  background: var(--bg);
 }
 
 body.jam-guest header > .jam-header-brand {
@@ -58,7 +58,7 @@ body.jam-guest header > .jam-header-brand {
   display: block;
   width: 3px;
   flex: 0 0 3px;
-  border-radius: 2px;
+  border-radius: 0;
   background: var(--accent);
   animation: jamEq 1.4s ease-in-out infinite;
   transform-origin: bottom;
@@ -237,38 +237,15 @@ body.jam-guest .np-shuffle-btn {
 body.jam-guest .np-shuffle-btn.shuffle-active { color: var(--accent); }
 
 /* Guest-ending state. */
-#jam-ended-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 10000;
-  display: none;
-  align-items: center;
-  justify-content: center;
-  background: var(--bg, #030303);
-}
-.jam-ended-card { max-width: 380px; padding: 32px; text-align: center; }
-.jam-ended-icon {
-  width: 56px;
-  height: 56px;
-  margin: 0 auto 20px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  border: 1px solid var(--border);
-  border-radius: 0;
-  color: var(--muted);
-}
-.jam-ended-icon svg { width: 26px; height: 26px; }
-.jam-ended-title { margin: 0 0 10px; color: var(--text); font-size: 1.25rem; }
-.jam-ended-msg { margin: 0; color: var(--muted); font-size: .88rem; line-height: 1.55; }
+/* The jam-ended overlay is styled once in home.css, which this page also loads. */
 
-body.jam-guest .toast { bottom: calc(var(--playbar-h-mobile, 104px) + 20px); }
+body.jam-guest .toast { bottom: calc(var(--playbar-h-mobile) + 20px); }
 
 @media (max-width: 899px) {
   body.jam-guest #jam-main,
   body.jam-guest #jam-main.idle,
   body.jam-guest.results-open #jam-main {
-    padding: 0 16px calc(var(--playbar-h-mobile, 104px) + 24px);
+    padding: 0 16px calc(var(--playbar-h-mobile) + 24px);
   }
   body.jam-guest header {
     height: 60px;

@@ -6,6 +6,30 @@ Log.setLevel(); // Never log signed URLs, signatures or cookie values.
 Platform.shim.eval = async data => vm.runInNewContext(
   '(function(){' + data.output + '})()', {}, { timeout: 2000 });
 
+// YouTube refuses googlevideo media URLs unless a GVS PO token is appended as
+// `pot=`. The token is minted by a separate BotGuard service (bgutil); it is
+// cached upstream and ours is short-lived, so a refresh naturally asks again.
+// No service configured means no token, which is how this ran before YouTube
+// started enforcing them.
+const POT_URL = (process.env.BGUTIL_POT_URL || '').replace(/\/+$/, '');
+
+async function gvsToken(video) {
+  if (!POT_URL) return '';
+  try {
+    const response = await fetch(`${POT_URL}/get_pot`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content_binding: video, client: 'WEB_MUSIC' }),
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!response.ok) return '';
+    const data = await response.json();
+    return typeof data.poToken === 'string' ? data.poToken : '';
+  } catch {
+    return '';
+  }
+}
+
 export function cookiesFromNetscape(text, now = Date.now() / 1000) {
   return text.split('\n').flatMap(line => {
     if (line.startsWith('#HttpOnly_')) line = line.slice(10);
@@ -19,7 +43,8 @@ export function cookiesFromNetscape(text, now = Date.now() / 1000) {
 
 export function createResolver({ createClient = options => Innertube.create(options),
   readFile = path => fs.readFileSync(path, 'utf8'),
-  stat = path => fs.statSync(path), now = () => Date.now(), capacity = 128 } = {}) {
+  stat = path => fs.statSync(path), now = () => Date.now(), capacity = 128,
+  pot = gvsToken } = {}) {
   let session, credential = '', pending = new Map(), cache = new Map(), active = 0, lastPlayerReset = -Infinity;
   const reset = () => { session = undefined; pending = new Map(); cache = new Map(); };
   return async function resolve(message) {
@@ -65,7 +90,17 @@ export function createResolver({ createClient = options => Innertube.create(opti
           format.drm_families?.length || !format.content_length)
         throw new Error('unsupported_format');
       const media = await format.decipher(client.session.player);
-      const url = new URL(media);
+      // The token service is optional: a slow or broken provider must never
+      // turn a playable song into an error.
+      let pot_token = '';
+      try { pot_token = await pot(video); } catch { pot_token = ''; }
+      let signed = media;
+      if (typeof pot_token === 'string' && pot_token) {
+        const withPot = new URL(media);
+        withPot.searchParams.set('pot', pot_token);
+        signed = withPot.toString();
+      }
+      const url = new URL(signed);
       if (url.protocol !== 'https:' || !url.hostname.endsWith('.googlevideo.com') ||
           (url.port && url.port !== '443') || url.username || url.password)
         throw new Error('invalid_media');
@@ -80,7 +115,7 @@ export function createResolver({ createClient = options => Innertube.create(opti
         thumbnail: Array.isArray(thumbs) ? String(thumbs.at(-1)?.url || '') : '',
         duration_ms: Number.isFinite(seconds) && seconds > 0 ? Math.round(seconds * 1000) : 0,
         is_live: basic.is_live === true };
-      const result = { url: media, itag: 140, length: format.content_length,
+      const result = { url: signed, itag: 140, length: format.content_length,
         modified: format.last_modified_ms, mime: 'audio/mp4', expires_at, metadata };
       // A credential rotation while this awaited must not pollute the new cache.
       currentCache.set(key, result);

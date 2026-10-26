@@ -133,8 +133,18 @@ class PlayerStateProxy:
     cannot move another account's (or the owner's) output card.
     """
 
+    __slots__ = ('_registry',)
+
     def __init__(self, registry: PlayerStateRegistry):
-        self._registry = registry
+        object.__setattr__(self, '_registry', registry)
+
+    @property
+    def __dict__(self):
+        # mock.patch decides how to restore an attribute by looking in
+        # target.__dict__; a proxy-local dict would hide the state's instance
+        # attributes and nested patches of the same attribute could not
+        # restore each other.
+        return self._registry.state().__dict__
 
     def __getattr__(self, name):
         return getattr(self._registry.state(), name)

@@ -170,7 +170,8 @@ class YouTubeStream:
                 # The worker only needs runtime/TLS settings, not Amazon
                 # credentials, Flask secrets or the application's API key.
                 env = {k: os.environ[k] for k in (
-                    'PATH', 'HOME', 'SSL_CERT_FILE', 'SSL_CERT_DIR', 'NODE_EXTRA_CA_CERTS')
+                    'PATH', 'HOME', 'SSL_CERT_FILE', 'SSL_CERT_DIR', 'NODE_EXTRA_CA_CERTS',
+                    'BGUTIL_POT_URL')
                     if k in os.environ}
                 try:
                     allowed = [str(Path(self.worker).resolve().parent)]

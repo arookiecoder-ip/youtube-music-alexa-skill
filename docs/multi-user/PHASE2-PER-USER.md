@@ -1,6 +1,6 @@
 # Phase 2 — Per-user player isolation
 
-Status: **Phase 2.0, 2.1, 2.1b, 2.2, 2.3 and 2.6 shipped: every account signs in at
+Status: **Phase 2.0, 2.1, 2.1b, 2.2, 2.3, 2.6 and 2.7 shipped: every account signs in at
 `/login/`, keeps its own queue, output lease, durable snapshot, YouTube Music session,
 Amazon session and Echo devices, runs its own sign-up / recovery / 2FA / self-delete
 door, and leaves nothing behind when it deletes itself. What remains is 2.4
@@ -469,6 +469,233 @@ restored account comes back without its connected providers.
 Cloudflare; on a directly reachable origin it must stay off. One Chromium and one
 Amazon login proxy port remain server-wide, so concurrent provider sign-ins still take
 turns. History, likes and playlists are still Phase 2.4.
+
+### Phase 2.7 — typed email codes, the sign-up switch and a panel that explains itself (2026-10-26) — **implemented**
+
+Four corrections to the doors and the panel, driven by things that were wrong in
+use rather than missing.
+
+**Codes instead of links.** Verification (signup, email change, administrator's
+"send verification") and password reset (both doors) now email a **six-digit code**
+that the person types back. The emails contain no button, no URL and no
+token-bearing link of any kind. `invite` and the administrator's `magic` sign-in
+still send links, deliberately: an invitation is a first-contact handshake and the
+magic link *is* the point.
+
+- Storage: schema v4 adds `code_enc` (Fernet-encrypted `{"code": …}`) and
+  `code_attempts` to `user_email_tokens`. A digest of six digits is one million
+  candidates precomputable from a stolen database; the Fernet key lives outside it.
+  One live code per purpose (the existing delete-previous rule), 15 minutes,
+  single use.
+- Guessing: each mismatch increments `code_attempts`; at
+  `MULTIUSER_EMAIL_CODE_ATTEMPTS` (default 5) the row is **spent**, not the account
+  locked. The door adds `code-ip` (10/15 min) and `code-id` (5/15 min) on the same
+  username bucket sign-in uses, so a guessing run spends the budget it would have
+  needed to sign in anyway. Wrong username and wrong code answer identically.
+- **A code never signs you in.** A successful `/signup/verify/` renders an
+  "Email confirmed — sign in and your account is live" page and mints **no session**:
+  every session still requires the password, and the verify form does not carry one.
+  (Phase 2.9 renamed that door to `/verify`.)
+- Routes: `GET /verify-email/<token>`, `GET|POST /reset-password/<token>` and
+  their `/admin` twins are gone. In their place: `POST /signup/verify/`,
+  `POST /reset-password/`, `POST /admin/reset-password/` and
+  `POST /api/account/email/verification/confirm` — all take a code.
+- The code field is `inputmode="numeric"`, `autocomplete="one-time-code"`,
+  `maxlength="6"`, six CSS boxes (the self-service door's CSP forbids inline
+  script); a wrong entry leaves the message under the form rather than at the top.
+
+**The sign-up kill-switch.** `system_settings.signup_open` is a database switch an
+**owner** flips from System (or the dashboard strip): `POST /admin/system/signup/`.
+`registration_open()` is the single policy — environment **and** switch **and**
+daily cap — so `/login/`'s "Create an account", `GET|POST /signup/` and
+`/account`'s "Create another account" all react at once. The environment stays the
+ceiling (`MULTIUSER_SELF_SIGNUP_ENABLED=0` cannot be overridden from the panel). The
+three closed reasons are worded differently on purpose: daily cap invites you back
+tomorrow, an administrator's closure sends you to support, an environment without
+sign-up is neither. Closing stops **new rows only**: an account that signed up five
+minutes ago can still verify, resend and reset; administrator-created accounts,
+invitations and bootstrap are untouched.
+
+**`/account` regrouped, endpoints unchanged.** Five sections in the order a person
+thinks: This account → Sign-in & security → Linked services → Devices → Delete
+this account. Each section has one primary action, and its result message renders
+inside it. The four "current password" ids collapse to one `current_password` per
+form. The current device is the first, marked row instead of being filtered out.
+Delete is last, in its own bordered card, stating what goes before the password and
+typed username. The page is server-rendered from `_account_payload()`, so it reads
+before any JavaScript runs.
+
+**Disconnecting actually forgets.** The panel's and the account page's
+`Disconnect` used to delete only the `user_provider_credentials` row while
+`youtube_auth/<id>.json`, `download_cookies_<id>.txt`, the sidecar Chromium
+profile, the Amazon cookie directory, Jam tokens and the cached auth objects
+survived — the account kept streaming and kept controlling its Echo devices.
+`_purge_account_artifacts` is now `_forget_account_artifacts(user_id, scopes)`
+with `{'youtube', 'amazon', 'all'}`: YouTube removes the auth file, the download jar,
+the sidecar profile and the YouTube caches; Amazon removes the cookie directory, Jam
+tokens and the Alexa-side registries. The `playback_dead` tombstone and the
+player-registry drops stay `all`-only, so a disconnect cannot freeze a live queue or
+release its output lease. `pending_purges.scope` retries only the provider that
+failed. `clear_provider_credentials` takes an `artifact_hook`, and
+`clear_own_provider_credentials` exists because `can_manage_user` is false for a
+plain user managing themselves. A failure says what is still there instead of
+claiming success, and both methods answer `(failures, was_linked)` so a disconnect
+aimed at a provider this account never connected says
+"Nothing was connected to YouTube Music on this account, so there was nothing to
+remove" instead of promising a deletion that had nothing to delete.
+
+**The `invited` lockout.** The status dropdown offered `invited` for *every*
+account, and `update_user` accepted it, so one misclick on a working account
+locked that person out (`authenticate` refuses any non-active status) while
+`email_verified` still read `1`. Legal transitions are now enforced in the service:
+`active ⇄ disabled`, `disabled → active`, and `invited → active` only through
+acceptance or "Mark verified manually". `invited` is creatable, never a
+destination. The duplicate danger-zone Disable/Enable pair is gone, so one control
+sets status.
+
+**Admin panel.** Navigation is five destinations whose labels equal their page
+titles with `aria-current="page"`; the duplicate `/remote/` link is gone; the
+dashboard is four tiles, a **Needs attention** list and five recent audit rows
+instead of a second copy of the users and audit tables; soft-deleted accounts show
+a `deleted` filter and a **Restore** action; every destructive or override action
+confirms; administrators can enrol and disable their own 2FA (the panel was weaker
+than the door strangers use); `must_change_password` is visible and clearable; the
+account detail prints its id and links to that account's audit events; the admin's
+own password change now passes `keep_sid_hash` so it no longer signs the person out
+while saying it changed. Accessibility: skip link, `:focus-visible`, a
+`role="status" aria-live="polite"` flash region (always present, collapsed when
+empty), captions and `scope="col"` on every table, `--faint` raised to `#8a8a8a`
+for AA, minimum readable size `.75rem`, larger mobile nav targets, and `for`/`id`
+wiring on the create-user form.
+
+**Tests** — `tests/test_multiuser.py` (restore reachability, the change-password
+flag, override confirmations, admin self-2FA, own-password session retention),
+`tests/test_selfservice.py` (codes issued, single use, expired, attempts-cap kills
+the row, enumeration equivalence, no token URL in any emitted `.eml`),
+`tests/test_account_purge.py` (scoped disconnect removes only its provider, leaves
+the owner's files alone, cannot aim at `owner`, tombstones stay `all`-only),
+plus the existing signup/switch coverage. `invite` and `magic` still emit links.
+
+### Phase 2.8 — provider sign-in typed into fields, not a mirrored browser (2026-10-26) — **implemented**
+
+Connecting Amazon or Google used to mean driving a remote browser: the page opened
+a live picture of Chromium (noVNC for the sidecar, a screenshot stream for Amazon)
+and the person clicked and typed *inside that picture*. Both doors are now ordinary
+form fields in Music Box, and the automation behind them types into the real
+provider pages.
+
+**What the person sees.** One page per provider at `/accounts/<provider>` — an
+email field, a password field, then exactly one follow-up panel appears depending on
+what the provider asked for: a code (`autocomplete="one-time-code"`), a captcha
+picture, a list of "which device did you just try to sign in on" choices, or a
+"approve this on your phone" wait. `#status` is a `role="status" aria-live="polite"`
+region, so each step transition is announced; Start over and Cancel are explicit.
+Nothing renders an `<iframe>` any more — `grep -l iframe templates/*.html` is empty.
+The stepper needs JavaScript: the panels are wired in
+`templates/static/js/account-signin.js`, and the form has no `action` to fall back on.
+
+**Amazon** is scripted by `alexapy`'s own login ladder in
+`alexa_remote.AlexaRemoteProxy`: `POST /alexa/form_login/` (email + password) then
+`POST /alexa/form_login/step/` carrying `{kind, value}` for the OTP, the captcha, or
+the device choice; `GET /alexa/form_login/captcha/` returns the picture
+**same-origin** rather than as a data URL, and `POST /alexa/form_login/cancel/` is
+idempotent. Promotion of a finished login is one function,
+`_promote_staged_login`, shared with the proxy-login path that Jam/interactive
+sign-in already used, so a form login commits cookies, the email file, the live
+session and the device cache the same way — and stages them per identity, never into
+another account's directory.
+
+**Google** is scripted by the sidecar's `google_signin.py` ladder inside the
+per-account headless Chromium: `POST /api/youtube/browser-session/form/start`
+(`/code`, `/poll`, `/stop`). Because the sidecar owns **one** browser per profile and
+Google keeps its page open between steps, one sign-in at a time can hold it:
+`_google_form_claim(identity)` with a 300-second lease that each accepted answer
+renews. A different account is told another sign-in is using the browser rather than
+being silently queued or overwriting it, and an abandoned attempt stops holding the
+browser once the lease lapses. `signed_in` goes straight to the existing capture →
+validate → atomic-promote path, so a form sign-in produces exactly the same jar the
+automated renewal produces.
+
+**Why this replaced the mirror.** Typing into a picture of a browser was slow,
+needed a viewport the app had to guess at, and asked people to enter their password
+into pixels they could not inspect — no autocomplete, no password manager, no
+`type="password"` they could trust. The scripted ladder keeps the credential inside
+Music Box's own field and lets the server answer the provider's real form. The
+captcha and the device-approval choice stay interactive because those genuinely are
+questions only the person can answer; they are now questions with a labelled box
+underneath, not a mouse to steer.
+
+**Verification.** Live, as a normal account: `/accounts/amazon` and
+`/accounts/youtube` render the stepper with zero `<iframe>` and no VNC/screenshot
+markup; the wiring answers correctly on empty input (`POST /alexa/form_login/` → 400
+"Enter your Amazon email and password.", `…/captcha/` with nothing waiting → 404,
+`…/step/` with no live attempt → 400, `form/start` with empty credentials → 400,
+`form/stop` → 200 idempotent, `form/code` and `form/poll` after the attempt ended →
+409 "This sign-in has ended. Start again."); one real Amazon round trip with a
+reserved `.invalid` address returned `{"state": "error", "message": "Amazon refused
+this sign-in…"}` in 6.8 s, which is the ladder actually reaching Amazon, being refused
+and reporting it. The stepper's own Playwright suite (`tests/browser/`) and the
+offline suite are green, and mutating `/alexa/*` calls still require a JSON body, so
+the CSRF rule that protects the cookie-authenticated command endpoints still applies
+to the new form posts.
+
+**Not in this pass.** The raw mirror endpoints
+(`/api/youtube/browser-session/surface`, `…/choose-account`, and the sidecar's
+`/interactive/frame` + `/interactive/input`) are still routed, authorised and
+tested, but no template or script calls them since the doors became forms. Removing
+them means touching the sidecar image too, so that deletion is left for an explicit
+decision.
+
+### Phase 2.9 — one name, one palette, and paths a person can read (2026-10-26) — **implemented**
+
+Five things that were wrong in use, not missing from the model.
+
+**One name per account.** `display_name` is deleted: schema **v5** drops the column
+and `username` is the only name an account has — it is what other players see in the
+queue and what the panel lists. Every read and write went with it: the admin users
+list, user detail, user new/edit, audit rows, the admin and self-service account
+pages, `account.js` and its `/api/account/profile` payload. The profile form is now
+email-only, and an administrator's rename is a username rename.
+
+**Sign-in admits what it accepts.** `authenticate()` has always matched
+`username = ? COLLATE NOCASE OR email = ? COLLATE NOCASE`, but both boxes said
+"Username". They now say **"Email or username"**, the admin field's `maxlength` rose
+to 254 so an address fits, and the placeholder is an address.
+
+**Paths a stranger is shown are plain.** Invitations moved from
+`/admin/invite/<token>` to `/invite/<token>` — an invited person has no reason to be
+handed a URL that says *admin*, and the admin prefix made the link look like the
+panel's own secret door. `/signup/verify` → `/verify` and `/signup/resend` →
+`/resend-code` for the same reason: nobody should have to parse a path to know where
+a code goes. The `/admin` twins keep their prefix because that door is staff-only.
+`emails.TOKEN_PATHS` is the single place the link shapes live.
+
+**One palette, then the panel inside it.** `templates/static/css/theme.css` is now
+the only source of the design tokens (`--surface`, `--border`, `--accent`,
+`--danger*`, `--ok*`, `--warn*`, radii, spacing, type scale); `admin.css`,
+`account.css` and `signin.css` read from it instead of each keeping its own copy, so
+the panel and the player are visibly the same product. **Service status** is rendered
+by `server.py` into `admin/system.html`, which extends `admin/base.html` — clicking
+it no longer leaves the site or opens an `iframe` to another origin.
+
+**`/account` has a hierarchy.** It was one long column of equally-weighted panels.
+It is now: identity header (avatar, `@username`, member since, Player / Sign out) → a
+four-chip status strip (email · two-factor · linked services · devices) → section
+pills → a three-column row (Sign-in details · Linked services · Devices) → a
+two-part security panel (password | two-factor) → the danger band, with self-deletion
+behind a `<details>` reveal so the destructive control is reachable but never first.
+Status chips are computed from stored rows immediately and re-computed from the live
+provider fetch, so the page is honest before JavaScript finishes. At 1440 px the page
+is 1437 px tall where it was 1706 px. The invitation page was pulled onto the same
+`selfservice_base` + `signin.css` shell, and both were photographed at 1440 and 390.
+
+**Constraints kept.** The self-service door's CSP is `script-src 'self'` /
+`style-src 'self'`, asserted by tests, so none of this layout is inline style or
+script — it is classes in `account.css`, which is why that file grew and the
+templates did not. Live after the change: `test_multiuser` 33 OK,
+`test_selfservice` 49 OK, `test_signup_switch` 12 OK, `test_login_second_factor` 33
+OK, `test_account_pages` 5 OK, `test_queue_session_auth` 8 OK,
+`test_static_assets` 5 OK, `test_secret_hygiene` 3 OK.
 
 ### Phase 2.4 — history, likes, playlists (~2 sessions)
 

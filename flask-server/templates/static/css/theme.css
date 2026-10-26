@@ -1,0 +1,236 @@
+/* One palette for the whole product.
+ *
+ * The player, the sign-in doors, /account, the admin panel and Service status
+ * all load this file first and own nothing colour- or size-related of their
+ * own.  That is deliberate: the moment a surface declares its own `--bg`, that
+ * surface starts drifting into a different-looking site, which is exactly what
+ * had happened here (four dark greys, two oranges, a violet-and-blue badge
+ * palette, and a diagnostics page that matched nothing).
+ *
+ * The values come from the player app.  Aliases at the bottom keep the names
+ * older stylesheets already use so they resolve to this palette instead of a
+ * private one.
+ */
+
+:root {
+  color-scheme: dark;
+
+  /* Surfaces -- flat graphite on a lifted near-black. No gradients, no blur,
+     no glow.  This was #030303, which read as an unlit screen rather than a
+     dark theme: a panel of cards needs a canvas behind it. */
+  --bg: #101013;
+  --surface: #1b1b1f;
+  --surface-2: #24242a;
+  --surface-3: #2f2f36;
+  --border: #3a3a42;
+  --border-soft: #292930;
+  --border-hover: #4b4b55;
+
+  /* Type */
+  --text: #f6f6f7;
+  --muted: #a8a8b0;
+  --faint: #87878f;
+
+  /* One accent, plus its tints. Everything else is a state colour. */
+  --accent: #e8590c;
+  --accent-hover: #f76707;
+  --accent-soft: rgba(232, 89, 12, .1);
+  --accent-line: rgba(232, 89, 12, .38);
+  --accent-tint: #ffb17e;
+  /* Text drawn *on* the accent fill. Orange is dark enough that white wins in
+     both themes, so this only exists to say so in one place. */
+  --on-accent: #ffffff;
+  /* Accent drawn as ink — links, monograms, emphasised numbers. The pure hue is
+     5.3:1 on the dark page but only 3.2:1 on the light one, so each theme names
+     the version that clears 4.5 on its own canvas. */
+  --link: var(--accent);
+
+  --danger: #e03131;
+  --danger-tint: #ff8787;
+  --danger-soft: rgba(224, 49, 49, .12);
+  --danger-line: rgba(224, 49, 49, .34);
+
+  --ok: #2f9e44;
+  --ok-tint: #69db7c;
+  --ok-soft: rgba(47, 158, 68, .13);
+  --ok-line: rgba(47, 158, 68, .34);
+
+  --warn: #e8a03a;
+  --warn-tint: #ffc078;
+  --warn-soft: rgba(232, 160, 58, .13);
+  --warn-line: rgba(232, 160, 58, .34);
+
+  /* The handful of values a stylesheet used to hard-code, which is exactly why
+     a light theme used to be impossible: hover wash, field fill, scrollbar,
+     placeholder ink and the backdrop behind a dialog. */
+  --hover-tint: rgba(255, 255, 255, .06);
+  --field-bg: #14141a;
+  --field-disabled: #16161b;
+  --placeholder: #87878f;
+  --scrollbar-thumb: #3a3a42;
+  --overlay: rgba(0, 0, 0, .68);
+  --pop-shadow: 0 10px 30px rgba(0, 0, 0, .55);
+  --qr-frame: #ffffff;
+
+  /* Four values the player shell painted by writing them out again -- 31 times
+     across player.css, base.css, header.css and queue.css. Naming them changes
+     nothing on screen: each keeps its exact colour. What stops is the drift, and
+     the reading of a bare `rgba(255,255,255,.08)` as a mystery rather than the
+     lift a hovered control gets. `--lift` covers both jobs that wash does --
+     a fill under a control, and the hairline that separates one from the next. */
+  --lift: rgba(255, 255, 255, .08);
+  --lift-quiet: rgba(255, 255, 255, .045);
+  --surface-deep: #0b0503;
+  --ember: #2b1006;
+
+  /* Spacing scale. One ladder, so a 14px gap here and a 18px gap there have to
+     be a decision rather than an accident. */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+  --space-7: 48px;
+
+  /* Control heights. A button, an input and a select on the same row read as a
+     row only when they are the same height; sizing them from content alone is
+     how a form ends up with three different ones. */
+  --control-h-sm: 32px;
+  --control-h-md: 40px;
+
+  /* The longest measure a paragraph of help text should run to. A panel that is
+     1000px wide does not mean its sentences should be 1000px wide. */
+  --measure: 68ch;
+
+  /* Geometry.  One sharp edge language for the whole product: cards, controls,
+     dialogs, menus and pills all resolve to square corners, so a component only
+     has to read a token to inherit it.  Rules that need a literal circle --
+     avatars, status dots, the round artwork variant -- declare `50%` on purpose
+     and are the only rounding left in the stylesheets. */
+  --radius-sm: 0;
+  --radius-md: 0;
+  --radius-lg: 0;
+  --radius-xl: 0;
+  --radius-full: 0;
+  --card-radius: 0;
+  --card-padding-x: 14px;
+  --card-padding-y: 10px;
+  --card-gap: 10px;
+
+  /* Typography scale */
+  --text-2xs: 0.55rem;
+  --text-xs: 0.62rem;
+  --text-sm: 0.7rem;
+  --text-base: 0.85rem;
+  --text-lg: 1.05rem;
+  --text-xl: 1.25rem;
+  --text-2xl: 1.6rem;
+  --text-3xl: 2.2rem;
+
+  --font-sans: -apple-system, 'Segoe UI', system-ui, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+
+  /* Legacy names, so an older rule reads this palette rather than its own. */
+  --bg-deep: var(--bg);
+  --panel: var(--surface);
+  --line: var(--border);
+  --radius: var(--radius-md);
+  --radius-xs: var(--radius-md);
+  --shadow: none;
+  --sans: var(--font-sans);
+  --mono: var(--font-mono);
+  --green: var(--ok-tint);
+  --green-soft: var(--ok-soft);
+  --red: var(--danger-tint);
+  --red-soft: var(--danger-soft);
+  --amber: var(--warn-tint);
+  --amber-soft: var(--warn-soft);
+  --blue: var(--muted);
+  --blue-soft: var(--hover-tint);
+  --violet: var(--accent-tint);
+  --violet-soft: var(--accent-soft);
+  --warm: var(--accent-tint);
+  --yellow: var(--warn-tint);
+}
+
+/* Light theme.
+ *
+ * Opt-in per document -- `<html data-theme="light">` -- because the player is a
+ * dark surface by design. The administrator panel and a signed-in account's own
+ * page are the two surfaces that offer the choice, and they store it under one
+ * preference so a person does not have to set it twice.  Nothing else switches:
+ * every surface reads these tokens, so a stylesheet that used a token is correct
+ * in both themes and one that hard-coded a colour is the only thing that needs
+ * fixing.
+ *
+ * The state colours darken here rather than lighten. On near-black a tint of a
+ * colour is the readable end; on near-white the same ink fails contrast, so the
+ * `*-tint` names carry the *text* colour and stay the darker of the two.
+ */
+html[data-theme="light"] {
+  color-scheme: light;
+
+  --bg: #f3f3f5;
+  --surface: #ffffff;
+  --surface-2: #f0f0f3;
+  --surface-3: #e3e3e8;
+  --border: #d2d2da;
+  --border-soft: #e6e6ec;
+  --border-hover: #b6b6c2;
+
+  --text: #17171a;
+  --muted: #5b5b66;
+  /* 4.5:1 against both canvases this ink sits on -- #ffffff cards and the
+     #f3f3f5 page. The previous value cleared 4.5 on white and missed on the
+     page background, which is where most of the quiet labels actually live. */
+  --faint: #6d6d7a;
+
+  --accent: #e8590c;
+  --accent-hover: #d94e06;
+  --accent-soft: rgba(232, 89, 12, .1);
+  --accent-line: rgba(232, 89, 12, .35);
+  --accent-tint: #b0450a;
+  /* The hue dark enough to read as ink on a light canvas. */
+  --link: var(--accent-tint);
+
+  --danger: #c92a2a;
+  --danger-tint: #a61e1e;
+  --danger-soft: rgba(201, 42, 42, .1);
+  --danger-line: rgba(201, 42, 42, .3);
+
+  --ok: #2f9e44;
+  --ok-tint: #2b6e3a;
+  --ok-soft: rgba(47, 158, 68, .12);
+  --ok-line: rgba(47, 158, 68, .32);
+
+  --warn: #e8a03a;
+  --warn-tint: #8a5a12;
+  --warn-soft: rgba(232, 160, 58, .16);
+  --warn-line: rgba(138, 90, 18, .3);
+
+  --hover-tint: rgba(20, 20, 26, .055);
+  --field-bg: #ffffff;
+  --field-disabled: #f2f2f5;
+  --placeholder: #71717e;
+  --scrollbar-thumb: #cfcfd8;
+  --overlay: rgba(24, 24, 30, .42);
+  --pop-shadow: 0 10px 30px rgba(24, 24, 30, .18);
+}
+
+/* ---- Reduced motion, once, for every surface ----
+   Fourteen component files had their own `prefers-reduced-motion` blocks and the
+   player -- the largest moving surface on the site -- had none. This rule sits at
+   the universal stylesheet and at the lowest specificity, so a component that
+   genuinely needs to keep animating (the processing shimmer, which is deliberately
+   slowed rather than stopped) still outranks it, and nothing has to opt out again. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: .01ms;
+    animation-iteration-count: 1;
+    transition-duration: .01ms;
+    scroll-behavior: auto;
+  }
+}

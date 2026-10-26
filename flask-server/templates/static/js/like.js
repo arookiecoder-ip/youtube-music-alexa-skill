@@ -116,6 +116,9 @@
       label.textContent = liked ? 'Dislike' : 'Like';
     } else {
       btn.innerHTML = svg;
+      // An icon-only heart has no text an AT can read, and a title tooltip is
+      // not a dependable name. The label has to follow the state flip.
+      btn.setAttribute('aria-label', liked ? 'Dislike' : 'Like');
     }
     btn.classList.toggle('liked', !!liked);
     btn.title = liked ? 'Dislike' : 'Like';
@@ -129,6 +132,7 @@
       b.innerHTML = liked ? heartFilled : heartEmpty;
       b.classList.toggle('liked', !!liked);
       b.title = liked ? 'Dislike' : 'Like';
+      b.setAttribute('aria-label', liked ? 'Dislike' : 'Like');
     });
   }
 

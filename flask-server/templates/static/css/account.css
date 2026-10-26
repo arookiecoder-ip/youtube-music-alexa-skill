@@ -1,14 +1,17 @@
 /* Self-service account pages.
  *
- * signin.css owns the door (brand, card, inputs, primary button); this file adds
- * only what the account surface needs on top: field help and errors, the
- * password meter, the honeypot, result-page links, and the wider two-column
- * layout of /account. There is no inline style anywhere in these templates, so
- * the blueprint can serve `style-src 'self'`. */
+ * signin.css owns the door (brand, inputs, primary button); this file adds only
+ * what the account surface needs on top: field help and errors, the password
+ * meter, the honeypot, result-page links, and the wider multi-column layout of
+ * /account. There is no inline style anywhere in these templates, so the
+ * blueprint can serve `style-src 'self'`.
+ *
+ * Nothing here declares a colour literal. Every value reads theme.css, which is
+ * what keeps this surface and the player the same product -- and what lets the
+ * one page that gains a light theme (the panel) inherit it correctly. */
 
 /* ---- shared bits ---- */
 .optional {
-  float: right;
   font-weight: 400;
   letter-spacing: .06em;
   text-transform: lowercase;
@@ -16,31 +19,34 @@
 }
 
 .field-help {
-  font-size: .7rem;
-  line-height: 1.5;
+  font-size: .75rem;
+  line-height: 1.55;
   color: var(--muted);
-  margin: 6px 0 0;
+  margin: var(--space-2) 0 0;
+  max-width: var(--measure);
+  overflow-wrap: anywhere;
 }
 
 .field-error {
-  font-size: .72rem;
-  line-height: 1.45;
-  color: var(--danger);
-  margin: 6px 0 0;
+  font-size: .75rem;
+  line-height: 1.5;
+  color: var(--danger-tint);
+  margin: var(--space-2) 0 0;
+  overflow-wrap: anywhere;
 }
 
 .form-note {
-  font-size: .72rem;
+  font-size: .75rem;
   line-height: 1.55;
   color: var(--muted);
-  margin: 16px 0 0;
+  margin: var(--space-4) 0 0;
 }
-.form-note.error { color: var(--danger); }
+.form-note.error { color: var(--danger-tint); }
 .form-note.success {
   color: var(--text);
   border-left: 2px solid var(--accent);
-  padding-left: 12px;
-  margin: 0 0 18px;
+  padding-left: var(--space-3);
+  margin: 0 0 var(--space-5);
 }
 
 /* Parked outside the viewport and hidden, so a person can neither see nor tab
@@ -55,19 +61,25 @@
   visibility: hidden;
 }
 
+/* Most of this page is a switch: the verification form, the two-factor
+   enrollment, the "no other device" line and each provider's Sign in /
+   Disconnect pair all appear and disappear on the `hidden` attribute. A
+   component that sets its own `display` would override the UA rule, and the
+   furniture for a state the account is not in would stay on screen. */
+[hidden] { display: none !important; }
+
 /* ---- password meter ---- */
 .pw-meter {
   display: flex;
   align-items: center;
-  gap: 8px;
-  margin: 8px 0 0;
+  gap: var(--space-2);
+  margin: var(--space-2) 0 0;
 }
 .pw-meter-bar {
   display: block;
   width: 74px;
   height: 3px;
   background: var(--border);
-  border-radius: 2px;
   overflow: hidden;
   position: relative;
 }
@@ -80,30 +92,30 @@
   transition: width .18s ease-out, background .18s ease-out;
 }
 .pw-meter-text {
-  font-size: .66rem;
+  font-size: .75rem;
   letter-spacing: .06em;
   text-transform: uppercase;
   color: var(--muted);
 }
 .pw-meter[data-state="weak"] { --pw-color: var(--danger); }
 .pw-meter[data-state="fair"] { --pw-color: var(--accent); }
-.pw-meter[data-state="good"] { --pw-color: #2f9e44; }
+.pw-meter[data-state="good"] { --pw-color: var(--ok); }
 
 /* ---- result pages ---- */
 .primary-link,
 .quiet-link {
   display: block;
-  margin-top: 20px;
+  margin-top: var(--space-5);
   text-align: center;
   text-decoration: none;
-  font-size: .72rem;
+  font-size: .75rem;
   font-weight: 700;
   letter-spacing: .1em;
   text-transform: uppercase;
-  color: #fff;
+  color: var(--on-accent);
   background: var(--accent);
   border: 1px solid var(--accent);
-  padding: 12px 14px;
+  padding: var(--space-3) var(--space-4);
 }
 .primary-link:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
 .quiet-link {
@@ -111,7 +123,8 @@
   border: 0;
   color: var(--muted);
   font-weight: 600;
-  padding: 2px 0 0;
+  padding: 0;
+  margin-top: var(--space-4);
   text-transform: none;
   letter-spacing: .02em;
 }
@@ -119,13 +132,17 @@
 
 .door-links {
   display: flex;
+  flex-wrap: wrap;
   justify-content: center;
-  gap: 16px;
-  margin-top: 18px;
+  gap: var(--space-2) var(--space-4);
+  margin-top: var(--space-4);
 }
 .door-links a {
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--control-h-md);
   color: var(--muted);
-  font-size: .72rem;
+  font-size: .75rem;
   text-decoration: none;
 }
 .door-links a:hover { color: var(--text); text-decoration: underline; }
@@ -133,176 +150,512 @@
 /* ---- /account ---- */
 body.account {
   align-items: flex-start;
-  padding-top: 32px;
+  padding-top: var(--space-6);
 }
-body.account main { max-width: 720px; }
+/* Four panels stacked in one column read as a form, not as an account, so the page
+   is as wide as it needs to be: a rail of section links beside the one panel being
+   used, and on a phone that rail laid back down as a row. The 1060px is the shell's
+   budget, not a measure -- prose inside a panel is capped separately. */
+body.account main { max-width: 1060px; width: 100%; }
 
 .account-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 14px;
-  margin-bottom: 22px;
+  gap: var(--space-4);
+  margin-bottom: var(--space-4);
+}
+.account-head .who { display: flex; align-items: center; gap: var(--space-3); min-width: 0; }
+.account-head .avatar {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  width: 42px;
+  height: 42px;
+  /* The one deliberate circle on the page: an avatar stands for a person, not
+     for a control, so it keeps the round shape the sharp-corner language
+     reserves for media. */
+  border-radius: 50%;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  font-size: var(--text-lg);
+  font-weight: 700;
+  color: var(--accent-tint);
 }
 .account-head .who h2 {
-  font-size: 1rem;
+  font-size: var(--text-lg);
   font-weight: 600;
+  line-height: 1.3;
   margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 .account-head .who p {
-  font-size: .72rem;
+  font-size: .75rem;
   color: var(--muted);
-  margin: 4px 0 0;
+  margin: var(--space-1) 0 0;
 }
-.account-actions-top { display: flex; gap: 10px; }
+.account-actions-top { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+
+/* The glance row. Every chip here is a thing a panel explains in full below. */
+.status-strip {
+  list-style: none;
+  margin: 0 0 var(--space-4);
+  padding: 0;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1px;
+  background: var(--border-soft);
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+.status-strip .chip {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--space-2);
+  padding: var(--space-3) var(--space-4);
+  background: var(--surface);
+  min-width: 0;
+}
+.chip-label {
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.status-strip .badge { max-width: 100%; }
+
+/* The shell. Five sections stacked in one column is a scroll that never ends, and
+   four of them are not the one you came for: the links move to a rail beside the
+   content and account.js shows one section at a time. The rail is sticky because the
+   section it is choosing between can still be taller than the window. */
+.account-shell {
+  display: grid;
+  /* 176px is the widest of the five labels on one line at this size, which is the
+     whole job. Anything more comes out of the panel beside it. */
+  grid-template-columns: 176px minmax(0, 1fr);
+  gap: var(--space-5);
+  align-items: start;
+}
+
+/* Jump links, standing up. They stay links rather than becoming tabs: every target
+   is a real fragment, so /account#panel-security works with no script at all and the
+   back button walks the sections. */
+.section-nav {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  position: sticky;
+  top: var(--space-4);
+  margin: 0;
+}
+.section-nav a {
+  display: flex;
+  align-items: center;
+  /* --control-h-md, not --control-h-sm: this is the same component as the status
+     page's section navigation, and a tab you can only reach with a mouse is not a
+     tab on a phone. */
+  min-height: var(--control-h-md);
+  font-size: var(--text-xs);
+  font-weight: 600;
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  text-decoration: none;
+  color: var(--muted);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  padding: var(--space-2) var(--space-3);
+}
+.section-nav a:hover { color: var(--text); border-color: var(--border-hover); }
+.section-nav a.active {
+  color: var(--text);
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  /* Which line is chosen has to be readable without comparing four washes of colour,
+     so the rail carries the same edge marker the admin sidebar draws. */
+  box-shadow: inset 3px 0 0 var(--accent);
+}
+.section-nav a.quiet {
+  /* One gap further down than the rest of the rail: the destructive entry should not
+     read as the fifth ordinary one. */
+  margin-top: var(--space-3);
+  color: var(--danger-tint);
+  border-color: var(--danger-line);
+  border-style: dashed;
+}
+.section-nav a.quiet:hover { color: var(--text); background: var(--danger); border-color: var(--danger); }
+.section-nav a.quiet.active {
+  background: var(--danger-soft);
+  box-shadow: inset 3px 0 0 var(--danger);
+}
+
+/* The notes that belong to no one section, then the section that is showing. Only one
+   panel is ever unhidden while the script is running, so this needs no grid of its
+   own -- stacked in source order is what a browser without JavaScript reads. */
+.account-panes { min-width: 0; }
+
+/* Password and two-factor are two halves of one question, so they sit side by
+   side inside the security panel instead of trailing down it. */
+.security-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-6);
+  align-items: start;
+  margin-top: var(--space-4);
+}
+.security-part { min-width: 0; }
+.security-part > h4 {
+  font-size: var(--text-base);
+  font-weight: 650;
+  color: var(--text);
+  margin: 0 0 var(--space-2);
+  padding-bottom: var(--space-2);
+  border-bottom: 1px solid var(--border-soft);
+  /* A subsection title and its status read as one row -- the name of the control
+     on the left, what it currently says on the right -- so the answer to "is
+     two-factor on?" is not somewhere else on the page. */
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
 
 .panel {
   background: var(--surface);
   border: 1px solid var(--border);
-  padding: 22px 22px 24px;
-  margin-bottom: 16px;
+  padding: var(--space-5);
+  margin-bottom: var(--space-4);
+  /* Jump links land on the heading, and a heading that sits under the sticky
+     accent bar reads as though the link did nothing. */
+  scroll-margin-top: var(--space-5);
 }
 .panel > h3 {
-  font-size: .72rem;
+  font-size: .75rem;
   font-weight: 700;
   letter-spacing: .14em;
   text-transform: uppercase;
   color: var(--text);
-  margin: 0 0 4px;
+  margin: 0 0 var(--space-2);
 }
-.panel > .panel-hint {
-  font-size: .74rem;
-  line-height: 1.55;
+.panel > .panel-hint,
+.panel .panel-hint {
+  font-size: .75rem;
+  line-height: 1.6;
   color: var(--muted);
-  margin: 0 0 6px;
+  margin: 0 0 var(--space-2);
+  max-width: var(--measure);
+  /* These sentences quote the account's own username and address, and neither is
+     guaranteed to contain a breakable space at 320px. */
+  overflow-wrap: anywhere;
 }
-.panel.danger { border-color: #3a1d1d; }
-.panel.danger > h3 { color: #ff8787; }
+.panel.danger { border-color: var(--danger-line); padding: var(--space-3) var(--space-5); }
+.panel.danger summary { color: var(--danger-tint); }
+.panel.danger .panel-hint { margin-top: var(--space-3); }
+
+/* A subsection inside a panel ("Password", "Two-factor sign-in"), so two related
+   forms share one heading instead of reading as unrelated siblings. */
+.panel > h4 {
+  font-size: var(--text-base);
+  font-weight: 600;
+  color: var(--text);
+  margin: var(--space-5) 0 var(--space-2);
+}
+.panel > h4:first-of-type { margin-top: var(--space-4); }
+
+/* Results render inside the section that produced them. */
+.section-notes { margin-top: var(--space-4); }
+.section-notes:empty { display: none; }
+
+/* Off-screen until focused: keyboard users can jump past the brand block. */
+.skip-link {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  padding: var(--space-2) var(--space-3);
+  background: var(--surface);
+  border: 1px solid var(--accent);
+  color: var(--text);
+  font-size: .75rem;
+  z-index: 10;
+}
+.skip-link:focus { left: var(--space-3); top: var(--space-3); }
+
+/* One focus language for the whole page. signin.css removes the outline on
+   inputs to draw its own border, so without this the only way to see where you
+   are is a border the field already has. */
+:where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
 
 .row {
   display: flex;
   flex-wrap: wrap;
-  gap: 10px 14px;
+  gap: var(--space-3) var(--space-4);
   align-items: flex-end;
 }
 .row > .grow { flex: 1 1 190px; }
-.row label { margin-top: 14px; }
+.row label { margin-top: var(--space-4); }
+/* signin.css makes a primary button a full-width CTA, which is right for a door
+   page where it is the only thing on the form. Paired with a second action it
+   instead shoves that action onto its own line, so inside a row the button goes
+   back to being as wide as its label. */
+body.account .row > button { flex: 0 0 auto; width: auto; }
+
+/* Labels that wrap their input need the gap the unwrapped ones got from the
+   label margin; keeps the label text above the field in both shapes. */
+.panel label > input { margin-top: var(--space-2); }
+/* `label:first-of-type { margin-top: 0 }` assumes a form that starts at the top
+   of its own box. On this page forms follow prose, a QR or another field, so
+   the first label was landing flush against whatever came before it. */
+.panel form > label:first-of-type { margin-top: var(--space-4); }
 
 .state-line {
   display: flex;
+  /* A label and its action are two fixed widths in a row that at 320px is not
+     wide enough for both; the action drops below rather than running off. */
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  padding: 12px 0;
+  gap: var(--space-3);
+  padding: var(--space-3) 0;
   border-top: 1px solid var(--border);
-  font-size: .78rem;
+  font-size: .75rem;
+  min-width: 0;
 }
 .state-line:first-of-type { border-top: 0; }
-.state-line .label { color: var(--muted); text-transform: uppercase; font-size: .62rem; letter-spacing: .12em; font-weight: 600; }
+/* A second form in a panel is a second task, not the tail of the first: without
+   a divider "Save changes" and "Confirm my email" stack up as two primary
+   buttons belonging to one action. The line goes on the form because the state
+   row that opens it drops its own top border as the first of its type. */
+.panel form + form {
+  margin-top: var(--space-5);
+  border-top: 1px solid var(--border);
+}
+.state-line .label {
+  flex: 0 0 auto;
+  color: var(--muted);
+  text-transform: uppercase;
+  font-size: var(--text-xs);
+  letter-spacing: .12em;
+  font-weight: 600;
+}
+/* `@username` is a value, not a sentence: it reads as one when it is set in the
+   same face as the prose around it. admin.css owns this rule there but this page
+   does not load that file, so it belongs here too. */
+.mono { font-family: var(--font-mono); }
+.state-line .mono,
+.state-line .value {
+  min-width: 0;
+  text-align: right;
+  overflow-wrap: anywhere;
+}
 
 .badge {
   display: inline-block;
-  font-size: .62rem;
+  font-size: .75rem;
   font-weight: 700;
   letter-spacing: .1em;
   text-transform: uppercase;
-  padding: 3px 8px;
-  border-radius: 999px;
+  padding: var(--space-1) var(--space-2);
   border: 1px solid var(--border);
   color: var(--muted);
+  overflow-wrap: anywhere;
 }
-.badge.ok { color: #69db7c; border-color: #2b5c36; }
-.badge.warn { color: #ffd8a8; border-color: #6b4a1c; }
-.badge.bad { color: #ff8787; border-color: #6b2222; }
+.badge.ok { color: var(--ok-tint); border-color: var(--ok-line); background: var(--ok-soft); }
+.badge.warn { color: var(--warn-tint); border-color: var(--warn-line); background: var(--warn-soft); }
+.badge.bad { color: var(--danger-tint); border-color: var(--danger-line); background: var(--danger-soft); }
 
+/* ---- controls: one height, one padding, one border ----
+   `ghost` and `tiny` are the same control at two weights, and the link-shaped
+   twins below are the same control again because /account deep-links to the
+   provider sign-in pages -- a bare <a> there would read as body text. */
 button.ghost,
-button.tiny {
+button.tiny,
+a.ghost-link,
+a.tiny-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: var(--control-h-sm);
+  padding: 0 var(--space-3);
   background: none;
   border: 1px solid var(--border);
   color: var(--text);
   font-family: inherit;
-  font-size: .68rem;
+  font-size: .75rem;
   font-weight: 600;
   letter-spacing: .06em;
   text-transform: uppercase;
-  padding: 8px 12px;
+  text-decoration: none;
+  white-space: nowrap;
   cursor: pointer;
 }
-button.ghost:hover,
-button.tiny:hover { border-color: var(--accent); color: var(--accent); }
-button.ghost:disabled,
-button.tiny:disabled { opacity: .4; cursor: default; }
-button.destructive {
-  border-color: #6b2222;
-  color: #ff8787;
-  background: none;
+/* A thumb cannot land on a 32px target reliably, so the compact control height is
+   the wrong promise on any surface that gets touched: coarse pointer, or narrow
+   enough to be a phone. */
+@media (hover: none), (max-width: 899px) {
+  button.ghost,
+  button.tiny,
+  a.ghost-link,
+  a.tiny-link { min-height: var(--control-h-md); }
 }
-button.destructive:hover { border-color: var(--danger); color: #fff; background: var(--danger); }
-button.ghost.linkish {
-  display: inline-block;
-  text-decoration: none;
+/* The two-tap confirmations rewrite their own label with a whole sentence --
+   "Tap again to disconnect Amazon". Held to one line, that sentence paints past
+   the panel it lives in; a button is allowed to break instead. The link-shaped
+   twins keep `nowrap` because nobody rewrites their label under their feet. */
+button.ghost,
+button.tiny {
+  white-space: normal;
+  overflow-wrap: anywhere;
   text-align: center;
 }
-
-/* The same two shapes as the buttons above, for links: the account page deep-links
-   to the provider sign-in pages, and a bare <a> would read as body text. */
-a.ghost-link,
-a.tiny-link {
-  display: inline-block;
-  text-decoration: none;
-  font-size: .68rem;
-  font-weight: 600;
-  letter-spacing: .06em;
-  text-transform: uppercase;
-  padding: 8px 12px;
-  border: 1px solid var(--border);
-  color: var(--text);
-}
+button.ghost:hover,
 a.ghost-link:hover,
-a.tiny-link:hover { border-color: var(--accent); color: var(--accent); }
-a.tiny-link[hidden] { display: none; }
-.prov-cell { display: inline-flex; align-items: center; gap: 10px; }
+button.tiny:hover,
+a.tiny-link:hover { border-color: var(--accent-line); color: var(--accent-tint); background: var(--hover-tint); }button.ghost:active,
+a.ghost-link:active,
+button.tiny:active,
+a.tiny-link:active { background: var(--surface-2); }
+button.ghost:disabled,
+button.tiny:disabled { opacity: .45; cursor: default; }
+button.ghost:disabled:hover,
+button.tiny:disabled:hover { border-color: var(--border); color: var(--text); background: none; }
+button.destructive { border-color: var(--danger-line); color: var(--danger-tint); }
+button.destructive:hover,
+button.destructive:active {
+  border-color: var(--danger);
+  color: var(--on-accent);
+  background: var(--danger);
+}
+button.ghost.linkish { text-align: center; }
 
-.devices { list-style: none; margin: 12px 0 0; }
+/* The primary action is the only filled control on the page, so it is the one
+   place a token pair is repeated rather than a modifier. signin.css parks it 22px
+   below the last field; that offset is not on the spacing scale this page uses. */
+body.account button.primary {
+  min-height: var(--control-h-md);
+  padding: 0 var(--space-4);
+  margin-top: var(--space-5);
+}
+
+/* The action end of a service or state row. A fixed budget keeps the row from
+   shuffling sideways when "Disconnect" becomes "Tap again to disconnect
+   Amazon", which is the shift this page produces on purpose. The budget is a
+   floor, not a licence to escape: capped to the row, the badge and the button
+   wrap inside the cell instead of the armed label painting over the next panel. */
+.prov-cell {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  flex: 0 0 auto;
+  min-width: 168px;
+  max-width: 100%;
+}
+
+.devices {
+  list-style: none;
+  margin: var(--space-3) 0 0;
+  padding: 0;
+  /* The only list on this page with no fixed length: a row carries a name, three
+     pieces of detail and the raw header, so six signed-in browsers used to stretch
+     this panel past the bottom of the screen. It scrolls inside itself now and the
+     panel keeps one height whatever the number. The `min()` is so a short viewport
+     never gets a list taller than the page it sits on, and `contain` is so the scroll
+     stops here when the rows run out instead of picking up the whole page with it. */
+  max-height: min(20rem, 60vh);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
+}
+.devices::-webkit-scrollbar { width: 8px; }
+.devices::-webkit-scrollbar-thumb { background: var(--scrollbar-thumb); }
+.devices::-webkit-scrollbar-track { background: transparent; }
 .devices li {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  padding: 12px 0;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  padding: var(--space-3) 0;
   border-top: 1px solid var(--border);
 }
-.devices .device-main { min-width: 0; }
+/* The name keeps a line it can actually be read on, so the row wraps around the
+   button rather than the button squeezing the name into an ellipsis. */
+.devices .device-main { flex: 1 1 12rem; min-width: 0; }
+/* The name and the "this device" mark share a line and must not trade places:
+   the mark is short and fixed, the name is whatever a browser chose to call
+   itself, so the name is the thing that gives way. */
+.devices .device-line {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-width: 0;
+}
 .devices .device-title {
-  font-size: .78rem;
+  font-size: var(--text-base);
+  min-width: 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
-  max-width: 340px;
 }
 .devices .device-meta {
-  font-size: .68rem;
+  font-size: .75rem;
   color: var(--muted);
-  margin-top: 3px;
+  margin-top: var(--space-1);
+  overflow-wrap: anywhere;
 }
-.devices .this-one { color: var(--accent); font-weight: 700; font-size: .62rem; letter-spacing: .1em; text-transform: uppercase; }
+/* The raw User-Agent is still the record of what signed in, so it stays on the
+   page -- as the technical detail it is, under the name a person can recognise,
+   and only on hover or when there is nothing better to say. */
+.devices .device-ua {
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+  color: var(--faint);
+  margin-top: var(--space-1);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.devices .this-one {
+  flex: 0 0 auto;
+  color: var(--accent-tint);
+  font-weight: 700;
+  font-size: var(--text-xs);
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+/* The button keeps its own line when the sentence it arms with ("Tap again to sign
+   out this device") will not share one with a readable device name, and drops back
+   into the row when it will. Shrinking it instead is what let the label escape the
+   panel at 320px. */
+.devices button { flex: 0 1 auto; min-width: 0; margin-left: auto; }
 
 .enroll {
-  margin-top: 16px;
+  margin-top: var(--space-4);
   border: 1px solid var(--border);
-  padding: 16px;
+  padding: var(--space-4);
 }
-.enroll[hidden] { display: none; }
 .enroll-grid {
   display: flex;
-  gap: 18px;
+  gap: var(--space-5);
   align-items: flex-start;
   flex-wrap: wrap;
 }
 .qr-frame {
-  background: #fff;
-  padding: 10px;
-  border-radius: 6px;
+  /* A QR needs a light backing to be readable by a camera; that is the one
+     reason this page may carry white, and theme.css names it. The border is for
+     the light theme, where white on white leaves the frame edgeless. */
+  background: var(--qr-frame);
+  border: 1px solid var(--border);
+  padding: var(--space-3);
   width: 168px;
   height: 168px;
   display: grid;
@@ -310,61 +663,156 @@ a.tiny-link[hidden] { display: none; }
   flex: 0 0 auto;
 }
 .qr-frame img { width: 148px; height: 148px; display: block; }
-.qr-fallback { font-size: .7rem; color: var(--muted); line-height: 1.5; }
-.enroll-steps { flex: 1 1 240px; }
-.enroll-steps ol { margin: 0 0 12px 16px; font-size: .74rem; line-height: 1.7; color: var(--muted); }
+.qr-fallback {
+  font-size: var(--text-sm);
+  color: var(--muted);
+  line-height: 1.55;
+}
+.enroll-steps { flex: 1 1 240px; min-width: 0; }
+.enroll-steps ol {
+  margin: 0 0 var(--space-3) var(--space-4);
+  font-size: .75rem;
+  line-height: 1.7;
+  color: var(--muted);
+}
 .secret-code {
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  font-size: .78rem;
+  font-family: var(--font-mono);
+  font-size: .75rem;
   letter-spacing: .06em;
   word-break: break-all;
   background: var(--bg);
   border: 1px solid var(--border);
-  padding: 9px 10px;
-  margin: 0 0 12px;
+  padding: var(--space-2) var(--space-3);
+  margin: 0 0 var(--space-3);
 }
 
-.note-stack { margin-top: 14px; }
+/* The one notice that belongs to no section, sitting above whichever section is
+   showing. It has to contribute nothing while it has nothing to say: a top margin on
+   an empty box is what pushed the panel out of line with the rail beside it. */
+.note-stack { margin: var(--space-4) 0; }
+.note-stack:empty { display: none; }
 .note {
-  font-size: .74rem;
-  line-height: 1.5;
-  padding: 10px 12px;
+  font-size: .75rem;
+  line-height: 1.55;
+  padding: var(--space-2) var(--space-3);
   border-left: 2px solid var(--border);
-  background: rgba(255, 255, 255, .02);
-  margin: 0 0 8px;
+  background: var(--hover-tint);
+  margin: 0 0 var(--space-2);
+  overflow-wrap: anywhere;
 }
-.note.ok { border-left-color: #2f9e44; }
+.note.ok { border-left-color: var(--ok); }
 .note.bad { border-left-color: var(--danger); }
 .note.warn { border-left-color: var(--accent); }
 
 details.reveal summary {
   cursor: pointer;
-  font-size: .7rem;
+  font-size: .75rem;
+  font-weight: 600;
   letter-spacing: .06em;
   text-transform: uppercase;
-  color: var(--muted);
-  margin-top: 14px;
+  color: var(--danger-tint);
+  /* The disclosure that opens the one irreversible action on the page should not
+     be a 17px strip of text to aim at. */
+  display: flex;
+  align-items: center;
+  min-height: var(--control-h-sm);
 }
 details.reveal[open] summary { color: var(--text); }
-details.reveal > .reveal-body { margin-top: 6px; }
+details.reveal > .reveal-body { margin-top: var(--space-2); }
 
 .confirm-box {
-  border: 1px dashed #6b2222;
-  padding: 16px;
-  margin-top: 14px;
+  border: 1px dashed var(--danger-line);
+  padding: var(--space-4);
+  margin-top: var(--space-4);
 }
-.confirm-box[hidden] { display: none; }
 
 .footnote {
-  font-size: .68rem;
+  font-size: .75rem;
   color: var(--muted);
   line-height: 1.6;
-  margin: 4px 0 26px;
+  margin: var(--space-1) 0 var(--space-6);
 }
-.footnote a { color: var(--muted); margin-right: 14px; }
+.footnote a {
+  color: var(--muted);
+  margin-right: var(--space-4);
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+}
+/* A footnote link sits in a sentence, so its box grows vertically only: padding
+   on top and the same padding back off as margin means the paragraph keeps its
+   height while the thumb gets a full control height to aim at. */
+@media (hover: none), (max-width: 899px) {
+  .footnote a { padding-block: 8px; margin-block: -8px; }
+}
+.footnote a:hover { color: var(--text); }
+
+/* ---- linked services ---- */
+.service-list { list-style: none; margin: var(--space-1) 0 0; padding: 0; }
+.service {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+  padding: var(--space-3) 0;
+  border-top: 1px solid var(--border);
+}
+.service:first-child { border-top: 0; }
+.service-main { min-width: 0; flex: 1 1 190px; display: flex; flex-direction: column; gap: var(--space-1); }
+.service-name { font-size: var(--text-base); font-weight: 650; }
+.service-hint { color: var(--muted); font-size: .75rem; line-height: 1.5; }
+.signout-link { color: var(--danger-tint); }
+.signout-link:hover { color: var(--danger-tint); background: var(--danger); border-color: var(--danger); }
+
+/* ---- breakpoints ----
+   The rail needs room beside the content to be a rail; below that it becomes the jump
+   row this page used to have, and the sections still switch the same way. */
+@media (max-width: 899px) {
+  .account-shell { grid-template-columns: minmax(0, 1fr); }
+  .section-nav {
+    position: static;
+    flex-direction: row;
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    /* The shell's own row gap is what separates the rail from the section below it
+       once they stack, so a margin here would just double the space. */
+    margin: 0;
+  }
+  /* Back to the horizontal shape in every respect, including the marker: a link that
+     is 40px tall does not need a third edge painted on it. */
+  .section-nav a { padding: 0 var(--space-4); }
+  .section-nav a.active,
+  .section-nav a.quiet.active { box-shadow: none; }
+  .section-nav a.quiet { margin-top: 0; margin-left: auto; }
+}
+
+@media (max-width: 900px) {
+  .security-grid { grid-template-columns: minmax(0, 1fr); gap: var(--space-5); }
+}
+
+@media (max-width: 760px) {
+  .status-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
 
 @media (max-width: 560px) {
-  .panel { padding: 18px 16px 20px; }
-  .devices .device-title { max-width: 190px; }
+  body.account { padding-top: var(--space-4); }
+  .panel { padding: var(--space-4); }
+  .panel.danger { padding: var(--space-3) var(--space-4); }
   .account-head { flex-direction: column; align-items: flex-start; }
+  .account-actions-top { width: 100%; }
+  .section-nav a.quiet { margin-left: 0; }
+  /* The 4-column glance row is 2x2 by now; the action cell stops reserving
+     desktop width so the two-line service row can sit under its name. */
+  .prov-cell { min-width: 0; justify-content: flex-start; }
+  .service { align-items: flex-start; }
+}
+
+@media (max-width: 380px) {
+  .status-strip { grid-template-columns: minmax(0, 1fr); }
+  .enroll-grid { gap: var(--space-4); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pw-meter-bar::after { transition: none; }
 }

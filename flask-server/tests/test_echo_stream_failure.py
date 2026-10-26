@@ -63,7 +63,8 @@ class EchoStreamFailureTests(unittest.TestCase):
               '_playback_output': SimpleNamespace(snapshot=lambda: {'playback_output': 'alexa', 'output_serial': 'echo'}),
               '_valid_video_id': lambda x: isinstance(x, str) and len(x) == 11,
               '_computed_position_ms': lambda: 2000, '_reset_progress': Mock(), '_notify_sse': notify, 'logger': Mock(), 'threading': SimpleNamespace(Timer=timer),
-              '_still_relevant_video': lambda vid: state['video_id'] == vid, '_auto_advance_after_failure': advance}
+              '_still_relevant_video': lambda vid: state['video_id'] == vid, '_auto_advance_after_failure': advance,
+              '_delayed': lambda seconds, target, args=(), start=True: timer(seconds, lambda: target(*args))}
         exec(compile(ast.Module(body=[fn], type_ignores=[]), str(SOURCE), 'exec'), ns)
         with Flask(__name__).test_request_context('/', method='POST', json={
             'event': 'failed', 'video_id': video, 'error_type': 'MEDIA_ERROR_SERVICE_UNAVAILABLE'}):

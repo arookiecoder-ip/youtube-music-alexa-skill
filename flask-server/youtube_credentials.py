@@ -7,9 +7,15 @@ not lose its session on upgrade. Accounts get one file per user id under
 is the source of truth: the file is a derived cache that is rebuilt on demand
 after a volume wipe or a restore from backup.
 
-An identity that is neither ``owner`` nor ``user:<id>`` resolves to ``None``, which
-callers treat as "public catalog only". Falling back to the owner's file would
-hand one account's session cookies to a stranger.
+``server`` is the deployment's own Google account -- the one configured from the
+environment and renewed by the keep-alive. It deliberately does **not** share the
+owner's file: renewing a shared file would overwrite a person's own linked
+session with the shared one.
+
+An identity that is neither ``owner``, ``server`` nor ``user:<id>`` resolves to
+``None``, which callers treat as "public catalog only". Whether an account with no
+link of its own may use the *server's* session is decided in ``server.py`` and is
+never the owner's file, because the owner's is a person's, not the deployment's.
 """
 from __future__ import annotations
 
@@ -19,6 +25,7 @@ import stat
 import tempfile
 
 OWNER = "owner"
+SERVER = "server"
 
 # users.id is a TEXT uuid4 (multiuser/db.py); anything else is not an account.
 _ACCOUNT_IDENTITY = re.compile(r"^user:([0-9a-fA-F-]{8,64})$")
@@ -39,6 +46,8 @@ class YouTubeCredentialStore:
         """Where this identity's browser-auth JSON lives (None = no private access)."""
         if identity == OWNER:
             return self._owner_path()
+        if identity == SERVER:
+            return os.path.join(self.account_dir, "server.json")
         user_id = account_user_id(identity)
         return os.path.join(self.account_dir, user_id + ".json") if user_id else None
 

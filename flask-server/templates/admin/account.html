@@ -1,61 +1,135 @@
 {% extends "admin/base.html" %}
+{% macro reauth_dialog(slug, heading, intro, action_url, submit_label, danger=false) %}
+  {# The identity check that unlocks a second-factor change.  "Which proof" is a
+     radio pair rather than a script: the checked input and the sibling selectors
+     in admin.css decide which panel is visible, so the dialog works with no JS at
+     all.  The "send code" button belongs to a second form through its `form`
+     attribute, because a form inside a form is not valid HTML. #}
+  <dialog class="admin-dialog" id="totp-{{ slug }}-dialog"
+          {% if reauth | default('') == slug %}data-autopen{% endif %}
+          aria-labelledby="totp-{{ slug }}-title">
+    <div class="dialog-head">
+      <h2 id="totp-{{ slug }}-title">{{ heading }}</h2>
+      <button class="btn icon ghost" type="button" data-dialog-close aria-label="Close">✕</button>
+    </div>
+    <div class="dialog-body">
+      <div class="col">
+        <p>{{ intro }}</p>
+        <form class="verify-form stack" id="totp-{{ slug }}-verify" method="post" action="{{ action_url }}">
+          <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+          <input type="radio" name="verify" value="password" id="totp-{{ slug }}-password-way"
+                 aria-label="Verify with your password"
+                 {% if way | default('') != 'email' %}checked{% endif %}>
+          <input type="radio" name="verify" value="email" id="totp-{{ slug }}-email-way"
+                 aria-label="Verify with a code from your email"
+                 {% if way | default('') == 'email' %}checked{% endif %}>
+          <div class="segmented">
+            <label for="totp-{{ slug }}-password-way">Password</label>
+            <label for="totp-{{ slug }}-email-way">Email code</label>
+          </div>
+          <div class="method method--password field">
+            <label for="totp-{{ slug }}-password">Current password</label>
+            <input id="totp-{{ slug }}-password" name="current_password" type="password"
+                   maxlength="200" autocomplete="current-password">
+            <span class="hint">Checked against your account, never stored or sent anywhere.</span>
+          </div>
+          <div class="method method--email field">
+            <div class="row tight spread">
+              <label for="totp-{{ slug }}-code">
+                Code sent to <span class="mono">{{ user.email or 'your address' }}</span>
+              </label>
+              <button class="btn small ghost" type="submit" form="totp-{{ slug }}-send"
+                      {% if not user.email %}disabled{% endif %}>Send code</button>
+            </div>
+            <input id="totp-{{ slug }}-code" name="code" type="text" inputmode="numeric"
+                   pattern="[0-9 ]*" maxlength="7" autocomplete="one-time-code" spellcheck="false"
+                   placeholder="••••••" class="code-field">
+            {% if sent | default(false) %}
+              <p class="ok-line">A fresh code is on its way. It works once and expires in {{ code_minutes }} minutes.</p>
+            {% else %}
+              <span class="hint">Ask for a code, then type the six digits here.</span>
+            {% endif %}
+            {% if not mail_configured %}<span class="hint">SMTP is not configured, so the code lands in the local outbox.</span>{% endif %}
+          </div>
+        </form>
+        <form id="totp-{{ slug }}-send" class="send-form" method="post"
+              action="{{ base_path }}/account/totp/reauth/send/">
+          <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+          <input type="hidden" name="action" value="{{ slug }}">
+        </form>
+      </div>
+    </div>
+    <div class="dialog-foot">
+      <button class="btn ghost" type="button" data-dialog-close>Cancel</button>
+      <button class="btn {{ 'danger' if danger else 'primary' }}" type="submit"
+              form="totp-{{ slug }}-verify">{{ submit_label }}</button>
+    </div>
+  </dialog>
+{% endmacro %}
 {% block content %}
 <div class="page-head">
   <div>
-    <h1>My account</h1>
-    <p>Manage your own password and sessions.</p>
+    <div class="title-row">
+      <span class="avatar lg" aria-hidden="true">{{ (user.username or '?')[0] }}</span>
+      <h1>@{{ user.username }}
+        <span class="badge {{ user.role }}">{{ user.role }}</span>
+        <span class="badge {{ user.status }}">{{ user.status }}</span>
+      </h1>
+    </div>
+    <p>{{ user.email or 'No email address' }} · signed in {{ user.last_login_at|mu_relative }} · member since {{ user.created_at|mu_datetime }}</p>
   </div>
 </div>
 
 <div class="grid cols-2">
-  <div style="display:flex;flex-direction:column;gap:16px">
+  <div class="col">
     <div class="card">
-      <div class="card-head" style="padding:0 0 16px;border:0"><h2>Identity</h2></div>
-      <dl class="kv">
-        <dt>Username</dt><dd>@{{ user.username }}</dd>
-        <dt>Display name</dt><dd>{{ user.display_name or '—' }}</dd>
-        <dt>Email</dt><dd>{{ user.email or '—' }} {% if user.email %}<span class="badge {{ 'active' if user.email_verified else 'invited' }}\">{{ 'verified' if user.email_verified else 'unverified' }}</span>{% endif %}</dd>
-        <dt>Role</dt><dd><span class="badge {{ user.role }}">{{ user.role }}</span></dd>
-        <dt>Status</dt><dd><span class="badge {{ user.status }}">{{ user.status }}</span></dd>
-        <dt>Last sign-in</dt><dd>{{ user.last_login_at|mu_relative }}</dd>
-        <dt>Member since</dt><dd>{{ user.created_at|mu_datetime }}</dd>
-      </dl>
-      <div class="section-divider"></div>
+      <div class="card-head plain">
+        <h2>Email address</h2>
+        {% if user.email %}
+          <span class="badge {{ 'active' if user.email_verified else 'invited' }}">
+            {{ 'verified' if user.email_verified else 'unverified' }}
+          </span>
+        {% endif %}
+      </div>
       <form class="stack" method="post" action="{{ base_path }}/account/profile/">
         <input type="hidden" name="_csrf" value="{{ csrf_token }}">
-        <div class="form-grid">
-          <div class="field">
-            <label for="display_name">Display name</label>
-            <input id="display_name" name="display_name" value="{{ user.display_name or '' }}" maxlength="120">
-          </div>
-          <div class="field">
-            <label for="profile_email">Email</label>
-            <input id="profile_email" name="email" type="email" value="{{ user.email or '' }}" maxlength="254"
-                   placeholder="you@synthora.in">
-            <span class="hint">Changing this requires your password and re-verification.</span>
-          </div>
+        <div class="field">
+          <label for="profile_email">Address</label>
+          <input id="profile_email" name="email" type="email" value="{{ user.email or '' }}" maxlength="254"
+                 placeholder="you@synthora.in">
+          <span class="hint">Used for sign-in, verification codes and password resets.</span>
         </div>
         <div class="field">
-          <label for="profile_password">Current password <span class="faint">(required to change email)</span></label>
+          <label for="profile_password">Current password</label>
           <input id="profile_password" name="current_password" type="password" maxlength="200"
                  autocomplete="current-password">
         </div>
-        <div class="form-actions">
-          <button class="btn primary" type="submit">Save profile</button>
-        </div>
+        <div class="form-actions"><button class="btn primary" type="submit">Save address</button></div>
       </form>
       {% if user.email and not user.email_verified and user.status == 'active' %}
         <div class="section-divider"></div>
-        <form method="post" action="{{ base_path }}/account/email/verification/">
-          <input type="hidden" name="_csrf" value="{{ csrf_token }}">
-          <button class="btn" type="submit">Send verification email</button>
-          {% if not mail_configured %}<span class="faint small" style="margin-left:8px">SMTP not configured — link goes to the outbox.</span>{% endif %}
-        </form>
+        <div class="col tight">
+          <p class="small muted">A six-digit code proves the address. Nothing arrives as a link to click.</p>
+          <div class="row tight">
+            <form method="post" action="{{ base_path }}/account/email/verification/">
+              <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+              <button class="btn" type="submit">Send code</button>
+            </form>
+            {% if not mail_configured %}<span class="faint small">SMTP not configured — the code goes to the outbox.</span>{% endif %}
+          </div>
+          <form method="post" action="{{ base_path }}/account/email/confirm/" class="row tight">
+            <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+            <input id="email_code" name="code" type="text" required inputmode="numeric" pattern="[0-9 ]*"
+                   maxlength="7" autocomplete="one-time-code" spellcheck="false" placeholder="••••••"
+                   class="code-field" aria-label="Verification code">
+            <button class="btn primary" type="submit">Confirm</button>
+          </form>
+        </div>
       {% endif %}
     </div>
 
     <div class="card">
-      <div class="card-head" style="padding:0 0 16px;border:0"><h2>Change password</h2></div>
+      <div class="card-head plain"><h2>Password</h2></div>
       <form class="stack" method="post" action="{{ base_path }}/account/">
         <input type="hidden" name="_csrf" value="{{ csrf_token }}">
         <div class="field">
@@ -74,21 +148,87 @@
         <div class="form-actions"><button class="btn primary" type="submit">Change password</button></div>
       </form>
     </div>
+
+    <div class="card">
+      <div class="card-head plain">
+        <h2>Two-factor sign-in</h2>
+        <span class="badge {{ 'active' if user.has_totp else ('invited' if user.totp_pending else 'neutral') }}">
+          {{ 'on' if user.has_totp else ('setup pending' if user.totp_pending else 'off') }}
+        </span>
+      </div>
+      {% if user.totp_pending %}
+        <p class="small muted">
+          {% if user.has_totp %}
+            Scan the new code with the app you are moving to, then type what it shows.
+            Your current authenticator still signs you in until you confirm this one, and
+            cancelling leaves it exactly as it was.
+          {% else %}
+            Scan the code with your authenticator app, then type what it shows.
+            The setup expires in a few minutes.
+          {% endif %}
+        </p>
+        <div class="qr-frame">
+          <img src="{{ base_path }}/account/totp/qr/" alt="QR code for your authenticator app" width="168" height="168">
+        </div>
+        <form class="stack" method="post" action="{{ base_path }}/account/totp/confirm/">
+          <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+          <div class="field">
+            <label for="totp_code">Authenticator code</label>
+            <input id="totp_code" name="code" type="text" required inputmode="numeric"
+                   pattern="[0-9 ]*" maxlength="7" autocomplete="one-time-code" spellcheck="false"
+                   placeholder="••••••" class="code-field">
+          </div>
+          <div class="form-actions">
+            <button class="btn primary" type="submit">{{ 'Confirm new authenticator' if user.has_totp else 'Turn on two-factor' }}</button>
+          </div>
+        </form>
+        <form method="post" action="{{ base_path }}/account/totp/cancel/" class="mt-0">
+          <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+          <button class="btn small ghost" type="submit">Cancel setup</button>
+        </form>
+      {% elif user.has_totp %}
+        <p class="small muted">An authenticator app asks for a six-digit code after your password when you sign in to this panel.</p>
+        <div class="row tight totp-actions">
+          <button class="btn" type="button" data-dialog-open="totp-replace-dialog">Change authenticator</button>
+          <button class="btn danger" type="button" data-dialog-open="totp-disable-dialog">Remove authenticator</button>
+        </div>
+        <p class="hint mt-2">
+          Both ask who you are first &mdash;
+          {% if user.email %}your password, or a code sent to <span class="mono">{{ user.email }}</span>{% else %}your password{% endif %}
+          &mdash; and nothing changes until that passes.
+        </p>
+      {% else %}
+        <p class="small muted">Ask for a six-digit code from an authenticator app as well as your password.</p>
+        <form class="stack" method="post" action="{{ base_path }}/account/totp/begin/">
+          <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+          <div class="field">
+            <label for="totp_current_password">Current password</label>
+            <input id="totp_current_password" name="current_password" type="password" required
+                   autocomplete="current-password">
+          </div>
+          <div class="form-actions"><button class="btn primary" type="submit">Set up two-factor</button></div>
+        </form>
+      {% endif %}
+    </div>
   </div>
 
-  <div style="display:flex;flex-direction:column;gap:16px">
+  <div class="col">
     <div class="card flush">
       <div class="card-head">
-        <h2>My sessions</h2>
-        <form method="post" action="{{ base_path }}/account/sessions/revoke/" data-confirm="Sign out every session, including this one?">
+        <h2>Devices</h2>
+        <form method="post" action="{{ base_path }}/account/sessions/revoke/"
+              data-confirm-heading="Sign out everywhere"
+              data-confirm="Every device on @{{ user.username }} is signed out, including this browser."
+              data-confirm-button="Yes, sign out" data-confirm-danger>
           <input type="hidden" name="_csrf" value="{{ csrf_token }}">
           <button class="btn small danger" type="submit">Sign out everywhere</button>
         </form>
       </div>
       {% if sessions %}
-        <div class="table-wrap">
+        <div class="table-wrap scroll-box">
           <table>
-            <thead><tr><th>Created</th><th>Last seen</th><th>Client</th><th>State</th></tr></thead>
+            <caption class="visually-hidden">Devices signed in to your account</caption>
+            <thead><tr><th scope="col">Created</th><th scope="col">Last seen</th><th scope="col">Client</th><th scope="col">State</th></tr></thead>
             <tbody>
               {% for s in sessions %}
                 <tr>
@@ -107,11 +247,15 @@
     </div>
 
     <div class="card flush">
-      <div class="card-head"><h2>My activity</h2></div>
+      <div class="card-head">
+        <h2>My activity</h2>
+        <a class="btn small ghost" href="{{ base_path }}/audit/?target={{ user.id }}">Full log</a>
+      </div>
       {% if audit %}
-        <div class="table-wrap">
+        <div class="table-wrap scroll-box">
           <table>
-            <thead><tr><th>Action</th><th>When</th><th>IP</th></tr></thead>
+            <caption class="visually-hidden">Recent events on your account</caption>
+            <thead><tr><th scope="col">Action</th><th scope="col">When</th><th scope="col">IP</th></tr></thead>
             <tbody>
               {% for event in audit %}
                 <tr>
@@ -129,13 +273,20 @@
     </div>
   </div>
 </div>
-{% endblock %}
-{% block scripts %}
-<script>
-  document.querySelectorAll('form[data-confirm]').forEach(function (form) {
-    form.addEventListener('submit', function (event) {
-      if (!window.confirm(form.getAttribute('data-confirm'))) event.preventDefault();
-    });
-  });
-</script>
+
+{% if user.has_totp and not user.totp_pending %}
+  {{ reauth_dialog(
+       'replace',
+       'Change authenticator',
+       'Start again with a different phone or app. The code you use today keeps working until you confirm the new one.',
+       url_for('multiuser_admin.account_totp_replace'),
+       'Verify and start again') }}
+  {{ reauth_dialog(
+       'disable',
+       'Remove authenticator',
+       'From the next sign-in onwards this panel asks for your password only. That is a weaker account: whoever has the password is in.',
+       url_for('multiuser_admin.account_totp_disable'),
+       'Verify and remove',
+       danger=true) }}
+{% endif %}
 {% endblock %}

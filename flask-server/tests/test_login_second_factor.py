@@ -519,7 +519,11 @@ class PlayerDoorTests(SecondFactorDoorTestBase):
     def test_the_signup_link_follows_the_registration_door(self):
         with mock.patch.object(self.accounts, "registration_open", lambda: False):
             page = self.client.get("/login/", headers={"User-Agent": PLAYER_UA}).get_data(as_text=True)
-        self.assertNotIn("/signup", page)
+        # The *create an account* link is what follows the door. The code page stays:
+        # somebody who signed up five minutes before it shut still has to be able to
+        # confirm their address, and that page cannot create anything.
+        self.assertNotIn('href="/signup"', page)
+        self.assertIn("/verify", page)
         self.assertIn("/forgot-password", page, "recovery still works while sign-ups are shut")
 
     def test_an_expired_pending_record_dies_on_its_own(self):

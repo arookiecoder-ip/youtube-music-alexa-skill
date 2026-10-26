@@ -14,7 +14,8 @@ function fixture(options = {}) {
   }};
   const resolve = createResolver({createClient:async()=>{state.sessions++;return client;},
     readFile:()=>'.youtube.com\tTRUE\t/\tTRUE\t0\tSID\tprivate',
-    stat:()=>({ino:1,mtimeMs:state.mtime,size:100}), now:()=>state.now,...options});
+    stat:()=>({ino:1,mtimeMs:state.mtime,size:100}), now:()=>state.now,
+    pot:async()=>'', ...options});
   return {state, format, resolve, request:{video_id:video,cookie_file:'/cookies'}};
 }
 test('cookie parser ignores unrelated domains, comments and expired cookies',()=>{
@@ -100,4 +101,30 @@ test('resolver returns public title/duration alongside an already-resolved strea
   assert.equal(result.metadata.title,'Resolved title');
   assert.equal(result.metadata.duration_ms,123000);
   assert(!Object.hasOwn(result.metadata,'url'));
+});
+test('the returned stream URL carries the minted GVS PO token',async()=>{
+  const seen=[];
+  const {resolve,request}=fixture({pot:async video=>{seen.push(video);return 'TOKEN123';}});
+  const result=await resolve(request);
+  assert.deepEqual(seen,[video]);
+  const url=new URL(result.url);
+  assert.equal(url.searchParams.get('pot'),'TOKEN123');
+  assert.equal(url.searchParams.get('expire'),'9000');
+});
+test('without a token service the URL is returned untouched',async()=>{
+  const {resolve,request}=fixture();
+  const result=await resolve(request);
+  assert.equal(result.url,'https://rr1.googlevideo.com/videoplayback?expire=9000');
+});
+test('an empty or failed token response never blocks playback',async()=>{
+  for (const pot of [async()=>'', async()=>{throw new Error('provider down');}]) {
+    const {resolve,request}=fixture({pot});
+    assert.equal((await resolve(request)).url,'https://rr1.googlevideo.com/videoplayback?expire=9000');
+  }
+});
+test('a cached URL keeps the token it was signed with',async()=>{
+  let minted=0;
+  const {resolve,request}=fixture({pot:async()=>`T${++minted}`});
+  const first=await resolve(request), second=await resolve(request);
+  assert.equal(first.url,second.url);assert.equal(minted,1);
 });

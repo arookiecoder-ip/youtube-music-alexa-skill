@@ -74,6 +74,16 @@ def new_token(nbytes: int = 32) -> str:
     return secrets.token_urlsafe(nbytes)
 
 
+def new_numeric_code(digits: int = 6) -> str:
+    """A zero-padded numeric code, drawn uniformly from 10**digits.
+
+    ``secrets.randbelow`` rather than ``random``: this picks the thing a stranger
+    gets five guesses at, and a non-cryptographic generator would make some codes
+    more likely than others.
+    """
+    return str(secrets.randbelow(10 ** max(4, int(digits)))).zfill(max(4, int(digits)))
+
+
 def sha256_hex(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 

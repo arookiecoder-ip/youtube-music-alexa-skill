@@ -255,6 +255,19 @@ class YouTubeBrowserSessionManager:
             entry.message = sidecar.get("message")
         return self.status(owner_id)
 
+    def mark_connected(self, owner_id=None):
+        """Record a sign-in that finished without the interactive lease.
+
+        The scripted form flow never takes the lease, yet the account panel
+        reads its verdict here: without this, a successful form sign-in would
+        still show 'idle' until the next refresh."""
+        with self._lock:
+            entry = self._auth_for(owner_id)
+            entry.state, entry.message = "connected", None
+            entry.last_success = self.clock()
+            entry.lease = None
+            self._release_busy_locked()
+
     def _take_and_promote(self, owner_id):
         candidate = self.controller.call("/candidate/take", "POST")
         if not accepted_browse_url(candidate.get("url")):

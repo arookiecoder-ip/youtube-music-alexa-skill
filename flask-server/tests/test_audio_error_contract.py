@@ -12,6 +12,8 @@ import unittest
 from unittest import mock
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+# audio_test_support is a sibling module: importable however this file was loaded.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 
 def _install_stubs():

@@ -1,46 +1,40 @@
-"""One email template set, two doors.
+"""One email template set, two doors, two kinds of credential.
 
-The administrator panel and the player-facing account pages issue the same
-tokens, so the copy, the link layout and the audit vocabulary live here rather
-than being written twice and drifting.  ``base`` is the only difference:
+The administrator panel and the player-facing account pages issue the same tokens,
+so the copy, the layout and the audit vocabulary live here rather than being
+written twice and drifting.  ``base`` is the only difference between the doors:
 ``/admin`` for administrator links, ``''`` for the player's own.
+
+Verification and reset are **typed codes** now, which is a different message shape:
+nothing in a code email may be clickable, because a link is what this replaced.
+Invitation and the administrator's sign-in link are still URLs, so they still go
+through :func:`send_token_email`.
 """
 from __future__ import annotations
 
 from flask import flash, request
 
-from .mailer import render_email
+from .mailer import render_code_email, render_email
 
 # Audit action suffix per purpose, so both doors record the same events.
 AUDIT_ACTION = {
-    "verify": "verification_email",
-    "reset": "password_reset_email",
+    "verify": "verification_code_email",
+    "reset": "password_reset_code_email",
+    "reauth": "reauth_code_email",
     "magic": "magic_link_email",
     "invite": "invitation_email",
 }
 
+# Only the purposes that still travel by URL.  A purpose absent from this map has
+# no path to build, which is what stops a half-migrated caller from issuing a
+# verification link that no route would ever accept.
 TOKEN_PATHS = {
-    "verify": "/verify-email/",
-    "reset": "/reset-password/",
     "magic": "/magic/",
     "invite": "/invite/",
 }
 
+# heading, intro, action label, expiry, warning
 COPY = {
-    "verify": (
-        "Verify your email address",
-        "Confirm this email address to finish securing your Music Box account.",
-        "Verify email",
-        "This verification link expires in {minutes} minutes.",
-        "",
-    ),
-    "reset": (
-        "Reset your Music Box password",
-        "We received a request to reset the password for your Music Box account.",
-        "Choose a new password",
-        "This password reset link expires in {minutes} minutes and can be used once.",
-        "If you did not request a reset, no action is needed — your password has not changed.",
-    ),
     "magic": (
         "Sign in to Music Box",
         "Use the button below to sign in to the administrator panel. This link works once.",
@@ -57,36 +51,52 @@ COPY = {
     ),
 }
 
+# heading, intro, expiry, warning.  ``intro`` is formatted with ``{where}``.
+CODE_COPY = {
+    "verify": (
+        "Verify your email address",
+        "Enter this code on {where} to confirm the address on your Music Box account.",
+        "This code expires in {minutes} minutes, works once, and stops working after "
+        "{attempts} wrong tries.",
+        "Do not share this code with anyone. Nobody from Music Box will ever ask you "
+        "for it in a message you did not start yourself.",
+    ),
+    "reset": (
+        "Reset your Music Box password",
+        "Enter this code on {where} to choose a new password.",
+        "This code expires in {minutes} minutes, works once, and stops working after "
+        "{attempts} wrong tries.",
+        "If you did not request a reset, no action is needed — your password has not changed.",
+    ),
+    "reauth": (
+        "Confirm a security change",
+        "Enter this code on {where} to prove this is you before the two-factor "
+        "sign-in on your Music Box account is changed.",
+        "This code expires in {minutes} minutes, works once, and stops working after "
+        "{attempts} wrong tries.",
+        "If you did not ask to change two-factor sign-in, ignore this email and "
+        "change your password.",
+    ),
+}
+
 
 def token_path(purpose: str, token: str, base: str = "") -> str:
     return f"{base}{TOKEN_PATHS[purpose]}{token}"
 
 
-def send_token_email(mu, user: dict, purpose: str, token: str, *, base: str = "",
-                     actor: dict | None = None, ip: str = "", user_agent: str = ""):
-    """Render, deliver and audit one token email. Returns the Mailer result."""
-    heading, intro, label, expiry, warning = COPY[purpose]
-    if purpose == "invite":
-        expiry = expiry.format(hours=mu.config.email_token_invite_hours)
-    elif purpose == "verify":
-        expiry = expiry.format(minutes=mu.config.email_token_verify_hours * 60)
-    elif purpose == "reset":
-        expiry = expiry.format(minutes=mu.config.email_token_reset_minutes)
-    else:
-        expiry = expiry.format(minutes=mu.config.email_token_magic_minutes)
-    url = mu.absolute_url(token_path(purpose, token, base), request.url_root)
-    subject = f"{mu.config.app_name}: {heading}"
-    text, html = render_email(
-        app_name=mu.config.app_name,
-        heading=heading,
-        intro=intro,
-        action_label=label,
-        action_url=url,
-        expiry=expiry,
-        warning=warning,
-        footer=f"Sent by {mu.config.app_name} at {mu.config.public_base_url or request.host}.",
-    )
+def _subject(mu, heading: str) -> str:
+    return f"{mu.config.app_name}: {heading}"
+
+
+def _footer(mu) -> str:
+    return f"Sent by {mu.config.app_name} at {mu.config.public_base_url or request.host}."
+
+
+def _deliver_and_audit(mu, user: dict, purpose: str, text: str, html: str, subject: str,
+                       actor: dict | None, ip: str, user_agent: str):
     result = mu.mailer.send(user["email"], subject, text, html)
+    # The code itself is never in these arguments: an audit row is readable by
+    # anybody with the panel, and a live code is a password.
     mu.accounts.audit(
         actor,
         f"{AUDIT_ACTION[purpose]}_{'sent' if result.ok else 'failed'}",
@@ -100,6 +110,53 @@ def send_token_email(mu, user: dict, purpose: str, token: str, *, base: str = ""
         user_agent,
     )
     return result
+
+
+def send_token_email(mu, user: dict, purpose: str, token: str, *, base: str = "",
+                     actor: dict | None = None, ip: str = "", user_agent: str = ""):
+    """Render, deliver and audit one token email. Returns the Mailer result."""
+    heading, intro, label, expiry, warning = COPY[purpose]
+    if purpose == "invite":
+        expiry = expiry.format(hours=mu.config.email_token_invite_hours)
+    else:
+        expiry = expiry.format(minutes=mu.config.email_token_magic_minutes)
+    url = mu.absolute_url(token_path(purpose, token, base), request.url_root)
+    text, html = render_email(
+        app_name=mu.config.app_name,
+        heading=heading,
+        intro=intro,
+        action_label=label,
+        action_url=url,
+        expiry=expiry,
+        warning=warning,
+        footer=_footer(mu),
+    )
+    return _deliver_and_audit(mu, user, purpose, text, html, _subject(mu, heading),
+                              actor, ip, user_agent)
+
+
+def send_code_email(mu, user: dict, purpose: str, code: str, *, where: str = "this page",
+                    actor: dict | None = None, ip: str = "", user_agent: str = ""):
+    """Render, deliver and audit one numeric-code email. Returns the Mailer result.
+
+    ``where`` is words, not a link: "the sign-up page", "your account page".  A
+    message that told the reader *where* without being able to *take* them there is
+    the property that made this switch worth making.
+    """
+    heading, intro, expiry, warning = CODE_COPY[purpose]
+    minutes = max(1, int(mu.config.email_code_minutes))
+    text, html = render_code_email(
+        app_name=mu.config.app_name,
+        heading=heading,
+        intro=intro.format(where=where),
+        code=code,
+        expiry=expiry.format(minutes=minutes, attempts=mu.config.email_code_attempts),
+        where=where,
+        warning=warning,
+        footer=_footer(mu),
+    )
+    return _deliver_and_audit(mu, user, purpose, text, html, _subject(mu, heading),
+                              actor, ip, user_agent)
 
 
 def flash_mail(mu, result, description: str, email: str = "") -> None:

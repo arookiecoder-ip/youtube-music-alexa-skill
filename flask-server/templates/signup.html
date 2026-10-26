@@ -19,16 +19,11 @@
          pattern="[A-Za-z0-9][A-Za-z0-9._-]{2,31}"
          aria-describedby="username-help">
   <p class="field-help" id="username-help">
-    3–32 characters: letters, numbers, dot, dash or underscore. This is your
-    handle, and every player on this Music Box sees it in the queue.
+    3–32 characters: letters, numbers, dot, dash or underscore. This is your only
+    name — every player on this Music Box sees it in the queue, and you can sign in
+    with it instead of your email address.
   </p>
   {{ field_error(field_errors, 'username') }}
-
-  <label for="display_name">Display name <span class="optional">optional</span></label>
-  <input id="display_name" name="display_name" type="text"
-         value="{{ form.get('display_name', '') }}" autocomplete="nickname" maxlength="120"
-         placeholder="{{ form.get('username', '') }}">
-  {{ field_error(field_errors, 'display_name') }}
 
   <label for="email">Email address</label>
   <input id="email" name="email" type="email" value="{{ form.get('email', '') }}"

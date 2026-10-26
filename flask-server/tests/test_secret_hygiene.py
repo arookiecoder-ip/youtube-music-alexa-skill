@@ -13,6 +13,8 @@ import unittest
 from unittest import mock
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+# audio_test_support is a sibling module: importable however this file was loaded.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 
 def _install_stubs():
@@ -88,11 +90,12 @@ class SecretHygiene(unittest.TestCase):
         env = dict(os.environ, DB_FILE=os.path.join(data, "data.db"),
                    API_KEY="", SECRET_KEY="", REMOTE_USER="u",
                    REMOTE_PASSWORD="p")
-        repo = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+        server_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
         proc = subprocess.run(
             [sys.executable, "-c",
-             "import sys; sys.path.insert(0, 'flask-server'); import server"],
-            cwd=repo, env=env, capture_output=True, text=True, timeout=120)
+             "import sys; sys.path.insert(0, %r); import server" % server_dir],
+            cwd=os.path.dirname(server_dir), env=env, capture_output=True, text=True,
+            timeout=120)
         self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
         for name, length in (("api_key.txt", 32), ("secret_key.txt", 64)):
             path = os.path.join(data, name)
