@@ -111,6 +111,8 @@ jobs:
           done
           curl --fail --silent http://127.0.0.1:5000/manifest.webmanifest >/dev/null
           test "$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:5000/api/app/events/)" = 401
+      - name: Verify real signed-session event delivery and revocation
+        run: docker exec musicbox-ci python tests/smoke_realtime_gateway.py
       - name: Container diagnostics
         if: always()
         run: docker logs musicbox-ci || true
