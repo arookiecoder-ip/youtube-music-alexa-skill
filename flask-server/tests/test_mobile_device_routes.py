@@ -75,10 +75,10 @@ class MobileDeviceRoutesTests(OutputRoutesTests):
         self.state.update(video_id=A, queue_index=1, queue=[track(A), track(A)])
         self.assertEqual(self.client.post('/alexa/seek/', json=dict(request, video_id=A, expected_queue_index=0)).status_code, 409)
 
-    def test_wait_budget_is_opt_in_bounded_and_compatible_with_old_clients(self):
+    def test_wait_budget_is_server_enforced_for_old_and_native_clients(self):
         self.registry.wait = Mock()
         token = self.output.snapshot()['output_token']
-        for extra, expected in (({}, 2), ({'wait_seconds': 8}, 8), ({'wait_seconds': 100}, 8), ({'wait_seconds': 'bad'}, 2)):
+        for extra, expected in (({}, 2), ({'wait_seconds': 8}, 2), ({'wait_seconds': 100}, 2), ({'wait_seconds': 'bad'}, 2)):
             reply = self.device('online', wait=True, output_token=token, **extra)
             self.assertEqual(reply.status_code, 200)
             self.assertEqual(self.registry.wait.call_args.args[1], expected)

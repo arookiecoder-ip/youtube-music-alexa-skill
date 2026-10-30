@@ -1,3 +1,6 @@
+from playback_events import playback_events
+from liked_songs_cache import LikedSongsCache
+_liked_songs_cache = LikedSongsCache()
 from flask import has_request_context
 import download_cookies
 import traceback
@@ -849,7 +852,7 @@ _SESSION_PATHS = ('/audio', '/get_radio', '/status', '/api/status', '/remote', '
                   '/alexa/queue_reorder', '/history', '/recommendations',
                   '/alexa/jam/start', '/alexa/jam/stop', '/alexa/jam/status',
                   '/alexa/jam/qr', '/api/home', '/api/library',
-                  '/api/subscribed_artists', '/api/app/output', '/api/app/devices', '/api/app/audio-token',
+                  '/api/subscribed_artists', '/api/app/output', '/api/app/devices', '/api/app/events/snapshot', '/api/app/audio-token',
                   '/alexa/like', '/api/liked_songs', '/api/profile_status',
                   '/api/youtube/download-cookies', '/api/youtube/download-cookies/status',
 '/alexa/amazon_signout',
@@ -937,6 +940,7 @@ def _session_close(sid):
         conn.execute('DELETE FROM web_sessions WHERE sid = ?', (sid,))
         conn.commit()
     _sid_cache().discard(sid)
+    playback_events.publish()
 
 
 def _sessions_close_all():
@@ -950,6 +954,7 @@ def _sessions_close_all():
         conn.commit()
     _sid_cache().clear()
     _legacy_adoption_closed = True
+    playback_events.publish()
 
 
 # Whether "sign out everywhere" has ever been used (None = not checked yet).
@@ -1240,7 +1245,7 @@ def _check_rate_limit():
     max_req, window = _RATE_LIMITS.get(group, _RATE_LIMITS['default'])
     if max_req <= 0:
         return None
-    ip = request.remote_addr or 'unknown'
+    ip = (request.headers.get('X-MusicBox-Client-IP') if request.remote_addr == '127.0.0.1' else None) or request.remote_addr or 'unknown'
     allowed, retry_after = _rate_limiter.check(ip, group, max_req, window)
     if not allowed:
         resp, _ = error_response(f'Rate limit exceeded. Try again in {retry_after}s.',
@@ -1398,6 +1403,7 @@ def _ytmusic_is_authenticated():
 
 def _invalidate_youtube_auth_caches():
     """Drop every thread-local authenticated client and personalized feed."""
+    _liked_songs_cache.clear()
     global _YT_HOME_CACHE_MTIME
     with _YT_HOME_CACHE_LOCK:
         _YT_HOME_CACHE.clear()
@@ -1523,7 +1529,7 @@ def _rate_limit_group(path: str) -> str:
         return 'proxy'
     if path == '/audio' or path.startswith('/audio/'):
         return 'audio'
-    if path in ('/api/app/output', '/api/app/queue', '/api/app/devices'):
+    if path in ('/api/app/output', '/api/app/queue', '/api/app/devices', '/api/app/events/snapshot'):
         return 'shared_playback'
     if path.startswith('/api/youtube/browser-session/'):
         return 'browser_session'
@@ -1969,8 +1975,11 @@ def _np_snapshot(serial=None, retain_errors=False):
     if output['playback_output'] == 'phone' and not output['phone_lease_ms']:
         _reset_progress(_computed_position_ms())
         s.update(playing=False, playback_confirmed=True, playback_processing=False)
+    event_epoch, event_revision = playback_events.version() if 'playback_events' in globals() else ('', 0)
     return {
         **output,
+        'event_epoch': event_epoch, 'event_revision': event_revision,
+        'presence_revision': _mobile_devices.revision if '_mobile_devices' in globals() else -1,
         'amazon_connected': getattr(alexa_remote.remote, 'connection_state', None),
         'remote_control_available': not (output['playback_output'] == 'alexa' and getattr(alexa_remote.remote, 'connection_state', None) is False),
         'playing': s['playing'], 'title': s['title'],
@@ -2090,6 +2099,8 @@ def _notify_sse():
         if not video or (_now_playing.get('playing') and _now_playing.get('playback_confirmed')):
             _youtube_stream.current.activate(video)
         _playback_persistence.submit(_now_playing, _playback_output.snapshot(), _computed_position_ms())
+    if "playback_events" in globals():
+        playback_events.publish()
     _schedule_alexa_queue_sync()
     with _sse_lock:
         subscribers = list(_sse_subscribers.items())
@@ -2542,11 +2553,8 @@ def app_mobile_devices():
                 # Opt-in keeps older clients' six-second HTTP deadline compatible.
                 requested_wait = body.get('wait_seconds', 2)
                 wait_seconds = min(8, max(0, requested_wait)) if isinstance(requested_wait, (int, float)) and not isinstance(requested_wait, bool) else 2
-                if body.get('bounded_wait') is True:
-                    if not _mobile_devices.wait_bounded(body.get('revision'), wait_seconds):
-                        retry_ms = 750
-                else:
-                    _mobile_devices.wait(body.get('revision'), wait_seconds)
+                if not _mobile_devices.wait_bounded(body.get('revision'), wait_seconds):
+                    retry_ms = 750
                 commands = _mobile_devices.pending_commands(owner, session_id)
                 _reconcile_mobile_output()
             _reconcile_mobile_output()
@@ -7610,6 +7618,8 @@ async def alexa_like():
         return jsonify({'error': 'action must be LIKE, DISLIKE, or INDIFFERENT'}), 400
     try:
         await asyncio.to_thread(yt.rate_song, video_id, action)
+        if '_liked_songs_cache' in globals():
+            _liked_songs_cache.update(video_id, action == 'LIKE')
         _bump_liked_version()
         return jsonify({'ok': True, 'action': action, 'video_id': video_id})
     except Exception as e:
@@ -7627,15 +7637,33 @@ async def api_get_liked_songs():
     if yt.auth_type == AuthType.UNAUTHORIZED:
         return jsonify({'liked_songs': []}), 200  # not an error; just no data
     try:
-        raw = await asyncio.to_thread(yt.get_liked_songs, 1000)
-        video_ids = [
-            t.get('videoId') for t in (raw.get('tracks') or [])
-            if t.get('videoId')
-        ]
-        return jsonify({'liked_songs': video_ids})
+        def load():
+            raw = _get_ytmusic_home().get_liked_songs(1000)
+            return [t['videoId'] for t in (raw.get('tracks') or []) if t.get('videoId')]
+        video_ids, stale = await asyncio.to_thread(_liked_songs_cache.get, load)
+        return jsonify({'liked_songs': video_ids, 'stale': stale})
     except Exception as e:
-        logger.debug('[api/liked_songs] failed (likely unauthenticated): %s', e)
-        return jsonify({'liked_songs': []}), 200  # degrade gracefully
+        logger.debug('[api/liked_songs] refresh unavailable: %s', type(e).__name__)
+        return jsonify({'error': 'Liked songs temporarily unavailable', 'retryable': True}), 503
+
+
+@app.route('/api/app/events/snapshot/', methods=['GET'])
+def playback_event_snapshot():
+    # This read is also the gateway's authorization check on connect and every
+    # heartbeat. Never let an API key or Jam guest subscribe to owner state.
+    if not _logged_in():
+        return jsonify({'error': 'web_session_required'}), 401
+    serial = _effective_serial(request.args.get('serial')) or 'phone'
+    with _np_lock:
+        snapshot = _np_snapshot(serial, retain_errors=True)
+        epoch, revision = playback_events.version()
+        if (request.args.get('queue_version') == str(snapshot['queue_version']) and
+                request.args.get('output_token') == snapshot['output_token']):
+            snapshot.pop('queue', None)
+    response = jsonify(type='playback_state', event_epoch=epoch,
+                       event_revision=revision, state=snapshot)
+    response.headers['Cache-Control'] = 'no-store'
+    return response
 
 
 @app.route("/alexa/now_playing/", methods=["GET"])

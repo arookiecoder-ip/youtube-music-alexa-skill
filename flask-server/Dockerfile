@@ -24,4 +24,4 @@ COPY --from=youtube-client /usr/local/bin/node /usr/local/bin/node
 COPY --from=youtube-client /youtube-stream/node_modules /app/youtube-stream/node_modules
 
 EXPOSE 5000
-CMD ["waitress-serve", "--host=0.0.0.0", "--port=5000", "--threads=16", "server:app"]
+CMD ["python", "realtime_gateway.py"]

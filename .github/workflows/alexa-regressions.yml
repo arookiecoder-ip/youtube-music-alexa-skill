@@ -82,3 +82,35 @@ jobs:
           name: status-dashboard-test-results
           path: status-artifacts/
           if-no-files-found: ignore
+
+  container-build:
+    needs: [playback-tests, status-dashboard-tests]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build backend image in Actions only
+        uses: docker/build-push-action@v6
+        with:
+          context: flask-server
+          load: true
+          push: false
+          tags: musicbox-realtime:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Check real gateway startup, public HTTP and stream authorization
+        run: |
+          docker run -d --name musicbox-ci -p 127.0.0.1:5000:5000 \
+            -e YOUTUBE_STREAMING=0 -e SECRET_KEY=isolated-ci-secret \
+            -e REMOTE_USER=ci-owner -e REMOTE_PASSWORD=isolated-ci-password \
+            -e DB_FILE=/tmp/musicbox.db -e AUDIO_CACHE_DIR=/tmp/audio musicbox-realtime:ci
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent http://127.0.0.1:5000/manifest.webmanifest >/dev/null; then break; fi
+            sleep 2
+          done
+          curl --fail --silent http://127.0.0.1:5000/manifest.webmanifest >/dev/null
+          test "$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:5000/api/app/events/)" = 401
+      - name: Container diagnostics
+        if: always()
+        run: docker logs musicbox-ci || true
