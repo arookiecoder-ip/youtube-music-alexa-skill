@@ -2,6 +2,7 @@
 import asyncio
 import threading
 import unittest
+from unittest.mock import patch
 from aiohttp import web, WSMsgType
 from aiohttp.test_utils import TestClient, TestServer
 from playback_events import PlaybackEvents
@@ -119,6 +120,21 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await response.read(), b'cde')
         self.assertEqual(response.headers['Content-Range'], 'bytes 2-4/6')
         self.assertEqual(response.headers.getall('Set-Cookie'), ['one=1', 'two=2'])
+
+    async def test_storm_schedules_only_one_cross_thread_wakeup(self):
+        event = self.events.subscribe()
+        loop = asyncio.get_running_loop()
+        with patch.object(loop, 'call_soon_threadsafe', wraps=loop.call_soon_threadsafe) as scheduled:
+            for _ in range(1000):
+                self.events.publish()
+            self.assertEqual(scheduled.call_count, 1)
+        await asyncio.sleep(0)
+        self.assertTrue(event.is_set())
+        event.clear()
+        self.events.publish()
+        await asyncio.sleep(0)
+        self.assertTrue(event.is_set())
+        self.events.unsubscribe(event)
 
     async def test_notification_storm_is_coalesced_and_restart_changes_epoch(self):
         event = self.events.subscribe()
