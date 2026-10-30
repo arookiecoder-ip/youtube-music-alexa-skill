@@ -1353,7 +1353,9 @@ def _get_ytmusic_home():
         if auth_file and os.path.isfile(auth_file):
             current_mtime = os.path.getmtime(auth_file)
             
-        if current_mtime > _YT_HOME_CACHE_MTIME:
+        if current_mtime != _YT_HOME_CACHE_MTIME:
+            if '_liked_songs_cache' in globals():
+                _liked_songs_cache.clear()
             _YT_HOME_CACHE.clear()
             _YT_HOME_CACHE_MTIME = current_mtime
             

@@ -32,7 +32,7 @@ def test_stale_reads_return_immediately_and_keep_favourites_on_failure():
             raise RuntimeError('YouTube offline')
         assert cache.get(fail) == (['liked'], True)
         cache._flight.result(2)
-        assert cache.get(fail)[0] == ['liked']
+        assert cache.get(fail) == (['liked'], True)
     finally:
         cache.close()
 
@@ -76,3 +76,23 @@ def test_account_change_fences_old_inflight_data():
         assert cache.get(lambda: ['new-account'])[0] == ['new-account']
     finally:
         release.set(); cache.close()
+
+
+def test_cold_failure_has_a_bounded_retry_window():
+    now, calls = [0], []
+    cache = LikedSongsCache(clock=lambda: now[0])
+    def fail():
+        calls.append(1)
+        raise RuntimeError('offline')
+    try:
+        for _ in range(3):
+            try:
+                cache.get(fail)
+                assert False
+            except RuntimeError:
+                pass
+        assert len(calls) == 1
+        now[0] = 16
+        assert cache.get(lambda: ['recovered'])[0] == ['recovered']
+    finally:
+        cache.close()

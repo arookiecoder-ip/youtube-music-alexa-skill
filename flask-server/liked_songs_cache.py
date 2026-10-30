@@ -15,6 +15,7 @@ class LikedSongsCache:
         self._executor = concurrent.futures.ThreadPoolExecutor(max_workers=1, thread_name_prefix='liked-refresh')
         self._value = None
         self._expires = 0
+        self._retry_at = 0
         self._generation = 0
         self._flight = None
 
@@ -22,12 +23,14 @@ class LikedSongsCache:
         with self._lock:
             self._generation += 1
             self._expires = 0
+            self._retry_at = 0
 
     def clear(self):
         with self._lock:
             self._generation += 1
             self._value = None
             self._expires = 0
+            self._retry_at = 0
 
     def update(self, video_id, liked):
         with self._lock:
@@ -42,6 +45,12 @@ class LikedSongsCache:
         with self._lock:
             if self._value is not None and self.clock() < self._expires:
                 return list(self._value), False
+            if self.clock() < self._retry_at:
+                if self._value is not None:
+                    return list(self._value), True
+                # A completed cold failure can be reused without another call.
+                if self._flight is not None and self._flight.done():
+                    return list(self._flight.result()), False
             if self._flight is None or self._flight.done():
                 generation = self._generation
                 self._flight = self._executor.submit(self._refresh, load, generation)
@@ -58,13 +67,15 @@ class LikedSongsCache:
         except Exception:
             with self._lock:
                 # Bound retries during an upstream outage; preserve favourites.
-                self._expires = self.clock() + min(15, self.ttl)
+                if generation == self._generation:
+                    self._retry_at = self.clock() + min(15, self.ttl)
                 if self._value is not None:
                     return list(self._value)
             raise
         with self._lock:
             if generation == self._generation:
                 self._value, self._expires = value, self.clock() + self.ttl
+                self._retry_at = 0
             elif self._value is None:
                 raise RuntimeError('Account changed during liked-song refresh')
             return list(self._value)
