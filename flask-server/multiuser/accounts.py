@@ -819,6 +819,63 @@ class AccountService:
         problem = validate_password(new_password, row["username"])
         if problem:
             raise AccountError(problem)
+        self._store_own_password(row, new_password, keep_sid_hash, revoke_other_sessions)
+        self.audit(actor, "password_changed", row["id"], {"self": True}, ip, user_agent)
+
+    def reset_own_password(
+        self,
+        actor: dict,
+        *,
+        email_code: str,
+        new_password: str,
+        totp_code: str = "",
+        ip: str = "",
+        user_agent: str = "",
+        keep_sid_hash: str = "",
+        revoke_other_sessions: bool = True,
+    ) -> None:
+        """Set a new password for the signed-in account without the old one.
+
+        For the person already inside the panel who has lost the password: the
+        mailbox answers, and the authenticator too when it is armed. The new password
+        is checked for strength before a live code is spent on it."""
+        row = self._active_row(actor)
+        problem = validate_password(new_password, row["username"])
+        if problem:
+            raise AccountError(problem)
+        # The authenticator is checked first so a mistyped one costs the person
+        # nothing: the emailed code stays live, and a resend is a minute away.
+        if row["totp_secret_enc"] and not self.verify_totp_code(row["id"], totp_code):
+            self.db.audit(
+                row["id"], row["username"], "password_reset_failed", row["id"],
+                json.dumps({"reason": "bad_totp"}), ip, user_agent,
+            )
+            raise AccountError(
+                "That authenticator code is not right, or it was already used. "
+                "Try the next code your app shows."
+            )
+        if not email_code or not self.consume_email_code(row["id"], "reauth", email_code):
+            self.db.audit(
+                row["id"], row["username"], "password_reset_failed", row["id"],
+                json.dumps({"reason": "bad_code"}), ip, user_agent,
+            )
+            raise AccountError(
+                "That email code did not match, or it has expired. Ask for a fresh one."
+            )
+        self._store_own_password(row, new_password, keep_sid_hash, revoke_other_sessions)
+        proof = "email+totp" if row["totp_secret_enc"] else "email"
+        self.audit(
+            actor, "password_reset", row["id"], {"self": True, "proof": proof},
+            ip, user_agent,
+        )
+
+    def _store_own_password(
+        self,
+        row: dict,
+        new_password: str,
+        keep_sid_hash: str = "",
+        revoke_other_sessions: bool = True,
+    ) -> None:
         now = _now()
         keep = sha256_hex(keep_sid_hash) if keep_sid_hash else ""
         with self.db.connect() as conn:
@@ -835,7 +892,6 @@ class AccountService:
                     "WHERE user_id = ? AND revoked_at = 0 AND sid_hash <> ?",
                     (now, row["id"], keep),
                 )
-        self.audit(actor, "password_changed", row["id"], {"self": True}, ip, user_agent)
 
     def session_summaries(self, user_id: str, current_sid_hash: str = "") -> list[dict]:
         """This account's live sessions, with nothing usable about them included.
@@ -872,6 +928,8 @@ class AccountService:
         activate: bool = False,
         ip: str = "",
         user_agent: str = "",
+        keep_sid_hash: str = "",
+        revoke_other_sessions: bool = True,
     ) -> dict:
         target = self.get_user(user_id)
         if not target:
@@ -895,10 +953,17 @@ class AccountService:
                     "WHERE id = ?",
                     (hash_password(password), now, now, user_id),
                 )
-            conn.execute(
-                "UPDATE user_sessions SET revoked_at = ? WHERE user_id = ? AND revoked_at = 0",
-                (now, user_id),
-            )
+            if revoke_other_sessions:
+                # A reset from a browser nobody else can see still means the old
+                # password is spent, so everybody else goes -- unless the person
+                # resetting from a signed-in session asks to keep their other
+                # devices. `keep_sid_hash` spares the one asking; "" spares nobody.
+                keep = sha256_hex(keep_sid_hash) if keep_sid_hash else ""
+                conn.execute(
+                    "UPDATE user_sessions SET revoked_at = ? "
+                    "WHERE user_id = ? AND revoked_at = 0 AND sid_hash <> ?",
+                    (now, user_id, keep),
+                )
             conn.execute("DELETE FROM user_email_tokens WHERE user_id = ?", (user_id,))
         self.db.audit(
             None, "email", action, user_id,
@@ -907,10 +972,23 @@ class AccountService:
         return self.get_user(user_id)
 
     def reset_password_with_token(
-        self, user_id: str, password: str, ip: str = "", user_agent: str = ""
+        self,
+        user_id: str,
+        password: str,
+        ip: str = "",
+        user_agent: str = "",
+        *,
+        keep_sid_hash: str = "",
+        revoke_other_sessions: bool = True,
     ) -> dict:
         return self._set_password_via_email(
-            user_id, password, action="password_reset_completed", ip=ip, user_agent=user_agent
+            user_id,
+            password,
+            action="password_reset_completed",
+            ip=ip,
+            user_agent=user_agent,
+            keep_sid_hash=keep_sid_hash,
+            revoke_other_sessions=revoke_other_sessions,
         )
 
     def complete_invitation(
@@ -1002,11 +1080,52 @@ class AccountService:
             "That did not verify. Re-enter your password, or ask for a fresh code."
         )
 
+    def confirm_own_credentials(
+        self,
+        actor: dict,
+        *,
+        current_password: str = "",
+        email_code: str = "",
+        purpose: str = "reauth",
+        require_email_code: bool = True,
+        ip: str = "",
+        user_agent: str = "",
+        audit_action: str = "security_change_failed",
+    ) -> str:
+        """Check the password, then spend an emailed code, and say which half failed.
+
+        :meth:`reauthenticate` accepts one proof *or* the other, which is the wrong
+        shape for the account page: changing an email address needs the code at the old
+        address **and** the password, and handing both to that function checks only the
+        code.  Here the password is always the first gate, so a wrong password never
+        burns a live code -- the code stays usable and the person only has to fix the
+        box they got wrong.
+        """
+        row = self._active_row(actor)
+        if not verify_password(row["password_hash"], current_password):
+            self.db.audit(
+                row["id"], row["username"], audit_action, row["id"],
+                json.dumps({"reason": "bad_password"}), ip, user_agent,
+            )
+            raise AccountError("Current password is incorrect.")
+        if email_code:
+            if not self.consume_email_code(row["id"], purpose, email_code):
+                self.db.audit(
+                    row["id"], row["username"], audit_action, row["id"],
+                    json.dumps({"reason": "bad_code"}), ip, user_agent,
+                )
+                raise AccountError("That email code did not match, or it has expired.")
+            return "password+email"
+        if require_email_code:
+            raise AccountError("Enter the code that was emailed to you.")
+        return "password"
+
     def begin_totp_enrollment(
         self,
         actor: dict,
         *,
         current_password: str = "",
+        email_code: str = "",
         issuer: str = "",
         ip: str = "",
         user_agent: str = "",
@@ -1017,19 +1136,27 @@ class AccountService:
 
         The password is required because a hijacked session must not be able to arm
         a second factor it alone can satisfy -- that turns 2FA into a lockout tool
-        against the real owner. ``verified`` says that proof was already made, by the
+        against the real owner. An emailed code is accepted as an optional extra
+        proof, never demanded, for the same reason it is optional when turning the
+        factor off. ``verified`` says that proof was already made, by the
         re-authentication dialog; ``allow_existing`` is the "change authenticator"
         case, where the live secret keeps working until the new one is confirmed.
         """
         row = self._active_row(actor)
         if row["totp_secret_enc"] and not allow_existing:
             raise AccountError("Two-factor sign-in is already on. Turn it off first.")
-        if not verified and not verify_password(row["password_hash"], current_password):
-            self.db.audit(
-                row["id"], row["username"], "totp_enrollment_failed", row["id"],
-                json.dumps({"reason": "bad_password"}), ip, user_agent,
+        if verified:
+            proof = "reauth"
+        else:
+            proof = self.confirm_own_credentials(
+                actor,
+                current_password=current_password,
+                email_code=email_code,
+                require_email_code=False,
+                ip=ip,
+                user_agent=user_agent,
+                audit_action="totp_enrollment_failed",
             )
-            raise AccountError("Current password is incorrect.")
         self._sweep_totp_enrollment(row["id"])
         secret = generate_totp_secret()
         now = _now()
@@ -1041,7 +1168,7 @@ class AccountService:
         self.audit(
             actor,
             "totp_enrollment_replaced" if allow_existing else "totp_enrollment_started",
-            row["id"], {"via": "reauth" if verified else "password"}, ip, user_agent,
+            row["id"], {"via": proof}, ip, user_agent,
         )
         issuer, uri = self._otpauth_uri(row["username"], secret, issuer)
         return {
@@ -1121,37 +1248,44 @@ class AccountService:
         actor: dict,
         *,
         current_password: str = "",
-        code: str = "",
+        email_code: str = "",
         ip: str = "",
         user_agent: str = "",
         verified: bool = False,
     ) -> dict:
-        """Turn 2FA off. Both the password and a live code are required.
+        """Turn 2FA off.
 
-        Either alone would let a stolen session disarm the protection, or a stolen
-        password lock the owner out of their own authenticator.  ``verified`` is the
-        admin panel's path: the dialog there has already checked the password *or* an
-        emailed code, so this does not ask for the factor being removed.
+        The password is the proof.  An emailed code is accepted and recorded but never
+        demanded: the phone that generates an authenticator code is the one thing a
+        person reliably loses, and being stuck unable to remove a second factor they no
+        longer have is not a protection -- it is a lockout with extra steps.  What the
+        removal no longer checks is made visible instead of invisible: the proof that
+        was used goes into the audit row, and an email tells the owner it happened.
+
+        ``verified`` is the admin panel's path, where the dialog there has already
+        checked a proof of its own.
         """
         row = self._active_row(actor)
         if not row["totp_secret_enc"]:
             raise AccountError("Two-factor sign-in is not on.")
-        secret = self._totp_secret(row["totp_secret_enc"])
-        if not verified and (
-            not verify_password(row["password_hash"], current_password)
-            or not totp_verify(secret, code)
-        ):
-            self.db.audit(
-                row["id"], row["username"], "totp_disable_failed", row["id"],
-                json.dumps({"reason": "credentials"}), ip, user_agent,
+        if verified:
+            proof = "reauth_dialog"
+        else:
+            proof = self.confirm_own_credentials(
+                actor,
+                current_password=current_password,
+                email_code=email_code,
+                require_email_code=False,
+                ip=ip,
+                user_agent=user_agent,
+                audit_action="totp_disable_failed",
             )
-            raise AccountError("Password or code is incorrect.")
         self.db.execute(
             "UPDATE users SET totp_secret_enc = '', totp_pending_enc = '', totp_pending_at = 0, "
             "totp_last_step = 0, updated_at = ? WHERE id = ?",
             (_now(), row["id"]),
         )
-        self.audit(actor, "totp_disabled", row["id"], {}, ip, user_agent)
+        self.audit(actor, "totp_disabled", row["id"], {"proof": proof}, ip, user_agent)
         return self.get_user(row["id"])
 
     def verify_totp_code(self, user_id: str, code: str) -> bool:
@@ -1215,6 +1349,8 @@ class AccountService:
         *,
         password: str,
         confirm_username: str,
+        email_code: str = "",
+        dry_run: bool = False,
         ip: str = "",
         user_agent: str = "",
     ) -> str:
@@ -1224,6 +1360,10 @@ class AccountService:
         able to be resurrected -- and a soft-deleted row keeps its username claimed
         forever. The audit journal deliberately survives: the record that an account
         existed and closed itself is the point of an audit log.
+
+        ``dry_run`` is the first popup of the page's four-step deletion: it proves
+        the password, the username and the last-owner guard, and erases nothing. The
+        emailed code belongs to the last step, so it is only asked for there.
         """
         row = self._active_row(actor)
         if not verify_password(row["password_hash"], password or ""):
@@ -1243,6 +1383,19 @@ class AccountService:
             "SELECT COUNT(*) FROM users WHERE role IN ('owner','admin') AND status = 'active'"
         ) or 0) <= 1:
             raise AccountError("The last administrator cannot delete this way. Use the admin panel.")
+        if dry_run:
+            return ""
+        # An address on file is a second proof: the code goes to it, and the same
+        # mailbox that could recover this account is the one that closes it.
+        if row["email"]:
+            if not (email_code or "").strip():
+                raise AccountError("Enter the code that was emailed to you.")
+            if not self.consume_email_code(row["id"], "reauth", email_code):
+                self.db.audit(
+                    row["id"], row["username"], "account_delete_failed", row["id"],
+                    json.dumps({"reason": "bad_code"}), ip, user_agent,
+                )
+                raise AccountError("That email code did not match, or it has expired.")
         user_id = row["id"]
         with self.db.connect() as conn:
             conn.execute(

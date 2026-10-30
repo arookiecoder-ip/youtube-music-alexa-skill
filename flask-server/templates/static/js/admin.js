@@ -134,6 +134,94 @@
     if (box.hasAttribute('data-autopen')) box.showModal();
   });
 
+  /* -------------------------------------------------------- device details
+   * Each row names its own session in data attributes. Opening one fills the
+   * server-rendered dialog -- which already carries the CSRF token -- and
+   * points the revoke form at that session's fingerprint. The identifier that
+   * arrives in the page is a fingerprint, never the session id itself. */
+  const deviceBox = $('device-dialog');
+  document.querySelectorAll('[data-device-open]').forEach((row) => {
+    const field = (name) => row.getAttribute('data-device-' + name) || '—';
+    const reveal = () => {
+      if (!deviceBox) return;
+      const revoke = $('device-revoke-form');
+      $('device-dialog-title').textContent = field('name');
+      $('device-name').textContent = field('name');
+      $('device-ip').textContent = field('ip');
+      $('device-created').textContent = field('created');
+      $('device-seen').textContent = field('seen');
+      $('device-expires').textContent = field('expires');
+      $('device-agent').textContent = field('agent');
+      const current = row.getAttribute('data-device-current') === '1';
+      $('device-current-note').hidden = !current;
+      if (revoke) {
+        revoke.setAttribute('action', row.getAttribute('data-device-revoke') || '');
+        revoke.setAttribute('data-confirm-heading', 'Remove this device');
+        revoke.setAttribute('data-confirm', current
+          ? 'This is the browser you are using. It is signed out now, so this panel closes on you.'
+          : 'That device is signed out immediately. Anything still open there stops working.');
+        revoke.setAttribute('data-confirm-button', 'Yes, remove it');
+        revoke.setAttribute('data-confirm-danger', '');
+        delete revoke.dataset.confirmed;
+      }
+      if (typeof deviceBox.showModal === 'function') deviceBox.showModal();
+    };
+    row.addEventListener('click', reveal);
+    row.addEventListener('keydown', (event) => {
+      if (event.key !== 'Enter' && event.key !== ' ') return;
+      event.preventDefault();
+      reveal();
+    });
+  });
+
+  /* ------------------------------------------------- "send code" without a reload
+   * Posting that form only says "the code is on its way"; reloading to say it
+   * throws the person out of the conversation. This answers with a toast and
+   * leaves the dialog exactly as it was. A modal dialog sits in the browser's
+   * top layer, so the toast is created inside it and CSS pins it to the
+   * viewport; anywhere else it would sit behind the backdrop.
+   * Without JS the form still posts and the page comes back with the dialog open. */
+  function toast(form, message, kind) {
+    const host = form.closest('dialog') || document.body;
+    let stack = host.querySelector(':scope > .toast-stack');
+    if (!stack) {
+      stack = document.createElement('div');
+      stack.className = 'toast-stack';
+      stack.setAttribute('role', 'status');
+      stack.setAttribute('aria-live', 'polite');
+      host.appendChild(stack);
+    }
+    const note = document.createElement('div');
+    note.className = 'toast ' + (kind || 'success');
+    note.textContent = message;
+    stack.appendChild(note);
+    setTimeout(() => {
+      note.classList.add('out');
+      setTimeout(() => note.remove(), 220);
+    }, 4200);
+  }
+
+  document.querySelectorAll('form.send-form').forEach((form) => {
+    form.addEventListener('submit', (event) => {
+      event.preventDefault();
+      const button = document.querySelector(`button[form="${form.id}"]`);
+      if (button) button.disabled = true;
+      // `form.action` is the hidden input called "action", not the URL.
+      const endpoint = form.getAttribute('action');
+      if (!endpoint) { form.submit(); return; }
+      fetch(endpoint, {
+        method: 'POST',
+        body: new FormData(form),
+        headers: { 'X-Requested-With': 'fetch', 'Accept': 'application/json' },
+        credentials: 'same-origin',
+      })
+        .then((response) => response.json())
+        .then((data) => toast(form, data.message || 'Code sent.', data.kind))
+        .catch(() => form.submit())
+        .finally(() => { if (button) button.disabled = false; });
+    });
+  });
+
   /* ---------------------------------------------------- confirm a real form
      The submit event fires from the button, so validation runs first and a form
      that is not ready is never asked about. `requestSubmit()` on the second pass

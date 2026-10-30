@@ -227,21 +227,21 @@ body.account main { max-width: 1060px; width: 100%; }
 }
 .status-strip .badge { max-width: 100%; }
 
-/* The shell. Five sections stacked in one column is a scroll that never ends, and
-   four of them are not the one you came for: the links move to a rail beside the
+/* The shell. Four sections stacked in one column is a scroll that never ends, and
+   three of them are not the one you came for: the links move to a rail beside the
    content and account.js shows one section at a time. The rail is sticky because the
    section it is choosing between can still be taller than the window. */
 .account-shell {
   display: grid;
-  /* 176px is the widest of the five labels on one line at this size, which is the
-     whole job. Anything more comes out of the panel beside it. */
+  /* 176px is the widest the labels have ever been on one line at this size, which is
+     the whole job. Anything more comes out of the panel beside it. */
   grid-template-columns: 176px minmax(0, 1fr);
   gap: var(--space-5);
   align-items: start;
 }
 
 /* Jump links, standing up. They stay links rather than becoming tabs: every target
-   is a real fragment, so /account#panel-security works with no script at all and the
+   is a real fragment, so /account#panel-sessions works with no script at all and the
    back button walks the sections. */
 .section-nav {
   display: flex;
@@ -296,32 +296,19 @@ body.account main { max-width: 1060px; width: 100%; }
    own -- stacked in source order is what a browser without JavaScript reads. */
 .account-panes { min-width: 0; }
 
-/* Password and two-factor are two halves of one question, so they sit side by
-   side inside the security panel instead of trailing down it. */
-.security-grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: var(--space-6);
-  align-items: start;
-  margin-top: var(--space-4);
-}
-.security-part { min-width: 0; }
-.security-part > h4 {
-  font-size: var(--text-base);
-  font-weight: 650;
-  color: var(--text);
-  margin: 0 0 var(--space-2);
-  padding-bottom: var(--space-2);
-  border-bottom: 1px solid var(--border-soft);
-  /* A subsection title and its status read as one row -- the name of the control
-     on the left, what it currently says on the right -- so the answer to "is
-     two-factor on?" is not somewhere else on the page. */
+/* The one action that cannot be undone sits under the grid, apart from the rows it
+   would erase, rather than sharing the rail with the sections. */
+.danger-zone {
   display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: var(--space-2);
-  flex-wrap: wrap;
+  justify-content: flex-end;
+  margin-top: var(--space-4);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--border);
 }
+
+/* The account section is a summary: a fact per row, with the buttons that change
+   it at the action end of the same row. */
+.state-line .prov-cell { justify-content: flex-end; }
 
 .panel {
   background: var(--surface);
@@ -354,16 +341,6 @@ body.account main { max-width: 1060px; width: 100%; }
 .panel.danger { border-color: var(--danger-line); padding: var(--space-3) var(--space-5); }
 .panel.danger summary { color: var(--danger-tint); }
 .panel.danger .panel-hint { margin-top: var(--space-3); }
-
-/* A subsection inside a panel ("Password", "Two-factor sign-in"), so two related
-   forms share one heading instead of reading as unrelated siblings. */
-.panel > h4 {
-  font-size: var(--text-base);
-  font-weight: 600;
-  color: var(--text);
-  margin: var(--space-5) 0 var(--space-2);
-}
-.panel > h4:first-of-type { margin-top: var(--space-4); }
 
 /* Results render inside the section that produced them. */
 .section-notes { margin-top: var(--space-4); }
@@ -453,6 +430,12 @@ body.account .row > button { flex: 0 0 auto; width: auto; }
   text-align: right;
   overflow-wrap: anywhere;
 }
+/* The address is the thing this row is about, so it reads larger and heavier than
+   the label beside it. */
+#profile-email {
+  font-size: .85rem;
+  font-weight: 700;
+}
 
 .badge {
   display: inline-block;
@@ -503,10 +486,9 @@ a.tiny-link {
   a.ghost-link,
   a.tiny-link { min-height: var(--control-h-md); }
 }
-/* The two-tap confirmations rewrite their own label with a whole sentence --
-   "Tap again to disconnect Amazon". Held to one line, that sentence paints past
-   the panel it lives in; a button is allowed to break instead. The link-shaped
-   twins keep `nowrap` because nobody rewrites their label under their feet. */
+/* A button label that outgrows its column may break instead of painting past the
+   panel: "Sign out other devices" is the one that does it. The link-shaped twins
+   keep `nowrap` because their labels are fixed words. */
 button.ghost,
 button.tiny {
   white-space: normal;
@@ -524,9 +506,12 @@ button.ghost:disabled,
 button.tiny:disabled { opacity: .45; cursor: default; }
 button.ghost:disabled:hover,
 button.tiny:disabled:hover { border-color: var(--border); color: var(--text); background: none; }
-button.destructive { border-color: var(--danger-line); color: var(--danger-tint); }
+button.destructive,
+a.tiny-link.destructive { border-color: var(--danger-line); color: var(--danger-tint); }
 button.destructive:hover,
-button.destructive:active {
+button.destructive:active,
+a.tiny-link.destructive:hover,
+a.tiny-link.destructive:active {
   border-color: var(--danger);
   color: var(--on-accent);
   background: var(--danger);
@@ -543,10 +528,9 @@ body.account button.primary {
 }
 
 /* The action end of a service or state row. A fixed budget keeps the row from
-   shuffling sideways when "Disconnect" becomes "Tap again to disconnect
-   Amazon", which is the shift this page produces on purpose. The budget is a
-   floor, not a licence to escape: capped to the row, the badge and the button
-   wrap inside the cell instead of the armed label painting over the next panel. */
+   shuffling sideways when a badge grows to "Needs signing in again". The budget is
+   a floor, not a licence to escape: capped to the row, the badge and the button
+   wrap inside the cell instead of painting over the next panel. */
 .prov-cell {
   display: inline-flex;
   flex-wrap: wrap;
@@ -632,10 +616,9 @@ body.account button.primary {
   text-transform: uppercase;
   white-space: nowrap;
 }
-/* The button keeps its own line when the sentence it arms with ("Tap again to sign
-   out this device") will not share one with a readable device name, and drops back
-   into the row when it will. Shrinking it instead is what let the label escape the
-   panel at 320px. */
+/* The button keeps its own line when a readable device name and the control will
+   not share one, and drops back into the row when they will. Shrinking it instead
+   is what let the label escape the panel at 320px. */
 .devices button { flex: 0 1 auto; min-width: 0; margin-left: auto; }
 
 .enroll {
@@ -704,6 +687,36 @@ body.account button.primary {
 .note.bad { border-left-color: var(--danger); }
 .note.warn { border-left-color: var(--accent); }
 
+/* A refusal in the delete flow is said over the popup, not in a line under the
+   field that caused it. <dialog> paints in the top layer, above anything appended
+   to <body>, so the stack is created inside the open popup; the body rule is the
+   fallback for a refusal that arrives with no popup open. It sits where the rest
+   of the app's toasts sit: bottom centre, square, on the page's own surface. */
+.toast-stack {
+  position: fixed;
+  bottom: var(--space-4);
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(420px, calc(100vw - 32px));
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  z-index: 1;
+  pointer-events: none;
+}
+.toast {
+  margin: 0;
+  padding: var(--space-3) var(--space-4);
+  font-size: .8rem;
+  line-height: 1.5;
+  color: var(--text);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left: 2px solid var(--danger);
+  box-shadow: var(--pop-shadow);
+  overflow-wrap: anywhere;
+}
+
 details.reveal summary {
   cursor: pointer;
   font-size: .75rem;
@@ -726,27 +739,6 @@ details.reveal > .reveal-body { margin-top: var(--space-2); }
   margin-top: var(--space-4);
 }
 
-.footnote {
-  font-size: .75rem;
-  color: var(--muted);
-  line-height: 1.6;
-  margin: var(--space-1) 0 var(--space-6);
-}
-.footnote a {
-  color: var(--muted);
-  margin-right: var(--space-4);
-  display: inline-flex;
-  align-items: center;
-  min-height: 24px;
-}
-/* A footnote link sits in a sentence, so its box grows vertically only: padding
-   on top and the same padding back off as margin means the paragraph keeps its
-   height while the thumb gets a full control height to aim at. */
-@media (hover: none), (max-width: 899px) {
-  .footnote a { padding-block: 8px; margin-block: -8px; }
-}
-.footnote a:hover { color: var(--text); }
-
 /* ---- linked services ---- */
 .service-list { list-style: none; margin: var(--space-1) 0 0; padding: 0; }
 .service {
@@ -764,6 +756,267 @@ details.reveal > .reveal-body { margin-top: var(--space-2); }
 .service-hint { color: var(--muted); font-size: .75rem; line-height: 1.5; }
 .signout-link { color: var(--danger-tint); }
 .signout-link:hover { color: var(--danger-tint); background: var(--danger); border-color: var(--danger); }
+
+/* ---- the popups ----
+   <dialog> supplies the focus trap, the Escape key and the top layer, so none of
+   that is re-implemented here. The page loads no admin.css, so the bar's shell is
+   declared against the same tokens everything else on this surface uses.
+   `data-autopen` rather than `open` is what lets showModal() run without throwing;
+   the not([open]) rule below is the no-script shape of the same dialog. */
+.account-dialog {
+  width: min(560px, calc(100vw - 32px));
+  max-height: min(88vh, 760px);
+  margin: auto;
+  padding: 0;
+  border: 1px solid var(--border);
+  /* Square, like every other surface on this page. */
+  border-radius: 0;
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--pop-shadow);
+}
+.account-dialog::backdrop { background: var(--overlay); }
+/* The browser's default dialog overflow would scroll the box itself, on top of
+   .dialog-body, giving the popup two scrollbars. Only the body scrolls. */
+.account-dialog[open] {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  overflow: hidden;
+}
+/* No script: the server marked the dialog the trigger link named, and a closed
+   dialog is display:none by default. This puts it back in the page as an ordinary
+   block at the end of <main>, so every field in it is reachable. The script drops
+   the flag before it calls showModal(), so a popup that is closed stays closed. */
+.account-dialog[data-autopen]:not([open]) {
+  display: block;
+  position: static;
+  width: auto;
+  max-width: none;
+  max-height: none;
+  margin: var(--space-5) 0 0;
+  box-shadow: none;
+}
+.dialog-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  padding: var(--space-4) var(--space-5);
+  border-bottom: 1px solid var(--border);
+}
+.dialog-head h2 {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  font-size: .95rem;
+  margin: 0;
+}
+/* A long popup scrolls its body and keeps its head and foot: that is what stops a
+   phone-sized viewport from pushing the submit button out of reach. */
+.dialog-body {
+  padding: var(--space-5);
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+.dialog-foot {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  padding: var(--space-4) var(--space-5);
+  border-top: 1px solid var(--border);
+}
+/* Two tasks in one popup are two blocks, separated the same way two forms in a
+   panel are: the line belongs to the block that follows, so the first one has no
+   rule above it. `.enroll` brings its own frame and margin. */
+.dialog-block { min-width: 0; }
+.dialog-block + .dialog-block,
+.enroll + .dialog-block {
+  margin-top: var(--space-5);
+  padding-top: var(--space-4);
+  border-top: 1px solid var(--border);
+}
+/* A popup opened at one task shows only that task, so there is no line between it
+   and a block that is not on screen: whichever block the view shows is the first
+   thing in the body. */
+.account-dialog[data-view] .dialog-body > [data-dialog-block]:not([hidden]) {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: 0;
+}
+.dialog-block > h3 {
+  font-size: .72rem;
+  font-weight: 700;
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  color: var(--text);
+  margin: 0 0 var(--space-2);
+}
+.dialog-block > .field-help { margin-top: 0; }
+/* signin.css zeroes the first label's margin because a door form begins at the top
+   of its own box; here every form begins under prose or a state row. */
+.dialog-body form > label:first-of-type { margin-top: var(--space-4); }
+/* A form that begins the body already sits below the padding under the head. */
+.dialog-body > form:first-child > label:first-of-type { margin-top: 0; }
+.dialog-body label > input { margin-top: var(--space-2); }
+/* A tick is a sentence, not a field name: no small caps, no letter spacing, and
+   the box is a hand-sized target even though the text is clickable too. */
+.dialog-body label.check {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  margin: var(--space-4) 0 0;
+  font-size: .78rem;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+  color: var(--text);
+  cursor: pointer;
+}
+.dialog-body label.check input {
+  width: 1.5rem;
+  height: 1.5rem;
+  margin: 0;
+  padding: 0;
+  flex: 0 0 auto;
+  accent-color: var(--accent);
+}
+/* "Did it send?" and "what happened" answers, inside the popup that asked. */
+.dialog-body .note { margin: var(--space-3) 0 0; }
+.dialog-body .note:empty { display: none; }
+
+/* ---- connecting a service ----
+   Both providers share one popup: only the copy and the endpoint change. The
+   credential form is the standalone door's two fields; the challenge panels are
+   whatever the provider asks for next, one at a time. */
+#connect-intro { margin-top: 0; }
+#connect-steps > div > .field-help { margin: 0 0 var(--space-3); }
+/* These labels follow the provider's question, not another field, so the door's
+   18px offset is not on this page's spacing scale. */
+#connect-code-panel label,
+#connect-captcha-panel label,
+#connect-choice-manual-label { margin-top: 0; }
+/* The picture is 308x90 from the provider; it may not paint wider than the popup
+   on a phone, and the frame is what makes a light challenge on a dark page read
+   as an image rather than a hole. */
+.connect-captcha {
+  display: block;
+  width: 100%;
+  max-width: 308px;
+  height: auto;
+  margin: 0 0 var(--space-2);
+  border: 1px solid var(--border);
+  background: var(--bg);
+}
+/* A radio is a choice, not field help: sentence case, one row per option, and
+   the whole row is the target. */
+#connect-choice-options { margin-top: var(--space-3); }
+.connect-choice {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-2);
+  margin: var(--space-2) 0 0;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  font-size: .82rem;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+  line-height: 1.4;
+  color: var(--text);
+  cursor: pointer;
+}
+.connect-choice:first-child { margin-top: 0; }
+.connect-choice:hover { border-color: var(--accent-line); }
+.connect-choice input {
+  /* A radio inside a row that is entirely clickable, but it is still its own target:
+     24px is the floor WCAG sets and the one the rest of this page keeps. */
+  width: 1.5rem;
+  height: 1.5rem;
+  margin: 0;
+  padding: 0;
+  flex: 0 0 auto;
+  accent-color: var(--accent);
+}
+#connect-choice-manual { margin-top: var(--space-2); }
+/* What the server is doing while an answer is checked or an approval is waited
+   on. It is a line, not a field, so it collapses when there is nothing to say. */
+.connect-status {
+  font-size: .75rem;
+  line-height: 1.5;
+  color: var(--muted);
+  margin: var(--space-3) 0 0;
+  overflow-wrap: anywhere;
+}
+.connect-status:empty { display: none; }
+.connect-status.error { color: var(--danger-tint); }
+/* The wait itself: one small ring beside the sentence that says what is being
+   waited on. It belongs to the same quiet line as the status, not to a banner. */
+.connect-working {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-size: .75rem;
+  line-height: 1.5;
+  color: var(--muted);
+  margin: var(--space-3) 0 0;
+}
+.connect-working[hidden] { display: none; }
+.connect-spinner {
+  width: 1rem;
+  height: 1rem;
+  flex: 0 0 auto;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: connect-spin .8s linear infinite;
+}
+@keyframes connect-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  /* A turning ring is decoration a reduced-motion reader asked not to see; the
+     sentence beside it still says what is happening. */
+  .connect-spinner { animation: none; border-top-color: var(--accent); opacity: .7; }
+}
+/* The check is often a picture grid, so the frame is both the picture and the
+   tap surface. Coordinates are held as percentages, which keeps the marks on
+   the same picture at every width. */
+.connect-captcha-frame {
+  position: relative;
+  width: 100%;
+  max-width: 460px;
+  margin: 0 0 var(--space-2);
+}
+.connect-captcha-frame .connect-captcha { margin: 0; max-width: none; }
+.connect-captcha-frame.tappable .connect-captcha { cursor: crosshair; }
+.captcha-mark {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  width: 1.75rem;
+  height: 1.75rem;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  border: 2px solid var(--on-accent);
+  background: var(--accent);
+  color: var(--on-accent);
+  font-size: .72rem;
+  font-weight: 600;
+  line-height: 1;
+  pointer-events: none;
+}
+#connect-captcha-clear { margin: 0 0 var(--space-2); }
+#connect-method-options { margin-top: var(--space-3); }
+#connect-code-different,
+#connect-approval-different { margin-top: var(--space-3); display: block; }
+#connect-code-different[hidden],
+#connect-approval-different[hidden] { display: none; }
+#connect-retry { margin-top: var(--space-3); }
+@media (max-width: 560px) {
+  .dialog-head, .dialog-foot { padding: var(--space-3) var(--space-4); }
+  .dialog-body { padding: var(--space-4); }
+  .account-dialog { max-height: 92vh; }
+}
 
 /* ---- breakpoints ----
    The rail needs room beside the content to be a rail; below that it becomes the jump
@@ -785,10 +1038,6 @@ details.reveal > .reveal-body { margin-top: var(--space-2); }
   .section-nav a.active,
   .section-nav a.quiet.active { box-shadow: none; }
   .section-nav a.quiet { margin-top: 0; margin-left: auto; }
-}
-
-@media (max-width: 900px) {
-  .security-grid { grid-template-columns: minmax(0, 1fr); gap: var(--space-5); }
 }
 
 @media (max-width: 760px) {

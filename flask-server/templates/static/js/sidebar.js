@@ -304,11 +304,9 @@
     if (!alert || !list) return;
     const missing = [];
     if (!status.amazon_connected) missing.push('Amazon / Alexa is not connected.');
-    if (!status.youtube_own_session) {
-      missing.push(status.youtube_server_fallback
-        ? 'YouTube Music is using the server session, not yours.'
-        : 'YouTube Music is not connected.');
-    }
+    // The server's own session is not this account being linked; it plays music
+    // but is not reported here as a connection.
+    if (!status.youtube_own_session) missing.push('YouTube Music is not connected.');
     if (status.youtube_cookies_source === 'none') {
       missing.push('No download cookies are saved.');
     }
@@ -334,8 +332,7 @@
       paint('status-yt-headers',
         status.youtube_browser_refreshing ? 'Refreshing'
           : status.youtube_browser_reconnect_required ? 'Needs attention'
-            : youtubeOwn ? 'Connected'
-              : status.youtube_server_fallback ? 'Server session' : 'Not connected',
+            : youtubeOwn ? 'Connected' : 'Not connected',
         youtubeOwn);
       renderAlerts(status);
     } catch (_) {

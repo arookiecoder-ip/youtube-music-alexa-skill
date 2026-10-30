@@ -90,7 +90,8 @@ test('URL cache evicts oldest entries at capacity',async()=>{
 test('bounds simultaneous distinct resolutions instead of unbounded queueing',async()=>{
  let release;const gate=new Promise(r=>release=r);
  const {resolve,request}=fixture({createClient:async()=>({session:{},getBasicInfo:async()=>{await gate;throw new Error('done');}})});
- const tasks=['aaaaaaaaaaa','bbbbbbbbbbb','ccccccccccc','ddddddddddd'].map(video_id=>resolve({...request,video_id}).catch(()=>{}));
+ const tasks=Array.from({length:8},(_,i)=>String(i).repeat(11))
+   .map(video_id=>resolve({...request,video_id}).catch(()=>{}));
  await new Promise(r=>setImmediate(r));
  await assert.rejects(resolve(request),/busy/);release();await Promise.all(tasks);
 });

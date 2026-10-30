@@ -207,13 +207,42 @@ class StepWiringTests(StepTests):
         self.assertEqual(payload['url'], 'accounts.google.com/x')
 
 
+@requires_sidecar('service.py')
+class GoogleSessionTests(unittest.TestCase):
+    class Jar:
+        def __init__(self, cookies):
+            self._cookies = list(cookies)
+
+        def cookies(self):
+            return self._cookies
+
+    def test_a_google_session_is_recognised_by_its_auth_cookies(self):
+        for name in ('SID', '__Secure-1PSID', 'SAPISID'):
+            with self.subTest(name=name):
+                self.assertTrue(svc._google_session_present(self.Jar([
+                    {'domain': '.google.com', 'name': name, 'value': 'v'}])))
+
+    def test_visitor_cookies_do_not_count_as_a_google_session(self):
+        self.assertFalse(svc._google_session_present(self.Jar([
+            {'domain': '.google.com', 'name': 'NID', 'value': 'v'},
+            {'domain': '.youtube.com', 'name': 'YSC', 'value': 'v'},
+            {'domain': '.youtube.com', 'name': 'VISITOR_INFO1_LIVE', 'value': 'v'}])))
+
+    def test_a_jar_that_cannot_be_read_is_not_a_session(self):
+        class Broken:
+            def cookies(self):
+                raise RuntimeError('closed')
+
+        self.assertFalse(svc._google_session_present(Broken()))
+
+
 class ReleaseTests(StepTests):
     def test_a_terminal_page_state_releases_the_browser_and_a_retryable_one_does_not(self):
-        terminal = (gs.UNSUPPORTED, gs.BLOCKED, gs.CAPTCHA, gs.LOCKED, gs.WRONG_PASSWORD,
+        terminal = (gs.UNSUPPORTED, gs.BLOCKED, gs.LOCKED, gs.WRONG_PASSWORD,
                     gs.UNKNOWN_ACCOUNT, gs.TIMEOUT)
         keepable = (gs.SIGNED_IN, gs.NEED_IDENTIFIER, gs.NEED_PASSWORD, gs.NEED_TOTP,
                     gs.NEED_BACKUP_CODE, gs.NEED_CHOICE, gs.CONSENT, gs.NEED_PROMPT,
-                    gs.NEED_PHONE, gs.NEED_PASSKEY)
+                    gs.NEED_PHONE, gs.NEED_PASSKEY, gs.CAPTCHA)
         for outcome in terminal + keepable:
             with self.subTest(outcome=outcome):
                 self.detached.clear()

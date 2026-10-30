@@ -7,12 +7,12 @@ from status_journal import Journal, JournalHandler
 from status_monitor import Metrics, CachedCollector, file_info, system_snapshot
 from playback_failover import PlaybackFailoverBudget
 from audio_jobs import AudioJobs
-from youtube_stream import YouTubeStream, StreamError
+from youtube_stream import Resolver, YouTubeStream, StreamError
 from playback_contract import restore_snapshot
 from player_state import (IDENTITY as _PLAYER_IDENTITY, PlayerStateRegistry as _PlayerStateRegistry,
                           PlayerStateView as _PlayerStateView, PlayerStateProxy as _PlayerStateProxy,
                           IdentityLock as _IdentityLock, spawn as _spawn_for_identity)
-import asyncio, collections, difflib, glob, hashlib, hmac, itertools, json, math, os, random, secrets, shutil, sys, threading, time, re, subprocess, logging, copy, uuid, tempfile, shlex
+import asyncio, base64, collections, difflib, glob, hashlib, hmac, itertools, json, math, os, random, secrets, shutil, sys, threading, time, re, subprocess, logging, copy, uuid, tempfile, shlex
 from datetime import timedelta, datetime
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
@@ -35,12 +35,11 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(me
 logger = logging.getLogger(__name__)
 
 class _YouTubeStreamPool:
-    """One YouTube resolver worker per identity.
+    """One relay facade per identity: its stream slots and current-track bytes.
 
-    A worker is bound to a single cookie jar and a single activated audio file,
-    and both are account-scoped. One shared worker would restart on every switch
-    between accounts -- and a stream URL signed with one account's cookies must
-    never be handed to another."""
+    The expensive resolver worker is shared per credential (see
+    ``_YouTubeResolverPool``); what stays account-scoped here is the playback
+    state -- the slot budget and the bytes already relayed to this account."""
     def __init__(self, factory, limit=4):
         self._factory = factory
         self._limit = max(1, int(limit))
@@ -59,7 +58,7 @@ class _YouTubeStreamPool:
                 try:
                     evicted.close()
                 except Exception:
-                    logger.debug('Evicted YouTube resolver did not close cleanly')
+                    logger.debug('Evicted YouTube relay did not close cleanly')
             return stream
 
     def every(self):
@@ -67,11 +66,13 @@ class _YouTubeStreamPool:
             return list(self._streams.values())
 
     def discard(self, identity):
-        """Close and drop one identity's resolver worker.
+        """Close and drop one identity's relay facade.
 
         Eviction alone never finishes a deletion: the pool holds at most a few
-        workers and a deleted account's could sit at the warm end indefinitely,
-        still resolving with a cookie jar the purge has already removed."""
+        facades and a deleted account's could sit at the warm end indefinitely.
+        The shared resolver worker is deliberately left running because other
+        accounts are playing through it; a worker built on this account's own
+        fallback jar is dropped separately by ``_discard_account_resolver``."""
         with self._lock:
             stream = self._streams.pop(identity, None)
         if stream is None:
@@ -79,7 +80,7 @@ class _YouTubeStreamPool:
         try:
             stream.close()
         except Exception:
-            logger.debug('Discarded YouTube resolver did not close cleanly')
+            logger.debug('Discarded YouTube relay did not close cleanly')
         return True
 
     @property
@@ -87,28 +88,89 @@ class _YouTubeStreamPool:
         return _YOUTUBE_STREAMING_ENABLED
 
     def snapshot(self):
-        """Aggregate view of every live worker, for the status page."""
-        streams, resolving, slots = [], 0, 0
+        """Aggregate view of every live relay, counting each resolver once."""
+        streams, resolving, slots, resolvers = [], 0, 0, set()
         for stream in self.every():
             data = stream.snapshot()
             streams.extend(data.get('streams') or [])
-            resolving += data.get('resolving', 0)
             slots = max(slots, data.get('stream_slots', 0))
+            resolver_id = data.get('resolver_id')
+            if resolver_id is not None and resolver_id not in resolvers:
+                resolvers.add(resolver_id)
+                resolving += data.get('resolving', 0)
         return {'active_streams': len(streams), 'stream_slots': slots,
-                'resolving': resolving, 'streams': streams, 'workers': len(self.every())}
+                'resolving': resolving, 'streams': streams, 'workers': len(resolvers)}
+
+
+class _YouTubeResolverPool:
+    """One resolver worker per download credential.
+
+    The worker owns the expensive part -- a persistent Node process, its
+    Innertube session and its resolved-URL cache -- and it depends only on the
+    cookie jar it signs with. Accounts that download with the same jar (normally
+    the server's) therefore share it: a cold song costs one request, not one
+    sign-in per account. A different jar still gets its own worker, because a
+    URL signed with one credential must never be handed to another.
+    """
+    def __init__(self, limit=4):
+        self._limit = max(1, int(limit))
+        self._resolvers = collections.OrderedDict()
+        self._lock = threading.Lock()
+
+    @staticmethod
+    def _key(cookie_file):
+        return os.path.abspath(cookie_file) if cookie_file else ''
+
+    def get(self, cookie_file):
+        key = self._key(cookie_file)
+        with self._lock:
+            resolver = self._resolvers.get(key)
+            if resolver is None:
+                path = cookie_file or None
+                resolver = self._resolvers[key] = Resolver(lambda: path)
+            self._resolvers.move_to_end(key)
+            while len(self._resolvers) > self._limit:
+                _, evicted = self._resolvers.popitem(last=False)
+                try:
+                    evicted.close()
+                except Exception:
+                    logger.debug('Evicted YouTube resolver did not close cleanly')
+            return resolver
+
+    def discard(self, cookie_file):
+        """Close the worker built on a jar nobody should use any more."""
+        key = self._key(cookie_file)
+        with self._lock:
+            resolver = self._resolvers.pop(key, None)
+        if resolver is None:
+            return False
+        try:
+            resolver.close()
+        except Exception:
+            logger.debug('Discarded YouTube resolver did not close cleanly')
+        return True
 
 
 _YOUTUBE_STREAMING_ENABLED = os.environ.get('YOUTUBE_STREAMING', '0').lower() in ('1', 'true', 'yes')
 
+_YOUTUBE_STREAM_LIMIT = os.environ.get('YOUTUBE_STREAM_WORKERS', '4')
+
+_youtube_resolvers = _YouTubeResolverPool(limit=_YOUTUBE_STREAM_LIMIT)
+
 _youtube_streams = _YouTubeStreamPool(
     lambda identity: YouTubeStream(
         lambda: Supporting.get_ytdlp_cookies_file(identity),
-        enabled=_YOUTUBE_STREAMING_ENABLED),
-    limit=os.environ.get('YOUTUBE_STREAM_WORKERS', '4'))
+        enabled=_YOUTUBE_STREAMING_ENABLED,
+        # Resolved per play, not captured: when the credential changes the next
+        # song uses the worker for the new jar, and the old worker stays warm for
+        # whoever is still on it until the LRU drops it.
+        resolver_for=lambda: _youtube_resolvers.get(
+            Supporting.get_ytdlp_cookies_file(identity))),
+    limit=_YOUTUBE_STREAM_LIMIT)
 
 
 def _youtube_stream_for(identity=None):
-    """The resolver worker belonging to this identity."""
+    """This identity's relay facade over its credential's shared resolver."""
     return _youtube_streams.get(identity)
 
 
@@ -984,6 +1046,9 @@ _SESSION_PATHS = ('/api/jam/session', '/audio', '/get_radio', '/status', '/api/s
                    '/api/youtube/browser-session/form/code',
                    '/api/youtube/browser-session/form/poll',
                    '/api/youtube/browser-session/form/stop',
+                   '/api/youtube/browser-session/form/methods',
+                   '/api/youtube/browser-session/form/method',
+                   '/api/youtube/browser-session/form/captcha',
 )
 _SESSION_PREFIXES = ('/accounts/', '/api/jam/', '/api/status/', '/alexa/now_playing/', '/history/', '/api/playlists/', '/recommendations/',
                     '/api/artist/', '/api/album/', '/api/library/', '/api/explore/', '/api/home/',
@@ -1838,11 +1903,23 @@ def _server_download_cookie_path():
 
 
 def _server_cookie_fallback():
-    """The server's jar, when an unlinked identity may borrow it. None otherwise."""
+    """The server's jar: the primary download credential for every other identity.
+
+    None when the server-session switch is off or the jar is missing/unusable, in
+    which case the caller may still have a jar of its own."""
     if not _server_session_enabled():
         return None
     path = _server_download_cookie_path()
     return path if download_cookies.is_usable(path) else None
+
+
+def _discard_account_resolver(identity):
+    """Close a resolver built on this account's own fallback jar.
+
+    The shared server jar's worker is deliberately untouched: every other account
+    plays through it, and stopping it would cold-start them all for one deletion.
+    A worker keyed by the account's private jar has no other user."""
+    _youtube_resolvers.discard(_download_cookie_path(identity))
 
 
 def _has_own_youtube_session(identity):
@@ -2313,6 +2390,7 @@ def _forget_player_identity(identity):
     # would re-create the entry it is meant to clear and fire a network close.
     _youtube_browser_sessions.forget(identity)
     _youtube_streams.discard(identity)
+    _discard_account_resolver(identity)
     _invalidate_youtube_auth_caches(identity)
     with _YT_HOME_CACHE_LOCK:
         _YT_HOME_CACHE_MTIME.pop(identity, None)
@@ -2382,6 +2460,7 @@ def _forget_account_artifacts(user_id, scopes=('all',)):
         # The live session and the Home cache are per identity; leaving them behind
         # would let the next request keep browsing with a credential we just deleted.
         _youtube_streams.discard(identity)
+        _discard_account_resolver(identity)
         _invalidate_youtube_auth_caches(identity)
         with _YT_HOME_CACHE_LOCK:
             _YT_HOME_CACHE_MTIME.pop(identity, None)
@@ -4329,9 +4408,10 @@ def _prewarm_queue_audio(queue, current_index=0, limit=4):
 def _audio_job_key(video_id):
     """Pool key for preparing one video's stream URL.
 
-    Identity is part of it: the resolved URL is signed with that account's own
-    cookies, so coalescing two accounts onto one job would hand the second caller
-    a link it cannot use -- or one it should not have."""
+    Identity stays in the key: an account on its own fallback jar signs a URL
+    nobody else can use, and the pool attributes work to the account that asked
+    for it. Accounts on the shared server jar still pay only a cache hit on the
+    resolver for a duplicate."""
     return (_current_identity(), video_id)
 
 
@@ -4775,20 +4855,24 @@ class Supporting:
 
     @staticmethod
     def get_ytdlp_cookies_file(identity=None):
-        """Return the cookie jar this identity should download with, if any has one.
+        """The download credential for every identity: the shared server jar first.
 
-        The candidate list (env paths, cookies.txt beside the app) is the owner's
-        legacy install. An account prefers its own jar; when it has none, the
-        deployment's server jar stands in -- the same exception `_yt_auth_file`
-        makes, so a player's library and their downloads agree about whose account
-        is being used."""
+        One jar for all accounts means one credential generation instead of a
+        per-account session/handshake. An account's own jar is only a fallback
+        when the server jar is missing or unusable (or the server fallback is
+        switched off). The owner's legacy candidates stay behind that same
+        fallback so an existing install keeps working without a server login."""
         identity = identity or _current_identity()
+        if identity == _SERVER_IDENTITY:
+            path = _server_download_cookie_path()
+            return path if download_cookies.is_usable(path) else None
+        server = _server_cookie_fallback()
+        if server:
+            return server
         user_id = account_user_id(identity)
         if user_id:
             path = _download_cookie_path(identity)
-            if download_cookies.is_usable(path):
-                return path
-            return _server_cookie_fallback()
+            return path if download_cookies.is_usable(path) else None
         configured = (os.environ.get("YTDLP_COOKIES_FILE")
                       or os.environ.get("YTDLP_COOKIES"))
         server_dir = os.path.dirname(os.path.abspath(__file__))
@@ -4802,10 +4886,9 @@ class Supporting:
         # `os.path.isfile` is not enough: the compose bind mount guarantees an
         # empty cookies.txt, and picking it made every anonymous-looking resolve
         # shadow the refreshed server jar.
-        found = next(
+        return next(
             (path for path in candidates if download_cookies.is_usable(path)), None
         )
-        return found or _server_cookie_fallback()
 
     @staticmethod
     def add_ytdlp_cookies(command):
@@ -7332,7 +7415,7 @@ def alexa_proxy_login():
     email = str(body.get("email") or "").strip()
     password = str(body.get("password") or "")
     if not email or not password:
-        return error_response('Enter your Amazon email and password.', 400)
+        return error_response('Enter your Amazon email or mobile number and password.', 400)
     proxy_base_url = None
     # Direct local development exposes AlexaProxy itself on 127.0.0.1:5001.
     # In Docker Compose that port is private and Caddy publishes the proxy at
@@ -7386,7 +7469,7 @@ def alexa_form_login():
     email = str(body.get("email") or "").strip()
     password = str(body.get("password") or "")
     if not email or not password:
-        return error_response("Enter your Amazon email and password.", 400)
+        return error_response("Enter your Amazon email or mobile number and password.", 400)
     return jsonify(alexa_remote.remote.form_login(email, password))
 
 
@@ -7477,14 +7560,17 @@ def profile_status():
     headers_debug = f"auth_type={auth_type_str}"
 
     cookies_file = Supporting.get_ytdlp_cookies_file(identity)
-    # The effective jar can be the server's stand-in. Say which one it is:
-    # otherwise an account with nothing linked reads "Download cookies saved"
-    # because a fallback path exists.
-    account_id = account_user_id(identity)
-    own_cookie_path = _download_cookie_path(identity) if account_id else cookies_file
+    # The effective jar is normally the shared server jar; an account's own jar
+    # is only the fallback. Report which file is actually in use rather than
+    # inferring it from which files exist.
+    own_cookie_path = _download_cookie_path(identity)
     own_cookies = download_cookies.is_usable(own_cookie_path)
-    cookies_source = ('account' if own_cookies else
-                      'server' if download_cookies.is_usable(cookies_file) else 'none')
+    if not cookies_file:
+        cookies_source = 'none'
+    elif os.path.abspath(cookies_file) == os.path.abspath(_server_download_cookie_path()):
+        cookies_source = 'server'
+    else:
+        cookies_source = 'account'
     if request.args.get('audio_check') == '0':
         # Native startup only needs account linkage. Download probes are an
         # explicit profile action and can take up to 50 seconds.
@@ -7769,8 +7855,53 @@ def _youtube_form_stop(profile, identity):
     _youtube_form_sidecar('/google/stop', {'profile': profile})
 
 
-def _youtube_form_map(owner, profile, outcome, detail):
+# The only ways this popup offers to verify.  Google's chooser can also list a
+# passkey or a recovery email; neither can be finished by typing an answer here,
+# so they are deliberately absent.
+_YOUTUBE_VERIFY_METHODS = (
+    {'value': 'totp', 'label': 'Authenticator code'},
+    {'value': 'phone', 'label': 'Text message code'},
+    {'value': 'backup', 'label': 'Backup code'},
+)
+_YOUTUBE_METHOD_VALUES = {method['value'] for method in _YOUTUBE_VERIFY_METHODS}
+
+
+def _method_state(message):
+    return {'state': 'need_method', 'message': message,
+            'options': [dict(method) for method in _YOUTUBE_VERIFY_METHODS]}
+
+
+def _masked_phone(value):
+    """The sidecar's masked number, re-masked here so only four digits survive.
+
+    Two digits are enough when Google itself only prints the tail ("a code at
+    •••50"); showing that tail is what lets the person tell which phone rang.
+    """
+    digits = re.sub(r'\D', '', str(value or ''))
+    return f'•••• {digits[-4:]}' if len(digits) >= 2 else ''
+
+
+def _captcha_state(answer):
+    answer = answer or {}
+    # A step answer nests the picture's shape under ``captcha``; the capture
+    # answer carries the same keys at the top because the picture is the answer.
+    meta = answer.get('captcha')
+    if not isinstance(meta, dict):
+        meta = answer
+    typed = bool(meta.get('text'))
+    message = ('Google wants a security check. Type the characters you see.'
+               if typed else
+               'Google wants a security check. Tap every picture that matches the '
+               'prompt, then choose Verify.')
+    return {'state': 'need_captcha', 'message': message, 'text': typed,
+            'hint': str(meta.get('hint') or '')[:160]}
+
+
+def _youtube_form_map(owner, profile, answer):
     """One sidecar verdict, as the sign-in form's next state."""
+    answer = answer or {}
+    outcome = answer.get('outcome') or 'unsupported'
+    detail = (answer.get('detail') or '').strip()
     if outcome == 'signed_in':
         _google_form_renew(owner)
         return _youtube_form_capture(owner, profile)
@@ -7778,43 +7909,71 @@ def _youtube_form_map(owner, profile, outcome, detail):
         _google_form_renew(owner)
         return {'state': 'need_code',
                 'kind': 'backup' if outcome == 'need_backup_code' else 'totp',
+                'different': True,
                 'message': ('That code was not accepted. Check it and try again.'
                             if outcome == 'bad_code' else
                             'Enter one of your backup codes.' if outcome == 'need_backup_code'
                             else 'Enter the code from your authenticator app.')}
+    if outcome == 'need_phone':
+        _google_form_renew(owner)
+        phone = _masked_phone(answer.get('phone'))
+        return {'state': 'need_code', 'kind': 'phone', 'different': True,
+                'message': (f'Google sent a code to the number ending {phone.split()[-1]}. '
+                            'Enter it below.' if phone else
+                            'Google sent a code to your phone. Enter it below.')}
+    if outcome == 'need_choice':
+        _google_form_renew(owner)
+        return _method_state('Choose how to verify it is you.')
+    if outcome == 'method_unavailable':
+        _google_form_renew(owner)
+        return _method_state('That way did not work for this account. '
+                             'Choose another.')
+    if outcome == 'need_passkey':
+        _google_form_renew(owner)
+        return _method_state('Google asked for a passkey, which this sign-in cannot '
+                             'answer. Choose a different way to verify.')
     if outcome == 'need_prompt':
         # The browser stays on the waiting page; approving on the phone
         # navigates it, which the poll endpoint then reads.
         _google_form_renew(owner)
-        return {'state': 'need_prompt',
-                'message': detail or 'Google is waiting for you to approve this '
-                                     'sign-in on your phone.'}
+        prompt = str(answer.get('prompt') or '').strip()
+        devices = str(answer.get('devices') or '').strip()[:160]
+        message = (f'Google sent a notification to {devices}. Confirm it there, '
+                   'then continue.' if devices else
+                   'Google is waiting for you to confirm this sign-in on your phone '
+                   'or tablet.')
+        if prompt:
+            message += f' Tap {prompt} there so the numbers match.'
+        return {'state': 'need_prompt', 'different': True, 'message': message}
+    if outcome == 'captcha':
+        _google_form_renew(owner)
+        return _captcha_state(answer)
     if outcome == 'browser_in_use':
         _google_form_release(owner)
         return {'state': 'busy', 'message': _YOUTUBE_FORM_BUSY}
     _youtube_form_stop(profile, owner)
-    message = detail or youtube_auto_login.describe_outcome(outcome)
-    return {'state': 'error', 'message': message}
+    logger.info('YouTube form sign-in stopped at %s: %s', outcome, detail)
+    return {'state': 'error', 'message': youtube_auto_login.describe_outcome(outcome)}
 
 
-def _youtube_form_follow(owner, profile, outcome, detail, steps, auto=3):
+def _youtube_form_follow(owner, profile, answer, steps, auto=2):
     """Answer the pages the server can answer itself, then report the first
     one only a person can.
 
     ``steps`` is the ordered list of scripted answers this request carries
     (start carries the address and the password; later steps carry none).
-    ``auto`` bounds the choice/consent hops, which are always ours to click."""
+    ``auto`` bounds the consent hops, which are always ours to click.  The
+    verification chooser is deliberately *not* hopped: which way to prove the
+    account is the person's decision, not the sequence's."""
     while True:
-        if outcome in ('need_choice', 'consent') and auto > 0:
+        outcome = (answer or {}).get('outcome') or 'unsupported'
+        if outcome == 'consent' and auto > 0:
             auto -= 1
-            answer = _youtube_form_sidecar(
-                '/google/choice' if outcome == 'need_choice' else '/google/consent',
-                {'profile': profile})
+            answer = _youtube_form_sidecar('/google/consent', {'profile': profile})
             if answer is None:
                 _youtube_form_stop(profile, owner)
-                return {'state': 'error', 'message': 'The sign-in browser is unavailable. Try again.'}
-            outcome = answer.get('outcome') or 'unsupported'
-            detail = answer.get('detail') or ''
+                return {'state': 'error',
+                        'message': 'The automatic sign-in stopped responding. Try again in a moment.'}
             continue
         matched = next((index for index, step in enumerate(steps)
                         if step['expect'] == outcome), None)
@@ -7824,25 +7983,48 @@ def _youtube_form_follow(owner, profile, outcome, detail, steps, auto=3):
         answer = _youtube_form_sidecar(step['path'], dict(step['payload'], profile=profile))
         if answer is None:
             _youtube_form_stop(profile, owner)
-            return {'state': 'error', 'message': 'The sign-in browser is unavailable. Try again.'}
-        outcome = answer.get('outcome') or 'unsupported'
-        detail = answer.get('detail') or ''
-    return _youtube_form_map(owner, profile, outcome, detail)
+            return {'state': 'error',
+                    'message': 'The automatic sign-in stopped responding. Try again in a moment.'}
+    return _youtube_form_map(owner, profile, answer)
+
+
+_CAPTURE_FAILURES = {
+    'signed_out': 'The sign-in finished, but YouTube Music stayed signed out. '
+                  'Try again.',
+    'timeout': 'The sign-in finished, but YouTube Music did not finish loading. '
+               'Try again.',
+    'not_signed_in': 'The sign-in browser closed before the session could be saved. '
+                     'Try again.',
+    'cancelled': 'The sign-in was cancelled before the session could be saved.',
+}
 
 
 def _youtube_form_capture(owner, profile):
     """Turn the signed-in browser into this identity's saved session."""
-    answer = _youtube_form_sidecar('/google/capture', {'profile': profile})
-    if not answer or answer.get('outcome') != 'captured':
+    answer = _youtube_form_sidecar('/google/capture', {'profile': profile}) or {}
+    if answer.get('outcome') != 'captured':
+        outcome = answer.get('outcome') or 'timeout'
+        if outcome == 'captcha':
+            # The browser is still on the check, so the person can clear it and
+            # the capture can be tried again without repeating the password.
+            _google_form_renew(owner)
+            return _captcha_state(answer)
         _youtube_form_stop(profile, owner)
+        logger.warning('YouTube form sign-in could not be saved: %s at %s (%s)',
+                       outcome, answer.get('url') or '', answer.get('detail') or '')
         return {'state': 'error',
-                'message': 'Signed in, but the YouTube Music session could not be saved. Try again.'}
+                'message': _CAPTURE_FAILURES.get(
+                    outcome,
+                    'Signed in, but the YouTube Music session could not be saved. '
+                    'Try again.')}
     try:
         _promote_youtube_browser_headers(answer.get('headers'), owner)
     except Exception as exc:
-        logger.warning('YouTube form sign-in could not be saved: %s', exc)
+        logger.warning('YouTube form sign-in could not be saved: %s', exc, exc_info=True)
         _youtube_form_stop(profile, owner)
-        return {'state': 'error', 'message': str(exc) or 'YouTube Music is still signed out.'}
+        return {'state': 'error',
+                'message': 'Signed in, but the YouTube Music session could not be saved. '
+                           'Try again.'}
     cookies = answer.get('cookies') or ''
     if cookies:
         try:
@@ -7887,16 +8069,15 @@ def youtube_form_signin_start():
     answer = _youtube_form_sidecar('/google/start', {'profile': profile, 'email': email})
     if answer is None:
         _google_form_release(owner)
-        return error_response('The sign-in browser is unavailable. Try again.', 503)
+        return error_response(
+            'The automatic sign-in could not start. Try again in a moment.', 503)
     steps = [
         {'expect': 'need_identifier', 'path': '/google/identifier',
          'payload': {'email': email}},
         {'expect': 'need_password', 'path': '/google/password',
          'payload': {'password': password}},
     ]
-    return jsonify(_youtube_form_follow(
-        owner, profile, answer.get('outcome') or 'unsupported',
-        answer.get('detail') or '', steps))
+    return jsonify(_youtube_form_follow(owner, profile, answer, steps))
 
 
 @app.post('/api/youtube/browser-session/form/code')
@@ -7914,10 +8095,107 @@ def youtube_form_signin_code():
     answer = _youtube_form_sidecar('/google/code', {'profile': profile, 'code': code})
     if answer is None:
         _youtube_form_stop(profile, owner)
-        return error_response('The sign-in browser is unavailable. Try again.', 503)
-    return jsonify(_youtube_form_follow(
-        owner, profile, answer.get('outcome') or 'unsupported',
-        answer.get('detail') or '', []))
+        return error_response(
+            'The automatic sign-in stopped responding. Try again in a moment.', 503)
+    return jsonify(_youtube_form_follow(owner, profile, answer, []))
+
+
+@app.post('/api/youtube/browser-session/form/methods')
+def youtube_form_signin_methods():
+    """Open the full chooser, then let the person pick one of the three ways."""
+    if not _logged_in():
+        return error_response('Sign in to continue.', 401)
+    owner = _browser_owner_id()
+    if not _google_form_held_by(owner):
+        return jsonify({'state': 'error', 'message': 'This sign-in has ended. Start again.'}), 409
+    profile = _browser_profile_key()
+    answer = _youtube_form_sidecar('/google/methods', {'profile': profile})
+    if answer is None:
+        _youtube_form_stop(profile, owner)
+        return error_response(
+            'The automatic sign-in stopped responding. Try again in a moment.', 503)
+    return jsonify(_youtube_form_follow(owner, profile, answer, []))
+
+
+@app.post('/api/youtube/browser-session/form/method')
+def youtube_form_signin_method():
+    if not _logged_in():
+        return error_response('Sign in to continue.', 401)
+    body = request.get_json(silent=True) or {}
+    method = str(body.get('method') or '').strip()
+    if method not in _YOUTUBE_METHOD_VALUES:
+        return error_response('Choose one of the verification methods.', 400)
+    owner = _browser_owner_id()
+    if not _google_form_held_by(owner):
+        return jsonify({'state': 'error', 'message': 'This sign-in has ended. Start again.'}), 409
+    profile = _browser_profile_key()
+    answer = _youtube_form_sidecar(
+        '/google/method', {'profile': profile, 'method': method})
+    if answer is None:
+        _youtube_form_stop(profile, owner)
+        return error_response(
+            'The automatic sign-in stopped responding. Try again in a moment.', 503)
+    return jsonify(_youtube_form_follow(owner, profile, answer, []))
+
+
+@app.get('/api/youtube/browser-session/form/captcha')
+def youtube_form_captcha():
+    """The security-check picture for this identity's sign-in, same-origin.
+
+    Served as a picture rather than JSON so the page's strict ``img-src 'self'``
+    policy keeps working and the capture never has to travel inside an answer.
+    """
+    if not _logged_in():
+        return error_response('Sign in to continue.', 401)
+    owner = _browser_owner_id()
+    if not _google_form_held_by(owner):
+        return error_response('This sign-in has ended. Start again.', 409)
+    answer = _youtube_form_sidecar(
+        '/google/captcha?profile=' + quote(_browser_profile_key()), None, method='GET')
+    image = (answer or {}).get('image') or ''
+    if not image:
+        return error_response('No security check is waiting.', 404)
+    try:
+        picture = base64.b64decode(image, validate=True)
+    except (ValueError, TypeError):
+        return error_response('The security check could not be shown.', 503)
+    return _no_store(Response(picture, content_type='image/jpeg',
+                              headers={'Cache-Control': 'no-store'}))
+
+
+@app.post('/api/youtube/browser-session/form/captcha')
+def youtube_form_captcha_answer():
+    if not _logged_in():
+        return error_response('Sign in to continue.', 401)
+    body = request.get_json(silent=True) or {}
+    text = str(body.get('text') or '').strip()
+    points = body.get('points') or []
+    if text and len(text) > 120:
+        return error_response('That answer is too long.', 400)
+    if text and points:
+        return error_response('Answer the security check one way only.', 400)
+    if points:
+        if not isinstance(points, list) or not 1 <= len(points) <= 20:
+            return error_response('Choose the pictures the check asks for.', 400)
+        for point in points:
+            if (not isinstance(point, list) or len(point) != 2
+                    or not all(isinstance(value, (int, float))
+                               and not isinstance(value, bool) and 0 <= value <= 1
+                               for value in point)):
+                return error_response('Choose the pictures the check asks for.', 400)
+    if not text and not points:
+        return error_response('Answer the security check.', 400)
+    owner = _browser_owner_id()
+    if not _google_form_held_by(owner):
+        return jsonify({'state': 'error', 'message': 'This sign-in has ended. Start again.'}), 409
+    profile = _browser_profile_key()
+    answer = _youtube_form_sidecar(
+        '/google/captcha', {'profile': profile, 'text': text, 'points': points})
+    if answer is None:
+        _youtube_form_stop(profile, owner)
+        return error_response(
+            'The automatic sign-in stopped responding. Try again in a moment.', 503)
+    return jsonify(_youtube_form_follow(owner, profile, answer, []))
 
 
 @app.post('/api/youtube/browser-session/form/poll')
@@ -7932,12 +8210,12 @@ def youtube_form_signin_poll():
     answer = _youtube_form_sidecar('/google/state', None, method='GET')
     if answer is None:
         _youtube_form_stop(profile, owner)
-        return error_response('The sign-in browser is unavailable. Try again.', 503)
-    outcome = answer.get('outcome') or 'idle'
-    if outcome == 'idle':
+        return error_response(
+            'The automatic sign-in stopped responding. Try again in a moment.', 503)
+    if (answer.get('outcome') or 'idle') == 'idle':
         _youtube_form_stop(profile, owner)
         return jsonify({'state': 'error', 'message': 'This sign-in has ended. Start again.'})
-    return jsonify(_youtube_form_follow(owner, profile, outcome, '', []))
+    return jsonify(_youtube_form_follow(owner, profile, answer, []))
 
 
 @app.post('/api/youtube/browser-session/form/stop')

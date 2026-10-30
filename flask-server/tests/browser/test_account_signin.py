@@ -65,7 +65,7 @@ def test_amazon_signin_walks_the_form_and_finishes(account_page,width):
     ])
     page.set_viewport_size({'width':width,'height':844});page.goto(origin+'/accounts/amazon')
     expect(page.get_by_role('heading',name='Amazon',exact=True)).to_be_visible()
-    page.get_by_label('Amazon email').fill('owner@example.test');page.get_by_label('Password',exact=True).fill('test-password')
+    page.get_by_label('Amazon email or mobile number').fill('owner@example.test');page.get_by_label('Password',exact=True).fill('test-password')
     page.get_by_role('button',name='Continue',exact=True).click()
     expect(page.locator('#code-panel')).to_be_visible()
     expect(page.locator('#password')).to_have_value('')
@@ -79,18 +79,39 @@ def test_amazon_signin_walks_the_form_and_finishes(account_page,width):
     assert ('/alexa/form_login/step/',{'kind':'captcha','value':'KL4W9'}) in calls
     assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
 
+def test_amazon_mobile_number_signin_shows_the_one_time_password_step(account_page):
+    page,origin,calls,queue=account_page
+    queue.extend([
+        {'state':'need_code','answer':'verificationcode','label':'One-time password',
+         'hint':'Amazon sent it to the phone number or email on your account.',
+         'message':'Enter the one-time password Amazon sent you.'},
+        {'state':'connected'},
+    ])
+    page.goto(origin+'/accounts/amazon')
+    field=page.get_by_label('Amazon email or mobile number')
+    assert field.get_attribute('type')=='text'
+    field.fill('+91 90000 00000');page.get_by_label('Password',exact=True).fill('pw')
+    page.get_by_role('button',name='Continue',exact=True).click()
+    expect(page.locator('#code-panel')).to_be_visible()
+    expect(page.get_by_label('One-time password')).to_be_visible()
+    expect(page.locator('#code-hint')).to_contain_text('phone number or email')
+    page.get_by_label('One-time password').fill('482913');page.locator('#code-submit').click()
+    expect(page).to_have_url(origin+'/account?connected=amazon#panel-providers')
+    assert calls[0]==('/alexa/form_login/',{'email':'+91 90000 00000','password':'pw'})
+    assert ('/alexa/form_login/step/',{'kind':'verificationcode','value':'482913'}) in calls
+
 def test_amazon_error_returns_to_the_form_and_can_restart(account_page):
     page,origin,calls,queue=account_page
     queue.append({'state':'error','message':'The email or password was wrong.'})
     page.goto(origin+'/accounts/amazon')
-    page.get_by_label('Amazon email').fill('owner@example.test');page.get_by_label('Password',exact=True).fill('nope')
+    page.get_by_label('Amazon email or mobile number').fill('owner@example.test');page.get_by_label('Password',exact=True).fill('nope')
     page.get_by_role('button',name='Continue',exact=True).click()
     expect(page.locator('#status')).to_have_class('error')
     expect(page.locator('#status')).to_contain_text('email or password was wrong')
     expect(page.locator('#setup')).to_be_visible()
     page.get_by_role('button',name='Start over').click()
     expect(page.locator('#status')).to_contain_text('Start again when you are ready.')
-    page.get_by_label('Amazon email').fill('owner@example.test');page.get_by_label('Password',exact=True).fill('right')
+    page.get_by_label('Amazon email or mobile number').fill('owner@example.test');page.get_by_label('Password',exact=True).fill('right')
     page.get_by_role('button',name='Continue',exact=True).click()
     expect(page).to_have_url(origin+'/account?connected=amazon#panel-providers')
 
@@ -102,7 +123,7 @@ def test_amazon_choice_options_render_and_submit(account_page):
         {'state':'connected'},
     ])
     page.goto(origin+'/accounts/amazon')
-    page.get_by_label('Amazon email').fill('owner@example.test');page.get_by_label('Password',exact=True).fill('pw')
+    page.get_by_label('Amazon email or mobile number').fill('owner@example.test');page.get_by_label('Password',exact=True).fill('pw')
     page.get_by_role('button',name='Continue',exact=True).click()
     expect(page.locator('#choice-panel')).to_be_visible()
     expect(page.get_by_text('Send code to +91 90000 00000')).to_be_visible()
@@ -117,7 +138,7 @@ def test_amazon_approval_polls_until_connected(account_page):
         {'state':'connected'},
     ])
     page.goto(origin+'/accounts/amazon')
-    page.get_by_label('Amazon email').fill('owner@example.test');page.get_by_label('Password',exact=True).fill('pw')
+    page.get_by_label('Amazon email or mobile number').fill('owner@example.test');page.get_by_label('Password',exact=True).fill('pw')
     page.get_by_role('button',name='Continue',exact=True).click()
     expect(page.locator('#approval-panel')).to_be_visible()
     expect(page.locator('#status')).to_contain_text('Waiting for the approval')

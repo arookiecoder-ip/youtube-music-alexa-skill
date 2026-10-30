@@ -34,6 +34,7 @@ CODE_RE = re.compile(r"Your code is (\d{6})")
 CODE_HEADINGS = {
     "verify": "Verify your email address",
     "reset": "Reset your Music Box password",
+    "reauth": "Confirm a security change",
 }
 
 PASSWORD = "Player!Passw0rd"
@@ -511,6 +512,76 @@ class AccountPageTests(SelfServiceTestBase):
         self.assertEqual(response.status_code, 422)
         self.assertIn("password", response.get_json()["error"]["fields"])
 
+    def test_the_popup_reset_takes_a_mailed_code_and_keeps_this_browser(self):
+        other = self.accounts.create_session(self.user, ip="127.0.0.1", user_agent="other")
+        self.sign_in(self.user)
+        sent = self.client.post("/api/account/password/reset/send", json={},
+                                headers=self.json_headers())
+        self.assertEqual(sent.status_code, 200, sent.get_data(as_text=True)[:300])
+        self.assertIn("@", sent.get_json()["sent_to"], "the answer masks the address")
+        code = self.newest_code("reset")
+
+        wrong = self.client.post("/api/account/password/reset", json={
+            "code": "000000", "password": NEW_PASSWORD,
+            "confirm_password": NEW_PASSWORD, "sign_out_others": False},
+            headers=self.json_headers())
+        self.assertEqual(wrong.status_code, 410)
+        self.assertIsNotNone(self.accounts.authenticate(
+            "player1", PASSWORD, "127.0.0.1", "pytest")[0], "a bad code changes nothing")
+
+        done = self.client.post("/api/account/password/reset", json={
+            "code": code, "password": NEW_PASSWORD, "confirm_password": NEW_PASSWORD,
+            "sign_out_others": False}, headers=self.json_headers())
+        self.assertEqual(done.status_code, 200, done.get_data(as_text=True)[:300])
+        self.assertIsNotNone(self.accounts.authenticate(
+            "player1", NEW_PASSWORD, "127.0.0.1", "pytest")[0])
+        # Unticked: the person asked to keep their other devices signed in, and the
+        # reset still proves the mailbox, which is all a reset ever asked for.
+        self.assertIsNotNone(self.accounts.validate_session(other)[0])
+        self.assertEqual(self.client.get("/api/account").status_code, 200)
+
+    def test_the_popup_reset_signs_out_other_devices_unless_told_not_to(self):
+        other = self.accounts.create_session(self.user, ip="127.0.0.1", user_agent="other")
+        raw = self.sign_in(self.user)
+        self.client.post("/api/account/password/reset/send", json={}, headers=self.json_headers())
+        done = self.client.post("/api/account/password/reset", json={
+            "code": self.newest_code("reset"), "password": NEW_PASSWORD,
+            "confirm_password": NEW_PASSWORD}, headers=self.json_headers())
+        self.assertEqual(done.status_code, 200, done.get_data(as_text=True)[:300])
+        self.assertIn("Every other device", done.get_json()["message"])
+        self.assertIsNone(self.accounts.validate_session(other)[0])
+        self.assertIsNotNone(self.accounts.validate_session(raw)[0])
+        self.assertEqual(self.client.get("/api/account").status_code, 200)
+
+    def test_email_change_needs_the_code_from_the_address_it_moves_away_from(self):
+        self.sign_in(self.user)
+        sent = self.client.post("/api/account/email/reauth", json={},
+                                headers=self.json_headers())
+        self.assertEqual(sent.status_code, 200, sent.get_data(as_text=True)[:300])
+        code = self.newest_code("reauth")
+
+        missing = self.client.post("/api/account/email/change", json={
+            "email": "moved@example.test", "current_password": PASSWORD},
+            headers=self.json_headers())
+        self.assertEqual(missing.status_code, 422)
+        self.assertIn("email_code", missing.get_json()["error"]["fields"])
+        stale = self.client.post("/api/account/email/change", json={
+            "email": "moved@example.test", "current_password": PASSWORD,
+            "email_code": "000000"}, headers=self.json_headers())
+        self.assertEqual(stale.status_code, 410)
+        self.assertEqual(self.user_row("player1")["email"], self.user["email"])
+
+        done = self.client.post("/api/account/email/change", json={
+            "email": "moved@example.test", "current_password": PASSWORD,
+            "email_code": code}, headers=self.json_headers())
+        self.assertEqual(done.status_code, 200, done.get_data(as_text=True)[:300])
+        body = done.get_json()
+        self.assertTrue(body["email_changed"])
+        self.assertTrue(body["verification_pending"])
+        row = self.user_row("player1")
+        self.assertEqual(row["email"], "moved@example.test")
+        self.assertEqual(int(row["email_verified"]), 0, "a new address starts unconfirmed")
+
     def test_signing_out_everywhere_kills_this_browser_too(self):
         self.accounts.create_session(self.user, ip="127.0.0.1", user_agent="other")
         self.sign_in(self.user)
@@ -543,13 +614,14 @@ class AccountPageTests(SelfServiceTestBase):
         self.assertEqual([row["current"] for row in payload["sessions"]], [True])
 
     def test_the_page_is_complete_before_any_script_runs(self):
-        # The five sections, their headings and this account's details are in the
+        # The four sections, the three popups and this account's details are in the
         # HTML the server sends. account.js only refreshes them after an action, so
         # a slowed or blocked script never leaves a page of empty shells.
         self.sign_in(self.user)
         page = self.client.get("/account").get_data(as_text=True)
-        for heading in ("Sign-in details", "Sign-in &amp; security", "Linked services",
-                        "Devices", "Delete this account"):
+        for heading in ("Sign-in details", "Linked services", "Devices",
+                        "Delete this account", "Change password", "Reset password",
+                        "Change email address", "Two-factor sign-in"):
             self.assertIn(heading, page)
         self.assertIn("@player1", page)
         self.assertIn(self.user["email"], page)
@@ -721,31 +793,66 @@ class TwoFactorTests(SelfServiceTestBase):
         self.assertFalse(payload["totp_pending"])
         self.assertEqual(self.client.get("/api/account/totp/qr").status_code, 409)
 
-    def test_disabling_needs_both_the_password_and_a_live_code(self):
+    def _turn_two_factor_on(self):
         secret = self.client.post("/api/account/totp/begin", json={"current_password": PASSWORD},
                                   headers=self.json_headers()).get_json()["secret"]
-        self.client.post("/api/account/totp/confirm",
-                         json={"code": totp_at(secret, int(time.time()) // 30)},
-                         headers=self.json_headers())
+        confirmed = self.client.post("/api/account/totp/confirm",
+                                     json={"code": totp_at(secret, int(time.time()) // 30)},
+                                     headers=self.json_headers())
+        self.assertEqual(confirmed.status_code, 200, confirmed.get_data(as_text=True)[:300])
+        return secret
 
-        no_password = self.client.post("/api/account/totp/disable",
-                                       json={"current_password": "wrong",
-                                             "code": totp_at(secret, int(time.time()) // 30)},
-                                       headers=self.json_headers())
-        self.assertEqual(no_password.status_code, 403)
+    def test_enrollment_can_also_prove_the_mailbox_with_a_code(self):
+        sent = self.client.post("/api/account/email/reauth", json={},
+                                headers=self.json_headers())
+        self.assertEqual(sent.status_code, 200, sent.get_data(as_text=True)[:300])
+        bad = self.client.post("/api/account/totp/begin", json={
+            "current_password": PASSWORD, "email_code": "000000"},
+            headers=self.json_headers())
+        self.assertEqual(bad.status_code, 410)
+        self.assertIn("email_code", bad.get_json()["error"]["fields"])
+        self.assertFalse(self.client.get("/api/account").get_json()["totp_pending"])
+
+        good = self.client.post("/api/account/totp/begin", json={
+            "current_password": PASSWORD, "email_code": self.newest_code("reauth")},
+            headers=self.json_headers())
+        self.assertEqual(good.status_code, 200, good.get_data(as_text=True)[:300])
+        self.assertTrue(good.get_json()["secret"])
+        self.assertTrue(self.client.get("/api/account").get_json()["totp_pending"])
+
+    def test_turning_two_factor_off_needs_the_password_but_not_the_phone(self):
+        self._turn_two_factor_on()
+
+        wrong = self.client.post("/api/account/totp/disable",
+                                 json={"current_password": "wrong"}, headers=self.json_headers())
+        self.assertEqual(wrong.status_code, 403)
         self.assertTrue(self.client.get("/api/account").get_json()["totp_enabled"])
 
-        no_code = self.client.post("/api/account/totp/disable",
-                                   json={"current_password": PASSWORD, "code": "000000"},
-                                   headers=self.json_headers())
-        # One answer for a bad password and a bad code: the factor is off either
-        # way and the caller learns nothing about which half it got wrong.
-        self.assertEqual(no_code.status_code, 403)
+        # The code the phone generates is deliberately not asked for: the phone is the
+        # one thing a person reliably loses, and a factor that cannot be removed is a
+        # lock-out. The owner is told instead of being stopped.
+        off = self.client.post("/api/account/totp/disable",
+                               json={"current_password": PASSWORD}, headers=self.json_headers())
+        self.assertEqual(off.status_code, 200, off.get_data(as_text=True)[:300])
+        self.assertFalse(self.client.get("/api/account").get_json()["totp_enabled"])
+        self.assertTrue(any("two-factor sign-in was turned off" in body.lower()
+                            for body in self._outbox_bodies()), "the owner is told")
+
+    def test_turning_two_factor_off_accepts_an_emailed_code_too(self):
+        self._turn_two_factor_on()
+        sent = self.client.post("/api/account/email/reauth", json={},
+                                headers=self.json_headers())
+        self.assertEqual(sent.status_code, 200, sent.get_data(as_text=True)[:300])
+
+        bad = self.client.post("/api/account/totp/disable",
+                               json={"current_password": PASSWORD, "email_code": "000000"},
+                               headers=self.json_headers())
+        self.assertEqual(bad.status_code, 410)
         self.assertTrue(self.client.get("/api/account").get_json()["totp_enabled"])
 
         off = self.client.post("/api/account/totp/disable",
                                json={"current_password": PASSWORD,
-                                     "code": totp_at(secret, int(time.time()) // 30)},
+                                     "email_code": self.newest_code("reauth")},
                                headers=self.json_headers())
         self.assertEqual(off.status_code, 200, off.get_data(as_text=True)[:300])
         self.assertFalse(self.client.get("/api/account").get_json()["totp_enabled"])
@@ -767,6 +874,12 @@ class DeleteAccountTests(SelfServiceTestBase):
         self.verify_by_code()
         self.user = self.user_row("player1")
         self.sign_in(self.user)
+
+    def emailed_code(self):
+        sent = self.client.post("/api/account/email/reauth", json={},
+                                headers=self.json_headers())
+        self.assertEqual(sent.status_code, 200, sent.get_data(as_text=True)[:300])
+        return self.newest_code("reauth")
 
     def test_wrong_password_is_refused_and_changes_nothing(self):
         response = self.client.post("/api/account/delete",
@@ -791,10 +904,45 @@ class DeleteAccountTests(SelfServiceTestBase):
         self.assertEqual(response.get_json()["error"]["code"], "username_mismatch")
         self.assertIsNotNone(self.user_row("player1"))
 
-    def test_success_removes_the_rows_revokes_access_and_calls_the_purge_hook(self):
-        other = self.accounts.create_session(self.user, ip="127.0.0.1", user_agent="phone")
+    def test_the_first_popup_proves_identity_without_deleting(self):
+        ok = self.client.post("/api/account/delete",
+                              json={"password": PASSWORD, "confirm_username": "player1",
+                                    "verify_only": True},
+                              headers=self.json_headers())
+        self.assertEqual(ok.status_code, 200, ok.get_data(as_text=True)[:300])
+        self.assertIsNotNone(self.user_row("player1"))
+        self.assertEqual(self.purged, [])
+
+        bad = self.client.post("/api/account/delete",
+                               json={"password": "nope", "confirm_username": "player1",
+                                     "verify_only": True},
+                               headers=self.json_headers())
+        self.assertEqual(bad.status_code, 403)
+
+    def test_an_address_on_file_is_a_second_proof(self):
         response = self.client.post("/api/account/delete",
                                     json={"password": PASSWORD, "confirm_username": "player1"},
+                                    headers=self.json_headers())
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(response.get_json()["error"]["code"], "code_required")
+        self.assertIn("email_code", response.get_json()["error"]["fields"])
+        self.assertIsNotNone(self.user_row("player1"))
+
+        self.emailed_code()
+        wrong = self.client.post("/api/account/delete",
+                                 json={"password": PASSWORD, "confirm_username": "player1",
+                                       "email_code": "000000"},
+                                 headers=self.json_headers())
+        self.assertEqual(wrong.status_code, 410)
+        self.assertEqual(wrong.get_json()["error"]["code"], "invalid_code")
+        self.assertIsNotNone(self.user_row("player1"))
+
+    def test_success_removes_the_rows_revokes_access_and_calls_the_purge_hook(self):
+        code = self.emailed_code()
+        other = self.accounts.create_session(self.user, ip="127.0.0.1", user_agent="phone")
+        response = self.client.post("/api/account/delete",
+                                    json={"password": PASSWORD, "confirm_username": "player1",
+                                          "email_code": code},
                                     headers=self.json_headers())
         self.assertEqual(response.status_code, 200, response.get_data(as_text=True)[:400])
         self.assertEqual(self.client.get("/api/account").status_code, 401)
@@ -820,7 +968,8 @@ class DeleteAccountTests(SelfServiceTestBase):
 
     def test_a_deleted_username_is_freed_for_the_next_person(self):
         self.client.post("/api/account/delete",
-                         json={"password": PASSWORD, "confirm_username": "player1"},
+                         json={"password": PASSWORD, "confirm_username": "player1",
+                               "email_code": self.emailed_code()},
                          headers=self.json_headers())
         response = self.register("player1")
         self.assertEqual(response.status_code, 200, response.get_data(as_text=True)[:400])

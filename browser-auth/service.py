@@ -40,6 +40,16 @@ PROFILE_DIR = os.environ.get("CHROME_USER_DATA_DIR", "/profile")
 CHROMIUM = os.environ.get("CHROMIUM_EXECUTABLE", "/usr/bin/chromium")
 CDP_URL = os.environ.get("CHROMIUM_CDP_URL", "http://127.0.0.1:9222")
 
+# Google's own entry into YouTube: a top-level pass through the account makes
+# YouTube mint its .youtube.com cookies, which is the session capture needs.
+_YOUTUBE_SIGNIN_URL = ("https://accounts.google.com/ServiceLogin?service=youtube"
+                       "&continue=https%3A%2F%2Fmusic.youtube.com%2F")
+# Any one of these on .google.com means the browser holds a Google session.
+_GOOGLE_SESSION_COOKIES = frozenset((
+    "SID", "HSID", "SSID", "SAPISID",
+    "__Secure-1PSID", "__Secure-1PAPISID", "__Secure-3PSID", "__Secure-3PAPISID",
+))
+
 # Profile keys arrive over the control API, so they are restricted to a plain
 # filename segment: no separators, no traversal, no leading dot.
 _PROFILE_KEY_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
@@ -285,12 +295,25 @@ def _capture_from_running_browser(interactive, connection=None):
         return _watch_for_account_headers(context, page, interactive)
 
 
+def _google_session_present(context):
+    """True when the browser jar carries a Google sign-in, not just visitor cookies."""
+    try:
+        names = {str(cookie.get("name") or "") for cookie in context.cookies()}
+    except Exception:
+        logger.warning("Could not read the browser cookie jar", exc_info=True)
+        return False
+    present = bool(names & _GOOGLE_SESSION_COOKIES)
+    logger.info("Capture: Google session cookies present: %s", present)
+    return present
+
+
 def _watch_for_account_headers(context, page, interactive):
     """Navigate to YouTube Music and wait for the active-account menu response."""
     global _candidate
 
     captured = threading.Event()
     signed_out = threading.Event()
+    signed_out_at = [0.0]
 
     def on_response(response):
         global _candidate
@@ -304,6 +327,8 @@ def _watch_for_account_headers(context, page, interactive):
                 return
             payload = response.json()
             if account_menu_reports_signed_out(payload):
+                if not signed_out.is_set():
+                    signed_out_at[0] = time.time()
                 signed_out.set()
                 return
             if not account_menu_is_signed_in(payload):
@@ -319,15 +344,66 @@ def _watch_for_account_headers(context, page, interactive):
         _set_state("captured", interactive=interactive, message=None)
 
     context.on("response", on_response)
-    page.goto("https://music.youtube.com", wait_until="domcontentloaded", timeout=45000)
+    try:
+        page.goto("https://music.youtube.com", wait_until="domcontentloaded", timeout=45000)
+    except Exception:
+        # A consent wall or a half-painted page still leaves a page to inspect,
+        # and the account-menu response is the only verdict that counts.
+        logger.warning("Could not finish loading YouTube Music during capture", exc_info=True)
     deadline = time.time() + CAPTURE_TIMEOUT
-    while not captured.is_set() and not signed_out.is_set() and time.time() < deadline:
+    next_probe = 0.0
+    reason = ""
+    handshake_tried = False
+    while not captured.is_set() and time.time() < deadline:
         if interactive and not _public_state()["interactive"]:
             break
+        settle = 10.0 if handshake_tried else 4.0
+        if signed_out.is_set() and time.time() - signed_out_at[0] >= settle:
+            if handshake_tried:
+                break
+            handshake_tried = True
+            if not _google_session_present(context):
+                break
+            # The Google account is signed in, but YouTube Music only ever trusts
+            # its own cookies. Opening YouTube Music cold shows the anonymous page
+            # and its account menu answers "signed out" before any handshake has
+            # run; passing through Google's YouTube entry performs that handshake
+            # as a top-level navigation, so it works without third-party cookies.
+            logger.info("Signed out on YouTube Music with a live Google session; "
+                        "following Google's YouTube entry")
+            signed_out.clear()
+            try:
+                page.goto(_YOUTUBE_SIGNIN_URL, wait_until="domcontentloaded",
+                          timeout=45000)
+            except Exception:
+                logger.warning("Could not follow Google's YouTube entry", exc_info=True)
+            continue
+        now = time.time()
+        if not reason and now >= next_probe:
+            next_probe = now + 2.0
+            try:
+                state = google_signin.read_page_state(page)
+                verdict = google_signin.classify_page(state)
+            except Exception:
+                verdict = ""
+            if verdict == google_signin.CONSENT:
+                # The EU cookie wall sits between sign-in and the account menu.
+                if google_signin.click_consent(page):
+                    next_probe = 0.0
+            elif verdict == google_signin.CAPTCHA:
+                reason = "captcha"
+            elif verdict in (google_signin.NEED_IDENTIFIER,
+                             google_signin.NEED_PASSWORD,
+                             google_signin.UNKNOWN_ACCOUNT,
+                             google_signin.BLOCKED,
+                             google_signin.LOCKED):
+                reason = "signed_out"
         page.wait_for_timeout(250)
     context.remove_listener("response", on_response)
     if captured.is_set():
         return "captured"
+    if reason:
+        return reason
     if signed_out.is_set():
         return "signed_out"
     if interactive and not _public_state()["interactive"]:
@@ -347,7 +423,8 @@ def _watch_for_account_headers(context, page, interactive):
 # --------------------------------------------------------------------------
 
 _automation = None
-_AUTOMATION_KINDS = ("start", "identifier", "password", "code", "choice", "consent")
+_AUTOMATION_KINDS = ("start", "identifier", "password", "code", "choice", "consent",
+                     "methods", "method")
 
 # Playwright's sync API is bound to the thread that started it: a page created
 # while answering one request raises "Cannot switch to a different thread" when
@@ -546,18 +623,29 @@ def _google_step(kind, handler, profile_key="", secrets=()):
         if page.is_closed():
             detail = "The sign-in browser window closed before this page could be read."
         elif (outcome or "unsupported") in ("unsupported", "blocked", "captcha", "locked",
-                                            "wrong_password", "unknown_account"):
+                                            "wrong_password", "unknown_account", "timeout"):
             detail = _excerpt(page, secrets)
-        if outcome in ("crashed", "unsupported", "blocked", "captcha", "locked",
+        if outcome in ("crashed", "unsupported", "blocked", "locked",
                        "wrong_password", "unknown_account", "timeout"):
             # Nothing further can be learned from this browser: release it so the
             # profile is flushed and the next attempt starts from a clean window.
-            # ``signed_in`` deliberately keeps it open for the capture step.
+            # A captcha keeps the browser, because the person can still answer it,
+            # and ``signed_in`` keeps it for the capture step.
             _detach_automation()
         answer = {"outcome": outcome or "unsupported",
                   "url": _redact_url((state or {}).get("url"))}
         if detail:
             answer["detail"] = detail
+        if outcome == google_signin.NEED_PHONE:
+            answer["phone"] = google_signin.phone_hint((state or {}).get("text") or "")
+        if outcome == google_signin.NEED_PROMPT:
+            answer["prompt"] = google_signin.prompt_hint((state or {}).get("text") or "")
+            answer["devices"] = google_signin.device_hint((state or {}).get("text") or "")
+        if outcome == google_signin.CAPTCHA:
+            answer["captcha"] = {
+                "text": bool(google_signin._present(page, google_signin._CAPTCHA_INPUTS)),
+                "hint": google_signin.captcha_hint((state or {}).get("text") or ""),
+            }
         logger.info("Sign-in step %s -> %s at %s", kind, answer["outcome"], answer["url"])
         return answer, 200
 
@@ -586,8 +674,24 @@ def _capture_and_export():
     connection = (auto["context"], auto["page"]) if auto else None
     result = _capture_from_running_browser(False, connection=connection)
     if result != "captured":
-        _detach_automation()
-        return {"outcome": result or "timeout"}, 200
+        page = auto["page"] if auto else None
+        answer = {"outcome": result or "timeout"}
+        if page is not None and not page.is_closed():
+            try:
+                answer["url"] = _redact_url(page.url)
+                answer["detail"] = _excerpt(page)
+            except Exception:
+                pass
+        if result == "captcha":
+            # The person can still clear the check, so the browser stays.
+            try:
+                _state, shot = google_signin.captcha_snapshot(page)
+                answer.update(shot)
+            except Exception:
+                logger.warning("Could not photograph the security check", exc_info=True)
+        else:
+            _detach_automation()
+        return answer, 200
     cookies = ""
     try:
         cookies = _netscape_jar(auto["context"].cookies("https://music.youtube.com"))
@@ -661,6 +765,99 @@ def google_consent():
                         str(body.get("profile") or ""))
 
 
+@app.post("/google/methods")
+def google_methods():
+    body = request.get_json(silent=True) or {}
+    return _google_step("methods", google_signin.show_methods,
+                        str(body.get("profile") or ""))
+
+
+@app.post("/google/method")
+def google_method():
+    body = request.get_json(silent=True) or {}
+    method = str(body.get("method") or "")
+    if method not in google_signin.METHODS:
+        return jsonify({"error": "unknown_method"}), 400
+    return _google_step("method",
+                        lambda page: google_signin.choose_method(page, method),
+                        str(body.get("profile") or ""))
+
+
+def _captcha_answer(state, outcome, page):
+    """The step answer for a captcha page, with a fresh picture while it lasts."""
+    answer = {"outcome": outcome or google_signin.CAPTCHA,
+              "url": _redact_url(state.get("url"))}
+    if outcome == google_signin.NEED_PHONE:
+        answer["phone"] = google_signin.phone_hint(state.get("text") or "")
+    if outcome == google_signin.NEED_PROMPT:
+        answer["prompt"] = google_signin.prompt_hint(state.get("text") or "")
+        answer["devices"] = google_signin.device_hint(state.get("text") or "")
+    if outcome == google_signin.CAPTCHA:
+        try:
+            _state, shot = google_signin.captcha_snapshot(page)
+            answer.update(shot)
+        except Exception:
+            logger.warning("Could not photograph the security check", exc_info=True)
+    return answer
+
+
+@app.route("/google/captcha", methods=["GET", "POST"])
+def google_captcha():
+    """Show the security check, then take the answer it is waiting for."""
+    if request.method == "POST":
+        body = request.get_json(silent=True) or {}
+        text = str(body.get("text") or "").strip()
+        points = body.get("points") or []
+        if text and len(text) > 120:
+            return jsonify({"error": "invalid_answer"}), 400
+        if points and (not isinstance(points, list) or len(points) > 20):
+            return jsonify({"error": "invalid_answer"}), 400
+        for point in points:
+            if (not isinstance(point, list) or len(point) != 2
+                    or not all(isinstance(value, (int, float)) and 0 <= value <= 1
+                               for value in point)):
+                return jsonify({"error": "invalid_answer"}), 400
+        if not text and not points:
+            return jsonify({"error": "answer_required"}), 400
+        profile = str(body.get("profile") or "")
+    else:
+        text, points = "", []
+        profile = request.args.get("profile") or ""
+    try:
+        _profile_dir_for(profile)
+    except ValueError:
+        return jsonify({"error": "invalid_profile_key"}), 400
+    is_get = request.method == "GET"
+
+    def work():
+        if not _automation_usable():
+            return {"outcome": "not_signed_in"}, 409
+        page = _automation["page"]
+        if is_get:
+            try:
+                state, shot = google_signin.captcha_snapshot(page)
+            except Exception:
+                logger.warning("Could not photograph the security check", exc_info=True)
+                return {"outcome": "crashed"}, 503
+            return {"outcome": "captcha", **shot}, 200
+        if page.is_closed():
+            return {"outcome": "not_signed_in"}, 409
+        try:
+            state, outcome = google_signin.answer_captcha(page, text=text, points=points)
+        except Exception:
+            logger.warning("Security check answer raised", exc_info=True)
+            _detach_automation()
+            return {"outcome": "crashed"}, 503
+        if outcome in ("crashed", "unsupported", "blocked", "locked",
+                       "wrong_password", "unknown_account", "timeout",
+                       "captcha_needs_taps"):
+            _detach_automation()
+        return _captcha_answer(state, outcome, page), 200
+
+    answer, status = _on_google_thread(work)
+    return jsonify(answer), status
+
+
 @app.post("/google/capture")
 def google_capture():
     body = request.get_json(silent=True) or {}
@@ -694,8 +891,23 @@ def google_state():
             state = google_signin.read_page_state(_automation["page"])
         except Exception:
             return {"outcome": "crashed"}
-        return {"outcome": google_signin.classify_page(state),
-                "url": _redact_url(state.get("url"))}
+        outcome = google_signin.classify_page(state)
+        answer = {"outcome": outcome, "url": _redact_url(state.get("url"))}
+        text = state.get("text") or ""
+        if outcome == google_signin.NEED_PHONE:
+            answer["phone"] = google_signin.phone_hint(text)
+        if outcome == google_signin.NEED_PROMPT:
+            answer["prompt"] = google_signin.prompt_hint(text)
+            answer["devices"] = google_signin.device_hint(text)
+        if outcome == google_signin.CAPTCHA:
+            answer["captcha"] = {
+                "text": bool(google_signin._present(
+                    _automation["page"], google_signin._CAPTCHA_INPUTS)),
+                "hint": google_signin.captcha_hint(text),
+            }
+        if outcome in (google_signin.UNSUPPORTED, google_signin.TIMEOUT):
+            answer["detail"] = _excerpt(_automation["page"])
+        return answer
 
     return jsonify(_on_google_thread(work, timeout=30))
 

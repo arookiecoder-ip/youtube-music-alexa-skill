@@ -538,7 +538,12 @@ details pre { margin: var(--space-2) 0 0; background: var(--bg); border: 1px sol
   transition: background .14s ease, color .14s ease;
 }
 .verify-form > .segmented label:hover { color: var(--text); }
-.verify-form > .method { display: none; }
+/* Both panels share one grid cell, so the cell is as tall as the taller of the
+   two and switching tabs cannot resize the dialog. `visibility` rather than
+   `display` keeps the hidden panel out of the tab order while it still counts
+   toward that height. */
+.verify-form > .methods { display: grid; }
+.methods > .method { grid-area: 1 / 1; visibility: hidden; }
 .verify-form > input[value="password"]:checked ~ .segmented label:nth-child(1),
 .verify-form > input[value="email"]:checked ~ .segmented label:nth-child(2) {
   background: var(--accent-soft); color: var(--text);
@@ -548,12 +553,33 @@ details pre { margin: var(--space-2) 0 0; background: var(--bg); border: 1px sol
 .verify-form > input[value="email"]:focus-visible ~ .segmented label:nth-child(2) {
   outline: 2px solid var(--accent); outline-offset: 2px;
 }
-.verify-form > input[value="password"]:checked ~ .method--password,
-.verify-form > input[value="email"]:checked ~ .method--email { display: flex; }
-.verify-form .code-field { max-width: 220px; }
+.verify-form > input[value="password"]:checked ~ .methods > .method--password,
+.verify-form > input[value="email"]:checked ~ .methods > .method--email { visibility: visible; }
+.verify-form .code-field,
+#reset-dialog .code-field { max-width: 220px; }
 /* Only ever posted through the send button's `form` attribute. */
 .send-form { display: none; }
 .ok-line { margin: 0; color: var(--ok-tint); font-size: .82rem; }
+/* A send that worked, said in place. A modal dialog lives in the browser's top
+   layer, so the stack is created inside the open dialog by admin.js and stays
+   pinned to the viewport from there. */
+.toast-stack {
+  position: fixed; right: 1.5rem; bottom: 1.5rem; z-index: 70;
+  display: flex; flex-direction: column; gap: var(--space-2);
+  width: min(360px, calc(100vw - 3rem)); pointer-events: none;
+}
+.toast {
+  padding: .6rem .8rem; color: var(--text); background: var(--surface-2);
+  border: 1px solid var(--border); border-left: 3px solid var(--accent);
+  border-radius: var(--radius-md); font-size: .84rem; line-height: 1.35;
+  box-shadow: 0 14px 34px rgba(0, 0, 0, .45);
+  animation: toast-in .16s ease-out; pointer-events: auto;
+}
+.toast.success { border-left-color: var(--ok-tint); }
+.toast.warning { border-left-color: var(--warn); }
+.toast.error { border-left-color: var(--danger); }
+.toast.out { opacity: 0; transform: translateY(4px); transition: opacity .2s ease, transform .2s ease; }
+@keyframes toast-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 /* The two choices beside a live authenticator: equal width, so the card reads as
    a decision between two options and not as a button that happens to be shorter. */
 .totp-actions { margin-top: var(--space-2); }
@@ -563,6 +589,14 @@ details pre { margin: var(--space-2) 0 0; background: var(--bg); border: 1px sol
    the header stays, the body scrolls. */
 .scroll-box { max-height: 320px; overflow: auto; overscroll-behavior: contain; }
 .scroll-box.tall { max-height: 420px; }
+
+/* The account page's two columns hold different numbers of cards. Each column
+   fills the row, so pinning its last card to the bottom puts both bottom edges
+   on the same line instead of leaving one column short. */
+.account-cols > .col > .card:last-child { margin-top: auto; }
+/* A device row is a control: it opens that session's details. */
+.device-row { cursor: pointer; }
+.device-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 
 /* ---------------------------------------------------------------- layout helpers
    Written as classes because the panel's CSP forbids inline style; a rule that

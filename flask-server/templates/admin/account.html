@@ -27,29 +27,29 @@
             <label for="totp-{{ slug }}-password-way">Password</label>
             <label for="totp-{{ slug }}-email-way">Email code</label>
           </div>
-          <div class="method method--password field">
-            <label for="totp-{{ slug }}-password">Current password</label>
-            <input id="totp-{{ slug }}-password" name="current_password" type="password"
-                   maxlength="200" autocomplete="current-password">
-            <span class="hint">Checked against your account, never stored or sent anywhere.</span>
-          </div>
-          <div class="method method--email field">
-            <div class="row tight spread">
-              <label for="totp-{{ slug }}-code">
-                Code sent to <span class="mono">{{ user.email or 'your address' }}</span>
-              </label>
-              <button class="btn small ghost" type="submit" form="totp-{{ slug }}-send"
-                      {% if not user.email %}disabled{% endif %}>Send code</button>
+          <div class="methods">
+            <div class="method method--password field">
+              <label for="totp-{{ slug }}-password">Current password</label>
+              <input id="totp-{{ slug }}-password" name="current_password" type="password"
+                     maxlength="200" autocomplete="current-password">
+              <span class="hint">Checked against your account, never stored or sent anywhere.</span>
             </div>
-            <input id="totp-{{ slug }}-code" name="code" type="text" inputmode="numeric"
-                   pattern="[0-9 ]*" maxlength="7" autocomplete="one-time-code" spellcheck="false"
-                   placeholder="••••••" class="code-field">
-            {% if sent | default(false) %}
-              <p class="ok-line">A fresh code is on its way. It works once and expires in {{ code_minutes }} minutes.</p>
-            {% else %}
-              <span class="hint">Ask for a code, then type the six digits here.</span>
-            {% endif %}
-            {% if not mail_configured %}<span class="hint">SMTP is not configured, so the code lands in the local outbox.</span>{% endif %}
+            <div class="method method--email field">
+              <div class="row tight spread">
+                <label for="totp-{{ slug }}-code">Email code</label>
+                <button class="btn small ghost" type="submit" form="totp-{{ slug }}-send"
+                        {% if not user.email %}disabled{% endif %}>Send code</button>
+              </div>
+              <input id="totp-{{ slug }}-code" name="code" type="text" inputmode="numeric"
+                     pattern="[0-9 ]*" maxlength="7" autocomplete="one-time-code" spellcheck="false"
+                     placeholder="••••••" class="code-field">
+              {% if sent | default(false) %}
+                <p class="ok-line">A fresh code is on its way. It works once and expires in {{ code_minutes }} minutes.</p>
+              {% else %}
+                <span class="hint">Ask for a code, then type the six digits here.</span>
+              {% endif %}
+              {% if not mail_configured %}<span class="hint">SMTP is not configured, so the code lands in the local outbox.</span>{% endif %}
+            </div>
           </div>
         </form>
         <form id="totp-{{ slug }}-send" class="send-form" method="post"
@@ -80,7 +80,7 @@
   </div>
 </div>
 
-<div class="grid cols-2">
+<div class="grid cols-2 account-cols">
   <div class="col">
     <div class="card">
       <div class="card-head plain">
@@ -91,21 +91,10 @@
           </span>
         {% endif %}
       </div>
-      <form class="stack" method="post" action="{{ base_path }}/account/profile/">
-        <input type="hidden" name="_csrf" value="{{ csrf_token }}">
-        <div class="field">
-          <label for="profile_email">Address</label>
-          <input id="profile_email" name="email" type="email" value="{{ user.email or '' }}" maxlength="254"
-                 placeholder="you@synthora.in">
-          <span class="hint">Used for sign-in, verification codes and password resets.</span>
-        </div>
-        <div class="field">
-          <label for="profile_password">Current password</label>
-          <input id="profile_password" name="current_password" type="password" maxlength="200"
-                 autocomplete="current-password">
-        </div>
-        <div class="form-actions"><button class="btn primary" type="submit">Save address</button></div>
-      </form>
+      <div class="row tight spread">
+        <span class="mono">{{ user.email or 'Not set' }}</span>
+        <button class="btn small" type="button" data-dialog-open="email-dialog">Change</button>
+      </div>
       {% if user.email and not user.email_verified and user.status == 'active' %}
         <div class="section-divider"></div>
         <div class="col tight">
@@ -130,23 +119,11 @@
 
     <div class="card">
       <div class="card-head plain"><h2>Password</h2></div>
-      <form class="stack" method="post" action="{{ base_path }}/account/">
-        <input type="hidden" name="_csrf" value="{{ csrf_token }}">
-        <div class="field">
-          <label for="current_password">Current password</label>
-          <input id="current_password" name="current_password" type="password" required autocomplete="current-password">
-        </div>
-        <div class="field">
-          <label for="new_password">New password</label>
-          <input id="new_password" name="new_password" type="password" required minlength="10" maxlength="200" autocomplete="new-password">
-          <span class="hint">At least 10 characters, using two of: lowercase, uppercase, digits, symbols.</span>
-        </div>
-        <div class="field">
-          <label for="confirm_password">Confirm new password</label>
-          <input id="confirm_password" name="confirm_password" type="password" required minlength="10" maxlength="200" autocomplete="new-password">
-        </div>
-        <div class="form-actions"><button class="btn primary" type="submit">Change password</button></div>
-      </form>
+      <div class="row tight totp-actions">
+        <button class="btn" type="button" data-dialog-open="password-dialog">Change password</button>
+        <button class="btn" type="button" data-dialog-open="reset-dialog"
+                {% if not user.email %}disabled{% endif %}>Reset password</button>
+      </div>
     </div>
 
     <div class="card">
@@ -187,16 +164,10 @@
           <button class="btn small ghost" type="submit">Cancel setup</button>
         </form>
       {% elif user.has_totp %}
-        <p class="small muted">An authenticator app asks for a six-digit code after your password when you sign in to this panel.</p>
         <div class="row tight totp-actions">
           <button class="btn" type="button" data-dialog-open="totp-replace-dialog">Change authenticator</button>
           <button class="btn danger" type="button" data-dialog-open="totp-disable-dialog">Remove authenticator</button>
         </div>
-        <p class="hint mt-2">
-          Both ask who you are first &mdash;
-          {% if user.email %}your password, or a code sent to <span class="mono">{{ user.email }}</span>{% else %}your password{% endif %}
-          &mdash; and nothing changes until that passes.
-        </p>
       {% else %}
         <p class="small muted">Ask for a six-digit code from an authenticator app as well as your password.</p>
         <form class="stack" method="post" action="{{ base_path }}/account/totp/begin/">
@@ -231,11 +202,20 @@
             <thead><tr><th scope="col">Created</th><th scope="col">Last seen</th><th scope="col">Client</th><th scope="col">State</th></tr></thead>
             <tbody>
               {% for s in sessions %}
-                <tr>
+                <tr class="device-row" tabindex="0"
+                    data-device-open="device-dialog"
+                    data-device-revoke="{{ url_for('multiuser_admin.account_session_revoke', fingerprint=s.id) }}"
+                    data-device-current="{{ '1' if s.current else '0' }}"
+                    data-device-name="{{ s.device }}"
+                    data-device-ip="{{ s.ip or '—' }}"
+                    data-device-agent="{{ s.device_ua or '—' }}"
+                    data-device-created="{{ s.created_at|mu_datetime }}"
+                    data-device-seen="{{ s.last_seen_at|mu_datetime }}"
+                    data-device-expires="{{ s.expires_at|mu_datetime }}">
                   <td class="faint nowrap">{{ s.created_at|mu_relative }}</td>
                   <td class="faint nowrap">{{ s.last_seen_at|mu_relative }}</td>
-                  <td class="small"><span class="mono">{{ s.ip or '—' }}</span><br><span class="faint">{{ (s.user_agent or '—')[:60] }}</span></td>
-                  <td><span class="badge {{ 'revoked' if s.revoked_at else 'active' }}">{{ 'revoked' if s.revoked_at else 'live' }}</span></td>
+                  <td class="small"><span class="mono">{{ s.ip or '—' }}</span><br><span class="faint">{{ s.device }}</span></td>
+                  <td><span class="badge {{ 'active' if s.current else 'neutral' }}">{{ 'this device' if s.current else 'live' }}</span></td>
                 </tr>
               {% endfor %}
             </tbody>
@@ -251,25 +231,6 @@
         <h2>My activity</h2>
         <a class="btn small ghost" href="{{ base_path }}/audit/?target={{ user.id }}">Full log</a>
       </div>
-      {% if audit %}
-        <div class="table-wrap scroll-box">
-          <table>
-            <caption class="visually-hidden">Recent events on your account</caption>
-            <thead><tr><th scope="col">Action</th><th scope="col">When</th><th scope="col">IP</th></tr></thead>
-            <tbody>
-              {% for event in audit %}
-                <tr>
-                  <td><span class="event-action">{{ event.action }}</span></td>
-                  <td class="faint nowrap">{{ event.created_at|mu_relative }}</td>
-                  <td class="mono faint">{{ event.ip or '—' }}</td>
-                </tr>
-              {% endfor %}
-            </tbody>
-          </table>
-        </div>
-      {% else %}
-        <div class="empty"><strong>No activity</strong></div>
-      {% endif %}
     </div>
   </div>
 </div>
@@ -289,4 +250,156 @@
        'Verify and remove',
        danger=true) }}
 {% endif %}
+
+<dialog class="admin-dialog" id="email-dialog" aria-labelledby="email-dialog-title"
+        {% if reauth | default('') == 'email' %}data-autopen{% endif %}>
+  <div class="dialog-head">
+    <h2 id="email-dialog-title">Change email address</h2>
+    <button class="btn icon ghost" type="button" data-dialog-close aria-label="Close">✕</button>
+  </div>
+  <div class="dialog-body">
+    <div class="col">
+      <p>The new address starts unverified and gets its own code. Your password is checked first.</p>
+      <form class="stack" id="email-form" method="post" action="{{ base_path }}/account/profile/">
+        <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+        <div class="field">
+          <label for="new_email">New email address</label>
+          <input id="new_email" name="email" type="email" required maxlength="254"
+                 placeholder="you@synthora.in">
+        </div>
+        <div class="field">
+          <label for="email_password">Current password</label>
+          <input id="email_password" name="current_password" type="password" required
+                 maxlength="200" autocomplete="current-password">
+        </div>
+      </form>
+    </div>
+  </div>
+  <div class="dialog-foot">
+    <button class="btn ghost" type="button" data-dialog-close>Cancel</button>
+    <button class="btn primary" type="submit" form="email-form">Change email</button>
+  </div>
+</dialog>
+
+<dialog class="admin-dialog" id="password-dialog" aria-labelledby="password-dialog-title"
+        {% if reauth | default('') == 'password' %}data-autopen{% endif %}>
+  <div class="dialog-head">
+    <h2 id="password-dialog-title">Change password</h2>
+    <button class="btn icon ghost" type="button" data-dialog-close aria-label="Close">✕</button>
+  </div>
+  <div class="dialog-body">
+    <div class="col">
+      <form class="stack" id="password-form" method="post" action="{{ base_path }}/account/">
+        <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+        <div class="field">
+          <label for="pw_current">Current password</label>
+          <input id="pw_current" name="current_password" type="password" required
+                 autocomplete="current-password">
+        </div>
+        <div class="field">
+          <label for="pw_new">New password</label>
+          <input id="pw_new" name="new_password" type="password" required minlength="10"
+                 maxlength="200" autocomplete="new-password">
+          <span class="hint">At least 10 characters, using two of: lowercase, uppercase, digits, symbols.</span>
+        </div>
+        <div class="field">
+          <label for="pw_confirm">Confirm new password</label>
+          <input id="pw_confirm" name="confirm_password" type="password" required minlength="10"
+                 maxlength="200" autocomplete="new-password">
+        </div>
+      </form>
+    </div>
+  </div>
+  <div class="dialog-foot">
+    <button class="btn ghost" type="button" data-dialog-close>Cancel</button>
+    <button class="btn primary" type="submit" form="password-form">Change password</button>
+  </div>
+</dialog>
+
+<dialog class="admin-dialog" id="reset-dialog" aria-labelledby="reset-dialog-title"
+        {% if reauth | default('') == 'reset' %}data-autopen{% endif %}>
+  <div class="dialog-head">
+    <h2 id="reset-dialog-title">Reset password</h2>
+    <button class="btn icon ghost" type="button" data-dialog-close aria-label="Close">✕</button>
+  </div>
+  <div class="dialog-body">
+    <div class="col">
+      <p>
+        Proves it is you with a code from your email{% if user.has_totp %} and your authenticator{% endif %},
+        then sets the new password. The current one is not asked for.
+      </p>
+      <form class="stack" id="reset-form" method="post" action="{{ base_path }}/account/password/reset/">
+        <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+        <div class="field">
+          <div class="row tight spread">
+            <label for="reset_code">Email code</label>
+            <button class="btn small ghost" type="submit" form="reset-send"
+                    {% if not user.email %}disabled{% endif %}>Send code</button>
+          </div>
+          <input id="reset_code" name="code" type="text" required inputmode="numeric"
+                 pattern="[0-9 ]*" maxlength="7" autocomplete="one-time-code" spellcheck="false"
+                 placeholder="••••••" class="code-field">
+          {% if sent | default(false) and reauth | default('') == 'reset' %}
+            <p class="ok-line">A fresh code is on its way. It works once and expires in {{ code_minutes }} minutes.</p>
+          {% else %}
+            <span class="hint">Ask for a code, then type the six digits here.</span>
+          {% endif %}
+        </div>
+        {% if user.has_totp %}
+          <div class="field">
+            <label for="reset_totp">Authenticator code</label>
+            <input id="reset_totp" name="totp_code" type="text" required inputmode="numeric"
+                   pattern="[0-9 ]*" maxlength="7" autocomplete="one-time-code" spellcheck="false"
+                   placeholder="••••••" class="code-field">
+          </div>
+        {% endif %}
+        <div class="field">
+          <label for="reset_new">New password</label>
+          <input id="reset_new" name="new_password" type="password" required minlength="10"
+                 maxlength="200" autocomplete="new-password">
+          <span class="hint">At least 10 characters, using two of: lowercase, uppercase, digits, symbols.</span>
+        </div>
+        <div class="field">
+          <label for="reset_confirm">Confirm new password</label>
+          <input id="reset_confirm" name="confirm_password" type="password" required minlength="10"
+                 maxlength="200" autocomplete="new-password">
+        </div>
+      </form>
+      <form id="reset-send" class="send-form" method="post"
+            action="{{ base_path }}/account/totp/reauth/send/">
+        <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+        <input type="hidden" name="action" value="reset">
+      </form>
+    </div>
+  </div>
+  <div class="dialog-foot">
+    <button class="btn ghost" type="button" data-dialog-close>Cancel</button>
+    <button class="btn primary" type="submit" form="reset-form">Reset password</button>
+  </div>
+</dialog>
+
+<dialog class="admin-dialog" id="device-dialog" aria-labelledby="device-dialog-title">
+  <div class="dialog-head">
+    <h2 id="device-dialog-title">Device</h2>
+    <button class="btn icon ghost" type="button" data-dialog-close aria-label="Close">✕</button>
+  </div>
+  <div class="dialog-body">
+    <dl class="kv">
+      <dt>Device</dt><dd id="device-name">—</dd>
+      <dt>IP address</dt><dd class="mono" id="device-ip">—</dd>
+      <dt>Created</dt><dd id="device-created">—</dd>
+      <dt>Last seen</dt><dd id="device-seen">—</dd>
+      <dt>Expires</dt><dd id="device-expires">—</dd>
+      <dt>User agent</dt><dd class="mono small" id="device-agent">—</dd>
+    </dl>
+    <p class="small muted mt-2" id="device-current-note" hidden>
+      This is the browser you are using. Removing it signs you out here too.
+    </p>
+  </div>
+  <form class="dialog-foot" id="device-revoke-form" method="post" action="">
+    <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+    <button class="btn ghost" type="button" data-dialog-close>Close</button>
+    <button class="btn danger" type="submit">Remove this device</button>
+  </form>
+</dialog>
 {% endblock %}

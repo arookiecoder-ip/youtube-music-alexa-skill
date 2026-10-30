@@ -882,29 +882,45 @@ def build_blueprint(mu: MultiUser) -> Blueprint:
     @bp.route("/account/totp/reauth/send/", methods=["POST"])
     @admin_required
     def account_totp_reauth_send():
-        """Post the code that unlocks the change-or-remove dialog.
+        """Post the code that unlocks a dialog.
 
         A separate endpoint because sending is not the action itself: it only buys
-        the right to ask for that action afterwards."""
+        the right to ask for that action afterwards. With JS the answer is JSON so
+        the dialog stays put and a toast says "sent"; without it the redirect comes
+        back with the same dialog open on the email tab."""
         slug = request.form.get("action") or ""
-        back = url_for("multiuser_admin.account", reauth=slug, way="email", sent=1)
+        wants_json = request.headers.get("X-Requested-With") == "fetch"
         user = mu.accounts.get_user(g.mu_user["id"])
-        if slug not in {"disable", "replace"} or not user:
-            return redirect(url_for("multiuser_admin.account"))
+
+        def answer(category: str, message: str, target: str):
+            if wants_json:
+                return jsonify(ok=category != "error", kind=category, message=message)
+            flash(message, category)
+            return redirect(target)
+
+        if slug not in {"disable", "replace", "reset"} or not user:
+            return answer("error", "That request could not be understood.",
+                          url_for("multiuser_admin.account"))
         if not user.get("email"):
-            flash("This account has no email address, so a code cannot be sent. Use your password.", "error")
-            return redirect(url_for("multiuser_admin.account", reauth=slug))
-        if mu.accounts.recent_email_token_count(user["id"], "reauth", 60):
-            flash(
-                "A code was sent less than a minute ago. Check your inbox, or use your password.",
-                "warning",
+            return answer(
+                "error",
+                "This account has no email address, so a code cannot be sent. Use your password.",
+                url_for("multiuser_admin.account", reauth=slug),
             )
-            return redirect(url_for("multiuser_admin.account", reauth=slug, way="email"))
+        if mu.accounts.recent_email_token_count(user["id"], "reauth", 60):
+            return answer(
+                "warning",
+                "A code was sent less than a minute ago. Check your inbox, or use your password.",
+                url_for("multiuser_admin.account", reauth=slug, way="email"),
+            )
         result = _send_code_email(
             user, "reauth", actor=g.mu_user, ip=_client_ip(), user_agent=_user_agent()
         )
-        _flash_mail(result, "Confirmation code", user["email"])
-        return redirect(back)
+        category, message = emails.mail_message(mu, result, "Confirmation code", user["email"])
+        return answer(
+            category, message,
+            url_for("multiuser_admin.account", reauth=slug, way="email", sent=1),
+        )
 
     @bp.route("/account/totp/replace/", methods=["POST"])
     @admin_required
@@ -1381,26 +1397,31 @@ def build_blueprint(mu: MultiUser) -> Blueprint:
             confirm = request.form.get("confirm_password") or ""
             if new != confirm:
                 flash("New password and confirmation do not match.", "error")
-            else:
-                try:
-                    mu.accounts.change_own_password(
-                        g.mu_user, current, new, ip=_client_ip(), user_agent=_user_agent(),
-                        # Without this the session the change was made from is
-                        # revoked too, so "Password changed." was followed by a
-                        # bounce to the sign-in page.
-                        keep_sid_hash=session.get("mu_sid") or "",
-                    )
-                    flash("Password changed.", "success")
-                    return redirect(url_for("multiuser_admin.account"))
-                except AccountError as exc:
-                    flash(str(exc), "error")
+                return redirect(url_for("multiuser_admin.account", reauth="password"))
+            try:
+                mu.accounts.change_own_password(
+                    g.mu_user, current, new, ip=_client_ip(), user_agent=_user_agent(),
+                    # Without this the session the change was made from is
+                    # revoked too, so "Password changed." was followed by a
+                    # bounce to the sign-in page.
+                    keep_sid_hash=session.get("mu_sid") or "",
+                )
+                flash("Password changed.", "success")
+                return redirect(url_for("multiuser_admin.account"))
+            except AccountError as exc:
+                flash(str(exc), "error")
+                return redirect(url_for("multiuser_admin.account", reauth="password"))
         return render_template(
             "admin/account.html",
             page="account",
             title="My account",
             user=mu.accounts.get_user(g.mu_user["id"]),
-            sessions=mu.accounts.list_sessions(g.mu_user["id"]),
-            audit=mu.accounts.user_audit(g.mu_user["id"], limit=15),
+            # Only live sessions, told apart by a fingerprint: the row can open
+            # its own dialog and name itself in the revoke action without the
+            # browser ever seeing a session id.
+            sessions=mu.accounts.session_summaries(
+                g.mu_user["id"], current_sid_hash=(g.mu_session or {}).get("sid_hash", "")
+            ),
             # Which verification dialog to reopen, and on which tab: a page reload
             # from "send code" or a refused password would otherwise drop the person
             # back onto the card and make them start the conversation again.
@@ -1409,6 +1430,30 @@ def build_blueprint(mu: MultiUser) -> Blueprint:
             sent=(request.args.get("sent") or "") == "1",
             code_minutes=mu.config.email_code_minutes,
         )
+
+    @bp.route("/account/password/reset/", methods=["POST"])
+    @admin_required
+    def account_password_reset():
+        """Set a new password proved by the mailbox and, when armed, the authenticator."""
+        back = url_for("multiuser_admin.account", reauth="reset")
+        new = request.form.get("new_password") or ""
+        if new != (request.form.get("confirm_password") or ""):
+            flash("New password and confirmation do not match.", "error")
+            return redirect(back)
+        try:
+            mu.accounts.reset_own_password(
+                g.mu_user,
+                email_code=(request.form.get("code") or "").strip(),
+                new_password=new,
+                totp_code=(request.form.get("totp_code") or "").strip(),
+                ip=_client_ip(), user_agent=_user_agent(),
+                keep_sid_hash=session.get("mu_sid") or "",
+            )
+            flash("Password reset.", "success")
+            return redirect(url_for("multiuser_admin.account"))
+        except AccountError as exc:
+            flash(str(exc), "error")
+            return redirect(back)
 
     @bp.route("/account/profile/", methods=["POST"])
     @admin_required
@@ -1435,6 +1480,7 @@ def build_blueprint(mu: MultiUser) -> Blueprint:
                 _flash_mail(result, "Verification code", user["email"])
         except AccountError as exc:
             flash(str(exc), "error")
+            return redirect(url_for("multiuser_admin.account", reauth="email"))
         return redirect(url_for("multiuser_admin.account"))
 
     @bp.route("/account/email/verification/", methods=["POST"])
@@ -1499,6 +1545,27 @@ def build_blueprint(mu: MultiUser) -> Blueprint:
             flash(str(exc), "error")
             return redirect(url_for("multiuser_admin.account"))
         return redirect(login_url)
+
+    @bp.route("/account/sessions/<fingerprint>/revoke/", methods=["POST"])
+    @admin_required
+    def account_session_revoke(fingerprint):
+        try:
+            _, killed_current = mu.accounts.revoke_own_sessions(
+                g.mu_user,
+                only_prefix=fingerprint,
+                keep_sid_hash=session.get("mu_sid") or "",
+                ip=_client_ip(), user_agent=_user_agent(),
+            )
+        except AccountError as exc:
+            flash(str(exc), "error")
+            return redirect(url_for("multiuser_admin.account"))
+        if killed_current:
+            session.pop("mu_sid", None)
+            session.pop("mu_user_id", None)
+            flash("That was this browser, so you are signed out.", "success")
+            return redirect(login_url)
+        flash("Device signed out.", "success")
+        return redirect(url_for("multiuser_admin.account"))
 
     @bp.route("/theme/", methods=["POST"])
     @admin_required

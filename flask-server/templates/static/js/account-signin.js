@@ -75,6 +75,11 @@
       case 'need_code':
         answerKind = data.answer || 'securitycode';
         el('code-message').textContent = data.message || 'Enter the code.';
+        // Amazon's two-step page and its one-time-password page each say what
+        // they want; Google's states have no label of their own.
+        el('code-label').textContent = data.label || 'Code';
+        el('code-hint').textContent = data.hint || '';
+        el('code-hint').hidden = !data.hint;
         el('code').value = '';
         showPanel('code-panel');
         el('code').focus();

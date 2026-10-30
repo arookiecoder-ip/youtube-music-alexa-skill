@@ -393,6 +393,146 @@ class LadderTests(unittest.TestCase):
 
 
 @requires_sidecar('google_signin.py')
+class PageHintTests(unittest.TestCase):
+    """What the popup says about the page Google is showing.
+
+    The phone number has to identify the phone without reproducing it, a device
+    prompt has to be recognised as a prompt rather than an unknown wall, and the
+    security check has to be named as one.
+    """
+
+    def test_a_phone_number_is_reduced_to_its_last_four_digits(self):
+        for text in ('Enter the code we sent to +1 (555) 010-1234.',
+                     'We texted a code to 555-010-1234.',
+                     'A code went to +44 20 7946 0958 just now.'):
+            with self.subTest(text=text):
+                hint = gs.phone_hint(text)
+                self.assertTrue(hint.startswith('•••• '), hint)
+                self.assertEqual(len(hint.split()[-1]), 4)
+
+    def test_the_masked_number_keeps_no_more_than_four_digits(self):
+        hint = gs.phone_hint('A code was sent to +1 (555) 010-1234.')
+        self.assertEqual(hint, '•••• 1234')
+        self.assertNotIn('555', hint)
+        self.assertNotIn('010', hint)
+
+    def test_a_number_google_itself_masks_still_identifies_the_phone(self):
+        self.assertEqual(gs.phone_hint('Get a verification code at •••••• •••50'),
+                         '•••• 50')
+        self.assertEqual(gs.phone_hint('Get a code at •••-•••-1234'), '•••• 1234')
+        self.assertEqual(gs.phone_hint('Get a code at •••••• •••88'), '•••• 88')
+
+    def test_a_page_without_a_number_offers_no_hint(self):
+        for text in ('Enter the code from your authenticator app.', '',
+                     'Google sent a code to your phone.'):
+            with self.subTest(text=text):
+                self.assertEqual(gs.phone_hint(text), '')
+
+    def test_a_device_prompt_asks_for_the_matching_number(self):
+        self.assertEqual(gs.prompt_hint('Tap 42 on your phone to continue.'), '42')
+        self.assertEqual(gs.prompt_hint('Open the Gmail app and tap Yes.'), '')
+
+    def test_a_device_prompt_names_the_devices_it_notified(self):
+        text = ('Check your device. Google sent a notification to your Galaxy Tab S7+ '
+                'and Galaxy S24+. Tap Yes on the notification.')
+        self.assertEqual(gs.device_hint(text),
+                         'your Galaxy Tab S7+ and Galaxy S24+')
+        self.assertEqual(gs.device_hint('Open the Gmail app and tap Yes.'), '')
+
+    def test_a_device_prompt_page_is_a_prompt_not_a_timeout(self):
+        for text in ('Tap Yes on your phone or tablet',
+                     'Tap 42 on your phone to confirm it is you',
+                     'Check your phone and tap the number shown'):
+            with self.subTest(text=text):
+                state = {'url': 'https://accounts.google.com/v3/signin/challenge/dp',
+                         'text': text, 'fields': {}}
+                self.assertEqual(gs.classify_page(state), gs.NEED_PROMPT)
+
+    def test_the_chooser_shape_of_the_same_page_is_a_choice(self):
+        state = {'url': 'https://accounts.google.com/v3/signin/challenge/dp',
+                 'text': 'Choose a 2-step verification method. Try another way',
+                 'fields': {}}
+        self.assertEqual(gs.classify_page(state), gs.NEED_CHOICE)
+
+    def test_the_chooser_lists_a_passkey_row_without_becoming_a_passkey_demand(self):
+        state = {'url': 'https://accounts.google.com/v3/signin/challenge/selection',
+                 'text': ('Choose how you want to sign in. Use a passkey. '
+                          'Get a verification code at +1 (555) 010-1234. '
+                          'Enter one of your backup codes.'),
+                 'fields': {}}
+        self.assertEqual(gs.classify_page(state), gs.NEED_CHOICE)
+
+    def test_a_failed_text_message_reopens_the_list_instead_of_a_lock(self):
+        # When the code cannot be sent, Google prints "We couldn't verify your
+        # phone number ... too many failed attempts" above the very same method
+        # list. Calling that an account lock hid the ways out still on screen.
+        state = {'url': 'https://accounts.google.com/v3/signin/challenge/ipp/error',
+                 'text': ('We couldn\u2019t verify your phone number. To help keep '
+                          'your account safe, Google wants to make sure it\u2019s really '
+                          'you. Too many failed attempts. '
+                          'Choose how you want to sign in: Tap Yes on your phone '
+                          'or tablet. Use your phone or tablet to get a security code.'),
+                 'fields': {}}
+        self.assertEqual(gs.classify_page(state), gs.NEED_CHOICE)
+
+    def test_a_real_lock_is_still_a_lock(self):
+        state = {'url': 'https://accounts.google.com/v3/signin/challenge/ipp',
+                 'text': ('Your account has been temporarily locked because of too '
+                          'many failed attempts. Try again later.'),
+                 'fields': {}}
+        self.assertEqual(gs.classify_page(state), gs.LOCKED)
+
+    def test_the_password_page_is_a_password_page_even_with_its_other_ways_link(self):
+        # Google's password screen carries a "Try another way" link. Reading that
+        # link first skipped the password entirely and offered verification
+        # methods for a session that had not signed in yet.
+        state = {'url': 'https://accounts.google.com/v3/signin/challenge/pwd',
+                 'text': 'Enter your password. Try another way', 'fields': {}}
+        self.assertEqual(gs.classify_page(state), gs.NEED_PASSWORD)
+        state['fields'] = {'password': 'input[type=password]'}
+        self.assertEqual(gs.classify_page(state), gs.NEED_PASSWORD)
+
+    def test_the_identifier_page_is_not_mistaken_for_a_chooser(self):
+        state = {'url': 'https://accounts.google.com/v3/signin/identifier',
+                 'text': 'Sign in. Try another way',
+                 'fields': {'identifier': 'input[type=email]'}}
+        self.assertEqual(gs.classify_page(state), gs.NEED_IDENTIFIER)
+
+    def test_a_device_prompt_wins_over_the_other_ways_link_on_its_page(self):
+        state = {'url': 'https://accounts.google.com/v3/signin/challenge/dp',
+                 'text': ('Check your device. Google sent a notification to your '
+                          'Galaxy S24+. Tap Yes on the notification. Try another way'),
+                 'fields': {}}
+        self.assertEqual(gs.classify_page(state), gs.NEED_PROMPT)
+
+    def test_the_chooser_on_the_prompt_page_is_a_choice_not_the_prompt_row(self):
+        # "Try another way" opens the list on the same /challenge/dp URL, and its
+        # first row says "Tap Yes on your phone or tablet". The heading decides.
+        state = {'url': 'https://accounts.google.com/v3/signin/challenge/dp',
+                 'text': ('Choose how you want to sign in: Tap Yes on your phone or '
+                          'tablet. Get a verification code at •••••• •••50. '
+                          'Get a verification code from the Google Authenticator app.'),
+                 'fields': {}}
+        self.assertEqual(gs.classify_page(state), gs.NEED_CHOICE)
+
+    def test_a_refused_password_still_reads_as_a_refusal(self):
+        state = {'url': 'https://accounts.google.com/v3/signin/challenge/pwd',
+                 'text': "Wrong password. Try again or click 'Forgot password'.",
+                 'fields': {'password': 'input[type=password]'}}
+        self.assertEqual(gs.classify_page(state), gs.WRONG_PASSWORD)
+
+    def test_an_empty_device_prompt_page_is_not_guessed_at(self):
+        state = {'url': 'https://accounts.google.com/v3/signin/challenge/dp',
+                 'text': '', 'fields': {}}
+        self.assertEqual(gs.classify_page(state), gs.UNSUPPORTED)
+
+    def test_the_three_methods_are_the_only_ones_the_popup_offers(self):
+        self.assertEqual(gs.METHODS, ('totp', 'phone', 'backup'))
+        for method in gs.METHODS:
+            self.assertTrue(gs._METHOD_PATTERNS[method])
+
+
+@requires_sidecar('google_signin.py')
 class SecretHygieneTests(unittest.TestCase):
     def test_each_credential_is_sent_only_to_the_step_that_needs_it(self):
         controller = FakeController([

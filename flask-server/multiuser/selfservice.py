@@ -60,6 +60,10 @@ PENDING_VERIFY_KEY = "mu_ss_pending_verify"
 # cross-blueprint import in the other direction would be a cycle.
 THEME_KEY = "admin_theme"
 THEMES = ("dark", "light")
+# The popups on /account, by the name a trigger link carries in its query string.
+# Anything else is ignored rather than rendered: an unknown step is a typo or a
+# probe, and the page is complete without it either way.
+DIALOG_STEPS = ("password", "reset", "email", "totp", "delete")
 
 USERNAME_TAKEN = "That username is already in use."
 EMAIL_TAKEN = "That email address is already in use."
@@ -94,6 +98,9 @@ _LIMITS: dict[str, tuple[int, int | None]] = {
     "totp-confirm": (10, 3600),
     "totp-disable": (5, 3600),
     "account-delete": (3, 86400),
+    # The first popup asks the same question as the delete itself, so it gets its
+    # own budget: opening it twice must not spend the deletion's three attempts.
+    "account-delete-check": (10, 900),
 }
 
 _SESSION_SURFACE = ("/account", "/api/account")
@@ -278,6 +285,50 @@ def build_selfservice_blueprint(mu) -> Blueprint:
         return emails.send_code_email(
             mu, user, purpose, code, where=where, ip=ip, user_agent=user_agent
         )
+
+    def _code_send_blocked(user: dict, purpose: str, ip: str, *,
+                           ip_scope: str = "resend-ip", id_scope: str = "resend-id"):
+        """The three gates every code sender on this page passes, in one call.
+
+        The bucket names are the ones the administrator door already charges for the
+        same emails, so a person who tries both pages does not collect two budgets.
+        The third gate is the database's own record of a code issued in the last
+        minute: it stops an impatient second click from burying the first message,
+        and it costs nothing when the inbox is slow.
+        """
+        blocked = _limited(ip_scope, netids.ip_bucket(ip))
+        if blocked:
+            return blocked
+        blocked = _limited(
+            id_scope, netids.identifier_bucket(user.get("email") or user["id"])
+        )
+        if blocked:
+            return blocked
+        if mu.accounts.recent_email_token_count(user["id"], purpose, 60):
+            return _json_error(
+                "rate_limited", "A code was just sent. Check your inbox.", 429,
+                retryable=True, retry_after=60,
+            )
+        return None
+
+    def _notify_security_change(user: dict, heading: str, intro: str, rows=(),
+                                note: str = "", audit: str = "security_change") -> None:
+        """Tell the owner, at the address on file, that their sign-in changed.
+
+        A notice nobody can deliver is still a notice: the change already happened
+        and already holds, so a dead SMTP must not turn it into a 500 that reads like
+        the two-factor toggle itself failed.
+        """
+        if not user.get("email"):
+            return
+        try:
+            emails.send_notice(
+                mu, user, heading, intro, rows=rows, note=note, audit=audit,
+                actor=g.ss_user, ip=_ip(), user_agent=_ua(),
+            )
+        except Exception:  # noqa: BLE001 - the change is committed; this is a courtesy copy
+            if mu.logger:
+                mu.logger.exception("[multiuser] security notice email failed")
 
     def _mail_note(result) -> str:
         """What the door tells the visitor about delivery.
@@ -996,7 +1047,15 @@ def build_selfservice_blueprint(mu) -> Blueprint:
             return redirect(f"{login_url}?{urlencode({'next': account_url})}")
         # The page renders complete from the server, so it is readable before (or
         # without) account.js; the script only refreshes pieces after an action.
-        return render_template("account.html", **_account_payload())
+        #
+        # ``?step=`` names the popup a trigger link asked for.  It exists for the
+        # browser that runs no script: its links are real, so the page it gets back
+        # has that dialog already open and every field in it reachable.  Where the
+        # script intercepts the click and opens the same dialog without a load.
+        step = (request.args.get("step") or "").strip().lower()
+        return render_template(
+            "account.html", step=step if step in DIALOG_STEPS else "", **_account_payload()
+        )
 
     def _theme_for(user: dict) -> str:
         """The palette this account is drawn in, dark when it never chose one.
@@ -1034,6 +1093,10 @@ def build_selfservice_blueprint(mu) -> Blueprint:
             # How many tries this code has left, so the page can say "two more"
             # rather than let somebody discover the ceiling by hitting it.
             "verification": mu.accounts.email_code_state(full["id"], "verify"),
+            # The same for the code that proves the mailbox before a change is made:
+            # a popup that says "we already sent one" saves a second send and the
+            # confusion of two emails where only the newest is valid.
+            "reauth": mu.accounts.email_code_state(full["id"], "reauth"),
             "role": full.get("role"),
             "role_text": "Administrator" if AccountService.can_view_admin(full) else "Player",
             "is_admin": AccountService.can_view_admin(full),
@@ -1192,6 +1255,253 @@ def build_selfservice_blueprint(mu) -> Blueprint:
             }
         )
 
+    @bp.route("/api/account/password/reset/send", methods=["POST"])
+    @account_required
+    def api_password_reset_send():
+        """A signed-in person who no longer knows the password they are not being asked for.
+
+        This path exists precisely because the current password is not required: the
+        proof is the mailbox.  So it issues the same purpose the anonymous "forgot
+        password" page issues, at the address on file, and pays for it from that page's
+        buckets keyed on the same address -- trying both doors does not double the
+        number of emails an attacker can ask for.
+        """
+        ip, user_agent = _ip(), _ua()
+        user = mu.accounts.get_user(g.ss_user["id"]) or g.ss_user
+        if not user.get("email"):
+            return _json_error(
+                "no_email",
+                "This account has no email address to send a code to. Set one first, "
+                "or ask the administrator.",
+                422,
+            )
+        blocked = _code_send_blocked(
+            user, "reset", ip, ip_scope="forgot-ip", id_scope="forgot-id"
+        )
+        if blocked:
+            return blocked
+        note = _mail_note(_send_code(user, "reset", ip, user_agent, account_where))
+        return jsonify({"ok": True, "note": note, "sent_to": _mask(user["email"])})
+
+    @bp.route("/api/account/password/reset", methods=["POST"])
+    @account_required
+    def api_password_reset():
+        """Spend the mailed code for a new password, with this browser still signed in.
+
+        The new password is checked *before* the code is spent: a weak entry or a typing
+        slip is the person's own mistake and must not consume a single-use credential
+        they cannot re-issue without waiting on the mail again.
+
+        The tick is theirs to set.  Left ticked, every other device is signed out -- the
+        old password is spent, so nobody else should keep a session made with it.
+        Unticked, this account's sessions are all left alone; the code still proves the
+        mailbox, which is what the reset was ever asking for.
+        """
+        ip, user_agent = _ip(), _ua()
+        user = mu.accounts.get_user(g.ss_user["id"]) or g.ss_user
+        body = request.get_json(silent=True) or {}
+        new_password = str(body.get("password") or "")
+        confirm = body.get("confirm_password")
+        errors: dict[str, str] = {}
+        if confirm is not None and str(confirm) != new_password:
+            errors["confirm_password"] = "The two new passwords do not match."
+        problem = validate_password(new_password, user.get("username") or "")
+        if problem and not errors.get("confirm_password"):
+            errors["password"] = problem
+        if errors:
+            return _json_error("invalid", next(iter(errors.values())), 422, fields=errors)
+
+        blocked = _limited("reset-ip", netids.ip_bucket(ip))
+        if blocked:
+            return blocked
+        blocked = _limited("code-ip", netids.ip_bucket(ip))
+        if blocked:
+            return blocked
+        allowed, retry_after = _throttle(
+            "code-id", netids.identifier_bucket(user.get("username") or user["id"])
+        )
+        if not allowed:
+            return _json_error(
+                "rate_limited",
+                f"Too many tries. Wait {retry_after} seconds and enter the code again.",
+                429,
+                retryable=True,
+                retry_after=retry_after,
+                fields={"code": "Wait before trying this code again."},
+            )
+        consumed = mu.accounts.consume_email_code(
+            user["id"], "reset", str(body.get("code") or "").strip()
+        )
+        if not consumed:
+            return _json_error(
+                "invalid_code",
+                "That code did not work. Codes are single-use, expire after "
+                f"{config.email_code_minutes} minutes and stop working after "
+                f"{config.email_code_attempts} wrong tries. Ask for a new one.",
+                410,
+                fields={"code": "Wrong, used, or expired. Send a new code and try once."},
+            )
+        sign_out_others = body.get("sign_out_others")
+        sign_out_others = True if sign_out_others is None else bool(sign_out_others)
+        try:
+            mu.accounts.reset_password_with_token(
+                user["id"],
+                new_password,
+                ip,
+                user_agent,
+                keep_sid_hash=session.get("mu_sid") or "",
+                revoke_other_sessions=sign_out_others,
+            )
+        except AccountError as exc:
+            return _json_error("invalid", str(exc), 422)
+        # No CSRF rotation: the popup stays open and keeps posting with the token it
+        # was rendered with, and this account's identity in this browser is unchanged.
+        return jsonify(
+            {
+                "ok": True,
+                "must_change_password": False,
+                "message": (
+                    "Password changed. Every other device was signed out; this one stays "
+                    "signed in."
+                    if sign_out_others
+                    else "Password changed. Your other devices are still signed in, as "
+                         "you asked; this one stays signed in too."
+                ),
+            }
+        )
+
+    @bp.route("/api/account/email/reauth", methods=["POST"])
+    @account_required
+    def api_send_reauth_code():
+        """One sender for the code that proves this person can read the mailbox.
+
+        The email-change popup and the optional box next to a two-factor toggle ask the
+        same question, so they ask it through one door and share one budget.  Issuing a
+        code replaces the live one for that purpose, which is why only the newest email
+        ever works -- worth saying here because two popups can each hold a half-typed
+        code and only one of them is real.
+        """
+        ip, user_agent = _ip(), _ua()
+        user = mu.accounts.get_user(g.ss_user["id"]) or g.ss_user
+        if not user.get("email"):
+            return _json_error(
+                "no_email",
+                "This account has no email address to send a code to. Set one first.",
+                422,
+            )
+        blocked = _code_send_blocked(user, "reauth", ip)
+        if blocked:
+            return blocked
+        note = _mail_note(_send_code(user, "reauth", ip, user_agent, account_where))
+        return jsonify({"ok": True, "note": note, "sent_to": _mask(user["email"])})
+
+    @bp.route("/api/account/email/change", methods=["POST"])
+    @account_required
+    def api_email_change():
+        """Move the account to a new address: the code from the old one, then the password.
+
+        The code is spent while the old address is still on the account, because a code
+        only validates against the address it was written to -- writing the new one first
+        would invalidate the very proof that made the change allowed.
+
+        The password is verified once here and handed to ``update_own_profile`` again
+        rather than bypassed: that function is the only writer of this column, it is the
+        door the administrator side uses too, and re-checking a hash the caller just
+        proved is cheaper than a second code path that could drift from the first.
+        """
+        ip, user_agent = _ip(), _ua()
+        user = mu.accounts.get_user(g.ss_user["id"]) or g.ss_user
+        body = request.get_json(silent=True) or {}
+        current_password = str(body.get("current_password") or "")
+        email_code = str(body.get("email_code") or "").strip()
+        try:
+            new_email = mu.accounts.validate_email(str(body.get("email") or ""))
+        except AccountError as exc:
+            message = str(exc)
+            return _json_error("invalid", message, 422, fields={"email": message})
+        if not new_email:
+            message = "An email address is required, so you can reset your password later."
+            return _json_error("invalid", message, 422, fields={"email": message})
+        # Judged on the address, before anything is spent: a code is single-use and a
+        # form typo is not a security event.
+        if new_email == (user.get("email") or "").strip().lower():
+            message = "That is already the address on this account."
+            return _json_error("invalid", message, 422, fields={"email": message})
+        owner = mu.accounts.find_user_by_email(new_email)
+        if owner and owner.get("id") != user["id"]:
+            return _json_error("email_taken", EMAIL_TAKEN_GENERIC, 409)
+        # An account with no address yet has no old mailbox to prove, so the password
+        # alone is the gate for that first one -- otherwise a person could never add
+        # an address to an account that does not have one.
+        has_current = bool((user.get("email") or "").strip())
+        if has_current and not email_code:
+            message = "Enter the code sent to your current address first."
+            return _json_error("invalid", message, 422, fields={"email_code": message})
+
+        if has_current:
+            blocked = _limited("code-ip", netids.ip_bucket(ip))
+            if blocked:
+                return blocked
+            allowed, retry_after = _throttle(
+                "code-id", netids.identifier_bucket(user.get("username") or user["id"])
+            )
+            if not allowed:
+                return _json_error(
+                    "rate_limited",
+                    f"Too many tries. Wait {retry_after} seconds and enter the code again.",
+                    429,
+                    retryable=True,
+                    retry_after=retry_after,
+                    fields={"email_code": "Wait before trying this code again."},
+                )
+        try:
+            mu.accounts.confirm_own_credentials(
+                user,
+                current_password=current_password,
+                email_code=email_code,
+                purpose="reauth",
+                require_email_code=has_current,
+                ip=ip,
+                user_agent=user_agent,
+                audit_action="email_change_failed",
+            )
+        except AccountError as exc:
+            message = str(exc)
+            if "password" in message.lower():
+                return _json_error(
+                    "bad_password", message, 403, fields={"current_password": message}
+                )
+            return _json_error(
+                "invalid_code", message, 410, fields={"email_code": message}
+            )
+        try:
+            updated = mu.accounts.update_own_profile(
+                user,
+                email=new_email,
+                current_password=current_password,
+                ip=ip,
+                user_agent=user_agent,
+            )
+        except AccountError as exc:
+            message = str(exc)
+            if message in (EMAIL_TAKEN, USERNAME_TAKEN):
+                return _error_for(exc)
+            return _json_error("invalid", message, 422, fields={"email": message})
+        # The new address starts unverified, so its confirmation code goes out in the
+        # same breath as the change -- exactly as the plain profile edit does.
+        note = _mail_note(_send_code(updated, "verify", ip, user_agent, account_where))
+        return jsonify(
+            {
+                "ok": True,
+                "user": updated,
+                "email_changed": True,
+                "verification_pending": mu.accounts.verification_pending(updated),
+                "note": note,
+                "message": f"Your email address is now {_mask(new_email)}. Confirm it "
+                           "with the code that was just sent.",
+            }
+        )
+
     @bp.route("/api/account/email/verification", methods=["POST"])
     @account_required
     def api_resend_verification():
@@ -1201,17 +1511,9 @@ def build_selfservice_blueprint(mu) -> Blueprint:
             return _json_error("no_email", "Add an email address first.", 422)
         if not mu.accounts.verification_pending(user):
             return jsonify({"ok": True, "note": "", "message": "This address is already confirmed."})
-        blocked = _limited("resend-ip", netids.ip_bucket(ip))
+        blocked = _code_send_blocked(user, "verify", ip)
         if blocked:
             return blocked
-        blocked = _limited("resend-id", netids.identifier_bucket(user["email"]))
-        if blocked:
-            return blocked
-        if mu.accounts.recent_email_token_count(user["id"], "verify", 60):
-            return _json_error(
-                "rate_limited", "A code was just sent. Check your inbox.", 429,
-                retryable=True, retry_after=60,
-            )
         note = _mail_note(_send_code(user, "verify", ip, user_agent, account_where))
         return jsonify({"ok": True, "note": note})
 
@@ -1309,27 +1611,40 @@ def build_selfservice_blueprint(mu) -> Blueprint:
         if blocked:
             return blocked
         body = request.get_json(silent=True) or {}
+        before = mu.accounts.get_user(g.ss_user["id"]) or g.ss_user
+        replacing = mu.accounts.totp_is_enabled(before)
         try:
             enrollment = mu.accounts.begin_totp_enrollment(
                 g.ss_user,
                 current_password=str(body.get("current_password") or ""),
+                # Optional, and never the authenticator's own code: the emailed one
+                # is the proof a person can still produce when the phone is the
+                # thing being replaced.
+                email_code=str(body.get("email_code") or "").strip(),
                 issuer=config.app_name,
                 ip=ip,
                 user_agent=user_agent,
+                # A player already uses one authenticator, they lose phones. The new
+                # secret stays pending -- and the live one keeps working -- until a code
+                # proves they can actually generate from it, so this can never be a way
+                # to lock somebody out of their own second factor.
+                allow_existing=True,
             )
         except AccountError as exc:
             message = str(exc)
-            lowered = message.lower()
-            if "incorrect" in lowered:
+            if "password" in message.lower():
                 return _json_error(
                     "bad_password", message, 403, fields={"current_password": message}
                 )
-            if "already on" in lowered:
-                return _json_error("totp_already_enabled", message, 409)
+            if "code" in message.lower():
+                return _json_error(
+                    "invalid_code", message, 410, fields={"email_code": message}
+                )
             return _json_error("invalid", message, 422)
         return jsonify(
             {
                 "ok": True,
+                "replacing": replacing,
                 "secret": enrollment["secret"],
                 "account": enrollment["account"],
                 "issuer": enrollment["issuer"],
@@ -1373,6 +1688,8 @@ def build_selfservice_blueprint(mu) -> Blueprint:
         if blocked:
             return blocked
         body = request.get_json(silent=True) or {}
+        before = mu.accounts.get_user(g.ss_user["id"]) or g.ss_user
+        replacing = mu.accounts.totp_is_enabled(before)
         try:
             user = mu.accounts.confirm_totp_enrollment(
                 g.ss_user,
@@ -1389,13 +1706,29 @@ def build_selfservice_blueprint(mu) -> Blueprint:
                 403 if bad_code else 422,
                 fields={"code": message},
             )
+        _notify_security_change(
+            user,
+            "Your two-factor sign-in was turned on"
+            if not replacing
+            else "Your two-factor authenticator was replaced",
+            "A code from the new authenticator app was entered correctly on your "
+            f"{config.app_name} account, so signing in now asks for one from it.",
+            rows=(("Changed", _human_stamp(int(time.time()))), ("From", _ip())),
+            note="If you did not do this, turn two-factor back off and change your "
+                 "password from a device you trust.",
+            audit="totp_change_notice",
+        )
         # No rotation here: the page stays open and keeps posting with the token
         # it was rendered with, and nothing about the session changed identity.
         return jsonify(
             {
                 "ok": True,
                 "totp_enabled": mu.accounts.totp_is_enabled(user),
-                "message": "Two-factor sign-in is on. You will need a code next time.",
+                "replacing": replacing,
+                "message": "Two-factor sign-in is on. You will need a code next time."
+                if not replacing
+                else "Your authenticator was replaced. The codes from the old app no "
+                     "longer work; use the new one.",
             }
         )
 
@@ -1415,20 +1748,40 @@ def build_selfservice_blueprint(mu) -> Blueprint:
         if blocked:
             return blocked
         body = request.get_json(silent=True) or {}
+        ip, user_agent = _ip(), _ua()
         try:
             user = mu.accounts.disable_totp(
                 g.ss_user,
                 current_password=str(body.get("current_password") or ""),
-                code=str(body.get("code") or "").strip(),
-                ip=_ip(),
-                user_agent=_ua(),
+                # An emailed code, never the authenticator's own: the device that
+                # generates those is the thing a person reliably loses, and a second
+                # factor they cannot remove is a lock-out, not a protection.
+                email_code=str(body.get("email_code") or "").strip(),
+                ip=ip,
+                user_agent=user_agent,
             )
         except AccountError as exc:
             message = str(exc)
             lowered = message.lower()
-            if "incorrect" in lowered:
-                return _json_error("bad_credentials", message, 403)
+            if "password" in lowered:
+                return _json_error(
+                    "bad_password", message, 403, fields={"current_password": message}
+                )
+            if "code" in lowered:
+                return _json_error(
+                    "invalid_code", message, 410, fields={"email_code": message}
+                )
             return _json_error("invalid", message, 422)
+        _notify_security_change(
+            user,
+            "Your two-factor sign-in was turned off",
+            "Two-factor is no longer required to sign in to your "
+            f"{config.app_name} account. Your password alone is enough again.",
+            rows=(("Changed", _human_stamp(int(time.time()))), ("From", ip)),
+            note="If this was not you, change your password now -- an attacker who "
+                 "reached this page already knew it.",
+            audit="totp_disable_notice",
+        )
         return jsonify(
             {
                 "ok": True,
@@ -1442,10 +1795,15 @@ def build_selfservice_blueprint(mu) -> Blueprint:
     @account_required
     def api_delete_account():
         ip, user_agent = _ip(), _ua()
-        blocked = _limited("account-delete", g.ss_user["id"])
+        body = request.get_json(silent=True) or {}
+        # The first popup only proves who is asking. It gets its own budget so that
+        # opening it twice cannot leave the deletion itself with no attempts left.
+        verify_only = bool(body.get("verify_only"))
+        blocked = _limited(
+            "account-delete-check" if verify_only else "account-delete", g.ss_user["id"]
+        )
         if blocked:
             return blocked
-        body = request.get_json(silent=True) or {}
         username = g.ss_user.get("username") or ""
         password = str(body.get("password") or "")
         confirm_username = str(body.get("confirm_username") or "")
@@ -1461,6 +1819,8 @@ def build_selfservice_blueprint(mu) -> Blueprint:
                 g.ss_user,
                 password=password,
                 confirm_username=confirm_username,
+                email_code=str(body.get("email_code") or "").strip(),
+                dry_run=verify_only,
                 ip=ip,
                 user_agent=user_agent,
             )
@@ -1473,11 +1833,21 @@ def build_selfservice_blueprint(mu) -> Blueprint:
                 return _json_error(
                     "username_mismatch", message, 409, fields={"confirm_username": message}
                 )
+            if "code" in lowered:
+                if "enter the code" in lowered:
+                    return _json_error(
+                        "code_required", message, 422, fields={"email_code": message}
+                    )
+                return _json_error(
+                    "invalid_code", message, 410, fields={"email_code": message}
+                )
             # Either wording of "you are the last one who can run this server":
             # the delete path's own sentence, or the shared last-owner guard's.
             if "administrator" in lowered or "must remain" in lowered:
                 return _json_error("last_owner", message, 409)
             return _json_error("invalid", message, 422)
+        if verify_only:
+            return jsonify({"ok": True})
         _drop_account_cookies()
         return jsonify(
             {

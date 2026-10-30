@@ -42,3 +42,17 @@ class ProxyAwareAlexaLogin(AlexaLogin):
             await super().reset()
         finally:
             self._cookiefile = files
+
+    # AlexaPy decides the next step from the markup of each answer, then drops
+    # the response when a failed confirmation resets the session. Keeping the
+    # last page -- url and body captured together -- lets the caller name the
+    # page it could not answer; nothing here is logged or persisted.
+    async def _process_resp(self, resp):
+        url = await super()._process_resp(resp)
+        self._resp_url = str(resp.url)
+        return url
+
+    async def _process_page(self, html, site):
+        self._page_url = getattr(self, "_resp_url", None) or str(site)
+        self._page_html = html
+        return await super()._process_page(html, site)

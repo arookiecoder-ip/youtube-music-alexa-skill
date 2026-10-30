@@ -4,10 +4,12 @@ Two behaviours are worth pinning down here.
 
 *Fallback* is a deliberate exception to "your own session or the public
 catalogue": an account that never connected YouTube reads the server's session,
-so `_yt_auth_file` and the download-cookie lookup must return that one credential
-for everybody -- and must stop returning it the moment the switch is off. The
-server's own identity must never fall back to itself, or a missing `server.json`
-would become an infinite lookup.
+so `_yt_auth_file` returns that one credential for everybody when the account
+has none of its own, and the download-cookie lookup *prefers* the server jar for
+every identity (an account jar only covers an unusable server jar). Both must
+stop returning it the moment the switch is off. The server's own identity must
+never fall back to itself, or a missing `server.json` would become an infinite
+lookup.
 
 *Keepalive* decides when to sign in, and the expensive answers (authenticated,
 switched off, unconfigured, backing off) are all the same answer: don't. Only an
@@ -161,15 +163,28 @@ class DownloadCookieFallbackTests(_TempStore):
         borrowed = self.write("download_cookies_server.txt")
         self.assertEqual(server.Supporting.get_ytdlp_cookies_file(ACCOUNT), borrowed)
 
-    def test_an_accounts_own_jar_wins_over_the_server_jar(self):
-        self.write("download_cookies_server.txt")
+    def test_the_shared_server_jar_wins_over_an_accounts_own_jar(self):
+        shared = self.write("download_cookies_server.txt")
+        self.write("download_cookies_%s.txt" % UUID)
+        self.assertEqual(server.Supporting.get_ytdlp_cookies_file(ACCOUNT), shared)
+
+    def test_an_accounts_jar_covers_an_unusable_server_jar(self):
+        with open(os.path.join(self.dir, "download_cookies_server.txt"), "w",
+                  encoding="utf-8") as stream:
+            stream.write("")
         own = self.write("download_cookies_%s.txt" % UUID)
         self.assertEqual(server.Supporting.get_ytdlp_cookies_file(ACCOUNT), own)
 
-    def test_the_switch_turns_the_borrowed_jar_off(self):
+    def test_the_switch_turns_the_shared_jar_off(self):
         self.write("download_cookies_server.txt")
         with mock.patch.dict(os.environ, {"YOUTUBE_SERVER_SESSION": "0"}):
             self.assertIsNone(server.Supporting.get_ytdlp_cookies_file(ACCOUNT))
+
+    def test_the_switch_falls_back_to_an_accounts_own_jar(self):
+        self.write("download_cookies_server.txt")
+        own = self.write("download_cookies_%s.txt" % UUID)
+        with mock.patch.dict(os.environ, {"YOUTUBE_SERVER_SESSION": "0"}):
+            self.assertEqual(server.Supporting.get_ytdlp_cookies_file(ACCOUNT), own)
 
 
 class RenewalTargetTests(_TempStore):

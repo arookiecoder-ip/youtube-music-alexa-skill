@@ -160,8 +160,16 @@ Shipped in `server.py`, `youtube_credentials.py`, `youtube_browser_session.py`,
 - The capture sidecar takes a `profile` key: the owner stays on the base
   `/profile`, an account gets `/profile/<id>`. One browser, so a second concurrent
   sign-in is refused with `409` instead of overwriting the first.
-- Download cookies are per identity (`/data/download_cookies_<user_id>.txt`), and
-  the `yt-dlp` node pool is per identity (`_youtube_stream_for(identity)`).
+- Download cookies: the shared server jar is the primary credential for every
+  identity, so accounts share one credential generation instead of a per-account
+  session; per-identity `/data/download_cookies_<user_id>.txt` jars remain as the
+  fallback when the server jar is missing/unusable.
+- The resolver is shared too: `_YouTubeResolverPool` keys one `Resolver` (Node
+  process, Innertube session, resolved-URL cache) by the cookie jar it signs
+  with, so every account on the server jar warms it once. Only the relay facade
+  (`_youtube_stream_for(identity)`: slot budget and current-track bytes) stays per
+  identity. Deleting an account drops its facade and any worker built on its own
+  fallback jar, never the shared one.
 - `AudioJobs` captures `IDENTITY` at submit and rebinds it while the job runs, so a
   background prefetch can never fill another account's cache; keys are
   `(identity, video_id)`.

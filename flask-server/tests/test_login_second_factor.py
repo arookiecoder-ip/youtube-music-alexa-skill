@@ -471,8 +471,7 @@ class PlayerDoorTests(SecondFactorDoorTestBase):
         token = self.post(username="player1", password=PLAYER_PASSWORD).get_json()["token"]
         user = self.accounts.get_user_by_username("player1")
         self.accounts.disable_totp(
-            user, current_password=PLAYER_PASSWORD,
-            code=totp_at(secret, int(time.time()) // 30), ip="127.0.0.1", user_agent="x"
+            user, current_password=PLAYER_PASSWORD, ip="127.0.0.1", user_agent="x"
         )
         response = self.post(step="totp", token=token, code=totp_at(secret, int(time.time()) // 30))
         self.assertEqual(response.status_code, 401)

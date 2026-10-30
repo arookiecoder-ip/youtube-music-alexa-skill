@@ -181,4 +181,46 @@ for line in sys.stdin:
         self.assertEqual(error.exception.code,'invalid_media')
 
 
+class SharedResolver(unittest.TestCase):
+    def test_two_facades_on_one_resolver_keep_separate_playback_state(self):
+        resolver=Mock();resolver.resolve.return_value=dict(MEDIA)
+        resolver.snapshot.return_value={'resolving':0}
+        one=YouTubeStream(lambda:'',resolver=resolver,capacity=1)
+        two=YouTubeStream(lambda:'',resolver=resolver,capacity=1)
+        self.addCleanup(one.close);self.addCleanup(two.close)
+        self.assertIsNot(one.current,two.current)
+        self.assertIsNot(one.slots,two.slots)
+        self.assertIsNotNone(one.snapshot()['resolver_id'])
+        self.assertEqual(one.snapshot()['resolver_id'],two.snapshot()['resolver_id'])
+
+    def test_closing_one_facade_leaves_the_shared_resolver_running(self):
+        resolver=Mock();resolver.resolve.return_value=dict(MEDIA)
+        one=YouTubeStream(lambda:'',resolver=resolver)
+        two=YouTubeStream(lambda:'',resolver=resolver)
+        self.addCleanup(one.close);self.addCleanup(two.close)
+        one.close()
+        two.resolve(VID)
+        resolver.resolve.assert_called_once_with(VID,refresh=False)
+        resolver.close.assert_not_called()
+
+    def test_a_changed_credential_moves_the_facade_to_another_worker(self):
+        credential=[MEDIA['url']];workers={}
+        def resolver_for():
+            return workers.setdefault(credential[0],Mock())
+        stream=YouTubeStream(lambda:credential[0],resolver_for=resolver_for)
+        self.addCleanup(stream.close)
+        first=stream._active_resolver()
+        credential[0]='https://rr2.googlevideo.com/audio'
+        self.assertIsNot(stream._active_resolver(),first)
+        self.assertIs(stream._active_resolver(),workers[credential[0]])
+
+    def test_a_private_facade_still_stops_its_own_worker(self):
+        stream=YouTubeStream(lambda:'')
+        self.addCleanup(stream.close)
+        resolver=stream._active_resolver()
+        with unittest.mock.patch.object(resolver,'close') as closed:
+            stream.close()
+        closed.assert_called_once()
+
+
 if __name__=='__main__':unittest.main()

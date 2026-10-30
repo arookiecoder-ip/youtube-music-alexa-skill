@@ -437,12 +437,18 @@ def render_alert_email(
     rows: tuple = (),
     note: str = "",
     footer: str = "",
+    fine_print: str = "",
+    trailing: str = "",
 ) -> tuple[str, str]:
-    """Return (text, html) for an operator alert.
+    """Return (text, html) for a message with no credential in it.
 
     Alerts describe a server that needs a human rather than a credential to type,
     so there is no code box and no button -- just what happened, in the same
     label-over-value shape the site uses, and what to do about it.
+
+    The two closing lines are the only part that is about the *reader* rather than
+    the event, so they are arguments: an operator alert and a notice to an account
+    holder are the same shape addressed to two people who need different reassurance.
     """
     text_lines = [app_name, "", heading, "", intro]
     for label, value in rows:
@@ -459,11 +465,11 @@ def render_alert_email(
     if note:
         body.append(_note(note, _DANGER))
     body.append(_fine_print(
-        f"Sent automatically by {_escape(app_name)} because this needs someone to look."))
+        _escape(fine_print) or f"Sent automatically by {_escape(app_name)} because this needs someone to look."))
     text_lines.extend(["", "— " + app_name])
     return "\n".join(text_lines), _document(
         app_name, "\n".join(body), footer,
-        trailing="Nothing in this email needs a reply; it is here so you see it before a user does.",
+        trailing=trailing or "Nothing in this email needs a reply; it is here so you see it before a user does.",
     )
 
 

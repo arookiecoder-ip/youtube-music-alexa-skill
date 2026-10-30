@@ -75,7 +75,10 @@ export function createResolver({ createClient = options => Innertube.create(opti
     const hit = cache.get(key);
     if (hit && hit.expires_at > now()) return hit;
     if (pending.has(key)) return pending.get(key);
-    if (active >= 4) throw new Error('busy');
+    // One worker now serves every account on this credential, so the ceiling
+    // matches the Python side's eight pending requests instead of the old
+    // per-account four. Cache hits never count against it.
+    if (active >= 8) throw new Error('busy');
     active++;
     const currentCache = cache, currentPending = pending;
     const task = (async () => {

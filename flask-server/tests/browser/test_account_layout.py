@@ -1,10 +1,11 @@
 """Pixel contract for /account, in real Chromium at the widths people use.
 
-The page is a settings surface with six forms, a status strip, a jump nav and a
-device list -- the kind of layout that breaks quietly: a panel that no longer
-fits its column, a nav row that starts scrolling the document sideways, a control
-that becomes a 19px tap target, a border radius that came back. None of that is
-visible in a template diff, and all of it is visible here.
+The page is a settings surface with four sections, a status strip, a jump nav, a
+device list and the popups that own each action -- the kind of layout that breaks
+quietly: a panel that no longer fits its column, a nav row that starts scrolling
+the document sideways, a control that becomes a 19px tap target, a border radius
+that came back. None of that is visible in a template diff, and all of it is
+visible here.
 
 Everything asserted is measurable, and the fixtures are deliberately the awkward
 shape of each state: an unconfirmed address with a live code, a waiting two-factor
@@ -22,8 +23,8 @@ from playwright.sync_api import sync_playwright
 ROOT = Path(__file__).resolve().parents[2]
 WIDTHS = [320, 375, 390, 768, 1024, 1440, 1920]
 # What the page actually sent to the server, recorded by the stubs below. The
-# layout checks are blind to a button that only ever arms, so the destructive
-# actions are the one thing here worth counting in requests.
+# layout checks are blind to a confirmation popup that opens and never sends, so
+# the destructive actions are the one thing here worth counting in requests.
 POSTS = []
 
 
@@ -95,6 +96,8 @@ FIXTURE = {
     ],
     "password_min_length": 12,
     "signup_open": True,
+    # The code-proving state account.js reads; there is none live in this fixture.
+    "reauth": None,
 }
 
 
@@ -107,11 +110,14 @@ def origin():
     @app.route("/account")
     def account_page():
         # ?theme=light renders the same page in the other palette; the real route
-        # reads the stored preference instead of a query string.
+        # reads the stored preference instead of a query string. ?step= is the
+        # no-script fallback trigger: the server marks that popup data-autopen.
         wanted = request.args.get("theme")
+        step = request.args.get("step", "")
         return render_template("account.html", app_name="Music Box", csrf_form="test-token",
                                asset_url=lambda relative: f"/static/{relative}?v=fixture",
                                theme=wanted if wanted in ("dark", "light") else "dark",
+                               step=step if step in ("password", "reset", "email", "totp", "delete") else "",
                                **FIXTURE)
 
     @app.route("/api/account")
@@ -135,6 +141,55 @@ def origin():
     def provider_disconnect(provider):
         POSTS.append(f"disconnect:{provider}")
         return jsonify({"complete": True, "message": ""})
+
+    # The provider sign-in popup submits to the same endpoints the standalone page
+    # uses. These answer with the first follow-up each provider asks for, so the
+    # dialog's step panels and its cancel-on-close path are exercised.
+    @app.route("/api/youtube/browser-session/form/start", methods=["POST"])
+    def youtube_form_start():
+        POSTS.append("youtube:start")
+        return jsonify({"state": "need_code", "answer": "securitycode",
+                        "message": "Enter the code your phone shows."})
+
+    @app.route("/api/youtube/browser-session/form/stop", methods=["POST"])
+    def youtube_form_stop():
+        POSTS.append("youtube:stop")
+        return jsonify({"success": True})
+
+    @app.route("/api/youtube/browser-session/form/code", methods=["POST"])
+    def youtube_form_code():
+        POSTS.append("youtube:code")
+        return jsonify({"state": "connected"})
+
+    @app.route("/alexa/form_login/", methods=["POST"])
+    def amazon_form_start():
+        POSTS.append("amazon:start")
+        body = request.get_json(silent=True) or {}
+        # The template fixture reports Amazon connected, so the popup tests use a
+        # normal address for the approval path and this one to reach the choice
+        # panel, which is the only place the popup grows radio rows.
+        if body.get("email") == "choice@example.test":
+            return jsonify({"state": "need_choice", "kind": "claimsoption",
+                            "message": "Choose how to verify.",
+                            "options": [
+                                {"index": "0",
+                                 "label": "Text a code to the number ending 1234"},
+                                {"index": "1", "label": "Use an authenticator app"},
+                            ]})
+        return jsonify({"state": "need_approval",
+                        "message": "Approve this sign-in on your phone."})
+
+    @app.route("/alexa/form_login/step/", methods=["POST"])
+    def amazon_form_step():
+        body = request.get_json(silent=True) or {}
+        POSTS.append("amazon:" + str(body.get("kind")))
+        return jsonify({"state": "need_approval",
+                        "message": "Approve this sign-in on your phone."})
+
+    @app.route("/alexa/form_login/cancel/", methods=["POST"])
+    def amazon_form_cancel():
+        POSTS.append("amazon:cancel")
+        return jsonify({"success": True})
 
     @app.route("/api/account/sessions/revoke", methods=["POST"])
     def sessions_revoke():
@@ -183,6 +238,18 @@ def open_section(page, panel_id):
     page.wait_for_timeout(60)
 
 
+DIALOGS = ["password", "email", "totp"]
+
+
+def open_dialog(page, slug):
+    """Open one popup from the button that owns it, the way a person does. The click
+    is the point: the button is what the page offers, and opening in place is its
+    promise -- no round trip to /account?step=... on this path."""
+    page.locator(f'#panel-profile a[data-dialog="dialog-{slug}"]').first.click()
+    page.wait_for_selector(f"#dialog-{slug}[open]")
+    page.wait_for_timeout(80)
+
+
 def hidden_panels(page):
     return page.evaluate("""() => [...document.querySelectorAll('.account-panes > .panel')]
         .filter((node) => node.hidden).map((node) => node.id)""")
@@ -190,7 +257,7 @@ def hidden_panels(page):
 
 def reveal_all(page):
     """Put every section back on the page -- the shape a browser with no JavaScript
-    gets -- so a geometry sweep measures all five panels rather than whichever one
+    gets -- so a geometry sweep measures all four panels rather than whichever one
     the rail happens to be showing."""
     page.evaluate("""() => document.querySelectorAll('.account-panes > .panel')
         .forEach((panel) => { panel.hidden = false; })""")
@@ -254,22 +321,32 @@ def test_the_surface_is_square_except_for_the_shapes_that_are_meant_to_be_round(
 
 # --------------------------------------------------------------------- controls
 def test_every_control_is_a_target_a_hand_can_hit(page):
-    # WCAG 2.2 AA asks for 24x24 CSS px. The page has six forms and a device list
-    # of sign-out buttons, so this is the check that the compact design stayed
-    # usable rather than merely compact.
+    # WCAG 2.2 AA asks for 24x24 CSS px. The page has five forms, a device list of
+    # sign-out buttons and three popups, so this is the check that the compact
+    # design stayed usable rather than merely compact.
     reveal_all(page)
-    small = page.evaluate("""() => {
-      const thin = [];
-      document.querySelectorAll('a, button, input, select, summary').forEach((node) => {
-        if (node.hidden || !node.offsetParent) return;
-        const box = node.getBoundingClientRect();
-        if (box.height && box.height < 24) {
-          thin.push(node.tagName + '#' + (node.id || node.className) + ' h=' + Math.round(box.height));
-        }
-      });
-      return thin;
-    }""")
-    assert small == [], small
+    thin = []
+    for slug in [None] + DIALOGS:
+        if slug:
+            open_dialog(page, slug)
+        scope = f"#dialog-{slug}" if slug else "body"
+        thin += page.evaluate("""(scope) => {
+          const thin = [];
+          document.querySelectorAll(scope + ' a, ' + scope + ' button, ' + scope + ' input, '
+                                   + scope + ' select, ' + scope + ' summary').forEach((node) => {
+            if (node.hidden || !node.offsetParent) return;
+            const box = node.getBoundingClientRect();
+            if (box.height && box.height < 24) {
+              thin.push(node.tagName + '#' + (node.id || node.className) + ' h='
+                        + Math.round(box.height));
+            }
+          });
+          return thin;
+        }""", scope)
+        if slug:
+            page.keyboard.press("Escape")
+            page.wait_for_timeout(60)
+    assert thin == [], thin
 
 
 def test_keyboard_focus_is_visible_on_the_forms(page):
@@ -315,31 +392,37 @@ def test_the_current_device_is_marked_and_never_offered_for_sign_out(page):
 
 
 # ------------------------------------------------------------------------ text
-def test_prose_is_capped_to_a_measure_wider_than_the_panel(page):
-    # A section that is the only thing on the page is not a licence for a sentence
-    # that runs the width of it.
-    open_section(page, "panel-security")
-    width = page.evaluate("() => document.querySelector('#panel-security .panel-hint') "
-                          ".getBoundingClientRect().width")
-    assert width < 720, width
+def test_the_delete_action_sits_outside_the_grid_and_opens_its_own_popup(page):
+    trigger = page.locator('.danger-zone a[data-dialog="dialog-delete-check"]')
+    shell = page.locator(".account-shell").bounding_box()
+    box = trigger.bounding_box()
+    assert box["y"] >= shell["y"] + shell["height"] - 1, (shell, box)
+    trigger.click()
+    page.wait_for_selector("#dialog-delete-check[open]")
+    assert page.locator("#form-delete-check").is_visible()
+    page.keyboard.press("Escape")
+    page.wait_for_timeout(80)
+    assert page.locator("#dialog-delete-check").is_hidden()
 
 
 def test_two_factor_states_are_said_in_the_same_words_everywhere(page):
-    open_section(page, "panel-security")
+    open_dialog(page, "totp")
     # Badges are set in small caps by CSS, so the rendered text is uppercase; the
-    # point is that the glance row and the panel answer the same question with the
-    # same words, not that either of them is spelled a particular way.
+    # point is that the strip, the option and the popup answer the same question
+    # with the same words, not that any of them is spelled a particular way.
     strip = page.locator("#totp-badge").inner_text().strip().lower()
-    heading = page.locator("#totp-state").inner_text().strip().lower()
-    assert strip == heading == "setup waiting", (strip, heading)
-    assert page.locator("#totp-off").is_visible()
-    assert not page.locator("#totp-on").is_visible()
+    option = page.locator("#totp-state").inner_text().strip().lower()
+    popup = page.locator("#totp-dialog-state").inner_text().strip().lower()
+    assert strip == option == popup == "setup waiting", (strip, option, popup)
+    # A setup is already waiting in this fixture, so the popup offers the code and
+    # not a second "turn it on" password box.
     assert page.locator("#enroll").is_visible()
+    assert not page.locator("#totp-begin-block").is_visible()
+    assert not page.locator("#totp-disable-block").is_visible()
 
 
 # ------------------------------------------------------------------------ nav
-PANELS = ["panel-profile", "panel-providers", "panel-sessions", "panel-security",
-          "panel-delete"]
+PANELS = ["panel-profile", "panel-providers", "panel-sessions"]
 
 
 def test_the_rail_is_a_sidebar_on_a_desk_and_a_row_on_a_phone(page, origin):
@@ -390,18 +473,17 @@ def test_choosing_a_section_shows_that_one_and_marks_it(page, panel_id):
     assert marked.count() == 1
     assert marked.first.get_attribute("aria-current") == "true"
     assert marked.first.get_attribute("href") == f"#{panel_id}"
-    # The address is the section's own fragment, so the back button walks the rail and
-    # /account#panel-security keeps meaning what it always meant.
+    # The address is the section's own fragment, so the back button walks the rail.
     assert page.evaluate("() => window.location.hash") == f"#{panel_id}"
 
 
 def test_the_back_button_walks_the_sections(page):
     open_section(page, "panel-sessions")
-    open_section(page, "panel-security")
+    open_section(page, "panel-providers")
     page.go_back()
     page.wait_for_timeout(200)
     assert page.locator("#panel-sessions").is_visible()
-    assert not page.locator("#panel-security").is_visible()
+    assert not page.locator("#panel-providers").is_visible()
 
 
 def test_a_browser_without_javascript_still_gets_every_section(origin):
@@ -414,6 +496,26 @@ def test_a_browser_without_javascript_still_gets_every_section(origin):
         opened.goto(f"{origin}/account", wait_until="load")
         for panel_id in PANELS:
             assert opened.locator(f"#{panel_id}").is_visible(), panel_id
+        # The option links are real links, and the server renders the popup they
+        # name as an ordinary block, so every field in it is reachable without a
+        # script drawing it. The actions still POST JSON, which is the same
+        # no-script shape the page's other forms have always had.
+        for slug in DIALOGS:
+            opened.goto(f"{origin}/account?step={slug}", wait_until="load")
+            assert opened.locator(f"#dialog-{slug}").is_visible(), slug
+            reachable = opened.evaluate("""(id) => [...document.querySelectorAll(id + ' input')]
+                .filter((node) => node.offsetParent !== null).length""", f"#dialog-{slug}")
+            assert reachable >= 1, slug
+        # The Reset button's own link names the reset task, so that is the form the
+        # server puts on the page for a browser that follows it.
+        opened.goto(f"{origin}/account?step=reset", wait_until="load")
+        assert opened.locator("#form-password-reset").is_visible()
+        assert opened.locator("#form-password").is_hidden()
+        # The delete button's link names its first popup, which is likewise rendered
+        # as a block for a browser that follows it.
+        opened.goto(f"{origin}/account?step=delete", wait_until="load")
+        assert opened.locator("#dialog-delete-check").is_visible()
+        assert opened.locator("#form-delete-check").is_visible()
         opened.close()
         browser.close()
 
@@ -428,7 +530,55 @@ def test_the_rail_offers_the_sections_in_the_order_they_are_written(page):
     assert hrefs == order, (hrefs, order)
 
 
-# ------------------------------------------------------------------ device list
+# ---------------------------------------------------------------------- popups
+@pytest.mark.parametrize("slug", DIALOGS)
+def test_an_option_opens_its_popup_without_leaving_the_page(page, slug):
+    page.locator(f'#panel-profile a[data-dialog="dialog-{slug}"]').first.click()
+    page.wait_for_selector(f"#dialog-{slug}[open]")
+    # Opening in place is the promise; the href is only the no-script fallback.
+    assert page.url.endswith("/account"), page.url
+    assert page.locator(f"#dialog-{slug}").is_visible()
+    for other in DIALOGS:
+        if other != slug:
+            assert page.locator(f"#dialog-{other}").is_hidden(), other
+    page.keyboard.press("Escape")
+    page.wait_for_timeout(80)
+    assert page.locator(f"#dialog-{slug}").is_hidden()
+
+
+def test_a_click_outside_a_popup_closes_it(page):
+    open_dialog(page, "password")
+    page.mouse.click(4, 4)
+    page.wait_for_timeout(80)
+    assert page.locator("#dialog-password").is_hidden()
+
+
+def test_the_close_buttons_close_the_popup_they_live_in(page):
+    open_dialog(page, "email")
+    page.locator("#dialog-email .dialog-head [data-dialog-close]").click()
+    page.wait_for_timeout(80)
+    assert page.locator("#dialog-email").is_hidden()
+    # ...and the option still opens it a second time.
+    open_dialog(page, "email")
+    page.locator("#dialog-email .dialog-foot [data-dialog-close]").click()
+    page.wait_for_timeout(80)
+    assert page.locator("#dialog-email").is_hidden()
+
+
+def test_a_direct_link_to_a_popup_opens_it_on_arrival(page, origin):
+    # /account?step=totp is what the trigger link's href says. A page reached that
+    # way must open that popup rather than render a dormant block at the bottom.
+    page.goto(f"{origin}/account?step=totp", wait_until="networkidle")
+    page.wait_for_timeout(120)
+    assert page.evaluate("() => document.getElementById('dialog-totp').open")
+    page.keyboard.press("Escape")
+    page.wait_for_timeout(80)
+    # The server's no-script flag was retired when the real popup opened, so the
+    # closed popup does not come back as a static block under the page.
+    assert page.locator("#dialog-totp").is_hidden()
+
+
+
 def test_the_device_list_scrolls_inside_its_own_panel(page):
     # Five live sessions is five rows of a name, three lines of detail and a raw
     # header apiece, and the panel used to grow with them. The rows run out inside
@@ -457,60 +607,70 @@ def test_the_device_list_scrolls_inside_its_own_panel(page):
 
 
 # ----------------------------------------------------------------------- rhythm
+LABEL_CLASHES = """(scope) => {
+  const visible = (node) => node.getBoundingClientRect().width > 0
+                         && node.getBoundingClientRect().height > 0;
+  const clashes = [];
+  for (const holder of document.querySelectorAll(scope)) {
+    const nodes = [...holder.querySelectorAll('*')].filter(visible);
+    for (const label of holder.querySelectorAll('form > label')) {
+      if (!visible(label)) continue;
+      const box = label.getBoundingClientRect();
+      let closest = null;
+      for (const node of nodes) {
+        if (node === label || label.contains(node) || node.contains(label)) continue;
+        const other = node.getBoundingClientRect();
+        // Only something the label actually sits under.
+        if (other.right <= box.left + 1 || other.left >= box.right - 1) continue;
+        if (other.bottom <= box.top + 1 && other.bottom > (closest ? closest.bottom : -1)) {
+          closest = {bottom: other.bottom, name: node.tagName + '.' + node.className};
+        }
+      }
+      if (closest && box.top - closest.bottom < 8) {
+        clashes.push({label: label.textContent.trim().slice(0, 20),
+                      above: closest.name, gap: Math.round(box.top - closest.bottom)});
+      }
+    }
+  }
+  return clashes;
+}"""
+
+
 def test_a_label_never_lands_on_top_of_the_text_above_it(page):
     # signin.css zeroes the first label's margin because on the door pages a form
     # begins at the top of its own box. Here forms follow prose, a state row or a
     # QR, and the label was drawing over them. Measured geometrically rather than
     # as a margin, because the element above is a different one every time.
     reveal_all(page)
-    tight = page.evaluate("""() => {
-      const visible = (node) => node.getBoundingClientRect().width > 0
-                             && node.getBoundingClientRect().height > 0;
-      const clashes = [];
-      for (const panel of document.querySelectorAll('.panel')) {
-        const nodes = [...panel.querySelectorAll('*')].filter(visible);
-        for (const label of panel.querySelectorAll('form > label')) {
-          if (!visible(label)) continue;
-          const box = label.getBoundingClientRect();
-          let closest = null;
-          for (const node of nodes) {
-            if (node === label || label.contains(node) || node.contains(label)) continue;
-            const other = node.getBoundingClientRect();
-            // Only something the label actually sits under. The security panel is
-            // two columns, and a paragraph in the other one shares the row.
-            if (other.right <= box.left + 1 || other.left >= box.right - 1) continue;
-            if (other.bottom <= box.top + 1 && other.bottom > (closest ? closest.bottom : -1)) {
-              closest = {bottom: other.bottom, name: node.tagName + '.' + node.className};
-            }
-          }
-          if (closest && box.top - closest.bottom < 8) {
-            clashes.push({label: label.textContent.trim().slice(0, 20),
-                          above: closest.name, gap: Math.round(box.top - closest.bottom)});
-          }
-        }
-      }
-      return clashes;
-    }""")
-    assert tight == [], tight
+    assert page.evaluate(LABEL_CLASHES, ".panel") == []
+    for slug in DIALOGS:
+        open_dialog(page, slug)
+        assert page.evaluate(LABEL_CLASHES, f"#dialog-{slug}") == [], slug
+        page.keyboard.press("Escape")
+        page.wait_for_timeout(60)
 
 
-def test_a_second_form_in_a_panel_is_separated_from_the_first(page):
-    # "Save changes" and "Confirm my email" are two different tasks. Stacked with
-    # no break between them they read as one action with two buttons.
-    save = page.locator("#form-profile button.primary").bounding_box()
-    verify = page.locator("#form-verify-code").bounding_box()
-    border = page.evaluate("() => getComputedStyle(document.querySelector('#form-verify-code'))"
-                           ".borderTopWidth")
-    assert border == "1px", border
-    gap = verify["y"] - (save["y"] + save["height"])
-    assert 16 <= gap <= 32, gap
+def test_each_password_button_opens_the_task_it_names(page):
+    # Change and reset are two different tasks, so each button shows its own form
+    # and only its own: stacked together they read as one action with two buttons.
+    page.locator('#panel-profile a[data-dialog="dialog-password"][data-view="change"]').click()
+    page.wait_for_selector("#dialog-password[open]")
+    assert page.locator("#form-password").is_visible()
+    assert page.locator("#form-password-reset").is_hidden()
+    page.keyboard.press("Escape")
+    page.wait_for_timeout(80)
+
+    page.locator('#panel-profile a[data-dialog="dialog-password"][data-view="reset"]').click()
+    page.wait_for_selector("#dialog-password[open]")
+    assert page.locator("#form-password-reset").is_visible()
+    assert page.locator("#form-password").is_hidden()
 
 
 def test_paired_actions_share_the_line_they_were_written_for(page):
     # A full-width primary button inside a flex row pushes its partner onto a
     # second line, which is how "Cancel setup" ended up under "Confirm". The row
     # bottom-aligns, so the pair is proved by overlapping, not by matching tops.
-    open_section(page, "panel-security")
+    open_dialog(page, "totp")
     confirm = page.locator("#form-totp-confirm .row button.primary").bounding_box()
     cancel = page.locator("#totp-cancel").bounding_box()
     shared = min(confirm["y"] + confirm["height"], cancel["y"] + cancel["height"]) \
@@ -521,7 +681,8 @@ def test_paired_actions_share_the_line_they_were_written_for(page):
 
 def test_the_primary_button_offset_is_on_the_spacing_scale(page):
     # signin.css parked every primary button 22px below its last field.
-    margin = page.evaluate("() => getComputedStyle(document.querySelector('#form-profile "
+    open_dialog(page, "password")
+    margin = page.evaluate("() => getComputedStyle(document.querySelector('#form-password "
                            "button.primary')).marginTop")
     assert margin in {"16px", "24px", "32px"}, margin
 
@@ -529,16 +690,16 @@ def test_the_primary_button_offset_is_on_the_spacing_scale(page):
 # ------------------------------------------------------------------- escaping
 ESCAPES = """() => {
   const offenders = [];
-  for (const panel of document.querySelectorAll('.panel')) {
-    const box = panel.getBoundingClientRect();
-    const style = getComputedStyle(panel);
+  for (const holder of document.querySelectorAll('.panel, dialog[open]')) {
+    const box = holder.getBoundingClientRect();
+    const style = getComputedStyle(holder);
     const left = box.left + parseFloat(style.paddingLeft);
     const right = box.right - parseFloat(style.paddingRight);
-    for (const node of panel.querySelectorAll('*')) {
+    for (const node of holder.querySelectorAll('*')) {
       const b = node.getBoundingClientRect();
       if (b.width === 0 || b.height === 0) continue;
       if (b.right > right + 1 || b.left < left - 1) {
-        offenders.push({panel: panel.id,
+        offenders.push({panel: holder.id,
                         node: node.tagName.toLowerCase() + '.' + node.className,
                         over: Math.round(Math.max(b.left - left, b.right - right)),
                         text: (node.textContent || '').trim().slice(0, 34)});
@@ -548,9 +709,13 @@ ESCAPES = """() => {
   return offenders;
 }"""
 
-# The actions that rewrite their own label with a sentence when armed.
-ARMABLE = ["#disconnect-amazon", "#disconnect-youtube", "#signout-others",
-           "#devices li:nth-child(2) button[data-revoke]"]
+# The destructive actions ask in a popup instead of rewriting their own label.
+# The row button in the Devices panel is reached through the list rather than by
+# id: the rows are rebuilt after every action, and the second one is a real other
+# device.
+DEVICE_BUTTON = "#devices li:nth-child(2) button[data-revoke]"
+CONFIRMABLE = ["#disconnect-amazon", "#disconnect-youtube", "#signout-others",
+               DEVICE_BUTTON]
 
 
 @pytest.mark.parametrize("width", WIDTHS)
@@ -563,90 +728,309 @@ def test_nothing_escapes_the_panel_it_lives_in(origin, width):
         opened = browser.new_context(viewport={"width": width, "height": 900}).new_page()
         opened.goto(f"{origin}/account", wait_until="networkidle")
         # All five at once: a panel that is hidden today is the one that breaks
-        # tomorrow, and the armed labels are clicked inside whichever it is.
+        # tomorrow, and the confirmation popup is opened from whichever it is.
         reveal_all(opened)
         assert opened.evaluate(ESCAPES) == [], width
-        for selector in ARMABLE:
+        for selector in CONFIRMABLE:
             opened.locator(selector).scroll_into_view_if_needed()
             opened.click(selector)
+            opened.wait_for_selector("#dialog-confirm[open]")
+            escaped = opened.evaluate(ESCAPES)
+            opened.keyboard.press("Escape")
             opened.wait_for_timeout(60)
-        escaped = opened.evaluate(ESCAPES)
+            assert escaped == [], (width, selector, escaped)
+        # The popups are measured the same way, one at a time: a modal lives in the
+        # top layer, so two of them cannot be open together.
+        for slug in DIALOGS:
+            open_dialog(opened, slug)
+            escaped = opened.evaluate(ESCAPES)
+            opened.keyboard.press("Escape")
+            opened.wait_for_timeout(60)
+            assert escaped == [], (width, slug, escaped)
         opened.close()
         browser.close()
-        assert escaped == [], (width, escaped)
 
 
-# ------------------------------------------------------------------ two-tap actions
-# The row button in the Devices panel, reached through the list rather than by id:
-# the rows are rebuilt after every action, and the second one is a real other device.
-DEVICE_BUTTON = "#devices li:nth-child(2) button[data-revoke]"
-
-ARMED = {
-    "#disconnect-amazon": ("panel-providers", "Disconnect", "Tap again to disconnect Amazon",
-                           "disconnect:amazon"),
-    "#disconnect-youtube": ("panel-providers", "Disconnect",
-                            "Tap again to disconnect YouTube Music", "disconnect:youtube"),
-    "#signout-others": ("panel-sessions", "Sign out other devices",
-                        "Tap again to sign out every other device", "revoke-others"),
-    # A row's own button arms with "this device" because the line beside it already
-    # says which device that is.
-    DEVICE_BUTTON: ("panel-sessions", "Sign out", "Tap again to sign out this device",
-                    "revoke:bbbb2222"),
+# ------------------------------------------------------------------ confirmations
+CONFIRMATIONS = {
+    "#disconnect-amazon": ("panel-providers", "Disconnect Amazon?", "disconnect:amazon"),
+    "#disconnect-youtube": ("panel-providers", "Disconnect YouTube Music?",
+                            "disconnect:youtube"),
+    "#signout-others": ("panel-sessions", "Sign out other devices?", "revoke-others"),
+    DEVICE_BUTTON: ("panel-sessions", "Sign out this device?", "revoke:bbbb2222"),
 }
 
 
 def visible_text(page, selector):
-    # These labels are uppercased by CSS and wrap when armed, so compare the words
-    # that are painted rather than the source spelling.
+    # These labels are uppercased by CSS and wrap, so compare the words that are
+    # painted rather than the source spelling.
     return " ".join(page.locator(selector).inner_text().split()).casefold()
 
 
-@pytest.mark.parametrize("selector", ARMED)
-def test_the_second_tap_actually_does_the_thing_the_first_one_armed_for(origin, selector):
-    # Geometry cannot see this failure: the label changes, the panel looks satisfied
-    # and nothing is ever sent. It is also the only check that the sentence the button
-    # arms with still names the same action the click performs.
-    panel, label, armed, endpoint = ARMED[selector]
+@pytest.mark.parametrize("selector", CONFIRMATIONS)
+def test_a_destructive_action_asks_in_a_popup_and_only_its_answer_acts(origin, selector):
+    # Geometry cannot see this failure: the popup opens, looks satisfied and nothing
+    # is ever sent. Cancel must leave the account alone, the sentence must name the
+    # action actually performed, and the trigger must keep the label it started with.
+    panel, title, endpoint = CONFIRMATIONS[selector]
     del POSTS[:]
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch()
         opened = browser.new_context(viewport={"width": 1280, "height": 900}).new_page()
         opened.goto(f"{origin}/account", wait_until="networkidle")
         open_section(opened, panel)
-        assert visible_text(opened, selector) == label.casefold()
+        before = visible_text(opened, selector)
+
         opened.click(selector)
-        assert visible_text(opened, selector) == armed.casefold()
+        opened.wait_for_selector("#dialog-confirm[open]")
+        assert opened.url.split("#", 1)[0].endswith("/account"), opened.url
+        assert visible_text(opened, "#dialog-confirm-title") == title.casefold()
+        assert visible_text(opened, selector) == before
+        if selector == DEVICE_BUTTON:
+            # A modal hides the row, so the sentence has to carry the name.
+            assert "safari on iphone" in visible_text(opened, "#dialog-confirm-message")
+        # Cancel is the safe answer: it closes the question and sends nothing.
+        opened.click("#dialog-confirm .dialog-foot [data-dialog-close]")
+        opened.wait_for_timeout(80)
+        assert opened.locator("#dialog-confirm").is_hidden()
         assert POSTS == []
+        # The same trigger asks again, and its answer is the action.
         opened.click(selector)
-        opened.wait_for_timeout(700)
-        assert visible_text(opened, selector) == label.casefold()
+        opened.wait_for_selector("#dialog-confirm[open]")
+        opened.click("#dialog-confirm-yes")
+        opened.wait_for_selector("#dialog-confirm", state="hidden")
+        opened.wait_for_timeout(300)
+        assert visible_text(opened, selector) == before
         opened.close()
         browser.close()
     assert POSTS == [endpoint], (selector, POSTS)
 
 
-def test_signing_out_of_this_browser_asks_once_before_it_leaves(origin):
-    # The header link is the one destructive control that is not a button, and it sits
-    # a hand's width from "Player". The first tap asks, the second one leaves -- and it
-    # leaves by the href, so the sign-out route is the one the page has always used.
+def test_signing_out_of_this_browser_asks_in_a_dialog_before_it_leaves(origin):
+    # The header link is the one destructive control that is not a button, and it
+    # sits a hand's width from "Player". It asks in a popup instead of rewriting its
+    # own label; Cancel leaves the session alone, and the confirm control still
+    # leaves by the href the page has always used.
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch()
         opened = browser.new_context(viewport={"width": 1280, "height": 900}).new_page()
         opened.goto(f"{origin}/account", wait_until="networkidle")
         assert visible_text(opened, "a.signout-link") == "sign out"
         opened.click("a.signout-link")
+        opened.wait_for_selector("#dialog-signout[open]")
         assert opened.url.endswith("/account"), opened.url
-        assert visible_text(opened, "a.signout-link") == "tap again to sign out"
+        assert opened.locator("#signout-confirm").get_attribute("href") == "/logout/"
+        assert visible_text(opened, "a.signout-link") == "sign out"
+        opened.click("#dialog-signout .dialog-foot [data-dialog-close]")
+        opened.wait_for_timeout(80)
+        assert opened.locator("#dialog-signout").is_hidden()
+        assert opened.url.endswith("/account"), opened.url
         opened.click("a.signout-link")
+        opened.wait_for_selector("#dialog-signout[open]")
+        opened.click("#signout-confirm")
         opened.wait_for_timeout(500)
         assert "/logout/" in opened.url, opened.url
         opened.close()
         browser.close()
 
 
+def test_a_provider_sign_in_opens_in_a_popup_on_the_account_page(origin):
+    # The provider links used to be doors to a separate page. They still carry that
+    # href for a browser without this script, but a click now asks for the same
+    # things in place -- and Cancel must stop the background sign-in it started.
+    del POSTS[:]
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        opened = browser.new_context(viewport={"width": 1280, "height": 900}).new_page()
+        opened.goto(f"{origin}/account", wait_until="networkidle")
+        # The fixture reports both sessions connected, so account.js hides the
+        # links; a provider that is not connected is the state this test needs.
+        open_section(opened, "panel-providers")
+        opened.evaluate("""() => document.querySelectorAll('a[data-connect]')
+            .forEach((link) => { link.hidden = false; })""")
+
+        opened.click("#link-youtube")
+        opened.wait_for_selector("#dialog-connect[open]")
+        assert "/accounts/" not in opened.url, opened.url
+        assert visible_text(opened, "#dialog-connect-title") == "connect youtube music"
+        assert visible_text(opened, "#connect-email-label") == "google email"
+        # The intro describes the form that is showing, so it is still there.
+        assert opened.locator("#connect-intro").is_visible()
+        opened.click("#dialog-connect .dialog-foot [data-dialog-close]")
+        opened.wait_for_timeout(80)
+        assert opened.locator("#dialog-connect").is_hidden()
+        assert "/accounts/" not in opened.url, opened.url
+        assert POSTS == [], POSTS
+
+        opened.click("#link-amazon")
+        opened.wait_for_selector("#dialog-connect[open]")
+        assert visible_text(opened, "#dialog-connect-title") == "connect amazon"
+        assert visible_text(opened, "#connect-email-label") == "amazon email or mobile number"
+        assert opened.locator("#connect-intro").is_visible()
+        opened.fill("#connect_email", "person@example.test")
+        opened.fill("#connect_password", "hunter2-hunter2")
+        opened.click("#connect-submit")
+        opened.wait_for_selector("#connect-approval-panel:not([hidden])")
+        assert opened.locator("#connect_email").input_value() == "person@example.test"
+        assert opened.locator("#connect_password").input_value() == ""
+        # The provider is asking a question now, so the sentence about signing in
+        # is behind the person rather than stacked over the question.
+        assert opened.locator("#connect-intro").is_hidden()
+        # Closing while the provider waits on a phone approval must not leave that
+        # background browser running on the server.
+        opened.click("#dialog-connect .dialog-foot [data-dialog-close]")
+        opened.wait_for_timeout(300)
+        assert opened.locator("#dialog-connect").is_hidden()
+        assert POSTS == ["amazon:start", "amazon:cancel"], POSTS
+        opened.close()
+        browser.close()
+
+
+def test_a_finished_provider_sign_in_closes_the_popup_and_says_so_in_place(origin):
+    # The popup exists so a connection does not cost the page the person was on.
+    # Answering the provider's last question has to close it, leave the URL alone
+    # and repaint the rows, not navigate to a result page.
+    del POSTS[:]
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        opened = browser.new_context(viewport={"width": 1280, "height": 900}).new_page()
+        opened.goto(f"{origin}/account", wait_until="networkidle")
+        open_section(opened, "panel-providers")
+        opened.evaluate("""() => {
+          const link = document.getElementById('link-youtube');
+          link.hidden = false;
+        }""")
+        opened.click("#link-youtube")
+        opened.wait_for_selector("#dialog-connect[open]")
+        opened.fill("#connect_email", "person@example.test")
+        opened.fill("#connect_password", "hunter2-hunter2")
+        opened.click("#connect-submit")
+        opened.wait_for_selector("#connect-code-panel:not([hidden])")
+        opened.fill("#connect_code", "123456")
+        opened.click("#connect-code-submit")
+        opened.wait_for_selector("#dialog-connect", state="hidden")
+        opened.wait_for_timeout(400)
+        assert "/accounts/" not in opened.url, opened.url
+        assert "youtube music connected" in visible_text(opened, "#notes-providers")
+        assert POSTS == ["youtube:start", "youtube:code"], POSTS
+        opened.close()
+        browser.close()
+
+
+def dialog_fit(page):
+    """The open popup's own edges and anything painting outside its body box."""
+    return page.evaluate("""() => {
+      const doc = document.documentElement;
+      const box = document.querySelector('dialog[open]');
+      const body = box.querySelector('.dialog-body');
+      const rect = body.getBoundingClientRect();
+      const style = getComputedStyle(body);
+      const left = rect.left + parseFloat(style.paddingLeft);
+      const right = rect.right - parseFloat(style.paddingRight);
+      const spills = [];
+      body.querySelectorAll('*').forEach((node) => {
+        const b = node.getBoundingClientRect();
+        if (!b.width || !b.height) return;
+        if (b.right > right + 1 || b.left < left - 1) {
+          spills.push(node.tagName.toLowerCase() + '.' + node.className + ' over='
+                      + Math.round(Math.max(b.left - left, b.right - right)));
+        }
+      });
+      const edge = box.getBoundingClientRect();
+      return {
+        scroll: doc.scrollWidth - doc.clientWidth,
+        dialog_right: Math.round(edge.right), viewport: doc.clientWidth,
+        spills: [...new Set(spills)],
+      };
+    }""")
+
+
+def thin_targets(page):
+    return page.evaluate("""() => {
+      const thin = [];
+      document.querySelectorAll('dialog[open] a, dialog[open] button, '
+                               + 'dialog[open] input, dialog[open] select, '
+                               + 'dialog[open] summary').forEach((node) => {
+        if (node.hidden || !node.offsetParent) return;
+        const box = node.getBoundingClientRect();
+        if (box.height && box.height < 24) {
+          thin.push(node.tagName + '#' + (node.id || node.className) + ' h='
+                    + Math.round(box.height));
+        }
+      });
+      return thin;
+    }""")
+
+
+@pytest.mark.parametrize("width", WIDTHS)
+def test_the_connect_popup_fits_every_width_and_keeps_24px_targets(origin, width):
+    # A provider image and radio rows are where a dialog grows past a phone or
+    # shrinks a control below a hand. The credentials form, the choice panel (the
+    # only one with radios) and the approval panel are measured separately, because
+    # each replaces the one before it.
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        opened = browser.new_context(viewport={"width": width, "height": 900}).new_page()
+        opened.goto(f"{origin}/account", wait_until="networkidle")
+        open_section(opened, "panel-providers")
+        opened.evaluate("""() => document.querySelectorAll('a[data-connect]')
+            .forEach((link) => { link.hidden = false; })""")
+        opened.click("#link-amazon")
+        opened.wait_for_selector("#dialog-connect[open]")
+
+        fit = dialog_fit(opened)
+        assert fit["scroll"] <= 1, (width, "credentials", fit)
+        assert fit["dialog_right"] <= fit["viewport"] + 1, (width, "credentials", fit)
+        assert fit["spills"] == [], (width, "credentials", fit)
+        assert thin_targets(opened) == [], (width, "credentials", thin_targets(opened))
+
+        opened.fill("#connect_email", "choice@example.test")
+        opened.fill("#connect_password", "hunter2-hunter2")
+        opened.click("#connect-submit")
+        opened.wait_for_selector("#connect-choice-panel:not([hidden])")
+        assert opened.locator("#connect-intro").is_hidden()
+        assert opened.locator(".connect-choice input").count() == 2
+        fit = dialog_fit(opened)
+        assert fit["scroll"] <= 1, (width, "choice", fit)
+        assert fit["dialog_right"] <= fit["viewport"] + 1, (width, "choice", fit)
+        assert fit["spills"] == [], (width, "choice", fit)
+        assert thin_targets(opened) == [], (width, "choice", thin_targets(opened))
+
+        opened.click("#connect-choice-submit")
+        opened.wait_for_selector("#connect-approval-panel:not([hidden])")
+        fit = dialog_fit(opened)
+        assert fit["scroll"] <= 1, (width, "approval", fit)
+        assert fit["dialog_right"] <= fit["viewport"] + 1, (width, "approval", fit)
+        assert fit["spills"] == [], (width, "approval", fit)
+        assert thin_targets(opened) == [], (width, "approval", thin_targets(opened))
+        opened.close()
+        browser.close()
+
+
+def test_the_sign_in_links_keep_the_standalone_page_as_their_fallback(origin):
+    # The popup is an enhancement. A browser without the script follows the href to
+    # the page that has always served this flow (test_account_pages.py proves the
+    # route answers, test_account_signin.py drives the page), and a modifier-click
+    # leaves that door to the browser instead of catching it in the page handler.
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        opened = browser.new_context(viewport={"width": 1280, "height": 900}).new_page()
+        opened.goto(f"{origin}/account", wait_until="networkidle")
+        assert opened.locator("#link-amazon").get_attribute("href") == "/accounts/amazon"
+        assert opened.locator("#link-youtube").get_attribute("href") == "/accounts/youtube"
+        open_section(opened, "panel-providers")
+        opened.evaluate("""() => document.querySelectorAll('a[data-connect]')
+            .forEach((link) => { link.hidden = false; })""")
+        opened.click("#link-amazon", modifiers=["Control"])
+        opened.wait_for_timeout(200)
+        assert opened.locator("#dialog-connect").is_hidden()
+        assert opened.url.split("#", 1)[0].endswith("/account"), opened.url
+        opened.close()
+        browser.close()
+
+
 # ---------------------------------------------------------------- light theme
-def test_the_state_colours_survive_a_light_surface(page):
-    # /account is a dark surface today, but theme.css promises the tokens carry a
+def test_the_state_colours_survive_a_light_surface(page):    # /account is a dark surface today, but theme.css promises the tokens carry a
     # light theme too, and admin.css already uses it. Tint ink that was chosen for
     # near-black has to be swapped, or the panel goes unreadable at #ffffff.
     page.evaluate("() => document.documentElement.setAttribute('data-theme', 'light')")
@@ -705,7 +1089,7 @@ def test_the_state_colours_survive_a_light_surface(page):
       // person has to be able to read; the accent-filled primary button is brand,
       // and its ink-to-fill ratio is a property of #e8590c rather than of this page.
       return ['.badge.bad', '.badge.warn', '.badge.ok', '.signout-link',
-              '#panel-delete summary', '.panel-hint', '.field-help', '.chip-label',
+              '.danger-zone a', '.field-help', '.chip-label',
               '.devices .device-meta', '.state-line .label',
               '.section-nav a', 'body.account button.primary'].map(read).filter(Boolean);
     }""")
@@ -719,7 +1103,7 @@ def palette_facts(page):
     return page.evaluate("""() => ({
       attribute: document.documentElement.getAttribute('data-theme'),
       canvas: getComputedStyle(document.body).backgroundColor,
-      ink: getComputedStyle(document.querySelector('.panel-hint')).color,
+      ink: getComputedStyle(document.querySelector('#head-since')).color,
       card: getComputedStyle(document.querySelector('.panel')).backgroundColor,
       scheme: document.querySelector('meta[name="color-scheme"]').content,
       bar: document.querySelector('meta[name="theme-color"]').content,

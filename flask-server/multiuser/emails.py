@@ -8,13 +8,14 @@ written twice and drifting.  ``base`` is the only difference between the doors:
 Verification and reset are **typed codes** now, which is a different message shape:
 nothing in a code email may be clickable, because a link is what this replaced.
 Invitation and the administrator's sign-in link are still URLs, so they still go
-through :func:`send_token_email`.
+through :func:`send_token_email`.  A notice that something has already changed carries
+neither, and has no reason to: :func:`send_notice` says what happened and when.
 """
 from __future__ import annotations
 
 from flask import flash, request
 
-from .mailer import render_code_email, render_email
+from .mailer import render_alert_email, render_code_email, render_email
 
 # Audit action suffix per purpose, so both doors record the same events.
 AUDIT_ACTION = {
@@ -70,12 +71,11 @@ CODE_COPY = {
     ),
     "reauth": (
         "Confirm a security change",
-        "Enter this code on {where} to prove this is you before the two-factor "
-        "sign-in on your Music Box account is changed.",
+        "Enter this code on {where} to prove this is you before the change to your "
+        "Music Box sign-in details is made.",
         "This code expires in {minutes} minutes, works once, and stops working after "
         "{attempts} wrong tries.",
-        "If you did not ask to change two-factor sign-in, ignore this email and "
-        "change your password.",
+        "If you did not ask for this change, ignore this email and change your password.",
     ),
 }
 
@@ -159,14 +159,60 @@ def send_code_email(mu, user: dict, purpose: str, code: str, *, where: str = "th
                               actor, ip, user_agent)
 
 
-def flash_mail(mu, result, description: str, email: str = "") -> None:
+def send_notice(mu, user: dict, heading: str, intro: str, rows: tuple = (), note: str = "",
+                *, audit: str = "security_notice", actor: dict | None = None,
+                ip: str = "", user_agent: str = ""):
+    """Deliver a report of something that has already happened.
+
+    A third kind of message next to the code and the link: it carries no credential at
+    all, so there is nothing in it to type, click or leak.  It exists because a change
+    the owner did not make is only discoverable if the account tells them twice -- the
+    audit row nobody reads, and a mail they do.
+    """
+    text, html = render_alert_email(
+        app_name=mu.config.app_name,
+        heading=heading,
+        intro=intro,
+        rows=rows,
+        note=note,
+        footer=_footer(mu),
+        fine_print=(
+            f"Sent automatically by {mu.config.app_name} because something on your "
+            "account changed."
+        ),
+        trailing=(
+            "If this wasn't you, change your password -- and turn two-factor sign-in "
+            "back on if it was switched off."
+        ),
+    )
+    result = mu.mailer.send(user["email"], _subject(mu, heading), text, html)
+    mu.accounts.audit(
+        actor,
+        f"{audit}_{'sent' if result.ok else 'failed'}",
+        user["id"],
+        {
+            "delivery": result.status,
+            "outbox": bool(result.outbox_path),
+            "error": (result.detail or "")[:200] if not result.ok else "",
+        },
+        ip,
+        user_agent,
+    )
+    return result
+
+
+def mail_message(mu, result, description: str, email: str = "") -> tuple[str, str]:
+    """(category, text) for one send result, whether it is flashed or toasted."""
     if result.status == "sent":
-        flash(f"{description} sent to {email}.", "success")
-    elif result.status == "outbox":
-        flash(
+        return "success", f"{description} sent to {email}."
+    if result.status == "outbox":
+        return "warning", (
             f"SMTP is not configured, so the {description.lower()} was written to the local outbox "
-            f"({mu.mailer.config.outbox_dir}). Configure MULTIUSER_SMTP_* to deliver it.",
-            "warning",
+            f"({mu.mailer.config.outbox_dir}). Configure MULTIUSER_SMTP_* to deliver it."
         )
-    else:
-        flash(f"Could not send the {description.lower()}: {result.detail}", "error")
+    return "error", f"Could not send the {description.lower()}: {result.detail}"
+
+
+def flash_mail(mu, result, description: str, email: str = "") -> None:
+    category, message = mail_message(mu, result, description, email)
+    flash(message, category)
