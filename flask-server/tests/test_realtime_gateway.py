@@ -146,3 +146,77 @@ class GatewayTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.events.version()[1], 1000)
         self.assertNotEqual(PlaybackEvents().epoch, self.events.epoch)
         self.events.unsubscribe(event)
+
+
+class GatewayBackpressureTests(unittest.IsolatedAsyncioTestCase):
+    async def test_established_stream_preserves_retry_after(self):
+        reads=0; events=PlaybackEvents()
+        async def snapshot(request):
+            nonlocal reads
+            reads+=1
+            if reads>1: return web.Response(status=429, headers={'Retry-After':'60'})
+            return web.json_response({'type':'playback_state','state':{'queue':[],'queue_version':1,'output_token':'dummy'}})
+        app=web.Application(); app.router.add_get('/api/app/events/snapshot/',snapshot)
+        upstream=TestServer(app); await upstream.start_server()
+        client=TestClient(TestServer(create_gateway(str(upstream.make_url('')).rstrip('/'),events)))
+        await client.start_server()
+        try:
+            ws=await client.ws_connect('/api/app/events/',headers={'Cookie':'session=dummy'})
+            await ws.receive_json(timeout=2);events.publish()
+            self.assertEqual(await ws.receive_json(timeout=2),{'type':'backoff','retry_after_ms':60000})
+            self.assertEqual((await ws.receive(timeout=2)).data,1013)
+        finally: await client.close();await upstream.close()
+
+    async def test_control_requests_use_reserved_listener_and_private_headers_cannot_be_forged(self):
+        calls=[]
+        async def regular(request):
+            calls.append(('regular',request.path))
+            self.assertNotIn('X-MusicBox-Internal-Snapshot',request.headers)
+            return web.json_response({'regular':True})
+        async def control(request):
+            calls.append(('control',request.path))
+            self.assertNotIn('X-MusicBox-Internal-Snapshot',request.headers)
+            return web.json_response({'control':True})
+        app=web.Application();app.router.add_route('*','/{path:.*}',regular)
+        reserved=web.Application();reserved.router.add_route('*','/{path:.*}',control)
+        upstream=TestServer(app);separate=TestServer(reserved)
+        await upstream.start_server();await separate.start_server()
+        client=TestClient(TestServer(create_gateway(str(upstream.make_url('')).rstrip('/'),
+            control_upstream=str(separate.make_url('')).rstrip('/'))));await client.start_server()
+        try:
+            for path in ['/api/app/output/','/audio/']:
+                result=await client.get(path,headers={'X-MusicBox-Internal-Snapshot':'1'})
+                self.assertEqual(result.status,200)
+            self.assertEqual(calls,[('control','/api/app/output/'),('regular','/audio/')])
+        finally: await client.close();await upstream.close();await separate.close()
+
+    async def test_concurrent_identical_subscribers_share_inflight_snapshot_without_caching_auth(self):
+        entered=asyncio.Event();release=asyncio.Event();reads=0
+        async def snapshot(request):
+            nonlocal reads
+            reads+=1; entered.set();await release.wait()
+            if request.headers.get('Cookie') != 'session=owner':raise web.HTTPUnauthorized()
+            self.assertEqual(request.headers.get('X-MusicBox-Internal-Snapshot'),'1')
+            return web.json_response({'type':'playback_state','state':{'queue':[],'queue_version':1,'output_token':'dummy'}})
+        app=web.Application();app.router.add_get('/api/app/events/snapshot/',snapshot)
+        upstream=TestServer(app);await upstream.start_server()
+        client=TestClient(TestServer(create_gateway(str(upstream.make_url('')).rstrip('/'))));await client.start_server()
+        tasks=[]
+        try:
+            tasks=[asyncio.ensure_future(client.ws_connect('/api/app/events/',headers={'Cookie':'session=owner'})) for _ in range(2)]
+            await asyncio.wait_for(entered.wait(),2)
+            # The upstream barrier keeps both handshakes overlapping, exercising
+            # real in-flight sharing rather than a cached authorization result.
+            await asyncio.sleep(.05)
+            self.assertEqual(reads,1)
+            release.set()
+            sockets=await asyncio.wait_for(asyncio.gather(*tasks),2)
+            for ws in sockets: await ws.receive_json(timeout=2);await ws.close()
+            denied=await client.get('/api/app/events/',headers={'Cookie':'session=other'})
+            self.assertEqual(denied.status,401)
+            self.assertEqual(reads,2)
+        finally:
+            release.set()
+            for task in tasks:
+                if not task.done():task.cancel()
+            await client.close();await upstream.close()

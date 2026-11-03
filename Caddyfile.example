@@ -1,13 +1,6 @@
 {$SITE_ADDRESS:localhost} {
-    handle_path /youtube-login/* {
-        forward_auth ytmusic:5000 {
-            uri /api/youtube/browser-session/authorize
-            header_up -Connection
-            header_up -Upgrade
-        }
-        header Cache-Control "no-store"
-        reverse_proxy youtube-browser:6080
-    }
+    # Retired desktop links lead to the authenticated, owner-leased touch surface.
+    redir /youtube-login/* /accounts/youtube 302
 
     handle /alexa/proxy/* {
         reverse_proxy ytmusic:5001

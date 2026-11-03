@@ -146,6 +146,12 @@ class AlexaRemote:
         self._proxy_finalize_task = None
         self._proxy_login_error = None
         self._proxy_login_complete = False
+        self._proxy_authorizer = None
+        self._proxy_attempt_started = 0.0
+
+    def set_proxy_authorizer(self, authorize):
+        """Owner-session authority installed by server.py; absent means denied."""
+        self._proxy_authorizer = authorize
 
     # ---------- background loop plumbing ----------
 
@@ -313,6 +319,7 @@ class AlexaRemote:
                 and not self._proxy_login_complete
             )
             if (self._proxy_base_url == proxy_base_url and not finalize_failed
+                    and time.monotonic() - self._proxy_attempt_started <= 600
                     and self._proxy_login is not None and self._proxy_login.email == email
                     and self._proxy_login.password == password):
                 return None
@@ -326,6 +333,7 @@ class AlexaRemote:
         # replacement verifies, including failed/cancelled same-email attempts.
         import tempfile
         self._proxy_attempt_id = secrets.token_urlsafe(24)
+        self._proxy_attempt_started = time.monotonic()
         self._proxy_cookie_stage = tempfile.mkdtemp(prefix="pending-", dir=ALEXA_COOKIE_DIR)
         os.makedirs(os.path.join(self._proxy_cookie_stage, ".storage"), exist_ok=True)
         stage = self._proxy_cookie_stage
@@ -381,6 +389,12 @@ class AlexaRemote:
 
     async def _proxy_handler(self, request):
         """Serve alexapy and start finalization as soon as its callback lands."""
+        authorize = self._proxy_authorizer
+        attempt = getattr(self, '_proxy_attempt_id', None)
+        if (not authorize or not attempt or
+                time.monotonic() - self._proxy_attempt_started > 600 or
+                not await asyncio.to_thread(authorize, request.headers.get('Cookie', ''), attempt)):
+            raise web.HTTPForbidden(text="Open Amazon sign-in from your signed-in Music Box account.")
         proxy = self._proxy
         if proxy is None:
             raise web.HTTPServiceUnavailable(text="Alexa login proxy is not running.")

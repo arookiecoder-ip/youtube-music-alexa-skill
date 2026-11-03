@@ -1,10 +1,16 @@
 #!/bin/sh
 set -eu
 
+if [ "$(id -u)" = 0 ]; then
+  mkdir -p "${CHROME_USER_DATA_DIR:-/profile}"
+  if [ "$(stat -c %u "${CHROME_USER_DATA_DIR:-/profile}")" != 10001 ]; then
+    chown -R musicbox:musicbox "${CHROME_USER_DATA_DIR:-/profile}"
+  fi
+  exec gosu musicbox "$0" "$@"
+fi
 mkdir -p "${CHROME_USER_DATA_DIR:-/profile}"
 Xvfb "${DISPLAY:-:99}" -screen 0 "${SCREEN_GEOMETRY:-1920x1080x24}" -nolisten tcp &
-# Xvfb starts asynchronously. Do not let x11vnc exit permanently while the
-# display socket is still being initialized.
+# Wait for Xvfb before starting the window manager and authenticated touch API.
 python - <<'PY'
 import ctypes
 import os
@@ -24,14 +30,6 @@ else:
     raise SystemExit("Virtual display did not become ready")
 PY
 openbox >/tmp/openbox.log 2>&1 &
-# Chromium renders with the GPU process / ozone on the X display, and x11vnc's
-# XDamage tracking silently stops picking up its updates (log: "XDAMAGE is not
-# working well... misses"). The noVNC client then freezes on the last known
-# frame and the signed-in browser appears to never have opened. Disable Damage
-# and fall back to timed full-frame polling so the viewer always sees the live
-# Chromium window. -wait=20ms poll, -deferupdate=10ms cuts encoder overhead.
-x11vnc -display "${DISPLAY:-:99}" -forever -shared -nopw -localhost -rfbport 5900 \
-  -noxdamage -wait 20 -deferupdate 10 -o /tmp/x11vnc.log >/dev/null 2>&1 &
-websockify --web=/usr/share/novnc/ "${NOVNC_PORT:-6080}" localhost:5900 >/tmp/novnc.log 2>&1 &
-
+# Sign-in uses the authenticated, owner-leased /surface API. Do not run a
+# passwordless VNC bridge or continuously scan the full desktop in the background.
 exec waitress-serve --host=0.0.0.0 --port=8765 --threads=4 service:app

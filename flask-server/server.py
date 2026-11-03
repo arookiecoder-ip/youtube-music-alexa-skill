@@ -261,6 +261,11 @@ if not API_KEY:
         if os.path.exists(api_key_path):
             with open(api_key_path, 'r') as f:
                 API_KEY = f.read().strip()
+            if not API_KEY:
+                API_KEY = secrets.token_hex(32)
+                with open(api_key_path, 'w') as f:
+                    f.write(API_KEY)
+                os.chmod(api_key_path, 0o600)
         else:
             API_KEY = secrets.token_hex(16)
             with open(api_key_path, 'w') as f:
@@ -679,9 +684,8 @@ _PUBLIC_PATHS = ('/', '/privacy_policy', '/terms_of_use', '/login', '/logout', '
                  '/manifest.webmanifest', '/service-worker.js', '/__not_found__')
 # Public path prefixes (startswith match) — static assets (CSS, JS, icons),
 # plus jam join links (/j/<token> and legacy /jam/<token> — the token itself is
-# the credential). The Amazon proxy tunnel also has to stay public so the
-# browser can reach the interactive login page directly; the proxy flow itself
-# is guarded by the generated session/cookie inside alexapy.
+# the credential). The Amazon proxy listener independently verifies the owner
+# session and current login attempt on every request, including subresources.
 _PUBLIC_PREFIXES = ('/static/', '/j/', '/jam/', '/alexa/proxy/')
 
 # Canonical SPA document URLs. These exact paths (no trailing slash) render
@@ -908,6 +912,7 @@ def _remote_login_enabled():
 # sessions) survive restarts when SECRET_KEY is set.
 _SID_MAX_AGE = timedelta(days=30).total_seconds()  # mirrors PERMANENT_SESSION_LIFETIME
 _valid_sids = None  # in-memory mirror of web_sessions; None = not loaded yet
+_sid_deadlines = {}
 _sids_lock = threading.Lock()
 
 
@@ -918,9 +923,11 @@ def _sid_cache():
             with get_db() as conn:
                 conn.execute('DELETE FROM web_sessions WHERE created_at < ?',
                              (time.time() - _SID_MAX_AGE,))
-                rows = conn.execute('SELECT sid FROM web_sessions').fetchall()
+                rows = conn.execute('SELECT sid, created_at FROM web_sessions').fetchall()
                 conn.commit()
             _valid_sids = {r['sid'] for r in rows}
+            _sid_deadlines.clear()
+            _sid_deadlines.update((r['sid'], r['created_at'] + _SID_MAX_AGE) for r in rows)
         return _valid_sids
 
 
@@ -932,6 +939,7 @@ def _session_open():
                      (sid, time.time()))
         conn.commit()
     _sid_cache().add(sid)
+    _sid_deadlines[sid] = time.time() + _SID_MAX_AGE
     return sid
 
 
@@ -940,6 +948,7 @@ def _session_close(sid):
         conn.execute('DELETE FROM web_sessions WHERE sid = ?', (sid,))
         conn.commit()
     _sid_cache().discard(sid)
+    _sid_deadlines.pop(sid, None)
     playback_events.publish()
 
 
@@ -953,6 +962,7 @@ def _sessions_close_all():
         conn.execute("INSERT OR REPLACE INTO kv (k, v) VALUES ('sessions_revoked_all', '1')")
         conn.commit()
     _sid_cache().clear()
+    _sid_deadlines.clear()
     _legacy_adoption_closed = True
     playback_events.publish()
 
@@ -976,7 +986,7 @@ def _logged_in():
     if not (_remote_login_enabled() and session.get('remote_user') == REMOTE_USER):
         return False
     sid = session.get('sid')
-    if sid in _sid_cache():
+    if _audio_session_valid(sid):
         return True
     if sid is None and _legacy_adoption_allowed():
         # Cookie issued before server-side sids existed. It carries the same
@@ -1142,9 +1152,20 @@ _audio_credentials = AudioCredentials(app.secret_key)
 def _audio_session_valid(sid):
     if not isinstance(sid, str) or not sid:
         return False
-    with get_db() as conn:
-        return conn.execute('SELECT 1 FROM web_sessions WHERE sid = ? AND created_at >= ?',
-                            (sid, time.time() - _SID_MAX_AGE)).fetchone() is not None
+    valid = _sid_cache()
+    return sid in valid and _sid_deadlines.get(sid, 0) > time.time()
+
+
+def _authorize_amazon_proxy(cookie_header, attempt):
+    # Verify the signed owner cookie and revocable SID locally, then bind it to
+    # this browser's attempt. No unauthenticated HTTP is sent to the login proxy.
+    with app.test_request_context('/alexa/proxy/', headers={'Cookie': cookie_header}):
+        bound = session.get('amazon_login_attempt')
+        return bool(_logged_in() and isinstance(bound, str) and hmac.compare_digest(bound, attempt))
+
+
+if callable(getattr(getattr(alexa_remote, 'remote', None), 'set_proxy_authorizer', None)):
+    alexa_remote.remote.set_proxy_authorizer(_authorize_amazon_proxy)
 
 @app.route('/api/app/audio-token/', methods=['POST'], strict_slashes=False)
 def app_audio_token():
@@ -1206,7 +1227,7 @@ def require_api_key():
                 return jsonify({'error': 'unauthorized'}), 401
         return None
     if not API_KEY:
-        return None
+        return jsonify({'error': {'code': 'unauthorized', 'message': 'Authentication required.'}}), 401
     supplied = request.args.get('key') or request.headers.get('X-Api-Key')
     if not _valid_key_supplied():
         # Device/skill endpoints must get a JSON error, never an HTML redirect.
@@ -1240,12 +1261,19 @@ def _check_rate_limit():
     group = _rate_limit_group(path)
     if group == 'static':
         return None
+    if (path == '/api/app/events/snapshot' and request.remote_addr == '127.0.0.1'
+            and request.headers.get('X-MusicBox-Internal-Snapshot') == '1'):
+        return None
     if group == 'audio':
         group = _audio_delivery_rate_group(request.args.get('video_id'), request.headers.get('X-MusicBox-Download') == '1')
     max_req, window = _RATE_LIMITS.get(group, _RATE_LIMITS['default'])
     if max_req <= 0:
         return None
     ip = (request.headers.get('X-MusicBox-Client-IP') if request.remote_addr == '127.0.0.1' else None) or request.remote_addr or 'unknown'
+    # Signed, validated sessions provide fair budgets behind Caddy/NAT without
+    # trusting a caller-controlled X-Forwarded-For header.
+    if _logged_in() and isinstance(session.get('sid'), str):
+        ip = 'session:' + session['sid']
     allowed, retry_after = _rate_limiter.check(ip, group, max_req, window)
     if not allowed:
         resp, _ = error_response(f'Rate limit exceeded. Try again in {retry_after}s.',
@@ -5629,6 +5657,15 @@ _PENDING_TTL = 300  # seconds
 # so concurrent requests from other tabs can't race and lose the state.
 _pending_store = {}
 _pending_lock = threading.Lock()
+_PENDING_LIMIT = 64
+
+
+def _prune_pending_logins():
+    """Caller holds _pending_lock; bound abandoned password-verified challenges."""
+    now = time.time()
+    for token, pending in list(_pending_store.items()):
+        if now - pending.get('at', 0) >= _PENDING_TTL:
+            _pending_store.pop(token, None)
 
 
 @app.route("/login/", methods=["GET", "POST"])
@@ -5649,6 +5686,7 @@ def login():
     if body.get("step") == "totp":
         token = str(body.get("token") or "")
         with _pending_lock:
+            _prune_pending_logins()
             pending = _pending_store.pop(token, None)
         if not pending or pending.get('user') != REMOTE_USER or (time.time() - pending.get('at', 0)) > _PENDING_TTL:
             return error_response('login timed out, start again', 401)
@@ -5672,6 +5710,9 @@ def login():
         # Hold the verified identity briefly while the browser collects the code.
         token = secrets.token_urlsafe(32)
         with _pending_lock:
+            _prune_pending_logins()
+            if len(_pending_store) >= _PENDING_LIMIT:
+                return error_response('Too many pending sign-ins. Try again shortly.', 429)
             _pending_store[token] = {
                 'user': REMOTE_USER, 'at': time.time(),
                 'next': _safe_spa_target(body.get('next')),
@@ -5685,6 +5726,10 @@ def login():
 
 @app.route("/logout/", methods=["POST", "GET"])
 def logout():
+    if request.method == 'GET':
+        return redirect('/home' if _logged_in() else '/login/')
+    if not request.is_json:
+        return error_response('Use a JSON POST to sign out.', 415)
     # Revoke the sid server-side so every copy of this cookie dies now, not at
     # its 30-day expiry. "everywhere" kills all sessions on all devices; it is
     # accepted only from a JSON body (a cross-site form can't send one without
@@ -6028,11 +6073,14 @@ def alexa_proxy_login():
     if _is_local_host(request.host) and not behind_caddy:
         proxy_port = os.environ.get("ALEXA_PROXY_PORT", "5001")
         proxy_base_url = f"http://127.0.0.1:{proxy_port}/alexa/proxy/"
+    if not _logged_in():
+        return error_response('Owner session required.', 401)
     url, error = alexa_remote.remote.proxy_start_url(
         email, password, base_url=proxy_base_url
     )
     if error:
         return error_response(error, 502)
+    session['amazon_login_attempt'] = getattr(alexa_remote.remote, '_proxy_attempt_id', None)
     return jsonify({'login_url': url, 'attempt_id':getattr(alexa_remote.remote, '_proxy_attempt_id', None)})
 
 
@@ -7600,6 +7648,8 @@ async def remove_history_item(video_id):
 
 @app.route("/alexa/like/", methods=["GET", "POST"])
 async def alexa_like():
+    if request.method == 'GET' and not _valid_key_supplied():
+        return error_response('Use an authenticated JSON POST to change likes.', 405)
     from ytmusicapi.auth.types import AuthType
     yt = _get_ytmusic_home()
     if yt.auth_type == AuthType.UNAUTHORIZED:

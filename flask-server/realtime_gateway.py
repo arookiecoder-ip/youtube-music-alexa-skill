@@ -18,6 +18,8 @@ from playback_events import playback_events
 HTTP_CLIENT = web.AppKey('http', aiohttp.ClientSession)
 EVENT_CLIENT = web.AppKey('events_http', aiohttp.ClientSession)
 
+CONTROL_PATHS = {'/api/app/output', '/api/app/events/snapshot', '/api/app/audio-token'}
+
 HOP_HEADERS = {'connection', 'keep-alive', 'proxy-authenticate', 'proxy-authorization',
                'te', 'trailer', 'transfer-encoding', 'upgrade'}
 
@@ -38,9 +40,11 @@ def same_origin(origin, host):
         return False
 
 
-def create_gateway(upstream, events=playback_events, max_connections=64, heartbeat=15):
+def create_gateway(upstream, events=playback_events, max_connections=64, heartbeat=15, control_upstream=None):
     app = web.Application(client_max_size=32 * 1024 * 1024)
     sockets = set()
+    control_upstream = control_upstream or upstream
+    snapshot_flights = {}
 
     async def startup(app):
         # The regular HTTP pool cannot starve the small snapshot/auth pool.
@@ -52,6 +56,10 @@ def create_gateway(upstream, events=playback_events, max_connections=64, heartbe
             connector=aiohttp.TCPConnector(limit=8))
 
     async def shutdown(app):
+        flights = tuple(snapshot_flights.values())
+        for task in flights:
+            task.cancel()
+        await asyncio.gather(*flights, return_exceptions=True)
         await asyncio.gather(*(ws.close(code=1001, message=b'server shutdown')
                                for ws in tuple(sockets) if isinstance(ws, web.WebSocketResponse)), return_exceptions=True)
 
@@ -59,8 +67,8 @@ def create_gateway(upstream, events=playback_events, max_connections=64, heartbe
         await app[HTTP_CLIENT].close()
         await app[EVENT_CLIENT].close()
 
-    async def snapshot(request, queue_version=None, output_token=None):
-        headers = CIMultiDict()
+    async def fetch_snapshot(request, queue_version=None, output_token=None):
+        headers = CIMultiDict({'X-MusicBox-Internal-Snapshot': '1'})
         # No API-key subscription, tokens in URLs, or client-selected upstream.
         if request.headers.get('Cookie'):
             headers['Cookie'] = request.headers['Cookie']
@@ -69,11 +77,31 @@ def create_gateway(upstream, events=playback_events, max_connections=64, heartbe
             query['queue_version'] = str(queue_version)
         if output_token is not None:
             query['output_token'] = output_token
-        async with app[EVENT_CLIENT].get(upstream + '/api/app/events/snapshot/',
+        async with app[EVENT_CLIENT].get(control_upstream + '/api/app/events/snapshot/',
                 params=query, headers=headers, allow_redirects=False) as response:
+            if response.status == 429:
+                retry = response.headers.get('Retry-After', '5')
+                retry = str(min(300, max(1, int(retry)))) if retry.isdigit() else '5'
+                raise web.HTTPTooManyRequests(headers={'Retry-After': retry})
             if response.status != 200:
                 raise web.HTTPUnauthorized() if response.status in (301, 302, 401, 403) else web.HTTPServiceUnavailable()
             return await response.json()
+
+    async def snapshot(request, queue_version=None, output_token=None):
+        # Share only concurrent reads of exactly the same authenticated view;
+        # retain no cached permission decision after a read completes.
+        key = (request.headers.get('Cookie', ''), request.query.get('serial', 'phone'), queue_version, output_token)
+        task = snapshot_flights.get(key)
+        if task is None:
+            task = asyncio.create_task(fetch_snapshot(request, queue_version, output_token))
+            snapshot_flights[key] = task
+            def finished(done):
+                if snapshot_flights.get(key) is done:
+                    snapshot_flights.pop(key, None)
+                if not done.cancelled():
+                    done.exception()  # Retrieve failures even if every subscriber disconnected.
+            task.add_done_callback(finished)
+        return await asyncio.shield(task)
 
     async def websocket(request):
         if not same_origin(request.headers.get('Origin'), request.host):
@@ -111,6 +139,11 @@ def create_gateway(upstream, events=playback_events, max_connections=64, heartbe
                     event.clear()
                     try:
                         payload = await snapshot(request, queue_version, output_token)
+                    except web.HTTPTooManyRequests as error:
+                        await asyncio.wait_for(ws.send_json({'type': 'backoff',
+                            'retry_after_ms': int(error.headers['Retry-After']) * 1000}), timeout=5)
+                        await ws.close(code=1013, message=b'rate limited')
+                        return
                     except web.HTTPUnauthorized:
                         await ws.close(code=4001, message=b'session expired')
                         return
@@ -149,8 +182,10 @@ def create_gateway(upstream, events=playback_events, max_connections=64, heartbe
         # This private header is always overwritten; Flask trusts it only from
         # the loopback listener, preserving rate limits per original caller.
         headers['X-MusicBox-Client-IP'] = request.remote or 'unknown'
+        headers.pop('X-MusicBox-Internal-Snapshot', None)
         try:
-            async with app[HTTP_CLIENT].request(request.method, upstream + request.raw_path,
+            target = control_upstream if request.path.rstrip('/') in CONTROL_PATHS else upstream
+            async with app[HTTP_CLIENT].request(request.method, target + request.raw_path,
                     headers=headers, data=request.content.iter_any(), allow_redirects=False) as response:
                 outgoing = web.StreamResponse(status=response.status, reason=response.reason,
                     headers=forwarded_headers(response.headers))
@@ -177,12 +212,16 @@ def main():
     # Internal listener is not exposed to the container network.
     internal = waitress.create_server(server.app, host='127.0.0.1', port=0, threads=16)
     threading.Thread(target=internal.run, name='waitress', daemon=True).start()
+    control = waitress.create_server(server.app, host='127.0.0.1', port=0, threads=4)
+    threading.Thread(target=control.run, name='playback-control', daemon=True).start()
     try:
-        web.run_app(create_gateway(f'http://127.0.0.1:{internal.effective_port}'),
+        web.run_app(create_gateway(f'http://127.0.0.1:{internal.effective_port}',
+                    control_upstream=f'http://127.0.0.1:{control.effective_port}'),
                     host='0.0.0.0', port=int(os.environ.get('PORT', '5000')),
                     access_log=None)
     finally:
         internal.close()
+        control.close()
 
 
 if __name__ == '__main__':

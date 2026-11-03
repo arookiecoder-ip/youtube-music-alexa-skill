@@ -167,6 +167,7 @@ class FlaskAuthorizationTests(unittest.TestCase):
         with self.server.app.test_request_context(
                 "/alexa/proxy_login/", method="POST",
                 json={"email": "owner@example.com", "password": "secret"}), \
+                mock.patch.object(self.server, '_logged_in', return_value=True), \
                 mock.patch.dict(os.environ, {"ALEXA_PROXY_BEHIND_CADDY": "1"}), \
                 mock.patch.object(self.server.alexa_remote.remote, "is_logged_in",
                                   return_value=False), \
@@ -181,6 +182,7 @@ class FlaskAuthorizationTests(unittest.TestCase):
         with self.server.app.test_request_context(
                 "/alexa/proxy_login/", method="POST",
                 json={"email": "owner@example.com", "password": "secret"}), \
+                mock.patch.object(self.server, '_logged_in', return_value=True), \
                 mock.patch.dict(os.environ, {"ALEXA_PROXY_BEHIND_CADDY": "0"}), \
                 mock.patch.object(self.server.alexa_remote.remote, "is_logged_in",
                                   return_value=False), \
