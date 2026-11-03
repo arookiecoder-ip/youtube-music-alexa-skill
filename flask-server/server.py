@@ -1157,11 +1157,14 @@ def _audio_session_valid(sid):
 
 
 def _authorize_amazon_proxy(cookie_header, attempt):
-    # Verify the signed owner cookie and revocable SID locally, then bind it to
-    # this browser's attempt. No unauthenticated HTTP is sent to the login proxy.
+    # Bind the attempt to its initiating SID on the server. Ordinary permanent
+    # cookie refreshes cannot overwrite the binding with an older cookie payload.
+    remote = alexa_remote.remote
+    bound = getattr(remote, '_proxy_owner_sid', None)
+    current = getattr(remote, '_proxy_attempt_id', None)
     with app.test_request_context('/alexa/proxy/', headers={'Cookie': cookie_header}):
-        bound = session.get('amazon_login_attempt')
-        return bool(_logged_in() and isinstance(bound, str) and hmac.compare_digest(bound, attempt))
+        return bool(_logged_in() and isinstance(bound, str) and isinstance(current, str) and
+                    hmac.compare_digest(session.get('sid', ''), bound) and hmac.compare_digest(attempt, current))
 
 
 if callable(getattr(getattr(alexa_remote, 'remote', None), 'set_proxy_authorizer', None)):
@@ -6076,11 +6079,10 @@ def alexa_proxy_login():
     if not _logged_in():
         return error_response('Owner session required.', 401)
     url, error = alexa_remote.remote.proxy_start_url(
-        email, password, base_url=proxy_base_url
+        email, password, base_url=proxy_base_url, owner_sid=session.get('sid')
     )
     if error:
         return error_response(error, 502)
-    session['amazon_login_attempt'] = getattr(alexa_remote.remote, '_proxy_attempt_id', None)
     return jsonify({'login_url': url, 'attempt_id':getattr(alexa_remote.remote, '_proxy_attempt_id', None)})
 
 

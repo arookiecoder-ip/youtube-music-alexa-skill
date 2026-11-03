@@ -26,7 +26,6 @@ class OwnerSecurityTests(unittest.TestCase):
         with self.owner.session_transaction() as session:
             session['remote_user'] = server.REMOTE_USER
             session['sid'] = self.sid
-            session['amazon_login_attempt'] = 'current-attempt'
         self.anonymous = server.app.test_client()
 
     def test_empty_runtime_key_never_bypasses_owner_authorization(self):
@@ -58,11 +57,34 @@ class OwnerSecurityTests(unittest.TestCase):
     def test_proxy_requires_matching_attempt_and_live_owner_sid(self):
         cookie = self.owner.get_cookie(server.app.config['SESSION_COOKIE_NAME'])
         header = server.app.config['SESSION_COOKIE_NAME']+'='+cookie.value
-        self.assertTrue(server._authorize_amazon_proxy(header, 'current-attempt'))
-        self.assertFalse(server._authorize_amazon_proxy(header, 'different-attempt'))
-        self.assertFalse(server._authorize_amazon_proxy('', 'current-attempt'))
-        server._session_close(self.sid)
-        self.assertFalse(server._authorize_amazon_proxy(header, 'current-attempt'))
+        remote = SimpleNamespace(_proxy_owner_sid=self.sid, _proxy_attempt_id='current-attempt')
+        with patch.object(server.alexa_remote, 'remote', remote):
+            # This cookie has no attempt marker, as with a concurrent refresh
+            # that began before the login attempt was created.
+            self.assertTrue(server._authorize_amazon_proxy(header, 'current-attempt'))
+            self.assertFalse(server._authorize_amazon_proxy(header, 'different-attempt'))
+            self.assertFalse(server._authorize_amazon_proxy('', 'current-attempt'))
+            remote._proxy_owner_sid='different-owner-session'
+            self.assertFalse(server._authorize_amazon_proxy(header, 'current-attempt'))
+            remote._proxy_owner_sid=self.sid
+            server._session_close(self.sid)
+            self.assertFalse(server._authorize_amazon_proxy(header, 'current-attempt'))
+
+    def test_proxy_start_binds_the_real_owner_sid_without_a_mutable_cookie_marker(self):
+        remote = SimpleNamespace(_proxy_owner_sid=None, _proxy_attempt_id='new-attempt', is_logged_in=lambda:False)
+        def start(email, password, base_url=None, owner_sid=None):
+            remote._proxy_owner_sid=owner_sid
+            return 'https://example.test/alexa/proxy/',None
+        remote.proxy_start_url=start
+        with patch.object(server.alexa_remote, 'remote', remote):
+            result=self.owner.post('/alexa/proxy_login/',json={'email':'owner@example.test','password':'dummy'})
+            self.assertEqual(result.status_code,200)
+            self.assertEqual(remote._proxy_owner_sid,self.sid)
+            cookie=self.owner.get_cookie(server.app.config['SESSION_COOKIE_NAME'])
+            header=server.app.config['SESSION_COOKIE_NAME']+'='+cookie.value
+            self.assertTrue(server._authorize_amazon_proxy(header,'new-attempt'))
+            with self.owner.session_transaction() as session:
+                self.assertNotIn('amazon_login_attempt',session)
 
     def test_password_verified_challenges_are_pruned_and_bounded(self):
         server._pending_store.update({'expired': {'at': time.time()-301}, 'current': {'at': time.time()}})

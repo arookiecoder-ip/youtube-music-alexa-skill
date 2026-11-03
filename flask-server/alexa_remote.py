@@ -148,6 +148,7 @@ class AlexaRemote:
         self._proxy_login_complete = False
         self._proxy_authorizer = None
         self._proxy_attempt_started = 0.0
+        self._proxy_owner_sid = None
 
     def set_proxy_authorizer(self, authorize):
         """Owner-session authority installed by server.py; absent means denied."""
@@ -299,7 +300,7 @@ class AlexaRemote:
             pass
         return resp
 
-    async def _start_proxy(self, email: str, password: str, base_url: str = None):
+    async def _start_proxy(self, email: str, password: str, base_url: str = None, owner_sid: str = None):
         """Idempotently bring up the proxy aiohttp app. Credentials come from
         the browser and are used only to seed this login object; they are not
         stored. Returns error or None."""
@@ -319,6 +320,7 @@ class AlexaRemote:
                 and not self._proxy_login_complete
             )
             if (self._proxy_base_url == proxy_base_url and not finalize_failed
+                    and self._proxy_owner_sid == owner_sid
                     and time.monotonic() - self._proxy_attempt_started <= 600
                     and self._proxy_login is not None and self._proxy_login.email == email
                     and self._proxy_login.password == password):
@@ -334,6 +336,7 @@ class AlexaRemote:
         import tempfile
         self._proxy_attempt_id = secrets.token_urlsafe(24)
         self._proxy_attempt_started = time.monotonic()
+        self._proxy_owner_sid = owner_sid
         self._proxy_cookie_stage = tempfile.mkdtemp(prefix="pending-", dir=ALEXA_COOKIE_DIR)
         os.makedirs(os.path.join(self._proxy_cookie_stage, ".storage"), exist_ok=True)
         stage = self._proxy_cookie_stage
@@ -372,9 +375,9 @@ class AlexaRemote:
         logger.info("Alexa login proxy listening on 0.0.0.0:%s under %s", PROXY_PORT, PROXY_PATH)
         return None
 
-    async def _proxy_start_url(self, email: str, password: str, base_url: str = None):
+    async def _proxy_start_url(self, email: str, password: str, base_url: str = None, owner_sid: str = None):
         """Bring up the proxy and return (url, error). url is where the user logs in."""
-        error = await self._start_proxy(email, password, base_url)
+        error = await self._start_proxy(email, password, base_url, owner_sid)
         if error:
             return None, error
         proxy = self._proxy
@@ -547,6 +550,7 @@ class AlexaRemote:
         self._proxy_runner = None
         self._proxy = None
         self._proxy_started = False
+        self._proxy_owner_sid = None
         self._proxy_base_url = None
         self._proxy_cookie_stage = None
         if runner:
@@ -559,8 +563,8 @@ class AlexaRemote:
             shutil.rmtree(stage, ignore_errors=True)
 
     # public (thread-safe) wrappers
-    def proxy_start_url(self, email: str, password: str, base_url: str = None):
-        return self._run(self._proxy_start_url(email, password, base_url))
+    def proxy_start_url(self, email: str, password: str, base_url: str = None, owner_sid: str = None):
+        return self._run(self._proxy_start_url(email, password, base_url, owner_sid))
 
     def proxy_cancel(self, attempt_id):
         return self._run(self._cancel_proxy_attempt(attempt_id))
