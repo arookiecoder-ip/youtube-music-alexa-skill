@@ -964,6 +964,7 @@ details.reveal > .reveal-body { margin-top: var(--space-2); }
 }
 .connect-working[hidden] { display: none; }
 .connect-spinner {
+  margin: 4px;
   width: 1rem;
   height: 1rem;
   flex: 0 0 auto;

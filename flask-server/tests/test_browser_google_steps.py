@@ -83,7 +83,8 @@ class StepTests(unittest.TestCase):
         return page
 
     def post(self, path, body=None, token=TOKEN):
-        headers = {'X-Control-Token': token} if token else {}
+        headers = {'X-Control-Token': token, 'X-Auth-Attempt':'test-attempt'} if token else {}
+        svc._auth_attempt='test-attempt';svc._auth_attempt_deadline=time.monotonic()+300
         return self.client.post(path, data=json.dumps(body or {}),
                                 content_type='application/json', headers=headers)
 
@@ -150,6 +151,18 @@ class GateTests(StepTests):
                 response = self.post('/google/code', {'profile': '', 'code': code})
                 self.assertEqual(response.status_code, 400)
                 self.assertEqual(response.get_json(), {'error': 'invalid_code'})
+
+
+class AttemptLifecycleTests(StepTests):
+    def test_stop_retires_the_capability_and_a_new_start_can_claim(self):
+        self.record_steps();self.attach_to(FakePage())
+        self.post('/google/start', {'profile': ''})
+        response=self.post('/google/stop', {'profile': ''})
+        self.assertEqual(response.status_code,200)
+        self.assertEqual(svc._auth_attempt,'')
+        response=self.client.post('/google/start',json={'profile':''},headers={'X-Control-Token':TOKEN,'X-Auth-Attempt':'replacement-attempt'})
+        self.assertNotEqual(response.status_code,403)
+        self.assertEqual(svc._auth_attempt,'replacement-attempt')
 
 
 class StepWiringTests(StepTests):
@@ -287,10 +300,12 @@ class ReleaseTests(StepTests):
         self.assertEqual(response.status_code, 409)
         self.assertEqual(response.get_json(), {'outcome': 'not_signed_in'})
 
-    def test_the_state_endpoint_is_idle_when_nothing_is_attached(self):
-        self.assertEqual(self.client.get('/google/state',
-                                        headers={'X-Control-Token': TOKEN}).get_json(),
-                         {'outcome': 'idle'})
+    def test_retired_attempt_cannot_read_state(self):
+        self.post('/google/stop', {})
+        response = self.client.get('/google/state', headers={
+            'X-Control-Token': TOKEN, 'X-Auth-Attempt': 'test-attempt'})
+        self.assertEqual(response.status_code, 403)
+        self.assertEqual(response.get_json(), {'error': 'attempt_expired'})
 
 
 class CaptureExportTests(StepTests):
@@ -328,7 +343,7 @@ class CaptureExportTests(StepTests):
         self.assertIsNone(svc._candidate)
         self.assertEqual(self.client.post('/candidate/take', data='{}',
                                           content_type='application/json',
-                                          headers={'X-Control-Token': TOKEN}).status_code, 404)
+                                          headers={'X-Control-Token': TOKEN, 'X-Auth-Attempt':'test-attempt'}).status_code, 404)
 
     def test_a_signed_in_page_with_nothing_worth_exporting_ships_an_empty_jar(self):
         page = FakePage()

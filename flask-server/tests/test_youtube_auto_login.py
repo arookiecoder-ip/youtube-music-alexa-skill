@@ -36,7 +36,7 @@ import youtube_auto_login as auto  # noqa: E402
 EMAIL = 'server.account@gmail.com'
 PASSWORD = 'a-password-nobody-else-has'
 # The RFC 6238 test secret, so the vector below is Google's and ours at once.
-SECRET = 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ'
+SECRET = 'GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ'  # gitleaks:allow -- synthetic fixture credential
 BACKUP = ('abcdef12', 'ghijkl34')
 
 CAPTURED = {'outcome': 'captured', 'headers': {'cookie': 'SAPISID=x'},

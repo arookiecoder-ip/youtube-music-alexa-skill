@@ -27,6 +27,7 @@ from .security import (
     safe_equal,
     sha256_hex,
     totp_verify,
+    totp_counter,
     validate_password,
     verify_password,
 )
@@ -45,6 +46,7 @@ CODE_DIGITS = 6
 SIGNUP_SWITCH_KEY = "signup_enabled"
 
 logger = logging.getLogger(__name__)
+_DUMMY_PASSWORD_HASH = hash_password("not-a-user-credential")
 
 
 class AccountError(ValueError):
@@ -92,6 +94,8 @@ def _public_user(row: Any) -> dict:
     user.pop("failed_login_count", None)
     user.pop("locked_until", None)
     user.pop("last_email_at", None)
+    for private in ("totp_pending_session", "totp_failed_count", "totp_locked_until"):
+        user.pop(private, None)
     user["has_totp"] = bool(dict(row).get("totp_secret_enc"))
     # An enrollment is only a live second factor once its code has been entered;
     # until then it is a secret sitting in a drawer, and must not read as "on".
@@ -412,6 +416,12 @@ class AccountService:
         now = _now()
         verified = bool(email_verified and email)
         with self.db.connect() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            if created_by == 'self':
+                count = conn.execute("SELECT COUNT(*) FROM users WHERE created_by='self' AND created_at>=?", (now-86400,)).fetchone()[0]
+                setting = conn.execute("SELECT setting_value FROM system_settings WHERE setting_key=?", (SIGNUP_SWITCH_KEY,)).fetchone()
+                if not self.config.self_signup_enabled or (setting and setting[0] != '1') or count >= self.config.max_self_signups_per_day:
+                    raise AccountError('Sign-up is not available right now.')
             conn.execute(
                 "INSERT INTO users (id, username, email, password_hash, role, status, "
                 "must_change_password, totp_secret_enc, failed_login_count, locked_until, created_at, "
@@ -577,7 +587,7 @@ class AccountService:
     def verification_pending(self, user: dict | None) -> bool:
         if not user:
             return False
-        return bool(user.get("email")) and not user.get("email_verified") and (
+        return bool(user.get("pending_email")) or bool(user.get("email")) and not user.get("email_verified") and (
             self._must_verify(user.get("created_by"))
         )
 
@@ -614,6 +624,8 @@ class AccountService:
             changes["username"] = self.validate_username(changes["username"])
         if "email" in changes:
             changes["email"] = self.validate_email(changes["email"])
+            if actor and actor.get("id") == user_id and changes["email"] != target.get("email"):
+                raise AccountError("Use your account security page to change your email address.")
         if "role" in changes:
             changes["role"] = (changes.get("role") or "").strip().lower()
             if changes["role"] not in ROLES:
@@ -661,6 +673,7 @@ class AccountService:
         *,
         email: str,
         current_password: str = "",
+        email_code: str = "",
         ip: str = "",
         user_agent: str = "",
     ) -> dict:
@@ -688,17 +701,20 @@ class AccountService:
         if not row or not verify_password(row["password_hash"], current_password):
             raise AccountError("Enter your current password to change the email address.")
         self._ensure_unique(target["username"], email, exclude_id=target["id"])
+        self.confirm_own_credentials(actor, current_password=current_password, email_code=email_code,
+                                     require_email_code=bool(target.get("email")), ip=ip, user_agent=user_agent)
         now = _now()
         with self.db.connect() as conn:
             conn.execute(
-                "UPDATE users SET email = ?, email_verified = 0, email_verified_at = 0, "
+                "UPDATE users SET pending_email = ?, pending_email_at = ?, "
                 "updated_at = ? WHERE id = ?",
-                (email, now, target["id"]),
+                (email, now, now, target["id"]),
             )
             conn.execute("DELETE FROM user_email_tokens WHERE user_id = ?", (target["id"],))
         self.audit(
             actor, "profile_updated", target["id"], {"email_changed": True}, ip, user_agent
         )
+        self.security_notice(target, "Email change requested", "A replacement recovery email was requested. Your current address stays active until the new address is confirmed. If this was not you, change your password and revoke other sessions.")
         return self.get_user(target["id"])
 
     def set_status(
@@ -884,6 +900,9 @@ class AccountService:
                 (hash_password(new_password), now, row["id"]),
             )
             conn.execute("DELETE FROM user_email_tokens WHERE user_id = ?", (row["id"],))
+            conn.execute("UPDATE user_sessions SET security_version=(SELECT security_version FROM users WHERE id=?) "
+                         "WHERE user_id=? AND revoked_at=0" + (" AND sid_hash=?" if revoke_other_sessions else ""),
+                         (row['id'], row['id'], keep) if revoke_other_sessions else (row['id'], row['id']))
             if revoke_other_sessions:
                 # A password change is the moment to evict whoever else knew the old
                 # one; without it a stolen password stays usable for 12 hours.
@@ -892,6 +911,8 @@ class AccountService:
                     "WHERE user_id = ? AND revoked_at = 0 AND sid_hash <> ?",
                     (now, row["id"], keep),
                 )
+
+        self.security_notice(dict(row), "Your password changed", "Your Music Box password was changed. If this was not you, reset it and revoke your other sessions.")
 
     def session_summaries(self, user_id: str, current_sid_hash: str = "") -> list[dict]:
         """This account's live sessions, with nothing usable about them included.
@@ -965,10 +986,15 @@ class AccountService:
                     (now, user_id, keep),
                 )
             conn.execute("DELETE FROM user_email_tokens WHERE user_id = ?", (user_id,))
+            preserved = sha256_hex(keep_sid_hash) if keep_sid_hash else ''
+            conn.execute("UPDATE user_sessions SET security_version=(SELECT security_version FROM users WHERE id=?) "
+                         "WHERE user_id=? AND revoked_at=0" + (" AND sid_hash=?" if revoke_other_sessions else ""),
+                         (user_id, user_id, preserved) if revoke_other_sessions else (user_id, user_id))
         self.db.audit(
             None, "email", action, user_id,
             json.dumps({"method": "email", "activated": activate}), ip, user_agent,
         )
+        self.security_notice(target, "Your password changed", "Your Music Box password was set through email recovery. If this was not you, secure your recovery mailbox and contact your administrator.")
         return self.get_user(user_id)
 
     def reset_password_with_token(
@@ -1131,6 +1157,7 @@ class AccountService:
         user_agent: str = "",
         verified: bool = False,
         allow_existing: bool = False,
+        session_token: str = "",
     ) -> dict:
         """Hand out a fresh secret, held *pending* until a code proves the clock matches.
 
@@ -1143,16 +1170,20 @@ class AccountService:
         case, where the live secret keeps working until the new one is confirmed.
         """
         row = self._active_row(actor)
+        if not row["email"] or not row["email_verified"]:
+            raise AccountError("Add and confirm a recovery email address before setting up two-factor sign-in.")
         if row["totp_secret_enc"] and not allow_existing:
             raise AccountError("Two-factor sign-in is already on. Turn it off first.")
-        if verified:
+        if row["totp_secret_enc"] and not email_code:
+            raise AccountError("Enter the code sent to your recovery email address.")
+        if verified and not row["totp_secret_enc"]:
             proof = "reauth"
         else:
             proof = self.confirm_own_credentials(
                 actor,
                 current_password=current_password,
                 email_code=email_code,
-                require_email_code=False,
+                require_email_code=bool(row["totp_secret_enc"]),
                 ip=ip,
                 user_agent=user_agent,
                 audit_action="totp_enrollment_failed",
@@ -1162,8 +1193,8 @@ class AccountService:
         now = _now()
         ttl = max(1, int(self.config.totp_pending_minutes)) * 60
         self.db.execute(
-            "UPDATE users SET totp_pending_enc = ?, totp_pending_at = ?, updated_at = ? WHERE id = ?",
-            (self.secret_box.encrypt_json({"secret": secret}), now, now, row["id"]),
+            "UPDATE users SET totp_pending_enc = ?, totp_pending_at = ?, updated_at = ?, totp_pending_session = ? WHERE id = ?",
+            (self.secret_box.encrypt_json({"secret": secret}), now, now, sha256_hex(session_token) if session_token else "", row["id"]),
         )
         self.audit(
             actor,
@@ -1187,7 +1218,7 @@ class AccountService:
             "&period=30&digits=6&algorithm=SHA1"
         )
 
-    def pending_totp_enrollment(self, actor: dict) -> dict:
+    def pending_totp_enrollment(self, actor: dict, session_token: str = "") -> dict:
         """The live enrollment, so the QR endpoint can render it.
 
         The provisioning URI carries the secret in plain text, which is why this
@@ -1196,10 +1227,10 @@ class AccountService:
         row = self._active_row(actor)
         self._sweep_totp_enrollment(row["id"])
         fresh = self.db.fetchone(
-            "SELECT totp_pending_enc, totp_pending_at FROM users WHERE id = ?", (row["id"],)
+            "SELECT totp_pending_enc, totp_pending_at, totp_pending_session FROM users WHERE id = ?", (row["id"],)
         )
         secret = self._totp_secret(fresh["totp_pending_enc"]) if fresh else ""
-        if not secret:
+        if not secret or (fresh["totp_pending_session"] and fresh["totp_pending_session"] != sha256_hex(session_token)):
             return {}
         issuer, uri = self._otpauth_uri(row["username"], secret)
         return {
@@ -1211,25 +1242,26 @@ class AccountService:
         }
 
     def confirm_totp_enrollment(
-        self, actor: dict, *, code: str, ip: str = "", user_agent: str = ""
+        self, actor: dict, *, code: str, ip: str = "", user_agent: str = "", session_token: str = ""
     ) -> dict:
-        row = self._active_row(actor)
-        self._sweep_totp_enrollment(row["id"])
-        secret = self._totp_secret(row["totp_pending_enc"])
-        if not secret:
-            raise AccountError("Start the two-factor setup again first.")
-        if not totp_verify(secret, code):
-            self.db.audit(
-                row["id"], row["username"], "totp_enrollment_failed", row["id"],
-                json.dumps({"reason": "bad_code"}), ip, user_agent,
-            )
-            raise AccountError("That code did not match. Check the authenticator and try again.")
-        step = int(time.time()) // 30
-        self.db.execute(
-            "UPDATE users SET totp_secret_enc = ?, totp_pending_enc = '', totp_pending_at = 0, "
-            "totp_last_step = ?, updated_at = ? WHERE id = ?",
-            (self.secret_box.encrypt_json({"secret": secret}), step, _now(), row["id"]),
-        )
+        self._active_row(actor)
+        with self.db.connect() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            row = conn.execute("SELECT * FROM users WHERE id=? AND status='active'", (actor['id'],)).fetchone()
+            deadline = _now() - max(1, int(self.config.totp_pending_minutes)) * 60
+            if (not row or not row['totp_pending_enc'] or row['totp_pending_at'] < deadline
+                    or (row['totp_pending_session'] and row['totp_pending_session'] != sha256_hex(session_token))):
+                raise AccountError('Start the two-factor setup again first.')
+            secret = self._totp_secret(row['totp_pending_enc'])
+            step = totp_counter(secret, code)
+            if step is None:
+                raise AccountError('That code did not match. Check the authenticator and try again.')
+            conn.execute("UPDATE users SET totp_secret_enc=?, totp_pending_enc='', totp_pending_at=0, "
+                         "totp_last_step=?, updated_at=? WHERE id=?",
+                         (self.secret_box.encrypt_json({'secret': secret}), step, _now(), row['id']))
+            keep = sha256_hex(session_token) if session_token else ''
+            conn.execute('UPDATE user_sessions SET revoked_at=? WHERE user_id=? AND revoked_at=0 AND sid_hash<>?', (_now(), row['id'], keep))
+            conn.execute('UPDATE user_sessions SET security_version=(SELECT security_version FROM users WHERE id=?) WHERE sid_hash=?', (row['id'], keep))
         self.audit(actor, "totp_enabled", row["id"], {}, ip, user_agent)
         return self.get_user(row["id"])
 
@@ -1252,6 +1284,7 @@ class AccountService:
         ip: str = "",
         user_agent: str = "",
         verified: bool = False,
+        session_token: str = "",
     ) -> dict:
         """Turn 2FA off.
 
@@ -1268,42 +1301,38 @@ class AccountService:
         row = self._active_row(actor)
         if not row["totp_secret_enc"]:
             raise AccountError("Two-factor sign-in is not on.")
-        if verified:
-            proof = "reauth_dialog"
-        else:
-            proof = self.confirm_own_credentials(
-                actor,
-                current_password=current_password,
-                email_code=email_code,
-                require_email_code=False,
-                ip=ip,
-                user_agent=user_agent,
-                audit_action="totp_disable_failed",
-            )
+        proof = self.confirm_own_credentials(
+            actor, current_password=current_password, email_code=email_code,
+            require_email_code=True, ip=ip, user_agent=user_agent,
+            audit_action='totp_disable_failed')
         self.db.execute(
             "UPDATE users SET totp_secret_enc = '', totp_pending_enc = '', totp_pending_at = 0, "
             "totp_last_step = 0, updated_at = ? WHERE id = ?",
             (_now(), row["id"]),
         )
+        keep = sha256_hex(session_token) if session_token else ""
+        self.db.execute("UPDATE user_sessions SET revoked_at=? WHERE user_id=? AND revoked_at=0 AND sid_hash<>?", (_now(), row["id"], keep))
+        self.db.execute("UPDATE user_sessions SET security_version=(SELECT security_version FROM users WHERE id=?) WHERE sid_hash=?", (row["id"], keep))
         self.audit(actor, "totp_disabled", row["id"], {"proof": proof}, ip, user_agent)
         return self.get_user(row["id"])
 
     def verify_totp_code(self, user_id: str, code: str) -> bool:
-        """Check a login code, and spend it: a window can only be used once."""
-        row = self.db.fetchone(
-            "SELECT totp_secret_enc, totp_last_step FROM users WHERE id = ? AND status = 'active'",
-            (user_id or "",),
-        )
-        secret = self._totp_secret(row["totp_secret_enc"]) if row else ""
-        if not secret or not totp_verify(secret, code):
-            return False
-        step = int(time.time()) // 30
-        # One atomic compare-and-set, so two logins inside the same 30s window
-        # cannot both be satisfied by one intercepted code.
-        return bool(self.db.execute(
-            "UPDATE users SET totp_last_step = ? WHERE id = ? AND totp_last_step < ?",
-            (step, user_id, step),
-        ))
+        with self.db.connect() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            row = conn.execute("SELECT * FROM users WHERE id = ? AND status = 'active'", (user_id or '',)).fetchone()
+            now = time.time()
+            if not row or row['totp_locked_until'] > now:
+                return False
+            secret = self._totp_secret(row['totp_secret_enc'])
+            step = totp_counter(secret, code)
+            if step is None or step <= row['totp_last_step']:
+                failures = int(row['totp_failed_count']) + 1
+                locked = now + self.config.login_window_seconds if failures >= self.config.login_max_attempts else 0
+                conn.execute('UPDATE users SET totp_failed_count=?, totp_locked_until=? WHERE id=?',
+                             (0 if locked else failures, locked, user_id))
+                return False
+            conn.execute('UPDATE users SET totp_last_step=?, totp_failed_count=0, totp_locked_until=0 WHERE id=?', (step, user_id))
+            return True
 
     # ------------------------------------------------------------------ delete
     def set_purge_hook(self, hook) -> None:
@@ -1464,6 +1493,7 @@ class AccountService:
             (username, username),
         )
         if not row:
+            verify_password(_DUMMY_PASSWORD_HASH, password)
             self.db.audit(
                 None, username[:120] or "unknown", "login_failed", None,
                 json.dumps({"reason": "unknown_user"}), ip, user_agent,
@@ -1524,16 +1554,35 @@ class AccountService:
         return self.get_user(row["id"]), ""
 
     # ------------------------------------------------------------------ sessions
+    def security_notice(self, user, heading, text):
+        notify = getattr(self, '_security_notice', None)
+        if notify and user.get('email'):
+            try:
+                notify(user, heading, text)
+            except Exception:
+                logger.exception('Could not deliver account security notice')
+
+    def security_version(self, user_id: str) -> int:
+        return int(self.db.scalar("SELECT security_version FROM users WHERE id = ? AND status = 'active'", (user_id,)) or 0)
+
+    def invalidate_security_proofs(self, user_id: str) -> None:
+        self.db.execute("UPDATE users SET security_version = security_version + 1, "
+                        "totp_pending_enc = '', totp_pending_at = 0 WHERE id = ?", (user_id,))
+
     def create_session(self, user: dict, ip: str = "", user_agent: str = "") -> str:
         raw = new_token(32)
         now = _now()
         expires = now + self.config.session_hours * 3600
         with self.db.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            current = conn.execute("SELECT status, security_version FROM users WHERE id = ?", (user["id"],)).fetchone()
+            if not current or current["status"] != "active" or current["security_version"] != user.get("security_version", current["security_version"]):
+                raise AccountError("Sign-in changed. Start again.")
             conn.execute(
                 "INSERT INTO user_sessions "
-                "(sid_hash, user_id, created_at, last_seen_at, expires_at, ip, user_agent, revoked_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, 0)",
-                (sha256_hex(raw), user["id"], now, now, expires, (ip or "")[:64], (user_agent or "")[:300]),
+                "(sid_hash, user_id, created_at, last_seen_at, expires_at, ip, user_agent, revoked_at, security_version) "
+                "VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?)",
+                (sha256_hex(raw), user["id"], now, now, expires, (ip or "")[:64], (user_agent or "")[:300], current["security_version"]),
             )
             conn.execute(
                 "DELETE FROM user_sessions WHERE expires_at < ? OR revoked_at > 0",
@@ -1546,14 +1595,14 @@ class AccountService:
             return None, None
         sid_hash = sha256_hex(raw_sid)
         row = self.db.fetchone(
-            "SELECT s.*, u.username, u.role, u.status AS user_status, u.email "
+            "SELECT s.*, u.username, u.role, u.status AS user_status, u.email, u.must_change_password, u.security_version AS user_security_version "
             "FROM user_sessions s JOIN users u ON u.id = s.user_id WHERE s.sid_hash = ?",
             (sid_hash,),
         )
         if not row:
             return None, None
         now = _now()
-        if row["revoked_at"] or row["expires_at"] <= now:
+        if row["revoked_at"] or row["expires_at"] <= now or row["security_version"] != row["user_security_version"]:
             return None, None
         absolute_limit = now - self.config.session_absolute_days * 86400
         if row["created_at"] < absolute_limit:
@@ -1579,6 +1628,8 @@ class AccountService:
             "role": row["role"],
             "status": row["user_status"],
             "email": row["email"],
+            "must_change_password": bool(row["must_change_password"]),
+            "security_version": row["user_security_version"],
         }
         return session, user
 
@@ -1591,6 +1642,7 @@ class AccountService:
             raise AccountError("User not found.")
         if not self.can_manage_user(actor, target) and not (actor and actor.get("id") == user_id):
             raise AccountError("You do not have permission to revoke these sessions.")
+        self.invalidate_security_proofs(user_id)
         count = self.db.execute(
             "UPDATE user_sessions SET revoked_at = ? WHERE user_id = ? AND revoked_at = 0",
             (_now(), user_id),
@@ -1618,6 +1670,11 @@ class AccountService:
         current_hash = sha256_hex(keep_sid_hash) if keep_sid_hash else ""
         now = _now()
         with self.db.connect() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            if not prefix:
+                conn.execute("UPDATE users SET security_version=security_version+1, totp_pending_enc='', totp_pending_at=0 WHERE id=?", (row['id'],))
+                if current_hash:
+                    conn.execute('UPDATE user_sessions SET security_version=(SELECT security_version FROM users WHERE id=?) WHERE sid_hash=?', (row['id'], current_hash))
             if prefix:
                 if len(prefix) < 6:
                     raise AccountError("Pick a session to sign out.")
@@ -1867,7 +1924,7 @@ class AccountService:
         user = self.get_user(user_id)
         if not user:
             raise AccountError("User not found.")
-        email = _normalize_email(email or user.get("email") or "")
+        email = _normalize_email((user.get("pending_email") if purpose == "verify" else "") or email or user.get("email") or "")
         if not email:
             raise AccountError("This account has no email address.")
         raw = new_token(32)
@@ -1913,7 +1970,7 @@ class AccountService:
         if not user_id or purpose not in {"verify", "reset", "reauth"}:
             return {}
         row = self.db.fetchone(
-            "SELECT t.*, u.username, u.email AS current_email, u.status AS user_status, u.role "
+            "SELECT t.*, u.username, CASE WHEN t.purpose = 'verify' AND u.pending_email <> '' THEN u.pending_email ELSE u.email END AS current_email, u.status AS user_status, u.role "
             "FROM user_email_tokens t JOIN users u ON u.id = t.user_id "
             "WHERE t.user_id = ? AND t.purpose = ? AND t.code_enc <> ''",
             (user_id, purpose),
@@ -2080,10 +2137,15 @@ class AccountService:
         if not target.get("email"):
             raise AccountError("This account has no email address.")
         now = _now()
-        self.db.execute(
-            "UPDATE users SET email_verified = 1, email_verified_at = ?, updated_at = ? WHERE id = ?",
-            (now, now, user_id),
-        )
+        with self.db.connect() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            row = conn.execute('SELECT pending_email FROM users WHERE id=?', (user_id,)).fetchone()
+            if row and row['pending_email']:
+                conn.execute("UPDATE users SET email=pending_email, pending_email='', pending_email_at=0, "
+                             "email_verified=1, email_verified_at=?, updated_at=? WHERE id=?", (now, now, user_id))
+                conn.execute('UPDATE user_sessions SET revoked_at=? WHERE user_id=? AND revoked_at=0', (now, user_id))
+            else:
+                conn.execute('UPDATE users SET email_verified=1, email_verified_at=?, updated_at=? WHERE id=?', (now, now, user_id))
         self.db.audit(
             None, "email", "email_verified", user_id,
             json.dumps({"method": "email_token"}), ip, user_agent,

@@ -36,7 +36,7 @@ _TEST_ENV = {
     "REMOTE_PASSWORD": "test-pass",
     # Any non-empty value avoids server.py's auto-generate-and-write-to-disk
     # api_key.txt path, which would litter the working directory on first run.
-    "API_KEY": "0123456789abcdef0123456789abcdef",
+    "API_KEY": "0123456789abcdef0123456789abcdef",  # gitleaks:allow -- synthetic fixture credential
 }
 _ORIGINAL_ENV = os.environ.copy()
 _STUB_MODULE_NAMES = (

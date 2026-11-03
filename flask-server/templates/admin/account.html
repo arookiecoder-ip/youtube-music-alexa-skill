@@ -1,70 +1,14 @@
 {% extends "admin/base.html" %}
 {% macro reauth_dialog(slug, heading, intro, action_url, submit_label, danger=false) %}
-  {# The identity check that unlocks a second-factor change.  "Which proof" is a
-     radio pair rather than a script: the checked input and the sibling selectors
-     in admin.css decide which panel is visible, so the dialog works with no JS at
-     all.  The "send code" button belongs to a second form through its `form`
-     attribute, because a form inside a form is not valid HTML. #}
-  <dialog class="admin-dialog" id="totp-{{ slug }}-dialog"
-          {% if reauth | default('') == slug %}data-autopen{% endif %}
-          aria-labelledby="totp-{{ slug }}-title">
-    <div class="dialog-head">
-      <h2 id="totp-{{ slug }}-title">{{ heading }}</h2>
-      <button class="btn icon ghost" type="button" data-dialog-close aria-label="Close">✕</button>
-    </div>
-    <div class="dialog-body">
-      <div class="col">
-        <p>{{ intro }}</p>
-        <form class="verify-form stack" id="totp-{{ slug }}-verify" method="post" action="{{ action_url }}">
-          <input type="hidden" name="_csrf" value="{{ csrf_token }}">
-          <input type="radio" name="verify" value="password" id="totp-{{ slug }}-password-way"
-                 aria-label="Verify with your password"
-                 {% if way | default('') != 'email' %}checked{% endif %}>
-          <input type="radio" name="verify" value="email" id="totp-{{ slug }}-email-way"
-                 aria-label="Verify with a code from your email"
-                 {% if way | default('') == 'email' %}checked{% endif %}>
-          <div class="segmented">
-            <label for="totp-{{ slug }}-password-way">Password</label>
-            <label for="totp-{{ slug }}-email-way">Email code</label>
-          </div>
-          <div class="methods">
-            <div class="method method--password field">
-              <label for="totp-{{ slug }}-password">Current password</label>
-              <input id="totp-{{ slug }}-password" name="current_password" type="password"
-                     maxlength="200" autocomplete="current-password">
-              <span class="hint">Checked against your account, never stored or sent anywhere.</span>
-            </div>
-            <div class="method method--email field">
-              <div class="row tight spread">
-                <label for="totp-{{ slug }}-code">Email code</label>
-                <button class="btn small ghost" type="submit" form="totp-{{ slug }}-send"
-                        {% if not user.email %}disabled{% endif %}>Send code</button>
-              </div>
-              <input id="totp-{{ slug }}-code" name="code" type="text" inputmode="numeric"
-                     pattern="[0-9 ]*" maxlength="7" autocomplete="one-time-code" spellcheck="false"
-                     placeholder="••••••" class="code-field">
-              {% if sent | default(false) %}
-                <p class="ok-line">A fresh code is on its way. It works once and expires in {{ code_minutes }} minutes.</p>
-              {% else %}
-                <span class="hint">Ask for a code, then type the six digits here.</span>
-              {% endif %}
-              {% if not mail_configured %}<span class="hint">SMTP is not configured, so the code lands in the local outbox.</span>{% endif %}
-            </div>
-          </div>
-        </form>
-        <form id="totp-{{ slug }}-send" class="send-form" method="post"
-              action="{{ base_path }}/account/totp/reauth/send/">
-          <input type="hidden" name="_csrf" value="{{ csrf_token }}">
-          <input type="hidden" name="action" value="{{ slug }}">
-        </form>
-      </div>
-    </div>
-    <div class="dialog-foot">
-      <button class="btn ghost" type="button" data-dialog-close>Cancel</button>
-      <button class="btn {{ 'danger' if danger else 'primary' }}" type="submit"
-              form="totp-{{ slug }}-verify">{{ submit_label }}</button>
-    </div>
-  </dialog>
+<dialog class="admin-dialog" id="totp-{{ slug }}-dialog" {% if reauth | default('') == slug %}data-autopen{% endif %}>
+<div class="dialog-head"><h2>{{ heading }}</h2><button type="button" class="btn ghost" data-dialog-close>Close</button></div>
+<div class="dialog-body"><p>Enter your current password and a code sent to your recovery email address.</p>
+<form id="totp-{{ slug }}-verify" class="stack" method="post" action="{{ action_url }}">
+<input type="hidden" name="_csrf" value="{{ csrf_token }}">
+<label for="totp-{{ slug }}-password">Current password</label><input id="totp-{{ slug }}-password" type="password" name="current_password" required autocomplete="current-password" maxlength="200">
+<label for="totp-{{ slug }}-code">Email code</label><input id="totp-{{ slug }}-code" name="code" inputmode="numeric" required maxlength="7" autocomplete="one-time-code">
+</form><form method="post" action="{{ base_path }}/account/totp/reauth/send/"><input type="hidden" name="_csrf" value="{{ csrf_token }}"><input type="hidden" name="action" value="{{ slug }}"><button class="btn ghost" type="submit">Send recovery code</button></form></div>
+<div class="dialog-foot"><button class="btn {{ 'danger' if danger else 'primary' }}" form="totp-{{ slug }}-verify" type="submit">{{ submit_label }}</button></div></dialog>
 {% endmacro %}
 {% block content %}
 <div class="page-head">
@@ -260,6 +204,7 @@
   <div class="dialog-body">
     <div class="col">
       <p>The new address starts unverified and gets its own code. Your password is checked first.</p>
+      <form method="post" action="{{ base_path }}/account/totp/reauth/send/"><input type="hidden" name="_csrf" value="{{ csrf_token }}"><input type="hidden" name="action" value="email"><button type="submit" class="btn ghost">Send code to current email</button></form>
       <form class="stack" id="email-form" method="post" action="{{ base_path }}/account/profile/">
         <input type="hidden" name="_csrf" value="{{ csrf_token }}">
         <div class="field">
@@ -271,13 +216,15 @@
           <label for="email_password">Current password</label>
           <input id="email_password" name="current_password" type="password" required
                  maxlength="200" autocomplete="current-password">
+          <label for="email_old_code">Code from your current email address</label>
+          <input id="email_old_code" name="email_code" inputmode="numeric" required maxlength="7" autocomplete="one-time-code">
         </div>
       </form>
     </div>
   </div>
   <div class="dialog-foot">
     <button class="btn ghost" type="button" data-dialog-close>Cancel</button>
-    <button class="btn primary" type="submit" form="email-form">Change email</button>
+    <button class="btn primary" type="submit" form="email-form">Request email change</button>
   </div>
 </dialog>
 

@@ -67,6 +67,9 @@ class MultiUserConfig:
             os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data.db"),
         )
         default_backup_dir = os.path.join(os.path.dirname(os.path.abspath(db_path)), "backups")
+        public_base = (os.environ.get("MULTIUSER_PUBLIC_BASE_URL") or os.environ.get("PUBLIC_BASE_URL", "")).strip().rstrip("/")
+        if public_base and "://" not in public_base:
+            public_base = "https://" + public_base
         return cls(
             enabled=env_bool("MULTI_USER_ENABLED"),
             db_path=db_path,
@@ -94,15 +97,12 @@ class MultiUserConfig:
             backup_dir=os.environ.get("MULTIUSER_BACKUP_DIR") or default_backup_dir,
             secure_cookies=(
                 env_bool("COOKIE_INSECURE") is False
-                and os.environ.get("PUBLIC_BASE_URL", "").lower().startswith("https://")
+                and public_base.lower().startswith("https://")
             ),
             app_name=os.environ.get("MULTIUSER_APP_NAME", "Music Box"),
             base_path="/admin",
             is_test_environment=env_bool("MULTIUSER_TEST_ENVIRONMENT"),
-            public_base_url=(
-                os.environ.get("MULTIUSER_PUBLIC_BASE_URL")
-                or os.environ.get("PUBLIC_BASE_URL", "")
-            ).strip().rstrip("/"),
+            public_base_url=public_base,
             require_email_verification=env_bool("MULTIUSER_REQUIRE_EMAIL_VERIFICATION", True),
             magic_link_enabled=env_bool("MULTIUSER_MAGIC_LINK_ENABLED", True),
             email_token_magic_minutes=_env_int("MULTIUSER_MAGIC_TOKEN_MINUTES", 15),

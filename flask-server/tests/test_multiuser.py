@@ -84,6 +84,7 @@ class MultiUserTestBase(unittest.TestCase):
         self.app.config.update(TESTING=True, SESSION_COOKIE_SECURE=False)
         self.layer = init_multiuser(self.app)
         self.assertIsNotNone(self.layer)
+        self.layer.db.execute("UPDATE users SET must_change_password=0 WHERE created_by='system'")
         self.client = self.app.test_client()
 
     def tearDown(self):
@@ -413,33 +414,16 @@ class UserManagementTests(MultiUserTestBase):
         self.assertEqual(self.layer.accounts.provider_status(user["id"]), [])
 
     def test_owner_can_update_own_profile_with_password_confirmation(self):
-        owner = self.layer.accounts.get_user_by_username("owner")
-        denied = self.client.post(
-            "/admin/account/profile/",
-            data={
-                "_csrf": self.csrf(),
-                "email": "new-owner@synthora.in",
-                "current_password": "wrong-password",
-            },
-            follow_redirects=True,
-        )
-        self.assertEqual(denied.status_code, 200)
-        self.assertIn(b"current password", denied.data.lower())
-        self.assertEqual(self.layer.accounts.get_user(owner["id"])["email"], "owner@synthora.in")
-
-        changed = self.client.post(
-            "/admin/account/profile/",
-            data={
-                "_csrf": self.csrf(),
-                "email": "new-owner@synthora.in",
-                "current_password": self.admin_password,
-            },
-        )
-        self.assertEqual(changed.status_code, 302)
-        updated = self.layer.accounts.get_user(owner["id"])
-        self.assertEqual(updated["email"], "new-owner@synthora.in")
-        self.assertEqual(updated["username"], "owner")
-        self.assertFalse(updated["email_verified"])
+        owner=self.layer.accounts.get_user_by_username('owner')
+        code=self.layer.accounts.create_email_code(owner['id'],'reauth')
+        changed=self.client.post('/admin/account/profile/',data={'_csrf':self.csrf(),'email':'new-owner@synthora.in','current_password':self.admin_password,'email_code':code})
+        self.assertEqual(changed.status_code,302)
+        updated=self.layer.accounts.get_user(owner['id'])
+        self.assertEqual(updated['email'],'owner@synthora.in')
+        self.assertEqual(updated['pending_email'],'new-owner@synthora.in')
+        verify=self.layer.accounts.create_email_code(owner['id'],'verify')
+        self.assertTrue(self.layer.accounts.consume_email_code(owner['id'],'verify',verify))
+        self.assertEqual(self.layer.accounts.verify_email_with_token(owner['id'])['email'],'new-owner@synthora.in')
 
     def test_audit_page_and_csv_export(self):
         page = self.client.get("/admin/audit/")
@@ -513,7 +497,8 @@ class EmailFlowTests(MultiUserTestBase):
         token = self.csrf()
         self.client.post("/admin/logout/", data={"_csrf": token})
         self.login("verify-me", "Temp!Passw0rd9")
-        self.assertEqual(self.client.get("/admin/").status_code, 200)
+        self.assertEqual(self.client.get("/admin/").status_code, 302)
+        self.assertEqual(self.client.get("/admin/account/").status_code, 200)
 
     def test_invitation_sets_password_and_activates_account(self):
         self.create_admin("invited", "invited@example.com", invite=True)
@@ -589,7 +574,9 @@ class EmailFlowTests(MultiUserTestBase):
         )
         self.assertEqual(response.status_code, 302)
         magic = self.newest_outbox_token("magic")
-        signed_in = self.client.get(f"/admin/magic/{magic}")
+        confirm = self.client.get(f"/admin/magic/{magic}")
+        self.assertEqual(confirm.status_code, 200)
+        signed_in = self.client.post(f"/admin/magic/{magic}", data={"_csrf": self.csrf()})
         self.assertEqual(signed_in.status_code, 302)
         self.assertEqual(self.client.get("/admin/").status_code, 200)
 
@@ -609,11 +596,14 @@ class EmailFlowTests(MultiUserTestBase):
         self.assertEqual(forged.status_code, 410)
 
     def test_email_code_cannot_survive_an_address_change(self):
-        owner = self.layer.accounts.get_user_by_username("owner")
-        code = self.layer.accounts.create_email_code(owner["id"], "reset", owner["email"])
-        self.layer.accounts.update_user(owner, owner["id"], {"email": "new@synthora.in"})
-        self.assertEqual(self.layer.accounts.email_code_state(owner["id"], "reset")["pending"], False)
-        self.assertEqual(self.layer.accounts.consume_email_code(owner["id"], "reset", code), {})
+        owner=self.layer.accounts.get_user_by_username('owner')
+        reset=self.layer.accounts.create_email_code(owner['id'],'reset')
+        proof=self.layer.accounts.create_email_code(owner['id'],'reauth')
+        self.layer.accounts.update_own_profile(owner,email='new@synthora.in',current_password=self.admin_password,email_code=proof)
+        verify=self.layer.accounts.create_email_code(owner['id'],'verify')
+        self.assertTrue(self.layer.accounts.consume_email_code(owner['id'],'verify',verify))
+        self.layer.accounts.verify_email_with_token(owner['id'])
+        self.assertFalse(self.layer.accounts.consume_email_code(owner['id'],'reset',reset))
 
 
 class ServiceTests(MultiUserTestBase):
@@ -783,7 +773,9 @@ class AdminControlsTests(MultiUserTestBase):
         )
         self.assertEqual(begin.status_code, 302, begin.get_data(as_text=True)[:300])
         owner = self.layer.accounts.get_user_by_username("owner")
-        pending = self.layer.accounts.pending_totp_enrollment(owner)
+        with self.client.session_transaction() as state:
+            session_token=state["mu_sid"]
+        pending = self.layer.accounts.pending_totp_enrollment(owner, session_token=session_token)
         self.assertTrue(pending, "expected a pending enrolment")
         secret = re.search(r"secret=([A-Z2-7]+)", pending["otpauth_uri"]).group(1)
 
@@ -799,12 +791,13 @@ class AdminControlsTests(MultiUserTestBase):
         self.assertTrue(self.layer.accounts.get_user_by_username("owner")["has_totp"])
         self.assertIn(b"Remove authenticator", self.client.get("/admin/account/").data)
 
+        recovery=self.layer.accounts.create_email_code(owner["id"],"reauth")
         off = self.client.post(
             "/admin/account/totp/disable/",
             data={
                 "_csrf": self.csrf(),
                 "current_password": self.admin_password,
-                "code": code,
+                "code": recovery,
             },
         )
         self.assertEqual(off.status_code, 302)

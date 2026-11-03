@@ -43,7 +43,13 @@
 
   // Amazon's scripted steps and Google's challenge pages can each take well over
   // a minute, so these calls get a far longer leash than ordinary API traffic.
+  let attemptId = "";
   async function api(path, body, timeout = 150000) {
+    const requestRun = run;
+    const starts = path.endsWith("/form/start") || path === "/alexa/form_login/";
+    if (starts) attemptId = "";
+    else if (body !== undefined && attemptId) body = {attempt_id: attemptId, ...body};
+    if (body === undefined && attemptId) path += (path.includes("?") ? "&" : "?") + "attempt_id=" + encodeURIComponent(attemptId);
     const controller = new AbortController();
     const timer = setTimeout(() => controller.abort(), timeout);
     try {
@@ -54,6 +60,7 @@
       });
       let data;
       try { data = await response.json(); } catch (_) { data = {}; }
+      if (data.attempt_id && requestRun === run) attemptId = data.attempt_id;
       if (!response.ok) {
         // A step the provider is waiting on comes back as a state, not a failure.
         if (data && typeof data.state === 'string') return data;

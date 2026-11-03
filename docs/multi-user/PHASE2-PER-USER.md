@@ -9,10 +9,7 @@ door, and leaves nothing behind when it deletes itself. What remains is 2.4
 Owner decision: per-user isolation (own queue, own YouTube auth, own Echo devices)
 rather than a shared-player login.
 
-The multi-user layer built in Phase 1 manages **identities only**. The player is
-still single-owner: every request that reaches playback runs against one set of
-module-level globals. This document is the inventory and the staged plan for
-changing that without breaking the working app or the Alexa path.
+The current implementation uses per-account identity registries and a single authoritative process. The inventory below is retained as migration history; current security/tenant boundaries are documented in [the architecture](../../ARCHITECTURE.md) and [rollout guide](../SECURITY-ROLLOUT.md). Multi-user Echo control now requires account pairing and the updated Lambda skill.
 
 ## Why it is not a small change
 

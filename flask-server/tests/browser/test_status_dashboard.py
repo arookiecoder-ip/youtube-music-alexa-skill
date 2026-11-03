@@ -50,7 +50,7 @@ def browser_page(live_server):
     with playwright.sync_playwright() as driver:
         browser = driver.chromium.launch(headless=True, executable_path=os.environ.get('PLAYWRIGHT_CHROMIUM_EXECUTABLE'))
         context = browser.new_context(viewport={'width':1440,'height':1050})
-        login=context.request.post(live_server+'/login/', form={'username':server.REMOTE_USER,'password':server.REMOTE_PASSWORD})
+        login=context.request.post(live_server+'/login/', data={'username':server.REMOTE_USER,'password':server.REMOTE_PASSWORD})
         assert login.status==200 and login.json()['ok']
         assert context.cookies(), 'Browser must use its real signed owner cookie'
         page = context.new_page()

@@ -20,6 +20,17 @@ dynamodb_adapter = DynamoDbAdapter(table_name=ddb_table_name, create_table=False
 
 sb = CustomSkillBuilder(persistence_adapter = dynamodb_adapter, api_client=DefaultApiClient())
 
+class LinkAccountIntentHandler(AbstractRequestHandler):
+    def can_handle(self, handler_input):
+        return ask_utils.is_intent_name('LinkAccountIntent')(handler_input)
+
+    def handle(self, handler_input):
+        value = handler_input.request_envelope.request.intent.slots['pairCode'].value or ''
+        code = re.sub(r'[^0-9]', '', value)
+        ok = len(code) == 8 and player.Api.link_account(handler_input, code)
+        return handler_input.response_builder.speak('This Echo is linked to your Music Box account.' if ok else 'That code did not work. Get a new code from your Music Box account page.').response
+
+
 class LaunchRequestHandler(AbstractRequestHandler):
     def can_handle(self, handler_input: HandlerInput) -> Response:
         return ask_utils.is_request_type("LaunchRequest")(handler_input)
@@ -863,6 +874,7 @@ class SavePersistenceAttributesResponseInterceptor(AbstractResponseInterceptor):
 # ###################################################################
 
 
+sb.add_request_handler(LinkAccountIntentHandler())
 sb.add_request_handler(LaunchRequestHandler())
 
 sb.add_request_handler(PlayArtistIntentHandler())
@@ -920,4 +932,11 @@ sb.add_exception_handler(CatchAllExceptionHandler())
 sb.add_global_request_interceptor(LoadPersistenceAttributesRequestInterceptor())
 sb.add_global_response_interceptor(SavePersistenceAttributesResponseInterceptor())
 
-lambda_handler = sb.lambda_handler()
+_sdk_lambda_handler = sb.lambda_handler()
+
+def lambda_handler(event, context):
+    expected = os.environ.get('ALEXA_SKILL_ID', '')
+    application = ((event.get('context') or {}).get('System') or {}).get('application') or {}
+    if expected and application.get('applicationId') != expected:
+        raise ValueError('Unexpected Alexa skill application')
+    return _sdk_lambda_handler(event, context)

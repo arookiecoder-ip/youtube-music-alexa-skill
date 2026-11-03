@@ -1,6 +1,7 @@
 import { Innertube, Platform, Log } from 'youtubei.js';
 import vm from 'node:vm';
 import fs from 'node:fs';
+import { AsyncLocalStorage } from 'node:async_hooks';
 
 Log.setLevel(); // Never log signed URLs, signatures or cookie values.
 Platform.shim.eval = async data => vm.runInNewContext(
@@ -20,7 +21,7 @@ async function gvsToken(video) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ content_binding: video, client: 'WEB_MUSIC' }),
-      signal: AbortSignal.timeout(10000),
+      signal: AbortSignal.timeout(1500),
     });
     if (!response.ok) return '';
     const data = await response.json();
@@ -44,10 +45,11 @@ export function cookiesFromNetscape(text, now = Date.now() / 1000) {
 export function createResolver({ createClient = options => Innertube.create(options),
   readFile = path => fs.readFileSync(path, 'utf8'),
   stat = path => fs.statSync(path), now = () => Date.now(), capacity = 128,
-  pot = gvsToken } = {}) {
+  pot = gvsToken, potTimeoutMs = 1500, deadlineMs = 12000 } = {}) {
   let session, credential = '', pending = new Map(), cache = new Map(), active = 0, lastPlayerReset = -Infinity;
   const reset = () => { session = undefined; pending = new Map(); cache = new Map(); };
-  return async function resolve(message) {
+  const scope = new AsyncLocalStorage();
+  const resolve = async function resolve(message) {
     if (message.action !== 'init' && !/^[A-Za-z0-9_-]{11}$/.test(message.video_id || ''))
       throw new Error('invalid_video');
     const path = message.cookie_file || '';
@@ -57,7 +59,7 @@ export function createResolver({ createClient = options => Innertube.create(opti
     if (!session) {
       const cookie = path ? cookiesFromNetscape(readFile(path), now()/1000) : '';
       session = Promise.resolve(createClient({ cookie, fetch: (url, init) => fetch(url, {
-        ...init, signal: AbortSignal.timeout(10000)
+        ...init, signal: AbortSignal.any([AbortSignal.timeout(10000), ...(scope.getStore() ? [scope.getStore()] : [])])
       }) }));
       // Failed initialization must be retryable; never retain a rejected promise.
       const current = session;
@@ -96,7 +98,13 @@ export function createResolver({ createClient = options => Innertube.create(opti
       // The token service is optional: a slow or broken provider must never
       // turn a playable song into an error.
       let pot_token = '';
-      try { pot_token = await pot(video); } catch { pot_token = ''; }
+      let timer;
+      try {
+        pot_token = await Promise.race([pot(video), new Promise(resolve => {
+          timer = setTimeout(() => resolve(''), potTimeoutMs);
+        })]);
+      } catch { pot_token = ''; }
+      finally { clearTimeout(timer); }
       let signed = media;
       if (typeof pot_token === 'string' && pot_token) {
         const withPot = new URL(media);
@@ -141,5 +149,14 @@ export function createResolver({ createClient = options => Innertube.create(opti
       throw error;
     }
     finally { currentPending.delete(key); active--; }
+  };
+  return message => {
+    const controller = new AbortController();
+    let timer;
+    const deadline = new Promise((_, reject) => {
+      timer = setTimeout(() => { controller.abort(); reject(new Error('resolve_timeout')); }, deadlineMs);
+    });
+    return scope.run(controller.signal, () => Promise.race([resolve(message), deadline]))
+      .finally(() => clearTimeout(timer));
   };
 }

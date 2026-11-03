@@ -11,7 +11,13 @@
   let run = 0, busy = false, pollTimer = null, pollCount = 0;
   let answerKind = 'securitycode', choiceKind = 'claimsoption';
 
+  let attemptId = "";
   async function api(path, body, timeout = 150000) {
+    const requestRun = run;
+    const starts = path.endsWith("/form/start") || path === "/alexa/form_login/";
+    if (starts) attemptId = "";
+    else if (body !== undefined && attemptId) body = {attempt_id: attemptId, ...body};
+    if (body === undefined && attemptId) path += (path.includes("?") ? "&" : "?") + "attempt_id=" + encodeURIComponent(attemptId);
     if (asToken && path.startsWith('/api/youtube/browser-session/')) {
       // An admin signing in for another account: the token is what makes these
       // calls target that account's profile. It never reaches the other APIs.
@@ -27,6 +33,7 @@
       });
       let data;
       try { data = await response.json(); } catch (_) { data = {}; }
+      if (data.attempt_id && requestRun === run) attemptId = data.attempt_id;
       if (!response.ok) {
         if (data && typeof data.state === 'string') return data;  // a form answer, not a transport error
         const message = response.status === 401 ? 'Your Music Box session has ended. Go back and sign in again.' :

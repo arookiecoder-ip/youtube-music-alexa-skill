@@ -66,6 +66,8 @@ _complete_requested = False
 _viewport = {"width":480,"height":900}
 _capture_requested = threading.Event()
 _profile_key = ""
+_auth_attempt = ""
+_auth_attempt_deadline = 0.0
 
 
 def _profile_dir_for(key):
@@ -144,7 +146,8 @@ def _plain_chromium_command(enable_capture=False, profile_dir=PROFILE_DIR):
     """Build Chromium command, keeping interactive login free of CDP."""
     os.makedirs(profile_dir, exist_ok=True)
     command = [
-        CHROMIUM, f"--user-data-dir={profile_dir}", "--no-sandbox",
+        CHROMIUM, f"--user-data-dir={profile_dir}",
+        *(["--no-sandbox"] if os.environ.get("MUSICBOX_CHROMIUM_DISABLE_SANDBOX") == "1" else []),
         "--disable-dev-shm-usage", f"--window-size={_viewport['width']},{_viewport['height']}",
         "--window-position=0,0", "--no-first-run",
         "--hide-crash-restore-bubble", "--test-type",
@@ -250,11 +253,42 @@ def accepted_browse_url(url):
 
 @app.before_request
 def require_control_token():
+    global _auth_attempt, _auth_attempt_deadline, _candidate
     if request.path == "/health":
         return None
     supplied = request.headers.get("X-Control-Token", "")
     if not CONTROL_TOKEN or not hmac.compare_digest(supplied, CONTROL_TOKEN):
         return jsonify({"error": "unauthorized"}), 401
+    attempt = request.headers.get('X-Auth-Attempt', '')
+    if request.path in ('/profile/delete',):
+        return None
+    with _lock:
+        if request.path in ('/interactive/start', '/refresh', '/google/start'):
+            if not attempt:
+                return jsonify({'error': 'attempt_required'}), 403
+            if (_auth_attempt and _auth_attempt != attempt and _auth_attempt_deadline > time.monotonic()
+                    and not hmac.compare_digest(request.headers.get('X-Previous-Attempt', ''), _auth_attempt)):
+                return jsonify({'error': 'browser_in_use'}), 409
+            if _auth_attempt != attempt:
+                _candidate = None
+            _auth_attempt = attempt
+            _auth_attempt_deadline = time.monotonic() + 300
+        elif (not attempt or not hmac.compare_digest(attempt, _auth_attempt)
+              or (time.monotonic() >= _auth_attempt_deadline and request.path not in ('/google/stop', '/interactive/close', '/interactive/complete'))):
+            return jsonify({'error': 'attempt_expired'}), 403
+        else:
+            _auth_attempt_deadline = time.monotonic() + 300
+
+
+
+@app.after_request
+def retire_auth_attempt(response):
+    global _auth_attempt, _auth_attempt_deadline, _candidate
+    if request.path in ('/google/stop', '/interactive/close', '/interactive/complete') and response.status_code < 300:
+        with _lock:
+            if request.headers.get('X-Auth-Attempt') == _auth_attempt:
+                _auth_attempt, _auth_attempt_deadline, _candidate = '', 0.0, None
+    return response
 
 
 def _public_state():
@@ -310,6 +344,7 @@ def _google_session_present(context):
 def _watch_for_account_headers(context, page, interactive):
     """Navigate to YouTube Music and wait for the active-account menu response."""
     global _candidate
+    expected_attempt = _auth_attempt
 
     captured = threading.Event()
     signed_out = threading.Event()
@@ -339,7 +374,9 @@ def _watch_for_account_headers(context, page, interactive):
         if not authenticated_browse_headers(headers):
             return
         with _lock:
-            _candidate = {"url": response.url, "headers": headers}
+            if expected_attempt != _auth_attempt:
+                return
+            _candidate = {"url": response.url, "headers": headers, "attempt_id": expected_attempt}
         captured.set()
         _set_state("captured", interactive=interactive, message=None)
 
@@ -436,7 +473,16 @@ _google_worker = concurrent.futures.ThreadPoolExecutor(
 
 
 def _on_google_thread(work, timeout=180):
-    return _google_worker.submit(work).result(timeout=timeout)
+    from flask import has_request_context
+    expected = request.headers.get('X-Auth-Attempt') if has_request_context() else None
+    def guarded():
+        if expected and expected != _auth_attempt:
+            return {'outcome':'attempt_expired'}, 409
+        result = work()
+        if expected and expected != _auth_attempt:
+            return {'outcome':'attempt_expired'}, 409
+        return result
+    return _google_worker.submit(guarded).result(timeout=timeout)
 
 
 def _automation_usable():

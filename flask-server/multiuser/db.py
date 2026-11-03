@@ -13,7 +13,7 @@ import sqlite3
 import time
 from typing import Any, Iterable
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 _SCHEMA_V1 = (
     """
@@ -228,8 +228,17 @@ class Database:
             conn.execute("PRAGMA busy_timeout = 15000")
             yield conn
             conn.commit()
-        except Exception:
+        except Exception as error:
             conn.rollback()
+            if isinstance(error, sqlite3.IntegrityError):
+                message = str(error)
+                from .accounts import AccountError
+                if 'active owner account must remain' in message:
+                    raise AccountError(message) from None
+                if 'users.username' in message:
+                    raise AccountError('That username is already taken.') from None
+                if 'users.email' in message or 'users.pending_email' in message:
+                    raise AccountError('That email address is already in use.') from None
             raise
         finally:
             conn.close()
@@ -328,6 +337,37 @@ class Database:
                     "INSERT INTO multiuser_schema_migrations (version, applied_at) VALUES (6, ?)",
                     (time.time(),),
                 )
+            if 7 not in applied:
+                for name, declaration in (
+                    ('security_version', 'INTEGER NOT NULL DEFAULT 1'),
+                    ('totp_pending_session', "TEXT NOT NULL DEFAULT ''"),
+                    ('totp_failed_count', 'INTEGER NOT NULL DEFAULT 0'),
+                    ('totp_locked_until', 'REAL NOT NULL DEFAULT 0'),
+                    ('pending_email', "TEXT NOT NULL DEFAULT ''"),
+                    ('pending_email_at', 'REAL NOT NULL DEFAULT 0'),
+                ):
+                    conn.execute(f'ALTER TABLE users ADD COLUMN {name} {declaration}')
+                conn.execute('ALTER TABLE user_sessions ADD COLUMN security_version INTEGER NOT NULL DEFAULT 1')
+                conn.execute("""CREATE TRIGGER users_security_version AFTER UPDATE OF
+                    password_hash, totp_secret_enc, email, role, status ON users
+                    WHEN OLD.password_hash IS NOT NEW.password_hash
+                      OR OLD.totp_secret_enc IS NOT NEW.totp_secret_enc
+                      OR OLD.email IS NOT NEW.email OR OLD.role IS NOT NEW.role
+                      OR OLD.status IS NOT NEW.status
+                    BEGIN UPDATE users SET security_version = security_version + 1,
+                        totp_pending_enc = '', totp_pending_at = 0, totp_pending_session = '' WHERE id = NEW.id; END""")
+                conn.execute("""CREATE TRIGGER users_keep_owner_update BEFORE UPDATE OF role, status ON users
+                    WHEN OLD.role = 'owner' AND OLD.status = 'active'
+                      AND (NEW.role <> 'owner' OR NEW.status <> 'active')
+                      AND (SELECT COUNT(*) FROM users WHERE role='owner' AND status='active') <= 1
+                    BEGIN SELECT RAISE(ABORT, 'At least one active owner account must remain.'); END""")
+                conn.execute("""CREATE TRIGGER users_keep_owner_delete BEFORE DELETE ON users
+                    WHEN OLD.role = 'owner' AND OLD.status = 'active'
+                      AND (SELECT COUNT(*) FROM users WHERE role='owner' AND status='active') <= 1
+                    BEGIN SELECT RAISE(ABORT, 'At least one active owner account must remain.'); END""")
+                conn.execute('CREATE TABLE alexa_pair_codes (code_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, expires_at REAL NOT NULL, security_version INTEGER NOT NULL)')
+                conn.execute('CREATE TABLE alexa_bindings (subject_hash TEXT NOT NULL, device_hash TEXT NOT NULL, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, PRIMARY KEY(subject_hash, device_hash))')
+                conn.execute('INSERT INTO multiuser_schema_migrations VALUES (7, ?)', (time.time(),))
             now = time.time()
             # Bound the audit journal so a long-lived install cannot grow it
             # without limit. 90 days is intentionally conservative.

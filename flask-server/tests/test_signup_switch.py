@@ -61,6 +61,7 @@ class SignupSwitchTestBase(unittest.TestCase):
         self.app.config.update(TESTING=True, SESSION_COOKIE_SECURE=False)
         self.layer = init_multiuser(self.app)
         self.assertIsNotNone(self.layer)
+        self.layer.db.execute("UPDATE users SET must_change_password=0 WHERE created_by='system'")
         self.accounts = self.layer.accounts
         self.client = self.app.test_client()
         self.owner = self.accounts.get_user_by_username("owner")
@@ -121,6 +122,7 @@ class SignupSwitchTestBase(unittest.TestCase):
             return session.get("mu_ss_csrf", "")
 
     def ss_csrf(self) -> str:
+        self.client.get("/verify")
         with self.client.session_transaction() as session:
             return session.get("mu_ss_csrf", "")
 

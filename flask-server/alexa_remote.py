@@ -417,6 +417,7 @@ class AlexaRemote:
         # form-login state (scripted sign-in; touched only on the background loop)
         self._form_login = None
         self._form_stage = None
+        self._form_attempt_id = None
         self._form_captcha = None  # (content_type, bytes) of the last captcha picture
         self._form_robot = None  # Amazon's own challenge form, when it asks for one
 
@@ -748,6 +749,8 @@ class AlexaRemote:
         except Exception:
             logger.exception("could not save Alexa login cookie")
             cookie_file = None
+        if hasattr(self, "_form_login") and login is not self._form_login and login is not self._proxy_login:
+            return "This sign-in was replaced. Start again."
         if not cookie_file or not os.path.isfile(cookie_file):
             self._proxy_login_error = "Alexa login succeeded, but its cookie file could not be saved."
             logger.error(self._proxy_login_error)
@@ -1017,8 +1020,19 @@ class AlexaRemote:
             return None
         url = _page_join(_last_page_url(login), url)
         try:
-            response = await login._session.get(url, ssl=login._ssl)
-            data = await response.read()
+            from urllib.parse import urlsplit
+            parsed = urlsplit(url)
+            domain = AMAZON_DOMAIN.lower()
+            if parsed.scheme != 'https' or not (parsed.hostname == 'www.' + domain or parsed.hostname == domain or (parsed.hostname or '').endswith('.amazon.com') or parsed.hostname == 'images-na.ssl-images-amazon.com'):
+                return None
+            response = await login._session.get(url, ssl=login._ssl, allow_redirects=False)
+            if response.status != 200:
+                response.close()
+                return None
+            data = await response.content.read(2 * 1024 * 1024 + 1)
+            response.close()
+            if len(data) > 2 * 1024 * 1024:
+                return None
         except Exception:
             logger.warning("could not fetch the Amazon captcha picture", exc_info=True)
             return None
@@ -1031,6 +1045,7 @@ class AlexaRemote:
 
     async def _form_cleanup(self):
         """Drop a scripted login: nothing it staged may survive the attempt."""
+        self._form_attempt_id = None
         login, self._form_login = self._form_login, None
         stage, self._form_stage = self._form_stage, None
         self._form_captcha = None
@@ -1066,6 +1081,8 @@ class AlexaRemote:
         identifier/password flow; answers to questions never re-post the
         credentials."""
         login = self._form_login
+        stage = self._form_stage
+        attempt_id = getattr(self, "_form_attempt_id", None)
         if login is None:
             return {"state": "error", "message": "This sign-in has ended. Start again."}
         _renew_proxy_claim(self)
@@ -1076,12 +1093,18 @@ class AlexaRemote:
                                        timeout=self.FORM_STEP_TIMEOUT)
         except Exception:
             logger.exception("scripted Amazon login step failed")
-            await self._form_cleanup()
+            if login is self._form_login:
+                await self._form_cleanup()
             return {"state": "error",
                     "message": "Amazon did not answer. Wait a moment and start again."}
+        if login is not self._form_login or stage != self._form_stage:
+            return {"state": "error", "message": "This sign-in was replaced. Start again."}
         result = await self._form_state(login)
+        result["attempt_id"] = attempt_id
+        if login is not self._form_login:
+            return {"state": "error", "message": "This sign-in was replaced. Start again."}
         if result["state"] == "connected":
-            error = await self._promote_staged_login(login, self._form_stage)
+            error = await self._promote_staged_login(login, stage)
             self._form_login = None
             self._form_stage = None
             self._form_captcha = None
@@ -1122,9 +1145,12 @@ class AlexaRemote:
             outputpath=lambda name: os.path.join(stage, name),
         )
         self._form_stage = stage
+        self._form_attempt_id = secrets.token_urlsafe(32)
         return await self._form_step({}, follow_password=True)
 
-    async def _form_login_answer(self, kind, value):
+    async def _form_login_answer(self, kind, value, attempt_id=None):
+        if attempt_id is not None and attempt_id != self._form_attempt_id:
+            return {"state": "error", "message": "This sign-in was replaced. Start again."}
         if self._form_login is None:
             return {"state": "error", "message": "This sign-in has ended. Start again."}
         if not await self._claim_proxy():
@@ -1167,6 +1193,8 @@ class AlexaRemote:
             logger.exception("robot check answer could not be sent")
             return {"state": "error",
                     "message": "Amazon did not answer that. Wait a moment and start again."}
+        if login is not self._form_login:
+            return {"state": "error", "message": "This sign-in was replaced. Start again."}
         login._lastreq = response
         login.status = {}
         return await self._form_step({})
@@ -1179,12 +1207,18 @@ class AlexaRemote:
         return self._run(self._form_login_begin(email, password),
                          timeout=self.FORM_STEP_TIMEOUT + 20)
 
-    def form_login_step(self, kind, value=""):
-        return self._run(self._form_login_answer(kind, value),
+    def form_login_step(self, kind, value="", attempt_id=None):
+        return self._run(self._form_login_answer(kind, value, attempt_id),
                          timeout=self.FORM_STEP_TIMEOUT + 20)
 
-    def form_login_cancel(self):
-        self._run(self._form_cleanup())
+    async def _cancel_form_attempt(self, attempt_id):
+        if attempt_id is not None and attempt_id != self._form_attempt_id:
+            return False
+        await self._form_cleanup()
+        return True
+
+    def form_login_cancel(self, attempt_id=None):
+        return self._run(self._cancel_form_attempt(attempt_id))
 
     # ---------- public API (called from Flask views, thread-safe) ----------
 

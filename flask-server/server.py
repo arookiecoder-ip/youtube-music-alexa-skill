@@ -1,3 +1,6 @@
+from browser_coordination import browser_scope, BROKER
+import provider_commands
+from auth_sessions import replace_identity, password_change_allowed, complete_login
 from flask import has_request_context
 import download_cookies
 import account_purge
@@ -34,139 +37,26 @@ from werkzeug.exceptions import HTTPException
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
 logger = logging.getLogger(__name__)
 
-class _YouTubeStreamPool:
-    """One relay facade per identity: its stream slots and current-track bytes.
-
-    The expensive resolver worker is shared per credential (see
-    ``_YouTubeResolverPool``); what stays account-scoped here is the playback
-    state -- the slot budget and the bytes already relayed to this account."""
-    def __init__(self, factory, limit=4):
-        self._factory = factory
-        self._limit = max(1, int(limit))
-        self._streams = collections.OrderedDict()
-        self._lock = threading.Lock()
-
-    def get(self, identity=None):
-        identity = identity or _current_identity()
-        with self._lock:
-            stream = self._streams.get(identity)
-            if stream is None:
-                stream = self._streams[identity] = self._factory(identity)
-            self._streams.move_to_end(identity)
-            while len(self._streams) > self._limit:
-                _, evicted = self._streams.popitem(last=False)
-                try:
-                    evicted.close()
-                except Exception:
-                    logger.debug('Evicted YouTube relay did not close cleanly')
-            return stream
-
-    def every(self):
-        with self._lock:
-            return list(self._streams.values())
-
-    def discard(self, identity):
-        """Close and drop one identity's relay facade.
-
-        Eviction alone never finishes a deletion: the pool holds at most a few
-        facades and a deleted account's could sit at the warm end indefinitely.
-        The shared resolver worker is deliberately left running because other
-        accounts are playing through it; a worker built on this account's own
-        fallback jar is dropped separately by ``_discard_account_resolver``."""
-        with self._lock:
-            stream = self._streams.pop(identity, None)
-        if stream is None:
-            return False
-        try:
-            stream.close()
-        except Exception:
-            logger.debug('Discarded YouTube relay did not close cleanly')
-        return True
-
-    @property
-    def enabled(self):
-        return _YOUTUBE_STREAMING_ENABLED
-
-    def snapshot(self):
-        """Aggregate view of every live relay, counting each resolver once."""
-        streams, resolving, slots, resolvers = [], 0, 0, set()
-        for stream in self.every():
-            data = stream.snapshot()
-            streams.extend(data.get('streams') or [])
-            slots = max(slots, data.get('stream_slots', 0))
-            resolver_id = data.get('resolver_id')
-            if resolver_id is not None and resolver_id not in resolvers:
-                resolvers.add(resolver_id)
-                resolving += data.get('resolving', 0)
-        return {'active_streams': len(streams), 'stream_slots': slots,
-                'resolving': resolving, 'streams': streams, 'workers': len(resolvers)}
-
-
-class _YouTubeResolverPool:
-    """One resolver worker per download credential.
-
-    The worker owns the expensive part -- a persistent Node process, its
-    Innertube session and its resolved-URL cache -- and it depends only on the
-    cookie jar it signs with. Accounts that download with the same jar (normally
-    the server's) therefore share it: a cold song costs one request, not one
-    sign-in per account. A different jar still gets its own worker, because a
-    URL signed with one credential must never be handed to another.
-    """
-    def __init__(self, limit=4):
-        self._limit = max(1, int(limit))
-        self._resolvers = collections.OrderedDict()
-        self._lock = threading.Lock()
-
-    @staticmethod
-    def _key(cookie_file):
-        return os.path.abspath(cookie_file) if cookie_file else ''
-
-    def get(self, cookie_file):
-        key = self._key(cookie_file)
-        with self._lock:
-            resolver = self._resolvers.get(key)
-            if resolver is None:
-                path = cookie_file or None
-                resolver = self._resolvers[key] = Resolver(lambda: path)
-            self._resolvers.move_to_end(key)
-            while len(self._resolvers) > self._limit:
-                _, evicted = self._resolvers.popitem(last=False)
-                try:
-                    evicted.close()
-                except Exception:
-                    logger.debug('Evicted YouTube resolver did not close cleanly')
-            return resolver
-
-    def discard(self, cookie_file):
-        """Close the worker built on a jar nobody should use any more."""
-        key = self._key(cookie_file)
-        with self._lock:
-            resolver = self._resolvers.pop(key, None)
-        if resolver is None:
-            return False
-        try:
-            resolver.close()
-        except Exception:
-            logger.debug('Discarded YouTube resolver did not close cleanly')
-        return True
-
+from stream_pools import _YouTubeStreamPool, _YouTubeResolverPool
 
 _YOUTUBE_STREAMING_ENABLED = os.environ.get('YOUTUBE_STREAMING', '0').lower() in ('1', 'true', 'yes')
 
 _YOUTUBE_STREAM_LIMIT = os.environ.get('YOUTUBE_STREAM_WORKERS', '4')
+
+_global_audio_slots = threading.BoundedSemaphore(max(1, int(os.environ.get("AUDIO_GLOBAL_STREAMS", "8"))))
 
 _youtube_resolvers = _YouTubeResolverPool(limit=_YOUTUBE_STREAM_LIMIT)
 
 _youtube_streams = _YouTubeStreamPool(
     lambda identity: YouTubeStream(
         lambda: Supporting.get_ytdlp_cookies_file(identity),
-        enabled=_YOUTUBE_STREAMING_ENABLED,
+        enabled=_YOUTUBE_STREAMING_ENABLED, global_slots=_global_audio_slots,
         # Resolved per play, not captured: when the credential changes the next
         # song uses the worker for the new jar, and the old worker stays warm for
         # whoever is still on it until the LRU drops it.
         resolver_for=lambda: _youtube_resolvers.get(
             Supporting.get_ytdlp_cookies_file(identity))),
-    limit=_YOUTUBE_STREAM_LIMIT)
+    limit=_YOUTUBE_STREAM_LIMIT, enabled=lambda: _YOUTUBE_STREAMING_ENABLED, global_limit=max(1, int(os.environ.get("AUDIO_GLOBAL_STREAMS", "8"))))
 
 
 def _youtube_stream_for(identity=None):
@@ -390,18 +280,30 @@ def _totp_at(secret_b32: str, counter: int) -> str:
 
 
 def _totp_verify(code: str, window: int = 1) -> bool:
-    if not _totp_enabled() or not re.fullmatch(r"\d{6}", code or ""):
+    from multiuser.security import totp_counter
+    if not _totp_enabled():
         return False
-    counter = int(time.time()) // 30
-    # accept the current step plus +/- `window` steps for clock drift
-    for step in range(-window, window + 1):
-        try:
-            candidate = _totp_at(REMOTE_TOTP_SECRET, counter + step)
-        except Exception:
+    with get_db() as conn:
+        conn.execute('BEGIN IMMEDIATE')
+        row = conn.execute("SELECT v FROM kv WHERE k='remote_totp_budget'").fetchone()
+        failures, locked_until = json.loads(row[0]) if row else (0, 0)
+        now = time.time()
+        if locked_until > now:
             return False
-        if hmac.compare_digest(candidate, code):
-            return True
-    return False
+        if locked_until:
+            failures = 0
+        step = totp_counter(REMOTE_TOTP_SECRET, code, window)
+        previous = conn.execute("SELECT v FROM kv WHERE k='remote_totp_last_step'").fetchone()
+        if step is None or (previous and step <= int(previous[0])):
+            failures += 1
+            conn.execute("INSERT OR REPLACE INTO kv(k,v) VALUES('remote_totp_budget',?)",
+                         (json.dumps([failures, now + 300 if failures >= 5 else 0]),))
+            conn.commit()
+            return False
+        conn.execute("INSERT OR REPLACE INTO kv(k,v) VALUES('remote_totp_last_step',?)", (str(step),))
+        conn.execute("DELETE FROM kv WHERE k='remote_totp_budget'")
+        conn.commit()
+    return True
 
 # Public authenticated audio origin used by Echo stream URLs. The server
 # relays YouTube audio and retains only temporary current-track bytes.
@@ -845,7 +747,7 @@ def _record_listen(video_id, title, artist, thumbnail_url):
 # verification rule inside multiuser/selfservice.py. They only exist at all when
 # MULTI_USER_ENABLED=1 registers that blueprint, so on a single-owner deployment
 # these entries match nothing and Flask answers 404.
-_PUBLIC_PATHS = ('/', '/privacy_policy', '/terms_of_use', '/login', '/logout', '/favicon.ico',
+_PUBLIC_PATHS = ('/health/live', '/health/ready', '/', '/privacy_policy', '/terms_of_use', '/login', '/logout', '/favicon.ico',
                  '/manifest.webmanifest', '/service-worker.js', '/__not_found__',
                  '/signup', '/resend-code', '/verify', '/forgot-password',
                  '/reset-password')
@@ -1196,6 +1098,8 @@ def _mu_web_identity():
 def _logged_in():
     if _mu_web_identity() is not None:
         return True
+    if session.get("mu_sid"):
+        return False
     if not (_remote_login_enabled() and session.get('remote_user') == REMOTE_USER):
         return False
     sid = session.get('sid')
@@ -1441,18 +1345,42 @@ _audio_credentials = AudioCredentials(app.secret_key)
 def _audio_session_valid(sid):
     if not isinstance(sid, str) or not sid:
         return False
+    if sid.startswith('account:'):
+        if _multiuser_layer is None:
+            return False
+        _, user = _multiuser_layer.accounts.validate_session(sid[8:])
+        return bool(user and not user.get('must_change_password'))
     with get_db() as conn:
         return conn.execute('SELECT 1 FROM web_sessions WHERE sid = ? AND created_at >= ?',
                             (sid, time.time() - _SID_MAX_AGE)).fetchone() is not None
+
+
+def _audio_subject_valid(data):
+    sid = data.get('sid')
+    if not _audio_session_valid(sid):
+        return False
+    if isinstance(sid, str) and sid.startswith('account:'):
+        _, user = _multiuser_layer.accounts.validate_session(sid[8:])
+        if (not user or user['id'] != data.get('user_id')
+                or user['security_version'] != data.get('security_version')):
+            return False
+        _PLAYER_IDENTITY.set(_player_identity_for_user_id(user['id'], user['role']))
+    elif data.get('user_id'):
+        return False
+    return True
+
 
 @app.route('/api/app/audio-token/', methods=['POST'], strict_slashes=False)
 def app_audio_token():
     if not _logged_in():
         return error_response('Web session required.', 401)
     body = request.get_json(silent=True) or {}
-    download = body.get('download') is True
-    return _no_store(jsonify({'token': _audio_credentials.issue(session.get('sid'), download),
-                              'expires_in': 86400 if download else 7200}))
+    user = _mu_web_identity()
+    sid = 'account:' + session['mu_sid'] if user else session.get('sid')
+    return _no_store(jsonify({'token': _audio_credentials.issue(sid, body.get('download') is True,
+        user_id=user['id'] if user else None,
+        security_version=user['security_version'] if user else None),
+        'expires_in': 86400 if body.get('download') is True else 7200}))
 
 _owner_row_read = [0.0, '']
 
@@ -1500,6 +1428,24 @@ def _bind_player_identity():
     # its queue; a Jam guest is bound to the host's identity through the jam
     # token; everything else (owner web session, Alexa, API keys, background
     # threads) stays on the legacy 'owner' state.
+    layer = _multiuser_layer
+    subject, device = request.headers.get('X-Alexa-User-Id'), request.headers.get('X-Alexa-Device-Id')
+    if layer is not None and subject and _valid_key_supplied():
+        if request.path.rstrip('/') == '/api/alexa/link':
+            return None
+        linked = layer.alexa_identity.resolve(subject, device)
+        if not linked:
+            return jsonify(error={'code':'link_account_required','message':'Link this Echo from your account page first.'}), 403
+        _PLAYER_IDENTITY.set(_player_identity_for_user_id(linked['id'], linked['role']))
+        request.environ['musicbox.alexa_identity'] = linked['id']
+        return None
+    if layer is not None and request.path.rstrip('/') == '/proxy' and request.args.get('cap'):
+        linked = layer.alexa_identity.stream_user(request.args['cap'], request.args.get('video_id'))
+        if not linked:
+            return jsonify(error='unauthorized'), 401
+        _PLAYER_IDENTITY.set(_player_identity_for_user_id(linked['id'], linked['role']))
+        request.environ['musicbox.echo_capability'] = True
+        return None
     user = _mu_web_identity()
     if user is not None:
         _PLAYER_IDENTITY.set(_player_identity_for_user_id(user['id'], user.get('role')))
@@ -1516,6 +1462,11 @@ def _bind_player_identity():
 @app.before_request
 def require_api_key():
     path = request.path.rstrip('/') or '/'
+    user = _mu_web_identity()
+    if user and user.get('must_change_password') and not password_change_allowed(path, request.method):
+        if request.method == 'GET' and not _is_api_path(request.path):
+            return redirect('/account?step=password')
+        return jsonify({'error': {'code': 'password_change_required', 'message': 'Change your temporary password first.'}}), 403
     # The optional multi-user admin panel owns its own session/CSRF auth. Its
     # routes must not be blocked by the device API key middleware, but only
     # once the layer has actually registered itself.
@@ -1530,6 +1481,13 @@ def require_api_key():
     # Allow jam home endpoint for authenticated users
     if path == '/api/jam/home' and _logged_in():
         return None
+    if request.environ.get('musicbox.echo_capability'):
+        return None
+    if (_multiuser_layer is not None and _valid_key_supplied()
+            and path in ('/armed_play', '/next_track', '/alexa/state_event', '/proxy')
+            and not request.environ.get('musicbox.alexa_identity')
+            and os.environ.get('ALLOW_LEGACY_SKILL_OWNER', '0') != '1'):
+        return jsonify(error={'code': 'link_account_required', 'message': 'Update and link the Alexa skill.'}), 403
     _ensure_db()
     # Let the shared shell renderer apply the same owner/jam/login policy as
     # the public root document. The SPA bypass accepts both the slash-less
@@ -1551,7 +1509,7 @@ def require_api_key():
         return _no_store(app.make_response((_JAM_ENDED_HTML, 410)))
     if path in ('/audio', '/get_radio', '/queue_tracks', '/next_track'):
         token = request.headers.get('X-MusicBox-Audio-Token', '')
-        if token and _audio_credentials.verify(token, path, _audio_session_valid):
+        if token and _audio_credentials.verify(token, path, _audio_session_valid, subject_valid=_audio_subject_valid):
             request.environ['musicbox.audio_scoped'] = True
             return None
     # A valid session cookie authorizes the remote page and its /alexa/* calls.
@@ -2170,7 +2128,7 @@ def _save_server_session(headers, cookies):
     if not path:
         raise ValueError('The server identity has no credential path')
     from ytmusicapi.auth.browser import setup_browser
-    promote_browser_headers(headers, path, setup_browser, lambda candidate: YTMusic(auth=candidate))
+    promote_browser_headers(headers, path, setup_browser, lambda candidate: YTMusic(auth=candidate, requests_timeout=10))
     if cookies:
         _write_server_cookie_jar(cookies)
     else:
@@ -4114,6 +4072,8 @@ def _error_code_for_status(status: int) -> str:
 @app.after_request
 def _log_request(response):
     path = request.path
+    if request.url_rule and any(marker in request.url_rule.rule for marker in ("<token>", "<secret>")):
+        path = request.url_rule.rule
     # Skip static files and SSE streams to keep logs readable
     if path.startswith('/static/') or path == '/alexa/now_playing/stream':
         return response
@@ -4900,11 +4860,7 @@ class Supporting:
         """
         cookies_file = Supporting.get_ytdlp_cookies_file()
         if cookies_file:
-            import shutil
-            import tempfile
-            tmp_cookies = os.path.join(tempfile.gettempdir(), "yt_dlp_cookies.txt")
-            shutil.copy2(cookies_file, tmp_cookies)
-            command.extend(["--cookies", tmp_cookies])
+            provider_commands.attach_cookies(command, cookies_file)
             return
         if browser := os.environ.get("YTDLP_BROWSER"):
             command.extend(["--cookies-from-browser", browser])
@@ -4984,7 +4940,10 @@ class Supporting:
             if extractor_args:
                 command.extend(["--extractor-args", ",".join(extractor_args)])
             command += ["--", video_id]
-            result = subprocess.run(command, capture_output=True, text=True)
+            try:
+                result = provider_commands.run(command, capture_output=True, text=True)
+            except (subprocess.TimeoutExpired, OSError):
+                continue
             if result.returncode == 0:
                 return result.stdout.strip()
             last_error = result.stderr.strip()
@@ -5019,7 +4978,7 @@ class Supporting:
                 command.extend(["--extractor-args", ",".join(extractor_args)])
             command += ["--", video_id]
             try:
-                result = subprocess.run(command, capture_output=True, text=True, timeout=25)
+                result = provider_commands.run(command, capture_output=True, text=True, timeout=25)
                 if result.returncode == 0:
                     break
             except (subprocess.SubprocessError, OSError):
@@ -5106,6 +5065,12 @@ class Supporting:
         if base:
             # Answer immediately; pre-warm the cache so the device's fetch is fast.
             _ensure_audio_ready_for_play(video_id)
+            if _multiuser_layer is not None:
+                user_id = _identity_account_id(_current_identity())
+                if not user_id:
+                    raise ValueError('Link an account before starting Echo playback')
+                cap = _multiuser_layer.alexa_identity.stream_token(user_id, video_id)
+                return {'audio_url': f"{base}/proxy/?video_id={video_id}&cap={quote(cap)}"}
             key_param = f"&key={API_KEY}" if API_KEY else ""
             return {'audio_url': f"{base}/proxy/?video_id={video_id}{key_param}"}
         url = await asyncio.to_thread(Supporting.resolve_direct_url, video_id)
@@ -5646,7 +5611,7 @@ async def get_radio():
         return error_response('missing required parameter "video_id"', 400)
     if not _valid_video_id(video_id):
         return error_response('invalid "video_id"', 400)
-    continuation = request.args.get('continuation') == '1'
+    continuation = request.args.get('continuation') == '1' and not request.environ.get('musicbox.audio_scoped')
     guard = None
     if continuation:
         with _np_lock:
@@ -6922,9 +6887,42 @@ def _login_door_links():
     return layer.accounts.registration_open(), '/forgot-password'
 
 
+@app.post('/api/alexa/link/')
+def link_alexa_account():
+    if _multiuser_layer is None or not _valid_key_supplied():
+        return error_response('Account linking unavailable.', 403)
+    subject, device = request.headers.get('X-Alexa-User-Id'), request.headers.get('X-Alexa-Device-Id')
+    allowed, retry = _multiuser_layer.rate_limiter.allow('alexa-pair', _client_ip(), 5, 300)
+    if not allowed:
+        return error_response('Too many pairing attempts. Try again later.', 429)
+    code = str((request.get_json(silent=True) or {}).get('code') or '')
+    if not _multiuser_layer.alexa_identity.pair(code, subject, device):
+        return error_response('Pairing code expired or invalid.', 403)
+    return jsonify(ok=True)
+
+
+@app.get('/health/live')
+def health_live():
+    return jsonify(status='alive')
+
+
+@app.get('/health/ready')
+def health_ready():
+    try:
+        with get_db() as conn:
+            conn.execute('SELECT 1').fetchone()
+        if os.environ.get('MULTI_USER_ENABLED') == '1' and _multiuser_layer is None:
+            raise RuntimeError('authentication unavailable')
+    except Exception:
+        return jsonify(status='unavailable'), 503
+    return jsonify(status='ready', protocol_version=2)
+
+
 @app.route("/login/", methods=["GET", "POST"])
 def login():
-    if not _remote_login_enabled():
+    if request.content_length and request.content_length > 32768:
+        return error_response("Sign-in request is too large.", 413)
+    if not _remote_login_enabled() and _multiuser_layer is None:
         # No credentials configured; fall back to the key-in-URL scheme.
         return redirect('/remote/')
     if request.method == "GET":
@@ -6939,6 +6937,8 @@ def login():
             next_target=_safe_spa_target(request.args.get('next')),
             signup_open=signup_open, forgot_url=forgot_url)))
 
+    if request.method == "POST" and not request.is_json:
+        return error_response("JSON sign-in required.", 415)
     body = request.get_json(silent=True) or request.form
 
     # Step 2: a password-verified session submitting its 2FA code.
@@ -6957,6 +6957,8 @@ def login():
             uid = str(pending.get('uid') or '')
             if layer is None:
                 return error_response('login timed out, start again', 401)
+            if pending.get('security_version') != layer.accounts.security_version(uid):
+                return error_response('login changed, start again', 401)
             if not layer.accounts.verify_totp_code(uid, code):
                 return error_response('invalid authentication code', 401)
             # Re-read the account: it could have been disabled, deleted, or had
@@ -6968,6 +6970,8 @@ def login():
             raw_sid = layer.accounts.create_session(
                 user, ip=_client_ip(),
                 user_agent=request.headers.get('User-Agent', '')[:400])
+            complete_login(layer, user, _client_ip())
+            replace_identity()
             session['mu_sid'] = raw_sid
             session['mu_user_id'] = user['id']
             session['sid'] = _session_open()
@@ -6977,6 +6981,7 @@ def login():
             return error_response('login timed out, start again', 401)
         if not _totp_verify(code):
             return error_response('invalid authentication code', 401)
+        replace_identity()
         session['remote_user'] = REMOTE_USER
         session['sid'] = _session_open()
         session.permanent = True
@@ -7018,19 +7023,20 @@ def login():
         mu_user, mu_error = layer.accounts.authenticate(
             username, password, ip=ip, user_agent=user_agent)
         if mu_user is not None:
-            layer.rate_limiter.reset("login-account", account_key)
-            layer.rate_limiter.reset("login-ip", ip_key)
             if layer.accounts.totp_is_enabled(mu_user):
                 # The password alone no longer buys a session: hold the verified
                 # identity for a few minutes under a token bound to this browser.
                 store, bind = _pending_2fa_door()
                 pending_token = store.issue({
                     'kind': 'account', 'uid': mu_user['id'],
+                    'security_version': mu_user['security_version'],
                     'next': _safe_spa_target(body.get('next')),
                 }, bind)
                 return jsonify({'ok': True, 'totp_required': True, 'token': pending_token})
             raw_sid = layer.accounts.create_session(
                 mu_user, ip=ip, user_agent=user_agent)
+            complete_login(layer, mu_user, ip)
+            replace_identity()
             session['mu_sid'] = raw_sid
             session['mu_user_id'] = mu_user['id']
             session['sid'] = _session_open()
@@ -7041,7 +7047,7 @@ def login():
         # so fall through to the REMOTE_USER comparison in that case.
         if mu_error and mu_error != "Invalid username or password.":
             return error_response(mu_error, 401)
-    if not (hmac.compare_digest(username, REMOTE_USER) and hmac.compare_digest(password, REMOTE_PASSWORD)):
+    if not (_remote_login_enabled() and hmac.compare_digest(username, REMOTE_USER) and hmac.compare_digest(password, REMOTE_PASSWORD)):
         return error_response('invalid username or password', 401)
     if _totp_enabled():
         # Hold the verified identity briefly while the browser collects the code.
@@ -7051,6 +7057,7 @@ def login():
             'next': _safe_spa_target(body.get('next')),
         }, bind)
         return jsonify({'ok': True, 'totp_required': True, 'token': token})
+    replace_identity()
     session['remote_user'] = REMOTE_USER
     session['sid'] = _session_open()
     session.permanent = True
@@ -7482,20 +7489,28 @@ def alexa_form_login_step():
     if not _logged_in():
         return error_response("Sign in to continue.", 401)
     body = request.get_json(silent=True) or {}
+    expected = getattr(alexa_remote.remote, "_form_attempt_id", None)
+    if not expected or not hmac.compare_digest(str(body.get("attempt_id") or ""), str(expected)):
+        return error_response("This sign-in was replaced. Start again.", 409)
     kind = str(body.get("kind") or "")
     value = str(body.get("value") or "").strip()
     if kind not in _FORM_LOGIN_ANSWERS:
         return error_response("Amazon is not asking for that answer.", 400)
     if kind != "poll" and not value:
         return error_response("Enter the answer Amazon is waiting for.", 400)
-    return jsonify(alexa_remote.remote.form_login_step(kind, value))
+    return jsonify(alexa_remote.remote.form_login_step(kind, value, attempt_id=expected))
 
 
 @app.route("/alexa/form_login/cancel/", methods=["POST"])
 def alexa_form_login_cancel():
+    body = request.get_json(silent=True) or {}
+    expected = getattr(alexa_remote.remote, "_form_attempt_id", None)
+    if not expected or not hmac.compare_digest(str(body.get("attempt_id") or ""), str(expected)):
+        return error_response("This sign-in was replaced. Start again.", 409)
     if not _logged_in():
         return error_response("Sign in to cancel the login attempt.", 401)
-    alexa_remote.remote.form_login_cancel()
+    if not alexa_remote.remote.form_login_cancel(attempt_id=expected):
+        return error_response("This sign-in was replaced. Start again.", 409)
     return jsonify({"cancelled": True})
 
 
@@ -7774,7 +7789,8 @@ def youtube_browser_choose_account():
             _browser_owner_id(), request.cookies.get(_youtube_browser_sessions.COOKIE_NAME)):
         return error_response('Sign-in session expired.', 403)
     try:
-        return jsonify(_youtube_browser_sessions.controller.call('/interactive/choose-account','POST'))
+        with BROKER.lock, _youtube_browser_sessions._lock, browser_scope(_browser_owner_id()):
+            return jsonify(_youtube_browser_sessions.controller.call('/interactive/choose-account','POST'))
     except Exception:
         return error_response('Sign-in browser is not ready.',503)
 
@@ -7788,8 +7804,9 @@ def youtube_browser_surface():
         return error_response('Sign-in session expired. Start again.', 403)
     try:
         path='/interactive/frame' if request.method == 'GET' else '/interactive/input'
-        data=_youtube_browser_sessions.controller.call(path, request.method,
-            payload=request.get_json(silent=True) or {}) if request.method == 'POST' else _youtube_browser_sessions.controller.call(path)
+        with BROKER.lock, _youtube_browser_sessions._lock, browser_scope(_browser_owner_id()):
+            data=_youtube_browser_sessions.controller.call(path, request.method,
+                payload=request.get_json(silent=True) or {}) if request.method == 'POST' else _youtube_browser_sessions.controller.call(path)
         return _no_store(app.make_response(jsonify(data)))
     except Exception:
         return error_response('Sign-in browser is not ready. Try again.', 503)
@@ -7827,6 +7844,11 @@ def _google_form_renew(identity):
 
 
 def _google_form_release(identity):
+    if has_request_context():
+        from browser_coordination import BROKER
+        supplied = (request.get_json(silent=True) or {}).get("attempt_id")
+        if supplied and BROKER.token and supplied != BROKER.token:
+            return
     with _google_form_guard:
         if _google_form_holder[0] == identity:
             _google_form_holder[0] = ''
@@ -7843,7 +7865,11 @@ def _youtube_form_sidecar(path, payload=None, method='POST'):
     """One scripted sidecar step. Returns the answer dict, or None when the
     sidecar itself could not be reached."""
     try:
-        return _youtube_auto_login_controller.call(path, method, payload)
+        with browser_scope(_browser_owner_id(), request.get_json(silent=True).get('attempt_id') if has_request_context() and isinstance(request.get_json(silent=True), dict) else None):
+            answer = _youtube_auto_login_controller.call(path, method, payload)
+            if isinstance(answer, dict) and answer.get("attempt_id") and has_request_context():
+                request.environ["musicbox.auth_attempt"] = answer["attempt_id"]
+            return answer
     except Exception:
         logger.warning('YouTube form sign-in sidecar call %s failed', path, exc_info=True)
         return None
@@ -7851,8 +7877,10 @@ def _youtube_form_sidecar(path, payload=None, method='POST'):
 
 def _youtube_form_stop(profile, identity):
     """Release the sidecar browser and this identity's claim on it."""
-    _google_form_release(identity)
+    if not _google_form_held_by(identity):
+        return
     _youtube_form_sidecar('/google/stop', {'profile': profile})
+    _google_form_release(identity)
 
 
 # The only ways this popup offers to verify.  Google's chooser can also list a
@@ -8040,6 +8068,19 @@ def _youtube_form_capture(owner, profile):
     return {'state': 'connected'}
 
 
+def _fenced_browser_capture(operation):
+    def capture(owner, profile):
+        expected = request.environ.get('musicbox.auth_attempt') or (request.get_json(silent=True) or {}).get('attempt_id')
+        with BROKER.lock:
+            if BROKER.owner != owner or not expected or BROKER.token != expected:
+                return {'state':'error', 'message':'This sign-in was replaced. Start again.'}
+            return operation(owner, profile)
+    return capture
+
+
+_youtube_form_capture = _fenced_browser_capture(_youtube_form_capture)
+
+
 def _youtube_form_guard_busy(owner):
     """True when the one scripted browser belongs to someone else right now."""
     if _google_form_held_by(owner):
@@ -8050,6 +8091,16 @@ def _youtube_form_guard_busy(owner):
         _google_form_release(owner)
         return 'The server is renewing its own YouTube session. Try again in a minute.'
     return ''
+
+
+@app.after_request
+def _provider_attempt_response(response):
+    attempt = request.environ.get('musicbox.auth_attempt')
+    if attempt and response.is_json:
+        data = response.get_json()
+        if isinstance(data, dict) and 'state' in data:
+            response.set_data(app.json.dumps(dict(data, attempt_id=attempt)))
+    return response
 
 
 @app.post('/api/youtube/browser-session/form/start')
@@ -8089,6 +8140,9 @@ def youtube_form_signin_code():
     if not 4 <= len(code) <= 16 or not re.fullmatch(r'[A-Za-z0-9-]+', code):
         return error_response('Enter the code exactly as your app shows it.', 400)
     owner = _browser_owner_id()
+    attempt = (request.get_json(silent=True) or {}).get("attempt_id") if request.method == "POST" else request.args.get("attempt_id")
+    if not isinstance(attempt, str) or not attempt:
+        return error_response("Sign-in attempt required. Start again.", 409)
     if not _google_form_held_by(owner):
         return jsonify({'state': 'error', 'message': 'This sign-in has ended. Start again.'}), 409
     profile = _browser_profile_key()
@@ -8106,6 +8160,9 @@ def youtube_form_signin_methods():
     if not _logged_in():
         return error_response('Sign in to continue.', 401)
     owner = _browser_owner_id()
+    attempt = (request.get_json(silent=True) or {}).get("attempt_id") if request.method == "POST" else request.args.get("attempt_id")
+    if not isinstance(attempt, str) or not attempt:
+        return error_response("Sign-in attempt required. Start again.", 409)
     if not _google_form_held_by(owner):
         return jsonify({'state': 'error', 'message': 'This sign-in has ended. Start again.'}), 409
     profile = _browser_profile_key()
@@ -8126,6 +8183,9 @@ def youtube_form_signin_method():
     if method not in _YOUTUBE_METHOD_VALUES:
         return error_response('Choose one of the verification methods.', 400)
     owner = _browser_owner_id()
+    attempt = (request.get_json(silent=True) or {}).get("attempt_id") if request.method == "POST" else request.args.get("attempt_id")
+    if not isinstance(attempt, str) or not attempt:
+        return error_response("Sign-in attempt required. Start again.", 409)
     if not _google_form_held_by(owner):
         return jsonify({'state': 'error', 'message': 'This sign-in has ended. Start again.'}), 409
     profile = _browser_profile_key()
@@ -8148,6 +8208,9 @@ def youtube_form_captcha():
     if not _logged_in():
         return error_response('Sign in to continue.', 401)
     owner = _browser_owner_id()
+    attempt = (request.get_json(silent=True) or {}).get("attempt_id") if request.method == "POST" else request.args.get("attempt_id")
+    if not isinstance(attempt, str) or not attempt:
+        return error_response("Sign-in attempt required. Start again.", 409)
     if not _google_form_held_by(owner):
         return error_response('This sign-in has ended. Start again.', 409)
     answer = _youtube_form_sidecar(
@@ -8186,6 +8249,9 @@ def youtube_form_captcha_answer():
     if not text and not points:
         return error_response('Answer the security check.', 400)
     owner = _browser_owner_id()
+    attempt = (request.get_json(silent=True) or {}).get("attempt_id") if request.method == "POST" else request.args.get("attempt_id")
+    if not isinstance(attempt, str) or not attempt:
+        return error_response("Sign-in attempt required. Start again.", 409)
     if not _google_form_held_by(owner):
         return jsonify({'state': 'error', 'message': 'This sign-in has ended. Start again.'}), 409
     profile = _browser_profile_key()
@@ -8204,6 +8270,9 @@ def youtube_form_signin_poll():
     if not _logged_in():
         return error_response('Sign in to continue.', 401)
     owner = _browser_owner_id()
+    attempt = (request.get_json(silent=True) or {}).get("attempt_id") if request.method == "POST" else request.args.get("attempt_id")
+    if not isinstance(attempt, str) or not attempt:
+        return error_response("Sign-in attempt required. Start again.", 409)
     if not _google_form_held_by(owner):
         return jsonify({'state': 'error', 'message': 'This sign-in has ended. Start again.'}), 409
     profile = _browser_profile_key()
@@ -8223,6 +8292,8 @@ def youtube_form_signin_stop():
     if not _logged_in():
         return error_response('Sign in to cancel.', 401)
     owner = _browser_owner_id()
+    if not (request.get_json(silent=True) or {}).get("attempt_id"):
+        return error_response("Sign-in attempt required.", 409)
     _youtube_form_stop(_browser_profile_key(), owner)
     return jsonify({'success': True})
 
@@ -13043,8 +13114,8 @@ def service_worker():
 
 # Main entry point
 # The multi-user layer is additive and disabled unless MULTI_USER_ENABLED=1.
-# Initialization is deliberately guarded: a misconfiguration in this optional
-# layer must never prevent the existing single-owner application from booting.
+# Explicitly configured authentication fails closed on initialization errors;
+# an unavailable identity database must not enable a legacy fallback.
 try:
     from multiuser import init_multiuser as _init_multiuser
 
@@ -13067,9 +13138,7 @@ try:
                          name='account-purge-sweeper').start()
 except Exception:  # noqa: BLE001 - optional subsystem must not break startup
     _multiuser_layer = None
-    logger.exception(
-        "[multiuser] initialization failed; continuing with the single-owner app"
-    )
+    raise RuntimeError("Multi-user authentication initialization failed; refusing to start") from None
 
 if _YOUTUBE_STREAMING_ENABLED:
     def _initialize_youtube_stream():

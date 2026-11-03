@@ -34,7 +34,7 @@ _TEST_ENV = {
     "SECRET_KEY": "test-secret-for-playlist-fast-start",
     "REMOTE_USER": "test-owner",
     "REMOTE_PASSWORD": "test-pass",
-    "API_KEY": "0123456789abcdef0123456789abcdef",
+    "API_KEY": "0123456789abcdef0123456789abcdef",  # gitleaks:allow -- synthetic fixture credential
 }
 
 

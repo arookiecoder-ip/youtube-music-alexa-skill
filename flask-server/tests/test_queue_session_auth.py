@@ -21,7 +21,7 @@ class QueueSessionAuthTests(unittest.TestCase):
                 nodes.append(node)
         self.app = Flask(__name__)
         self.app.secret_key = 'test-only'
-        scope = {'app': self.app, 'request': request, 'session': session,
+        scope = {'_mu_web_identity':lambda:None, '_multiuser_layer':None, 'app': self.app, 'request': request, 'session': session,
                  'jsonify': jsonify, 'hmac': hmac, 'API_KEY': 'test-machine-key',
                  '_ensure_db': lambda: None, '_is_spa_document_path': lambda path: False,
                  '_PUBLIC_PATHS': (), '_PUBLIC_PREFIXES': (),

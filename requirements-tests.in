@@ -1,0 +1,5 @@
+-r flask-server/requirements.txt
+-r lambda/requirements.txt
+-r browser-auth/requirements.txt
+pytest>=8,<9
+pip-audit

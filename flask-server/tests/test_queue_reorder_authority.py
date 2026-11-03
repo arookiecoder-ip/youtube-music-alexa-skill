@@ -26,7 +26,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 os.environ.setdefault("SECRET_KEY", "test-secret-reorder-authority")
 os.environ.setdefault("REMOTE_USER", "test-owner")
 os.environ.setdefault("REMOTE_PASSWORD", "test-pass")
-os.environ.setdefault("API_KEY", "0123456789abcdef0123456789abcdef")
+os.environ.setdefault("API_KEY", "0123456789abcdef0123456789abcdef")  # gitleaks:allow -- synthetic fixture credential
 
 if "ytmusicapi" not in sys.modules:
     ytmusicapi = types.ModuleType("ytmusicapi")

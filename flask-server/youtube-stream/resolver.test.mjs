@@ -129,3 +129,14 @@ test('a cached URL keeps the token it was signed with',async()=>{
   const first=await resolve(request), second=await resolve(request);
   assert.equal(first.url,second.url);assert.equal(minted,1);
 });
+
+test('a stalled optional PO provider cannot consume the full RPC budget', async () => {
+  const { resolve, request } = fixture({ pot: () => new Promise(() => {}), potTimeoutMs: 5 });
+  const result = await resolve(request);
+  assert.equal(new URL(result.url).searchParams.has('pot'), false);
+});
+
+test('the end-to-end resolver deadline bounds a hung provider operation', async () => {
+  const { resolve, request } = fixture({ deadlineMs: 5, createClient: () => new Promise(() => {}) });
+  await assert.rejects(resolve(request), /resolve_timeout/);
+});

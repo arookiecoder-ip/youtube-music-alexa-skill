@@ -517,12 +517,20 @@ def _wait_for_input(page, family, wait_seconds=8):
     return state
 
 
+def _credential_origin(page):
+    parsed = urlparse(page.url)
+    if parsed.scheme != 'https' or parsed.hostname != 'accounts.google.com' or parsed.port not in (None, 443):
+        raise ValueError('Refusing credentials on an unexpected origin')
+
+
 def submit_identifier(page, email, wait_seconds=20):
     state = _wait_for_input(page, "identifier")
     selector = state["fields"].get("identifier")
     if not selector:
         return state, classify_page(state)
+    _credential_origin(page)
     _type(page, selector, email)
+    _credential_origin(page)
     _submit(page)
     return _wait_after(page, state, wait_seconds)
 
@@ -536,7 +544,9 @@ def submit_password(page, password, wait_seconds=60):
     selector = state["fields"].get("password")
     if not selector:
         return state, classify_page(state)
+    _credential_origin(page)
     _type(page, selector, password)
+    _credential_origin(page)
     _submit(page)
     return _wait_after(page, state, wait_seconds)
 
@@ -547,7 +557,9 @@ def submit_code(page, code, wait_seconds=25):
     selector = state["fields"].get("code")
     if not selector:
         return state, classify_page(state)
+    _credential_origin(page)
     _type(page, selector, code)
+    _credential_origin(page)
     _submit(page)
     return _wait_after(page, state, wait_seconds)
 

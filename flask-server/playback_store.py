@@ -1,4 +1,5 @@
 """Durable per-identity playback metadata; never restore an active ownership lease."""
+from contextlib import contextmanager
 import json
 import sqlite3
 import threading
@@ -43,18 +44,26 @@ class PlaybackStore:
         # identity -> (fingerprint, monotonic) of the last write, so a burst of
         # no-op saves coalesces per identity instead of across identities.
         self.saved = {}
+        self._schema_ready = False
         # identity -> unix seconds it stays considered deleted. Cached from the
         # table so a purge survives a restart and an in-flight writer cannot undo it.
         self._dead = {}
 
+    @contextmanager
     def _connection(self):
         conn = sqlite3.connect(self.path, timeout=10)
-        conn.execute('CREATE TABLE IF NOT EXISTS playback_snapshot '
-                     '(identity TEXT PRIMARY KEY, body TEXT NOT NULL)')
-        conn.execute('CREATE TABLE IF NOT EXISTS playback_dead '
-                     '(identity TEXT PRIMARY KEY, expires_at REAL NOT NULL)')
-        self._rekey(conn)
-        return conn
+        try:
+            with self.lock:
+                if not self._schema_ready:
+                    with conn:
+                        conn.execute('CREATE TABLE IF NOT EXISTS playback_snapshot (identity TEXT PRIMARY KEY, body TEXT NOT NULL)')
+                        conn.execute('CREATE TABLE IF NOT EXISTS playback_dead (identity TEXT PRIMARY KEY, expires_at REAL NOT NULL)')
+                        self._rekey(conn)
+                    self._schema_ready = True
+            with conn:
+                yield conn
+        finally:
+            conn.close()
 
     def _rekey(self, conn):
         """Move a pre-multi-user single-row snapshot onto the owner identity."""
@@ -83,7 +92,7 @@ class PlaybackStore:
                 return True
             # Expired (or never tombstoned): drop the cache entry, and the row it came
             # from, so the table cannot accumulate identities that are simply gone.
-            self._dead.pop(identity, None)
+            self._dead[identity] = 0.0
             if deadline > 0.0:
                 with self._connection() as conn:
                     conn.execute('DELETE FROM playback_dead WHERE identity=?', (identity,))
@@ -158,7 +167,7 @@ class PlaybackPersistence:
     def submit(self, state, output, position, identity=None):
         # Caller holds its state lock; copy only persistent queue metadata.
         identity = identity or IDENTITY.get() or OWNER
-        if self.store.dead(identity):
+        if getattr(self.store, "_dead", {}).get(identity, 0.0) > time.time():
             # A heartbeat or request thread still in flight for a deleted account
             # would otherwise re-create the snapshot row the purge just removed.
             with self.guard:

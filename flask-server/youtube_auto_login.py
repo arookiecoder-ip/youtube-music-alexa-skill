@@ -338,6 +338,11 @@ class GoogleAutoLogin:
     # -- the ladder --------------------------------------------------------
 
     def sign_in(self, profile_key="", reason="scheduled"):
+        from browser_coordination import browser_scope
+        with browser_scope("@automatic:" + str(profile_key or "server")):
+            return self._sign_in(profile_key, reason)
+
+    def _sign_in(self, profile_key="", reason="scheduled"):
         """One full attempt. Returns ``{outcome, ok, detail}`` and never raises."""
         if not self.enabled:
             return self._finish(_NOT_CONFIGURED, False, "Automatic sign-in is switched off.")
@@ -417,7 +422,14 @@ class GoogleAutoLogin:
                                  "Signed in, but the YouTube Music session could not be captured.")
         candidate = state or {}
         if self.on_session is not None:
-            self.on_session(candidate.get("headers"), candidate.get("cookies") or "")
+            from browser_coordination import BROKER, OWNER
+            # Fake controllers in offline tests have no capability. Real sidecar
+            # replies always carry it, and commits are fenced by that generation.
+            attempt = candidate.get('attempt_id')
+            with BROKER.lock:
+                if attempt and (BROKER.owner != OWNER.get() or BROKER.token != attempt):
+                    return self._outcome('timeout', False, 'Sign-in was replaced before promotion.')
+                self.on_session(candidate.get("headers"), candidate.get("cookies") or "")
         return self._outcome("signed_in", True, "")
 
     def _call(self, path, payload):
@@ -481,6 +493,7 @@ class GoogleAutoLogin:
 
 
 _COPY = {
+    "method_unavailable": "Google cannot use that verification method. Choose another method.",
     "signed_in": "Signed in and saved the download cookies.",
     "need_identifier": "Google kept asking for the account address, so it does not accept the one configured.",
     "need_password": "Google asked for a password and did not accept the one configured.",

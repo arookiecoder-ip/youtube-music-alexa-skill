@@ -5,6 +5,8 @@ remote and device APIs are not modified by this module.
 """
 from __future__ import annotations
 
+from auth_sessions import replace_identity, password_change_allowed, complete_login
+
 import csv
 import io
 import json
@@ -35,7 +37,7 @@ from .config import MultiUserConfig
 from .crypto import SecretBox
 from .db import Database
 from .mailer import Mailer, render_email
-from .security import RateLimiter, generate_password
+from .security import RateLimiter, generate_password, validate_password
 from .selfservice import build_selfservice_blueprint
 
 PAGE_SIZE = 25
@@ -227,15 +229,20 @@ class MultiUser:
 
     def __init__(self, config: MultiUserConfig, app_secret: str = "", logger=None):
         self.config = config
+        if config.public_base_url.lower().startswith("https://") and not config.encryption_key:
+            raise ValueError("Production HTTPS deployments require MULTIUSER_ENCRYPTION_KEY; migrate encrypted state before changing keys.")
         self.logger = logger
         self.db = Database(config.db_path)
         self.secret_box = SecretBox(config.encryption_key, fallback_secret=app_secret)
         self.accounts = AccountService(self.db, config, self.secret_box)
         self.rate_limiter = RateLimiter()
+        from alexa_identity import AlexaIdentity
+        self.alexa_identity = AlexaIdentity(self.accounts, app_secret)
         default_outbox = os.path.join(
             os.path.dirname(os.path.abspath(config.db_path)), "mail-outbox"
         )
         self.mailer = Mailer.from_env(default_outbox_dir=default_outbox, logger=logger)
+        self.accounts._security_notice = lambda user, heading, text: emails.send_notice(self, user, heading, text, audit="security_change")
         # Step one of sign-in at this door parks its proof here. Separate from the
         # player door's own store, so a token issued at one can never be spent at
         # the other.
@@ -366,6 +373,8 @@ def build_blueprint(mu: MultiUser) -> Blueprint:
         def wrapper(*args, **kwargs):
             if not g.get("mu_user"):
                 return _unauthorized()
+            if g.mu_user.get("must_change_password") and not password_change_allowed(request.path, request.method):
+                return redirect(url_for("multiuser_admin.account", reauth="password"))
             if not AccountService.can_view_admin(g.mu_user):
                 return _forbidden()
             return view(*args, **kwargs)
@@ -389,6 +398,8 @@ def build_blueprint(mu: MultiUser) -> Blueprint:
 
     @bp.before_request
     def _guard():
+        if request.content_length and request.content_length > 32768:
+            return jsonify(error="request_too_large"), 413
         # Any admin POST needs a CSRF token, including login and public forms.
         if request.method in {"POST", "PUT", "PATCH", "DELETE"} and not csrf_valid():
             if _wants_json():
@@ -722,7 +733,7 @@ def build_blueprint(mu: MultiUser) -> Blueprint:
                         )
                         _flash_mail(result, "Verification code", user["email"])
                     if generated_password and not form["send_invite"]:
-                        flash(f"Generated temporary password: {form['password']}", "password")
+                        return render_template("admin/password_result.html", title="Temporary password", password=form["password"], target_id=user["id"])
                     return redirect(url_for("multiuser_admin.user_detail", user_id=user["id"]))
                 except AccountError as exc:
                     flash(str(exc), "error")
@@ -802,7 +813,9 @@ def build_blueprint(mu: MultiUser) -> Blueprint:
                 user_agent=_user_agent(),
             )
             label = "Generated password" if generated else "Password reset"
-            flash(f"{label}: {password}", "password")
+            if generated:
+                return render_template("admin/password_result.html", title="Temporary password", password=password, target_id=user_id)
+            flash("Password reset.", "success")
             flash("Every device on this account was signed out.", "info")
         except AccountError as exc:
             flash(str(exc), "error")
@@ -869,7 +882,7 @@ def build_blueprint(mu: MultiUser) -> Blueprint:
     def account_totp_begin():
         try:
             mu.accounts.begin_totp_enrollment(
-                g.mu_user,
+                g.mu_user, session_token=session.get("mu_sid") or "",
                 current_password=request.form.get("current_password") or "",
                 issuer=mu.config.app_name,
                 ip=_client_ip(), user_agent=_user_agent(),
@@ -898,7 +911,7 @@ def build_blueprint(mu: MultiUser) -> Blueprint:
             flash(message, category)
             return redirect(target)
 
-        if slug not in {"disable", "replace", "reset"} or not user:
+        if slug not in {"disable", "replace", "reset", "email"} or not user:
             return answer("error", "That request could not be understood.",
                           url_for("multiuser_admin.account"))
         if not user.get("email"):
@@ -936,13 +949,11 @@ def build_blueprint(mu: MultiUser) -> Blueprint:
             way="email" if by_email else "password",
         )
         try:
-            mu.accounts.reauthenticate(
-                g.mu_user, ip=_client_ip(), user_agent=_user_agent(), **credentials
-            )
             mu.accounts.begin_totp_enrollment(
-                g.mu_user,
+                g.mu_user, session_token=session.get("mu_sid") or "",
                 issuer=mu.config.app_name,
-                verified=True, allow_existing=True,
+                current_password=request.form.get("current_password") or "",
+                email_code=request.form.get("code") or "", allow_existing=True,
                 ip=_client_ip(), user_agent=_user_agent(),
             )
             flash("Scan the new authenticator and confirm its code. Your current one still works until you do.", "success")
@@ -958,7 +969,7 @@ def build_blueprint(mu: MultiUser) -> Blueprint:
 
         Same rules as the player door: the URI *is* the secret, so it is only ever
         the ``src`` of one same-origin image on a no-store response."""
-        enrollment = mu.accounts.pending_totp_enrollment(g.mu_user)
+        enrollment = mu.accounts.pending_totp_enrollment(g.mu_user, session_token=session.get("mu_sid") or "")
         if not enrollment:
             return Response("", status=409, mimetype="text/plain")
         try:
@@ -980,7 +991,7 @@ def build_blueprint(mu: MultiUser) -> Blueprint:
     def account_totp_confirm():
         try:
             mu.accounts.confirm_totp_enrollment(
-                g.mu_user, code=request.form.get("code") or "",
+                g.mu_user, session_token=session.get("mu_sid") or "", code=request.form.get("code") or "",
                 ip=_client_ip(), user_agent=_user_agent(),
             )
             flash("Two-factor sign-in is on. You will be asked for a code when you sign in.", "success")
@@ -1010,11 +1021,9 @@ def build_blueprint(mu: MultiUser) -> Blueprint:
             way="email" if by_email else "password",
         )
         try:
-            mu.accounts.reauthenticate(
-                g.mu_user, ip=_client_ip(), user_agent=_user_agent(), **credentials
-            )
             mu.accounts.disable_totp(
-                g.mu_user, verified=True,
+                g.mu_user, session_token=session.get("mu_sid") or "", current_password=request.form.get("current_password") or "",
+                email_code=request.form.get("code") or "",
                 ip=_client_ip(), user_agent=_user_agent(),
             )
             flash("Two-factor sign-in is off. Sign in with your password alone from now on.", "success")
@@ -1464,14 +1473,13 @@ def build_blueprint(mu: MultiUser) -> Blueprint:
                 g.mu_user,
                 email=request.form.get("email") or "",
                 current_password=request.form.get("current_password") or "",
+                email_code=request.form.get("email_code") or "",
                 ip=_client_ip(),
                 user_agent=_user_agent(),
             )
-            flash("Profile updated.", "success")
+            flash("Confirm the proposed address before it replaces your current email.", "success")
             if (
-                user.get("email")
-                and user["email"].strip().lower() != previous_email
-                and not user.get("email_verified")
+                user.get("pending_email")
             ):
                 result = _send_code_email(
                     user, "verify", actor=g.mu_user,
@@ -1622,6 +1630,7 @@ def build_blueprint(mu: MultiUser) -> Blueprint:
                 or not user
                 or user.get("status") != "active"
                 or not AccountService.can_view_admin(user)
+                or record.get("security_version") != mu.accounts.security_version(user["id"])
                 or not mu.accounts.totp_is_enabled(user)
                 or not mu.accounts.verify_totp_code(user["id"], str(request.form.get("code") or "").strip())
             ):
@@ -1634,6 +1643,8 @@ def build_blueprint(mu: MultiUser) -> Blueprint:
                 flash("That sign-in needs your password again.", "error")
                 return door(next_target, status=401)
             raw_sid = mu.accounts.create_session(user, ip, _user_agent())
+            complete_login(mu, user, ip)
+            replace_identity()
             session["mu_sid"] = raw_sid
             session["mu_user_id"] = user["id"]
             session.permanent = True
@@ -1678,18 +1689,18 @@ def build_blueprint(mu: MultiUser) -> Blueprint:
         # they exist to slow guessing, not to cap legitimate sign-ins.  These keys
         # must be the bucketed ones the allow() above spent, or the reset is a
         # silent no-op and the two doors stop sharing a cleared budget.
-        mu.rate_limiter.reset("login-account", account_key)
-        mu.rate_limiter.reset("login-ip", ip_key)
 
         if mu.accounts.totp_is_enabled(user):
             # The password buys a wait, not a session.
             token = mu.pending.issue(
-                {"kind": "admin", "uid": user["id"], "next": next_target}, bind
+                {"kind": "admin", "uid": user["id"], "next": next_target, "security_version": user["security_version"]}, bind
             )
             mu.accounts.audit(user, "admin_login_2fa", user["id"], {"step": "issued"}, ip, _user_agent())
             return door(next_target, step="code", pending=token)
 
         raw_sid = mu.accounts.create_session(user, ip, _user_agent())
+        complete_login(mu, user, ip)
+        replace_identity()
         session["mu_sid"] = raw_sid
         session["mu_user_id"] = user["id"]
         session.permanent = True
@@ -1804,6 +1815,9 @@ def build_blueprint(mu: MultiUser) -> Blueprint:
                 identifier=identifier,
                 code=request.form.get("code") or "",
             ), 400
+        problem = validate_password(password, (user or {}).get("username") or "")
+        if problem:
+            return rejected(problem, 422)
         consumed = mu.accounts.consume_email_code(
             user["id"], "reset", request.form.get("code") or ""
         )
@@ -1868,8 +1882,12 @@ def build_blueprint(mu: MultiUser) -> Blueprint:
         )
         return redirect(login_url)
 
-    @bp.route("/magic/<token>", methods=["GET"])
+    @bp.route("/magic/<token>", methods=["GET", "POST"])
     def magic_login(token):
+        if request.method == "GET":
+            if not mu.accounts.peek_email_token(token, "magic"):
+                return render_template("admin/error.html", status=410, message="This sign-in link is expired or invalid."), 410
+            return render_template("admin/magic_confirm.html", title="Confirm sign-in")
         consumed = mu.accounts.consume_email_token(token, "magic")
         if not consumed:
             return (
@@ -1900,6 +1918,11 @@ def build_blueprint(mu: MultiUser) -> Blueprint:
                 ),
                 403,
             )
+        if mu.accounts.totp_is_enabled(user):
+            bind = pending.bind_value(netids.ip_bucket(_client_ip()), _user_agent())
+            token = mu.pending.issue({'kind': 'admin', 'uid': user['id'],
+                'security_version': user['security_version'], 'next': base + '/'}, bind)
+            return render_template('admin/login.html', title='Verify sign-in', step='code', pending=token, next_target=base + '/')
         if not user.get("email_verified"):
             mu.accounts.verify_email_with_token(user["id"], ip=_client_ip(), user_agent=_user_agent())
         # Retire any session already active in this browser before replacing it.
@@ -1909,6 +1932,7 @@ def build_blueprint(mu: MultiUser) -> Blueprint:
             if previous_session:
                 mu.accounts.revoke_session(previous_session["sid_hash"])
         raw_sid = mu.accounts.create_session(user, _client_ip(), _user_agent())
+        replace_identity()
         session["mu_sid"] = raw_sid
         session["mu_user_id"] = user["id"]
         session.permanent = True

@@ -27,7 +27,7 @@ class EchoStreamFailureTests(unittest.TestCase):
         fn = next(n for n in cls.body if isinstance(n, ast.AsyncFunctionDef) and n.name == 'get_stream')
         fn.decorator_list = []
         direct = Mock(side_effect=AssertionError('Echo must never receive IP-locked URL'))
-        ns = {'PUBLIC_BASE_URL': '', 'has_request_context': has_request_context, 'request': request,
+        ns = {'_multiuser_layer': None, 'PUBLIC_BASE_URL': '', 'has_request_context': has_request_context, 'request': request,
               '_ensure_audio_ready_for_play': Mock(),
               'threading': SimpleNamespace(Thread=Mock(return_value=Mock())), 'API_KEY': 'test-key',
               'Supporting': SimpleNamespace(ensure_downloaded=Mock(), resolve_direct_url=direct), 'asyncio': asyncio}

@@ -16,6 +16,8 @@ Nothing here imports ``server.py`` -- the layer stays optional.
 """
 from __future__ import annotations
 
+from auth_sessions import password_change_allowed
+
 import hmac
 import os
 import secrets
@@ -282,8 +284,9 @@ def build_selfservice_blueprint(mu) -> Blueprint:
         code = mu.accounts.create_email_code(
             user["id"], purpose, user.get("email") or "", ip=ip, user_agent=user_agent
         )
+        recipient = dict(user, email=user.get("pending_email") or user.get("email")) if purpose == "verify" else user
         return emails.send_code_email(
-            mu, user, purpose, code, where=where, ip=ip, user_agent=user_agent
+            mu, recipient, purpose, code, where=where, ip=ip, user_agent=user_agent
         )
 
     def _code_send_blocked(user: dict, purpose: str, ip: str, *,
@@ -357,6 +360,11 @@ def build_selfservice_blueprint(mu) -> Blueprint:
     # ------------------------------------------------------------- the guard
     @bp.before_request
     def _guard():
+        if request.content_length and request.content_length > 32768:
+            return _json_error("request_too_large", "Account request is too large.", 413)
+        user = current_user()
+        if user and user.get("must_change_password") and not password_change_allowed(request.path, request.method):
+            return _json_error("password_change_required", "Change your temporary password first.", 403)
         if (
             request.method in {"POST", "PUT", "PATCH", "DELETE"}
             and request.path.startswith("/api/account")
@@ -719,6 +727,7 @@ def build_selfservice_blueprint(mu) -> Blueprint:
         if request.method == "GET":
             return render_template("selfservice_form.html", **spec)
         ip, user_agent = _ip(), _ua()
+        session.pop(PENDING_VERIFY_KEY, None)
         identifier = (request.form.get("identifier") or "").strip()
         scripted = _honeypot_filled()
         blocked = _limited("resend-ip", netids.ip_bucket(ip), html=True)
@@ -747,7 +756,7 @@ def build_selfservice_blueprint(mu) -> Blueprint:
             # This browser just proved it holds the mailbox *and* the username, so
             # remembering which account it is confirming is not a privilege gain --
             # and it saves a stranger from retyping what they typed a minute ago.
-            session[PENDING_VERIFY_KEY] = [user["id"], user.get("username") or ""]
+            session.pop(PENDING_VERIFY_KEY, None)
             sent_to = user
         elif scripted:
             mu.accounts.audit(
@@ -768,7 +777,7 @@ def build_selfservice_blueprint(mu) -> Blueprint:
                 "If that account still needs confirming, a fresh six-digit code is on "
                 f"its way. It expires after {config.email_code_minutes} minutes."
             ),
-            username=sent_to.get("username") if sent_to else "",
+            username="",
         )
 
     # -------------------------------------------------------------- invitation
@@ -808,6 +817,9 @@ def build_selfservice_blueprint(mu) -> Blueprint:
         confirm = request.form.get("confirm_password") or ""
         if password != confirm:
             return page("The two passwords do not match.", 400)
+        problem = validate_password(password, info.get("username") or "")
+        if problem:
+            return page(problem, 422)
         consumed = mu.accounts.consume_email_token(token, "invite")
         if not consumed:
             return _result_page(
@@ -855,6 +867,7 @@ def build_selfservice_blueprint(mu) -> Blueprint:
         if request.method == "GET":
             return render_template("selfservice_form.html", **spec)
         ip, user_agent = _ip(), _ua()
+        session.pop(PENDING_VERIFY_KEY, None)
         identifier = (request.form.get("identifier") or "").strip()
         scripted = _honeypot_filled()
         # These bucket names are the administrator door's, so one attacker cannot
@@ -884,7 +897,7 @@ def build_selfservice_blueprint(mu) -> Blueprint:
             )
             # Whose reset this is, remembered for the browser that just asked. It is
             # an identifier only -- the code is still what opens the door.
-            session[PENDING_VERIFY_KEY] = [user["id"], user.get("username") or ""]
+            session.pop(PENDING_VERIFY_KEY, None)
         elif scripted:
             mu.accounts.audit(
                 None, "password_reset_honeypot", None,
@@ -937,7 +950,7 @@ def build_selfservice_blueprint(mu) -> Blueprint:
             )
 
         if request.method == "GET":
-            return page(username=pending_username)
+            return page()
 
         blocked = _limited("reset-ip", netids.ip_bucket(ip), html=True)
         if blocked:
@@ -954,11 +967,6 @@ def build_selfservice_blueprint(mu) -> Blueprint:
             if "@" in identifier
             else mu.accounts.get_user_by_username(identifier)
         ) if identifier else None
-        if user and user.get("id") != pending_uid:
-            # A code belongs to one account. Answering "wrong code" for somebody
-            # else's username is the honest reply: it neither confirms the address
-            # nor lets a second account's credential be spent here.
-            user = None
         if not user:
             blocked = _limited(
                 "code-id", netids.identifier_bucket(identifier), html=True
@@ -1088,6 +1096,7 @@ def build_selfservice_blueprint(mu) -> Blueprint:
             "user": full,
             "username": full.get("username"),
             "email": full.get("email") or "",
+            "pending_email": full.get("pending_email") or "",
             "email_verified": bool(full.get("email_verified")),
             "verification_pending": mu.accounts.verification_pending(full),
             # How many tries this code has left, so the page can say "two more"
@@ -1169,6 +1178,22 @@ def build_selfservice_blueprint(mu) -> Blueprint:
             )
         return jsonify({"ok": True, "complete": True, "message": message})
 
+    @bp.route('/api/account/alexa/link-code', methods=['POST'])
+    @account_required
+    def alexa_link_code():
+        blocked = _limited('code-ip', netids.ip_bucket(_ip()))
+        if blocked:
+            return blocked
+        return jsonify(code=mu.alexa_identity.issue(g.ss_user), expires_in=300)
+
+    @bp.route('/api/account/alexa/unlink', methods=['POST'])
+    @account_required
+    def alexa_unlink():
+        mu.db.execute('DELETE FROM alexa_bindings WHERE user_id=?', (g.ss_user['id'],))
+        mu.db.execute('DELETE FROM alexa_pair_codes WHERE user_id=?', (g.ss_user['id'],))
+        mu.accounts.invalidate_security_proofs(g.ss_user['id'])
+        return jsonify(ok=True)
+
     @bp.route("/api/account/profile", methods=["POST"])
     @account_required
     def api_profile():
@@ -1184,6 +1209,7 @@ def build_selfservice_blueprint(mu) -> Blueprint:
                 g.ss_user,
                 email=email,
                 current_password=str(body.get("current_password") or ""),
+                email_code=str(body.get("email_code") or ""),
                 ip=ip,
                 user_agent=user_agent,
             )
@@ -1196,7 +1222,7 @@ def build_selfservice_blueprint(mu) -> Blueprint:
             if message in (EMAIL_TAKEN, USERNAME_TAKEN):
                 return _error_for(exc)
             return _json_error("invalid", message, 422, fields={"email": message})
-        email_changed = (user.get("email") or "") != (before.get("email") or "")
+        email_changed = bool(user.get("pending_email"))
         note = ""
         if email_changed:
             # The address is unverified from this moment, so the code that fixes it
@@ -1455,35 +1481,20 @@ def build_selfservice_blueprint(mu) -> Blueprint:
                     fields={"email_code": "Wait before trying this code again."},
                 )
         try:
-            mu.accounts.confirm_own_credentials(
-                user,
-                current_password=current_password,
-                email_code=email_code,
-                purpose="reauth",
-                require_email_code=has_current,
-                ip=ip,
-                user_agent=user_agent,
-                audit_action="email_change_failed",
-            )
-        except AccountError as exc:
-            message = str(exc)
-            if "password" in message.lower():
-                return _json_error(
-                    "bad_password", message, 403, fields={"current_password": message}
-                )
-            return _json_error(
-                "invalid_code", message, 410, fields={"email_code": message}
-            )
-        try:
             updated = mu.accounts.update_own_profile(
                 user,
                 email=new_email,
                 current_password=current_password,
+                email_code=email_code,
                 ip=ip,
                 user_agent=user_agent,
             )
         except AccountError as exc:
             message = str(exc)
+            if "password" in message.lower():
+                return _json_error("bad_password", message, 403, fields={"current_password": message})
+            if "code" in message.lower():
+                return _json_error("invalid_code", message, 410, fields={"email_code": message})
             if message in (EMAIL_TAKEN, USERNAME_TAKEN):
                 return _error_for(exc)
             return _json_error("invalid", message, 422, fields={"email": message})
@@ -1497,7 +1508,7 @@ def build_selfservice_blueprint(mu) -> Blueprint:
                 "email_changed": True,
                 "verification_pending": mu.accounts.verification_pending(updated),
                 "note": note,
-                "message": f"Your email address is now {_mask(new_email)}. Confirm it "
+                "message": f"Confirm the proposed address {_mask(new_email)} "
                            "with the code that was just sent.",
             }
         )
@@ -1615,7 +1626,7 @@ def build_selfservice_blueprint(mu) -> Blueprint:
         replacing = mu.accounts.totp_is_enabled(before)
         try:
             enrollment = mu.accounts.begin_totp_enrollment(
-                g.ss_user,
+                g.ss_user, session_token=session.get("mu_sid") or "",
                 current_password=str(body.get("current_password") or ""),
                 # Optional, and never the authenticator's own code: the emailed one
                 # is the proof a person can still produce when the phone is the
@@ -1662,7 +1673,7 @@ def build_selfservice_blueprint(mu) -> Blueprint:
         The URI *is* the secret, which is why it is never a JSON field: this
         endpoint's only purpose is to be the ``src`` of one same-origin ``<img>``
         on a no-store page."""
-        enrollment = mu.accounts.pending_totp_enrollment(g.ss_user)
+        enrollment = mu.accounts.pending_totp_enrollment(g.ss_user, session_token=session.get("mu_sid") or "")
         if not enrollment:
             return _json_error("no_enrollment", "Start the two-factor setup again first.", 409)
         try:
@@ -1692,7 +1703,7 @@ def build_selfservice_blueprint(mu) -> Blueprint:
         replacing = mu.accounts.totp_is_enabled(before)
         try:
             user = mu.accounts.confirm_totp_enrollment(
-                g.ss_user,
+                g.ss_user, session_token=session.get("mu_sid") or "",
                 code=str(body.get("code") or "").strip(),
                 ip=_ip(),
                 user_agent=_ua(),
@@ -1751,7 +1762,7 @@ def build_selfservice_blueprint(mu) -> Blueprint:
         ip, user_agent = _ip(), _ua()
         try:
             user = mu.accounts.disable_totp(
-                g.ss_user,
+                g.ss_user, session_token=session.get("mu_sid") or "",
                 current_password=str(body.get("current_password") or ""),
                 # An emailed code, never the authenticator's own: the device that
                 # generates those is the thing a person reliably loses, and a second

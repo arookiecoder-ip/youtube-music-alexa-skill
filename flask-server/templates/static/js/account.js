@@ -177,7 +177,8 @@
     const summary = el('profile-email');
     if (summary) summary.textContent = data.email || 'No email address';
 
-    if (!data.email) badge('verify-badge', 'No email address', 'bad');
+    if (data.pending_email) badge('verify-badge', 'Confirm ' + data.pending_email, 'warn');
+    else if (!data.email) badge('verify-badge', 'No email address', 'bad');
     else if (data.email_verified) badge('verify-badge', 'Confirmed', 'ok');
     else badge('verify-badge', 'Waiting for your code', 'warn');
     const pending = Boolean(data.email) && data.verification_pending;
@@ -206,6 +207,8 @@
   }
 
   function renderTotp(data) {
+    const recoveryInput = el('begin_email_code');
+    if (recoveryInput) recoveryInput.required = Boolean(data.totp_enabled);
     const words = data.totp_enabled ? 'On' : (data.totp_pending ? 'Setup waiting' : 'Off');
     const kind = data.totp_enabled ? 'ok' : (data.totp_pending ? 'warn' : '');
     badge('totp-badge', words, kind);
@@ -912,4 +915,18 @@
   })();
 
   load();
+})();
+
+(() => {
+  const code = document.getElementById('alexa-link-code');
+  const unlink = document.getElementById('alexa-unlink');
+  const result = document.getElementById('alexa-link-result');
+  const send = async (path) => {
+    const response = await fetch(path, {method:'POST', credentials:'same-origin', headers:{'Content-Type':'application/json','X-CSRF-Token':document.body.dataset.csrf || ''},body:'{}'});
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error?.message || 'Try again.');
+    return data;
+  };
+  code?.addEventListener('click', async () => { try {result.textContent=(await send('/api/account/alexa/link-code')).code;} catch(e) {result.textContent=e.message;} });
+  unlink?.addEventListener('click', async () => { try {await send('/api/account/alexa/unlink');result.textContent='Echo devices unlinked.';} catch(e) {result.textContent=e.message;} });
 })();

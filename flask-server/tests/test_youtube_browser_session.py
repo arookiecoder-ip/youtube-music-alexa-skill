@@ -249,7 +249,8 @@ class CaptureTests(unittest.TestCase):
         client = module.app.test_client()
         self.assertEqual(client.get("/status").status_code, 401)
         self.assertEqual(client.get("/status", headers={"X-Control-Token": "wrong"}).status_code, 401)
-        self.assertEqual(client.get("/status", headers={"X-Control-Token": "correct"}).status_code, 200)
+        module._auth_attempt="test-attempt";module._auth_attempt_deadline=time.monotonic()+300
+        self.assertEqual(client.get("/status", headers={"X-Control-Token": "correct", "X-Auth-Attempt": "test-attempt"}).status_code, 200)
 
     @requires_sidecar('service.py')
     def test_sidecar_rejects_signed_headers_without_active_account(self):
@@ -337,7 +338,8 @@ class CaptureTests(unittest.TestCase):
         with mock.patch.dict(os.environ, {"YT_BROWSER_CONTROL_TOKEN": "correct"}):
             spec.loader.exec_module(module)
         client = module.app.test_client()
-        headers = {"X-Control-Token": "correct"}
+        module._auth_attempt="test-attempt";module._auth_attempt_deadline=time.monotonic()+300
+        headers = {"X-Control-Token": "correct", "X-Auth-Attempt": "test-attempt"}
         self.assertEqual(client.post("/interactive/capture", headers=headers).status_code, 409)
         module._set_state("waiting_for_login", interactive=True)
         response = client.post("/interactive/capture", headers=headers)

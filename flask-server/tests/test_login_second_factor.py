@@ -149,6 +149,7 @@ class SecondFactorDoorTestBase(unittest.TestCase):
         self.layer_app.secret_key = "layer-session-secret"
         self.layer = init_multiuser(self.layer_app)
         self.assertIsNotNone(self.layer)
+        self.layer.db.execute("UPDATE users SET must_change_password=0 WHERE created_by='system'")
         self.accounts = self.layer.accounts
         self.owner = self.accounts.get_user_by_username("owner")
         self.admin_client = self.layer_app.test_client()
@@ -423,7 +424,7 @@ class PlayerDoorTests(SecondFactorDoorTestBase):
         self.player_user("player1")
         user = self.accounts.get_user_by_username("player1")
         self.accounts.begin_totp_enrollment(
-            user, current_password=PLAYER_PASSWORD, ip="127.0.0.1", user_agent="x"
+            user, current_password=PLAYER_PASSWORD, email_code=self.accounts.create_email_code(user["id"], "reauth"), ip="127.0.0.1", user_agent="x"
         )
         response = self.post(username="player1", password=PLAYER_PASSWORD)
         self.assertFalse(response.get_json().get("totp_required"))
@@ -471,7 +472,7 @@ class PlayerDoorTests(SecondFactorDoorTestBase):
         token = self.post(username="player1", password=PLAYER_PASSWORD).get_json()["token"]
         user = self.accounts.get_user_by_username("player1")
         self.accounts.disable_totp(
-            user, current_password=PLAYER_PASSWORD, ip="127.0.0.1", user_agent="x"
+            user, current_password=PLAYER_PASSWORD, email_code=self.accounts.create_email_code(user["id"], "reauth"), ip="127.0.0.1", user_agent="x"
         )
         response = self.post(step="totp", token=token, code=totp_at(secret, int(time.time()) // 30))
         self.assertEqual(response.status_code, 401)

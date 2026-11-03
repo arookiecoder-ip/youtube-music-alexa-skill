@@ -1,6 +1,8 @@
 #!/bin/sh
 set -eu
 
+export HOME="${HOME:-/home/musicbox}"
+
 mkdir -p "${CHROME_USER_DATA_DIR:-/profile}"
 # A restart keeps this container's writable layer (including /tmp) but not the
 # processes in it. A lock left by the previous X server then makes the new Xvfb

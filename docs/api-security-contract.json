@@ -1,0 +1,676 @@
+{
+  "protocol_version": 2,
+  "session_generation": "security_version",
+  "routes": [
+    {
+      "path": "/account",
+      "methods": [
+        "GET"
+      ],
+      "principal": "account",
+      "csrf": "required for mutations",
+      "tenant": "authenticated account; admin target permissions checked in service"
+    },
+    {
+      "path": "/admin/",
+      "methods": [
+        "GET"
+      ],
+      "principal": "administrator",
+      "csrf": "required for mutations",
+      "tenant": "authenticated account; admin target permissions checked in service"
+    },
+    {
+      "path": "/admin/account/",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "principal": "administrator",
+      "csrf": "required for mutations",
+      "tenant": "authenticated account; admin target permissions checked in service"
+    },
+    {
+      "path": "/admin/account/email/confirm/",
+      "methods": [
+        "POST"
+      ],
+      "principal": "administrator",
+      "csrf": "required for mutations",
+      "tenant": "authenticated account; admin target permissions checked in service"
+    },
+    {
+      "path": "/admin/account/email/verification/",
+      "methods": [
+        "POST"
+      ],
+      "principal": "administrator",
+      "csrf": "required for mutations",
+      "tenant": "authenticated account; admin target permissions checked in service"
+    },
+    {
+      "path": "/admin/account/password/reset/",
+      "methods": [
+        "POST"
+      ],
+      "principal": "administrator",
+      "csrf": "required for mutations",
+      "tenant": "authenticated account; admin target permissions checked in service"
+    },
+    {
+      "path": "/admin/account/profile/",
+      "methods": [
+        "POST"
+      ],
+      "principal": "administrator",
+      "csrf": "required for mutations",
+      "tenant": "authenticated account; admin target permissions checked in service"
+    },
+    {
+      "path": "/admin/account/sessions/<fingerprint>/revoke/",
+      "methods": [
+        "POST"
+      ],
+      "principal": "administrator",
+      "csrf": "required for mutations",
+      "tenant": "authenticated account; admin target permissions checked in service"
+    },
+    {
+      "path": "/admin/account/sessions/revoke/",
+      "methods": [
+        "POST"
+      ],
+      "principal": "administrator",
+      "csrf": "required for mutations",
+      "tenant": "authenticated account; admin target permissions checked in service"
+    },
+    {
+      "path": "/admin/account/totp/begin/",
+      "methods": [
+        "POST"
+      ],
+      "principal": "administrator",
+      "csrf": "required for mutations",
+      "tenant": "authenticated account; admin target permissions checked in service"
+    },
+    {
+      "path": "/admin/account/totp/cancel/",
+      "methods": [
+        "POST"
+      ],
+      "principal": "administrator",
+      "csrf": "required for mutations",
+      "tenant": "authenticated account; admin target permissions checked in service"
+    },
+    {
+      "path": "/admin/account/totp/confirm/",
+      "methods": [
+        "POST"
+      ],
+      "principal": "administrator",
+      "csrf": "required for mutations",
+      "tenant": "authenticated account; admin target permissions checked in service"
+    },
+    {
+      "path": "/admin/account/totp/disable/",
+      "methods": [
+        "POST"
+      ],
+      "principal": "administrator",
+      "csrf": "required for mutations",
+      "tenant": "authenticated account; admin target permissions checked in service"
+    },
+    {
+      "path": "/admin/account/totp/qr/",
+      "methods": [
+        "GET"
+      ],
+      "principal": "administrator",
+      "csrf": "required for mutations",
+      "tenant": "authenticated account; admin target permissions checked in service"
+    },
+    {
+      "path": "/admin/account/totp/reauth/send/",
+      "methods": [
+        "POST"
+      ],
+      "principal": "administrator",
+      "csrf": "required for mutations",
+      "tenant": "authenticated account; admin target permissions checked in service"
+    },
+    {
+      "path": "/admin/account/totp/replace/",
+      "methods": [
+        "POST"
+      ],
+      "principal": "administrator",
+      "csrf": "required for mutations",
+      "tenant": "authenticated account; admin target permissions checked in service"
+    },
+    {
+      "path": "/admin/api/health/",
+      "methods": [
+        "GET"
+      ],
+      "principal": "administrator",
+      "csrf": "required for mutations",
+      "tenant": "authenticated account; admin target permissions checked in service"
+    },
+    {
+      "path": "/admin/api/users/",
+      "methods": [
+        "GET"
+      ],
+      "principal": "administrator",
+      "csrf": "required for mutations",
+      "tenant": "authenticated account; admin target permissions checked in service"
+    },
+    {
+      "path": "/admin/audit/",
+      "methods": [
+        "GET"
+      ],
+      "principal": "administrator",
+      "csrf": "required for mutations",
+      "tenant": "authenticated account; admin target permissions checked in service"
+    },
+    {
+      "path": "/admin/audit/export.csv",
+      "methods": [
+        "GET"
+      ],
+      "principal": "administrator",
+      "csrf": "required for mutations",
+      "tenant": "authenticated account; admin target permissions checked in service"
+    },
+    {
+      "path": "/admin/email-login/",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "principal": "public",
+      "csrf": "required for mutations",
+      "tenant": "none until proof verified"
+    },
+    {
+      "path": "/admin/forgot-password/",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "principal": "public",
+      "csrf": "required for mutations",
+      "tenant": "none until proof verified"
+    },
+    {
+      "path": "/admin/login/",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "principal": "public",
+      "csrf": "required for mutations",
+      "tenant": "none until proof verified"
+    },
+    {
+      "path": "/admin/logout/",
+      "methods": [
+        "POST"
+      ],
+      "principal": "administrator",
+      "csrf": "required for mutations",
+      "tenant": "authenticated account; admin target permissions checked in service"
+    },
+    {
+      "path": "/admin/magic/<token>",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "principal": "public",
+      "csrf": "required for mutations",
+      "tenant": "none until proof verified"
+    },
+    {
+      "path": "/admin/reset-password/",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "principal": "public",
+      "csrf": "required for mutations",
+      "tenant": "none until proof verified"
+    },
+    {
+      "path": "/admin/system/",
+      "methods": [
+        "GET"
+      ],
+      "principal": "administrator",
+      "csrf": "required for mutations",
+      "tenant": "authenticated account; admin target permissions checked in service"
+    },
+    {
+      "path": "/admin/system/backup/",
+      "methods": [
+        "POST"
+      ],
+      "principal": "administrator",
+      "csrf": "required for mutations",
+      "tenant": "authenticated account; admin target permissions checked in service"
+    },
+    {
+      "path": "/admin/system/test-email/",
+      "methods": [
+        "POST"
+      ],
+      "principal": "administrator",
+      "csrf": "required for mutations",
+      "tenant": "authenticated account; admin target permissions checked in service"
+    },
+    {
+      "path": "/admin/theme/",
+      "methods": [
+        "POST"
+      ],
+      "principal": "administrator",
+      "csrf": "required for mutations",
+      "tenant": "authenticated account; admin target permissions checked in service"
+    },
+    {
+      "path": "/admin/users/",
+      "methods": [
+        "GET"
+      ],
+      "principal": "administrator",
+      "csrf": "required for mutations",
+      "tenant": "authenticated account; admin target permissions checked in service"
+    },
+    {
+      "path": "/admin/users/<user_id>/",
+      "methods": [
+        "GET"
+      ],
+      "principal": "administrator",
+      "csrf": "required for mutations",
+      "tenant": "authenticated account; admin target permissions checked in service"
+    },
+    {
+      "path": "/admin/users/<user_id>/delete/",
+      "methods": [
+        "POST"
+      ],
+      "principal": "administrator",
+      "csrf": "required for mutations",
+      "tenant": "authenticated account; admin target permissions checked in service"
+    },
+    {
+      "path": "/admin/users/<user_id>/edit/",
+      "methods": [
+        "POST"
+      ],
+      "principal": "administrator",
+      "csrf": "required for mutations",
+      "tenant": "authenticated account; admin target permissions checked in service"
+    },
+    {
+      "path": "/admin/users/<user_id>/email/invitation/",
+      "methods": [
+        "POST"
+      ],
+      "principal": "administrator",
+      "csrf": "required for mutations",
+      "tenant": "authenticated account; admin target permissions checked in service"
+    },
+    {
+      "path": "/admin/users/<user_id>/email/verification/",
+      "methods": [
+        "POST"
+      ],
+      "principal": "administrator",
+      "csrf": "required for mutations",
+      "tenant": "authenticated account; admin target permissions checked in service"
+    },
+    {
+      "path": "/admin/users/<user_id>/email/verify-now/",
+      "methods": [
+        "POST"
+      ],
+      "principal": "administrator",
+      "csrf": "required for mutations",
+      "tenant": "authenticated account; admin target permissions checked in service"
+    },
+    {
+      "path": "/admin/users/<user_id>/password-change/",
+      "methods": [
+        "POST"
+      ],
+      "principal": "administrator",
+      "csrf": "required for mutations",
+      "tenant": "authenticated account; admin target permissions checked in service"
+    },
+    {
+      "path": "/admin/users/<user_id>/password/",
+      "methods": [
+        "POST"
+      ],
+      "principal": "administrator",
+      "csrf": "required for mutations",
+      "tenant": "authenticated account; admin target permissions checked in service"
+    },
+    {
+      "path": "/admin/users/<user_id>/provider/<provider>/disconnect/",
+      "methods": [
+        "POST"
+      ],
+      "principal": "administrator",
+      "csrf": "required for mutations",
+      "tenant": "authenticated account; admin target permissions checked in service"
+    },
+    {
+      "path": "/admin/users/<user_id>/restore/",
+      "methods": [
+        "POST"
+      ],
+      "principal": "administrator",
+      "csrf": "required for mutations",
+      "tenant": "authenticated account; admin target permissions checked in service"
+    },
+    {
+      "path": "/admin/users/<user_id>/sessions/revoke/",
+      "methods": [
+        "POST"
+      ],
+      "principal": "administrator",
+      "csrf": "required for mutations",
+      "tenant": "authenticated account; admin target permissions checked in service"
+    },
+    {
+      "path": "/admin/users/<user_id>/status/",
+      "methods": [
+        "POST"
+      ],
+      "principal": "administrator",
+      "csrf": "required for mutations",
+      "tenant": "authenticated account; admin target permissions checked in service"
+    },
+    {
+      "path": "/admin/users/<user_id>/totp/",
+      "methods": [
+        "POST"
+      ],
+      "principal": "administrator",
+      "csrf": "required for mutations",
+      "tenant": "authenticated account; admin target permissions checked in service"
+    },
+    {
+      "path": "/admin/users/new/",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "principal": "administrator",
+      "csrf": "required for mutations",
+      "tenant": "authenticated account; admin target permissions checked in service"
+    },
+    {
+      "path": "/admin/users/signup/",
+      "methods": [
+        "POST"
+      ],
+      "principal": "administrator",
+      "csrf": "required for mutations",
+      "tenant": "authenticated account; admin target permissions checked in service"
+    },
+    {
+      "path": "/admin/youtube/",
+      "methods": [
+        "GET"
+      ],
+      "principal": "administrator",
+      "csrf": "required for mutations",
+      "tenant": "authenticated account; admin target permissions checked in service"
+    },
+    {
+      "path": "/admin/youtube/signin/",
+      "methods": [
+        "POST"
+      ],
+      "principal": "administrator",
+      "csrf": "required for mutations",
+      "tenant": "authenticated account; admin target permissions checked in service"
+    },
+    {
+      "path": "/api/account",
+      "methods": [
+        "GET"
+      ],
+      "principal": "account",
+      "csrf": "required for mutations",
+      "tenant": "authenticated account; admin target permissions checked in service"
+    },
+    {
+      "path": "/api/account/alexa/link-code",
+      "methods": [
+        "POST"
+      ],
+      "principal": "account",
+      "csrf": "required for mutations",
+      "tenant": "authenticated account; admin target permissions checked in service"
+    },
+    {
+      "path": "/api/account/alexa/unlink",
+      "methods": [
+        "POST"
+      ],
+      "principal": "account",
+      "csrf": "required for mutations",
+      "tenant": "authenticated account; admin target permissions checked in service"
+    },
+    {
+      "path": "/api/account/delete",
+      "methods": [
+        "POST"
+      ],
+      "principal": "account",
+      "csrf": "required for mutations",
+      "tenant": "authenticated account; admin target permissions checked in service"
+    },
+    {
+      "path": "/api/account/email/change",
+      "methods": [
+        "POST"
+      ],
+      "principal": "account",
+      "csrf": "required for mutations",
+      "tenant": "authenticated account; admin target permissions checked in service"
+    },
+    {
+      "path": "/api/account/email/reauth",
+      "methods": [
+        "POST"
+      ],
+      "principal": "account",
+      "csrf": "required for mutations",
+      "tenant": "authenticated account; admin target permissions checked in service"
+    },
+    {
+      "path": "/api/account/email/verification",
+      "methods": [
+        "POST"
+      ],
+      "principal": "account",
+      "csrf": "required for mutations",
+      "tenant": "authenticated account; admin target permissions checked in service"
+    },
+    {
+      "path": "/api/account/email/verification/confirm",
+      "methods": [
+        "POST"
+      ],
+      "principal": "account",
+      "csrf": "required for mutations",
+      "tenant": "authenticated account; admin target permissions checked in service"
+    },
+    {
+      "path": "/api/account/password",
+      "methods": [
+        "POST"
+      ],
+      "principal": "account",
+      "csrf": "required for mutations",
+      "tenant": "authenticated account; admin target permissions checked in service"
+    },
+    {
+      "path": "/api/account/password/reset",
+      "methods": [
+        "POST"
+      ],
+      "principal": "account",
+      "csrf": "required for mutations",
+      "tenant": "authenticated account; admin target permissions checked in service"
+    },
+    {
+      "path": "/api/account/password/reset/send",
+      "methods": [
+        "POST"
+      ],
+      "principal": "account",
+      "csrf": "required for mutations",
+      "tenant": "authenticated account; admin target permissions checked in service"
+    },
+    {
+      "path": "/api/account/profile",
+      "methods": [
+        "POST"
+      ],
+      "principal": "account",
+      "csrf": "required for mutations",
+      "tenant": "authenticated account; admin target permissions checked in service"
+    },
+    {
+      "path": "/api/account/providers/<provider>/disconnect",
+      "methods": [
+        "POST"
+      ],
+      "principal": "account",
+      "csrf": "required for mutations",
+      "tenant": "authenticated account; admin target permissions checked in service"
+    },
+    {
+      "path": "/api/account/sessions/revoke",
+      "methods": [
+        "POST"
+      ],
+      "principal": "account",
+      "csrf": "required for mutations",
+      "tenant": "authenticated account; admin target permissions checked in service"
+    },
+    {
+      "path": "/api/account/totp/begin",
+      "methods": [
+        "POST"
+      ],
+      "principal": "account",
+      "csrf": "required for mutations",
+      "tenant": "authenticated account; admin target permissions checked in service"
+    },
+    {
+      "path": "/api/account/totp/cancel",
+      "methods": [
+        "POST"
+      ],
+      "principal": "account",
+      "csrf": "required for mutations",
+      "tenant": "authenticated account; admin target permissions checked in service"
+    },
+    {
+      "path": "/api/account/totp/confirm",
+      "methods": [
+        "POST"
+      ],
+      "principal": "account",
+      "csrf": "required for mutations",
+      "tenant": "authenticated account; admin target permissions checked in service"
+    },
+    {
+      "path": "/api/account/totp/disable",
+      "methods": [
+        "POST"
+      ],
+      "principal": "account",
+      "csrf": "required for mutations",
+      "tenant": "authenticated account; admin target permissions checked in service"
+    },
+    {
+      "path": "/api/account/totp/qr",
+      "methods": [
+        "GET"
+      ],
+      "principal": "account",
+      "csrf": "required for mutations",
+      "tenant": "authenticated account; admin target permissions checked in service"
+    },
+    {
+      "path": "/forgot-password",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "principal": "public",
+      "csrf": "required for mutations",
+      "tenant": "none until proof verified"
+    },
+    {
+      "path": "/invite/<token>",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "principal": "public",
+      "csrf": "required for mutations",
+      "tenant": "none until proof verified"
+    },
+    {
+      "path": "/resend-code",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "principal": "public",
+      "csrf": "required for mutations",
+      "tenant": "none until proof verified"
+    },
+    {
+      "path": "/reset-password",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "principal": "public",
+      "csrf": "required for mutations",
+      "tenant": "none until proof verified"
+    },
+    {
+      "path": "/signup",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "principal": "public",
+      "csrf": "required for mutations",
+      "tenant": "none until proof verified"
+    },
+    {
+      "path": "/verify",
+      "methods": [
+        "GET",
+        "POST"
+      ],
+      "principal": "public",
+      "csrf": "required for mutations",
+      "tenant": "none until proof verified"
+    }
+  ]
+}

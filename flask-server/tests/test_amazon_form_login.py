@@ -309,3 +309,19 @@ class AmazonChoiceParsingTests(unittest.TestCase):
 
     def test_lines_without_an_option_are_ignored(self):
         self.assertEqual(self.parse("Nothing to choose here."), [])
+
+
+class AmazonAttemptRaceTests(unittest.IsolatedAsyncioTestCase):
+    async def test_stale_answer_and_cancel_cannot_touch_replacement(self):
+        _, methods = _nodes()
+        namespace = {}
+        exec(compile(ast.Module(body=[methods['_form_login_answer'], methods['_cancel_form_attempt']], type_ignores=[]), str(SOURCE), 'exec'), namespace)
+        owner = SimpleNamespace(_form_attempt_id='new-attempt', _form_login=object(),
+                                _claim_proxy=AsyncMock(), _form_cleanup=AsyncMock(),
+                                _form_step=AsyncMock())
+        reply = await namespace['_form_login_answer'](owner, 'securitycode', '123456', 'old-attempt')
+        self.assertEqual(reply['state'], 'error')
+        self.assertFalse(await namespace['_cancel_form_attempt'](owner, 'old-attempt'))
+        owner._claim_proxy.assert_not_awaited()
+        owner._form_cleanup.assert_not_awaited()
+        owner._form_step.assert_not_awaited()

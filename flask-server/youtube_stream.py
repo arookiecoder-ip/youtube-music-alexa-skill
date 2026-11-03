@@ -99,7 +99,7 @@ class Resolver:
     No playback state lives here: the current-track bytes and the relay slots
     belong to the per-identity ``YouTubeStream`` facade below.
     """
-    def __init__(self, cookie_file, worker=None, timeout=10, popen=subprocess.Popen):
+    def __init__(self, cookie_file, worker=None, timeout=15, popen=subprocess.Popen):
         self.cookie_file = cookie_file
         self.worker = worker or str(Path(__file__).with_name('youtube-stream') / 'worker.mjs')
         self.timeout, self.popen = timeout, popen
@@ -108,7 +108,17 @@ class Resolver:
         self._cookie_path = None
         self._pending = {}
         self._sequence = 0
+        self._retired = False
         atexit.register(self.close)
+
+    def retire_if_idle(self):
+        with self._lock:
+            if self._pending:
+                return False
+            self._retired = True
+            self.close()
+            atexit.unregister(self.close)
+            return True
 
     def snapshot(self):
         with self._lock:
@@ -165,6 +175,8 @@ class Resolver:
             raise StreamError('invalid_video', 400)
         waiter = queue.Queue(maxsize=1)
         with self._lock:
+            if self._retired:
+                raise StreamError("busy")
             cookie_path = self.cookie_file() or ''
             if self._process and cookie_path != self._cookie_path:
                 self.close()
@@ -239,15 +251,17 @@ class YouTubeStream:
     ``close()`` never stops a shared resolver: doing so would cold-start every
     other account playing through it.
     """
-    def __init__(self, cookie_file, enabled=False, worker=None, timeout=10,
+    def __init__(self, cookie_file, enabled=False, worker=None, timeout=15,
                  opener=None, popen=subprocess.Popen, capacity=8, current=None,
-                 resolver=None, resolver_for=None):
+                 resolver=None, resolver_for=None, global_slots=None):
         self.enabled, self.cookie_file = enabled, cookie_file
         self._worker, self._timeout, self._popen = worker, timeout, popen
         self.opener = opener or urllib.request.build_opener(
             urllib.request.ProxyHandler({}), _MediaRedirect())
         self.slots = threading.BoundedSemaphore(capacity)
         self.capacity = capacity
+        self.global_slots = global_slots
+        self._retired = False
         self.current = current or CurrentAudio()
         self._resolver = resolver
         self._resolver_for = resolver_for
@@ -291,9 +305,14 @@ class YouTubeStream:
 
     def close(self):
         with self._lock:
+            self._retired = True
             resolver = self._resolver if self._owns_resolver else None
+        self.current.close()
+        atexit.unregister(self.close)
+        atexit.unregister(self.current.close)
         if resolver is not None:
             resolver.close()
+            atexit.unregister(resolver.close)
 
     def resolve(self, video_id=None, refresh=False):
         return self._active_resolver().resolve(video_id, refresh=refresh)
@@ -306,7 +325,10 @@ class YouTubeStream:
     def open(self, video_id, method='GET', byte_range=None, if_range=None):
         if byte_range and not re.fullmatch(r'bytes=(?:\d+-\d*|-\d+)', byte_range):
             raise StreamError('invalid_range', 416)
-        if not self.slots.acquire(blocking=False):
+        if self._retired or not self.slots.acquire(blocking=False):
+            raise StreamError('busy')
+        if self.global_slots is not None and not self.global_slots.acquire(blocking=False):
+            self.slots.release()
             raise StreamError('busy')
         with self._lock:
             self._active_sequence += 1
@@ -316,6 +338,8 @@ class YouTubeStream:
             with self._lock:
                 self._active.pop(active_id, None)
             self.slots.release()
+            if self.global_slots is not None:
+                self.global_slots.release()
         upstream = None
         try:
             try:

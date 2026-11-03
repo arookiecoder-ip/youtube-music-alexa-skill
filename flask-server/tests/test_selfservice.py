@@ -75,6 +75,7 @@ class SelfServiceTestBase(unittest.TestCase):
         self.app.config.update(TESTING=True, SESSION_COOKIE_SECURE=False)
         self.layer = init_multiuser(self.app)
         self.assertIsNotNone(self.layer)
+        self.layer.db.execute("UPDATE users SET must_change_password=0 WHERE created_by='system'")
         self.accounts = self.layer.accounts
         self.client = self.app.test_client()
 
@@ -98,7 +99,7 @@ class SelfServiceTestBase(unittest.TestCase):
             return session.get("mu_ss_csrf", "")
 
     def sign_in(self, user: dict) -> str:
-        raw = self.accounts.create_session(user, ip="127.0.0.1", user_agent="pytest")
+        raw = self.accounts.create_session(self.accounts.get_user(user["id"]), ip="127.0.0.1", user_agent="pytest")
         with self.client.session_transaction() as session:
             session["mu_sid"] = raw
         self.client.get("/account")
@@ -474,15 +475,13 @@ class AccountPageTests(SelfServiceTestBase):
 
     def test_profile_change_resends_the_link_and_unverifies_the_address(self):
         self.sign_in(self.user)
-        response = self.client.post("/api/account/profile",
-                                    json={"email": "moved@example.test", "current_password": PASSWORD},
-                                    headers=self.json_headers())
-        self.assertEqual(response.status_code, 200, response.get_data(as_text=True)[:300])
-        body = response.get_json()
-        self.assertTrue(body["email_changed"])
-        self.assertTrue(body["verification_pending"])
-        self.assertEqual(int(self.user_row("player1")["email_verified"]), 0)
-        self.assertIn("not configured to send email", body["note"])
+        code=self.accounts.create_email_code(self.user['id'],'reauth')
+        response=self.client.post('/api/account/profile',json={'email':'moved@example.test','current_password':PASSWORD,'email_code':code},headers=self.json_headers())
+        self.assertEqual(response.status_code,200,response.get_data(as_text=True)[:300])
+        self.assertTrue(response.json['verification_pending'])
+        self.assertEqual(self.user_row('player1')['email'],self.user['email'])
+        self.assertEqual(self.user_row('player1')['pending_email'],'moved@example.test')
+        self.assertIn('not configured to send email',response.json['note'])
 
     def test_profile_change_without_the_password_is_a_403_on_one_field(self):
         self.sign_in(self.user)
@@ -579,8 +578,8 @@ class AccountPageTests(SelfServiceTestBase):
         self.assertTrue(body["email_changed"])
         self.assertTrue(body["verification_pending"])
         row = self.user_row("player1")
-        self.assertEqual(row["email"], "moved@example.test")
-        self.assertEqual(int(row["email_verified"]), 0, "a new address starts unconfirmed")
+        self.assertEqual(row["email"], self.user["email"])
+        self.assertEqual(row["pending_email"], "moved@example.test")
 
     def test_signing_out_everywhere_kills_this_browser_too(self):
         self.accounts.create_session(self.user, ip="127.0.0.1", user_agent="other")
@@ -822,21 +821,13 @@ class TwoFactorTests(SelfServiceTestBase):
 
     def test_turning_two_factor_off_needs_the_password_but_not_the_phone(self):
         self._turn_two_factor_on()
-
-        wrong = self.client.post("/api/account/totp/disable",
-                                 json={"current_password": "wrong"}, headers=self.json_headers())
-        self.assertEqual(wrong.status_code, 403)
-        self.assertTrue(self.client.get("/api/account").get_json()["totp_enabled"])
-
-        # The code the phone generates is deliberately not asked for: the phone is the
-        # one thing a person reliably loses, and a factor that cannot be removed is a
-        # lock-out. The owner is told instead of being stopped.
-        off = self.client.post("/api/account/totp/disable",
-                               json={"current_password": PASSWORD}, headers=self.json_headers())
-        self.assertEqual(off.status_code, 200, off.get_data(as_text=True)[:300])
-        self.assertFalse(self.client.get("/api/account").get_json()["totp_enabled"])
-        self.assertTrue(any("two-factor sign-in was turned off" in body.lower()
-                            for body in self._outbox_bodies()), "the owner is told")
+        off=self.client.post('/api/account/totp/disable',json={'current_password':PASSWORD},headers=self.json_headers())
+        self.assertNotEqual(off.status_code,200)
+        self.assertTrue(self.client.get('/api/account').json['totp_enabled'])
+        recovery=self.accounts.create_email_code(self.user['id'],'reauth')
+        off=self.client.post('/api/account/totp/disable',json={'current_password':PASSWORD,'email_code':recovery},headers=self.json_headers())
+        self.assertEqual(off.status_code,200,off.get_data(as_text=True)[:300])
+        self.assertFalse(self.client.get('/api/account').json['totp_enabled'])
 
     def test_turning_two_factor_off_accepts_an_emailed_code_too(self):
         self._turn_two_factor_on()

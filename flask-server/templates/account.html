@@ -508,7 +508,7 @@
         <h3>Turn it off</h3>
         <p class="field-help">Removing it asks for your password only. The phone that makes the
           codes is the one thing people reliably lose, and a second factor you cannot remove is
-          a lock-out rather than a protection. An emailed code is optional; the account is told
+          unnecessary when you can prove control of your recovery email. An emailed recovery code is required; the account is told
           by email whenever this changes.</p>
         <form id="form-totp-disable" autocomplete="off">
           <label>Password
@@ -524,8 +524,8 @@
           </div>
 
           <label for="disable_email_code">Code from your email
-            <span class="optional">optional</span></label>
-          <input class="code-input" type="text" id="disable_email_code" name="email_code"
+            <span class="optional">required</span></label>
+          <input required class="code-input" type="text" id="disable_email_code" name="email_code"
                  inputmode="numeric" pattern="[0-9 ]*" maxlength="7" autocomplete="one-time-code"
                  spellcheck="false" placeholder="••••••">
           <p class="field-error" id="err-disable_code" hidden></p>
@@ -762,6 +762,7 @@
       <button class="ghost destructive" type="button" id="delete-final-yes">Delete account</button>
     </div>
   </dialog>
+<section class="account-panel"><h2>Link an Echo</h2><p>Generate a code, then say “Alexa, ask DJ to link account” followed by its eight digits. The code expires in five minutes.</p><button type="button" class="tiny" id="alexa-link-code">Generate pairing code</button><output id="alexa-link-result" aria-live="polite"></output><button type="button" class="tiny" id="alexa-unlink">Unlink Echo devices</button></section>
 </main>
 <script src="{{ asset_url('js/selfservice.js') }}" defer></script>
 <script src="{{ asset_url('js/account.js') }}" defer></script>

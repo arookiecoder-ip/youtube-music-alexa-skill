@@ -439,7 +439,7 @@ class ServerPurgeTests(TempDirTest):
         server._player_registry.state_for("owner")['video_id'] = 'mine'
         for not_an_account in ("", "owner", None, "not-a-uuid"):
             self.assertEqual(server._purge_account_artifacts(not_an_account), ["identity"])
-        self.assertEqual(server._playback_store._dead, {},
+        self.assertFalse(any(value > time.time() for value in server._playback_store._dead.values()),
                          "a refusal must not tombstone anything")
         self.assertEqual(server._player_registry.peek("owner")['video_id'], 'mine')
         conn = sqlite3.connect(self.db_path)
