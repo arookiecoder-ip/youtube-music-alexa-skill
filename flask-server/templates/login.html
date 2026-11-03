@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Music Box - Sign in</title>
+<link rel="stylesheet" href="/static/css/theme.css?v={{ asset_v }}">
 <link rel="stylesheet" href="/static/css/signin.css?v={{ asset_v }}">
 </head>
 <body>
@@ -21,13 +22,16 @@
   <div class="card">
     <!-- Step 1: credentials -->
     <form class="step active" id="step-creds" data-step="1">
-      <label for="username">Username</label>
-      <input type="text" id="username" name="username" autocomplete="username" autofocus>
+      <label for="username">Email or username</label>
+      <input type="text" id="username" name="username" autocomplete="username" autofocus
+             placeholder="you@example.com">
 
       <label for="password">Password</label>
       <input type="password" id="password" name="password" autocomplete="current-password">
 
       <button type="submit" class="primary" id="creds-btn">Sign in</button>
+      <p class="step-hint">Your username is the one name on your account, and it signs
+        in just as well as the email address does.</p>
     </form>
 
     <!-- Step 2: always in the page. Whether it is needed is decided per account
@@ -35,7 +39,7 @@
          accounts that do. -->
     <form class="step" id="step-code" data-step="2">
       <button type="button" class="back" id="back-btn">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
           <path d="M19 12H5M12 19l-7-7 7-7"/>
         </svg>
         Back
@@ -53,6 +57,7 @@
     {% if signup_open or forgot_url %}
     <nav class="door-links">
       {% if signup_open %}<a href="/signup">Create an account</a>{% endif %}
+      <a href="/verify">Enter your code</a>
       {% if forgot_url %}<a href="{{ forgot_url }}">Forgot password?</a>{% endif %}
     </nav>
     {% endif %}

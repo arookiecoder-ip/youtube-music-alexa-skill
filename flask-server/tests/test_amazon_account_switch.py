@@ -21,8 +21,10 @@ class AmazonAccountSwitchTests(unittest.IsolatedAsyncioTestCase):
         path=Path(__file__).resolve().parents[1]/'alexa_remote.py'
         cls=next(n for n in ast.parse(path.read_text()).body if isinstance(n,ast.ClassDef) and n.name=='AlexaRemote')
         method=next(n for n in cls.body if isinstance(n,ast.AsyncFunctionDef) and n.name=='_finalize_proxy_login')
+        promote=next(n for n in cls.body if isinstance(n,ast.AsyncFunctionDef) and n.name=='_promote_staged_login')
         self.ns=dict(os=os,time=time,tempfile=tempfile,asyncio=SimpleNamespace(sleep=AsyncMock()),logger=Mock())
-        exec(compile(ast.Module(body=[method],type_ignores=[]),str(path),'exec'),self.ns)
+        exec(compile(ast.Module(body=[method,promote],type_ignores=[]),str(path),'exec'),self.ns)
+        self.owner._promote_staged_login=self.ns['_promote_staged_login'].__get__(self.owner)
     async def test_verified_replacement_promotes_cookie_and_pointer(self):
         self.assertTrue(await self.ns['_finalize_proxy_login'](self.owner))
         self.assertEqual(self.live.read_text(),'new-verified-session')

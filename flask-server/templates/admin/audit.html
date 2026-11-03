@@ -1,4 +1,5 @@
 {% extends "admin/base.html" %}
+{% from "admin/_labels.html" import action_name with context %}
 {% block content %}
 <div class="page-head">
   <div>
@@ -10,43 +11,66 @@
   </div>
 </div>
 
-<div class="card flush">
-  <div class="card-head">
+<div class="card filter-card">
+  <div class="card-body">
     <form class="search-form" method="get" action="{{ base_path }}/audit/">
-      <select name="action" aria-label="Filter by action">
-        <option value="">All actions</option>
-        {% for name in actions %}
-          <option value="{{ name }}" {{ 'selected' if action == name else '' }}>{{ name }}</option>
-        {% endfor %}
-      </select>
-      <input type="search" name="actor" value="{{ actor }}" placeholder="Actor username or ID" aria-label="Filter by actor">
-      <input type="search" name="target" value="{{ target }}" placeholder="Target user ID" aria-label="Filter by target user">
-      <button class="btn small" type="submit">Filter</button>
+      <div class="search-field">
+        <label for="audit-action">Action</label>
+        <select id="audit-action" name="action">
+          <option value="">All actions</option>
+          {% for name in actions %}
+            <option value="{{ name }}" {{ 'selected' if action == name else '' }}>{{ action_name(name) }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="search-field">
+        <label for="audit-actor">Actor</label>
+        <input id="audit-actor" type="search" name="actor" value="{{ actor }}" placeholder="Username or ID">
+      </div>
+      <div class="search-field">
+        <label for="audit-target">Account</label>
+        <select id="audit-target" name="target">
+          <option value="">All accounts</option>
+          {% set listed = accounts|map(attribute='id')|list %}
+          {% for acct in accounts %}
+            <option value="{{ acct.id }}" {{ 'selected' if target == acct.id else '' }}>
+              @{{ acct.username }}
+            </option>
+          {% endfor %}
+          {% if target and target not in listed %}
+            <option value="{{ target }}" selected>Deleted or unknown account {{ target[:8] }}…</option>
+          {% endif %}
+        </select>
+      </div>
+      <button class="btn" type="submit">Filter</button>
       {% if action or actor or target %}
-        <a class="btn small ghost" href="{{ base_path }}/audit/">Clear</a>
+        <a class="btn ghost" href="{{ base_path }}/audit/">Clear</a>
       {% endif %}
+      <span class="result-count ml-auto">{{ pagination.total }} event{% if pagination.total != 1 %}s{% endif %}</span>
     </form>
-    <span class="faint small">{{ pagination.total }} event{% if pagination.total != 1 %}s{% endif %}</span>
   </div>
+</div>
 
+<div class="card flush">
   {% if events %}
     <div class="table-wrap">
       <table>
+        <caption class="visually-hidden">Audit events{% if action or actor or target %} matching the current filters{% endif %}</caption>
         <thead>
           <tr>
-            <th>When</th>
-            <th>Action</th>
-            <th>Actor</th>
-            <th>Target</th>
-            <th>IP</th>
-            <th>Details</th>
+            <th scope="col">When</th>
+            <th scope="col">What</th>
+            <th scope="col">Actor</th>
+            <th scope="col">Target</th>
+            <th scope="col">IP</th>
+            <th scope="col">Details</th>
           </tr>
         </thead>
         <tbody>
           {% for event in events %}
             <tr>
               <td class="faint nowrap">{{ event.created_at|mu_datetime }}</td>
-              <td><span class="event-action">{{ event.action }}</span></td>
+              <td><span class="event-action" title="{{ event.action }}">{{ action_name(event.action) }}</span></td>
               <td class="muted">
                 {{ event.actor_label }}
                 {% if event.actor_user_id %}<br><span class="faint mono">{{ event.actor_user_id[:8] }}…</span>{% endif %}
@@ -59,10 +83,20 @@
               <td class="mono faint">{{ event.ip or '—' }}</td>
               <td>
                 {% if event.details %}
-                  <details>
-                    <summary>View</summary>
-                    <pre>{{ event.details|mu_json }}</pre>
-                  </details>
+                  {# A button and one shared dialog, rather than a disclosure that
+                     pushes the rest of the table down a row at a time: a payload
+                     is read, then put away. #}
+                  <button class="btn small ghost" type="button"
+                          data-dialog-source="event-{{ loop.index }}-{{ pagination.page }}"
+                          data-dialog-heading="{{ action_name(event.action) }}">View</button>
+                  <template id="event-{{ loop.index }}-{{ pagination.page }}">
+                    <p class="mt-0 mono faint">{{ event.action }}</p>
+                    <p>
+                      {{ event.actor_label }} · {{ event.created_at|mu_datetime }}
+                      {%- if event.ip %} · {{ event.ip }}{% endif %}
+                    </p>
+                    <pre class="payload">{{ event.details|mu_json }}</pre>
+                  </template>
                 {% else %}—{% endif %}
               </td>
             </tr>
@@ -72,10 +106,18 @@
     </div>
     <div class="pagination">
       <span>Showing {{ pagination.start }}–{{ pagination.end }} of {{ pagination.total }}</span>
-      <span class="pages">
-        {% if pagination.has_prev %}<a class="btn small ghost" href="{{ pagination.prev_url }}">← Previous</a>{% endif %}
-        <span class="faint" style="align-self:center">Page {{ pagination.page }} / {{ pagination.pages }}</span>
-        {% if pagination.has_next %}<a class="btn small ghost" href="{{ pagination.next_url }}">Next →</a>{% endif %}
+      <span class="pager">
+        {% if pagination.has_prev %}
+          <a class="btn small" href="{{ pagination.prev_url }}">← Previous</a>
+        {% else %}
+          <button class="btn small" type="button" disabled>← Previous</button>
+        {% endif %}
+        <span class="where">Page {{ pagination.page }} / {{ pagination.pages }}</span>
+        {% if pagination.has_next %}
+          <a class="btn small" href="{{ pagination.next_url }}">Next →</a>
+        {% else %}
+          <button class="btn small" type="button" disabled>Next →</button>
+        {% endif %}
       </span>
     </div>
   {% else %}

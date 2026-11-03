@@ -111,7 +111,7 @@
 .collection-skeleton-cover {
   width: 210px;
   height: 210px;
-  border-radius: 10px;
+  border-radius: 0;
 }
 .collection-skeleton-hero-copy {
   display: flex;
@@ -127,7 +127,7 @@
   width: 190px;
   height: 42px;
   margin-top: 7px;
-  border-radius: 24px;
+  border-radius: 0;
   background: linear-gradient(90deg, var(--border) 25%, #2a2a2a 37%, var(--border) 63%);
   background-size: 400% 100%;
   animation: skeletonShimmer 1.4s ease infinite;
@@ -144,8 +144,8 @@
   padding: 9px 10px;
   box-sizing: border-box;
 }
-.collection-skeleton-number { width: 28px; height: 10px; border-radius: 3px; }
-.collection-skeleton-thumb { width: 60px; height: 60px; flex: 0 0 60px; border-radius: 4px; }
+.collection-skeleton-number { width: 28px; height: 10px; border-radius: 0; }
+.collection-skeleton-thumb { width: 60px; height: 60px; flex: 0 0 60px; border-radius: 0; }
 .collection-skeleton-copy { flex: 1; min-width: 0; }
 .collection-skeleton-line-title { width: min(260px, 75%); }
 .collection-skeleton-line-subtitle { width: min(150px, 45%); margin-top: 9px; }
@@ -264,11 +264,30 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: var(--space-2);
   box-sizing: border-box;
 }
 #collection-detail-shell .collection-detail-page-header h3 {
   margin: 0;
   color: var(--text);
+}
+/* One primary action that takes the row and one square icon action beside it,
+   so the two buttons share a rail instead of sizing themselves by content. */
+.playlist-detail-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+.playlist-detail-actions .play-all-btn {
+  flex: 1;
+  justify-content: center;
+  gap: var(--space-2);
+}
+.playlist-detail-actions .shuffle-play-btn {
+  flex: none;
+  width: 40px;
+  justify-content: center;
+  padding: 0;
 }
 #collection-detail-shell .collection-detail-body {
   flex: 1;
@@ -311,7 +330,7 @@
 }
 .playlist-detail-hero .playlist-collage img,
 .playlist-detail-hero .playlist-collage .collage-placeholder {
-  border-radius: 2px;
+  border-radius: 0;
 }
 .playlist-detail-hero-info {
   flex: 1;
@@ -458,6 +477,10 @@
 #collection-detail-shell .history-item.active .playlist-track-duration {
   color: var(--text);
 }
+/* The selector for this block went missing once and Chromium discarded the
+   whole declaration list silently, leaving drag handles with no width, no
+   grab cursor and full opacity. */
+.playlist-drag-handle {
   flex: none;
   width: 20px;
   display: flex;
@@ -658,7 +681,7 @@
   .collection-detail-body .playlist-detail-hero .playlist-collage {
     width: 210px;
     height: 210px;
-    border-radius: 10px;
+    border-radius: 0;
     box-shadow: 0 22px 60px rgba(0,0,0,.5);
   }
   .collection-detail-body .playlist-detail-hero-info {
@@ -735,13 +758,13 @@
     background: transparent;
   }
   .collection-detail-body .history-item:hover { background: rgba(255,255,255,.06); }
-  .collection-detail-body .queue-thumb { width: 60px; height: 60px; border-radius: 4px; }
+  .collection-detail-body .queue-thumb { width: 60px; height: 60px; border-radius: 0; }
   .playlist-track-art {
     position: relative;
     width: 44px;
     height: 44px;
     flex: 0 0 44px;
-    border-radius: 4px;
+    border-radius: 0;
     overflow: hidden;
   }
   .playlist-track-art::after {
@@ -850,7 +873,7 @@
   body.playlists-route #collection-detail-shell .playlist-detail-hero .playlist-collage {
     width: 180px;
     height: 180px;
-    border-radius: 8px;
+    border-radius: 0;
   }
 
   body.playlists-route #collection-detail-shell .playlist-detail-hero-info {
@@ -1101,7 +1124,7 @@
   position: relative;
   flex: 0 0 60px;
   overflow: hidden;
-  border-radius: 4px;
+  border-radius: 0;
 }
 .playlist-track-playback-indicator {
   position: absolute;
@@ -1154,22 +1177,11 @@
   /* The mobile expanded player is z-index: 1000 and its action menu is 1200. */
   z-index: 1400;
 }
-#add-to-playlist-overlay .history-modal { border-radius: 0; }
-#new-playlist-overlay .history-modal { border-radius: 0; }
-#new-playlist-overlay #new-playlist-overlay-name,
-#new-playlist-overlay #new-playlist-overlay-desc {
-  border-radius: 0 !important;
-  transition: border-color .15s ease, background-color .15s ease, box-shadow .15s ease;
-}
 #new-playlist-overlay #new-playlist-overlay-name:focus,
 #new-playlist-overlay #new-playlist-overlay-desc:focus {
   border-color: var(--accent) !important;
   background: var(--surface) !important;
   box-shadow: none;
-}
-#new-playlist-overlay #new-playlist-overlay-create {
-  border-radius: 0 !important;
-  transition: border-color .15s ease, background-color .15s ease, box-shadow .15s ease, transform .15s ease;
 }
 #new-playlist-overlay #new-playlist-overlay-create:focus,
 #new-playlist-overlay #new-playlist-overlay-create:focus-visible,
@@ -1180,22 +1192,10 @@
 #new-playlist-overlay #new-playlist-overlay-create:active {
   transform: translateY(1px);
 }
-#import-playlist-overlay .history-modal { border-radius: 0; }
-#import-playlist-overlay #import-playlist-url { border-radius: 0 !important; }
-#import-playlist-overlay #import-playlist-submit { border-radius: 0 !important; }
-#new-playlist-name { border-radius: 0 !important; }
-#new-playlist-btn { border-radius: 0; }
-#add-to-playlist-overlay .history-modal-body {
-  /* Keep the list as the modal's only scroll container. */
-  min-height: 0;
-  overflow: hidden;
-}
 #add-to-playlist-list {
   /* Hover feedback must not expand the scrollable area horizontally. */
   min-width: 0;
-  min-height: 0;
   overflow-x: hidden;
-  overflow-y: auto;
   scrollbar-gutter: stable;
 }
 #add-to-playlist-list > button {

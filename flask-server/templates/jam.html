@@ -11,6 +11,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Music Box">
+<link rel="stylesheet" href="/static/css/theme.css?v={{ asset_v }}">
 <link rel="stylesheet" href="/static/css/base.css?v={{ asset_v }}">
 <link rel="stylesheet" href="/static/css/player.css?v={{ asset_v }}">
 <link rel="stylesheet" href="/static/css/player-processing.css?v={{ asset_v }}">
@@ -82,15 +83,15 @@
         <div class="np-artist" id="np-artist"></div>
         <span class="playbar-time"><span id="playbar-elapsed">0:00</span> / <span id="playbar-total">--:--</span></span>
       </div>
-      <button class="np-like-btn ghost-btn" id="np-like-btn" title="Like">
+      <button class="np-like-btn ghost-btn" id="np-like-btn" title="Like" aria-label="Like">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/></svg>
       </button>
-      <a class="np-ytm-btn ghost-btn" id="np-url-toggle" href="#" target="_blank" rel="noopener" title="Open on YouTube Music" style="display:none">
+      <a class="np-ytm-btn ghost-btn" id="np-url-toggle" href="#" target="_blank" rel="noopener" title="Open on YouTube Music" aria-label="Open this song on YouTube Music" style="display:none">
         <svg viewBox="0 0 24 24" fill="currentColor">
           <path d="M12 0C5.376 0 0 5.376 0 12s5.376 12 12 12 12-5.376 12-12S18.624 0 12 0zm0 21.6c-5.292 0-9.6-4.308-9.6-9.6S6.708 2.4 12 2.4s9.6 4.308 9.6 9.6-4.308 9.6-9.6 9.6zM9.6 16.8l7.2-4.8-7.2-4.8v9.6z"/>
         </svg>
       </a>
-      <button class="np-shuffle-btn ghost-btn" id="shuffle-btn" title="Shuffle">
+      <button class="np-shuffle-btn ghost-btn" id="shuffle-btn" title="Shuffle" aria-label="Shuffle">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <polyline points="16 3 21 3 21 8"/>
           <line x1="4" y1="20" x2="21" y2="3"/>
@@ -104,7 +105,7 @@
     <!-- CENTER: Transport & Progress -->
     <div class="player-center">
       <div class="transport">
-        <button data-action="previous" class="ghost-btn" title="Previous">
+        <button data-action="previous" class="ghost-btn" title="Previous" aria-label="Previous">
           <svg viewBox="0 0 24 24" fill="currentColor">
             <rect x="4" y="5" width="2.5" height="14"/>
             <polygon points="20,5 10,12 20,19"/>
@@ -119,7 +120,7 @@
             <rect x="14" y="5" width="4" height="14"/>
           </svg>
         </button>
-        <button data-action="next" class="ghost-btn" title="Next">
+        <button data-action="next" class="ghost-btn" title="Next" aria-label="Next">
           <svg viewBox="0 0 24 24" fill="currentColor">
             <polygon points="4,5 14,12 4,19"/>
             <rect x="17.5" y="5" width="2.5" height="14"/>
@@ -307,13 +308,13 @@
 <!-- Queue popup modal (mobile): same as the normal remote, opened from the
      now-playing page's Queue action square -->
 <div class="queue-modal-overlay" id="queue-modal-overlay">
-  <div class="queue-modal" id="queue-modal">
+  <div class="queue-modal" id="queue-modal" role="dialog" aria-labelledby="queue-modal-title" tabindex="-1">
     <div class="queue-modal-drag" id="queue-modal-drag">
       <div class="drag-bar"></div>
     </div>
     <div class="queue-modal-header">
-      <h3>Queue</h3>
-      <button class="queue-modal-close" id="queue-modal-close" title="Close">
+      <h3 id="queue-modal-title">Queue</h3>
+      <button class="queue-modal-close" id="queue-modal-close" title="Close" aria-label="Close queue">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
           <line x1="18" y1="6" x2="6" y2="18"/>
           <line x1="6" y1="6" x2="18" y2="18"/>
@@ -328,16 +329,17 @@
 
 <!-- Jam-ended overlay -->
 <div id="jam-ended-overlay">
-  <div class="jam-ended-card">
+  <div class="jam-ended-card" role="dialog" aria-modal="true" tabindex="-1"
+       aria-labelledby="jam-ended-title" aria-describedby="jam-ended-msg">
     <div class="jam-ended-icon">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
         <path d="M10.5 4.5A7.5 7.5 0 0 0 3 12a7.5 7.5 0 0 0 7.5 7.5"/>
         <path d="M13.5 19.5A7.5 7.5 0 0 0 21 12a7.5 7.5 0 0 0-7.5-7.5"/>
         <line x1="12" y1="8" x2="12" y2="12"/>
         <line x1="12" y1="16" x2="12.01" y2="16"/>
       </svg>
     </div>
-    <h1 class="jam-ended-title" id="jam-ended-title">This jam has ended</h1>
+    <h2 class="jam-ended-title" id="jam-ended-title">This jam has ended</h2>
     <p class="jam-ended-msg" id="jam-ended-msg">The host ended the session. Ask them for a new link to keep listening.</p>
   </div>
 </div>

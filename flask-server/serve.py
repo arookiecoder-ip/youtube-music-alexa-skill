@@ -23,6 +23,10 @@ ARGS = {
 
 
 def main():
+    # The keepalive signs in as the deployment's own Google account, so it starts
+    # here and not on import: a test process that imports the app must never touch
+    # the shared Chromium or Google.
+    server.start_youtube_server_keepalive()
     # The app object, not "server:app" -- only the command-line runner resolves that.
     waitress.serve(server.app, **ARGS)
 

@@ -2,6 +2,13 @@
 
 Signed URLs stay on a private child-process pipe. The public endpoints retain
 Flask authorization and never redirect clients to a credential-bearing URL.
+
+``Resolver`` owns the expensive, credential-scoped part (the worker process, its
+Innertube session and its resolved-URL cache) and is meant to be shared by every
+identity that downloads with the same cookie jar: the sign-in handshake is paid
+once for the install, not once per account. ``YouTubeStream`` adds the
+account-scoped playback state around it -- the stream-slot budget and the bytes
+already relayed to that account's player.
 """
 import atexit
 import hashlib
@@ -81,33 +88,41 @@ class Relay:
             self.close()
 
 
-class YouTubeStream:
-    def __init__(self, cookie_file, enabled=False, worker=None, timeout=10,
-                 opener=None, popen=subprocess.Popen, capacity=8, current=None):
-        self.enabled, self.cookie_file = enabled, cookie_file
+class Resolver:
+    """One persistent worker, session and URL cache for one download credential.
+
+    The cold-play cost -- Node startup, the Innertube handshake and the player
+    setup -- depends only on the cookie jar the URL is signed with. Keying this
+    object by that jar instead of by the person lets every account on the same
+    credential share one warm session and one URL cache.
+
+    No playback state lives here: the current-track bytes and the relay slots
+    belong to the per-identity ``YouTubeStream`` facade below.
+    """
+    def __init__(self, cookie_file, worker=None, timeout=15, popen=subprocess.Popen):
+        self.cookie_file = cookie_file
         self.worker = worker or str(Path(__file__).with_name('youtube-stream') / 'worker.mjs')
         self.timeout, self.popen = timeout, popen
-        self.opener = opener or urllib.request.build_opener(
-            urllib.request.ProxyHandler({}), _MediaRedirect())
-        self.slots = threading.BoundedSemaphore(capacity)
-        self.capacity = capacity
-        self.current = current or CurrentAudio()
-        self._active = {}
-        self._active_sequence = 0
         self._lock = threading.RLock()
         self._process = None
         self._cookie_path = None
         self._pending = {}
         self._sequence = 0
+        self._retired = False
         atexit.register(self.close)
-        atexit.register(self.current.close)
+
+    def retire_if_idle(self):
+        with self._lock:
+            if self._pending:
+                return False
+            self._retired = True
+            self.close()
+            atexit.unregister(self.close)
+            return True
 
     def snapshot(self):
         with self._lock:
-            return {'active_streams':len(self._active), 'stream_slots':self.capacity,
-                    'resolving':len(self._pending), 'streams':[
-                        {'video_id':v, 'age_seconds':max(0,time.monotonic()-started)}
-                        for v,started in self._active.values()]}
+            return {'resolving': len(self._pending)}
 
     def close(self):
         with self._lock:
@@ -160,6 +175,8 @@ class YouTubeStream:
             raise StreamError('invalid_video', 400)
         waiter = queue.Queue(maxsize=1)
         with self._lock:
+            if self._retired:
+                raise StreamError("busy")
             cookie_path = self.cookie_file() or ''
             if self._process and cookie_path != self._cookie_path:
                 self.close()
@@ -170,7 +187,8 @@ class YouTubeStream:
                 # The worker only needs runtime/TLS settings, not Amazon
                 # credentials, Flask secrets or the application's API key.
                 env = {k: os.environ[k] for k in (
-                    'PATH', 'HOME', 'SSL_CERT_FILE', 'SSL_CERT_DIR', 'NODE_EXTRA_CA_CERTS')
+                    'PATH', 'HOME', 'SSL_CERT_FILE', 'SSL_CERT_DIR', 'NODE_EXTRA_CA_CERTS',
+                    'BGUTIL_POT_URL')
                     if k in os.environ}
                 try:
                     allowed = [str(Path(self.worker).resolve().parent)]
@@ -220,6 +238,85 @@ class YouTubeStream:
             with self._lock:
                 self._pending.pop(request_id, None)
 
+
+class YouTubeStream:
+    """One identity's relay over a (usually shared) resolver.
+
+    ``resolver`` is a worker shared by every identity with the same credential.
+    ``resolver_for`` looks one up per call instead, so a credential change moves
+    this facade to the worker for the new jar without disturbing the one another
+    account is still using. With neither supplied the facade owns a private
+    resolver.
+
+    ``close()`` never stops a shared resolver: doing so would cold-start every
+    other account playing through it.
+    """
+    def __init__(self, cookie_file, enabled=False, worker=None, timeout=15,
+                 opener=None, popen=subprocess.Popen, capacity=8, current=None,
+                 resolver=None, resolver_for=None, global_slots=None):
+        self.enabled, self.cookie_file = enabled, cookie_file
+        self._worker, self._timeout, self._popen = worker, timeout, popen
+        self.opener = opener or urllib.request.build_opener(
+            urllib.request.ProxyHandler({}), _MediaRedirect())
+        self.slots = threading.BoundedSemaphore(capacity)
+        self.capacity = capacity
+        self.global_slots = global_slots
+        self._retired = False
+        self.current = current or CurrentAudio()
+        self._resolver = resolver
+        self._resolver_for = resolver_for
+        self._owns_resolver = resolver is None and resolver_for is None
+        self._active = {}
+        self._active_sequence = 0
+        self._lock = threading.RLock()
+        atexit.register(self.close)
+        atexit.register(self.current.close)
+
+    def _active_resolver(self):
+        with self._lock:
+            if self._resolver_for is not None:
+                self._resolver = self._resolver_for()
+            elif self._resolver is None:
+                self._resolver = Resolver(self.cookie_file, worker=self._worker,
+                                          timeout=self._timeout, popen=self._popen)
+            return self._resolver
+
+    # Worker lifecycle stays reachable here for diagnostics and tests.
+    @property
+    def _process(self):
+        resolver = self._resolver
+        return resolver._process if resolver else None
+
+    @property
+    def _pending(self):
+        resolver = self._resolver
+        return resolver._pending if resolver else {}
+
+    def snapshot(self):
+        with self._lock:
+            active = list(self._active.values())
+            resolver = self._resolver
+            resolving = resolver.snapshot()['resolving'] if resolver else 0
+        return {'active_streams':len(active), 'stream_slots':self.capacity,
+                'resolving':resolving, 'resolver_id':id(resolver) if resolver else None,
+                'streams':[
+                    {'video_id':v, 'age_seconds':max(0,time.monotonic()-started)}
+                    for v,started in active]}
+
+    def close(self):
+        with self._lock:
+            self._retired = True
+            resolver = self._resolver if self._owns_resolver else None
+        self.current.close()
+        atexit.unregister(self.close)
+        atexit.unregister(self.current.close)
+        if resolver is not None:
+            resolver.close()
+            atexit.unregister(resolver.close)
+
+    def resolve(self, video_id=None, refresh=False):
+        return self._active_resolver().resolve(video_id, refresh=refresh)
+
     def metadata(self, video_id):
         """Public metadata only; signed transport URLs never leave the relay."""
         metadata = self.resolve(video_id).get('metadata') or {}
@@ -228,7 +325,10 @@ class YouTubeStream:
     def open(self, video_id, method='GET', byte_range=None, if_range=None):
         if byte_range and not re.fullmatch(r'bytes=(?:\d+-\d*|-\d+)', byte_range):
             raise StreamError('invalid_range', 416)
-        if not self.slots.acquire(blocking=False):
+        if self._retired or not self.slots.acquire(blocking=False):
+            raise StreamError('busy')
+        if self.global_slots is not None and not self.global_slots.acquire(blocking=False):
+            self.slots.release()
             raise StreamError('busy')
         with self._lock:
             self._active_sequence += 1
@@ -238,6 +338,8 @@ class YouTubeStream:
             with self._lock:
                 self._active.pop(active_id, None)
             self.slots.release()
+            if self.global_slots is not None:
+                self.global_slots.release()
         upstream = None
         try:
             try:

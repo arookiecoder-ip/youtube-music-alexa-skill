@@ -50,7 +50,8 @@ default (`0`) is byte-for-byte the existing single-owner behaviour.
 - [x] Edit profile, role and status; last-active-owner protection.
 - [x] Enable/disable, soft delete, restore, password reset, session revocation,
       TOTP reset.
-- [x] Self-service account page: display name, email, password, sessions.
+- [x] Self-service account page: email, password, sessions. One name per account
+      (`username`), so there is no display-name field to edit.
 - [x] System page: database integrity/size/schema, disk, backups, SMTP state,
       test email, manual backup.
 
@@ -80,7 +81,7 @@ default (`0`) is byte-for-byte the existing single-owner behaviour.
 - [x] Admin templates are responsive and use only first-party CSS/JS.
 - [x] Deployment documentation and progress log.
 
-## Phase 2 — Per-user playback data and provider linking — **2.0–2.3 and 2.6 done**
+## Phase 2 — Per-user playback data and provider linking — **2.0–2.3, 2.6–2.9 done**
 
 - [ ] Scope `playlist_tracks`, history, likes, queues and preferences by
       `users.id`; migrate the existing single-owner rows to the bootstrap owner.
@@ -105,7 +106,8 @@ default (`0`) is byte-for-byte the existing single-owner behaviour.
       the device API key.
 - [x] Account registration or invitation-only onboarding (product decision):
       **open sign-up, gated on a verified email address**, plus invitations from
-      the admin panel.
+      the admin panel. An owner can close public sign-up from the panel; the
+      environment remains the ceiling.
 - [x] TOTP enrollment and disable, with the code demanded at both sign-in doors
       (player `/login/` and `/admin/login/`). Recovery codes are deliberately not
       in this pass: an account that locks itself out is an administrator's job
@@ -187,3 +189,14 @@ Required only when one process/one SQLite file is no longer sufficient:
 | TOTP enroll/disable, no recovery codes yet | Recovery codes are a second secret-storage problem with its own loss and leak modes. Enrol/disable plus an administrator's TOTP reset is the smaller honest surface. |
 | `serve.py` instead of the `waitress-serve` CLI | waitress deletes untrusted proxy headers before Flask exists, and its `trusted_proxy` option cannot name an ephemeral docker address. Per-client limits are worth owning the launch command; two tests pin it. |
 | Purge is a queue with backoff | The row delete is transactional; the filesystem, the sidecar and the in-process state are not. A half-finished purge is a privacy failure, so it retries for 24 hours and then says so in the log. |
+| Verification and reset use typed codes, not links | A link is a credential a mail reader can follow without anybody typing anything: it executes on render, survives forwarding, and turns address verification into a click. A six-digit code makes the person act, expires in 15 minutes, is single-use, and is spent after five wrong tries — without ever locking the account, which would let anyone who knows a username deny sign-in. Codes are Fernet-encrypted because a digest of one million values is precomputable from a stolen database. |
+| Invitations and administrator sign-in keep links | Deliberately different shapes. An invitation is a first-contact handshake and the `magic` link *is* the sign-in; neither is a step the person asked to perform on an existing account. Both stay token-hash-only. |
+| A code never mints a session | Every session at both doors requires the password. The verify form carries no password, so letting it sign the person in would open a second, weaker door into the same accounts. `/verify` answers with an "Email confirmed" page that points at sign-in and sets no session cookie. |
+| Sign-up kill-switch is owner-only; the env var is the ceiling | Closing sign-up governs who may obtain an account, which is not an ordinary admin action. `MULTIUSER_SELF_SIGNUP_ENABLED=0` cannot be overridden from the panel, so a stolen owner session cannot reopen a deployment that said never. Closing stops new rows only: pending accounts can still verify, resend and reset. |
+| Provider disconnect deletes the secrets, not just the row | The old disconnect removed the `user_provider_credentials` row while the auth file, jar, Chromium profile and Amazon cookies survived — the account kept streaming and controlling its Echo. `_forget_account_artifacts` now has `youtube`/`amazon`/`all` scopes, retries only the failing scope, and the flash names what survived — or says nothing was connected at all, because the service answers `(failures, was_linked)`. |
+| Provider sign-in is typed fields, not a mirrored browser | Asking someone to type a password into a picture of a browser gives them no `type="password"`, no password manager, no way to verify what is being captured, and costs a viewport to guess at. The app asks the questions the provider actually needs answered (email, password, code, captcha, which device) and its own automation types into the provider's page. The captcha and the device choice stay interactive because those are genuinely questions only the person can answer. |
+| One account may hold the sign-in browser at a time | Google keeps its page open between steps, so an unclaimed browser lets two accounts overwrite each other's half-finished sign-in. The claim is per identity and expires after 300 s, so an abandoned attempt stops blocking; another account is told to wait rather than being silently queued. |
+| The raw mirror endpoints stay for now | `/api/youtube/browser-session/surface` and `…/choose-account` (and the sidecar's `/interactive/frame`/`input`) are still routed, authorised and tested, but nothing in the UI calls them since the doors became forms. Deleting them means changing the sidecar image too, so that is an explicit operator decision, not a side effect of this pass. |
+| One name per account | `display_name` was a second name nothing enforced: it was not unique, not searchable as a handle, and not accepted at sign-in, so it read like a username that could not be used as one. Schema v5 drops the column and `username` is the only name. The alternative — making the display name authoritative — would have meant two identities per account forever. |
+| Sign-in says "Email or username" | The service matched either since the first commit, but the field said "Username", so people typed an address into a box that looked like it would reject it. A label that understates what a form accepts is a bug the user finds alone. |
+| Public paths avoid technical words | `/admin/invite/<token>` became `/invite/<token>`, `/signup/verify` became `/verify`, `/signup/resend` became `/resend-code`. An invited person has no business seeing an `admin` segment in a URL, and nobody should have to read a path to know which code goes where. The `/admin` twins keep their prefix because that door really is staff-only. |

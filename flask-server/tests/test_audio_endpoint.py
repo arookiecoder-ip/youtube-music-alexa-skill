@@ -12,6 +12,8 @@ import unittest
 from unittest import mock
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+# audio_test_support is a sibling module: importable however this file was loaded.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 
 def _install_stubs():
@@ -20,7 +22,7 @@ def _install_stubs():
     os.environ.setdefault("SECRET_KEY", "test-secret-for-audio-endpoint")
     os.environ.setdefault("REMOTE_USER", "test-owner")
     os.environ.setdefault("REMOTE_PASSWORD", "test-pass")
-    os.environ.setdefault("API_KEY", "0123456789abcdef0123456789abcdef")
+    os.environ.setdefault("API_KEY", "0123456789abcdef0123456789abcdef")  # gitleaks:allow -- synthetic fixture credential
 
     if "ytmusicapi" not in sys.modules:
         ytmusicapi = types.ModuleType("ytmusicapi")

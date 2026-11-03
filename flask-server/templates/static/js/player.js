@@ -608,6 +608,9 @@ function refreshNpLikeButton() {
     if (!btn) continue;
     btn.classList.toggle('liked', isLiked);
     btn.title = isLiked ? 'Dislike' : 'Like';
+    // Most of these hearts are icon-only, so the state has to be in the
+    // accessible name and not only in the tooltip.
+    btn.setAttribute('aria-label', isLiked ? 'Dislike' : 'Like');
     if (id === 'np-menu-like') {
       btn.innerHTML = svg + `<span>${isLiked ? 'Dislike' : 'Like'}</span>`;
     } else {

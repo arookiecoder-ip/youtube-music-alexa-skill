@@ -43,8 +43,8 @@ const MUTATIONS = [
   [
     'sequence no longer increments (every click looks current)',
     'ui-state.js',
-    "    state._playIntentSeq += 1;",
-    "    state._playIntentSeq = state._playIntentSeq;",
+    "    state._playIntentSeq = Math.max(now, state._playIntentSeq + 1);",
+    "    state._playIntentSeq = Math.max(now, state._playIntentSeq);",
   ],
   [
     'intent never expires (a failed play freezes the UI)',
@@ -82,6 +82,7 @@ const MUTATIONS = [
     'player.js failure path no longer rolls back the optimistic paint',
     'player.js',
     "    window.settlePlayIntent(item.video_id);\n"
+    + "    if (window.progress && window.progress.cancelPending) window.progress.cancelPending();\n"
     + "    state.isPlaying = false;\n"
     + "    state.lastActionIntent = false;\n"
     + "    syncPlayPause();\n"

@@ -1,0 +1,725 @@
+/* Administration panel.
+ *
+ * Same palette and same square geometry as the player -- theme.css owns every
+ * colour and size, this file only arranges them.  The one thing the panel has
+ * that nothing else does is a light theme, selected per account and rendered
+ * onto `<html data-theme>` before the first paint.
+ *
+ * Layout is a rail on desktop and a drawer on phones.
+ */
+
+:root {
+  /* Layout only -- the rail width, which no other surface shares. */
+  --sidebar: 252px;
+}
+
+* { box-sizing: border-box; }
+html, body { min-height: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-sans);
+  font-size: 15px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+}
+a { color: var(--link); text-decoration: none; }
+a:hover { color: var(--accent-hover); }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+code, pre, .mono { font-family: var(--font-mono); }
+h1, h2, h3 { margin: 0; font-weight: 650; letter-spacing: -.02em; }
+h1 { font-size: 1.5rem; }
+h2 { font-size: 1rem; }
+h3 { font-size: .92rem; }
+p { margin: 0 0 .8rem; }
+small, .small { font-size: .8rem; }
+img, svg { max-width: 100%; }
+* { scrollbar-width: thin; scrollbar-color: var(--scrollbar-thumb) transparent; }
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-thumb { background: var(--scrollbar-thumb); border-radius: var(--radius-full); }
+::-webkit-scrollbar-track { background: transparent; }
+
+.skip-link {
+  position: absolute; left: 8px; top: -64px; z-index: 60;
+  background: var(--surface); color: var(--text); border: 1px solid var(--border);
+  border-radius: var(--radius-md); padding: 9px 14px; font-weight: 650; font-size: .86rem;
+}
+.skip-link:focus { top: 8px; color: var(--text); }
+
+/* ---------------------------------------------------------------- shell */
+.layout { display: flex; min-height: 100vh; }
+.sidebar {
+  width: var(--sidebar);
+  flex: 0 0 var(--sidebar);
+  background: var(--surface);
+  border-right: 1px solid var(--border-soft);
+  padding: 20px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+  position: sticky;
+  top: 0;
+  height: 100vh;
+  overflow-y: auto;
+  z-index: 30;
+}
+.brand { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-1) var(--space-2); color: var(--text); }
+.brand:hover { color: var(--text); }
+/* The player's equaliser mark, same five bars.  It animates here as it does
+   there, and stops for a person who asked the system to reduce motion. */
+.eq-icon { display: flex; align-items: flex-end; gap: 3px; height: 22px; flex: none; }
+.eq-icon span { display: block; width: 3px; background: var(--accent); transform-origin: bottom; }
+.eq-icon span:nth-child(1) { height: 35%; }
+.eq-icon span:nth-child(2) { height: 75%; }
+.eq-icon span:nth-child(3) { height: 50%; }
+.eq-icon span:nth-child(4) { height: 90%; }
+.eq-icon span:nth-child(5) { height: 60%; }
+@media (prefers-reduced-motion: no-preference) {
+  .eq-icon span { animation: eq 1.4s ease-in-out infinite; }
+  .eq-icon span:nth-child(1) { animation-delay: 0s; }
+  .eq-icon span:nth-child(2) { animation-delay: .15s; }
+  .eq-icon span:nth-child(3) { animation-delay: .35s; }
+  .eq-icon span:nth-child(4) { animation-delay: .1s; }
+  .eq-icon span:nth-child(5) { animation-delay: .25s; }
+}
+@keyframes eq {
+  0%, 100% { transform: scaleY(1); }
+  50% { transform: scaleY(.3); }
+}
+.brand-text { min-width: 0; }
+.brand-name { display: block; font-weight: 700; letter-spacing: -.02em; line-height: 1.15; }
+.brand-sub { display: block; color: var(--faint); font-size: var(--text-sm); text-transform: uppercase; letter-spacing: .12em; }
+
+.nav { display: flex; flex-direction: column; gap: var(--space-1); }
+.nav-label {
+  color: var(--muted); font-size: var(--text-xs); font-weight: 600;
+  text-transform: uppercase; letter-spacing: .14em; padding: var(--space-4) var(--space-3) var(--space-1);
+}
+.nav a {
+  position: relative;
+  display: flex; align-items: center; gap: var(--space-3);
+  min-height: 40px; padding: var(--space-2) var(--space-3); border-radius: var(--radius-md);
+  color: var(--muted); font-weight: 600; font-size: .88rem;
+  transition: background .15s ease, color .15s ease;
+}
+.nav a svg { width: 19px; height: 19px; flex: none; opacity: .85; }
+.nav a:hover { background: var(--hover-tint); color: var(--text); }
+.nav a.active { background: var(--accent-soft); color: var(--text); }
+.nav a.active::before {
+  content: ""; position: absolute; left: -14px; top: 50%;
+  transform: translateY(-50%);
+  width: 3px; height: 18px; border-radius: 0; background: var(--accent);
+}
+.nav a.active svg { opacity: 1; }
+.nav .count {
+  margin-left: auto; font-size: var(--text-sm); color: var(--muted);
+  background: var(--surface); border-radius: var(--radius-full); padding: var(--space-1) var(--space-2);
+  font-variant-numeric: tabular-nums;
+}
+.nav .external { color: var(--faint); }
+.nav .external:hover { color: var(--muted); }
+
+.sidebar-foot { margin-top: auto; display: flex; flex-direction: column; gap: var(--space-3); }
+.sidebar-user {
+  display: flex; align-items: center; gap: var(--space-3);
+  border: 1px solid var(--border-soft); background: var(--surface);
+  border-radius: var(--radius-md); padding: var(--space-3);
+}
+.avatar {
+  width: 36px; height: 36px; flex: none; border-radius: var(--radius-md);
+  background: var(--surface-2); border: 1px solid var(--border);
+  display: grid; place-items: center; font-weight: 700; color: var(--link);
+  text-transform: uppercase; font-size: .8rem;
+}
+.avatar.lg { width: 52px; height: 52px; font-size: 1.2rem; }
+.sidebar-user-copy { min-width: 0; }
+.sidebar-user-name { font-weight: 650; font-size: .86rem; line-height: 1.25; display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sidebar-user-role { color: var(--faint); font-size: var(--text-sm); text-transform: uppercase; letter-spacing: .1em; }
+.sidebar-link { color: var(--faint); font-size: .76rem; padding: 0 4px; }
+.sidebar-link:hover { color: var(--text); }
+
+.main { flex: 1; min-width: 0; }
+.topbar {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--space-4);
+  min-height: 64px; padding: var(--space-3) var(--space-6);
+  border-bottom: 1px solid var(--border-soft);
+  background: var(--bg);
+  position: sticky; top: 0; z-index: 20;
+}
+.topbar-left { display: flex; align-items: center; gap: var(--space-3); min-width: 0; }
+.topbar-title { font-size: .78rem; color: var(--muted); text-transform: uppercase; letter-spacing: .12em; white-space: nowrap; }
+.topbar-actions { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
+.nav-toggle {
+  display: none; width: 40px; height: 40px; flex: none;
+  border: 1px solid var(--border); background: var(--bg); color: var(--text);
+  border-radius: var(--radius-md); cursor: pointer; place-items: center;
+}
+.nav-toggle svg { width: 18px; height: 18px; margin: 0 auto; }
+.nav-toggle:hover { background: var(--surface-2); border-color: var(--border-hover); }
+.content { padding: var(--space-6) var(--space-6) 64px; max-width: 1280px; }
+.page-head { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-4); margin-bottom: var(--space-5); flex-wrap: wrap; }
+.page-head p { color: var(--muted); margin: var(--space-1) 0 0; max-width: 760px; }
+.page-head .title-row { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; }
+.page-head h1 { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
+
+/* ---------------------------------------------------------------- pieces */
+.preview-badge, .chip {
+  display: inline-flex; align-items: center; gap: var(--space-1);
+  background: var(--warn-soft); border: 1px solid var(--warn-line);
+  color: var(--warn-tint); border-radius: 0; padding: var(--space-1) var(--space-3);
+  font-size: var(--text-sm); font-weight: 700; letter-spacing: .07em; text-transform: uppercase;
+}
+.preview-badge::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+
+.grid { display: grid; gap: var(--space-4); }
+.grid.cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.grid.cols-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.grid.cols-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.grid.split { grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr); }
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border); border-radius: var(--radius-md);
+  padding: 20px;
+}
+.card.flush { padding: 0; overflow: hidden; }
+.card-head {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--space-3);
+  padding: 16px 20px; border-bottom: 1px solid var(--border);
+}
+.card-head h2 { font-size: .96rem; }
+.card-head.plain { padding: 0 0 var(--space-4); border: 0; }
+.card-body { padding: 20px; }
+.card-body.flush { padding: 0; }
+.stack-md { display: flex; flex-direction: column; gap: var(--space-4); }
+.card-hint { color: var(--muted); font-size: .8rem; margin: var(--space-1) 0 var(--space-3); }
+.stat-label { color: var(--muted); font-size: var(--text-xs); font-weight: 600; letter-spacing: .14em; text-transform: uppercase; }
+.stat-value { font-size: 1.9rem; font-weight: 700; letter-spacing: -.04em; margin-top: 4px; font-variant-numeric: tabular-nums; }
+.stat-note { color: var(--muted); font-size: .78rem; margin-top: var(--space-1); }
+.stat-value.accent { color: var(--link); }
+.stat-value.green { color: var(--ok-tint); }
+.stat-value.amber { color: var(--warn-tint); }
+.stat-value.red { color: var(--danger-tint); }
+
+.kpi { display: flex; align-items: flex-start; justify-content: space-between; gap: var(--space-3); }
+.kpi-icon {
+  width: 40px; height: 40px; flex: none; border-radius: var(--radius-md);
+  display: grid; place-items: center;
+  background: var(--surface-2); border: 1px solid var(--border);
+  color: var(--muted);
+}
+.kpi-icon svg { width: 18px; height: 18px; }
+.kpi-icon.accent { color: var(--link); background: var(--accent-soft); border-color: var(--accent-line); }
+.kpi-icon.green { color: var(--ok-tint); background: var(--ok-soft); border-color: var(--ok-line); }
+.kpi-icon.amber { color: var(--warn-tint); background: var(--warn-soft); border-color: var(--warn-line); }
+.kpi-icon.blue { color: var(--muted); background: var(--surface-2); border-color: var(--border); }
+
+/* Simple, dependency-free bar chart. Every bar keeps a readable value in its
+   title attribute and the table-like summary beneath carries the numbers. */
+.chart { display: flex; align-items: flex-end; gap: var(--space-1); height: 132px; padding: var(--space-1) 0 0; min-width: 0; overflow-x: auto; overscroll-behavior-x: contain; }
+.chart-col { flex: 1 0 var(--space-4); display: grid; grid-template-rows: 1fr auto; gap: var(--space-1); height: 100%; }
+.chart-bar {
+  width: 100%; min-height: 3px; border-radius: 0;
+  background: var(--accent); opacity: .8; transition: opacity .15s; align-self: end;
+}
+.chart-col:hover .chart-bar { opacity: 1; }
+.chart-bar.empty { background: var(--surface-3); opacity: 1; }
+.chart-label { color: var(--faint); font-size: var(--text-sm); text-align: center; white-space: nowrap; }
+.chart-foot { display: flex; justify-content: space-between; gap: var(--space-3); margin-top: var(--space-3); color: var(--faint); font-size: .74rem; }
+
+.dist { display: flex; flex-direction: column; gap: var(--space-3); }
+.dist-row { display: grid; grid-template-columns: 92px minmax(0, 1fr) 48px; gap: var(--space-3); align-items: center; font-size: .82rem; }
+.dist-line { display: flex; flex-direction: column; gap: var(--space-1); }
+.dist-line .dist-row { width: 100%; }
+.dist-note { color: var(--warn-tint); font-size: var(--text-sm); }
+.dist-row .name { color: var(--muted); text-transform: capitalize; }
+.dist-row .num { text-align: right; font-variant-numeric: tabular-nums; color: var(--text); }
+/* The bars are the same kind of object as the cards above them: square, 1px-free
+   fills. A rounded cap on an 8px meter was the last soft edge in the panel. */
+.dist-track { height: 8px; border-radius: 0; background: var(--surface-3); overflow: hidden; }
+.dist-fill { height: 100%; border-radius: 0; background: var(--accent); }
+.dist-fill.green { background: var(--ok); }
+.dist-fill.blue { background: var(--muted); }
+.dist-fill.amber { background: var(--warn); }
+.dist-fill.violet { background: var(--accent-tint); }
+.dist-fill.muted { background: var(--surface-3); }
+
+/* ---------------------------------------------------------------- buttons
+   Every control that can be acted on says so before it is clicked: a fill that
+   lifts off the field colour, a border that sharpens, and a 1px press.  The
+   states are written once here so a new button variant inherits them. */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: var(--space-2);
+  border: 1px solid var(--border); background: var(--field-bg); color: var(--text);
+  border-radius: var(--radius-md); min-height: var(--control-h-md); padding: 0 var(--space-4); font-size: .82rem; font-weight: 600;
+  cursor: pointer; font-family: inherit; line-height: 1.2; white-space: nowrap;
+  transition: background .15s ease, border-color .15s ease, color .15s ease,
+              box-shadow .15s ease, transform .06s ease;
+}
+.btn:hover { background: var(--surface-2); border-color: var(--border-hover); color: var(--text); }
+.btn:active { transform: translateY(1px); }
+.btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.btn svg { width: 15px; height: 15px; flex: none; }
+.btn.primary {
+  background: var(--accent); border-color: var(--accent); color: var(--on-accent);
+  font-weight: 700; text-transform: uppercase; letter-spacing: .1em;
+  font-size: var(--text-sm); padding: 0 var(--space-6);
+}
+.btn.primary:hover {
+  background: var(--accent-hover); border-color: var(--accent-hover);
+  box-shadow: inset 0 -2px 0 rgba(0, 0, 0, .2);
+}
+.btn.danger { color: var(--danger-tint); border-color: var(--danger-line); background: transparent; }
+.btn.danger:hover { background: var(--danger-soft); border-color: var(--danger); color: var(--danger-tint); }
+.btn.ghost { background: transparent; }
+.btn.ghost:hover { background: var(--hover-tint); border-color: var(--border-hover); }
+.btn.small { min-height: var(--control-h-sm); padding: 0 var(--space-3); font-size: .76rem; }
+.btn.icon { padding: 0; width: 40px; }
+.btn[disabled] {
+  opacity: .42; cursor: not-allowed; pointer-events: none;
+}
+.btn.block { width: 100%; }
+.btn-row { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
+.btn-row.tight { gap: var(--space-1); }
+.btn-row.center { justify-content: center; }
+
+/* A pager that is always the same shape: both ends are present, and the end you
+   cannot go to is drawn rather than missing, so the strip does not jump between
+   pages. */
+.pager { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
+.pager .btn { min-width: 96px; }
+.pager .where { color: var(--faint); font-size: .78rem; font-variant-numeric: tabular-nums; min-width: 84px; text-align: center; }
+
+/* ---------------------------------------------------------------- feedback */
+.flash-stack { display: flex; flex-direction: column; gap: var(--space-2); margin-bottom: var(--space-5); }
+.flash-stack:empty { display: none; margin: 0; }
+.flash {
+  border: 1px solid var(--border); background: var(--surface);
+  border-left: 3px solid var(--muted); border-radius: var(--radius-md);
+  padding: var(--space-3) var(--space-4); font-size: .88rem; display: flex; justify-content: space-between; gap: var(--space-3);
+}
+.flash.success { border-left-color: var(--ok); }
+.flash.error { border-left-color: var(--danger); }
+.flash.warning { border-left-color: var(--warn); }
+.flash.info { border-left-color: var(--muted); }
+.flash.password { border-left-color: var(--accent); }
+.flash code { background: var(--bg); padding: var(--space-1) var(--space-2); border-radius: var(--radius-sm); font-size: .84em; word-break: break-all; }
+
+/* ---------------------------------------------------------------- tables */
+.table-wrap { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-size: .87rem; }
+caption { caption-side: top; text-align: left; color: var(--muted); font-size: .78rem; padding: 0 0 var(--space-3); }
+th {
+  text-align: left; color: var(--muted); font-size: var(--text-xs); font-weight: 600;
+  text-transform: uppercase; letter-spacing: .14em; padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--border); white-space: nowrap;
+  position: sticky; top: 0; background: var(--surface);
+}
+td { padding: var(--space-3) var(--space-4); border-bottom: 1px solid var(--border-soft); vertical-align: middle; }
+tr:last-child td { border-bottom: 0; }
+tbody tr:hover { background: var(--hover-tint); }
+.table-user { display: flex; align-items: center; gap: var(--space-3); min-width: 190px; color: inherit; }
+.table-user:hover { color: inherit; }
+.table-user .name { font-weight: 620; }
+.table-user .sub { color: var(--faint); font-size: .75rem; }
+.muted { color: var(--muted); }
+.faint { color: var(--faint); }
+.nowrap { white-space: nowrap; }
+.right { text-align: right; }
+.visually-hidden {
+  position: absolute; width: 1px; height: 1px; margin: -1px; padding: 0;
+  overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+}
+
+.badge {
+  /* Square, like every badge outside the panel: the same status word on
+     /account and /admin should not be two different shapes. The 5px dot inside
+     stays round -- it is a drawing, not a surface. */
+  display: inline-flex; align-items: center; gap: var(--space-1); border-radius: 0;
+  padding: var(--space-1) var(--space-3); min-height: 24px; font-size: var(--text-sm); font-weight: 700; letter-spacing: .06em;
+  border: 1px solid var(--border); background: var(--bg); color: var(--muted);
+  white-space: nowrap; text-transform: uppercase;
+}
+.badge::before { content: ""; width: 5px; height: 5px; border-radius: 50%; background: currentColor; }
+.badge.active, .badge.connected, .badge.ok, .badge.signed_in { color: var(--ok-tint); background: var(--ok-soft); border-color: var(--ok-line); }
+.badge.disabled, .badge.revoked, .badge.deleted, .badge.error { color: var(--danger-tint); background: var(--danger-soft); border-color: var(--danger-line); }
+.badge.invited, .badge.expired, .badge.pending, .badge.admin { color: var(--warn-tint); background: var(--warn-soft); border-color: var(--warn-line); }
+.badge.user, .badge.neutral { color: var(--muted); }
+
+/* ---------------------------------------------------------------- forms */
+form.stack { display: flex; flex-direction: column; gap: var(--space-4); }
+.field { display: flex; flex-direction: column; gap: var(--space-1); }
+.field label {
+  font-size: var(--text-xs); font-weight: 600; color: var(--muted);
+  text-transform: uppercase; letter-spacing: .14em;
+}
+.field .hint, .hint { color: var(--faint); font-size: .78rem; }
+.field input, .field select, .field textarea, .search-form input, .search-form select {
+  width: 100%; background: var(--field-bg); border: 1px solid var(--border);
+  border-radius: var(--radius-md); color: var(--text); min-height: var(--control-h-md); padding: var(--space-2) var(--space-3);
+  font-family: inherit; font-size: var(--text-base); outline: none;
+  transition: border-color .15s, background .15s;
+}
+.field input::placeholder, .search-form input::placeholder { color: var(--placeholder); }
+.field input:hover, .field select:hover, .field textarea:hover,
+.search-form input:hover, .search-form select:hover { border-color: var(--border-hover); }
+.field input:focus, .field select:focus, .field textarea:focus,
+.search-form input:focus, .search-form select:focus { border-color: var(--accent); }
+/* `outline: none` above is more specific than the panel-wide :focus-visible rule,
+   so a keyboard user tabbing through a form saw only the border recolour — which
+   is the same thing hover already does. The ring is drawn here instead. */
+.field input:focus-visible, .field select:focus-visible, .field textarea:focus-visible,
+.search-form input:focus-visible, .search-form select:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 2px;
+}
+.field input[readonly], .field input[disabled], .field select[disabled] {
+  color: var(--faint); background: var(--field-disabled);
+}
+.field .mono-input, .code-input, .mono-field, .code-field { font-family: var(--font-mono); }
+/* A native select, restyled. The arrow is a file rather than a data: URI, which
+   the status page's img-src 'self' would block. */
+.field select, .search-form select {
+  -webkit-appearance: none; appearance: none;
+  padding-right: 34px; cursor: pointer;
+  background-image: url('/static/icons/select-chevron.svg');
+  background-position: right 11px center;
+  background-repeat: no-repeat;
+}
+.form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-4); }
+.form-actions { display: flex; align-items: center; gap: var(--space-2); padding-top: var(--space-1); flex-wrap: wrap; }
+.checkline { display: flex; align-items: center; gap: var(--space-2); min-height: var(--control-h-sm); font-size: .86rem; color: var(--muted); }
+.checkline input { width: 20px; height: 20px; accent-color: var(--accent); }
+/* The label is the target, so the whole line has to be tall enough to aim at,
+   not just the 18px box inside it: 32px at the desk, the full control height
+   wherever a thumb is doing the pointing. */
+@media (hover: none), (max-width: 899px) {
+  .checkline { min-height: var(--control-h-md); }
+}
+.toolbar { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; }
+.search-form { display: flex; align-items: flex-end; gap: var(--space-2); flex-wrap: wrap; }
+.search-form .search-field { display: flex; flex-direction: column; gap: var(--space-1); }
+.search-form label {
+  font-size: var(--text-xs); font-weight: 600; color: var(--muted);
+  letter-spacing: .14em; text-transform: uppercase;
+}
+.search-form input { min-width: 230px; }
+.filter-card { margin-bottom: var(--space-4); }
+.filter-card .card-body { padding: 14px 20px; }
+.result-count { color: var(--faint); font-size: .8rem; }
+
+.pagination {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--space-3);
+  padding: 14px 18px; border-top: 1px solid var(--border-soft);
+  color: var(--faint); font-size: .8rem;
+}
+.pagination .pages { display: flex; align-items: center; gap: var(--space-2); }
+
+.kv { display: grid; grid-template-columns: 190px minmax(0, 1fr); gap: var(--space-2) var(--space-4); font-size: .86rem; }
+.kv dt { color: var(--faint); }
+.kv dd { margin: 0; overflow-wrap: anywhere; }
+.section-divider { height: 1px; background: var(--border-soft); margin: var(--space-5) 0; }
+.danger-zone {
+  border: 1px solid var(--danger-line);
+  background: var(--surface);
+  border-radius: var(--radius-md); padding: 20px;
+}
+.danger-zone h2 { color: var(--danger-tint); font-size: .96rem; margin-bottom: var(--space-1); }
+.muted-box { background: var(--bg); border: 1px solid var(--border-soft); border-radius: var(--radius-md); padding: var(--space-3) var(--space-4); color: var(--muted); font-size: .83rem; }
+.empty { padding: var(--space-6) var(--space-5); text-align: center; color: var(--faint); }
+.empty strong { display: block; color: var(--muted); margin-bottom: 4px; }
+.event-action { color: var(--text); }
+a.event-action { text-decoration: none; }
+a.event-action:hover { color: var(--accent); text-decoration: underline; }
+/* A link that IS a row's action -- the activity label, the audit target id, the
+   pointer to a control on another page -- has to be aimable with a mouse as well
+   as a thumb. Vertical padding grows the hit box and never moves the text (an
+   inline box's padding takes no part in line layout), and 5px of bleed disappears
+   into the 12px the table already gives every cell, so no row steals from the next. */
+a.event-action,
+.hint a,
+td > a:not(.btn):not(.table-user):not(.chip):not(.badge),
+dd > a:not(.btn):not(.chip) {
+  padding: 5px 6px;
+  margin: -5px -6px;
+}
+details > summary { min-height: 24px; }
+@media (hover: none), (max-width: 899px) {
+  /* 24px is the desk minimum; a thumb wants the full control height. */
+  a.event-action,
+  .hint a,
+  td > a:not(.btn):not(.table-user):not(.chip):not(.badge),
+  dd > a:not(.btn):not(.chip) { padding: 13px 6px; margin: -13px -6px; }
+  details > summary { padding: 13px 0; margin: -13px 0; }
+}
+.attention { list-style: none; margin: var(--space-1) 0 0; padding: 0; }
+.attention-item { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); padding: var(--space-3) 0; border-top: 1px solid var(--border-soft); font-size: .86rem; color: var(--muted); }
+.attention-item:first-child { border-top: 0; }
+.attention-item .btn { flex: 0 0 auto; }
+details summary { cursor: pointer; color: var(--faint); font-size: .78rem; }
+details pre { margin: var(--space-2) 0 0; background: var(--bg); border: 1px solid var(--border-soft); border-radius: var(--radius-md); padding: var(--space-2); font-size: .74rem; overflow-x: auto; color: var(--muted); }
+
+.provider-row {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--space-3);
+  border: 1px solid var(--border-soft); border-radius: var(--radius-md); padding: var(--space-3);
+  background: var(--bg);
+}
+.provider-row + .provider-row { margin-top: var(--space-3); }
+.provider-name { font-weight: 620; }
+.provider-error { color: var(--danger-tint); font-size: .78rem; margin-top: 4px; }
+
+.banner {
+  display: flex; align-items: flex-start; gap: var(--space-3);
+  border: 1px solid var(--warn-line); background: var(--warn-soft);
+  border-radius: var(--radius-md); padding: var(--space-3) var(--space-4); margin-bottom: var(--space-5);
+  color: var(--warn-tint); font-size: .86rem;
+}
+.banner.info { border-color: var(--border); background: var(--surface); color: var(--muted); }
+.banner strong { color: inherit; }
+
+/* ---------------------------------------------------------------- dialogs
+   One <dialog> in the shell, reused for confirmations and for any payload a row
+   can open.  The native element gives the backdrop, focus trap and Escape for
+   free; this only dresses it in the panel's own tokens. */
+.admin-dialog {
+  width: min(560px, calc(100vw - 32px));
+  max-height: min(88vh, 720px);
+  margin: auto;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--pop-shadow);
+}
+.admin-dialog::backdrop { background: var(--overlay); }
+/* `minmax(0, 1fr)` is what keeps a long payload scrolling in the body instead of
+   pushing the footer out of the viewport. */
+.admin-dialog[open] { display: grid; grid-template-rows: auto minmax(0, 1fr) auto; }
+.dialog-head {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--space-3);
+  padding: var(--space-4) var(--space-5); border-bottom: 1px solid var(--border);
+}
+.dialog-head h2 { font-size: .98rem; }
+.dialog-body { padding: var(--space-5); overflow: auto; }
+.dialog-body p { color: var(--muted); font-size: .9rem; }
+.dialog-foot {
+  display: flex; align-items: center; justify-content: flex-end; gap: var(--space-2);
+  padding: var(--space-4) var(--space-5); border-top: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+@media (max-width: 480px) {
+  .dialog-foot .btn { flex: 1 1 auto; }
+}
+.dialog-body .payload, .payload {
+  margin: 0; background: var(--field-bg); border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md); padding: var(--space-3); font-size: .78rem;
+  color: var(--muted); overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere;
+}
+
+/* The account page's own dialogs, which ask who you are before a second factor
+   is changed.  "Password or email code" is a radio pair rather than a script: the
+   checked input and the sibling combinator decide which panel is shown, and the
+   tabs are labels for those inputs, so the choice works with no JS at all.
+   nth-child lines up with the tab order in the markup. */
+.verify-form > input[type="radio"] {
+  position: absolute; width: 1px; height: 1px; margin: 0; padding: 0;
+  clip-path: inset(50%); overflow: hidden; white-space: nowrap;
+}
+.verify-form > .segmented {
+  display: grid; grid-auto-flow: column; gap: var(--space-1); padding: 4px;
+  background: var(--field-bg); border: 1px solid var(--border-soft);
+  border-radius: var(--radius-md);
+}
+.verify-form > .segmented label {
+  display: flex; align-items: center; justify-content: center; text-align: center;
+  min-height: var(--control-h-sm); padding: 0 var(--space-3);
+  font-size: .82rem; font-weight: 560; color: var(--muted); cursor: pointer;
+  user-select: none; border-radius: var(--radius-sm);
+  transition: background .14s ease, color .14s ease;
+}
+.verify-form > .segmented label:hover { color: var(--text); }
+/* Both panels share one grid cell, so the cell is as tall as the taller of the
+   two and switching tabs cannot resize the dialog. `visibility` rather than
+   `display` keeps the hidden panel out of the tab order while it still counts
+   toward that height. */
+.verify-form > .methods { display: grid; }
+.methods > .method { grid-area: 1 / 1; visibility: hidden; }
+.verify-form > input[value="password"]:checked ~ .segmented label:nth-child(1),
+.verify-form > input[value="email"]:checked ~ .segmented label:nth-child(2) {
+  background: var(--accent-soft); color: var(--text);
+  box-shadow: inset 0 0 0 1px var(--accent-line);
+}
+.verify-form > input[value="password"]:focus-visible ~ .segmented label:nth-child(1),
+.verify-form > input[value="email"]:focus-visible ~ .segmented label:nth-child(2) {
+  outline: 2px solid var(--accent); outline-offset: 2px;
+}
+.verify-form > input[value="password"]:checked ~ .methods > .method--password,
+.verify-form > input[value="email"]:checked ~ .methods > .method--email { visibility: visible; }
+.verify-form .code-field,
+#reset-dialog .code-field { max-width: 220px; }
+/* Only ever posted through the send button's `form` attribute. */
+.send-form { display: none; }
+.ok-line { margin: 0; color: var(--ok-tint); font-size: .82rem; }
+/* A send that worked, said in place. A modal dialog lives in the browser's top
+   layer, so the stack is created inside the open dialog by admin.js and stays
+   pinned to the viewport from there. */
+.toast-stack {
+  position: fixed; right: 1.5rem; bottom: 1.5rem; z-index: 70;
+  display: flex; flex-direction: column; gap: var(--space-2);
+  width: min(360px, calc(100vw - 3rem)); pointer-events: none;
+}
+.toast {
+  padding: .6rem .8rem; color: var(--text); background: var(--surface-2);
+  border: 1px solid var(--border); border-left: 3px solid var(--accent);
+  border-radius: var(--radius-md); font-size: .84rem; line-height: 1.35;
+  box-shadow: 0 14px 34px rgba(0, 0, 0, .45);
+  animation: toast-in .16s ease-out; pointer-events: auto;
+}
+.toast.success { border-left-color: var(--ok-tint); }
+.toast.warning { border-left-color: var(--warn); }
+.toast.error { border-left-color: var(--danger); }
+.toast.out { opacity: 0; transform: translateY(4px); transition: opacity .2s ease, transform .2s ease; }
+@keyframes toast-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+/* The two choices beside a live authenticator: equal width, so the card reads as
+   a decision between two options and not as a button that happens to be shorter. */
+.totp-actions { margin-top: var(--space-2); }
+.totp-actions .btn { flex: 1 1 200px; }
+
+/* A long list that belongs inside its card rather than pushing the page down:
+   the header stays, the body scrolls. */
+.scroll-box { max-height: 320px; overflow: auto; overscroll-behavior: contain; }
+.scroll-box.tall { max-height: 420px; }
+
+/* The account page's two columns hold different numbers of cards. Each column
+   fills the row, so pinning its last card to the bottom puts both bottom edges
+   on the same line instead of leaving one column short. */
+.account-cols > .col > .card:last-child { margin-top: auto; }
+/* A device row is a control: it opens that session's details. */
+.device-row { cursor: pointer; }
+.device-row:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+
+/* ---------------------------------------------------------------- layout helpers
+   Written as classes because the panel's CSP forbids inline style; a rule that
+   lives in a template cannot be checked against the palette. */
+.row { display: flex; align-items: center; gap: var(--space-3); flex-wrap: wrap; }
+.row.tight { gap: var(--space-2); }
+.row.spread { justify-content: space-between; }
+.col { display: flex; flex-direction: column; gap: var(--space-4); }
+.col.tight { gap: var(--space-2); }
+.ml-auto { margin-left: auto; }
+.mt-0 { margin-top: 0; }
+.mt-2 { margin-top: var(--space-2); }
+.mt-3 { margin-top: var(--space-3); }
+.mt-4 { margin-top: var(--space-4); }
+.mt-5 { margin-top: var(--space-5); }
+.mb-0 { margin-bottom: 0; }
+.mb-2 { margin-bottom: var(--space-2); }
+.mb-3 { margin-bottom: var(--space-3); }
+.mb-4 { margin-bottom: var(--space-4); }
+.mb-5 { margin-bottom: var(--space-5); }
+.center { text-align: center; }
+.full { width: 100%; }
+.mono-field { font-family: var(--font-mono); }
+.code-field { font-family: var(--font-mono); letter-spacing: .3em; text-align: center; }
+.code-field.lg { font-size: var(--text-xl); letter-spacing: .34em; }
+/* The one big number a door page shows: an error code, or the mark that says it worked. */
+.display { font-size: var(--text-2xl); }
+.result-mark { font-size: 2.4rem; line-height: 1; color: var(--ok-tint); }
+.pickable { user-select: all; }
+.hint-indent { margin-left: var(--space-6); }
+.head-id { display: flex; align-items: center; gap: var(--space-4); flex-wrap: wrap; }
+.qr-frame {
+  display: inline-block; margin: var(--space-3) 0; padding: 10px;
+  background: var(--qr-frame); border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+.qr-frame img { display: block; }
+
+/* The sign-up switch, which now lives beside the accounts it governs. */
+.switch-bar {
+  display: flex; align-items: center; justify-content: space-between; gap: var(--space-4);
+  flex-wrap: wrap;
+  border: 1px solid var(--border); border-left: 3px solid var(--accent);
+  background: var(--surface); border-radius: var(--radius-md);
+  padding: var(--space-3) var(--space-5); margin-bottom: var(--space-4);
+}
+.switch-bar.closed { border-left-color: var(--danger); }
+.switch-bar .copy { min-width: 240px; }
+.switch-bar .copy strong { display: block; font-size: .92rem; }
+.switch-bar .copy span { color: var(--muted); font-size: .82rem; }
+
+/* ---------------------------------------------------------------- doors */
+.login-shell { min-height: 100vh; display: grid; place-items: center; padding: 24px; }
+.login-card { width: 100%; max-width: 400px; }
+.login-brand { display: flex; align-items: center; gap: var(--space-3); margin-bottom: var(--space-5); }
+.login-card .card { padding: var(--space-6); }
+.login-card h1 { font-size: 1.28rem; margin-bottom: 4px; }
+.login-card .sub { color: var(--muted); font-size: .86rem; margin-bottom: var(--space-5); }
+.login-foot { text-align: center; margin-top: var(--space-4); color: var(--faint); font-size: .76rem; }
+/* Two ways to reach a reset: the pair under the password field sits in a flex
+   row, so it can take the standard control height outright; the one inside a
+   sentence can only grow its tap box without moving the words. */
+.row > a.small { display: inline-flex; align-items: center; min-height: var(--control-h-md); }
+@media (hover: none), (max-width: 899px) {
+  /* Links that sit inside a sentence -- a reset offer, a filter, a footnote --
+     cannot take a min-height without dragging the text with it. Padding grows the
+     tap box and the same padding taken back as margin leaves the line where it
+     always was. */
+  .login-foot a,
+  .hint a { padding: 13px 6px; margin: -13px -6px; }
+}
+
+/* ---------------------------------------------------------------- responsive */
+@media (max-width: 1080px) {
+  .grid.cols-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .grid.cols-3 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .grid.split { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 860px) {
+  .layout { display: block; }
+  .sidebar {
+    position: fixed; inset: 0 auto 0 0; width: min(84vw, 300px); height: 100vh;
+    transform: translateX(-105%); transition: transform .22s ease, visibility .22s;
+    padding: 20px 16px; overflow-y: auto; border-right: 1px solid var(--border);
+    /* Same reason as the player's drawer: off-canvas is not out of the tab order
+       until visibility says so, and this drawer holds twelve navigation links. */
+    visibility: hidden;
+  }
+  body.nav-open .sidebar { transform: none; visibility: visible; }
+  body.nav-open { overflow: hidden; }
+  .nav-toggle { display: grid; }
+  .topbar { padding: var(--space-3) var(--space-4); }
+  .content { padding: var(--space-4) var(--space-4) var(--space-7); }
+  .grid.cols-2, .grid.cols-3, .grid.cols-4 { grid-template-columns: minmax(0, 1fr); }
+  /* A `1fr` track is min-content-bounded, so one long user-agent string or
+     mono path decided the width of the whole page. Every stacked track here
+     has to be able to go to zero for the scrollers inside to mean anything. */
+  .form-grid { grid-template-columns: minmax(0, 1fr); }
+  .kv { grid-template-columns: minmax(0, 1fr); gap: var(--space-1); }
+  .kv dd { margin-bottom: var(--space-2); }
+  .chart { height: 112px; gap: var(--space-1); }
+  .search-form input { min-width: 0; width: 100%; }
+  /* Below this width the sidebar is a thumb-targeted drawer, not a mouse
+     sidebar, so its rows take the touch height rather than the compact one. */
+  .sidebar .btn.small { min-height: 44px; justify-content: flex-start; }
+  /* Same reason for the rest of the panel: a 32px table action is a mouse
+     target, and this breakpoint is where the panel gets touched. */
+  .btn.small { min-height: var(--control-h-md); }
+}
+@media (max-width: 480px) {
+  /* The pager is three fixed-width things in a row -- two 96px buttons and an
+     84px counter -- and the caption beside it is another 130. At phone widths
+     that sum is wider than the screen, and the card's overflow:hidden ate the
+     Next button rather than wrapping it. Stack the line and let the two buttons
+     share the row. */
+  .pagination { flex-direction: column; align-items: stretch; gap: var(--space-3); }
+  .pager { justify-content: space-between; }
+  .pager .btn { min-width: 0; flex: 1 1 0; }
+  .pager .where { min-width: 0; order: -1; width: 100%; text-align: left; }
+}
+.nav-scrim {
+  display: none; position: fixed; inset: 0; z-index: 25;
+  background: var(--overlay);
+}
+body.nav-open .nav-scrim { display: block; }
+@media (min-width: 861px) { .nav-scrim { display: none !important; } }

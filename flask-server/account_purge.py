@@ -34,6 +34,27 @@ RETRY_LIMIT_SECONDS = 86400
 _BACKOFF_BASE = 30.0
 _BACKOFF_CAP = 7200.0
 
+# What a queued purge has to erase. A whole-account purge is ``all``; a provider
+# disconnect records only the provider it could not finish, so its retry cannot
+# apply the deletion tombstone to an account that is still alive.
+SCOPES = ("youtube", "amazon", "all")
+
+
+def _parse_scopes(value: str) -> set[str]:
+    return {part.strip() for part in str(value or "").split(",") if part.strip() in SCOPES}
+
+
+def _split_scopes(value: str) -> tuple[str, ...]:
+    scopes = _parse_scopes(value)
+    if not scopes or "all" in scopes:
+        return ("all",)
+    return tuple(sorted(scopes))
+
+
+def _merge_scopes(existing: str, incoming: str) -> str:
+    scopes = _parse_scopes(existing) | _parse_scopes(incoming)
+    return "all" if "all" in scopes or not scopes else ",".join(sorted(scopes))
+
 
 def remove_file(path: str) -> bool:
     """Delete one file. False when there was nothing there to delete.
@@ -69,11 +90,19 @@ class PendingPurges:
             ' attempts INTEGER NOT NULL DEFAULT 0,'
             ' last_error TEXT NOT NULL DEFAULT "",'
             ' created_at REAL NOT NULL,'
-            ' next_at REAL NOT NULL)'
+            ' next_at REAL NOT NULL,'
+            ' scope TEXT NOT NULL DEFAULT "all")'
         )
+        # Tables created before scoped purges exist keep their rows; the default
+        # is the whole account, which is what every one of them means.
+        columns = {row[1] for row in conn.execute('PRAGMA table_info(pending_purges)')}
+        if 'scope' not in columns:
+            conn.execute(
+                'ALTER TABLE pending_purges ADD COLUMN scope TEXT NOT NULL DEFAULT "all"')
+            conn.commit()
         return conn
 
-    def record(self, user_id: str, error: str = "") -> bool:
+    def record(self, user_id: str, error: str = "", scope: str = "all") -> bool:
         """Queue a failed purge (or fold a new failure into the waiting one).
 
         Returns False once the retry window is exhausted -- the caller's signal to
@@ -85,10 +114,11 @@ class PendingPurges:
         conn = self._connection()
         try:
             row = conn.execute(
-                'SELECT attempts, created_at FROM pending_purges WHERE user_id=?',
+                'SELECT attempts, created_at, scope FROM pending_purges WHERE user_id=?',
                 (user_id,)).fetchone()
             attempts = (int(row[0]) if row else 0) + 1
             created = float(row[1]) if row else now
+            scopes = _merge_scopes(row[2] if row else "", scope)
             if created and now - created > RETRY_LIMIT_SECONDS:
                 conn.execute('DELETE FROM pending_purges WHERE user_id=?', (user_id,))
                 conn.commit()
@@ -98,12 +128,24 @@ class PendingPurges:
                 return False
             delay = min(_BACKOFF_CAP, _BACKOFF_BASE * (4 ** min(attempts - 1, 4)))
             conn.execute(
-                'INSERT OR REPLACE INTO pending_purges VALUES (?, ?, ?, ?, ?)',
-                (user_id, attempts, (error or '')[:400], created, now + delay))
+                'INSERT OR REPLACE INTO pending_purges'
+                ' (user_id, attempts, last_error, created_at, next_at, scope)'
+                ' VALUES (?, ?, ?, ?, ?, ?)',
+                (user_id, attempts, (error or '')[:400], created, now + delay, scopes))
             conn.commit()
             return True
         finally:
             conn.close()
+
+    def scopes_of(self, user_id: str) -> tuple[str, ...]:
+        """What is still left to erase for one queued account."""
+        conn = self._connection()
+        try:
+            row = conn.execute(
+                'SELECT scope FROM pending_purges WHERE user_id=?', (user_id,)).fetchone()
+        finally:
+            conn.close()
+        return _split_scopes(row[0] if row else "all")
 
     def due(self, limit: int = 20) -> list[str]:
         conn = self._connection()

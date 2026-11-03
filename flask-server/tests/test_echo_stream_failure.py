@@ -27,7 +27,7 @@ class EchoStreamFailureTests(unittest.TestCase):
         fn = next(n for n in cls.body if isinstance(n, ast.AsyncFunctionDef) and n.name == 'get_stream')
         fn.decorator_list = []
         direct = Mock(side_effect=AssertionError('Echo must never receive IP-locked URL'))
-        ns = {'PUBLIC_BASE_URL': '', 'has_request_context': has_request_context, 'request': request,
+        ns = {'_multiuser_layer': None, 'PUBLIC_BASE_URL': '', 'has_request_context': has_request_context, 'request': request,
               '_ensure_audio_ready_for_play': Mock(),
               'threading': SimpleNamespace(Thread=Mock(return_value=Mock())), 'API_KEY': 'test-key',
               'Supporting': SimpleNamespace(ensure_downloaded=Mock(), resolve_direct_url=direct), 'asyncio': asyncio}
@@ -63,7 +63,8 @@ class EchoStreamFailureTests(unittest.TestCase):
               '_playback_output': SimpleNamespace(snapshot=lambda: {'playback_output': 'alexa', 'output_serial': 'echo'}),
               '_valid_video_id': lambda x: isinstance(x, str) and len(x) == 11,
               '_computed_position_ms': lambda: 2000, '_reset_progress': Mock(), '_notify_sse': notify, 'logger': Mock(), 'threading': SimpleNamespace(Timer=timer),
-              '_still_relevant_video': lambda vid: state['video_id'] == vid, '_auto_advance_after_failure': advance}
+              '_still_relevant_video': lambda vid: state['video_id'] == vid, '_auto_advance_after_failure': advance,
+              '_delayed': lambda seconds, target, args=(), start=True: timer(seconds, lambda: target(*args))}
         exec(compile(ast.Module(body=[fn], type_ignores=[]), str(SOURCE), 'exec'), ns)
         with Flask(__name__).test_request_context('/', method='POST', json={
             'event': 'failed', 'video_id': video, 'error_type': 'MEDIA_ERROR_SERVICE_UNAVAILABLE'}):

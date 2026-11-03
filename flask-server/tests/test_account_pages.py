@@ -5,6 +5,9 @@ from unittest.mock import Mock
 from types import SimpleNamespace
 import unittest
 from flask import Flask, request, jsonify, redirect, render_template, abort
+import sys
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from browser_coordination import browser_scope, BROKER
 
 class AccountPageTests(unittest.TestCase):
     def setUp(self):
@@ -13,10 +16,10 @@ class AccountPageTests(unittest.TestCase):
         self.logged=True;self.allowed=True
         self.controller=Mock();self.controller.call.return_value={'width':480,'height':800,'image':'data:image/jpeg;base64,AA=='}
         def no_store(r):r.headers['Cache-Control']='no-store';return r
-        namespace=dict(_STATIC_VERSION="fixture-assets",app=app,request=request,jsonify=jsonify,redirect=redirect,render_template=render_template,abort=abort,
+        namespace=dict(BROKER=BROKER,browser_scope=browser_scope,_STATIC_VERSION="fixture-assets",app=app,request=request,jsonify=jsonify,redirect=redirect,render_template=render_template,abort=abort,
             _logged_in=lambda:self.logged,_browser_owner_id=lambda:'owner',_no_store=no_store,
             error_response=lambda message,status:(jsonify(error=message),status),
-            _youtube_browser_sessions=SimpleNamespace(COOKIE_NAME='lease',authorize=lambda owner,token:self.allowed and token=='valid',controller=self.controller))
+            _youtube_browser_sessions=SimpleNamespace(_lock=__import__("threading").RLock(),COOKIE_NAME='lease',authorize=lambda owner,token:self.allowed and token=='valid',controller=self.controller))
         nodes=[n for n in ast.parse((root/'server.py').read_text()).body if isinstance(n,ast.FunctionDef) and n.name in ['account_signin_page','youtube_browser_surface']]
         exec(compile(ast.Module(body=nodes,type_ignores=[]),str(root/'server.py'),'exec'),namespace)
         self.client=app.test_client()

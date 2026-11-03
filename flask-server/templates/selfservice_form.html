@@ -5,12 +5,15 @@
 {% block brand_sub %}{{ page_title }}{% endblock %}
 
 {% block card %}
-{# One generic single-field door form: it serves both "resend the verification
-   link" and "forgot password", which differ only in copy and in which bucket
+{# One generic single-field door form: it serves both "send a new verification
+   code" and "forgot password", which differ only in copy and in which bucket
    they spend. #}
 {% if sent_note %}
   <div class="step active">
     <p class="form-note success">{{ sent_note }}</p>
+    {% if sent_link_url %}
+      <a class="primary-link" href="{{ sent_link_url }}">{{ sent_link_label }}</a>
+    {% endif %}
     <a class="primary-link" href="{{ back_url }}">{{ back_label }}</a>
   </div>
 {% else %}

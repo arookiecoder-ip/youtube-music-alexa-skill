@@ -189,6 +189,13 @@ def _request_volume(handler_input):
     except Exception:
         return None
 
+def skill_identity_headers(handler_input):
+    system = getattr(getattr(handler_input.request_envelope, 'context', None), 'system', None)
+    user = getattr(getattr(system, 'user', None), 'user_id', '')
+    device = getattr(getattr(system, 'device', None), 'device_id', '')
+    return {'X-Api-Key': data.API_KEY, 'X-Alexa-User-Id': user or '', 'X-Alexa-Device-Id': device or ''}
+
+
 def _notify_server(handler_input, event: str, **extra):
     """Bounded POST reporting playback state; returns optional reconciliation advice.
     Failures are logged and swallowed so audio callbacks remain usable."""
@@ -209,7 +216,7 @@ def _notify_server(handler_input, event: str, **extra):
         if timestamp:
             extra.setdefault('event_timestamp', timestamp.isoformat() if hasattr(timestamp, 'isoformat') else str(timestamp))
         payload = json.dumps({'event': event, **extra})
-        url = f'{api_url}/alexa/state_event/?key={data.API_KEY}'
+        url = f'{api_url}/alexa/state_event/'
         logger.info(f'_notify_server: POST {event} to {api_url}/alexa/state_event/')
         # 'started' is the web remote's only signal that the track changed on
         # auto-advance — a dropped POST wedges its now-playing card. 'stopped'
@@ -227,7 +234,7 @@ def _notify_server(handler_input, event: str, **extra):
         resp = http.request(
             'POST', url,
             body=payload,
-            headers={'Content-Type': 'application/json'},
+            headers={'Content-Type': 'application/json', **skill_identity_headers(handler_input)},
             timeout=timeout,
             retries=retries,
         )
@@ -520,15 +527,25 @@ class Attributes:
 
 class Api:
     @staticmethod
+    def link_account(handler_input, code):
+        api_url, error = Attributes.get_api_url(handler_input)
+        if error:
+            return False
+        response = http.request('POST', api_url + '/api/alexa/link/',
+            body=json.dumps({'code':code}), headers={'Content-Type':'application/json', **skill_identity_headers(handler_input)},
+            timeout=urllib3.Timeout(total=3), retries=False)
+        return response.status == 200
+
+    @staticmethod
     def _get_json(handler_input: HandlerInput, path: str, params: Dict) -> Tuple[Dict, Exception]:
         api_url, error = Attributes.get_api_url(handler_input)
         if error: return None, error
-        query = urlencode({**params, 'key': data.API_KEY})
+        query = urlencode(params)
         url = f"{api_url}/{path}/?{query}"
         started = time.monotonic()
         try:
             control = path in ('armed_play', 'next_track')
-            response = http.request("GET", url, timeout=urllib3.Timeout(total=3.0 if control else 25.0),
+            response = http.request("GET", url, headers=skill_identity_headers(handler_input), timeout=urllib3.Timeout(total=3.0 if control else 25.0),
                                     retries=False if control else None)
         except Exception:
             logger.exception(f'Request to {path} failed')

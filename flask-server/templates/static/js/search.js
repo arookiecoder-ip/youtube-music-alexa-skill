@@ -1294,11 +1294,11 @@ if (nextBtn) {
 
   const removeSvg =
     '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" ' +
-    'stroke="currentColor" stroke-width="2.5" stroke-linecap="round">' +
+    'stroke="currentColor" stroke-width="2.2" stroke-linecap="round">' +
     '<path d="M18 6 6 18M6 6l12 12"/></svg>';
   const useSuggestionSvg =
     '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" ' +
-    'stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">' +
+    'stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">' +
     '<path d="M7 17 17 7"/><path d="M9 7h8v8"/></svg>';
 
   function removeHistoryEntry(text) {

@@ -1,10 +1,35 @@
 import { Innertube, Platform, Log } from 'youtubei.js';
 import vm from 'node:vm';
 import fs from 'node:fs';
+import { AsyncLocalStorage } from 'node:async_hooks';
 
 Log.setLevel(); // Never log signed URLs, signatures or cookie values.
 Platform.shim.eval = async data => vm.runInNewContext(
   '(function(){' + data.output + '})()', {}, { timeout: 2000 });
+
+// YouTube refuses googlevideo media URLs unless a GVS PO token is appended as
+// `pot=`. The token is minted by a separate BotGuard service (bgutil); it is
+// cached upstream and ours is short-lived, so a refresh naturally asks again.
+// No service configured means no token, which is how this ran before YouTube
+// started enforcing them.
+const POT_URL = (process.env.BGUTIL_POT_URL || '').replace(/\/+$/, '');
+
+async function gvsToken(video) {
+  if (!POT_URL) return '';
+  try {
+    const response = await fetch(`${POT_URL}/get_pot`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content_binding: video, client: 'WEB_MUSIC' }),
+      signal: AbortSignal.timeout(1500),
+    });
+    if (!response.ok) return '';
+    const data = await response.json();
+    return typeof data.poToken === 'string' ? data.poToken : '';
+  } catch {
+    return '';
+  }
+}
 
 export function cookiesFromNetscape(text, now = Date.now() / 1000) {
   return text.split('\n').flatMap(line => {
@@ -19,10 +44,12 @@ export function cookiesFromNetscape(text, now = Date.now() / 1000) {
 
 export function createResolver({ createClient = options => Innertube.create(options),
   readFile = path => fs.readFileSync(path, 'utf8'),
-  stat = path => fs.statSync(path), now = () => Date.now(), capacity = 128 } = {}) {
+  stat = path => fs.statSync(path), now = () => Date.now(), capacity = 128,
+  pot = gvsToken, potTimeoutMs = 1500, deadlineMs = 12000 } = {}) {
   let session, credential = '', pending = new Map(), cache = new Map(), active = 0, lastPlayerReset = -Infinity;
   const reset = () => { session = undefined; pending = new Map(); cache = new Map(); };
-  return async function resolve(message) {
+  const scope = new AsyncLocalStorage();
+  const resolve = async function resolve(message) {
     if (message.action !== 'init' && !/^[A-Za-z0-9_-]{11}$/.test(message.video_id || ''))
       throw new Error('invalid_video');
     const path = message.cookie_file || '';
@@ -32,7 +59,7 @@ export function createResolver({ createClient = options => Innertube.create(opti
     if (!session) {
       const cookie = path ? cookiesFromNetscape(readFile(path), now()/1000) : '';
       session = Promise.resolve(createClient({ cookie, fetch: (url, init) => fetch(url, {
-        ...init, signal: AbortSignal.timeout(10000)
+        ...init, signal: AbortSignal.any([AbortSignal.timeout(10000), ...(scope.getStore() ? [scope.getStore()] : [])])
       }) }));
       // Failed initialization must be retryable; never retain a rejected promise.
       const current = session;
@@ -50,7 +77,10 @@ export function createResolver({ createClient = options => Innertube.create(opti
     const hit = cache.get(key);
     if (hit && hit.expires_at > now()) return hit;
     if (pending.has(key)) return pending.get(key);
-    if (active >= 4) throw new Error('busy');
+    // One worker now serves every account on this credential, so the ceiling
+    // matches the Python side's eight pending requests instead of the old
+    // per-account four. Cache hits never count against it.
+    if (active >= 8) throw new Error('busy');
     active++;
     const currentCache = cache, currentPending = pending;
     const task = (async () => {
@@ -65,7 +95,23 @@ export function createResolver({ createClient = options => Innertube.create(opti
           format.drm_families?.length || !format.content_length)
         throw new Error('unsupported_format');
       const media = await format.decipher(client.session.player);
-      const url = new URL(media);
+      // The token service is optional: a slow or broken provider must never
+      // turn a playable song into an error.
+      let pot_token = '';
+      let timer;
+      try {
+        pot_token = await Promise.race([pot(video), new Promise(resolve => {
+          timer = setTimeout(() => resolve(''), potTimeoutMs);
+        })]);
+      } catch { pot_token = ''; }
+      finally { clearTimeout(timer); }
+      let signed = media;
+      if (typeof pot_token === 'string' && pot_token) {
+        const withPot = new URL(media);
+        withPot.searchParams.set('pot', pot_token);
+        signed = withPot.toString();
+      }
+      const url = new URL(signed);
       if (url.protocol !== 'https:' || !url.hostname.endsWith('.googlevideo.com') ||
           (url.port && url.port !== '443') || url.username || url.password)
         throw new Error('invalid_media');
@@ -80,7 +126,7 @@ export function createResolver({ createClient = options => Innertube.create(opti
         thumbnail: Array.isArray(thumbs) ? String(thumbs.at(-1)?.url || '') : '',
         duration_ms: Number.isFinite(seconds) && seconds > 0 ? Math.round(seconds * 1000) : 0,
         is_live: basic.is_live === true };
-      const result = { url: media, itag: 140, length: format.content_length,
+      const result = { url: signed, itag: 140, length: format.content_length,
         modified: format.last_modified_ms, mime: 'audio/mp4', expires_at, metadata };
       // A credential rotation while this awaited must not pollute the new cache.
       currentCache.set(key, result);
@@ -103,5 +149,14 @@ export function createResolver({ createClient = options => Innertube.create(opti
       throw error;
     }
     finally { currentPending.delete(key); active--; }
+  };
+  return message => {
+    const controller = new AbortController();
+    let timer;
+    const deadline = new Promise((_, reject) => {
+      timer = setTimeout(() => { controller.abort(); reject(new Error('resolve_timeout')); }, deadlineMs);
+    });
+    return scope.run(controller.signal, () => Promise.race([resolve(message), deadline]))
+      .finally(() => clearTimeout(timer));
   };
 }

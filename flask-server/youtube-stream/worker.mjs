@@ -14,7 +14,7 @@ input.on('line', async line => {
     process.stdout.write(JSON.stringify({ id: message.id, result })+'\n');
   } catch (error) {
     const known = new Set(['invalid_video','busy','unsupported_format','invalid_media','expired',
-      'authentication_required','track_unavailable']);
+      'authentication_required','track_unavailable','resolve_timeout']);
     const code = known.has(error.message) ? error.message : 'resolve_failed';
     process.stdout.write(JSON.stringify({ id: message?.id, error: code })+'\n');
   }

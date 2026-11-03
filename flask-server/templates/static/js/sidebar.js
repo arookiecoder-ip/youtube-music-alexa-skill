@@ -71,6 +71,7 @@
     document.documentElement.classList.add('sidebar-open');
     document.body.classList.add('sidebar-open');
     overlay.style.display = 'block';
+    hamburger.setAttribute('aria-expanded', 'true');
     requestAnimationFrame(() => {
       sidebar.classList.add('open');
       overlay.classList.add('open');
@@ -84,6 +85,7 @@
     sidebar.classList.remove('open');
     overlay.classList.remove('open');
     sbWrapper.classList.remove('open');
+    hamburger.setAttribute('aria-expanded', 'false');
     setTimeout(() => { overlay.style.display = 'none'; }, 300);
   }
 
@@ -94,6 +96,7 @@
 
   function closeMobileSearch() {
     document.body.classList.remove('mobile-search-open');
+    if (mobileSearchToggle) mobileSearchToggle.setAttribute('aria-expanded', 'false');
   }
 
   function closeMobileProfile() {
@@ -109,6 +112,7 @@
       event.stopPropagation();
       closeMobileProfile();
       const isOpen = document.body.classList.toggle('mobile-search-open');
+      mobileSearchToggle.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
       if (isOpen && searchInput) {
         requestAnimationFrame(() => searchInput.focus());
       }
@@ -189,131 +193,6 @@
   // can close it, matching the sign-out button's behavior.
   window._closeSidebar = closeSidebar;
 })();
-
-/* ---- Persistent YouTube browser authentication ---- */
-(function () {
-  const openBtn = document.getElementById('youtube-browser-auth');
-  if (openBtn) { openBtn.addEventListener('click', () => { window.location.href = '/accounts/youtube'; }); return; }
-  const modal = document.getElementById('youtube-browser-auth-modal-wrap');
-  const closeBtn = document.getElementById('youtube-browser-auth-close');
-  const saveBtn = document.getElementById('youtube-browser-auth-save');
-  const input = document.getElementById('youtube-browser-headers');
-  const status = document.getElementById('youtube-browser-auth-status');
-  const startBtn = document.getElementById('youtube-browser-session-start');
-  const retryBtn = document.getElementById('youtube-browser-session-retry');
-  if (!openBtn || !modal || !saveBtn || !input) return;
-  let pollTimer = null;
-  let pollCount = 0;
-  let browserPopup = null;
-  const labels = {
-    capture_requested: 'Capture requested...',
-    settling_session: 'Saving the signed-in browser profile...',
-    validating_login: 'Validating the selected YouTube Music account...',
-    idle: 'Ready to connect.', connecting: 'Starting the secure browser…',
-    waiting_for_login: 'Waiting until YouTube Music is fully signed in…',
-    captured: 'Signed-in request captured…', validating: 'Validating personalized access…',
-    refreshing: 'Refreshing the saved browser session…', connected: 'Connected. Personalized data is ready.',
-    reconnect_required: 'Google needs you to sign in or complete a challenge.',
-    unavailable: 'The browser service is unavailable. You can still use manual import below.'
-  };
-
-  function stopPolling() {
-    if (pollTimer) window.clearTimeout(pollTimer);
-    pollTimer = null;
-  }
-  function render(data) {
-    const stateName = data.state || 'unavailable';
-    if (status) status.textContent = data.message || labels[stateName] || stateName;
-    modal.dataset.browserState = stateName;
-    if (retryBtn) retryBtn.hidden = !['reconnect_required', 'unavailable'].includes(stateName);
-    if (stateName === 'connected') {
-      stopPolling();
-      // The noVNC page is only closed after Flask has validated and promoted
-      // the captured session. Failed captures remain available for a retry.
-      if (browserPopup && !browserPopup.closed) browserPopup.close();
-      browserPopup = null;
-      window.setTimeout(() => { window.location.href = '/?refresh=1'; }, 700);
-    } else if (['reconnect_required', 'unavailable', 'idle'].includes(stateName)) stopPolling();
-  }
-  async function poll() {
-    if (modal.hidden || pollCount++ >= 120) { stopPolling(); return; }
-    try {
-      const data = await window.api('/api/youtube/browser-session/status');
-      render(data);
-      if (!['connected', 'reconnect_required', 'unavailable', 'idle'].includes(data.state)) {
-        pollTimer = window.setTimeout(poll, 1500);
-      }
-    } catch (error) { render({ state: 'unavailable', message: error.message }); }
-  }
-  async function begin(endpoint) {
-    render({ state: 'connecting' });
-    try {
-      const data = await window.api(endpoint, {});
-      render(data);
-      if (data.url) {
-        browserPopup = window.open(data.url, '_blank');
-        if (browserPopup) browserPopup.opener = null;
-        if (!browserPopup) {
-          await window.api('/api/youtube/browser-session/stop', {});
-          render({ state: 'idle', message: 'Popup was blocked. Allow popups, then try again.' });
-          return;
-        }
-      }
-      pollCount = 0;
-      stopPolling();
-      pollTimer = window.setTimeout(poll, 1000);
-    } catch (error) { render({ state: 'unavailable', message: error.message }); }
-  }
-
-  async function close() {
-    stopPolling();
-    if (browserPopup && !browserPopup.closed) browserPopup.close();
-    browserPopup = null;
-    // Closing the setup modal also terminates the temporary server-side
-    // browser, so it never remains running after the user dismisses setup.
-    try { await window.api('/api/youtube/browser-session/stop', {}); } catch (_) {}
-    modal.hidden = true;
-    input.value = '';
-    if (status) status.textContent = '';
-  }
-
-  openBtn.addEventListener('click', () => {
-    const profile = document.getElementById('profile-menu-wrap');
-    if (profile) profile.classList.remove('open');
-    modal.hidden = false;
-    render({ state: 'idle' });
-  });
-  if (startBtn) startBtn.addEventListener('click', () => begin('/api/youtube/browser-session/start'));
-  if (retryBtn) retryBtn.addEventListener('click', () => begin('/api/youtube/browser-session/retry'));
-  if (closeBtn) closeBtn.addEventListener('click', close);
-  modal.addEventListener('click', (event) => { if (event.target === modal) close(); });
-  document.addEventListener('keydown', (event) => {
-    if (event.key === 'Escape' && !modal.hidden) close();
-  });
-
-  saveBtn.addEventListener('click', async () => {
-    const headers = input.value.trim();
-    if (!headers) {
-      if (status) status.textContent = 'Paste the request headers first.';
-      return;
-    }
-    saveBtn.disabled = true;
-    saveBtn.textContent = 'Validating…';
-    if (status) status.textContent = 'Checking headers with YouTube Music…';
-    try {
-      await window.api('/api/youtube/browser-auth', { headers });
-      input.value = '';
-      if (status) status.textContent = 'Connected. Reloading your personalized data…';
-      window.location.href = '/?refresh=1';
-    } catch (error) {
-      if (status) status.textContent = error.message || 'Could not validate these headers.';
-    } finally {
-      saveBtn.disabled = false;
-      saveBtn.textContent = 'Validate manual headers';
-    }
-  });
-})();
-
 
 /* ---- Nav rail (Home / Recently Listened) ---- */
 (function () {
@@ -401,93 +280,69 @@
   if (sidebarBtn) sidebarBtn.addEventListener('click', toggleRail);
 })();
 
-/* ---- Top-bar profile menu ---- */
+/* ---- Top-bar profile menu ----
+   The menu reports what is not linked and points at /account. Signing in to
+   Amazon or YouTube, and signing out, both live on the account page so there is
+   one place to do either. */
 (function () {
   const wrap = document.getElementById('profile-menu-wrap');
   const trigger = document.getElementById('profile-menu-trigger');
   const menu = document.getElementById('profile-menu');
   if (!wrap || !trigger || !menu) return;
-  trigger.addEventListener('click', async (e) => {
-    e.stopPropagation();
+
+  function paint(id, text, ok) {
+    const node = document.getElementById(id);
+    if (!node) return;
+    node.textContent = text;
+    node.classList.toggle('is-ok', !!ok);
+    node.classList.toggle('is-bad', !ok);
+  }
+
+  function renderAlerts(status) {
+    const alert = document.getElementById('profile-alert');
+    const list = document.getElementById('profile-alert-list');
+    if (!alert || !list) return;
+    const missing = [];
+    if (!status.amazon_connected) missing.push('Amazon / Alexa is not connected.');
+    // The server's own session is not this account being linked; it plays music
+    // but is not reported here as a connection.
+    if (!status.youtube_own_session) missing.push('YouTube Music is not connected.');
+    if (status.youtube_cookies_source === 'none') {
+      missing.push('No download cookies are saved.');
+    }
+    list.replaceChildren(...missing.map((text) => {
+      const item = document.createElement('li');
+      item.textContent = text;
+      return item;
+    }));
+    alert.hidden = missing.length === 0;
+  }
+
+  trigger.addEventListener('click', async (event) => {
+    event.stopPropagation();
     const open = wrap.classList.toggle('open');
     trigger.setAttribute('aria-expanded', String(open));
-    
-    if (open && window.api && !window.JAM_GUEST) {
-      try {
-        const cookieStatus = document.getElementById('status-yt-cookies');
-        if (cookieStatus) cookieStatus.textContent = 'Testing audio…';
-        const status = await window.api('/api/profile_status/?audio_check=0');
-        
-        window.setAmazonConnection?.(status.amazon_connected);
-        const amzEl = document.getElementById('status-amazon');
-        if (amzEl) {
-          amzEl.textContent = status.amazon_connected ? 'Connected' : 'Disconnected';
-          amzEl.style.color = status.amazon_connected ? '#4ade80' : '#ff6b6b';
-          amzEl.style.backgroundColor = status.amazon_connected ? 'rgba(74, 222, 128, 0.1)' : 'rgba(255, 107, 107, 0.1)';
-          if (status.debug && status.debug.amazon) amzEl.title = status.debug.amazon;
-        }
-        
-
-        
-        const ythEl = document.getElementById('status-yt-headers');
-        if (ythEl) {
-          ythEl.textContent = status.youtube_browser_refreshing ? 'Refreshing' :
-            (status.youtube_browser_reconnect_required ? 'Reconnect' :
-              (status.youtube_auth_working ? 'Connected' : 'Not connected'));
-          ythEl.style.color = status.youtube_auth_working ? '#4ade80' : '#ff6b6b';
-          ythEl.style.backgroundColor = status.youtube_auth_working ? 'rgba(74, 222, 128, 0.1)' : 'rgba(255, 107, 107, 0.1)';
-          if (status.youtube_browser_last_successful_renewal) {
-            ythEl.title = `Last browser renewal: ${new Date(status.youtube_browser_last_successful_renewal * 1000).toLocaleString()}`;
-          } else if (status.debug && status.debug.headers) ythEl.title = status.debug.headers;
-        }
-
-        const ytcEl = document.getElementById('status-yt-cookies');
-        if (ytcEl) {
-          const cookiesOk = status.youtube_cookies_working;
-          ytcEl.textContent = status.youtube_cookies_present ? 'Saved' : 'Not connected';
-          ytcEl.style.color = cookiesOk ? '#4ade80' : '#ff6b6b';
-          ytcEl.style.backgroundColor = cookiesOk ? 'rgba(74, 222, 128, 0.1)' : 'rgba(255, 107, 107, 0.1)';
-          if (status.debug && status.debug.cookies) ytcEl.title = status.debug.cookies;
-        }
-        
-        const amzSignout = document.getElementById('amazon-signout');
-        const amzSignin = document.getElementById('amazon-signin');
-        if (amzSignout) amzSignout.style.display = status.amazon_connected ? 'block' : 'none';
-        if (amzSignin) { amzSignin.style.display = 'block'; amzSignin.textContent = status.amazon_connected ? 'Change Amazon account' : 'Sign in to Amazon'; }
-        
-      } catch (err) {
-        console.error("Failed to load profile status", err);
-        const cookieStatus = document.getElementById("status-yt-cookies");
-        if (cookieStatus) cookieStatus.textContent = "Check failed";
-      }
+    if (!open || !window.api || window.JAM_GUEST) return;
+    try {
+      const status = await window.api('/api/profile_status/?audio_check=0');
+      window.setAmazonConnection?.(status.amazon_connected);
+      paint('status-amazon', status.amazon_connected ? 'Connected' : 'Not connected',
+        status.amazon_connected);
+      const youtubeOwn = !!status.youtube_own_session;
+      paint('status-yt-headers',
+        status.youtube_browser_refreshing ? 'Refreshing'
+          : status.youtube_browser_reconnect_required ? 'Needs attention'
+            : youtubeOwn ? 'Connected' : 'Not connected',
+        youtubeOwn);
+      renderAlerts(status);
+    } catch (_) {
+      paint('status-amazon', 'Check failed', false);
+      paint('status-yt-headers', 'Check failed', false);
     }
   });
-  
-  const amzSignoutBtn = document.getElementById('amazon-signout');
-  if (amzSignoutBtn) {
-    amzSignoutBtn.addEventListener('click', async () => {
-      try {
-        if (window.api) {
-          await window.api('/alexa/amazon_signout/', {});
-          if (window.toast) window.toast('Signed out of Amazon');
-          window.location.reload();
-        }
-      } catch (e) {
-        console.error(e);
-      }
-    });
-  }
 
-  const amzSigninBtn = document.getElementById('amazon-signin');
-  if (amzSigninBtn) {
-    amzSigninBtn.addEventListener('click', () => {
-      wrap.classList.remove('open');
-      window.location.href = '/accounts/amazon';
-    });
-  }
-  
-  document.addEventListener('click', (e) => {
-    if (wrap.contains(e.target)) return;
+  document.addEventListener('click', (event) => {
+    if (wrap.contains(event.target)) return;
     wrap.classList.remove('open');
     trigger.setAttribute('aria-expanded', 'false');
   });

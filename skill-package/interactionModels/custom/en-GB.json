@@ -4,6 +4,19 @@
       "invocationName": "music box",
       "intents": [
         {
+          "name": "LinkAccountIntent",
+          "slots": [
+            {
+              "name": "pairCode",
+              "type": "AMAZON.NUMBER"
+            }
+          ],
+          "samples": [
+            "link account {pairCode}",
+            "pair account {pairCode}"
+          ]
+        },
+        {
           "name": "AMAZON.CancelIntent",
           "samples": []
         },

@@ -3,7 +3,7 @@
 <div class="login-shell">
   <div class="login-card">
     <div class="login-brand">
-      <span class="brand-mark" style="width:38px;height:38px;border-radius:11px;display:grid;place-items:center;background:linear-gradient(145deg,var(--accent),#b23e00);font-size:1.15rem">♫</span>
+      <span class="eq-icon" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span></span>
       <div>
         <div class="brand-name">{{ mu_config.app_name }}</div>
         <div class="brand-sub">Multi-user admin</div>
@@ -14,7 +14,7 @@
       <div class="sub">Administrator access only. Sessions expire automatically.</div>
 
       {% if not mail_configured %}
-        <div class="banner" style="margin-bottom:16px">
+        <div class="banner mb-4">
           <span>⚑</span>
           <span>Email delivery is not configured. Password resets and email sign-in links are written to the local outbox until <span class="mono">MULTIUSER_SMTP_*</span> is set.</span>
         </div>
@@ -44,7 +44,7 @@
             wrong code ends the attempt and you enter your password again.</div>
         </div>
         <div class="form-actions">
-          <button class="btn primary" type="submit" style="width:100%">Verify code</button>
+          <button class="btn primary block" type="submit">Verify code</button>
         </div>
       </form>
       {% else %}
@@ -52,20 +52,22 @@
         <input type="hidden" name="_csrf" value="{{ csrf_token }}">
         <input type="hidden" name="next" value="{{ next_target or base_path ~ '/' }}">
         <div class="field">
-          <label for="username">Username</label>
+          <label for="username">Email or username</label>
           <input id="username" name="username" type="text" autocomplete="username" required autofocus
-                 maxlength="32" spellcheck="false" autocapitalize="none">
+                 maxlength="254" spellcheck="false" autocapitalize="none"
+                 placeholder="you@synthora.in">
+          <span class="hint">Either one works — the username is the account's only name.</span>
         </div>
         <div class="field">
           <label for="password">Password</label>
           <input id="password" name="password" type="password" autocomplete="current-password" required maxlength="200">
         </div>
         <div class="form-actions">
-          <button class="btn primary" type="submit" style="width:100%">Sign in</button>
+          <button class="btn primary block" type="submit">Sign in</button>
         </div>
       </form>
       {% endif %}
-      <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-top:15px">
+      <div class="row spread mt-4">
         <a class="small" href="{{ base_path }}/forgot-password/">Forgot password?</a>
         {% if magic_link_enabled %}
           <a class="small" href="{{ base_path }}/email-login/">Email me a sign-in link</a>
@@ -73,8 +75,8 @@
       </div>
     </div>
     <div class="login-foot">
-      Phase 1 preview · Multi-user foundation is additive and feature-flagged.<br>
-      Web login remains available at <a href="/login/">/login/</a>.
+      Accounts, sessions and provider credentials live in the admin panel.<br>
+      Player sign-in remains at <a href="/login/">/login/</a>.
     </div>
   </div>
 </div>

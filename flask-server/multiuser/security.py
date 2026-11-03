@@ -35,7 +35,7 @@ def hash_password(password: str) -> str:
 
 
 def verify_password(password_hash: str, password: str) -> bool:
-    if not password_hash or password is None:
+    if not password_hash or not isinstance(password, str) or len(password) > PASSWORD_MAX_LENGTH:
         return False
     try:
         return check_password_hash(password_hash, password)
@@ -74,6 +74,16 @@ def new_token(nbytes: int = 32) -> str:
     return secrets.token_urlsafe(nbytes)
 
 
+def new_numeric_code(digits: int = 6) -> str:
+    """A zero-padded numeric code, drawn uniformly from 10**digits.
+
+    ``secrets.randbelow`` rather than ``random``: this picks the thing a stranger
+    gets five guesses at, and a non-cryptographic generator would make some codes
+    more likely than others.
+    """
+    return str(secrets.randbelow(10 ** max(4, int(digits)))).zfill(max(4, int(digits)))
+
+
 def sha256_hex(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
@@ -95,21 +105,25 @@ def totp_at(secret_b32: str, counter: int) -> str:
     return f"{code:06d}"
 
 
-def totp_verify(secret_b32: str, code: str, window: int = 1) -> bool:
-    if not secret_b32:
-        return False
-    code = (code or "").strip()
-    if len(code) != 6 or not code.isdigit():
-        return False
+def totp_counter(secret_b32: str, code: str, window: int = 1) -> int | None:
+    """Return the counter actually matched, not the wall-clock counter."""
+    if not secret_b32 or not isinstance(code, str):
+        return None
+    code = code.strip()
+    if len(code) != 6 or not code.isascii() or not code.isdigit():
+        return None
     counter = int(time.time()) // 30
     for step in range(-window, window + 1):
         try:
-            candidate = totp_at(secret_b32, counter + step)
+            if hmac.compare_digest(totp_at(secret_b32, counter + step), code):
+                return counter + step
         except (ValueError, TypeError):
-            return False
-        if hmac.compare_digest(candidate, code):
-            return True
-    return False
+            return None
+    return None
+
+
+def totp_verify(secret_b32: str, code: str, window: int = 1) -> bool:
+    return totp_counter(secret_b32, code, window) is not None
 
 
 def generate_totp_secret() -> str:
@@ -125,6 +139,7 @@ class RateLimiter:
 
     def __init__(self) -> None:
         self._events: dict[tuple[str, str], Deque[float]] = defaultdict(deque)
+        self._expires = {}
         self._lock = threading.Lock()
 
     def _prune(self, key: tuple[str, str], cutoff: float) -> Deque[float]:
@@ -137,21 +152,27 @@ class RateLimiter:
         now = time.monotonic()
         cutoff = now - window_seconds
         with self._lock:
-            bucket = self._prune((scope, key), cutoff)
+            identity = (scope, key)
+            if identity not in self._events and len(self._events) >= 5000:
+                for stale in [item for item, expiry in self._expires.items() if expiry <= now]:
+                    self._events.pop(stale, None)
+                    self._expires.pop(stale, None)
+                if len(self._events) >= 5000:
+                    return False, 1
+            bucket = self._prune(identity, cutoff)
+            self._expires[identity] = now + window_seconds
             if len(bucket) >= limit:
                 retry_after = max(1, int(window_seconds - (now - bucket[0])))
                 return False, retry_after
             bucket.append(now)
-            # Bound memory if many one-off keys are used.
-            if len(self._events) > 5000:
-                for stale_key in [k for k, v in self._events.items() if not v or v[-1] < cutoff][:1000]:
-                    self._events.pop(stale_key, None)
             return True, 0
 
     def reset(self, scope: str, key: str) -> None:
         with self._lock:
             self._events.pop((scope, key), None)
+            self._expires.pop((scope, key), None)
 
     def clear(self) -> None:
         with self._lock:
             self._events.clear()
+            self._expires.clear()

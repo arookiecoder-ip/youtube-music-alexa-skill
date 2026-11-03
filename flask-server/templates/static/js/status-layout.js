@@ -1,38 +1,29 @@
-/* Navigation and secondary details stay outside the dashboard's grid flow. */
+/* In-page section navigation and the secondary detail dialogs.
+ *
+ * The shell owns the sidebar drawer, so this file is left with two jobs: scroll
+ * a section-nav target into view without leaving the page, and borrow a panel's
+ * detail list into the shared dialog and give it back on close.
+ */
 (() => {
   'use strict';
   const el = id => document.getElementById(id);
-  const drawer = el('nav-drawer'), nav = el('status-nav'), toggle = el('nav-toggle');
-  const mobile = matchMedia('(max-width: 900px)');
-  function syncNavigation() {
-    if (drawer.open) drawer.close();
-    (mobile.matches ? el('drawer-links') : el('desktop-navigation')).append(nav);
-  }
-  toggle.addEventListener('click', () => {
-    if (!mobile.matches || drawer.open) return;
-    drawer.showModal();
-    toggle.setAttribute('aria-expanded', 'true');
-  });
-  el('nav-close').addEventListener('click', () => drawer.close());
-  drawer.addEventListener('close', () => toggle.setAttribute('aria-expanded', 'false'));
+  const nav = el('status-nav'), details = el('panel-dialog');
+  const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)');
+
   nav.addEventListener('click', event => {
     const link = event.target.closest('a');
     if (!link) return;
     const target = document.querySelector(link.getAttribute('href'));
     if (!target) return;
     event.preventDefault();
-    if (drawer.open) drawer.close();
     if (location.hash !== link.hash) history.pushState(null, '', link.hash);
     window.dispatchEvent(new Event('hashchange'));
     requestAnimationFrame(() => target.scrollIntoView({
-      behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'instant' : 'smooth',
+      behavior: reduceMotion.matches ? 'instant' : 'smooth',
       block: 'start'
     }));
   });
-  mobile.addEventListener('change', syncNavigation);
-  syncNavigation();
 
-  const details = el('panel-dialog');
   let home = null, content = null;
   for (const button of document.querySelectorAll('[data-detail-target]')) {
     button.addEventListener('click', () => {
@@ -49,10 +40,9 @@
     home = content = null;
   });
   el('panel-dialog-close').addEventListener('click', () => details.close());
-  for (const dialog of [drawer, details]) {
-    dialog.addEventListener('click', event => {
-      const rect = dialog.getBoundingClientRect();
-      if (event.target === dialog && (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom)) dialog.close();
-    });
-  }
+  details.addEventListener('click', event => {
+    const rect = details.getBoundingClientRect();
+    if (event.target === details && (event.clientX < rect.left || event.clientX > rect.right ||
+        event.clientY < rect.top || event.clientY > rect.bottom)) details.close();
+  });
 })();

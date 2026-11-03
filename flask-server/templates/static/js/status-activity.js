@@ -39,7 +39,7 @@
   dialog.addEventListener('close', () => { dialogEpoch++; if (dialogController) dialogController.abort(); });
   el('dialog-close').addEventListener('click', () => dialog.close());
   more.addEventListener('click', () => { if (loadMore) loadMore(); });
-  function button(text, action) { const b = node('button', text); b.type = 'button'; b.addEventListener('click', action); return b; }
+  function button(text, action) { const b = node('button', text, 'btn small'); b.type = 'button'; b.addEventListener('click', action); return b; }
   function logRow(row, focus = false) {
     const wrapper = node('article', null, `log-row ${row.is_error ? 'log-error' : ''}${focus ? ' focused-log' : ''}`);
     const header = node('div', null, 'log-row-head');

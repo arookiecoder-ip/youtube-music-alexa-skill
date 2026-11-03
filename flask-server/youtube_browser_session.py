@@ -74,17 +74,20 @@ def is_authentication_error(error):
     return any(x in message for x in positive) and not any(x in message for x in negative)
 
 
+from browser_coordination import BROKER, OWNER, ATTEMPT, browser_scope
+
+
 class BrowserController:
     def __init__(self, base_url, token, timeout=10):
         self.base_url = (base_url or "").rstrip("/")
         self.token = token or ""
         self.timeout = timeout
 
-    def call(self, path, method="GET", payload=None):
+    def _send(self, path, method="GET", payload=None, attempt=None):
         if not self.base_url or not self.token:
             raise RuntimeError("Browser sidecar is not configured")
         req = urllib.request.Request(self.base_url + path, method=method,
-                                     headers={"X-Control-Token": self.token,
+                                     headers={"X-Control-Token": self.token, "X-Auth-Attempt": attempt or "", "X-Previous-Attempt": BROKER.previous or "",
                                               "Content-Type": "application/json"},
                                      data=json.dumps(payload or {}).encode() if method != "GET" else None)
         try:
@@ -93,8 +96,21 @@ class BrowserController:
         except urllib.error.HTTPError as exc:
             # 409 means an existing capture is already running; status remains usable.
             if exc.code == 409:
-                return json.load(exc)
+                return dict(json.load(exc), _http_status=409)
             raise
+
+
+    def call(self, path, method="GET", payload=None):
+        from player_state import current
+        owner = OWNER.get() or current()
+        with BROKER.lock:
+            starting = path in ('/interactive/start', '/refresh', '/google/start')
+            if starting and BROKER.token and (BROKER.owner == owner or BROKER.expires <= time.monotonic()):
+                # Retire the physical browser before replacing its capability.
+                self._send('/google/stop', 'POST', {}, BROKER.token)
+                BROKER.owner, BROKER.token, BROKER.expires = None, None, 0
+            return BROKER.command(owner, path, ATTEMPT.get(),
+                                  lambda attempt: self._send(path, method, payload, attempt))
 
 
 class _OwnerAuth:
@@ -147,13 +163,16 @@ class YouTubeBrowserSessionManager:
 
     def _expire_locked(self, entry):
         if entry.lease and self.clock() >= entry.lease[2]:
+            owner = entry.lease[0]
             entry.lease = None
             if entry.state not in ("connected", "reconnect_required"):
                 entry.state = "idle"
             # Do not perform network I/O under the manager lock. The lease is
             # already invalid, and this bounded best-effort close releases the
             # otherwise inaccessible Chromium window/resources.
-            threading.Thread(target=self._close_sidecar, daemon=True).start()
+            with browser_scope(owner):
+                self._close_sidecar()
+            self._release_busy_locked()
 
     def _close_sidecar(self):
         try:
@@ -177,12 +196,16 @@ class YouTubeBrowserSessionManager:
             viewport = {key: viewport[key] for key in ('width', 'height')}
         token = secrets.token_urlsafe(32)
         with self._lock:
+            for existing in list(self._auth.values()):
+                self._expire_locked(existing)
             if self._busy not in (None, str(owner_id or "")):
                 return None, dict(self.status(owner_id),
                                   message="Another account is connecting YouTube Music "
                                           "right now. Try again in a minute.")
             entry = self._auth_for(owner_id)
             self._expire_locked(entry)
+            if entry.refreshing:
+                return None, dict(self._status_locked(entry), state="busy")
             entry.lease = (str(owner_id or ""), self._digest(token), self.clock() + self.lease_ttl)
             entry.state, entry.message = "connecting", None
             self._busy = str(owner_id or "")
@@ -190,6 +213,10 @@ class YouTubeBrowserSessionManager:
             sidecar = self.controller.call("/interactive/start", "POST",
                                            dict({"profile": profile_key or ""}, **(viewport or {})))
             with self._lock:
+                if sidecar.get("_http_status") == 409 or sidecar.get("state") == "busy":
+                    entry.lease = None
+                    self._release_busy_locked()
+                    return None, dict(self._status_locked(entry), state="busy")
                 entry.state = sidecar.get("state", "waiting_for_login")
         except Exception:
             with self._lock:
@@ -218,13 +245,15 @@ class YouTubeBrowserSessionManager:
 
     def revoke(self, owner_id=None, close=True):
         with self._lock:
+            held = self._busy == str(owner_id or "")
             entry = self._auth_for(owner_id)
             entry.lease = None
             if entry.state != "connected":
                 entry.state = "idle"
             self._release_busy_locked()
-        if close:
-            self._close_sidecar()
+        if close and held:
+            with browser_scope(owner_id):
+                self._close_sidecar()
 
     def forget(self, owner_id=None):
         """Drop one identity's browser record without leaving a new one behind.
@@ -255,6 +284,19 @@ class YouTubeBrowserSessionManager:
             entry.message = sidecar.get("message")
         return self.status(owner_id)
 
+    def mark_connected(self, owner_id=None):
+        """Record a sign-in that finished without the interactive lease.
+
+        The scripted form flow never takes the lease, yet the account panel
+        reads its verdict here: without this, a successful form sign-in would
+        still show 'idle' until the next refresh."""
+        with self._lock:
+            entry = self._auth_for(owner_id)
+            entry.state, entry.message = "connected", None
+            entry.last_success = self.clock()
+            entry.lease = None
+            self._release_busy_locked()
+
     def _take_and_promote(self, owner_id):
         candidate = self.controller.call("/candidate/take", "POST")
         if not accepted_browse_url(candidate.get("url")):
@@ -275,7 +317,7 @@ class YouTubeBrowserSessionManager:
             self._expire_locked(entry)
             # Only the identity that owns the Chromium can read meaningful state
             # from it; the sidecar has no per-user view.
-            if self._busy not in (None, str(owner_id or "")):
+            if self._busy != str(owner_id or "") or not (entry.lease or entry.refreshing):
                 return self._status_locked(entry)
         try:
             sidecar = self.controller.call("/status")
@@ -330,7 +372,7 @@ class YouTubeBrowserSessionManager:
                 return entry.state == "connected"
             if entry.last_attempt and now - entry.last_attempt < self.refresh_cooldown:
                 return entry.state == "connected"
-            if self._busy not in (None, profile_key):
+            if entry.lease or self._busy not in (None, profile_key):
                 # The one Chromium is busy with another account's login.
                 return entry.state == "connected"
             entry.refreshing, entry.last_attempt = True, now
@@ -415,3 +457,14 @@ def promote_browser_headers(headers, auth_file, setup_browser, ytmusic_factory):
     finally:
         if os.path.exists(temp_path):
             os.unlink(temp_path)
+
+
+def _owned_operation(method):
+    def call(self, owner_id=None, *args, **kwargs):
+        with BROKER.lock, self._lock, browser_scope(owner_id):
+            return method(self, owner_id, *args, **kwargs)
+    return call
+
+
+for _name in ('start', 'poll', 'status', 'authorize', 'revoke', 'forget', 'open_youtube', 'request_capture', '_take_and_promote'):
+    setattr(YouTubeBrowserSessionManager, _name, _owned_operation(getattr(YouTubeBrowserSessionManager, _name)))

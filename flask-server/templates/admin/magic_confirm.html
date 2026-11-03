@@ -1,0 +1,6 @@
+{% extends "admin/base.html" %}
+{% block content %}
+<div class="card"><h1>Confirm sign-in</h1>
+<p>Continue to sign in with this one-time email link. If your account uses an authenticator, you will verify it next.</p>
+<form method="post"><input type="hidden" name="_csrf" value="{{ csrf_token }}"><button type="submit" class="btn primary">Continue</button></form></div>
+{% endblock %}

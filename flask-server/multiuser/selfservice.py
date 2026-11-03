@@ -16,6 +16,8 @@ Nothing here imports ``server.py`` -- the layer stays optional.
 """
 from __future__ import annotations
 
+from auth_sessions import password_change_allowed
+
 import hmac
 import os
 import secrets
@@ -49,6 +51,21 @@ STATIC_DIR = os.path.join(TEMPLATE_DIR, "static")
 # an administrator used the other door in the same browser.
 CSRF_KEY = "mu_ss_csrf"
 SIGNUP_NONCE_KEY = "mu_ss_signup"
+# Which account this browser just asked to verify, so the code page can say "we sent
+# a code for @alice" and prefill the username.  It is an identifier, not a
+# credential: nothing can be done with it without the code, which is why it is safe
+# to keep in a cookie the browser already holds.
+PENDING_VERIFY_KEY = "mu_ss_pending_verify"
+# The same stored preference the administrator panel writes, deliberately: an account
+# that chose the light palette in one surface gets it in the other. Named here rather
+# than imported from ``admin.py`` because that module imports this one, and a
+# cross-blueprint import in the other direction would be a cycle.
+THEME_KEY = "admin_theme"
+THEMES = ("dark", "light")
+# The popups on /account, by the name a trigger link carries in its query string.
+# Anything else is ignored rather than rendered: an unknown step is a typo or a
+# probe, and the page is complete without it either way.
+DIALOG_STEPS = ("password", "reset", "email", "totp", "delete")
 
 USERNAME_TAKEN = "That username is already in use."
 EMAIL_TAKEN = "That email address is already in use."
@@ -73,11 +90,19 @@ _LIMITS: dict[str, tuple[int, int | None]] = {
     "forgot-ip": (10, None),
     "forgot-id": (3, None),
     "reset-ip": (20, 900),
+    # Typing a code is where an attacker actually gets to guess, so this is the
+    # tightest budget on the door: six digits, five tries per identifier, and a
+    # per-IP ceiling on top so one address cannot sweep the whole username list.
+    "code-ip": (10, 900),
+    "code-id": (5, 900),
     "account-password": (5, 900),
     "totp-begin": (3, 3600),
     "totp-confirm": (10, 3600),
     "totp-disable": (5, 3600),
     "account-delete": (3, 86400),
+    # The first popup asks the same question as the delete itself, so it gets its
+    # own budget: opening it twice must not spend the deletion's three attempts.
+    "account-delete-check": (10, 900),
 }
 
 _SESSION_SURFACE = ("/account", "/api/account")
@@ -113,6 +138,11 @@ def build_selfservice_blueprint(mu) -> Blueprint:
     config = mu.config
     login_url = "/login/"
     account_url = "/account"
+    # A code with no page named in it is a code nobody can find, so every email
+    # says where it is typed.
+    verify_where = f"the confirm-code page on {config.app_name}"
+    reset_where = f"the reset-password page on {config.app_name}"
+    account_where = f"the account page of your {config.app_name} account"
 
     # ------------------------------------------------------------- addressing
     def _ip() -> str:
@@ -245,27 +275,76 @@ def build_selfservice_blueprint(mu) -> Blueprint:
         return _json_error("invalid", message, status, fields={field: message} if field else None)
 
     # ----------------------------------------------------------- mail plumbing
-    def _send_token(user: dict, purpose: str, ip: str, user_agent: str):
-        token = mu.accounts.create_email_token(
+    def _send_code(user: dict, purpose: str, ip: str, user_agent: str, where: str):
+        """Issue and email a typed code for this account. Returns the Mailer result.
+
+        No URL is built or returned anywhere on this path: the message is the code
+        and the name of the page to type it into, and nothing in it is clickable.
+        """
+        code = mu.accounts.create_email_code(
             user["id"], purpose, user.get("email") or "", ip=ip, user_agent=user_agent
         )
-        # base="" because a player's link points at the player's own paths.
-        return emails.send_token_email(
-            mu, user, purpose, token, base="", ip=ip, user_agent=user_agent
+        recipient = dict(user, email=user.get("pending_email") or user.get("email")) if purpose == "verify" else user
+        return emails.send_code_email(
+            mu, recipient, purpose, code, where=where, ip=ip, user_agent=user_agent
         )
+
+    def _code_send_blocked(user: dict, purpose: str, ip: str, *,
+                           ip_scope: str = "resend-ip", id_scope: str = "resend-id"):
+        """The three gates every code sender on this page passes, in one call.
+
+        The bucket names are the ones the administrator door already charges for the
+        same emails, so a person who tries both pages does not collect two budgets.
+        The third gate is the database's own record of a code issued in the last
+        minute: it stops an impatient second click from burying the first message,
+        and it costs nothing when the inbox is slow.
+        """
+        blocked = _limited(ip_scope, netids.ip_bucket(ip))
+        if blocked:
+            return blocked
+        blocked = _limited(
+            id_scope, netids.identifier_bucket(user.get("email") or user["id"])
+        )
+        if blocked:
+            return blocked
+        if mu.accounts.recent_email_token_count(user["id"], purpose, 60):
+            return _json_error(
+                "rate_limited", "A code was just sent. Check your inbox.", 429,
+                retryable=True, retry_after=60,
+            )
+        return None
+
+    def _notify_security_change(user: dict, heading: str, intro: str, rows=(),
+                                note: str = "", audit: str = "security_change") -> None:
+        """Tell the owner, at the address on file, that their sign-in changed.
+
+        A notice nobody can deliver is still a notice: the change already happened
+        and already holds, so a dead SMTP must not turn it into a 500 that reads like
+        the two-factor toggle itself failed.
+        """
+        if not user.get("email"):
+            return
+        try:
+            emails.send_notice(
+                mu, user, heading, intro, rows=rows, note=note, audit=audit,
+                actor=g.ss_user, ip=_ip(), user_agent=_ua(),
+            )
+        except Exception:  # noqa: BLE001 - the change is committed; this is a courtesy copy
+            if mu.logger:
+                mu.logger.exception("[multiuser] security notice email failed")
 
     def _mail_note(result) -> str:
         """What the door tells the visitor about delivery.
 
         An outbox write means this server cannot send mail at all, and the page
-        would be lying about a link nobody receives. An SMTP failure stays vague:
+        would be lying about a code nobody receives. An SMTP failure stays vague:
         the reason belongs in the administrator's audit log, not on a stranger's
         screen."""
         if result.status == "sent":
             return ""
         if result.status == "outbox":
             return (
-                "This server is not configured to send email yet, so the link was "
+                "This server is not configured to send email yet, so the code was "
                 "written to its outbox instead. Ask the administrator to confirm "
                 "your address."
             )
@@ -281,6 +360,11 @@ def build_selfservice_blueprint(mu) -> Blueprint:
     # ------------------------------------------------------------- the guard
     @bp.before_request
     def _guard():
+        if request.content_length and request.content_length > 32768:
+            return _json_error("request_too_large", "Account request is too large.", 413)
+        user = current_user()
+        if user and user.get("must_change_password") and not password_change_allowed(request.path, request.method):
+            return _json_error("password_change_required", "Change your temporary password first.", 403)
         if (
             request.method in {"POST", "PUT", "PATCH", "DELETE"}
             and request.path.startswith("/api/account")
@@ -339,13 +423,17 @@ def build_selfservice_blueprint(mu) -> Blueprint:
 
     @bp.context_processor
     def _context():
+        policy = mu.accounts.signup_policy()
         return {
             "csrf_form": csrf_token(),
             "app_name": config.app_name,
             "password_min_length": PASSWORD_MIN_LENGTH,
             "login_url": login_url,
             "signup_enabled": config.self_signup_enabled,
-            "signup_open": config.self_signup_enabled and mu.accounts.registration_open(),
+            "signup_open": policy["open"],
+            "signup_reason": policy["reason"],
+            "code_minutes": config.email_code_minutes,
+            "code_attempts": config.email_code_attempts,
         }
 
     @bp.app_template_global("asset_url")
@@ -364,13 +452,34 @@ def build_selfservice_blueprint(mu) -> Blueprint:
     #                          creating an account
     # ====================================================================
 
-    def _signups_closed():
+    def _signups_closed(reason: str = ""):
+        """The closed-door page, saying which kind of closed this is.
+
+        Three different sentences for three different situations, because the
+        advice differs: a cap that resets tomorrow invites the visitor back, an
+        administrator's switch means "ask us", and a deployment with no self-signup
+        at all means neither. Telling somebody to wait for a door that will never
+        open is how support mail gets written.
+        """
+        if reason == "daily_cap":
+            message = (
+                f"This Music Box has already accepted {config.max_self_signups_per_day} "
+                "self-created accounts in the last day. Try again tomorrow, or ask an "
+                "administrator to make one for you now."
+            )
+        elif reason == "administrator":
+            message = (
+                "An administrator has switched public sign-ups off on this Music Box. If "
+                "you were meant to have an account, ask them to create one for you -- and "
+                "they can switch public sign-ups back on whenever they like."
+            )
+        else:
+            message = (
+                "This Music Box does not let people create their own accounts at all. "
+                "Ask an administrator to create one for you."
+            )
         return _result_page(
-            "Sign-ups are closed",
-            "This Music Box is not accepting new accounts right now. An administrator "
-            "can still create one for you.",
-            status=503,
-            action_label="Sign in",
+            "Sign-ups are closed", message, status=503, action_label="Sign in"
         )
 
     def _issue_signup_nonce() -> None:
@@ -402,9 +511,9 @@ def build_selfservice_blueprint(mu) -> Blueprint:
         )
         return _result_page(
             "Check your inbox",
-            f"If those details are usable, a verification link is on its way to "
-            f"{_mask(email)}. It expires after {config.email_token_verify_hours} hours.",
-            secondary_url="/signup/resend",
+            f"If those details are usable, a six-digit verification code is on its way "
+            f"to {_mask(email)}. It expires after {config.email_code_minutes} minutes.",
+            secondary_url="/resend-code",
             secondary_label="Did not arrive? Send it again",
         )
 
@@ -423,11 +532,18 @@ def build_selfservice_blueprint(mu) -> Blueprint:
     @bp.route("/signup", methods=["GET", "POST"])
     def signup():
         if request.method == "GET":
-            if not config.self_signup_enabled:
-                return _signups_closed()
+            policy = mu.accounts.signup_policy()
+            if not policy["open"]:
+                return _signups_closed(policy["reason"])
             return _signup_form()
 
         ip, user_agent = _ip(), _ua()
+        # The door state is answered before anything a visitor could fix (honeypot,
+        # form nonce, rate limit): "come back tomorrow" is not a message to bury
+        # behind "your form expired, reload it".
+        policy = mu.accounts.signup_policy()
+        if not policy["open"]:
+            return _signups_closed(policy["reason"])
         username = (request.form.get("username") or "").strip()
         email = (request.form.get("email") or "").strip()
         # Off-screen honeypot: a human cannot see or tab into this field.
@@ -448,15 +564,12 @@ def build_selfservice_blueprint(mu) -> Blueprint:
         blocked = _limited("signup-ip", netids.ip_bucket(ip), html=True)
         if blocked:
             return blocked
-        if not mu.accounts.registration_open():
-            return _signups_closed()
         blocked = _limited("signup-id", netids.identifier_bucket(email), html=True)
         if blocked:
             return blocked
 
         password = request.form.get("password") or ""
         confirm = request.form.get("confirm_password") or ""
-        display_name = (request.form.get("display_name") or "").strip()[:120]
         errors: dict[str, str] = {}
         clean_username = clean_email = ""
         try:
@@ -477,7 +590,7 @@ def build_selfservice_blueprint(mu) -> Blueprint:
                 errors["password"] = problem
         if errors:
             return _signup_form(
-                {"username": username, "email": email, "display_name": display_name}, errors, status=422
+                {"username": username, "email": email}, errors, status=422
             )
 
         try:
@@ -485,7 +598,6 @@ def build_selfservice_blueprint(mu) -> Blueprint:
                 username=clean_username,
                 password=password,
                 email=clean_email,
-                display_name=display_name,
                 ip=ip,
                 user_agent=user_agent,
             )
@@ -502,44 +614,120 @@ def build_selfservice_blueprint(mu) -> Blueprint:
                     {"email": clean_email}, {"username": message}, status=409
                 )
             if message.startswith("Sign-up is not available"):
-                return _signups_closed()
+                return _signups_closed(mu.accounts.signup_policy()["reason"])
             return _signup_form(
                 {"username": clean_username, "email": clean_email}, form_error=message,
                 status=422,
             )
 
         rotate_csrf()
-        note = _mail_note(_send_token(user, "verify", ip, user_agent))
+        note = _mail_note(_send_code(user, "verify", ip, user_agent, verify_where))
         if note:
             return _result_page("Almost there", note, action_label="Back to sign in")
+        # Straight to the code box, with this browser told which account it just
+        # asked about.  A person should not have to find a second page and retype a
+        # username they were given a field for thirty seconds ago.
+        session[PENDING_VERIFY_KEY] = [user["id"], user.get("username") or ""]
+        return redirect("/verify")
+
+    @bp.route("/verify", methods=["GET", "POST"])
+    def verify_signup():
+        """Type the six digits from the email.  There is no link to open.
+
+        Deliberately **not** behind the sign-up policy: closing the door stops new
+        accounts being created, it must not strand somebody who was mid-way through
+        confirming one when it closed.  Nothing on this page can create anything.
+        """
+        ip, user_agent = _ip(), _ua()
+        pending_uid, pending_username = (session.get(PENDING_VERIFY_KEY) or ("", ""))[:2]
+        typed = (request.form.get("username") or "").strip() if request.method == "POST" else ""
+        # A browser that just signed up is told which account to confirm; anybody who
+        # arrives cold types a username.  Neither is trusted for more than the code
+        # proves, and neither answer says which of the two happened.
+        if typed:
+            user = mu.accounts.get_user_by_username(typed)
+        elif pending_uid:
+            user = mu.accounts.get_user(pending_uid)
+        else:
+            user = None
+        username = (typed or pending_username) if user else ""
+
+        def page(errors=None, form_error="", status=200):
+            return (
+                render_template(
+                    "signup_verify.html",
+                    username=username,
+                    masked_email=_mask((user or {}).get("email") or ""),
+                    field_errors=errors or None,
+                    form_error=form_error,
+                ),
+                status,
+            )
+
+        dead_code = (
+            "That code did not work. Codes are single-use, expire after "
+            f"{config.email_code_minutes} minutes and stop working after "
+            f"{config.email_code_attempts} wrong tries. Ask for a new one below."
+        )
+        if request.method == "GET":
+            if user and not mu.accounts.email_code_state(user["id"], "verify")["pending"]:
+                return page(form_error=dead_code)
+            return page()
+
+        if not user:
+            # "No such account" and "wrong code" are the same sentence here, because
+            # the difference between them is an account enumerator's whole toolkit.
+            return page({"code": dead_code} if (typed or pending_username) else
+                        {"username": "Enter the username you signed up with."},
+                        status=410)
+        blocked = _limited("code-ip", netids.ip_bucket(ip), html=True)
+        if blocked:
+            return blocked
+        blocked = _limited(
+            "code-id", netids.identifier_bucket(user.get("username") or username), html=True
+        )
+        if blocked:
+            return blocked
+        consumed = mu.accounts.consume_email_code(
+            user["id"], "verify", request.form.get("code") or ""
+        )
+        if not consumed:
+            return page({"code": dead_code}, status=410)
+        mu.accounts.verify_email_with_token(user["id"], ip=ip, user_agent=user_agent)
+        session.pop(PENDING_VERIFY_KEY, None)
+        rotate_csrf()
+        # No session is minted here.  A code proves a mailbox, not the password, and
+        # this door has never opened without both.
         return _result_page(
-            "Check your inbox",
-            f"We sent a verification link to {_mask(user.get('email') or '')}. Open it to "
-            f"finish creating the account @{user.get('username')}. The link expires after "
-            f"{config.email_token_verify_hours} hours.",
-            secondary_url="/signup/resend",
-            secondary_label="Did not arrive? Send it again",
+            "Email confirmed",
+            f"{_mask(user.get('email') or '')} is verified for account "
+            f"@{user.get('username')}. Sign in and your account is live.",
+            action_label="Sign in",
         )
 
-    @bp.route("/signup/resend", methods=["GET", "POST"])
+    @bp.route("/resend-code", methods=["GET", "POST"])
     def resend_verification():
         spec = dict(
-            page_title="Resend the verification link",
+            page_title="Send a new code",
             intro=(
                 "Enter the email address or username you signed up with. Only an "
-                "address that still needs confirming gets a new link."
+                "address that still needs confirming gets a new code, and the old "
+                "one stops working the moment the new one is sent."
             ),
             field_name="identifier",
             field_label="Email address or username",
             field_type="text",
             field_autocomplete="username",
-            submit_label="Send the link",
+            submit_label="Send a new code",
             back_url=login_url,
             back_label="Back to sign in",
+            sent_link_url="/verify",
+            sent_link_label="Enter the code",
         )
         if request.method == "GET":
             return render_template("selfservice_form.html", **spec)
         ip, user_agent = _ip(), _ua()
+        session.pop(PENDING_VERIFY_KEY, None)
         identifier = (request.form.get("identifier") or "").strip()
         scripted = _honeypot_filled()
         blocked = _limited("resend-ip", netids.ip_bucket(ip), html=True)
@@ -553,17 +741,23 @@ def build_selfservice_blueprint(mu) -> Blueprint:
             if "@" in identifier
             else mu.accounts.get_user_by_username(identifier)
         )
+        sent_to = ""
         if (
             not scripted
             and user
             and mu.accounts.verification_pending(user)
             and mu.accounts.recent_email_token_count(user["id"], "verify", 60) == 0
         ):
-            result = _send_token(user, "verify", ip, user_agent)
+            result = _send_code(user, "verify", ip, user_agent, verify_where)
             mu.accounts.audit(
-                None, "verification_email_resent", user["id"],
+                None, "verification_code_resent", user["id"],
                 {"delivery": result.status}, ip, user_agent,
             )
+            # This browser just proved it holds the mailbox *and* the username, so
+            # remembering which account it is confirming is not a privilege gain --
+            # and it saves a stranger from retyping what they typed a minute ago.
+            session.pop(PENDING_VERIFY_KEY, None)
+            sent_to = user
         elif scripted:
             mu.accounts.audit(
                 None, "verification_resend_honeypot", None,
@@ -580,29 +774,72 @@ def build_selfservice_blueprint(mu) -> Blueprint:
             "selfservice_form.html",
             **spec,
             sent_note=(
-                "If that account still needs confirming, a fresh link is on its way."
+                "If that account still needs confirming, a fresh six-digit code is on "
+                f"its way. It expires after {config.email_code_minutes} minutes."
             ),
+            username="",
         )
 
-    @bp.route("/verify-email/<token>", methods=["GET"])
-    def verify_email(token):
-        ip, user_agent = _ip(), _ua()
-        consumed = mu.accounts.consume_email_token(token, "verify")
+    # -------------------------------------------------------------- invitation
+    @bp.route("/invite/<token>", methods=["GET", "POST"])
+    def accept_invite(token):
+        """The one emailed credential that is still a link, on the public door.
+
+        An invitation carries an address an administrator vouched for and a password
+        nobody has chosen yet, so it cannot be a typed code; it lives here rather
+        than under /admin so a stranger's email says nothing about the panel behind
+        it, and accepting one still never signs anybody in."""
+        info = mu.accounts.peek_email_token(token, "invite")
+        if not info:
+            return _result_page(
+                "This invitation is no longer valid",
+                "Invitations expire after 72 hours and can only be used once. Ask an "
+                "administrator to send a new one.",
+                status=410,
+                action_label="Go to sign in",
+            )
+
+        def page(error: str = "", status: int = 200):
+            return (
+                render_template(
+                    "invite.html",
+                    token=token,
+                    email=info["email"],
+                    username=info["username"],
+                    form_error=error,
+                ),
+                status,
+            )
+
+        if request.method == "GET":
+            return page()
+        password = request.form.get("password") or ""
+        confirm = request.form.get("confirm_password") or ""
+        if password != confirm:
+            return page("The two passwords do not match.", 400)
+        problem = validate_password(password, info.get("username") or "")
+        if problem:
+            return page(problem, 422)
+        consumed = mu.accounts.consume_email_token(token, "invite")
         if not consumed:
             return _result_page(
-                "That link is not valid",
-                "Verification links expire and can only be used once. Ask for a new one, "
-                "or sign in if your address is already confirmed.",
+                "This invitation has already been used",
+                "Each invitation works once. Sign in with the password you chose, or "
+                "ask an administrator to send a new one.",
                 status=410,
-                action_url="/signup/resend",
-                action_label="Send a new link",
+                action_label="Sign in",
             )
-        mu.accounts.verify_email_with_token(consumed["user"]["id"], ip=ip, user_agent=user_agent)
+        try:
+            mu.accounts.complete_invitation(
+                consumed["user"]["id"], password, ip=_ip(), user_agent=_ua()
+            )
+        except AccountError as exc:
+            return page(str(exc), 400)
         rotate_csrf()
         return _result_page(
-            "Email confirmed",
-            f"{_mask(consumed.get('email') or '')} is verified for account "
-            f"@{consumed['user'].get('username')}. You can sign in now.",
+            "Account activated",
+            f"@{consumed['user'].get('username') or info['username']} is ready. Sign in "
+            "with the password you just chose.",
             action_label="Sign in",
         )
 
@@ -613,20 +850,24 @@ def build_selfservice_blueprint(mu) -> Blueprint:
             page_title="Reset your password",
             intro=(
                 "Enter your email address or username. If an account matches, we send a "
-                f"link to choose a new password; it expires after "
-                f"{config.email_token_reset_minutes} minutes and works once."
+                f"six-digit code to type into the next page; it expires after "
+                f"{config.email_code_minutes} minutes, works once, and stops working "
+                f"after {config.email_code_attempts} wrong tries."
             ),
             field_name="identifier",
             field_label="Email address or username",
             field_type="text",
             field_autocomplete="username",
-            submit_label="Send reset link",
+            submit_label="Send reset code",
             back_url=login_url,
             back_label="Back to sign in",
+            sent_link_url="/reset-password",
+            sent_link_label="Enter the code",
         )
         if request.method == "GET":
             return render_template("selfservice_form.html", **spec)
         ip, user_agent = _ip(), _ua()
+        session.pop(PENDING_VERIFY_KEY, None)
         identifier = (request.form.get("identifier") or "").strip()
         scripted = _honeypot_filled()
         # These bucket names are the administrator door's, so one attacker cannot
@@ -649,11 +890,14 @@ def build_selfservice_blueprint(mu) -> Blueprint:
             and user.get("email")
             and mu.accounts.recent_email_token_count(user["id"], "reset", 60) == 0
         ):
-            result = _send_token(user, "reset", ip, user_agent)
+            result = _send_code(user, "reset", ip, user_agent, reset_where)
             mu.accounts.audit(
-                None, "password_reset_requested", user["id"], {"delivery": result.status},
+                None, "password_reset_code_requested", user["id"], {"delivery": result.status},
                 ip, user_agent,
             )
+            # Whose reset this is, remembered for the browser that just asked. It is
+            # an identifier only -- the code is still what opens the door.
+            session.pop(PENDING_VERIFY_KEY, None)
         elif scripted:
             mu.accounts.audit(
                 None, "password_reset_honeypot", None,
@@ -665,7 +909,7 @@ def build_selfservice_blueprint(mu) -> Blueprint:
                 {"identifier": identifier[:120]}, ip, user_agent,
             )
         # What the visitor reads must not depend on whether an account matched --
-        # that difference is the whole enumeration trick, and the token above is
+        # that difference is the whole enumeration trick, and the code above is
         # issued either way. It may only state a fact that is true of every
         # request to this deployment: can this server send email at all? The
         # per-account delivery outcome stays in the audit log.
@@ -673,76 +917,117 @@ def build_selfservice_blueprint(mu) -> Blueprint:
             "selfservice_form.html",
             **spec,
             sent_note=(
-                "If an account matches that address, a reset link is on its way."
+                "If an account matches that address, a reset code is on its way."
                 if mu.mailer.config.configured
                 else (
-                    "This server is not configured to send email, so no link can arrive "
+                    "This server is not configured to send email, so no code can arrive "
                     "yet. Ask the administrator to set it up."
                 )
             ),
         )
 
-    @bp.route("/reset-password/<token>", methods=["GET", "POST"])
-    def reset_password(token):
-        ip, user_agent = _ip(), _ua()
-        blocked = _limited("reset-ip", netids.ip_bucket(ip), html=True)
-        if blocked:
-            return blocked
+    @bp.route("/reset-password", methods=["GET", "POST"])
+    def reset_password():
+        """Choose a new password by typing the emailed code. No link involved.
 
-        def page(form=None, field_errors=None, form_error="", status=200):
+        A code alone is not enough to reset a password: the identifier says which
+        account is being opened, so the two are checked together against one row
+        that only exists for the account that was emailed.
+        """
+        ip, user_agent = _ip(), _ua()
+        pending_uid, pending_username = (session.get(PENDING_VERIFY_KEY) or ("", ""))[:2]
+
+        def page(form=None, field_errors=None, form_error="", status=200, username=""):
             return (
                 render_template(
                     "reset_password.html",
-                    token=token,
-                    email=info.get("email") if info else "",
                     form=form or {},
+                    username=username,
                     field_errors=field_errors or None,
                     form_error=form_error,
                 ),
                 status,
             )
 
-        info = mu.accounts.peek_email_token(token, "reset")
-        if not info:
-            return _result_page(
-                "That link is not valid",
-                "Reset links expire and can only be used once. Request a new one below.",
-                status=410,
-                action_url="/forgot-password",
-                action_label="Request a new link",
-            )
         if request.method == "GET":
             return page()
+
+        blocked = _limited("reset-ip", netids.ip_bucket(ip), html=True)
+        if blocked:
+            return blocked
+
+        identifier = (request.form.get("identifier") or "").strip() or pending_username
+        form = {
+            "identifier": identifier,
+            "code": request.form.get("code") or "",
+            "confirm_password": request.form.get("confirm_password") or "",
+        }
+        user = (
+            mu.accounts.find_user_by_email(identifier)
+            if "@" in identifier
+            else mu.accounts.get_user_by_username(identifier)
+        ) if identifier else None
+        if not user:
+            blocked = _limited(
+                "code-id", netids.identifier_bucket(identifier), html=True
+            )
+            if blocked:
+                return blocked
+            return page(
+                form,
+                {"code": "That code did not work for that account. Codes are single-use "
+                         f"and expire after {config.email_code_minutes} minutes."},
+                status=410,
+                username=identifier,
+            )
+
+        code = request.form.get("code") or ""
         password = request.form.get("password") or ""
         confirm = request.form.get("confirm_password") or ""
-        errors = {}
+        errors: dict[str, str] = {}
         if password != confirm:
             errors["confirm_password"] = "The two passwords do not match."
-        else:
-            problem = validate_password(password, info.get("username") or "")
-            if problem:
-                errors["password"] = problem
+        problem = validate_password(password, user.get("username") or "")
+        if problem and not errors.get("confirm_password"):
+            errors["password"] = problem
         if errors:
-            return page(None, errors, status=422)
-        consumed = mu.accounts.consume_email_token(token, "reset")
+            return page(form, errors, status=422, username=identifier)
+
+        blocked = _limited("code-ip", netids.ip_bucket(ip), html=True)
+        if blocked:
+            return blocked
+        allowed, retry_after = _throttle(
+            "code-id", netids.identifier_bucket(user.get("username") or "")
+        )
+        if not allowed:
+            return page(
+                form,
+                {"code": f"Too many tries on that account. Wait {retry_after} seconds "
+                         "and enter the code again."},
+                status=429,
+                username=identifier,
+            )
+        consumed = mu.accounts.consume_email_code(user["id"], "reset", code)
         if not consumed:
-            return _result_page(
-                "That link is not valid",
-                "This reset link has already been used, or it expired. Request a new one below.",
+            return page(
+                form,
+                {"code": "That code did not work. Codes are single-use, expire after "
+                         f"{config.email_code_minutes} minutes and stop working after "
+                         f"{config.email_code_attempts} wrong tries. Ask for a new one."},
                 status=410,
-                action_url="/forgot-password",
-                action_label="Request a new link",
+                username=identifier,
             )
         try:
             mu.accounts.reset_password_with_token(
-                consumed["user"]["id"], password, ip=ip, user_agent=user_agent
+                user["id"], password, ip=ip, user_agent=user_agent
             )
         except AccountError as exc:
-            return page(None, None, str(exc), status=422)
+            return page(None, None, str(exc), status=422, username=identifier)
+        session.pop(PENDING_VERIFY_KEY, None)
         rotate_csrf()
         return _result_page(
             "Password changed",
-            f"Sign in as @{consumed['user'].get('username')} with the new password. "
+            f"Sign in as @{user.get('username')} with the new password. "
             "Every other device was signed out.",
             action_label="Sign in",
         )
@@ -751,39 +1036,163 @@ def build_selfservice_blueprint(mu) -> Blueprint:
     #                            the account page
     # ====================================================================
 
+    def _human_stamp(seconds) -> str:
+        """An absolute local time for server-rendered rows; "" when there is none."""
+        try:
+            value = int(seconds or 0)
+        except (TypeError, ValueError):
+            return ""
+        if value <= 0:
+            return ""
+        try:
+            return time.strftime("%b %d, %Y, %H:%M", time.localtime(value))
+        except (ValueError, OSError, OverflowError):
+            return ""
+
     @bp.route("/account", methods=["GET"])
     def account_page():
         if current_user() is None:
             return redirect(f"{login_url}?{urlencode({'next': account_url})}")
-        return render_template("account.html", username=g.ss_user.get("username"))
+        # The page renders complete from the server, so it is readable before (or
+        # without) account.js; the script only refreshes pieces after an action.
+        #
+        # ``?step=`` names the popup a trigger link asked for.  It exists for the
+        # browser that runs no script: its links are real, so the page it gets back
+        # has that dialog already open and every field in it reachable.  Where the
+        # script intercepts the click and opens the same dialog without a load.
+        step = (request.args.get("step") or "").strip().lower()
+        return render_template(
+            "account.html", step=step if step in DIALOG_STEPS else "", **_account_payload()
+        )
+
+    def _theme_for(user: dict) -> str:
+        """The palette this account is drawn in, dark when it never chose one.
+
+        The choice itself is made by the administrator panel's theme control, which
+        stores this same key against this same account: one preference per person, not
+        one per surface, and no second switch on this page to disagree with the first.
+        Read per render instead of kept in the session, so the choice follows the
+        account to another browser.  An unreadable preference is not worth a 500.
+        """
+        try:
+            stored = mu.accounts.get_preference(user["id"], THEME_KEY)
+        except Exception:
+            return "dark"
+        return stored if stored in THEMES else "dark"
 
     def _account_payload() -> dict:
         full = mu.accounts.get_user(g.ss_user["id"]) or g.ss_user
+        providers = mu.accounts.provider_status(full["id"])
+        sessions = mu.accounts.session_summaries(
+            full["id"], current_sid_hash=(g.ss_session or {}).get("sid_hash", "")
+        )
+        # This device first, then the most recently seen one; the page marks the
+        # current row and never offers to sign it out with the others.
+        sessions.sort(key=lambda row: (not row["current"], -(row["last_seen_at"] or 0)))
+        for row in sessions:
+            row["seen_text"] = _human_stamp(row.get("last_seen_at")) or "unknown"
+            row["signed_in_text"] = _human_stamp(row.get("created_at")) or "unknown"
         return {
             "user": full,
             "username": full.get("username"),
-            "display_name": full.get("display_name") or "",
             "email": full.get("email") or "",
+            "pending_email": full.get("pending_email") or "",
             "email_verified": bool(full.get("email_verified")),
             "verification_pending": mu.accounts.verification_pending(full),
+            # How many tries this code has left, so the page can say "two more"
+            # rather than let somebody discover the ceiling by hitting it.
+            "verification": mu.accounts.email_code_state(full["id"], "verify"),
+            # The same for the code that proves the mailbox before a change is made:
+            # a popup that says "we already sent one" saves a second send and the
+            # confusion of two emails where only the newest is valid.
+            "reauth": mu.accounts.email_code_state(full["id"], "reauth"),
             "role": full.get("role"),
+            "role_text": "Administrator" if AccountService.can_view_admin(full) else "Player",
             "is_admin": AccountService.can_view_admin(full),
             "created_by": full.get("created_by"),
             "created_at": full.get("created_at"),
+            "created_text": _human_stamp(full.get("created_at")),
             "must_change_password": bool(full.get("must_change_password")),
             "totp_enabled": mu.accounts.totp_is_enabled(full),
             "totp_pending": bool(full.get("totp_pending")),
-            "providers": mu.accounts.provider_status(full["id"]),
-            "sessions": mu.accounts.session_summaries(
-                full["id"], current_sid_hash=(g.ss_session or {}).get("sid_hash", "")
-            ),
+            "providers": providers,
+            "provider_map": {row["provider"]: row for row in providers},
+            "sessions": sessions,
             "password_min_length": PASSWORD_MIN_LENGTH,
+            "theme": _theme_for(full),
         }
 
     @bp.route("/api/account", methods=["GET"])
     @account_required
     def api_account():
         return jsonify(_account_payload())
+
+    @bp.route("/api/account/providers/<provider>/disconnect", methods=["POST"])
+    @account_required
+    def api_disconnect_provider(provider):
+        """Forget one linked service, secrets included.
+
+        Deleting the database row alone leaves the cookies, the browser profile and
+        the live session working, which is how "Disconnected" kept streaming -- so
+        the answer distinguishes "removed everything" from "the row is gone but
+        these artifacts are still here".
+        """
+        ip, user_agent = _ip(), _ua()
+        try:
+            failures, was_linked = mu.accounts.clear_own_provider_credentials(
+                g.ss_user, provider, ip=ip, user_agent=user_agent
+            )
+        except AccountError as exc:
+            return _json_error("invalid_provider", str(exc), 422)
+        label = "YouTube Music" if provider == "youtube" else "Amazon"
+        if failures:
+            return jsonify({
+                "ok": True,
+                "complete": False,
+                "message": (
+                    f"{label} sign-in was removed, but this server could not delete "
+                    f"everything yet ({'; '.join(failures)}). Try again in a minute; "
+                    f"until then the old session may still work."
+                ),
+            })
+        if not was_linked:
+            # Nothing was connected, so saying a removal happened would be the same
+            # kind of invented status this door used to report.
+            return jsonify({
+                "ok": True,
+                "complete": True,
+                "was_linked": False,
+                "message": f"Nothing was connected to {label} on this account, so there "
+                           "was nothing to remove.",
+            })
+        if provider == "youtube":
+            message = (
+                "YouTube Music sign-in was removed, and this server deleted the saved "
+                "cookies and browser profile with it. This account plays through the "
+                "server's session until you connect your own."
+            )
+        else:
+            message = (
+                "Amazon sign-in was removed, and this server deleted the saved Alexa "
+                "cookies with it."
+            )
+        return jsonify({"ok": True, "complete": True, "message": message})
+
+    @bp.route('/api/account/alexa/link-code', methods=['POST'])
+    @account_required
+    def alexa_link_code():
+        blocked = _limited('code-ip', netids.ip_bucket(_ip()))
+        if blocked:
+            return blocked
+        return jsonify(code=mu.alexa_identity.issue(g.ss_user), expires_in=300)
+
+    @bp.route('/api/account/alexa/unlink', methods=['POST'])
+    @account_required
+    def alexa_unlink():
+        mu.db.execute('DELETE FROM alexa_bindings WHERE user_id=?', (g.ss_user['id'],))
+        mu.db.execute('DELETE FROM alexa_pair_codes WHERE user_id=?', (g.ss_user['id'],))
+        mu.accounts.invalidate_security_proofs(g.ss_user['id'])
+        return jsonify(ok=True)
 
     @bp.route("/api/account/profile", methods=["POST"])
     @account_required
@@ -798,9 +1207,9 @@ def build_selfservice_blueprint(mu) -> Blueprint:
         try:
             user = mu.accounts.update_own_profile(
                 g.ss_user,
-                display_name=str(body.get("display_name") or ""),
                 email=email,
                 current_password=str(body.get("current_password") or ""),
+                email_code=str(body.get("email_code") or ""),
                 ip=ip,
                 user_agent=user_agent,
             )
@@ -813,12 +1222,12 @@ def build_selfservice_blueprint(mu) -> Blueprint:
             if message in (EMAIL_TAKEN, USERNAME_TAKEN):
                 return _error_for(exc)
             return _json_error("invalid", message, 422, fields={"email": message})
-        email_changed = (user.get("email") or "") != (before.get("email") or "")
+        email_changed = bool(user.get("pending_email"))
         note = ""
         if email_changed:
-            # The address is unverified from this moment, so the link that fixes it
+            # The address is unverified from this moment, so the code that fixes it
             # has to be offered in the same breath as the change.
-            note = _mail_note(_send_token(user, "verify", ip, user_agent))
+            note = _mail_note(_send_code(user, "verify", ip, user_agent, account_where))
         return jsonify(
             {
                 "ok": True,
@@ -872,6 +1281,238 @@ def build_selfservice_blueprint(mu) -> Blueprint:
             }
         )
 
+    @bp.route("/api/account/password/reset/send", methods=["POST"])
+    @account_required
+    def api_password_reset_send():
+        """A signed-in person who no longer knows the password they are not being asked for.
+
+        This path exists precisely because the current password is not required: the
+        proof is the mailbox.  So it issues the same purpose the anonymous "forgot
+        password" page issues, at the address on file, and pays for it from that page's
+        buckets keyed on the same address -- trying both doors does not double the
+        number of emails an attacker can ask for.
+        """
+        ip, user_agent = _ip(), _ua()
+        user = mu.accounts.get_user(g.ss_user["id"]) or g.ss_user
+        if not user.get("email"):
+            return _json_error(
+                "no_email",
+                "This account has no email address to send a code to. Set one first, "
+                "or ask the administrator.",
+                422,
+            )
+        blocked = _code_send_blocked(
+            user, "reset", ip, ip_scope="forgot-ip", id_scope="forgot-id"
+        )
+        if blocked:
+            return blocked
+        note = _mail_note(_send_code(user, "reset", ip, user_agent, account_where))
+        return jsonify({"ok": True, "note": note, "sent_to": _mask(user["email"])})
+
+    @bp.route("/api/account/password/reset", methods=["POST"])
+    @account_required
+    def api_password_reset():
+        """Spend the mailed code for a new password, with this browser still signed in.
+
+        The new password is checked *before* the code is spent: a weak entry or a typing
+        slip is the person's own mistake and must not consume a single-use credential
+        they cannot re-issue without waiting on the mail again.
+
+        The tick is theirs to set.  Left ticked, every other device is signed out -- the
+        old password is spent, so nobody else should keep a session made with it.
+        Unticked, this account's sessions are all left alone; the code still proves the
+        mailbox, which is what the reset was ever asking for.
+        """
+        ip, user_agent = _ip(), _ua()
+        user = mu.accounts.get_user(g.ss_user["id"]) or g.ss_user
+        body = request.get_json(silent=True) or {}
+        new_password = str(body.get("password") or "")
+        confirm = body.get("confirm_password")
+        errors: dict[str, str] = {}
+        if confirm is not None and str(confirm) != new_password:
+            errors["confirm_password"] = "The two new passwords do not match."
+        problem = validate_password(new_password, user.get("username") or "")
+        if problem and not errors.get("confirm_password"):
+            errors["password"] = problem
+        if errors:
+            return _json_error("invalid", next(iter(errors.values())), 422, fields=errors)
+
+        blocked = _limited("reset-ip", netids.ip_bucket(ip))
+        if blocked:
+            return blocked
+        blocked = _limited("code-ip", netids.ip_bucket(ip))
+        if blocked:
+            return blocked
+        allowed, retry_after = _throttle(
+            "code-id", netids.identifier_bucket(user.get("username") or user["id"])
+        )
+        if not allowed:
+            return _json_error(
+                "rate_limited",
+                f"Too many tries. Wait {retry_after} seconds and enter the code again.",
+                429,
+                retryable=True,
+                retry_after=retry_after,
+                fields={"code": "Wait before trying this code again."},
+            )
+        consumed = mu.accounts.consume_email_code(
+            user["id"], "reset", str(body.get("code") or "").strip()
+        )
+        if not consumed:
+            return _json_error(
+                "invalid_code",
+                "That code did not work. Codes are single-use, expire after "
+                f"{config.email_code_minutes} minutes and stop working after "
+                f"{config.email_code_attempts} wrong tries. Ask for a new one.",
+                410,
+                fields={"code": "Wrong, used, or expired. Send a new code and try once."},
+            )
+        sign_out_others = body.get("sign_out_others")
+        sign_out_others = True if sign_out_others is None else bool(sign_out_others)
+        try:
+            mu.accounts.reset_password_with_token(
+                user["id"],
+                new_password,
+                ip,
+                user_agent,
+                keep_sid_hash=session.get("mu_sid") or "",
+                revoke_other_sessions=sign_out_others,
+            )
+        except AccountError as exc:
+            return _json_error("invalid", str(exc), 422)
+        # No CSRF rotation: the popup stays open and keeps posting with the token it
+        # was rendered with, and this account's identity in this browser is unchanged.
+        return jsonify(
+            {
+                "ok": True,
+                "must_change_password": False,
+                "message": (
+                    "Password changed. Every other device was signed out; this one stays "
+                    "signed in."
+                    if sign_out_others
+                    else "Password changed. Your other devices are still signed in, as "
+                         "you asked; this one stays signed in too."
+                ),
+            }
+        )
+
+    @bp.route("/api/account/email/reauth", methods=["POST"])
+    @account_required
+    def api_send_reauth_code():
+        """One sender for the code that proves this person can read the mailbox.
+
+        The email-change popup and the optional box next to a two-factor toggle ask the
+        same question, so they ask it through one door and share one budget.  Issuing a
+        code replaces the live one for that purpose, which is why only the newest email
+        ever works -- worth saying here because two popups can each hold a half-typed
+        code and only one of them is real.
+        """
+        ip, user_agent = _ip(), _ua()
+        user = mu.accounts.get_user(g.ss_user["id"]) or g.ss_user
+        if not user.get("email"):
+            return _json_error(
+                "no_email",
+                "This account has no email address to send a code to. Set one first.",
+                422,
+            )
+        blocked = _code_send_blocked(user, "reauth", ip)
+        if blocked:
+            return blocked
+        note = _mail_note(_send_code(user, "reauth", ip, user_agent, account_where))
+        return jsonify({"ok": True, "note": note, "sent_to": _mask(user["email"])})
+
+    @bp.route("/api/account/email/change", methods=["POST"])
+    @account_required
+    def api_email_change():
+        """Move the account to a new address: the code from the old one, then the password.
+
+        The code is spent while the old address is still on the account, because a code
+        only validates against the address it was written to -- writing the new one first
+        would invalidate the very proof that made the change allowed.
+
+        The password is verified once here and handed to ``update_own_profile`` again
+        rather than bypassed: that function is the only writer of this column, it is the
+        door the administrator side uses too, and re-checking a hash the caller just
+        proved is cheaper than a second code path that could drift from the first.
+        """
+        ip, user_agent = _ip(), _ua()
+        user = mu.accounts.get_user(g.ss_user["id"]) or g.ss_user
+        body = request.get_json(silent=True) or {}
+        current_password = str(body.get("current_password") or "")
+        email_code = str(body.get("email_code") or "").strip()
+        try:
+            new_email = mu.accounts.validate_email(str(body.get("email") or ""))
+        except AccountError as exc:
+            message = str(exc)
+            return _json_error("invalid", message, 422, fields={"email": message})
+        if not new_email:
+            message = "An email address is required, so you can reset your password later."
+            return _json_error("invalid", message, 422, fields={"email": message})
+        # Judged on the address, before anything is spent: a code is single-use and a
+        # form typo is not a security event.
+        if new_email == (user.get("email") or "").strip().lower():
+            message = "That is already the address on this account."
+            return _json_error("invalid", message, 422, fields={"email": message})
+        owner = mu.accounts.find_user_by_email(new_email)
+        if owner and owner.get("id") != user["id"]:
+            return _json_error("email_taken", EMAIL_TAKEN_GENERIC, 409)
+        # An account with no address yet has no old mailbox to prove, so the password
+        # alone is the gate for that first one -- otherwise a person could never add
+        # an address to an account that does not have one.
+        has_current = bool((user.get("email") or "").strip())
+        if has_current and not email_code:
+            message = "Enter the code sent to your current address first."
+            return _json_error("invalid", message, 422, fields={"email_code": message})
+
+        if has_current:
+            blocked = _limited("code-ip", netids.ip_bucket(ip))
+            if blocked:
+                return blocked
+            allowed, retry_after = _throttle(
+                "code-id", netids.identifier_bucket(user.get("username") or user["id"])
+            )
+            if not allowed:
+                return _json_error(
+                    "rate_limited",
+                    f"Too many tries. Wait {retry_after} seconds and enter the code again.",
+                    429,
+                    retryable=True,
+                    retry_after=retry_after,
+                    fields={"email_code": "Wait before trying this code again."},
+                )
+        try:
+            updated = mu.accounts.update_own_profile(
+                user,
+                email=new_email,
+                current_password=current_password,
+                email_code=email_code,
+                ip=ip,
+                user_agent=user_agent,
+            )
+        except AccountError as exc:
+            message = str(exc)
+            if "password" in message.lower():
+                return _json_error("bad_password", message, 403, fields={"current_password": message})
+            if "code" in message.lower():
+                return _json_error("invalid_code", message, 410, fields={"email_code": message})
+            if message in (EMAIL_TAKEN, USERNAME_TAKEN):
+                return _error_for(exc)
+            return _json_error("invalid", message, 422, fields={"email": message})
+        # The new address starts unverified, so its confirmation code goes out in the
+        # same breath as the change -- exactly as the plain profile edit does.
+        note = _mail_note(_send_code(updated, "verify", ip, user_agent, account_where))
+        return jsonify(
+            {
+                "ok": True,
+                "user": updated,
+                "email_changed": True,
+                "verification_pending": mu.accounts.verification_pending(updated),
+                "note": note,
+                "message": f"Confirm the proposed address {_mask(new_email)} "
+                           "with the code that was just sent.",
+            }
+        )
+
     @bp.route("/api/account/email/verification", methods=["POST"])
     @account_required
     def api_resend_verification():
@@ -881,19 +1522,61 @@ def build_selfservice_blueprint(mu) -> Blueprint:
             return _json_error("no_email", "Add an email address first.", 422)
         if not mu.accounts.verification_pending(user):
             return jsonify({"ok": True, "note": "", "message": "This address is already confirmed."})
-        blocked = _limited("resend-ip", netids.ip_bucket(ip))
+        blocked = _code_send_blocked(user, "verify", ip)
         if blocked:
             return blocked
-        blocked = _limited("resend-id", netids.identifier_bucket(user["email"]))
-        if blocked:
-            return blocked
-        if mu.accounts.recent_email_token_count(user["id"], "verify", 60):
-            return _json_error(
-                "rate_limited", "A link was just sent. Check your inbox.", 429,
-                retryable=True, retry_after=60,
-            )
-        note = _mail_note(_send_token(user, "verify", ip, user_agent))
+        note = _mail_note(_send_code(user, "verify", ip, user_agent, account_where))
         return jsonify({"ok": True, "note": note})
+
+    @bp.route("/api/account/email/verification/confirm", methods=["POST"])
+    @account_required
+    def api_confirm_verification():
+        """Type the six digits for the address this account already holds.
+
+        No identifier in the body: the session says whose address it is, and a code
+        is only ever valid against its own account's live row.
+        """
+        ip, user_agent = _ip(), _ua()
+        user = mu.accounts.get_user(g.ss_user["id"]) or g.ss_user
+        blocked = _limited("code-ip", netids.ip_bucket(ip))
+        if blocked:
+            return blocked
+        allowed, retry_after = _throttle(
+            "code-id", netids.identifier_bucket(user.get("username") or user["id"])
+        )
+        if not allowed:
+            return _json_error(
+                "rate_limited",
+                f"Too many tries. Wait {retry_after} seconds and enter the code again.",
+                429,
+                retryable=True,
+                retry_after=retry_after,
+                fields={"code": "Wait before trying this code again."},
+            )
+        consumed = mu.accounts.consume_email_code(
+            user["id"], "verify", str((request.get_json(silent=True) or {}).get("code") or "")
+        )
+        if not consumed:
+            return _json_error(
+                "invalid_code",
+                "That code did not work. Codes are single-use, expire after "
+                f"{config.email_code_minutes} minutes and stop working after "
+                f"{config.email_code_attempts} wrong tries. Ask for a new one.",
+                410,
+                fields={"code": "Wrong, used, or expired. Send a new code and try once."},
+            )
+        verified = mu.accounts.verify_email_with_token(
+            user["id"], ip=ip, user_agent=user_agent
+        )
+        return jsonify(
+            {
+                "ok": True,
+                "user": verified or mu.accounts.get_user(user["id"]),
+                "email_verified": True,
+                "verification_pending": False,
+                "message": f"{_mask(user.get('email') or '')} is confirmed.",
+            }
+        )
 
     @bp.route("/api/account/sessions/revoke", methods=["POST"])
     @account_required
@@ -901,9 +1584,10 @@ def build_selfservice_blueprint(mu) -> Blueprint:
         body = request.get_json(silent=True) or {}
         only = str(body.get("id") or "").strip()
         everywhere = bool(body.get("all"))
-        if not only and not everywhere:
+        others = bool(body.get("others"))
+        if not only and not everywhere and not others:
             return _json_error(
-                "invalid", "Name a session, or sign out of every device.", 422
+                "invalid", "Name a session, or sign out of every other device.", 422
             )
         try:
             revoked, killed_current = mu.accounts.revoke_own_sessions(
@@ -938,27 +1622,40 @@ def build_selfservice_blueprint(mu) -> Blueprint:
         if blocked:
             return blocked
         body = request.get_json(silent=True) or {}
+        before = mu.accounts.get_user(g.ss_user["id"]) or g.ss_user
+        replacing = mu.accounts.totp_is_enabled(before)
         try:
             enrollment = mu.accounts.begin_totp_enrollment(
-                g.ss_user,
+                g.ss_user, session_token=session.get("mu_sid") or "",
                 current_password=str(body.get("current_password") or ""),
+                # Optional, and never the authenticator's own code: the emailed one
+                # is the proof a person can still produce when the phone is the
+                # thing being replaced.
+                email_code=str(body.get("email_code") or "").strip(),
                 issuer=config.app_name,
                 ip=ip,
                 user_agent=user_agent,
+                # A player already uses one authenticator, they lose phones. The new
+                # secret stays pending -- and the live one keeps working -- until a code
+                # proves they can actually generate from it, so this can never be a way
+                # to lock somebody out of their own second factor.
+                allow_existing=True,
             )
         except AccountError as exc:
             message = str(exc)
-            lowered = message.lower()
-            if "incorrect" in lowered:
+            if "password" in message.lower():
                 return _json_error(
                     "bad_password", message, 403, fields={"current_password": message}
                 )
-            if "already on" in lowered:
-                return _json_error("totp_already_enabled", message, 409)
+            if "code" in message.lower():
+                return _json_error(
+                    "invalid_code", message, 410, fields={"email_code": message}
+                )
             return _json_error("invalid", message, 422)
         return jsonify(
             {
                 "ok": True,
+                "replacing": replacing,
                 "secret": enrollment["secret"],
                 "account": enrollment["account"],
                 "issuer": enrollment["issuer"],
@@ -976,7 +1673,7 @@ def build_selfservice_blueprint(mu) -> Blueprint:
         The URI *is* the secret, which is why it is never a JSON field: this
         endpoint's only purpose is to be the ``src`` of one same-origin ``<img>``
         on a no-store page."""
-        enrollment = mu.accounts.pending_totp_enrollment(g.ss_user)
+        enrollment = mu.accounts.pending_totp_enrollment(g.ss_user, session_token=session.get("mu_sid") or "")
         if not enrollment:
             return _json_error("no_enrollment", "Start the two-factor setup again first.", 409)
         try:
@@ -1002,9 +1699,11 @@ def build_selfservice_blueprint(mu) -> Blueprint:
         if blocked:
             return blocked
         body = request.get_json(silent=True) or {}
+        before = mu.accounts.get_user(g.ss_user["id"]) or g.ss_user
+        replacing = mu.accounts.totp_is_enabled(before)
         try:
             user = mu.accounts.confirm_totp_enrollment(
-                g.ss_user,
+                g.ss_user, session_token=session.get("mu_sid") or "",
                 code=str(body.get("code") or "").strip(),
                 ip=_ip(),
                 user_agent=_ua(),
@@ -1018,13 +1717,29 @@ def build_selfservice_blueprint(mu) -> Blueprint:
                 403 if bad_code else 422,
                 fields={"code": message},
             )
+        _notify_security_change(
+            user,
+            "Your two-factor sign-in was turned on"
+            if not replacing
+            else "Your two-factor authenticator was replaced",
+            "A code from the new authenticator app was entered correctly on your "
+            f"{config.app_name} account, so signing in now asks for one from it.",
+            rows=(("Changed", _human_stamp(int(time.time()))), ("From", _ip())),
+            note="If you did not do this, turn two-factor back off and change your "
+                 "password from a device you trust.",
+            audit="totp_change_notice",
+        )
         # No rotation here: the page stays open and keeps posting with the token
         # it was rendered with, and nothing about the session changed identity.
         return jsonify(
             {
                 "ok": True,
                 "totp_enabled": mu.accounts.totp_is_enabled(user),
-                "message": "Two-factor sign-in is on. You will need a code next time.",
+                "replacing": replacing,
+                "message": "Two-factor sign-in is on. You will need a code next time."
+                if not replacing
+                else "Your authenticator was replaced. The codes from the old app no "
+                     "longer work; use the new one.",
             }
         )
 
@@ -1044,20 +1759,40 @@ def build_selfservice_blueprint(mu) -> Blueprint:
         if blocked:
             return blocked
         body = request.get_json(silent=True) or {}
+        ip, user_agent = _ip(), _ua()
         try:
             user = mu.accounts.disable_totp(
-                g.ss_user,
+                g.ss_user, session_token=session.get("mu_sid") or "",
                 current_password=str(body.get("current_password") or ""),
-                code=str(body.get("code") or "").strip(),
-                ip=_ip(),
-                user_agent=_ua(),
+                # An emailed code, never the authenticator's own: the device that
+                # generates those is the thing a person reliably loses, and a second
+                # factor they cannot remove is a lock-out, not a protection.
+                email_code=str(body.get("email_code") or "").strip(),
+                ip=ip,
+                user_agent=user_agent,
             )
         except AccountError as exc:
             message = str(exc)
             lowered = message.lower()
-            if "incorrect" in lowered:
-                return _json_error("bad_credentials", message, 403)
+            if "password" in lowered:
+                return _json_error(
+                    "bad_password", message, 403, fields={"current_password": message}
+                )
+            if "code" in lowered:
+                return _json_error(
+                    "invalid_code", message, 410, fields={"email_code": message}
+                )
             return _json_error("invalid", message, 422)
+        _notify_security_change(
+            user,
+            "Your two-factor sign-in was turned off",
+            "Two-factor is no longer required to sign in to your "
+            f"{config.app_name} account. Your password alone is enough again.",
+            rows=(("Changed", _human_stamp(int(time.time()))), ("From", ip)),
+            note="If this was not you, change your password now -- an attacker who "
+                 "reached this page already knew it.",
+            audit="totp_disable_notice",
+        )
         return jsonify(
             {
                 "ok": True,
@@ -1071,10 +1806,15 @@ def build_selfservice_blueprint(mu) -> Blueprint:
     @account_required
     def api_delete_account():
         ip, user_agent = _ip(), _ua()
-        blocked = _limited("account-delete", g.ss_user["id"])
+        body = request.get_json(silent=True) or {}
+        # The first popup only proves who is asking. It gets its own budget so that
+        # opening it twice cannot leave the deletion itself with no attempts left.
+        verify_only = bool(body.get("verify_only"))
+        blocked = _limited(
+            "account-delete-check" if verify_only else "account-delete", g.ss_user["id"]
+        )
         if blocked:
             return blocked
-        body = request.get_json(silent=True) or {}
         username = g.ss_user.get("username") or ""
         password = str(body.get("password") or "")
         confirm_username = str(body.get("confirm_username") or "")
@@ -1090,6 +1830,8 @@ def build_selfservice_blueprint(mu) -> Blueprint:
                 g.ss_user,
                 password=password,
                 confirm_username=confirm_username,
+                email_code=str(body.get("email_code") or "").strip(),
+                dry_run=verify_only,
                 ip=ip,
                 user_agent=user_agent,
             )
@@ -1102,11 +1844,21 @@ def build_selfservice_blueprint(mu) -> Blueprint:
                 return _json_error(
                     "username_mismatch", message, 409, fields={"confirm_username": message}
                 )
+            if "code" in lowered:
+                if "enter the code" in lowered:
+                    return _json_error(
+                        "code_required", message, 422, fields={"email_code": message}
+                    )
+                return _json_error(
+                    "invalid_code", message, 410, fields={"email_code": message}
+                )
             # Either wording of "you are the last one who can run this server":
             # the delete path's own sentence, or the shared last-owner guard's.
             if "administrator" in lowered or "must remain" in lowered:
                 return _json_error("last_owner", message, 409)
             return _json_error("invalid", message, 422)
+        if verify_only:
+            return jsonify({"ok": True})
         _drop_account_cookies()
         return jsonify(
             {

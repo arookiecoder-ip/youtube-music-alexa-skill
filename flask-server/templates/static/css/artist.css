@@ -228,7 +228,7 @@
     justify-content: center;
     gap: 8px;
     padding: 10px 24px;
-    border-radius: 99px;
+    border-radius: 0;
     font-size: 0.9rem;
     font-weight: 600;
     cursor: pointer;
@@ -275,7 +275,7 @@
     cursor: pointer;
     transition: background .15s;
   }
-  .artist-song-row:hover { background: #1a1a1a; }
+  .artist-song-row:hover { background: var(--hover-tint); }
   /* Hover must not move the track row or its text. */
   .artist-song-row:hover,
   .artist-song-row:focus-within {
@@ -286,7 +286,7 @@
     height: 56px;
     flex: none;
     object-fit: cover;
-    border-radius: 4px;
+    border-radius: 0;
     background: var(--surface);
     transition: filter .18s ease;
   }
@@ -350,7 +350,7 @@
     transform: translateY(-50%) scale(1);
     pointer-events: auto;
   }
-  .artist-song-play-btn:hover, .artist-song-like-btn:hover { color: var(--text); border-color: #444; }
+  .artist-song-play-btn:hover, .artist-song-like-btn:hover { color: var(--text); border-color: var(--border-hover); }
   .artist-song-artist .artist-name { color: inherit; }
   .artist-song-artist .artist-name:hover {
     color: var(--text);
@@ -377,7 +377,7 @@
   }
   .artist-view-all-btn {
     padding: 10px 24px;
-    border-radius: 99px;
+    border-radius: 0;
     background: rgba(255, 255, 255, 0.1);
     color: var(--text);
     border: none;
@@ -564,7 +564,7 @@
     width: 40px;
     height: 40px;
     flex: none;
-    border-radius: 4px;
+    border-radius: 0;
     background: linear-gradient(90deg, var(--border) 25%, #2a2a2a 37%, var(--border) 63%);
     background-size: 400% 100%;
     animation: skeletonShimmer 1.4s ease infinite;
@@ -619,7 +619,7 @@
       min-width: 44px;
       min-height: 44px;
       flex: 0 0 44px;
-      border-radius: 4px;
+      border-radius: 0;
     }
     #artist-top-songs .artist-song-info,
     #artist-songs-section .artist-song-info { min-width: 0; flex: 1 1 auto; }
@@ -672,8 +672,6 @@
       border-bottom-color: transparent;
     }
   }
-
-}
 
 /* Mobile playlist/album/artist detail routes. Moved from redesign.css. */
 @media (max-width: 899px) {

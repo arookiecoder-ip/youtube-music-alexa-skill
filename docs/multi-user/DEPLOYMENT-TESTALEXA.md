@@ -92,6 +92,8 @@ MULTIUSER_SMTP_PASSWORD=<brevo-smtp-key>
 # for a test stack and worth deciding before a real one.
 MULTIUSER_SELF_SIGNUP_ENABLED=1
 MULTIUSER_MAX_SELF_SIGNUPS_PER_DAY=25
+MULTIUSER_EMAIL_CODE_MINUTES=15   # verify/reset codes
+MULTIUSER_EMAIL_CODE_ATTEMPTS=5   # wrong tries before the row is spent
 MULTIUSER_TRUSTED_PROXY_CIDRS=
 MULTIUSER_TRUST_CLOUDFLARE=1
 ACCOUNT_PURGE_SWEEP_SECONDS=60
@@ -155,6 +157,20 @@ is configured against the Brevo relay and a test message reached a real external
 mailbox. The owner account still has no email address, so verification, reset and
 magic-link flows have not yet been exercised end-to-end against a real inbox.
 
+### Re-verified after the Phase 2.9 pass (2026-10-26)
+
+| Check | Result |
+| --- | --- |
+| Schema | `schema_migrations` shows `1,2,3,4,5`; `PRAGMA table_info(users)` has no `display_name`; `owner`, `sanam12341`, `test123`, `jayprakash` still active |
+| `GET /signup`, `/verify`, `/resend-code` | `200` each |
+| `GET /invite/<unknown token>` | `410`, themed page, no session |
+| `POST /login/` with a username | `200` — the box is labelled "Email or username" and both work |
+| `GET /account` at 1440 / 768 / 390 | three-column row above 1100 px, two columns to 760 px, single column below; status strip 4 → 2×2 → stacked |
+| Container suite | `test_multiuser` 33, `test_selfservice` 49, `test_signup_switch` 12, `test_login_second_factor` 33, `test_account_pages` 5, `test_queue_session_auth` 8, `test_static_assets` 5, `test_secret_hygiene` 3 — all OK |
+
+The only console error on any of these pages is the Cloudflare insights beacon,
+blocked by this deployment's own CSP. That is expected and harmless.
+
 ## 5. TLS
 
 Caddy requests a public certificate automatically using HTTP-01. If Cloudflare
@@ -182,23 +198,25 @@ curl -sS -o /dev/null -w '%{http_code}\n' https://testalexa.synthora.in/admin/ap
 
 1. Open `https://testalexa.synthora.in/admin/login/`.
 2. Sign in as `owner` with `MULTIUSER_ADMIN_PASSWORD` from
-   `.env.testalexa`.
-3. Open **My account → Profile**, set your real `@synthora.in` address and a
-   display name. Changing the email requires the current password and sends a
-   verification link by email.
-4. **Before signing out**, retrieve the verification link from the outbox and
-   open it. Email verification is enforced at the next sign-in when an address
-   is set. If you sign out first, an owner can still resend verification from
-   **Users → (your account) → Send verification email** while signed in.
+   `.env.testalexa`. Either the username or the email address works in that box.
+3. Open **My account → Profile**, set your real `@synthora.in` address. Changing
+   the email requires the current password and sends a
+   **six-digit verification code** by email.
+4. **Before signing out**, retrieve the code from the outbox and type it into the
+   inline code box on **My account** (or `/account`). Email verification is
+   enforced at the next sign-in when an address is set. If you sign out first, an
+   owner can still resend verification from **Users → (your account) → Send
+   verification email** while signed in.
 5. Open **System** and confirm the database integrity is `ok`.
 6. Create a second owner before relying on this account, so the last-owner guard
    cannot lock you out.
 
-Retrieve the newest verification link without printing other messages:
+Read the newest verification code inside the container without printing the whole
+message:
 
 ```bash
 docker compose --env-file .env.testalexa -p musicbox-test exec ytmusic \
-  sh -c 'ls -t /data/mail-outbox/*.eml | head -1 | xargs sed -n "/verify-email/p"'
+  sh -c 'ls -t /data/mail-outbox/*.eml | head -1 | grep -oE "[0-9]{6}" | head -1'
 ```
 
 If the only owner signs out while their email is unverified, they cannot sign
@@ -279,27 +297,64 @@ Provider checklist:
 - If the provider blocks the host, check outbound TCP 587/465 from this server.
 
 `/data/mail-outbox` inside the `ytmusic_data` volume is the fallback: when
-`MULTIUSER_SMTP_HOST` is blank, every one-time link is written there as a `.eml`
-file instead of being sent. Treat those files as secrets:
+`MULTIUSER_SMTP_HOST` is blank, every message is written there as a `.eml` file
+instead of being sent. Treat those files as secrets:
 
 ```bash
 docker compose --env-file .env.testalexa -p musicbox-test exec ytmusic \
   ls -l /data/mail-outbox
 ```
 
-Never paste an `.eml` into chat or logs; it contains a working one-time link.
+Never paste an `.eml` into chat or logs; it contains a live verification/reset
+**code** or an invitation/magic **link** — either one is a credential.
 
-## 8. Account doors, client address and the purge queue
+## 8. Account doors, codes, client address and the purge queue
 
-With the layer on, the public surface is `/signup`, `/signup/resend`,
-`/verify-email/<token>`, `/forgot-password`, `/reset-password/<token>`,
-`/account` and `/api/account*`, next to `/login/` and `/admin/`. Sign-up is open
-and the account cannot sign in until its address is confirmed, so SMTP (or the
-outbox) has to be reachable — see §7. To turn self-signup off while keeping the
-rest of the layer:
+With the layer on, the public surface is `/signup`, `/verify`, `/resend-code`,
+`/forgot-password`, `/reset-password`, `/invite/<token>`, `/account` and
+`/api/account*`, next to `/login/` and `/admin/`. Sign-up is open by default and
+the account cannot sign in until its address is confirmed, so SMTP (or the
+outbox) has to be reachable — see §7.
+
+**Verification and password reset are typed six-digit codes.** The emails carry no
+link: the person types the code at `/verify` or `/reset-password/` (and the
+administrator types it at `/admin/reset-password/`). A code is valid for
+`MULTIUSER_EMAIL_CODE_MINUTES` (default 15), works once, and is spent after
+`MULTIUSER_EMAIL_CODE_ATTEMPTS` (default 5) wrong tries — the account is never
+locked. Invitations (`/invite/<token>`, `/admin/invite/<token>`) and the
+administrator's email sign-in (`/admin/magic/<token>`) still use links. The old
+`/verify-email/<token>` and `/reset-password/<token>` routes no longer exist, and
+neither do `/signup/verify` or `/signup/resend`.
+
+A successful verification does **not** sign the person in; it answers with an "Email
+confirmed" page that points at sign-in. That is deliberate: every session requires the
+password, and the verify form carries none.
+
+The outbox now holds plaintext codes, not just links. Read it **inside the
+container** when testing and never paste an `.eml` into chat or logs:
 
 ```bash
-MULTIUSER_SELF_SIGNUP_ENABLED=0      # /signup answers "not available"
+docker compose --env-file .env.testalexa -p musicbox-test exec ytmusic \
+  ls -lt /data/mail-outbox | head
+```
+
+**Closing public sign-up.** An owner can close the door from **System → Public
+sign-ups** (or the dashboard strip); the button writes `signup_open` in
+`system_settings` and is audited as `signup_policy_changed`. `registration_open()`
+is the one policy — environment **and** switch **and** daily cap — so the
+"Create an account" link, `GET|POST /signup/` and `/account`'s create-account
+prompt all react on the next page view. The environment is the ceiling: an owner
+cannot reopen a deployment that sets `MULTIUSER_SELF_SIGNUP_ENABLED=0`.
+
+Closing stops **new rows only**. A person who signed up minutes earlier can still
+verify, resend and reset their password; administrator-created accounts,
+invitations and bootstrap are never affected. The three closed messages are
+distinct on purpose — daily cap ("come back tomorrow"), administrator ("closed"),
+environment ("this deployment does not allow sign-ups") — so a visitor is not told
+to wait for something that will never happen.
+
+```bash
+MULTIUSER_SELF_SIGNUP_ENABLED=0        # the hard ceiling; /signup says "not available"
 MULTIUSER_MAX_SELF_SIGNUPS_PER_DAY=25  # durable, counted in the database
 ```
 
@@ -336,18 +391,41 @@ curl -s -H 'X-Forwarded-For: 203.0.113.1, 198.51.100.2' \
 
 **Deleting an account is a queue, not a request.** The row goes immediately; the
 snapshot, credential file, download jar, Amazon cookie directory, Jam tokens and
-Chromium profile are removed by `_purge_account_artifacts`, and whatever fails
-(e.g. Chromium still holding the profile) is recorded in `pending_purges` and
-retried by a daemon with 30s→2h backoff for up to 24 hours. Watch it:
+Chromium profile are removed by `_forget_account_artifacts(user_id, 'all')`, and
+whatever fails (e.g. Chromium still holding the profile) is recorded in
+`pending_purges` and retried by a daemon with 30s→2h backoff for up to 24 hours.
+A **provider disconnect** uses the same machinery with a narrower scope
+(`youtube` or `amazon`): it removes that provider's row, auth file/jar/profile
+or Amazon cookies and caches, and retries only that scope. The `playback_dead`
+tombstone and the in-process player registries are `all`-only, so a disconnect
+never freezes a live queue. A disconnect of something that was never connected is
+answered as such ("Nothing was connected to …, so there was nothing to remove") —
+the panel does not report a deletion it did not perform. Watch the queue:
 
 ```bash
 docker compose --env-file .env.testalexa -p musicbox-test exec ytmusic \
   python3 -c 'import sqlite3;print(sqlite3.connect("/data/data.db").execute(
-  "SELECT user_id,attempts,error FROM pending_purges").fetchall())'
+  "SELECT user_id,attempts,last_error,scope FROM pending_purges").fetchall())'
 ```
 
 A row that survives hours is an operator problem — the account's secrets are still
 on the volume. The sweep interval is `ACCOUNT_PURGE_SWEEP_SECONDS` (default 60).
+
+**Connecting Amazon or Google is typed fields, not a remote browser.** A person
+opens **Your account → Linked services → Connect** (or
+`/accounts/amazon`, `/accounts/youtube`) and answers ordinary form fields: email and
+password, then whichever single follow-up the provider asks for — authenticator code,
+captcha picture, device choice, or "approve this on your phone". Amazon's ladder is
+`POST /alexa/form_login/` + `/step/` + `/cancel/` with
+`GET /alexa/form_login/captcha/` served same-origin; Google's is
+`POST /api/youtube/browser-session/form/{start,code,poll,stop}` against the sidecar's
+headless Chromium, where one identity holds the browser for 300 seconds at a time.
+No port, no VNC password and no screenshot surface is exposed to visitors for this:
+the only browser the sidecar still mirrors (`/interactive/frame` on the sidecar,
+reached by `/api/youtube/browser-session/surface`) is unreferenced by any page, and
+removing it is a deliberate act that also needs a sidecar rebuild. If a scripted
+ladder is refused by the provider, the account simply sees the refusal — check
+`docker logs ytmusic --since 10m` and the account's `/api/profile_status`.
 
 ## 9. Verify the existing app still works
 
@@ -429,9 +507,9 @@ Only use `-v` after taking a backup; it is irreversible.
 - [ ] The outbox volume is not exposed through Caddy, SFTP or backups shared
       with third parties.
 - [ ] Admin accounts use unique passwords; owner count is at least two.
-- [ ] Every administrator enrols TOTP from `/account` — the layer supports it and
-      does not require it, so an unenforced rule is a rule nobody follows.
-- [ ] `pending_purges` is empty after an account deletion (and `/signup` is
-      closed with `MULTIUSER_SELF_SIGNUP_ENABLED=0` if the deployment is
-      invite-only).
+- [ ] Every administrator enrols TOTP from **My account** (the panel supports it
+      and does not require it, so an unenforced rule is a rule nobody follows).
+- [ ] `pending_purges` is empty after an account deletion (and public sign-up is
+      closed — from **System → Public sign-ups**, or hard-disabled with
+      `MULTIUSER_SELF_SIGNUP_ENABLED=0` — if the deployment is invite-only).
 - [ ] Audit log reviewed after setup; unexpected logins investigated.

@@ -47,6 +47,23 @@ def _parse(path):
         raise ValueError('The export contains no unexpired YouTube cookies.')
 
 
+def is_usable(path):
+    """Whether *path* holds at least one live YouTube cookie.
+
+    The docker bind mount creates an empty ``cookies.txt`` before anything is
+    uploaded, and an existing file is not the same thing as a usable jar: a
+    resolver handed the empty one asks YouTube anonymously and fails with
+    ``authentication_required`` even though a refreshed server jar sits beside
+    it."""
+    if not path:
+        return False
+    try:
+        _parse(path)
+    except (OSError, ValueError):
+        return False
+    return True
+
+
 def _probe(path, configure_command):
     """Fetch an uncached audio sample using this export, never the live cookie jar."""
     try:

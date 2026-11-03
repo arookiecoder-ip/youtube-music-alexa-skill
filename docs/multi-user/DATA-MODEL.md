@@ -1,20 +1,24 @@
 # Multi-user data model
 
-Schema version: **2**
+Schema version: **5**
 
 All tables are new and namespaced in the multi-user database (`DB_FILE`). They
 do **not** replace or alter the legacy single-owner tables (`web_sessions`,
 `kv`, `jam_tokens`, `playlist_tracks`). Initialization creates missing tables
-and applies additive migrations; it never drops a column or table.
+and applies additive migrations; v5 is the first migration that removes
+anything, and it removes exactly one column nobody reads any more.
 
 ## `users`
+
+An account has **one name**: `username`. It is what the queue credits and what
+the panel lists, and it signs in alongside the email address, so there is no
+second, friendlier name to keep in sync.
 
 | Column | Type | Notes |
 | --- | --- | --- |
 | `id` | TEXT PK | UUID v4 |
-| `username` | TEXT UNIQUE NOCASE | 3–32 chars, `[A-Za-z0-9][A-Za-z0-9._-]*`, reserved names blocked |
-| `email` | TEXT NOCASE | Optional, unique when non-empty, lower-cased |
-| `display_name` | TEXT | 120 chars max |
+| `username` | TEXT UNIQUE NOCASE | 3–32 chars, `[A-Za-z0-9][A-Za-z0-9._-]*`, reserved names blocked. The account's only name, and one of the two things `authenticate` accepts |
+| `email` | TEXT NOCASE | Optional, unique when non-empty, lower-cased. The other sign-in handle, and the only route back via a reset code |
 | `password_hash` | TEXT | PBKDF2-SHA256, 600,000 iterations |
 | `role` | TEXT | `owner`, `admin`, `user` |
 | `status` | TEXT | `active`, `disabled`, `invited`, `deleted` |
@@ -63,29 +67,63 @@ during initialization and on session creation.
 
 ## `user_email_tokens`
 
-Single-use, purpose-bound email links. Only a SHA-256 hash is stored, never the
-raw token.
+Single-use, purpose-bound credentials. Two shapes share the table:
+
+- `verify` and `reset` hold a **typed numeric code** (v4). The row still has a
+  random `token_hash` primary key so one row means one live credential, but the
+  six-digit code is in `code_enc` and no route or email ever builds a URL from it.
+- `invite` and `magic` are **links**. Only a SHA-256 hash of the URL token is
+  stored, never the raw token.
 
 | Column | Notes |
 | --- | --- |
-| `token_hash` | TEXT PK |
+| `token_hash` | TEXT PK; SHA-256 of the URL token, or a random 256-bit value for a code row |
 | `user_id` | FK → `users.id`, cascade delete |
-| `purpose` | `verify`, `reset`, `magic`, `invite` |
-| `email` | Address the link was issued for |
+| `purpose` | `verify`, `reset` (codes), `magic`, `invite` (links) |
+| `email` | Address the credential was issued for |
 | `created_at`, `expires_at` | Unix timestamps |
 | `used_at` | `0` = unused |
 | `ip`, `user_agent` | Request metadata |
+| `code_enc` | v4 — Fernet-encrypted `{"code": "123456"}`; empty for link purposes |
+| `code_attempts` | v4 — wrong guesses spent against this row |
 
 Rules:
 
-- Creating a token for a purpose deletes the previous live token for that user
-  and purpose.
-- A token only matches while its `email` equals the user's current email.
-  Changing the address invalidates every outstanding link.
-- Password reset, invitation acceptance and password changes delete all tokens
-  for the user.
-- TTLs: verify 24h, reset 60 min, magic 15 min, invite 72h (configurable).
+- Creating a credential for a purpose deletes the previous live one for that user
+  and purpose, so there is exactly one code to type.
+- A credential only matches while its `email` equals the user's current email.
+  Changing the address invalidates every outstanding code and link.
+- Password reset, invitation acceptance and password changes delete all
+  credentials for the user.
+- **Codes are encrypted, not hashed.** Six digits is a space of one million, so a
+  digest would be precomputed from a stolen database; the Fernet key lives outside
+  the database by deployment. Protection against *online* guessing comes from
+  `code_attempts`: every mismatch increments it, and at
+  `MULTIUSER_EMAIL_CODE_ATTEMPTS` (default 5) the row is **consumed** and the code
+  is dead until a resend. The account is never locked — otherwise anyone who knew
+  a username could deny that person sign-in for free.
+- TTLs: verify and reset 15 minutes (`MULTIUSER_EMAIL_CODE_MINUTES`), magic 15
+  minutes, invite 72h (configurable).
 - Expired rows are pruned during initialization.
+
+## `system_settings`
+
+A small key/value table for policies an administrator may change without a
+redeploy. Deliberately not per-user.
+
+| Column | Notes |
+| --- | --- |
+| `setting_key` | TEXT PK |
+| `setting_value` | TEXT, default `''` |
+| `updated_at` | Unix timestamp |
+| `updated_by` | Actor user ID; empty for a system default |
+
+The only key today is `signup_open` (`1`/`0`). **No row means open**, so an
+upgrade does not silently close the door. The switch is consulted on every
+`registration_open()` call — there is no cache, so a click takes effect on the
+next page view. `MULTIUSER_SELF_SIGNUP_ENABLED=0` remains the ceiling: the switch
+can close a deployment that allows sign-up, but it cannot open one that does not.
+Every change is audited as `signup_policy_changed` with the before and after.
 
 ## `user_provider_credentials`
 
@@ -122,7 +160,7 @@ Append-only administrative journal, retained for 90 days then pruned at startup.
 | --- | --- |
 | `id` | Autoincrement PK |
 | `actor_user_id`, `actor_label` | NULL/system for unauthenticated events |
-| `action` | Short event name. Besides the Phase 1 set, the account doors add `signup`, `signup_honeypot`, `signup_too_fast`, `password_reset_requested`, `password_reset_requested_unknown`, `password_reset_honeypot`, `email_verified`, `password_changed`, `sessions_revoked`, `totp_enrollment_started`, `totp_enrollment_cancelled`, `totp_enabled`, `totp_disabled`, `account_delete_failed`, `account_deleted_self` and `admin_login_2fa`. A refused self-delete or a scripted sign-up is audited rather than dropped, because the attempts are the signal. |
+| `action` | Short event name. Besides the Phase 1 set, the account doors add `signup`, `signup_honeypot`, `signup_too_fast`, `password_reset_requested`, `password_reset_requested_unknown`, `password_reset_honeypot`, `email_verified`, `password_changed`, `sessions_revoked`, `totp_enrollment_started`, `totp_enrollment_cancelled`, `totp_enabled`, `totp_disabled`, `account_delete_failed`, `account_deleted_self`, `provider_disconnected` and `admin_login_2fa`. Codes add `verification_code_email_sent|failed` and `password_reset_code_email_sent|failed`, plus `signup_policy_changed`; the code itself is never written into `details_json`, because a live code is a password. A refused self-delete or a scripted sign-up is audited rather than dropped, because the attempts are the signal. `provider_disconnected` carries the provider, whether a credential row was actually removed (`was_linked`) and either `removed` or the list of artifacts that survived, so the journal cannot claim a disconnection the files contradict. |
 | `target_user_id` | Optional affected user |
 | `details_json` | Non-secret JSON details |
 | `ip`, `user_agent` | Truncated request metadata |
@@ -139,9 +177,18 @@ Exports are available at `/admin/audit/export.csv` (last 5,000 events).
 - **v3** — `totp_pending_enc` / `totp_pending_at` / `totp_last_step` on `users`,
   and `idx_users_created_by` `(created_by, created_at)`, because the daily
   self-signup cap is counted on every anonymous registration.
+- **v4** — `code_enc` / `code_attempts` on `user_email_tokens` (verification and
+  reset become typed codes), and `system_settings` (the administrator's sign-up
+  switch). `verify` and `reset` cease to be link purposes; `magic` and `invite`
+  are unchanged.
+- **v5** — `ALTER TABLE users DROP COLUMN display_name`. Every account had two
+  names, and the second one only ever duplicated or contradicted the handle the
+  queue and the panel already show. The drop is guarded on `PRAGMA table_info`
+  and on SQLite's 3.35+ support for `DROP COLUMN`, so an older build leaves an
+  unread empty column behind instead of failing to start.
 
 Migrations are additive and idempotent. The runner checks `PRAGMA table_info`
-before adding columns, so a partially applied v2 deployment can safely retry.
+before adding or dropping, so a partially applied deployment can safely retry.
 
 ## Tables the player layer owns in the same file
 
@@ -158,11 +205,15 @@ lazily. `playback_snapshot` is keyed by the same `identity`
 (`owner`, `user:<uuid>`, or the Jam host's).
 
 **`pending_purges`** — `user_id TEXT PRIMARY KEY, attempts, last_error, created_at,
-next_at`. One row per account whose artifacts are not gone yet. Written by
-`server._purge_account_artifacts` through `account_purge.PendingPurges`, drained by the
-`account-purge-sweeper` daemon with 30s→2h exponential backoff, and dropped with a
-logged error after 24 hours — a queue must not grow just because one filesystem is
-unwritable. `last_error` is truncated to 400 characters and never holds a secret.
+next_at, scope`. One row per account whose artifacts are not gone yet. Written by
+`server._forget_account_artifacts` through `account_purge.PendingPurges`, drained
+by the `account-purge-sweeper` daemon with 30s→2h exponential backoff, and dropped
+with a logged error after 24 hours — a queue must not grow just because one
+filesystem is unwritable. `scope` is a comma-separated set of `youtube` /
+`amazon` / `all`, merged when a second attempt targets the same account, so a
+provider disconnect that 409s on a still-open Chromium profile retries that
+provider instead of re-running a whole deletion. `last_error` is truncated to 400
+characters and never holds a secret.
 
 ## Backup and recovery
 
@@ -184,7 +235,8 @@ unwritable. `last_error` is truncated to 400 characters and never holds a secret
 | --- | --- |
 | Audit log | 90 days |
 | Expired sessions | Purged after expiry + 1 day |
-| Expired email tokens | Purged after expiry + 1 day |
+| Expired email codes and links | Purged after expiry + 1 day |
+| Spent code rows (`code_attempts` at the cap) | Dead in place until the next resend replaces or expiry prunes the row |
 | `playback_dead` tombstones | 900 seconds after the deletion, pruned lazily |
 | `pending_purges` rows | Retried with backoff for 24 hours, then dropped with a logged error |
 | Outbox `.eml` files | Manual; configure SMTP and delete after testing |

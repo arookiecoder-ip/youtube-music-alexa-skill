@@ -1,19 +1,10 @@
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
-  :root {
-    --bg: #0a0a0a;
-    --surface: #141414;
-    --border: #252525;
-    --text: #e8e8e8;
-    --muted: #666;
-    --accent: #e8590c;
-    --accent-hover: #f76707;
-    --danger: #e03131;
-  }
+  /* Tokens come from theme.css -- the same palette the player runs on. */
 
   html, body { height: 100%; }
   body {
-    font-family: -apple-system, 'Segoe UI', system-ui, sans-serif;
+    font-family: var(--font-sans);
     background: var(--bg);
     color: var(--text);
     display: flex;
@@ -111,10 +102,17 @@
     font-family: inherit;
     transition: border-color .15s;
   }
-  input::placeholder { color: #3e3e3e; }
+  input::placeholder { color: var(--placeholder); }
   input:focus {
     outline: none;
     border-color: var(--accent);
+  }
+  /* Border colour alone is a weak place-marker once a form has four fields, and
+     it is invisible to anyone who cannot see the accent hue. Keyboard focus gets
+     a real ring; the border change stays for the pointer. */
+  input:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
   }
 
   .code-input {
@@ -128,9 +126,10 @@
   button.primary {
     width: 100%;
     margin-top: 22px;
+    min-height: 44px;
     border: 1px solid var(--accent);
     background: var(--accent);
-    color: #fff;
+    color: var(--on-accent);
     padding: 12px 14px;
     font-size: .72rem;
     font-weight: 700;
@@ -141,6 +140,7 @@
     transition: background .12s, border-color .12s;
   }
   button.primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+  button.primary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
   button.primary:disabled { opacity: .4; cursor: default; }
 
   .back {
@@ -184,13 +184,18 @@
   .door-links {
     display: flex;
     flex-wrap: wrap;
-    gap: 6px 18px;
+    gap: var(--space-2) var(--space-4);
     justify-content: space-between;
-    margin-top: 16px;
-    padding-top: 14px;
+    margin-top: var(--space-4);
+    padding-top: var(--space-4);
     border-top: 1px solid var(--border);
   }
   .door-links a {
+    /* These are the only route to a reset code on a phone, and a flex item can
+       take the standard control height without disturbing the line it sits on. */
+    display: inline-flex;
+    align-items: center;
+    min-height: var(--control-h-md);
     font-size: .76rem;
     color: var(--muted);
     text-decoration: none;

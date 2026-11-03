@@ -22,10 +22,13 @@
   .sidebar-overlay.open { opacity: 1; }
 
   .sidebar {
+    /* One number for the drawer. The mobile block below used to declare 260 over
+       this 280 with !important, which is the same component measured twice. */
+    --drawer-w: 260px;
     position: fixed;
     top: 0;
     right: 0;
-    width: 280px;
+    width: var(--drawer-w);
     height: 100dvh;
     background: var(--surface);
     border-left: 1px solid var(--border);
@@ -312,7 +315,7 @@ body.rail-collapsed .sidebar-playlist-list { scrollbar-width: none; }
     padding: 6px 8px !important;
     gap: 0;
     justify-content: flex-start;
-    border-radius: 4px !important;
+    border-radius: 0 !important;
   }
   body.rail-collapsed .sidebar .sidebar-nav-btn {
     width: 100%;
@@ -485,8 +488,8 @@ body.rail-collapsed .sidebar .sidebar-nav-btn:hover {
   display: block;
   flex: 0 0 3px;
   width: 3px;
-  border-radius: 2px;
-  background: var(--accent, #ff5a00);
+  border-radius: 0;
+  background: var(--accent);
 }
 .sidebar-brand-mark span:nth-child(1) { height: 7px; }
 .sidebar-brand-mark span:nth-child(2) { height: 13px; }
@@ -512,7 +515,7 @@ body.rail-collapsed .sidebar .sidebar-nav-btn:hover {
   margin-bottom: 12px;
   padding: 8px 14px !important;
   border: 0 !important;
-  border-radius: 999px !important;
+  border-radius: 0 !important;
   background: rgba(255,255,255,.09) !important;
   color: var(--text) !important;
   font-weight: 700;
@@ -533,7 +536,7 @@ body.rail-collapsed .sidebar .sidebar-nav-btn:hover {
   width: 100%;
   padding: 6px 12px !important;
   border: 0 !important;
-  border-radius: 4px !important;
+  border-radius: 0 !important;
   background: transparent !important;
   text-align: left;
   color: var(--text) !important;
@@ -542,7 +545,7 @@ body.rail-collapsed .sidebar .sidebar-nav-btn:hover {
   width: 24px;
   height: 24px;
   flex: 0 0 24px;
-  border-radius: 4px;
+  border-radius: 0;
   overflow: hidden;
   background: var(--surface);
   display: flex;
@@ -556,7 +559,10 @@ body.rail-collapsed .sidebar .sidebar-nav-btn:hover {
   object-fit: cover;
 }
 .sidebar-playlist-art.is-liked {
-  background: var(--accent-grad, linear-gradient(135deg, var(--accent), #ff6a00));
+  /* No fallback colour: base.css defines --accent-grad on :root, and the private
+     orange this line used to carry as a second answer is what let a third and
+     fourth orange keep existing. One gradient, one place. */
+  background: var(--accent-grad);
   color: #fff;
 }
 .sidebar-playlist-art svg {
@@ -673,9 +679,16 @@ body.rail-collapsed .sidebar .sidebar-nav-btn:hover {
     border-left: 0 !important;
     border-right: 1px solid var(--border) !important;
     transform: translateX(-100%) !important;
+    /* A drawer slid off-canvas is still in the tab order, so a keyboard user on a
+       phone walked the entire navigation before reaching anything they could see.
+       visibility removes the stops, and transitioning it keeps the slide intact:
+       hidden lands when the motion ends, visible applies the moment it starts. */
+    visibility: hidden !important;
+    transition: transform .3s cubic-bezier(.22, 1, .36, 1), visibility .3s !important;
   }
   body .sidebar.open {
     transform: translateX(0) !important;
+    visibility: visible !important;
   }
   body .sidebar-overlay {
     display: none;
@@ -759,7 +772,7 @@ body.library-route #nav-library-btn::before {
   transform: translateY(-50%);
   width: 3px;
   height: 18px;
-  border-radius: 0 3px 3px 0;
+  border-radius: 0;
   background: var(--accent);
 }
 .sidebar .sidebar-nav-btn { position: relative; }
@@ -848,9 +861,23 @@ body.library-route #nav-library-btn::before {
 .profile-menu-status strong {
   font-weight: 500;
 }
+.profile-menu-status span.is-ok { color: var(--accent); border-color: rgba(232, 89, 12, .5); }
+.profile-menu-status span.is-bad { color: #ff9b94; border-color: rgba(248, 81, 73, .45); }
+.profile-alert {
+  margin-top: 12px;
+  padding: 11px 12px;
+  border: 1px solid rgba(248, 81, 73, .45);
+  background: rgba(248, 81, 73, .1);
+  color: var(--text);
+  font-size: 0.82rem;
+  line-height: 1.5;
+}
+.profile-alert strong { display: block; margin-bottom: 5px; color: #ff9b94; }
+.profile-alert ul { margin: 0 0 9px; padding-left: 16px; color: var(--muted); }
+.profile-alert a { color: var(--accent); font-weight: 650; }
 .profile-menu-status span {
   box-sizing: border-box;
-  width: 78px;
+  min-width: 78px;
   text-align: center;
   font-weight: 600;
   padding: 3px 7px;
@@ -903,6 +930,6 @@ body.library-route #nav-library-btn::before {
 .profile-menu-user{padding-bottom:16px}.profile-menu-user>div:last-child{min-width:0}
 .profile-menu-status>div{gap:16px;min-height:30px;margin:4px 0}.profile-menu-status strong{flex:1}
 .profile-menu-status span{width:auto;max-width:150px;flex:none;white-space:nowrap;letter-spacing:0;border:0;background:transparent!important;padding:0;font-size:12px;font-weight:500}
-.profile-menu button,.profile-menu .profile-menu-link{margin:0;min-height:44px;border:0;border-radius:4px;background:transparent;padding:10px 8px;font-weight:500;justify-content:flex-start;text-align:left}
+.profile-menu button,.profile-menu .profile-menu-link{margin:0;min-height:44px;border:0;border-radius:0;background:transparent;padding:10px 8px;font-weight:500;justify-content:flex-start;text-align:left}
 .profile-menu #logout{background:transparent;color:#ff9992;border-top:1px solid #333;border-radius:0;margin-top:10px;padding-top:16px}
 .profile-menu-trigger.amazon-disconnected{border:2px solid #f16f65;box-shadow:0 0 0 3px #f16f6514}.profile-menu-wrap:has(.amazon-disconnected) .profile-menu-avatar{border-color:#f16f65;color:#f16f65}

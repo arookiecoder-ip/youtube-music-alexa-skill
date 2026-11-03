@@ -1,6 +1,6 @@
 # Multi-user progress log
 
-Last updated: 2026-10-25
+Last updated: 2026-10-26
 
 ## Where the work lives
 
@@ -22,9 +22,10 @@ the Alexa skill/Lambda are untouched.
     TOTP helpers and an in-process sliding-window rate limiter.
   - `crypto.py` — Fernet-encrypted provider credentials, with an HKDF-derived
     key fallback from `SECRET_KEY`.
-  - `db.py` — additive schema v1 + v2 + v3 (`totp_pending_*`,
-    `idx_users_created_by`), migrations, audit, counts, integrity check and
-    online SQLite backup.
+  - `db.py` — additive schema v1 + v2 + v3 + v4 (`code_enc`/`code_attempts`
+    for typed email codes, `system_settings` for the sign-up switch,
+    `totp_pending_*`, `idx_users_created_by`), migrations, audit, counts,
+    integrity check and online SQLite backup.
   - `accounts.py` — user CRUD, roles, statuses, last-owner protection, sessions,
     email tokens, invitations, self-service profile and audit, plus the
     self-service half: `register_self_service`, the verification gate,
@@ -39,9 +40,11 @@ the Alexa skill/Lambda are untouched.
     buckets).
   - `pending.py` — the single-use, browser-bound record between "password
     accepted" and "second factor proven".
-  - `selfservice.py` — the `/signup`, `/forgot-password`, `/reset-password`,
-    `/verify-email`, `/account` and `/api/account*` blueprint, with its own
-    limiter table, CSRF surface and security headers.
+  - `selfservice.py` — the `/signup`, `/verify`, `/resend-code`,
+    `/forgot-password`, `/reset-password`, `/invite/<token>`, `/account` and
+    `/api/account*` blueprint, with its own limiter table, CSRF surface and
+    security headers. Verification and reset take a typed six-digit code; the
+    only token URL on this door is an invitation.
   - `admin.py` — `/admin` blueprint: dashboard, users, audit, system, account,
     login/logout, verification, reset, magic link and invitations.
 - `flask-server/account_purge.py` — the retry queue and the path guards behind
@@ -58,7 +61,7 @@ the Alexa skill/Lambda are untouched.
   - `/admin` bypasses the device API-key middleware only when the layer has
     registered successfully;
   - the same middleware lets the self-service paths through (`/signup`,
-    `/signup/resend`, `/forgot-password`, `/verify-email/`, `/api/account/`),
+    `/signup/resend`, `/forgot-password`, `/reset-password/`, `/api/account/`),
     while `/account` and `/api/account` stay 401 to an anonymous browser;
   - `POST /login/` grew the second step for accounts that enabled TOTP, sharing
     the administrator door's budgets and the same pending store;
@@ -95,13 +98,17 @@ the Alexa skill/Lambda are untouched.
 
 ### Email authentication
 
-- Email verification (24h default).
-- Password reset (60 min default).
+- Email verification (15 min, `MULTIUSER_EMAIL_CODE_MINUTES`) by **typed
+  six-digit code**; no link.
+- Password reset (15 min) by typed code on both doors; no link.
 - Passwordless magic-link sign-in (15 min default, admin roles only).
 - Invitations (72h default) that activate the account when a password is set.
-- Resend throttling and one live token per purpose per user.
-- Email change requires the current password, invalidates outstanding tokens
-  and forces re-verification.
+- Codes are stored encrypted, single-use, one live per purpose; five wrong tries
+  spends the row without locking the account. Emails never carry a URL for
+  `verify` or `reset`.
+- Resend throttling and one live credential per purpose per user.
+- Email change requires the current password, invalidates outstanding codes and
+  forces re-verification, which is confirmed by a code.
 - Enumeration-safe responses on public reset/magic-link requests.
 - SMTP test button and outbox counters in **System**.
 
@@ -113,9 +120,9 @@ the Alexa skill/Lambda are untouched.
 - Per-door limits: 5 sign-ups per hour per address, 3 per day per email, and a
   daily cap counted in the database (`MULTIUSER_MAX_SELF_SIGNUPS_PER_DAY`) because
   nothing in-process survives a restart.
-- `/forgot-password` and `/reset-password/<token>` for accounts, sharing one
-  budget with the equivalent admin requests and answering identically whether or
-  not the address exists.
+- `/forgot-password`, then `/reset-password/` with a typed code for accounts,
+  sharing one budget with the equivalent admin requests and answering identically
+  whether or not the address exists.
 - `/account` and `/api/account`: profile (an email change re-verifies), password
   (this browser stays, every other session is revoked), the session list with no
   hash or token in it, resend verification, TOTP enrol/QR/confirm/cancel/disable,
@@ -131,6 +138,85 @@ the Alexa skill/Lambda are untouched.
   the address bucket and user agent that earned it.
 
 Details, live results and the stated limitations: `PHASE2-PER-USER.md`.
+
+### Codes, the sign-up switch and the panel pass (Phase 2.7)
+
+- Signup, email-change re-verify and password reset now send a **typed six-digit
+  code** on both doors; `invite` and the administrator's magic-link sign-in keep
+  their links deliberately. A verification code never mints a session.
+- Old token routes removed: `/verify-email/<token>` and `/reset-password/<token>`
+  on both doors (and their `/admin` twins). The surviving link credentials are
+  `/invite/<token>` on the self-service door and `/admin/magic/` on the panel.
+- Owner-only sign-up kill-switch at **System → Public sign-ups** (and the
+  dashboard strip). `registration_open()` is the one policy; the environment
+  stays the ceiling. Closing stops new sign-ups only — pending accounts can still
+  verify, resend and reset.
+- `/account` regrouped into This account · Sign-in & security · Linked services ·
+  Devices · Delete this account, each with one primary action and its own result
+  message; the current device is listed first and marked.
+- Disconnecting Amazon or YouTube now deletes the credentials on disk (auth file,
+  cookie jar, sidecar profile, Amazon cookie directory, Jam tokens, caches) and
+  says what, if anything, survived. Scoped retries in `pending_purges.scope`.
+- The `invited` status can no longer be set on a working account; transitions are
+  enforced in the service, so a stale tab cannot lock an account out.
+- Admin panel: nav labels equal page titles with `aria-current`; dashboard is
+  tiles + Needs attention + five audit rows; deleted accounts are filterable and
+  restorable; destructive actions confirm; admin self-2FA; `must_change_password`
+  visible and clearable; audit reachable per account; accessibility pass (skip
+  link, live flash region, table captions/scopes, AA contrast, readable minimum
+  size, mobile targets).
+
+### Provider sign-in typed into fields (Phase 2.8)
+
+- Connecting Amazon and Google is no longer a mirrored remote browser. Both doors
+  are ordinary fields (`/accounts/<provider>`): email and password first, then the
+  one follow-up the provider asks for — authenticator code, captcha picture, device
+  choice, or "approve on your phone". No template renders an `<iframe>`.
+- Amazon: `POST /alexa/form_login/` + `/step/` + `/cancel/` and a same-origin
+  `GET /alexa/form_login/captcha/`, driven by `alexapy`'s login ladder. A finished
+  login promotes through the shared `_promote_staged_login` path, per identity.
+- Google: `POST /api/youtube/browser-session/form/{start,code,poll,stop}`, driven by
+  the sidecar's `google_signin.py` ladder in that account's headless Chromium, with a
+  300-second per-identity claim on the one browser so two accounts cannot fight over
+  it. Success feeds the existing capture → validate → atomic promote path.
+- Verified live: stepper pages render with zero iframes; empty input answers 400/404
+  per endpoint; `form/stop` idempotent; a real Amazon round trip with a reserved
+  `.invalid` address reported `state: error` in 6.8 s.
+- Left in place but unreferenced by any UI: `/api/youtube/browser-session/surface`
+  and `…/choose-account` (and the sidecar's `/interactive/frame`/`input`). Removing
+  them needs a sidecar-image change, so it waits for an explicit decision.
+
+### One name, and pages that say so (Phase 2.9)
+
+- `display_name` is gone. Schema v5 drops the column and an account has exactly one
+  name — its `username`. Every surface that showed or edited the second name now
+  shows the one: admin users list, user detail, user new/edit, audit rows, the admin
+  account page, `/account` and the JS payload behind it.
+- Sign-in now says what the service already did. Both boxes read **"Email or
+  username"**, because `authenticate()` has always matched either one
+  case-insensitively. The profile form on both doors is email-only, and renaming a
+  user in the panel is a username rename.
+- Paths a stranger is ever shown are plain: invitations moved from
+  `/admin/invite/<token>` to `/invite/<token>`, and the self-service door's
+  `/signup/verify` and `/signup/resend` became `/verify` and `/resend-code`. The
+  `/admin` twins keep their prefix — that door is staff-only.
+- `/account` is laid out by importance instead of one long column: identity header
+  (avatar, `@username`, member since, Player / Sign out) → a four-chip status strip
+  (email · two-factor · linked services · devices) → section pills → a three-column
+  row of Sign-in details / Linked services / Devices → a two-part security panel
+  (password | two-factor) → the danger band, with delete behind a `<details>`
+  reveal. Page height at 1440 px fell from 1706 px to 1437 px.
+- The invitation page matches the sign-in door rather than being its own design:
+  same brand mark, same card, live strength meter, and copy that says activating does
+  not sign you in. Checked at 1440 and 390 through Playwright.
+- All of the above stays inside the self-service door's strict CSP
+  (`script-src 'self'`, `style-src 'self'`) — layout lives in `account.css` classes,
+  and no template gained an inline `style` or `script`.
+- Live: `test_multiuser` 33 OK, `test_selfservice` 49 OK, `test_signup_switch` 12 OK,
+  `test_login_second_factor` 33 OK, `test_account_pages` 5 OK,
+  `test_queue_session_auth` 8 OK, `test_static_assets` 5 OK,
+  `test_secret_hygiene` 3 OK. `/signup`, `/verify`, `/resend-code` answer 200 and
+  `/invite/<unknown>` answers 410.
 
 ### Operations
 
@@ -343,11 +429,62 @@ and the owner were not touched.
 ## Verification commands
 
 ```bash
-# Backend unit tests
-cd /home/ubuntu/youtube-music-alexa-skill/flask-server
-/tmp/opencode/venv/bin/python -m pytest -q tests/test_multiuser.py
+# The full offline gate: every flask-server/tests file (Python and JS) in its own
+# process with isolated environment. This is the suite that must be green.
+cd /home/ubuntu/youtube-music-alexa-skill
+/tmp/opencode/venv/bin/python scripts/run-regressions.py --results /tmp/reg
 
-# Compile check
+# One file, host
+cd flask-server && PYTHONPATH=$PWD:$PWD/tests /tmp/opencode/venv/bin/python \
+  -m pytest -q tests/test_multiuser.py
+
+# The account layer against the real deployment image. Two things the image needs:
+# PYTHONPATH with tests/ (several files import sibling test modules by bare name)
+# and one process per file (module-level environment capture makes a shared process
+# lie). Scope matters too: the app image has no pytest, no Playwright and no sibling
+# source trees, so `unittest discover` over all of tests/ reports ~33 artifacts
+# (pytest-only files, /network-egress and /browser-auth sources).
+docker compose --env-file .env.testalexa -p musicbox-test exec ytmusic sh -lc '
+  cd /app && export PYTHONPATH=/app:/app/tests
+  for m in tests.test_multiuser tests.test_selfservice tests.test_signup_switch \
+           tests.test_account_purge tests.test_login_second_factor \
+           tests.test_player_state tests.test_secret_hygiene \
+           tests.test_audio_endpoint tests.test_audio_error_contract \
+           tests.test_download_cookies tests.test_download_cookie_routes \
+           tests.test_status_routes tests.test_status_journal \
+           tests.test_status_monitor tests.test_queue_session_auth \
+           tests.test_youtube_browser_session tests.test_youtube_auto_login \
+           tests.test_touch_browser tests.test_account_pages \
+           tests.test_netids tests.test_playback_output \
+           tests.test_playback_store tests.test_current_audio; do
+    printf "%-40s " $m; python -m unittest -q $m >/dev/null 2>&1 && echo PASS || echo FAIL
+  done'
+
+# The same loop over *all* 75 test files reports 70 PASS. The other five are the
+# image's missing pieces, not regressions, and each has a gate elsewhere:
+#   test_echo_presence_cache, test_metadata_recovery, test_offline_dispatch_state
+#       -- pytest-style files; the image has no pytest, so unittest collects 0 (or
+#          errors on `import pytest`). The host runner above covers all three.
+#   test_network_egress -- reads /network-egress/proxy.py, which lives in the egress
+#          container, not in this image.
+#   test_audio_jobs    -- test_repeated_prepare_calls_share_one_url_resolution asks
+#          for one URL resolution across 50 repeat calls and gets two in this image,
+#          at the same commit where the host runner passes it. It is timing, not
+#          multiuser (audio_jobs.py and its test reference neither, and forcing
+#          MULTI_USER_ENABLED=0 or a fresh DB_FILE changes nothing), so treat the
+#          host runner as its gate until the prefetch window itself is reworked.
+
+# Browser (Playwright) suites run in the sidecar image, which has the sources:
+docker run --rm --network host --entrypoint sh \
+  -v $PWD/flask-server:/app musicbox-test-youtube-browser -c \
+  'pip install -q pytest && python -m playwright install chromium && \
+   cd /app && python -m pytest -q tests/browser'
+```
+
+Compile check and the local admin smoke test:
+
+```bash
+cd /home/ubuntu/youtube-music-alexa-skill/flask-server
 python3 -m compileall -q multiuser server.py
 
 # Local admin smoke test (does not touch the running stack)

@@ -181,7 +181,11 @@ class Mailer:
         if not self.valid_address(to_address):
             return MailResult("error", "Invalid recipient address.")
         if not html:
-            html = f"<html><body><pre style='white-space:pre-wrap'>{_escape(text)}</pre></body></html>"
+            html = (f'<!doctype html>\n<html>\n<body style="margin:0;padding:24px;'
+                    f'background:{_INK};color:{_TEXT};font-family:{_SANS}">'
+                    f'<pre style="white-space:pre-wrap;margin:0;font-size:13px;'
+                    f'line-height:1.6;font-family:{_MONO}">{_escape(text)}</pre>'
+                    f'</body>\n</html>')
         original_to = to_address
         if self.config.redirect_to:
             to_address = self.config.redirect_to
@@ -240,12 +244,133 @@ def _escape(value: str) -> str:
     )
 
 
+# The palette is the site's own, from templates/static/css/signin.css.  Mail is
+# the one surface where the brand is seen outside the app, so it repeats the real
+# tokens rather than a guess at them: #0a0a0a page, #141414 card, #252525 rules,
+# #e8e8e8 text, #666 fine print, #e8590c accent.  Everything is square-cornered
+# because the site is, and every value is repeated literally because Gmail drops
+# <style> blocks and Outlook renders through Word.
+_INK = "#0a0a0a"
+_SURFACE = "#141414"
+_RULE = "#252525"
+_TEXT = "#e8e8e8"
+_BODY = "#c7c7c7"
+_FAINT = "#8a8a8a"
+_MUTED = "#666666"
+_ACCENT = "#e8590c"
+_DANGER = "#e03131"
+_SANS = "-apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,Roboto,Helvetica,Arial,sans-serif"
+_MONO = "ui-monospace,SFMono-Regular,Menlo,Consolas,monospace"
+
+
 def _mask(address: str) -> str:
     try:
         local, domain = address.split("@", 1)
         return f"{local[:2]}***@{domain}"
     except ValueError:
         return "***"
+
+
+def _mark() -> str:
+    """The five-bar equaliser from the sign-in brand, without flex.
+
+    ``display:flex`` does not exist in Outlook, so the bars are inline-block
+    cells with the same 35/75/50/90/60% heights the stylesheet uses, aligned to
+    a common bottom edge.
+    """
+    bars = (8, 17, 11, 20, 13)
+    return "".join(
+        f'<span style="display:inline-block;width:3px;height:{height}px;'
+        f"background:{_ACCENT};vertical-align:bottom"
+        f'{";margin-right:3px" if index < len(bars) - 1 else ""}"></span>'
+        for index, height in enumerate(bars)
+    )
+
+
+def _label(text: str) -> str:
+    return (f'<p style="margin:0 0 7px;font-size:10px;font-weight:600;'
+            f"text-transform:uppercase;letter-spacing:.14em;color:{_MUTED};"
+            f'font-family:{_SANS}">{_escape(text)}</p>')
+
+
+def _field(value: str) -> str:
+    return (f'      <p style="margin:0 0 16px;padding:11px 14px;background:{_INK};'
+            f'border:1px solid {_RULE};font-size:13px;line-height:1.6;color:{_TEXT};'
+            f'word-break:break-word">{_escape(value)}</p>')
+
+
+def _note(text: str, rule: str = _ACCENT) -> str:
+    """A caution line with a coloured left rule.
+
+    The site never shouts at you in a coloured box; a 3px edge is how the web app
+    marks a note worth reading -- accent for advice, danger for a fault.
+    """
+    return (f'      <p style="margin:0 0 14px;padding:11px 14px;border-left:3px solid {rule};'
+            f'background:{_INK};font-size:12px;line-height:1.6;color:{_BODY}">{_escape(text)}</p>')
+
+
+def _heading(heading: str, intro: str) -> str:
+    return (f'      <h1 style="margin:0 0 8px;font-size:17px;font-weight:600;'
+            f'letter-spacing:-.01em;color:{_TEXT}">{_escape(heading)}</h1>\n'
+            f'      <p style="margin:0 0 20px;font-size:13.5px;line-height:1.6;'
+            f'color:{_BODY}">{_escape(intro)}</p>')
+
+
+def _fine_print(inner_html: str, break_all: bool = False) -> str:
+    """The separated note at the bottom of a card.
+
+    ``inner_html`` is expected to be escaped already, because the link emails put
+    a coloured span inside it.
+    """
+    return (f'      <p style="margin:20px 0 0;padding-top:14px;border-top:1px solid {_RULE};'
+            f'font-size:11px;line-height:1.6;color:{_MUTED}'
+            f'{";word-break:break-all" if break_all else ""}">{inner_html}</p>')
+
+
+def _code_box(code: str) -> str:
+    """The code drawn as the site's own code field.
+
+    ``.code-input`` in signin.css is a page-background box with a #252525 rule,
+    centred monospaced digits and heavy letter-spacing, so a reader who has the
+    mail open beside the browser sees the same shape they are about to type into.
+    The right padding is smaller than the left because letter-spacing adds a
+    space after the last digit, which would otherwise push the digits off centre.
+    """
+    return (f'      <div style="background:{_INK};border:1px solid {_RULE};padding:20px 8px 20px 20px;'
+            f'text-align:center;font-family:{_MONO};font-size:28px;font-weight:600;'
+            f'letter-spacing:.3em;color:#fff">{_escape(code)}</div>')
+
+
+def _document(app_name: str, card_html: str, footer: str,
+              trailing: str = "If you did not request this, you can ignore this email.") -> str:
+    """The shell every transactional message is wrapped in.
+
+    Inline styles are not laziness: Gmail strips ``<style>`` blocks and Outlook
+    renders through Word, so a style attribute is the only thing that survives.
+    ``trailing`` is a parameter because telling someone to ignore an alert about a
+    server that is failing right now is the wrong advice.
+    """
+    return f"""\
+<!doctype html>
+<html>
+<body style="margin:0;padding:0;background:{_INK};color:{_TEXT};font-family:{_SANS}">
+  <div style="height:3px;background:{_ACCENT};font-size:3px;line-height:3px">&nbsp;</div>
+  <div style="max-width:560px;margin:0 auto;padding:30px 20px 34px">
+    <table role="presentation" cellpadding="0" cellspacing="0" style="border-collapse:collapse;margin:0 0 22px">
+      <tr>
+        <td style="vertical-align:bottom;padding-right:12px">{_mark()}</td>
+        <td style="vertical-align:middle;font-size:13px;font-weight:700;\
+letter-spacing:.14em;text-transform:uppercase;color:{_TEXT}">{_escape(app_name)}</td>
+      </tr>
+    </table>
+    <div style="background:{_SURFACE};border:1px solid {_RULE};padding:26px 24px">
+{card_html}
+    </div>
+    <p style="color:{_MUTED};font-size:11px;line-height:1.6;margin:16px 2px 0">{_escape(footer or '')}\
+{("<br>" + _escape(trailing)) if trailing else ""}</p>
+  </div>
+</body>
+</html>"""
 
 
 def render_email(
@@ -259,7 +384,7 @@ def render_email(
     footer: str = "",
     warning: str = "",
 ) -> tuple[str, str]:
-    """Return (text, html) for a branded transactional email."""
+    """Return (text, html) for a message whose credential is a link to open."""
     text_lines = [
         f"{app_name}",
         "",
@@ -281,31 +406,122 @@ def render_email(
             "",
             "If you did not request this, you can ignore this email.",
             "",
-            "— Music Box",
+            "— " + app_name,
         ]
     )
-    text = "\n".join(text_lines)
-    html = f"""\
-<!doctype html>
-<html>
-<body style="margin:0;padding:0;background:#050505;color:#f5f5f5;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif">
-  <div style="max-width:560px;margin:0 auto;padding:32px 20px">
-    <div style="display:flex;align-items:center;gap:10px;margin-bottom:22px">
-      <span style="display:inline-grid;place-items:center;width:34px;height:34px;border-radius:10px;background:#e8590c;font-size:18px">♫</span>
-      <span style="font-weight:700;font-size:16px">{_escape(app_name)}</span>
-    </div>
-    <div style="background:#151515;border:1px solid #2b2b2b;border-radius:14px;padding:28px">
-      <h1 style="margin:0 0 10px;font-size:22px;letter-spacing:-.02em">{_escape(heading)}</h1>
-      <p style="margin:0 0 20px;color:#b3b3b3;line-height:1.55">{_escape(intro)}</p>
-      <p style="margin:0 0 22px">
-        <a href="{_escape(action_url)}" style="display:inline-block;background:#e8590c;color:#fff;text-decoration:none;font-weight:600;padding:11px 20px;border-radius:9px">{_escape(action_label)}</a>
-      </p>
-      <p style="margin:0 0 12px;color:#8c8c8c;font-size:13px">{_escape(expiry)}</p>
-      {f'<p style="margin:0 0 12px;color:#e3b341;font-size:13px">{_escape(warning)}</p>' if warning else ''}
-      <p style="margin:18px 0 0;color:#666;font-size:12px;word-break:break-all">If the button does not work, paste this link into your browser:<br><span style="color:#9a9a9a">{_escape(action_url)}</span></p>
-    </div>
-    <p style="color:#666;font-size:12px;line-height:1.5;margin:18px 4px 0">{_escape(footer or '')}<br>If you did not request this, you can ignore this email.</p>
-  </div>
-</body>
-</html>"""
-    return text, html
+    card = "\n".join(
+        [
+            _heading(heading, intro),
+            '      <p style="margin:0 0 18px">'
+            f'<a href="{_escape(action_url)}" style="display:inline-block;background:{_ACCENT};'
+            f'border:1px solid {_ACCENT};color:#fff;text-decoration:none;font-size:12px;'
+            'font-weight:700;text-transform:uppercase;letter-spacing:.1em;padding:12px 20px">'
+            f'{_escape(action_label)}</a></p>',
+            f'      <p style="margin:0 0 14px;font-size:12px;color:{_FAINT}">{_escape(expiry)}</p>',
+            (_note(warning) if warning else ""),
+            _fine_print(
+                f'{_escape(action_label)} does not work? Paste this address into your '
+                f'browser:<br><span style="color:{_FAINT}">{_escape(action_url)}</span>',
+                break_all=True,
+            ),
+        ]
+    )
+    return "\n".join(text_lines), _document(app_name, card, footer)
+
+
+def render_alert_email(
+    *,
+    app_name: str,
+    heading: str,
+    intro: str,
+    rows: tuple = (),
+    note: str = "",
+    footer: str = "",
+    fine_print: str = "",
+    trailing: str = "",
+) -> tuple[str, str]:
+    """Return (text, html) for a message with no credential in it.
+
+    Alerts describe a server that needs a human rather than a credential to type,
+    so there is no code box and no button -- just what happened, in the same
+    label-over-value shape the site uses, and what to do about it.
+
+    The two closing lines are the only part that is about the *reader* rather than
+    the event, so they are arguments: an operator alert and a notice to an account
+    holder are the same shape addressed to two people who need different reassurance.
+    """
+    text_lines = [app_name, "", heading, "", intro]
+    for label, value in rows:
+        if value:
+            text_lines.extend(["", f"{label}: {value}"])
+    if note:
+        text_lines.extend(["", note])
+    if footer:
+        text_lines.extend(["", footer])
+    body = [_heading(heading, intro)]
+    for label, value in rows:
+        if value:
+            body.extend([_label(label), _field(value)])
+    if note:
+        body.append(_note(note, _DANGER))
+    body.append(_fine_print(
+        _escape(fine_print) or f"Sent automatically by {_escape(app_name)} because this needs someone to look."))
+    text_lines.extend(["", "— " + app_name])
+    return "\n".join(text_lines), _document(
+        app_name, "\n".join(body), footer,
+        trailing=trailing or "Nothing in this email needs a reply; it is here so you see it before a user does.",
+    )
+
+
+def render_code_email(
+    *,
+    app_name: str,
+    heading: str,
+    intro: str,
+    code: str,
+    expiry: str,
+    where: str,
+    footer: str = "",
+    warning: str = "",
+) -> tuple[str, str]:
+    """Return (text, html) for a message whose credential is a code to type.
+
+    No anchor, no URL, no "paste this link" line anywhere in the output -- that is
+    the entire point of the switch.  A forwarded code email is inert until somebody
+    types it into a page that also has to be reached by hand, whereas a forwarded
+    link was one click from whomever it was forwarded to.  The digits stay
+    contiguous so a person copying them does not copy a space.
+    """
+    text_lines = [
+        app_name,
+        "",
+        heading,
+        "",
+        intro,
+        "",
+        f"Your code is {code}",
+        "",
+        f"Enter it on {where}.",
+        "",
+        expiry,
+    ]
+    if warning:
+        text_lines.extend(["", warning])
+    if footer:
+        text_lines.extend(["", footer])
+    text_lines.extend(["", "If you did not request this, you can ignore this email.",
+                       "", "— " + app_name])
+    card = "\n".join(
+        [
+            _heading(heading, intro),
+            _label("Your code"),
+            _code_box(code),
+            f'      <p style="margin:14px 0 14px;font-size:13px;line-height:1.6;color:{_BODY}">'
+            f'Enter it on <span style="color:{_TEXT}">{_escape(where)}</span>.</p>',
+            f'      <p style="margin:0 0 14px;font-size:12px;color:{_FAINT}">{_escape(expiry)}</p>',
+            (_note(warning) if warning else ""),
+            _fine_print("This email has no button in it on purpose: nothing here "
+                        "works without you."),
+        ]
+    )
+    return "\n".join(text_lines), _document(app_name, card, footer)
