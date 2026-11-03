@@ -220,3 +220,32 @@ class GatewayBackpressureTests(unittest.IsolatedAsyncioTestCase):
             for task in tasks:
                 if not task.done():task.cancel()
             await client.close();await upstream.close()
+
+    async def test_slow_wsgi_requests_cannot_starve_reserved_control_workers(self):
+        import waitress
+        from flask import Flask, jsonify
+        app=Flask('isolated-control-capacity')
+        gate=threading.Event(); both_started=threading.Event(); count=0; lock=threading.Lock()
+        @app.get('/slow/')
+        def slow():
+            nonlocal count
+            with lock:
+                count+=1
+                if count==2:both_started.set()
+            gate.wait(3)
+            return jsonify(done=True)
+        @app.get('/api/app/output/')
+        def output():return jsonify(heartbeat=True)
+        regular=waitress.create_server(app,host='127.0.0.1',port=0,threads=2)
+        reserved=waitress.create_server(app,host='127.0.0.1',port=0,threads=1)
+        threading.Thread(target=regular.run,daemon=True).start();threading.Thread(target=reserved.run,daemon=True).start()
+        client=TestClient(TestServer(create_gateway(f'http://127.0.0.1:{regular.effective_port}',
+            control_upstream=f'http://127.0.0.1:{reserved.effective_port}')));await client.start_server()
+        tasks=[asyncio.ensure_future(client.get('/slow/')) for _ in range(2)]
+        try:
+            self.assertTrue(await asyncio.to_thread(both_started.wait,2))
+            response=await asyncio.wait_for(client.get('/api/app/output/'),1)
+            self.assertEqual(await response.json(),{'heartbeat':True})
+        finally:
+            gate.set();await asyncio.gather(*tasks,return_exceptions=True)
+            await client.close();regular.close();reserved.close()

@@ -101,3 +101,12 @@ class AmazonProxyBoundaryTests(unittest.IsolatedAsyncioTestCase):
         self.owner._proxy_attempt_started-=601
         with self.assertRaises(web.HTTPForbidden): await self.handler(self.owner,req)
         self.assertEqual(self.forward.await_count,1)
+
+    async def test_superseded_attempt_cannot_forward_to_a_new_shared_proxy(self):
+        def authorize(cookie, attempt):
+            self.owner._proxy_attempt_id='replacement-attempt'
+            return True
+        self.owner._proxy_authorizer=authorize
+        req=make_mocked_request('GET','/alexa/proxy/',headers={'Cookie':'session=owner'})
+        with self.assertRaises(web.HTTPForbidden): await self.handler(self.owner,req)
+        self.forward.assert_not_awaited()

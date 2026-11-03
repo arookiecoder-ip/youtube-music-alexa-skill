@@ -393,7 +393,8 @@ class AlexaRemote:
         attempt = getattr(self, '_proxy_attempt_id', None)
         if (not authorize or not attempt or
                 time.monotonic() - self._proxy_attempt_started > 600 or
-                not await asyncio.to_thread(authorize, request.headers.get('Cookie', ''), attempt)):
+                not await asyncio.to_thread(authorize, request.headers.get('Cookie', ''), attempt) or
+                attempt != getattr(self, '_proxy_attempt_id', None)):
             raise web.HTTPForbidden(text="Open Amazon sign-in from your signed-in Music Box account.")
         proxy = self._proxy
         if proxy is None:

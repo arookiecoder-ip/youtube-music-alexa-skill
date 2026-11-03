@@ -156,21 +156,7 @@ jobs:
             if docker exec musicbox-browser-ci python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8765/health',timeout=2)"; then break; fi
             sleep 2
           done
-          docker exec musicbox-browser-ci python -c "from pathlib import Path; assert next(l for l in Path('/proc/1/status').read_text().splitlines() if l.startswith('Uid:')).split()[1] == '10001'"
-          docker exec -i musicbox-browser-ci python - <<'PY'
-          import socket, urllib.request, urllib.error
-          for port in (5900,6080):
-              s=socket.socket();s.settimeout(1)
-              assert s.connect_ex(('127.0.0.1',port)) != 0, 'Unauthenticated desktop port exposed'
-              s.close()
-          try:
-              urllib.request.urlopen('http://127.0.0.1:8765/interactive/frame')
-              raise AssertionError('Anonymous frame read accepted')
-          except urllib.error.HTTPError as error:
-              assert error.code == 401
-          request=urllib.request.Request('http://127.0.0.1:8765/interactive/start',data=b'{}',headers={'Content-Type':'application/json','X-Control-Token':'isolated-ci-browser-token'})
-          assert urllib.request.urlopen(request).status in (202,409)
-          PY
+          docker exec -i musicbox-browser-ci python - < flask-server/tests/smoke_browser_container.py
       - name: Browser diagnostics
         if: always()
         run: docker logs musicbox-browser-ci || true
