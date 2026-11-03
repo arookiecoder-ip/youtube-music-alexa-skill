@@ -126,5 +126,3 @@ class _YouTubeResolverPool:
         except Exception:
             logger.debug('Discarded YouTube resolver did not close cleanly')
         return True
-
-
