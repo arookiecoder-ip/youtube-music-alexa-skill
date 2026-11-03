@@ -6949,9 +6949,11 @@ def login():
         pending = store.consume(str(body.get("token") or ""), bind)
         if not pending:
             return error_response('login timed out, start again', 401)
-        # str(): a JSON body can carry the 6-digit code as a number, and
-        # .strip() on an int would 500 instead of failing the check cleanly.
-        code = str(body.get("code") or "").strip()
+        # JSON numbers lose leading zeroes; restore exactly six digits while
+        # leaving booleans, fractions and out-of-range values invalid.
+        raw_code = body.get("code")
+        code = (f"{raw_code:06d}" if type(raw_code) is int and 0 <= raw_code <= 999999
+                else str(raw_code or "").strip())
         if pending.get('kind') == 'account':
             layer = _multiuser_layer
             uid = str(pending.get('uid') or '')

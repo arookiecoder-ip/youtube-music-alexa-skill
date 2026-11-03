@@ -58,3 +58,13 @@ No automated suite proves live Google/Amazon acceptance, mailbox delivery, actua
 - Both production images build; backend UID 10001 readiness/access smoke and Compose configuration validation pass. Production Chromium sandbox launch fails under this review host's namespace policy (see rollout requirement above).
 - Nonignored source snapshot: Gitleaks reports **no leaks**. Backend image: **274** upstream advisories, **38 HIGH/CRITICAL**, **0 fixable HIGH/CRITICAL**. Browser image: **1018** advisories, **254 HIGH/CRITICAL**, **0 fixable HIGH/CRITICAL**. Counts include distribution scanner classifications, not demonstrated application exploits; an empty fixable gate is not a clean image.
 - Runtime dependency locks were audited separately with no known advisories. Native OS/Chromium findings above remain; update pinned bases/packages when upstream fixes become available.
+
+## Test stack rollout (2026-11-03)
+
+Deployed the remediation to Compose project `musicbox-test` at `https://testalexa.synthora.in`. Schema 7 migration retained all 17 existing accounts; provider ciphertext decrypts and database integrity is `ok`. Backend/browser run as UID 10001. Public readiness, login and admin health return 200; the deployed browser launches successfully.
+
+Before switching, saved local rollback filesystem images/configuration and an encrypted whole-state archive under `/home/ubuntu/musicbox-deployment-backups/20261103T165703Z/`. An isolated restore drill authenticated/extracted all three state directories, retained 17 accounts, and revoked restored sessions. These local backups still need external retention and separate key custody.
+
+This host blocks Chromium user namespaces. The user explicitly approved preserving its existing unsandboxed compatibility mode in the ignored `.env.testalexa`; private networking, non-root execution and container limits remain enabled. Lambda/interaction-model publication is pending ASK authentication. Legacy key-only owner bypass remains disabled; updated skill requests must pair their Alexa subject/device before normal account playback.
+
+Deployment also exposed a YAML flow-list parsing bug in the tmpfs options, now quoted correctly. Hosted CI exposed numeric TOTP leading-zero loss and a narrow-screen header overflow with wider system fonts; both have targeted fixes and regression coverage.

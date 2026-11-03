@@ -413,9 +413,15 @@ class PlayerDoorTests(SecondFactorDoorTestBase):
     def test_a_number_is_accepted_for_the_code_a_json_body_may_send(self):
         self.player_user("player1")
         secret = self.enroll("player1", PLAYER_PASSWORD)
-        token = self.post(username="player1", password=PLAYER_PASSWORD).get_json()["token"]
-        code = int(totp_at(secret, int(time.time()) // 30))
-        response = self.post(step="totp", token=token, code=code)
+        # Exercise leading-zero loss deterministically instead of depending on
+        # the random secret's code at this exact second (a 1-in-10 CI failure).
+        counter = int(time.time()) // 30
+        while not totp_at(secret, counter).startswith("0"):
+            counter += 1
+        code = int(totp_at(secret, counter))
+        with mock.patch("time.time", return_value=counter * 30 + 1):
+            token = self.post(username="player1", password=PLAYER_PASSWORD).get_json()["token"]
+            response = self.post(step="totp", token=token, code=code)
         self.assertEqual(response.status_code, 200, response.get_data(as_text=True)[:300])
 
     def test_a_pending_enrollment_is_not_a_second_factor(self):

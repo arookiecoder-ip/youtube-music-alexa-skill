@@ -18,7 +18,7 @@ services:
     mem_limit: 2g
     cpus: 2
     pids_limit: 256
-    tmpfs: [/tmp:size=256m,mode=1777]
+    tmpfs: ['/tmp:size=256m,mode=1777']
     build: ./flask-server
     container_name: ytmusic
     restart: unless-stopped
@@ -96,7 +96,7 @@ services:
     mem_limit: 2g
     cpus: 2
     pids_limit: 512
-    tmpfs: [/tmp:size=512m,mode=1777]
+    tmpfs: ['/tmp:size=512m,mode=1777']
     build: ./browser-auth
     container_name: youtube-browser
     restart: unless-stopped

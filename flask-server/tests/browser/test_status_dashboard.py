@@ -132,6 +132,17 @@ def test_api_strings_are_text_and_expired_session_stops_polling(browser_page):
     assert not count
     assert not errors
 
+def test_wide_system_font_keeps_status_header_inside_small_screen(browser_page):
+    page, base, errors = browser_page
+    page.set_viewport_size({'width':320,'height':900})
+    ready(page, base)
+    # Hosted Ubuntu and Debian use different fallback font metrics.
+    page.add_style_tag(content='.status-page .topbar-title {font-size:20px}')
+    assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
+    assert page.locator('#error-inbox').bounding_box()['x'] >= 0
+    assert not errors
+
+
 @pytest.mark.parametrize('width', [320, 390, 768, 1024])
 def test_responsive_layout_capacity_and_expandable_details(browser_page, width):
     page, base, errors = browser_page

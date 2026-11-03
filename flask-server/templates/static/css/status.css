@@ -13,6 +13,9 @@ html { scroll-padding-top: 88px; }
 .symbols { position: absolute; width: 0; height: 0; overflow: hidden; }
 /* `svg.icon`, not `.icon`: `.btn.icon` puts the same class on the button, and a
    20px rule meant for the glyph was shrinking the 40px control around it. */
+/* Keep wide system-font titles from pushing the error control off small screens. */
+.status-page .topbar-title { overflow: hidden; text-overflow: ellipsis; }
+
 .status-page svg.icon { width: 20px; height: 20px; flex: 0 0 auto; }
 .status-page .btn svg.icon { width: 17px; height: 17px; }
 
