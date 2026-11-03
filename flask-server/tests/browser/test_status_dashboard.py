@@ -137,7 +137,7 @@ def test_wide_system_font_keeps_status_header_inside_small_screen(browser_page):
     page.set_viewport_size({'width':320,'height':900})
     ready(page, base)
     # Hosted Ubuntu and Debian use different fallback font metrics.
-    page.add_style_tag(content='.status-page .topbar-title {font-size:20px}')
+    page.locator('.topbar-title').evaluate("el => { el.style.fontSize = '20px'; }")
     assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
     assert page.locator('#error-inbox').bounding_box()['x'] >= 0
     assert not errors
