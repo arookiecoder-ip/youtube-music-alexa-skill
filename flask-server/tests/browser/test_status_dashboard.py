@@ -74,6 +74,16 @@ def ready(page, base):
     playwright.expect(page.locator('#request-total')).to_contain_text('total')
 
 
+def assert_viewport_fits(page):
+    dimensions = page.evaluate("""() => ({width:innerWidth, scroll:document.documentElement.scrollWidth,
+      outside:[...document.querySelectorAll('body *')].filter(el=>{
+        const box=el.getBoundingClientRect();
+        return box.width && box.right>innerWidth+1 && !el.closest('.table-wrap');
+      }).slice(0,15).map(el=>({tag:el.tagName,id:el.id,classes:String(el.className),
+        right:el.getBoundingClientRect().right,text:el.textContent.slice(0,60)}))})""")
+    assert dimensions['scroll'] <= dimensions['width'], dimensions
+
+
 def test_desktop_filters_pause_export_manual_cookie_probe_and_no_javascript_errors(browser_page, tmp_path):
     page, base, errors = browser_page
     ready(page, base)
@@ -102,7 +112,7 @@ def test_mobile_no_overflow_secret_url_removed_and_failed_refresh_keeps_snapshot
     page.goto(base+'/status?key='+server.API_KEY)
     playwright.expect(page.locator('#updated')).to_contain_text('Updated')
     assert 'key=' not in page.url
-    assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
+    assert_viewport_fits(page)
     before=page.locator('#request-total').inner_text()
     page.route('**/api/status', lambda route: route.fulfill(status=503,json={'error':'outage'}))
     page.locator('#refresh').click()
@@ -138,7 +148,8 @@ def test_wide_system_font_keeps_status_header_inside_small_screen(browser_page):
     ready(page, base)
     # Hosted Ubuntu and Debian use different fallback font metrics.
     page.locator('.topbar-title').evaluate("el => { el.style.fontSize = '20px'; }")
-    assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
+    page.locator('#cookie-check').evaluate("el => { el.style.fontSize = '20px'; }")
+    assert_viewport_fits(page)
     assert page.locator('#error-inbox').bounding_box()['x'] >= 0
     assert not errors
 
@@ -148,7 +159,7 @@ def test_responsive_layout_capacity_and_expandable_details(browser_page, width):
     page, base, errors = browser_page
     page.set_viewport_size({'width':width,'height':900})
     ready(page, base)
-    assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
+    assert_viewport_fits(page)
     assert page.locator('#cache-section, #inventory-section').count()==0
     page.get_by_role('button', name='Resource details', exact=True).click()
     playwright.expect(page.locator('#system')).to_be_visible()
@@ -264,7 +275,7 @@ def test_navigation_and_details_do_not_move_dashboard(browser_page, width, tmp_p
         # always on screen and the button must not be in the tab order.
         assert not page.locator('#nav-toggle').is_visible()
         playwright.expect(page.locator('#status-nav')).to_be_visible()
-    assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
+    assert_viewport_fits(page)
     page.evaluate('scrollTo(0,0)')
     screenshot(page, f'musicbox-status-layout-{width}.png', tmp_path)
     assert not errors
