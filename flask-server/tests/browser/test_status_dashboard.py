@@ -79,9 +79,9 @@ def assert_viewport_fits(page):
       outside:[...document.querySelectorAll('body *')].filter(el=>{
         const box=el.getBoundingClientRect();
         return box.width && box.right>innerWidth+1 && !el.closest('.table-wrap');
-      }).slice(0,15).map(el=>({tag:el.tagName,id:el.id,classes:String(el.className),
+      }).slice(0,15).map(el=>({tag:el.tagName,id:el.id,classes:el.getAttribute('class'),parent:el.parentElement?.outerHTML.slice(0,300),
         right:el.getBoundingClientRect().right,text:el.textContent.slice(0,60)}))})""")
-    assert dimensions['scroll'] <= dimensions['width'], dimensions
+    assert dimensions['scroll'] <= dimensions['width'], json.dumps(dimensions)
 
 
 def test_desktop_filters_pause_export_manual_cookie_probe_and_no_javascript_errors(browser_page, tmp_path):
@@ -149,6 +149,7 @@ def test_wide_system_font_keeps_status_header_inside_small_screen(browser_page):
     # Hosted Ubuntu and Debian use different fallback font metrics.
     page.locator('.topbar-title').evaluate("el => { el.style.fontSize = '20px'; }")
     page.locator('#cookie-check').evaluate("el => { el.style.fontSize = '20px'; }")
+    page.locator('[data-detail-target="cookies"]').evaluate("el => { el.style.fontSize = '20px'; }")
     assert_viewport_fits(page)
     assert page.locator('#error-inbox').bounding_box()['x'] >= 0
     assert not errors
