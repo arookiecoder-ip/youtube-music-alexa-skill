@@ -1,6 +1,6 @@
 # Security remediation and rollout
 
-Implementation status for the findings in [the architecture audit](CURRENT-ARCHITECTURE-SECURITY-REVIEW.md). Changes are in the working tree; no production deployment, live provider login, or real Echo pairing was performed.
+Implementation status for the findings in [the architecture audit](CURRENT-ARCHITECTURE-SECURITY-REVIEW.md). Changes are committed on `feat/multi-user` and deployed to the test stack at `https://testalexa.synthora.in`. Lambda/interaction-model publication awaits ASK authentication; live provider login and real Echo pairing still require account/device verification.
 
 ## Implemented
 
@@ -68,3 +68,9 @@ Before switching, saved local rollback filesystem images/configuration and an en
 This host blocks Chromium user namespaces. The user explicitly approved preserving its existing unsandboxed compatibility mode in the ignored `.env.testalexa`; private networking, non-root execution and container limits remain enabled. Lambda/interaction-model publication is pending ASK authentication. Legacy key-only owner bypass remains disabled; updated skill requests must pair their Alexa subject/device before normal account playback.
 
 Deployment also exposed a YAML flow-list parsing bug in the tmpfs options, now quoted correctly. Hosted CI exposed numeric TOTP leading-zero loss and a narrow-screen header overflow with wider system fonts; both have targeted fixes and regression coverage.
+
+## Release verification (2026-11-04)
+
+Application revision `50bbef2` fixes the remaining 320px overflow by wrapping long details-button labels while keeping their icons inside the button. A deterministic larger-font test reproduced the failure before the fix; all 21 dashboard checks pass locally after it.
+
+[GitHub regression run 41760029881](https://github.com/arookiecoder-ip/youtube-music-alexa-skill/actions/runs/41760029881) passed both the playback and browser jobs. The release is deployed; live source hashes match, public health/login checks return 200, unauthorized mutations/browser access return 401, schema 7 integrity is `ok`, and all 17 accounts plus the stored provider credential remain intact. The approved Chromium compatibility mode is retained. ASK credentials are still absent on this host, so Alexa skill/model deployment remains pending.
