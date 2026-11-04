@@ -661,6 +661,19 @@ class DispatchCoalescing(_CleanServerState):
         with server._ARMED_PLAYS_LOCK:
             server._ARMED_PLAYS.clear()
 
+    def test_seek_burst_for_same_song_only_dispatches_the_latest_offset(self):
+        sent = []
+        delivered = threading.Event()
+        def dispatch(serial, video, offset=0):
+            sent.append((serial, video, offset))
+            delivered.set()
+        with mock.patch.object(server, '_dispatch_play_with_retry', side_effect=dispatch):
+            for position in (10000, 25000, 42000):
+                server._schedule_play_dispatch('DEVICE1', 'AAAAAAAAAAA', offset_ms=position, delay=0.2)
+            self.assertTrue(delivered.wait(2), 'Latest seek was not dispatched')
+        self.assertEqual(sent, [('DEVICE1', 'AAAAAAAAAAA', 42000)])
+        self.assertEqual(server._peek_armed_play('DEVICE1')[1], 42000)
+
     def test_a_five_click_burst_dispatches_only_the_last_song(self):
         sent = []
         with mock.patch.object(server, "_dispatch_play_with_retry",

@@ -6716,7 +6716,17 @@ def alexa_seek():
         revision = int(_now_playing.get('playback_revision', 0)) + 1
         _now_playing['playback_revision'] = revision
         _now_playing['updated_at'] = time.time()
+        seek_intent = _now_playing['alexa_intent_at']
+        seek_output = _playback_output.snapshot()['output_token']
     _notify_sse()
+    if body.get('async') is True:
+        # Acknowledge the staged cursor immediately. The shared dispatcher drops
+        # superseded seeks and re-arms an outstanding trigger with the latest
+        # offset instead of queueing several slow Amazon commands. Device/track
+        # fences and the confirmation watchdog remain authoritative.
+        _schedule_play_dispatch(serial, video_id, offset_ms=position_ms, delay=0.075,
+                                expected_intent=seek_intent, expected_output=seek_output)
+        return jsonify({'ok': True, 'pending': True}), 202
     error = _dispatch_play_with_retry(serial, video_id, position_ms)
     if error:
         with _np_lock:
