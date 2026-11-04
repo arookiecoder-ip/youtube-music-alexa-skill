@@ -1,6 +1,6 @@
 # Security remediation and rollout
 
-Implementation status for the findings in [the architecture audit](CURRENT-ARCHITECTURE-SECURITY-REVIEW.md). Changes are committed on `feat/multi-user` and deployed to the test stack at `https://testalexa.synthora.in`. Lambda/interaction-model publication awaits ASK authentication; live provider login and real Echo pairing still require account/device verification.
+Implementation status for the findings in [the architecture audit](CURRENT-ARCHITECTURE-SECURITY-REVIEW.md). Changes are committed on `feat/multi-user` and deployed to the test stack at `https://testalexa.synthora.in`. The Alexa-hosted development skill and all five language models are also deployed; live provider login and real Echo pairing still require account/device verification.
 
 ## Implemented
 
@@ -73,4 +73,14 @@ Deployment also exposed a YAML flow-list parsing bug in the tmpfs options, now q
 
 Application revision `50bbef2` fixes the remaining 320px overflow by wrapping long details-button labels while keeping their icons inside the button. A deterministic larger-font test reproduced the failure before the fix; all 21 dashboard checks pass locally after it.
 
-[GitHub regression run 41760029881](https://github.com/arookiecoder-ip/youtube-music-alexa-skill/actions/runs/41760029881) passed both the playback and browser jobs. The release is deployed; live source hashes match, public health/login checks return 200, unauthorized mutations/browser access return 401, schema 7 integrity is `ok`, and all 17 accounts plus the stored provider credential remain intact. The approved Chromium compatibility mode is retained. ASK credentials are still absent on this host, so Alexa skill/model deployment remains pending.
+[GitHub regression run 41760029881](https://github.com/arookiecoder-ip/youtube-music-alexa-skill/actions/runs/41760029881) passed both the playback and browser jobs. The release is deployed; live source hashes match, public health/login checks return 200, unauthorized mutations/browser access return 401, schema 7 integrity is `ok`, and all 17 accounts plus the stored provider credential remain intact. The approved Chromium compatibility mode is retained. ASK authentication was pending at that verification point; the completed Alexa-hosted release is recorded below.
+
+## Alexa-hosted development release (2026-11-04)
+
+Amazon developer authentication succeeded without linking an AWS account or creating IAM access keys. The private hosted skill was backed up before changes. Amazon reports deployment commit `363b66f` as **SUCCEEDED**; all five locales (`en-AU`, `en-CA`, `en-GB`, `en-IN`, `en-US`) exactly match the prepared models and include `LinkAccountIntent`. The original skill manifest/endpoints and invocation name were retained.
+
+The approved backend API key is stored only in the private Amazon-hosted configuration. That configuration also activates the application-ID check and points to `https://testalexa.synthora.in`. Help and invalid-code pairing simulations both completed successfully; the latter reached the new pairing handler and rejected the invalid code. Actual Echo pairing requires the account page's current code on each device.
+
+**Hosted runtime limitation:** Amazon reports Python 3.8 for this skill and manages that runtime. The new `lambda/requirements-hosted.lock` is compiled for Python 3.8, and all 44 Lambda tests pass with those exact hashed dependencies. The hosted requirements entry point uses `--require-hashes` and includes that compatibility lock. The existing Python 3.12 lock remains appropriate for newer self-managed runtimes.
+
+The Python 3.8 compatibility audit reports known advisories in `requests==2.32.4` and `urllib3==1.26.20`. Available fixed versions require newer Python/dependency support, so this hosted compatibility lock is **not advisory-free**. Reproduce with `pip-audit --disable-pip --no-deps -r lambda/requirements-hosted.lock`. Resolving that remaining platform constraint requires a supported runtime/hosting migration; obtaining IAM keys alone does not upgrade this Alexa-managed runtime. See [Amazon's hosted runtime policy](https://developer.amazon.com/en-US/docs/alexa/hosted-skills/build-a-skill-end-to-end-using-an-alexa-hosted-skill.html).
