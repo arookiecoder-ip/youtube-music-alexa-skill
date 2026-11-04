@@ -752,6 +752,28 @@ class DispatchCoalescing(_CleanServerState):
         self.assertEqual(sent, ["FIRST111111", "SECOND22222"],
                          msg="a dropped trigger must not block playback forever")
 
+    def test_old_unserved_trigger_is_replaced_before_cleanup_ttl(self):
+        """A later deliberate click must not wait the full 15-second marker TTL.
+
+        Amazon can accept an injected command without invoking the skill.  In
+        that case there is no /armed_play/ request to clear the marker, so the
+        next click needs a fresh command once the short reuse window passes.
+        """
+        sent = []
+        with mock.patch.object(server, "_dispatch_play_with_retry",
+                               side_effect=lambda s, v, o=0: sent.append(v)):
+            server._schedule_play_dispatch("DEVICE1", "FIRST111111", delay=0.05)
+            time.sleep(0.25)
+            with server._TRIGGER_INFLIGHT_LOCK:
+                server._TRIGGER_INFLIGHT["DEVICE1"] = (
+                    time.time() - server.TRIGGER_REUSE_WINDOW - 0.1)
+            self.assertTrue(server._trigger_in_flight("DEVICE1"),
+                            msg="the cleanup marker remains valid until its full TTL")
+            server._schedule_play_dispatch("DEVICE1", "SECOND22222", delay=0.05)
+            time.sleep(0.25)
+        self.assertEqual(sent, ["FIRST111111", "SECOND22222"],
+                         msg="an old unserved trigger must not suppress a new play")
+
     def test_a_lone_click_still_dispatches(self):
         sent = []
         with mock.patch.object(server, "_dispatch_play_with_retry",

@@ -373,6 +373,12 @@ _PENDING_DISPATCH_LOCK = threading.Lock()
 # The TTL bounds the case where Alexa silently drops a trigger: after it we
 # allow a fresh one rather than blocking playback forever.
 TRIGGER_INFLIGHT_TTL = 15.0
+# Do not let a trigger that Amazon accepted but never delivered suppress a
+# later, deliberate play for the entire marker lifetime.  Five seconds keeps a
+# normal rapid-click burst behind one trigger (and matches the cached-stream
+# confirmation watchdog), while a later click gets a new chance to reach the
+# skill instead of waiting for the 15-second cleanup TTL.
+TRIGGER_REUSE_WINDOW = float(os.environ.get('TRIGGER_REUSE_WINDOW', '5.0'))
 _TRIGGER_INFLIGHT = {}
 _TRIGGER_INFLIGHT_LOCK = threading.Lock()
 
@@ -382,15 +388,26 @@ def _note_trigger_sent(serial):
         _TRIGGER_INFLIGHT[serial or ''] = time.time()
 
 
-def _trigger_in_flight(serial):
-    """True while a trigger phrase for this device is sent but not yet served."""
+def _trigger_in_flight(serial, max_age=None):
+    """True while a trigger phrase for this device is sent but not yet served.
+
+    ``max_age`` is a non-destructive freshness bound for callers deciding
+    whether an old, unserved trigger is still safe to reuse.  The full TTL is
+    retained for cleanup and observability, but dispatch must not be wedged by
+    an accepted Amazon command that never invokes the skill.
+    """
     key = serial or ''
+    limit = TRIGGER_INFLIGHT_TTL if max_age is None else max(0.0, max_age)
     with _TRIGGER_INFLIGHT_LOCK:
         sent_at = _TRIGGER_INFLIGHT.get(key)
         if sent_at is None:
             return False
-        if time.time() - sent_at > TRIGGER_INFLIGHT_TTL:
-            del _TRIGGER_INFLIGHT[key]
+        if time.time() - sent_at > limit:
+            # A bounded reuse check must not erase the marker early: another
+            # observer may still need the full-TTL state.  The dispatcher will
+            # overwrite it immediately when it sends the replacement trigger.
+            if max_age is None:
+                del _TRIGGER_INFLIGHT[key]
             return False
         return True
 
@@ -456,7 +473,7 @@ def _schedule_play_dispatch(serial, video_id, offset_ms=0, delay=None, expected_
         # Always keep the arm current: this is what an in-flight trigger, or the
         # one we are about to send, will actually play.
         _arm_play(serial, video_id, offset_ms)
-        if _trigger_in_flight(serial):
+        if _trigger_in_flight(serial, max_age=TRIGGER_REUSE_WINDOW):
             # A trigger is already on its way to Alexa and will fetch the arm we
             # just refreshed. Sending another would make the Echo play this song
             # *and then* the next one. But that in-flight trigger can be dropped
