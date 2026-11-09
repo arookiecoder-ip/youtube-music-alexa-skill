@@ -21,12 +21,12 @@ Authentication helpers, browser coordination, provider command files, Alexa iden
 
 ## Before deployment
 
-1. Stop the backend and browser and take an encrypted backup of **all three volumes**: database/data, Amazon cookies, Chromium profiles. Keep a separately tested copy of the encryption keys. Migration advances the account schema to **7**. Rollback requires the prior image and prior whole-state backup; do not run an older binary against the migrated database.
+1. Stop the backend and browser and take an encrypted backup of **all three volumes**: database/data, Amazon cookies, Chromium profiles. Keep a separately tested copy of the encryption keys. Migration advances the account schema to **8**. Rollback requires the prior image and prior whole-state backup; do not run an older binary against the migrated database.
 2. Configure an independent `MULTIUSER_ENCRYPTION_KEY` (or existing supported `ADMIN_ENCRYPTION_KEY`). HTTPS multi-user startup now refuses implicit derivation from the Flask signing secret. **Preserve the existing encryption key** or rotate the stored ciphertext before changing it. Merely replacing an environment variable makes existing encrypted credentials unreadable.
 3. For a deployment that previously derived its key from `SECRET_KEY`, securely derive the old Fernet key using `multiuser.crypto._fernet_key('', old_secret)` in an isolated administrative process. Write it directly to a protected key file, never logs/shell arguments. Rotate the database to the new independent key while stopped, update configuration, then restart. Keep signing-secret rotation separate.
 4. Retain strong independent browser-control and egress tokens. Compose's one-shot permissions service changes only the named application volumes to UID/GID **10001** before application startup. Confirm bind-mounted cookie files remain readable by that UID.
 5. Validate Chromium sandbox support on the target host. The managed review host blocks the required sandbox setup under the hardened container profile. Install/permit appropriate unprivileged user-namespace support on the deployment host. `MUSICBOX_CHROMIUM_DISABLE_SANDBOX=1` is an explicit compatibility escape hatch with weaker isolation; it is **not** the default and was not enabled in production. A passing browser-test launch does not prove production sandbox compatibility.
-6. Deploy the Lambda changes and updated interaction models together with the backend. Configure `ALEXA_SKILL_ID` in Lambda and retain the Alexa invocation permission restriction. The account page generates a one-time pairing code for **each Echo device**; use the new link-account intent on that device. Unknown subject/device combinations are rejected. `ALLOW_LEGACY_SKILL_OWNER=1` deliberately restores key-only owner behavior if migration compatibility is required.
+6. Deploy the Lambda changes and updated interaction models together with the backend. Configure `ALEXA_SKILL_ID` in Lambda (and `ALEXA_SKILL_NAMESPACE` for a second skill) and retain the Alexa invocation permission restriction. The account page generates a one-time pairing code for **each Echo device**; use the new link-account intent on that device. Unknown subject/device combinations are rejected. `ALLOW_LEGACY_SKILL_OWNER=1` deliberately restores key-only owner behavior if migration compatibility is required.
 7. Existing v1 audio capabilities are invalid after the salt change. Refresh clients and reissue playback URLs. Password/security changes invalidate pending proofs and capabilities; session changes can require another login. Email changes now display a pending address until verification.
 8. Check `/health/live` and `/health/ready`, signup/invite, password reset, forced password completion, TOTP setup/change/remove, staged email verification, deletion/purge, two simultaneous provider tabs, provider disconnect/reconnect, and two accounts on separate Echo devices in staging. Use actual recovery mail delivery and device callbacks for the final acceptance check.
 
@@ -84,3 +84,40 @@ The approved backend API key is stored only in the private Amazon-hosted configu
 **Hosted runtime limitation:** Amazon reports Python 3.8 for this skill and manages that runtime. The new `lambda/requirements-hosted.lock` is compiled for Python 3.8, and all 44 Lambda tests pass with those exact hashed dependencies. The hosted requirements entry point uses `--require-hashes` and includes that compatibility lock. The existing Python 3.12 lock remains appropriate for newer self-managed runtimes.
 
 The Python 3.8 compatibility audit reports known advisories in `requests==2.32.4` and `urllib3==1.26.20`. Available fixed versions require newer Python/dependency support, so this hosted compatibility lock is **not advisory-free**. Reproduce with `pip-audit --disable-pip --no-deps -r lambda/requirements-hosted.lock`. Resolving that remaining platform constraint requires a supported runtime/hosting migration; obtaining IAM keys alone does not upgrade this Alexa-managed runtime. See [Amazon's hosted runtime policy](https://developer.amazon.com/en-US/docs/alexa/hosted-skills/build-a-skill-end-to-end-using-an-alexa-hosted-skill.html).
+
+## Separate multi-user Alexa skill (2026-11-09)
+
+A second, independent Alexa-hosted custom skill now runs against the same backend without touching the original skill (`amzn1.ask.skill.27cadb23-7c3c-48c9-b01d-1cdfa56636b6`) or its `skill-package/` assets.
+
+| Item | Value |
+| --- | --- |
+| Skill name / invocation | Music Box Multi / `music box multi` |
+| Skill id | `amzn1.ask.skill.8cd77e6f-497a-40db-8057-d6aefcf8fc09` |
+| Hosting | Alexa-hosted Python 3.8, its own Lambda, S3, DynamoDB and CodeCommit repository |
+| Locales | `en-AU`, `en-CA`, `en-GB`, `en-IN`, `en-US` |
+| Backend origin | `https://testalexa.synthora.in` |
+
+### Isolation model
+
+- **Bindings are skill-scoped.** `alexa_bindings` now has `PRIMARY KEY(skill_id, subject_hash, device_hash)`. The skill id arrives in `X-Alexa-Skill-Id`; the legacy skill sends no header and maps to the empty namespace. The same Echo can therefore hold one binding for each skill, even for different accounts, and a pairing made by one skill never authorizes the other.
+- **Pairing codes stay unscoped but single-use.** The account page's existing code flow is unchanged. Whichever skill redeems a code first creates a binding only in its own namespace; replay into the other skill hashes to the same row and is rejected as already consumed.
+- **Legacy compatibility is byte-compatible.** The empty namespace hashes values exactly as schema 7 did (`HMAC(secret, value)`); only a real skill id adds the `skill\0` prefix. The v8 migration copies existing rows into the empty namespace unchanged, and pairing codes issued just before the upgrade still redeem. A regression test covers both.
+- **Pairing is budgeted per Echo.** The old shared-Lambda-egress IP budget (5/300 s for every customer) was replaced by 5 attempts per 300 s per subject/device plus a 100/300 s IP ceiling. One Echo guessing codes cannot lock out other households, while device-id rotation remains bounded.
+- Malformed `X-Alexa-Skill-Id` values return `400 invalid_skill`; a well-formed unknown skill returns `403 link_account_required`; empty or missing user/device values cannot resolve a binding.
+- The hosted Lambda has `ALEXA_SKILL_ID` and `ALEXA_SKILL_NAMESPACE` set to the new skill id, so the handler rejects requests whose `context.System.application.applicationId` differs. The API key and origin are stored only in that private hosted configuration.
+
+### Test evidence
+
+- Backend: `test_alexa_skill_isolation.py` **11 passed** (cross-skill isolation, independent per-skill pairing, code replay, malformed headers, expiry/security generation, disabled account, per-Echo rate limit, legacy-row and pre-upgrade code compatibility).
+- Existing regressions: `test_auth_route_contract.py` **5 passed**, `test_multiuser.py` **33 passed**, `test_security_storage.py` **4 passed**, `test_alexa_logged_out.py` **7 passed**.
+- Lambda: all **50** tests pass, including new skill-header and application-id enforcement tests.
+- Live SMAPI `invoke-skill` against the deployed skill: launch and help returned normally; an invalid code was rejected; a valid account-page code linked the Echo; the next play returned `Playing Blinding Lights by The Weeknd`.
+- After enabling the skill for development testing, live NLU `simulate-skill` routed "open music box multi" to the launch handler and "ask music box multi to link account 00000000" to the pairing handler, which rejected the code.
+- Live backend checks: the new skill resolved while the legacy namespace did not inherit it; pairing the same Echo under the new skill created a second row in the new namespace; replaying that code with no skill header returned 403; malformed skill header returned 400; five wrong codes returned 403 and the sixth returned 429, while a different Echo was still allowed.
+- The v8 migration was exercised on the live test database after a snapshot. It retained existing accounts and exposed the pre-v8 legacy hash incompatibility described above, which was fixed before the final verification.
+
+### Remaining limits
+
+- No physical Echo was available. SMAPI simulation invokes the deployed Lambda and the real backend, but cannot prove device audio output, callbacks, or Amazon-managed pairing UX.
+- Both skills share one backend and one Lambda egress address. Isolation rests on the skill id + Alexa subject/device binding and the per-Echo rate budget, not on separate infrastructure for the application server.
+- The new hosted repository's private `api_key.py` is not in this repository. Redeploying requires regenerating CodeCommit credentials with `ask smapi generate-credentials-for-alexa-hosted-skill` and recreating that private file.

@@ -935,7 +935,7 @@ sb.add_global_response_interceptor(SavePersistenceAttributesResponseInterceptor(
 _sdk_lambda_handler = sb.lambda_handler()
 
 def lambda_handler(event, context):
-    expected = os.environ.get('ALEXA_SKILL_ID', '')
+    expected = os.environ.get('ALEXA_SKILL_ID') or getattr(data, 'ALEXA_SKILL_ID', '')
     application = ((event.get('context') or {}).get('System') or {}).get('application') or {}
     if expected and application.get('applicationId') != expected:
         raise ValueError('Unexpected Alexa skill application')

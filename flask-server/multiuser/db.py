@@ -13,7 +13,7 @@ import sqlite3
 import time
 from typing import Any, Iterable
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 _SCHEMA_V1 = (
     """
@@ -368,6 +368,23 @@ class Database:
                 conn.execute('CREATE TABLE alexa_pair_codes (code_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, expires_at REAL NOT NULL, security_version INTEGER NOT NULL)')
                 conn.execute('CREATE TABLE alexa_bindings (subject_hash TEXT NOT NULL, device_hash TEXT NOT NULL, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE, PRIMARY KEY(subject_hash, device_hash))')
                 conn.execute('INSERT INTO multiuser_schema_migrations VALUES (7, ?)', (time.time(),))
+            if 8 not in applied:
+                # Version 8 scopes an Echo pairing to the Alexa skill that
+                # performed it.  The primary key changes, so the table is
+                # rebuilt; existing rows become legacy-skill bindings (''),
+                # which is exactly what the current skill resolves.
+                conn.execute('ALTER TABLE alexa_bindings RENAME TO alexa_bindings_v7')
+                conn.execute("""CREATE TABLE alexa_bindings (
+                    skill_id TEXT NOT NULL DEFAULT '',
+                    subject_hash TEXT NOT NULL,
+                    device_hash TEXT NOT NULL,
+                    user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    PRIMARY KEY(skill_id, subject_hash, device_hash))""")
+                conn.execute("""INSERT INTO alexa_bindings (skill_id, subject_hash, device_hash, user_id)
+                    SELECT '', subject_hash, device_hash, user_id FROM alexa_bindings_v7""")
+                conn.execute('DROP TABLE alexa_bindings_v7')
+                conn.execute('CREATE INDEX IF NOT EXISTS idx_alexa_bindings_user ON alexa_bindings(user_id)')
+                conn.execute('INSERT INTO multiuser_schema_migrations VALUES (8, ?)', (time.time(),))
             now = time.time()
             # Bound the audit journal so a long-lived install cannot grow it
             # without limit. 90 days is intentionally conservative.

@@ -1,0 +1,104 @@
+{
+  "manifest": {
+    "apis": {
+      "custom": {
+        "interfaces": [
+          {
+            "type": "AUDIO_PLAYER"
+          }
+        ],
+        "locales": {}
+      }
+    },
+    "manifestVersion": "1.0",
+    "publishingInformation": {
+      "automaticClonedLocale": {
+        "locales": [
+          {
+            "source": "en-IN"
+          }
+        ]
+      },
+      "distributionCountries": [],
+      "isAvailableWorldwide": true,
+      "locales": {
+        "en-US": {
+          "description": "Multi-user Music Box: each Echo is linked to its owner's own Music Box account and queue.",
+          "examplePhrases": [
+            "Alexa, open music box multi",
+            "Alexa, ask music box multi to play blinding lights",
+            "Alexa, ask music box multi to link account"
+          ],
+          "keywords": [
+            "music",
+            "youtube music",
+            "multi user"
+          ],
+          "name": "Music Box Multi",
+          "summary": "Per-account YouTube Music control for Echo devices."
+        },
+        "en-CA": {
+          "description": "Multi-user Music Box: each Echo is linked to its owner's own Music Box account and queue.",
+          "examplePhrases": [
+            "Alexa, open music box multi",
+            "Alexa, ask music box multi to play blinding lights",
+            "Alexa, ask music box multi to link account"
+          ],
+          "keywords": [
+            "music",
+            "youtube music",
+            "multi user"
+          ],
+          "name": "Music Box Multi",
+          "summary": "Per-account YouTube Music control for Echo devices."
+        },
+        "en-IN": {
+          "description": "Multi-user Music Box: each Echo is linked to its owner's own Music Box account and queue.",
+          "examplePhrases": [
+            "Alexa, open music box multi",
+            "Alexa, ask music box multi to play blinding lights",
+            "Alexa, ask music box multi to link account"
+          ],
+          "keywords": [
+            "music",
+            "youtube music",
+            "multi user"
+          ],
+          "name": "Music Box Multi",
+          "summary": "Per-account YouTube Music control for Echo devices."
+        },
+        "en-AU": {
+          "description": "Multi-user Music Box: each Echo is linked to its owner's own Music Box account and queue.",
+          "examplePhrases": [
+            "Alexa, open music box multi",
+            "Alexa, ask music box multi to play blinding lights",
+            "Alexa, ask music box multi to link account"
+          ],
+          "keywords": [
+            "music",
+            "youtube music",
+            "multi user"
+          ],
+          "name": "Music Box Multi",
+          "summary": "Per-account YouTube Music control for Echo devices."
+        },
+        "en-GB": {
+          "description": "Multi-user Music Box: each Echo is linked to its owner's own Music Box account and queue.",
+          "examplePhrases": [
+            "Alexa, open music box multi",
+            "Alexa, ask music box multi to play blinding lights",
+            "Alexa, ask music box multi to link account"
+          ],
+          "keywords": [
+            "music",
+            "youtube music",
+            "multi user"
+          ],
+          "name": "Music Box Multi",
+          "summary": "Per-account YouTube Music control for Echo devices."
+        }
+      },
+      "testingInstructions": "Link the Echo from the target account page (Generate pairing code), then say: Alexa, ask music box multi to link account 12345678."
+    }
+  }
+}

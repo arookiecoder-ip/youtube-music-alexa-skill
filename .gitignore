@@ -40,3 +40,5 @@ flask-server/data.db-*
 # Bounded operational journal and SQLite sidecars
 **/status_logs.sqlite3*
 .qoder/
+# Local ASK deployment scratch (hosted repo copy and database snapshot)
+.alexa-new/

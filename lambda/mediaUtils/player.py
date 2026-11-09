@@ -193,7 +193,13 @@ def skill_identity_headers(handler_input):
     system = getattr(getattr(handler_input.request_envelope, 'context', None), 'system', None)
     user = getattr(getattr(system, 'user', None), 'user_id', '')
     device = getattr(getattr(system, 'device', None), 'device_id', '')
-    return {'X-Api-Key': data.API_KEY, 'X-Alexa-User-Id': user or '', 'X-Alexa-Device-Id': device or ''}
+    headers = {'X-Api-Key': data.API_KEY, 'X-Alexa-User-Id': user or '', 'X-Alexa-Device-Id': device or ''}
+    # Only the separately deployed multi-user skill sets a namespace. A blank
+    # value keeps the legacy skill's existing pairings working untouched.
+    namespace = getattr(data, 'ALEXA_SKILL_NAMESPACE', '')
+    if namespace:
+        headers['X-Alexa-Skill-Id'] = namespace
+    return headers
 
 
 def _notify_server(handler_input, event: str, **extra):

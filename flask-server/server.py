@@ -1430,14 +1430,20 @@ def _bind_player_identity():
     # threads) stays on the legacy 'owner' state.
     layer = _multiuser_layer
     subject, device = request.headers.get('X-Alexa-User-Id'), request.headers.get('X-Alexa-Device-Id')
+    skill = ''
+    if layer is not None:
+        skill = layer.alexa_identity.skill_namespace(request.headers.get('X-Alexa-Skill-Id'))
+        if skill is None:
+            return jsonify(error={'code':'invalid_skill','message':'Invalid Alexa skill identity.'}), 400
     if layer is not None and subject and _valid_key_supplied():
         if request.path.rstrip('/') == '/api/alexa/link':
             return None
-        linked = layer.alexa_identity.resolve(subject, device)
+        linked = layer.alexa_identity.resolve(subject, device, skill)
         if not linked:
             return jsonify(error={'code':'link_account_required','message':'Link this Echo from your account page first.'}), 403
         _PLAYER_IDENTITY.set(_player_identity_for_user_id(linked['id'], linked['role']))
         request.environ['musicbox.alexa_identity'] = linked['id']
+        request.environ['musicbox.alexa_skill'] = skill
         return None
     if layer is not None and request.path.rstrip('/') == '/proxy' and request.args.get('cap'):
         linked = layer.alexa_identity.stream_user(request.args['cap'], request.args.get('video_id'))
@@ -6892,11 +6898,24 @@ def link_alexa_account():
     if _multiuser_layer is None or not _valid_key_supplied():
         return error_response('Account linking unavailable.', 403)
     subject, device = request.headers.get('X-Alexa-User-Id'), request.headers.get('X-Alexa-Device-Id')
-    allowed, retry = _multiuser_layer.rate_limiter.allow('alexa-pair', _client_ip(), 5, 300)
-    if not allowed:
-        return error_response('Too many pairing attempts. Try again later.', 429)
+    identity = _multiuser_layer.alexa_identity
+    skill = identity.skill_namespace(request.headers.get('X-Alexa-Skill-Id'))
+    if skill is None:
+        return error_response('Invalid Alexa skill identity.', 400)
+    # Skill requests arrive from the Lambda's shared egress address, so an
+    # IP-only budget would let one onboarding block every other account.  The
+    # meaningful limit is per Echo; a much wider IP budget still bounds a
+    # caller that rotates fake device ids.
+    device_key = identity.digest(f'{subject or ""}\0{device or ""}', skill)[:40]
+    allowed, retry = _multiuser_layer.rate_limiter.allow('alexa-pair-device', device_key, 5, 300)
+    ip_allowed, ip_retry = _multiuser_layer.rate_limiter.allow(
+        'alexa-pair-ip', _netids().ip_bucket(_client_ip()), 100, 300)
+    if not allowed or not ip_allowed:
+        response = error_response('Too many pairing attempts. Try again later.', 429)
+        response[0].headers['Retry-After'] = str(max(retry, ip_retry) if not allowed else ip_retry)
+        return response
     code = str((request.get_json(silent=True) or {}).get('code') or '')
-    if not _multiuser_layer.alexa_identity.pair(code, subject, device):
+    if not identity.pair(code, subject, device, skill):
         return error_response('Pairing code expired or invalid.', 403)
     return jsonify(ok=True)
 

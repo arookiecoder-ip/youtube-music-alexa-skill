@@ -1,13 +1,24 @@
 # Fallback API URL used when none has been set via the "set api url" voice command.
 # Shared secret; must match the API_KEY env var on the Flask server.
 # Both live in api_key.py (gitignored) so the repo can be public.
+import os
 try:
-    from api_key import API_KEY, DEFAULT_API_URL
+    import api_key as _key_config
+    API_KEY = getattr(_key_config, 'API_KEY', '')
+    DEFAULT_API_URL = getattr(_key_config, 'DEFAULT_API_URL', '')
 except ImportError:
     import logging
     logging.warning("api_key.py not found; API_KEY and DEFAULT_API_URL are empty")
+    _key_config = None
     API_KEY = ""
     DEFAULT_API_URL = ""
+
+# A second deployment can share this code without sharing an identity
+# namespace.  The environment wins; the private config file is the fallback for
+# Alexa-hosted skills, whose Lambda environment Amazon manages.  Empty values
+# keep the legacy single-skill behavior.
+ALEXA_SKILL_ID = os.environ.get('ALEXA_SKILL_ID') or getattr(_key_config, 'ALEXA_SKILL_ID', '')
+ALEXA_SKILL_NAMESPACE = os.environ.get('ALEXA_SKILL_NAMESPACE') or getattr(_key_config, 'ALEXA_SKILL_NAMESPACE', '')
 
 WELCOME_MSG = "Welcome to music box. You can say, play blinding lights, to begin."
 WELCOME_REPROMPT_MSG = "You can say, play, followed by a song name, to begin."
