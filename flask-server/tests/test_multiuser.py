@@ -672,6 +672,17 @@ class ServiceTests(MultiUserTestBase):
             self.assertEqual(admin_rules, [])
             self.assertNotIn("multiuser", app.extensions)
 
+    def test_disabled_layer_logs_the_missing_account_routes(self):
+        with mock.patch.dict(os.environ, {"MULTI_USER_ENABLED": "0"}, clear=False):
+            app = Flask(__name__)
+            app.secret_key = "disabled-layer-secret"
+            with self.assertLogs(app.logger, level="WARNING") as captured:
+                self.assertIsNone(init_multiuser(app))
+            text = "\n".join(captured.output)
+            self.assertIn("disabled", text)
+            for path in ("/signup", "/verify", "/forgot-password", "/reset-password", "/account", "/admin"):
+                self.assertIn(path, text)
+
     def test_backup_creates_a_readable_copy(self):
         destination = os.path.join(self.tmp, "backup.db")
         self.layer.db.backup_to(destination)
