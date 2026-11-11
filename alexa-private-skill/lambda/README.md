@@ -7,7 +7,7 @@ Configure these values in Lambda's environment panel (or your private deployed
 `api_key.py` for Alexa-hosted code):
 
 ```dotenv
-MUSICBOX_SERVER_URL=https://testalexa.synthora.in
+MUSICBOX_SERVER_URL=https://your-server.example
 MUSICBOX_EMAIL=your-verified-musicbox-email@example.com
 MUSICBOX_ALEXA_TOKEN=your-admin-issued-token
 ```

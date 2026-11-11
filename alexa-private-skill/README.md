@@ -7,7 +7,7 @@ Deploy this skill in your own Amazon developer account and connect it to your Mu
 Use only these three private settings:
 
 ```dotenv
-MUSICBOX_SERVER_URL=https://testalexa.synthora.in
+MUSICBOX_SERVER_URL=https://your-server.example
 MUSICBOX_EMAIL=your-verified-musicbox-email@example.com
 MUSICBOX_ALEXA_TOKEN=your-admin-issued-token
 ```
