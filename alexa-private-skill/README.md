@@ -30,3 +30,5 @@ An administrator enables Amazon / Alexa access and generates the token under **A
 No skill-ID setting or server-wide administrator API key is required in this configuration. The included credentials are placeholders; put real values only in your private deployment. Configure the Alexa Skills Kit trigger/resource policy through Amazon's deployment tools.
 
 This directory is the self-contained shareable package. The repository's other top-level skill code may belong to a different deployment; use the manifest and Lambda code together from this directory.
+
+The user-panel Amazon connection can use an email/mobile different from your Music Box login. This is separate from private-skill voice authorization and access to development skills. See [Amazon account versus developer account](docs/multi-user/AMAZON-ACCOUNT-LINKING-2026-11-12.md).

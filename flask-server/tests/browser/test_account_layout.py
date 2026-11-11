@@ -868,7 +868,7 @@ def test_a_provider_sign_in_opens_in_a_popup_on_the_account_page(origin):
         opened.click("#link-amazon")
         opened.wait_for_selector("#dialog-connect[open]")
         assert visible_text(opened, "#dialog-connect-title") == "connect amazon"
-        assert visible_text(opened, "#connect-email-label") == "amazon email (must match music box)"
+        assert visible_text(opened, "#connect-email-label") == "amazon email or mobile number"
         assert opened.locator("#connect-intro").is_visible()
         opened.fill("#connect_email", "person@example.test")
         opened.fill("#connect_password", "hunter2-hunter2")
@@ -1220,3 +1220,21 @@ def test_disabled_amazon_access_hides_service_and_status_without_hiding_youtube(
     expect(page.locator('#service-amazon')).to_be_hidden()
     expect(page.locator('#service-youtube')).to_be_visible()
     expect(page.locator('#sum-services')).to_contain_text('Linked')
+
+
+@pytest.mark.parametrize('identifier', ['another-amazon-account@example.test', '+919876543210'])
+def test_amazon_popup_accepts_an_independent_email_or_mobile_number(page, origin, identifier):
+    page.goto(origin + '/account')
+    open_section(page, 'panel-providers')
+    page.locator('#link-amazon').evaluate('(node) => node.hidden = false')
+    page.click('#link-amazon')
+    expect(page.locator('#connect_email')).to_have_attribute('type', 'text')
+    expect(page.locator('#connect-intro')).to_contain_text('It can differ from your Music Box email')
+    page.fill('#connect_email', identifier)
+    page.fill('#connect_password', 'Synthetic!Password12')
+    with page.expect_request('**/alexa/form_login/') as request:
+        page.click('#connect-submit')
+    assert request.value.post_data_json['email'] == identifier
+    expect(page.locator('#connect-approval-panel')).to_be_visible()
+    page.locator('#dialog-connect .dialog-foot [data-dialog-close]').click()
+    expect(page.locator('#dialog-connect')).not_to_be_visible()

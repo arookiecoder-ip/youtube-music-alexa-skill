@@ -50,7 +50,7 @@ New accounts default to access **off**. Schema migration 10 preserves access for
 
 When access is off, account provider payloads omit Amazon. Account HTML omits its service row, profile status omits Amazon connection/debug fields, native account/settings rows disappear, and device pickers remove Echo devices while keeping phone/browser outputs. Existing account pages refresh permission within 15 seconds; native device/settings checks and playback updates also refresh it. Authorization changes take effect at the server immediately, independent of display refresh.
 
-Direct Amazon login/device/status routes, stale client requests and physical Echo controls are denied when disabled. Pending Amazon login promotion and remote-command execution check the live policy again. Amazon login must use the verified Music Box email. Queue and provider state remain isolated even when more than one account has the owner role; changing administrators never transfers the bootstrap owner's cookies.
+Direct Amazon login/device/status routes, stale client requests and physical Echo controls are denied when disabled. Pending Amazon login promotion and remote-command execution check the live policy again. Website Amazon sign-in accepts any Amazon account the user successfully authenticates, including an email or mobile number different from the Music Box login. This does not change the private skill’s separate verified-email/token authorization or Amazon’s rules for access to unpublished skills. Queue and provider state remain isolated even when more than one account has the owner role; changing administrators never transfers the bootstrap owner's cookies.
 
 ## Cross-verification checklist
 

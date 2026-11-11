@@ -162,7 +162,7 @@
 </div>{% endfor %}{% if can_manage %}<form method="post" action="{{ base_path }}/users/{{ user.id }}/alexa/" data-confirm-heading="Revoke Alexa tokens" data-confirm="Reject every existing Alexa token and its playback URLs for {{ user.username }}?" data-confirm-button="Revoke tokens" data-confirm-danger>{{ csrf() }}<input type="hidden" name="action" value="revoke">
 <button class="btn small danger" type="submit">Revoke all tokens</button>
 </form>{% endif %}</details>{% endif %}
-        <p class="ud-footnote">The authenticated Amazon email must match the verified Music Box email. Tokens expire after one year.</p>
+        <p class="ud-footnote">For private-skill voice playback, the authenticated Amazon email must match the verified Music Box email. Website Amazon sign-in can use a different account. Tokens expire after one year.</p>
       </section>
       <section class="ud-panel" aria-labelledby="activity-title">
 <div class="ud-panel-head">

@@ -13205,8 +13205,8 @@ try:
         user = _multiuser_layer.accounts.get_user(user_id) if user_id else None
         if not _multiuser_layer.alexa_access.eligible(user):
             return 'Amazon access requires an active account, admin permission and a verified email.'
-        if not isinstance(email, str) or email.strip().casefold() != user['email'].strip().casefold():
-            return 'Your Amazon email must match your verified Music Box email.'
+        # Amazon proves its own account during sign-in. The identifier may be
+        # different from the Music Box mailbox, including a mobile number.
         return None
     if _multiuser_layer is not None:
         alexa_remote.set_access_policy(_amazon_access_policy)
