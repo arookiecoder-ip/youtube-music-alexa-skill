@@ -230,6 +230,7 @@
     const form = event.target.closest('form[data-confirm]');
     if (!form || form.dataset.confirmed === '1') return;
     event.preventDefault();
+    const submitter = event.submitter;
     ask(
       form.getAttribute('data-confirm-heading') || 'Confirm this action',
       form.getAttribute('data-confirm'),
@@ -238,7 +239,7 @@
     ).then((yes) => {
       if (!yes) return;
       form.dataset.confirmed = '1';
-      form.requestSubmit();
+      form.requestSubmit(submitter && submitter.isConnected ? submitter : undefined);
     });
   }, true);
 
@@ -254,6 +255,25 @@
         (target) => target.append(source.content.cloneNode(true)),
         [{ label: 'Close', className: 'ghost', cancel: true }]
       );
+    });
+  });
+
+  document.querySelectorAll('[data-copy-target]').forEach((button) => {
+    button.addEventListener('click', async () => {
+      const field = $(button.dataset.copyTarget);
+      if (!field) return;
+      const status = button.parentElement.querySelector('.ud-copy-status');
+      try {
+        if (navigator.clipboard && navigator.clipboard.writeText) await navigator.clipboard.writeText(field.value);
+        else {
+          field.focus(); field.select();
+          if (!document.execCommand('copy')) throw new Error('Clipboard unavailable');
+        }
+        if (status) status.textContent = 'Token copied. Keep it private.';
+      } catch (_) {
+        field.focus(); field.select();
+        if (status) status.textContent = 'Token selected. Copy it using your device’s copy command.';
+      }
     });
   });
 

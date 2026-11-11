@@ -767,6 +767,8 @@ class AdminControlsTests(MultiUserTestBase):
         self.layer.db.execute(
             "UPDATE users SET totp_secret_enc = ? WHERE id = ?", (secret_enc, user["id"])
         )
+        # The redesigned page shows session revocation when there is a session.
+        self.layer.accounts.create_session(self.layer.accounts.get_user(user["id"]), ip="127.0.0.1", user_agent="test-device")
         page = self.client.get(f"/admin/users/{user['id']}/").data
         # Each of these changes the account's ability to sign in, so each is a
         # confirmation, not a routine click.

@@ -1,8 +1,10 @@
 {% extends "admin/base.html" %}
+{% block head %}<link rel="stylesheet" href="{{ asset_url('css/admin-users.css') }}">{% endblock %}
 {% block topbar_actions %}
   <a class="btn small primary" href="{{ base_path }}/users/new/">Create user</a>
 {% endblock %}
 {% block content %}
+<div class="user-directory">
 <div class="page-head">
   <div>
     <h1>Users</h1>
@@ -194,4 +196,5 @@
     <a href="{{ base_path }}/users/?status=deleted">Show deleted accounts</a>.
   {% endif %}
 </p>
+</div>
 {% endblock %}

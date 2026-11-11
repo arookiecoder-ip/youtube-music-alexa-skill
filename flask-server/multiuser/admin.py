@@ -758,6 +758,18 @@ def build_blueprint(mu: MultiUser) -> Blueprint:
         if not AccountService.can_manage_user(g.mu_user, user) and g.mu_user["id"] != user_id:
             return _forbidden()
         providers = mu.accounts.provider_status(user_id)
+        sessions = mu.accounts.list_sessions(user_id)
+        page_now = time.time()
+        alexa_tokens = mu.alexa_access.metadata(user_id)
+        from .alexa_access import AccessDenied
+        for token in alexa_tokens:
+            token['state'] = 'revoked' if token['revoked_at'] else ('expired' if token['expires_at'] <= page_now else 'inactive')
+            if token['state'] == 'inactive':
+                try:
+                    mu.alexa_access.current(token['id'])
+                    token['state'] = 'active'
+                except AccessDenied:
+                    pass
         return render_template(
             "admin/user_detail.html",
             page="users",
@@ -765,10 +777,14 @@ def build_blueprint(mu: MultiUser) -> Blueprint:
             user=user,
             deleted=user["status"] == "deleted",
             can_restore=g.mu_user.get("role") == "owner",
-            sessions=mu.accounts.list_sessions(user_id),
+            sessions=sessions,
+            page_now=page_now,
+            live_session_count=sum(not row["revoked_at"] and row["expires_at"] > page_now for row in sessions),
             providers=providers,
             alexa_token=request.environ.get("musicbox.new_alexa_token"),
-            alexa_tokens=mu.alexa_access.metadata(user_id),
+            alexa_tokens=alexa_tokens,
+            alexa_eligible=mu.alexa_access.eligible(user),
+            has_active_alexa_token=any(row["state"] == "active" for row in alexa_tokens),
             audit=mu.accounts.user_audit(user_id, limit=20),
             roles=ROLES,
             allowed_roles=[role for role in ROLES if AccountService.can_assign_role(g.mu_user, role)],
