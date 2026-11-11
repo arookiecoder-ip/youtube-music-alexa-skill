@@ -1,5 +1,8 @@
 # Music Box backend and Alexa skill
 
+The complete multi-user backend, admin/web UI and private Alexa source are maintained on this `feat/multi-user` branch. The [standalone downloadable Alexa package](https://github.com/arookiecoder-ip/youtube-music-alexa-skill/tree/master/alexa-private-skill) is also linked from the default branch. [Android source](https://github.com/arookiecoder-ip/MusicBox-APP/tree/feat/multi-user) lives in its own repository.
+
+
 Self-hosted YouTube Music catalog, progressive audio relay, web/PWA player and shared playback control for browsers, Android phones and Alexa Echo devices.
 
 [Architecture](ARCHITECTURE.md) · [Changelog and PR history](CHANGELOG.md) · [Android app](https://github.com/arookiecoder-ip/MusicBox-APP) · [Docker setup](SETUP-DOCKER.md)
@@ -68,8 +71,8 @@ The old persistent audio-cache volume is no longer mounted. Do not remove data/a
 2. Configure your HTTPS origin and private credentials in `.env`. Generate independent random values rather than using the placeholders below.
 3. Provision `cookies.txt` for the bind mount. It can be an empty file for an anonymous attempt; authenticated/restricted playback may require a valid export. Account browsing and audio cookies are separate credentials.
 4. Start the prerequisite network/VPN container for this topology, then build/start the application services.
-5. Sign in to the Web Remote, connect YouTube Music through its protected browser flow, and connect Amazon if using Echo playback.
-6. Deploy the custom skill using [lambda](lambda) and the locale-specific [interaction models](skill-package/interactionModels/custom). Configure the real API key and public backend origin only in the deployed skill's private configuration. The tracked [template](lambda/api_key.py) must remain a placeholder.
+5. Sign in to the Web Remote, connect YouTube Music through its protected browser flow, and connect Amazon when Echo remote controls are enabled for your account. Private-skill voice playback verifies your Amazon email through Alexa instead.
+6. Deploy the custom skill using [lambda](lambda) and the locale-specific [interaction models](skill-package/interactionModels/custom). For multi-user hosting, configure only MUSICBOX_SERVER_URL, MUSICBOX_EMAIL and MUSICBOX_ALEXA_TOKEN in the deployed skill. An administrator grants access and issues that account's token; see [private skill setup](docs/multi-user/PRIVATE-SKILL-ACCESS-2026-11-11.md). The tracked [template](lambda/api_key.py) must remain a placeholder.
 
 Example `.env` keys:
 
@@ -106,7 +109,7 @@ Keep one authoritative Flask process. Locks, leases, queue decisions and provide
 | --- | --- |
 | `PUBLIC_BASE_URL` | Public HTTPS origin used in device-playable backend URLs. It must be reachable by Echo. |
 | `SITE_ADDRESS` | Caddy site address. |
-| `API_KEY` | Backend/skill shared credential; owner APIs can also use an authorized web session. Prefer headers over putting a key in a URL. |
+| `API_KEY` | Server administrator credential for legacy integrations. Never distribute it to private skills; they use revocable per-account Alexa tokens. |
 | `REMOTE_USER`, `REMOTE_PASSWORD` | Both are required to enable owner web login. |
 | `REMOTE_TOTP_SECRET` | Optional base32 TOTP secret. |
 | `SECRET_KEY`, `SECRET_KEY_FILE` | Stable session signing key; when omitted the server attempts to persist a generated key beside `DB_FILE`. A writable, preserved location is necessary for that fallback to survive restart. |

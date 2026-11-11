@@ -61,6 +61,7 @@ class EchoPairingTests(SelfServiceTestBase):
 
     def test_stream_capability_is_video_bound_and_tamper_resistant(self):
         user=self.accounts.get_user_by_username('owner');identity=self.layer.alexa_identity
+        self.layer.alexa_access.set_enabled(user['id'], True)
         token=identity.stream_token(user['id'],'dQw4w9WgXcQ')
         self.assertEqual(identity.stream_user(token,'dQw4w9WgXcQ')['id'],user['id'])
         self.assertIsNone(identity.stream_user(token,'aaaaaaaaaaa'))

@@ -13,12 +13,13 @@ enrollment, two linked providers, five sessions with real headers, and long
 values that a name column would otherwise clip.
 """
 from pathlib import Path
+import os
 import threading
 
 import pytest
 from flask import Flask, Response, jsonify, render_template, request
 from werkzeug.serving import make_server
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import sync_playwright, expect
 
 ROOT = Path(__file__).resolve().parents[2]
 WIDTHS = [320, 375, 390, 768, 1024, 1440, 1920]
@@ -53,6 +54,7 @@ PIXEL = "Mozilla/5.0 (Linux; Android 14; SM-A546B) AppleWebKit/537.36 (KHTML, li
 FIREFOX = "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:132.0) Gecko/20100101 Firefox/132.0"
 
 FIXTURE = {
+    "alexa_access_enabled": True,
     "username": "fairly_long_username_that_has_to_fit_somewhere",
     "email": "someone.with.a.longish.local.part@example-corporation.test",
     "email_verified": False,
@@ -115,6 +117,7 @@ def origin():
         wanted = request.args.get("theme")
         step = request.args.get("step", "")
         return render_template("account.html", app_name="Music Box", csrf_form="test-token",
+                               alexa_invocation="music box multi",
                                asset_url=lambda relative: f"/static/{relative}?v=fixture",
                                theme=wanted if wanted in ("dark", "light") else "dark",
                                step=step if step in ("password", "reset", "email", "totp", "delete") else "",
@@ -128,7 +131,7 @@ def origin():
 
     @app.route("/api/profile_status/")
     def profile_status():
-        return jsonify({"amazon_connected": True, "youtube_own_session": True,
+        return jsonify({"alexa_access_enabled": True, "amazon_connected": True, "youtube_own_session": True,
                         "youtube_server_fallback": False})
 
     @app.route("/api/account/totp/qr")
@@ -865,7 +868,7 @@ def test_a_provider_sign_in_opens_in_a_popup_on_the_account_page(origin):
         opened.click("#link-amazon")
         opened.wait_for_selector("#dialog-connect[open]")
         assert visible_text(opened, "#dialog-connect-title") == "connect amazon"
-        assert visible_text(opened, "#connect-email-label") == "amazon email or mobile number"
+        assert visible_text(opened, "#connect-email-label") == "amazon email (must match music box)"
         assert opened.locator("#connect-intro").is_visible()
         opened.fill("#connect_email", "person@example.test")
         opened.fill("#connect_password", "hunter2-hunter2")
@@ -1172,3 +1175,48 @@ def test_the_header_links_keep_the_line_they_were_written_for(page, origin, them
     assert row["same_line"], row["boxes"]
     assert row["equal_height"] == 1, row["boxes"]
     assert row["widest"] >= 24, row["boxes"]
+
+
+@pytest.mark.parametrize('width', [320, 390, 1440])
+def test_services_has_no_echo_code_pairing_controls(page, origin, width):
+    at_width(page, origin, width)
+    open_section(page, 'panel-providers')
+    expect(page.locator('#disconnect-amazon')).to_be_visible()
+    assert page.locator('#alexa-link-code, #alexa-unlink, #alexa-link-result, .echo-pairing').count() == 0
+    assert 'Generate pairing code' not in page.locator('body').inner_text()
+    assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
+
+
+@pytest.mark.parametrize('failure', ['network', 'html'])
+def test_password_failure_stays_visible_in_dialog_without_erasing_input(page, failure):
+    def reject(route):
+        if failure == 'network':
+            route.abort()
+        else:
+            route.fulfill(status=502, content_type='text/html', body='<h1>Bad gateway</h1>')
+    page.route('**/api/account/password', reject)
+    open_dialog(page, 'password')
+    form = page.locator('#form-password')
+    form.locator('[name=current_password]').fill('Existing!Password')
+    form.locator('[name=password]').fill('New!Password123')
+    form.locator('[name=confirm_password]').fill('New!Password123')
+    form.get_by_role('button', name='Change password', exact=True).click()
+    expect(page.locator('#dialog-password')).to_be_visible()
+    expect(page.locator('#dialog-password .toast')).to_contain_text(
+        'Could not connect' if failure == 'network' else 'unreadable response')
+    expect(form.locator('[name=password]')).to_have_value('New!Password123')
+    expect(form.get_by_role('button', name='Change password', exact=True)).to_be_enabled()
+
+
+def test_disabled_amazon_access_hides_service_and_status_without_hiding_youtube(page, origin):
+    import json
+    disabled = dict(FIXTURE, alexa_access_enabled=False,
+                    providers=[row for row in FIXTURE['providers'] if row['provider'] != 'amazon'],
+                    provider_map={'youtube': FIXTURE['provider_map']['youtube']})
+    page.route('**/api/account', lambda route: route.fulfill(status=200, content_type='application/json', body=json.dumps(disabled)))
+    page.route('**/api/profile_status/**', lambda route: route.fulfill(status=200, content_type='application/json', body=json.dumps({'alexa_access_enabled': False, 'youtube_own_session': True})))
+    page.goto(origin + '/account')
+    open_section(page, 'panel-providers')
+    expect(page.locator('#service-amazon')).to_be_hidden()
+    expect(page.locator('#service-youtube')).to_be_visible()
+    expect(page.locator('#sum-services')).to_contain_text('Linked')

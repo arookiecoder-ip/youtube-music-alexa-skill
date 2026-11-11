@@ -44,12 +44,13 @@ def _lambda_function():
 
 
 class SkillIdentityHeaderTests(unittest.TestCase):
-    def test_the_namespace_is_sent_only_when_configured(self):
-        with mock.patch.object(data, 'ALEXA_SKILL_NAMESPACE', ''):
-            self.assertNotIn('X-Alexa-Skill-Id', player.skill_identity_headers(_identity()))
-        with mock.patch.object(data, 'ALEXA_SKILL_NAMESPACE', SKILL):
+    def test_shared_client_sends_only_per_account_credentials(self):
+        with mock.patch.object(data, 'MUSICBOX_ALEXA_TOKEN', 'user-token'), mock.patch.object(data, 'MUSICBOX_EMAIL', 'user@example.test'):
             headers = player.skill_identity_headers(_identity())
-        self.assertEqual(headers['X-Alexa-Skill-Id'], SKILL)
+        self.assertEqual(headers['Authorization'], 'Bearer user-token')
+        self.assertEqual(headers['X-MusicBox-Email'], 'user@example.test')
+        self.assertNotIn('X-Api-Key', headers)
+        self.assertNotIn('X-Alexa-Skill-Id', headers)
 
     def test_the_paired_user_and_device_are_forwarded_unchanged(self):
         with mock.patch.object(data, 'ALEXA_SKILL_NAMESPACE', SKILL):
@@ -65,31 +66,13 @@ class SkillIdentityHeaderTests(unittest.TestCase):
         self.assertEqual(headers['X-Alexa-Device-Id'], '')
 
 
-class ApplicationIdEnforcementTests(unittest.TestCase):
-    def test_a_configured_skill_rejects_another_skill(self):
+class ApplicationConfigurationTests(unittest.TestCase):
+    def test_skill_id_is_not_a_required_configuration(self):
         lambda_function = _lambda_function()
-        with mock.patch.dict(os.environ, {'ALEXA_SKILL_ID': SKILL}):
-            with self.assertRaises(ValueError):
-                lambda_function.lambda_handler(_event('amzn1.ask.skill.other'), None)
-            with mock.patch.object(lambda_function, '_sdk_lambda_handler', return_value='ok') as handler:
-                self.assertEqual(lambda_function.lambda_handler(_event(), None), 'ok')
-                handler.assert_called_once()
-
-    def test_the_private_config_is_used_when_the_environment_is_empty(self):
-        lambda_function = _lambda_function()
-        with mock.patch.dict(os.environ, {'ALEXA_SKILL_ID': ''}), \
-                mock.patch.object(data, 'ALEXA_SKILL_ID', SKILL):
-            with self.assertRaises(ValueError):
-                lambda_function.lambda_handler(_event('amzn1.ask.skill.other'), None)
-
-    def test_an_unset_skill_id_keeps_legacy_compatibility(self):
-        lambda_function = _lambda_function()
-        with mock.patch.dict(os.environ, {'ALEXA_SKILL_ID': ''}), \
-                mock.patch.object(data, 'ALEXA_SKILL_ID', ''), \
-                mock.patch.object(lambda_function, '_sdk_lambda_handler', return_value='ok') as handler:
-            self.assertEqual(lambda_function.lambda_handler(_event('amzn1.ask.skill.other'), None), 'ok')
+        self.assertFalse(hasattr(data, 'ALEXA_SKILL_ID'))
+        with mock.patch.object(lambda_function, '_sdk_lambda_handler', return_value='ok') as handler:
+            self.assertEqual(lambda_function.lambda_handler(_event('any-private-skill'), None), 'ok')
             handler.assert_called_once()
-
 
 if __name__ == '__main__':
     unittest.main()

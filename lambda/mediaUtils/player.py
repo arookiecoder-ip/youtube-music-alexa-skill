@@ -5,7 +5,8 @@ from ask_sdk_core.handler_input import HandlerInput
 from ask_sdk_model.services.directive import (SendDirectiveRequest, Header, SpeakDirective)
 import logging, random, urllib3, json, data, difflib, uuid, time
 from ask_sdk_model.interfaces import display
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit
+from skill_security import SkillAuthorizationError, scoped_token
 from xml.sax.saxutils import escape
 from dacite import from_dict
 from dataclasses import asdict
@@ -193,12 +194,16 @@ def skill_identity_headers(handler_input):
     system = getattr(getattr(handler_input.request_envelope, 'context', None), 'system', None)
     user = getattr(getattr(system, 'user', None), 'user_id', '')
     device = getattr(getattr(system, 'device', None), 'device_id', '')
-    headers = {'X-Api-Key': data.API_KEY, 'X-Alexa-User-Id': user or '', 'X-Alexa-Device-Id': device or ''}
-    # Only the separately deployed multi-user skill sets a namespace. A blank
-    # value keeps the legacy skill's existing pairings working untouched.
-    namespace = getattr(data, 'ALEXA_SKILL_NAMESPACE', '')
-    if namespace:
-        headers['X-Alexa-Skill-Id'] = namespace
+    headers = {
+        'Authorization': 'Bearer ' + data.MUSICBOX_ALEXA_TOKEN,
+        'X-MusicBox-Email': data.MUSICBOX_EMAIL,
+        'X-Alexa-User-Id': user or '', 'X-Alexa-Device-Id': device or '',
+        'X-Alexa-Profile-Token': getattr(system, 'api_access_token', '') or '',
+        'X-Alexa-Api-Endpoint': getattr(system, 'api_endpoint', '') or '',
+    }
+    binding = getattr(handler_input.request_envelope, '_musicbox_binding', '')
+    if binding:
+        headers['X-Alexa-Binding'] = binding
     return headers
 
 
@@ -243,6 +248,7 @@ def _notify_server(handler_input, event: str, **extra):
             headers={'Content-Type': 'application/json', **skill_identity_headers(handler_input)},
             timeout=timeout,
             retries=retries,
+            redirect=False,
         )
         logger.info(f'_notify_server: response {resp.status}')
         if resp.status == 200:
@@ -525,22 +531,26 @@ class Attributes:
     
     @staticmethod
     def get_api_url(handler_input: HandlerInput) -> Tuple[str, Exception]:
-        user_attr = Attributes.get_user_attributes(handler_input)
-        api_url = user_attr.get('api_url') or data.DEFAULT_API_URL
+        # A voice-controlled destination would forward the deployment key to
+        # an arbitrary listener. Ignore all previously persisted overrides.
+        api_url = data.DEFAULT_API_URL
         if not api_url: return None, Exception(data.API_URL_NOT_SET)
+        try:
+            parsed = urlsplit(api_url)
+            if (parsed.scheme != 'https' or not parsed.hostname or parsed.username
+                    or parsed.password or parsed.query or parsed.fragment
+                    or any(char.isspace() or ord(char) < 32 for char in api_url)):
+                raise ValueError('Invalid configured backend URL')
+            parsed.port  # Validate port syntax before any authenticated call.
+        except (TypeError, ValueError):
+            return None, Exception('Configure a valid HTTPS backend URL in the skill settings.')
         return api_url.rstrip('/'), None
 
 
 class Api:
     @staticmethod
     def link_account(handler_input, code):
-        api_url, error = Attributes.get_api_url(handler_input)
-        if error:
-            return False
-        response = http.request('POST', api_url + '/api/alexa/link/',
-            body=json.dumps({'code':code}), headers={'Content-Type':'application/json', **skill_identity_headers(handler_input)},
-            timeout=urllib3.Timeout(total=3), retries=False)
-        return response.status == 200
+        return False
 
     @staticmethod
     def _get_json(handler_input: HandlerInput, path: str, params: Dict) -> Tuple[Dict, Exception]:
@@ -550,9 +560,9 @@ class Api:
         url = f"{api_url}/{path}/?{query}"
         started = time.monotonic()
         try:
-            control = path in ('armed_play', 'next_track')
+            control = path in ('armed_play', 'next_track', 'api/alexa/identity')
             response = http.request("GET", url, headers=skill_identity_headers(handler_input), timeout=urllib3.Timeout(total=3.0 if control else 25.0),
-                                    retries=False if control else None)
+                                    retries=False if control else None, redirect=False)
         except Exception:
             logger.exception(f'Request to {path} failed')
             return None, Exception(data.API_CONNECTION_ISSUE)
@@ -561,6 +571,14 @@ class Api:
                         (time.monotonic() - started) * 1000, response.status)
         if response.status == 404:
             return None, Exception(data.NOT_FOUND)
+        if response.status in (401, 403):
+            try:
+                failure = json.loads(response.data.decode('utf-8'))
+                code = failure.get('error', {}).get('code', 'alexa_access_denied')
+            except (ValueError, AttributeError, UnicodeDecodeError):
+                code = 'alexa_access_denied'
+            return None, SkillAuthorizationError(
+                'Alexa access was denied. Check your token, account access and matching Amazon email.', code=code)
         if response.status != 200:
             logger.error(f'{path} returned status {response.status}: {response.data[:500]}')
             return None, Exception(data.SERVICE_ISSUE)
@@ -808,7 +826,7 @@ class Controller:
         handler_input.response_builder.add_directive(PlayDirective(
             play_behavior=PlayBehavior.REPLACE_ENQUEUED,
             audio_item=AudioItem(stream=Stream(url=stream.audio_url,
-                token=_make_token(index, metadata.video_id, 'q' + decision['decision_id']),
+                token=scoped_token(handler_input, _make_token(index, metadata.video_id, 'q' + decision['decision_id'])),
                 offset_in_milliseconds=0), metadata=Attributes.get_audio_item_metadata(metadata))))
         info['next_stream_enqueued'] = True
         return handler_input.response_builder.response
@@ -1052,7 +1070,7 @@ class Controller:
             if not Api.validate_next(handler_input, current_video_id, decision):
                 playback_info['next_stream_enqueued'] = False
                 return False
-            enqueue_token = _make_token(enqueue_index, enqueue_video_id, ('q' + decision['decision_id']) if decision.get('decision_id') else None)
+            enqueue_token = scoped_token(handler_input, _make_token(enqueue_index, enqueue_video_id, ('q' + decision['decision_id']) if decision.get('decision_id') else None))
             # expected_previous_token must equal the stream Alexa is playing
             # right now. Reuse the exact token persisted when it started; fall
             # back to the bare video_id for legacy sessions predating the
@@ -1293,7 +1311,7 @@ class Controller:
         # be told apart from an earlier occurrence. Persist the exact token we
         # send: the next ENQUEUE's expected_previous_token must match it
         # verbatim, which stays correct even after a window trim shifts index.
-        token = _make_token(playback_info.get('index', 0), song_info.metadata.video_id, uuid.uuid4().hex[:24])
+        token = scoped_token(handler_input, _make_token(playback_info.get('index', 0), song_info.metadata.video_id, uuid.uuid4().hex[:24]))
         playback_info['current_token'] = token
 
         response_builder.add_directive(
@@ -1348,7 +1366,9 @@ class Controller:
         # so an in-flight fresh play/seek keeps its own arm, and only honor
         # fresh 'resume' arms so an old intent can never hijack playback.
         try:
-            armed, _ = Api.get_armed_play(handler_input, peek=True)
+            armed, arm_error = Api.get_armed_play(handler_input, peek=True)
+            if isinstance(arm_error, SkillAuthorizationError):
+                return Controller.error_response(handler_input, arm_error, is_playback)
         except Exception:
             logger.exception('resume: armed-play peek failed; using persisted session')
             armed = None
@@ -1376,7 +1396,7 @@ class Controller:
             return handler_input.response_builder.set_should_end_session(True).response
         if not metadata:
             return Controller.error_response(handler_input, data.NOTHING_TO_RESUME, is_playback)
-        if (playback_info.get('stream_url')
+        if (not getattr(data, 'ALEXA_SKILL_NAMESPACE', '') and playback_info.get('stream_url')
                 and playback_info.get('stream_url_video_id') == metadata.video_id):
             stream = player_models.Stream(playback_info.get('stream_url'))
         else:
@@ -1435,9 +1455,9 @@ class Controller:
         playback_info["offset_in_ms"] = offset_in_ms
         playback_info["next_stream_enqueued"] = False
 
-        # Reuse the already-resolved stream url when we have it; only hit the API
-        # when we must (avoids a round-trip on every scrub).
-        if (playback_info.get('stream_url')
+        # Paired streams must be freshly authorized; cached capabilities may
+        # have expired or belong to an earlier binding.
+        if (not getattr(data, 'ALEXA_SKILL_NAMESPACE', '') and playback_info.get('stream_url')
                 and playback_info.get('stream_url_video_id') == metadata.video_id):
             stream = player_models.Stream(playback_info.get('stream_url'))
         else:

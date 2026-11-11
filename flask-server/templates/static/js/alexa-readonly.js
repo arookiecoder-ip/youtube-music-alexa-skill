@@ -3,6 +3,7 @@
 const selectors='.transport button, #pp-btn, [data-action="next"], [data-action="previous"], #mobile-np-play, #mobile-np-next, #mobile-np-previous, .progress-track, #volume, #mobile-np-volume, .queue-item, .np-queue-item';
 let locked=false,lastToast=0;
 window.updateAlexaControlState=np=>{
+ if(typeof np?.alexa_access_enabled==='boolean')window.updateAmazonAccess?.(np.alexa_access_enabled);
  locked=np?.playback_output==='alexa' && np.remote_control_available===false;
  document.body.classList.toggle('alexa-controls-unavailable',locked);
  if(typeof np?.amazon_connected==='boolean')window.setAmazonConnection?.(np.amazon_connected);

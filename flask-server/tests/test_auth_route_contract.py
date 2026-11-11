@@ -9,11 +9,42 @@ from test_login_second_factor import SecondFactorDoorTestBase, PLAYER_PASSWORD
 
 class RouteContractTests(SecondFactorDoorTestBase):
     def setUp(self):
-        super().setUp();self.bind_player_door();self.server._ensure_db();self.user=self.player_user('contract-user')
+        super().setUp();self.bind_player_door();self.server._ensure_db();self.user=self.player_user('contract-user');self.layer.alexa_access.set_enabled(self.user['id'], True)
 
     def login_player(self):
         response=self.client.post('/login/',json={'username':self.user['username'],'password':PLAYER_PASSWORD})
         self.assertEqual(response.status_code,200)
+
+    def test_public_information_routes_render_without_login(self):
+        for path, heading in [('/privacy_policy/', 'Privacy'), ('/terms_of_use/', 'Terms of use')]:
+            response = self.client.get(path)
+            self.assertEqual(response.status_code, 200)
+            self.assertIn(heading.encode(), response.data)
+            self.assertIn(b'width=device-width', response.data)
+
+    def test_cookie_authenticated_get_cannot_change_liked_songs(self):
+        self.login_player()
+        with mock.patch.object(self.server, '_get_ytmusic_home') as provider:
+            response = self.client.get('/alexa/like/?video_id=AAAAAAAAAAA')
+        self.assertEqual(response.status_code, 405)
+        provider.assert_not_called()
+
+    def test_paired_skill_get_and_browser_json_post_can_like(self):
+        from types import SimpleNamespace
+        provider = SimpleNamespace(auth_type='BROWSER', rate_song=mock.Mock())
+        self.login_player()
+        with mock.patch.object(self.server, '_get_ytmusic_home', return_value=provider):
+            response = self.client.post('/alexa/like/', json={'video_id': 'AAAAAAAAAAA'})
+        self.assertEqual(response.status_code, 200)
+        provider.rate_song.assert_called_once_with('AAAAAAAAAAA', 'LIKE')
+        identity = self.layer.alexa_identity
+        self.assertTrue(identity.pair(identity.issue(self.user), 'subject', 'device'))
+        provider.rate_song.reset_mock()
+        headers = {'X-Api-Key': self.server.API_KEY, 'X-Alexa-User-Id': 'subject', 'X-Alexa-Device-Id': 'device'}
+        with mock.patch.object(self.server, '_get_ytmusic_home', return_value=provider):
+            response = self.client.get('/alexa/like/?video_id=AAAAAAAAAAA', headers=headers)
+        self.assertEqual(response.status_code, 200)
+        provider.rate_song.assert_called_once_with('AAAAAAAAAAA', 'LIKE')
 
     def test_account_login_clears_legacy_owner_identity(self):
         with self.client.session_transaction() as state:

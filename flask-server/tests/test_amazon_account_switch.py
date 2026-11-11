@@ -15,7 +15,7 @@ class AmazonAccountSwitchTests(unittest.IsolatedAsyncioTestCase):
         self.login=SimpleNamespace(email='new@example.test',_cookiefile=[str(staged)],test_loggedin=AsyncMock(return_value=True),save_cookiefile=save)
         self.old=SimpleNamespace(close=AsyncMock())
         storage=str(self.storage)
-        self.owner=SimpleNamespace(cookie_dir=storage,_storage_dir=os.path.join(storage,'.storage'),
+        self.owner=SimpleNamespace(_access_error=Mock(return_value=None),cookie_dir=storage,_storage_dir=os.path.join(storage,'.storage'),
             _email_file=os.path.join(storage,'.storage','last_email.txt'),
             _proxy_login=self.login,_login=self.old,_proxy_cookie_stage=str(self.stage),_stop_proxy=AsyncMock())
         path=Path(__file__).resolve().parents[1]/'alexa_remote.py'
@@ -31,6 +31,13 @@ class AmazonAccountSwitchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((self.live.parent/'last_email.txt').read_text(),'new@example.test')
         self.assertIs(self.owner._login,self.login);self.old.close.assert_awaited_once()
         self.assertEqual(self.login._cookiefile,[str(self.live)])
+    async def test_admin_revocation_before_promotion_preserves_existing_cookie(self):
+        self.owner._access_error.return_value = 'Amazon access disabled'
+        error = await self.owner._promote_staged_login(self.login, str(self.stage))
+        self.assertEqual(error, 'Amazon access disabled')
+        self.assertEqual(self.live.read_text(), 'old-valid-session')
+        self.assertIs(self.owner._login, self.old)
+
     async def test_failed_verification_keeps_previous_session_and_cookie(self):
         self.login.test_loggedin.return_value=False
         self.assertFalse(await self.ns['_finalize_proxy_login'](self.owner))

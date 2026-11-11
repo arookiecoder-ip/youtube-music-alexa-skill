@@ -671,6 +671,15 @@
       "principal": "public",
       "csrf": "required for mutations",
       "tenant": "none until proof verified"
+    },
+    {
+      "path": "/admin/users/<user_id>/alexa/",
+      "methods": [
+        "POST"
+      ],
+      "principal": "administrator",
+      "csrf": "required for mutations",
+      "tenant": "admin target permissions; scoped account token management"
     }
   ]
 }

@@ -238,6 +238,8 @@ class MultiUser:
         self.rate_limiter = RateLimiter()
         from alexa_identity import AlexaIdentity
         self.alexa_identity = AlexaIdentity(self.accounts, app_secret)
+        from .alexa_access import AlexaAccess
+        self.alexa_access = AlexaAccess(self.accounts)
         default_outbox = os.path.join(
             os.path.dirname(os.path.abspath(config.db_path)), "mail-outbox"
         )
@@ -765,6 +767,8 @@ def build_blueprint(mu: MultiUser) -> Blueprint:
             can_restore=g.mu_user.get("role") == "owner",
             sessions=mu.accounts.list_sessions(user_id),
             providers=providers,
+            alexa_token=request.environ.get("musicbox.new_alexa_token"),
+            alexa_tokens=mu.alexa_access.metadata(user_id),
             audit=mu.accounts.user_audit(user_id, limit=20),
             roles=ROLES,
             allowed_roles=[role for role in ROLES if AccountService.can_assign_role(g.mu_user, role)],
@@ -772,6 +776,32 @@ def build_blueprint(mu: MultiUser) -> Blueprint:
             can_manage=AccountService.can_manage_user(g.mu_user, user) and user["status"] != "deleted",
             is_self=g.mu_user["id"] == user_id,
         )
+
+    @bp.route("/users/<user_id>/alexa/", methods=["POST"])
+    @admin_required
+    def user_alexa(user_id):
+        user = mu.accounts.get_user(user_id)
+        if not user or not AccountService.can_manage_user(g.mu_user, user):
+            return _forbidden()
+        action = request.form.get("action")
+        try:
+            if action == "access":
+                mu.alexa_access.set_enabled(user_id, request.form.get("enabled") == "1")
+            elif action == "generate":
+                request.environ["musicbox.new_alexa_token"] = mu.alexa_access.rotate(user_id)
+            elif action == "revoke":
+                mu.alexa_access.revoke(user_id)
+            else:
+                return _forbidden()
+            mu.db.audit(g.mu_user["id"], g.mu_user["username"], "alexa_" + action, user_id)
+        except ValueError as exc:
+            flash(str(exc), "error")
+        if request.environ.get("musicbox.new_alexa_token"):
+            response = current_app.make_response(user_detail(user_id))
+            response.headers["Cache-Control"] = "no-store"
+            response.headers["Referrer-Policy"] = "no-referrer"
+            return response
+        return redirect(url_for("multiuser_admin.user_detail", user_id=user_id))
 
     @bp.route("/users/<user_id>/edit/", methods=["POST"])
     @admin_required

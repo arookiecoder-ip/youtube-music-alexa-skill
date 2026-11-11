@@ -102,7 +102,17 @@
     if (wrapper) wrapper.classList.remove('open');
   }
 
+  window.addEventListener('amazon-access', event => {
+    if (event.detail === false) {
+      window._connectEchoDevices = [];
+      if (deviceEl) { deviceEl.replaceChildren(); syncCustomDropdown(); }
+      try { localStorage.removeItem(window.CACHE_DEVICES_KEY || 'cachedDevices'); } catch (_) {}
+      if (loginSection) loginSection.hidden = true;
+    }
+  });
+
   async function loadDevices(refresh) {
+    if (document.body.dataset.alexaEnabled === 'false') return;
     const showStatusToast = !!refresh;
     if (showStatusToast) toast('Loading devices...');
     const prevSerial = deviceEl.value || localStorage.getItem('selectedSerial') || '';
@@ -256,6 +266,7 @@
   }
 
   async function refreshAuth() {
+    if (document.body.dataset.alexaEnabled === 'false') { showControls(false); return false; }
     try {
       const s = await api('/alexa/status/');
       if (!s.configured && !window.browserPlayback) {
@@ -311,6 +322,13 @@
     const savedSerial = localStorage.getItem('selectedSerial') || '';
     try {
       const data = await api('/alexa/init/' + (savedSerial ? '?serial=' + encodeURIComponent(savedSerial) : ''));
+      if (data.alexa_access_enabled === false) {
+        window.updateAmazonAccess?.(false);
+        window._connectEchoDevices = [];
+        window._applyDevices([], '');
+        if (window.connectSSE) window.connectSSE();
+        return;
+      }
       const s = data.status || {};
       if (!s.configured && !window.browserPlayback) {
         showControls(false);

@@ -21,7 +21,7 @@ info = dict(index=0, play_order=[0,1], current_token='0|A|attempt', offset_in_ms
 attrs = dict(playback_info=info, playback_setting=dict(loop=False,shuffle=False), playlist=[
     dict(video_id=v,title=v,artist='artist',thumbnail=None,duration_ms=180000) for v in ['A','B']])
 hi = Node(response_builder=ResponseFactory(), attributes_manager=Node(persistent_attributes={'user':attrs}),
-    request_envelope=Node(context=Node(system=Node(user=Node(user_id='user')),audio_player=Node(token='0|A|attempt'))))
+    request_envelope=Node(_musicbox_binding='a'*64,context=Node(system=Node(user=Node(user_id='user')),audio_player=Node(token='0|A|attempt'))))
 def next_track(*args):
     info['next_decision']=dict(authoritative=True,permitted=True,decision_id='rev')
     return Metadata(title='C',artist='artist',video_id='C',thumbnail=None,duration_ms=180000),None
@@ -31,7 +31,7 @@ data=DefaultSerializer().serialize(response)
 directive=data['directives'][0]
 assert directive['playBehavior']=='REPLACE_ENQUEUED',data
 assert 'expectedPreviousToken' not in directive['audioItem']['stream'],data
-assert directive['audioItem']['stream']['token']=='1|C|qrev',data
+assert directive['audioItem']['stream']['token']=='1|C|qrev|b'+'a'*64,data
 assert info['current_token']=='0|A|attempt' and info['offset_in_ms']==9000,info
 hi.response_builder=ResponseFactory()
 with patch.object(player.Api,'next_track',return_value=(None,None)), patch.object(player.Api,'validate_next',return_value=True):

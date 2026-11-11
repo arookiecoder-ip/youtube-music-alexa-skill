@@ -23,11 +23,11 @@
       "isAvailableWorldwide": true,
       "locales": {
         "en-US": {
-          "description": "Multi-user Music Box: each Echo is linked to its owner's own Music Box account and queue.",
+          "description": "Development skill for Music Box playback on supported Alexa devices.",
           "examplePhrases": [
             "Alexa, open music box multi",
             "Alexa, ask music box multi to play blinding lights",
-            "Alexa, ask music box multi to link account"
+            "Alexa, ask music box multi to play some jazz"
           ],
           "keywords": [
             "music",
@@ -35,14 +35,14 @@
             "multi user"
           ],
           "name": "Music Box Multi",
-          "summary": "Per-account YouTube Music control for Echo devices."
+          "summary": "Music Box playback for development testing."
         },
         "en-CA": {
-          "description": "Multi-user Music Box: each Echo is linked to its owner's own Music Box account and queue.",
+          "description": "Development skill for Music Box playback on supported Alexa devices.",
           "examplePhrases": [
             "Alexa, open music box multi",
             "Alexa, ask music box multi to play blinding lights",
-            "Alexa, ask music box multi to link account"
+            "Alexa, ask music box multi to play some jazz"
           ],
           "keywords": [
             "music",
@@ -50,14 +50,14 @@
             "multi user"
           ],
           "name": "Music Box Multi",
-          "summary": "Per-account YouTube Music control for Echo devices."
+          "summary": "Music Box playback for development testing."
         },
         "en-IN": {
-          "description": "Multi-user Music Box: each Echo is linked to its owner's own Music Box account and queue.",
+          "description": "Development skill for Music Box playback on supported Alexa devices.",
           "examplePhrases": [
             "Alexa, open music box multi",
             "Alexa, ask music box multi to play blinding lights",
-            "Alexa, ask music box multi to link account"
+            "Alexa, ask music box multi to play some jazz"
           ],
           "keywords": [
             "music",
@@ -65,14 +65,14 @@
             "multi user"
           ],
           "name": "Music Box Multi",
-          "summary": "Per-account YouTube Music control for Echo devices."
+          "summary": "Music Box playback for development testing."
         },
         "en-AU": {
-          "description": "Multi-user Music Box: each Echo is linked to its owner's own Music Box account and queue.",
+          "description": "Development skill for Music Box playback on supported Alexa devices.",
           "examplePhrases": [
             "Alexa, open music box multi",
             "Alexa, ask music box multi to play blinding lights",
-            "Alexa, ask music box multi to link account"
+            "Alexa, ask music box multi to play some jazz"
           ],
           "keywords": [
             "music",
@@ -80,14 +80,14 @@
             "multi user"
           ],
           "name": "Music Box Multi",
-          "summary": "Per-account YouTube Music control for Echo devices."
+          "summary": "Music Box playback for development testing."
         },
         "en-GB": {
-          "description": "Multi-user Music Box: each Echo is linked to its owner's own Music Box account and queue.",
+          "description": "Development skill for Music Box playback on supported Alexa devices.",
           "examplePhrases": [
             "Alexa, open music box multi",
             "Alexa, ask music box multi to play blinding lights",
-            "Alexa, ask music box multi to link account"
+            "Alexa, ask music box multi to play some jazz"
           ],
           "keywords": [
             "music",
@@ -95,10 +95,44 @@
             "multi user"
           ],
           "name": "Music Box Multi",
-          "summary": "Per-account YouTube Music control for Echo devices."
+          "summary": "Music Box playback for development testing."
         }
       },
-      "testingInstructions": "Link the Echo from the target account page (Generate pairing code), then say: Alexa, ask music box multi to link account 12345678."
+      "testingInstructions": "Private development skill. Configure MUSICBOX_SERVER_URL, MUSICBOX_EMAIL and MUSICBOX_ALEXA_TOKEN; enable and grant customer email permission. Pairing codes are disabled."
+    },
+    "permissions": [
+      {
+        "name": "alexa::profile:email:read"
+      }
+    ],
+    "privacyAndCompliance": {
+      "allowsPurchases": false,
+      "usesPersonalInfo": true,
+      "isChildDirected": false,
+      "isExportCompliant": true,
+      "containsAds": false,
+      "locales": {
+        "en-US": {
+          "privacyPolicyUrl": "https://testalexa.synthora.in/privacy_policy/",
+          "termsOfUseUrl": "https://testalexa.synthora.in/terms_of_use/"
+        },
+        "en-CA": {
+          "privacyPolicyUrl": "https://testalexa.synthora.in/privacy_policy/",
+          "termsOfUseUrl": "https://testalexa.synthora.in/terms_of_use/"
+        },
+        "en-IN": {
+          "privacyPolicyUrl": "https://testalexa.synthora.in/privacy_policy/",
+          "termsOfUseUrl": "https://testalexa.synthora.in/terms_of_use/"
+        },
+        "en-AU": {
+          "privacyPolicyUrl": "https://testalexa.synthora.in/privacy_policy/",
+          "termsOfUseUrl": "https://testalexa.synthora.in/terms_of_use/"
+        },
+        "en-GB": {
+          "privacyPolicyUrl": "https://testalexa.synthora.in/privacy_policy/",
+          "termsOfUseUrl": "https://testalexa.synthora.in/terms_of_use/"
+        }
+      }
     }
   }
 }

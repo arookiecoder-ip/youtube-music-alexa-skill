@@ -13,7 +13,7 @@ import sqlite3
 import time
 from typing import Any, Iterable
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 10
 
 _SCHEMA_V1 = (
     """
@@ -385,6 +385,20 @@ class Database:
                 conn.execute('DROP TABLE alexa_bindings_v7')
                 conn.execute('CREATE INDEX IF NOT EXISTS idx_alexa_bindings_user ON alexa_bindings(user_id)')
                 conn.execute('INSERT INTO multiuser_schema_migrations VALUES (8, ?)', (time.time(),))
+            if 9 not in applied:
+                conn.execute("ALTER TABLE alexa_bindings ADD COLUMN generation TEXT NOT NULL DEFAULT ''")
+                conn.execute("UPDATE alexa_bindings SET generation=lower(hex(randomblob(16)))")
+                conn.execute('INSERT INTO multiuser_schema_migrations VALUES (9, ?)', (time.time(),))
+            if 10 not in applied:
+                conn.execute("ALTER TABLE users ADD COLUMN alexa_enabled INTEGER NOT NULL DEFAULT 0")
+                # Preserve existing installations; newly created accounts need an admin grant.
+                conn.execute("UPDATE users SET alexa_enabled=1 WHERE status='active'")
+                conn.execute("""CREATE TABLE alexa_access_tokens (
+                    id TEXT PRIMARY KEY, user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    token_hash TEXT NOT NULL, email TEXT NOT NULL, security_version INTEGER NOT NULL,
+                    created_at REAL NOT NULL, expires_at REAL NOT NULL, revoked_at REAL NOT NULL DEFAULT 0)""")
+                conn.execute("CREATE INDEX idx_alexa_access_user ON alexa_access_tokens(user_id)")
+                conn.execute("INSERT INTO multiuser_schema_migrations VALUES (10, ?)", (time.time(),))
             now = time.time()
             # Bound the audit journal so a long-lived install cannot grow it
             # without limit. 90 days is intentionally conservative.

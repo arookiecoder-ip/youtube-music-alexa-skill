@@ -15,6 +15,7 @@ from playback_contract import restore_snapshot
 class OutputRoutesTests(PhoneQueueTests):
     def setUp(self):
         super().setUp()
+        self.namespace['_alexa_access_enabled'] = lambda: True
         self.namespace['restore_snapshot'] = restore_snapshot
         self.namespace["_playback_failover_budget"] = PlaybackFailoverBudget()
         self.seek_dispatch = Mock(return_value=None)

@@ -17,6 +17,7 @@
   text-transform: lowercase;
   color: var(--muted);
 }
+.legal-links a { display: inline-flex; align-items: center; min-height: 24px; }
 
 .field-help {
   font-size: .75rem;

@@ -53,7 +53,7 @@
 <link rel="stylesheet" href="/static/css/explore.css?v={{ asset_v }}">
 <link rel="stylesheet" href="/static/css/mobile.css?v={{ asset_v }}">
 </head>
-<body class="preload{{ ' jam-guest' if jam_guest else '' }}">
+<body data-alexa-enabled="{{ 'true' if alexa_access_enabled else 'false' }}" class="preload{{ ' jam-guest' if jam_guest else '' }}">
 <div id="top-progress-bar" class="top-progress-bar"></div>
 <script>
   window.APP_VERSION = "{{ asset_v }}";
@@ -150,7 +150,7 @@
             <a href="/account#panel-providers">Open your account</a>
           </div>
           <div class="profile-menu-status jam-owner-only">
-            <div><strong>Amazon</strong> <span id="status-amazon">Checking&hellip;</span></div>
+            {% if alexa_access_enabled %}<div><strong>Amazon</strong> <span id="status-amazon">Checking&hellip;</span></div>{% endif %}
             <div><strong>YouTube</strong> <span id="status-yt-headers">Checking&hellip;</span></div>
           </div>
           {% if account_available %}<a class="jam-owner-only profile-menu-link" href="/account">Your account</a>{% endif %}
@@ -271,6 +271,7 @@
 
   <div class="layout">
   <div class="left-col">
+  {% if alexa_access_enabled %}
   <!-- Amazon login -->
   <section id="login-section" hidden>
     <div class="label">Amazon Account</div>
@@ -284,6 +285,7 @@
     </form>
   </section>
 
+  {% endif %}
   <!-- Player -->
   <section class="needs-login player-section redesigned-bar is-collapsed" hidden>
     <!-- LEFT: Art & Info -->

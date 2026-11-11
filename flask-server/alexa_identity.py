@@ -26,7 +26,8 @@ class AlexaIdentity:
     def __init__(self, accounts, secret):
         self.accounts, self.db = accounts, accounts.db
         self.secret = str(secret).encode()
-        self.signer = URLSafeTimedSerializer(secret, salt='musicbox-echo-stream-v1')
+        # Retire old capabilities which were not tied to a revocable binding.
+        self.signer = URLSafeTimedSerializer(secret, salt='musicbox-echo-stream-v2')
 
     @staticmethod
     def skill_namespace(value):
@@ -68,28 +69,78 @@ class AlexaIdentity:
             if not row or row['expires_at'] <= time.time() or row['security_version'] != row['live_version']:
                 return False
             conn.execute('DELETE FROM alexa_pair_codes WHERE code_hash=?', (row['code_hash'],))
-            conn.execute('INSERT OR REPLACE INTO alexa_bindings (skill_id, subject_hash, device_hash, user_id) VALUES (?,?,?,?)',
-                         (skill, self.digest(subject, skill), self.digest(device, skill), row['user_id']))
+            conn.execute('INSERT OR REPLACE INTO alexa_bindings (skill_id, subject_hash, device_hash, user_id, generation) VALUES (?,?,?,?,?)',
+                         (skill, self.digest(subject, skill), self.digest(device, skill), row['user_id'], secrets.token_hex(16)))
         return True
 
     def resolve(self, subject, device, skill=''):
+        user, _ = self.binding(subject, device, skill)
+        return user
+
+    def binding(self, subject, device, skill=''):
+        """Return an active account and the current binding, never a fallback."""
         if not subject or not device or skill is None:
-            return None
+            return None, None
         row = self.db.fetchone(
-            'SELECT user_id FROM alexa_bindings WHERE skill_id=? AND subject_hash=? AND device_hash=?',
+            'SELECT * FROM alexa_bindings WHERE skill_id=? AND subject_hash=? AND device_hash=?',
             (skill, self.digest(subject, skill), self.digest(device, skill)))
         user = self.accounts.get_user(row['user_id']) if row else None
-        return user if user and user['status'] == 'active' and not user['must_change_password'] else None
+        if not user or user['status'] != 'active' or user['must_change_password']:
+            return None, None
+        binding = dict(row)
+        binding['security_version'] = self.accounts.security_version(user['id'])
+        binding['version'] = self.binding_version(binding)
+        return user, binding
 
-    def stream_token(self, user_id, video):
-        return self.signer.dumps({'user_id': user_id, 'video': video, 'version': self.accounts.security_version(user_id)})
+    def binding_version(self, binding):
+        """Opaque generation changes on re-pairing and account proof revocation."""
+        value = '\0'.join(str(binding[key]) for key in
+                          ('skill_id', 'subject_hash', 'device_hash', 'user_id', 'generation'))
+        value += '\0' + str(binding['security_version'])
+        return self.digest(value)
+
+    def stream_token(self, user_id, video, binding=None):
+        data = {'user_id': user_id, 'video': video, 'version': self.accounts.security_version(user_id)}
+        if binding is not None:
+            if binding['user_id'] != user_id:
+                raise ValueError('Stream account does not match Echo binding')
+            # Preserve the authorized snapshot: revoking proofs while a request
+            # is in flight must not let it mint a token at the newer version.
+            data['version'] = binding['security_version']
+            if 'token_hash' in binding:
+                data['credential'] = binding['id']
+                return self.signer.dumps(data)
+            data['binding'] = {key: binding[key] for key in
+                               ('skill_id', 'subject_hash', 'device_hash', 'generation')}
+        return self.signer.dumps(data)
 
     def stream_user(self, token, video):
         try:
             data = self.signer.loads(token, max_age=7200)
         except BadData:
             return None
+        if not isinstance(data, dict):
+            return None
         if data.get('video') != video or not data.get('version') or data['version'] != self.accounts.security_version(data.get('user_id')):
             return None
+        from multiuser.alexa_access import AlexaAccess, AccessDenied
+        if data.get('credential'):
+            try:
+                user, credential = AlexaAccess(self.accounts).current(data['credential'])
+                return user if user['id'] == data.get('user_id') else None
+            except AccessDenied:
+                return None
+        if not AlexaAccess(self.accounts).enabled(data.get('user_id')):
+            return None
+        binding = data.get('binding')
+        if binding is not None:
+            if not isinstance(binding, dict) or not all(isinstance(binding.get(key), str) for key in
+                    ('skill_id', 'subject_hash', 'device_hash', 'generation')):
+                return None
+            row = self.db.fetchone(
+                'SELECT user_id, generation FROM alexa_bindings WHERE skill_id=? AND subject_hash=? AND device_hash=?',
+                (binding['skill_id'], binding['subject_hash'], binding['device_hash']))
+            if not row or row['user_id'] != data.get('user_id') or row['generation'] != binding['generation']:
+                return None
         user = self.accounts.get_user(data['user_id'])
         return user if user and user['status'] == 'active' and not user['must_change_password'] else None

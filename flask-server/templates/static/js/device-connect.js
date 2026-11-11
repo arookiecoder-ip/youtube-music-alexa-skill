@@ -32,7 +32,7 @@
   };
   const originalApply = window._applyDevices;
   window._applyDevices = function (devices, preferred) {
-    echoDevices = devices.filter(d => !String(d.serial).startsWith('mobile:'));
+    echoDevices = document.body.dataset.alexaEnabled === 'false' ? [] : devices.filter(d => !String(d.serial).startsWith('mobile:'));
     const browser = window.browserPlayback;
     const local = browser ? 'mobile:' + browser.id : '';
     const devicesWithPhones = echoDevices.filter(d => d.online && (!d.logged_out || (output && output.playback_output === 'alexa' && output.output_serial === d.serial))).concat(phones.map(d => ({ serial: 'mobile:' + d.id,
@@ -51,6 +51,9 @@
       available(preferred) ? preferred : local || '';
     return originalApply(devicesWithPhones, value);
   };
+  window.addEventListener('amazon-access', event => {
+    if (event.detail === false) { echoDevices = []; window._connectEchoDevices = []; render(); }
+  });
   function render() {
     const previous = select.value;
     window._applyDevices(window._connectEchoDevices || echoDevices, previous);
@@ -59,7 +62,7 @@
       if (window.refreshVolume) window.refreshVolume(true);
     }
   }
-  window.activeAlexaSerial = () => output && output.output_serial || echoDevices.find(d => d.online)?.serial || "";
+  window.activeAlexaSerial = () => document.body.dataset.alexaEnabled === 'false' ? "" : output && output.output_serial || echoDevices.find(d => d.online)?.serial || "";
   window.mobileOutputSelected = function (np) {
     return np.playback_output === 'phone' && select.value === 'mobile:' + np.output_owner;
   };
@@ -72,7 +75,7 @@
       beginHandoffFeedback(np.playback_output === 'phone' ? 'mobile:' + np.output_owner : np.output_serial);
     }
     output = np;
-    if (np.remote_control_available === false && np.playing && np.output_serial && !echoDevices.some(d => d.serial === np.output_serial)) {
+    if (document.body.dataset.alexaEnabled !== 'false' && np.remote_control_available === false && np.playing && np.output_serial && !echoDevices.some(d => d.serial === np.output_serial)) {
       echoDevices.push({serial:np.output_serial,name:'Alexa',online:true,logged_out:true,controllable:false});
       window._connectEchoDevices = echoDevices;
     }

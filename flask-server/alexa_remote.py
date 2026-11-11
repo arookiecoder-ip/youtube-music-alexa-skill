@@ -384,6 +384,14 @@ class _Device:
         self._locale = None  # AlexaAPI falls back to its default locale
 
 
+_access_policy = None
+
+
+def set_access_policy(policy):
+    global _access_policy
+    _access_policy = policy
+
+
 class AlexaRemote:
     def __init__(self, cookie_dir: str = None):
         # One instance per identity (see `remote` at the bottom of this module);
@@ -451,6 +459,18 @@ class AlexaRemote:
 
     LOGIN_REQUIRED = "Not signed in. Use the login button to sign in to Amazon."
 
+    def _read_saved_email(self):
+        try:
+            with open(self._email_file) as source:
+                return source.read().strip()
+        except (OSError, AttributeError):
+            return None
+
+    def _access_error(self, email=None):
+        if _access_policy is None:
+            return None
+        return _access_policy(getattr(self, '_musicbox_identity', OWNER), email)
+
     async def _ensure_login(self, force_check: bool = False):
         """Ensure a usable session, reusing the stored cookie. No credentials
         are held server-side, so this can only validate/restore an existing
@@ -461,6 +481,10 @@ class AlexaRemote:
         trip (see _LOGIN_RECHECK_TTL) so transport/volume commands stay snappy;
         pass force_check=True to re-validate immediately (e.g. after a command
         was rejected)."""
+        error = self._access_error(getattr(self._login, 'email', None) if self._login else self._read_saved_email())
+        if error:
+            self.connection_state = False
+            return error
         if not hasattr(self, '_login_task_lock'):
             self._login_task_lock = asyncio.Lock()
             
@@ -669,6 +693,9 @@ class AlexaRemote:
 
     async def _proxy_start_url(self, email: str, password: str, base_url: str = None):
         """Bring up the proxy and return (url, error). url is where the user logs in."""
+        error = self._access_error(email)
+        if error:
+            return None, error
         error = await self._start_proxy(email, password, base_url)
         if error:
             return None, error
@@ -770,6 +797,9 @@ class AlexaRemote:
         return True
 
     async def _promote_staged_login(self, login, stage):
+        error = self._access_error(getattr(login, 'email', None))
+        if error:
+            return error
         """Persist a verified login's cookies and adopt it as the live session.
 
         Shared by the browser-proxy and the scripted form flow, which differ
@@ -1123,6 +1153,9 @@ class AlexaRemote:
         return result
 
     async def _form_login_begin(self, email, password):
+        error = self._access_error(email)
+        if error:
+            return {'state': 'error', 'message': error}
         email = _normalize_identifier(email)
         if not email or not password:
             return {"state": "error",
@@ -1678,9 +1711,12 @@ class AlexaRemote:
 # `remote` resolves the caller's identity exactly like playback state does, so
 # the existing `alexa_remote.remote.<call>()` sites need no changes.
 _owner_remote = AlexaRemote()
-_remote_registry = PlayerStateRegistry(
-    lambda identity: (_owner_remote if identity in (OWNER, '')
-                      else AlexaRemote(cookie_dir=cookie_dir_for(identity)))
-)
+def _remote_for_identity(identity):
+    instance = _owner_remote if identity in (OWNER, '') else AlexaRemote(cookie_dir=cookie_dir_for(identity))
+    instance._musicbox_identity = identity
+    return instance
+
+
+_remote_registry = PlayerStateRegistry(_remote_for_identity)
 
 remote = PlayerStateProxy(_remote_registry)

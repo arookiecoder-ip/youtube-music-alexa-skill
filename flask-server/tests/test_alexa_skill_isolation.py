@@ -20,6 +20,8 @@ class SkillScopedBindingTests(SecondFactorDoorTestBase):
         self.server._ensure_db()
         self.user = self.player_user('isolation-a')
         self.other = self.player_user('isolation-b')
+        self.layer.alexa_access.set_enabled(self.user['id'], True)
+        self.layer.alexa_access.set_enabled(self.other['id'], True)
 
     def headers(self, subject='subject', device='device', skill=None):
         values = {'X-Api-Key': self.server.API_KEY,
@@ -94,27 +96,12 @@ class SkillScopedBindingTests(SecondFactorDoorTestBase):
                                  (self.user['id'],))
         self.assertFalse(self.layer.alexa_identity.pair(live, 's', 'd', SKILL_A))
 
-    def test_pairing_attempts_are_budgeted_per_echo_not_per_lambda_address(self):
-        for _ in range(5):
-            response = self.client.post('/api/alexa/link/',
-                                        headers=self.headers(skill=SKILL_A),
-                                        json={'code': '00000000'})
-            self.assertEqual(response.status_code, 403)
-        blocked = self.client.post('/api/alexa/link/',
-                                   headers=self.headers(skill=SKILL_A),
-                                   json={'code': '00000000'})
-        self.assertEqual(blocked.status_code, 429)
-        self.assertIn('Retry-After', blocked.headers)
-
-        # A different Echo arriving through the same Lambda egress address is
-        # not punished for the first one's guesses.
+    def test_retired_pairing_codes_cannot_be_redeemed(self):
         code = self.layer.alexa_identity.issue(self.user)
-        allowed = self.client.post('/api/alexa/link/',
-                                   headers=self.headers(device='second-device', skill=SKILL_A),
-                                   json={'code': code})
-        self.assertEqual(allowed.status_code, 200)
-        self.assertEqual(self.layer.alexa_identity.resolve('subject', 'second-device', SKILL_A)['id'],
-                         self.user['id'])
+        response = self.client.post('/api/alexa/link/',
+                                    headers=self.headers(skill=SKILL_A), json={'code': code})
+        self.assertEqual(response.status_code, 410)
+        self.assertIsNone(self.layer.alexa_identity.resolve('subject', 'device', SKILL_A))
 
     def test_a_valid_pairing_still_rejects_a_disabled_account(self):
         code = self.layer.alexa_identity.issue(self.user)

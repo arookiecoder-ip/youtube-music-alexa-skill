@@ -1,24 +1,19 @@
-# Fallback API URL used when none has been set via the "set api url" voice command.
-# Shared secret; must match the API_KEY env var on the Flask server.
-# Both live in api_key.py (gitignored) so the repo can be public.
+"""Private-skill configuration. No server-wide key or skill ID is distributed."""
 import os
 try:
     import api_key as _key_config
-    API_KEY = getattr(_key_config, 'API_KEY', '')
-    DEFAULT_API_URL = getattr(_key_config, 'DEFAULT_API_URL', '')
 except ImportError:
-    import logging
-    logging.warning("api_key.py not found; API_KEY and DEFAULT_API_URL are empty")
     _key_config = None
-    API_KEY = ""
-    DEFAULT_API_URL = ""
 
-# A second deployment can share this code without sharing an identity
-# namespace.  The environment wins; the private config file is the fallback for
-# Alexa-hosted skills, whose Lambda environment Amazon manages.  Empty values
-# keep the legacy single-skill behavior.
-ALEXA_SKILL_ID = os.environ.get('ALEXA_SKILL_ID') or getattr(_key_config, 'ALEXA_SKILL_ID', '')
-ALEXA_SKILL_NAMESPACE = os.environ.get('ALEXA_SKILL_NAMESPACE') or getattr(_key_config, 'ALEXA_SKILL_NAMESPACE', '')
+def _setting(name):
+    return os.environ.get(name) or getattr(_key_config, name, '')
+
+MUSICBOX_SERVER_URL = _setting('MUSICBOX_SERVER_URL')
+MUSICBOX_EMAIL = _setting('MUSICBOX_EMAIL')
+MUSICBOX_ALEXA_TOKEN = _setting('MUSICBOX_ALEXA_TOKEN')
+DEFAULT_API_URL = MUSICBOX_SERVER_URL
+# All deployments use scoped credentials and isolated persistence.
+ALEXA_SKILL_NAMESPACE = 'private-account'
 
 WELCOME_MSG = "Welcome to music box. You can say, play blinding lights, to begin."
 WELCOME_REPROMPT_MSG = "You can say, play, followed by a song name, to begin."
@@ -36,8 +31,8 @@ PLAYBACK_PLAY = "Playing {} by {}"
 PLAYBACK_PLAY_CARD = "Playing {}"
 PLAYBACK_NEXT_END = "You have reached the end of the playlist"
 PLAYBACK_PREVIOUS_END = "You have reached the start of the playlist"
-API_CONNECTION_ISSUE = 'Could not connect to api url. Please check the connection to the url or set a new url.'
-API_URL_NOT_SET = 'Api url not set. To set api url, say, "Alexa, ask DJ to set api url"'
+API_CONNECTION_ISSUE = 'Could not connect to the music server. Please try again in a moment.'
+API_URL_NOT_SET = 'The skill administrator needs to configure the music server address.'
 NOT_FOUND = "Sorry, I couldn't find that. Please try something else."
 SERVICE_ISSUE = 'Sorry, the music service had a problem. Please try again in a moment.'
 NOTHING_TO_RESUME = 'There is nothing to resume. Say, play, followed by a song name, to begin.'

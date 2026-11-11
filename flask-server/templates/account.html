@@ -47,7 +47,7 @@
     <span class="badge {{ kind }}" id="{{ id }}">{{ text }}</span>
   </li>
 {%- endmacro %}
-<body class="account" data-csrf="{{ csrf_form }}" data-min-password="{{ password_min_length }}"
+<body data-alexa-enabled="{{ 'true' if alexa_access_enabled else 'false' }}" class="account" data-csrf="{{ csrf_form }}" data-min-password="{{ password_min_length }}"
       data-username="{{ username }}">
 <a class="skip-link" href="#account-main">Skip to account settings</a>
 <main id="account-main">
@@ -94,7 +94,7 @@
             'On' if totp_enabled else ('Setup waiting' if totp_pending else 'Off'),
             'ok' if totp_enabled else ('warn' if totp_pending else '')) }}
     {{ chip('sum-services', 'Services',
-            (providers|length ~ ' of 2 linked') if providers else 'None linked',
+            (providers|length ~ (' of 2 linked' if alexa_access_enabled else ' linked')) if providers else 'None linked',
             'ok' if providers|length == 2 else ('warn' if providers else '')) }}
     {{ chip('sum-devices', 'Devices',
             'This one only' if sessions|length <= 1 else (sessions|length ~ ' signed in'),
@@ -195,6 +195,7 @@
       <section class="panel" id="panel-providers" tabindex="-1" aria-labelledby="title-providers">
         <h3 id="title-providers">Linked services</h3>
         <ul class="service-list">
+          {% if alexa_access_enabled %}
           <li class="service" id="service-amazon">
             <div class="service-main">
               <span class="service-name">Amazon / Alexa</span>
@@ -209,6 +210,7 @@
                       {{ '' if provider_map.get('amazon') else 'hidden' }}>Disconnect</button>
             </div>
           </li>
+          {% endif %}
           <li class="service" id="service-youtube">
             <div class="service-main">
               <span class="service-name">YouTube Music</span>
@@ -707,7 +709,7 @@
     </div>
     <div class="dialog-body">
       <p class="field-help">This cannot be undone, and an administrator cannot recover it. It
-        removes @{{ username }}, its queue and playlists, the Amazon and YouTube sign-ins,
+        removes @{{ username }}, its queue and playlists, the {% if alexa_access_enabled %}Amazon and {% endif %}YouTube sign-ins,
         the saved cookies and browser profile on this server, and every signed-in device.</p>
       {% if email %}
         <p class="field-help">A six-digit code goes to <strong>{{ email }}</strong> before
@@ -762,7 +764,6 @@
       <button class="ghost destructive" type="button" id="delete-final-yes">Delete account</button>
     </div>
   </dialog>
-<section class="account-panel"><h2>Link an Echo</h2><p>Generate a code, then say “Alexa, ask DJ to link account” followed by its eight digits. The code expires in five minutes.</p><button type="button" class="tiny" id="alexa-link-code">Generate pairing code</button><output id="alexa-link-result" aria-live="polite"></output><button type="button" class="tiny" id="alexa-unlink">Unlink Echo devices</button></section>
 </main>
 <script src="{{ asset_url('js/selfservice.js') }}" defer></script>
 <script src="{{ asset_url('js/account.js') }}" defer></script>

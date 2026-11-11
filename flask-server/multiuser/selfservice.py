@@ -1062,7 +1062,8 @@ def build_selfservice_blueprint(mu) -> Blueprint:
         # script intercepts the click and opens the same dialog without a load.
         step = (request.args.get("step") or "").strip().lower()
         return render_template(
-            "account.html", step=step if step in DIALOG_STEPS else "", **_account_payload()
+            "account.html", step=step if step in DIALOG_STEPS else "",
+            **_account_payload()
         )
 
     def _theme_for(user: dict) -> str:
@@ -1083,6 +1084,9 @@ def build_selfservice_blueprint(mu) -> Blueprint:
     def _account_payload() -> dict:
         full = mu.accounts.get_user(g.ss_user["id"]) or g.ss_user
         providers = mu.accounts.provider_status(full["id"])
+        alexa_enabled = mu.alexa_access.enabled(full["id"])
+        if not alexa_enabled:
+            providers = [row for row in providers if row["provider"] != "amazon"]
         sessions = mu.accounts.session_summaries(
             full["id"], current_sid_hash=(g.ss_session or {}).get("sid_hash", "")
         )
@@ -1094,6 +1098,7 @@ def build_selfservice_blueprint(mu) -> Blueprint:
             row["signed_in_text"] = _human_stamp(row.get("created_at")) or "unknown"
         return {
             "user": full,
+            "alexa_access_enabled": alexa_enabled,
             "username": full.get("username"),
             "email": full.get("email") or "",
             "pending_email": full.get("pending_email") or "",
@@ -1181,17 +1186,15 @@ def build_selfservice_blueprint(mu) -> Blueprint:
     @bp.route('/api/account/alexa/link-code', methods=['POST'])
     @account_required
     def alexa_link_code():
-        blocked = _limited('code-ip', netids.ip_bucket(_ip()))
-        if blocked:
-            return blocked
-        return jsonify(code=mu.alexa_identity.issue(g.ss_user), expires_in=300)
+        return _json_error('pairing_unavailable', 'Echo pairing codes are no longer available.', 410)
 
     @bp.route('/api/account/alexa/unlink', methods=['POST'])
     @account_required
     def alexa_unlink():
         mu.db.execute('DELETE FROM alexa_bindings WHERE user_id=?', (g.ss_user['id'],))
         mu.db.execute('DELETE FROM alexa_pair_codes WHERE user_id=?', (g.ss_user['id'],))
-        mu.accounts.invalidate_security_proofs(g.ss_user['id'])
+        # Binding-scoped audio capabilities are revoked by deleting bindings.
+        # Do not revoke unrelated browser sessions when unlinking Echo devices.
         return jsonify(ok=True)
 
     @bp.route("/api/account/profile", methods=["POST"])

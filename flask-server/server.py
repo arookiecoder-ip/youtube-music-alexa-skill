@@ -1393,7 +1393,9 @@ def _owner_row_id():
     multi-user does not ask its owner to reconnect everything. Cached because callers
     that lack the role on hand (jam guests) resolve it per request, and a read here
     would open a SQLite connection each time; sixty seconds is the worst a role change
-    takes to land."""
+    takes to land. The bootstrap identity remains fixed even if that account is
+    disabled or demoted: changing administrators must never transfer its cookies
+    or queue to somebody else."""
     now = time.monotonic()
     if now - _owner_row_read[0] < 60:
         return _owner_row_read[1]
@@ -1401,7 +1403,7 @@ def _owner_row_id():
     if _multiuser_layer is not None:
         try:
             row = _multiuser_layer.db.fetchone(
-                "SELECT id FROM users WHERE role = 'owner' AND status = 'active' LIMIT 1")
+                "SELECT id FROM users WHERE created_by='system' OR role='owner' ORDER BY CASE WHEN created_by='system' THEN 0 ELSE 1 END, created_at, id LIMIT 1")
             user_id = str(row['id']) if row else ''
         except Exception:
             logger.exception('Could not look up the owning account')
@@ -1417,8 +1419,20 @@ def _player_identity_for_user_id(user_id, role=None):
     usual case for a signed-in web request."""
     if not user_id:
         return _OWNER_IDENTITY
-    owner = (role == 'owner') if role is not None else str(user_id) == _owner_row_id()
+    owner = str(user_id) == _owner_row_id()
     return _OWNER_IDENTITY if owner else 'user:' + str(user_id)
+
+
+def _alexa_access_enabled():
+    if _multiuser_layer is None:
+        return True
+    user_id = _identity_account_id(_current_identity())
+    return bool(user_id and _multiuser_layer.alexa_access.enabled(user_id))
+
+
+@app.context_processor
+def _alexa_access_template_context():
+    return {'alexa_access_enabled': _alexa_access_enabled()}
 
 
 @app.before_request
@@ -1429,21 +1443,49 @@ def _bind_player_identity():
     # token; everything else (owner web session, Alexa, API keys, background
     # threads) stays on the legacy 'owner' state.
     layer = _multiuser_layer
+    from multiuser.alexa_access import AccessDenied, SKILL_PATHS
+    if layer is not None and request.headers.get('Authorization', '').startswith('Bearer '):
+        if request.path.rstrip('/') not in SKILL_PATHS:
+            return jsonify(error={'code': 'alexa_scope_denied', 'message': 'This token is restricted to skill playback.'}), 403
+        try:
+            linked, credential = layer.alexa_access.authenticate(request.headers)
+            if not request.headers.get('X-Alexa-User-Id') or not request.headers.get('X-Alexa-Device-Id'):
+                raise AccessDenied()
+            supplied = request.headers.get('X-Alexa-Binding')
+            if supplied and not hmac.compare_digest(supplied.encode(), credential['version'].encode()):
+                raise AccessDenied()
+        except AccessDenied as exc:
+            return jsonify(error={'code': exc.code, 'message': str(exc)}), 403
+        _PLAYER_IDENTITY.set(_player_identity_for_user_id(linked['id']))
+        request.environ['musicbox.alexa_identity'] = linked['id']
+        request.environ['musicbox.alexa_binding'] = credential
+        request.environ['musicbox.alexa_token_authorized'] = True
+        return None
     subject, device = request.headers.get('X-Alexa-User-Id'), request.headers.get('X-Alexa-Device-Id')
     skill = ''
     if layer is not None:
         skill = layer.alexa_identity.skill_namespace(request.headers.get('X-Alexa-Skill-Id'))
         if skill is None:
             return jsonify(error={'code':'invalid_skill','message':'Invalid Alexa skill identity.'}), 400
-    if layer is not None and subject and _valid_key_supplied():
+    alexa_headers = any(name in request.headers for name in
+                        ('X-Alexa-User-Id', 'X-Alexa-Device-Id', 'X-Alexa-Skill-Id', 'X-Alexa-Binding'))
+    if layer is not None and alexa_headers:
+        if not _valid_key_supplied():
+            return jsonify(error={'code': 'unauthorized', 'message': 'Invalid skill credential.'}), 401
+        if not subject or not device:
+            return jsonify(error={'code': 'link_account_required', 'message': 'Complete Echo identity required.'}), 403
         if request.path.rstrip('/') == '/api/alexa/link':
             return None
-        linked = layer.alexa_identity.resolve(subject, device, skill)
-        if not linked:
-            return jsonify(error={'code':'link_account_required','message':'Link this Echo from your account page first.'}), 403
+        linked, binding = layer.alexa_identity.binding(subject, device, skill)
+        if not linked or not layer.alexa_access.enabled(linked['id']):
+            return jsonify(error={'code':'link_account_required','message':'This Echo is not authorized for this account.'}), 403
+        supplied_binding = request.headers.get('X-Alexa-Binding')
+        if supplied_binding is not None and not hmac.compare_digest(supplied_binding.encode(), binding['version'].encode()):
+            return jsonify(error={'code': 'link_account_required', 'message': 'Echo account binding changed.'}), 403
         _PLAYER_IDENTITY.set(_player_identity_for_user_id(linked['id'], linked['role']))
         request.environ['musicbox.alexa_identity'] = linked['id']
         request.environ['musicbox.alexa_skill'] = skill
+        request.environ['musicbox.alexa_binding'] = binding
         return None
     if layer is not None and request.path.rstrip('/') == '/proxy' and request.args.get('cap'):
         linked = layer.alexa_identity.stream_user(request.args['cap'], request.args.get('video_id'))
@@ -1455,6 +1497,12 @@ def _bind_player_identity():
     user = _mu_web_identity()
     if user is not None:
         _PLAYER_IDENTITY.set(_player_identity_for_user_id(user['id'], user.get('role')))
+        if not layer.alexa_access.enabled(user['id']):
+            with _np_lock:
+                if _playback_output.restrict_alexa():
+                    _reset_progress(_computed_position_ms())
+                    _now_playing.update(playing=False, playback_confirmed=True, playback_processing=False,
+                        output_serial='', alexa_token=None, alexa_intent_at=time.time())
         return
     jam_token = session.get('jam')
     if jam_token:
@@ -1469,10 +1517,18 @@ def _bind_player_identity():
 def require_api_key():
     path = request.path.rstrip('/') or '/'
     user = _mu_web_identity()
+    if request.environ.get('musicbox.alexa_token_authorized'):
+        return None
     if user and user.get('must_change_password') and not password_change_allowed(path, request.method):
         if request.method == 'GET' and not _is_api_path(request.path):
             return redirect('/account?step=password')
         return jsonify({'error': {'code': 'password_change_required', 'message': 'Change your temporary password first.'}}), 403
+    if user and _multiuser_layer is not None and not _multiuser_layer.alexa_access.enabled(user['id']):
+        amazon_paths = ('/accounts/amazon', '/alexa/login', '/alexa/form_login', '/alexa/proxy',
+                        '/alexa/status', '/alexa/devices', '/alexa/logout', '/alexa/volume', '/alexa/text_command',
+                        '/alexa/proxy_login', '/alexa/proxy_check', '/alexa/proxy_cancel', '/alexa/amazon_signout')
+        if any(path == prefix or path.startswith(prefix + '/') for prefix in amazon_paths):
+            return jsonify(error={'code': 'alexa_access_disabled', 'message': 'Amazon access is disabled.'}), 403
     # The optional multi-user admin panel owns its own session/CSRF auth. Its
     # routes must not be blocked by the device API key middleware, but only
     # once the layer has actually registered itself.
@@ -1493,7 +1549,7 @@ def require_api_key():
             and path in ('/armed_play', '/next_track', '/alexa/state_event', '/proxy')
             and not request.environ.get('musicbox.alexa_identity')
             and os.environ.get('ALLOW_LEGACY_SKILL_OWNER', '0') != '1'):
-        return jsonify(error={'code': 'link_account_required', 'message': 'Update and link the Alexa skill.'}), 403
+        return jsonify(error={'code': 'link_account_required', 'message': 'An authorized Alexa skill identity is required.'}), 403
     _ensure_db()
     # Let the shared shell renderer apply the same owner/jam/login policy as
     # the public root document. The SPA bypass accepts both the slash-less
@@ -3142,7 +3198,8 @@ def _np_snapshot(serial=None, retain_errors=False):
         s.update(playing=False, playback_confirmed=True, playback_processing=False)
     return {
         **output,
-        'amazon_connected': getattr(alexa_remote.remote, 'connection_state', None),
+        'alexa_access_enabled': _alexa_access_enabled(),
+        **({'amazon_connected': getattr(alexa_remote.remote, 'connection_state', None)} if _alexa_access_enabled() else {}),
         'remote_control_available': not (output['playback_output'] == 'alexa' and getattr(alexa_remote.remote, 'connection_state', None) is False),
         'playing': s['playing'], 'title': s['title'],
         'artist': s['artist'], 'artists': s.get('artists', []),
@@ -3488,6 +3545,8 @@ def app_playback_output():
     if action == 'claim':
         source_playing = bool(_get_now_playing().get('playing'))
         def pause_echo():
+            if not _alexa_access_enabled():
+                return
             current = _get_now_playing()
             if not current.get('playing') and not current.get('playback_processing'):
                 return
@@ -5074,8 +5133,9 @@ class Supporting:
             if _multiuser_layer is not None:
                 user_id = _identity_account_id(_current_identity())
                 if not user_id:
-                    raise ValueError('Link an account before starting Echo playback')
-                cap = _multiuser_layer.alexa_identity.stream_token(user_id, video_id)
+                    raise ValueError('An authorized account is required for Echo playback')
+                binding = request.environ.get('musicbox.alexa_binding') if has_request_context() else None
+                cap = _multiuser_layer.alexa_identity.stream_token(user_id, video_id, binding=binding)
                 return {'audio_url': f"{base}/proxy/?video_id={video_id}&cap={quote(cap)}"}
             key_param = f"&key={API_KEY}" if API_KEY else ""
             return {'audio_url': f"{base}/proxy/?video_id={video_id}{key_param}"}
@@ -6893,31 +6953,17 @@ def _login_door_links():
     return layer.accounts.registration_open(), '/forgot-password'
 
 
+@app.get('/api/alexa/identity/')
+def alexa_account_identity():
+    binding = request.environ.get('musicbox.alexa_binding')
+    if binding is None:
+        return error_response('This Echo is not authorized for this account.', 403)
+    return _no_store(jsonify(binding=binding['version']))
+
+
 @app.post('/api/alexa/link/')
 def link_alexa_account():
-    if _multiuser_layer is None or not _valid_key_supplied():
-        return error_response('Account linking unavailable.', 403)
-    subject, device = request.headers.get('X-Alexa-User-Id'), request.headers.get('X-Alexa-Device-Id')
-    identity = _multiuser_layer.alexa_identity
-    skill = identity.skill_namespace(request.headers.get('X-Alexa-Skill-Id'))
-    if skill is None:
-        return error_response('Invalid Alexa skill identity.', 400)
-    # Skill requests arrive from the Lambda's shared egress address, so an
-    # IP-only budget would let one onboarding block every other account.  The
-    # meaningful limit is per Echo; a much wider IP budget still bounds a
-    # caller that rotates fake device ids.
-    device_key = identity.digest(f'{subject or ""}\0{device or ""}', skill)[:40]
-    allowed, retry = _multiuser_layer.rate_limiter.allow('alexa-pair-device', device_key, 5, 300)
-    ip_allowed, ip_retry = _multiuser_layer.rate_limiter.allow(
-        'alexa-pair-ip', _netids().ip_bucket(_client_ip()), 100, 300)
-    if not allowed or not ip_allowed:
-        response = error_response('Too many pairing attempts. Try again later.', 429)
-        response[0].headers['Retry-After'] = str(max(retry, ip_retry) if not allowed else ip_retry)
-        return response
-    code = str((request.get_json(silent=True) or {}).get('code') or '')
-    if not identity.pair(code, subject, device, skill):
-        return error_response('Pairing code expired or invalid.', 403)
-    return jsonify(ok=True)
+    return error_response('Echo pairing codes are no longer available.', 410)
 
 
 @app.get('/health/live')
@@ -7412,8 +7458,10 @@ def alexa_status():
 def alexa_init():
     """Combined startup endpoint: returns auth status + device list + now-playing
     in one round-trip so the page can render instantly on load."""
+    if not _alexa_access_enabled():
+        return jsonify(alexa_access_enabled=False, devices=[], now_playing=None)
     status = alexa_remote.remote.status()
-    result = {'status': status, 'devices': [], 'now_playing': None}
+    result = {'alexa_access_enabled': True, 'status': status, 'devices': [], 'now_playing': None}
     if status.get('logged_in'):
         devices, _ = alexa_remote.remote.devices(refresh=False)
         result['devices'] = devices
@@ -7580,7 +7628,8 @@ def profile_status():
     is genuinely its own and not the owner's session leaking through the UI."""
     identity = _current_identity()
     # Amazon
-    amazon_status = alexa_remote.remote.status()
+    alexa_enabled = _alexa_access_enabled()
+    amazon_status = alexa_remote.remote.status() if alexa_enabled else {}
     amazon_connected = bool(amazon_status.get("logged_in"))
     amazon_debug = f"logged_in={amazon_connected}, error={amazon_status.get('login_error')}"
     
@@ -7622,8 +7671,8 @@ def profile_status():
     browser_status = _youtube_browser_sessions.status(identity)
     own_auth_file = _youtube_credentials.path_for(identity)
     own_session = bool(own_auth_file and os.path.isfile(own_auth_file))
-    return jsonify({
-        "amazon_connected": amazon_connected,
+    payload = {
+        "alexa_access_enabled": alexa_enabled,
         "youtube_auth_working": yt_auth_working,
         "youtube_auth_type": auth_type_str,
         "youtube_own_session": own_session,
@@ -7640,11 +7689,14 @@ def profile_status():
         "youtube_browser_reconnect_required": browser_status["reconnect_required"],
         "youtube_browser_last_successful_renewal": browser_status["last_successful_renewal"],
         "debug": {
-            "amazon": amazon_debug,
             "headers": headers_debug,
             "cookies": cookies_debug
         }
-    })
+    }
+    if alexa_enabled:
+        payload["amazon_connected"] = amazon_connected
+        payload["debug"]["amazon"] = amazon_debug
+    return jsonify(payload)
 
 
 
@@ -8341,6 +8393,8 @@ def guard_logged_out_echo_controls():
         body=request.get_json(silent=True) or {}
         target=str(body.get('serial') or '')
         physical_target=target and not target.startswith('mobile:') and target != 'phone'
+        if not _alexa_access_enabled() and (physical_target or out['playback_output'] == 'alexa'):
+            return error_response('Amazon access is disabled. Choose a phone or browser.', 403, code='alexa_access_disabled')
         if getattr(alexa_remote.remote, 'connection_state', None) is False and (physical_target or out['playback_output']=='alexa'):
             return error_response('Sign in to Amazon to control Alexa, or choose another playback device.',409,code='amazon_login_required')
 
@@ -8697,7 +8751,7 @@ def _reconcile_buffered_alexa_start(token, offset_ms=0, event_at=None, second_pr
     REPLACE_ENQUEUED has no expectedPreviousToken field. Even with validation,
     a track can finish between the skill response and device receipt.
     """
-    parts = token.split('|', 2)
+    parts = token.split('|')[:3]
     if len(parts) != 3 or not parts[2].startswith('q'):
         return None  # Voice/new plays and old skill tokens retain their behavior.
     with _np_lock:
@@ -9600,6 +9654,11 @@ async def remove_history_item(video_id):
 
 @app.route("/alexa/like/", methods=["GET", "POST"])
 async def alexa_like():
+    # A top-level cross-site GET can carry a SameSite=Lax browser cookie.
+    # Keep the key-authenticated skill's GET contract; browser mutations must
+    # use the JSON POST path protected by the session middleware.
+    if request.method == 'GET' and not (_valid_key_supplied() or request.environ.get('musicbox.alexa_token_authorized')):
+        return error_response('Use POST to change liked songs.', 405)
     from ytmusicapi.auth.types import AuthType
     yt = _get_ytmusic_home()
     if yt.auth_type == AuthType.UNAUTHORIZED:
@@ -13141,6 +13200,19 @@ try:
     from multiuser import init_multiuser as _init_multiuser
 
     _multiuser_layer = _init_multiuser(app)
+    def _amazon_access_policy(identity, email=None):
+        if _multiuser_layer is None:
+            return None
+        user_id = _identity_account_id(identity)
+        user = _multiuser_layer.accounts.get_user(user_id) if user_id else None
+        if not _multiuser_layer.alexa_access.eligible(user):
+            return 'Amazon access requires an active account, admin permission and a verified email.'
+        if not isinstance(email, str) or email.strip().casefold() != user['email'].strip().casefold():
+            return 'Your Amazon email must match your verified Music Box email.'
+        return None
+    if _multiuser_layer is not None:
+        alexa_remote.set_access_policy(_amazon_access_policy)
+
     if _multiuser_layer is not None:
         # Deleting the row is only the beginning: the queue snapshot, the Amazon
         # session, the credential file, the download jar and the Chromium profile

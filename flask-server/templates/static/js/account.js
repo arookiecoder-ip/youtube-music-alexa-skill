@@ -124,13 +124,27 @@
       headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': CSRF },
       body: JSON.stringify(payload || {}),
     });
-    let json = {};
-    try { json = await response.json(); } catch (err) { json = {}; }
+    let json;
+    try { json = await response.json(); } catch (err) {
+      json = { error: { code: 'invalid_response', message: 'The server sent an unreadable response. Try again.' } };
+    }
+    if (!json || typeof json !== 'object' || Array.isArray(json)) {
+      json = { error: { code: 'invalid_response', message: 'The server sent an unreadable response. Try again.' } };
+    }
     if (response.status === 401) {
       // The session ended under an open page. Explaining that and then failing
       // every later click would be worse than just going to the sign-in door.
       window.location.href = '/login/?next=' + encodeURIComponent('/account');
       throw new Error('signed-out');
+    }
+    if (!response.ok) {
+      const error = json && json.error;
+      return {
+        ...(error && typeof error === 'object' ? error : {}),
+        code: (error && error.code) || 'request_failed',
+        message: (typeof error === 'string' ? error : error && error.message)
+          || 'That request did not complete. Try again.',
+      };
     }
     return json.error || json;
   }
@@ -147,6 +161,12 @@
       result = await call(path, payload);
     } catch (err) {
       if (button) button.disabled = false;
+      if (err.message !== 'signed-out') {
+        const message = 'Could not connect. Your changes were not saved. Try again.';
+        if (inlineId) inlineNote(inlineId, 'bad', message);
+        else if (button && button.closest('dialog')) toast(message);
+        else note('bad', message, section);
+      }
       return null;
     }
     if (button) button.disabled = false;
@@ -158,6 +178,8 @@
         ? 'Try again in ' + result.retry_after + ' seconds.' : '';
       if (inlineId) {
         inlineNote(inlineId, 'bad', [message, wait].filter(Boolean).join(' '));
+      } else if (button && button.closest('dialog')) {
+        toast([message, wait].filter(Boolean).join(' '));
       } else {
         if (message) note('bad', message, section);
         if (wait) note('warn', wait, section);
@@ -248,13 +270,35 @@
   // not have to read four panels to find out. It reports the same thing the panels
   // say, only nearer the top.
   function summaryServices(amazon, youtube) {
-    const linked = (amazon ? 1 : 0) + (youtube ? 1 : 0);
+    const enabled = document.body.dataset.alexaEnabled === 'true';
+    const linked = (enabled && amazon ? 1 : 0) + (youtube ? 1 : 0);
+    if (!enabled) { badge('sum-services', youtube ? 'Linked' : 'Not linked', youtube ? 'ok' : ''); return; }
     badge('sum-services',
       linked === 2 ? 'Both linked' : (linked ? '1 of 2 linked' : 'None linked'),
       linked === 2 ? 'ok' : (linked ? 'warn' : ''));
   }
 
+  // A permission change must reach an already-open settings page as well.
+  let accessPoll;
+  async function refreshAccess() {
+    if (!document.hidden) {
+      try {
+        const response = await fetch('/api/account', { credentials: 'same-origin', cache: 'no-store' });
+        if (response.ok) renderProviders(await response.json());
+      } catch (_) { /* Keep the last display; every action still checks the server. */ }
+    }
+    accessPoll = setTimeout(refreshAccess, 15000);
+  }
+  accessPoll = setTimeout(refreshAccess, 15000);
+  window.addEventListener('pagehide', () => clearTimeout(accessPoll));
+
   function renderProviders(data) {
+    document.body.dataset.alexaEnabled = String(data.alexa_access_enabled === true);
+    shown('service-amazon', data.alexa_access_enabled === true);
+    if (data.alexa_access_enabled !== true && el('dialog-connect-title')?.textContent.includes('Amazon')) {
+      const dialog = el('dialog-connect');
+      if (dialog?.open) dialog.close();
+    }
     const rows = {};
     (data.providers || []).forEach((row) => { rows[row.provider] = row; });
     [['amazon', 'prov-amazon'], ['youtube', 'prov-youtube']].forEach(([name, id]) => {
@@ -279,6 +323,8 @@
             + 'The badges above show the last thing saved for this account.';
           return;
         }
+        document.body.dataset.alexaEnabled = String(status.alexa_access_enabled === true);
+        shown('service-amazon', status.alexa_access_enabled === true);
         badge('prov-amazon', status.amazon_connected ? 'Connected' : 'Not connected',
           status.amazon_connected ? 'ok' : '');
         const youtubeOwn = !!status.youtube_own_session;
@@ -787,6 +833,7 @@
     try {
       return await call(path, payload);
     } catch (err) {
+      if (err.message !== 'signed-out') toast('Could not connect. Your changes were not saved. Try again.');
       return null;
     } finally {
       if (button) button.disabled = false;
@@ -915,18 +962,4 @@
   })();
 
   load();
-})();
-
-(() => {
-  const code = document.getElementById('alexa-link-code');
-  const unlink = document.getElementById('alexa-unlink');
-  const result = document.getElementById('alexa-link-result');
-  const send = async (path) => {
-    const response = await fetch(path, {method:'POST', credentials:'same-origin', headers:{'Content-Type':'application/json','X-CSRF-Token':document.body.dataset.csrf || ''},body:'{}'});
-    const data = await response.json();
-    if (!response.ok) throw new Error(data.error?.message || 'Try again.');
-    return data;
-  };
-  code?.addEventListener('click', async () => { try {result.textContent=(await send('/api/account/alexa/link-code')).code;} catch(e) {result.textContent=e.message;} });
-  unlink?.addEventListener('click', async () => { try {await send('/api/account/alexa/unlink');result.textContent='Echo devices unlinked.';} catch(e) {result.textContent=e.message;} });
 })();

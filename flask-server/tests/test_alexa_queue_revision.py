@@ -328,6 +328,12 @@ class AlexaQueueRevisionTests(NextTrackBase):
         server._now_playing.update(playing=False, _alexa_finished_token='0|A|attempt')
         self.assertTrue(server._reconcile_buffered_alexa_start('1|B|q' + decision['decision_id'])['accepted'])
 
+    def test_binding_suffix_preserves_buffered_queue_decision(self):
+        decision = self.decision()
+        response = server._reconcile_buffered_alexa_start(
+            '1|B|q' + decision['decision_id'] + '|b' + 'a' * 64)
+        self.assertTrue(response['accepted'])
+
     def test_new_same_song_voice_attempt_rejects_old_buffer(self):
         decision = self.decision()
         server._now_playing['alexa_token'] = '0|A|new_voice_attempt'

@@ -49,6 +49,26 @@
 {% endif %}
 
 {% if not deleted %}
+<section class="card">
+  <div class="card-head plain"><h2>Amazon / Alexa access</h2></div>
+  <p>Disabling access hides Amazon controls and revokes every Alexa token. Re-enabling requires a new token.</p>
+  {% if can_manage %}
+  <form method="post" action="{{ base_path }}/users/{{ user.id }}/alexa/" class="stack">
+    <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+    <input type="hidden" name="action" value="access">
+    <label><input type="checkbox" name="enabled" value="1" {{ 'checked' if user.alexa_enabled else '' }}> Allow Amazon / Alexa</label>
+    <button type="submit" class="btn primary">Save access</button>
+  </form>
+  <form method="post" action="{{ base_path }}/users/{{ user.id }}/alexa/">
+    <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+    <button name="action" value="generate" class="btn" {{ 'disabled' if not user.alexa_enabled else '' }}>Generate / rotate token</button>
+    <button name="action" value="revoke" class="btn destructive">Revoke tokens</button>
+  </form>
+  {% endif %}
+  {% if alexa_token %}<div role="status"><p>Copy this token now; it is shown only in this response. Rotating invalidates the previous token and its playback URLs.</p><code class="pickable">{{ alexa_token }}</code></div>{% endif %}
+  <p>Private skill settings: MUSICBOX_SERVER_URL, MUSICBOX_EMAIL and MUSICBOX_ALEXA_TOKEN. The verified account email must match the Amazon account email. Tokens expire after one year.</p>
+  {% for token in alexa_tokens %}<p class="mono">{{ token.id }} · {{ 'Revoked' if token.revoked_at else 'Issued (account restrictions and expiry still apply)' }}</p>{% endfor %}
+</section>
 <div class="grid cols-2">
   <div class="col">
     <div class="card">

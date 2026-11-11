@@ -303,7 +303,7 @@
     const list = document.getElementById('profile-alert-list');
     if (!alert || !list) return;
     const missing = [];
-    if (!status.amazon_connected) missing.push('Amazon / Alexa is not connected.');
+    if (status.alexa_access_enabled === true && !status.amazon_connected) missing.push('Amazon / Alexa is not connected.');
     // The server's own session is not this account being linked; it plays music
     // but is not reported here as a connection.
     if (!status.youtube_own_session) missing.push('YouTube Music is not connected.');
@@ -325,6 +325,7 @@
     if (!open || !window.api || window.JAM_GUEST) return;
     try {
       const status = await window.api('/api/profile_status/?audio_check=0');
+      window.updateAmazonAccess?.(status.alexa_access_enabled === true);
       window.setAmazonConnection?.(status.amazon_connected);
       paint('status-amazon', status.amazon_connected ? 'Connected' : 'Not connected',
         status.amazon_connected);
@@ -393,10 +394,11 @@
 // Connection health is independent of opening the account menu. Never run an
 // audio download probe for this indicator, and do not turn a network error red.
 (() => {
+ window.updateAmazonAccess=enabled=>{document.body.dataset.alexaEnabled=String(enabled);window.dispatchEvent(new CustomEvent('amazon-access', {detail:enabled}));const status=document.getElementById('status-amazon');if(status?.parentElement)status.parentElement.hidden=!enabled;if(!enabled){const trigger=document.getElementById('profile-menu-trigger');trigger?.classList.remove('amazon-disconnected');trigger?.setAttribute('aria-label','Account');}};
  const trigger=document.getElementById('profile-menu-trigger');
  if(!trigger || window.JAM_GUEST)return;
  window.setAmazonConnection=connected=>{if(typeof connected!=='boolean')return;trigger.classList.toggle('amazon-disconnected',!connected);trigger.setAttribute('aria-label',connected?'Account':'Account — Amazon disconnected');};
  let timer;
- async function check(){if(!document.hidden && window.api){try{const d=await window.api('/alexa/status/');window.setAmazonConnection(d.logged_in);}catch(_){}}timer=setTimeout(check,60000);}
+ async function check(){if(!document.hidden && window.api){try{const d=await window.api('/api/profile_status/?audio_check=0');window.updateAmazonAccess(d.alexa_access_enabled===true);if(d.alexa_access_enabled===true)window.setAmazonConnection(d.amazon_connected);}catch(_){}}timer=setTimeout(check,60000);}
  check();window.addEventListener('pagehide',()=>clearTimeout(timer));
 })();

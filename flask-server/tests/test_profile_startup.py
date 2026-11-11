@@ -13,6 +13,7 @@ class ProfileStartupTests(unittest.TestCase):
         self.probe = Mock(return_value={'valid': True, 'message': 'Audio passed'})
         browser = {'available': True, 'refreshing': False, 'state': 'ready', 'reconnect_required': False, 'last_successful_renewal': 0}
         namespace = {'app': app, 'request': request, 'jsonify': jsonify,
+            '_alexa_access_enabled': lambda: True,
             'alexa_remote': SimpleNamespace(remote=SimpleNamespace(status=lambda: {'logged_in': True})),
             '_current_identity': lambda: 'owner',
             '_get_ytmusic_home': lambda identity=None: SimpleNamespace(auth_type='BROWSER'),
@@ -32,6 +33,7 @@ class ProfileStartupTests(unittest.TestCase):
         source = Path(__file__).resolve().parents[1] / 'server.py'
         route = next(node for node in ast.parse(source.read_text()).body if isinstance(node, ast.FunctionDef) and node.name == 'profile_status')
         exec(compile(ast.Module(body=[route], type_ignores=[]), str(source), 'exec'), namespace)
+        self.namespace = namespace
         self.client = app.test_client()
 
     def test_native_startup_checks_accounts_without_audio_download(self):
@@ -49,3 +51,14 @@ class ProfileStartupTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+    def test_disabled_amazon_has_no_status_debug_or_remote_lookup(self):
+        status = Mock(side_effect=AssertionError('Disabled Amazon must not be contacted'))
+        self.namespace['_alexa_access_enabled'] = lambda: False
+        self.namespace['alexa_remote'].remote.status = status
+        result = self.client.get('/api/profile_status/?audio_check=0').get_json()
+        self.assertFalse(result['alexa_access_enabled'])
+        self.assertNotIn('amazon_connected', result)
+        self.assertNotIn('amazon', result['debug'])
+        self.assertTrue(result['youtube_auth_working'])
+        status.assert_not_called()

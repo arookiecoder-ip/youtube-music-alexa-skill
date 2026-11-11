@@ -16,7 +16,7 @@
   const PROVIDERS = {
     amazon: {
       title: 'Connect Amazon',
-      label: 'Amazon email or mobile number',
+      label: 'Amazon email (must match Music Box)',
       intro: 'Sign in to connect your Echo devices.',
       hint: 'The sign-in runs on this server in the background. Music Box keeps only '
         + 'the resulting Alexa session — your Amazon password is never stored.',
@@ -399,6 +399,7 @@
   }
 
   function open(name) {
+    if (name === 'amazon' && document.body.dataset.alexaEnabled !== 'true') return;
     provider = name;
     const words = PROVIDERS[name];
     ++run;
@@ -410,9 +411,8 @@
     q('dialog-connect-title').textContent = words.title;
     q('connect-intro').textContent = words.intro;
     q('connect-email-label').textContent = words.label;
-    // Amazon signs in by email or mobile number; a number cannot be typed into
-    // an `email` field, so the field follows the provider.
-    q('connect_email').type = name === 'amazon' ? 'text' : 'email';
+    // Amazon must use the same email as the verified Music Box account.
+    q('connect_email').type = 'email';
     q('connect-hint').textContent = words.hint;
     q('connect-credentials').reset();
     q('connect-retry').hidden = true;

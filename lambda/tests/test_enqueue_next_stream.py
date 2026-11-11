@@ -204,6 +204,13 @@ class StageNextTrackTests(unittest.TestCase):
 
 
 class EnqueueNextStreamTests(unittest.TestCase):
+    def setUp(self):
+        # Controller mechanics use legacy-shaped doubles; real SDK tests verify
+        # mandatory authorization and scoped persistence before dispatch.
+        patcher = mock.patch.object(player.data, 'ALEXA_SKILL_NAMESPACE', '')
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     """enqueue_next_stream resolves the next track from the server's live queue
     and falls back to the window when the server has no next."""
 

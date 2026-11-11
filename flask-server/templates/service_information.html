@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Service information{% endblock %} · Music Box</title>
+  <link rel="stylesheet" href="/static/css/theme.css">
+  <link rel="stylesheet" href="/static/css/signin.css">
+  <link rel="stylesheet" href="/static/css/account.css">
+</head>
+<body class="door">
+  <main>
+    <div class="brand"><div><h1>Music Box</h1><p>Service information</p></div></div>
+    <article class="card">{% block content %}{% endblock %}</article>
+    <nav class="door-links legal-links" aria-label="Service information">
+      <a href="/login/">Sign in</a>
+      <a href="/privacy_policy/">Privacy</a>
+      <a href="/terms_of_use/">Terms of use</a>
+    </nav>
+  </main>
+</body>
+</html>
