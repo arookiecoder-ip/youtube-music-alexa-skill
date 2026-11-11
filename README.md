@@ -1,6 +1,6 @@
 # Music Box backend and Alexa skill
 
-The complete multi-user backend, admin/web UI and private Alexa source are maintained on this `feat/multi-user` branch. The [standalone downloadable Alexa package](https://github.com/arookiecoder-ip/youtube-music-alexa-skill/tree/master/alexa-private-skill) is also linked from the default branch. [Android source](https://github.com/arookiecoder-ip/MusicBox-APP/tree/feat/multi-user) lives in its own repository.
+The complete multi-user backend, admin/web UI and private Alexa source are maintained on this `feat/multi-user` branch. The [standalone downloadable Alexa package](alexa-private-skill/) belongs to this branch. [Android source](https://github.com/arookiecoder-ip/MusicBox-APP/tree/feat/multi-user) lives in its own repository.
 
 
 Self-hosted YouTube Music catalog, progressive audio relay, web/PWA player and shared playback control for browsers, Android phones and Alexa Echo devices.

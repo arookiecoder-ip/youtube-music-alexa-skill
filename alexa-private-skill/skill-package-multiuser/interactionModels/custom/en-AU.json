@@ -1,0 +1,628 @@
+{
+  "interactionModel": {
+    "languageModel": {
+      "invocationName": "music box multi",
+      "intents": [
+        {
+          "name": "AMAZON.CancelIntent",
+          "samples": []
+        },
+        {
+          "name": "AMAZON.HelpIntent",
+          "samples": []
+        },
+        {
+          "name": "AMAZON.StopIntent",
+          "samples": []
+        },
+        {
+          "name": "AMAZON.NavigateHomeIntent",
+          "samples": []
+        },
+        {
+          "name": "AMAZON.FallbackIntent",
+          "samples": []
+        },
+        {
+          "name": "AMAZON.ResumeIntent",
+          "samples": []
+        },
+        {
+          "name": "AMAZON.PauseIntent",
+          "samples": []
+        },
+        {
+          "name": "AMAZON.StartOverIntent",
+          "samples": []
+        },
+        {
+          "name": "AMAZON.ShuffleOnIntent",
+          "samples": []
+        },
+        {
+          "name": "AMAZON.ShuffleOffIntent",
+          "samples": []
+        },
+        {
+          "name": "AMAZON.RepeatIntent",
+          "samples": []
+        },
+        {
+          "name": "AMAZON.PreviousIntent",
+          "samples": []
+        },
+        {
+          "name": "AMAZON.NextIntent",
+          "samples": []
+        },
+        {
+          "name": "AMAZON.LoopOnIntent",
+          "samples": []
+        },
+        {
+          "name": "AMAZON.LoopOffIntent",
+          "samples": []
+        },
+        {
+          "name": "PlaySongIntent",
+          "slots": [
+            {
+              "name": "songName",
+              "type": "AMAZON.SearchQuery"
+            }
+          ],
+          "samples": [
+            "play {songName}"
+          ]
+        },
+        {
+          "name": "PlayArtistIntent",
+          "slots": [
+            {
+              "name": "artistName",
+              "type": "AMAZON.SearchQuery"
+            }
+          ],
+          "samples": [
+            "play songs by {artistName}",
+            "play music by {artistName}",
+            "play tracks by {artistName}"
+          ]
+        },
+        {
+          "name": "PlayAlbumIntent",
+          "slots": [
+            {
+              "name": "albumName",
+              "type": "AMAZON.SearchQuery"
+            }
+          ],
+          "samples": [
+            "play album {albumName}",
+            "play the album {albumName}"
+          ]
+        },
+        {
+          "name": "PlayAudio",
+          "slots": [],
+          "samples": [
+            "play",
+            "resume",
+            "resume music",
+            "resume playing",
+            "resume the music",
+            "resume the song",
+            "continue playing",
+            "keep playing"
+          ]
+        },
+        {
+          "name": "AnnounceNowPlayingIntent",
+          "slots": [],
+          "samples": [
+            "what is playing",
+            "what song is this",
+            "who sings this",
+            "announce now playing"
+          ]
+        },
+        {
+          "name": "StartPlaylistIntent",
+          "slots": [
+            {
+              "name": "playlistName",
+              "type": "AMAZON.SearchQuery"
+            }
+          ],
+          "samples": [
+            "play playlist {playlistName}",
+            "start playlist {playlistName}",
+            "play my playlist {playlistName}"
+          ]
+        },
+        {
+          "name": "CreatePlaylistIntent",
+          "slots": [
+            {
+              "name": "encodedPlaylistId",
+              "type": "AMAZON.SearchQuery"
+            }
+          ],
+          "samples": [
+            "add playlist {encodedPlaylistId}",
+            "save playlist {encodedPlaylistId}"
+          ]
+        },
+        {
+          "name": "DeletePlaylistIntent",
+          "slots": [
+            {
+              "name": "playlistName",
+              "type": "AMAZON.SearchQuery"
+            }
+          ],
+          "samples": [
+            "delete playlist {playlistName}",
+            "remove playlist {playlistName}"
+          ]
+        },
+        {
+          "name": "FindPlaylistIntent",
+          "slots": [],
+          "samples": [
+            "what are my playlists",
+            "list my playlists",
+            "find my playlists"
+          ]
+        },
+        {
+          "name": "SetApiurlIntent",
+          "slots": [
+            {
+              "name": "apiUrl",
+              "type": "AMAZON.SearchQuery"
+            }
+          ],
+          "samples": [
+            "set api url {apiUrl}",
+            "set api url to {apiUrl}"
+          ]
+        },
+        {
+          "name": "SeekIntent",
+          "slots": [
+            {
+              "name": "seconds",
+              "type": "AMAZON.NUMBER"
+            },
+            {
+              "name": "minutes",
+              "type": "AMAZON.NUMBER"
+            }
+          ],
+          "samples": [
+            "seek to {seconds} seconds",
+            "seek to {seconds}",
+            "go to {seconds} seconds",
+            "jump to {seconds} seconds",
+            "skip to {seconds} seconds",
+            "skip to {minutes} minutes",
+            "skip to {minutes} minutes {seconds} seconds",
+            "seek to {minutes} minutes",
+            "seek to {minutes} minutes {seconds} seconds",
+            "go to {minutes} minutes",
+            "go to {minutes} minutes {seconds} seconds",
+            "jump to {minutes} minutes",
+            "jump to {minutes} minutes {seconds} seconds"
+          ]
+        },
+        {
+          "name": "FastForwardIntent",
+          "slots": [
+            {
+              "name": "seconds",
+              "type": "AMAZON.NUMBER"
+            },
+            {
+              "name": "minutes",
+              "type": "AMAZON.NUMBER"
+            }
+          ],
+          "samples": [
+            "fast forward",
+            "skip ahead",
+            "fast forward {seconds} seconds",
+            "skip ahead {seconds} seconds",
+            "skip forward {seconds} seconds",
+            "go forward {seconds} seconds",
+            "forward {seconds} seconds",
+            "fast forward {minutes} minutes",
+            "skip ahead {minutes} minutes",
+            "skip forward {minutes} minutes",
+            "go forward {minutes} minutes",
+            "skip ahead {minutes} minutes {seconds} seconds",
+            "fast forward {minutes} minutes {seconds} seconds"
+          ]
+        },
+        {
+          "name": "RewindIntent",
+          "slots": [
+            {
+              "name": "seconds",
+              "type": "AMAZON.NUMBER"
+            },
+            {
+              "name": "minutes",
+              "type": "AMAZON.NUMBER"
+            }
+          ],
+          "samples": [
+            "rewind",
+            "go back",
+            "rewind {seconds} seconds",
+            "go back {seconds} seconds",
+            "skip back {seconds} seconds",
+            "back {seconds} seconds",
+            "rewind {minutes} minutes",
+            "go back {minutes} minutes",
+            "skip back {minutes} minutes",
+            "go back {minutes} minutes {seconds} seconds",
+            "rewind {minutes} minutes {seconds} seconds"
+          ]
+        },
+        {
+          "name": "LikeSongIntent",
+          "slots": [],
+          "samples": [
+            "like this song",
+            "like the song",
+            "like this",
+            "like the current song",
+            "i like this song",
+            "i love this song",
+            "love this song",
+            "add this song to liked songs",
+            "add this to liked songs",
+            "add this song to my liked songs",
+            "save this song",
+            "save this to liked songs"
+          ]
+        },
+        {
+          "name": "PlayGenreIntent",
+          "slots": [
+            {
+              "name": "genre",
+              "type": "GenreType"
+            }
+          ],
+          "samples": [
+            "play some {genre}",
+            "play some {genre} music",
+            "play some {genre} songs",
+            "play {genre} music",
+            "play {genre} songs",
+            "play genre {genre}",
+            "play the genre {genre}",
+            "start some {genre} music",
+            "put on some {genre}",
+            "put on some {genre} music",
+            "play me some {genre}"
+          ]
+        }
+      ],
+      "types": [
+        {
+          "name": "GenreType",
+          "values": [
+            {
+              "name": {
+                "value": "pop"
+              }
+            },
+            {
+              "name": {
+                "value": "rock"
+              }
+            },
+            {
+              "name": {
+                "value": "jazz"
+              }
+            },
+            {
+              "name": {
+                "value": "blues"
+              }
+            },
+            {
+              "name": {
+                "value": "classical"
+              }
+            },
+            {
+              "name": {
+                "value": "hip hop"
+              }
+            },
+            {
+              "name": {
+                "value": "rap"
+              }
+            },
+            {
+              "name": {
+                "value": "r and b",
+                "synonyms": [
+                  "rhythm and blues",
+                  "r n b"
+                ]
+              }
+            },
+            {
+              "name": {
+                "value": "country"
+              }
+            },
+            {
+              "name": {
+                "value": "metal",
+                "synonyms": [
+                  "heavy metal"
+                ]
+              }
+            },
+            {
+              "name": {
+                "value": "punk"
+              }
+            },
+            {
+              "name": {
+                "value": "indie"
+              }
+            },
+            {
+              "name": {
+                "value": "e d m",
+                "synonyms": [
+                  "electronic dance music"
+                ]
+              }
+            },
+            {
+              "name": {
+                "value": "electronic"
+              }
+            },
+            {
+              "name": {
+                "value": "dance"
+              }
+            },
+            {
+              "name": {
+                "value": "house"
+              }
+            },
+            {
+              "name": {
+                "value": "techno"
+              }
+            },
+            {
+              "name": {
+                "value": "trance"
+              }
+            },
+            {
+              "name": {
+                "value": "dubstep"
+              }
+            },
+            {
+              "name": {
+                "value": "reggae"
+              }
+            },
+            {
+              "name": {
+                "value": "funk"
+              }
+            },
+            {
+              "name": {
+                "value": "disco"
+              }
+            },
+            {
+              "name": {
+                "value": "soul"
+              }
+            },
+            {
+              "name": {
+                "value": "gospel"
+              }
+            },
+            {
+              "name": {
+                "value": "folk"
+              }
+            },
+            {
+              "name": {
+                "value": "acoustic"
+              }
+            },
+            {
+              "name": {
+                "value": "instrumental"
+              }
+            },
+            {
+              "name": {
+                "value": "lo fi",
+                "synonyms": [
+                  "lofi",
+                  "low fi"
+                ]
+              }
+            },
+            {
+              "name": {
+                "value": "chill",
+                "synonyms": [
+                  "chill out"
+                ]
+              }
+            },
+            {
+              "name": {
+                "value": "ambient"
+              }
+            },
+            {
+              "name": {
+                "value": "k pop",
+                "synonyms": [
+                  "kpop",
+                  "korean pop"
+                ]
+              }
+            },
+            {
+              "name": {
+                "value": "j pop",
+                "synonyms": [
+                  "japanese pop"
+                ]
+              }
+            },
+            {
+              "name": {
+                "value": "bollywood",
+                "synonyms": [
+                  "hindi",
+                  "hindi songs"
+                ]
+              }
+            },
+            {
+              "name": {
+                "value": "punjabi",
+                "synonyms": [
+                  "bhangra"
+                ]
+              }
+            },
+            {
+              "name": {
+                "value": "tamil"
+              }
+            },
+            {
+              "name": {
+                "value": "telugu"
+              }
+            },
+            {
+              "name": {
+                "value": "devotional",
+                "synonyms": [
+                  "bhajan",
+                  "bhajans"
+                ]
+              }
+            },
+            {
+              "name": {
+                "value": "sufi"
+              }
+            },
+            {
+              "name": {
+                "value": "ghazal",
+                "synonyms": [
+                  "ghazals"
+                ]
+              }
+            },
+            {
+              "name": {
+                "value": "romantic",
+                "synonyms": [
+                  "love songs"
+                ]
+              }
+            },
+            {
+              "name": {
+                "value": "sad",
+                "synonyms": [
+                  "sad songs"
+                ]
+              }
+            },
+            {
+              "name": {
+                "value": "party"
+              }
+            },
+            {
+              "name": {
+                "value": "workout",
+                "synonyms": [
+                  "gym"
+                ]
+              }
+            },
+            {
+              "name": {
+                "value": "retro",
+                "synonyms": [
+                  "oldies",
+                  "old songs"
+                ]
+              }
+            },
+            {
+              "name": {
+                "value": "nineties",
+                "synonyms": [
+                  "90s"
+                ]
+              }
+            },
+            {
+              "name": {
+                "value": "eighties",
+                "synonyms": [
+                  "80s"
+                ]
+              }
+            },
+            {
+              "name": {
+                "value": "latin"
+              }
+            },
+            {
+              "name": {
+                "value": "afrobeats",
+                "synonyms": [
+                  "afrobeat"
+                ]
+              }
+            },
+            {
+              "name": {
+                "value": "phonk"
+              }
+            }
+          ]
+        }
+      ]
+    }
+  }
+}
