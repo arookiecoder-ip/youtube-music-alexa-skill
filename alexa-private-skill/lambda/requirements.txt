@@ -1,5 +1,0 @@
-boto3
-ask-sdk-core
-ask-sdk-dynamodb-persistence-adapter
-dacite
-urllib3
