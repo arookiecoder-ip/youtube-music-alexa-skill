@@ -680,6 +680,15 @@
       "principal": "administrator",
       "csrf": "required for mutations",
       "tenant": "admin target permissions; scoped account token management"
+    },
+    {
+      "path": "/admin/users/<user_id>/permanent-delete/",
+      "methods": [
+        "POST"
+      ],
+      "principal": "administrator",
+      "csrf": "required for mutations",
+      "tenant": "active owner only; deleted account only; exact typed username; transaction rechecks authorization"
     }
   ]
 }

@@ -54,9 +54,28 @@
   </div>
   {% if deleted %}
   <section class="ud-panel ud-danger">
-<h2>This account is deleted</h2>
-<p>Sign-in is blocked. Sessions, provider credentials and saved files were removed.</p>{% if can_restore %}<form method="post" action="{{ base_path }}/users/{{ user.id }}/restore/" data-confirm-heading="Restore account" data-confirm="Restore {{ user.username }} in a disabled state? Set a password and activate it before it can sign in." data-confirm-button="Restore account">{{ csrf() }}<button class="btn" type="submit">Restore account</button>
-</form>{% endif %}</section>
+    <h2>This account is deleted</h2>
+    <p>Sign-in is blocked. Restore it in a disabled state, or permanently remove the account from this installation.</p>
+    {% if can_restore %}
+    <div class="ud-deleted-actions">
+      <form method="post" action="{{ base_path }}/users/{{ user.id }}/restore/" data-confirm-heading="Restore account" data-confirm="Restore {{ user.username }} in a disabled state? Set a password and activate it before it can sign in." data-confirm-button="Restore account">{{ csrf() }}<button class="btn" type="submit">Restore account</button></form>
+      {% if not is_self %}<button class="btn danger" type="button" data-dialog-open="permanent-delete-dialog">Delete permanently</button>{% endif %}
+    </div>
+    {% else %}<p>Only an owner can restore or permanently delete this account.</p>{% endif %}
+  </section>
+  {% if can_restore and not is_self %}
+  <dialog class="admin-dialog ud-dialog" id="permanent-delete-dialog" aria-labelledby="permanent-delete-title">
+    {{ dialog_head('Permanently delete account', 'permanent-delete-title') }}
+    <form method="post" action="{{ base_path }}/users/{{ user.id }}/permanent-delete/" data-confirm-name="{{ user.username }}">
+      {{ csrf() }}
+      <div class="dialog-body">
+        <div class="ud-notice"><strong>This cannot be undone</strong><span>The account row and its linked credentials will be removed. It will disappear from Deleted accounts and cannot be restored.</span></div>
+        <div class="field"><label for="permanent-delete-name">Type <strong>{{ user.username }}</strong> to confirm</label><input id="permanent-delete-name" name="confirmation" data-confirm-name-input autocomplete="off" autocapitalize="none" spellcheck="false" required></div>
+      </div>
+      <div class="dialog-foot"><button class="btn ghost" type="button" data-dialog-close>Cancel</button><button class="btn danger" type="submit" data-confirm-name-submit disabled>Delete permanently</button></div>
+    </form>
+  </dialog>
+  {% endif %}
   {% else %}
   <nav class="ud-jump-nav" aria-label="User account sections">
 <a href="#profile-title">Overview</a>

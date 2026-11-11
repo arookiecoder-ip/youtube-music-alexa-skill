@@ -240,3 +240,43 @@ def test_alexa_token_revoke_and_disable_have_distinct_confirmations(admin_page):
     page.locator('#admin-dialog').get_by_role('button', name='Disable access', exact=True).click()
     expect(page.locator('.ud-state')).to_contain_text('Off')
     assert not case.layer.alexa_access.enabled(user['id'])
+
+
+def test_deleted_account_can_be_permanently_removed_after_typing_its_name(admin_page):
+    page, case, user, origin, errors = admin_page
+    case.accounts.delete_user(case.owner, user['id'])
+    page.reload()
+    page.get_by_role('button', name='Delete permanently', exact=True).click()
+    dialog = page.locator('#permanent-delete-dialog')
+    expect(dialog).to_be_visible()
+    submit = dialog.get_by_role('button', name='Delete permanently', exact=True)
+    expect(submit).to_be_disabled()
+    dialog.get_by_role('textbox').fill('wrong-name')
+    expect(submit).to_be_disabled()
+    dialog.get_by_role('button', name='Cancel', exact=True).click()
+    assert case.accounts.get_user(user['id'], include_deleted=True)
+    page.get_by_role('button', name='Delete permanently', exact=True).click()
+    dialog.get_by_role('textbox').fill(user['username'])
+    expect(submit).to_be_enabled()
+    submit.click()
+    expect(page.locator('.flash.success')).to_contain_text('Account permanently deleted')
+    assert not case.accounts.get_user(user['id'], include_deleted=True)
+    assert user['username'] not in page.locator('.user-directory').inner_text()
+
+
+@pytest.mark.parametrize('require_change', [False, True])
+def test_admin_created_password_change_is_optional(admin_page, require_change):
+    page, case, user, origin, errors = admin_page
+    page.goto(origin + '/admin/users/new/')
+    checkbox = page.locator('#must_change_password')
+    expect(checkbox).not_to_be_checked()
+    if require_change:
+        checkbox.check()
+    name = 'optional-password-' + ('yes' if require_change else 'no')
+    page.locator('#username').fill(name)
+    page.locator('#password').fill('Created!Password123')
+    page.get_by_role('button', name='Create user', exact=True).click()
+    expect(page.locator('.ud-hero h1')).to_have_text(name)
+    text = 'Change required at next sign-in' if require_change else 'No change required'
+    expect(page.locator('.ud-security-item').filter(has_text='Password')).to_contain_text(text)
+    assert bool(case.accounts.get_user_by_username(name)['must_change_password']) == require_change

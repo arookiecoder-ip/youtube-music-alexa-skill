@@ -119,6 +119,7 @@ class AccountService:
         self.db.initialize()
         existing = self.db.scalar("SELECT COUNT(*) FROM users") or 0
         if existing:
+            self.legacy_owner_id()
             return {"created": False}
         password = self.config.admin_password
         generated = False
@@ -162,6 +163,7 @@ class AccountService:
                     now if bootstrap_email else 0,
                 ),
             )
+        self.legacy_owner_id()
         self.db.audit(
             None, "system", "system_bootstrap", user_id,
             json.dumps({"role": "owner", "generated_password_file": password_file}),
@@ -357,7 +359,7 @@ class AccountService:
         password: str,
         email: str = "",
         role: str = "user",
-        must_change_password: bool = True,
+        must_change_password: bool = False,
         status: str = "active",
         email_verified: bool = False,
         ip: str = "",
@@ -1463,6 +1465,44 @@ class AccountService:
             conn.execute("DELETE FROM user_email_tokens WHERE user_id = ?", (user_id,))
         self.audit(actor, "user_deleted", user_id, {"username": target.get("username")}, ip, user_agent)
         self._purge(user_id)
+
+    def permanently_delete_user(self, actor: dict | None, user_id: str,
+                                confirmation: str, ip: str = "", user_agent: str = "") -> None:
+        """Erase a previously deleted row; owner authorization is checked live."""
+        self.legacy_owner_id()  # Never let a later owner inherit the legacy slot.
+        with self.db.connect() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            live_actor = conn.execute("SELECT * FROM users WHERE id=?", ((actor or {}).get("id"),)).fetchone()
+            if not live_actor or live_actor['role'] != 'owner' or live_actor['status'] != 'active' or live_actor['must_change_password']:
+                raise AccountError("Only an active owner can permanently delete an account.")
+            if live_actor['id'] == user_id:
+                raise AccountError("You cannot permanently delete your own account.")
+            target = conn.execute("SELECT * FROM users WHERE id=?", (user_id,)).fetchone()
+            if not target:
+                raise AccountError("Deleted user not found.")
+            if target['status'] != 'deleted':
+                raise AccountError("Move the account to Deleted before permanently deleting it.")
+            if not isinstance(confirmation, str) or confirmation.strip() != target['username']:
+                raise AccountError("Type the deleted account's exact username to confirm.")
+            # All account-owned identity records cascade, including sessions,
+            # providers, email proofs, preferences and Alexa credentials/bindings.
+            conn.execute("DELETE FROM users WHERE id=? AND status='deleted'", (user_id,))
+            conn.execute("INSERT INTO audit_log (actor_user_id,actor_label,action,target_user_id,details_json,ip,user_agent,created_at) VALUES (?,?,?,?,?,?,?,?)",
+                         (live_actor['id'],live_actor['username'],'user_permanently_deleted',user_id,'{}',ip,user_agent,_now()))
+        # Keep the existing artifact cleanup/retry mechanism after the row is gone.
+        self._purge(user_id)
+
+    def legacy_owner_id(self) -> str:
+        """The original playback slot stays pinned even after permanent deletion."""
+        with self.db.connect() as conn:
+            row = conn.execute("SELECT setting_value FROM system_settings WHERE setting_key='legacy_owner_user_id'").fetchone()
+            if row:
+                return str(row['setting_value'])
+            original = conn.execute("SELECT id FROM users WHERE created_by='system' OR role='owner' ORDER BY CASE WHEN created_by='system' THEN 0 ELSE 1 END, created_at, id LIMIT 1").fetchone()
+            if not original:
+                return ''
+            conn.execute("INSERT OR IGNORE INTO system_settings (setting_key,setting_value,updated_at,updated_by) VALUES ('legacy_owner_user_id',?,?, 'system')", (original['id'],_now()))
+            return str(conn.execute("SELECT setting_value FROM system_settings WHERE setting_key='legacy_owner_user_id'").fetchone()['setting_value'])
 
     def restore_user(self, actor: dict | None, user_id: str, ip: str = "", user_agent: str = "") -> dict:
         if not actor or actor.get("role") != "owner":

@@ -258,6 +258,17 @@
     });
   });
 
+  document.querySelectorAll('form[data-confirm-name]').forEach((form) => {
+    const field = form.querySelector('[data-confirm-name-input]');
+    const button = form.querySelector('[data-confirm-name-submit]');
+    if (!field || !button) return;
+    const matches = () => field.value.trim() === form.dataset.confirmName;
+    const sync = () => { button.disabled = !matches(); };
+    field.addEventListener('input', sync);
+    form.addEventListener('submit', (event) => { if (!matches()) { event.preventDefault(); field.focus(); } });
+    sync();
+  });
+
   document.querySelectorAll('[data-copy-target]').forEach((button) => {
     button.addEventListener('click', async () => {
       const field = $(button.dataset.copyTarget);

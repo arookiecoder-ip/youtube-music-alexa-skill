@@ -143,3 +143,5 @@ html[data-theme="light"] .ud-warn { color:#8b5a08; }
 #admin-dialog .dialog-foot .btn { border-radius:7px; text-transform:none; letter-spacing:0; }
 
 .ud-device-actions { display:flex; align-items:center; gap:8px; flex-shrink:0; }
+
+.ud-deleted-actions { display:flex; gap:12px; align-items:center; flex-wrap:wrap; margin-top:20px; }

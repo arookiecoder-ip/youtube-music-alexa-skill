@@ -1402,9 +1402,7 @@ def _owner_row_id():
     user_id = ''
     if _multiuser_layer is not None:
         try:
-            row = _multiuser_layer.db.fetchone(
-                "SELECT id FROM users WHERE created_by='system' OR role='owner' ORDER BY CASE WHEN created_by='system' THEN 0 ELSE 1 END, created_at, id LIMIT 1")
-            user_id = str(row['id']) if row else ''
+            user_id = _multiuser_layer.accounts.legacy_owner_id()
         except Exception:
             logger.exception('Could not look up the owning account')
             return _owner_row_read[1]

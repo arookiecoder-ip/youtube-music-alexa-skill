@@ -683,7 +683,7 @@ def build_blueprint(mu: MultiUser) -> Blueprint:
             "email": "",
             "role": "user",
             "password": "",
-            "must_change_password": True,
+            "must_change_password": False,
             "send_invite": False,
             "send_verification": True,
         }
@@ -735,7 +735,7 @@ def build_blueprint(mu: MultiUser) -> Blueprint:
                         )
                         _flash_mail(result, "Verification code", user["email"])
                     if generated_password and not form["send_invite"]:
-                        return render_template("admin/password_result.html", title="Temporary password", password=form["password"], target_id=user["id"])
+                        return render_template("admin/password_result.html", title="Account password", password=form["password"], target_id=user["id"], must_change_password=form["must_change_password"])
                     return redirect(url_for("multiuser_admin.user_detail", user_id=user["id"]))
                 except AccountError as exc:
                     flash(str(exc), "error")
@@ -1226,6 +1226,22 @@ def build_blueprint(mu: MultiUser) -> Blueprint:
         except AccountError as exc:
             flash(str(exc), "error")
             return redirect(url_for("multiuser_admin.user_detail", user_id=user_id))
+
+    @bp.route("/users/<user_id>/permanent-delete/", methods=["POST"])
+    @admin_required
+    def user_permanent_delete(user_id):
+        try:
+            mu.accounts.permanently_delete_user(
+                g.mu_user, user_id, request.form.get("confirmation") or "",
+                ip=_client_ip(), user_agent=_user_agent(),
+            )
+            flash("Account permanently deleted. It cannot be restored.", "success")
+            return redirect(url_for("multiuser_admin.users", status="deleted"))
+        except AccountError as exc:
+            flash(str(exc), "error")
+            if mu.accounts.get_user(user_id, include_deleted=True):
+                return redirect(url_for("multiuser_admin.user_detail", user_id=user_id))
+            return redirect(url_for("multiuser_admin.users", status="deleted"))
 
     @bp.route("/users/<user_id>/restore/", methods=["POST"])
     @admin_required
