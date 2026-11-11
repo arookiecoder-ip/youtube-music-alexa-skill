@@ -1,5 +1,10 @@
 # Music Box backend and Alexa skill
 
+## Personal Alexa skill package
+
+The new per-account private skill is available in **[alexa-private-skill](alexa-private-skill/)**. It includes browsable source, setup instructions and a **[downloadable ZIP](alexa-private-skill/musicbox-private-skill.zip)**. Configure your Music Box email and an admin-issued Alexa token; no shared server key or skill-ID environment setting is required.
+
+
 Self-hosted YouTube Music catalog, progressive audio relay, web/PWA player and shared playback control for browsers, Android phones and Alexa Echo devices.
 
 [Architecture](ARCHITECTURE.md) · [Changelog and PR history](CHANGELOG.md) · [Android app](https://github.com/arookiecoder-ip/MusicBox-APP) · [Docker setup](SETUP-DOCKER.md)

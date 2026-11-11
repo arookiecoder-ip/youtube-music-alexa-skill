@@ -1,0 +1,138 @@
+{
+  "manifest": {
+    "apis": {
+      "custom": {
+        "interfaces": [
+          {
+            "type": "AUDIO_PLAYER"
+          }
+        ],
+        "locales": {}
+      }
+    },
+    "manifestVersion": "1.0",
+    "publishingInformation": {
+      "automaticClonedLocale": {
+        "locales": [
+          {
+            "source": "en-IN"
+          }
+        ]
+      },
+      "distributionCountries": [],
+      "isAvailableWorldwide": true,
+      "locales": {
+        "en-US": {
+          "description": "Development skill for Music Box playback on supported Alexa devices.",
+          "examplePhrases": [
+            "Alexa, open music box multi",
+            "Alexa, ask music box multi to play blinding lights",
+            "Alexa, ask music box multi to play some jazz"
+          ],
+          "keywords": [
+            "music",
+            "youtube music",
+            "multi user"
+          ],
+          "name": "Music Box Multi",
+          "summary": "Music Box playback for development testing."
+        },
+        "en-CA": {
+          "description": "Development skill for Music Box playback on supported Alexa devices.",
+          "examplePhrases": [
+            "Alexa, open music box multi",
+            "Alexa, ask music box multi to play blinding lights",
+            "Alexa, ask music box multi to play some jazz"
+          ],
+          "keywords": [
+            "music",
+            "youtube music",
+            "multi user"
+          ],
+          "name": "Music Box Multi",
+          "summary": "Music Box playback for development testing."
+        },
+        "en-IN": {
+          "description": "Development skill for Music Box playback on supported Alexa devices.",
+          "examplePhrases": [
+            "Alexa, open music box multi",
+            "Alexa, ask music box multi to play blinding lights",
+            "Alexa, ask music box multi to play some jazz"
+          ],
+          "keywords": [
+            "music",
+            "youtube music",
+            "multi user"
+          ],
+          "name": "Music Box Multi",
+          "summary": "Music Box playback for development testing."
+        },
+        "en-AU": {
+          "description": "Development skill for Music Box playback on supported Alexa devices.",
+          "examplePhrases": [
+            "Alexa, open music box multi",
+            "Alexa, ask music box multi to play blinding lights",
+            "Alexa, ask music box multi to play some jazz"
+          ],
+          "keywords": [
+            "music",
+            "youtube music",
+            "multi user"
+          ],
+          "name": "Music Box Multi",
+          "summary": "Music Box playback for development testing."
+        },
+        "en-GB": {
+          "description": "Development skill for Music Box playback on supported Alexa devices.",
+          "examplePhrases": [
+            "Alexa, open music box multi",
+            "Alexa, ask music box multi to play blinding lights",
+            "Alexa, ask music box multi to play some jazz"
+          ],
+          "keywords": [
+            "music",
+            "youtube music",
+            "multi user"
+          ],
+          "name": "Music Box Multi",
+          "summary": "Music Box playback for development testing."
+        }
+      },
+      "testingInstructions": "Private development skill. Configure MUSICBOX_SERVER_URL, MUSICBOX_EMAIL and MUSICBOX_ALEXA_TOKEN; enable and grant customer email permission. Pairing codes are disabled."
+    },
+    "permissions": [
+      {
+        "name": "alexa::profile:email:read"
+      }
+    ],
+    "privacyAndCompliance": {
+      "allowsPurchases": false,
+      "usesPersonalInfo": true,
+      "isChildDirected": false,
+      "isExportCompliant": true,
+      "containsAds": false,
+      "locales": {
+        "en-US": {
+          "privacyPolicyUrl": "https://testalexa.synthora.in/privacy_policy/",
+          "termsOfUseUrl": "https://testalexa.synthora.in/terms_of_use/"
+        },
+        "en-CA": {
+          "privacyPolicyUrl": "https://testalexa.synthora.in/privacy_policy/",
+          "termsOfUseUrl": "https://testalexa.synthora.in/terms_of_use/"
+        },
+        "en-IN": {
+          "privacyPolicyUrl": "https://testalexa.synthora.in/privacy_policy/",
+          "termsOfUseUrl": "https://testalexa.synthora.in/terms_of_use/"
+        },
+        "en-AU": {
+          "privacyPolicyUrl": "https://testalexa.synthora.in/privacy_policy/",
+          "termsOfUseUrl": "https://testalexa.synthora.in/terms_of_use/"
+        },
+        "en-GB": {
+          "privacyPolicyUrl": "https://testalexa.synthora.in/privacy_policy/",
+          "termsOfUseUrl": "https://testalexa.synthora.in/terms_of_use/"
+        }
+      }
+    }
+  }
+}
