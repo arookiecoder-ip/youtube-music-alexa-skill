@@ -5,6 +5,12 @@
 The new per-account private skill is available in **[alexa-private-skill](alexa-private-skill/)**. It includes browsable source, setup instructions and a **[downloadable ZIP](alexa-private-skill/musicbox-private-skill.zip)**. Configure your Music Box email and an admin-issued Alexa token; no shared server key or skill-ID environment setting is required.
 
 
+The rest of the multi-user implementation is published separately:
+
+- **[Backend, admin panel, web UI and main Alexa source — `feat/multi-user`](https://github.com/arookiecoder-ip/youtube-music-alexa-skill/tree/feat/multi-user)**
+- **[Android application source — `feat/multi-user`](https://github.com/arookiecoder-ip/MusicBox-APP/tree/feat/multi-user)**
+- [Current private-skill setup and verification checklist](https://github.com/arookiecoder-ip/youtube-music-alexa-skill/blob/feat/multi-user/docs/multi-user/PRIVATE-SKILL-ACCESS-2026-11-11.md)
+
 Self-hosted YouTube Music catalog, progressive audio relay, web/PWA player and shared playback control for browsers, Android phones and Alexa Echo devices.
 
 [Architecture](ARCHITECTURE.md) · [Changelog and PR history](CHANGELOG.md) · [Android app](https://github.com/arookiecoder-ip/MusicBox-APP) · [Docker setup](SETUP-DOCKER.md)
