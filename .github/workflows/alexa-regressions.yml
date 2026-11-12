@@ -1,10 +1,10 @@
 name: Alexa playback regressions
 on:
   pull_request:
-    paths: ['flask-server/**', 'lambda/**', 'browser-auth/**', 'network-egress/**', 'skill-package/**', 'docker-compose.yml', 'Caddyfile*', 'scripts/run-regressions.py', '.github/workflows/alexa-regressions.yml']
+    paths: ['flask-server/**', 'lambda/**', 'browser-auth/**', 'network-egress/**', 'skill-package/**', 'skill-package-multiuser/**', 'docker-compose.yml', 'Caddyfile*', 'scripts/run-regressions.py', '.github/workflows/alexa-regressions.yml']
   push:
     branches: [master]
-    paths: ['flask-server/**', 'lambda/**', 'browser-auth/**', 'network-egress/**', 'skill-package/**', 'docker-compose.yml', 'Caddyfile*', 'scripts/run-regressions.py', '.github/workflows/alexa-regressions.yml']
+    paths: ['flask-server/**', 'lambda/**', 'browser-auth/**', 'network-egress/**', 'skill-package/**', 'skill-package-multiuser/**', 'docker-compose.yml', 'Caddyfile*', 'scripts/run-regressions.py', '.github/workflows/alexa-regressions.yml']
   workflow_dispatch:
 permissions:
   contents: read

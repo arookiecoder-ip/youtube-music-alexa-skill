@@ -451,10 +451,7 @@
     <div class="dialog-body">
       <div class="dialog-block" id="totp-begin-block" data-dialog-block="change"
            {{ 'hidden' if totp_pending else '' }}>
-        <h3 id="totp-begin-title">{{ 'Use a new authenticator app' if totp_enabled else 'Turn it on' }}</h3>
-        <p class="field-help">Verify your email, confirm your password, then add your authenticator app.
-          {%- if totp_enabled %} The app you use now keeps working until the new one is
-          confirmed, so a phone you are replacing cannot lock you out.{% endif %}</p>
+        <h3 id="totp-begin-title">Verify your email</h3>
         <form id="form-totp-begin" autocomplete="off">
           <label>Your password
             <input type="password" name="current_password" autocomplete="current-password">
@@ -462,18 +459,21 @@
           <p class="field-error" id="err-totp_current_password" hidden></p>
 
           <div class="state-line">
-            <span class="label">Email code</span>
-            <span class="prov-cell">
-              <button class="tiny" id="reauth-send-begin" type="button">Send a code</button>
-            </span>
+            <span class="label" id="begin-email-address">{{ email }}</span>
           </div>
           <p class="note" id="totp-begin-note" role="status" hidden></p>
-
-          <label for="begin_email_code">Code from your email</label>
-          <input class="code-input" type="text" id="begin_email_code" name="email_code"
-                 inputmode="numeric" pattern="[0-9 ]*" maxlength="7" autocomplete="one-time-code"
-                 spellcheck="false" placeholder="••••••">
-          <p class="field-help">The new app must be confirmed before anything changes.</p>
+          <div class="begin-code-slot">
+            <button class="primary" id="reauth-send-begin" type="button">Send a code</button>
+            <div id="begin-otp-fields" hidden>
+              <label for="begin_email_code">Enter OTP</label>
+              <div class="begin-otp-row">
+                <input class="code-input" type="text" id="begin_email_code" name="email_code"
+                       inputmode="numeric" pattern="[0-9 ]*" maxlength="7" autocomplete="one-time-code"
+                       spellcheck="false" placeholder="••••••">
+                <button class="tiny" id="reauth-resend-begin" type="button" data-rest-label="Resend">Resend</button>
+              </div>
+            </div>
+          </div>
           <p class="field-error" id="err-begin_code" hidden></p>
 
           <button class="primary" type="submit" data-submit id="totp-begin-submit">

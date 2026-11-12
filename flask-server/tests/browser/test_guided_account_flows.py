@@ -133,15 +133,27 @@ def test_totp_email_proof_precedes_password_and_setup(guided_page):
     page, case, user, origin = guided_page
     page.goto(origin+'/account?step=totp')
     dialog=page.locator('#dialog-totp')
+    initial = dialog.bounding_box()
+    expect(dialog.locator('#totp-begin-title')).to_have_text('Verify your email')
+    expect(dialog.locator('#begin-email-address')).to_have_text('listener@example.test')
+    expect(dialog.locator('#begin_email_code')).not_to_be_visible()
     expect(dialog.locator('#enroll')).not_to_be_visible()
     dialog.locator('#reauth-send-begin').click()
-    expect(dialog.locator('#reauth-send-begin')).to_contain_text('Resend in')
+    expect(dialog.locator('#reauth-send-begin')).not_to_be_visible()
+    expect(dialog.locator('#reauth-resend-begin')).to_contain_text('Resend in')
+    expect(dialog.locator('#reauth-resend-begin')).to_be_disabled()
+    expect(dialog.locator('.toast')).to_have_text('OTP sent')
+    assert dialog.bounding_box() == initial
     dialog.locator('#begin_email_code').fill(case.newest_code('reauth'))
     dialog.get_by_role('button',name='Verify and continue').click()
+    expect(dialog.locator('#form-totp-begin [name=current_password]')).to_be_visible()
+    assert dialog.bounding_box() == initial
     dialog.locator('#form-totp-begin [name=current_password]').fill(PASSWORD)
     dialog.locator('#form-totp-begin [type=submit]').click()
     expect(dialog.locator('#enroll')).to_be_visible()
     expect(dialog.locator('#totp-begin-block')).not_to_be_visible()
+    assert dialog.bounding_box() == initial
+
 
 
 def test_password_eye_icon_toggles_without_visible_button_text(guided_page):
