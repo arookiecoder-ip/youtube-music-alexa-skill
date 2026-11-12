@@ -12,7 +12,7 @@
 <span class="ud-eyebrow">Account management</span>
 <h2 id="{{ id }}">{{ title }}</h2>
 </div>
-<button class="btn icon ghost" type="button" data-dialog-close aria-label="Close dialog">✕</button>
+<button class="btn icon ghost" type="button" data-dialog-close aria-label="Close dialog"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true" focusable="false"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
 </div>{% endmacro %}
 {% block head %}<link rel="stylesheet" href="{{ asset_url('css/admin-users.css') }}">{% endblock %}
 {% block topbar_actions %}<a class="btn small ghost" href="{{ base_path }}/users/">← All users</a>{% endblock %}
@@ -33,7 +33,7 @@
 </div>
 </div>
     <div class="ud-hero-actions">
-<span class="badge {{ user.status }}">{{ user.status|capitalize }}</span>{% if can_manage and not is_self %}<button class="btn primary" type="button" data-dialog-open="edit-user-dialog">Edit profile</button>{% elif is_self %}<a class="btn" href="{{ base_path }}/account/">My account</a>{% endif %}</div>
+<span class="badge {{ user.status }}">{{ user.status|capitalize }}</span><a class="btn" href="{{ base_path }}/audit/?target={{ user.id }}">Logs</a>{% if can_manage and not is_self %}<button class="btn primary" type="button" data-dialog-open="edit-user-dialog">Edit profile</button>{% elif is_self %}<a class="btn" href="{{ base_path }}/account/">My account</a>{% endif %}</div>
   </header>
   <div class="ud-summary" aria-label="Account at a glance">
     <div>
@@ -93,7 +93,7 @@
 <span class="ud-eyebrow">Identity</span>
 <h2 id="profile-title">Account overview</h2>
 </div>
-</div>{% if can_manage and not is_self %}<button class="btn small ghost" type="button" data-dialog-open="edit-user-dialog">Edit</button>{% endif %}</div>
+</div></div>
         <dl class="ud-facts">
 <div>
 <dt>Username</dt>
@@ -151,20 +151,16 @@
 <strong>Private skill token</strong>
 <p>{% if not user.alexa_enabled %}Enable access before creating a token.{% elif not alexa_eligible %}Activate the account, verify its email and finish any required password change first.{% else %}Create a credential for this account’s private deployment.{% endif %}</p>
 </div>{% if can_manage %}<button class="btn small" type="button" data-dialog-open="token-create-dialog" {{ 'disabled' if not alexa_eligible else '' }}>{{ 'Rotate token' if has_active_alexa_token else 'Generate token' }}</button>{% endif %}</div>
-        {% if alexa_tokens %}<details class="ud-token-history">
-<summary>Token history <span>{{ alexa_tokens|length }}</span>
-</summary>{% for token in alexa_tokens %}<div class="ud-token-record">
-<div>
-<code>{{ token.id }}</code>
-<span>Issued {{ token.created_at|mu_relative }} · expires {{ token.expires_at|mu_datetime }}</span>
-</div>
-<span class="badge {{ 'active' if token.state == 'active' else 'neutral' }}">{{ token.state }}</span>
-</div>{% endfor %}{% if can_manage %}<form method="post" action="{{ base_path }}/users/{{ user.id }}/alexa/" data-confirm-heading="Revoke Alexa tokens" data-confirm="Reject every existing Alexa token and its playback URLs for {{ user.username }}?" data-confirm-button="Revoke tokens" data-confirm-danger>{{ csrf() }}<input type="hidden" name="action" value="revoke">
-<button class="btn small danger" type="submit">Revoke all tokens</button>
-</form>{% endif %}</details>{% endif %}
+        {% if alexa_tokens %}<div class="ud-history-action"><button class="btn" type="button" data-dialog-open="token-history-dialog">Token history <span class="ud-count">{{ alexa_tokens|length }}</span></button></div>{% endif %}
         <p class="ud-footnote">For private-skill voice playback, use the same Amazon account in the user panel, Developer Console and Echo. The Music Box email can differ. Tokens expire after one year.</p>
       </section>
-      <a class="btn" href="{{ base_path }}/audit/?target={{ user.id }}">Logs</a>
+      {% if can_manage and not is_self %}<section class="ud-panel ud-danger" id="danger-zone">
+<span class="ud-eyebrow">Destructive action</span>
+<h2>Delete account</h2>
+<p>Revoke sessions and remove the user’s saved provider credentials and files.</p>
+<form method="post" action="{{ base_path }}/users/{{ user.id }}/delete/" data-confirm-heading="Delete account" data-confirm="Delete {{ user.username }}? Their sessions, provider credentials and saved files will be removed. An owner can restore only the account row." data-confirm-button="Delete account" data-confirm-danger>{{ csrf() }}<button class="btn danger" type="submit">Delete user</button>
+</form>
+</section>{% endif %}
     </div>
     <aside class="ud-aside">
       <section class="ud-panel ud-security" aria-labelledby="security-title">
@@ -186,7 +182,7 @@
 <div>
 <strong>Password</strong>
 <span>{{ 'Change required at next sign-in' if user.must_change_password else 'No change required' }}</span>
-</div>{% if can_manage and not is_self %}<button class="btn small ghost" type="button" data-dialog-open="password-user-dialog">Manage</button>{% elif is_self %}<a class="btn small ghost" href="{{ base_path }}/account/">Manage</a>{% endif %}</div>
+</div>{% if can_manage and not is_self %}<button class="btn small ghost" type="button" data-dialog-open="password-user-dialog">Password options</button>{% elif is_self %}<a class="btn small ghost" href="{{ base_path }}/account/">Manage</a>{% endif %}</div>
         <div class="ud-security-item">
 <div>
 <strong>Two-factor authentication</strong>
@@ -213,7 +209,7 @@
 <strong>No services connected</strong>
 <p>The user connects their music accounts from their own account page.</p>
 </div>{% endfor %}</section>
-      <section class="ud-panel" aria-labelledby="sessions-title">
+      <section class="ud-panel ud-devices-panel" aria-labelledby="sessions-title">
 <div class="ud-panel-head">
 <div class="ud-section-title">
 <span class="ud-section-icon">{{ icon('device') }}</span>
@@ -223,7 +219,7 @@
 </h2>
 </div>
 </div>{% if sessions and (can_manage or is_self) %}<form method="post" action="{{ base_path }}/users/{{ user.id }}/sessions/revoke/" data-confirm-heading="Sign out everywhere" data-confirm="Sign out every device on @{{ user.username }}?{% if is_self %} This includes this browser.{% endif %}" data-confirm-button="Sign out everywhere" data-confirm-danger>{{ csrf() }}<button class="btn small ghost" type="submit">Sign out all</button>
-</form>{% endif %}</div>{% for s in sessions %}<div class="ud-device">
+</form>{% endif %}</div><div class="ud-device-list {{ 'is-empty' if not sessions else '' }}" role="region" aria-label="Signed-in devices" tabindex="0">{% for s in sessions %}<div class="ud-device">
 <div>
 <strong>{{ (s.user_agent or '')|mu_device }}</strong>
 <span>Seen {{ s.last_seen_at|mu_relative }}</span>
@@ -233,18 +229,28 @@
 <span class="ud-empty-icon">{{ icon('device') }}</span>
 <strong>No signed-in devices</strong>
 <p>This account has no sessions yet.</p>
-</div>{% endfor %}</section>
-      {% if can_manage and not is_self %}<section class="ud-panel ud-danger" id="danger-zone">
-<span class="ud-eyebrow">Destructive action</span>
-<h2>Delete account</h2>
-<p>Revoke sessions and remove the user’s saved provider credentials and files.</p>
-<form method="post" action="{{ base_path }}/users/{{ user.id }}/delete/" data-confirm-heading="Delete account" data-confirm="Delete {{ user.username }}? Their sessions, provider credentials and saved files will be removed. An owner can restore only the account row." data-confirm-button="Delete account" data-confirm-danger>{{ csrf() }}<button class="btn danger" type="submit">Delete user</button>
-</form>
-</section>{% endif %}
+</div>{% endfor %}</div></section>
+
     </aside>
   </div>
   {% endif %}
 </div>
+
+{% if alexa_tokens and not deleted %}
+<dialog class="admin-dialog ud-dialog" id="token-history-dialog" aria-labelledby="token-history-title">
+{{ dialog_head('Token history', 'token-history-title') }}
+<div class="dialog-body"><p>Credentials issued for this account. Full tokens cannot be displayed again.</p><div class="ud-history-list" role="region" aria-label="Issued Alexa tokens" tabindex="0">{% for token in alexa_tokens %}<div class="ud-token-record">
+<div>
+<code>{{ token.id }}</code>
+<span>Issued {{ token.created_at|mu_relative }} · expires {{ token.expires_at|mu_datetime }}</span>
+</div>
+<span class="badge {{ 'active' if token.state == 'active' else 'neutral' }}">{{ token.state }}</span>
+</div>{% endfor %}</div></div>
+<div class="dialog-foot"><button class="btn ghost" type="button" data-dialog-close>Close</button>{% if can_manage %}<form method="post" action="{{ base_path }}/users/{{ user.id }}/alexa/" data-confirm-heading="Revoke Alexa tokens" data-confirm="Reject every existing Alexa token and its playback URLs for {{ user.username }}?" data-confirm-button="Revoke tokens" data-confirm-danger>{{ csrf() }}<input type="hidden" name="action" value="revoke">
+<button class="btn small danger" type="submit">Revoke all tokens</button>
+</form>{% endif %}</div>
+</dialog>
+{% endif %}
 {% for s in sessions %}
 <dialog class="admin-dialog ud-dialog" id="session-info-{{ loop.index }}" aria-labelledby="session-info-title-{{ loop.index }}">
 {{ dialog_head('Device details', 'session-info-title-' ~ loop.index) }}
@@ -283,28 +289,39 @@
 </div>
 </form>
 </dialog>
-<dialog class="admin-dialog ud-dialog" id="password-user-dialog" aria-labelledby="password-user-title">{{ dialog_head('Password & sign-in', 'password-user-title') }}<div class="dialog-body">
-<form method="post" action="{{ base_path }}/users/{{ user.id }}/password/" class="stack" data-confirm-heading="Reset password" data-confirm="Reset the password and sign out every device for {{ user.username }}?" data-confirm-button="Reset password" data-confirm-danger>{{ csrf() }}<div class="field">
-<label for="reset-password">New password</label>
-<div class="row tight">
-<input id="reset-password" name="password" type="password" minlength="10" maxlength="200" autocomplete="new-password" class="full">
-<button class="btn" type="button" data-generate="reset-password">Generate</button>
+<dialog class="admin-dialog ud-dialog" id="password-user-dialog" aria-labelledby="password-user-title">
+{{ dialog_head('Password options', 'password-user-title') }}
+<div class="dialog-body">
+  <p>Choose what should happen for {{ user.username }}.</p>
+  <div class="ud-password-options">
+    <button class="ud-option" type="button" data-dialog-open="password-reset-dialog"><strong>Reset password now</strong><span>Set a temporary password and sign out their devices.</span></button>
+    <button class="ud-option" type="button" data-dialog-open="password-require-dialog"><strong>{{ 'Remove change requirement' if user.must_change_password else 'Require a password change' }}</strong><span>{{ 'Let the user keep their current password.' if user.must_change_password else 'Keep their password until they sign in and choose a new one.' }}</span></button>
+  </div>
 </div>
-<span class="hint">Leave blank to generate one. The new password is shown once on the result page.</span>
+<div class="dialog-foot"><button class="btn" type="button" data-dialog-close>Close</button></div>
+</dialog>
+<dialog class="admin-dialog ud-dialog" id="password-reset-dialog" aria-labelledby="password-reset-title">
+{{ dialog_head('Reset password', 'password-reset-title') }}
+<form method="post" action="{{ base_path }}/users/{{ user.id }}/password/" data-password-reset-options data-confirm-heading="Reset password" data-confirm="Reset the password and sign out every device for {{ user.username }}?" data-confirm-button="Reset password" data-confirm-danger>
+{{ csrf() }}
+<div class="dialog-body">
+  <fieldset class="ud-password-mode"><legend>Choose a replacement</legend>
+    <label><input type="radio" name="password_mode" value="generate" checked> Generate a secure password</label>
+    <label><input type="radio" name="password_mode" value="manual"> Set a password yourself</label>
+  </fieldset>
+  <p class="hint" data-generated-password-note>The generated password will be shown once after the reset.</p>
+  <div class="field ud-manual-password"><label for="reset-password">Temporary password</label><input id="reset-password" name="password" type="password" minlength="10" maxlength="200" autocomplete="new-password"><span class="hint">Use at least 10 characters with two character types.</span></div>
+  <p class="ud-footnote">All devices will be signed out. The user must choose a new password at their next sign-in.</p>
 </div>
-<button class="btn" type="submit">Reset password</button>
+<div class="dialog-foot"><button class="btn ghost" type="button" data-dialog-open="password-user-dialog">Back</button><button class="btn primary" type="submit">Reset password</button></div>
 </form>
-<div class="ud-divider">
-</div>
-<strong>Require a password change</strong>
-<p>{{ 'This account must choose a new password at its next sign-in.' if user.must_change_password else 'Ask the user to choose a new password at their next sign-in.' }}</p>
+</dialog>
+<dialog class="admin-dialog ud-dialog" id="password-require-dialog" aria-labelledby="password-require-title">
+{{ dialog_head('Remove change requirement' if user.must_change_password else 'Require a password change', 'password-require-title') }}
 <form method="post" action="{{ base_path }}/users/{{ user.id }}/password-change/">{{ csrf() }}<input type="hidden" name="state" value="{{ 'clear' if user.must_change_password else 'require' }}">
-<button class="btn ghost" type="submit">{{ 'Clear requirement' if user.must_change_password else 'Require a password change' }}</button>
+<div class="dialog-body"><p>{{ 'The user can keep signing in with their current password.' if user.must_change_password else 'At their next sign-in, the user must choose a new password before using their account.' }}</p><p class="hint">This does not replace their password now.</p></div>
+<div class="dialog-foot"><button class="btn ghost" type="button" data-dialog-open="password-user-dialog">Back</button><button class="btn primary" type="submit">{{ 'Remove requirement' if user.must_change_password else 'Require change' }}</button></div>
 </form>
-</div>
-<div class="dialog-foot">
-<button class="btn" type="button" data-dialog-close>Done</button>
-</div>
 </dialog>
 {% endif %}
 <dialog class="admin-dialog ud-dialog" id="email-user-dialog" aria-labelledby="email-user-title">{{ dialog_head('Email authentication', 'email-user-title') }}<div class="dialog-body">

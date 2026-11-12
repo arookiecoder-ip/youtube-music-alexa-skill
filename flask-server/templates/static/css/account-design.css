@@ -105,3 +105,46 @@ body.account .skip-link { left: 12px; top: 0; transform: translateY(-120%); }
 body.account .skip-link:focus { left: 12px; top: 0; transform: translateY(12px); }
 
 body .btn.primary:hover { color: var(--auth-action-text); }
+
+/* User detail: one profile action, balanced columns and contained histories. */
+.user-detail .ud-columns { align-items: stretch; }
+.user-detail .ud-main, .user-detail .ud-aside { display: flex; flex-direction: column; min-height: 0; align-self: stretch; }
+.user-detail .ud-alexa { flex: 1; }
+.user-detail #danger-zone { margin-top: auto; }
+.user-detail .ud-hero-actions { flex-wrap: wrap; }
+.user-detail .ud-devices-panel { display: flex; flex: 1; flex-direction: column; min-height: 0; }
+.ud-device-list { flex: 1 1 300px; height: 300px; min-height: 160px; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; scrollbar-width: thin; scrollbar-color: var(--scrollbar-thumb) var(--surface); }
+.ud-device-list.is-empty { flex-basis: 160px; height: auto; }
+.ud-device-list::-webkit-scrollbar, .ud-history-list::-webkit-scrollbar { width: 8px; }
+.ud-device-list::-webkit-scrollbar-thumb, .ud-history-list::-webkit-scrollbar-thumb { background: var(--scrollbar-thumb); }
+.ud-device-list .ud-device { padding-right: 8px; }
+.ud-history-action { border-top: 1px solid var(--border-soft); padding-top: 16px; }
+.ud-history-list { max-height: min(45dvh, 360px); overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; scrollbar-width: thin; }
+.ud-password-options { display: grid; gap: 12px; }
+.ud-option { display: flex; flex-direction: column; gap: 8px; width: 100%; padding: 16px; border: 1px solid var(--border); border-radius: var(--settings-radius); background: var(--surface-2); color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+.ud-option:hover { border-color: var(--accent-line); background: var(--hover-tint); }
+.ud-option strong { font-size: 15px; font-weight: 600; }
+.ud-option span { color: var(--muted); font-size: 14px; line-height: 1.6; }
+.ud-password-mode { display: grid; gap: 8px; padding: 0; margin: 0; border: 0; }
+.ud-password-mode legend { margin-bottom: 12px; color: var(--text); font-size: 14px; font-weight: 600; }
+.ud-password-mode label { display: flex; align-items: center; gap: 12px; min-height: 44px; font-size: 14px; cursor: pointer; }
+.ud-password-mode input[type=radio] { flex: none; width: 18px; height: 18px; min-height: 18px; margin: 0; accent-color: var(--accent); }
+.ud-manual-password { margin-top: 20px; }
+.admin-dialog.ud-dialog, #admin-dialog { border-radius: var(--settings-radius); }
+.admin-dialog.ud-dialog .btn, #admin-dialog .dialog-foot .btn, .admin-dialog.ud-dialog .ud-notice { border-radius: var(--settings-radius); }
+.admin-dialog.ud-dialog .btn, #admin-dialog .dialog-foot .btn { min-height: 40px; text-transform: none; letter-spacing: 0; }
+.admin-dialog.ud-dialog .dialog-foot { display: flex; justify-content: flex-end; align-items: center; flex-wrap: wrap; gap: 12px; }
+.admin-dialog.ud-dialog .dialog-foot > .ghost { margin-right: auto; }
+.admin-dialog.ud-dialog .dialog-foot form { margin: 0; }
+.admin-dialog.ud-dialog .field input { min-height: 44px; border-radius: var(--settings-radius); }
+@media(max-width: 1000px) {
+  .user-detail .ud-columns { grid-template-columns: minmax(0, 1fr); }
+  .user-detail .ud-main, .user-detail .ud-aside { align-self: auto; }
+  .user-detail .ud-alexa, .user-detail .ud-devices-panel { flex: none; }
+  .ud-device-list { flex: 0 1 300px; }
+}
+@media(max-width: 600px) {
+  .ud-security-item { flex-wrap: wrap; }
+  .admin-dialog.ud-dialog .dialog-foot { gap: 8px; }
+  .ud-device-list { height: 280px; flex-basis: 280px; }
+}

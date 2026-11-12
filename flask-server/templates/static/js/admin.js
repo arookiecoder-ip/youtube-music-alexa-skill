@@ -101,10 +101,15 @@
    * Escape key and -- since a hidden panel holds no focusable control -- the
    * right field focused for whichever verification tab is showing. */
   const pageDialogs = Array.from(document.querySelectorAll('dialog'));
+  const dialogTriggers = new WeakMap();
 
   /* Clicking the backdrop, or pressing Escape, is a refusal -- never the
      action the dialog was asking about. */
   pageDialogs.forEach((box) => {
+    box.addEventListener('close', () => {
+      const trigger = dialogTriggers.get(box);
+      if (trigger && trigger.isConnected) trigger.focus();
+    });
     box.addEventListener('click', (event) => {
       if (event.target !== box) return;
       const rect = box.getBoundingClientRect();
@@ -124,8 +129,31 @@
   document.querySelectorAll('[data-dialog-open]').forEach((button) => {
     button.addEventListener('click', () => {
       const box = $(button.getAttribute('data-dialog-open'));
-      if (box && typeof box.showModal === 'function') box.showModal();
+      if (box && typeof box.showModal === 'function') {
+        const parent = button.closest('dialog');
+        dialogTriggers.set(box, (parent && dialogTriggers.get(parent)) || button);
+        if (parent && parent.open && parent !== box) parent.close();
+        if (!box.open) box.showModal();
+      }
     });
+  });
+
+  document.querySelectorAll('form[data-password-reset-options]').forEach((form) => {
+    const field = form.querySelector('input[name=password]');
+    const manual = form.querySelector('.ud-manual-password');
+    const note = form.querySelector('[data-generated-password-note]');
+    const update = () => {
+      const generated = form.elements.password_mode.value === 'generate';
+      field.disabled = generated;
+      field.required = !generated;
+      manual.hidden = generated;
+      if (note) note.hidden = !generated;
+      if (generated) field.value = '';
+    };
+    form.querySelectorAll('input[name=password_mode]').forEach((radio) => radio.addEventListener('change', update));
+    const box = form.closest('dialog');
+    if (box) box.addEventListener('close', () => { field.value = ''; });
+    update();
   });
 
   /* A dialog that outlived a page load: "send code" posts, comes back, and the
