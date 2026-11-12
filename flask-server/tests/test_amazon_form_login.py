@@ -156,6 +156,15 @@ class AmazonFormStateTests(unittest.IsolatedAsyncioTestCase):
         state = await self.state(login_failed="login_failed")
         self.assertIn("email or mobile number", state["message"])
 
+    async def test_empty_mfa_page_does_not_blame_credentials(self):
+        login = SimpleNamespace(status={'login_failed':'login_failed'},
+                                _page_url='https://www.amazon.in/ap/mfa?private=not-logged',
+                                _page_html='', _page_status=302)
+        state = await self.ns['_form_state'](self.owner, login)
+        self.assertEqual(state['code'], 'amazon_mfa_page_unavailable')
+        self.assertIn('verification page', state['message'])
+        self.assertNotIn('password', state['message'])
+
     async def test_amazons_register_page_means_the_identifier_was_not_found(self):
         login = SimpleNamespace(
             status={"login_failed": "login_failed"},

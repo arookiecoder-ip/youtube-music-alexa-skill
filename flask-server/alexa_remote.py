@@ -324,7 +324,8 @@ async def _page_note(login):
     try:
         html = getattr(login, "_page_html", None)
         if html is not None:
-            return _page_fingerprint(_last_page_url(login) or "", html)
+            return (f"http_status={getattr(login, '_page_status', None)} chars={len(html)} "
+                    + _page_fingerprint(_last_page_url(login) or "", html))
         response = getattr(login, "_lastreq", None)
         if response is None:
             return "no page"
@@ -1121,6 +1122,11 @@ class AlexaRemote:
                                "Amazon in a browser, complete what it asks, then try again."}
         if note:
             return {"state": "error", "message": note}
+        if str(_last_page_url(login) or '').split('?', 1)[0].rstrip('/').endswith('/ap/mfa'):
+            return {"state": "error", "code": "amazon_mfa_page_unavailable",
+                    "message": "Amazon's verification page could not be loaded. Start over "
+                               "and try again. If it continues, complete any pending "
+                               "sign-in verification on Amazon's own website first."}
         if status.get("login_failed"):
             return {"state": "error",
                     "message": "Amazon refused this sign-in. Check the email or mobile "
