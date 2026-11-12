@@ -68,3 +68,5 @@ skill deployment finishes. Record click-to-audible time, then compare command an
 first-byte log timings. The 3-second versus 4.5-second baseline has not yet been
 re-measured on the device after this update. Do not claim the gap is eliminated
 from synthetic tests alone.
+
+Follow-up transport probing identified paced whole-file upstream responses as an additional bottleneck. See [bounded upstream measurements and correction](BOUNDED-UPSTREAM-2026-11-12.md).

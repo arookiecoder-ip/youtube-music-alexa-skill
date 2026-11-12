@@ -58,18 +58,54 @@ class _RecoveringAudio:
     A refreshed signed URL must describe the same representation. Recovery keeps
     the original response headers and stream slot, and never repeats audio bytes.
     """
-    def __init__(self, upstream, start, end, reopen, video_id):
+    def __init__(self, upstream, start, end, segment_end, reopen, video_id, partial):
         self.upstream, self.position, self.end = upstream, start, end
-        self.status, self.headers = upstream.status, upstream.headers
+        self.segment_end = segment_end
+        self.status = 206 if partial else 200
+        self.headers = {'Content-Type': upstream.headers['Content-Type'],
+                        'Content-Length': str(end-start+1), 'Accept-Ranges': 'bytes'}
+        if partial:
+            total = upstream.headers['Content-Range'].rsplit('/', 1)[1]
+            self.headers['Content-Range'] = f'bytes {start}-{end}/{total}'
         self.reopen, self.video_id = reopen, video_id
         self.attempts, self.closed = 0, False
+
+    @staticmethod
+    def _close_error(error):
+        if isinstance(error, urllib.error.HTTPError):
+            error.close()
+
+    def _advance(self, recovery=False):
+        self.upstream.close()
+        if not recovery:
+            try:
+                self.upstream, self.segment_end = self.reopen(self.position, self.end, False)
+                return
+            except (OSError, urllib.error.URLError, http.client.HTTPException) as error:
+                self._close_error(error)
+        # Segment boundaries are normal progress; only broken transfers or
+        # failed opens spend the response's two-attempt recovery budget.
+        while True:
+            if self.attempts >= 2:
+                raise StreamError('upstream_interrupted', 502)
+            self.attempts += 1
+            try:
+                self.upstream, self.segment_end = self.reopen(self.position, self.end, True)
+                break
+            except (OSError, urllib.error.URLError, http.client.HTTPException) as error:
+                self._close_error(error)
+        logging.getLogger(__name__).info(
+            '[stream-recovery] resumed video=%s offset=%s attempt=%s',
+            self.video_id, self.position, self.attempts)
 
     def read1(self, count):
         if self.closed or self.position > self.end or count <= 0:
             return b''
         while True:
+            if self.position > self.segment_end:
+                self._advance()
             try:
-                block = self.upstream.read1(min(count, self.end-self.position+1))
+                block = self.upstream.read1(min(count, self.segment_end-self.position+1))
             except http.client.IncompleteRead as error:
                 block = error.partial
             except (OSError, http.client.HTTPException):
@@ -77,22 +113,7 @@ class _RecoveringAudio:
             if block:
                 self.position += len(block)
                 return block
-            # EOF before the advertised end is a broken connection too.
-            self.upstream.close()
-            while True:
-                if self.attempts >= 2:
-                    raise StreamError('upstream_interrupted', 502)
-                self.attempts += 1
-                try:
-                    self.upstream = self.reopen(self.position, self.end)
-                    break
-                except (OSError, urllib.error.URLError, http.client.HTTPException) as error:
-                    if isinstance(error, urllib.error.HTTPError):
-                        error.close()
-                    continue
-            logging.getLogger(__name__).info(
-                '[stream-recovery] resumed video=%s offset=%s attempt=%s',
-                self.video_id, self.position, self.attempts)
+            self._advance(recovery=True)
 
     def close(self):
         if not self.closed:
@@ -301,6 +322,8 @@ class YouTubeStream:
     ``close()`` never stops a shared resolver: doing so would cold-start every
     other account playing through it.
     """
+    UPSTREAM_CHUNK_BYTES = 512 * 1024
+
     def __init__(self, cookie_file, enabled=False, worker=None, timeout=15,
                  opener=None, popen=subprocess.Popen, capacity=8, current=None,
                  resolver=None, resolver_for=None, global_slots=None):
@@ -419,64 +442,64 @@ class YouTubeStream:
                 # If-Range must compare the same stable representation, not a
                 # signed URL that changes each time YouTube refreshes it.
                 selected_range = byte_range if not if_range or if_range == etag else None
-                expected_range = None
-                if selected_range:
-                    # Googlevideo rejects suffix ranges on some edges. Turn
-                    # every supported single range into explicit byte bounds,
-                    # using the fixed format's known complete length.
-                    length = int(media['length'])
-                    try:
-                        start, end = byte_bounds(selected_range, length)
-                    except ValueError:
-                        raise StreamError('invalid_range', 416, {'Content-Range':f'bytes */{length}'})
-                    selected_range = f'bytes={start}-{end}'
-                    expected_range = f'bytes {start}-{end}/{length}'
-                    headers['Range'] = selected_range
+                total_length = int(media['length'])
+                if total_length <= 0:
+                    raise StreamError('invalid_audio_length', 502)
+                try:
+                    stream_start, stream_end = byte_bounds(selected_range, total_length)
+                except ValueError:
+                    raise StreamError('invalid_range', 416, {'Content-Range':f'bytes */{total_length}'}) from None
+                segment_end = (stream_end if method == 'HEAD' else
+                               min(stream_end, stream_start+self.UPSTREAM_CHUNK_BYTES-1))
+                # Whole-file Googlevideo responses can be paced below the audio
+                # bitrate. Bounded ranges deliver the same bytes promptly.
+                if method != 'HEAD' or selected_range:
+                    headers['Range'] = f'bytes={stream_start}-{segment_end}'
+                expected_range = f'bytes {stream_start}-{segment_end}/{total_length}'
                 try:
                     upstream = self.opener.open(urllib.request.Request(
                         media['url'], headers=headers, method=method), timeout=10)
                     if upstream.status not in (200, 206):
                         raise StreamError('upstream_error', 502)
-                    if selected_range and upstream.status != 206:
+                    full_representation = stream_start == 0 and segment_end == total_length-1
+                    if upstream.status != 206 and (selected_range or not full_representation):
                         raise StreamError('range_ignored', 502)
-                    if selected_range and upstream.headers.get('Content-Range') != expected_range:
+                    if upstream.status == 206 and upstream.headers.get('Content-Range') != expected_range:
                         raise StreamError('range_mismatch', 502)
                     if not upstream.headers.get('Content-Type', '').startswith('audio/mp4'):
                         raise StreamError('invalid_audio', 502)
-                    total_length = int(media['length'])
-                    stream_start = start if selected_range else 0
-                    stream_end = end if selected_range else total_length-1
-                    if total_length <= 0:
+                    advertised_length = upstream.headers.get('Content-Length')
+                    if advertised_length is not None and int(advertised_length) != segment_end-stream_start+1:
                         raise StreamError('invalid_audio_length', 502)
                     expected_length = stream_end-stream_start+1
-                    advertised_length = upstream.headers.get('Content-Length')
-                    if advertised_length is not None and int(advertised_length) != expected_length:
-                        raise StreamError('invalid_audio_length', 502)
-                    if not selected_range and upstream.status == 206 and upstream.headers.get('Content-Range') != f'bytes 0-{stream_end}/{total_length}':
-                        raise StreamError('range_mismatch', 502)
                     if method != 'HEAD':
+                        transport_media = [media]
                         original_etag = etag
-                        def reopen(offset, last, original_etag=original_etag):
-                            refreshed = self.resolve(video_id, refresh=True)
-                            refreshed_etag = '"'+hashlib.sha256(
-                                f'{video_id}:{refreshed.get("itag")}:{refreshed.get("length")}:{refreshed.get("modified")}'.encode()
-                            ).hexdigest()+'"'
-                            if refreshed_etag != original_etag:
-                                raise StreamError('audio_representation_changed', 502)
+                        def reopen(offset, last, refresh, original_etag=original_etag):
+                            if refresh:
+                                refreshed = self.resolve(video_id, refresh=True)
+                                refreshed_etag = '"'+hashlib.sha256(
+                                    f'{video_id}:{refreshed.get("itag")}:{refreshed.get("length")}:{refreshed.get("modified")}'.encode()
+                                ).hexdigest()+'"'
+                                if refreshed_etag != original_etag:
+                                    raise StreamError('audio_representation_changed', 502)
+                                transport_media[0] = refreshed
+                            segment_last = min(last, offset+self.UPSTREAM_CHUNK_BYTES-1)
                             response = self.opener.open(urllib.request.Request(
-                                refreshed['url'], headers={'Accept-Encoding': 'identity',
-                                    'Range': f'bytes={offset}-{last}'}, method='GET'), timeout=10)
+                                transport_media[0]['url'], headers={'Accept-Encoding': 'identity',
+                                    'Range': f'bytes={offset}-{segment_last}'}, method='GET'), timeout=10)
                             try:
                                 if (response.status != 206
-                                        or response.headers.get('Content-Range') != f'bytes {offset}-{last}/{total_length}'
+                                        or response.headers.get('Content-Range') != f'bytes {offset}-{segment_last}/{total_length}'
                                         or not response.headers.get('Content-Type', '').startswith('audio/mp4')
-                                        or int(response.headers.get('Content-Length', '-1')) != last-offset+1):
+                                        or int(response.headers.get('Content-Length', '-1')) != segment_last-offset+1):
                                     raise StreamError('invalid_recovery_range', 502)
                             except Exception:
                                 response.close()
                                 raise
-                            return response
-                        upstream = _RecoveringAudio(upstream, stream_start, stream_end, reopen, video_id)
+                            return response, segment_last
+                        upstream = _RecoveringAudio(upstream, stream_start, stream_end,
+                            segment_end, reopen, video_id, bool(selected_range))
                     first = upstream.read1(16384) if method != 'HEAD' else b''
                     if method != 'HEAD' and not first:
                         raise StreamError('empty_audio', 502)

@@ -104,7 +104,10 @@ class Streaming(unittest.TestCase):
     def test_if_range_mismatch_serves_complete_representation(self):
         self.opener.open.return_value=Upstream()
         relay=self.stream.open(VID,byte_range='bytes=3-',if_range='"old"')
-        self.assertIsNone(self.opener.open.call_args.args[0].get_header('Range'));relay.close()
+        self.assertEqual(self.opener.open.call_args.args[0].get_header('Range'), 'bytes=0-11')
+        self.assertEqual(relay.status, 200)
+        self.assertNotIn('Content-Range', relay.headers)
+        relay.close()
 
     def test_capacity_is_bounded_and_recovers_after_disconnect(self):
         self.opener.open.return_value=Upstream()
@@ -216,6 +219,80 @@ class Streaming(unittest.TestCase):
         with self.assertRaises(StreamError) as error:
             self.stream.open(VID)
         self.assertEqual(error.exception.code, 'invalid_audio_length')
+
+    def test_full_audio_uses_bounded_ranges_without_spending_recovery_budget(self):
+        body = b'abcdefghijklmnop'
+        self.stream.resolve.return_value = {**MEDIA, 'length': len(body)}
+        self.stream.UPSTREAM_CHUNK_BYTES = 4
+        self.opener.open.side_effect = [Upstream(body[i:i+4], status=206,
+            headers={'Content-Range': f'bytes {i}-{i+3}/16'}) for i in range(0, 16, 4)]
+        self.stream.current.activate(VID)
+        relay = self.stream.open(VID)
+        blocks = []
+        for block in relay.chunks():
+            relay.remember(block)
+            blocks.append(block)
+        self.assertEqual(b''.join(blocks), body)
+        self.assertEqual(relay.status, 200)
+        self.assertEqual(relay.headers['Content-Length'], '16')
+        self.assertNotIn('Content-Range', relay.headers)
+        self.assertEqual(relay.upstream.attempts, 0)
+        self.assertEqual(self.stream.resolve.call_count, 1)
+        self.assertEqual([c.args[0].get_header('Range') for c in self.opener.open.call_args_list],
+                         ['bytes=0-3', 'bytes=4-7', 'bytes=8-11', 'bytes=12-15'])
+        cached = self.stream.current.open(VID)
+        self.assertEqual(cached.read1(16), body)
+        cached.close()
+        self.assertEqual(self.stream.snapshot()['active_streams'], 0)
+
+    def test_partial_client_response_preserves_its_range_across_segments(self):
+        body = b'abcdefghijklmnop'
+        self.stream.resolve.return_value = {**MEDIA, 'length': len(body)}
+        self.stream.UPSTREAM_CHUNK_BYTES = 4
+        self.opener.open.side_effect = [Upstream(body[i:i+4], status=206,
+            headers={'Content-Range': f'bytes {i}-{i+3}/16'}) for i in (2, 6, 10)]
+        relay = self.stream.open(VID, byte_range='bytes=2-13')
+        self.assertEqual(b''.join(relay.chunks()), body[2:14])
+        self.assertEqual(relay.status, 206)
+        self.assertEqual(relay.headers['Content-Length'], '12')
+        self.assertEqual(relay.headers['Content-Range'], 'bytes 2-13/16')
+        self.assertEqual(self.stream.resolve.call_count, 1)
+
+    def test_failure_inside_segment_recovers_and_normal_segments_continue(self):
+        self.stream.resolve.return_value = {**MEDIA, 'length': 16}
+        self.stream.UPSTREAM_CHUNK_BYTES = 4
+        self.opener.open.side_effect = [
+            Upstream(b'ab', status=206, headers={'Content-Length':'4','Content-Range':'bytes 0-3/16'}),
+            Upstream(b'cdef', status=206, headers={'Content-Range':'bytes 2-5/16'}),
+            Upstream(b'ghij', status=206, headers={'Content-Range':'bytes 6-9/16'}),
+            Upstream(b'klmn', status=206, headers={'Content-Range':'bytes 10-13/16'}),
+            Upstream(b'op', status=206, headers={'Content-Range':'bytes 14-15/16'})]
+        relay = self.stream.open(VID)
+        self.assertEqual(b''.join(relay.chunks()), b'abcdefghijklmnop')
+        self.assertEqual(relay.upstream.attempts, 1)
+        self.assertEqual(self.stream.resolve.call_count, 2)
+        self.assertEqual(self.opener.open.call_count, 5)
+
+    def test_expired_url_at_normal_segment_boundary_refreshes_once(self):
+        self.stream.UPSTREAM_CHUNK_BYTES = 4
+        expired_body = io.BytesIO(b'private')
+        expired = HTTPError(MEDIA['url'], 403, 'private', {}, expired_body)
+        self.opener.open.side_effect = [
+            Upstream(b'1234', status=206, headers={'Content-Range':'bytes 0-3/12'}), expired,
+            Upstream(b'5678', status=206, headers={'Content-Range':'bytes 4-7/12'}),
+            Upstream(b'9012', status=206, headers={'Content-Range':'bytes 8-11/12'})]
+        relay = self.stream.open(VID)
+        self.assertEqual(b''.join(relay.chunks()), b'123456789012')
+        self.assertEqual(self.stream.resolve.call_count, 2)
+        self.assertEqual(relay.upstream.attempts, 1)
+        self.assertTrue(expired_body.closed)
+
+    def test_large_whole_file_fallback_is_rejected_if_edge_ignores_range(self):
+        self.stream.UPSTREAM_CHUNK_BYTES = 4
+        self.opener.open.return_value = Upstream()
+        with self.assertRaises(StreamError) as error:
+            self.stream.open(VID)
+        self.assertEqual(error.exception.code, 'range_ignored')
 
     def test_safe_upstream_validation(self):
         for url in ['http://rr1.googlevideo.com/a','https://googlevideo.com.evil/a',
