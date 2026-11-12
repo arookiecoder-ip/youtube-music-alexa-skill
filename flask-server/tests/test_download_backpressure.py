@@ -748,7 +748,7 @@ class DispatchCoalescing(_CleanServerState):
             time.sleep(0.4)
         self.assertEqual(sent, ["LONE1111111"])
 
-    def test_devices_do_not_coalesce_with_each_other(self):
+    def test_new_device_selection_supersedes_same_accounts_old_dispatch(self):
         sent = []
         with mock.patch.object(server, "_dispatch_play_with_retry",
                                side_effect=lambda s, v, o=0: sent.append((s, v))):
@@ -756,8 +756,8 @@ class DispatchCoalescing(_CleanServerState):
             server._schedule_play_dispatch("DEVICE2", "BBBBBBBBBBB", delay=0.15)
             time.sleep(0.5)
         self.assertEqual(sorted(sent),
-                         [("DEVICE1", "AAAAAAAAAAA"), ("DEVICE2", "BBBBBBBBBBB")],
-                         msg="one device's burst must not cancel another's play")
+                         [("DEVICE2", "BBBBBBBBBBB")],
+                         msg="an older device selection must not start after a newer one")
 
     def test_the_echo_ends_up_playing_the_last_clicked_song(self):
         """The end-to-end property that matters, at several click cadences.
@@ -1093,7 +1093,7 @@ class PlaybackFailureAutoAdvance(_CleanServerState):
         self.assertTrue(errors)
         self.assertEqual(errors[-1]['type'], 'unavailable')
 
-    def test_final_transport_timeout_advances_with_bounded_failure_budget(self):
+    def test_final_transport_timeout_preserves_selected_track_and_queue(self):
         current, nxt = "TIMEOUTTIME", "AFTERAFTERA"
         self._install_queue(current, nxt)
         dispatched = []
@@ -1114,10 +1114,11 @@ class PlaybackFailureAutoAdvance(_CleanServerState):
             # confirmed, so the second _wait_once also times out.
             server._watch_playback_confirmation(
                 "DEVICE1", current, lambda: dispatched.append(current) or None)
-        self.assertEqual(dispatched, [current, nxt])
+        self.assertEqual(dispatched, [current])
         snap = server._get_now_playing()
-        self.assertEqual(snap['video_id'], nxt)
-        self.assertTrue(snap['playing'])
+        self.assertEqual(snap['video_id'], current)
+        self.assertFalse(snap['playing'])
+        self.assertFalse(snap['playback_processing'])
         self.assertEqual(snap['playback_error']['type'], 'timeout')
         self.assertEqual([t['video_id'] for t in snap['queue']], [current, nxt])
 

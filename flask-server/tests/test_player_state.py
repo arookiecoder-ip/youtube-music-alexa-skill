@@ -125,3 +125,34 @@ class PlayerStateProxyTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class StreamIdentityTests(unittest.TestCase):
+    def test_interleaved_streams_do_not_leak_identity_and_close_on_other_thread(self):
+        from player_state import IdentityIterator
+        seen = []
+
+        def source():
+            try:
+                yield IDENTITY.get()
+                yield IDENTITY.get()
+            finally:
+                seen.append(IDENTITY.get())
+
+        token = IDENTITY.set('consumer')
+        try:
+            a = IdentityIterator(source(), 'user:a')
+            b = IdentityIterator(source(), 'user:b')
+            self.assertEqual(next(a), 'user:a')
+            self.assertEqual(IDENTITY.get(), 'consumer')
+            self.assertEqual(next(b), 'user:b')
+            self.assertEqual(next(a), 'user:a')
+            worker = threading.Thread(target=a.close)
+            worker.start()
+            worker.join(timeout=2)
+            self.assertFalse(worker.is_alive())
+            b.close()
+            self.assertEqual(seen, ['user:a', 'user:b'])
+            self.assertEqual(IDENTITY.get(), 'consumer')
+        finally:
+            IDENTITY.reset(token)

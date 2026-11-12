@@ -47,7 +47,10 @@ class EchoStreamFailureTests(unittest.TestCase):
     def test_pending_failure_retry_is_cancelled_by_new_transport_intent(self):
         self._failure_case('newtrack001', ignored=False, cancel_retry=True)
 
-    def _failure_case(self, video, ignored, cancel_retry=False):
+    def test_confirmed_unavailable_song_can_advance(self):
+        self._failure_case('newtrack001', ignored=False, unavailable=True)
+
+    def _failure_case(self, video, ignored, cancel_retry=False, unavailable=False):
         tree = ast.parse(SOURCE.read_text())
         fn = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == 'alexa_state_event')
         fn.decorator_list = []
@@ -63,6 +66,7 @@ class EchoStreamFailureTests(unittest.TestCase):
               '_playback_output': SimpleNamespace(snapshot=lambda: {'playback_output': 'alexa', 'output_serial': 'echo'}),
               '_valid_video_id': lambda x: isinstance(x, str) and len(x) == 11,
               '_computed_position_ms': lambda: 2000, '_reset_progress': Mock(), '_notify_sse': notify, 'logger': Mock(), 'threading': SimpleNamespace(Timer=timer),
+              '_is_dead_or_flaky_video': lambda vid: unavailable,
               '_still_relevant_video': lambda vid: state['video_id'] == vid, '_auto_advance_after_failure': advance,
               '_delayed': lambda seconds, target, args=(), start=True: timer(seconds, lambda: target(*args))}
         exec(compile(ast.Module(body=[fn], type_ignores=[]), str(SOURCE), 'exec'), ns)
@@ -80,7 +84,7 @@ class EchoStreamFailureTests(unittest.TestCase):
             if cancel_retry:
                 state['playback_revision'] += 1
             callbacks[0]()
-            if cancel_retry: advance.assert_not_called()
+            if cancel_retry or not unavailable: advance.assert_not_called()
             else: advance.assert_called_once_with('echo', video, 'MEDIA_ERROR_SERVICE_UNAVAILABLE')
 
 if __name__ == '__main__': unittest.main()

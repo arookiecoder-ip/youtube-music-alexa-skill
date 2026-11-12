@@ -51,6 +51,26 @@ def spawn(key, target, args=(), kwargs=None, name=None):
     return thread
 
 
+class IdentityIterator:
+    """Keep streamed response iteration and cleanup inside one account context."""
+
+    def __init__(self, iterable, identity):
+        self._context = contextvars.Context()
+        self._context.run(IDENTITY.set, identity or OWNER)
+        self._iterator = self._context.run(iter, iterable)
+
+    def __iter__(self):
+        return self
+
+    def __next__(self):
+        return self._context.run(next, self._iterator)
+
+    def close(self):
+        close = getattr(self._iterator, 'close', None)
+        if close is not None:
+            self._context.run(close)
+
+
 class PlayerStateRegistry:
     """Lazily created per-identity playback state and its lock.
 

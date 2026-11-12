@@ -14,7 +14,8 @@ from youtube_stream import Resolver, YouTubeStream, StreamError
 from playback_contract import restore_snapshot
 from player_state import (IDENTITY as _PLAYER_IDENTITY, PlayerStateRegistry as _PlayerStateRegistry,
                           PlayerStateView as _PlayerStateView, PlayerStateProxy as _PlayerStateProxy,
-                          IdentityLock as _IdentityLock, spawn as _spawn_for_identity)
+                          IdentityLock as _IdentityLock, spawn as _spawn_for_identity,
+                          IdentityIterator as _IdentityIterator)
 import asyncio, base64, collections, difflib, glob, hashlib, hmac, itertools, json, math, os, random, secrets, shutil, sys, threading, time, re, subprocess, logging, copy, uuid, tempfile, shlex
 from datetime import timedelta, datetime
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
@@ -341,8 +342,9 @@ if not os.environ.get("API_KEY"):
 # per device and sends the skill a short, NLU-safe trigger phrase. The skill
 # then GETs /armed_play/ to learn what to play. Latest-arm-wins, single slot per
 # serial, with a short TTL so a stale arm never plays unexpectedly.
-_ARMED_PLAYS = {}
-_ARMED_PLAYS_LOCK = threading.Lock()
+_armed_plays_registry = _PlayerStateRegistry(lambda identity: {})
+_ARMED_PLAYS = _PlayerStateView(_armed_plays_registry)
+_ARMED_PLAYS_LOCK = _IdentityLock(_armed_plays_registry)
 ARMED_PLAY_TTL = 60.0  # seconds
 
 # ---- play-intent claims (rapid-click coalescing) ----
@@ -359,8 +361,9 @@ ARMED_PLAY_TTL = 60.0  # seconds
 # collapses into exactly one dispatch for the song the user actually landed on.
 # Requests without a seq (voice commands, the Lambda, older clients) always
 # claim, preserving existing behaviour.
-_PLAY_INTENT_SEQS = {}
-_PLAY_INTENT_LOCK = threading.Lock()
+_play_intent_registry = _PlayerStateRegistry(lambda identity: {})
+_PLAY_INTENT_SEQS = _PlayerStateView(_play_intent_registry)
+_PLAY_INTENT_LOCK = _IdentityLock(_play_intent_registry)
 
 
 def _claim_play_intent(serial, seq, client_id=''):
@@ -413,8 +416,9 @@ def _play_intent_seq_arg(body):
 # whatever the user landed on. The delay is short enough to be invisible next to
 # the ~9-10s cold-start path but long enough to absorb ordinary rapid clicking.
 PLAY_DISPATCH_DEBOUNCE = float(os.environ.get('PLAY_DISPATCH_DEBOUNCE', '0.15'))
-_PENDING_DISPATCH = {}
-_PENDING_DISPATCH_LOCK = threading.Lock()
+_pending_dispatch_registry = _PlayerStateRegistry(lambda identity: {})
+_PENDING_DISPATCH = _PlayerStateView(_pending_dispatch_registry)
+_PENDING_DISPATCH_LOCK = _IdentityLock(_pending_dispatch_registry)
 
 # A short debounce only merges clicks that land within its window; clicks ~1s
 # apart still produced one trigger each. The timing-independent half of the fix
@@ -428,8 +432,9 @@ _PENDING_DISPATCH_LOCK = threading.Lock()
 # The TTL bounds the case where Alexa silently drops a trigger: after it we
 # allow a fresh one rather than blocking playback forever.
 TRIGGER_INFLIGHT_TTL = 15.0
-_TRIGGER_INFLIGHT = {}
-_TRIGGER_INFLIGHT_LOCK = threading.Lock()
+_trigger_inflight_registry = _PlayerStateRegistry(lambda identity: {})
+_TRIGGER_INFLIGHT = _PlayerStateView(_trigger_inflight_registry)
+_TRIGGER_INFLIGHT_LOCK = _IdentityLock(_trigger_inflight_registry)
 
 
 def _note_trigger_sent(serial):
@@ -483,6 +488,7 @@ def _schedule_play_dispatch(serial, video_id, offset_ms=0, delay=None, expected_
     now-playing's `playback_error` (the web remote already toasts it) rather than
     this call's return value, because the send happens after the response.
     """
+    correction = expected_intent is not None
     if expected_intent is None:
         with _np_lock:
             _now_playing['alexa_intent_at'] = time.time()
@@ -493,6 +499,9 @@ def _schedule_play_dispatch(serial, video_id, offset_ms=0, delay=None, expected_
     key = serial or ''
     if delay is None:
         delay = PLAY_DISPATCH_DEBOUNCE
+
+    if expected_intent is None:
+        expected_intent, expected_output = dispatch_intent, dispatch_output
 
     def _fire():
         with _PENDING_DISPATCH_LOCK:
@@ -505,7 +514,7 @@ def _schedule_play_dispatch(serial, video_id, offset_ms=0, delay=None, expected_
             with _np_lock:
                 out = _playback_output.snapshot()
                 if (_now_playing.get('alexa_intent_at') != expected_intent or
-                        not _now_playing.get('playing') or _now_playing.get('video_id') != video_id or
+                        (correction and (not _now_playing.get('playing') or _now_playing.get('video_id') != video_id)) or
                         out['playback_output'] != 'alexa' or out['output_token'] != expected_output):
                     return
         # Always keep the arm current: this is what an in-flight trigger, or the
@@ -524,7 +533,7 @@ def _schedule_play_dispatch(serial, video_id, offset_ms=0, delay=None, expected_
                 _arm_play(serial, video_id, offset_ms)
                 return alexa_remote.remote.play_video_id(serial, video_id, offset_ms)
             _spawn_for_identity(_current_identity(), _watch_playback_confirmation,
-                               args=(serial, video_id, _resend), name='playback-watchdog')
+                               args=(serial, video_id, _resend, (dispatch_intent, dispatch_output)), name='playback-watchdog')
             return
         try:
             _note_trigger_sent(serial)
@@ -545,7 +554,7 @@ def _schedule_play_dispatch(serial, video_id, offset_ms=0, delay=None, expected_
         if expected_intent is not None:
             output = _playback_output.snapshot()
             if (_now_playing.get('alexa_intent_at') != expected_intent or
-                    not _now_playing.get('playing') or _now_playing.get('video_id') != video_id or
+                    (correction and (not _now_playing.get('playing') or _now_playing.get('video_id') != video_id)) or
                     output['playback_output'] != 'alexa' or output['output_token'] != expected_output):
                 return None
         # Stage under the same lock as the fence: a superseded correction must
@@ -603,8 +612,8 @@ def _consume_armed_play(serial=None):
 
     The skill can't map its opaque Alexa deviceId to the AlexaPy serialNumber
     used when arming, so when ``serial`` is None (the skill's call) we return the
-    single most-recently-armed play. This is safe for a single-user remote where
-    the trigger phrase follows its arm within ~1s."""
+    most-recently-armed play belonging to the authenticated account.
+    Other accounts' arms are never visible to this lookup."""
     with _ARMED_PLAYS_LOCK:
         if serial is not None:
             entry = _ARMED_PLAYS.pop(serial, None)
@@ -2527,6 +2536,16 @@ def _drop_alexa_state(identity):
     The queue-sync timer is cancelled before its slot is discarded: a Timer left
     armed would fire seconds later and drive an Echo for a provider that is gone.
     """
+    # Cancel dispatch timers before discarding their account slots. A timer
+    # already running is also fenced by the retired account's play intent.
+    with _pending_dispatch_registry.lock_for(identity):
+        pending = _pending_dispatch_registry.peek(identity) or {}
+        for entry in pending.values():
+            entry['timer'].cancel()
+        pending.clear()
+    for registry in (_armed_plays_registry, _play_intent_registry,
+                     _pending_dispatch_registry, _trigger_inflight_registry):
+        registry.discard(identity)
     timer = None
     with _player_registry.lock_for(identity):
         slot = _alexa_queue_sync_slot_registry.peek(identity)
@@ -6050,7 +6069,9 @@ def _serve_youtube_stream(video_id, confirm=False, cancellable=False, meta=None)
             response.headers['Retry-After'] = '2'
         return response
 
-    echo_output_token = _playback_output.snapshot()['output_token'] if confirm else None
+    with _np_lock:
+        echo_output_token = _playback_output.snapshot()['output_token'] if confirm else None
+        echo_intent = _now_playing.get('alexa_intent_at') if confirm else None
     stream_identity = _current_identity()
 
     def generate():
@@ -6062,9 +6083,12 @@ def _serve_youtube_stream(video_id, confirm=False, cancellable=False, meta=None)
         try:
             for block in relay.chunks():
                 if confirm:
-                    owner = _playback_output.snapshot()
-                    if owner['playback_output'] != 'alexa' or owner['output_token'] != echo_output_token:
-                        return
+                    with _np_lock:
+                        owner = _playback_output.snapshot()
+                        if (owner['playback_output'] != 'alexa'
+                                or owner['output_token'] != echo_output_token
+                                or _now_playing.get('alexa_intent_at') != echo_intent):
+                            return
                 if (cancellable and _generation_superseded(generation)
                         and _stream_superseded(video_id)):
                     return
@@ -6088,7 +6112,7 @@ def _serve_youtube_stream(video_id, confirm=False, cancellable=False, meta=None)
     request_download = request.headers.get('X-MusicBox-Download') == '1'
     headers = _audio_meta_headers(video_id, meta)
     headers.update(relay.headers)
-    response = Response(generate() if request.method != 'HEAD' else (),
+    response = Response(_IdentityIterator(generate(), stream_identity) if request.method != 'HEAD' else (),
                         status=relay.status, headers=headers)
     # Closing an uniterated response (HEAD, device abort before first yield)
     # must release its upstream socket and stream slot too.
@@ -6615,7 +6639,7 @@ def _download_in_progress(video_id):
     return _audio_jobs.contains(_audio_job_key(video_id))
 
 
-def _watch_playback_confirmation(serial, video_id, resend):
+def _watch_playback_confirmation(serial, video_id, resend, expected=None):
     """Background watchdog: retries `resend()` once if `video_id` isn't
     confirmed playing within PLAYBACK_CONFIRM_TIMEOUT. `resend` is a zero-arg
     callable that re-arms and resends the play command; it should return an
@@ -6625,17 +6649,24 @@ def _watch_playback_confirmation(serial, video_id, resend):
 
     with _np_lock:
         intent_revision = int(_now_playing.get('playback_revision', 0))
+        if expected is None:
+            expected = (_now_playing.get('alexa_intent_at'),
+                        _playback_output.snapshot()['output_token'])
+
+    def _relevant_locked():
+        # A pause, same-song replay or output handoff also supersedes this attempt.
+        return (_now_playing.get('video_id') == video_id
+                and _now_playing.get('alexa_intent_at') == expected[0]
+                and _playback_output.snapshot()['output_token'] == expected[1]
+                and int(_now_playing.get('failed_playback_revision', 0)) <= intent_revision)
 
     def _confirmed():
         with _np_lock:
-            return (_now_playing.get('video_id') == video_id
-                    and bool(_now_playing.get('playback_confirmed')))
+            return _relevant_locked() and bool(_now_playing.get('playback_confirmed'))
 
     def _still_relevant():
-        # Give up quietly if the user has since moved on to another track.
         with _np_lock:
-            return (_now_playing.get('video_id') == video_id
-                    and int(_now_playing.get('failed_playback_revision', 0)) <= intent_revision)
+            return _relevant_locked()
 
     def _wait_once():
         # A cache hit has nothing left to wait on but the trigger + /proxy/
@@ -6716,19 +6747,28 @@ def _watch_playback_confirmation(serial, video_id, resend):
             if not _still_relevant():
                 return
         logger.warning("[playback-watchdog] no confirmation for %s in %ss, retrying once", video_id, PLAYBACK_CONFIRM_TIMEOUT)
+        if not _still_relevant():
+            return
         error = resend()
         if error:
             logger.error("[playback-watchdog] retry dispatch failed: %s", error)
-            _update_now_playing(playback_error={'type': 'dispatch_error', 'message': error})
+            _fail_play_dispatch(video_id, expected[0], expected[1], error)
             return
         if _wait_once():
             return
         if not _still_relevant():
             return
         logger.warning("[playback-watchdog] retry for %s also unconfirmed", video_id)
-        if not _auto_advance_after_failure(serial, video_id, 'timeout'):
-            _update_now_playing(playing=False, playback_processing=False,
-                playback_error={'type': 'timeout', 'message': _playback_failure_message('timeout')})
+        # Device timeouts do not prove the selected song is unavailable.
+        with _np_lock:
+            if not _relevant_locked():
+                return
+            _reset_progress(_computed_position_ms())
+            _now_playing.update(playing=False, playback_processing=False, playback_confirmed=False,
+                playback_error={'type': 'timeout', 'message': _playback_failure_message('timeout')},
+                updated_at=time.time())
+            _now_playing['playback_revision'] = int(_now_playing.get('playback_revision', 0)) + 1
+        _notify_sse()
     except Exception:
         logger.exception("")
 
@@ -6894,11 +6934,14 @@ def _dispatch_play_with_retry(serial, video_id, offset_ms=0):
         _arm_play(serial, video_id, offset_ms)
         return alexa_remote.remote.play_video_id(serial, video_id, offset_ms)
 
+    with _np_lock:
+        expected = (_now_playing.get('alexa_intent_at'),
+                    _playback_output.snapshot()['output_token'])
     error = _send()
     if error:
         return error
     _spawn_for_identity(_current_identity(), _watch_playback_confirmation,
-                        args=(serial, video_id, _send), name='playback-watchdog')
+                        args=(serial, video_id, _send, expected), name='playback-watchdog')
     return None
 
 
@@ -8946,7 +8989,9 @@ def alexa_state_event():
             def recover_failure():
                 if (_still_relevant_video(failed_id)
                         and _now_playing.get('playback_revision') == failed_revision
-                        and _playback_output.snapshot()['playback_output'] == 'alexa'):
+                        and _playback_output.snapshot()['playback_output'] == 'alexa'
+                        and _is_dead_or_flaky_video(failed_id)):
+                    # Service, auth and device failures must not consume the queue.
                     _auto_advance_after_failure(serial, failed_id, str(body.get('error_type') or 'server_issue'))
             timer = _delayed(1.0, recover_failure)
         return jsonify({'ok': True})
@@ -10242,7 +10287,7 @@ def alexa_play_queue():
                 target_idx = requested_index
 
         first = validated_items[target_idx]
-        _update_now_playing(queue_session_id=_intent_queue_session, playing=False,
+        _update_now_playing(queue_session_id=_intent_queue_session, playing=False, playback_processing=True,
                             title=first['title'], artist=first['artist'],
                             artists=first.get('artists', []),
                             thumbnail=first['thumbnail'], video_id=first['video_id'],
@@ -10363,12 +10408,6 @@ def alexa_play_queue():
             target_idx = queue.index(item)
 
     _ensure_audio_ready_for_play(video_id, wait=False)
-    # Coalesced: see _schedule_play_dispatch. A burst of queue-row clicks sends
-    # one trigger phrase for the row the user landed on.
-    replaced = _schedule_play_dispatch(serial, video_id)
-    if replaced:
-        logger.info("play_queue: coalesced pending dispatch %s -> %s",
-                    replaced, video_id)
 
     # Preserve the structured artist IDs supplied by the browser. The old
     # direct-play path kept only the display string, so the playback page had
@@ -10390,7 +10429,7 @@ def alexa_play_queue():
     # duplicate call from the webhook is harmless.
     if not _jam_guest():
         _record_listen(video_id, item.get('title', ''), item.get('artist', ''), thumb)
-    _update_now_playing(queue_session_id=_intent_queue_session, playing=False,
+    _update_now_playing(queue_session_id=_intent_queue_session, playing=False, playback_processing=True,
                         title=item.get('title', ''),
                         artist=item.get('artist', ''),
                         artists=item.get('artists', []),
@@ -10405,6 +10444,13 @@ def alexa_play_queue():
                         # authoritative until the skill syncs (see
                         # alexa_state_event).
                         queue_web_dirty=True)
+    # Coalesced: see _schedule_play_dispatch. A burst of queue-row clicks sends
+    # one trigger phrase for the row the user landed on.
+    replaced = _schedule_play_dispatch(serial, video_id)
+    if replaced:
+        logger.info("play_queue: coalesced pending dispatch %s -> %s",
+                    replaced, video_id)
+
     # Recommendations/charts carry no duration, so the progress bar would show
     # --:-- with no total. Look the real metadata (incl. length) up in the
     # background and patch it into now-playing without blocking playback.

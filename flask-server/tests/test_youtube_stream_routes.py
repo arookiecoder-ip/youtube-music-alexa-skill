@@ -62,6 +62,18 @@ class StreamRoutes(unittest.TestCase):
             submit.call_args.args[1]()
             resolve.assert_called_once_with(VID)
 
+    def test_paused_same_song_cannot_be_reconfirmed_by_old_stream(self):
+        with server.app.test_request_context('/proxy/?video_id='+VID), \
+                mock.patch.dict(server._now_playing, {'video_id': VID, 'alexa_intent_at': 10}), \
+                mock.patch.object(server, '_confirm_stream_delivery') as confirm:
+            response = server._serve_youtube_stream(VID, confirm=True)
+            # Pause can arrive while the upstream is still preparing its body.
+            server._now_playing.update(playing=False, alexa_intent_at=11)
+            self.assertEqual(list(response.response), [])
+            response.close()
+            confirm.assert_not_called()
+        self.release.assert_called_once()
+
     def test_closed_uniterated_response_releases_stream(self):
         with server.app.test_request_context('/audio/?video_id='+VID):
             r=server._serve_youtube_stream(VID)
