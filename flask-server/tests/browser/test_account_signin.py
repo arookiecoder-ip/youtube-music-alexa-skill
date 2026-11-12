@@ -250,7 +250,7 @@ def login_page():
         if request.method == 'GET':
             return render_template('login.html', asset_v='test', next_target='/home',
                                    signup_open=True, forgot_url='/forgot-password', otp_available=True,
-                                   otp_start=request.args.get('otp') == '1', code_ready=request.args.get('code') == '1)
+                                   otp_start=request.args.get('otp') == '1', code_ready=request.args.get('code') == '1')
         body = request.get_json(); calls.append(body)
         if body.get('step') == 'send_otp':
             return jsonify(ok=True, retry_after=60, message='Check your inbox.')
