@@ -129,8 +129,9 @@ in `.env` for you (existing entries are kept, values are never printed, the file
 stays `0600`). Generated `api_key.txt` / `secret_key.txt` fallbacks beside the
 database are also `0600`.
 
-Rotation: change `API_KEY` in **both** `lambda/api_key.py` (Alexa console →
-Deploy) **and** the server `.env`, then `docker compose up -d ytmusic`. Changing
+The private Alexa skill uses its per-user `MUSICBOX_ALEXA_TOKEN`, issued and
+rotated in Admin → Users. Update that token in the private Lambda `.env` and
+redeploy the skill after rotation. Keep the server-wide `API_KEY` on the server. Changing
 `SECRET_KEY` signs out all web-remote sessions (expected — log in again).
 
 ---
@@ -258,16 +259,19 @@ directives — music simply won't play.
 
 ---
 
-## 14. Add your server's URL and API key to the skill
+## 14. Configure the private skill
 
 1. Go to the **Code** tab in the console.
-2. Open (or create) `lambda/api_key.py` in the code editor.
-3. Set its contents to:
-   ```python
-   API_KEY = "<the same API_KEY value you put in .env in step 5>"
-   DEFAULT_API_URL = "https://<your-server-hostname-from-step-3>"
+2. Copy `lambda/.env.example` into a file named `.env` beside `data.py` in the deployed code.
+3. Fill in these settings privately:
+   ```dotenv
+   MUSICBOX_SERVER_URL=https://your-server.example
+   MUSICBOX_EMAIL=your-verified-musicbox-email@example.com
+   MUSICBOX_ALEXA_TOKEN=your-admin-issued-token
    ```
-4. Don't click Deploy yet — one more step below.
+4. Enable Amazon / Alexa access and issue this user's token in Admin → Users. The Music Box email must belong to that token. Use the same Amazon account in Developer Console, on the Echo and in the user panel; the Music Box email may differ.
+5. Remove the old `api_key.py`. The skill now loads its adjacent `.env`; Lambda environment variables override it. Never put the server-wide `API_KEY` in the private skill or commit your filled `.env` to a public repository.
+6. Don't click Deploy yet — one more step below.
 
 ---
 
@@ -280,7 +284,8 @@ Still in the **Code** tab, make sure these files match what's in this repo's
 - `requirements.txt` (replace entirely — the original upstream version has a
   dependency pin that breaks Alexa-hosted deploys)
 - `data.py`
-- `api_key.py` (the one you just edited in step 14)
+- Your private `.env` (configured in step 14; only `.env.example` is distributed)
+- `skill_security.py`
 - `mediaUtils/player.py`
 - `models/player_models.py` (create this file/folder if it doesn't exist)
 

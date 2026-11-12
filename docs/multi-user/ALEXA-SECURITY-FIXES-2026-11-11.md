@@ -1,5 +1,8 @@
 # Alexa security fixes — 2026-11-11
 
+Current private-skill configuration uses a private `.env` beside `data.py`, copied from `lambda/.env.example`. `api_key.py` references below describe the earlier deployment and are superseded by the [current setup](PRIVATE-SKILL-ACCESS-2026-11-11.md).
+
+
 Historical review/deployment record. For the current per-account token architecture and setup, see [Private skill access](PRIVATE-SKILL-ACCESS-2026-11-11.md).
 
 

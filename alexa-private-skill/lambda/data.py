@@ -1,12 +1,43 @@
 """Private-skill configuration. No server-wide key or skill ID is distributed."""
 import os
-try:
-    import api_key as _key_config
-except ImportError:
-    _key_config = None
+from pathlib import Path
+import shlex
+
+_CONFIG_NAMES = frozenset(('MUSICBOX_SERVER_URL', 'MUSICBOX_EMAIL', 'MUSICBOX_ALEXA_TOKEN'))
+
+
+def _read_private_env():
+    """Read only this Lambda's .env; never search parent folders or expand values."""
+    try:
+        lines = Path(__file__).with_name('.env').read_text(encoding='utf-8-sig').splitlines()
+    except FileNotFoundError:
+        return {}
+    values = {}
+    for number, line in enumerate(lines, 1):
+        line = line.strip()
+        if line.startswith('export '):
+            line = line[7:].lstrip()
+        name, separator, value = line.partition('=')
+        name = name.strip()
+        if name not in _CONFIG_NAMES:
+            continue
+        try:
+            parts = shlex.split(value, comments=True, posix=True)
+        except ValueError:
+            raise RuntimeError('Invalid private .env setting on line %s.' % number) from None
+        if not separator or len(parts) > 1:
+            raise RuntimeError('Invalid private .env setting on line %s.' % number)
+        values[name] = parts[0] if parts else ''
+    return values
+
+
+_file_config = _read_private_env()
+
 
 def _setting(name):
-    return os.environ.get(name) or getattr(_key_config, name, '')
+    # An explicitly empty environment value also overrides the file.
+    return os.environ.get(name, _file_config.get(name, ''))
+
 
 MUSICBOX_SERVER_URL = _setting('MUSICBOX_SERVER_URL')
 MUSICBOX_EMAIL = _setting('MUSICBOX_EMAIL')

@@ -2,7 +2,7 @@
 
 This runbook deploys the additive multi-user backend to **this** server only.
 It does not touch the production `alexa.synthora.in` host, the Alexa skill, the
-Lambda or `lambda/api_key.py`.
+Lambda or its private `.env`.
 
 - Compose project: `musicbox-test`
 - Deployment env file: `/home/ubuntu/youtube-music-alexa-skill/.env.testalexa`

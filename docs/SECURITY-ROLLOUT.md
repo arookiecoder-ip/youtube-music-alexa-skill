@@ -1,5 +1,8 @@
 # Security remediation and rollout
 
+Current private-skill configuration uses a private `.env` beside `data.py`, copied from `lambda/.env.example`. `api_key.py` references below describe the earlier deployment and are superseded by the [current setup](multi-user/PRIVATE-SKILL-ACCESS-2026-11-11.md).
+
+
 Implementation status for the findings in [the architecture audit](CURRENT-ARCHITECTURE-SECURITY-REVIEW.md). Changes are committed on `feat/multi-user` and deployed to the test stack at `https://testalexa.synthora.in`. The Alexa-hosted development skill and all five language models are also deployed; live provider login and real Echo pairing still require account/device verification.
 
 ## Implemented

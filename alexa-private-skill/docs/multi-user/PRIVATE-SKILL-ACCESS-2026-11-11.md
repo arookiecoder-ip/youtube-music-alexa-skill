@@ -4,7 +4,7 @@ Each customer deploys their own development skill. The shared Music Box server r
 
 ## Skill configuration
 
-Set these three private Lambda environment variables, or the corresponding values in the deployed private `lambda/api_key.py` when using Alexa-hosted code:
+Copy `lambda/.env.example` to a private `lambda/.env` and fill in these three settings. Deploy `.env` beside `data.py`. Lambda environment variables can override the file:
 
 ```dotenv
 MUSICBOX_SERVER_URL=https://your-server.example
@@ -25,8 +25,8 @@ The server asks Amazon's Customer Profile API for the account email using the cu
 1. Open your skill and choose **Build → Interfaces**. Enable **Audio Player**, then click **Save Interfaces**.
 2. Choose the locale that matches your Echo language. Open **Build → Interaction Model → JSON Editor**, then paste the contents of `skill-package-multiuser/interactionModels/custom/en-IN.json` for English (India). Use `en-US.json`, `en-GB.json`, `en-CA.json` or `en-AU.json` for the corresponding locale. Click **Save Model → Build Model**. This editor takes the locale file, **not `skill.json`**.
 3. Open **Build → Tools → Permissions** and enable **Customer Email Address**. Also grant this permission to the skill in the Alexa mobile app.
-4. For an Alexa-hosted skill, put the files and subfolders from `lambda/` in the **Code** tab. Keep `lambda_function.py`, `data.py`, the private `api_key.py`, `skill_security.py`, `requirements.txt`, `mediaUtils/` and `models/` together. Save and deploy the code. The `skill-package-multiuser/` directory belongs to the skill configuration, not the Code tab. For a self-hosted Lambda, upload the Lambda code to AWS and configure its Alexa Skills Kit trigger and the console's **Endpoint** page instead.
-5. Configure your private server URL, verified Music Box email and admin-issued token. The current Alexa-hosted source reads these from `api_key.py`; self-hosted AWS Lambda environment variables can override them. `.env.example` is a placeholder reference only and is **not loaded by the current code**.
+4. For an Alexa-hosted skill, put the files and subfolders from `lambda/` in the **Code** tab. Keep `lambda_function.py`, `data.py`, your private `.env`, `skill_security.py`, `requirements.txt`, `mediaUtils/` and `models/` together. Save and deploy the code. The `skill-package-multiuser/` directory belongs to the skill configuration, not the Code tab. For a self-hosted Lambda, upload the Lambda code to AWS and configure its Alexa Skills Kit trigger and the console's **Endpoint** page instead.
+5. Copy `.env.example` to `.env` in the same deployed folder as `data.py`. Fill in your private server URL, verified Music Box email and admin-issued token, then save and deploy. The skill loads this `.env` automatically; Lambda environment variables override file values, including explicitly empty values. The example is never loaded automatically. Delete the old `api_key.py` from your deployed code.
 6. In **Test**, enable testing in **Development**. Test using the configured invocation name and an Echo registered to the eligible Amazon developer account. Use the same Amazon account in the Developer Console, on the Echo and in the Music Box user panel. The Music Box login email can differ.
 
 Amazon documentation: [interaction-model JSON Editor](https://developer.amazon.com/en-US/docs/alexa/custom-skills/create-the-interaction-model-for-your-skill.html), [AudioPlayer interface](https://developer.amazon.com/en-US/docs/alexa/custom-skills/use-long-form-audio.html), [customer email permission](https://developer.amazon.com/en-US/docs/alexa/custom-skills/request-customer-contact-information-for-use-in-your-skill.html), [skill manifest and console settings](https://developer.amazon.com/en-US/docs/alexa/ask-toolkit/vs-code-ask-skills.html).
@@ -81,7 +81,7 @@ Backend tests cover live credential authorization, token/stream revocation, acco
 
 Android compilation, JVM tests, instrumentation APKs, lint and emulator runs are performed **only in GitHub Actions**. The existing `Android Feature Build` workflow supports these runs on `feat/multi-user`. A proposed dedicated `android-multiuser.yml` is present locally in the native checkout but cannot be pushed with the available credentials because GitHub denied workflow-file write access. Successful existing workflow runs remain usable for builds and verification.
 
-Alexa-hosted Python 3.8 dependency constraints from the earlier security audit remain a separate hosting migration issue; this change does not claim to eliminate those runtime dependency advisories. Never publish a private configured `api_key.py` or a generated token with the shareable source.
+Alexa-hosted Python 3.8 dependency constraints from the earlier security audit remain a separate hosting migration issue; this change does not claim to eliminate those runtime dependency advisories. Never publish a private `.env` or a generated token with the shareable source.
 
 References: [Amazon Customer Profile API](https://developer.amazon.com/en-US/docs/alexa/custom-skills/customer-profile-api-reference.html), [Alexa request context and API access tokens](https://developer.amazon.com/en-US/docs/alexa/custom-skills/request-and-response-json-reference.html).
 
@@ -95,3 +95,7 @@ References: [Amazon Customer Profile API](https://developer.amazon.com/en-US/doc
 - The current Alexa Lambda source/shareable package is ready for each user's private deployment; an existing hosted skill is not assigned an arbitrary customer's email/token automatically. Physical Echo permission/voice checks remain in the manual checklist above.
 
 Latest identity-policy implementation and verification: [Amazon account linking update](AMAZON-ACCOUNT-LINKING-2026-11-12.md). The configured Music Box email can differ from the verified Amazon account connected in the user panel.
+
+The private `.env` supports one `KEY=value` per line, optional single/double quotes, comments and an optional `export` prefix. It does not expand variables or execute commands. Only the three Music Box settings above are read, only from the file beside `data.py`; no parent-directory search occurs. GitHub and the downloadable ZIP contain only `.env.example` with placeholders. Keep your filled `.env` in your private deployment. `api_key.py` is no longer used.
+
+Configuration-loader verification: all 57 Lambda regression tests passed, including eight private `.env` cases covering precedence, missing files, ignored examples/parent files/legacy Python config, quoting/comments, literal values and redacted malformed-setting errors. No dependency or backend/native-app changes are required.
