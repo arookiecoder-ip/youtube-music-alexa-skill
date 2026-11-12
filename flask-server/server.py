@@ -538,7 +538,10 @@ def _schedule_play_dispatch(serial, video_id, offset_ms=0, delay=None, expected_
             return
         try:
             _note_trigger_sent(serial)
+            trigger_started = time.monotonic()
             error = _dispatch_play_with_retry(serial, video_id, offset_ms)
+            logger.info('[play-dispatch] video=%s command completed in %.0fms', video_id,
+                        (time.monotonic() - trigger_started) * 1000)
             if error:
                 _clear_trigger_inflight(serial)
                 logger.error("[play-dispatch] %s failed: %s", video_id, error)
@@ -6107,6 +6110,9 @@ def _serve_youtube_stream(video_id, confirm=False, cancellable=False, meta=None)
                                 _youtube_stream_for().current.activate(video_id)
                     logger.info('[stream-timing] youtube first byte %.0fms for %s',
                                 (time.monotonic() - started) * 1000, video_id)
+                    if confirm and isinstance(echo_intent, (int, float)) and echo_intent > 0:
+                        logger.info('[startup-timing] video=%s intent to first audio byte %.0fms',
+                                    video_id, max(0, time.time() - echo_intent) * 1000)
                 relay.remember(block)
                 yield block
         finally:
@@ -10777,10 +10783,31 @@ def armed_play():
     # _trigger_in_flight), which is what stops the Echo playing every song in a
     # rapid-click burst one after another.
     _clear_trigger_inflight(serial)
-    # armed_at/kind let the skill judge freshness (a resume honors only a
-    # recent 'resume' arm); older skill versions simply ignore the extra fields.
-    return jsonify({'video_id': video_id, 'offset_ms': offset_ms,
-                    'armed_at': armed_at, 'kind': kind})
+    # New clients can start from this response instead of requesting the same
+    # song again through /stream_video/. Old clients keep the original shape.
+    payload = {'video_id': video_id, 'offset_ms': offset_ms,
+               'armed_at': armed_at, 'kind': kind}
+    if request.args.get('include_stream') == '1' and kind == 'play':
+        with _np_lock:
+            current = _now_playing.get('video_id')
+            queue = _now_playing.get('queue') or []
+            index = _now_playing.get('queue_index', -1)
+            selected = isinstance(index, int) and 0 <= index < len(queue)
+            start = max(0, index - _SKILL_QUEUE_BEHIND) if selected and len(queue) > _SKILL_QUEUE_WINDOW else 0
+            queue = copy.deepcopy(queue[start:start + _SKILL_QUEUE_WINDOW])
+        if current == video_id and selected:
+            queue = [{'title': row.get('title', ''), 'artist': row.get('artist', ''),
+                      'video_id': row.get('video_id', ''),
+                      'thumbnail': _thumbnail_metadata(row.get('thumbnail')),
+                      'duration_ms': row.get('duration_ms', 0)} for row in queue]
+            metadata = queue[index - start]
+            if metadata.get('video_id') == video_id and metadata.get('title'):
+                stream = asyncio.run(Supporting.get_stream(video_id))
+                if stream:
+                    # A repeated song keeps its actual selected queue occurrence.
+                    payload['startup'] = {'song_info': {'metadata': metadata, 'stream': stream},
+                                          'playlist': queue, 'queue_index': index - start}
+    return jsonify(payload)
 
 
 @app.route("/alexa/search/", methods=["GET"])

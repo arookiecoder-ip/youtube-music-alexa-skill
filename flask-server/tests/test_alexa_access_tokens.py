@@ -22,7 +22,7 @@ class AlexaAccessTokenTests(SecondFactorDoorTestBase):
             'X-MusicBox-Email': self.user['email'], 'X-Alexa-User-Id': 'subject',
             'X-Alexa-Device-Id': 'device', 'X-Alexa-Profile-Token': 'amazon-proof',
             'X-Alexa-Api-Endpoint': 'https://api.amazonalexa.com'}
-        self.amazon = mock.patch('multiuser.alexa_access.requests.get')
+        self.amazon = mock.patch('multiuser.alexa_access.AlexaAccess._profile_get')
         self.lookup = self.amazon.start()
         self.addCleanup(self.amazon.stop)
         self.lookup.return_value.status_code = 200

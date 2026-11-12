@@ -627,6 +627,15 @@ class Api:
 
     @staticmethod
     def stream_video(handler_input: HandlerInput, video_id: str) -> Tuple[player_models.SongInfoList, Exception]:
+        envelope = handler_input.request_envelope
+        startup = getattr(envelope, '_musicbox_startup', None)
+        envelope._musicbox_startup = None
+        if isinstance(startup, dict):
+            try:
+                if startup['song_info']['metadata']['video_id'] == video_id:
+                    return from_dict(player_models.SongInfoList, startup), None
+            except Exception:
+                logger.info('Bundled startup metadata was invalid; fetching fresh song data')
         response_json, error = Api._get_json(handler_input, 'stream_video', {'video_id': video_id})
         if error: return None, error
         try:
@@ -781,7 +790,8 @@ class Api:
         With ``peek=True`` the arm is returned without consuming it, so a
         resume can inspect the web remote's intent without stealing the arm of
         an in-flight fresh play or seek (see /armed_play/)."""
-        params = {'peek': '1'} if peek else {}
+        handler_input.request_envelope._musicbox_startup = None
+        params = {'peek': '1'} if peek else {'include_stream': '1'}
         response_json, error = Api._get_json(handler_input, 'armed_play', params)
         if error:
             return None, error
@@ -801,6 +811,9 @@ class Api:
         except (TypeError, ValueError):
             armed_age_s = None
         kind = (response_json or {}).get('kind') or 'play'
+        startup = (response_json or {}).get('startup')
+        if not peek and kind == 'play' and isinstance(startup, dict):
+            handler_input.request_envelope._musicbox_startup = startup
         return (video_id, offset_ms, armed_age_s, kind), None
 
 
@@ -914,7 +927,10 @@ class Controller:
             return Controller.error_response(handler_input, error, is_playback)
         playlist = song_info_list.playlist or [song_info_list.song_info.metadata]
         song_info = song_info_list.song_info
-        index = next((i for i, item in enumerate(playlist) if item.video_id == video_id), 0)
+        index = getattr(song_info_list, 'queue_index', None)
+        if (type(index) is not int or not 0 <= index < len(playlist)
+                or playlist[index].video_id != video_id):
+            index = next((i for i, item in enumerate(playlist) if item.video_id == video_id), 0)
         playlist, index = _window_playlist(playlist, index)
 
         user_attr = Attributes.get_user_attributes(handler_input)

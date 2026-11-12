@@ -212,6 +212,34 @@ class SecurityCases(unittest.TestCase):
                 player._notify_server(hi, 'finished')
                 self.assertFalse(send.call_args.kwargs['redirect'])
 
+    def test_bundled_startup_builds_real_sdk_play_directive_without_song_fetch(self):
+        event = self.event('PlaySongIntent')
+        event['request']['intent']['slots'] = {'songName': {'name': 'songName', 'value': 'mbsilent app selection'}}
+        # Use the exact marker/phrase recognized by the production handler.
+        event['request']['intent']['slots']['songName']['value'] = player.SILENT_PLAY_MARKER + ' app selection'
+        metadata = dict(title='Selected song', artist='Artist', video_id='AAAAAAAAAAA',
+                        thumbnail={'url':'https://images.example/art', 'width':0, 'height':0}, duration_ms=180000)
+        earlier = dict(metadata, title='Earlier occurrence')
+        other = dict(metadata, title='Other song', video_id='BBBBBBBBBBB')
+        startup = dict(song_info={'metadata':metadata, 'stream':{'audio_url':'https://music.example/audio'}},
+                       playlist=[earlier, other, metadata], queue_index=2)
+        paths = []
+        def api(handler, path, params):
+            paths.append(path)
+            if path == 'api/alexa/identity':
+                return {'binding': self.binding}, None
+            if path == 'armed_play':
+                return dict(video_id='AAAAAAAAAAA', offset_ms=1234, kind='play', startup=startup), None
+            raise AssertionError('Unexpected startup HTTP call: '+path)
+        self.identity.side_effect = api
+        response = self.invoke(event)['response']
+        directive = response['directives'][0]
+        self.assertEqual(directive['type'], 'AudioPlayer.Play')
+        self.assertEqual(directive['audioItem']['stream']['url'], 'https://music.example/audio')
+        self.assertEqual(directive['audioItem']['stream']['offsetInMilliseconds'], 1234)
+        self.assertTrue(directive['audioItem']['stream']['token'].startswith('2|AAAAAAAAAAA|'))
+        self.assertEqual(paths, ['api/alexa/identity', 'armed_play'])
+
     def test_invalid_configured_origins_fail_before_http(self):
         hi = self.handler()
         with patch.object(player.http, 'request') as send:

@@ -25,7 +25,7 @@ def proof_access():
         'X-Alexa-Profile-Token': 'synthetic-amazon-proof',
         'X-Alexa-Api-Endpoint': 'https://api.amazonalexa.com',
         'X-Alexa-Request-Id': 'amzn1.echo-api.request.request-a'}
-    with mock.patch('multiuser.alexa_access.requests.get') as lookup:
+    with mock.patch('multiuser.alexa_access.AlexaAccess._profile_get') as lookup:
         lookup.return_value.status_code = 200
         lookup.return_value.json.return_value = linked['email']
         yield access, headers, user, token, linked, lookup

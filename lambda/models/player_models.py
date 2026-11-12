@@ -31,6 +31,7 @@ class SongInfoList:
     playlist: List[Metadata]
     queue_id: Optional[str] = None
     next_offset: int = 0
+    queue_index: Optional[int] = None
 
 @dataclass
 class Playlist:

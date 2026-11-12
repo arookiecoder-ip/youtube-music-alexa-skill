@@ -27,6 +27,8 @@ class AlexaAccess:
     def __init__(self, accounts):
         self.accounts, self.db = accounts, accounts.db
         self._proofs, self._proof_lock = OrderedDict(), threading.Lock()
+        self._profile_clients = threading.local()
+        self._profile_transport = requests.adapters.HTTPAdapter(pool_connections=4, pool_maxsize=16)
 
     def enabled(self, user_id):
         user = self.accounts.get_user(user_id)
@@ -112,6 +114,20 @@ class AlexaAccess:
     def unlink_amazon(self, user_id):
         self.db.execute("DELETE FROM user_provider_credentials WHERE user_id=? AND provider='amazon'", (user_id,))
 
+    def _profile_get(self, url, **kwargs):
+        # Pool TLS connections without sharing mutable Session state between
+        # workers. Each bearer is request-local and cookies never carry over.
+        client = getattr(self._profile_clients, 'client', None)
+        if client is None:
+            client = requests.Session()
+            client.mount('https://', self._profile_transport)
+            self._profile_clients.client = client
+        client.cookies.clear()
+        try:
+            return client.get(url, **kwargs)
+        finally:
+            client.cookies.clear()
+
     def _proof_key(self, headers, user, token, linked, endpoint, proof):
         request_id = headers.get('X-Alexa-Request-Id', '')
         subject, device = headers.get('X-Alexa-User-Id', ''), headers.get('X-Alexa-Device-Id', '')
@@ -165,11 +181,14 @@ class AlexaAccess:
         proof_was_cached = email is not None
         if email is None:
             try:
-                response = requests.get(endpoint + '/v2/accounts/~current/settings/Profile.email',
+                response = self._profile_get(endpoint + '/v2/accounts/~current/settings/Profile.email',
                     headers={'Authorization': 'Bearer ' + proof}, timeout=(1, 1.5), allow_redirects=False)
-                if response.status_code != 200:
-                    raise AccessDenied('amazon_permission_required')
-                email = response.json()
+                try:
+                    if response.status_code != 200:
+                        raise AccessDenied('amazon_permission_required')
+                    email = response.json()
+                finally:
+                    response.close()
             except (requests.RequestException, ValueError):
                 raise AccessDenied('amazon_profile_unavailable') from None
         if not isinstance(email, str) or email.strip().casefold() != linked['email']:
