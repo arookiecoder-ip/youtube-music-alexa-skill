@@ -392,7 +392,25 @@ def set_access_policy(policy):
     _access_policy = policy
 
 
+def set_identity_hook(hook):
+    AlexaRemote._identity_sink = staticmethod(hook) if hook is not None else None
+
+
 class AlexaRemote:
+    _identity_sink = None
+
+    @staticmethod
+    async def _verified_account(login):
+        try:
+            profile = await AlexaAPI.get_authentication(login)
+        except Exception:
+            return None
+        if (not isinstance(profile, dict) or profile.get('authenticated') is not True
+                or not isinstance(profile.get('customerEmail'), str) or '@' not in profile['customerEmail']
+                or not isinstance(profile.get('customerId'), str) or not profile['customerId']):
+            return None
+        return profile
+
     def __init__(self, cookie_dir: str = None):
         # One instance per identity (see `remote` at the bottom of this module);
         # the directory is the only thing that makes two of them different
@@ -791,6 +809,8 @@ class AlexaRemote:
             logger.error(self._proxy_login_error)
             return False
 
+        if login is not self._proxy_login:
+            return False
         self._proxy_login_complete = True
         await self._stop_proxy()
         logger.info("Alexa login finalized and cookie persisted")
@@ -807,6 +827,18 @@ class AlexaRemote:
         staging directory first, so a login that fails verification never
         touches this identity's saved session. Returns a user-facing error,
         or None on success."""
+        sink = getattr(self, '_identity_sink', None)
+        profile = None
+        if sink:
+            profile = await self._verified_account(login)
+            if not profile:
+                return "Amazon could not confirm this account's identity. Try signing in again."
+            if login not in (getattr(self, '_proxy_login', None), getattr(self, '_form_login', None)):
+                return "This Amazon sign-in was cancelled or replaced. Start again."
+            error = self._access_error(getattr(login, 'email', None))
+            if error:
+                return error
+        previous_email = self._read_saved_email() if sink else None
         try:
             await login.save_cookiefile()
             cookie_files = getattr(login, "_cookiefile", [])
@@ -814,20 +846,51 @@ class AlexaRemote:
         except Exception:
             logger.exception("could not save Alexa login cookie")
             cookie_file = None
+        if sink:
+            if login not in (getattr(self, '_proxy_login', None), getattr(self, '_form_login', None)):
+                return "This Amazon sign-in was cancelled or replaced. Start again."
+            error = self._access_error(getattr(login, 'email', None))
+            if error:
+                return error
         if not cookie_file or not os.path.isfile(cookie_file):
             return "Alexa login succeeded, but its cookie file could not be saved."
 
+        destination = None
+        previous_cookie = None
         if stage:
             try:
                 relative = os.path.relpath(cookie_file, stage)
                 destination = os.path.join(self.cookie_dir, relative)
                 os.makedirs(os.path.dirname(destination), exist_ok=True)
+                if os.path.isfile(destination):
+                    with open(destination, 'rb') as source:
+                        previous_cookie = source.read()
                 os.replace(cookie_file, destination)
                 login._cookiefile = [os.path.join(self.cookie_dir, os.path.relpath(path, stage)) for path in login._cookiefile]
                 login._outputpath = lambda name: os.path.join(self.cookie_dir, name)
             except OSError:
                 logger.exception("could not promote verified Amazon cookie")
                 return "Could not save the new account. Try again."
+
+        def restore_previous_cookie():
+            if destination is None:
+                return
+            try:
+                if previous_cookie is None:
+                    os.unlink(destination)
+                else:
+                    with tempfile.NamedTemporaryFile(dir=os.path.dirname(destination), delete=False) as backup:
+                        backup.write(previous_cookie)
+                        backup.flush()
+                        os.fsync(backup.fileno())
+                        backup_path = backup.name
+                    try:
+                        os.replace(backup_path, destination)
+                    finally:
+                        if os.path.exists(backup_path):
+                            os.unlink(backup_path)
+            except OSError:
+                logger.error('Could not restore the previous Amazon session cookie')
 
         # Persist the email separately so _ensure_login can locate alexapy's
         # email-keyed cookie file after a process restart.
@@ -846,17 +909,44 @@ class AlexaRemote:
                     os.unlink(pointer)
         except Exception:
             logger.exception("could not persist login email for restore")
+            restore_previous_cookie()
             return "The account could not be saved. Your previous account is unchanged. Try again."
 
-        if self._login and self._login is not login:
+        if sink:
             try:
-                await self._login.close()
+                sink(getattr(self, '_musicbox_identity', OWNER), profile['customerEmail'], profile['customerId'])
             except Exception:
-                pass
+                # Leave the previous in-memory session and restore its files.
+                restore_previous_cookie()
+                try:
+                    if previous_email:
+                        with tempfile.NamedTemporaryFile(mode='w', encoding='utf-8',
+                                                         dir=self._storage_dir, delete=False) as source:
+                            source.write(previous_email)
+                            source.flush()
+                            os.fsync(source.fileno())
+                            restored_pointer = source.name
+                        try:
+                            os.replace(restored_pointer, self._email_file)
+                        finally:
+                            if os.path.exists(restored_pointer):
+                                os.unlink(restored_pointer)
+                    else:
+                        os.unlink(self._email_file)
+                except OSError:
+                    logger.error('Could not restore the previous Amazon account pointer')
+                return "Amazon access changed while signing in. Your previous account was not replaced."
+            self._identity_verified = True
+        previous_login = self._login
         self._login = login
         self.connection_state = True
         self._login_checked_at = time.monotonic()
         self._devices_raw = []
+        if previous_login and previous_login is not login:
+            try:
+                await previous_login.close()
+            except Exception:
+                pass
         return None
 
     async def _proxy_check(self):
@@ -1135,6 +1225,8 @@ class AlexaRemote:
             return {"state": "error", "message": "This sign-in was replaced. Start again."}
         if result["state"] == "connected":
             error = await self._promote_staged_login(login, stage)
+            if login is not self._form_login:
+                return {"state": "error", "message": "This sign-in was replaced. Start again."}
             self._form_login = None
             self._form_stage = None
             self._form_captcha = None
@@ -1283,7 +1375,15 @@ class AlexaRemote:
             task.cancel()
         self._proxy_finalize_task = None
         self._proxy_attempt_id = None
-        sessions = [s for s in (self._login, pending) if s is not None]
+        form_login = getattr(self, '_form_login', None)
+        self._form_login = None
+        sessions = [s for s in (self._login, pending, form_login) if s is not None]
+        # Fence a profile lookup before the first network cleanup yields.
+        self._login = None
+        self._identity_verified = False
+        sink = getattr(self, '_identity_sink', None)
+        if sink:
+            sink(getattr(self, '_musicbox_identity', OWNER), None, None)
         for session in {id(s): s for s in sessions}.values():
             try:
                 await session.close()
@@ -1291,6 +1391,7 @@ class AlexaRemote:
                 logger.debug("Alexa login close failed", exc_info=True)
         self._clear_persisted_session()
         self._login = None
+        self._identity_verified = False
         self.connection_state = False
         self._login_checked_at = 0.0
         self._devices_raw = []
@@ -1337,7 +1438,20 @@ class AlexaRemote:
     async def _status(self):
         error = await self._ensure_login()
         self.connection_state = error is None
-        return self._status_result(error)
+        result = self._status_result(error)
+        sink = getattr(self, '_identity_sink', None)
+        if error is None and sink and not getattr(self, '_identity_verified', False):
+            login = self._login
+            profile = await self._verified_account(login)
+            if profile and self._login is login and self._access_error(getattr(login, 'email', None)) is None:
+                try:
+                    sink(getattr(self, '_musicbox_identity', OWNER), profile['customerEmail'], profile['customerId'])
+                    self._identity_verified = True
+                except Exception:
+                    result['identity_error'] = 'Amazon identity could not be saved.'
+            else:
+                result['identity_error'] = 'Reconnect Amazon to confirm the account identity.'
+        return result
 
     def devices(self, refresh: bool = False):
         """Returns (device list, error string or None)."""

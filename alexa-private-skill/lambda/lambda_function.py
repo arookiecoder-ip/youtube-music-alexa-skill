@@ -820,8 +820,13 @@ class VerifyAccountRequestInterceptor(AbstractRequestInterceptor):
         result, error = player.Api._get_json(handler_input, 'api/alexa/identity', {})
         binding = result.get('binding') if isinstance(result, dict) else None
         if error or not isinstance(binding, str) or not re.fullmatch(r'[0-9a-f]{64}', binding):
+            if isinstance(error, SkillAuthorizationError):
+                message = str(error)
+                if not message.startswith('Alexa access was denied.'):
+                    message = 'Alexa access was denied. ' + message
+                raise SkillAuthorizationError(message, code=error.code)
             raise SkillAuthorizationError(
-                'Alexa access was denied. Check your Music Box token and account access. Your verified Music Box email must match Amazon; allow email access in the Alexa app.',
+                'Alexa access was denied. Check your Music Box token and account access, connect the same Amazon account as this Echo, and allow email access in the Alexa app.',
                 code=getattr(error, 'code', 'alexa_access_denied'))
         # Old callbacks must not install A's track/queue into B's fresh state.
         request_type = envelope.request.object_type or ''

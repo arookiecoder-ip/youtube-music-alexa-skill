@@ -1229,7 +1229,7 @@ def test_amazon_popup_accepts_an_independent_email_or_mobile_number(page, origin
     page.locator('#link-amazon').evaluate('(node) => node.hidden = false')
     page.click('#link-amazon')
     expect(page.locator('#connect_email')).to_have_attribute('type', 'text')
-    expect(page.locator('#connect-intro')).to_contain_text('It can differ from your Music Box email')
+    expect(page.locator('#connect-intro')).to_contain_text('Your Music Box email can differ')
     page.fill('#connect_email', identifier)
     page.fill('#connect_password', 'Synthetic!Password12')
     with page.expect_request('**/alexa/form_login/') as request:

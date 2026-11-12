@@ -17,7 +17,7 @@
     amazon: {
       title: 'Connect Amazon',
       label: 'Amazon email or mobile number',
-      intro: 'Use the Amazon account registered to your Echo devices. It can differ from your Music Box email.',
+      intro: 'Use the Amazon account for your Echo and private skill in Developer Console. Your Music Box email can differ.',
       hint: 'The sign-in runs on this server in the background. Music Box keeps only '
         + 'the resulting Alexa session — your Amazon password is never stored.',
     },

@@ -22,6 +22,7 @@ def _install_stubs():
     sys.modules['home_feed'] = types.ModuleType('home_feed')
     alexa = types.ModuleType('alexa_remote')
     alexa.set_access_policy = lambda policy: None
+    alexa.set_identity_hook = lambda hook: None
     alexa.AlexaUnreachable = type('AlexaUnreachable', (Exception,), {})
     alexa_remote = types.ModuleType('alexa_remote.remote')
     alexa_remote.devices = lambda refresh=False: ([], 'stub')

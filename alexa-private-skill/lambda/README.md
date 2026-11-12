@@ -17,8 +17,9 @@ the token in Admin → Users → your account. Rotating/revoking it or disabling
 rejects old skill requests and old audio URLs. Do not share the configured token.
 
 Use `skill-package-multiuser` for the manifest/models, enable email permission and
-grant it in the Alexa app. Your authenticated Amazon email must match your
-verified Music Box email. Configure the Alexa Skills Kit trigger/resource policy
+grant it in the Alexa app. Connect Amazon in your Music Box user panel first. Use the same Amazon account
+for that connection, the private skill in Developer Console and the Echo.
+Your Music Box email can differ. Configure the Alexa Skills Kit trigger/resource policy
 in AWS/Amazon's deployment tools. No skill-ID setting or server administrator
 API key belongs in this configuration.
 
@@ -37,7 +38,7 @@ See [setup, behavior and cross-verification checklist](../docs/multi-user/PRIVAT
 3. Open **Build → Tools → Permissions** and enable **Customer Email Address**. Also grant this permission to the skill in the Alexa mobile app.
 4. For an Alexa-hosted skill, put the files and subfolders from `lambda/` in the **Code** tab. Keep `lambda_function.py`, `data.py`, the private `api_key.py`, `skill_security.py`, `requirements.txt`, `mediaUtils/` and `models/` together. Save and deploy the code. The `skill-package-multiuser/` directory belongs to the skill configuration, not the Code tab. For a self-hosted Lambda, upload the Lambda code to AWS and configure its Alexa Skills Kit trigger and the console's **Endpoint** page instead.
 5. Configure your private server URL, verified Music Box email and admin-issued token. The current Alexa-hosted source reads these from `api_key.py`; self-hosted AWS Lambda environment variables can override them. `.env.example` is a placeholder reference only and is **not loaded by the current code**.
-6. In **Test**, enable testing in **Development**. Test using the configured invocation name and an Echo registered to the eligible Amazon developer account. The authenticated Amazon email must match the verified Music Box email.
+6. In **Test**, enable testing in **Development**. Test using the configured invocation name and an Echo registered to the eligible Amazon developer account. Use the same Amazon account in the Developer Console, on the Echo and in your Music Box user panel. Your Music Box email can differ.
 
 Amazon documentation: [interaction-model JSON Editor](https://developer.amazon.com/en-US/docs/alexa/custom-skills/create-the-interaction-model-for-your-skill.html), [AudioPlayer interface](https://developer.amazon.com/en-US/docs/alexa/custom-skills/use-long-form-audio.html), [customer email permission](https://developer.amazon.com/en-US/docs/alexa/custom-skills/request-customer-contact-information-for-use-in-your-skill.html), [skill manifest and console settings](https://developer.amazon.com/en-US/docs/alexa/ask-toolkit/vs-code-ask-skills.html).
 

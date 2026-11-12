@@ -13210,6 +13210,16 @@ try:
         return None
     if _multiuser_layer is not None:
         alexa_remote.set_access_policy(_amazon_access_policy)
+        def _remember_amazon_identity(identity, email, customer_id):
+            user_id = _identity_account_id(identity)
+            if email is None:
+                if user_id:
+                    _multiuser_layer.alexa_access.unlink_amazon(user_id)
+                return
+            if not user_id:
+                raise ValueError('An authenticated Music Box account is required.')
+            _multiuser_layer.alexa_access.link_amazon(user_id, email, customer_id)
+        alexa_remote.set_identity_hook(_remember_amazon_identity)
 
     if _multiuser_layer is not None:
         # Deleting the row is only the beginning: the queue snapshot, the Amazon

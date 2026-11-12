@@ -577,8 +577,15 @@ class Api:
                 code = failure.get('error', {}).get('code', 'alexa_access_denied')
             except (ValueError, AttributeError, UnicodeDecodeError):
                 code = 'alexa_access_denied'
+            messages = {
+                'amazon_link_required': 'Connect your Amazon account in the Music Box user panel first.',
+                'amazon_email_mismatch': 'Use the same Amazon account for this Echo and the Amazon connection in your Music Box user panel.',
+                'musicbox_email_mismatch': 'Set MUSICBOX_EMAIL to the verified Music Box email belonging to your token.',
+                'amazon_permission_required': 'Allow email access for this skill in the Alexa app.',
+                'amazon_link_changed': 'Your Amazon connection changed. Try again.'}
             return None, SkillAuthorizationError(
-                'Alexa access was denied. Check your token, account access and matching Amazon email.', code=code)
+                'Alexa access was denied. ' + messages.get(code,
+                    'Check your token and account access.'), code=code)
         if response.status != 200:
             logger.error(f'{path} returned status {response.status}: {response.data[:500]}')
             return None, Exception(data.SERVICE_ISSUE)

@@ -207,7 +207,7 @@ def test_profile_outline_updates_without_opening_menu(account_page):
     page,_,_,_=account_page
     page.set_content('<button id="profile-menu-trigger" class="profile-menu-trigger">Profile</button>')
     page.add_style_tag(content=(ROOT/'templates/static/css/sidebar.css').read_text())
-    page.evaluate('window.api=async()=>({logged_in:false})')
+    page.evaluate('window.api=async()=>({alexa_access_enabled:true,amazon_connected:false})')
     code=(ROOT/'templates/static/js/sidebar.js').read_text().split('// Connection health is independent')[1]
     page.evaluate('// Connection health is independent'+code)
     expect(page.locator('#profile-menu-trigger')).to_have_class('profile-menu-trigger amazon-disconnected')

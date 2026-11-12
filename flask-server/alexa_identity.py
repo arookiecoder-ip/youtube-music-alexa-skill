@@ -109,6 +109,7 @@ class AlexaIdentity:
             data['version'] = binding['security_version']
             if 'token_hash' in binding:
                 data['credential'] = binding['id']
+                data['amazon_generation'] = binding.get('amazon_generation')
                 return self.signer.dumps(data)
             data['binding'] = {key: binding[key] for key in
                                ('skill_id', 'subject_hash', 'device_hash', 'generation')}
@@ -127,7 +128,8 @@ class AlexaIdentity:
         if data.get('credential'):
             try:
                 user, credential = AlexaAccess(self.accounts).current(data['credential'])
-                return user if user['id'] == data.get('user_id') else None
+                linked = AlexaAccess(self.accounts).linked_amazon(user['id'])
+                return user if user['id'] == data.get('user_id') and data.get('amazon_generation') == linked['generation'] else None
             except AccessDenied:
                 return None
         if not AlexaAccess(self.accounts).enabled(data.get('user_id')):

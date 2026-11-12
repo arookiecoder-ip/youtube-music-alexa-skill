@@ -16,7 +16,7 @@ No application ID or server-wide API key is required in this configuration. The 
 
 Use `skill-package-multiuser/skill.json` and its interaction models. Enable **Customer Permissions → Email Address** (`alexa::profile:email:read`) and grant that permission in the Alexa app for the deployed development skill. Retain the AudioPlayer interface. Private development skills are usable by the developer's eligible Amazon account/devices; distributing the source does not make one private skill available to every Amazon customer.
 
-The server asks Amazon's Customer Profile API for the account email using the current request's `context.System.apiAccessToken`. It never authorizes a claim such as “my Amazon email is X” on its own. The returned Amazon email, configured email and verified Music Box email must match, ignoring case and surrounding spaces. Missing permission, missing identity, unavailable profile service or a mismatch denies playback. The profile is Amazon's active default Alexa profile; it does not identify the human currently speaking.
+The server asks Amazon's Customer Profile API for the account email using the current request's `context.System.apiAccessToken`. It never authorizes a claim such as “my Amazon email is X” on its own. The configured MUSICBOX_EMAIL must match the verified Music Box account associated with the admin token. Separately, the returned Amazon profile email must match the canonical Amazon email verified from the authenticated Amazon session connected in that user’s panel. The two emails can differ. A typed login identifier is never accepted as Amazon identity proof. The server cannot independently inspect the Developer Console owner’s login; create/test the private skill in the same Amazon account as the Echo and panel connection. Missing permission, missing identity, unavailable profile service or a mismatch denies playback. The profile is Amazon's active default Alexa profile; it does not identify the human currently speaking.
 
 ## Set up through the Alexa Developer Console
 
@@ -27,7 +27,7 @@ The server asks Amazon's Customer Profile API for the account email using the cu
 3. Open **Build → Tools → Permissions** and enable **Customer Email Address**. Also grant this permission to the skill in the Alexa mobile app.
 4. For an Alexa-hosted skill, put the files and subfolders from `lambda/` in the **Code** tab. Keep `lambda_function.py`, `data.py`, the private `api_key.py`, `skill_security.py`, `requirements.txt`, `mediaUtils/` and `models/` together. Save and deploy the code. The `skill-package-multiuser/` directory belongs to the skill configuration, not the Code tab. For a self-hosted Lambda, upload the Lambda code to AWS and configure its Alexa Skills Kit trigger and the console's **Endpoint** page instead.
 5. Configure your private server URL, verified Music Box email and admin-issued token. The current Alexa-hosted source reads these from `api_key.py`; self-hosted AWS Lambda environment variables can override them. `.env.example` is a placeholder reference only and is **not loaded by the current code**.
-6. In **Test**, enable testing in **Development**. Test using the configured invocation name and an Echo registered to the eligible Amazon developer account. The authenticated Amazon email must match the verified Music Box email.
+6. In **Test**, enable testing in **Development**. Test using the configured invocation name and an Echo registered to the eligible Amazon developer account. Use the same Amazon account in the Developer Console, on the Echo and in the Music Box user panel. The Music Box login email can differ.
 
 Amazon documentation: [interaction-model JSON Editor](https://developer.amazon.com/en-US/docs/alexa/custom-skills/create-the-interaction-model-for-your-skill.html), [AudioPlayer interface](https://developer.amazon.com/en-US/docs/alexa/custom-skills/use-long-form-audio.html), [customer email permission](https://developer.amazon.com/en-US/docs/alexa/custom-skills/request-customer-contact-information-for-use-in-your-skill.html), [skill manifest and console settings](https://developer.amazon.com/en-US/docs/alexa/ask-toolkit/vs-code-ask-skills.html).
 
@@ -50,7 +50,7 @@ New accounts default to access **off**. Schema migration 10 preserves access for
 
 When access is off, account provider payloads omit Amazon. Account HTML omits its service row, profile status omits Amazon connection/debug fields, native account/settings rows disappear, and device pickers remove Echo devices while keeping phone/browser outputs. Existing account pages refresh permission within 15 seconds; native device/settings checks and playback updates also refresh it. Authorization changes take effect at the server immediately, independent of display refresh.
 
-Direct Amazon login/device/status routes, stale client requests and physical Echo controls are denied when disabled. Pending Amazon login promotion and remote-command execution check the live policy again. Website Amazon sign-in accepts any Amazon account the user successfully authenticates, including an email or mobile number different from the Music Box login. This does not change the private skill’s separate verified-email/token authorization or Amazon’s rules for access to unpublished skills. Queue and provider state remain isolated even when more than one account has the owner role; changing administrators never transfers the bootstrap owner's cookies.
+Direct Amazon login/device/status routes, stale client requests and physical Echo controls are denied when disabled. Pending Amazon login promotion and remote-command execution check the live policy again. Website Amazon sign-in accepts any Amazon account the user successfully authenticates, including an email or mobile number different from the Music Box login. Private voice requests require the Amazon profile to match the verified panel connection, while the token remains bound to the verified Music Box email. Amazon’s rules for access to unpublished skills still apply. Queue and provider state remain isolated even when more than one account has the owner role; changing administrators never transfers the bootstrap owner's cookies.
 
 ## Cross-verification checklist
 
@@ -58,8 +58,10 @@ Direct Amazon login/device/status routes, stale client requests and physical Ech
 - [ ] Ordinary users cannot enable access or generate/revoke tokens; admins cannot manage owners or other admins.
 - [ ] Missing/invalid CSRF rejects every admin mutation.
 - [ ] Generated token appears once, is absent from cookies/logs/subsequent GET responses, and the database contains only its hash.
-- [ ] Enabled + active + verified + matching Amazon email + current token plays on a real Echo.
-- [ ] Wrong configured email, different real Amazon email, denied email permission and unavailable Amazon API each reject without playback.
+- [ ] Enabled + active + verified Music Box email + verified linked Amazon account + current token plays on a real Echo.
+- [ ] Wrong configured email, Amazon profile different from the linked account, denied email permission and unavailable Amazon API each reject without playback.
+- [ ] Link Amazon with an email different from Music Box (also test a mobile-number login); voice succeeds only for that verified linked Amazon account.
+- [ ] Unlink/relink or replace Amazon: old binding, callbacks and signed audio URLs reject; repeated verification of the same session preserves playback.
 - [ ] Missing user/device identity and malformed/stale generation headers reject cleanly.
 - [ ] Each supported Alexa region uses an allowlisted Amazon HTTPS endpoint; redirects and arbitrary hosts are rejected.
 - [ ] Rotate/revoke/expire the token: old requests, callbacks, persisted playback and old signed audio URL requests cannot authorize.
@@ -91,3 +93,5 @@ References: [Amazon Customer Profile API](https://developer.amazon.com/en-US/doc
 - Android commit `6d2620d1987af4307ef8552c3f51875943b9423e`: [GitHub Actions run 43064822378](https://github.com/arookiecoder-ip/MusicBox-APP/actions/runs/43064822378) passed APK compilation, 513 JVM tests, 21 phone emulator UI checks, APK entry-point verification and lint with zero errors. Lint still reports nonfatal warnings/hints.
 - Backend deployed to `https://testalexa.synthora.in`: liveness/readiness HTTP 200, schema 10, existing 19 account rows preserved, invalid Alexa credential HTTP 403. No customer tokens were generated automatically.
 - The current Alexa Lambda source/shareable package is ready for each user's private deployment; an existing hosted skill is not assigned an arbitrary customer's email/token automatically. Physical Echo permission/voice checks remain in the manual checklist above.
+
+Latest identity-policy implementation and verification: [Amazon account linking update](AMAZON-ACCOUNT-LINKING-2026-11-12.md). The configured Music Box email can differ from the verified Amazon account connected in the user panel.

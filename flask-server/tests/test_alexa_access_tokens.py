@@ -15,6 +15,8 @@ class AlexaAccessTokenTests(SecondFactorDoorTestBase):
         self.user = self.player_user('private-skill')
         self.access = self.layer.alexa_access
         self.access.set_enabled(self.user['id'], True)
+        self.amazon_email = 'linked-amazon@example.test'
+        self.access.link_amazon(self.user['id'], self.amazon_email, 'customer-B')
         self.token = self.access.rotate(self.user['id'])
         self.headers = {'Authorization': 'Bearer ' + self.token,
             'X-MusicBox-Email': self.user['email'], 'X-Alexa-User-Id': 'subject',
@@ -24,7 +26,7 @@ class AlexaAccessTokenTests(SecondFactorDoorTestBase):
         self.lookup = self.amazon.start()
         self.addCleanup(self.amazon.stop)
         self.lookup.return_value.status_code = 200
-        self.lookup.return_value.json.return_value = self.user['email']
+        self.lookup.return_value.json.return_value = self.amazon_email
 
     def identity(self, headers=None):
         return self.client.get('/api/alexa/identity/', headers=headers or self.headers)
@@ -59,7 +61,7 @@ class AlexaAccessTokenTests(SecondFactorDoorTestBase):
     def test_client_email_and_real_amazon_email_must_both_match(self):
         self.lookup.return_value.json.return_value = 'someone-else@example.test'
         self.assertEqual(self.identity().json['error']['code'], 'amazon_email_mismatch')
-        self.lookup.return_value.json.return_value = self.user['email']
+        self.lookup.return_value.json.return_value = self.amazon_email
         self.headers['X-MusicBox-Email'] = 'someone-else@example.test'
         self.assertEqual(self.identity().status_code, 403)
 
@@ -99,7 +101,7 @@ class AlexaAccessTokenTests(SecondFactorDoorTestBase):
     def test_revocation_during_amazon_call_is_rechecked(self):
         def revoke(*args, **kwargs):
             self.access.revoke(self.user['id'])
-            return mock.Mock(status_code=200, json=lambda: self.user['email'])
+            return mock.Mock(status_code=200, json=lambda: self.amazon_email)
         self.lookup.side_effect = revoke
         self.assertEqual(self.identity().status_code, 403)
 
@@ -173,7 +175,7 @@ class AlexaAccessTokenTests(SecondFactorDoorTestBase):
         for field, value in (('email', 'changed@example.test'), ('password_hash', 'changed-hash')):
             token = self.access.rotate(self.user['id'])
             headers = dict(self.headers, Authorization='Bearer ' + token)
-            self.lookup.return_value.json.return_value = headers['X-MusicBox-Email']
+            self.lookup.return_value.json.return_value = self.amazon_email
             user, credential = self.access.authenticate(headers)
             cap = self.layer.alexa_identity.stream_token(user['id'], 'AAAAAAAAAAA', credential)
             self.layer.db.execute('UPDATE users SET ' + field + '=? WHERE id=?', (value, self.user['id']))
@@ -188,3 +190,46 @@ class AlexaAccessTokenTests(SecondFactorDoorTestBase):
         self.lookup.side_effect = None
         self.lookup.return_value.json.side_effect = ValueError('invalid JSON')
         self.assertEqual(self.identity().json['error']['code'], 'amazon_profile_unavailable')
+
+    def test_unlinked_or_unverified_amazon_identity_cannot_authorize_voice(self):
+        self.access.unlink_amazon(self.user['id'])
+        self.assertEqual(self.identity().json['error']['code'], 'amazon_link_required')
+        self.lookup.assert_not_called()
+        self.accounts.set_provider_credentials(None, self.user['id'], 'amazon',
+            {'email': self.amazon_email}, {'account_email': self.amazon_email})
+        self.assertEqual(self.identity().json['error']['code'], 'amazon_link_required')
+
+    def test_relink_changes_binding_and_retires_previous_audio_capability(self):
+        user, credential = self.access.authenticate(self.headers)
+        cap = self.layer.alexa_identity.stream_token(user['id'], 'AAAAAAAAAAA', credential)
+        self.access.unlink_amazon(user['id'])
+        self.assertIsNone(self.layer.alexa_identity.stream_user(cap, 'AAAAAAAAAAA'))
+        self.access.link_amazon(user['id'], self.amazon_email, 'customer-B')
+        _, replacement = self.access.authenticate(self.headers)
+        self.assertNotEqual(credential['version'], replacement['version'])
+        self.assertIsNone(self.layer.alexa_identity.stream_user(cap, 'AAAAAAAAAAA'))
+        # A normal status revalidation of the same session does not cut music.
+        self.access.link_amazon(user['id'], self.amazon_email.upper(), 'customer-B')
+        _, same = self.access.authenticate(self.headers)
+        self.assertEqual(replacement['version'], same['version'])
+
+    def test_account_replacement_during_profile_call_is_rejected(self):
+        def replace(*args, **kwargs):
+            self.access.link_amazon(self.user['id'], 'new-amazon@example.test', 'customer-C')
+            return mock.Mock(status_code=200, json=lambda: self.amazon_email)
+        self.lookup.side_effect = replace
+        self.assertEqual(self.identity().json['error']['code'], 'amazon_link_changed')
+
+    def test_linked_amazon_identity_is_isolated_between_musicbox_users(self):
+        other = self.player_user('amazon-isolated')
+        self.access.set_enabled(other['id'], True)
+        self.access.link_amazon(other['id'], 'other-amazon@example.test', 'customer-other')
+        self.assertEqual(self.access.linked_amazon(self.user['id'])['email'], self.amazon_email)
+        self.lookup.return_value.json.return_value = 'other-amazon@example.test'
+        self.assertEqual(self.identity().json['error']['code'], 'amazon_email_mismatch')
+
+    def test_disabled_user_cannot_publish_new_amazon_identity(self):
+        self.access.set_enabled(self.user['id'], False)
+        with self.assertRaises(AccessDenied):
+            self.access.link_amazon(self.user['id'], 'new@example.test', 'customer-C')
+        self.assertEqual(self.access.linked_amazon(self.user['id'])['email'], self.amazon_email)

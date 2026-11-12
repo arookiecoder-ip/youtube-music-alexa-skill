@@ -142,7 +142,7 @@
 <div>
 <strong>{{ 'Available to this user' if user.alexa_enabled else 'Not available to this user' }}</strong>
 <p>{{ 'Amazon options are shown in their app.' if user.alexa_enabled else 'Amazon linking, status and Echo controls are hidden.' }}</p>
-</div>{% if can_manage %}<form method="post" action="{{ base_path }}/users/{{ user.id }}/alexa/" data-confirm-heading="{{ 'Disable' if user.alexa_enabled else 'Enable' }} Amazon / Alexa access" data-confirm="{% if user.alexa_enabled %}Hide Amazon options and revoke every Alexa token for {{ user.username }}? Re-enabling access requires a new token.{% else %}Allow {{ user.username }} to use Amazon features? Alexa playback still requires an active account, a verified matching email and a valid token.{% endif %}" data-confirm-button="{{ 'Disable access' if user.alexa_enabled else 'Enable access' }}" {{ 'data-confirm-danger' if user.alexa_enabled else '' }}>{{ csrf() }}<input type="hidden" name="action" value="access">
+</div>{% if can_manage %}<form method="post" action="{{ base_path }}/users/{{ user.id }}/alexa/" data-confirm-heading="{{ 'Disable' if user.alexa_enabled else 'Enable' }} Amazon / Alexa access" data-confirm="{% if user.alexa_enabled %}Hide Amazon options and revoke every Alexa token for {{ user.username }}? Re-enabling access requires a new token.{% else %}Allow {{ user.username }} to use Amazon features? Alexa playback still requires an active account, a verified Music Box email, the connected Amazon account and a valid token.{% endif %}" data-confirm-button="{{ 'Disable access' if user.alexa_enabled else 'Enable access' }}" {{ 'data-confirm-danger' if user.alexa_enabled else '' }}>{{ csrf() }}<input type="hidden" name="action" value="access">
 <input type="hidden" name="enabled" value="{{ '0' if user.alexa_enabled else '1' }}">
 <button class="btn {{ 'ghost' if user.alexa_enabled else 'ud-button-blue' }}" type="submit">{{ 'Disable access' if user.alexa_enabled else 'Enable access' }}</button>
 </form>{% endif %}</div>
@@ -162,7 +162,7 @@
 </div>{% endfor %}{% if can_manage %}<form method="post" action="{{ base_path }}/users/{{ user.id }}/alexa/" data-confirm-heading="Revoke Alexa tokens" data-confirm="Reject every existing Alexa token and its playback URLs for {{ user.username }}?" data-confirm-button="Revoke tokens" data-confirm-danger>{{ csrf() }}<input type="hidden" name="action" value="revoke">
 <button class="btn small danger" type="submit">Revoke all tokens</button>
 </form>{% endif %}</details>{% endif %}
-        <p class="ud-footnote">For private-skill voice playback, the authenticated Amazon email must match the verified Music Box email. Website Amazon sign-in can use a different account. Tokens expire after one year.</p>
+        <p class="ud-footnote">For private-skill voice playback, use the same Amazon account in the user panel, Developer Console and Echo. The Music Box email can differ. Tokens expire after one year.</p>
       </section>
       <section class="ud-panel" aria-labelledby="activity-title">
 <div class="ud-panel-head">
@@ -337,7 +337,7 @@
 </dialog>
 <dialog class="admin-dialog ud-dialog" id="token-create-dialog" aria-labelledby="token-create-title">{{ dialog_head('Create an Alexa token', 'token-create-title') }}<form method="post" action="{{ base_path }}/users/{{ user.id }}/alexa/">{{ csrf() }}<input type="hidden" name="action" value="generate">
 <div class="dialog-body">
-<p>A token gives this private skill access to <strong>{{ user.email }}</strong>. The authenticated Amazon email must match.</p>
+<p>A token gives this private skill access to <strong>{{ user.email }}</strong>. The Echo must use the Amazon account connected in this user’s panel.</p>
 <div class="ud-notice">
 <strong>Previous tokens will stop working</strong>
 <span>Generating a new token invalidates existing tokens and their playback URLs. Copy the new token immediately; it is shown once.</span>

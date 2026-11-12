@@ -1,6 +1,7 @@
 """Revocable per-account Alexa credentials; never store a usable token."""
 import hashlib
 import hmac
+import json
 import secrets
 import time
 import requests
@@ -71,6 +72,42 @@ class AlexaAccess:
             raise AccessDenied()
         return user, dict(row)
 
+    def linked_amazon(self, user_id):
+        account = self.accounts.get_provider_secret(user_id, 'amazon')
+        if (account.get('verified_by') != 'amazon_authenticated_session'
+                or not account.get('email') or not account.get('customer_id')
+                or not account.get('generation')):
+            raise AccessDenied('amazon_link_required')
+        return account
+
+    def link_amazon(self, user_id, email, customer_id):
+        """Called only with identity returned by the authenticated Amazon API."""
+        if not isinstance(email, str) or '@' not in email or not isinstance(customer_id, str) or not customer_id:
+            raise AccessDenied('amazon_link_required')
+        email = email.strip().casefold()
+        with self.db.connect() as conn:
+            conn.execute('BEGIN IMMEDIATE')
+            user = conn.execute('SELECT * FROM users WHERE id=?', (user_id,)).fetchone()
+            if not self.eligible(dict(user) if user else None):
+                raise AccessDenied()
+            old = conn.execute("SELECT secret_enc,status FROM user_provider_credentials WHERE user_id=? AND provider='amazon'", (user_id,)).fetchone()
+            previous = {}
+            if old and old['status'] == 'connected':
+                try:
+                    previous = self.accounts.secret_box.decrypt_json(old['secret_enc'])
+                except Exception:
+                    previous = {}
+            generation = (previous.get('generation') if isinstance(previous, dict)
+                and previous.get('email') == email and previous.get('customer_id') == customer_id else None)
+            payload = {'verified_by':'amazon_authenticated_session','email':email,
+                       'customer_id':customer_id,'generation':generation or secrets.token_hex(16)}
+            now = time.time()
+            conn.execute("INSERT INTO user_provider_credentials (user_id,provider,secret_enc,metadata_json,status,updated_at,last_validated_at) VALUES (?,'amazon',?,?,'connected',?,?) ON CONFLICT(user_id,provider) DO UPDATE SET secret_enc=excluded.secret_enc,metadata_json=excluded.metadata_json,status='connected',last_error='',updated_at=excluded.updated_at,last_validated_at=excluded.last_validated_at",
+                         (user_id,self.accounts.secret_box.encrypt_json(payload),json.dumps({'account_email':email}),now,now))
+
+    def unlink_amazon(self, user_id):
+        self.db.execute("DELETE FROM user_provider_credentials WHERE user_id=? AND provider='amazon'", (user_id,))
+
     def authenticate(self, headers):
         raw = headers.get('Authorization', '').removeprefix('Bearer ')
         if len(raw) > 256 or not raw.startswith('mbx_'):
@@ -79,7 +116,8 @@ class AlexaAccess:
         if not hmac.compare_digest(token['token_hash'], hashlib.sha256(raw.encode()).hexdigest()):
             raise AccessDenied()
         if headers.get('X-MusicBox-Email', '').strip().casefold() != token['email']:
-            raise AccessDenied('amazon_email_mismatch')
+            raise AccessDenied('musicbox_email_mismatch')
+        linked = self.linked_amazon(user['id'])
         endpoint = headers.get('X-Alexa-Api-Endpoint', '').rstrip('/')
         proof = headers.get('X-Alexa-Profile-Token', '')
         if endpoint not in AMAZON_ENDPOINTS or not proof or len(proof) > 16384:
@@ -92,9 +130,13 @@ class AlexaAccess:
             email = response.json()
         except (requests.RequestException, ValueError):
             raise AccessDenied('amazon_profile_unavailable') from None
-        if not isinstance(email, str) or email.strip().casefold() != token['email']:
+        if not isinstance(email, str) or email.strip().casefold() != linked['email']:
             raise AccessDenied('amazon_email_mismatch')
         # Recheck after the network call: an admin may have revoked it in flight.
         user, token = self.current(token['id'])
-        token['version'] = hashlib.sha256((token['id'] + ':' + str(token['security_version'])).encode()).hexdigest()
+        current_link = self.linked_amazon(user['id'])
+        if current_link['generation'] != linked['generation']:
+            raise AccessDenied('amazon_link_changed')
+        token['amazon_generation'] = current_link['generation']
+        token['version'] = hashlib.sha256((token['id'] + ':' + str(token['security_version']) + ':' + current_link['generation']).encode()).hexdigest()
         return user, token
