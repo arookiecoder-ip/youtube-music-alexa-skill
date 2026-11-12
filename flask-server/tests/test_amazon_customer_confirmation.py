@@ -56,6 +56,24 @@ class AmazonCustomerConfirmationTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(await self.login.test_loggedin())
         self.assertEqual(self.request.await_count,2)
         self.assertEqual(self.login.verified_account()['customerId'],'amazon-customer')
+        self.assertEqual(self.login.url,'amazon.com')
+        # The real AlexaPy API builder must use the confirmed marketplace too.
+        from alexapy import AlexaAPI
+        devices=[{'serialNumber':'synthetic-echo','capabilities':['MUSIC_SKILL']}]
+        device_response=customer_response({'devices':devices},url='https://alexa.amazon.com/api/devices-v2/device')
+        device_response.content_type='application/json'
+        self.request.side_effect=None;self.request.return_value=device_response
+        self.assertEqual(await AlexaAPI.get_devices(self.login),devices)
+        self.assertEqual(str(self.request.await_args.args[0]).split('?')[0],
+                         'https://alexa.amazon.com/api/devices-v2/device')
+        other=ProxyAwareAlexaLogin('amazon.in','other@example.test','',
+                                  lambda name:str(Path(self.root.name)/name))
+        try:
+            self.assertEqual(other.url,'amazon.in')
+            self.assertEqual(self.login.url,'amazon.com')
+        finally:
+            await other.close()
+            await asyncio.sleep(0)
 
     async def test_untrusted_origin_or_non_success_response_never_becomes_identity(self):
         for url,status in [('https://evil.example/api/users/me',200),
@@ -146,6 +164,7 @@ class AmazonOtpPromotionTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(result['state'],'connected')
                 self.assertEqual(get.await_count,4)
                 self.assertIn('amazon.com/api/users/me',get.await_args.args[0])
+                self.assertEqual(login.url,'amazon.com')
                 remote._identity_sink.assert_called_once_with('user:explicit-user','canonical@example.test','amazon-customer')
                 self.assertIs(remote._login,login)
                 self.assertTrue(Path(login._cookiefile[0]).is_file())

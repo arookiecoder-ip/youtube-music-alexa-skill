@@ -108,6 +108,7 @@ class ProxyAwareAlexaLogin(AlexaLogin):
         # can still return 401 after the fallback has confirmed the login.
         self._confirmed_identity = None
         self._identity_candidate = None
+        self._identity_candidate_domain = None
         self._identity_probe_active = True
         try:
             confirmed = await super().test_loggedin(*args, **kwargs)
@@ -116,6 +117,10 @@ class ProxyAwareAlexaLogin(AlexaLogin):
         candidate = self._identity_candidate
         if confirmed and candidate and candidate['customerId'] == self.customer_id:
             self._confirmed_identity = candidate
+            # Keep every later Alexa API call on the marketplace that actually
+            # authenticated this session. The constructor's regional default can
+            # still redirect devices/control calls to sign-in after a fallback.
+            self._url = self._identity_candidate_domain
         return confirmed
 
     def verified_account(self):
@@ -146,6 +151,7 @@ class ProxyAwareAlexaLogin(AlexaLogin):
     async def reset(self):
         self._confirmed_identity = None
         self._identity_candidate = None
+        self._identity_candidate_domain = None
         if not getattr(self, '_restoring_saved_session', False):
             return await super().reset()
         files = self._cookiefile
@@ -177,6 +183,7 @@ class ProxyAwareAlexaLogin(AlexaLogin):
                 if (isinstance(customer, dict) and isinstance(customer.get('email'), str)
                         and '@' in customer['email'] and isinstance(customer.get('id'), str)
                         and customer['id'].strip()):
+                    self._identity_candidate_domain = parsed.hostname.split('.', 1)[1]
                     self._identity_candidate = {'authenticated': True,
                         'customerEmail': customer['email'], 'customerId': customer['id']}
         return url
