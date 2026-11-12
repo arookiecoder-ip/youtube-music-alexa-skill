@@ -334,3 +334,27 @@ class AmazonAttemptRaceTests(unittest.IsolatedAsyncioTestCase):
         owner._claim_proxy.assert_not_awaited()
         owner._form_cleanup.assert_not_awaited()
         owner._form_step.assert_not_awaited()
+
+
+class AmazonPromotionCleanupTests(unittest.IsolatedAsyncioTestCase):
+    async def test_failed_promotion_closes_only_pending_session_and_removes_stage(self):
+        import asyncio, shutil, tempfile
+        from unittest.mock import Mock
+        _, methods = _nodes()
+        namespace={'asyncio':asyncio,'shutil':shutil,'logger':Mock(),
+                   '_renew_proxy_claim':Mock(),'_release_proxy_claim':Mock()}
+        exec(compile(ast.Module(body=[methods['_form_step'],methods['_form_cleanup']],type_ignores=[]),str(SOURCE),'exec'),namespace)
+        with tempfile.TemporaryDirectory() as root:
+            stage=Path(root)/'pending';stage.mkdir();(stage/'cookie').write_text('pending cookie')
+            live=Path(root)/'live-cookie';live.write_text('previous working session')
+            old=SimpleNamespace(close=AsyncMock())
+            login=SimpleNamespace(login=AsyncMock(),close=AsyncMock())
+            owner=SimpleNamespace(_form_login=login,_form_stage=str(stage),_form_attempt_id='attempt',
+                FORM_STEP_TIMEOUT=1,_login=old,_form_state=AsyncMock(return_value={'state':'connected'}),
+                _promote_staged_login=AsyncMock(return_value='Identity verification failed.'))
+            owner._form_cleanup=namespace['_form_cleanup'].__get__(owner)
+            result=await namespace['_form_step'](owner,{'securitycode':'synthetic'})
+            self.assertEqual(result['state'],'error')
+            login.close.assert_awaited_once();old.close.assert_not_awaited()
+            self.assertIsNone(owner._form_login);self.assertIsNone(owner._form_stage)
+            self.assertFalse(stage.exists());self.assertEqual(live.read_text(),'previous working session')

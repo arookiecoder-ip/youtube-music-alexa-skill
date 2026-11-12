@@ -37,6 +37,14 @@ class _AmazonLoginSession:
     def __getattr__(self, name):
         return getattr(self._session, name)
 
+    @property
+    def _connector(self):
+        return self._session._connector
+
+    @_connector.setter
+    def _connector(self, value):
+        self._session._connector = value
+
     def _safe_url(self, url):
         try:
             parsed = urlsplit(str(url))
@@ -93,6 +101,31 @@ class ProxyAwareAlexaLogin(AlexaLogin):
         if not isinstance(self._session, _AmazonLoginSession):
             self._session = _AmazonLoginSession(self._session, self.url)
 
+    async def test_loggedin(self, *args, **kwargs):
+        # Capture the same /api/users/me response used by AlexaPy's successful
+        # session check, including its amazon.com marketplace fallback.
+        # get_authentication() retries only the configured marketplace, which
+        # can still return 401 after the fallback has confirmed the login.
+        self._confirmed_identity = None
+        self._identity_candidate = None
+        self._identity_probe_active = True
+        try:
+            confirmed = await super().test_loggedin(*args, **kwargs)
+        finally:
+            self._identity_probe_active = False
+        candidate = self._identity_candidate
+        if confirmed and candidate and candidate['customerId'] == self.customer_id:
+            self._confirmed_identity = candidate
+        return confirmed
+
+    def verified_account(self):
+        profile = getattr(self, '_confirmed_identity', None)
+        if (not profile or not (self.status or {}).get('login_successful')
+                or self.close_requested or not self._session or self._session.closed
+                or profile['customerId'] != self.customer_id):
+            return None
+        return dict(profile)
+
     async def restore_cookie_session(self):
         """Validate persisted credentials without deleting them on a failed probe.
 
@@ -111,6 +144,8 @@ class ProxyAwareAlexaLogin(AlexaLogin):
             self._restoring_saved_session = False
 
     async def reset(self):
+        self._confirmed_identity = None
+        self._identity_candidate = None
         if not getattr(self, '_restoring_saved_session', False):
             return await super().reset()
         files = self._cookiefile
@@ -128,6 +163,22 @@ class ProxyAwareAlexaLogin(AlexaLogin):
         url = await super()._process_resp(resp)
         self._resp_url = str(resp.url)
         self._resp_status = resp.status
+        if getattr(self, '_identity_probe_active', False) and resp.status == 200:
+            parsed = urlsplit(str(resp.url))
+            if (parsed.scheme == 'https' and parsed.hostname in
+                    {'www.' + self.url.lower(), 'www.amazon.com',
+                     'alexa.' + self.url.lower(), 'alexa.amazon.com'}
+                    and parsed.path == '/api/users/me' and parsed.port in (None, 443)
+                    and not parsed.username and not parsed.password):
+                try:
+                    customer = await resp.json()
+                except Exception:
+                    customer = None
+                if (isinstance(customer, dict) and isinstance(customer.get('email'), str)
+                        and '@' in customer['email'] and isinstance(customer.get('id'), str)
+                        and customer['id'].strip()):
+                    self._identity_candidate = {'authenticated': True,
+                        'customerEmail': customer['email'], 'customerId': customer['id']}
         return url
 
     async def _process_page(self, html, site):

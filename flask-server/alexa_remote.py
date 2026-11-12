@@ -403,7 +403,9 @@ class AlexaRemote:
     @staticmethod
     async def _verified_account(login):
         try:
-            profile = await AlexaAPI.get_authentication(login)
+            # This snapshot is populated only from Amazon's authenticated
+            # customer response during a successful AlexaPy session check.
+            profile = login.verified_account()
         except Exception:
             return None
         if (not isinstance(profile, dict) or profile.get('authenticated') is not True
@@ -1233,14 +1235,17 @@ class AlexaRemote:
             error = await self._promote_staged_login(login, stage)
             if login is not self._form_login:
                 return {"state": "error", "message": "This sign-in was replaced. Start again."}
+            if error:
+                logger.error("scripted Amazon login could not be saved: %s", error)
+                await self._form_cleanup()
+                return {"state": "error", "message": error}
             self._form_login = None
             self._form_stage = None
             self._form_captcha = None
             self._form_robot = None
+            if stage:
+                shutil.rmtree(stage, ignore_errors=True)
             _release_proxy_claim(self)
-            if error:
-                logger.error("scripted Amazon login could not be saved: %s", error)
-                return {"state": "error", "message": error}
             logger.info("Amazon form login completed and cookie persisted")
             return result
         if result["state"] == "error":

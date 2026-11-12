@@ -14,13 +14,13 @@ class VerifiedAmazonIdentityTests(IsolatedAsyncioTestCase):
         cls = next(n for n in source.body if isinstance(n, ast.ClassDef) and n.name == 'AlexaRemote')
         cls.body = [n for n in cls.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))
                     and n.name in {'_verified_account', '_status', '_logout'}]
-        self.api = SimpleNamespace(get_authentication=AsyncMock(return_value={
-            'authenticated': True, 'customerEmail': 'verified@example.test', 'customerId': 'customer-B'}))
-        namespace = {'AlexaAPI': self.api, 'OWNER': 'owner', 'logger': Mock(),
+        self.profile = Mock(return_value={
+            'authenticated': True, 'customerEmail': 'verified@example.test', 'customerId': 'customer-B'})
+        namespace = {'OWNER': 'owner', 'logger': Mock(),
                      '_release_proxy_claim': Mock()}
         exec(compile(ast.Module(body=[cls], type_ignores=[]), str(path), 'exec'), namespace)
         self.remote = namespace['AlexaRemote']()
-        self.login = SimpleNamespace(email='+919876543210', close=AsyncMock())
+        self.login = SimpleNamespace(email='+919876543210', close=AsyncMock(), verified_account=self.profile)
         self.remote._login = self.login
         self.remote._musicbox_identity = 'user:explicit-id'
         self.remote._identity_sink = Mock()
@@ -33,22 +33,22 @@ class VerifiedAmazonIdentityTests(IsolatedAsyncioTestCase):
         self.remote._identity_sink.assert_called_once_with(
             'user:explicit-id', 'verified@example.test', 'customer-B')
         await self.remote._status()
-        self.api.get_authentication.assert_awaited_once_with(self.login)
+        self.profile.assert_called_once_with()
 
     async def test_untrusted_or_missing_profile_does_not_publish_login_identifier(self):
         for profile in (None, {}, {'authenticated': False},
                         {'authenticated': True, 'customerEmail': 'claim@example.test'},
                         {'authenticated': True, 'customerEmail': 1, 'customerId': 'id'}):
-            self.api.get_authentication.return_value = profile
+            self.profile.return_value = profile
             result = await self.remote._status()
             self.assertIn('identity_error', result)
         self.remote._identity_sink.assert_not_called()
 
     async def test_provider_failure_can_retry_without_trusting_login_field(self):
-        self.api.get_authentication.side_effect = RuntimeError('Provider unavailable')
+        self.profile.side_effect = RuntimeError('Provider unavailable')
         self.assertIn('identity_error', await self.remote._status())
         self.remote._identity_sink.assert_not_called()
-        self.api.get_authentication.side_effect = None
+        self.profile.side_effect = None
         await self.remote._status()
         self.remote._identity_sink.assert_called_once()
 
@@ -56,7 +56,7 @@ class VerifiedAmazonIdentityTests(IsolatedAsyncioTestCase):
         async def replaced(login):
             self.remote._login = object()
             return {'authenticated': True, 'customerEmail': 'stale@example.test', 'customerId': 'old'}
-        self.api.get_authentication.side_effect = replaced
+        self.remote._verified_account = AsyncMock(side_effect=replaced)
         self.assertIn('identity_error', await self.remote._status())
         self.remote._identity_sink.assert_not_called()
 
@@ -66,7 +66,7 @@ class VerifiedAmazonIdentityTests(IsolatedAsyncioTestCase):
             started.set()
             await proceed.wait()
             return {'authenticated': True, 'customerEmail': 'stale@example.test', 'customerId': 'old'}
-        self.api.get_authentication.side_effect = delayed
+        self.remote._verified_account = AsyncMock(side_effect=delayed)
         status = asyncio.create_task(self.remote._status())
         await started.wait()
         self.remote._proxy_login = self.remote._proxy_finalize_task = None
