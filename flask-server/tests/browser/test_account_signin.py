@@ -253,6 +253,8 @@ def login_page():
                                    otp_start=request.args.get('otp') == '1', code_ready=request.args.get('code') == '1')
         body = request.get_json(); calls.append(body)
         if body.get('step') == 'send_otp':
+            if body.get('username') == 'unknown@example.test':
+                return jsonify(error={'message': 'No account exists with that email or username.'}), 404
             return jsonify(ok=True, retry_after=60, message='Check your inbox.')
         return jsonify(ok=True, next='/home')
     @app.get('/home')
@@ -322,3 +324,17 @@ def test_old_code_page_destination_opens_inline_entry(login_page):
     page.locator('#creds-btn').click()
     page.wait_for_url(origin+'/home')
     assert calls[-1]['username'] == 'new-person'
+
+
+def test_unknown_account_stays_on_send_otp_step(login_page):
+    page, origin, calls = login_page
+    page.goto(origin+'/login/')
+    page.locator('#username').fill('unknown@example.test')
+    page.get_by_role('button', name='Login via OTP', exact=True).click()
+    page.get_by_role('button', name='Send OTP', exact=True).click()
+    expect(page.locator('#status')).to_have_text('No account exists with that email or username.')
+    expect(page.locator('#send-otp')).to_be_visible()
+    expect(page.locator('#send-otp')).to_be_enabled()
+    expect(page.locator('#email-code')).not_to_be_visible()
+    expect(page.locator('#creds-btn')).to_be_disabled()
+    expect(page.locator('#username')).to_be_editable()

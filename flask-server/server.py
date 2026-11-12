@@ -7165,19 +7165,26 @@ def login():
                 response.headers['Retry-After'] = str(max(1, retry))
                 return response, status
         if sending:
+            if not user:
+                return error_response('No account exists with that email or username.', 404)
+            if user.get('status') != 'active':
+                return error_response('This account is not active. Contact an administrator.', 403)
+            if not user.get('email'):
+                return error_response('This account has no email address. Sign in with your password.', 422)
             # The cooldown is server-enforced even across tabs and aliases.
             allowed, retry = layer.rate_limiter.allow('otp-send-cooldown', account_key, 1, 60)
             if not allowed:
                 response, status = error_response(f'Wait {retry}s before requesting another code.', 429)
                 response.headers['Retry-After'] = str(max(1, retry))
                 return response, status
-            if user and user.get('status') == 'active' and user.get('email'):
-                code = layer.accounts.create_email_code(user['id'], 'magic', user['email'], ip, user_agent)
-                emails.send_code_email(layer, user, 'magic', code, where='the Music Box sign-in page',
-                                       ip=ip, user_agent=user_agent)
-            # Unknown and inactive accounts receive the same response.
-            return jsonify(ok=True, retry_after=60,
-                           message='If this account can sign in, a six-digit code is on its way.')
+            code = layer.accounts.create_email_code(user['id'], 'magic', user['email'], ip, user_agent)
+            delivery = emails.send_code_email(layer, user, 'magic', code, where='the Music Box sign-in page',
+                                              ip=ip, user_agent=user_agent)
+            if delivery.status != 'sent':
+                response, status = error_response('The email could not be sent. Try again later or sign in with your password.', 503)
+                response.headers['Retry-After'] = '60'
+                return response, status
+            return jsonify(ok=True, retry_after=60, message='A six-digit code was sent to your email.')
         proof = (layer.accounts.consume_email_code(user['id'], 'magic', str(body.get('code') or ''))
                  if user and user.get('status') == 'active' else None)
         if (not proof and user and user.get('status') == 'active'

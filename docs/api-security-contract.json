@@ -711,7 +711,8 @@
       "purpose": "magic (encrypted numeric code); initial signup verify codes accepted only for the current unverified address",
       "resend": "60 seconds per canonical account; 5 sends per account and 30 per IP in 10 minutes",
       "verification": "single-use, expiring, limited attempts; disabled accounts and changed addresses rejected",
-      "second_factor": "enrolled authenticator required before session creation"
+      "second_factor": "enrolled authenticator required before session creation",
+      "send_feedback": "Explicit errors for nonexistent accounts, inactive accounts and missing email; success only after SMTP reports sent"
     },
     "legacy_code_page": "GET /verify redirects to inline login; POST retained for already-open verification forms"
   }

@@ -3,6 +3,7 @@ import time
 from unittest import mock
 from tests.test_login_second_factor import SecondFactorDoorTestBase, PLAYER_UA, CLIENT_IP, PLAYER_PASSWORD
 from multiuser.security import totp_at
+from multiuser.mailer import MailResult
 
 
 class EmailOtpLoginTests(SecondFactorDoorTestBase):
@@ -36,15 +37,37 @@ class EmailOtpLoginTests(SecondFactorDoorTestBase):
         second = self.post(step='totp', token=first['token'], code=totp_at(secret, int(time.time()) // 30))
         self.assertEqual(second.status_code, 200, second.get_json())
 
-    def test_unknown_account_has_identical_send_response(self):
+    def test_unknown_account_is_rejected_without_sending_mail(self):
         with mock.patch('multiuser.emails.send_code_email') as send:
-            known = self.post(step='send_otp')
-            unknown = self.post(step='send_otp', username='unknown')
-        self.assertEqual(known.get_json(), unknown.get_json())
-        self.assertEqual(send.call_count, 1)
+            for identifier in ('unknown', 'unknown@example.test'):
+                response = self.post(step='send_otp', username=identifier)
+                self.assertEqual(response.status_code, 404)
+                self.assertIn('No account exists', response.get_json()['error']['message'])
+            send.assert_not_called()
+
+    def test_known_account_reports_success_only_when_sent(self):
+        with mock.patch('multiuser.emails.send_code_email', return_value=MailResult('sent')) as send:
+            response = self.post(step='send_otp')
+        self.assertEqual(response.status_code, 200)
+        self.assertIn('was sent', response.get_json()['message'])
+        send.assert_called_once()
+
+    def test_failed_or_outbox_delivery_does_not_report_success(self):
+        for status in ('error', 'disabled', 'outbox'):
+            self.layer.rate_limiter.clear()
+            with mock.patch('multiuser.emails.send_code_email', return_value=MailResult(status)):
+                response = self.post(step='send_otp')
+            self.assertEqual(response.status_code, 503)
+            self.assertNotIn('ok', response.get_json())
+
+    def test_inactive_account_is_rejected_without_sending_mail(self):
+        self.accounts.db.execute("UPDATE users SET status='disabled' WHERE id=?", (self.user['id'],))
+        with mock.patch('multiuser.emails.send_code_email') as send:
+            self.assertEqual(self.post(step='send_otp').status_code, 403)
+            send.assert_not_called()
 
     def test_cooldown_is_shared_by_username_and_email(self):
-        with mock.patch('multiuser.emails.send_code_email'):
+        with mock.patch('multiuser.emails.send_code_email', return_value=MailResult('sent')):
             self.assertEqual(self.post(step='send_otp').status_code, 200)
             blocked = self.post(step='send_otp', username=self.user['email'])
         self.assertEqual(blocked.status_code, 429)
