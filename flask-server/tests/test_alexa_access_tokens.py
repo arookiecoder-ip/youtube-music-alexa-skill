@@ -233,3 +233,56 @@ class AlexaAccessTokenTests(SecondFactorDoorTestBase):
         with self.assertRaises(AccessDenied):
             self.access.link_amazon(self.user['id'], 'new@example.test', 'customer-C')
         self.assertEqual(self.access.linked_amazon(self.user['id'])['email'], self.amazon_email)
+
+
+    def test_amazon_identity_denial_stops_only_its_own_pending_playback(self):
+        from datetime import datetime, timezone
+        server = self.server
+        token = server._PLAYER_IDENTITY.set('user:'+self.user['id'])
+        try:
+            server._now_playing.update(video_id='AAAAAAAAAAA', queue=[{'video_id':'AAAAAAAAAAA'}],
+                queue_index=0, playing=False, playback_processing=True, playback_confirmed=False,
+                alexa_intent_at=time.time()-2, _alexa_auth_blocked=False)
+        finally:
+            server._PLAYER_IDENTITY.reset(token)
+        self.lookup.return_value.json.return_value='different@example.test'
+        headers={**self.headers,'X-Alexa-Request-Timestamp':datetime.now(timezone.utc).isoformat(),
+                 'X-Alexa-Request-Type':'IntentRequest'}
+        with mock.patch.object(server,'_notify_sse'):
+            response=self.identity(headers)
+        self.assertEqual(response.status_code,403)
+        self.assertEqual(response.json['error']['code'],'amazon_email_mismatch')
+        token=server._PLAYER_IDENTITY.set('user:'+self.user['id'])
+        try:
+            self.assertFalse(server._now_playing['playback_processing'])
+            self.assertTrue(server._now_playing['_alexa_auth_blocked'])
+            self.assertEqual(server._now_playing['playback_error']['code'],'amazon_email_mismatch')
+            self.assertEqual(server._now_playing['video_id'],'AAAAAAAAAAA')
+        finally:
+            server._PLAYER_IDENTITY.reset(token)
+
+    def test_forged_and_revoked_tokens_cannot_report_playback_failures(self):
+        self.assertIsNotNone(self.access.failure_owner(self.headers))
+        forged={**self.headers,'Authorization':self.headers['Authorization']+'x'}
+        self.assertIsNone(self.access.failure_owner(forged))
+        self.access.revoke(self.user['id'])
+        self.assertIsNone(self.access.failure_owner(self.headers))
+
+
+    def test_stale_identity_denial_returns_fence_without_stopping_new_intent(self):
+        from datetime import datetime, timezone
+        server=self.server
+        identity='user:'+self.user['id']
+        player=server._player_registry.state_for(identity)
+        player.update(video_id='AAAAAAAAAAA',playing=False,playback_processing=True,
+                      alexa_intent_at=time.time(),_alexa_auth_blocked=False)
+        self.lookup.return_value.json.return_value='different@example.test'
+        headers={**self.headers,'X-Alexa-Request-Timestamp':datetime.fromtimestamp(time.time()-20,timezone.utc).isoformat(),
+                 'X-Alexa-Request-Type':'IntentRequest'}
+        with mock.patch.object(server,'_notify_sse') as notify:
+            response=self.identity(headers)
+        self.assertEqual(response.status_code,403)
+        self.assertEqual(response.json['error']['code'],'stale_alexa_request')
+        self.assertTrue(player['playback_processing'])
+        self.assertFalse(player['_alexa_auth_blocked'])
+        notify.assert_not_called()

@@ -9,6 +9,7 @@ import traceback
 from status_journal import Journal, JournalHandler
 from status_monitor import Metrics, CachedCollector, file_info, system_snapshot
 from playback_failover import PlaybackFailoverBudget
+from alexa_playback_errors import authentication_failure as _alexa_auth_error
 from audio_jobs import AudioJobs
 from youtube_stream import Resolver, YouTubeStream, StreamError
 from playback_contract import restore_snapshot
@@ -492,6 +493,8 @@ def _schedule_play_dispatch(serial, video_id, offset_ms=0, delay=None, expected_
     correction = expected_intent is not None
     if expected_intent is None:
         with _np_lock:
+            if _now_playing.get('_alexa_auth_blocked'):
+                return None
             _now_playing['alexa_intent_at'] = time.time()
             _now_playing.pop('_alexa_finished_token', None)
     with _np_lock:
@@ -505,6 +508,8 @@ def _schedule_play_dispatch(serial, video_id, offset_ms=0, delay=None, expected_
         expected_intent, expected_output = dispatch_intent, dispatch_output
 
     def _fire():
+        if _now_playing.get('_alexa_auth_blocked'):
+            return
         with _PENDING_DISPATCH_LOCK:
             pending = _PENDING_DISPATCH.get(key)
             # A newer click replaced us between the timer firing and this lock.
@@ -531,6 +536,8 @@ def _schedule_play_dispatch(serial, video_id, offset_ms=0, delay=None, expected_
             # while the web remote already shows it as "playing".
             logger.info("[play-dispatch] reusing in-flight trigger for %s", video_id)
             def _resend():
+                if _now_playing.get('_alexa_auth_blocked'):
+                    return 'Alexa authentication failed. Reconnect Amazon before retrying.'
                 _arm_play(serial, video_id, offset_ms)
                 return alexa_remote.remote.play_video_id(serial, video_id, offset_ms)
             _spawn_for_identity(_current_identity(), _watch_playback_confirmation,
@@ -555,6 +562,8 @@ def _schedule_play_dispatch(serial, video_id, offset_ms=0, delay=None, expected_
     token = object()
     timer = _delayed(delay, _fire, start=False)
     with _np_lock:
+        if _now_playing.get('_alexa_auth_blocked'):
+            return None
         if expected_intent is not None:
             output = _playback_output.snapshot()
             if (_now_playing.get('alexa_intent_at') != expected_intent or
@@ -1466,11 +1475,26 @@ def _bind_player_identity():
             if supplied and not hmac.compare_digest(supplied.encode(), credential['version'].encode()):
                 raise AccessDenied()
         except AccessDenied as exc:
-            return jsonify(error={'code': exc.code, 'message': str(exc)}), 403
+            # A denied route stays denied. Only possession of a current token
+            # may report a failure to that token's own pending playback.
+            owner = layer.alexa_access.failure_owner(request.headers)
+            if owner:
+                _report_alexa_auth_denial(owner['id'], exc.code)
+            if request.environ.get('musicbox.alexa_denial_stale'):
+                return jsonify(error={'code':'stale_alexa_request', 'message':'A newer playback request superseded this Alexa request.'}), 403
+            failure = _alexa_auth_error(exc, exc.code)
+            return jsonify(error={'code': exc.code, 'message': failure['message'] if failure else str(exc)}), 403
         _PLAYER_IDENTITY.set(_player_identity_for_user_id(linked['id']))
         request.environ['musicbox.alexa_identity'] = linked['id']
         request.environ['musicbox.alexa_binding'] = credential
         request.environ['musicbox.alexa_token_authorized'] = True
+        _accept_verified_alexa_retry()
+        with _np_lock:
+            _now_playing['_alexa_verified_token_id'] = credential['id']
+            blocked = _now_playing.get('_alexa_auth_blocked')
+            failure = _now_playing.get('_alexa_auth_failure') or _alexa_auth_error('', 'alexa_authentication_required')
+        if blocked:
+            return jsonify(error={'code':failure['code'], 'message':failure['message']}), 403
         return None
     subject, device = request.headers.get('X-Alexa-User-Id'), request.headers.get('X-Alexa-Device-Id')
     skill = ''
@@ -3482,8 +3506,10 @@ def _ensure_heartbeat():
             _heartbeat_thread.start()
 
 
-def _update_now_playing(**kwargs):
+def _update_now_playing(_require_alexa_access=False, **kwargs):
     with _np_lock:
+        if _require_alexa_access and _now_playing.get('_alexa_auth_blocked'):
+            return False
         # A change of video_id means a new track: re-anchor the progress bar to
         # the start (or to an explicit position_ms if the caller passed one, e.g.
         # a seek) and drop the previous track's duration until it's looked up
@@ -5853,6 +5879,9 @@ def proxy_stream():
     video_id = request.args.get("video_id")
     if not _valid_video_id(video_id):
         return error_response('missing or invalid "video_id"', 400)
+    if _now_playing.get('_alexa_auth_blocked'):
+        return error_response('Alexa authentication failed. Reconnect Amazon or correct the skill settings before retrying.',
+                              403, code='alexa_authentication_required')
     output = _playback_output.snapshot()
     if output['playback_output'] == 'phone':
         return error_response('Phone owns playback; stale Echo stream ignored.', 409)
@@ -6093,6 +6122,7 @@ def _serve_youtube_stream(video_id, confirm=False, cancellable=False, meta=None)
                         owner = _playback_output.snapshot()
                         if (owner['playback_output'] != 'alexa'
                                 or owner['output_token'] != echo_output_token
+                                or _now_playing.get('_alexa_auth_blocked')
                                 or (first and _now_playing.get('alexa_intent_at') != echo_intent)):
                             return
                 if (cancellable and _generation_superseded(generation)
@@ -6664,7 +6694,8 @@ def _watch_playback_confirmation(serial, video_id, resend, expected=None):
 
     def _relevant_locked():
         # A pause, same-song replay or output handoff also supersedes this attempt.
-        return (_now_playing.get('video_id') == video_id
+        return (not _now_playing.get('_alexa_auth_blocked')
+                and _now_playing.get('video_id') == video_id
                 and _now_playing.get('alexa_intent_at') == expected[0]
                 and _playback_output.snapshot()['output_token'] == expected[1]
                 and int(_now_playing.get('failed_playback_revision', 0)) <= intent_revision)
@@ -6697,7 +6728,9 @@ def _watch_playback_confirmation(serial, video_id, resend, expected=None):
             # toward the timeout — a resend mid-download wouldn't start
             # playback any sooner.
             if _download_in_progress(video_id):
-                deadline = time.time() + PLAYBACK_CONFIRM_TIMEOUT
+                if (_multiuser_layer is None
+                        or _now_playing.get('_alexa_verified_intent_at') == expected[0]):
+                    deadline = time.time() + PLAYBACK_CONFIRM_TIMEOUT
             elif not buffering_sent and time.time() >= buffering_deadline:
                 # Non-fatal, informational only: lets the UI show "still
                 # working on it" instead of sitting silent until a real
@@ -6714,6 +6747,17 @@ def _watch_playback_confirmation(serial, video_id, resend, expected=None):
         if _wait_once():
             return
         if not _still_relevant():
+            return
+        authentication = _known_alexa_auth_failure()
+        if authentication:
+            _stop_alexa_auth_failure('', authentication['code'], video_id, expected[0], expected[1])
+            return
+        if (_multiuser_layer is not None
+                and _now_playing.get('_alexa_verified_intent_at') != expected[0]):
+            # An unknown/revoked credential cannot write another user's player.
+            # Without an authenticated arm acknowledgement, stop this pending
+            # attempt instead of treating it as a bad song or sending again.
+            _stop_alexa_auth_failure('', 'alexa_request_unverified', video_id, expected[0], expected[1])
             return
         # A permanently unavailable track must stop here, but the queue can
         # still move on: substituting a *different* upload would be wrong,
@@ -6800,6 +6844,10 @@ def _watch_resume_confirmation(serial, video_id, staged_revision):
     if not _valid_video_id(video_id):
         return
 
+    with _np_lock:
+        resume_intent = _now_playing.get('alexa_intent_at')
+        resume_output = _playback_output.snapshot()['output_token']
+
     def _confirmed():
         with _np_lock:
             return (_now_playing.get('video_id') == video_id
@@ -6826,18 +6874,32 @@ def _watch_resume_confirmation(serial, video_id, staged_revision):
             # evicted the cached file, and a resend mid-download would not
             # start playback any sooner.
             if _download_in_progress(video_id):
-                deadline = time.time() + PLAYBACK_CONFIRM_TIMEOUT
+                if (_multiuser_layer is None
+                        or _now_playing.get('_alexa_verified_intent_at') == resume_intent):
+                    deadline = time.time() + PLAYBACK_CONFIRM_TIMEOUT
             time.sleep(PLAYBACK_CONFIRM_POLL_INTERVAL)
         return _confirmed() or _superseded()
 
     try:
         if _wait_once():
             return
+        authentication = _known_alexa_auth_failure()
+        if authentication:
+            _stop_alexa_auth_failure('', authentication['code'], video_id, resume_intent, resume_output)
+            return
+        if (_multiuser_layer is not None
+                and _now_playing.get('_alexa_verified_intent_at') != resume_intent):
+            _stop_alexa_auth_failure('', 'alexa_request_unverified', video_id, resume_intent, resume_output)
+            return
         logger.warning("[resume-watchdog] no confirmation for %s in %ss, retrying once",
                        video_id, PLAYBACK_CONFIRM_TIMEOUT)
         error = alexa_remote.remote.command(serial, 'play')
         if error:
             logger.error("[resume-watchdog] retry dispatch failed: %s", error)
+            if _alexa_auth_error(error):
+                _stop_alexa_auth_failure(error, expected_video=video_id,
+                    expected_intent=resume_intent, expected_output=resume_output)
+                return
             with _np_lock:
                 still_staged = (int(_now_playing.get('playback_revision', 0)) == staged_revision
                                 and _now_playing.get('video_id') == video_id
@@ -6890,7 +6952,16 @@ def _auto_advance_after_failure(serial, video_id, reason):
     """
     if not _still_relevant_video(video_id):
         return False
+    if _alexa_auth_error(reason, reason):
+        _stop_alexa_auth_failure(reason, reason, expected_video=video_id)
+        return True
+    authentication = _known_alexa_auth_failure()
+    if authentication:
+        _stop_alexa_auth_failure('', authentication['code'], expected_video=video_id)
+        return True
     with _np_lock:
+        if _now_playing.get('_alexa_auth_blocked'):
+            return True
         occurrence = (serial, video_id, _now_playing.get('queue_index', -1))
     count, fresh = _playback_failover_budget.fail(occurrence)
     if not fresh:
@@ -6911,7 +6982,7 @@ def _auto_advance_after_failure(serial, video_id, reason):
         return False
     logger.warning("[playback-watchdog] auto-advancing to %s after %s (%s)",
                    next_id, video_id, reason)
-    _update_now_playing(
+    staged = _update_now_playing(_require_alexa_access=True,
         video_id=next_id, queue_index=next_idx, playing=True,
         title=next_item.get('title', ''), artist=next_item.get('artist', ''),
         thumbnail=next_item.get('thumbnail', ''),
@@ -6919,9 +6990,14 @@ def _auto_advance_after_failure(serial, video_id, reason):
         playback_confirmed=False,
         playback_error={'type': reason, 'message': f'Song failed ({count}/5). Trying the next song.',
                         'terminal': False, 'skipped_video_id': video_id})
+    if staged is False:
+        return True
     dispatch_error = _dispatch_play_with_retry(serial, next_id)
     if dispatch_error:
         logger.error("[playback-watchdog] auto-advance dispatch failed: %s", dispatch_error)
+        if _alexa_auth_error(dispatch_error):
+            _stop_alexa_auth_failure(dispatch_error, expected_video=next_id)
+            return True
         _update_now_playing(playing=False, playback_processing=False, playback_error={
             'type': 'offline' if 'offline' in str(dispatch_error).lower() else 'dispatch_error',
             'message': str(dispatch_error)})
@@ -6940,6 +7016,8 @@ def _dispatch_play_with_retry(serial, video_id, offset_ms=0):
     any) happens in the background and reports failure via 'playback_error'
     in now_playing rather than this return value."""
     def _send():
+        if _now_playing.get('_alexa_auth_blocked'):
+            return 'Alexa authentication failed. Reconnect Amazon or correct the skill settings before retrying.'
         _arm_play(serial, video_id, offset_ms)
         return alexa_remote.remote.play_video_id(serial, video_id, offset_ms)
 
@@ -6948,6 +7026,9 @@ def _dispatch_play_with_retry(serial, video_id, offset_ms=0):
                     _playback_output.snapshot()['output_token'])
     error = _send()
     if error:
+        if _alexa_auth_error(error):
+            _stop_alexa_auth_failure(error, expected_video=video_id,
+                expected_intent=expected[0], expected_output=expected[1])
         return error
     _spawn_for_identity(_current_identity(), _watch_playback_confirmation,
                         args=(serial, video_id, _send, expected), name='playback-watchdog')
@@ -8478,8 +8559,143 @@ def alexa_volume():
     return jsonify({'volume': volume, 'available': True, 'stale': False})
 
 
+def _accept_verified_alexa_retry():
+    """Only a fresh, authenticated user play can release an auth-failure latch."""
+    kind = request.headers.get('X-Alexa-Request-Type', '')
+    intent = request.headers.get('X-Alexa-Intent-Name', '')
+    manual = (kind == 'IntentRequest' and intent in {
+        'PlaySongIntent', 'PlayArtistIntent', 'PlayAlbumIntent', 'StartPlaylistIntent', 'PlayAudio',
+        'PlayGenreIntent', 'AMAZON.ResumeIntent', 'AMAZON.NextIntent', 'AMAZON.PreviousIntent',
+        'SeekIntent', 'FastForwardIntent', 'RewindIntent', 'AMAZON.StartOverIntent', 'AMAZON.RepeatIntent'})
+    if not manual and kind != 'PlaybackController.PlayCommandIssued':
+        return False
+    try:
+        raw = request.headers.get('X-Alexa-Request-Timestamp', '')
+        at = datetime.fromisoformat(raw.replace('Z', '+00:00')).timestamp()
+    except (ValueError, TypeError, OverflowError):
+        return False
+    if not time.time()-60 <= at <= time.time()+5:
+        return False
+    with _np_lock:
+        since = _now_playing.get('alexa_intent_at') or 0
+        threshold = int(since) if '.' not in raw else since
+        if not _now_playing.get('_alexa_auth_blocked') or at < threshold:
+            return False
+        _now_playing.update(_alexa_auth_blocked=False, playback_error=None, alexa_intent_at=time.time())
+        _now_playing.pop('_playback_error_event', None)
+        if intent in ('AMAZON.ResumeIntent', 'PlayAudio') or kind == 'PlaybackController.PlayCommandIssued':
+            video_id = _now_playing.get('video_id')
+            if _valid_video_id(video_id):
+                # Resume the preserved failed selection, not an older DynamoDB song.
+                serial = _playback_output.snapshot().get('output_serial') or None
+                _arm_play(serial, video_id, _computed_position_ms(), kind='resume')
+    return True
+
+
+def _known_alexa_auth_failure():
+    """A revoked last-used skill credential cannot justify a music fallback."""
+    layer = _multiuser_layer
+    token_id = _now_playing.get('_alexa_verified_token_id')
+    if layer is None or not token_id:
+        return None
+    from multiuser.alexa_access import AccessDenied
+    try:
+        user, _credential = layer.alexa_access.current(token_id)
+    except AccessDenied:
+        return _alexa_auth_error('', 'alexa_access_denied')
+    if _player_identity_for_user_id(user['id']) != _current_identity():
+        return _alexa_auth_error('', 'alexa_access_denied')
+    return None
+
+
+def _stop_alexa_auth_failure(error, code=None, expected_video=None, expected_intent=None, expected_output=None):
+    failure = _alexa_auth_error(error, code)
+    if failure is None:
+        return False
+    with _np_lock:
+        output = _playback_output.snapshot()
+        if (output['playback_output'] != 'alexa'
+                or (expected_video is not None and _now_playing.get('video_id') != expected_video)
+                or (expected_intent is not None and _now_playing.get('alexa_intent_at') != expected_intent)
+                or (expected_output is not None and output['output_token'] != expected_output)):
+            return False
+        if _now_playing.get('_alexa_auth_blocked'):
+            return True
+        _reset_progress(_computed_position_ms())
+        _now_playing.update(playing=False, playback_processing=False, playback_confirmed=False,
+                            playback_error=failure, _alexa_auth_failure=failure, _alexa_auth_blocked=True, updated_at=time.time())
+        _now_playing['playback_revision'] = int(_now_playing.get('playback_revision', 0)) + 1
+        _now_playing['failed_playback_revision'] = _now_playing['playback_revision']
+        # Retire workers and callbacks from this attempt, even for the same song.
+        _now_playing['alexa_intent_at'] = time.time()
+        with _PENDING_DISPATCH_LOCK:
+            pending = list(_PENDING_DISPATCH.values())
+            _PENDING_DISPATCH.clear()
+        with _ARMED_PLAYS_LOCK:
+            _ARMED_PLAYS.clear()
+        with _TRIGGER_INFLIGHT_LOCK:
+            _TRIGGER_INFLIGHT.clear()
+    for entry in pending:
+        entry['timer'].cancel()
+    _notify_sse()
+    return True
+
+
+def _report_alexa_auth_denial(user_id, code):
+    # A late callback cannot cancel a newer user intent. Old clients without a
+    # request timestamp remain rejected but cannot write playback diagnostics.
+    try:
+        raw = request.headers.get('X-Alexa-Request-Timestamp', '')
+        at = datetime.fromisoformat(raw.replace('Z', '+00:00')).timestamp()
+    except (ValueError, TypeError, OverflowError):
+        return False
+    if at > time.time() + 5:
+        return False
+    if time.time() - at > 60:
+        request.environ['musicbox.alexa_denial_stale'] = True
+        return False
+    identity_token = _PLAYER_IDENTITY.set(_player_identity_for_user_id(user_id))
+    try:
+        with _np_lock:
+            intent = _now_playing.get('alexa_intent_at') or 0
+            threshold = int(intent) if '.' not in raw else intent
+            if at < threshold:
+                request.environ['musicbox.alexa_denial_stale'] = True
+                return False
+            if not (_now_playing.get('playback_processing') or _now_playing.get('playing')):
+                return False
+            kind = request.headers.get('X-Alexa-Request-Type', '')
+            if kind.startswith(('AudioPlayer.', 'PlaybackController.')):
+                supplied = request.headers.get('X-Alexa-Playback-Token', '')
+                parts = supplied.split('|')
+                actual = _now_playing.get('alexa_token')
+                # A failure while buffering the successor can name that song
+                # while currentPlaybackState still proves the active stream.
+                current = request.headers.get('X-Alexa-Current-Playback-Token')
+                queued_current = kind == 'AudioPlayer.PlaybackFailed' and actual and current == actual
+                if (len(parts) < 2 or parts[1] != _now_playing.get('video_id')) and not queued_current:
+                    request.environ['musicbox.alexa_denial_stale'] = True
+                    return False
+                if actual and actual != supplied and not _now_playing.get('playback_processing') and not queued_current:
+                    request.environ['musicbox.alexa_denial_stale'] = True
+                    return False
+            out = _playback_output.snapshot()
+            if out['playback_output'] != 'alexa':
+                return False
+            video, output = _now_playing.get('video_id'), out['output_token']
+        stopped = _stop_alexa_auth_failure('', code, video, intent, output)
+        if not stopped:
+            request.environ['musicbox.alexa_denial_stale'] = True
+        return stopped
+    finally:
+        _PLAYER_IDENTITY.reset(identity_token)
+
+
 def _fail_play_dispatch(video_id, intent, output_token, error):
     """A late offline response must never stop a newer song or phone handoff."""
+    if _alexa_auth_error(error):
+        return _stop_alexa_auth_failure(error, expected_video=video_id,
+            expected_intent=intent, expected_output=output_token)
     with _np_lock:
         output = _playback_output.snapshot()
         if (output['playback_output'] != 'alexa' or output['output_token'] != output_token
@@ -8500,6 +8716,10 @@ def _device_dispatch_failed(error):
     no longer under our control, so stop claiming it's live — this freezes the
     progress bar on every open remote instead of ticking on forever — then
     surface a clear 502."""
+    failure = _alexa_auth_error(error)
+    if failure:
+        _stop_alexa_auth_failure(error)
+        return error_response(failure['message'], 403, code=failure['code'])
     with _np_lock:
         _reset_progress(_computed_position_ms())
         _now_playing.update(playing=False, playback_processing=False, playback_confirmed=False)
@@ -8520,6 +8740,8 @@ def alexa_command():
         _claim_alexa_output(serial, expected_owner=body.get('output_owner'),
                             expected_token=body.get('output_token'),
                             source_paused=body.get('phone_paused') is True)
+        with _np_lock:
+            _now_playing['_alexa_auth_blocked'] = False
     if action == 'pause' and _playback_output.snapshot()['playback_output'] == 'phone':
         # Stop a stale Echo transport without rewriting the active phone's mirrored state.
         error = alexa_remote.remote.command(serial, action, body.get('value'))
@@ -8586,6 +8808,9 @@ def alexa_command():
         if not int(item.get('duration_ms') or 0):
             _bg_thread(_lookup_and_update_np, args=(video_id,))
         return jsonify({'ok': True, 'now_playing': item, 'queue_index': target_idx})
+    with _np_lock:
+        command_fence = (_now_playing.get('video_id'), _now_playing.get('alexa_intent_at'),
+                         _playback_output.snapshot()['output_token'])
     resume_position_ms = None
     previous_now_playing = None
     if action in ('play', 'pause'):
@@ -8611,6 +8836,8 @@ def alexa_command():
             _now_playing['alexa_intent_at'] = time.time()
             staged_video_id = _now_playing.get('video_id', '')
             staged_revision = int(_now_playing.get('playback_revision', 0))
+            command_fence = (staged_video_id, _now_playing.get('alexa_intent_at'),
+                             _playback_output.snapshot()['output_token'])
         _notify_sse()
         # Prepare the URL while Alexa handles resume; paused current bytes remain.
         if _valid_video_id(staged_video_id):
@@ -8656,6 +8883,8 @@ def alexa_command():
             _now_playing['playback_revision'] = int(_now_playing.get('playback_revision', 0)) + 1
             _now_playing['updated_at'] = time.time()
             paused_video_id = _now_playing.get('video_id', '')
+            command_fence = (paused_video_id, _now_playing.get('alexa_intent_at'),
+                             _playback_output.snapshot()['output_token'])
         _notify_sse()
         # Refresh the cache mtime at pause time so TTL counts from the pause,
         # not the original download; the file is also pinned while selected.
@@ -8663,6 +8892,11 @@ def alexa_command():
     else:
         error = alexa_remote.remote.command(serial, action, body.get("value"))
     if error:
+        failure = _alexa_auth_error(error)
+        if failure:
+            _stop_alexa_auth_failure(error, expected_video=command_fence[0],
+                expected_intent=command_fence[1], expected_output=command_fence[2])
+            return error_response(failure['message'], 403, code=failure['code'])
         if previous_now_playing is not None:
             # A rejected command must not leave every browser stuck in an
             # unconfirmed pending state. Restore the pre-command snapshot only
@@ -8979,6 +9213,10 @@ def alexa_state_event():
     sys.stderr.flush()
     if event == 'failed':
         failed_id = body.get('video_id', '')
+        failure = _alexa_auth_error(body.get('error_message'), body.get('error_type'))
+        if failure and _valid_video_id(failed_id):
+            stopped = _stop_alexa_auth_failure('', failure['code'], expected_video=failed_id)
+            return jsonify({'ok': True, 'authentication_failed': stopped})
         with _np_lock:
             if not _valid_video_id(failed_id) or failed_id != _now_playing.get('video_id'):
                 return jsonify({'ok': True, 'ignored': 'stale or unidentified playback failure'})
@@ -9928,6 +10166,11 @@ async def alexa_play():
     query = str(body.get("query") or "").strip()
     if not serial or not query:
         return error_response('missing "serial" or "query"', 400)
+    with _np_lock:
+        _now_playing['_alexa_auth_blocked'] = False
+        _now_playing['alexa_intent_at'] = time.time()
+        requested_intent = _now_playing['alexa_intent_at']
+        requested_output = _playback_output.snapshot()['output_token']
     logger.info("[alexa/play] query=%r serial=%s", query, serial)
     # For plain-text queries (non-URLs), skip the blocking resolve and fire
     # everything in the background so the web remote gets an instant response.
@@ -10118,6 +10361,8 @@ async def alexa_play():
                 error = alexa_remote.remote.play_query(serial, spoken)
                 if error:
                     logger.error("[alexa/play] play_query failed: %s", error)
+                    _stop_alexa_auth_failure(error, expected_intent=requested_intent,
+                                             expected_output=requested_output)
                     _update_now_playing(playing=False)
                 return
             thumb = ''
@@ -10147,6 +10392,8 @@ async def alexa_play():
                 error = alexa_remote.remote.play_query(serial, spoken)
             if error:
                 logger.error("[alexa/play] play failed: %s", error)
+                _stop_alexa_auth_failure(error, expected_intent=requested_intent,
+                                         expected_output=requested_output)
                 _update_now_playing(playing=False)
             else:
                 logger.info("[alexa/play] sent successfully")
@@ -10296,6 +10543,8 @@ def alexa_play_queue():
                 target_idx = requested_index
 
         first = validated_items[target_idx]
+        with _np_lock:
+            _now_playing['_alexa_auth_blocked'] = False
         _update_now_playing(queue_session_id=_intent_queue_session, playing=False, playback_processing=True,
                             title=first['title'], artist=first['artist'],
                             artists=first.get('artists', []),
@@ -10363,6 +10612,9 @@ def alexa_play_queue():
         return error_response('missing "serial" or "video_id"', 400)
     if not _valid_video_id(video_id):
         return error_response('invalid "video_id"', 400)
+
+    with _np_lock:
+        _now_playing['_alexa_auth_blocked'] = False
 
     cur = _get_now_playing()
     queue = cur.get('queue') or []
@@ -10772,12 +11024,20 @@ def armed_play():
         if not peeked:
             return jsonify({'video_id': None})
         video_id, offset_ms, armed_at, kind = peeked
+        if kind == 'resume' and request.environ.get('musicbox.alexa_token_authorized'):
+            with _np_lock:
+                if _now_playing.get('video_id') == video_id:
+                    _now_playing['_alexa_verified_intent_at'] = _now_playing.get('alexa_intent_at')
         return jsonify({'video_id': video_id, 'offset_ms': offset_ms,
                         'armed_at': armed_at, 'kind': kind})
     armed = _consume_armed_play(serial)
     if not armed:
         return jsonify({'video_id': None})
     video_id, offset_ms, armed_at, kind = armed
+    if request.environ.get('musicbox.alexa_token_authorized'):
+        with _np_lock:
+            if _now_playing.get('video_id') == video_id:
+                _now_playing['_alexa_verified_intent_at'] = _now_playing.get('alexa_intent_at')
     # The outstanding trigger has now been served, so a later click may send a
     # fresh one. Until this point additional clicks only re-arm (see
     # _trigger_in_flight), which is what stops the Echo playing every song in a

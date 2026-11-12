@@ -5,6 +5,7 @@ from pathlib import Path
 from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, Mock
+from alexa_playback_errors import authentication_failure
 
 
 class DirectAlexaCommandTests(unittest.IsolatedAsyncioTestCase):
@@ -12,7 +13,7 @@ class DirectAlexaCommandTests(unittest.IsolatedAsyncioTestCase):
         tree = ast.parse((Path(__file__).resolve().parents[1] / 'alexa_remote.py').read_text())
         cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == 'AlexaRemote')
         fn = next(n for n in cls.body if isinstance(n, ast.AsyncFunctionDef) and n.name == '_command')
-        namespace = {'asyncio': asyncio, 'logger': Mock(), 'SKILL_INVOCATION_NAME': 'music box',
+        namespace = {'authentication_failure': authentication_failure, 'asyncio': asyncio, 'logger': Mock(), 'SKILL_INVOCATION_NAME': 'music box',
                      '_TRANSPORT_TEXT': {'play': 'resume', 'pause': 'pause'}}
         exec(compile(ast.Module(body=[fn], type_ignores=[]), 'alexa_remote.py', 'exec'), namespace)
         self.command = namespace['_command']
@@ -46,3 +47,10 @@ class DirectAlexaCommandTests(unittest.IsolatedAsyncioTestCase):
     async def test_volume_has_no_default_batching_delay(self):
         self.assertIsNone(await self.command(self.remote, 'echo', 'volume', 43))
         self.api.set_volume.assert_awaited_once_with(.43, queue_delay=0)
+
+
+    async def test_authentication_rejection_has_reconnect_message(self):
+        self.api.run_custom.side_effect = type('AlexapyLoginError', (Exception,), {})('expired')
+        error = await self.command(self.remote, 'echo-one', 'play', None)
+        self.assertIn('Reconnect Amazon', error)
+        self.assertFalse(self.remote.connection_state)

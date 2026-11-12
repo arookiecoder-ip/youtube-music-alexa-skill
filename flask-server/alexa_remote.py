@@ -35,6 +35,7 @@ from network_sessions import ProxyAwareAlexaLogin as AlexaLogin
 from amazon_login_transport import AmazonLoginTransport
 from alexapy.helpers import get_json_value
 from player_state import OWNER, PlayerStateProxy, PlayerStateRegistry
+from alexa_playback_errors import authentication_failure
 
 logger = logging.getLogger(__name__)
 
@@ -1599,11 +1600,15 @@ class AlexaRemote:
             self._login_checked_at = 0.0
             logger.exception("command %s timed out", action)
             return "Alexa didn't respond in time. Check the device is online and try again."
-        except Exception:
+        except Exception as exc:
             # A rejected command often means the session went stale; force a
             # re-validation on the next call instead of trusting the cache.
             self._login_checked_at = 0.0
             logger.exception("command %s failed", action)
+            failure = authentication_failure(exc)
+            if failure:
+                self.connection_state = False
+                return failure['message']
             return "Amazon couldn't run that command. The device may be offline — try again."
         return None
 
@@ -1732,9 +1737,13 @@ class AlexaRemote:
             self._login_checked_at = 0.0
             logger.exception("text_command %r timed out", text)
             return "Alexa didn't respond in time. Check the device is online and try again."
-        except Exception:
+        except Exception as exc:
             self._login_checked_at = 0.0
             logger.exception("text_command %r failed", text)
+            failure = authentication_failure(exc)
+            if failure:
+                self.connection_state = False
+                return failure['message']
             return "Amazon couldn't run that command. The device may be offline — try again."
         return None
 

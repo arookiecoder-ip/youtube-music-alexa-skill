@@ -38,3 +38,5 @@ The private `.env` supports one `KEY=value` per line, optional single/double quo
 The updated client forwards one Alexa request ID across its backend calls, allowing the server to avoid repeated Amazon profile lookups within that request. Redeploy the updated Lambda files to receive this startup improvement; keep your private `.env` unchanged. See [stream recovery and startup checks](docs/multi-user/STREAM-RECOVERY-AND-STARTUP-2026-11-12.md).
 
 Direct song selections can now reuse the armed-song response for their metadata, queue position and stream URL. Update both `mediaUtils/player.py` and `models/player_models.py` together (or deploy the complete Lambda folder) to remove the extra startup request. [Startup timing checks](docs/multi-user/STARTUP-ROUND-TRIPS-2026-11-12.md).
+
+Authentication failures now stop playback attempts and show a corrective message instead of trying other songs. Deploy the updated Lambda folder alongside the backend; keep your private `.env` unchanged. [Authentication checks](docs/multi-user/ALEXA-AUTHENTICATION-STOP-2026-11-12.md).

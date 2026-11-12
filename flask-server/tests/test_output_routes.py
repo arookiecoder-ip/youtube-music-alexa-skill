@@ -10,12 +10,15 @@ import copy
 from test_app_queue import PhoneQueueTests, A, B, track
 from playback_failover import PlaybackFailoverBudget
 from playback_contract import restore_snapshot
+from alexa_playback_errors import authentication_failure
 
 
 class OutputRoutesTests(PhoneQueueTests):
     def setUp(self):
         super().setUp()
         self.namespace['_alexa_access_enabled'] = lambda: True
+        self.namespace['_alexa_auth_error'] = authentication_failure
+        self.namespace['_stop_alexa_auth_failure'] = Mock()
         self.namespace['restore_snapshot'] = restore_snapshot
         self.namespace["_playback_failover_budget"] = PlaybackFailoverBudget()
         self.seek_dispatch = Mock(return_value=None)

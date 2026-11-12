@@ -112,6 +112,9 @@ class SecurityCases(unittest.TestCase):
         self.assertIn('access was denied', result['response']['outputSpeech']['ssml'])
         self.get.assert_not_called()
         self.save.assert_not_called()
+        directives = result['response']['directives']
+        self.assertEqual([d['type'] for d in directives], ['AudioPlayer.Stop', 'AudioPlayer.ClearQueue'])
+        self.assertEqual(directives[1]['clearBehavior'], 'CLEAR_ALL')
 
     def test_permission_card_is_only_shown_when_amazon_permission_is_missing(self):
         self.identity.side_effect = None
@@ -126,6 +129,42 @@ class SecurityCases(unittest.TestCase):
                                 timestamp='2026-11-11T00:00:00Z', token='0|AAAAAAAAAAA|old|b' + 'b' * 64,
                                 offsetInMilliseconds=0)
         result = self.invoke(event)['response']
+        self.assertFalse(result.get('directives'))
+        self.assertNotIn('outputSpeech', result)
+        self.get.assert_not_called()
+        self.save.assert_not_called()
+
+    def test_auth_denied_started_event_stops_without_speech_or_play_directive(self):
+        event = self.event()
+        event['request'] = dict(type='AudioPlayer.PlaybackStarted', requestId='denied-start',
+            timestamp='2026-11-12T00:00:00Z', token='0|AAAAAAAAAAA|attempt|b'+self.binding,
+            offsetInMilliseconds=0)
+        self.identity.side_effect = None
+        self.identity.return_value = (None, SkillAuthorizationError('Reconnect Amazon', code='amazon_link_required'))
+        result = self.invoke(event)['response']
+        self.assertEqual([d['type'] for d in result['directives']], ['AudioPlayer.Stop','AudioPlayer.ClearQueue'])
+        self.assertNotIn('outputSpeech', result)
+        self.assertNotIn('shouldEndSession', result)
+        self.get.assert_not_called()
+        self.save.assert_not_called()
+
+    def test_denied_queue_callback_stops_instead_of_enqueuing_another_song(self):
+        for kind in ('AudioPlayer.PlaybackNearlyFinished','AudioPlayer.PlaybackFinished','AudioPlayer.PlaybackFailed'):
+            with self.subTest(kind=kind):
+                event = self.event()
+                event['request'] = dict(type=kind, requestId='denied-queue', timestamp='2026-11-12T00:00:00Z',
+                    token='0|AAAAAAAAAAA|attempt|b'+self.binding, offsetInMilliseconds=0)
+                self.identity.side_effect = None
+                self.identity.return_value = (None, SkillAuthorizationError('Reconnect Amazon', code='amazon_link_required'))
+                result = self.invoke(event)['response']
+                self.assertEqual([d['type'] for d in result['directives']], ['AudioPlayer.Stop','AudioPlayer.ClearQueue'])
+                self.assertNotIn('outputSpeech', result)
+                self.assertNotIn('shouldEndSession', result)
+
+    def test_stale_auth_denial_cannot_stop_or_save_over_newer_playback(self):
+        self.identity.side_effect = None
+        self.identity.return_value = (None, SkillAuthorizationError('superseded', code='stale_alexa_request'))
+        result = self.invoke()['response']
         self.assertFalse(result.get('directives'))
         self.assertNotIn('outputSpeech', result)
         self.get.assert_not_called()
@@ -181,7 +220,7 @@ class SecurityCases(unittest.TestCase):
         with patch.object(player.Api, 'get_armed_play', return_value=(None, SkillAuthorizationError('unlinked'))), \
                 patch.object(player.Api, 'get_stream') as fresh:
             response = player.Controller.resume(hi, is_playback=True)
-        self.assertFalse(response.directives)
+        self.assertEqual([d.object_type for d in response.directives], ['AudioPlayer.Stop', 'AudioPlayer.ClearQueue'])
         fresh.assert_not_called()
 
     def test_fresh_capability_denial_never_replays_cached_audio(self):
@@ -191,7 +230,45 @@ class SecurityCases(unittest.TestCase):
                     patch.object(player.Api, 'get_stream', return_value=(None, SkillAuthorizationError('unlinked'))):
                 response = (player.Controller.resume(hi, is_playback=True) if action == 'resume'
                             else player.Controller.seek(hi, 9000))
-            self.assertFalse(response.directives)
+            self.assertEqual([d.object_type for d in response.directives], ['AudioPlayer.Stop', 'AudioPlayer.ClearQueue'])
+
+    def test_real_http_denial_during_resume_cannot_use_saved_audio_or_lookup_fallback(self):
+        import json
+        self.invoke()
+        bucket = next(iter(self.rows.values()))['amazon-user']
+        bucket['playlist'] = [dict(title='Selected',artist='Artist',video_id='AAAAAAAAAAA',thumbnail=None)]
+        bucket['playback_info'].update(index=0,play_order=[0],stream_url='https://music.example/stale',
+                                      stream_url_video_id='AAAAAAAAAAA')
+        self.identity_patch.stop()
+        paths=[]
+        def http(method,url,**kwargs):
+            paths.append(url.split('/')[3])
+            if '/api/alexa/identity/' in url:
+                return Node(status=200,data=json.dumps({'binding':self.binding}).encode())
+            return Node(status=403,data=json.dumps({'error':{'code':'amazon_link_required'}}).encode())
+        with patch.object(player.http,'request',side_effect=http):
+            response=self.invoke(self.event('AMAZON.ResumeIntent'))['response']
+        self.assertEqual([d['type'] for d in response['directives']], ['AudioPlayer.Stop','AudioPlayer.ClearQueue'])
+        self.assertEqual(paths,['api','armed_play'])
+
+    def test_denied_state_post_does_not_expand_radio_or_swallow_authentication(self):
+        import json
+        self.identity_patch.stop()
+        requests=[]
+        def http(method,url,**kwargs):
+            requests.append((method,url))
+            if method=='GET':
+                return Node(status=200,data=json.dumps({'binding':self.binding}).encode())
+            return Node(status=403,data=json.dumps({'error':{'code':'amazon_link_required'}}).encode())
+        event=self.event()
+        event['request']=dict(type='AudioPlayer.PlaybackStarted',requestId='denied-post',
+            timestamp='2026-11-12T00:00:00Z',token='0|AAAAAAAAAAA|attempt|b'+self.binding,offsetInMilliseconds=0)
+        with patch.object(player.http,'request',side_effect=http), \
+                patch.object(player.Controller,'expand_radio_queue') as expand:
+            response=self.invoke(event)['response']
+        self.assertEqual([d['type'] for d in response['directives']], ['AudioPlayer.Stop','AudioPlayer.ClearQueue'])
+        expand.assert_not_called()
+        self.assertEqual(len(requests),2)
 
     def test_http_uses_only_configured_https_origin_and_never_follows_redirects(self):
         # Stop the dispatch mock; exercise real URL and HTTP helpers below.

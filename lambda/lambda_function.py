@@ -548,6 +548,19 @@ class CatchAllExceptionHandler(AbstractExceptionHandler):
         # events. A handler may have partially populated the shared builder
         # before raising, so explicitly strip every standard response property.
         request_type = handler_input.request_envelope.request.object_type or ''
+        if isinstance(exception, SkillAuthorizationError) and exception.code in ('stale_alexa_binding', 'stale_alexa_request'):
+            handler_input.request_envelope._musicbox_state_loaded = False
+            response = handler_input.response_builder.response
+            response.directives = []
+            response.output_speech = response.card = response.reprompt = response.should_end_session = None
+            return response
+        if isinstance(exception, SkillAuthorizationError):
+            if request_type in ('IntentRequest', 'LaunchRequest', 'AudioPlayer.PlaybackStarted', 'AudioPlayer.PlaybackNearlyFinished', 'AudioPlayer.PlaybackFinished', 'AudioPlayer.PlaybackFailed') or request_type.startswith('PlaybackController.'):
+                response = handler_input.response_builder.response
+                response.directives = [player.StopDirective(),
+                    player.ClearQueueDirective(clear_behavior=player.ClearBehavior.CLEAR_ALL)]
+                if request_type in ('IntentRequest', 'LaunchRequest'):
+                    response.should_end_session = True
         if request_type.startswith(('AudioPlayer.', 'PlaybackController.')) or request_type in ('SessionEndedRequest', 'System.ExceptionEncountered'):
             response = handler_input.response_builder.response
             response.output_speech = None
@@ -837,7 +850,7 @@ class VerifyAccountRequestInterceptor(AbstractRequestInterceptor):
         else:
             token = ''
         if (request_type.startswith('AudioPlayer.') or token) and not token.endswith('|b' + binding):
-            raise SkillAuthorizationError('This playback belongs to an earlier Echo account binding.')
+            raise SkillAuthorizationError('This playback belongs to an earlier Echo account binding.', code='stale_alexa_binding')
         envelope._musicbox_binding = binding
 
 

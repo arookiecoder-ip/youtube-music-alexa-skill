@@ -8,6 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 from flask import Flask, request, has_request_context, jsonify
+from alexa_playback_errors import authentication_failure
 from datetime import datetime
 import time, sys
 
@@ -61,7 +62,8 @@ class EchoStreamFailureTests(unittest.TestCase):
         callbacks = []
         timer = Mock(side_effect=lambda seconds, callback: callbacks.append(callback) or Mock())
         advance = Mock()
-        ns = {'request': request, 'jsonify': jsonify, 'datetime': datetime, 'time': time, 'sys': sys,
+        ns = {'_alexa_auth_error': authentication_failure, '_stop_alexa_auth_failure': Mock(),
+              'request': request, 'jsonify': jsonify, 'datetime': datetime, 'time': time, 'sys': sys,
               '_np_lock': threading.RLock(), '_now_playing': state,
               '_playback_output': SimpleNamespace(snapshot=lambda: {'playback_output': 'alexa', 'output_serial': 'echo'}),
               '_valid_video_id': lambda x: isinstance(x, str) and len(x) == 11,

@@ -114,6 +114,23 @@ class AlexaAccess:
     def unlink_amazon(self, user_id):
         self.db.execute("DELETE FROM user_provider_credentials WHERE user_id=? AND provider='amazon'", (user_id,))
 
+    def failure_owner(self, headers):
+        """Identify a current credential for diagnostics without granting access.
+
+        Unknown, forged, expired and revoked tokens cannot mutate playback state.
+        Amazon identity verification is deliberately not bypassed for any route.
+        """
+        raw = headers.get('Authorization', '').removeprefix('Bearer ')
+        if not raw.startswith('mbx_') or len(raw) > 256:
+            return None
+        try:
+            user, token = self.current(raw.split('.')[0])
+        except AccessDenied:
+            return None
+        if not hmac.compare_digest(token['token_hash'], hashlib.sha256(raw.encode()).hexdigest()):
+            return None
+        return user
+
     def _profile_get(self, url, **kwargs):
         # Pool TLS connections without sharing mutable Session state between
         # workers. Each bearer is request-local and cookies never carry over.

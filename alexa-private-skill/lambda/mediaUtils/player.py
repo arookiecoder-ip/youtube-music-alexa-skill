@@ -204,10 +204,47 @@ def skill_identity_headers(handler_input):
     request_id = getattr(getattr(handler_input.request_envelope, 'request', None), 'request_id', '')
     if isinstance(request_id, str) and request_id:
         headers['X-Alexa-Request-Id'] = request_id
+    request = getattr(handler_input.request_envelope, 'request', None)
+    request_type = getattr(request, 'object_type', '') or ''
+    if request_type:
+        headers['X-Alexa-Request-Type'] = request_type
+    intent_name = getattr(getattr(request, 'intent', None), 'name', '')
+    if intent_name:
+        headers['X-Alexa-Intent-Name'] = intent_name
+    playback_token = getattr(request, 'token', None)
+    if not playback_token and request_type.startswith('PlaybackController.'):
+        playback_token = getattr(getattr(handler_input.request_envelope.context, 'audio_player', None), 'token', None)
+    if playback_token:
+        headers['X-Alexa-Playback-Token'] = playback_token
+    current_token = getattr(getattr(request, 'current_playback_state', None), 'token', None)
+    if current_token:
+        headers['X-Alexa-Current-Playback-Token'] = current_token
+    timestamp = getattr(getattr(handler_input.request_envelope, 'request', None), 'timestamp', None)
+    if timestamp:
+        headers['X-Alexa-Request-Timestamp'] = timestamp.isoformat() if hasattr(timestamp, 'isoformat') else str(timestamp)
     binding = getattr(handler_input.request_envelope, '_musicbox_binding', '')
     if binding:
         headers['X-Alexa-Binding'] = binding
     return headers
+
+
+def _authorization_error(body):
+    try:
+        code = json.loads(body.decode('utf-8')).get('error', {}).get('code', 'alexa_access_denied')
+    except (ValueError, AttributeError, UnicodeDecodeError):
+        code = 'alexa_access_denied'
+    if not isinstance(code, str):
+        code = 'alexa_access_denied'
+    messages = {
+        'amazon_link_required': 'Connect your Amazon account in the Music Box user panel first.',
+        'amazon_email_mismatch': 'Use the same Amazon account for this Echo and the Amazon connection in your Music Box user panel.',
+        'musicbox_email_mismatch': 'Set MUSICBOX_EMAIL to the verified Music Box email belonging to your token.',
+        'amazon_permission_required': 'Allow email access for this skill in the Alexa app.',
+        'amazon_profile_unavailable': 'Amazon account verification is temporarily unavailable. Try again later.',
+        'amazon_link_changed': 'Your Amazon connection changed. Reconnect Amazon and try again.',
+        'stale_alexa_request': 'A newer playback request superseded this request.'}
+    return SkillAuthorizationError('Alexa access was denied. '+messages.get(code,
+        'Check your active token and account access.'), code=code)
 
 
 def _notify_server(handler_input, event: str, **extra):
@@ -254,8 +291,12 @@ def _notify_server(handler_input, event: str, **extra):
             redirect=False,
         )
         logger.info(f'_notify_server: response {resp.status}')
+        if resp.status in (401, 403):
+            raise _authorization_error(resp.data)
         if resp.status == 200:
             return json.loads(resp.data.decode('utf-8'))
+    except SkillAuthorizationError:
+        raise
     except Exception as e:
         logger.info(f'_notify_server FAILED: {e}')
 
@@ -566,6 +607,8 @@ class Api:
             control = path in ('armed_play', 'next_track', 'api/alexa/identity')
             response = http.request("GET", url, headers=skill_identity_headers(handler_input), timeout=urllib3.Timeout(total=3.0 if control else 25.0),
                                     retries=False if control else None, redirect=False)
+        except SkillAuthorizationError:
+            raise
         except Exception:
             logger.exception(f'Request to {path} failed')
             return None, Exception(data.API_CONNECTION_ISSUE)
@@ -575,20 +618,7 @@ class Api:
         if response.status == 404:
             return None, Exception(data.NOT_FOUND)
         if response.status in (401, 403):
-            try:
-                failure = json.loads(response.data.decode('utf-8'))
-                code = failure.get('error', {}).get('code', 'alexa_access_denied')
-            except (ValueError, AttributeError, UnicodeDecodeError):
-                code = 'alexa_access_denied'
-            messages = {
-                'amazon_link_required': 'Connect your Amazon account in the Music Box user panel first.',
-                'amazon_email_mismatch': 'Use the same Amazon account for this Echo and the Amazon connection in your Music Box user panel.',
-                'musicbox_email_mismatch': 'Set MUSICBOX_EMAIL to the verified Music Box email belonging to your token.',
-                'amazon_permission_required': 'Allow email access for this skill in the Alexa app.',
-                'amazon_link_changed': 'Your Amazon connection changed. Try again.'}
-            return None, SkillAuthorizationError(
-                'Alexa access was denied. ' + messages.get(code,
-                    'Check your token and account access.'), code=code)
+            raise _authorization_error(response.data)
         if response.status != 200:
             logger.error(f'{path} returned status {response.status}: {response.data[:500]}')
             return None, Exception(data.SERVICE_ISSUE)
@@ -856,6 +886,25 @@ class Controller:
 
     @staticmethod
     def error_response(handler_input: HandlerInput, message, is_playback: bool = False) -> Response:
+        if isinstance(message, SkillAuthorizationError):
+            if message.code in ('stale_alexa_binding', 'stale_alexa_request'):
+                handler_input.request_envelope._musicbox_state_loaded = False
+                response = handler_input.response_builder.response
+                response.directives = []
+                response.output_speech = response.card = response.reprompt = response.should_end_session = None
+                return response
+            request_type = getattr(getattr(handler_input.request_envelope, 'request', None), 'object_type', 'IntentRequest') or ''
+            response = handler_input.response_builder.response
+            if request_type in ('IntentRequest', 'LaunchRequest', 'AudioPlayer.PlaybackStarted', 'AudioPlayer.PlaybackNearlyFinished', 'AudioPlayer.PlaybackFinished', 'AudioPlayer.PlaybackFailed') or request_type.startswith('PlaybackController.'):
+                response.directives = [StopDirective(), ClearQueueDirective(clear_behavior=ClearBehavior.CLEAR_ALL)]
+            else:
+                response.directives = []
+            if request_type.startswith(('AudioPlayer.', 'PlaybackController.')):
+                response.output_speech = response.card = response.reprompt = response.should_end_session = None
+                return response
+            if not is_playback:
+                handler_input.response_builder.speak(str(message))
+            return handler_input.response_builder.set_should_end_session(True).response
         if is_playback:
             return handler_input.response_builder.set_should_end_session(True).response
         return handler_input.response_builder.speak(str(message)).response
@@ -977,6 +1026,8 @@ class Controller:
             Attributes.set_play_order(handler_input)
             logger.info(f'expand_radio_queue: playlist now {len(merged)} tracks')
             return True
+        except SkillAuthorizationError:
+            raise
         except Exception:
             logger.exception('expand_radio_queue failed')
             return False
@@ -1118,6 +1169,8 @@ class Controller:
             logger.info(f'enqueue_next_stream: enqueued {enqueue_video_id} after {current_video_id} '
                         f'(index {current_index} -> {enqueue_index})')
             return True
+        except SkillAuthorizationError:
+            raise
         except Exception:
             logger.exception('enqueue_next_stream failed')
             playback_info = Attributes.get_playback_info(handler_input)
@@ -1182,6 +1235,8 @@ class Controller:
             play_order.insert(target, physical)
             playback_info['play_order'] = play_order
             return play_order.index(physical)
+        except SkillAuthorizationError:
+            raise
         except Exception:
             logger.exception('_stage_next_track failed')
             return None
@@ -1237,6 +1292,8 @@ class Controller:
                         handler_input, Controller._dedupe_against_playlist(playlist, tracks))
                     if grew:
                         logger.info('extend_queue: extended from server queue')
+        except SkillAuthorizationError:
+            raise
         except Exception:
             logger.exception('extend_queue: server-queue continuation failed')
         if not grew:
@@ -1272,6 +1329,8 @@ class Controller:
                 return False
             logger.info(f'extend_radio_queue: appended {len(new_tracks[:25])} tracks')
             return True
+        except SkillAuthorizationError:
+            raise
         except Exception:
             logger.exception('extend_radio_queue failed')
             return False
@@ -1395,6 +1454,8 @@ class Controller:
             armed, arm_error = Api.get_armed_play(handler_input, peek=True)
             if isinstance(arm_error, SkillAuthorizationError):
                 return Controller.error_response(handler_input, arm_error, is_playback)
+        except SkillAuthorizationError:
+            raise
         except Exception:
             logger.exception('resume: armed-play peek failed; using persisted session')
             armed = None

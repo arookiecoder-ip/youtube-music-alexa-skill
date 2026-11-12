@@ -69,6 +69,15 @@ class SkillIdentityHeaderTests(unittest.TestCase):
         self.assertEqual(first['X-Alexa-Request-Id'], 'amzn1.echo-api.request.request-a')
         self.assertEqual(first['X-Alexa-Request-Id'], second['X-Alexa-Request-Id'])
 
+    def test_request_timestamp_and_audio_identity_are_forwarded_for_failure_fences(self):
+        request = _identity()
+        request.request_envelope.request = _node(object_type='AudioPlayer.PlaybackStarted',
+            timestamp='2026-11-12T10:00:00Z', token='0|AAAAAAAAAAA|attempt')
+        headers = player.skill_identity_headers(request)
+        self.assertEqual(headers['X-Alexa-Request-Timestamp'], '2026-11-12T10:00:00Z')
+        self.assertEqual(headers['X-Alexa-Request-Type'], 'AudioPlayer.PlaybackStarted')
+        self.assertEqual(headers['X-Alexa-Playback-Token'], '0|AAAAAAAAAAA|attempt')
+
     def test_a_missing_device_id_does_not_become_every_device(self):
         headers = player.skill_identity_headers(_identity('a', ''))
         self.assertEqual(headers['X-Alexa-Device-Id'], '')
