@@ -127,24 +127,11 @@ class SignupSwitchTestBase(unittest.TestCase):
             return session.get("mu_ss_csrf", "")
 
     def pending_signup(self, username: str = "pending"):
-        """Sign up through the real form so the code email is actually sent."""
-        response = self.client.post(
-            "/signup",
-            data={
-                "_csrf": self.open_signup_form(),
-                "username": username,
-                "email": f"{username}@example.test",
-                "password": PASSWORD,
-                "confirm_password": PASSWORD,
-            },
-        )
-        # With no SMTP the door says "Almost there" and names the outbox; with
-        # SMTP it redirects to the code box. Either way the account exists.
-        self.assertIn(response.status_code, (200, 302),
-                      response.get_data(as_text=True)[:400])
-        user = self.accounts.get_user_by_username(username)
-        self.assertTrue(user, "the sign-up form must create the pending account")
-        return user, self.newest_code()
+        """An unverified account from before email-first signup was introduced."""
+        user = self.accounts.register_self_service(username=username, password=PASSWORD,
+                                                   email=f"{username}@example.test")
+        code = self.accounts.create_email_code(user["id"], "verify")
+        return user, code
 
 
 class SignupSwitchTests(SignupSwitchTestBase):

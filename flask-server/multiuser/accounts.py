@@ -549,14 +549,15 @@ class AccountService:
         username: str,
         password: str,
         email: str,
+        email_verified: bool = False,
         ip: str = "",
         user_agent: str = "",
     ) -> dict:
         """Create an account with no administrator involved.
 
         Privilege is not on offer: role, status and verification are fixed by the
-        caller, and the account cannot sign in until the address on it is
-        confirmed, so an abandoned registration is harmless.
+        caller. Only a server-side caller that has already proven mailbox
+        ownership may pass email_verified=True; legacy registrations stay pending.
         """
         if not self.registration_open():
             raise AccountError("Sign-up is not available right now.")
@@ -575,7 +576,7 @@ class AccountService:
             role="user",
             status="active",
             must_change_password=False,
-            email_verified=False,
+            email_verified=email_verified,
             created_by="self",
         )
         self.db.audit(

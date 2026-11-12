@@ -13,7 +13,7 @@ import sqlite3
 import time
 from typing import Any, Iterable
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 
 _SCHEMA_V1 = (
     """
@@ -408,6 +408,13 @@ class Database:
                     for operation in ('INSERT', 'UPDATE'):
                         conn.execute(f"CREATE TRIGGER {table}_reject_admin_{operation.lower()} BEFORE {operation} ON {table} WHEN NEW.role = 'admin' BEGIN SELECT RAISE(ABORT, 'The admin role has been removed.'); END")
                 conn.execute("INSERT INTO multiuser_schema_migrations VALUES (11, ?)", (time.time(),))
+            if 12 not in applied:
+                conn.execute("""CREATE TABLE signup_challenges (
+                    token TEXT PRIMARY KEY, email TEXT NOT NULL, code_enc TEXT NOT NULL,
+                    expires REAL NOT NULL, sent REAL NOT NULL,
+                    attempts INTEGER NOT NULL DEFAULT 0, verified INTEGER NOT NULL DEFAULT 0)""")
+                conn.execute("CREATE INDEX idx_signup_challenges_email ON signup_challenges(email)")
+                conn.execute("INSERT INTO multiuser_schema_migrations VALUES (12, ?)", (time.time(),))
             now = time.time()
             # Bound the audit journal so a long-lived install cannot grow it
             # without limit. 90 days is intentionally conservative.

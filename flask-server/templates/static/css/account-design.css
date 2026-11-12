@@ -148,3 +148,22 @@ body .btn.primary:hover { color: var(--auth-action-text); }
   .admin-dialog.ud-dialog .dialog-foot { gap: 8px; }
   .ud-device-list { height: 280px; flex-basis: 280px; }
 }
+
+/* Signup steps also animate when navigating without JavaScript. */
+.signup-flow { animation: signup-enter 320ms ease-out both; }
+@keyframes signup-enter {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .signup-flow { animation: none; }
+}
+@view-transition { navigation: auto; }
+@media (prefers-reduced-motion: no-preference) {
+  body:has(.signup-flow) main { view-transition-name: signup-card; }
+  ::view-transition-old(signup-card) { animation: signup-leave 180ms ease-in both; }
+  ::view-transition-new(signup-card) { animation: signup-enter 320ms ease-out both; }
+}
+@keyframes signup-leave {
+  to { opacity: 0; transform: translateY(-8px); }
+}

@@ -19,6 +19,7 @@ from __future__ import annotations
 from auth_sessions import password_change_allowed
 
 import hmac
+import hashlib
 import os
 import secrets
 import time
@@ -83,6 +84,7 @@ EMAIL_TAKEN_GENERIC = (
 # The operator-facing policy is MULTIUSER_SELF_SIGNUP_ENABLED and
 # MULTIUSER_MAX_SELF_SIGNUPS_PER_DAY.
 _LIMITS: dict[str, tuple[int, int | None]] = {
+    "signup-details": (10, 900),
     "signup-ip": (5, 3600),
     "signup-id": (3, 86400),
     "resend-ip": (10, 900),
@@ -535,104 +537,125 @@ def build_selfservice_blueprint(mu) -> Blueprint:
 
     @bp.route("/signup", methods=["GET", "POST"])
     def signup():
-        if request.method == "GET":
-            policy = mu.accounts.signup_policy()
-            if not policy["open"]:
-                return _signups_closed(policy["reason"])
-            return _signup_form()
-
-        ip, user_agent = _ip(), _ua()
-        # The door state is answered before anything a visitor could fix (honeypot,
-        # form nonce, rate limit): "come back tomorrow" is not a message to bury
-        # behind "your form expired, reload it".
         policy = mu.accounts.signup_policy()
         if not policy["open"]:
             return _signups_closed(policy["reason"])
-        username = (request.form.get("username") or "").strip()
-        email = (request.form.get("email") or "").strip()
-        # Off-screen honeypot: a human cannot see or tab into this field.
+        now = time.time()
+        mu.db.execute("DELETE FROM signup_challenges WHERE expires < ?", (now,))
+        token = session.get("signup_challenge", "")
+        key = hashlib.sha256(token.encode()).hexdigest()
+        row = mu.db.fetchone("SELECT * FROM signup_challenges WHERE token = ?", (key,))
+        pending = dict(row) if row else None
+        step = "details" if pending and pending["verified"] else "code" if pending else "email"
+
+        def page(error="", status=200):
+            if step == "email":
+                _issue_signup_nonce()
+            return render_template("signup.html", signup_step=step,
+                masked_email=_mask(pending["email"]) if pending else "",
+                form=request.form, field_errors={}, form_error=error), status
+
+        if request.method == "GET":
+            return page()
+        action = request.form.get("step", "")
+        ip, ua = _ip(), _ua()
         if _honeypot_filled():
-            return _fake_signup_success(username, email, "honeypot", ip, user_agent)
-        opened, too_fast = _signup_nonce_state()
-        if not opened:
-            # No nonce means the form was never opened here, or its page was
-            # reloaded and resubmitted. That is honest feedback, not a bot tell.
-            return _signup_form(
-                {"username": username, "email": email},
-                {"username": "Open the sign-up form again before submitting it."},
-                status=400,
-            )
-        if too_fast:
-            return _fake_signup_success(username, email, "too_fast", ip, user_agent)
-
-        blocked = _limited("signup-ip", netids.ip_bucket(ip), html=True)
-        if blocked:
-            return blocked
-        blocked = _limited("signup-id", netids.identifier_bucket(email), html=True)
-        if blocked:
-            return blocked
-
-        password = request.form.get("password") or ""
-        confirm = request.form.get("confirm_password") or ""
-        errors: dict[str, str] = {}
-        clean_username = clean_email = ""
-        try:
-            clean_username = AccountService.validate_username(username)
-            clean_email = AccountService.validate_email(email)
-        except AccountError as exc:
-            message = str(exc)
-            errors["username" if message.startswith("Username") or message.startswith("That username") else "email"] = message
-        if not errors.get("email") and not clean_email:
-            errors["email"] = (
-                "An email address is required, so you can reset your password later."
-            )
-        if password != confirm:
-            errors["confirm_password"] = "The two passwords do not match."
+            return page("Please reload and try again.", 400)
+        if action == "restart":
+            mu.db.execute("DELETE FROM signup_challenges WHERE token=?", (key,))
+            session.pop("signup_challenge", None)
+            return redirect("/signup", code=303)
+        if action == "email":
+            blocked = _limited("signup-ip", netids.ip_bucket(ip), html=True)
+            if blocked:
+                return blocked
+            opened, fast = _signup_nonce_state()
+            if not opened or fast:
+                return page("Please take a moment and try again.", 400)
+            try:
+                email = AccountService.validate_email(request.form.get("email", ""))
+                if not email:
+                    raise AccountError("Enter your email address.")
+            except AccountError as exc:
+                return page(str(exc), 422)
+            blocked = _limited("signup-id", netids.identifier_bucket(email), html=True)
+            if blocked:
+                return blocked
+            if mu.accounts.find_user_by_email(email):
+                return page("An account already uses this email address. Sign in or reset your password.", 409)
+        elif action == "resend" and pending and not pending["verified"]:
+            email = pending["email"]
+            wait = max(0, int(pending["sent"] + 60 - now + 1))
+            if wait:
+                response = make_response(*page(f"Try again in {wait} seconds.", 429))
+                response.headers["Retry-After"] = str(wait)
+                return response
+            for scope, value in (("resend-ip", netids.ip_bucket(ip)),
+                                 ("resend-id", netids.identifier_bucket(email))):
+                blocked = _limited(scope, value, html=True)
+                if blocked:
+                    return blocked
+        elif action == "code" and step == "code":
+            for scope, value in (("code-ip", netids.ip_bucket(ip)),
+                                 ("code-id", netids.identifier_bucket(pending["email"]))):
+                blocked = _limited(scope, value, html=True)
+                if blocked:
+                    return blocked
+            with mu.db.connect() as conn:
+                conn.execute("BEGIN IMMEDIATE")
+                current = conn.execute("SELECT * FROM signup_challenges WHERE token=?", (key,)).fetchone()
+                valid = (current and current["expires"] > now and not current["verified"]
+                         and current["attempts"] < config.email_code_attempts)
+                expected = mu.accounts.secret_box.decrypt_json(current["code_enc"])["code"] if valid else ""
+                good = bool(expected) and hmac.compare_digest(expected, request.form.get("code", "").strip())
+                conn.execute("UPDATE signup_challenges SET attempts=attempts+1, verified=? WHERE token=? AND verified=0",
+                             (int(good), key))
+            if not good:
+                return page("That code is invalid or expired. Request a new code if needed.", 422)
+            return redirect("/signup", code=303)
+        elif action == "details" and step == "details":
+            blocked = _limited("signup-details", netids.ip_bucket(ip), html=True)
+            if blocked:
+                return blocked
+            try:
+                username = AccountService.validate_username(request.form.get("username", ""))
+                password = request.form.get("password", "")
+                problem = validate_password(password, username)
+                if problem:
+                    raise AccountError(problem)
+                if password != request.form.get("confirm_password", ""):
+                    raise AccountError("The two passwords do not match.")
+                mu.accounts._ensure_unique(username, pending["email"])
+                with mu.db.connect() as conn:
+                    claimed = conn.execute("DELETE FROM signup_challenges WHERE token=? AND verified=1 AND expires>?",
+                                           (key, now)).rowcount
+                if not claimed:
+                    return page("Verification expired. Start again.", 410)
+                user = mu.accounts.register_self_service(username=username, password=password,
+                    email=pending["email"], email_verified=True, ip=ip, user_agent=ua)
+            except AccountError as exc:
+                return page(str(exc), 422)
+            session.pop("signup_challenge", None)
+            rotate_csrf()
+            return _result_page("Account created", "Your email is verified. You can now sign in.", action_label="Sign in")
         else:
-            problem = validate_password(password, clean_username)
-            if problem:
-                errors["password"] = problem
-        if errors:
-            return _signup_form(
-                {"username": username, "email": email}, errors, status=422
-            )
+            return page("This step has expired. Reload and try again.", 400)
 
-        try:
-            user = mu.accounts.register_self_service(
-                username=clean_username,
-                password=password,
-                email=clean_email,
-                ip=ip,
-                user_agent=user_agent,
-            )
-        except AccountError as exc:
-            message = str(exc)
-            if message == EMAIL_TAKEN:
-                return _signup_form(
-                    {"username": clean_username, "email": clean_email},
-                    form_error=EMAIL_TAKEN_GENERIC,
-                    status=409,
-                )
-            if message == USERNAME_TAKEN:
-                return _signup_form(
-                    {"email": clean_email}, {"username": message}, status=409
-                )
-            if message.startswith("Sign-up is not available"):
-                return _signups_closed(mu.accounts.signup_policy()["reason"])
-            return _signup_form(
-                {"username": clean_username, "email": clean_email}, form_error=message,
-                status=422,
-            )
-
-        rotate_csrf()
-        note = _mail_note(_send_code(user, "verify", ip, user_agent, verify_where))
-        if note:
-            return _result_page("Almost there", note, action_label="Back to sign in")
-        # Straight to the code box, with this browser told which account it just
-        # asked about.  A person should not have to find a second page and retype a
-        # username they were given a field for thirty seconds ago.
-        session[PENDING_VERIFY_KEY] = [user["id"], user.get("username") or ""]
-        return redirect("/verify")
+        # Only an opaque challenge identifier reaches the signed browser cookie.
+        code = f"{secrets.randbelow(1000000):06d}"
+        raw = secrets.token_urlsafe(32)
+        new_key = hashlib.sha256(raw.encode()).hexdigest()
+        result = emails.send_code_email(mu, {"id": None, "email": email}, "verify", code,
+            where="the sign-up page", ip=ip, user_agent=ua)
+        if not result.ok:
+            return page("We could not send your code. Please try again later.", 503)
+        with mu.db.connect() as conn:
+            conn.execute("DELETE FROM signup_challenges WHERE token=? OR email=?", (key, email))
+            conn.execute("INSERT INTO signup_challenges(token,email,code_enc,expires,sent) VALUES(?,?,?,?,?)",
+                (new_key, email, mu.accounts.secret_box.encrypt_json({"code": code}),
+                 now + config.email_code_minutes * 60, now))
+        session["signup_challenge"] = raw
+        return redirect("/signup", code=303)
 
     @bp.route("/verify", methods=["GET", "POST"])
     def verify_signup():
