@@ -830,6 +830,9 @@ class AlexaRemote:
         staging directory first, so a login that fails verification never
         touches this identity's saved session. Returns a user-facing error,
         or None on success."""
+        if getattr(login, 'oauth_login', False) and not getattr(login, 'refresh_token', None):
+            return ("Amazon sign-in finished, but Alexa device authorization did not complete. "
+                    "Start over to authorize the Alexa connection again.")
         sink = getattr(self, '_identity_sink', None)
         profile = None
         if sink:
@@ -942,6 +945,8 @@ class AlexaRemote:
             self._identity_verified = True
         previous_login = self._login
         self._login = login
+        logger.info('Amazon session promoted: OAuth registered=%s marketplace=%s',
+                    bool(getattr(login, 'refresh_token', None)), getattr(login, 'url', 'unknown'))
         self.connection_state = True
         self._login_checked_at = time.monotonic()
         self._devices_raw = []
@@ -1272,6 +1277,9 @@ class AlexaRemote:
             await self._stop_proxy()
         if not await self._claim_proxy():
             return {"state": "busy", "message": PROXY_PORT_BUSY}
+        # Disconnect deletes this account's cookie directory while its remote
+        # object can remain cached. Prepare it again before starting a login.
+        os.makedirs(self._storage_dir, mode=0o700, exist_ok=True)
         stage = tempfile.mkdtemp(prefix="pending-", dir=self.cookie_dir)
         os.makedirs(os.path.join(stage, ".storage"), exist_ok=True)
         self._form_login = AlexaLogin(

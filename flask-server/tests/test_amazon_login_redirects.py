@@ -90,6 +90,22 @@ class AmazonLoginRedirectTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(upstream.get.await_count,5)
         self.assertEqual(loop.release.call_count,5)
 
+    async def test_intermediate_oauth_callback_is_not_lost_when_the_next_page_redirects(self):
+        from network_sessions import ProxyAwareAlexaLogin
+        with tempfile.TemporaryDirectory() as directory:
+            login=ProxyAwareAlexaLogin('amazon.in','synthetic@example.test','',lambda name:str(Path(directory)/name))
+            callback='https://www.amazon.com/ap/maplanding?openid.oa2.authorization_code=synthetic-code'
+            upstream=SimpleNamespace(post=AsyncMock(return_value=response('https://www.amazon.in/ap/mfa',302,callback)),
+                get=AsyncMock(side_effect=[response(callback,302,'/spa/index.html'),response('https://www.amazon.com/spa/index.html')]))
+            try:
+                session=_AmazonLoginSession(upstream,'amazon.in',login._capture_oauth_callback)
+                await session.post('https://www.amazon.in/ap/mfa',data={'otp':'synthetic'},allow_redirects=False)
+                self.assertEqual(login.authorization_code,'synthetic-code')
+                upstream.post.assert_awaited_once()
+                self.assertEqual(upstream.get.await_count,2)
+            finally:
+                await login.close();await asyncio.sleep(0)
+
     async def test_non_signin_requests_keep_original_behavior(self):
         upstream=SimpleNamespace(post=Mock(return_value='original request'))
         client=_AmazonLoginSession(upstream,'amazon.in')

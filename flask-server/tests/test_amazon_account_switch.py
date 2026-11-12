@@ -118,3 +118,11 @@ class AmazonAccountSwitchTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(Path(self.owner._email_file).read_text(), 'old@example.test')
         self.assertIs(self.owner._login, self.old)
         self.old.close.assert_not_awaited()
+
+    async def test_web_only_session_cannot_be_promoted_as_an_oauth_alexa_connection(self):
+        self.login.oauth_login = True
+        self.login.refresh_token = None
+        error = await self.owner._promote_staged_login(self.login, str(self.stage))
+        self.assertIn('Alexa device authorization did not complete', error)
+        self.assertEqual(self.live.read_text(), 'old-valid-session')
+        self.assertIs(self.owner._login, self.old)

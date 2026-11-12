@@ -358,3 +358,24 @@ class AmazonPromotionCleanupTests(unittest.IsolatedAsyncioTestCase):
             login.close.assert_awaited_once();old.close.assert_not_awaited()
             self.assertIsNone(owner._form_login);self.assertIsNone(owner._form_stage)
             self.assertFalse(stage.exists());self.assertEqual(live.read_text(),'previous working session')
+
+
+class AmazonReconnectDirectoryTests(unittest.IsolatedAsyncioTestCase):
+    async def test_signin_recreates_only_its_deleted_account_cookie_directory(self):
+        import os,secrets,tempfile
+        from unittest.mock import Mock
+        functions,methods=_nodes()
+        namespace={'os':os,'secrets':secrets,'tempfile':tempfile,'re':re,
+                   'AMAZON_DOMAIN':'amazon.in','PROXY_PORT_BUSY':'busy','AlexaLogin':Mock()}
+        exec(compile(ast.Module(body=[functions['_normalize_identifier'],methods['_form_login_begin']],type_ignores=[]),str(SOURCE),'exec'),namespace)
+        with tempfile.TemporaryDirectory() as root:
+            root=Path(root);account=root/'account-one';other=root/'account-two';other.mkdir()
+            cookie=other/'working-cookie';cookie.write_text('preserved')
+            owner=SimpleNamespace(cookie_dir=str(account),_storage_dir=str(account/'.storage'),
+                _access_error=Mock(return_value=None),_form_cleanup=AsyncMock(),_proxy_started=False,
+                _claim_proxy=AsyncMock(return_value=True),_form_step=AsyncMock(return_value={'state':'need_code'}))
+            result=await namespace['_form_login_begin'](owner,'synthetic@example.test','synthetic-password')
+            self.assertEqual(result['state'],'need_code')
+            self.assertTrue(Path(owner._form_stage).is_dir())
+            self.assertTrue((account/'.storage').is_dir())
+            self.assertEqual(cookie.read_text(),'preserved')

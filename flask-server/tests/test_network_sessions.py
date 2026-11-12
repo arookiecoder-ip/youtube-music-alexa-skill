@@ -52,3 +52,19 @@ class NetworkSessionTests(unittest.IsolatedAsyncioTestCase):
                 self.assertFalse(login._restoring_saved_session)
             finally:
                 await login.close()
+
+    async def test_oauth_callback_is_scoped_to_trusted_callback_locations(self):
+        with tempfile.TemporaryDirectory() as root:
+            login=ProxyAwareAlexaLogin('amazon.in','test@example.test','',lambda name:str(Path(root)/name))
+            other=ProxyAwareAlexaLogin('amazon.in','other@example.test','',lambda name:str(Path(root)/name))
+            try:
+                for url in ('http://www.amazon.com/ap/maplanding?openid.oa2.authorization_code=untrusted',
+                            'https://evil.example/ap/maplanding?openid.oa2.authorization_code=untrusted',
+                            'https://www.amazon.com/ap/signin?openid.oa2.authorization_code=untrusted'):
+                    self.assertFalse(login._capture_oauth_callback(url))
+                    self.assertFalse(login.authorization_code)
+                self.assertTrue(login._capture_oauth_callback('https://www.amazon.com/ap/maplanding?openid.oa2.authorization_code=synthetic-code'))
+                self.assertEqual(login.authorization_code,'synthetic-code')
+                self.assertFalse(other.authorization_code)
+            finally:
+                await login.close();await other.close();await asyncio.sleep(0)

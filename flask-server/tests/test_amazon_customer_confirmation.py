@@ -143,10 +143,9 @@ class AmazonOtpPromotionTests(unittest.IsolatedAsyncioTestCase):
             get=AsyncMock(side_effect=[
                 page('https://www.amazon.in/ap/signin', '<form name="signIn" action="/ap/signin"><input name="email"><input name="password"></form>'),
                 page('https://www.amazon.in/ap/mfa', '<form id="auth-mfa-form" action="/ap/mfa"><input id="auth-mfa-otpcode" name="otpCode"></form>'),
-                page(login._prefix+'amazon.in/api/users/me',status=401,customer={'email':'','error':'unauthorized'}),
-                page(login._prefix+'amazon.com/api/users/me',customer={'email':'canonical@example.test','id':'amazon-customer'})])
+                page(login._prefix+'amazon.in/api/users/me',customer={'email':'canonical@example.test','id':'amazon-customer'})])
             post=AsyncMock(side_effect=[page('https://www.amazon.in/ap/signin',status=302,location='/ap/mfa'),
-                                       page('https://www.amazon.in/ap/maplanding')])
+                                       page('https://www.amazon.com/ap/maplanding?openid.oa2.authorization_code=synthetic-authorization-code')])
             remote=namespace['AlexaRemote']();old=SimpleNamespace(close=AsyncMock())
             for name,value in dict(_form_login=login,_form_stage=str(stage),_form_attempt_id='synthetic-attempt',
                 FORM_STEP_TIMEOUT=5,_login=old,_proxy_login=None,_identity_sink=Mock(),
@@ -154,7 +153,14 @@ class AmazonOtpPromotionTests(unittest.IsolatedAsyncioTestCase):
                 _read_saved_email=Mock(return_value=None),cookie_dir=str(live),_storage_dir=str(live/'.storage'),
                 _email_file=str(live/'.storage/last_email.txt')).items():setattr(remote,name,value)
             patches=[patch.object(session,'get',get),patch.object(session,'post',post)]
-            for method in ('get_tokens','register_capabilities','exchange_token_for_cookies','get_csrf','check_domain'):
+            async def register_session():
+                self.assertEqual(login.authorization_code,'synthetic-authorization-code')
+                self.assertTrue(login.code_verifier)
+                login.refresh_token='synthetic-refresh-token'
+                login.access_token='synthetic-access-token'
+                return True
+            patches.append(patch.object(login,'get_tokens',AsyncMock(side_effect=register_session)))
+            for method in ('register_capabilities','exchange_token_for_cookies','get_csrf','check_domain'):
                 patches.append(patch.object(login,method,AsyncMock(return_value=True)))
             for item in patches:item.start()
             try:
@@ -162,9 +168,10 @@ class AmazonOtpPromotionTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(first['state'],'need_code')
                 result=await remote._form_step({'securitycode':'123456'})
                 self.assertEqual(result['state'],'connected')
-                self.assertEqual(get.await_count,4)
-                self.assertIn('amazon.com/api/users/me',get.await_args.args[0])
-                self.assertEqual(login.url,'amazon.com')
+                self.assertEqual(get.await_count,3)
+                self.assertIn('amazon.in/api/users/me',get.await_args.args[0])
+                self.assertEqual(login.url,'amazon.in')
+                self.assertTrue(login.refresh_token)
                 remote._identity_sink.assert_called_once_with('user:explicit-user','canonical@example.test','amazon-customer')
                 self.assertIs(remote._login,login)
                 self.assertTrue(Path(login._cookiefile[0]).is_file())
