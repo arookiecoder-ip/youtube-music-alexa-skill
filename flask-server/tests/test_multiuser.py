@@ -757,7 +757,7 @@ class AdminControlsTests(MultiUserTestBase):
         )
         self.assertTrue(self.layer.accounts.get_user(user["id"])["must_change_password"])
         detail = self.client.get(f"/admin/users/{user['id']}/")
-        self.assertIn(b"This account must choose a new password", detail.data)
+        self.assertIn(b"Change required at next sign-in", detail.data)
 
         self.client.post(
             f"/admin/users/{user['id']}/password-change/",
