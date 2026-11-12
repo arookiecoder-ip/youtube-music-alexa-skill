@@ -94,3 +94,5 @@ class EmailOtpLoginTests(SecondFactorDoorTestBase):
         response = self.admin_client.get('/verify')
         self.assertEqual(response.status_code, 302)
         self.assertIn('/login/?otp=1&code=1', response.headers['Location'])
+        with self.admin_client.session_transaction() as session:
+            self.assertTrue(session.get('mu_ss_csrf'))

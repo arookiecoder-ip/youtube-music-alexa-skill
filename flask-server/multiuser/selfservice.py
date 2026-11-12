@@ -676,6 +676,8 @@ def build_selfservice_blueprint(mu) -> Blueprint:
         if request.method == "GET":
             # Old bookmarks and signup mail now lead to the inline login form.
             # Keep POST compatibility for verification forms already open in tabs.
+            # Rendering used to initialize this token through the context processor.
+            csrf_token()
             return redirect(login_url + "?otp=1&code=1")
 
         if not user:
