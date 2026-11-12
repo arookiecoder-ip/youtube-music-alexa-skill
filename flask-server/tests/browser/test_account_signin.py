@@ -297,6 +297,9 @@ def test_switch_back_preserves_password_login(login_page):
     page, origin, calls = login_page
     page.goto(origin+'/login/')
     page.get_by_role('button', name='Login via OTP', exact=True).click()
+    page.locator('#username').fill('person')
+    page.get_by_role('button', name='Send OTP', exact=True).click()
+    page.locator('#email-code').fill('123')
     page.get_by_role('button', name='Login via password', exact=True).click()
     expect(page.locator('#password')).to_be_visible()
     page.locator('#username').fill('person')

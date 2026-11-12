@@ -10,6 +10,7 @@
   function refresh() {
     signIn.disabled = busy || (mode === 'otp' && (!sent || !/^[0-9]{6}$/.test(emailCode.value)));
     if (!toggle) return;
+    emailCode.disabled = mode !== 'otp';
     toggle.disabled = busy;
     $('username').readOnly = mode === 'otp' && lockedIdentifier;
     $('send-otp').disabled = busy || Date.now() < resendAt;
