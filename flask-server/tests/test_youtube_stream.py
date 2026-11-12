@@ -114,11 +114,108 @@ class Streaming(unittest.TestCase):
         self.opener.open.return_value=Upstream();self.stream.open(VID).close()
 
     def test_read_failure_releases_slot(self):
-        up=Upstream();self.opener.open.return_value=up
+        up=Upstream(b'x'*20000)
+        self.stream.resolve.return_value = {**MEDIA, 'length': 20000}
+        self.opener.open.side_effect = [up, OSError('offline'), OSError('offline')]
         relay=self.stream.open(VID)
         up.read1=Mock(side_effect=OSError('broken connection'))
-        with self.assertRaises(OSError):list(relay.chunks())
+        with self.assertRaises(StreamError) as error:list(relay.chunks())
+        self.assertEqual(error.exception.code, 'upstream_interrupted')
+        self.assertEqual(self.opener.open.call_count, 3)
         self.assertTrue(up.closed);self.assertTrue(self.stream.slots.acquire(False));self.stream.slots.release()
+
+    def test_early_eof_resumes_exactly_without_duplicate_bytes(self):
+        first = Upstream(b'1234', headers={'Content-Length': '12'})
+        rest = Upstream(b'56789012', status=206,
+            headers={'Content-Range': 'bytes 4-11/12'})
+        self.opener.open.side_effect = [first, rest]
+        self.stream.current.activate(VID)
+        relay = self.stream.open(VID)
+        blocks = []
+        for block in relay.chunks():
+            relay.remember(block)
+            blocks.append(block)
+        self.assertEqual(b''.join(blocks), b'123456789012')
+        cached = self.stream.current.open(VID)
+        self.assertEqual(cached.read1(12), b'123456789012')
+        cached.close()
+        self.assertEqual(self.opener.open.call_args.args[0].get_header('Range'), 'bytes=4-11')
+        self.assertTrue(self.stream.resolve.call_args.kwargs['refresh'])
+        self.assertEqual(relay.headers['Content-Length'], '12')
+        self.assertTrue(first.closed and rest.closed)
+        self.assertEqual(self.stream.snapshot()['active_streams'], 0)
+
+    def test_failed_reconnect_closes_http_error_and_remains_bounded(self):
+        first = Upstream(b'1234', headers={'Content-Length': '12'})
+        error_body = io.BytesIO(b'private provider response')
+        refused = HTTPError(MEDIA['url'], 403, 'private', {}, error_body)
+        rest = Upstream(b'56789012', status=206, headers={'Content-Range': 'bytes 4-11/12'})
+        self.opener.open.side_effect = [first, refused, rest]
+        relay = self.stream.open(VID)
+        self.assertEqual(b''.join(relay.chunks()), b'123456789012')
+        self.assertTrue(error_body.closed)
+        self.assertEqual(self.opener.open.call_count, 3)
+
+    def test_recovery_preserves_original_client_range(self):
+        first = Upstream(b'3456', status=206,
+            headers={'Content-Length': '8', 'Content-Range': 'bytes 2-9/12'})
+        rest = Upstream(b'7890', status=206,
+            headers={'Content-Range': 'bytes 6-9/12'})
+        self.opener.open.side_effect = [first, rest]
+        relay = self.stream.open(VID, byte_range='bytes=2-9')
+        self.assertEqual(b''.join(relay.chunks()), b'34567890')
+        self.assertEqual(self.opener.open.call_args.args[0].get_header('Range'), 'bytes=6-9')
+        self.assertEqual(relay.headers['Content-Range'], 'bytes 2-9/12')
+
+    def test_partial_exception_bytes_are_not_lost_or_repeated(self):
+        import http.client
+        first = Upstream(headers={'Content-Length': '12'})
+        first.read1 = Mock(side_effect=[b'1234', http.client.IncompleteRead(b'56', 6), b''])
+        rest = Upstream(b'789012', status=206, headers={'Content-Range': 'bytes 6-11/12'})
+        self.opener.open.side_effect = [first, rest]
+        relay = self.stream.open(VID)
+        self.assertEqual(b''.join(relay.chunks()), b'123456789012')
+        self.assertEqual(self.opener.open.call_args.args[0].get_header('Range'), 'bytes=6-11')
+
+    def test_recovery_budget_is_shared_across_interruptions(self):
+        self.opener.open.side_effect = [
+            Upstream(b'1234', headers={'Content-Length': '12'}),
+            Upstream(b'5678', status=206, headers={'Content-Length': '8', 'Content-Range': 'bytes 4-11/12'}),
+            Upstream(b'9012', status=206, headers={'Content-Range': 'bytes 8-11/12'})]
+        self.assertEqual(b''.join(self.stream.open(VID).chunks()), b'123456789012')
+        self.assertEqual(self.opener.open.call_count, 3)
+
+    def test_recovery_rejects_changed_representation(self):
+        self.opener.open.return_value = Upstream(b'1234', headers={'Content-Length': '12'})
+        self.stream.resolve.side_effect = [MEDIA, {**MEDIA, 'itag': 141}]
+        relay = self.stream.open(VID)
+        with self.assertRaises(StreamError) as error:
+            list(relay.chunks())
+        self.assertEqual(error.exception.code, 'audio_representation_changed')
+        self.assertEqual(self.opener.open.call_count, 1)
+        self.assertEqual(self.stream.snapshot()['active_streams'], 0)
+
+    def test_recovery_rejects_ignored_range_and_closes_socket(self):
+        first, wrong = Upstream(b'1234', headers={'Content-Length': '12'}), Upstream()
+        self.opener.open.side_effect = [first, wrong]
+        relay = self.stream.open(VID)
+        with self.assertRaises(StreamError) as error:
+            list(relay.chunks())
+        self.assertEqual(error.exception.code, 'invalid_recovery_range')
+        self.assertTrue(wrong.closed)
+        self.assertEqual(self.stream.snapshot()['active_streams'], 0)
+
+    def test_client_close_does_not_start_recovery(self):
+        self.opener.open.return_value = Upstream(b'1234', headers={'Content-Length': '12'})
+        relay = self.stream.open(VID)
+        relay.close()
+        self.assertEqual(self.opener.open.call_count, 1)
+
+    def test_wrong_initial_length_cannot_be_served_as_success(self):
+        self.opener.open.return_value = Upstream(b'1234')
+        with self.assertRaises(StreamError) as error:
+            self.stream.open(VID)
+        self.assertEqual(error.exception.code, 'invalid_audio_length')
 
     def test_safe_upstream_validation(self):
         for url in ['http://rr1.googlevideo.com/a','https://googlevideo.com.evil/a',

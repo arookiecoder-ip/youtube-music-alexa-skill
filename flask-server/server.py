@@ -82,6 +82,7 @@ _status_storage = CachedCollector(10)
 def _operational_request_start():
     if not request.path.startswith('/static/') and request.path.rstrip('/') != '/status' and not request.path.startswith('/api/status'):
         request.environ['musicbox.metrics_start'] = _operational.begin_request()
+        request.environ['musicbox.request_started_at'] = time.monotonic()
         request.environ['musicbox.trace'] = uuid.uuid4().hex
 
 
@@ -4161,7 +4162,7 @@ def _log_request(response):
         return response
     # _mark_start_time is skipped when an earlier before_request hook (auth,
     # rate limit) short-circuits the request, so fall back gracefully.
-    duration = time.time() - getattr(request, '_start_time', time.time())
+    duration = time.monotonic() - request.environ.get('musicbox.request_started_at', time.monotonic())
     extra = ''
     ct = response.content_type or ''
     if ct.startswith('application/json') and response.status_code >= 400 and response.data:
@@ -4176,8 +4177,9 @@ def _log_request(response):
         except Exception:
             pass
     args = request.args.to_dict()
-    if 'key' in args:
-        args['key'] = '***'
+    for sensitive in ('key', 'cap', 'token', 'access_token', 'code'):
+        if sensitive in args:
+            args[sensitive] = '***'
     logger.info('[%s] %s %s -> %s%s (%.1fms)', request.method, path,
                 args or '', response.status_code, extra,
                 duration * 1000)
@@ -6056,6 +6058,12 @@ def _stream_superseded(video_id) -> bool:
 def _serve_youtube_stream(video_id, confirm=False, cancellable=False, meta=None):
     generation = _current_playback_generation()
     started = time.monotonic()
+    # Snapshot before resolution/open: a pause or handoff during that network
+    # wait must not let this older request adopt the newer playback intent.
+    with _np_lock:
+        echo_output_token = _playback_output.snapshot()['output_token'] if confirm else None
+        echo_intent = _now_playing.get('alexa_intent_at') if confirm else None
+    stream_identity = _current_identity()
     try:
         relay = _youtube_stream_for().open(video_id, method=request.method,
             byte_range=request.headers.get('Range'), if_range=request.headers.get('If-Range'))
@@ -6068,11 +6076,6 @@ def _serve_youtube_stream(video_id, confirm=False, cancellable=False, meta=None)
         if error.status == 503:
             response.headers['Retry-After'] = '2'
         return response
-
-    with _np_lock:
-        echo_output_token = _playback_output.snapshot()['output_token'] if confirm else None
-        echo_intent = _now_playing.get('alexa_intent_at') if confirm else None
-    stream_identity = _current_identity()
 
     def generate():
         # The body is iterated after the view returns, so re-bind the account this
@@ -6087,7 +6090,7 @@ def _serve_youtube_stream(video_id, confirm=False, cancellable=False, meta=None)
                         owner = _playback_output.snapshot()
                         if (owner['playback_output'] != 'alexa'
                                 or owner['output_token'] != echo_output_token
-                                or _now_playing.get('alexa_intent_at') != echo_intent):
+                                or (first and _now_playing.get('alexa_intent_at') != echo_intent)):
                             return
                 if (cancellable and _generation_superseded(generation)
                         and _stream_superseded(video_id)):

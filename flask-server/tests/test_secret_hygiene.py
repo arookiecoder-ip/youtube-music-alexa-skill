@@ -129,3 +129,14 @@ class SecretHygiene(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class StreamCapabilityLoggingTests(unittest.TestCase):
+    def test_stream_authorization_queries_are_redacted(self):
+        with server.app.test_request_context('/proxy/?video_id=abcdefghijk&cap=private-capability&key=private-key&token=private-token'), mock.patch.object(server.logger, 'info') as log:
+            server._log_request(server.app.response_class('ok'))
+        arguments = log.call_args.args[3]
+        self.assertEqual(arguments['video_id'], 'abcdefghijk')
+        self.assertEqual(arguments['cap'], '***')
+        self.assertEqual(arguments['key'], '***')
+        self.assertEqual(arguments['token'], '***')

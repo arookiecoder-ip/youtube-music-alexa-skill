@@ -12,6 +12,8 @@ already relayed to that account's player.
 """
 import atexit
 import hashlib
+import http.client
+import logging
 import json
 import os
 from pathlib import Path
@@ -48,6 +50,54 @@ class _MediaRedirect(urllib.request.HTTPRedirectHandler):
         if not valid_media_url(newurl):
             raise StreamError('invalid_media', 502)
         return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+class _RecoveringAudio:
+    """Resume a broken upstream at the first byte not yet returned to the player.
+
+    A refreshed signed URL must describe the same representation. Recovery keeps
+    the original response headers and stream slot, and never repeats audio bytes.
+    """
+    def __init__(self, upstream, start, end, reopen, video_id):
+        self.upstream, self.position, self.end = upstream, start, end
+        self.status, self.headers = upstream.status, upstream.headers
+        self.reopen, self.video_id = reopen, video_id
+        self.attempts, self.closed = 0, False
+
+    def read1(self, count):
+        if self.closed or self.position > self.end or count <= 0:
+            return b''
+        while True:
+            try:
+                block = self.upstream.read1(min(count, self.end-self.position+1))
+            except http.client.IncompleteRead as error:
+                block = error.partial
+            except (OSError, http.client.HTTPException):
+                block = b''
+            if block:
+                self.position += len(block)
+                return block
+            # EOF before the advertised end is a broken connection too.
+            self.upstream.close()
+            while True:
+                if self.attempts >= 2:
+                    raise StreamError('upstream_interrupted', 502)
+                self.attempts += 1
+                try:
+                    self.upstream = self.reopen(self.position, self.end)
+                    break
+                except (OSError, urllib.error.URLError, http.client.HTTPException) as error:
+                    if isinstance(error, urllib.error.HTTPError):
+                        error.close()
+                    continue
+            logging.getLogger(__name__).info(
+                '[stream-recovery] resumed video=%s offset=%s attempt=%s',
+                self.video_id, self.position, self.attempts)
+
+    def close(self):
+        if not self.closed:
+            self.closed = True
+            self.upstream.close()
 
 
 class Relay:
@@ -393,15 +443,49 @@ class YouTubeStream:
                         raise StreamError('range_mismatch', 502)
                     if not upstream.headers.get('Content-Type', '').startswith('audio/mp4'):
                         raise StreamError('invalid_audio', 502)
+                    total_length = int(media['length'])
+                    stream_start = start if selected_range else 0
+                    stream_end = end if selected_range else total_length-1
+                    if total_length <= 0:
+                        raise StreamError('invalid_audio_length', 502)
+                    expected_length = stream_end-stream_start+1
+                    advertised_length = upstream.headers.get('Content-Length')
+                    if advertised_length is not None and int(advertised_length) != expected_length:
+                        raise StreamError('invalid_audio_length', 502)
+                    if not selected_range and upstream.status == 206 and upstream.headers.get('Content-Range') != f'bytes 0-{stream_end}/{total_length}':
+                        raise StreamError('range_mismatch', 502)
+                    if method != 'HEAD':
+                        original_etag = etag
+                        def reopen(offset, last, original_etag=original_etag):
+                            refreshed = self.resolve(video_id, refresh=True)
+                            refreshed_etag = '"'+hashlib.sha256(
+                                f'{video_id}:{refreshed.get("itag")}:{refreshed.get("length")}:{refreshed.get("modified")}'.encode()
+                            ).hexdigest()+'"'
+                            if refreshed_etag != original_etag:
+                                raise StreamError('audio_representation_changed', 502)
+                            response = self.opener.open(urllib.request.Request(
+                                refreshed['url'], headers={'Accept-Encoding': 'identity',
+                                    'Range': f'bytes={offset}-{last}'}, method='GET'), timeout=10)
+                            try:
+                                if (response.status != 206
+                                        or response.headers.get('Content-Range') != f'bytes {offset}-{last}/{total_length}'
+                                        or not response.headers.get('Content-Type', '').startswith('audio/mp4')
+                                        or int(response.headers.get('Content-Length', '-1')) != last-offset+1):
+                                    raise StreamError('invalid_recovery_range', 502)
+                            except Exception:
+                                response.close()
+                                raise
+                            return response
+                        upstream = _RecoveringAudio(upstream, stream_start, stream_end, reopen, video_id)
                     first = upstream.read1(16384) if method != 'HEAD' else b''
                     if method != 'HEAD' and not first:
                         raise StreamError('empty_audio', 502)
-                    offset = [start if selected_range else 0]
+                    offset = [stream_start]
                     def remember(block):
                         self.current.write(ticket, etag, int(media['length']), offset[0], block)
                         offset[0] += len(block)
                     relay = Relay(upstream, first, release, remember)
-                    relay.headers.update({'ETag': etag, 'Cache-Control': 'no-store',
+                    relay.headers.update({'ETag': etag, 'Content-Length': str(expected_length), 'Cache-Control': 'no-store',
                         'Accept-Ranges': 'bytes', 'X-Audio-Delivery': 'youtube-stream',
                         'X-Audio-Source':'youtube'})
                     return relay

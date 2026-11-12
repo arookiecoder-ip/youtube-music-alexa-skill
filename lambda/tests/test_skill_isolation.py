@@ -61,6 +61,14 @@ class SkillIdentityHeaderTests(unittest.TestCase):
         self.assertEqual(second['X-Alexa-User-Id'], 'b')
         self.assertNotEqual(first['X-Alexa-Device-Id'], second['X-Alexa-Device-Id'])
 
+    def test_request_id_follows_preflight_and_action_for_same_envelope(self):
+        request = _identity()
+        request.request_envelope.request = _node(request_id='amzn1.echo-api.request.request-a')
+        first = player.skill_identity_headers(request)
+        second = player.skill_identity_headers(request)
+        self.assertEqual(first['X-Alexa-Request-Id'], 'amzn1.echo-api.request.request-a')
+        self.assertEqual(first['X-Alexa-Request-Id'], second['X-Alexa-Request-Id'])
+
     def test_a_missing_device_id_does_not_become_every_device(self):
         headers = player.skill_identity_headers(_identity('a', ''))
         self.assertEqual(headers['X-Alexa-Device-Id'], '')

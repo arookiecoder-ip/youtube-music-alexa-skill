@@ -74,6 +74,33 @@ class StreamRoutes(unittest.TestCase):
             confirm.assert_not_called()
         self.release.assert_called_once()
 
+    def test_pause_does_not_truncate_an_already_started_audio_response(self):
+        with server.app.test_request_context('/proxy/?video_id='+VID), \
+                mock.patch.dict(server._now_playing, {'video_id': VID, 'alexa_intent_at': 10}), \
+                mock.patch.object(server, '_confirm_stream_delivery') as confirm:
+            response = server._serve_youtube_stream(VID, confirm=True)
+            chunks = iter(response.response)
+            self.assertEqual(next(chunks), b'audio')
+            server._now_playing.update(playing=False, alexa_intent_at=11)
+            self.assertEqual(b''.join(chunks), b'123456789012')
+            response.close()
+            confirm.assert_called_once_with(VID)
+        self.release.assert_called_once()
+
+    def test_pause_while_upstream_opens_cannot_be_adopted_as_new_intent(self):
+        def opened(*args, **kwargs):
+            server._now_playing.update(playing=False, alexa_intent_at=11)
+            return self.relay
+        server._youtube_stream_for().open.side_effect = opened
+        with server.app.test_request_context('/proxy/?video_id='+VID), \
+                mock.patch.dict(server._now_playing, {'video_id': VID, 'alexa_intent_at': 10}), \
+                mock.patch.object(server, '_confirm_stream_delivery') as confirm:
+            response = server._serve_youtube_stream(VID, confirm=True)
+            self.assertEqual(list(response.response), [])
+            response.close()
+            confirm.assert_not_called()
+        self.release.assert_called_once()
+
     def test_closed_uniterated_response_releases_stream(self):
         with server.app.test_request_context('/audio/?video_id='+VID):
             r=server._serve_youtube_stream(VID)

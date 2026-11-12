@@ -201,6 +201,9 @@ def skill_identity_headers(handler_input):
         'X-Alexa-Profile-Token': getattr(system, 'api_access_token', '') or '',
         'X-Alexa-Api-Endpoint': getattr(system, 'api_endpoint', '') or '',
     }
+    request_id = getattr(getattr(handler_input.request_envelope, 'request', None), 'request_id', '')
+    if isinstance(request_id, str) and request_id:
+        headers['X-Alexa-Request-Id'] = request_id
     binding = getattr(handler_input.request_envelope, '_musicbox_binding', '')
     if binding:
         headers['X-Alexa-Binding'] = binding

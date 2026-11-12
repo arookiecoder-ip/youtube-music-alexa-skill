@@ -18,8 +18,10 @@ reserved for songs already identified as unavailable by the backend.
 
 Streaming bodies iterate and close inside a separate context for their account.
 They no longer leave a user's identity bound in the worker consuming the response.
-An old Echo stream also stops when its play intent or output lease changes, so a
-late first byte cannot confirm a paused or replayed attempt.
+An old Echo stream rejects its first byte when its play intent changes, so it
+cannot confirm a paused or replayed attempt. Once started, a same-song transport
+change keeps the HTTP body intact; an output handoff still stops the old stream.
+See STREAM-RECOVERY-AND-STARTUP-2026-11-12.md for the follow-up correction.
 
 This reduces unwanted commands and interference; it does not establish a measured
 improvement in Amazon's network latency or YouTube cold-start time. No Alexa

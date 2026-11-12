@@ -1,5 +1,8 @@
 """Revocable per-account Alexa credentials; never store a usable token."""
+from collections import OrderedDict
 import hashlib
+import re
+import threading
 import hmac
 import json
 import secrets
@@ -23,6 +26,7 @@ class AccessDenied(Exception):
 class AlexaAccess:
     def __init__(self, accounts):
         self.accounts, self.db = accounts, accounts.db
+        self._proofs, self._proof_lock = OrderedDict(), threading.Lock()
 
     def enabled(self, user_id):
         user = self.accounts.get_user(user_id)
@@ -108,6 +112,37 @@ class AlexaAccess:
     def unlink_amazon(self, user_id):
         self.db.execute("DELETE FROM user_provider_credentials WHERE user_id=? AND provider='amazon'", (user_id,))
 
+    def _proof_key(self, headers, user, token, linked, endpoint, proof):
+        request_id = headers.get('X-Alexa-Request-Id', '')
+        subject, device = headers.get('X-Alexa-User-Id', ''), headers.get('X-Alexa-Device-Id', '')
+        if (not subject or not device or len(subject) > 512 or len(device) > 512
+                or not re.fullmatch(r'[A-Za-z0-9_.:-]{1,256}', request_id)):
+            return None
+        return (user['id'], token['id'], linked['generation'], endpoint, subject,
+                device, request_id, hashlib.sha256(proof.encode()).digest())
+
+    def _cached_proof(self, key):
+        if key is None:
+            return None
+        with self._proof_lock:
+            entry = self._proofs.get(key)
+            if entry and entry[0] > time.monotonic():
+                return entry[1]
+            self._proofs.pop(key, None)
+        return None
+
+    def _remember_proof(self, key, email):
+        if key is None:
+            return
+        with self._proof_lock:
+            now = time.monotonic()
+            for stale, entry in list(self._proofs.items()):
+                if entry[0] <= now:
+                    del self._proofs[stale]
+            self._proofs[key] = (now + 10, email)
+            while len(self._proofs) > 512:
+                self._proofs.popitem(last=False)
+
     def authenticate(self, headers):
         raw = headers.get('Authorization', '').removeprefix('Bearer ')
         if len(raw) > 256 or not raw.startswith('mbx_'):
@@ -122,14 +157,21 @@ class AlexaAccess:
         proof = headers.get('X-Alexa-Profile-Token', '')
         if endpoint not in AMAZON_ENDPOINTS or not proof or len(proof) > 16384:
             raise AccessDenied('amazon_permission_required')
-        try:
-            response = requests.get(endpoint + '/v2/accounts/~current/settings/Profile.email',
-                headers={'Authorization': 'Bearer ' + proof}, timeout=(1, 1.5), allow_redirects=False)
-            if response.status_code != 200:
-                raise AccessDenied('amazon_permission_required')
-            email = response.json()
-        except (requests.RequestException, ValueError):
-            raise AccessDenied('amazon_profile_unavailable') from None
+        # Share only successful Amazon proof within one Alexa envelope. Local
+        # authorization is never cached: current() and the linked identity are
+        # checked before and after every call, including a profile cache hit.
+        proof_key = self._proof_key(headers, user, token, linked, endpoint, proof)
+        email = self._cached_proof(proof_key)
+        proof_was_cached = email is not None
+        if email is None:
+            try:
+                response = requests.get(endpoint + '/v2/accounts/~current/settings/Profile.email',
+                    headers={'Authorization': 'Bearer ' + proof}, timeout=(1, 1.5), allow_redirects=False)
+                if response.status_code != 200:
+                    raise AccessDenied('amazon_permission_required')
+                email = response.json()
+            except (requests.RequestException, ValueError):
+                raise AccessDenied('amazon_profile_unavailable') from None
         if not isinstance(email, str) or email.strip().casefold() != linked['email']:
             raise AccessDenied('amazon_email_mismatch')
         # Recheck after the network call: an admin may have revoked it in flight.
@@ -137,6 +179,8 @@ class AlexaAccess:
         current_link = self.linked_amazon(user['id'])
         if current_link['generation'] != linked['generation']:
             raise AccessDenied('amazon_link_changed')
+        if not proof_was_cached:
+            self._remember_proof(proof_key, email)
         token['amazon_generation'] = current_link['generation']
         token['version'] = hashlib.sha256((token['id'] + ':' + str(token['security_version']) + ':' + current_link['generation']).encode()).hexdigest()
         return user, token
