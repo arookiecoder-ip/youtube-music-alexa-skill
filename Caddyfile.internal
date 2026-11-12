@@ -20,6 +20,13 @@
     }
 
     handle /alexa/proxy/* {
+        forward_auth ytmusic:5000 {
+            uri /alexa/proxy_authorize/
+            header_up -Connection
+            header_up -Upgrade
+            copy_headers X-MusicBox-Proxy-Authorization
+        }
+        header Cache-Control "no-store"
         reverse_proxy ytmusic:5001
     }
 

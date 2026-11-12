@@ -775,13 +775,12 @@ _PUBLIC_PATHS = ('/health/live', '/health/ready', '/', '/welcome', '/privacy_pol
                  '/reset-password')
 # Public path prefixes (startswith match) — static assets (CSS, JS, icons),
 # plus jam join links (/j/<token> and legacy /jam/<token> — the token itself is
-# the credential). The Amazon proxy tunnel also has to stay public so the
-# browser can reach the interactive login page directly; the proxy flow itself
-# is guarded by the generated session/cookie inside alexapy.
+# the credential). Amazon proxy access is checked by Caddy forward_auth
+# against the signed-in account and its active login attempt.
 # Verification and reset are typed six-digit codes now, so no emailed credential
 # lives in a URL on the player door: /signup/ is the sign-up form itself, and
 # /invite/ carries the one remaining emailed link, an administrator's invitation.
-_PUBLIC_PREFIXES = ('/static/', '/j/', '/jam/', '/alexa/proxy/', '/signup/', '/invite/')
+_PUBLIC_PREFIXES = ('/static/', '/j/', '/jam/', '/signup/', '/invite/')
 
 # Canonical SPA document URLs. These exact paths (no trailing slash) render
 # the same protected shell as `/`; nearby API paths such as `/history/` remain
@@ -944,7 +943,7 @@ def _safe_spa_target(value, default='/home'):
 # API key stays out of the browser URL). Everything here plus the remote page.
 _SESSION_PATHS = ('/api/jam/session', '/audio', '/get_radio', '/status', '/api/status', '/remote', '/alexa/status', '/alexa/init', '/alexa/devices', '/alexa/command',
                   '/alexa/play', '/alexa/suggest', '/alexa/proxy_login',
-                  '/alexa/proxy_cancel', '/alexa/proxy_check', '/alexa/now_playing', '/alexa/state_event',
+                  '/alexa/proxy_cancel', '/alexa/proxy_authorize', '/alexa/proxy_check', '/alexa/now_playing', '/alexa/state_event',
                   '/alexa/seek', '/alexa/volume', '/alexa/play_queue',
                   '/alexa/shuffle_queue', '/alexa/search', '/alexa/clear',
                   '/alexa/queue_add', '/alexa/queue_remove',
@@ -7683,6 +7682,19 @@ def alexa_init():
             with _np_lock:
                 result['now_playing'] = _np_snapshot(retained['serial'])
     return jsonify(result)
+
+
+@app.get('/alexa/proxy_authorize/')
+def alexa_proxy_authorize():
+    # Caddy copies this credential internally; only the active account may enter.
+    if not _logged_in() or not _alexa_access_enabled():
+        return _no_store(Response(status=401))
+    credential = alexa_remote.remote.proxy_authorization()
+    if not credential:
+        return _no_store(Response(status=403))
+    response = Response(status=204)
+    response.headers['X-MusicBox-Proxy-Authorization'] = credential
+    return _no_store(response)
 
 
 @app.route("/alexa/proxy_login/", methods=["POST"])

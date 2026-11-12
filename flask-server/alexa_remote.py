@@ -25,7 +25,7 @@ AlexaPy's aiohttp session is bound to the event loop it was created in,
 but Flask async views each run in a throwaway loop — so all AlexaPy work
 runs on one dedicated background loop owned by this module.
 """
-import asyncio, base64, logging, os, re, shutil, secrets, tempfile, threading, time
+import asyncio, base64, hmac, logging, os, re, shutil, secrets, tempfile, threading, time
 from concurrent.futures import TimeoutError as FuturesTimeoutError
 
 import httpx
@@ -705,7 +705,8 @@ class AlexaRemote:
         await runner.setup()
         # Bind on all interfaces so Caddy (running in a separate container) can
         # reach this over the Docker network; Caddy fronts it with TLS publicly.
-        site = web.TCPSite(runner, "0.0.0.0", PROXY_PORT)
+        bind = "0.0.0.0" if os.environ.get("ALEXA_PROXY_BEHIND_CADDY") == "1" else "127.0.0.1"
+        site = web.TCPSite(runner, bind, PROXY_PORT)
         await site.start()
         self._proxy_runner = runner
         self._proxy_started = True
@@ -731,8 +732,23 @@ class AlexaRemote:
             logger.debug("proxy.reset() unavailable or failed; continuing")
         return str(proxy.access_url()), None
 
+    def proxy_authorization(self):
+        """Internal credential for this identity's live login attempt."""
+        with _proxy_guard:
+            if (_proxy_holder[0] is self and self._proxy_started
+                    and time.monotonic() < _proxy_claim_expires[0]):
+                return self._proxy_attempt_id
+        return None
+
     async def _proxy_handler(self, request):
         """Serve alexapy and start finalization as soon as its callback lands."""
+        if os.environ.get("ALEXA_PROXY_BEHIND_CADDY") == "1":
+            expected = self.proxy_authorization()
+            supplied = request.headers.get('X-MusicBox-Proxy-Authorization', '')
+            if not expected or not hmac.compare_digest(supplied.encode(), expected.encode()):
+                raise web.HTTPForbidden(text="Sign in to the active Amazon login session.")
+            request = request.clone(headers={k: v for k, v in request.headers.items()
+                if k.lower() != 'x-musicbox-proxy-authorization'})
         proxy = self._proxy
         if proxy is None:
             raise web.HTTPServiceUnavailable(text="Alexa login proxy is not running.")
