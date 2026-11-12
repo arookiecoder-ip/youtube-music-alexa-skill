@@ -674,9 +674,9 @@ def build_selfservice_blueprint(mu) -> Blueprint:
             f"{config.email_code_attempts} wrong tries. Ask for a new one below."
         )
         if request.method == "GET":
-            if user and not mu.accounts.email_code_state(user["id"], "verify")["pending"]:
-                return page(form_error=dead_code)
-            return page()
+            # Old bookmarks and signup mail now lead to the inline login form.
+            # Keep POST compatibility for verification forms already open in tabs.
+            return redirect(login_url + "?otp=1&code=1")
 
         if not user:
             # "No such account" and "wrong code" are the same sentence here, because

@@ -24,10 +24,10 @@
   <div class="card">
     {% if email_changed %}<p class="step-hint" role="status">Your email was updated. Sign in with your new address.</p>{% endif %}
     <!-- Step 1: credentials -->
-    <form class="step active" id="step-creds" data-step="1">
+    <form class="step active" id="step-creds" data-step="1" data-otp-start="{{ '1' if otp_start else '0' }}" data-code-ready="{{ '1' if code_ready else '0' }}">
       <label for="username">Email or username</label>
       <input type="text" id="username" name="username" autocomplete="username" autofocus
-             placeholder="you@example.com">
+             placeholder="you@example.com" value="{{ initial_username|default('') }}">
 
       <div id="password-section" class="login-panel">
         <label for="password">Password</label>

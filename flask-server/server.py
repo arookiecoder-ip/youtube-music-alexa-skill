@@ -7132,7 +7132,9 @@ def login():
             "login.html", asset_v=_STATIC_VERSION,
             email_changed=request.args.get('email_changed') == '1',
             next_target=_safe_spa_target(request.args.get('next')),
-            signup_open=signup_open, forgot_url=forgot_url, otp_available=_multiuser_layer is not None)))
+            signup_open=signup_open, forgot_url=forgot_url, otp_available=_multiuser_layer is not None,
+            initial_username=(session.get('mu_ss_pending_verify') or ['', ''])[1],
+            otp_start=request.args.get('otp') == '1', code_ready=request.args.get('code') == '1')))
 
     if request.method == "POST" and not request.is_json:
         return error_response("JSON sign-in required.", 415)
@@ -7179,6 +7181,11 @@ def login():
                            message='If this account can sign in, a six-digit code is on its way.')
         proof = (layer.accounts.consume_email_code(user['id'], 'magic', str(body.get('code') or ''))
                  if user and user.get('status') == 'active' else None)
+        if (not proof and user and user.get('status') == 'active'
+                and not user.get('email_verified') and not user.get('pending_email')):
+            # A signup verification code proves the same current mailbox. Pending
+            # email-change codes must never become login credentials.
+            proof = layer.accounts.consume_email_code(user['id'], 'verify', str(body.get('code') or ''))
         if not proof:
             return error_response('Invalid or expired code. Request a new code and try again.', 401)
         # Mailbox possession also completes initial address verification. Pending

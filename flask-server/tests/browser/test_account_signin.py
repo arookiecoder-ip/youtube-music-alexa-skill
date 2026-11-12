@@ -249,7 +249,8 @@ def login_page():
     def login():
         if request.method == 'GET':
             return render_template('login.html', asset_v='test', next_target='/home',
-                                   signup_open=True, forgot_url='/forgot-password', otp_available=True)
+                                   signup_open=True, forgot_url='/forgot-password', otp_available=True,
+                                   otp_start=request.args.get('otp') == '1', code_ready=request.args.get('code') == '1)
         body = request.get_json(); calls.append(body)
         if body.get('step') == 'send_otp':
             return jsonify(ok=True, retry_after=60, message='Check your inbox.')
@@ -304,3 +305,17 @@ def test_switch_back_preserves_password_login(login_page):
     page.wait_for_url(origin+'/home')
     assert calls[-1]['password'] == 'secret'
     assert 'step' not in calls[-1]
+
+
+def test_old_code_page_destination_opens_inline_entry(login_page):
+    page, origin, calls = login_page
+    page.goto(origin+'/login/?otp=1&code=1')
+    expect(page.locator('#email-code')).to_be_visible()
+    expect(page.locator('#password')).not_to_be_visible()
+    expect(page.locator('#creds-btn')).to_be_disabled()
+    page.locator('#username').fill('new-person')
+    page.locator('#email-code').fill('123456')
+    expect(page.locator('#creds-btn')).to_be_enabled()
+    page.locator('#creds-btn').click()
+    page.wait_for_url(origin+'/home')
+    assert calls[-1]['username'] == 'new-person'

@@ -78,3 +78,19 @@ class EmailOtpLoginTests(SecondFactorDoorTestBase):
         code = self.code()
         self.accounts.db.execute("UPDATE user_email_tokens SET expires_at=1 WHERE user_id=?", (self.user['id'],))
         self.assertEqual(self.post(step='email_otp', code=code).status_code, 401)
+
+    def test_signup_code_works_in_the_inline_login(self):
+        self.accounts.db.execute("UPDATE users SET email_verified=0 WHERE id=?", (self.user['id'],))
+        code = self.accounts.create_email_code(self.user['id'], 'verify')
+        self.assertEqual(self.post(step='email_otp', code=code).status_code, 200)
+        self.assertTrue(self.accounts.get_user(self.user['id'])['email_verified'])
+
+    def test_pending_address_change_code_cannot_sign_in(self):
+        self.accounts.db.execute("UPDATE users SET email_verified=0, pending_email='other@example.test' WHERE id=?", (self.user['id'],))
+        code = self.accounts.create_email_code(self.user['id'], 'verify')
+        self.assertEqual(self.post(step='email_otp', code=code).status_code, 401)
+
+    def test_legacy_code_page_redirects_to_inline_login(self):
+        response = self.admin_client.get('/verify')
+        self.assertEqual(response.status_code, 302)
+        self.assertIn('/login/?otp=1&code=1', response.headers['Location'])

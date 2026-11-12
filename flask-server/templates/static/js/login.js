@@ -2,7 +2,7 @@
 (() => {
   'use strict';
   const $ = id => document.getElementById(id);
-  let mode = 'password', busy = false, sent = false, pendingToken = '', resendAt = 0;
+  let mode = 'password', busy = false, sent = false, lockedIdentifier = false, pendingToken = '', resendAt = 0;
   const credentials = $('step-creds'), signIn = $('creds-btn');
   const emailCode = $('email-code'), toggle = $('otp-toggle');
   const setError = message => { $('status').textContent = message || ''; };
@@ -11,7 +11,7 @@
     signIn.disabled = busy || (mode === 'otp' && (!sent || !/^[0-9]{6}$/.test(emailCode.value)));
     if (!toggle) return;
     toggle.disabled = busy;
-    $('username').readOnly = mode === 'otp' && sent;
+    $('username').readOnly = mode === 'otp' && lockedIdentifier;
     $('send-otp').disabled = busy || Date.now() < resendAt;
     const remaining = Math.max(0, Math.ceil((resendAt - Date.now()) / 1000));
     $('resend-otp').disabled = busy || remaining > 0;
@@ -40,7 +40,7 @@
         {duration: 180, easing: 'ease-out'}).finished;
     }
   }
-  toggle?.addEventListener('click', async () => {
+  async function switchMode() {
     if (busy) return;
     busy = true; mode = mode === 'password' ? 'otp' : 'password'; refresh(); setError('');
     try {
@@ -49,6 +49,12 @@
       toggle.setAttribute('aria-expanded', String(mode === 'otp'));
       if (mode === 'otp') $('password').value = '';
     } finally { busy = false; refresh(); }
+  }
+  toggle?.addEventListener('click', switchMode);
+  $('username').addEventListener('input', () => {
+    if (sent && mode === 'password') {
+      sent = false; lockedIdentifier = false; emailCode.value = ''; $('send-otp').hidden = false; $('otp-entry').hidden = true;
+    }
   });
   async function send() {
     if (busy || Date.now() < resendAt) return;
@@ -57,7 +63,7 @@
     try {
       const data = await post({step: 'send_otp', username: $('username').value.trim()});
       resendAt = Date.now() + Math.max(60, Number(data.retry_after) || 60) * 1000;
-      emailCode.value = ''; sent = true;
+      emailCode.value = ''; sent = true; lockedIdentifier = true;
       $('otp-hint').textContent = data.message;
       if (!$('send-otp').hidden) await swap($('send-otp'), $('otp-entry'));
       emailCode.focus();
@@ -96,6 +102,15 @@
     catch (error) { back(); setError(error.message); }
     finally { busy = false; $('back-btn').disabled = false; refresh(); }
   });
+  if (toggle && credentials.dataset.otpStart === '1') {
+    switchMode().then(() => {
+      if (credentials.dataset.codeReady === '1') {
+        sent = true; $('send-otp').hidden = true; $('otp-entry').hidden = false;
+        $('otp-hint').textContent = 'Enter the code from your email, or request a new one.';
+        refresh();
+      }
+    });
+  }
   setInterval(refresh, 1000);
   refresh();
 })();
