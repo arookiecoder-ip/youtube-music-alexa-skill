@@ -39,7 +39,11 @@ body.account main { max-width: var(--settings-max); }
 .flow-progress { margin: 0 0 24px; padding: 12px; background: var(--accent-soft); border-left: 2px solid var(--accent); font-size: 13px; line-height: 1.5; color: var(--text); }
 .auth-next-step, .auth-first-step { min-width: 0; }
 .code-timer { font-variant-numeric: tabular-nums; margin-top: 16px; }
-.password-reveal { display: block; margin-top: 4px; border: 0; background: transparent; color: var(--muted); min-height: 40px; padding: 8px 0; font: inherit; font-size: 13px; cursor: pointer; }
+.password-field { display: block; position: relative; width: 100%; }
+.password-field > input { padding-right: 52px; }
+.password-field > .password-reveal { position: absolute; right: 2px; top: 50%; display: grid; place-items: center; width: 44px; min-height: 44px; margin: 0; padding: 0; border: 0; background: transparent; color: var(--muted); cursor: pointer; transform: translateY(-50%); }
+.password-field > .password-reveal:active { transform: translateY(-50%); }
+.password-reveal svg { display: block; pointer-events: none; }
 .password-reveal:hover { color: var(--text); }
 .door .card, body:not(.account) > main > .card { border-radius: var(--settings-radius); border-color: var(--border-soft); padding: 28px; }
 .login-shell .login-card { width: min(440px, 100%); }

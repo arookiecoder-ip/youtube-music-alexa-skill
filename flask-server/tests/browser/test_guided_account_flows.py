@@ -142,3 +142,23 @@ def test_totp_email_proof_precedes_password_and_setup(guided_page):
     dialog.locator('#form-totp-begin [type=submit]').click()
     expect(dialog.locator('#enroll')).to_be_visible()
     expect(dialog.locator('#totp-begin-block')).not_to_be_visible()
+
+
+def test_password_eye_icon_toggles_without_visible_button_text(guided_page):
+    page, case, user, origin = guided_page
+    page.goto(origin+'/signup')
+    password=page.locator('#password')
+    field=password.locator('..')
+    toggle=field.locator('button.password-reveal')
+    expect(toggle).to_have_attribute('aria-label','Show password')
+    expect(toggle.locator('svg')).to_be_visible()
+    expect(toggle).to_have_text('')
+    password.fill('Example!Pass123')
+    toggle.click()
+    expect(password).to_have_attribute('type','text')
+    expect(toggle).to_have_attribute('aria-label','Hide password')
+    expect(toggle).to_have_attribute('aria-pressed','true')
+    toggle.click()
+    expect(password).to_have_attribute('type','password')
+    expect(password).to_have_value('Example!Pass123')
+    expect(toggle).to_have_attribute('aria-label','Show password')

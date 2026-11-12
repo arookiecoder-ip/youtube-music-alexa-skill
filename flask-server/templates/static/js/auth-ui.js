@@ -2,15 +2,23 @@
 (function () {
   'use strict';
   document.querySelectorAll('input[type=password]').forEach((input) => {
+    const field = document.createElement('span');
+    field.className = 'password-field';
+    input.parentNode.insertBefore(field, input);
     const button = document.createElement('button');
-    button.type = 'button'; button.className = 'password-reveal'; button.textContent = 'Show password';
-    button.setAttribute('aria-pressed', 'false');
-    button.addEventListener('click', () => {
-      const show = input.type === 'password'; input.type = show ? 'text' : 'password';
-      button.textContent = show ? 'Hide password' : 'Show password'; button.setAttribute('aria-pressed', String(show));
-    });
-    input.after(button);
-    input.closest('dialog')?.addEventListener('close', () => { input.type = 'password'; button.textContent = 'Show password'; button.setAttribute('aria-pressed', 'false'); });
+    button.type = 'button'; button.className = 'password-reveal';
+    const eye = '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7Z"/><circle cx="12" cy="12" r="3"/>';
+    const eyeOff = '<path d="m3 3 18 18M10.6 10.6a2 2 0 0 0 2.8 2.8M9.9 5.2A12 12 0 0 1 12 5c6.5 0 10 7 10 7a18 18 0 0 1-3.1 4M6.2 6.2A20 20 0 0 0 2 12s3.5 7 10 7a12 12 0 0 0 5.8-1.8"/>';
+    function show(visible) {
+      input.type = visible ? 'text' : 'password';
+      button.setAttribute('aria-label', visible ? 'Hide password' : 'Show password');
+      button.setAttribute('aria-pressed', String(visible));
+      button.innerHTML = '<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false">' + (visible ? eyeOff : eye) + '</svg>';
+    }
+    show(false);
+    button.addEventListener('click', () => show(input.type === 'password'));
+    field.append(input, button);
+    input.closest('dialog')?.addEventListener('close', () => show(false));
   });
   // Admin forms submit through their original routes after each proof succeeds.
   // Both panels share the same session; bootstrap the account CSRF token for checks.
