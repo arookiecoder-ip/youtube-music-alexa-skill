@@ -16,6 +16,7 @@
 <link rel="stylesheet" href="{{ asset_url('css/theme.css') }}">
 <link rel="stylesheet" href="{{ asset_url('css/signin.css') }}">
 <link rel="stylesheet" href="{{ asset_url('css/account.css') }}">
+<link rel="stylesheet" href="{{ asset_url('css/account-design.css') }}">
 </head>
 {# Server-rendered so the page is complete before account.js runs; the script only
    refreshes individual sections after an action. No inline script or style anywhere,
@@ -48,7 +49,7 @@
   </li>
 {%- endmacro %}
 <body data-alexa-enabled="{{ 'true' if alexa_access_enabled else 'false' }}" class="account" data-csrf="{{ csrf_form }}" data-min-password="{{ password_min_length }}"
-      data-username="{{ username }}">
+      data-username="{{ username }}" data-has-email="{{ '1' if email else '0' }}">
 <a class="skip-link" href="#account-main">Skip to account settings</a>
 <main id="account-main">
   <div class="brand">
@@ -73,7 +74,7 @@
       </div>
     </div>
     <div class="account-actions-top">
-      <a class="ghost-link" href="/">&#8592; Player</a>
+      <a class="ghost-link" href="/">Player</a>
       {# The one control up here that ends this browser's session sits a hand's width
          from "Player", so it asks in a popup before leaving. The href stays real:
          without the script this is the plain link it always was. #}
@@ -296,10 +297,20 @@
         <p class="field-help">Changing it signs out every other device and leaves this one
           signed in, so a stolen password cannot keep a stranger's session alive.</p>
         <form id="form-password" autocomplete="off" data-password-form>
+          {% if email %}
+          <p class="field-help">Send a verification code to {{ email }}.</p>
+          <button class="tiny" type="button" id="change-send">Send a code</button>
+          <p class="note" id="change-code-note" role="status" hidden></p>
+          <label for="change-code">Verification code</label>
+          <input class="code-input" id="change-code" name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="6">
+          <p class="field-error" id="err-change-code" hidden></p>
+          {% endif %}
+          <div class="current-password-proof" {{ 'hidden' if email else '' }}>
           <label>Current password
             <input type="password" name="current_password" autocomplete="current-password">
           </label>
           <p class="field-error" id="err-current_password" hidden></p>
+          </div>
 
           <label for="pw_new">New password</label>
           <input type="password" id="pw_new" name="password" data-strength autocomplete="new-password">
@@ -377,7 +388,7 @@
     </div>
     <div class="dialog-body">
       <div class="dialog-block">
-        <h3>1. Prove the address you have</h3>
+        <h3>Confirm your current email</h3>
         {% if email %}
           <p class="field-help">A six-digit code goes to <strong>{{ email }}</strong>.</p>
           <p><button class="tiny" id="reauth-send" type="button"
@@ -441,8 +452,7 @@
       <div class="dialog-block" id="totp-begin-block" data-dialog-block="change"
            {{ 'hidden' if totp_pending else '' }}>
         <h3 id="totp-begin-title">{{ 'Use a new authenticator app' if totp_enabled else 'Turn it on' }}</h3>
-        <p class="field-help">Your password plus a six-digit code from an authenticator app on
-          your phone, from either door.
+        <p class="field-help">Verify your email, confirm your password, then add your authenticator app.
           {%- if totp_enabled %} The app you use now keeps working until the new one is
           confirmed, so a phone you are replacing cannot lock you out.{% endif %}</p>
         <form id="form-totp-begin" autocomplete="off">
@@ -459,13 +469,11 @@
           </div>
           <p class="note" id="totp-begin-note" role="status" hidden></p>
 
-          <label for="begin_email_code">Code from your email
-            <span class="optional">optional</span></label>
+          <label for="begin_email_code">Code from your email</label>
           <input class="code-input" type="text" id="begin_email_code" name="email_code"
                  inputmode="numeric" pattern="[0-9 ]*" maxlength="7" autocomplete="one-time-code"
                  spellcheck="false" placeholder="••••••">
-          <p class="field-help">A second proof from the mailbox, on top of the password.
-            The new app still has to confirm itself before anything changes.</p>
+          <p class="field-help">The new app must be confirmed before anything changes.</p>
           <p class="field-error" id="err-begin_code" hidden></p>
 
           <button class="primary" type="submit" data-submit id="totp-begin-submit">
@@ -508,10 +516,7 @@
       <div class="dialog-block" id="totp-disable-block" data-dialog-block="remove"
            {{ '' if totp_enabled else 'hidden' }}>
         <h3>Turn it off</h3>
-        <p class="field-help">Removing it asks for your password only. The phone that makes the
-          codes is the one thing people reliably lose, and a second factor you cannot remove is
-          unnecessary when you can prove control of your recovery email. An emailed recovery code is required; the account is told
-          by email whenever this changes.</p>
+        <p class="field-help">Verify your email code, then confirm with your password. You will receive an email when two-factor sign-in is removed.</p>
         <form id="form-totp-disable" autocomplete="off">
           <label>Password
             <input type="password" name="current_password" autocomplete="current-password">
@@ -768,5 +773,6 @@
 <script src="{{ asset_url('js/selfservice.js') }}" defer></script>
 <script src="{{ asset_url('js/account.js') }}" defer></script>
 <script src="{{ asset_url('js/account-connect.js') }}" defer></script>
+<script defer src="{{ asset_url('js/auth-ui.js') }}"></script>
 </body>
 </html>

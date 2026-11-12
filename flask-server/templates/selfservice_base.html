@@ -8,6 +8,7 @@
 <link rel="stylesheet" href="{{ asset_url('css/theme.css') }}">
 <link rel="stylesheet" href="{{ asset_url('css/signin.css') }}">
 <link rel="stylesheet" href="{{ asset_url('css/account.css') }}">
+<link rel="stylesheet" href="{{ asset_url('css/account-design.css') }}">
 </head>
 {# The door pages: plain HTML form POSTs, so they work with JavaScript turned
    off. selfservice.js only adds the password meter and double-submit guard, and
@@ -15,6 +16,7 @@
    script, which is what lets the blueprint serve a strict CSP. #}
 <body class="door" data-csrf="{{ csrf_form }}" data-min-password="{{ password_min_length }}">
 <main>
+  <a class="brand-home" href="/welcome">Music Box home</a>
   <div class="brand">
     <div class="eq-icon">
       <span></span><span></span><span></span><span></span><span></span>
@@ -38,5 +40,6 @@
   </nav>
 </main>
 <script src="{{ asset_url('js/selfservice.js') }}" defer></script>
+<script defer src="{{ asset_url('js/auth-ui.js') }}"></script>
 </body>
 </html>

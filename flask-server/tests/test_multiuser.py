@@ -183,13 +183,13 @@ class MultiUserTestBase(unittest.TestCase):
                 f"a token-bearing link leaked into an email: {TOKEN_URL_RE.search(body)}",
             )
 
-    def create_admin(self, username: str, email: str, *, invite: bool = False) -> None:
+    def create_owner(self, username: str, email: str, *, invite: bool = False) -> None:
         token = self.csrf()
         data = {
             "_csrf": token,
             "username": username,
             "email": email,
-            "role": "admin",
+            "role": "owner",
             "password": "Temp!Passw0rd9",
             "must_change_password": "on",
             "send_verification": "" if invite else "on",
@@ -469,8 +469,8 @@ class EmailFlowTests(MultiUserTestBase):
         super().setUp()
         self.login()
 
-    def test_unverified_admin_cannot_sign_in_until_email_is_confirmed(self):
-        self.create_admin("verify-me", "verify@example.com")
+    def test_unverified_owner_cannot_sign_in_until_email_is_confirmed(self):
+        self.create_owner("verify-me", "verify@example.com")
         # New session: remove this browser's owner login.
         token = self.csrf()
         self.client.post("/admin/logout/", data={"_csrf": token})
@@ -501,7 +501,7 @@ class EmailFlowTests(MultiUserTestBase):
         self.assertEqual(self.client.get("/admin/account/").status_code, 200)
 
     def test_invitation_sets_password_and_activates_account(self):
-        self.create_admin("invited", "invited@example.com", invite=True)
+        self.create_owner("invited", "invited@example.com", invite=True)
         invited = self.layer.accounts.get_user_by_username("invited")
         self.assertEqual(invited["status"], "invited")
 

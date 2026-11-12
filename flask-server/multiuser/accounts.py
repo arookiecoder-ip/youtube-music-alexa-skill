@@ -34,7 +34,7 @@ from .security import (
 
 USERNAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{2,31}$")
 RESERVED_USERNAMES = {"anonymous", "system", "deleted", "root", "administrator"}
-ROLES = ("owner", "admin", "user")
+ROLES = ("owner", "user")
 STATUSES = ("active", "disabled", "invited")
 PROVIDERS = ("youtube", "amazon")
 # Six digits is what an authenticator app offers to autofill and what a person can
@@ -300,7 +300,7 @@ class AccountService:
     # --------------------------------------------------------------- permissions
     @staticmethod
     def can_view_admin(actor: dict | None) -> bool:
-        return bool(actor and actor.get("role") in {"owner", "admin"} and actor.get("status") == "active")
+        return bool(actor and actor.get("role") == "owner" and actor.get("status") == "active")
 
     @staticmethod
     def can_manage_user(actor: dict | None, target: dict | None) -> bool:
@@ -308,8 +308,6 @@ class AccountService:
             return False
         if actor.get("role") == "owner":
             return True
-        if actor.get("role") == "admin":
-            return bool(target and target.get("role") == "user")
         return False
 
     @staticmethod
@@ -318,8 +316,6 @@ class AccountService:
             return False
         if actor.get("role") == "owner":
             return role in ROLES
-        if actor.get("role") == "admin":
-            return role == "user"
         return False
 
     @staticmethod
@@ -1410,10 +1406,10 @@ class AccountService:
             )
             raise AccountError("Type your username exactly to confirm.")
         self._guard_last_owner(dict(row), {"status": "deleted"})
-        if row["role"] in {"owner", "admin"} and int(self.db.scalar(
-            "SELECT COUNT(*) FROM users WHERE role IN ('owner','admin') AND status = 'active'"
+        if row["role"] == "owner" and int(self.db.scalar(
+            "SELECT COUNT(*) FROM users WHERE role = 'owner' AND status = 'active'"
         ) or 0) <= 1:
-            raise AccountError("The last administrator cannot delete this way. Use the admin panel.")
+            raise AccountError("The last owner cannot delete this way. Use the admin panel.")
         if dry_run:
             return ""
         # An address on file is a second proof: the code goes to it, and the same
@@ -2037,10 +2033,11 @@ class AccountService:
             "pending": True,
             "email": row["email"],
             "expires_at": row["expires_at"],
+            "resend_at": row["created_at"] + 60,
             "attempts_left": max(0, self.config.email_code_attempts - int(row["code_attempts"] or 0)),
         }
 
-    def consume_email_code(self, user_id: str, purpose: str, code: str) -> dict:
+    def consume_email_code(self, user_id: str, purpose: str, code: str, *, consume: bool = True) -> dict:
         """Spend the live code, or return {} -- and never say which failure this was.
 
         "No such code", "expired", "guessed too often" and "wrong" are one answer,
@@ -2080,6 +2077,10 @@ class AccountService:
                     (ceiling, _now(), row["token_hash"]),
                 )
             return {}
+        # A step check proves the code without spending it; the final mutation
+        # still consumes it atomically and rechecks expiry and address binding.
+        if not consume:
+            return {"user": self.get_user(user_id), "email": row["email"], "purpose": purpose}
         with self.db.connect() as conn:
             changed = conn.execute(
                 "UPDATE user_email_tokens SET used_at = ? WHERE token_hash = ? AND used_at = 0",

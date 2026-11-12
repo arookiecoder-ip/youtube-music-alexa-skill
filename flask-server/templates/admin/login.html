@@ -2,16 +2,17 @@
 {% block body %}
 <div class="login-shell">
   <div class="login-card">
+    <a class="brand-home" href="/welcome">Music Box home</a>
     <div class="login-brand">
       <span class="eq-icon" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span></span>
       <div>
         <div class="brand-name">{{ mu_config.app_name }}</div>
-        <div class="brand-sub">Multi-user admin</div>
+        <div class="brand-sub">Admin login</div>
       </div>
     </div>
     <div class="card">
       <h1>Sign in</h1>
-      <div class="sub">Administrator access only. Sessions expire automatically.</div>
+      <div class="sub">Owner access. Sign in to manage this Music Box.</div>
 
       {% if not mail_configured %}
         <div class="banner mb-4">

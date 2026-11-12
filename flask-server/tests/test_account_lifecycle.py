@@ -44,7 +44,7 @@ class AccountLifecycleTests(MultiUserTestBase):
         self.deleted()
         for name in ('', 'DELETE', 'another-user'):
             with self.assertRaises(AccountError): self.accounts.permanently_delete_user(self.owner, self.user['id'], name)
-        admin = self.accounts.create_user(self.owner, 'limited-admin', 'Admin!Password12', role='admin')
+        admin = self.accounts.create_user(self.owner, 'limited-user', 'User!Password12', role='user')
         for actor in (None, admin, {'id': admin['id'], 'role': 'owner', 'status': 'active'}):
             with self.assertRaises(AccountError): self.accounts.permanently_delete_user(actor, self.user['id'], self.user['username'])
         with self.assertRaises(AccountError): self.accounts.permanently_delete_user(self.owner, self.owner['id'], 'owner')

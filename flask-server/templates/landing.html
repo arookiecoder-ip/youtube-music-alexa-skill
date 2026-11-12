@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#101013">
+  <meta name="description" content="Your YouTube Music library, a web player and playback on your Echo. Welcome to Music Box.">
+  <title>Music Box | Make room for music</title>
+  <link rel="icon" href="/favicon.ico">
+  <link rel="stylesheet" href="/static/css/theme.css?v={{ asset_v }}">
+  <link rel="stylesheet" href="/static/css/landing.css?v={{ asset_v }}">
+</head>
+<body>
+<a class="skip-link" href="#main">Skip to content</a>
+<header class="landing-nav wrap">
+  <a class="wordmark" href="/" aria-label="Music Box home"><span class="eq-mark" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>Music Box</a>
+  <nav aria-label="Sign in"><a class="button quiet" href="{{ admin_login_url }}">Admin login</a><a class="button" href="/login/">User login</a></nav>
+</header>
+<main id="main">
+  <section class="hero wrap" aria-labelledby="hero-title">
+    <h1 id="hero-title">Make room<br>for music.</h1>
+    <div class="hero-bottom"><p>Your YouTube Music library.<br>Your browser. Your Echo.</p><a class="button" href="/login/">Start listening</a></div>
+    <div class="hero-note"><span>YouTube Music, on your terms.</span><a href="#listening">Explore Music Box</a></div>
+  </section>
+  <section class="listening wrap" id="listening" aria-labelledby="listening-title">
+    <h2 id="listening-title">Pick the next song.<br>Keep the room going.</h2>
+    <dl class="listening-rows">
+      <div><dt>Your library</dt><dd>Connect YouTube Music for playlists, likes and listening history.</dd></div>
+      <div><dt>Your browser</dt><dd>Search, play and manage the queue from the web player.</dd></div>
+      <div><dt>Your Echo</dt><dd>Connect Amazon and use Alexa playback when your account has access.</dd></div>
+    </dl>
+  </section>
+  <section class="account-intro wrap" aria-labelledby="account-title"><h2 id="account-title">An account<br>that’s yours.</h2><div><p>Manage your sign-in, connected services and devices in one place. Add an authenticator for two-factor sign-in.</p><a class="text-link" href="/login/?next=%2Faccount">Open your account</a></div></section>
+  <section class="entry wrap" aria-labelledby="entry-title"><h2 id="entry-title">Ready when you are.</h2><a class="button" href="/login/">User login</a><p>Manage this Music Box? <a href="{{ admin_login_url }}">Admin login</a></p></section>
+</main>
+<footer class="wrap landing-footer"><a class="wordmark" href="/">Music Box</a><nav aria-label="Legal"><a href="/privacy_policy/">Privacy</a><a href="/terms_of_use/">Terms</a></nav></footer>
+</body>
+</html>

@@ -164,24 +164,7 @@
 </form>{% endif %}</details>{% endif %}
         <p class="ud-footnote">For private-skill voice playback, use the same Amazon account in the user panel, Developer Console and Echo. The Music Box email can differ. Tokens expire after one year.</p>
       </section>
-      <section class="ud-panel" aria-labelledby="activity-title">
-<div class="ud-panel-head">
-<div>
-<span class="ud-eyebrow">Audit trail</span>
-<h2 id="activity-title">Recent activity</h2>
-</div>
-<a class="btn small ghost" href="{{ base_path }}/audit/?target={{ user.id }}">View full log ↗</a>
-</div>{% if audit %}<ol class="ud-timeline">{% for event in audit %}<li>
-<span class="ud-timeline-dot">
-</span>
-<div>
-<strong>{{ action_name(event.action) }}</strong>
-<span>{{ event.actor_label or 'System' }} · {{ event.created_at|mu_relative }}</span>
-</div>
-</li>{% endfor %}</ol>{% else %}<div class="ud-empty">
-<strong>No activity yet</strong>
-<p>Account actions will appear here.</p>
-</div>{% endif %}</section>
+      <a class="btn" href="{{ base_path }}/audit/?target={{ user.id }}">Logs</a>
     </div>
     <aside class="ud-aside">
       <section class="ud-panel ud-security" aria-labelledby="security-title">

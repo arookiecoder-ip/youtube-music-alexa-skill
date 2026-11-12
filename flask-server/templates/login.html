@@ -6,9 +6,11 @@
 <title>Music Box - Sign in</title>
 <link rel="stylesheet" href="/static/css/theme.css?v={{ asset_v }}">
 <link rel="stylesheet" href="/static/css/signin.css?v={{ asset_v }}">
+<link rel="stylesheet" href="/static/css/account-design.css?v={{ asset_v }}">
 </head>
 <body>
 <main>
+  <a class="brand-home" href="/welcome">Music Box home</a>
   <div class="brand">
     <div class="eq-icon">
       <span></span><span></span><span></span><span></span><span></span>
@@ -20,6 +22,7 @@
   </div>
 
   <div class="card">
+    {% if email_changed %}<p class="step-hint" role="status">Your email was updated. Sign in with your new address.</p>{% endif %}
     <!-- Step 1: credentials -->
     <form class="step active" id="step-creds" data-step="1">
       <label for="username">Email or username</label>
@@ -143,5 +146,6 @@ stepCode.addEventListener('submit', async (e) => {
   }
 });
 </script>
+<script defer src="/static/js/auth-ui.js?v={{ asset_v }}"></script>
 </body>
 </html>

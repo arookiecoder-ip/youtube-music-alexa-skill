@@ -123,6 +123,10 @@ def origin():
                                step=step if step in ("password", "reset", "email", "totp", "delete") else "",
                                **FIXTURE)
 
+    @app.route("/api/account/code/check", methods=["POST"])
+    def code_check():
+        return jsonify({"ok": True})
+
     @app.route("/api/account")
     def api_account():
         # account.js reloads this after every action; the layout checks click
@@ -1194,10 +1198,11 @@ def test_password_failure_stays_visible_in_dialog_without_erasing_input(page, fa
             route.abort()
         else:
             route.fulfill(status=502, content_type='text/html', body='<h1>Bad gateway</h1>')
-    page.route('**/api/account/password', reject)
+    page.route('**/api/account/password/reset', reject)
     open_dialog(page, 'password')
     form = page.locator('#form-password')
-    form.locator('[name=current_password]').fill('Existing!Password')
+    form.locator('#change-code').fill('123456')
+    form.get_by_role('button', name='Verify and continue', exact=True).click()
     form.locator('[name=password]').fill('New!Password123')
     form.locator('[name=confirm_password]').fill('New!Password123')
     form.get_by_role('button', name='Change password', exact=True).click()

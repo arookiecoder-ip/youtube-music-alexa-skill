@@ -170,9 +170,12 @@
       return null;
     }
     if (button) button.disabled = false;
+    if (result && result.retry_after && button) startCodeTimer(button, {resend_at: Date.now() / 1000 + result.retry_after});
+    if (result && result.ok && result.expires_at && button) startCodeTimer(button, result);
     if (!result || result.code) {
       const mapped = (result && result.fields) || {};
       Object.keys(mapped).forEach((key) => { if (ids[key]) setError(ids[key], mapped[key]); });
+      if (result && (result.code === 'invalid_code' || result.code === 'bad_password') && button?.form?.resetFlow) button.form.resetFlow();
       const message = (result && result.message) || '';
       const wait = result && result.retry_after
         ? 'Try again in ' + result.retry_after + ' seconds.' : '';
@@ -205,6 +208,7 @@
     else badge('verify-badge', 'Waiting for your code', 'warn');
     const pending = Boolean(data.email) && data.verification_pending;
     shown('resend-verify', pending);
+    if (pending && data.verification?.pending && el('resend-verify')) startCodeTimer(el('resend-verify'), data.verification);
     shown('form-verify-code', pending);
     if (pending && data.verification && data.verification.attempts_left !== undefined) {
       // Say how many tries are left before the code dies, rather than let a person
@@ -458,19 +462,129 @@
     if (box && box.open) box.close();
   }
 
+  const verifyForm = el('form-verify-code');
+  if (verifyForm) {
+    const dialog = document.createElement('dialog'); dialog.id = 'dialog-verify-email'; dialog.className = 'account-dialog';
+    dialog.setAttribute('aria-labelledby', 'verify-email-title');
+    const head = document.createElement('div'); head.className = 'dialog-head';
+    const title = document.createElement('h2'); title.id = 'verify-email-title'; title.textContent = 'Confirm your new email'; head.appendChild(title);
+    const close = document.createElement('button'); close.type = 'button'; close.className = 'tiny'; close.textContent = 'Close'; close.addEventListener('click', () => dialog.close()); head.appendChild(close);
+    const content = document.createElement('div'); content.className = 'dialog-body';
+    // Keep the existing profile form as the regular pending-verification entry.
+    dialog.append(head, content); document.body.appendChild(dialog);
+    const originalParent = verifyForm.parentNode;
+    dialog.addEventListener('close', () => originalParent.appendChild(verifyForm));
+    const show = dialog.showModal.bind(dialog);
+    dialog.showModal = () => { content.appendChild(verifyForm); show(); };
+  }
+
+  const codeTimers = new Map();
+  function startCodeTimer(button, result) {
+    const label = button.dataset.restLabel || button.textContent;
+    button.dataset.restLabel = label;
+    const parent = button.closest('form') || button.closest('.dialog-body');
+    let hint = parent && parent.querySelector('.code-timer');
+    if (!hint && parent) { hint = document.createElement('p'); hint.className = 'field-help code-timer'; parent.appendChild(hint); }
+    if (codeTimers.has(button)) clearInterval(codeTimers.get(button));
+    const tick = () => {
+      const now = Date.now() / 1000;
+      const cooldown = Math.max(0, Math.ceil((result.resend_at || 0) - now));
+      button.disabled = cooldown > 0;
+      button.textContent = cooldown ? 'Resend in ' + cooldown + 's' : label;
+      if (hint && result.expires_at) {
+        const remaining = Math.max(0, Math.ceil(result.expires_at - now));
+        hint.textContent = remaining ? 'Code expires in ' + Math.floor(remaining / 60) + ':' + String(remaining % 60).padStart(2, '0') : 'Code expired. Send a new code.';
+      }
+      if (!cooldown && (!result.expires_at || now >= result.expires_at)) { clearInterval(codeTimers.get(button)); codeTimers.delete(button); }
+    };
+    tick(); codeTimers.set(button, setInterval(tick, 1000));
+  }
+
+  // Move only the fields for the next step. Existing ids, handlers and final
+  // server checks remain authoritative, including single-use code consumption.
+  function stagedForm(id, firstNextSelector, check, labels) {
+    const form = el(id);
+    if (!form) return;
+    const nextStart = form.querySelector(firstNextSelector);
+    if (!nextStart) return;
+    const details = document.createElement('div');
+    details.className = 'auth-next-step';
+    let node = nextStart;
+    while (node) { const next = node.nextSibling; details.appendChild(node); node = next; }
+    form.appendChild(details);
+    const progress = document.createElement('p'); progress.className = 'flow-progress'; progress.textContent = labels[0];
+    form.prepend(progress);
+    const gate = document.createElement('button'); gate.type = 'button'; gate.className = 'primary'; gate.textContent = 'Verify and continue';
+    form.insertBefore(gate, details);
+    const first = document.createElement('div'); first.className = 'auth-first-step';
+    while (progress.nextSibling !== gate) first.appendChild(progress.nextSibling);
+    form.insertBefore(first, gate);
+    details.hidden = true;
+    const error = document.createElement('p'); error.className = 'field-error'; error.setAttribute('role', 'alert');
+    form.insertBefore(error, details);
+    let verified = false;
+    const advance = async () => {
+      gate.disabled = true; error.textContent = '';
+      try {
+        const result = await check(form);
+        if (!result || result.code || !result.ok) { error.textContent = result && result.message || 'Verification failed. Try again.'; return; }
+        verified = true; first.hidden = true; gate.hidden = true; details.hidden = false;
+        progress.textContent = labels[1];
+        const input = details.querySelector('input'); if (input) input.focus();
+      } catch (_) { error.textContent = 'Could not verify. Check your connection and try again.'; }
+      finally { gate.disabled = false; }
+    };
+    gate.addEventListener('click', advance);
+    form.addEventListener('submit', (event) => { if (!verified) { event.preventDefault(); event.stopImmediatePropagation(); advance(); } }, true);
+    form.resetFlow = () => { verified = false; first.hidden = false; gate.hidden = false; details.hidden = true; progress.textContent = labels[0]; };
+    const box = form.closest('dialog');
+    if (box) box.addEventListener('close', () => {
+      verified = false; first.hidden = false; gate.hidden = false; details.hidden = true; progress.textContent = labels[0]; error.textContent = '';
+      form.querySelectorAll('input[autocomplete=current-password], input[autocomplete=new-password], input[autocomplete=one-time-code]').forEach(input => { input.value = ''; });
+    });
+  }
+  stagedForm('form-password', 'label[for=pw_new]', form => form.elements.code ? call('/api/account/code/check', {purpose: 'reset', code: value(form, 'code')}) : call('/api/account/identity/check', {current_password: value(form, 'current_password')}), ['Step 1 of 2: Verify your identity', 'Step 2 of 2: Choose your password']);
+  stagedForm('form-password-reset', 'label[for=reset_password]', form => call('/api/account/code/check', {purpose: 'reset', code: value(form, 'code')}), ['Step 1 of 2: Verify your email code', 'Step 2 of 2: Choose your password']);
+  stagedForm('form-email-change', 'label:has(input[name=current_password])', form => {
+    const code = form.elements.email_code;
+    return code ? call('/api/account/code/check', {purpose: 'reauth', code: code.value}) : Promise.resolve({ok: true});
+  }, ['Step 1 of 3: Verify your current email', 'Step 2 of 3: Enter your new email']);
+  // Keep the sender and proof together; the next-address heading belongs to step 2.
+  const emailTitle = el('form-email-change')?.previousElementSibling;
+  if (emailTitle) emailTitle.textContent = 'Verify your email';
+  const disable = el('form-totp-disable');
+  if (disable) {
+    const label = disable.querySelector('label:has(input[name=current_password])');
+    const err = el('err-disable_password');
+    const submit = disable.querySelector('[type=submit]');
+    if (label && submit) { disable.insertBefore(label, submit); if (err) disable.insertBefore(err, submit); }
+    stagedForm('form-totp-disable', 'label:has(input[name=current_password])', form => call('/api/account/code/check', {purpose: 'reauth', code: value(form, 'email_code')}), ['Step 1 of 2: Verify your email code', 'Step 2 of 2: Confirm removal']);
+  }
+
+  const begin = el('form-totp-begin');
+  if (begin && document.body.dataset.hasEmail === '1') {
+    const label = begin.querySelector('label:has(input[name=current_password])');
+    const err = el('err-totp_current_password');
+    const submit = begin.querySelector('[type=submit]');
+    if (label && submit) { begin.insertBefore(label, submit); if (err) begin.insertBefore(err, submit); }
+    stagedForm('form-totp-begin', 'label:has(input[name=current_password])', form => call('/api/account/code/check', {purpose: 'reauth', code: value(form, 'email_code')}), ['Step 1 of 3: Verify your email', 'Step 2 of 3: Confirm your password']);
+  }
+
   // ---- password, changed with the one you have
   bind('form-password', async (form, button) => {
-    const result = await post('/api/account/password', {
+    const result = await post(form.elements.code ? '/api/account/password/reset' : '/api/account/password', {
+      code: value(form, 'code'),
       current_password: value(form, 'current_password'),
       password: value(form, 'password'),
       confirm_password: value(form, 'confirm_password'),
     }, {
+      code: 'err-change-code',
       current_password: 'err-current_password',
       password: 'err-password',
       confirm_password: 'err-confirm_password',
     }, button, 'notes-profile');
     if (!result) return;
-    wipe(form, ['current_password', 'password', 'confirm_password']);
+    wipe(form, ['code', 'current_password', 'password', 'confirm_password']);
     const forced = el('must-change-note');
     if (forced) forced.remove();
     closeOwner(form);
@@ -479,6 +593,11 @@
   });
 
   // ---- password, reset with a code when the old one is gone
+  on('change-send', 'click', async (event) => {
+    const result = await post('/api/account/password/reset/send', {}, {}, event.currentTarget, null, 'change-code-note');
+    if (result) { inlineNote('change-code-note', result.note ? 'warn' : 'ok', result.note || 'Code sent. Check your inbox.'); el('change-code').focus(); }
+  });
+
   on('reset-send', 'click', async (event) => {
     const result = await post('/api/account/password/reset/send', {}, {},
       event.currentTarget, 'notes-profile', 'reset-note');
@@ -543,9 +662,9 @@
     inlineNote('reauth-note', '', '');
     touched.profile_email = false;
     closeOwner(form);
-    note(result.note ? 'warn' : 'ok',
-      result.note || result.message || 'Email address changed.', 'notes-profile');
-    load();
+    await load();
+    openDialog(el('dialog-verify-email'));
+    note(result.note ? 'warn' : 'ok', result.note || result.message || 'Check your new email.', 'notes-profile');
   });
 
   on('resend-verify', 'click', async (event) => {
@@ -560,6 +679,8 @@
       { code: value(form, 'code') }, { code: 'err-verify-code' }, button, 'notes-profile');
     if (!result) return;
     wipe(form, ['code']);
+    if (result.sign_in_required) { window.location.assign(result.redirect_url); return; }
+    closeOwner(form);
     note('ok', result.message || 'Email confirmed.', 'notes-profile');
     load();
   });

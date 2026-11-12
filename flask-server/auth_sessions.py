@@ -13,7 +13,7 @@ def password_change_allowed(path, method):
     path = path.rstrip('/') or '/'
     return (path in {'/logout', '/admin/logout', '/account', '/api/account',
                      '/api/account/password', '/api/account/password/reset',
-                     '/api/account/password/reset/send', '/admin/account',
+                     '/api/account/password/reset/send', '/api/account/code/check', '/api/account/identity/check', '/admin/account',
                      '/admin/account/password/reset', '/admin/account/password/reset/send'}
             or path.startswith('/static/'))
 

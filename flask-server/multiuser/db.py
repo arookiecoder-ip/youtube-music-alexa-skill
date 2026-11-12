@@ -13,7 +13,7 @@ import sqlite3
 import time
 from typing import Any, Iterable
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 
 _SCHEMA_V1 = (
     """
@@ -399,6 +399,15 @@ class Database:
                     created_at REAL NOT NULL, expires_at REAL NOT NULL, revoked_at REAL NOT NULL DEFAULT 0)""")
                 conn.execute("CREATE INDEX idx_alexa_access_user ON alexa_access_tokens(user_id)")
                 conn.execute("INSERT INTO multiuser_schema_migrations VALUES (10, ?)", (time.time(),))
+            if 11 not in applied:
+                # Retire the delegated administrator tier. Owners keep panel access.
+                conn.execute("UPDATE user_sessions SET revoked_at=? WHERE revoked_at=0 AND user_id IN (SELECT id FROM users WHERE role='admin')", (time.time(),))
+                conn.execute("UPDATE users SET role='user' WHERE role='admin'")
+                conn.execute("UPDATE user_invites SET role='user' WHERE role='admin'")
+                for table in ('users', 'user_invites'):
+                    for operation in ('INSERT', 'UPDATE'):
+                        conn.execute(f"CREATE TRIGGER {table}_reject_admin_{operation.lower()} BEFORE {operation} ON {table} WHEN NEW.role = 'admin' BEGIN SELECT RAISE(ABORT, 'The admin role has been removed.'); END")
+                conn.execute("INSERT INTO multiuser_schema_migrations VALUES (11, ?)", (time.time(),))
             now = time.time()
             # Bound the audit journal so a long-lived install cannot grow it
             # without limit. 90 days is intentionally conservative.
@@ -459,7 +468,7 @@ class Database:
             "disabled": "SELECT COUNT(*) FROM users WHERE status = 'disabled'",
             "deleted": "SELECT COUNT(*) FROM users WHERE status = 'deleted'",
             "owners": "SELECT COUNT(*) FROM users WHERE role = 'owner' AND status = 'active'",
-            "admins": "SELECT COUNT(*) FROM users WHERE role IN ('owner', 'admin') AND status = 'active'",
+            "admins": "SELECT COUNT(*) FROM users WHERE role = 'owner' AND status = 'active'",
             "sessions": "SELECT COUNT(*) FROM user_sessions WHERE revoked_at = 0 AND expires_at > ?",
             "credentials": "SELECT COUNT(*) FROM user_provider_credentials WHERE status = 'connected'",
             "audit_events": "SELECT COUNT(*) FROM audit_log",

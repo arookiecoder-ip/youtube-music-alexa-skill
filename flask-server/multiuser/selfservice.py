@@ -289,6 +289,10 @@ def build_selfservice_blueprint(mu) -> Blueprint:
             mu, recipient, purpose, code, where=where, ip=ip, user_agent=user_agent
         )
 
+    def _code_deadlines(user: dict, purpose: str) -> dict:
+        state = mu.accounts.email_code_state(user["id"], purpose)
+        return {"expires_at": state.get("expires_at", 0), "resend_at": state.get("resend_at", 0)}
+
     def _code_send_blocked(user: dict, purpose: str, ip: str, *,
                            ip_scope: str = "resend-ip", id_scope: str = "resend-id"):
         """The three gates every code sender on this page passes, in one call.
@@ -982,6 +986,16 @@ def build_selfservice_blueprint(mu) -> Blueprint:
             )
 
         code = request.form.get("code") or ""
+        if request.form.get("verify_only") == "1":
+            blocked = _limited("code-ip", netids.ip_bucket(ip))
+            if blocked:
+                return blocked
+            blocked = _limited("code-id", netids.identifier_bucket(user.get("username") or user["id"]))
+            if blocked:
+                return blocked
+            if not mu.accounts.consume_email_code(user["id"], "reset", code, consume=False):
+                return _json_error("invalid_code", "This code is incorrect or expired. Try again or send a new code.", 410)
+            return jsonify({"ok": True})
         password = request.form.get("password") or ""
         confirm = request.form.get("confirm_password") or ""
         errors: dict[str, str] = {}
@@ -1112,7 +1126,7 @@ def build_selfservice_blueprint(mu) -> Blueprint:
             # confusion of two emails where only the newest is valid.
             "reauth": mu.accounts.email_code_state(full["id"], "reauth"),
             "role": full.get("role"),
-            "role_text": "Administrator" if AccountService.can_view_admin(full) else "Player",
+            "role_text": "Owner" if AccountService.can_view_admin(full) else "User",
             "is_admin": AccountService.can_view_admin(full),
             "created_by": full.get("created_by"),
             "created_at": full.get("created_at"),
@@ -1310,7 +1324,7 @@ def build_selfservice_blueprint(mu) -> Blueprint:
         if blocked:
             return blocked
         note = _mail_note(_send_code(user, "reset", ip, user_agent, account_where))
-        return jsonify({"ok": True, "note": note, "sent_to": _mask(user["email"])})
+        return jsonify({"ok": True, "note": note, "sent_to": _mask(user["email"]), **_code_deadlines(user, "reset")})
 
     @bp.route("/api/account/password/reset", methods=["POST"])
     @account_required
@@ -1399,6 +1413,37 @@ def build_selfservice_blueprint(mu) -> Blueprint:
             }
         )
 
+    @bp.route("/api/account/identity/check", methods=["POST"])
+    @account_required
+    def api_check_account_identity():
+        blocked = _limited("account-password", g.ss_user["id"])
+        if blocked:
+            return blocked
+        body = request.get_json(silent=True) or {}
+        try:
+            mu.accounts.reauthenticate(g.ss_user, password=str(body.get("current_password") or ""), ip=_ip(), user_agent=_ua())
+        except AccountError as exc:
+            return _json_error("bad_password", str(exc), 403)
+        return jsonify({"ok": True})
+
+    @bp.route("/api/account/code/check", methods=["POST"])
+    @account_required
+    def api_check_account_code():
+        body = request.get_json(silent=True) or {}
+        purpose = str(body.get("purpose") or "")
+        if purpose not in {"reset", "reauth"}:
+            return _json_error("invalid", "Choose a valid verification action.", 422)
+        user = mu.accounts.get_user(g.ss_user["id"]) or g.ss_user
+        blocked = _limited("code-ip", netids.ip_bucket(_ip()))
+        if blocked:
+            return blocked
+        allowed, retry_after = _throttle("code-id", netids.identifier_bucket(user.get("username") or user["id"]))
+        if not allowed:
+            return _json_error("rate_limited", "Wait before checking another code.", 429, retry_after=retry_after)
+        if not mu.accounts.consume_email_code(user["id"], purpose, str(body.get("code") or ""), consume=False):
+            return _json_error("invalid_code", "This code is incorrect or expired. Try again or send a new code.", 410)
+        return jsonify({"ok": True, "verification": mu.accounts.email_code_state(user["id"], purpose)})
+
     @bp.route("/api/account/email/reauth", methods=["POST"])
     @account_required
     def api_send_reauth_code():
@@ -1422,7 +1467,7 @@ def build_selfservice_blueprint(mu) -> Blueprint:
         if blocked:
             return blocked
         note = _mail_note(_send_code(user, "reauth", ip, user_agent, account_where))
-        return jsonify({"ok": True, "note": note, "sent_to": _mask(user["email"])})
+        return jsonify({"ok": True, "note": note, "sent_to": _mask(user["email"]), **_code_deadlines(user, "reauth")})
 
     @bp.route("/api/account/email/change", methods=["POST"])
     @account_required
@@ -1509,6 +1554,7 @@ def build_selfservice_blueprint(mu) -> Blueprint:
                 "ok": True,
                 "user": updated,
                 "email_changed": True,
+                **_code_deadlines(updated, "verify"),
                 "verification_pending": mu.accounts.verification_pending(updated),
                 "note": note,
                 "message": f"Confirm the proposed address {_mask(new_email)} "
@@ -1529,7 +1575,7 @@ def build_selfservice_blueprint(mu) -> Blueprint:
         if blocked:
             return blocked
         note = _mail_note(_send_code(user, "verify", ip, user_agent, account_where))
-        return jsonify({"ok": True, "note": note})
+        return jsonify({"ok": True, "note": note, **_code_deadlines(user, "verify")})
 
     @bp.route("/api/account/email/verification/confirm", methods=["POST"])
     @account_required
@@ -1577,7 +1623,9 @@ def build_selfservice_blueprint(mu) -> Blueprint:
                 "user": verified or mu.accounts.get_user(user["id"]),
                 "email_verified": True,
                 "verification_pending": False,
-                "message": f"{_mask(user.get('email') or '')} is confirmed.",
+                "sign_in_required": bool(user.get("pending_email")),
+                "redirect_url": "/login/?email_changed=1" if user.get("pending_email") else "",
+                "message": ("Email updated. Sign in again with your new email address." if user.get("pending_email") else f"{_mask(user.get('email') or '')} is confirmed."),
             }
         )
 

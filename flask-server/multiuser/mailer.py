@@ -15,6 +15,7 @@ import uuid
 from dataclasses import dataclass
 from email.message import EmailMessage
 from email.utils import formataddr, formatdate, make_msgid
+from datetime import datetime, timezone
 from typing import Optional
 
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
@@ -135,13 +136,19 @@ class Mailer:
         message["To"] = to_address
         if self.config.reply_to:
             message["Reply-To"] = self.config.reply_to
-        message["Date"] = formatdate(localtime=False)
+        sent_at = datetime.now(timezone.utc)
+        message["Date"] = formatdate(sent_at.timestamp(), localtime=False)
         message["Message-ID"] = make_msgid(domain=self.config.from_address.split("@")[-1] or None)
         message["Auto-Submitted"] = "auto-generated"
         message["X-Mailer"] = "MusicBox-MultiUser"
         for key, value in (headers or {}).items():
             if key and value:
                 message[key] = str(value)[:900]
+        stamp = sent_at.strftime("Sent on %d %b %Y at %H:%M:%S UTC")
+        text = text.rstrip() + "\n\n" + stamp + "\n"
+        footer = (f'<p style="margin:24px 0 0;padding:16px 0;font-size:12px;'
+                  f'color:{_FAINT};font-family:{_SANS};text-align:center">{stamp}</p>')
+        html = re.sub(r"</body\s*>", lambda _: footer + "</body>", html, count=1, flags=re.I) if re.search(r"</body\s*>", html, re.I) else html + footer
         message.set_content(text)
         message.add_alternative(html, subtype="html")
         return message

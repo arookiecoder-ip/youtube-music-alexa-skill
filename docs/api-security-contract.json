@@ -16,7 +16,7 @@
       "methods": [
         "GET"
       ],
-      "principal": "administrator",
+      "principal": "owner",
       "csrf": "required for mutations",
       "tenant": "authenticated account; admin target permissions checked in service"
     },
@@ -26,7 +26,7 @@
         "GET",
         "POST"
       ],
-      "principal": "administrator",
+      "principal": "owner",
       "csrf": "required for mutations",
       "tenant": "authenticated account; admin target permissions checked in service"
     },
@@ -35,7 +35,7 @@
       "methods": [
         "POST"
       ],
-      "principal": "administrator",
+      "principal": "owner",
       "csrf": "required for mutations",
       "tenant": "authenticated account; admin target permissions checked in service"
     },
@@ -44,7 +44,7 @@
       "methods": [
         "POST"
       ],
-      "principal": "administrator",
+      "principal": "owner",
       "csrf": "required for mutations",
       "tenant": "authenticated account; admin target permissions checked in service"
     },
@@ -53,7 +53,7 @@
       "methods": [
         "POST"
       ],
-      "principal": "administrator",
+      "principal": "owner",
       "csrf": "required for mutations",
       "tenant": "authenticated account; admin target permissions checked in service"
     },
@@ -62,7 +62,7 @@
       "methods": [
         "POST"
       ],
-      "principal": "administrator",
+      "principal": "owner",
       "csrf": "required for mutations",
       "tenant": "authenticated account; admin target permissions checked in service"
     },
@@ -71,7 +71,7 @@
       "methods": [
         "POST"
       ],
-      "principal": "administrator",
+      "principal": "owner",
       "csrf": "required for mutations",
       "tenant": "authenticated account; admin target permissions checked in service"
     },
@@ -80,7 +80,7 @@
       "methods": [
         "POST"
       ],
-      "principal": "administrator",
+      "principal": "owner",
       "csrf": "required for mutations",
       "tenant": "authenticated account; admin target permissions checked in service"
     },
@@ -89,7 +89,7 @@
       "methods": [
         "POST"
       ],
-      "principal": "administrator",
+      "principal": "owner",
       "csrf": "required for mutations",
       "tenant": "authenticated account; admin target permissions checked in service"
     },
@@ -98,7 +98,7 @@
       "methods": [
         "POST"
       ],
-      "principal": "administrator",
+      "principal": "owner",
       "csrf": "required for mutations",
       "tenant": "authenticated account; admin target permissions checked in service"
     },
@@ -107,7 +107,7 @@
       "methods": [
         "POST"
       ],
-      "principal": "administrator",
+      "principal": "owner",
       "csrf": "required for mutations",
       "tenant": "authenticated account; admin target permissions checked in service"
     },
@@ -116,7 +116,7 @@
       "methods": [
         "POST"
       ],
-      "principal": "administrator",
+      "principal": "owner",
       "csrf": "required for mutations",
       "tenant": "authenticated account; admin target permissions checked in service"
     },
@@ -125,7 +125,7 @@
       "methods": [
         "GET"
       ],
-      "principal": "administrator",
+      "principal": "owner",
       "csrf": "required for mutations",
       "tenant": "authenticated account; admin target permissions checked in service"
     },
@@ -134,7 +134,7 @@
       "methods": [
         "POST"
       ],
-      "principal": "administrator",
+      "principal": "owner",
       "csrf": "required for mutations",
       "tenant": "authenticated account; admin target permissions checked in service"
     },
@@ -143,7 +143,7 @@
       "methods": [
         "POST"
       ],
-      "principal": "administrator",
+      "principal": "owner",
       "csrf": "required for mutations",
       "tenant": "authenticated account; admin target permissions checked in service"
     },
@@ -152,7 +152,7 @@
       "methods": [
         "GET"
       ],
-      "principal": "administrator",
+      "principal": "owner",
       "csrf": "required for mutations",
       "tenant": "authenticated account; admin target permissions checked in service"
     },
@@ -161,7 +161,7 @@
       "methods": [
         "GET"
       ],
-      "principal": "administrator",
+      "principal": "owner",
       "csrf": "required for mutations",
       "tenant": "authenticated account; admin target permissions checked in service"
     },
@@ -170,7 +170,7 @@
       "methods": [
         "GET"
       ],
-      "principal": "administrator",
+      "principal": "owner",
       "csrf": "required for mutations",
       "tenant": "authenticated account; admin target permissions checked in service"
     },
@@ -179,7 +179,7 @@
       "methods": [
         "GET"
       ],
-      "principal": "administrator",
+      "principal": "owner",
       "csrf": "required for mutations",
       "tenant": "authenticated account; admin target permissions checked in service"
     },
@@ -218,7 +218,7 @@
       "methods": [
         "POST"
       ],
-      "principal": "administrator",
+      "principal": "owner",
       "csrf": "required for mutations",
       "tenant": "authenticated account; admin target permissions checked in service"
     },
@@ -247,7 +247,7 @@
       "methods": [
         "GET"
       ],
-      "principal": "administrator",
+      "principal": "owner",
       "csrf": "required for mutations",
       "tenant": "authenticated account; admin target permissions checked in service"
     },
@@ -256,7 +256,7 @@
       "methods": [
         "POST"
       ],
-      "principal": "administrator",
+      "principal": "owner",
       "csrf": "required for mutations",
       "tenant": "authenticated account; admin target permissions checked in service"
     },
@@ -265,7 +265,7 @@
       "methods": [
         "POST"
       ],
-      "principal": "administrator",
+      "principal": "owner",
       "csrf": "required for mutations",
       "tenant": "authenticated account; admin target permissions checked in service"
     },
@@ -274,7 +274,7 @@
       "methods": [
         "POST"
       ],
-      "principal": "administrator",
+      "principal": "owner",
       "csrf": "required for mutations",
       "tenant": "authenticated account; admin target permissions checked in service"
     },
@@ -283,7 +283,7 @@
       "methods": [
         "GET"
       ],
-      "principal": "administrator",
+      "principal": "owner",
       "csrf": "required for mutations",
       "tenant": "authenticated account; admin target permissions checked in service"
     },
@@ -292,16 +292,25 @@
       "methods": [
         "GET"
       ],
-      "principal": "administrator",
+      "principal": "owner",
       "csrf": "required for mutations",
       "tenant": "authenticated account; admin target permissions checked in service"
+    },
+    {
+      "path": "/admin/users/<user_id>/alexa/",
+      "methods": [
+        "POST"
+      ],
+      "principal": "owner",
+      "csrf": "required for mutations",
+      "tenant": "admin target permissions; scoped account token management"
     },
     {
       "path": "/admin/users/<user_id>/delete/",
       "methods": [
         "POST"
       ],
-      "principal": "administrator",
+      "principal": "owner",
       "csrf": "required for mutations",
       "tenant": "authenticated account; admin target permissions checked in service"
     },
@@ -310,7 +319,7 @@
       "methods": [
         "POST"
       ],
-      "principal": "administrator",
+      "principal": "owner",
       "csrf": "required for mutations",
       "tenant": "authenticated account; admin target permissions checked in service"
     },
@@ -319,7 +328,7 @@
       "methods": [
         "POST"
       ],
-      "principal": "administrator",
+      "principal": "owner",
       "csrf": "required for mutations",
       "tenant": "authenticated account; admin target permissions checked in service"
     },
@@ -328,7 +337,7 @@
       "methods": [
         "POST"
       ],
-      "principal": "administrator",
+      "principal": "owner",
       "csrf": "required for mutations",
       "tenant": "authenticated account; admin target permissions checked in service"
     },
@@ -337,7 +346,7 @@
       "methods": [
         "POST"
       ],
-      "principal": "administrator",
+      "principal": "owner",
       "csrf": "required for mutations",
       "tenant": "authenticated account; admin target permissions checked in service"
     },
@@ -346,7 +355,7 @@
       "methods": [
         "POST"
       ],
-      "principal": "administrator",
+      "principal": "owner",
       "csrf": "required for mutations",
       "tenant": "authenticated account; admin target permissions checked in service"
     },
@@ -355,16 +364,25 @@
       "methods": [
         "POST"
       ],
-      "principal": "administrator",
+      "principal": "owner",
       "csrf": "required for mutations",
       "tenant": "authenticated account; admin target permissions checked in service"
+    },
+    {
+      "path": "/admin/users/<user_id>/permanent-delete/",
+      "methods": [
+        "POST"
+      ],
+      "principal": "owner",
+      "csrf": "required for mutations",
+      "tenant": "active owner only; deleted account only; exact typed username; transaction rechecks authorization"
     },
     {
       "path": "/admin/users/<user_id>/provider/<provider>/disconnect/",
       "methods": [
         "POST"
       ],
-      "principal": "administrator",
+      "principal": "owner",
       "csrf": "required for mutations",
       "tenant": "authenticated account; admin target permissions checked in service"
     },
@@ -373,7 +391,7 @@
       "methods": [
         "POST"
       ],
-      "principal": "administrator",
+      "principal": "owner",
       "csrf": "required for mutations",
       "tenant": "authenticated account; admin target permissions checked in service"
     },
@@ -382,7 +400,7 @@
       "methods": [
         "POST"
       ],
-      "principal": "administrator",
+      "principal": "owner",
       "csrf": "required for mutations",
       "tenant": "authenticated account; admin target permissions checked in service"
     },
@@ -391,7 +409,7 @@
       "methods": [
         "POST"
       ],
-      "principal": "administrator",
+      "principal": "owner",
       "csrf": "required for mutations",
       "tenant": "authenticated account; admin target permissions checked in service"
     },
@@ -400,7 +418,7 @@
       "methods": [
         "POST"
       ],
-      "principal": "administrator",
+      "principal": "owner",
       "csrf": "required for mutations",
       "tenant": "authenticated account; admin target permissions checked in service"
     },
@@ -410,7 +428,7 @@
         "GET",
         "POST"
       ],
-      "principal": "administrator",
+      "principal": "owner",
       "csrf": "required for mutations",
       "tenant": "authenticated account; admin target permissions checked in service"
     },
@@ -419,7 +437,7 @@
       "methods": [
         "POST"
       ],
-      "principal": "administrator",
+      "principal": "owner",
       "csrf": "required for mutations",
       "tenant": "authenticated account; admin target permissions checked in service"
     },
@@ -428,7 +446,7 @@
       "methods": [
         "GET"
       ],
-      "principal": "administrator",
+      "principal": "owner",
       "csrf": "required for mutations",
       "tenant": "authenticated account; admin target permissions checked in service"
     },
@@ -437,7 +455,7 @@
       "methods": [
         "POST"
       ],
-      "principal": "administrator",
+      "principal": "owner",
       "csrf": "required for mutations",
       "tenant": "authenticated account; admin target permissions checked in service"
     },
@@ -467,6 +485,15 @@
       "principal": "account",
       "csrf": "required for mutations",
       "tenant": "authenticated account; admin target permissions checked in service"
+    },
+    {
+      "path": "/api/account/code/check",
+      "methods": [
+        "POST"
+      ],
+      "principal": "account",
+      "csrf": "required",
+      "tenant": "authenticated account only; rate limited; previews never consume the code or authorize a mutation"
     },
     {
       "path": "/api/account/delete",
@@ -512,6 +539,15 @@
       "principal": "account",
       "csrf": "required for mutations",
       "tenant": "authenticated account; admin target permissions checked in service"
+    },
+    {
+      "path": "/api/account/identity/check",
+      "methods": [
+        "POST"
+      ],
+      "principal": "account",
+      "csrf": "required",
+      "tenant": "authenticated account only; rate limited; previews never consume the code or authorize a mutation"
     },
     {
       "path": "/api/account/password",
@@ -671,24 +707,6 @@
       "principal": "public",
       "csrf": "required for mutations",
       "tenant": "none until proof verified"
-    },
-    {
-      "path": "/admin/users/<user_id>/alexa/",
-      "methods": [
-        "POST"
-      ],
-      "principal": "administrator",
-      "csrf": "required for mutations",
-      "tenant": "admin target permissions; scoped account token management"
-    },
-    {
-      "path": "/admin/users/<user_id>/permanent-delete/",
-      "methods": [
-        "POST"
-      ],
-      "principal": "administrator",
-      "csrf": "required for mutations",
-      "tenant": "active owner only; deleted account only; exact typed username; transaction rechecks authorization"
     }
   ]
 }

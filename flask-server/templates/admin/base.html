@@ -20,6 +20,7 @@
   <link rel="stylesheet" href="{{ asset_url('css/admin.css') }}">
   <script defer src="{{ asset_url('js/admin.js') }}"></script>
   {% block head %}{% endblock %}
+  <link rel="stylesheet" href="{{ asset_url('css/account-design.css') }}">
 </head>
 <body class="{% block body_class %}{% endblock %}">
 {% block body %}
@@ -156,5 +157,6 @@
   <div class="dialog-foot" id="admin-dialog-foot"></div>
 </dialog>
 {% block scripts %}{% endblock %}
+<script defer src="{{ asset_url('js/auth-ui.js') }}"></script>
 </body>
 </html>

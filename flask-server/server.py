@@ -769,7 +769,7 @@ def _record_listen(video_id, title, artist, thumbnail_url):
 # verification rule inside multiuser/selfservice.py. They only exist at all when
 # MULTI_USER_ENABLED=1 registers that blueprint, so on a single-owner deployment
 # these entries match nothing and Flask answers 404.
-_PUBLIC_PATHS = ('/health/live', '/health/ready', '/', '/privacy_policy', '/terms_of_use', '/login', '/logout', '/favicon.ico',
+_PUBLIC_PATHS = ('/health/live', '/health/ready', '/', '/welcome', '/privacy_policy', '/terms_of_use', '/login', '/logout', '/favicon.ico',
                  '/manifest.webmanifest', '/service-worker.js', '/__not_found__',
                  '/signup', '/resend-code', '/verify', '/forgot-password',
                  '/reset-password')
@@ -7130,6 +7130,7 @@ def login():
         # step two is always in the document and revealed by the response.
         return _no_store(app.make_response(render_template(
             "login.html", asset_v=_STATIC_VERSION,
+            email_changed=request.args.get('email_changed') == '1',
             next_target=_safe_spa_target(request.args.get('next')),
             signup_open=signup_open, forgot_url=forgot_url)))
 
@@ -13256,7 +13257,16 @@ threading.Thread(target=_status_watchdog_loop, daemon=True, name='status-watchdo
 
 @app.route("/", methods=["GET"])
 def root():
+    if not (_logged_in() or _valid_key_supplied() or _jam_guest() or session.get('jam')):
+        return welcome()
     return _render_root_shell()
+
+
+@app.route("/welcome", methods=["GET"])
+def welcome():
+    base = _multiuser_layer.config.base_path if _multiuser_layer else '/admin'
+    return _no_store(app.make_response(render_template(
+        "landing.html", asset_v=_STATIC_VERSION, admin_login_url=base + '/login/')))
 
 
 def spa_document():
