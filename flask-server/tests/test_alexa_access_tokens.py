@@ -164,7 +164,10 @@ class AlexaAccessTokenTests(SecondFactorDoorTestBase):
     def test_additional_owner_never_inherits_bootstrap_owner_playback_or_cookies(self):
         second = self.accounts.create_user(self.owner, 'other-owner', 'Another!Passw0rd',
             email='other-owner@example.test', role='owner', must_change_password=False, email_verified=True)
-        with mock.patch.object(self.server, '_owner_row_read', [0.0, '']):
+        # A newly booted CI/server host can still be inside its first minute.
+        # An uninitialized cache must not be mistaken for a cached empty owner.
+        with mock.patch.object(self.server, '_owner_row_read', [0.0, '']), \
+                mock.patch.object(self.server.time, 'monotonic', return_value=30.0):
             self.assertEqual(self.server._player_identity_for_user_id(self.owner['id'], 'owner'), 'owner')
             self.assertEqual(self.server._player_identity_for_user_id(second['id'], 'owner'), 'user:' + second['id'])
         self.layer.db.execute("UPDATE users SET status='disabled' WHERE id=?", (self.owner['id'],))

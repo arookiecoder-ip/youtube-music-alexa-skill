@@ -1141,11 +1141,11 @@ def _logged_in():
 def _admin_logged_in():
     """Whether this session may see server-wide administration.
 
-    A multi-user owner/administrator, or the legacy single-user owner session on
+    A multi-user owner, or the legacy single-user owner session on
     a deployment without the layer. Plain players and Jam guests never qualify."""
     user = _mu_web_identity()
     if user is not None:
-        return user.get('role') in {'owner', 'admin'} and user.get('status') == 'active'
+        return user.get('role') == 'owner' and user.get('status') == 'active'
     # The owner API key is the legacy single-user credential: the skill, CLI
     # diagnostics and key-in-URL status page have no session cookie, but they
     # are still the owner. Without this, moving /status behind the admin check
@@ -1419,7 +1419,7 @@ def _owner_row_id():
     disabled or demoted: changing administrators must never transfer its cookies
     or queue to somebody else."""
     now = time.monotonic()
-    if now - _owner_row_read[0] < 60:
+    if _owner_row_read[0] > 0 and now - _owner_row_read[0] < 60:
         return _owner_row_read[1]
     user_id = ''
     if _multiuser_layer is not None:

@@ -41,3 +41,14 @@ class LandingRouteTests(unittest.TestCase):
     def test_welcome_is_always_accessible(self):
         self.logged=True
         self.assertIn(b'Make room',self.client.get('/welcome').data)
+
+    def test_management_check_rejects_the_retired_admin_role(self):
+        actor={"role":"admin","status":"active"}
+        scope={"_mu_web_identity":lambda:actor,"_valid_key_supplied":lambda:False,"_logged_in":lambda:True}
+        node=next(n for n in ast.parse((ROOT/'server.py').read_text()).body if isinstance(n,ast.FunctionDef) and n.name=='_admin_logged_in')
+        exec(compile(ast.Module(body=[node],type_ignores=[]),'server.py','exec'),scope)
+        self.assertFalse(scope['_admin_logged_in']())
+        actor['role']='owner'
+        self.assertTrue(scope['_admin_logged_in']())
+        actor['role']='user'
+        self.assertFalse(scope['_admin_logged_in']())

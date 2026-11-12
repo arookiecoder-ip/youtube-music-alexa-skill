@@ -248,15 +248,20 @@ class SignupSwitchTests(SignupSwitchTestBase):
         for field in ("role", "status", "email", "email_verified"):
             self.assertEqual(after[field], before[field])
 
-    def test_an_administrator_that_is_not_the_owner_cannot_change_it(self):
-        self.accounts.create_user(
+    def test_a_non_owner_cannot_change_it(self):
+        user = self.accounts.create_user(
             self.owner, "helper", "Helper!Passw0rd", email="helper@example.test",
-            role="admin", status="active", email_verified=True,
+            role="user", status="active", email_verified=True,
         )
-        self.login("helper", "Helper!Passw0rd")
+        raw = self.accounts.create_session(user)
+        with self.client.session_transaction() as state:
+            state["mu_sid"] = raw
+        self.client.get("/admin/login/")
         response = self.set_door(False)
-        self.assertEqual(response.status_code, 302)
+        self.assertEqual(response.status_code, 403)
         self.assertTrue(self.accounts.registration_open())
+        with self.assertRaises(AccountError):
+            self.accounts.set_signup_switch(user, False)
 
     def test_the_environment_is_the_ceiling(self):
         with mock.patch.object(self.accounts.config, "self_signup_enabled", False):

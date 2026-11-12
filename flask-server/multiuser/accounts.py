@@ -491,6 +491,8 @@ class AccountService:
     def set_signup_switch(
         self, actor: dict | None, enabled: bool, ip: str = "", user_agent: str = ""
     ) -> None:
+        if not self.can_view_admin(actor):
+            raise AccountError("Only an active owner can change public sign-ups.")
         if not self.config.self_signup_enabled:
             # The environment is the ceiling: a hijacked panel session must not be
             # able to open a door the deployment shut on purpose.
