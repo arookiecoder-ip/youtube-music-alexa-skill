@@ -50,13 +50,7 @@
                {{ 'checked' if form.send_invite else '' }}>
         Send an invitation email (the user chooses their own password)
       </label>
-      <label class="checkline" for="send_verification">
-        <input type="checkbox" name="send_verification" id="send_verification" {{ 'checked' if form.send_verification else '' }}>
-        Send a verification code (they type it to confirm the address)
-      </label>
-      <span class="hint hint-indent">
-        Both need an email address. With verification enforced the user cannot sign in until the address is confirmed.
-      </span>
+      <span class="hint hint-indent">An invitation needs an email address. Users can also confirm their address by signing in via OTP.</span>
     </div>
 
     <label class="checkline" for="must_change_password">

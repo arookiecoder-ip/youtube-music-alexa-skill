@@ -478,14 +478,18 @@ class EmailFlowTests(MultiUserTestBase):
 
         self.login()
         user = self.layer.accounts.get_user_by_username("verify-me")
-        response = self.client.post(
+        # Administrator-triggered verification mail was removed. Public signup
+        # verification still works independently of the passwordless login door.
+        removed = self.client.post(
             f"/admin/users/{user['id']}/email/verification/",
             data={"_csrf": self.csrf()},
         )
-        self.assertEqual(response.status_code, 302)
+        self.assertEqual(removed.status_code, 404)
+        response = self.client.post(
+            "/resend-code", data={"_csrf": self.ss_csrf(), "identifier": "verify-me"},
+        )
+        self.assertEqual(response.status_code, 200)
         self.assert_no_token_in_any_email()
-        # The administrator can send the code but cannot spend it: only the person
-        # with the mailbox types it, on the account door, without signing in.
         confirmed = self.client.post(
             "/verify",
             data={"_csrf": self.ss_csrf(), "username": "verify-me",

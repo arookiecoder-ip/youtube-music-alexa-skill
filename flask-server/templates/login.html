@@ -29,8 +29,24 @@
       <input type="text" id="username" name="username" autocomplete="username" autofocus
              placeholder="you@example.com">
 
-      <label for="password">Password</label>
-      <input type="password" id="password" name="password" autocomplete="current-password">
+      <div id="password-section" class="login-panel">
+        <label for="password">Password</label>
+        <input type="password" id="password" name="password" autocomplete="current-password">
+      </div>
+      {% if otp_available %}
+      <button type="button" class="login-mode" id="otp-toggle" aria-expanded="false" aria-controls="otp-section">Login via OTP</button>
+      <div id="otp-section" class="login-panel" hidden>
+        <button type="button" class="primary" id="send-otp">Send OTP</button>
+        <div id="otp-entry" hidden>
+          <label for="email-code">Email code</label>
+          <div class="otp-field">
+            <input type="text" id="email-code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" pattern="[0-9]{6}" placeholder="------">
+            <button type="button" id="resend-otp" disabled>Resend</button>
+          </div>
+          <p class="step-hint" id="otp-hint" role="status"></p>
+        </div>
+      </div>
+      {% endif %}
 
       <button type="submit" class="primary" id="creds-btn">Sign in</button>
     </form>
@@ -53,97 +69,19 @@
       <button type="submit" class="primary" id="code-btn">Sign in</button>
     </form>
 
-    <p id="status"></p>
+    <p id="status" role="alert"></p>
 
     {% if signup_open or forgot_url %}
     <nav class="door-links">
       {% if signup_open %}<a href="/signup">Create an account</a>{% endif %}
-      <a href="/verify">Enter your code</a>
       {% if forgot_url %}<a href="{{ forgot_url }}">Forgot password?</a>{% endif %}
     </nav>
     {% endif %}
   </div>
 </main>
 
-<script>
-const NEXT_TARGET = {{ next_target|tojson }};
-const statusEl = document.getElementById('status');
-const stepCreds = document.getElementById('step-creds');
-const credsBtn = document.getElementById('creds-btn');
-
-function setError(msg) { statusEl.textContent = msg || ''; }
-
-function showStep(el) {
-  document.querySelectorAll('.step').forEach(s => s.classList.remove('active'));
-  el.classList.add('active');
-  setError('');
-  const input = el.querySelector('input');
-  if (input) setTimeout(() => input.focus(), 60);
-}
-
-async function post(payload) {
-  const res = await fetch('/login/', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    credentials: 'same-origin',
-    body: JSON.stringify(payload),
-  });
-  const json = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    const error = json && json.error;
-    const message = typeof error === 'string'
-      ? error
-      : (error && typeof error.message === 'string' ? error.message : 'HTTP ' + res.status);
-    throw new Error(message);
-  }
-  return json;
-}
-
-stepCreds.addEventListener('submit', async (e) => {
-  e.preventDefault();
-  setError('');
-  credsBtn.disabled = true;
-  try {
-    const json = await post({
-      username: document.getElementById('username').value.trim(),
-      password: document.getElementById('password').value,
-      next: NEXT_TARGET,
-    });
-    if (json.totp_required) {
-      window._loginToken = json.token;
-      showStep(document.getElementById('step-code'));
-    } else {
-      location.href = json.next || '/home';
-    }
-  } catch (err) {
-    setError(err.message);
-  } finally {
-    credsBtn.disabled = false;
-  }
-});
-
-const stepCode = document.getElementById('step-code');
-const codeBtn = document.getElementById('code-btn');
-document.getElementById('back-btn').onclick = () => showStep(stepCreds);
-stepCode.addEventListener('submit', async (e) => {
-  e.preventDefault();
-  setError('');
-  codeBtn.disabled = true;
-  try {
-    const json = await post({ step: 'totp', code: document.getElementById('code').value.trim(), token: window._loginToken });
-    location.href = json.next || '/home';
-  } catch (err) {
-    // The one-time proof is spent whether the code was wrong or the wait ran
-    // out, so the only honest next step is the password again.
-    window._loginToken = '';
-    document.getElementById('code').value = '';
-    showStep(stepCreds);
-    setError(err.message);
-  } finally {
-    codeBtn.disabled = false;
-  }
-});
-</script>
+<script>const NEXT_TARGET = {{ next_target|tojson }};</script>
+<script defer src="/static/js/login.js?v={{ asset_v }}"></script>
 <script defer src="/static/js/auth-ui.js?v={{ asset_v }}"></script>
 </body>
 </html>

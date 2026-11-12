@@ -1625,6 +1625,7 @@ async function playCollection(items, options) {
       serial: serial,
       playlist_id: playlistId || undefined,
       queue_items: playlistId ? undefined : queueItems,
+      brief_response: true,
       target_video_id: startVideoId || undefined,
       start_index: requestedStartIndex,
       shuffle: !!options.shuffle,
@@ -1696,6 +1697,7 @@ async function addCollectionToQueue(items, options) {
       position: 'last',
       playlist_id: playlistId || undefined,
       queue_items: playlistId ? undefined : queueItems,
+      brief_response: true,
     });
     const count = Number(data && data.added_count) || queueItems.length;
     const skipped = Number(data && data.skipped_count) || 0;

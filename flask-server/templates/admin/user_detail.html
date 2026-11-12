@@ -326,9 +326,7 @@
 {% endif %}
 <dialog class="admin-dialog ud-dialog" id="email-user-dialog" aria-labelledby="email-user-title">{{ dialog_head('Email authentication', 'email-user-title') }}<div class="dialog-body">
 <p>{{ user.email or 'No email address has been added.' }}</p>{% if user.email %}<p>{{ 'This email has been verified.' if user.email_verified else 'This email has not been verified yet.' }}</p>
-<div class="ud-dialog-actions">{% if not user.email_verified %}<form method="post" action="{{ base_path }}/users/{{ user.id }}/email/verification/">{{ csrf() }}<button class="btn" type="submit">Send verification email</button>
-</form>
-<form method="post" action="{{ base_path }}/users/{{ user.id }}/email/verify-now/" data-confirm-heading="Mark email verified" data-confirm="Mark {{ user.email }} as verified for @{{ user.username }} without an email round trip?" data-confirm-button="Mark verified">{{ csrf() }}<button class="btn ghost" type="submit">Mark verified manually</button>
+<div class="ud-dialog-actions">{% if not user.email_verified %}<form method="post" action="{{ base_path }}/users/{{ user.id }}/email/verify-now/" data-confirm-heading="Mark email verified" data-confirm="Mark {{ user.email }} as verified for @{{ user.username }} without an email round trip?" data-confirm-button="Mark verified">{{ csrf() }}<button class="btn ghost" type="submit">Mark verified manually</button>
 </form>{% endif %}{% if user.status == 'invited' %}<form method="post" action="{{ base_path }}/users/{{ user.id }}/email/invitation/">{{ csrf() }}<button class="btn" type="submit">Resend invitation</button>
 </form>{% endif %}</div>{% else %}<p>Add an email using Edit profile first.</p>{% endif %}</div>
 <div class="dialog-foot">

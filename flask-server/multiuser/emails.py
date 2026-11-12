@@ -54,6 +54,12 @@ COPY = {
 
 # heading, intro, expiry, warning.  ``intro`` is formatted with ``{where}``.
 CODE_COPY = {
+    "magic": (
+        "Sign in to Music Box",
+        "Enter this code on {where} to sign in to your Music Box account.",
+        "This code expires in {minutes} minutes, works once, and stops working after {attempts} wrong tries.",
+        "If you did not request this code, ignore this email. Never share your code.",
+    ),
     "verify": (
         "Verify your email address",
         "Enter this code on {where} to confirm the address on your Music Box account.",
@@ -144,7 +150,7 @@ def send_code_email(mu, user: dict, purpose: str, code: str, *, where: str = "th
     the property that made this switch worth making.
     """
     heading, intro, expiry, warning = CODE_COPY[purpose]
-    minutes = max(1, int(mu.config.email_code_minutes))
+    minutes = max(1, int(mu.config.email_token_magic_minutes if purpose == "magic" else mu.config.email_code_minutes))
     text, html = render_code_email(
         app_name=mu.config.app_name,
         heading=heading,

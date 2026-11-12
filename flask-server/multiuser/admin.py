@@ -685,7 +685,6 @@ def build_blueprint(mu: MultiUser) -> Blueprint:
             "password": "",
             "must_change_password": False,
             "send_invite": False,
-            "send_verification": True,
         }
         if request.method == "POST":
             form = {
@@ -695,7 +694,6 @@ def build_blueprint(mu: MultiUser) -> Blueprint:
                 "password": request.form.get("password") or "",
                 "must_change_password": request.form.get("must_change_password") == "on",
                 "send_invite": request.form.get("send_invite") == "on",
-                "send_verification": request.form.get("send_verification") == "on",
             }
             generated_password = False
             if form["send_invite"] and not form["email"]:
@@ -728,12 +726,6 @@ def build_blueprint(mu: MultiUser) -> Blueprint:
                             ip=_client_ip(), user_agent=_user_agent(),
                         )
                         _flash_mail(result, "Invitation email", user["email"])
-                    elif form["send_verification"] and user.get("email"):
-                        result = _send_code_email(
-                            user, "verify", actor=g.mu_user,
-                            ip=_client_ip(), user_agent=_user_agent(),
-                        )
-                        _flash_mail(result, "Verification code", user["email"])
                     if generated_password and not form["send_invite"]:
                         return render_template("admin/password_result.html", title="Account password", password=form["password"], target_id=user["id"], must_change_password=form["must_change_password"])
                     return redirect(url_for("multiuser_admin.user_detail", user_id=user["id"]))
@@ -1077,36 +1069,6 @@ def build_blueprint(mu: MultiUser) -> Blueprint:
         except AccountError as exc:
             flash(str(exc), "error")
             return redirect(back)
-
-    @bp.route("/users/<user_id>/email/verification/", methods=["POST"])
-    @admin_required
-    def user_email_verification(user_id):
-        user = mu.accounts.get_user(user_id)
-        if not user:
-            flash("User not found.", "error")
-            return redirect(url_for("multiuser_admin.users"))
-        if not AccountService.can_manage_user(g.mu_user, user):
-            return _forbidden()
-        if not user.get("email"):
-            flash("Add an email address first.", "error")
-            return redirect(url_for("multiuser_admin.user_detail", user_id=user_id))
-        if user.get("email_verified"):
-            flash("That email address is already verified.", "info")
-            return redirect(url_for("multiuser_admin.user_detail", user_id=user_id))
-        if mu.accounts.recent_email_token_count(user_id, "verify", 60):
-            flash("A verification email was sent less than a minute ago. Check the inbox first.", "warning")
-            return redirect(url_for("multiuser_admin.user_detail", user_id=user_id))
-        result = _send_code_email(
-            user, "verify", actor=g.mu_user, ip=_client_ip(), user_agent=_user_agent()
-        )
-        _flash_mail(result, "Verification code", user["email"])
-        if result.status == "sent":
-            flash(
-                "The code is in their inbox. They type it into their own account page "
-                "-- there is no link for anyone to click.",
-                "info",
-            )
-        return redirect(url_for("multiuser_admin.user_detail", user_id=user_id))
 
     @bp.route("/users/<user_id>/email/verify-now/", methods=["POST"])
     @admin_required

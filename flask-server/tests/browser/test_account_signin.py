@@ -229,3 +229,78 @@ def test_sidebar_device_list_fades_and_blocks_logged_out_echo(account_page):
     entry.evaluate('element=>element.click()')
     assert page.locator('#device').input_value()=='mobile:own'
     assert 'Sign in to Amazon' in page.evaluate('window.message')
+
+
+"""Exercise the inline login state machine at phone and desktop sizes."""
+from pathlib import Path
+import threading
+import pytest
+from flask import Flask, render_template, request, jsonify
+from werkzeug.serving import make_server
+from playwright.sync_api import sync_playwright, expect
+
+ROOT = Path(__file__).resolve().parents[2]
+
+@pytest.fixture
+def login_page():
+    app = Flask(__name__, template_folder=str(ROOT/'templates'), static_folder=str(ROOT/'templates/static'))
+    calls = []
+    @app.route('/login/', methods=['GET', 'POST'])
+    def login():
+        if request.method == 'GET':
+            return render_template('login.html', asset_v='test', next_target='/home',
+                                   signup_open=True, forgot_url='/forgot-password', otp_available=True)
+        body = request.get_json(); calls.append(body)
+        if body.get('step') == 'send_otp':
+            return jsonify(ok=True, retry_after=60, message='Check your inbox.')
+        return jsonify(ok=True, next='/home')
+    @app.get('/home')
+    def home(): return 'Signed in'
+    server = make_server('127.0.0.1', 0, app, threaded=True)
+    thread = threading.Thread(target=server.serve_forever, daemon=True); thread.start()
+    with sync_playwright() as playwright:
+        browser = playwright.chromium.launch()
+        page = browser.new_page()
+        yield page, f'http://127.0.0.1:{server.server_port}', calls
+        browser.close()
+    server.shutdown(); thread.join()
+
+@pytest.mark.parametrize('width', [390, 1280])
+def test_inline_otp_flow_and_cooldown(login_page, width):
+    page, origin, calls = login_page
+    page.set_viewport_size({'width': width, 'height': 844})
+    page.goto(origin+'/login/')
+    expect(page.get_by_role('link', name='Enter your code')).to_have_count(0)
+    page.locator('#username').fill('person@example.test')
+    page.get_by_role('button', name='Login via OTP', exact=True).click()
+    expect(page.locator('#password')).not_to_be_visible()
+    expect(page.locator('#creds-btn')).to_be_disabled()
+    page.get_by_role('button', name='Send OTP', exact=True).click()
+    expect(page.locator('#email-code')).to_be_visible()
+    expect(page.locator('#send-otp')).not_to_be_visible()
+    expect(page.locator('#resend-otp')).to_be_disabled()
+    expect(page.locator('#resend-otp')).to_contain_text('Resend (')
+    page.locator('#email-code').fill('12345')
+    expect(page.locator('#creds-btn')).to_be_disabled()
+    page.locator('#email-code').fill('012345')
+    expect(page.locator('#creds-btn')).to_be_enabled()
+    assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
+    page.locator('#creds-btn').click()
+    page.wait_for_url(origin+'/home')
+    assert calls[-1]['step'] == 'email_otp'
+    assert calls[-1]['code'] == '012345'
+    assert len([call for call in calls if call.get('step') == 'send_otp']) == 1
+
+
+def test_switch_back_preserves_password_login(login_page):
+    page, origin, calls = login_page
+    page.goto(origin+'/login/')
+    page.get_by_role('button', name='Login via OTP', exact=True).click()
+    page.get_by_role('button', name='Login via password', exact=True).click()
+    expect(page.locator('#password')).to_be_visible()
+    page.locator('#username').fill('person')
+    page.locator('#password').fill('secret')
+    page.locator('#creds-btn').click()
+    page.wait_for_url(origin+'/home')
+    assert calls[-1]['password'] == 'secret'
+    assert 'step' not in calls[-1]

@@ -1956,7 +1956,7 @@ class AccountService:
     ) -> dict:
         if purpose not in {"verify", "reset", "magic", "invite", "reauth"}:
             raise AccountError("Invalid email token purpose.")
-        if code != (purpose in {"verify", "reset", "reauth"}):
+        if purpose != "magic" and code != (purpose in {"verify", "reset", "reauth"}):
             raise AccountError("Verification, reset and re-authentication are typed "
                                "codes; links are not.")
         user = self.get_user(user_id)
@@ -2005,7 +2005,7 @@ class AccountService:
         ``attacker@example.com``.  Plus the attempt ceiling, which is why a code dies
         before its window does.
         """
-        if not user_id or purpose not in {"verify", "reset", "reauth"}:
+        if not user_id or purpose not in {"verify", "reset", "reauth", "magic"}:
             return {}
         row = self.db.fetchone(
             "SELECT t.*, u.username, CASE WHEN t.purpose = 'verify' AND u.pending_email <> '' THEN u.pending_email ELSE u.email END AS current_email, u.status AS user_status, u.role "

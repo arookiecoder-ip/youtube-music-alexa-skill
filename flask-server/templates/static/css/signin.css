@@ -201,3 +201,15 @@
     text-decoration: none;
   }
   .door-links a:hover { color: var(--text); text-decoration: underline; }
+
+.login-panel[hidden], #otp-entry[hidden], #send-otp[hidden] { display: none; }
+#password-section label { margin-top: 18px; }
+.login-mode { display: block; background: none; border: 0; color: var(--accent); font: inherit; font-size: .78rem; padding: 12px 0; cursor: pointer; }
+.login-mode:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.otp-field { position: relative; }
+.otp-field input { padding-right: 118px; letter-spacing: .25em; font-variant-numeric: tabular-nums; }
+.otp-field button { position: absolute; right: 5px; top: 5px; bottom: 5px; border: 0; background: var(--surface); color: var(--accent); padding: 0 9px; cursor: pointer; }
+.otp-field button:disabled { color: var(--muted); cursor: default; }
+#otp-hint { margin-top: 10px; }
+button.primary { transition: opacity .18s ease, background .12s, border-color .12s; }
+@media (prefers-reduced-motion: reduce) { .step.active, .eq-icon span { animation: none; } button.primary { transition: none; } }

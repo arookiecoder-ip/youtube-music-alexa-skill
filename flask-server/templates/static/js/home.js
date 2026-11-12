@@ -352,6 +352,7 @@
                       ? window.playCollection(queueItems)
                       : window.api('/alexa/play_queue/', {
                           serial: window.selectedSerial ? window.selectedSerial() : '',
+                          brief_response: true,
                           queue_items: queueItems
                       });
                   playRequest.catch(err => {

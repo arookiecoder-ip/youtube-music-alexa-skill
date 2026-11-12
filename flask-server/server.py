@@ -7132,11 +7132,76 @@ def login():
             "login.html", asset_v=_STATIC_VERSION,
             email_changed=request.args.get('email_changed') == '1',
             next_target=_safe_spa_target(request.args.get('next')),
-            signup_open=signup_open, forgot_url=forgot_url)))
+            signup_open=signup_open, forgot_url=forgot_url, otp_available=_multiuser_layer is not None)))
 
     if request.method == "POST" and not request.is_json:
         return error_response("JSON sign-in required.", 415)
     body = request.get_json(silent=True) or request.form
+
+    # Email sign-in uses the existing single-use magic credential storage, with
+    # encrypted numeric codes rather than administrator sign-in URLs.
+    if body.get("step") in {"send_otp", "email_otp"}:
+        layer = _multiuser_layer
+        if layer is None:
+            return error_response('Email sign-in is unavailable.', 404)
+        from multiuser import emails
+        identifier = str(body.get("username") or "").strip()[:254]
+        ip = _client_ip()
+        user_agent = request.headers.get('User-Agent', '')[:400]
+        sending = body.get("step") == "send_otp"
+        user = (layer.accounts.find_user_by_email(identifier) if '@' in identifier
+                else layer.accounts.get_user_by_username(identifier))
+        # Canonicalize aliases: username and email share one account budget.
+        account_key = (user or {}).get('id') or _netids().identifier_bucket(identifier)
+        for scope, key, limit, window in (
+            ('otp-send-ip' if sending else 'otp-check-ip', _netids().ip_bucket(ip), 30, 600),
+            ('otp-send-account' if sending else 'otp-check-account', account_key,
+             5 if sending else layer.config.login_max_attempts, 600),
+        ):
+            allowed, retry = layer.rate_limiter.allow(scope, key, limit, window)
+            if not allowed:
+                response, status = error_response(f'Too many attempts. Try again in {retry}s.', 429)
+                response.headers['Retry-After'] = str(max(1, retry))
+                return response, status
+        if sending:
+            # The cooldown is server-enforced even across tabs and aliases.
+            allowed, retry = layer.rate_limiter.allow('otp-send-cooldown', account_key, 1, 60)
+            if not allowed:
+                response, status = error_response(f'Wait {retry}s before requesting another code.', 429)
+                response.headers['Retry-After'] = str(max(1, retry))
+                return response, status
+            if user and user.get('status') == 'active' and user.get('email'):
+                code = layer.accounts.create_email_code(user['id'], 'magic', user['email'], ip, user_agent)
+                emails.send_code_email(layer, user, 'magic', code, where='the Music Box sign-in page',
+                                       ip=ip, user_agent=user_agent)
+            # Unknown and inactive accounts receive the same response.
+            return jsonify(ok=True, retry_after=60,
+                           message='If this account can sign in, a six-digit code is on its way.')
+        proof = (layer.accounts.consume_email_code(user['id'], 'magic', str(body.get('code') or ''))
+                 if user and user.get('status') == 'active' else None)
+        if not proof:
+            return error_response('Invalid or expired code. Request a new code and try again.', 401)
+        # Mailbox possession also completes initial address verification. Pending
+        # address changes remain bound to their separate verification purpose.
+        if not user.get('email_verified'):
+            layer.accounts.mark_email_verified(user, user['id'], ip=ip, user_agent=user_agent, method='email_otp')
+        user = layer.accounts.get_user(user['id'])
+        if not user or user.get('status') != 'active':
+            return error_response('This account cannot sign in.', 401)
+        if layer.accounts.totp_is_enabled(user):
+            store, bind = _pending_2fa_door()
+            token = store.issue({'kind': 'account', 'uid': user['id'],
+                                 'security_version': user['security_version'],
+                                 'next': _safe_spa_target(body.get('next'))}, bind)
+            return jsonify(ok=True, totp_required=True, token=token)
+        raw_sid = layer.accounts.create_session(user, ip=ip, user_agent=user_agent)
+        complete_login(layer, user, ip)
+        replace_identity()
+        session['mu_sid'] = raw_sid
+        session['mu_user_id'] = user['id']
+        session['sid'] = _session_open()
+        session.permanent = True
+        return jsonify(ok=True, next=_safe_spa_target(body.get('next')))
 
     # Step 2: a password-verified session submitting its 2FA code.
     if body.get("step") == "totp":
