@@ -16,9 +16,14 @@ class SignupStepsTests(SignupSwitchTestBase):
 
     def test_complete_flow_and_single_use(self):
         self.begin()
-        self.assertIn('Verification code', self.client.get('/signup').text)
+        code_page = self.client.get('/signup').text
+        self.assertIn('Verification code', code_page)
+        self.assertIn('data-signup-step="code"', code_page)
+        self.assertIn('class="signup-actions"', code_page)
         self.assertEqual(self.post('code', code=self.newest_code()).status_code, 303)
-        self.assertIn('Repeat the password', self.client.get('/signup').text)
+        details_page = self.client.get('/signup').text
+        self.assertIn('Repeat the password', details_page)
+        self.assertIn('data-signup-step="details"', details_page)
         values = dict(username='newuser', password=PASSWORD, confirm_password=PASSWORD)
         self.assertEqual(self.post('details', **values).status_code, 200)
         user = self.accounts.get_user_by_username('newuser')

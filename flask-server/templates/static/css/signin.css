@@ -203,6 +203,31 @@
   .door-links a:hover { color: var(--text); text-decoration: underline; }
 
 .login-panel[hidden], #otp-entry[hidden], #send-otp[hidden] { display: none; }
+.signup-actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  margin-top: 8px;
+  font-size: .76rem;
+}
+.signup-actions form { margin: 0; min-width: 0; }
+.signup-actions form:last-child { margin-left: auto; text-align: right; }
+.signup-actions button {
+  appearance: none;
+  background: none;
+  border: 0;
+  box-shadow: none;
+  color: var(--muted);
+  font: inherit;
+  line-height: 1.4;
+  text-align: inherit;
+  padding: 8px 0;
+  min-height: 44px;
+  cursor: pointer;
+}
+.signup-actions button:hover { color: var(--text); text-decoration: underline; }
+.signup-actions button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 #password-section label { margin-top: 18px; }
 .login-mode { display: block; background: none; border: 0; color: var(--accent); font: inherit; font-size: .78rem; padding: 12px 0; cursor: pointer; }
 .login-mode:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
