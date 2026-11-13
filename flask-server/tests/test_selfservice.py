@@ -8,6 +8,7 @@ covered by its own tests.
 from __future__ import annotations
 
 import email
+from email.utils import parseaddr
 import glob
 import os
 import re
@@ -141,6 +142,7 @@ class SelfServiceTestBase(unittest.TestCase):
             "email": email_address or f"{username}@example.test",
         }
         payload.update(extra)
+        self.pending_signup_outbox = set(glob.glob(os.path.join(self.outbox, "*.eml")))
         return self.client.post("/signup", data=payload)
 
     def _outbox_bodies(self) -> list[str]:
@@ -189,7 +191,7 @@ class SelfServiceTestBase(unittest.TestCase):
             for path in sorted(glob.glob(os.path.join(self.outbox, "*.eml"))):
                 with open(path, "rb") as handle:
                     message = email.message_from_bytes(handle.read())
-                if email.utils.parseaddr(message.get("To", ""))[1] != self.pending_signup_email:
+                if path in self.pending_signup_outbox or parseaddr(message.get("To", ""))[1] != self.pending_signup_email:
                     continue
                 for part in message.walk():
                     if part.get_content_type() == "text/plain":
@@ -967,7 +969,8 @@ class DeleteAccountTests(SelfServiceTestBase):
                          json={"password": PASSWORD, "confirm_username": "player1",
                                "email_code": self.emailed_code()},
                          headers=self.json_headers())
-        response = self.register("player1")
+        self.assertEqual(self.register("player1").status_code, 303)
+        response = self.verify_by_code()
         self.assertEqual(response.status_code, 200, response.get_data(as_text=True)[:400])
         self.assertIsNotNone(self.user_row("player1"))
 
