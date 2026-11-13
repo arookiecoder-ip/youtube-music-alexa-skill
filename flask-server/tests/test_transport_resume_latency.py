@@ -68,3 +68,14 @@ class TransportResumeLatencyTests(unittest.IsolatedAsyncioTestCase):
         self.api.pause.side_effect = RuntimeError('unsupported firmware')
         self.assertIsNone(await self.ns['_pause_for_handoff'](self.owner, 'echo'))
         self.api.run_custom.assert_awaited_once_with('ask music box to pause', queue_delay=0)
+
+    async def test_native_authentication_failure_expires_login_cache_and_blocks_fallback(self):
+        self.owner._devices_fetched_at = 100
+        self.owner._login_checked_at = 99
+        self.owner._command = AsyncMock()
+        self.ns['authentication_failure'] = lambda error: {'message': 'Reconnect Amazon'}
+        self.api.pause.side_effect = RuntimeError('expired session')
+        self.assertEqual(await self.ns['_pause_for_handoff'](self.owner, 'echo'), 'Reconnect Amazon')
+        self.assertEqual(self.owner._login_checked_at, 0)
+        self.assertFalse(self.owner.connection_state)
+        self.owner._command.assert_not_awaited()

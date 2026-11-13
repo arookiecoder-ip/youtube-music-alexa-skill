@@ -1668,6 +1668,7 @@ class AlexaRemote:
         except Exception as exc:
             failure = authentication_failure(exc)
             if failure:
+                self._login_checked_at = 0.0
                 self.connection_state = False
                 return failure['message']
             # Older Echo firmware may reject the native transport. Keep the
