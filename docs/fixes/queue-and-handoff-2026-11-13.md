@@ -12,12 +12,16 @@ still require a synchronous refresh and cannot silently pass the online check.
 Only one background refresh runs per account at a time, and refresh failures do
 not invalidate an accepted transport command.
 
-Alexa-to-phone/browser handoffs and 2.5.5 Echo-to-Echo handoffs use Amazon's native
-PauseCommand instead of injecting a spoken pause through NLU and Lambda. Native
-errors fall back to the existing skill pause; authentication errors and failed
-fallbacks deny the handoff. The destination is never granted audio before the
-source pause request succeeds. Online handoffs no longer perform a preliminary
-presence request. Offline status is verified separately when a pause fails.
+The initial 2.5.5 native PauseCommand optimization was rolled back: Amazon can
+acknowledge it without stopping this custom-skill stream. Handoffs now send the
+skill pause and retain source ownership until an authenticated PlaybackStopped
+callback confirms the same video and playback token. Command acceptance,
+optimistic paused UI state, cached stop records, and stale callbacks do not
+release audio. A missing confirmation times out and refuses the switch. Active
+signed-out/unreachable Echo playback cannot be silently handed off. The existing
+2.5.5 `native_handoff` hint now requests this verified path for compatibility; no
+APK update is required for the correction. Stale presence refresh still runs in
+parallel, avoiding an unnecessary preflight without sacrificing confirmation.
 
 The Android changes also retain post-call resume intent while audio drains,
 recheck call state after asynchronous ownership recovery, tolerate up to three

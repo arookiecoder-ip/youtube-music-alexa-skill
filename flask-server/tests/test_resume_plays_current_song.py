@@ -256,6 +256,34 @@ class StaleStoppedWebhook(_CleanState):
             json={'event': 'stopped', **payload},
         )
 
+    def test_handoff_accepts_real_stopped_callback_without_a_serial_in_payload(self):
+        _stage_playing(NEW_SONG, position_ms=10_000)
+        server._now_playing['alexa_token'] = 'current-occurrence'
+        output = dict(playback_output='alexa', output_token='source', output_serial='echo-one')
+        def command(*args):
+            response = self._post_stopped({'video_id': NEW_SONG, 'token': 'current-occurrence'})
+            self.assertEqual(response.status_code, 200)
+            return None
+        with mock.patch.object(server._playback_output, 'snapshot', return_value=output), \
+             mock.patch.object(server.alexa_remote.remote, 'command', side_effect=command), \
+             mock.patch.object(server, '_notify_sse'):
+            self.assertIsNone(server._pause_echo_for_handoff('echo-one'))
+        self.assertEqual(server._now_playing['_alexa_stop_ack']['token'], 'current-occurrence')
+
+    def test_stale_stopped_callback_cannot_complete_handoff(self):
+        _stage_playing(NEW_SONG, position_ms=10_000)
+        server._now_playing['alexa_token'] = 'current-occurrence'
+        output = dict(playback_output='alexa', output_token='source', output_serial='echo-one')
+        def command(*args):
+            self._post_stopped({'video_id': NEW_SONG, 'token': 'previous-occurrence'})
+            return None
+        with mock.patch.object(server._playback_output, 'snapshot', return_value=output), \
+             mock.patch.object(server.alexa_remote.remote, 'command', side_effect=command), \
+             mock.patch.object(server, '_HANDOFF_PAUSE_TIMEOUT', .01), \
+             mock.patch.object(server, '_notify_sse'):
+            self.assertIn('not confirmed', server._pause_echo_for_handoff('echo-one'))
+        self.assertTrue(server._now_playing['playing'])
+
     def test_stale_stop_for_old_track_is_ignored(self):
         """Alexa emits PlaybackStopped for the interrupted song; arriving
         after the new song's PlaybackStarted, it must not pause/rewind it."""

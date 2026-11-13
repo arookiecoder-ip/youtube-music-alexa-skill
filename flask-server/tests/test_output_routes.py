@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock, AsyncMock
 import asyncio
 import copy
+import time
 
 from test_app_queue import PhoneQueueTests, A, B, track
 from playback_failover import PlaybackFailoverBudget
@@ -34,14 +35,19 @@ class OutputRoutesTests(PhoneQueueTests):
         self.namespace.update(_np_snapshot=lambda serial=None: copy.deepcopy(self.state), copy=copy, threading=threading, logger=Mock(), _effective_serial=lambda serial: serial,
             _touch_cached_audio=Mock(), _ensure_audio_ready_for_play=Mock(), _arm_play=self.arm,
             _watch_resume_confirmation=Mock(), _ARMED_PLAYS_LOCK=threading.Lock(), _ARMED_PLAYS={})
-        self.command = Mock(side_effect=lambda *args: self.state.update(playing=False, playback_processing=False))
+        def stopped(serial, *args):
+            self.state.update(playing=False, playback_processing=False,
+                _alexa_stop_ack={'received_at': time.monotonic(), 'serial': serial,
+                    'video_id': self.state['video_id'], 'token': self.state.get('alexa_token', '')})
+        self.command = Mock(side_effect=stopped)
+        self.namespace['_HANDOFF_PAUSE_TIMEOUT'] = .3
         self.namespace.update(alexa_remote=SimpleNamespace(remote=SimpleNamespace(command=self.command)),
                               _get_now_playing=lambda: dict(self.state),
                               _cancel_pending_dispatch=Mock(), _bump_playback_generation=Mock())
         source = Path(__file__).resolve().parents[1] / 'server.py'
         functions = [node for node in ast.parse(source.read_text()).body
                      if isinstance(node, ast.FunctionDef) and node.name in
-                     ('app_playback_output', '_claim_alexa_output', 'alexa_command', 'alexa_seek', '_command_alexa_volume')]
+                     ('app_playback_output', '_pause_echo_for_handoff', '_claim_alexa_output', 'alexa_command', 'alexa_seek', '_command_alexa_volume')]
         exec(compile(ast.Module(body=functions, type_ignores=[]), str(source), 'exec'), self.namespace)
 
     def output_request(self, action, token=''):
@@ -69,22 +75,27 @@ class OutputRoutesTests(PhoneQueueTests):
         self.assertEqual(result.json['playback_output'], 'alexa')
         self.assertTrue(self.state['playing'])
 
-    def test_phone_claim_waits_for_native_pause_and_avoids_voice_dispatch(self):
-        remote = self.namespace['alexa_remote'].remote
-        remote.pause_for_handoff = Mock(return_value=None)
-        claim = self.output_request('claim')
-        self.assertEqual(claim.status_code, 200)
-        remote.pause_for_handoff.assert_called_once_with('echo-one')
-        self.command.assert_not_called()
-
-    def test_failed_native_pause_never_grants_destination_ownership(self):
-        remote = self.namespace['alexa_remote'].remote
-        remote.pause_for_handoff = Mock(return_value='rejected')
-        result = self.output_request('claim')
-        self.assertEqual(result.status_code, 409)
-        self.assertEqual(result.json['playback_output'], 'alexa')
+    def test_command_acceptance_without_stopped_event_never_grants_phone_audio(self):
+        self.command.side_effect = None
+        self.command.return_value = None
+        response = self.output_request('claim')
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(self.output.snapshot()['playback_output'], 'alexa')
         self.assertTrue(self.state['playing'])
-        self.command.assert_not_called()
+
+    def test_a_cached_stop_from_before_the_request_never_releases_audio(self):
+        self.state['_alexa_stop_ack'] = {'received_at': time.monotonic()+10_000,
+            'serial':'echo-one', 'video_id':self.state['video_id'], 'token':''}
+        self.command.side_effect = None
+        self.command.return_value = None
+        self.assertEqual(self.output_request('claim').status_code, 409)
+        self.assertEqual(self.output.snapshot()['playback_output'], 'alexa')
+
+    def test_optimistic_paused_state_is_not_a_stopped_confirmation(self):
+        self.command.side_effect = lambda *args: self.state.update(playing=False, playback_processing=False)
+        response = self.output_request('claim')
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(self.output.snapshot()['playback_output'], 'alexa')
 
     def test_web_handoff_waits_for_ack_and_invalidates_phone_writes(self):
         claim = self.output_request('claim').json
@@ -137,17 +148,11 @@ class OutputRoutesTests(PhoneQueueTests):
         self.assertEqual(self.state, before)
         self.assertTrue(self.output.owns_phone('phone-one', claim['output_token']))
 
-    def test_phone_waits_for_native_pause_ack_without_waiting_for_skill_webhook(self):
+    def test_phone_waits_for_the_actual_matching_playback_stopped_callback(self):
         accepted = threading.Event()
         finished = threading.Event()
         responses = []
-        native_ack = threading.Event()
-        def pause(*args):
-            accepted.set()
-            if not native_ack.wait(1):
-                return 'Native pause request timed out'
-            return None
-        self.command.side_effect = pause
+        self.command.side_effect = lambda *args: accepted.set()
         def claim_phone():
             with self.app.test_client() as client:
                 responses.append(client.post('/api/app/output/', json={
@@ -156,14 +161,23 @@ class OutputRoutesTests(PhoneQueueTests):
         worker = threading.Thread(target=claim_phone)
         worker.start()
         self.assertTrue(accepted.wait(1))
-        self.assertFalse(finished.is_set())
+        self.assertFalse(finished.wait(.05))
         self.assertEqual(self.output.snapshot()['playback_output'], 'alexa')
-        native_ack.set()  # The delayed skill webhook is deliberately absent.
+        with self.namespace['_np_lock']:
+            self.state.update(playing=False, playback_processing=False,
+                _alexa_stop_ack={'received_at':time.monotonic(), 'serial':'echo-one',
+                    'video_id':self.state['video_id'], 'token':self.state.get('alexa_token','')})
         worker.join(1)
         self.assertFalse(worker.is_alive())
         self.assertEqual(responses[0].status_code, 200)
         self.assertEqual(responses[0].json['playback_output'], 'phone')
-        self.assertFalse(self.state['playing'])
+
+    def test_stop_from_a_different_playback_instance_cannot_release_handoff(self):
+        self.state['alexa_token'] = 'current-instance'
+        self.command.side_effect = lambda *args: self.state.update(_alexa_stop_ack={
+            'received_at':time.monotonic(), 'serial':'echo-one', 'video_id':self.state['video_id'], 'token':'old-instance'})
+        self.assertEqual(self.output_request('claim').status_code, 409)
+        self.assertEqual(self.output.snapshot()['playback_output'], 'alexa')
 
     def run_real_web_play(self, error=None):
         self.output_request('claim')

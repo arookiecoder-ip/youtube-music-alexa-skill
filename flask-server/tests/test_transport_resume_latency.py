@@ -22,6 +22,7 @@ class TransportResumeLatencyTests(unittest.IsolatedAsyncioTestCase):
             _devices_fetched_at=0, _login=object(), _find_device=lambda serial: object(),
             _find_device_raw=lambda serial: self.raw)
         self.owner._api_for = self.ns['_api_for'].__get__(self.owner)
+        self.owner._command = self.ns['_command'].__get__(self.owner)
         self.owner._refresh_transport_presence = self.ns['_refresh_transport_presence'].__get__(self.owner)
 
     async def test_resume_never_waits_for_stale_known_online_presence(self):
@@ -56,26 +57,24 @@ class TransportResumeLatencyTests(unittest.IsolatedAsyncioTestCase):
         await self.owner._transport_presence_refresh
         self.api.run_custom.assert_awaited_once()
 
-    async def test_handoff_uses_native_pause_without_skill_invocation(self):
+    async def test_handoff_uses_skill_stop_even_when_native_pause_would_succeed(self):
         self.owner._devices_fetched_at = 100
         self.assertIsNone(await self.ns['_pause_for_handoff'](self.owner, 'echo'))
-        self.api.pause.assert_awaited_once_with()
-        self.api.run_custom.assert_not_awaited()
-
-    async def test_unsupported_native_pause_falls_back_to_the_skill(self):
-        self.owner._devices_fetched_at = 100
-        self.owner._command = self.ns['_command'].__get__(self.owner)
-        self.api.pause.side_effect = RuntimeError('unsupported firmware')
-        self.assertIsNone(await self.ns['_pause_for_handoff'](self.owner, 'echo'))
+        self.api.pause.assert_not_awaited()
         self.api.run_custom.assert_awaited_once_with('ask music box to pause', queue_delay=0)
 
-    async def test_native_authentication_failure_expires_login_cache_and_blocks_fallback(self):
+    async def test_rejected_skill_stop_does_not_fall_back_to_native_false_success(self):
+        self.owner._devices_fetched_at = 100
+        self.api.run_custom.side_effect = RuntimeError('unavailable')
+        self.assertIsNotNone(await self.ns['_pause_for_handoff'](self.owner, 'echo'))
+        self.api.pause.assert_not_awaited()
+
+    async def test_handoff_authentication_failure_expires_login_cache(self):
         self.owner._devices_fetched_at = 100
         self.owner._login_checked_at = 99
-        self.owner._command = AsyncMock()
         self.ns['authentication_failure'] = lambda error: {'message': 'Reconnect Amazon'}
-        self.api.pause.side_effect = RuntimeError('expired session')
+        self.api.run_custom.side_effect = RuntimeError('expired session')
         self.assertEqual(await self.ns['_pause_for_handoff'](self.owner, 'echo'), 'Reconnect Amazon')
         self.assertEqual(self.owner._login_checked_at, 0)
         self.assertFalse(self.owner.connection_state)
-        self.owner._command.assert_not_awaited()
+        self.api.pause.assert_not_awaited()

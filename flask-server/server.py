@@ -3635,6 +3635,39 @@ def handle_output_conflict(error):
                     **_playback_output.snapshot()}), 409
 
 
+_HANDOFF_PAUSE_TIMEOUT = 6.0
+
+
+def _pause_echo_for_handoff(serial):
+    """A command acknowledgment is not evidence that the source is silent."""
+    started = time.monotonic()
+    before = _playback_output.snapshot()
+    with _np_lock:
+        video = _now_playing.get('video_id', '')
+        token = _now_playing.get('alexa_token') or ''
+        previous_stop = _now_playing.get('_alexa_stop_ack')
+    error = alexa_remote.remote.command(serial, 'pause')
+    if error:
+        return error
+    deadline = time.monotonic() + _HANDOFF_PAUSE_TIMEOUT
+    while True:
+        output = _playback_output.snapshot()
+        with _np_lock:
+            stopped = _now_playing.get('_alexa_stop_ack') or {}
+            matching = (stopped is not previous_stop and stopped.get('received_at', 0) >= started
+                        and stopped.get('video_id') == video
+                        and (stopped.get('serial') == serial or (token and stopped.get('token') == token))
+                        and (not token or stopped.get('token') == token))
+            changed = _now_playing.get('video_id', '') != video or (_now_playing.get('alexa_token') or '') != token
+        if output['output_token'] != before['output_token'] or changed:
+            return 'Playback changed while waiting for Alexa to stop. Retry the switch.'
+        if matching:
+            return None
+        if time.monotonic() >= deadline:
+            return 'Alexa has not confirmed it stopped. Playback stayed on Alexa; retry the switch.'
+        time.sleep(.05)
+
+
 @app.route('/api/app/output/', methods=['GET', 'POST'], strict_slashes=False)
 def app_playback_output():
     if request.method == 'GET':
@@ -3657,11 +3690,10 @@ def app_playback_output():
                 raise OutputConflict('Choose an Alexa device before moving active playback to the phone.')
             _cancel_pending_dispatch(serial)
             if getattr(alexa_remote.remote, 'connection_state', None) is False:
-                return
-            native_pause = getattr(alexa_remote.remote, 'pause_for_handoff', None)
-            error = native_pause(serial) if callable(native_pause) else alexa_remote.remote.command(serial, 'pause')
+                raise OutputConflict('Reconnect Amazon before moving active Alexa playback.')
+            error = _pause_echo_for_handoff(serial)
             if error:
-                raise OutputConflict('The Echo could not pause. Playback stayed on Alexa.')
+                raise OutputConflict(error)
         result = _playback_output.phone(owner, pause_echo, str(body.get('serial') or ''))
         with _np_lock:
             _reset_progress(_computed_position_ms())
@@ -3710,30 +3742,12 @@ def _pause_echo_for_mobile(serial):
     if not serial:
         raise OutputConflict('Choose an Alexa device first.')
     _cancel_pending_dispatch(serial)
-    logged_out = getattr(alexa_remote.remote, 'connection_state', None) is False
-    native_pause = getattr(alexa_remote.remote, 'pause_for_handoff', None)
-    if not logged_out and callable(native_pause):
-        error = native_pause(serial)
-        if error:
-            # An offline source is already silent, but confirm that state
-            # after a failed native command rather than delaying every switch.
-            devices, presence_error = alexa_remote.remote.devices(refresh=True)
-            offline = not presence_error and isinstance(devices, list) and any(
-                device.get('serial') == serial and device.get('online') is False for device in devices)
-            if not offline:
-                raise OutputConflict('The Echo could not pause. Playback stayed on Alexa.')
-    elif not logged_out:
-        offline = False
-        try:
-            devices, error = alexa_remote.remote.devices()
-            offline = not error and isinstance(devices, list) and any(
-                device.get('serial') == serial and device.get('online') is False for device in devices)
-        except Exception:
-            pass
-        if not offline and alexa_remote.remote.command(serial, 'pause'):
-            raise OutputConflict('The Echo could not pause. Playback stayed on Alexa.')
-    # Native PauseCommand is acknowledged by Amazon directly; the custom skill's
-    # PlaybackStopped webhook can arrive seconds later and is not a handoff gate.
+    if getattr(alexa_remote.remote, 'connection_state', None) is False:
+        raise OutputConflict('Reconnect Amazon before moving active Alexa playback.')
+    error = _pause_echo_for_handoff(serial)
+    if error:
+        raise OutputConflict(error)
+    # Only the authenticated, matching PlaybackStopped callback releases audio.
     with _np_lock:
         _reset_progress(_computed_position_ms())
         _now_playing.update(playing=False, playback_confirmed=True, playback_processing=False)
@@ -9058,9 +9072,10 @@ def alexa_command():
         _notify_sse()
         # Refresh the cache mtime at pause time so TTL counts from the pause,
         # not the original download; the file is also pinned while selected.
-        native_pause = getattr(alexa_remote.remote, 'pause_for_handoff', None)
-        if body.get('native_handoff') is True and callable(native_pause):
-            error = native_pause(serial)
+        if body.get('native_handoff') is True:
+            # Compatibility with 2.5.5: its handoff hint now requests a
+            # confirmed skill pause, never the unreliable native transport.
+            error = _pause_echo_for_handoff(serial)
         else:
             error = alexa_remote.remote.command(serial, action, body.get("value"))
     else:
@@ -9463,6 +9478,9 @@ def alexa_state_event():
             was_confirmed = bool(_now_playing.get('playback_confirmed'))
             _reset_progress(elapsed_ms)
             _now_playing['playing'] = False
+            _now_playing['_alexa_stop_ack'] = {
+                'received_at': time.monotonic(), 'serial': str(body.get('serial') or _playback_output.snapshot()['output_serial'] or ''),
+                'video_id': stopped_video_id, 'token': event_token}
             # PlaybackStopped is the authoritative completion of a pause/stop
             # transition. Clear the shared processing marker so every browser
             # settles, including clients that did not send the command.

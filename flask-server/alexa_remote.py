@@ -1653,28 +1653,13 @@ class AlexaRemote:
             logger.debug("background transport presence refresh failed", exc_info=True)
 
     def pause_for_handoff(self, serial: str):
-        """Pause the device directly before granting a different output audio."""
+        """Request the custom skill pause; the server verifies PlaybackStopped."""
         return self._run(self._pause_for_handoff(serial))
 
     async def _pause_for_handoff(self, serial):
-        api, error = await self._api_for(serial, require_online=True, cached_online=True)
-        if error:
-            return error
-        try:
-            # A handoff does not need Alexa NLU or a Lambda invocation. The
-            # real PlaybackStopped event still records the source's cursor.
-            await api.pause()
-            return None
-        except Exception as exc:
-            failure = authentication_failure(exc)
-            if failure:
-                self._login_checked_at = 0.0
-                self.connection_state = False
-                return failure['message']
-            # Older Echo firmware may reject the native transport. Keep the
-            # established skill pause as a fallback; never grant on failure.
-            logger.debug("native handoff pause failed; trying skill pause", exc_info=True)
-            return await self._command(serial, 'pause', None)
+        # Native /api/np/command can acknowledge a custom-skill stream
+        # without stopping it. Use the skill's AudioPlayer StopDirective.
+        return await self._command(serial, 'pause', None)
 
     def command(self, serial: str, action: str, value=None):
         """Transport control. Returns an error string, or None on success."""

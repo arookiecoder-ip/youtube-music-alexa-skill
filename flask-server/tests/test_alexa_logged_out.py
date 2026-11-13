@@ -46,13 +46,14 @@ class LoggedOutEchoTests(unittest.TestCase):
         self.assertEqual(self.client.post('/alexa/state_event/',json={}).status_code,200)
         self.out['playback_output']='phone'
         self.assertEqual(self.client.post('/alexa/command/',json={'serial':'mobile:phone'}).status_code,200)
-    def test_signed_out_handoff_does_not_require_unavailable_amazon_pause(self):
+    def test_signed_out_playing_echo_cannot_release_audio_without_a_confirmed_stop(self):
         import threading
         self.ns.update(_np_lock=threading.Lock(),_now_playing=self.np,_reset_progress=Mock(),_computed_position_ms=lambda:12000)
-        self.ns['_pause_echo_for_mobile']('echo-one')
+        with self.assertRaisesRegex(RuntimeError, 'Reconnect Amazon'):
+            self.ns['_pause_echo_for_mobile']('echo-one')
         self.remote.command.assert_not_called()
         self.ns['_cancel_pending_dispatch'].assert_called_once_with('echo-one')
-        self.assertFalse(self.np['playing'])
+        self.assertTrue(self.np['playing'])
     def test_signed_in_echo_restores_devices_and_commands(self):
         self.remote.connection_state=True;self.remote.devices.return_value=([{'serial':'echo-one','name':'Bedroom','online':True}],None)
         self.assertTrue(self.client.get('/alexa/devices/').json['amazon_connected'])

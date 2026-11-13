@@ -11,16 +11,6 @@ from mobile_devices import MobileDevices
 
 
 class MobileDeviceRoutesTests(OutputRoutesTests):
-    def test_native_echo_handoff_does_not_wait_for_a_preliminary_presence_read(self):
-        remote = self.namespace['alexa_remote'].remote
-        remote.pause_for_handoff = Mock(return_value=None)
-        remote.devices = Mock(side_effect=AssertionError('unnecessary presence round trip'))
-        self.namespace['_pause_echo_for_mobile']('echo-one')
-        remote.pause_for_handoff.assert_called_once_with('echo-one')
-        remote.devices.assert_not_called()
-        self.command.assert_not_called()
-        self.assertFalse(self.state['playing'])
-
     def test_last_track_clear_requires_current_phone_ownership(self):
         claim = self.output_request('claim').json
         self.state.update(queue=[track(A)], video_id=A, playing=True)
@@ -685,15 +675,14 @@ class MobileDeviceRoutesTests(OutputRoutesTests):
             self.assertFalse(result['default_selected'])
             self.assertEqual(result['playback_output'],'alexa')
 
-    def test_confirmed_offline_echo_does_not_block_explicit_phone_play_with_a_pause_error(self):
+    def test_unreachable_playing_echo_cannot_grant_phone_audio_without_stop_confirmation(self):
         self.output.serial='echo-one'
         self.state.update(video_id=A,playing=True)
-        self.namespace['alexa_remote'].remote.devices=Mock(return_value=([{'serial':'echo-one','online':False}],None))
         self.command.return_value='offline'
         self.command.side_effect=None
-        self.namespace['_pause_echo_for_mobile']('echo-one')
-        self.command.assert_not_called()
-        self.assertFalse(self.state['playing'])
+        with self.assertRaises(self.namespace['OutputConflict']):
+            self.namespace['_pause_echo_for_mobile']('echo-one')
+        self.assertTrue(self.state['playing'])
 
     def test_idle_closed_browser_still_selects_an_open_foreground_phone(self):
         self.device('online',owner='browser-one')
