@@ -129,12 +129,15 @@ class SelfServiceTestBase(unittest.TestCase):
         if no_nonce:
             with self.client.session_transaction() as session:
                 session.pop("mu_ss_signup", None)
+        self.pending_signup_details = {
+            "username": username,
+            "password": extra.pop("password", PASSWORD),
+            "confirm_password": extra.pop("confirm_password", PASSWORD),
+        }
         payload = {
             "_csrf": token if csrf is None else csrf,
-            "username": username,
+            "step": "email",
             "email": email_address or f"{username}@example.test",
-            "password": PASSWORD,
-            "confirm_password": PASSWORD,
         }
         payload.update(extra)
         return self.client.post("/signup", data=payload)
@@ -184,7 +187,21 @@ class SelfServiceTestBase(unittest.TestCase):
         return found[-1]
 
     def verify_by_code(self, username: str = "player1", code: str = ""):
-        """Type the verification code the way a person would, and answer the POST."""
+        """Complete the current staged signup, or verify an existing account."""
+        details = getattr(self, "pending_signup_details", None)
+        if details is not None:
+            verified = self.client.post("/signup", data={
+                "_csrf": self.form_csrf("/signup"), "step": "code",
+                "code": code or self.newest_code("verify"),
+            })
+            if verified.status_code != 303:
+                return verified
+            response = self.client.post("/signup", data={
+                "_csrf": self.form_csrf("/signup"), "step": "details", **details,
+            })
+            if response.status_code == 200:
+                self.pending_signup_details = None
+            return response
         return self.client.post("/verify", data={
             "_csrf": self.form_csrf("/verify"),
             "username": username,
@@ -210,92 +227,69 @@ class SelfServiceTestBase(unittest.TestCase):
 
 
 class SignupTests(SelfServiceTestBase):
-    def test_signup_creates_a_locked_account_and_sends_a_code(self):
+    def test_signup_proves_email_before_creating_an_account(self):
         response = self.register("player1")
-        # 302 to the code page when mail really left the server; 200 with the
-        # "this server cannot send email" page when the message only reached the
-        # outbox -- which is exactly how this suite runs.
-        self.assertIn(response.status_code, (200, 302), response.get_data(as_text=True)[:400])
+        self.assertEqual(response.status_code, 303)
+        self.assertIsNone(self.user_row("player1"))
+        self.assertIsNone(self.accounts.authenticate("player1", PASSWORD, "127.0.0.1", "pytest")[0])
+        self.assertEqual(self.verify_by_code().status_code, 200)
         user = self.user_row("player1")
-        self.assertIsNotNone(user)
-        self.assertEqual(user["role"], "user", "a self-signup can never grant itself a role")
+        self.assertEqual(user["role"], "user")
         self.assertEqual(user["created_by"], "self")
-        self.assertEqual(int(user["email_verified"]), 0)
+        self.assertEqual(int(user["email_verified"]), 1)
+        self.assertIsNotNone(self.accounts.authenticate("player1", PASSWORD, "127.0.0.1", "pytest")[0])
 
-        self.assertIsNone(
-            self.accounts.authenticate("player1", PASSWORD, "127.0.0.1", "pytest")[0],
-            "an unverified account must not sign in",
-        )
-
-        verified = self.verify_by_code()
-        self.assertEqual(verified.status_code, 200, verified.get_data(as_text=True)[:400])
-        signed_in, error = self.accounts.authenticate("player1", PASSWORD, "127.0.0.1", "pytest")
-        self.assertIsNotNone(signed_in, error)
+    def test_a_signup_code_cannot_be_replayed_after_account_creation(self):
+        self.register("player1")
+        code = self.newest_code("verify")
+        self.assertEqual(self.verify_by_code(code=code).status_code, 200)
+        replay = self.client.post("/signup", data={
+            "_csrf": self.form_csrf("/signup"), "step": "code", "code": code,
+        })
+        self.assertEqual(replay.status_code, 400)
         self.assertEqual(int(self.user_row("player1")["email_verified"]), 1)
 
-    def test_a_code_works_once(self):
+    def test_email_proof_is_required_even_when_operator_disables_legacy_rule(self):
+        self.assertIsNotNone(self.accounts.authenticate("owner", "Owner!Passw0rd", "127.0.0.1", "pytest")[0])
         self.register("player1")
-        first = self.verify_by_code()
-        self.assertEqual(first.status_code, 200)
-        second = self.verify_by_code()
-        self.assertEqual(second.status_code, 410)
+        self.assertIsNone(self.user_row("player1"))
+        self.assertIsNone(self.accounts.authenticate("player1", PASSWORD, "127.0.0.1", "pytest")[0])
 
-    def test_self_signups_stay_locked_even_when_the_operator_disables_the_rule(self):
-        # MULTIUSER_REQUIRE_EMAIL_VERIFICATION=0 is this suite's setting, and an
-        # account created by an administrator is then usable at once. One created by
-        # a stranger must still wait for the link, so the rule cannot be switched off
-        # from the environment.
-        admin = self.accounts.get_user_by_username("owner")
-        self.assertNotEqual(admin.get("created_by"), "self")
-        self.assertIsNotNone(self.accounts.authenticate(
-            "owner", "Owner!Passw0rd", "127.0.0.1", "pytest")[0])
-
-        self.register("player1")
-        self.assertEqual(self.user_row("player1")["created_by"], "self")
-        self.assertIsNone(self.accounts.authenticate(
-            "player1", PASSWORD, "127.0.0.1", "pytest")[0])
-
-    def test_honeypot_gets_a_fake_answer_and_no_account(self):
+    def test_honeypot_is_rejected_without_sending_mail_or_creating_account(self):
         response = self.register("bot123", website="http://spam.example")
-        self.assertEqual(response.status_code, 200)
-        self.assertIsNone(self.user_row("bot123"))
-        actions = [
-            row["action"] for row in self.layer.db.fetchall(
-                "SELECT action FROM audit_log ORDER BY id"
-            )
-        ]
-        self.assertIn("signup_honeypot", actions)
-
-    def test_a_form_submitted_faster_than_a_person_can_type_is_answered_fakely(self):
-        response = self.register("quick123", age_seconds=0)
-        self.assertEqual(response.status_code, 200)
-        self.assertIsNone(self.user_row("quick123"), "the too-fast rule must not create a user")
-
-    def test_posting_without_opening_the_form_is_rejected_honestly(self):
-        response = self.register("noform1", no_nonce=True)
         self.assertEqual(response.status_code, 400)
+        self.assertIsNone(self.user_row("bot123"))
+        self.assertEqual(glob.glob(os.path.join(self.outbox, "*.eml")), [])
+
+    def test_a_form_submitted_too_fast_creates_no_challenge_or_account(self):
+        response = self.register("quick123", age_seconds=0)
+        self.assertEqual(response.status_code, 400)
+        self.assertIsNone(self.user_row("quick123"))
+        self.assertEqual(glob.glob(os.path.join(self.outbox, "*.eml")), [])
+
+    def test_posting_without_opening_the_form_is_rejected(self):
+        self.assertEqual(self.register("noform1", no_nonce=True).status_code, 400)
         self.assertIsNone(self.user_row("noform1"))
 
-    def test_a_colliding_email_is_not_named_as_a_collision(self):
+    def test_an_existing_email_is_refused_before_details(self):
         self.register("player1")
+        self.assertEqual(self.verify_by_code().status_code, 200)
         response = self.register("player2", email_address="player1@example.test")
         self.assertEqual(response.status_code, 409)
-        body = response.get_data(as_text=True)
-        # The typed address is echoed back (their own text, not a disclosure), but
-        # nothing may say which of the two fields collided.
-        self.assertNotIn("already in use", body)
-        self.assertNotIn("player1", body.replace("player1@example.test", ""))
+        self.assertIsNone(self.user_row("player2"))
+        self.assertNotIn("player1", response.text.replace("player1@example.test", ""))
 
-    def test_a_colliding_username_is_named_because_it_is_public(self):
+    def test_a_public_username_collision_is_refused_at_details(self):
         self.register("player1")
-        response = self.register("player1")
-        self.assertEqual(response.status_code, 409)
-        self.assertIn("already in use", response.get_data(as_text=True))
+        self.assertEqual(self.verify_by_code().status_code, 200)
+        self.assertEqual(self.register("player1", email_address="another@example.test").status_code, 303)
+        response = self.verify_by_code()
+        self.assertEqual(response.status_code, 422)
+        self.assertIn("already in use", response.text)
 
     def test_a_stale_form_token_changes_nothing(self):
         response = self.client.post("/signup", data={
-            "_csrf": "not-a-token", "username": "sneaky1", "email": "s@example.test",
-            "password": PASSWORD, "confirm_password": PASSWORD,
+            "_csrf": "not-a-token", "step": "email", "email": "s@example.test",
         })
         self.assertEqual(response.status_code, 400)
         self.assertIsNone(self.user_row("sneaky1"))
@@ -304,21 +298,17 @@ class SignupTests(SelfServiceTestBase):
         token = self.open_signup_form()
         self.exhaust("signup-ip", netids.ip_bucket("127.0.0.1"), 5, 3600)
         response = self.client.post("/signup", data={
-            "_csrf": token, "username": "over1", "email": "over1@example.test",
-            "password": PASSWORD, "confirm_password": PASSWORD,
+            "_csrf": token, "step": "email", "email": "over1@example.test",
         })
         self.assertEqual(response.status_code, 429)
         self.assertIn("Retry-After", response.headers)
         self.assertIsNone(self.user_row("over1"))
 
-    def test_weak_passwords_are_refused_per_field(self):
-        token = self.open_signup_form()
-        response = self.client.post("/signup", data={
-            "_csrf": token, "username": "weak1", "email": "weak1@example.test",
-            "password": "short", "confirm_password": "short",
-        })
+    def test_weak_passwords_are_refused_after_email_proof(self):
+        self.assertEqual(self.register("weak1", password="short", confirm_password="short").status_code, 303)
+        response = self.verify_by_code()
         self.assertEqual(response.status_code, 422)
-        self.assertIn("at least", response.get_data(as_text=True))
+        self.assertIn("at least", response.text)
         self.assertIsNone(self.user_row("weak1"))
 
 
@@ -352,8 +342,8 @@ class SignupDisabledFlagTests(SelfServiceTestBase):
 
 class ForgotPasswordTests(SelfServiceTestBase):
     def test_known_and_unknown_addresses_get_the_same_answer(self):
-        created = self.register("player1")
-        self.assertEqual(created.status_code, 200)
+        self.assertEqual(self.register("player1").status_code, 303)
+        self.assertEqual(self.verify_by_code().status_code, 200)
         before = len(glob.glob(os.path.join(self.outbox, "*.eml")))
 
         token = self.form_csrf("/forgot-password")
@@ -394,6 +384,7 @@ class ForgotPasswordTests(SelfServiceTestBase):
 
     def test_a_reset_code_works_once(self):
         self.register("player1")
+        self.assertEqual(self.verify_by_code().status_code, 200)
         token = self.form_csrf("/forgot-password")
         self.client.post("/forgot-password", data={
             "_csrf": token, "identifier": "player1@example.test"})
