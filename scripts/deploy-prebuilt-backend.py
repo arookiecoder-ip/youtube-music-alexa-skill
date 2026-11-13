@@ -65,7 +65,9 @@ def main():
         override = STATE / 'compose.image.json'
         def write_override(image):
             temporary = STATE / 'compose.image.json.tmp'
-            temporary.write_text(json.dumps({'services': {'ytmusic': {'image': image}}}))
+            configuration = json.loads(override.read_text()) if override.exists() else {}
+            configuration.setdefault('services', {}).setdefault('ytmusic', {})['image'] = image
+            temporary.write_text(json.dumps(configuration))
             temporary.replace(override)
         compose = ['docker', 'compose', '--env-file', str(ROOT / '.env.production'),
                    '-p', 'musicbox-test', '-f', str(ROOT / 'docker-compose.yml'),

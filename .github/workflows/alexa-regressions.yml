@@ -156,7 +156,7 @@ jobs:
           cache-to: type=gha,scope=browser,mode=max
       - name: Verify private non-root browser and retired VNC ports
         run: |
-          docker run -d --name musicbox-browser-ci --cap-drop ALL --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add SETUID --cap-add SETGID --security-opt no-new-privileges --shm-size 512m -e YT_BROWSER_CONTROL_TOKEN=isolated-ci-browser-token musicbox-browser:ci
+          docker run -d --name musicbox-browser-ci --cap-drop ALL --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add SETUID --cap-add SETGID --security-opt no-new-privileges --shm-size 512m -e MUSICBOX_CHROMIUM_DISABLE_SANDBOX=1 -e YT_BROWSER_CONTROL_TOKEN=isolated-ci-browser-token musicbox-browser:ci
           for attempt in $(seq 1 40); do
             if docker exec musicbox-browser-ci python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8765/health',timeout=2)"; then break; fi
             sleep 2
@@ -202,7 +202,7 @@ jobs:
       - name: Verify ARM64 non-root browser surface
         run: |
           test "$(docker image inspect musicbox-browser:${{ github.sha }} --format '{{.Architecture}}')" = arm64
-          docker run -d --name musicbox-browser-ci --cap-drop ALL --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add SETUID --cap-add SETGID --security-opt no-new-privileges --shm-size 512m -e YT_BROWSER_CONTROL_TOKEN=isolated-ci-browser-token musicbox-browser:${{ github.sha }}
+          docker run -d --name musicbox-browser-ci --cap-drop ALL --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add SETUID --cap-add SETGID --security-opt no-new-privileges --shm-size 512m -e MUSICBOX_CHROMIUM_DISABLE_SANDBOX=1 -e YT_BROWSER_CONTROL_TOKEN=isolated-ci-browser-token musicbox-browser:${{ github.sha }}
           for attempt in $(seq 1 40); do
             if docker exec musicbox-browser-ci python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8765/health',timeout=2)"; then break; fi
             sleep 2

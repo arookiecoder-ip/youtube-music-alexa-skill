@@ -209,6 +209,7 @@ def main():
     import threading
     import waitress
     import server
+    server.start_youtube_server_keepalive()
     # Internal listener is not exposed to the container network.
     internal = waitress.create_server(server.app, host='127.0.0.1', port=0, threads=16, clear_untrusted_proxy_headers=False)
     threading.Thread(target=internal.run, name='waitress', daemon=True).start()

@@ -838,3 +838,20 @@ class AdminControlsTests(MultiUserTestBase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class EncryptedBootstrapTests(MultiUserTestBase):
+    admin_password = ""
+
+    def test_generated_owner_password_is_encrypted_and_usable(self):
+        from pathlib import Path
+        import stat
+        path = Path(self.tmp) / 'multiuser_admin_password.enc'
+        self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
+        encrypted = path.read_text().strip()
+        password = self.layer.accounts.secret_box.decrypt_json(encrypted)['password']
+        self.assertNotIn(password, encrypted)
+        self.assertFalse((Path(self.tmp) / 'multiuser_admin_password.txt').exists())
+        user, error = self.layer.accounts.authenticate('owner', password, '127.0.0.1', 'test')
+        self.assertIsNotNone(user)
+        self.assertIsNone(error)

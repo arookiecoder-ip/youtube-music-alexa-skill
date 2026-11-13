@@ -53,3 +53,10 @@ password file. An administrator can decrypt it inside the container with the
 configured `SecretBox` and encryption key. Existing accounts and credentials are
 not changed. Generated legacy API credentials derive from the persistent signing
 key; explicitly configured keys and existing legacy key files remain supported.
+
+This host retains its existing explicit
+`MUSICBOX_CHROMIUM_DISABLE_SANDBOX=1` compatibility setting. CI's browser smoke
+uses the same setting because the hardened container profile cannot create
+Chromium's additional sandbox on the hosted runner. The non-root service,
+container capability restrictions, authenticated attempt lease and private
+network boundary remain enabled. This does not claim a working Chromium sandbox.
