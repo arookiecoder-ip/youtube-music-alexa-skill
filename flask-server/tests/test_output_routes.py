@@ -91,6 +91,17 @@ class OutputRoutesTests(PhoneQueueTests):
         self.assertEqual(self.output_request('claim').status_code, 409)
         self.assertEqual(self.output.snapshot()['playback_output'], 'alexa')
 
+    def test_new_echo_selection_cannot_be_released_by_the_old_echo_stop(self):
+        self.output.serial = 'echo-one'
+        def switched(*args):
+            self.output.serial = 'echo-two'
+            self.state['_alexa_stop_ack'] = {'received_at':time.monotonic(),
+                'serial':'echo-one', 'video_id':self.state['video_id'], 'token':''}
+        self.command.side_effect = switched
+        self.assertEqual(self.output_request('claim').status_code, 409)
+        self.assertEqual(self.output.snapshot()['playback_output'], 'alexa')
+        self.assertEqual(self.output.snapshot()['output_serial'], 'echo-two')
+
     def test_optimistic_paused_state_is_not_a_stopped_confirmation(self):
         self.command.side_effect = lambda *args: self.state.update(playing=False, playback_processing=False)
         response = self.output_request('claim')

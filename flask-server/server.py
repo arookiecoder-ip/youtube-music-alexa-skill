@@ -3646,6 +3646,7 @@ def _pause_echo_for_handoff(serial):
         video = _now_playing.get('video_id', '')
         token = _now_playing.get('alexa_token') or ''
         previous_stop = _now_playing.get('_alexa_stop_ack')
+        intent = _now_playing.get('alexa_intent_at')
     error = alexa_remote.remote.command(serial, 'pause')
     if error:
         return error
@@ -3658,8 +3659,11 @@ def _pause_echo_for_handoff(serial):
                         and stopped.get('video_id') == video
                         and (stopped.get('serial') == serial or (token and stopped.get('token') == token))
                         and (not token or stopped.get('token') == token))
-            changed = _now_playing.get('video_id', '') != video or (_now_playing.get('alexa_token') or '') != token
-        if output['output_token'] != before['output_token'] or changed:
+            changed = (_now_playing.get('video_id', '') != video
+                       or (_now_playing.get('alexa_token') or '') != token
+                       or _now_playing.get('alexa_intent_at') != intent)
+        if (output['output_token'] != before['output_token']
+                or output.get('output_serial') != before.get('output_serial') or changed):
             return 'Playback changed while waiting for Alexa to stop. Retry the switch.'
         if matching:
             return None
