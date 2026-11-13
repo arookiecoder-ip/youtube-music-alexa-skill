@@ -23,6 +23,8 @@ class OutputRoutesTests(PhoneQueueTests):
         self.namespace["_playback_failover_budget"] = PlaybackFailoverBudget()
         self.seek_dispatch = Mock(return_value=None)
         self.namespace['_dispatch_play_with_retry'] = self.seek_dispatch
+        self.schedule_seek = Mock()
+        self.namespace['_schedule_play_dispatch'] = self.schedule_seek
         self.namespace.update(_alexa_volume_lock=threading.RLock(), _alexa_volume_grace={},
             _record_volume_state=Mock())
         self.arm = Mock()
@@ -258,6 +260,37 @@ class OutputRoutesTests(PhoneQueueTests):
         self.assertEqual(self.state['position_ms'], 42500)
         self.assertTrue(self.state['playback_confirmed'])
         self.assertFalse(self.state['playback_processing'])
+
+    def test_async_seek_acknowledges_before_amazon_and_schedules_fenced_latest_offset(self):
+        self.state.update(playing=True, playback_confirmed=True)
+        self.seek_dispatch.side_effect = AssertionError('Must not wait on Amazon in HTTP worker')
+        response = self.client.post('/alexa/seek/', json={
+            'serial': 'echo-one', 'position_ms': 42000, 'video_id': A, 'async': True})
+        self.assertEqual(response.status_code, 202)
+        self.assertTrue(response.json['pending'])
+        self.assertEqual(self.state['position_ms'], 42000)
+        self.assertTrue(self.state['playback_processing'])
+        self.assertFalse(self.state['playback_confirmed'])
+        self.seek_dispatch.assert_not_called()
+        self.schedule_seek.assert_called_once_with('echo-one', A, offset_ms=42000, delay=0.075,
+            expected_intent=self.state['alexa_intent_at'],
+            expected_output=self.namespace['_playback_output'].snapshot()['output_token'])
+
+    def test_async_seek_while_paused_only_moves_cursor(self):
+        self.state.update(playing=False, playback_confirmed=True)
+        response = self.client.post('/alexa/seek/', json={
+            'serial': 'echo-one', 'position_ms': 42000, 'async': True})
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json['paused'])
+        self.assertEqual(self.state['position_ms'], 42000)
+        self.seek_dispatch.assert_not_called()
+        self.schedule_seek.assert_not_called()
+
+    def test_async_seek_rejects_stale_identity_before_scheduling(self):
+        response = self.client.post('/alexa/seek/', json={
+            'serial': 'echo-one', 'position_ms': 42000, 'video_id': B, 'async': True})
+        self.assertEqual(response.status_code, 409)
+        self.schedule_seek.assert_not_called()
 
     def test_failed_seek_restores_cursor_but_not_a_newer_track(self):
         self.state.update(playing=True, playback_confirmed=True)

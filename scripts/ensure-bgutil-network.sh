@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Idempotently attach the bgutil-ytdlp-pot-provider container to the "web"
-# Docker network so ytmusic (which shares gluetun's network namespace, and
-# gluetun is on "web") can reach it at http://bgutil-provider:4416.
+# Docker network so ytmusic can reach it at http://bgutil-provider:4416, and to the
+# private egress network so its preferred-VPN/fallback proxy resolves.
 #
 # bgutil-provider is a standalone container (not part of this repo's
 # docker-compose.yml -- see README) started separately on this host with
@@ -24,7 +24,6 @@
 # use `systemctl restart ensure-bgutil-network` (not `start`).
 set -euo pipefail
 
-NETWORK="web"
 CONTAINER="bgutil-provider"
 
 if ! docker inspect "$CONTAINER" >/dev/null 2>&1; then
@@ -32,18 +31,25 @@ if ! docker inspect "$CONTAINER" >/dev/null 2>&1; then
     exit 0
 fi
 
-if ! docker network inspect "$NETWORK" >/dev/null 2>&1; then
-    echo "ensure-bgutil-network: network '$NETWORK' does not exist yet, nothing to do" >&2
-    exit 0
-fi
+# The provider must both serve ytmusic on web and resolve its outbound proxy
+# on the private egress network. Discover the latter by its explicit alias,
+# rather than assuming a Compose project/network name or fixed container IP.
+networks=(web)
+while IFS= read -r gateway; do
+    [ -n "$gateway" ] || continue
+    while IFS= read -r network; do
+        [ -n "$network" ] && networks+=("$network")
+    done < <(docker inspect "$gateway" --format '{{range $name, $config := .NetworkSettings.Networks}}{{range $config.Aliases}}{{if eq . "musicbox-egress-internal"}}{{$name}}{{"\n"}}{{end}}{{end}}{{end}}')
+done < <(docker ps -aq --filter label=com.docker.compose.service=musicbox-egress)
 
-already_attached=$(docker inspect "$CONTAINER" \
-    --format "{{if index .NetworkSettings.Networks \"$NETWORK\"}}yes{{else}}no{{end}}")
-
-if [ "$already_attached" = "yes" ]; then
-    echo "ensure-bgutil-network: '$CONTAINER' is already on '$NETWORK', nothing to do"
-    exit 0
-fi
-
-docker network connect "$NETWORK" "$CONTAINER"
-echo "ensure-bgutil-network: attached '$CONTAINER' to '$NETWORK'"
+for network in "${networks[@]}"; do
+    if ! docker network inspect "$network" >/dev/null 2>&1; then
+        echo "ensure-bgutil-network: network '$network' does not exist yet, skipping" >&2
+        continue
+    fi
+    attached=$(docker inspect "$CONTAINER" --format "{{if index .NetworkSettings.Networks \"$network\"}}yes{{else}}no{{end}}")
+    if [ "$attached" != "yes" ]; then
+        docker network connect "$network" "$CONTAINER"
+        echo "ensure-bgutil-network: attached '$CONTAINER' to '$network'"
+    fi
+done

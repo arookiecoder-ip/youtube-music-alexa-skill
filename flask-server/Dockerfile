@@ -16,4 +16,4 @@ COPY --from=youtube-client /youtube-stream/node_modules /app/youtube-stream/node
 USER 10001:10001
 EXPOSE 5000
 HEALTHCHECK --interval=15s --timeout=3s --start-period=30s --retries=3 CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/health/ready', timeout=2)"
-CMD ["python3", "serve.py"]
+CMD ["python", "realtime_gateway.py"]

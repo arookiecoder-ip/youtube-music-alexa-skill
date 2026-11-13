@@ -141,6 +141,8 @@ class MobileDevices:
         with self.changed:
             self.revision += 1
             self.changed.notify_all()
+        from playback_events import playback_events
+        playback_events.publish()
 
     def wait(self, revision, timeout=2):
         # Stay below presence TTL with headroom for request/response latency.

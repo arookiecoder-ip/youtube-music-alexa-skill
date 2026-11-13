@@ -101,6 +101,9 @@ services:
     container_name: youtube-browser
     restart: unless-stopped
     networks: [browser-private]
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, SETUID, SETGID]
     environment:
       - YT_BROWSER_CONTROL_TOKEN=${YT_BROWSER_CONTROL_TOKEN:?set YT_BROWSER_CONTROL_TOKEN in .env}
       - MUSICBOX_BROWSER_PROXY=http://musicbox-egress-internal:8890

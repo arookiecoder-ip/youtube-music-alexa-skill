@@ -442,6 +442,9 @@ class AlexaRemote:
         self._proxy_finalize_task = None
         self._proxy_login_error = None
         self._proxy_login_complete = False
+        self._proxy_authorizer = None
+        self._proxy_attempt_started = 0.0
+        self._proxy_owner_sid = None
         self._proxy_attempt_id = None
         self._proxy_cookie_stage = None
         # form-login state (scripted sign-in; touched only on the background loop)
@@ -450,6 +453,10 @@ class AlexaRemote:
         self._form_attempt_id = None
         self._form_captcha = None  # (content_type, bytes) of the last captcha picture
         self._form_robot = None  # Amazon's own challenge form, when it asks for one
+
+    def set_proxy_authorizer(self, authorize):
+        """Install the session authority for this account's proxy attempt."""
+        self._proxy_authorizer = authorize
 
     # ---------- background loop plumbing ----------
 
@@ -639,7 +646,7 @@ class AlexaRemote:
         logger.info("reclaimed the Alexa login proxy from an abandoned login")
         return _proxy_claim(self)
 
-    async def _start_proxy(self, email: str, password: str, base_url: str = None):
+    async def _start_proxy(self, email: str, password: str, base_url: str = None, owner_sid: str = None):
         """Idempotently bring up the proxy aiohttp app. Credentials come from
         the browser and are used only to seed this login object; they are not
         stored. Returns error or None."""
@@ -659,6 +666,8 @@ class AlexaRemote:
                 and not self._proxy_login_complete
             )
             if (self._proxy_base_url == proxy_base_url and not finalize_failed
+                    and self._proxy_owner_sid == owner_sid
+                    and time.monotonic() - self._proxy_attempt_started <= 600
                     and self._proxy_login is not None and self._proxy_login.email == email
                     and self._proxy_login.password == password):
                 _renew_proxy_claim(self)
@@ -675,6 +684,8 @@ class AlexaRemote:
         # Keep the previous account's persisted credentials intact until the
         # replacement verifies, including failed/cancelled same-email attempts.
         self._proxy_attempt_id = secrets.token_urlsafe(24)
+        self._proxy_attempt_started = time.monotonic()
+        self._proxy_owner_sid = owner_sid
         self._proxy_cookie_stage = tempfile.mkdtemp(prefix="pending-", dir=self.cookie_dir)
         os.makedirs(os.path.join(self._proxy_cookie_stage, ".storage"), exist_ok=True)
         stage = self._proxy_cookie_stage
@@ -714,12 +725,12 @@ class AlexaRemote:
         logger.info("Alexa login proxy listening on 0.0.0.0:%s under %s", PROXY_PORT, PROXY_PATH)
         return None
 
-    async def _proxy_start_url(self, email: str, password: str, base_url: str = None):
+    async def _proxy_start_url(self, email: str, password: str, base_url: str = None, owner_sid: str = None):
         """Bring up the proxy and return (url, error). url is where the user logs in."""
         error = self._access_error(email)
         if error:
             return None, error
-        error = await self._start_proxy(email, password, base_url)
+        error = await self._start_proxy(email, password, base_url, owner_sid)
         if error:
             return None, error
         proxy = self._proxy
@@ -742,6 +753,13 @@ class AlexaRemote:
 
     async def _proxy_handler(self, request):
         """Serve alexapy and start finalization as soon as its callback lands."""
+        authorize = self._proxy_authorizer
+        attempt = getattr(self, '_proxy_attempt_id', None)
+        if (not authorize or not attempt or
+                time.monotonic() - self._proxy_attempt_started > 600 or
+                not await asyncio.to_thread(authorize, request.headers.get('Cookie', ''), attempt) or
+                attempt != getattr(self, '_proxy_attempt_id', None)):
+            raise web.HTTPForbidden(text="Open Amazon sign-in from your signed-in Music Box account.")
         if os.environ.get("ALEXA_PROXY_BEHIND_CADDY") == "1":
             expected = self.proxy_authorization()
             supplied = request.headers.get('X-MusicBox-Proxy-Authorization', '')
@@ -1004,6 +1022,7 @@ class AlexaRemote:
         self._proxy_runner = None
         self._proxy = None
         self._proxy_started = False
+        self._proxy_owner_sid = None
         self._proxy_base_url = None
         self._proxy_cookie_stage = None
         if runner:
@@ -1018,8 +1037,8 @@ class AlexaRemote:
         _release_proxy_claim(self)
 
     # public (thread-safe) wrappers
-    def proxy_start_url(self, email: str, password: str, base_url: str = None):
-        return self._run(self._proxy_start_url(email, password, base_url))
+    def proxy_start_url(self, email: str, password: str, base_url: str = None, owner_sid: str = None):
+        return self._run(self._proxy_start_url(email, password, base_url, owner_sid))
 
     def proxy_cancel(self, attempt_id):
         return self._run(self._cancel_proxy_attempt(attempt_id))

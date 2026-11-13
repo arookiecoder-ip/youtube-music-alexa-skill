@@ -6,6 +6,11 @@ on:
     branches: [master]
     paths: ['flask-server/**', 'lambda/**', 'browser-auth/**', 'network-egress/**', 'skill-package/**', 'skill-package-multiuser/**', 'docker-compose.yml', 'Caddyfile*', 'scripts/run-regressions.py', '.github/workflows/alexa-regressions.yml']
   workflow_dispatch:
+    inputs:
+      deployment_images:
+        description: Build and export tested ARM64 images for deployment without server builds
+        type: boolean
+        default: false
 permissions:
   contents: read
 jobs:
@@ -82,3 +87,143 @@ jobs:
           name: status-dashboard-test-results
           path: status-artifacts/
           if-no-files-found: ignore
+
+  container-build:
+    needs: [playback-tests, status-dashboard-tests]
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build backend image in Actions only
+        uses: docker/build-push-action@v6
+        with:
+          context: flask-server
+          load: true
+          push: false
+          tags: musicbox-realtime:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - name: Check real gateway startup, public HTTP and stream authorization
+        run: |
+          docker run -d --name musicbox-ci -p 127.0.0.1:5000:5000 \
+            -e YOUTUBE_STREAMING=0 -e SECRET_KEY=isolated-ci-secret \
+            -e REMOTE_USER=ci-owner -e REMOTE_PASSWORD=isolated-ci-password \
+            -e DB_FILE=/tmp/musicbox.db -e AUDIO_CACHE_DIR=/tmp/audio musicbox-realtime:ci
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent http://127.0.0.1:5000/manifest.webmanifest >/dev/null; then break; fi
+            sleep 2
+          done
+          curl --fail --silent http://127.0.0.1:5000/manifest.webmanifest >/dev/null
+          test "$(curl --silent --output /dev/null --write-out '%{http_code}' http://127.0.0.1:5000/api/app/events/)" = 401
+      - name: Verify real signed-session event delivery and revocation
+        run: docker exec musicbox-ci python tests/smoke_realtime_gateway.py
+      - name: Container diagnostics
+        if: always()
+        run: docker logs musicbox-ci || true
+
+  dependency-audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install --upgrade pip pip-audit
+      - name: Audit resolved backend and browser dependencies
+        run: pip-audit -r flask-server/requirements.txt -r browser-auth/requirements.txt --format json --output dependency-audit.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: dependency-audit
+          path: dependency-audit.json
+
+  browser-container:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build browser sidecar in Actions only
+        uses: docker/build-push-action@v6
+        with:
+          context: browser-auth
+          load: true
+          push: false
+          tags: musicbox-browser:ci
+          cache-from: type=gha,scope=browser
+          cache-to: type=gha,scope=browser,mode=max
+      - name: Verify private non-root browser and retired VNC ports
+        run: |
+          docker run -d --name musicbox-browser-ci --cap-drop ALL --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add SETUID --cap-add SETGID --security-opt no-new-privileges --shm-size 512m -e YT_BROWSER_CONTROL_TOKEN=isolated-ci-browser-token musicbox-browser:ci
+          for attempt in $(seq 1 40); do
+            if docker exec musicbox-browser-ci python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8765/health',timeout=2)"; then break; fi
+            sleep 2
+          done
+          docker exec -i musicbox-browser-ci python - < flask-server/tests/smoke_browser_container.py
+      - name: Browser diagnostics
+        if: always()
+        run: docker logs musicbox-browser-ci || true
+
+  deployment-images-arm64:
+    if: ${{ inputs.deployment_images == true }}
+    needs: [playback-tests, status-dashboard-tests, dependency-audit, browser-container, container-build]
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build ARM64 backend in Actions
+        uses: docker/build-push-action@v6
+        with:
+          context: flask-server
+          load: true
+          tags: musicbox-backend:${{ github.sha }}
+          cache-from: type=gha,scope=backend-arm64
+          cache-to: type=gha,scope=backend-arm64,mode=max
+      - name: Build ARM64 browser in Actions
+        uses: docker/build-push-action@v6
+        with:
+          context: browser-auth
+          load: true
+          tags: musicbox-browser:${{ github.sha }}
+          cache-from: type=gha,scope=browser-arm64
+          cache-to: type=gha,scope=browser-arm64,mode=max
+      - name: Verify ARM64 gateway and revocable owner sessions
+        run: |
+          test "$(docker image inspect musicbox-backend:${{ github.sha }} --format '{{.Architecture}}')" = arm64
+          docker run -d --name musicbox-ci -p 127.0.0.1:5000:5000 -e YOUTUBE_STREAMING=0 -e SECRET_KEY=isolated-ci-secret -e REMOTE_USER=ci-owner -e REMOTE_PASSWORD=isolated-ci-password -e DB_FILE=/tmp/musicbox.db -e AUDIO_CACHE_DIR=/tmp/audio musicbox-backend:${{ github.sha }}
+          for attempt in $(seq 1 60); do
+            if curl --fail --silent http://127.0.0.1:5000/manifest.webmanifest >/dev/null; then break; fi
+            sleep 2
+          done
+          docker exec musicbox-ci python tests/smoke_realtime_gateway.py
+      - name: Verify ARM64 non-root browser surface
+        run: |
+          test "$(docker image inspect musicbox-browser:${{ github.sha }} --format '{{.Architecture}}')" = arm64
+          docker run -d --name musicbox-browser-ci --cap-drop ALL --cap-add CHOWN --cap-add DAC_OVERRIDE --cap-add SETUID --cap-add SETGID --security-opt no-new-privileges --shm-size 512m -e YT_BROWSER_CONTROL_TOKEN=isolated-ci-browser-token musicbox-browser:${{ github.sha }}
+          for attempt in $(seq 1 40); do
+            if docker exec musicbox-browser-ci python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8765/health',timeout=2)"; then break; fi
+            sleep 2
+          done
+          docker exec -i musicbox-browser-ci python - < flask-server/tests/smoke_browser_container.py
+      - name: Export tested images and checksums
+        run: |
+          docker save musicbox-backend:${{ github.sha }} musicbox-browser:${{ github.sha }} | gzip -1 > image-bundle.tar.gz
+          sha256sum image-bundle.tar.gz > SHA256SUMS
+          printf '%s\n' '${{ github.sha }}' > SOURCE_COMMIT
+      - uses: actions/upload-artifact@v4
+        with:
+          name: deployment-images-arm64
+          retention-days: 7
+          compression-level: 0
+          path: |
+            image-bundle.tar.gz
+            SHA256SUMS
+            SOURCE_COMMIT
+      - name: ARM64 diagnostics
+        if: always()
+        run: |
+          docker logs musicbox-ci || true
+          docker logs musicbox-browser-ci || true
