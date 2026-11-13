@@ -183,7 +183,9 @@
       const current = row.getAttribute('data-device-current') === '1';
       $('device-current-note').hidden = !current;
       if (revoke) {
-        revoke.setAttribute('action', row.getAttribute('data-device-revoke') || '');
+        const destination = new URL(row.getAttribute('data-device-revoke') || '', window.location.origin);
+        if (destination.origin !== window.location.origin || !destination.pathname.startsWith('/admin/account/')) return;
+        revoke.action = destination.pathname;
         revoke.setAttribute('data-confirm-heading', 'Remove this device');
         revoke.setAttribute('data-confirm', current
           ? 'This is the browser you are using. It is signed out now, so this panel closes on you.'

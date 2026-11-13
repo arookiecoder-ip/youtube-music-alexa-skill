@@ -1121,9 +1121,17 @@ def profile_delete():
     if not key:
         return jsonify({"error": "profile_key_required"}), 400
     try:
-        path = _profile_dir_for(key)
+        _profile_dir_for(key)  # Validate the opaque key before looking at disk.
     except ValueError:
         return jsonify({"error": "invalid_profile_key"}), 400
+    root = os.path.realpath(PROFILE_DIR)
+    try:
+        with os.scandir(root) as entries:
+            path = next((entry.path for entry in entries if entry.name == key), None)
+    except FileNotFoundError:
+        path = None
+    if path is None:
+        return jsonify({"deleted": False})
     with _lock:
         in_flight = bool(_worker and _worker.is_alive()) or bool(_state["interactive"]) \
             or _manual_browser is not None

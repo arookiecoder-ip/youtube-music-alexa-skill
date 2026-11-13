@@ -50,7 +50,12 @@ _DUMMY_PASSWORD_HASH = hash_password("not-a-user-credential")
 
 
 class AccountError(ValueError):
-    """A validation or permission error safe to show to an administrator."""
+    """Public validation copy, deliberately separate from internal exceptions."""
+
+    @property
+    def public_message(self):
+        return self.args[0] if self.args and isinstance(self.args[0], str) else 'The account change could not be completed.'
+
 
 
 def _now() -> float:
@@ -129,12 +134,13 @@ class AccountService:
             generated = True
             password_file = os.path.join(
                 os.path.dirname(os.path.abspath(self.config.db_path)),
-                "multiuser_admin_password.txt",
+                "multiuser_admin_password.enc",
             )
             try:
-                with open(password_file, "w", encoding="utf-8") as handle:
-                    handle.write(password + "\n")
-                os.chmod(password_file, 0o600)
+                encrypted_password = self.secret_box.encrypt_json({"password": password})
+                descriptor = os.open(password_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+                with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                    handle.write(encrypted_password + "\n")
             except OSError:
                 password_file = ""
         else:

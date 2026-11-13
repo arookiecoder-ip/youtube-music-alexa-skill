@@ -46,3 +46,10 @@ DNS/tunnel configuration, existing image ID and hosted-skill Git bundle. Rollbac
 restores the prior DNS record and tunnel configuration plus the server's saved
 environment and image. Do not delete database volumes. Deletion of the old Alexa
 skill is permanent; its saved package is retained privately for reconstruction.
+
+New installs without an explicit owner password write an encrypted
+`multiuser_admin_password.enc`, created with mode 0600, instead of a plaintext
+password file. An administrator can decrypt it inside the container with the
+configured `SecretBox` and encryption key. Existing accounts and credentials are
+not changed. Generated legacy API credentials derive from the persistent signing
+key; explicitly configured keys and existing legacy key files remain supported.

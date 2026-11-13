@@ -30,9 +30,11 @@ for attempt in range(60):
         assert frame['width']>0 and frame['height']>0
         break
     except urllib.error.HTTPError as error:
+        print('Frame pending:', error.code, error.read().decode()[:400], flush=True)
         assert error.code in (409,503), error.code
         time.sleep(.5)
 else:
+    print(json.load(urllib.request.urlopen(urllib.request.Request('http://127.0.0.1:8765/status',headers=headers))), flush=True)
     raise AssertionError('Chromium touch surface did not become ready')
 request=urllib.request.Request('http://127.0.0.1:8765/interactive/close',data=b'{}',headers=headers)
 assert urllib.request.urlopen(request,timeout=15).status == 200

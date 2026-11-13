@@ -82,7 +82,7 @@ def _theme_for(layer, user: dict | None) -> str:
 def _safe_next(value: str) -> str:
     value = (value or "").strip()
     if value.startswith("/admin/") and not value.startswith("//"):
-        return value
+        return "/admin/" + value[len("/admin/"):]
     return "/admin/"
 
 
@@ -730,7 +730,7 @@ def build_blueprint(mu: MultiUser) -> Blueprint:
                         return render_template("admin/password_result.html", title="Account password", password=form["password"], target_id=user["id"], must_change_password=form["must_change_password"])
                     return redirect(url_for("multiuser_admin.user_detail", user_id=user["id"]))
                 except AccountError as exc:
-                    flash(str(exc), "error")
+                    flash(exc.public_message, "error")
         return render_template(
             "admin/user_new.html",
             page="users",
@@ -832,7 +832,7 @@ def build_blueprint(mu: MultiUser) -> Blueprint:
             )
             flash("User updated.", "success")
         except AccountError as exc:
-            flash(str(exc), "error")
+            flash(exc.public_message, "error")
         return redirect(url_for("multiuser_admin.user_detail", user_id=user_id))
 
     @bp.route("/users/<user_id>/password/", methods=["POST"])
@@ -856,7 +856,7 @@ def build_blueprint(mu: MultiUser) -> Blueprint:
             flash("Password reset.", "success")
             flash("Every device on this account was signed out.", "info")
         except AccountError as exc:
-            flash(str(exc), "error")
+            flash(exc.public_message, "error")
         return redirect(url_for("multiuser_admin.user_detail", user_id=user_id))
 
     @bp.route("/users/<user_id>/status/", methods=["POST"])
@@ -867,7 +867,7 @@ def build_blueprint(mu: MultiUser) -> Blueprint:
             mu.accounts.set_status(g.mu_user, user_id, status, ip=_client_ip(), user_agent=_user_agent())
             flash(f"User status set to {status}.", "success")
         except AccountError as exc:
-            flash(str(exc), "error")
+            flash(exc.public_message, "error")
         return redirect(url_for("multiuser_admin.user_detail", user_id=user_id))
 
     @bp.route("/users/<user_id>/totp/", methods=["POST"])
@@ -877,7 +877,7 @@ def build_blueprint(mu: MultiUser) -> Blueprint:
             mu.accounts.reset_totp(g.mu_user, user_id, ip=_client_ip(), user_agent=_user_agent())
             flash("Two-factor authentication was reset for this user.", "success")
         except AccountError as exc:
-            flash(str(exc), "error")
+            flash(exc.public_message, "error")
         return redirect(url_for("multiuser_admin.user_detail", user_id=user_id))
 
     @bp.route("/users/<user_id>/password-change/", methods=["POST"])
@@ -899,7 +899,7 @@ def build_blueprint(mu: MultiUser) -> Blueprint:
                 "success",
             )
         except AccountError as exc:
-            flash(str(exc), "error")
+            flash(exc.public_message, "error")
         return redirect(url_for("multiuser_admin.user_detail", user_id=user_id))
 
     # ------------------------------------------------------- own second factor
@@ -927,7 +927,7 @@ def build_blueprint(mu: MultiUser) -> Blueprint:
             )
             flash("Scan the code with your authenticator app, then type the code it shows.", "success")
         except AccountError as exc:
-            flash(str(exc), "error")
+            flash(exc.public_message, "error")
         return redirect(url_for("multiuser_admin.account"))
 
     @bp.route("/account/totp/reauth/send/", methods=["POST"])
@@ -997,7 +997,7 @@ def build_blueprint(mu: MultiUser) -> Blueprint:
             flash("Scan the new authenticator and confirm its code. Your current one still works until you do.", "success")
             return redirect(url_for("multiuser_admin.account"))
         except AccountError as exc:
-            flash(str(exc), "error")
+            flash(exc.public_message, "error")
             return redirect(back)
 
     @bp.route("/account/totp/qr/", methods=["GET"])
@@ -1034,7 +1034,7 @@ def build_blueprint(mu: MultiUser) -> Blueprint:
             )
             flash("Two-factor sign-in is on. You will be asked for a code when you sign in.", "success")
         except AccountError as exc:
-            flash(str(exc), "error")
+            flash(exc.public_message, "error")
         return redirect(url_for("multiuser_admin.account"))
 
     @bp.route("/account/totp/cancel/", methods=["POST"])
@@ -1046,7 +1046,7 @@ def build_blueprint(mu: MultiUser) -> Blueprint:
             )
             flash("Two-factor setup was cancelled.", "info")
         except AccountError as exc:
-            flash(str(exc), "error")
+            flash(exc.public_message, "error")
         return redirect(url_for("multiuser_admin.account"))
 
     @bp.route("/account/totp/disable/", methods=["POST"])
@@ -1067,7 +1067,7 @@ def build_blueprint(mu: MultiUser) -> Blueprint:
             flash("Two-factor sign-in is off. Sign in with your password alone from now on.", "success")
             return redirect(url_for("multiuser_admin.account"))
         except AccountError as exc:
-            flash(str(exc), "error")
+            flash(exc.public_message, "error")
             return redirect(back)
 
     @bp.route("/users/<user_id>/email/verify-now/", methods=["POST"])
@@ -1079,7 +1079,7 @@ def build_blueprint(mu: MultiUser) -> Blueprint:
             )
             flash("Email marked as verified.", "success")
         except AccountError as exc:
-            flash(str(exc), "error")
+            flash(exc.public_message, "error")
         return redirect(url_for("multiuser_admin.user_detail", user_id=user_id))
 
     @bp.route("/users/<user_id>/email/invitation/", methods=["POST"])
@@ -1143,7 +1143,7 @@ def build_blueprint(mu: MultiUser) -> Blueprint:
             )
             flash(f"Signed out {count} device{'s' if count != 1 else ''}.", "success")
         except AccountError as exc:
-            flash(str(exc), "error")
+            flash(exc.public_message, "error")
         return redirect(url_for("multiuser_admin.user_detail", user_id=user_id))
 
     @bp.route("/users/<user_id>/provider/<provider>/disconnect/", methods=["POST"])
@@ -1155,7 +1155,7 @@ def build_blueprint(mu: MultiUser) -> Blueprint:
                 g.mu_user, user_id, provider, ip=_client_ip(), user_agent=_user_agent()
             )
         except AccountError as exc:
-            flash(str(exc), "error")
+            flash(exc.public_message, "error")
         else:
             if failures:
                 flash(
@@ -1186,7 +1186,7 @@ def build_blueprint(mu: MultiUser) -> Blueprint:
             flash("User deleted. Provider credentials were removed.", "success")
             return redirect(url_for("multiuser_admin.users"))
         except AccountError as exc:
-            flash(str(exc), "error")
+            flash(exc.public_message, "error")
             return redirect(url_for("multiuser_admin.user_detail", user_id=user_id))
 
     @bp.route("/users/<user_id>/permanent-delete/", methods=["POST"])
@@ -1200,7 +1200,7 @@ def build_blueprint(mu: MultiUser) -> Blueprint:
             flash("Account permanently deleted. It cannot be restored.", "success")
             return redirect(url_for("multiuser_admin.users", status="deleted"))
         except AccountError as exc:
-            flash(str(exc), "error")
+            flash(exc.public_message, "error")
             if mu.accounts.get_user(user_id, include_deleted=True):
                 return redirect(url_for("multiuser_admin.user_detail", user_id=user_id))
             return redirect(url_for("multiuser_admin.users", status="deleted"))
@@ -1212,7 +1212,7 @@ def build_blueprint(mu: MultiUser) -> Blueprint:
             mu.accounts.restore_user(g.mu_user, user_id, ip=_client_ip(), user_agent=_user_agent())
             flash("User restored in disabled state. Set a password, then activate the account.", "success")
         except AccountError as exc:
-            flash(str(exc), "error")
+            flash(exc.public_message, "error")
         return redirect(url_for("multiuser_admin.user_detail", user_id=user_id))
 
     @bp.route("/audit/", methods=["GET"])
@@ -1393,7 +1393,7 @@ def build_blueprint(mu: MultiUser) -> Blueprint:
                 g.mu_user, opened, _client_ip(), _user_agent()
             )
         except AccountError as exc:
-            flash(str(exc), "error")
+            flash(exc.public_message, "error")
             return redirect(url_for("multiuser_admin.users"))
         flash(
             "Public sign-ups are open again." if opened else "Public sign-ups are now closed.",
@@ -1442,7 +1442,7 @@ def build_blueprint(mu: MultiUser) -> Blueprint:
                 flash("Password changed.", "success")
                 return redirect(url_for("multiuser_admin.account"))
             except AccountError as exc:
-                flash(str(exc), "error")
+                flash(exc.public_message, "error")
                 return redirect(url_for("multiuser_admin.account", reauth="password"))
         return render_template(
             "admin/account.html",
@@ -1485,7 +1485,7 @@ def build_blueprint(mu: MultiUser) -> Blueprint:
             flash("Password reset.", "success")
             return redirect(url_for("multiuser_admin.account"))
         except AccountError as exc:
-            flash(str(exc), "error")
+            flash(exc.public_message, "error")
             return redirect(back)
 
     @bp.route("/account/profile/", methods=["POST"])
@@ -1511,7 +1511,7 @@ def build_blueprint(mu: MultiUser) -> Blueprint:
                 )
                 _flash_mail(result, "Verification code", user["email"])
         except AccountError as exc:
-            flash(str(exc), "error")
+            flash(exc.public_message, "error")
             return redirect(url_for("multiuser_admin.account", reauth="email"))
         return redirect(url_for("multiuser_admin.account"))
 
@@ -1558,7 +1558,7 @@ def build_blueprint(mu: MultiUser) -> Blueprint:
                 g.mu_user["id"], ip=_client_ip(), user_agent=_user_agent()
             )
         except AccountError as exc:
-            flash(str(exc), "error")
+            flash(exc.public_message, "error")
             return redirect(url_for("multiuser_admin.account"))
         flash("Email address confirmed.", "success")
         return redirect(url_for("multiuser_admin.account"))
@@ -1574,7 +1574,7 @@ def build_blueprint(mu: MultiUser) -> Blueprint:
             session.pop("mu_user_id", None)
             flash(f"Signed out {count} device{'s' if count != 1 else ''}, including this one.", "success")
         except AccountError as exc:
-            flash(str(exc), "error")
+            flash(exc.public_message, "error")
             return redirect(url_for("multiuser_admin.account"))
         return redirect(login_url)
 
@@ -1589,7 +1589,7 @@ def build_blueprint(mu: MultiUser) -> Blueprint:
                 ip=_client_ip(), user_agent=_user_agent(),
             )
         except AccountError as exc:
-            flash(str(exc), "error")
+            flash(exc.public_message, "error")
             return redirect(url_for("multiuser_admin.account"))
         if killed_current:
             session.pop("mu_sid", None)
@@ -1614,6 +1614,7 @@ def build_blueprint(mu: MultiUser) -> Blueprint:
         target = request.form.get("next") or ""
         if not (target.startswith(base) and not target.startswith("//")):
             target = url_for("multiuser_admin.dashboard")
+        target = "/admin/" + target.removeprefix("/admin/").lstrip("/")
         if wanted not in ("dark", "light"):
             flash("Choose either the dark theme or the light theme.", "error")
             return redirect(target)
@@ -1856,7 +1857,7 @@ def build_blueprint(mu: MultiUser) -> Blueprint:
                 user["id"], password, ip=ip, user_agent=_user_agent()
             )
         except AccountError as exc:
-            return rejected(str(exc), 400)
+            return rejected(exc.public_message, 400)
         flash("Password reset. Sign in with your new password.", "success")
         return redirect(login_url)
 

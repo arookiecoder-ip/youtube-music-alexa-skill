@@ -326,21 +326,16 @@ if not API_KEY:
         if os.path.exists(api_key_path):
             with open(api_key_path, 'r') as f:
                 API_KEY = f.read().strip()
-            if not API_KEY:
-                API_KEY = secrets.token_hex(32)
-                with open(api_key_path, 'w') as f:
-                    f.write(API_KEY)
-                os.chmod(api_key_path, 0o600)
-        else:
-            API_KEY = secrets.token_hex(16)
-            with open(api_key_path, 'w') as f:
-                f.write(API_KEY)
-            try:
-                os.chmod(api_key_path, 0o600)
-            except OSError:
-                pass
-    except Exception:
-        API_KEY = secrets.token_hex(16)
+    except OSError:
+        API_KEY = None
+    if not API_KEY:
+        # Derive the fallback from the already protected persistent signing key.
+        # Existing explicit credentials and legacy key files keep their identity;
+        # new installations need no additional plaintext secret file.
+        import hashlib as _key_hashlib
+        import hmac as _key_hmac
+        _signing_material = app.secret_key.encode() if isinstance(app.secret_key, str) else app.secret_key
+        API_KEY = _key_hmac.new(_signing_material, b'musicbox-legacy-api-key-v1', _key_hashlib.sha256).hexdigest()
 
 if not os.environ.get("API_KEY"):
     logger.warning("No API key configured in environment; using persistent generated credential.")
@@ -950,7 +945,7 @@ def _safe_spa_target(value, default='/home'):
     # do not reinterpret their identifier as a query value before the shell has
     # loaded and the client router has normalized it.
     if path_style:
-        return normalized_path
+        return '/' + normalized_path.lstrip('/')
     canonical_path = normalized_path or '/'
     query = parse_qs(parsed.query, keep_blank_values=True)
     allowed = _SPA_QUERY_FIELDS.get(canonical_path, ())
@@ -961,7 +956,7 @@ def _safe_spa_target(value, default='/home'):
         value = _first_query_value(query, name)
         if value:
             clean.append((name, value))
-    return canonical_path + (('?' + urlencode(clean)) if clean else '')
+    return '/' + canonical_path.lstrip('/') + (('?' + urlencode(clean)) if clean else '')
 
 # Endpoints reachable with a logged-in web-remote session cookie (so the long
 # API key stays out of the browser URL). Everything here plus the remote page.
@@ -1525,7 +1520,7 @@ def _bind_player_identity():
             if request.environ.get('musicbox.alexa_denial_stale'):
                 return jsonify(error={'code':'stale_alexa_request', 'message':'A newer playback request superseded this Alexa request.'}), 403
             failure = _alexa_auth_error(exc, exc.code)
-            return jsonify(error={'code': exc.code, 'message': failure['message'] if failure else str(exc)}), 403
+            return jsonify(error={'code': exc.code, 'message': failure['message'] if failure else 'Alexa authorization denied.'}), 403
         _PLAYER_IDENTITY.set(_player_identity_for_user_id(linked['id']))
         request.environ['musicbox.alexa_identity'] = linked['id']
         request.environ['musicbox.alexa_binding'] = credential
@@ -2201,8 +2196,7 @@ def _send_youtube_login_alert(outcome, detail, reason, snapshot):
     """
     recipient = (os.environ.get(youtube_auto_login.ENV_ALERT_TO) or '').strip()
     if not recipient:
-        logger.warning('YouTube sign-in failed (%s) and %s is not set, so nobody was told',
-                       outcome, youtube_auto_login.ENV_ALERT_TO)
+        logger.warning('YouTube sign-in failed and no alert recipient is configured.')
         return
     from multiuser.mailer import Mailer, render_alert_email
     app_name = (getattr(getattr(_multiuser_layer, 'config', None), 'app_name', '')
@@ -7910,7 +7904,7 @@ def download_cookie_status():
         result = download_cookies.status(Supporting.get_ytdlp_cookies_file(), _configure_cookie_probe,
                                         force=request.args.get('refresh') == '1')
     except download_cookies.ProbeBusy as exc:
-        return error_response(str(exc), 429)
+        return error_response('A cookie check is already running. Try again shortly.', 429)
     return jsonify(result)
 
 
@@ -7958,7 +7952,7 @@ def profile_status():
         try:
             cookie_test = download_cookies.status(cookies_file, _configure_cookie_probe)
         except download_cookies.ProbeBusy as exc:
-            cookie_test = {'valid': False, 'message': str(exc)}
+            cookie_test = {'valid': False, 'message': 'A cookie check is already running. Try again shortly.'}
     cookies_working = cookie_test['valid']
     cookies_debug = cookie_test['message']
 

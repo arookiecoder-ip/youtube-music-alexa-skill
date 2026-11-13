@@ -97,7 +97,8 @@ class SecretHygiene(unittest.TestCase):
             cwd=os.path.dirname(server_dir), env=env, capture_output=True, text=True,
             timeout=120)
         self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
-        for name, length in (("api_key.txt", 32), ("secret_key.txt", 64)):
+        self.assertFalse(os.path.exists(os.path.join(data, "api_key.txt")))
+        for name, length in (("secret_key.txt", 64),):
             path = os.path.join(data, name)
             self.assertTrue(os.path.isfile(path), name)
             mode = stat.S_IMODE(os.stat(path).st_mode)
