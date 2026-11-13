@@ -208,7 +208,9 @@ def classify_page(snapshot):
         return SIGNED_IN
     if host == "accounts.google.com" and path.startswith("/sorry/"):
         return CAPTCHA
-    if host.endswith("consent.youtube.com") or "/client/cookie/consent" in path:
+    if host == "consent.youtube.com" or host.endswith(".consent.youtube.com") or (
+            host in ("accounts.google.com", "www.youtube.com", "youtube.com")
+            and "/client/cookie/consent" in path):
         return CONSENT
 
     if "/challenge/totp" in path or code_kind == "totp":

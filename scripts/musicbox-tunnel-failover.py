@@ -82,7 +82,9 @@ def check_health(config):
             return False
         connection = http.client.HTTPSConnection(url.hostname, timeout=timeout)
         raw = socket.create_connection((addresses[0], 443), timeout=timeout)
-        connection.sock = ssl.create_default_context().wrap_socket(raw, server_hostname=url.hostname)
+        context = ssl.create_default_context()
+        context.minimum_version = ssl.TLSVersion.TLSv1_2
+        connection.sock = context.wrap_socket(raw, server_hostname=url.hostname)
         try:
             path = url.path or '/'
             if url.query:

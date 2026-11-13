@@ -278,7 +278,7 @@ class AccountService:
         email = _normalize_email(email)
         if not email:
             return ""
-        if len(email) > 254 or not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email):
+        if len(email) > 254 or not re.match(r"^[^@\s]+@[^@.\s]+\.[^@\s]+$", email):
             raise AccountError("Enter a valid email address, or leave it blank.")
         return email
 

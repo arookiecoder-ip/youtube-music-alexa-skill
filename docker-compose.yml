@@ -91,8 +91,6 @@ services:
 
   youtube-browser:
     init: true
-    cap_drop: [ALL]
-    security_opt: [no-new-privileges:true]
     mem_limit: 2g
     cpus: 2
     pids_limit: 512
