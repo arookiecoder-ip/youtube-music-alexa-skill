@@ -25,9 +25,15 @@ class SignupStepsTests(SignupSwitchTestBase):
         self.assertIn('Repeat the password', details_page)
         self.assertIn('data-signup-step="details"', details_page)
         values = dict(username='newuser', password=PASSWORD, confirm_password=PASSWORD)
-        self.assertEqual(self.post('details', **values).status_code, 200)
+        response = self.post('details', **values)
+        self.assertEqual(response.status_code, 303)
+        self.assertEqual(response.location, '/account')
         user = self.accounts.get_user_by_username('newuser')
         self.assertTrue(user['email_verified'])
+        with self.client.session_transaction() as session:
+            self.assertEqual(session['mu_user_id'], user['id'])
+            _, authenticated = self.accounts.validate_session(session['mu_sid'])
+            self.assertEqual(authenticated['id'], user['id'])
         self.assertEqual(self.post('details', **values).status_code, 400)
 
     def test_no_skipping_and_resend_cooldown(self):

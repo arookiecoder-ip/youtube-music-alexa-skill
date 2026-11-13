@@ -917,7 +917,7 @@
     if (first) first.focus();
   }
 
-  Array.prototype.forEach.call(document.querySelectorAll('a[data-dialog]'), (link) => {
+  Array.prototype.forEach.call(document.querySelectorAll('[data-dialog]'), (link) => {
     link.addEventListener('click', (event) => {
       if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
       const box = el(link.getAttribute('data-dialog'));
@@ -979,6 +979,11 @@
     return !result || Boolean(result.code);
   }
 
+  on('delete-warning-continue', 'click', (event) => {
+    closeOwner(event.currentTarget);
+    openDialog(el('dialog-delete-check'));
+  });
+
   bind('form-delete-check', async (form, button) => {
     const result = await sendStep('/api/account/delete', {
       password: value(form, 'current_password'),
@@ -1000,14 +1005,33 @@
       openDialog(el('dialog-delete-final'));
       return;
     }
-    const result = await sendStep('/api/account/email/reauth', {}, button);
-    if (refused(result)) return;
     closeOwner(button);
     openDialog(el('dialog-delete-code'));
+  });
+
+  on('delete-send-code', 'click', async (event) => {
+    const button = event.currentTarget;
+    const result = await sendStep('/api/account/email/reauth', {}, button);
+    if (refused(result)) {
+      if (result && result.retry_after) startCodeTimer(button, {resend_at: Date.now() / 1000 + result.retry_after});
+      return;
+    }
+    const fields = el('delete-code-fields');
+    fields.hidden = false;
+    if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      fields.animate([{opacity: 0, transform: 'translateY(8px)'}, {opacity: 1, transform: 'translateY(0)'}], {duration: 220, easing: 'ease-out'});
+    }
+    button.dataset.restLabel = 'Resend OTP';
+    startCodeTimer(button, result);
+    el('delete_code').focus();
     inlineNote('del-code-note', '', result.note || ('Code sent to ' + result.sent_to + '.'));
   });
 
   bind('form-delete-code', (form) => {
+    if (el('delete-code-fields').hidden || value(form, 'code').replace(/[^0-9]/g, '').length !== 6) {
+      toast('Send a code and enter all six digits to continue.');
+      return;
+    }
     closeOwner(form);
     openDialog(el('dialog-delete-final'));
   });

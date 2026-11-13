@@ -270,8 +270,8 @@
   {# The one action that cannot be undone sits outside the grid, below everything
      it erases, rather than as a fourth item in the rail. #}
   <div class="danger-zone">
-    <a class="tiny-link destructive" href="/account?step=delete#panel-profile"
-       data-dialog="dialog-delete-check">Delete account</a>
+    <button class="ghost destructive" type="button"
+       data-dialog="dialog-delete-warning">Delete account</button>
   </div>
 
   {# ------------------------------------------------------------ the popups
@@ -294,8 +294,7 @@
       <div class="dialog-block" data-dialog-block="change"
            {{ 'hidden' if pw_view == 'reset' else '' }}>
         <h3>Change password</h3>
-        <p class="field-help">Changing it signs out every other device and leaves this one
-          signed in, so a stolen password cannot keep a stranger's session alive.</p>
+
         <form id="form-password" autocomplete="off" data-password-form>
           {% if email %}
           <p class="field-help">Send a verification code to {{ email }}.</p>
@@ -680,8 +679,16 @@
 
   {# Deleting is four questions, each in its own popup: who you are, whether you
      mean it, the code from the mailbox, and one last confirmation. #}
+  <dialog class="account-dialog" id="dialog-delete-warning"
+          {{ 'data-autopen' if open_step == 'delete' else '' }} aria-labelledby="delete-warning-title">
+    <div class="dialog-head"><h2 id="delete-warning-title">Delete this account?</h2></div>
+    <div class="dialog-body"><p>This permanently removes your account, playlists, likes and connected services. It cannot be undone.</p></div>
+    <div class="dialog-foot">
+      <button class="tiny" type="button" data-dialog-close>Keep my account</button>
+      <button class="ghost destructive" type="button" id="delete-warning-continue">Continue</button>
+    </div>
+  </dialog>
   <dialog class="account-dialog" id="dialog-delete-check"
-          {{ 'data-autopen' if open_step == 'delete' else '' }}
           aria-labelledby="dialog-delete-check-title">
     <div class="dialog-head">
       <h2 id="dialog-delete-check-title">Delete this account</h2>
@@ -735,13 +742,15 @@
         <button class="tiny" type="button" data-dialog-close aria-label="Close">&#10005;</button>
       </div>
       <div class="dialog-body">
-        <p class="field-help">The code went to <strong>{{ email }}</strong>. It is typed here,
-          not clicked from the message.</p>
+        <p class="field-help">Send a code to <strong>{{ email }}</strong> when you are ready.</p>
         <form id="form-delete-code" autocomplete="off">
+          <button class="ghost" type="button" id="delete-send-code">Send OTP</button>
+          <div id="delete-code-fields" hidden>
           <label for="delete_code">Code from your email</label>
           <input class="code-input" type="text" id="delete_code" name="code" inputmode="numeric"
                  pattern="[0-9 ]*" maxlength="7" autocomplete="one-time-code" spellcheck="false"
-                 placeholder="••••••">
+                 placeholder="••••••" required>
+          </div>
           <p class="note" id="del-code-note" role="status" hidden></p>
         </form>
       </div>

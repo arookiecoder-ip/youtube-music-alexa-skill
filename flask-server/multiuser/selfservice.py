@@ -635,9 +635,15 @@ def build_selfservice_blueprint(mu) -> Blueprint:
                     email=pending["email"], email_verified=True, ip=ip, user_agent=ua)
             except AccountError as exc:
                 return page(str(exc), 422)
-            session.pop("signup_challenge", None)
+            from auth_sessions import replace_identity, complete_login
+            raw_sid = mu.accounts.create_session(user, ip, ua)
+            complete_login(mu, user, ip)
+            replace_identity()
+            session["mu_sid"] = raw_sid
+            session["mu_user_id"] = user["id"]
+            session.permanent = True
             rotate_csrf()
-            return _result_page("Account created", "Your email is verified. You can now sign in.", action_label="Sign in")
+            return redirect("/account", code=303)
         else:
             return page("This step has expired. Reload and try again.", 400)
 

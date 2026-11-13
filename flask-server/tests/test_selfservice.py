@@ -215,8 +215,18 @@ class SelfServiceTestBase(unittest.TestCase):
             response = self.client.post("/signup", data={
                 "_csrf": self.form_csrf("/signup"), "step": "details", **details,
             })
-            if response.status_code == 200:
+            if response.status_code == 303:
                 self.pending_signup_details = None
+                # Most fixtures need a registered, signed-out user. Verify the
+                # new session before explicitly logging out of this setup flow.
+                with self.client.session_transaction() as browser:
+                    raw = browser.get("mu_sid")
+                    self.assertTrue(raw)
+                row, signed_in = self.accounts.validate_session(raw)
+                self.assertEqual(signed_in["username"], username)
+                self.accounts.revoke_session(row["sid_hash"])
+                with self.client.session_transaction() as browser:
+                    browser.clear()
             return response
         return self.client.post("/verify", data={
             "_csrf": self.form_csrf("/verify"),
@@ -248,7 +258,7 @@ class SignupTests(SelfServiceTestBase):
         self.assertEqual(response.status_code, 303)
         self.assertIsNone(self.user_row("player1"))
         self.assertIsNone(self.accounts.authenticate("player1", PASSWORD, "127.0.0.1", "pytest")[0])
-        self.assertEqual(self.verify_by_code().status_code, 200)
+        self.assertEqual(self.verify_by_code().status_code, 303)
         user = self.user_row("player1")
         self.assertEqual(user["role"], "user")
         self.assertEqual(user["created_by"], "self")
@@ -258,7 +268,7 @@ class SignupTests(SelfServiceTestBase):
     def test_a_signup_code_cannot_be_replayed_after_account_creation(self):
         self.register("player1")
         code = self.newest_code("verify")
-        self.assertEqual(self.verify_by_code(code=code).status_code, 200)
+        self.assertEqual(self.verify_by_code(code=code).status_code, 303)
         replay = self.client.post("/signup", data={
             "_csrf": self.form_csrf("/signup"), "step": "code", "code": code,
         })
@@ -289,7 +299,7 @@ class SignupTests(SelfServiceTestBase):
 
     def test_an_existing_email_is_refused_before_details(self):
         self.register("player1")
-        self.assertEqual(self.verify_by_code().status_code, 200)
+        self.assertEqual(self.verify_by_code().status_code, 303)
         response = self.register("player2", email_address="player1@example.test")
         self.assertEqual(response.status_code, 409)
         self.assertIsNone(self.user_row("player2"))
@@ -297,7 +307,7 @@ class SignupTests(SelfServiceTestBase):
 
     def test_a_public_username_collision_is_refused_at_details(self):
         self.register("player1")
-        self.assertEqual(self.verify_by_code().status_code, 200)
+        self.assertEqual(self.verify_by_code().status_code, 303)
         self.assertEqual(self.register("player1", email_address="another@example.test").status_code, 303)
         response = self.verify_by_code()
         self.assertEqual(response.status_code, 422)
@@ -359,7 +369,7 @@ class SignupDisabledFlagTests(SelfServiceTestBase):
 class ForgotPasswordTests(SelfServiceTestBase):
     def test_known_and_unknown_addresses_get_the_same_answer(self):
         self.assertEqual(self.register("player1").status_code, 303)
-        self.assertEqual(self.verify_by_code().status_code, 200)
+        self.assertEqual(self.verify_by_code().status_code, 303)
         before = len(glob.glob(os.path.join(self.outbox, "*.eml")))
 
         token = self.form_csrf("/forgot-password")
@@ -400,7 +410,7 @@ class ForgotPasswordTests(SelfServiceTestBase):
 
     def test_a_reset_code_works_once(self):
         self.register("player1")
-        self.assertEqual(self.verify_by_code().status_code, 200)
+        self.assertEqual(self.verify_by_code().status_code, 303)
         token = self.form_csrf("/forgot-password")
         self.client.post("/forgot-password", data={
             "_csrf": token, "identifier": "player1@example.test"})
@@ -971,7 +981,7 @@ class DeleteAccountTests(SelfServiceTestBase):
                          headers=self.json_headers())
         self.assertEqual(self.register("player1").status_code, 303)
         response = self.verify_by_code()
-        self.assertEqual(response.status_code, 200, response.get_data(as_text=True)[:400])
+        self.assertEqual(response.status_code, 303, response.get_data(as_text=True)[:400])
         self.assertIsNotNone(self.user_row("player1"))
 
 

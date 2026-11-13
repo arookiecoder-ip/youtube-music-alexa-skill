@@ -8,7 +8,7 @@ on:
         type: boolean
         default: true
   push:
-    branches: [fix/signup-flow]
+    branches: [fix/signup-flow, feat/multi-user]
     paths:
       - flask-server/**
       - .github/workflows/signup-build-deploy.yml
@@ -55,7 +55,7 @@ jobs:
           retention-days: 7
 
   deploy:
-    if: ${{ github.ref == 'refs/heads/fix/signup-flow' && (github.event_name == 'push' || inputs.deploy) }}
+    if: ${{ (github.ref == 'refs/heads/fix/signup-flow' || github.ref == 'refs/heads/feat/multi-user') && (github.event_name == 'push' || inputs.deploy) }}
     needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 15

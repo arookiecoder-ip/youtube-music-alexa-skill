@@ -204,6 +204,17 @@ def origin():
         POSTS.append("revoke-others" if body.get("others") else f"revoke:{body.get('id')}")
         return jsonify({})
 
+    @app.route("/api/account/delete", methods=["POST"])
+    def delete_account():
+        POSTS.append("delete:check" if request.json.get("verify_only") else "delete:final")
+        return jsonify({"ok": True})
+
+    @app.route("/api/account/email/reauth", methods=["POST"])
+    def delete_code():
+        import time
+        POSTS.append("reauth:send")
+        return jsonify({"ok": True, "sent_to": "a@b.test", "expires_at": time.time() + 600, "resend_at": time.time() + 60})
+
     @app.errorhandler(404)
     def not_found(_error):
         # A POST the page has no stub for must not be a silent 500 in the middle
@@ -400,11 +411,13 @@ def test_the_current_device_is_marked_and_never_offered_for_sign_out(page):
 
 # ------------------------------------------------------------------------ text
 def test_the_delete_action_sits_outside_the_grid_and_opens_its_own_popup(page):
-    trigger = page.locator('.danger-zone a[data-dialog="dialog-delete-check"]')
+    trigger = page.locator('.danger-zone button[data-dialog="dialog-delete-warning"]')
     shell = page.locator(".account-shell").bounding_box()
     box = trigger.bounding_box()
     assert box["y"] >= shell["y"] + shell["height"] - 1, (shell, box)
     trigger.click()
+    page.wait_for_selector("#dialog-delete-warning[open]")
+    page.locator('#delete-warning-continue').click()
     page.wait_for_selector("#dialog-delete-check[open]")
     assert page.locator("#form-delete-check").is_visible()
     page.keyboard.press("Escape")
@@ -521,8 +534,7 @@ def test_a_browser_without_javascript_still_gets_every_section(origin):
         # The delete button's link names its first popup, which is likewise rendered
         # as a block for a browser that follows it.
         opened.goto(f"{origin}/account?step=delete", wait_until="load")
-        assert opened.locator("#dialog-delete-check").is_visible()
-        assert opened.locator("#form-delete-check").is_visible()
+        assert opened.locator("#dialog-delete-warning").is_visible()
         opened.close()
         browser.close()
 
@@ -1243,3 +1255,23 @@ def test_amazon_popup_accepts_an_independent_email_or_mobile_number(page, origin
     expect(page.locator('#connect-approval-panel')).to_be_visible()
     page.locator('#dialog-connect .dialog-foot [data-dialog-close]').click()
     expect(page.locator('#dialog-connect')).not_to_be_visible()
+
+
+def test_deletion_sends_nothing_until_explicit_send_otp_click(page):
+    POSTS.clear()
+    page.locator('.danger-zone button').click()
+    assert page.locator('#dialog-delete-warning').is_visible()
+    assert POSTS == []
+    page.locator('#delete-warning-continue').click()
+    page.locator('#form-delete-check input[name=current_password]').fill('test-password')
+    page.locator('#del_username').fill(FIXTURE['username'])
+    page.locator('button[form=form-delete-check]').click()
+    page.locator('#delete-confirm-yes').click()
+    expect(page.locator('#dialog-delete-code')).to_be_visible()
+    assert POSTS == ['delete:check']
+    assert page.locator('#delete_code').is_hidden()
+    page.locator('#delete-send-code').click()
+    expect(page.locator('#delete_code')).to_be_visible()
+    expect(page.locator('#delete-send-code')).to_be_disabled()
+    expect(page.locator('#form-delete-code .code-timer')).to_contain_text('Code expires in')
+    assert POSTS == ['delete:check', 'reauth:send']
