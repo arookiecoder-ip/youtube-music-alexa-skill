@@ -255,7 +255,8 @@
     const removeLink = el('totp-remove-link');
     if (removeLink) removeLink.hidden = !data.totp_enabled;
     const title = el('totp-begin-title');
-    if (title) title.textContent = data.totp_enabled ? 'Use a new authenticator app' : 'Turn it on';
+    if (title) title.textContent = 'Verify your email';
+    if (el('begin-email-address')) el('begin-email-address').textContent = data.email || '';
     const begin = el('totp-begin-submit');
     if (begin) begin.textContent = data.totp_enabled ? 'Set up the new app' : 'Start setup';
 
@@ -483,8 +484,9 @@
     const label = button.dataset.restLabel || button.textContent;
     button.dataset.restLabel = label;
     const parent = button.closest('form') || button.closest('.dialog-body');
-    let hint = parent && parent.querySelector('.code-timer');
-    if (!hint && parent) { hint = document.createElement('p'); hint.className = 'field-help code-timer'; parent.appendChild(hint); }
+    const compact = button.id === 'reauth-send-begin' || button.id === 'reauth-resend-begin';
+    let hint = !compact && parent && parent.querySelector('.code-timer');
+    if (!compact && !hint && parent) { hint = document.createElement('p'); hint.className = 'field-help code-timer'; parent.appendChild(hint); }
     if (codeTimers.has(button)) clearInterval(codeTimers.get(button));
     const tick = () => {
       const now = Date.now() / 1000;
@@ -513,6 +515,7 @@
     while (node) { const next = node.nextSibling; details.appendChild(node); node = next; }
     form.appendChild(details);
     const progress = document.createElement('p'); progress.className = 'flow-progress'; progress.textContent = labels[0];
+    if (id === 'form-totp-begin') progress.hidden = true;
     form.prepend(progress);
     const gate = document.createElement('button'); gate.type = 'button'; gate.className = 'primary'; gate.textContent = 'Verify and continue';
     form.insertBefore(gate, details);
@@ -567,7 +570,7 @@
     const err = el('err-totp_current_password');
     const submit = begin.querySelector('[type=submit]');
     if (label && submit) { begin.insertBefore(label, submit); if (err) begin.insertBefore(err, submit); }
-    stagedForm('form-totp-begin', 'label:has(input[name=current_password])', form => call('/api/account/code/check', {purpose: 'reauth', code: value(form, 'email_code')}), ['Step 1 of 3: Verify your email', 'Step 2 of 3: Confirm your password']);
+    stagedForm('form-totp-begin', 'label:has(input[name=current_password])', form => call('/api/account/code/check', {purpose: 'reauth', code: value(form, 'email_code')}), ['', '']);
   }
 
   // ---- password, changed with the one you have
@@ -685,8 +688,18 @@
     load();
   });
 
-  on('reauth-send-begin', 'click', (event) =>
-    sendMailboxCode(event.currentTarget, 'totp-begin-note', 'begin_email_code'));
+  async function sendBeginCode(event) {
+    const result = await post('/api/account/email/reauth', {}, {}, event.currentTarget, null, 'totp-begin-note');
+    if (!result) return;
+    inlineNote('totp-begin-note', '', '');
+    shown('reauth-send-begin', false);
+    shown('begin-otp-fields', true);
+    startCodeTimer(el('reauth-resend-begin'), result);
+    toast(result.note || 'OTP sent');
+    el('begin_email_code').focus();
+  }
+  on('reauth-send-begin', 'click', sendBeginCode);
+  on('reauth-resend-begin', 'click', sendBeginCode);
 
   bind('form-totp-begin', async (form, button) => {
     const result = await post('/api/account/totp/begin', {

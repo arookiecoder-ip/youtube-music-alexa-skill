@@ -3,7 +3,7 @@
 {% block page_title %}Create an account{% endblock %}
 {% block brand_sub %}Create an account{% endblock %}
 {% block card %}
-<div class="signup-flow" data-signup-flow>
+<div class="signup-flow" data-signup-flow data-signup-step="{{ signup_step }}" data-masked-email="{{ masked_email|default('') }}">
   <p class="step-hint" aria-label="Signup progress">{% if signup_step == 'email' %}1 of 3 · Email{% elif signup_step == 'code' %}2 of 3 · Verify email{% else %}3 of 3 · Account details{% endif %}</p>
   <form method="post" action="/signup" class="step active" {% if signup_step == 'details' %}data-password-form{% endif %}>
     <input type="hidden" name="_csrf" value="{{ csrf_form }}">
@@ -31,19 +31,23 @@
     {% endif %}
   </form>
   {% if signup_step == 'code' %}
-  <form method="post" action="/signup">
-    <input type="hidden" name="_csrf" value="{{ csrf_form }}">
-    <input type="hidden" name="step" value="resend">
-    <p class="step-hint">You can request another code after 60 seconds.</p>
-    <button type="submit">Send a new code</button>
-  </form>
+  <p class="step-hint">You can request another code after 60 seconds.</p>
   {% endif %}
   {% if signup_step != 'email' %}
-  <form method="post" action="/signup">
-    <input type="hidden" name="_csrf" value="{{ csrf_form }}">
-    <input type="hidden" name="step" value="restart">
-    <button type="submit">Use a different email</button>
-  </form>
+  <div class="signup-actions">
+    {% if signup_step == 'code' %}
+    <form method="post" action="/signup">
+      <input type="hidden" name="_csrf" value="{{ csrf_form }}">
+      <input type="hidden" name="step" value="resend">
+      <button type="submit">Send a new code</button>
+    </form>
+    {% endif %}
+    <form method="post" action="/signup">
+      <input type="hidden" name="_csrf" value="{{ csrf_form }}">
+      <input type="hidden" name="step" value="restart">
+      <button type="submit">Use a different email</button>
+    </form>
+  </div>
   {% endif %}
 </div>
 {% endblock %}
