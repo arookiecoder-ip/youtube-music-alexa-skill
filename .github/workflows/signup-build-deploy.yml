@@ -90,7 +90,7 @@ jobs:
         run: |
           set -eu
           test "$(curl -A 'Mozilla/5.0 MusicBox-CI/1.0' -sS -o /dev/null -w '%{http_code}' https://alexa.synthora.in/health/ready)" = 200
-          test "$(curl -A 'Mozilla/5.0 MusicBox-CI/1.0' -sS -o /dev/null -w '%{http_code}' https://alexa.synthora.in/alexa/proxy/)" = 401
+          test "$(curl -A 'Mozilla/5.0 MusicBox-CI/1.0' -sS -o /dev/null -w '%{http_code}' https://alexa.synthora.in/alexa/proxy_authorize/)" = 401
       - name: Remove ephemeral SSH private key
         if: always()
         run: rm -f "$RUNNER_TEMP/deploy_key"

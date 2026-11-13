@@ -60,3 +60,11 @@ uses the same setting because the hardened container profile cannot create
 Chromium's additional sandbox on the hosted runner. The non-root service,
 container capability restrictions, authenticated attempt lease and private
 network boundary remain enabled. This does not claim a working Chromium sandbox.
+
+The former mirrored Amazon proxy URL (`/alexa/proxy/`) receives Cloudflare's
+suspected-phishing interstitial on the production hostname. Current web and
+native account flows use `/accounts/amazon` and the authenticated
+`/alexa/form_login/` API instead. The deployment probe checks the proxy's
+`/alexa/proxy_authorize/` authorization endpoint; it does not bypass or disable
+Cloudflare's interstitial. Old proxy bookmarks should be replaced with Account →
+Services. Removing Cloudflare's warning itself requires Cloudflare's review.
