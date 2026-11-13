@@ -3,7 +3,7 @@ import os
 from pathlib import Path
 import shlex
 
-_CONFIG_NAMES = frozenset(('MUSICBOX_SERVER_URL', 'MUSICBOX_EMAIL', 'MUSICBOX_ALEXA_TOKEN'))
+_CONFIG_NAMES = frozenset(('MUSICBOX_SERVER_URL', 'MUSICBOX_EMAIL', 'MUSICBOX_ACCOUNT_ID', 'MUSICBOX_ALEXA_TOKEN'))
 
 
 def _read_private_env():
@@ -41,6 +41,7 @@ def _setting(name):
 
 MUSICBOX_SERVER_URL = _setting('MUSICBOX_SERVER_URL')
 MUSICBOX_EMAIL = _setting('MUSICBOX_EMAIL')
+MUSICBOX_ACCOUNT_ID = _setting('MUSICBOX_ACCOUNT_ID')
 MUSICBOX_ALEXA_TOKEN = _setting('MUSICBOX_ALEXA_TOKEN')
 DEFAULT_API_URL = MUSICBOX_SERVER_URL
 # All deployments use scoped credentials and isolated persistence.

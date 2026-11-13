@@ -36,9 +36,9 @@ class AlexaAccess:
                     and not user['must_change_password'])
 
     @staticmethod
-    def eligible(user):
+    def eligible(user, existing=False):
         return bool(user and user.get('alexa_enabled') and user['status'] == 'active'
-            and not user['must_change_password'] and user.get('email_verified') and user.get('email'))
+            and (existing or not user['must_change_password']) and user.get('email_verified') and user.get('email'))
 
     def set_enabled(self, user_id, enabled):
         with self.db.connect() as conn:
@@ -72,9 +72,9 @@ class AlexaAccess:
     def current(self, token_id):
         row = self.db.fetchone('SELECT * FROM alexa_access_tokens WHERE id=?', (token_id,))
         user = self.accounts.get_user(row['user_id']) if row else None
-        if not row or row['revoked_at'] or row['expires_at'] <= time.time() or not self.eligible(user):
+        if not row or row['revoked_at'] or row['expires_at'] <= time.time() or not self.eligible(user, existing=True):
             raise AccessDenied()
-        if row['security_version'] != user['security_version'] or row['email'] != user['email'].strip().casefold():
+        if row['security_version'] != user['security_version']:
             raise AccessDenied()
         return user, dict(row)
 
@@ -183,7 +183,11 @@ class AlexaAccess:
         user, token = self.current(raw.split('.')[0])
         if not hmac.compare_digest(token['token_hash'], hashlib.sha256(raw.encode()).hexdigest()):
             raise AccessDenied()
-        if headers.get('X-MusicBox-Email', '').strip().casefold() != token['email']:
+        account_id = headers.get('X-MusicBox-Account-Id', '').strip()
+        if account_id:
+            if not hmac.compare_digest(account_id.encode('utf-8'), str(user['id']).encode('utf-8')):
+                raise AccessDenied('musicbox_account_mismatch')
+        elif headers.get('X-MusicBox-Email', '').strip().casefold() not in {token['email'], user['email'].strip().casefold()}:
             raise AccessDenied('musicbox_email_mismatch')
         linked = self.linked_amazon(user['id'])
         endpoint = headers.get('X-Alexa-Api-Endpoint', '').rstrip('/')

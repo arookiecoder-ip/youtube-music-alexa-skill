@@ -11,6 +11,17 @@ from mobile_devices import MobileDevices
 
 
 class MobileDeviceRoutesTests(OutputRoutesTests):
+    def test_browser_presence_requires_focus_or_existing_audio(self):
+        self.device('online', owner='browser-tab', kind='browser', foreground=False, playing=False)
+        self.assertNotIn('browser-tab', [d['id'] for d in self.client.get('/api/app/devices/').json['devices']])
+        self.device('visibility', owner='browser-tab', foreground=True, playing=False, visibility_revision=1)
+        self.assertIn('browser-tab', [d['id'] for d in self.client.get('/api/app/devices/').json['devices']])
+        self.device('visibility', owner='browser-tab', foreground=False, playing=True, visibility_revision=2)
+        self.assertIn('browser-tab', [d['id'] for d in self.client.get('/api/app/devices/').json['devices']])
+        self.device('visibility', owner='browser-tab', foreground=False, playing=False, visibility_revision=3)
+        self.assertNotIn('browser-tab', [d['id'] for d in self.client.get('/api/app/devices/').json['devices']])
+        self.assertIn('browser-tab', [d['id'] for d in self.registry.list(include_unavailable=True)])
+
     def test_last_track_clear_requires_current_phone_ownership(self):
         claim = self.output_request('claim').json
         self.state.update(queue=[track(A)], video_id=A, playing=True)
@@ -675,14 +686,13 @@ class MobileDeviceRoutesTests(OutputRoutesTests):
             self.assertFalse(result['default_selected'])
             self.assertEqual(result['playback_output'],'alexa')
 
-    def test_unreachable_playing_echo_cannot_grant_phone_audio_without_stop_confirmation(self):
+    def test_unreachable_echo_does_not_block_explicit_phone_selection(self):
         self.output.serial='echo-one'
         self.state.update(video_id=A,playing=True)
         self.command.return_value='offline'
         self.command.side_effect=None
-        with self.assertRaises(self.namespace['OutputConflict']):
-            self.namespace['_pause_echo_for_mobile']('echo-one')
-        self.assertTrue(self.state['playing'])
+        self.namespace['_pause_echo_for_mobile']('echo-one')
+        self.assertFalse(self.state['playing'])
 
     def test_idle_closed_browser_still_selects_an_open_foreground_phone(self):
         self.device('online',owner='browser-one')

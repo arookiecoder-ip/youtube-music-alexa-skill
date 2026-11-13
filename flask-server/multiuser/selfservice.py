@@ -1323,8 +1323,7 @@ def build_selfservice_blueprint(mu) -> Blueprint:
             {
                 "ok": True,
                 "message": (
-                    "Password changed. Other devices were signed out; this one stays "
-                    "signed in. Turn two-factor on while you are here."
+                    "Password changed. Your devices stay signed in."
                 ),
             }
         )
@@ -1416,7 +1415,7 @@ def build_selfservice_blueprint(mu) -> Blueprint:
                 fields={"code": "Wrong, used, or expired. Send a new code and try once."},
             )
         sign_out_others = body.get("sign_out_others")
-        sign_out_others = True if sign_out_others is None else bool(sign_out_others)
+        sign_out_others = False if sign_out_others is None else bool(sign_out_others)
         try:
             mu.accounts.reset_password_with_token(
                 user["id"],
@@ -1654,9 +1653,9 @@ def build_selfservice_blueprint(mu) -> Blueprint:
                 "user": verified or mu.accounts.get_user(user["id"]),
                 "email_verified": True,
                 "verification_pending": False,
-                "sign_in_required": bool(user.get("pending_email")),
-                "redirect_url": "/login/?email_changed=1" if user.get("pending_email") else "",
-                "message": ("Email updated. Sign in again with your new email address." if user.get("pending_email") else f"{_mask(user.get('email') or '')} is confirmed."),
+                "sign_in_required": False,
+                "redirect_url": "",
+                "message": ("Email updated. Your devices stay signed in." if user.get("pending_email") else f"{_mask(user.get('email') or '')} is confirmed."),
             }
         )
 

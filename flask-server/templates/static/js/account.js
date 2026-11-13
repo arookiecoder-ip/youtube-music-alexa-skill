@@ -12,6 +12,13 @@
 
   const CSRF = document.body.dataset.csrf || '';
   const el = (id) => document.getElementById(id);
+  el('copy-account-id')?.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(el('account-id').textContent.trim());
+      el('copy-account-id').textContent = 'Copied';
+      setTimeout(() => { el('copy-account-id').textContent = 'Copy ID'; }, 2000);
+    } catch (_) { el('copy-account-id').textContent = 'Select ID to copy'; }
+  });
 
   // ------------------------------------------------------------------ chrome
   // A result belongs to the section that produced it: a message about a bad
@@ -618,7 +625,7 @@
       code: value(form, 'code').replace(/[^0-9]/g, ''),
       password: value(form, 'password'),
       confirm_password: value(form, 'confirm_password'),
-      sign_out_others: tick ? tick.checked : true,
+      sign_out_others: tick ? tick.checked : false,
     }, {
       code: 'err-reset_code',
       password: 'err-reset_password',

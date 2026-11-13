@@ -8,7 +8,7 @@ Copy `lambda/.env.example` to a private `lambda/.env` and fill in these three se
 
 ```dotenv
 MUSICBOX_SERVER_URL=https://your-server.example
-MUSICBOX_EMAIL=your-verified-musicbox-email@example.com
+MUSICBOX_ACCOUNT_ID=your-musicbox-account-id
 MUSICBOX_ALEXA_TOKEN=the-token-issued-by-your-administrator
 ```
 
@@ -16,7 +16,7 @@ No application ID or server-wide API key is required in this configuration. The 
 
 Use `skill-package-multiuser/skill.json` and its interaction models. Enable **Customer Permissions → Email Address** (`alexa::profile:email:read`) and grant that permission in the Alexa app for the deployed development skill. Retain the AudioPlayer interface. Private development skills are usable by the developer's eligible Amazon account/devices; distributing the source does not make one private skill available to every Amazon customer.
 
-The server asks Amazon's Customer Profile API for the account email using the current request's `context.System.apiAccessToken`. It never authorizes a claim such as “my Amazon email is X” on its own. The configured MUSICBOX_EMAIL must match the verified Music Box account associated with the admin token. Separately, the returned Amazon profile email must match the canonical Amazon email verified from the authenticated Amazon session connected in that user’s panel. The two emails can differ. A typed login identifier is never accepted as Amazon identity proof. The server cannot independently inspect the Developer Console owner’s login; create/test the private skill in the same Amazon account as the Echo and panel connection. Missing permission, missing identity, unavailable profile service or a mismatch denies playback. The profile is Amazon's active default Alexa profile; it does not identify the human currently speaking.
+The server asks Amazon's Customer Profile API for the account email using the current request's `context.System.apiAccessToken`. It never authorizes a claim such as “my Amazon email is X” on its own. The configured MUSICBOX_ACCOUNT_ID must match the stable Music Box account ID associated with the admin token. Copy it from Account settings; changing the recovery email does not change this ID. Separately, the returned Amazon profile email must match the canonical Amazon email verified from the authenticated Amazon session connected in that user’s panel. The two emails can differ. A typed login identifier is never accepted as Amazon identity proof. The server cannot independently inspect the Developer Console owner’s login; create/test the private skill in the same Amazon account as the Echo and panel connection. Missing permission, missing identity, unavailable profile service or a mismatch denies playback. The profile is Amazon's active default Alexa profile; it does not identify the human currently speaking.
 
 ## Set up through the Alexa Developer Console
 

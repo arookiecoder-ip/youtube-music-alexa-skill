@@ -85,7 +85,6 @@ class AlexaAccessTokenTests(SecondFactorDoorTestBase):
 
     def test_restrictions_email_password_expiry_and_revoke_retire_credentials(self):
         for sql in ("UPDATE users SET status='disabled' WHERE id=?",
-                    "UPDATE users SET must_change_password=1 WHERE id=?",
                     "UPDATE users SET email_verified=0 WHERE id=?"):
             with self.subTest(sql=sql):
                 self.layer.db.execute(sql, (self.user['id'],))
@@ -174,7 +173,7 @@ class AlexaAccessTokenTests(SecondFactorDoorTestBase):
         with mock.patch.object(self.server, '_owner_row_read', [0.0, '']):
             self.assertEqual(self.server._player_identity_for_user_id(second['id'], 'owner'), 'user:' + second['id'])
 
-    def test_account_email_change_and_password_change_invalidate_token_and_stream(self):
+    def test_account_email_change_and_password_change_preserve_token_and_stream_until_revoked(self):
         for field, value in (('email', 'changed@example.test'), ('password_hash', 'changed-hash')):
             token = self.access.rotate(self.user['id'])
             headers = dict(self.headers, Authorization='Bearer ' + token)
@@ -182,8 +181,8 @@ class AlexaAccessTokenTests(SecondFactorDoorTestBase):
             user, credential = self.access.authenticate(headers)
             cap = self.layer.alexa_identity.stream_token(user['id'], 'AAAAAAAAAAA', credential)
             self.layer.db.execute('UPDATE users SET ' + field + '=? WHERE id=?', (value, self.user['id']))
-            self.assertEqual(self.identity(headers).status_code, 403)
-            self.assertIsNone(self.layer.alexa_identity.stream_user(cap, 'AAAAAAAAAAA'))
+            self.assertEqual(self.identity(headers).status_code, 200)
+            self.assertIsNotNone(self.layer.alexa_identity.stream_user(cap, 'AAAAAAAAAAA'))
             self.layer.db.execute('UPDATE users SET email=? WHERE id=?', (self.user['email'], self.user['id']))
 
     def test_amazon_timeouts_and_invalid_profile_json_fail_closed(self):

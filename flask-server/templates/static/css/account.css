@@ -1100,3 +1100,8 @@ details.reveal > .reveal-body { margin-top: var(--space-2); }
 @media (prefers-reduced-motion: reduce) {
   #connect-setup, #connect-steps, #connect-working { animation: none; }
 }
+
+#account-id { overflow-wrap: anywhere; user-select: all; min-width: 0; flex: 1; }
+#copy-account-id { background: transparent; color: var(--text); font: inherit; white-space: nowrap; cursor: pointer; }
+
+.account-id-line .prov-cell { justify-content: flex-start; text-align: left; }

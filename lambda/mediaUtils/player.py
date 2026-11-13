@@ -197,6 +197,7 @@ def skill_identity_headers(handler_input):
     headers = {
         'Authorization': 'Bearer ' + data.MUSICBOX_ALEXA_TOKEN,
         'X-MusicBox-Email': data.MUSICBOX_EMAIL,
+        'X-MusicBox-Account-Id': getattr(data, 'MUSICBOX_ACCOUNT_ID', ''),
         'X-Alexa-User-Id': user or '', 'X-Alexa-Device-Id': device or '',
         'X-Alexa-Profile-Token': getattr(system, 'api_access_token', '') or '',
         'X-Alexa-Api-Endpoint': getattr(system, 'api_endpoint', '') or '',
@@ -238,7 +239,8 @@ def _authorization_error(body):
     messages = {
         'amazon_link_required': 'Connect your Amazon account in the Music Box user panel first.',
         'amazon_email_mismatch': 'Use the same Amazon account for this Echo and the Amazon connection in your Music Box user panel.',
-        'musicbox_email_mismatch': 'Set MUSICBOX_EMAIL to the verified Music Box email belonging to your token.',
+        'musicbox_account_mismatch': 'Set MUSICBOX_ACCOUNT_ID to the Music Box account ID belonging to your token.',
+        'musicbox_email_mismatch': 'Set MUSICBOX_ACCOUNT_ID to your account ID from Music Box Account settings.',
         'amazon_permission_required': 'Allow email access for this skill in the Alexa app.',
         'amazon_profile_unavailable': 'Amazon account verification is temporarily unavailable. Try again later.',
         'amazon_link_changed': 'Your Amazon connection changed. Reconnect Amazon and try again.',

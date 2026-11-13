@@ -385,7 +385,7 @@ class ForgotPasswordTests(SelfServiceTestBase):
         after = glob.glob(os.path.join(self.outbox, "*.eml"))
         self.assertEqual(len(after), before + 1, "only the real address gets a link")
 
-    def test_the_reset_code_sets_a_password_and_kills_other_sessions(self):
+    def test_the_reset_code_sets_a_password_and_keeps_other_sessions(self):
         self.register("player1")
         self.verify_by_code()
         user = self.user_row("player1")
@@ -406,7 +406,7 @@ class ForgotPasswordTests(SelfServiceTestBase):
         signed_in, error = self.accounts.authenticate(
             "player1", NEW_PASSWORD, "127.0.0.1", "pytest")
         self.assertIsNotNone(signed_in, error)
-        self.assertIsNone(self.accounts.validate_session(other)[0], "other devices must die")
+        self.assertIsNotNone(self.accounts.validate_session(other)[0], "sessions require explicit revocation")
 
     def test_a_reset_code_works_once(self):
         self.register("player1")
@@ -508,15 +508,15 @@ class AccountPageTests(SelfServiceTestBase):
         self.assertEqual(response.status_code, 403)
         self.assertIn("current_password", response.get_json()["error"]["fields"])
 
-    def test_password_change_keeps_this_browser_and_drops_the_others(self):
+    def test_password_change_keeps_this_browser_and_the_others(self):
         other = self.accounts.create_session(self.user, ip="127.0.0.1", user_agent="stolen-laptop")
         raw = self.sign_in(self.user)
         response = self.client.post("/api/account/password", json={
             "current_password": PASSWORD, "password": NEW_PASSWORD,
             "confirm_password": NEW_PASSWORD}, headers=self.json_headers())
         self.assertEqual(response.status_code, 200, response.get_data(as_text=True)[:300])
-        self.assertIsNone(self.accounts.validate_session(other)[0],
-                          "a stolen password must not keep a stranger's session alive")
+        self.assertIsNotNone(self.accounts.validate_session(other)[0],
+                             "password changes do not implicitly revoke sessions")
         self.assertIsNotNone(self.accounts.validate_session(raw)[0])
         self.assertEqual(self.client.get("/api/account").status_code, 200)
 
@@ -556,13 +556,13 @@ class AccountPageTests(SelfServiceTestBase):
         self.assertIsNotNone(self.accounts.validate_session(other)[0])
         self.assertEqual(self.client.get("/api/account").status_code, 200)
 
-    def test_the_popup_reset_signs_out_other_devices_unless_told_not_to(self):
+    def test_the_popup_reset_can_explicitly_sign_out_other_devices(self):
         other = self.accounts.create_session(self.user, ip="127.0.0.1", user_agent="other")
         raw = self.sign_in(self.user)
         self.client.post("/api/account/password/reset/send", json={}, headers=self.json_headers())
         done = self.client.post("/api/account/password/reset", json={
             "code": self.newest_code("reset"), "password": NEW_PASSWORD,
-            "confirm_password": NEW_PASSWORD}, headers=self.json_headers())
+            "confirm_password": NEW_PASSWORD, "sign_out_others": True}, headers=self.json_headers())
         self.assertEqual(done.status_code, 200, done.get_data(as_text=True)[:300])
         self.assertIn("Every other device", done.get_json()["message"])
         self.assertIsNone(self.accounts.validate_session(other)[0])

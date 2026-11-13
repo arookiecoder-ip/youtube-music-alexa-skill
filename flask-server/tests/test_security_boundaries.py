@@ -32,12 +32,10 @@ class AccountBoundaries(SelfServiceTestBase):
         self.accounts.db.execute('UPDATE users SET totp_last_step=0 WHERE id=?', (self.user['id'],))
         return secret
 
-    def test_password_change_invalidates_pending_credential_version(self):
+    def test_password_change_preserves_existing_access_version(self):
         version = self.accounts.security_version(self.user['id'])
         self.accounts.change_own_password(self.user, self.password, 'Changed!Passw0rd')
-        self.assertGreater(self.accounts.security_version(self.user['id']), version)
-        with self.assertRaises(AccountError):
-            self.accounts.create_session(self.user)
+        self.assertEqual(self.accounts.security_version(self.user['id']), version)
 
     def test_old_mailbox_proof_is_required_by_service_and_alternate_route(self):
         with self.assertRaises(AccountError):

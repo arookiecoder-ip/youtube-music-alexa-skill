@@ -41,6 +41,7 @@ class OutputRoutesTests(PhoneQueueTests):
                     'video_id': self.state['video_id'], 'token': self.state.get('alexa_token', '')})
         self.command = Mock(side_effect=stopped)
         self.namespace['_HANDOFF_PAUSE_TIMEOUT'] = .3
+        self.namespace['_known_alexa_auth_failure'] = Mock(return_value=None)
         self.namespace.update(alexa_remote=SimpleNamespace(remote=SimpleNamespace(command=self.command)),
                               _get_now_playing=lambda: dict(self.state),
                               _cancel_pending_dispatch=Mock(), _bump_playback_generation=Mock())
@@ -67,29 +68,51 @@ class OutputRoutesTests(PhoneQueueTests):
         self.command.assert_called_once_with('echo-one', 'pause')
         self.assertEqual(self.client.get('/api/app/output/').json['playback_output'], 'phone')
 
-    def test_echo_pause_failure_preserves_alexa_state(self):
+    def test_revoked_skill_credential_prioritizes_target_without_spoken_command(self):
+        self.namespace['_known_alexa_auth_failure'].return_value = {'code': 'alexa_access_denied'}
+        self.assertEqual(self.output_request('claim').status_code, 200)
+        self.command.assert_not_called()
+        self.assertEqual(self.output.snapshot()['playback_output'], 'phone')
+
+    def test_handoff_uses_bounded_pause_and_allows_target_after_timeout(self):
+        bounded = Mock(return_value='Alexa did not confirm the pause')
+        self.namespace['alexa_remote'].remote.handoff_pause = bounded
+        self.assertEqual(self.output_request('claim').status_code, 200)
+        bounded.assert_called_once_with('echo-one')
+        self.command.assert_not_called()
+
+    def test_echo_pause_failure_prioritizes_selected_phone(self):
         self.command.side_effect = None
         self.command.return_value = 'offline'
         result = self.output_request('claim')
-        self.assertEqual(result.status_code, 409)
-        self.assertEqual(result.json['playback_output'], 'alexa')
-        self.assertTrue(self.state['playing'])
+        self.assertEqual(result.status_code, 200)
+        self.assertEqual(result.json['playback_output'], 'phone')
+        self.assertFalse(self.state['playing'])
 
-    def test_command_acceptance_without_stopped_event_never_grants_phone_audio(self):
+    def test_missing_stop_confirmation_does_not_trap_playback(self):
         self.command.side_effect = None
         self.command.return_value = None
         response = self.output_request('claim')
-        self.assertEqual(response.status_code, 409)
-        self.assertEqual(self.output.snapshot()['playback_output'], 'alexa')
-        self.assertTrue(self.state['playing'])
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.output.snapshot()['playback_output'], 'phone')
+        self.assertFalse(self.state['playing'])
 
-    def test_a_cached_stop_from_before_the_request_never_releases_audio(self):
+    def test_stale_stop_does_not_prevent_target_priority(self):
         self.state['_alexa_stop_ack'] = {'received_at': time.monotonic()+10_000,
             'serial':'echo-one', 'video_id':self.state['video_id'], 'token':''}
         self.command.side_effect = None
         self.command.return_value = None
+        self.assertEqual(self.output_request('claim').status_code, 200)
+        self.assertEqual(self.output.snapshot()['playback_output'], 'phone')
+
+    def test_failed_pause_cannot_steal_a_newer_song(self):
+        def changed(*args):
+            self.state['video_id'] = B
+            return 'offline'
+        self.command.side_effect = changed
         self.assertEqual(self.output_request('claim').status_code, 409)
         self.assertEqual(self.output.snapshot()['playback_output'], 'alexa')
+        self.assertEqual(self.state['video_id'], B)
 
     def test_new_echo_selection_cannot_be_released_by_the_old_echo_stop(self):
         self.output.serial = 'echo-one'
@@ -102,11 +125,11 @@ class OutputRoutesTests(PhoneQueueTests):
         self.assertEqual(self.output.snapshot()['playback_output'], 'alexa')
         self.assertEqual(self.output.snapshot()['output_serial'], 'echo-two')
 
-    def test_optimistic_paused_state_is_not_a_stopped_confirmation(self):
+    def test_paused_source_allows_target_priority(self):
         self.command.side_effect = lambda *args: self.state.update(playing=False, playback_processing=False)
         response = self.output_request('claim')
-        self.assertEqual(response.status_code, 409)
-        self.assertEqual(self.output.snapshot()['playback_output'], 'alexa')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.output.snapshot()['playback_output'], 'phone')
 
     def test_web_handoff_waits_for_ack_and_invalidates_phone_writes(self):
         claim = self.output_request('claim').json
@@ -183,12 +206,12 @@ class OutputRoutesTests(PhoneQueueTests):
         self.assertEqual(responses[0].status_code, 200)
         self.assertEqual(responses[0].json['playback_output'], 'phone')
 
-    def test_stop_from_a_different_playback_instance_cannot_release_handoff(self):
+    def test_old_stop_does_not_block_explicit_target_selection(self):
         self.state['alexa_token'] = 'current-instance'
         self.command.side_effect = lambda *args: self.state.update(_alexa_stop_ack={
             'received_at':time.monotonic(), 'serial':'echo-one', 'video_id':self.state['video_id'], 'token':'old-instance'})
-        self.assertEqual(self.output_request('claim').status_code, 409)
-        self.assertEqual(self.output.snapshot()['playback_output'], 'alexa')
+        self.assertEqual(self.output_request('claim').status_code, 200)
+        self.assertEqual(self.output.snapshot()['playback_output'], 'phone')
 
     def run_real_web_play(self, error=None):
         self.output_request('claim')

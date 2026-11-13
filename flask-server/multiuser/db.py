@@ -415,6 +415,15 @@ class Database:
                     attempts INTEGER NOT NULL DEFAULT 0, verified INTEGER NOT NULL DEFAULT 0)""")
                 conn.execute("CREATE INDEX idx_signup_challenges_email ON signup_challenges(email)")
                 conn.execute("INSERT INTO multiuser_schema_migrations VALUES (12, ?)", (time.time(),))
+            if 13 not in applied:
+                # Credentials identify future sign-ins; existing grants are revoked
+                # only by explicit revocation or account authorization changes.
+                conn.execute("DROP TRIGGER IF EXISTS users_security_version")
+                conn.execute("""CREATE TRIGGER users_security_version AFTER UPDATE OF role, status ON users
+                    WHEN OLD.role IS NOT NEW.role OR OLD.status IS NOT NEW.status
+                    BEGIN UPDATE users SET security_version = security_version + 1,
+                        totp_pending_enc = '', totp_pending_at = 0, totp_pending_session = '' WHERE id = NEW.id; END""")
+                conn.execute("INSERT INTO multiuser_schema_migrations VALUES (13, ?)", (time.time(),))
             now = time.time()
             # Bound the audit journal so a long-lived install cannot grow it
             # without limit. 90 days is intentionally conservative.

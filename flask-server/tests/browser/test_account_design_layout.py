@@ -25,3 +25,13 @@ def test_user_directory_uses_shared_theme_and_no_admin_role(admin_page):
     expect(page.locator('#user-role option')).to_have_text(['All roles','owner','user'])
     expect(page.get_by_role('link',name='Create user')).to_be_visible()
     page.screenshot(path='/tmp/musicbox-redesign/admin-users.png',full_page=True)
+
+
+def test_account_id_can_be_copied_without_exposing_credentials(guided_page):
+    page,case,user,origin=guided_page
+    page.context.grant_permissions(['clipboard-read', 'clipboard-write'])
+    page.goto(origin+'/account')
+    expect(page.locator('#account-id')).to_have_text(user['id'])
+    page.locator('#copy-account-id').click()
+    expect(page.locator('#copy-account-id')).to_have_text('Copied')
+    assert page.evaluate('navigator.clipboard.readText()') == user['id']

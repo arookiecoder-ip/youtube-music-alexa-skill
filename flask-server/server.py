@@ -3635,11 +3635,15 @@ def handle_output_conflict(error):
                     **_playback_output.snapshot()}), 409
 
 
-_HANDOFF_PAUSE_TIMEOUT = 6.0
+_HANDOFF_PAUSE_TIMEOUT = 0.4
 
 
 def _pause_echo_for_handoff(serial):
-    """A command acknowledgment is not evidence that the source is silent."""
+    """Try to stop the source, without trapping playback on an unavailable Echo."""
+    if getattr(alexa_remote.remote, "connection_state", None) is False:
+        return None
+    if _get_now_playing().get("_alexa_auth_blocked") or _known_alexa_auth_failure():
+        return None
     started = time.monotonic()
     before = _playback_output.snapshot()
     with _np_lock:
@@ -3647,9 +3651,12 @@ def _pause_echo_for_handoff(serial):
         token = _now_playing.get('alexa_token') or ''
         previous_stop = _now_playing.get('_alexa_stop_ack')
         intent = _now_playing.get('alexa_intent_at')
-    error = alexa_remote.remote.command(serial, 'pause')
-    if error:
-        return error
+    pause = getattr(alexa_remote.remote, 'handoff_pause', None)
+    try:
+        error = pause(serial) if pause else alexa_remote.remote.command(serial, 'pause')
+    except Exception:
+        logger.warning('Alexa source pause failed during output handoff', exc_info=True)
+        error = 'Alexa could not confirm the source pause.'
     deadline = time.monotonic() + _HANDOFF_PAUSE_TIMEOUT
     while True:
         output = _playback_output.snapshot()
@@ -3665,10 +3672,12 @@ def _pause_echo_for_handoff(serial):
         if (output['output_token'] != before['output_token']
                 or output.get('output_serial') != before.get('output_serial') or changed):
             return 'Playback changed while waiting for Alexa to stop. Retry the switch.'
+        if error:
+            return error
         if matching:
             return None
         if time.monotonic() >= deadline:
-            return 'Alexa has not confirmed it stopped. Playback stayed on Alexa; retry the switch.'
+            return None
         time.sleep(.05)
 
 
@@ -3693,14 +3702,13 @@ def app_playback_output():
             if not serial:
                 raise OutputConflict('Choose an Alexa device before moving active playback to the phone.')
             _cancel_pending_dispatch(serial)
-            if getattr(alexa_remote.remote, 'connection_state', None) is False:
-                raise OutputConflict('Reconnect Amazon before moving active Alexa playback.')
             error = _pause_echo_for_handoff(serial)
-            if error:
+            if error and error.startswith('Playback changed'):
                 raise OutputConflict(error)
         result = _playback_output.phone(owner, pause_echo, str(body.get('serial') or ''))
         with _np_lock:
             _reset_progress(_computed_position_ms())
+            _now_playing.pop('playback_error', None)
             _now_playing.update(playing=False, playback_confirmed=True, playback_processing=False)
             _now_playing['playback_revision'] = int(_now_playing.get('playback_revision', 0)) + 1
             _now_playing['updated_at'] = time.time()
@@ -3746,12 +3754,10 @@ def _pause_echo_for_mobile(serial):
     if not serial:
         raise OutputConflict('Choose an Alexa device first.')
     _cancel_pending_dispatch(serial)
-    if getattr(alexa_remote.remote, 'connection_state', None) is False:
-        raise OutputConflict('Reconnect Amazon before moving active Alexa playback.')
     error = _pause_echo_for_handoff(serial)
-    if error:
+    if error and error.startswith('Playback changed'):
         raise OutputConflict(error)
-    # Only the authenticated, matching PlaybackStopped callback releases audio.
+    # Target selection takes priority when the source cannot confirm a stop.
     with _np_lock:
         _reset_progress(_computed_position_ms())
         _now_playing.update(playing=False, playback_confirmed=True, playback_processing=False)
@@ -3763,7 +3769,7 @@ def _finish_browser_close(owner, token):
         return
     _reconcile_mobile_output(quiet=True)
     # Re-registration during refresh preserves this tab's silent selection.
-    if owner not in {device['id'] for device in _mobile_devices.list()}:
+    if owner not in {device['id'] for device in _mobile_devices.list(include_unavailable=True)}:
         _playback_output.close_phone(owner)
     _notify_sse()
 
@@ -3772,7 +3778,7 @@ def _reconcile_mobile_output(closed_owner='', quiet=False):
     output = _playback_output.snapshot()
     if output['playback_output'] != 'phone':
         return
-    online = {d['id'] for d in _mobile_devices.list()}
+    online = {d['id'] for d in _mobile_devices.list(include_unavailable=True)}
     owner, controller = output['output_owner'], output['output_controller']
     with _np_lock:
         closing = _now_playing.get('_browser_closing')
@@ -3871,7 +3877,7 @@ def app_mobile_devices():
     action = body.get('action')
     try:
         if action == 'visibility':
-            return jsonify(ok=_mobile_devices.visibility(owner, session_id, body.get('foreground'), body.get('visibility_revision')))
+            return jsonify(ok=_mobile_devices.visibility(owner, session_id, body.get('foreground'), body.get('visibility_revision'), body.get('playing')))
         if action == 'foreground':
             # A foreground visit is a preference change, never a play command.
             # Keep active/buffering audio and recently paused sessions elsewhere.
@@ -3907,7 +3913,7 @@ def app_mobile_devices():
                 _notify_sse()
             return jsonify(default_selected=selected, now_playing=snapshot, **result)
         if action == 'online':
-            commands = _mobile_devices.online(owner, session_id, body.get('name'), body.get('ack', []), body.get('volume'), body.get('volume_steps'), foreground=body.get('foreground'), visibility_revision=body.get('visibility_revision'))
+            commands = _mobile_devices.online(owner, session_id, body.get('name'), body.get('ack', []), body.get('volume'), body.get('volume_steps'), foreground=body.get('foreground'), visibility_revision=body.get('visibility_revision'), kind=body.get('kind'), playing=body.get('playing'))
             retry_ms = 50
             busy = body.get('busy_commands')
             busy = set(busy[:32]) if isinstance(busy, list) and all(isinstance(value, str) for value in busy[:32]) else set()
@@ -3940,7 +3946,7 @@ def app_mobile_devices():
                 if before['playback_output'] != 'phone' or before['handoff_pending']:
                     raise OutputConflict('Playback moved to another output.')
                 target = before['output_owner']
-                online = {d['id'] for d in _mobile_devices.list()}
+                online = {d['id'] for d in _mobile_devices.list(include_unavailable=True)}
                 if target and target in online and target != owner:
                     _mobile_devices.command(target, before['output_token'], 'play', {}, body.get('command_id'))
                     return jsonify(default_selected=False, **before)

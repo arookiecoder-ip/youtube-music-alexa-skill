@@ -22,12 +22,16 @@ class MobileDevices:
                 del self.devices[key]
                 self.wake()
 
-    def list(self):
+    def list(self, include_unavailable=False):
         with self.lock:
             self._prune()
-            return [{'id': key, 'name': value['name'], 'volume': value.get('volume'), 'volume_steps': value.get('volume_steps')} for key, value in self.devices.items()]
+            return [{'id': key, 'name': value['name'], 'volume': value.get('volume'), 'volume_steps': value.get('volume_steps')} for key, value in self.devices.items() if include_unavailable or self._selectable(value)]
 
-    def visibility(self, device_id, session_id, foreground, revision=None):
+    @staticmethod
+    def _selectable(device):
+        return device.get("kind") != "browser" or device.get("foreground") or device.get("playing")
+
+    def visibility(self, device_id, session_id, foreground, revision=None, playing=None):
         if not isinstance(foreground, bool):
             raise ValueError('foreground must be boolean')
         if revision is not None and (isinstance(revision, bool) or not isinstance(revision, int) or revision < 0):
@@ -44,6 +48,9 @@ class MobileDevices:
                 device['visibility_revision'] = revision
             if foreground and not device.get('foreground'):
                 device['foreground_at'] = self.clock()
+            if isinstance(playing, bool):
+                changed = changed or playing != device.get('playing')
+                device['playing'] = playing
             device['foreground'] = foreground
             if changed:
                 self.wake()
@@ -61,10 +68,10 @@ class MobileDevices:
     def require_online(self, device_id):
         with self.lock:
             self._prune()
-            if device_id not in self.devices:
+            if device_id not in self.devices or not self._selectable(self.devices[device_id]):
                 raise ValueError('This device is offline. Refresh the device list.')
 
-    def online(self, device_id, session_id, name, ack=(), volume=None, volume_steps=None, foreground=None, visibility_revision=None):
+    def online(self, device_id, session_id, name, ack=(), volume=None, volume_steps=None, foreground=None, visibility_revision=None, kind=None, playing=None):
         if not isinstance(session_id, str) or not 1 <= len(session_id) <= 128:
             raise ValueError('session_id required')
         if not isinstance(ack, list) or len(ack) > 32:
@@ -87,6 +94,8 @@ class MobileDevices:
             new_session = device is None or device['session'] != session_id
             if new_session:
                 device = self.devices[device_id] = {'session': session_id, 'commands': [], 'name': ''}
+            if kind in ('browser', 'app'):
+                device['kind'] = kind
             device['name'] = str(name or 'Android device')[:100]
             old_volume = (device.get('volume'), device.get('volume_steps'))
             if volume is not None:
@@ -97,7 +106,7 @@ class MobileDevices:
                 self.wake()
             device['until'] = self.clock() + self.ttl
             if foreground is not None:
-                self.visibility(device_id, session_id, foreground, visibility_revision)
+                self.visibility(device_id, session_id, foreground, visibility_revision, playing)
             device['commands'] = [c for c in device['commands'] if c['id'] not in ack and c['until'] > self.clock()]
             return copy.deepcopy(device['commands'])
 
@@ -125,7 +134,9 @@ class MobileDevices:
 
     def command(self, target, token, action, payload, command_id=None):
         with self.lock:
-            self.require_online(target)
+            self._prune()
+            if target not in self.devices:
+                raise ValueError('This device is offline. Refresh the device list.')
             commands = self.devices[target]['commands']
             command_id = str(command_id or uuid.uuid4())[:128]
             if any(c['id'] == command_id for c in commands):

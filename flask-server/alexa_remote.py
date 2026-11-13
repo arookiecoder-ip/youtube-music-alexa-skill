@@ -487,7 +487,7 @@ class AlexaRemote:
             # coroutine and force a login re-check on the next call.
             future.cancel()
             self._login_checked_at = 0.0
-            logger.warning("Alexa call exceeded %ss and was abandoned", CALL_TIMEOUT)
+            logger.warning("Alexa call exceeded %ss and was abandoned", timeout)
             raise AlexaUnreachable(
                 "Alexa isn't responding. The device may be offline or Amazon is "
                 "unreachable — try again in a moment.")
@@ -1664,6 +1664,13 @@ class AlexaRemote:
     def command(self, serial: str, action: str, value=None):
         """Transport control. Returns an error string, or None on success."""
         return self._run(self._command(serial, action, value))
+
+    def handoff_pause(self, serial: str):
+        """Bound source cleanup so target selection never waits on Amazon's long timeout."""
+        try:
+            return self._run(self._command(serial, 'pause', None), timeout=1.0)
+        except AlexaUnreachable:
+            return "Alexa did not confirm the pause before the selected device took over."
 
     async def _command(self, serial, action, value):
         # Reject early if the target Echo is offline: it can't be reached, and a

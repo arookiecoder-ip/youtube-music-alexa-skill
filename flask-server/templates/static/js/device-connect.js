@@ -37,7 +37,7 @@
     const local = browser ? 'mobile:' + browser.id : '';
     const devicesWithPhones = echoDevices.filter(d => d.online && (!d.logged_out || (output && output.playback_output === 'alexa' && output.output_serial === d.serial))).concat(phones.map(d => ({ serial: 'mobile:' + d.id,
       name: browser && d.id === browser.id ? 'This browser' : d.name, online: true })));
-    if (local && !devicesWithPhones.some(d => d.serial === local)) {
+    if (local && (!browser.available || browser.available()) && !devicesWithPhones.some(d => d.serial === local)) {
       devicesWithPhones.push({ serial: local, name: 'This browser', online: true });
     }
     const active = output && (output.playback_output === 'phone' && output.output_owner
