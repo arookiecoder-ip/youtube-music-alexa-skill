@@ -8,6 +8,7 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+  pull-requests: read
 jobs:
   security:
     runs-on: ubuntu-latest
@@ -35,6 +36,8 @@ jobs:
           MUSICBOX_EGRESS_TOKEN: ci-validation-only
         run: docker compose config --quiet
       - uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Build backend
         run: docker build -t musicbox-security:backend flask-server
       - uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # 0.35.0
@@ -62,3 +65,19 @@ jobs:
           exit-code: '1'
           severity: HIGH,CRITICAL
           ignore-unfixed: true
+
+  codeql-review-report:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: read
+    steps:
+      - name: Export current CodeQL findings for production review
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: gh api --paginate "repos/$GH_REPO/code-scanning/alerts?state=open&per_page=100" > codeql-review.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: codeql-review
+          path: codeql-review.json
