@@ -6,7 +6,7 @@ ENV DEBIAN_FRONTEND=noninteractive \
     CHROME_USER_DATA_DIR=/profile \
     PYTHONDONTWRITEBYTECODE=1
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
+RUN apt-get update && apt-get install -y --only-upgrade apt libapt-pkg6.0 && apt-get install -y --no-install-recommends \
     chromium chromium-sandbox xvfb openbox xdotool gosu ca-certificates fonts-liberation \
     && rm -rf /var/lib/apt/lists/*
 

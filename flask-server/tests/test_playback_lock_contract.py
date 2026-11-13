@@ -48,6 +48,7 @@ class PlaybackLockContractTests(unittest.TestCase):
         client=SimpleNamespace(auth_type=object(),rate_song=Mock())
         namespace=dict(_np_lock=ProductionLock(),_now_playing={'video_id':'A'},
             _get_ytmusic_home=lambda:client,_bump_liked_version=Mock(),
+            _liked_cache=lambda:SimpleNamespace(update=Mock()),
             asyncio=asyncio,request=request,jsonify=jsonify,logger=Mock())
         self.functions({'_get_now_playing','alexa_like'},namespace)
         with Flask(__name__).test_request_context('/alexa/like/',method='POST',json={'action':'LIKE'}):

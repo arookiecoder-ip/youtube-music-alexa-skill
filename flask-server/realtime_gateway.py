@@ -210,9 +210,9 @@ def main():
     import waitress
     import server
     # Internal listener is not exposed to the container network.
-    internal = waitress.create_server(server.app, host='127.0.0.1', port=0, threads=16)
+    internal = waitress.create_server(server.app, host='127.0.0.1', port=0, threads=16, clear_untrusted_proxy_headers=False)
     threading.Thread(target=internal.run, name='waitress', daemon=True).start()
-    control = waitress.create_server(server.app, host='127.0.0.1', port=0, threads=4)
+    control = waitress.create_server(server.app, host='127.0.0.1', port=0, threads=4, clear_untrusted_proxy_headers=False)
     threading.Thread(target=control.run, name='playback-control', daemon=True).start()
     try:
         web.run_app(create_gateway(f'http://127.0.0.1:{internal.effective_port}',

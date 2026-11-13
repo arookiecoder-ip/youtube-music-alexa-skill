@@ -1,5 +1,7 @@
 """Owner boundaries, CSRF and expiry using the real Flask routes and a disposable DB."""
 import ast
+import os
+import hmac
 import asyncio
 from pathlib import Path
 import tempfile
@@ -17,7 +19,7 @@ class OwnerSecurityTests(unittest.TestCase):
         self.directory = tempfile.TemporaryDirectory(); self.addCleanup(self.directory.cleanup)
         for name, value in [('DB_FILE', str(Path(self.directory.name)/'sessions.db')),
                             ('_db_initialized', False), ('_valid_sids', None), ('_sid_deadlines', {}),
-                            ('_pending_store', {})]:
+                            ('_pending_2fa', None)]:
             p = patch.object(server, name, value); p.start(); self.addCleanup(p.stop)
         server._ensure_db()
         self.owner = server.app.test_client()
@@ -87,14 +89,21 @@ class OwnerSecurityTests(unittest.TestCase):
                 self.assertNotIn('amazon_login_attempt',session)
 
     def test_password_verified_challenges_are_pruned_and_bounded(self):
-        server._pending_store.update({'expired': {'at': time.time()-301}, 'current': {'at': time.time()}})
-        with server._pending_lock: server._prune_pending_logins()
-        self.assertEqual(set(server._pending_store), {'current'})
-        server._pending_store.update({str(i): {'at': time.time(), 'user':server.REMOTE_USER} for i in range(64)})
+        with server.app.test_request_context('/'):
+            store, bind = server._pending_2fa_door()
+        with patch('multiuser.pending.time.time', return_value=time.time()-301):
+            expired = store.issue({'kind':'owner', 'user':server.REMOTE_USER}, bind)
+        store.issue({'kind':'owner', 'user':server.REMOTE_USER}, bind)
+        self.assertIsNone(store.consume(expired, bind))
+        for _ in range(store.capacity + 5):
+            store.issue({'kind':'owner', 'user':server.REMOTE_USER}, bind)
+        self.assertEqual(store.waiting(), store.capacity)
         with patch.object(server, '_totp_enabled', return_value=True):
             result = self.anonymous.post('/login/', json={'username':server.REMOTE_USER, 'password':server.REMOTE_PASSWORD})
-        self.assertEqual(result.status_code, 429)
-        self.assertEqual(len(server._pending_store),65)
+        self.assertEqual(result.status_code, 200)
+        self.assertTrue(result.get_json()['totp_required'])
+        self.assertEqual(store.waiting(), store.capacity)
+
 
 
 class AmazonProxyBoundaryTests(unittest.IsolatedAsyncioTestCase):
@@ -102,7 +111,7 @@ class AmazonProxyBoundaryTests(unittest.IsolatedAsyncioTestCase):
         path = Path(__file__).resolve().parents[1]/'alexa_remote.py'
         cls = next(n for n in ast.parse(path.read_text()).body if isinstance(n, ast.ClassDef) and n.name=='AlexaRemote')
         node = next(n for n in cls.body if isinstance(n, ast.AsyncFunctionDef) and n.name=='_proxy_handler')
-        ns = dict(web=web, asyncio=asyncio, time=time)
+        ns = dict(web=web, asyncio=asyncio, time=time, os=os, hmac=hmac)
         exec(compile(ast.Module(body=[node], type_ignores=[]),str(path),'exec'), ns)
         self.handler = ns['_proxy_handler']
         self.forward = AsyncMock(return_value=web.Response(text='dummy login page'))

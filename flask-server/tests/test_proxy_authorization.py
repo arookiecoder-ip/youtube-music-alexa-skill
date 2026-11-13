@@ -18,9 +18,9 @@ class ProxyAuthorizationTests(unittest.TestCase):
         tree = ast.parse((Path(__file__).parents[1] / 'alexa_remote.py').read_text())
         cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == 'AlexaRemote')
         methods = [n for n in cls.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef)) and n.name in ('proxy_authorization', '_proxy_handler')]
-        self.ns = dict(_proxy_guard=threading.Lock(), _proxy_holder=[None], _proxy_claim_expires=[time.monotonic()+60], time=time, os=os, hmac=hmac, web=web)
+        self.ns = dict(_proxy_guard=threading.Lock(), _proxy_holder=[None], _proxy_claim_expires=[time.monotonic()+60], time=time, os=os, hmac=hmac, web=web, asyncio=asyncio)
         exec(compile(ast.Module(body=methods, type_ignores=[]), '<proxy-guards>', 'exec'), self.ns)
-        self.remote = SimpleNamespace(_proxy_started=True, _proxy_attempt_id='private-attempt', _proxy=SimpleNamespace(all_handler=mock.AsyncMock(return_value=web.Response())), _proxy_login=None)
+        self.remote = SimpleNamespace(_proxy_authorizer=lambda cookie,attempt: True, _proxy_attempt_started=time.monotonic(), _proxy_started=True, _proxy_attempt_id='private-attempt', _proxy=SimpleNamespace(all_handler=mock.AsyncMock(return_value=web.Response())), _proxy_login=None)
         self.remote.proxy_authorization = lambda: self.ns['proxy_authorization'](self.remote)
         self.ns['_proxy_holder'][0] = self.remote
 
