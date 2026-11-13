@@ -1771,16 +1771,21 @@ class _IdentitySlotCache:
     would be served somebody else's library. Rebuild locks are per identity for the
     same reason -- one account's slow rebuild must not make the others wait."""
 
-    def __init__(self):
+    def __init__(self, maxsize=64):
         self._guard = threading.Lock()
-        self._slots = {}
+        self._slots = collections.OrderedDict()
+        self._maxsize = max(1, maxsize)
+        self._locks = [threading.Lock() for _ in range(64)]
 
     def _slot(self, identity):
         with self._guard:
             slot = self._slots.get(identity)
             if slot is None:
-                slot = self._slots[identity] = {'built_at': 0.0, 'lock': threading.Lock(),
+                slot = self._slots[identity] = {'built_at': 0.0, 'lock': self._locks[hash(identity) % len(self._locks)],
                                                 'value': None}
+            self._slots.move_to_end(identity)
+            while len(self._slots) > self._maxsize:
+                self._slots.popitem(last=False)
             return slot
 
     def lock(self, identity):
@@ -1876,29 +1881,44 @@ def _write_browser_auth_file(headers_raw, dest):
             os.unlink(temp_path)
 
 
-def _server_session_enabled():
-    """Whether the deployment's own Google account may stand in for an unlinked one.
+from local_library import LocalLibrary
+_local_library_sync_lock = threading.Lock()
 
-    Off is the conservative choice for a deployment that would rather show the
-    public catalogue than share one account's listening history between people.
+
+def _local_library():
+    return LocalLibrary(get_db, _current_identity())
+
+
+def _sync_local_library(identity):
+    # A single bounded worker avoids one background thread per read/request.
+    if identity == _SERVER_IDENTITY or not LocalLibrary(get_db, identity).pending():
+        return
+    if not _local_library_sync_lock.acquire(blocking=False):
+        return
+    def run():
+        try:
+            if _has_own_youtube_session(identity):
+                LocalLibrary(get_db, identity).sync(_get_ytmusic_home(identity))
+        except Exception:
+            logger.exception('Staged Google library sync incomplete; retained for retry')
+        finally:
+            _local_library_sync_lock.release()
+    _spawn_for_identity(identity, run, name='local-library-sync')
+
+
+def _server_session_enabled():
+    """Whether server download credentials and their keepalive are enabled.
+
+    This switch controls the server download credential only. Personalized
+    requests always require the requesting identity's own Google credential.
     """
     return os.environ.get('YOUTUBE_SERVER_SESSION', '1').strip().lower() not in {
         '0', 'false', 'no', 'off'}
 
 
 def _server_session_auth_file(identity):
-    """The keepalive-renewed server session, when this identity has none of its own.
-
-    This is the documented exception to "your own session or the public catalogue":
-    an account that never linked YouTube Music gets exactly what the deployment's
-    Google account sees, including its Home, library and watch history. The owner's
-    personal file is never part of this -- the server keeps its own credential, so
-    a renewal cannot overwrite a person's linked session.
-    """
-    if identity == _SERVER_IDENTITY or not _server_session_enabled():
-        return None
-    path = _youtube_credentials.path_for(_SERVER_IDENTITY)
-    return path if path and os.path.isfile(path) else None
+    """Download credentials must never authorize personalized API calls."""
+    return None
 
 
 def _has_server_session():
@@ -1914,9 +1934,8 @@ def _has_server_session():
 def _yt_auth_file(identity):
     """This identity's auth JSON, rebuilt from its encrypted row if the file is gone.
 
-    None means "no YouTube session at all", which callers read as public catalog
-    only. An identity without a session of its own falls back to the server's,
-    never to another person's.
+    None means public catalog only. Server download credentials are never
+    used for account data, even when YOUTUBE_SERVER_SESSION is enabled.
 
     The encrypted `user_provider_credentials` row is the source of truth for
     accounts; this file is a derived cache, so a restarted container or a restored
@@ -1932,11 +1951,7 @@ def _yt_auth_file(identity):
                 return path
             except Exception as exc:
                 logger.warning('Could not rebuild the YouTube session for %s: %s', identity, exc)
-    fallback = _server_session_auth_file(identity)
-    if fallback:
-        logger.debug('%s has no YouTube session of its own; using the server account',
-                     identity)
-    return fallback
+    return None
 
 
 def _download_cookie_path(identity=None):
@@ -1983,15 +1998,8 @@ def _has_own_youtube_session(identity):
 
 
 def _youtube_renewal_identity(identity):
-    """Whose saved session a renewal has to replace for *this* identity.
-
-    An account that never linked YouTube is served by the server's credential, so
-    renewing that account's own (empty) profile would leave every fallback reader
-    stuck on the dead session they were actually using.
-    """
-    if identity == _SERVER_IDENTITY or _has_own_youtube_session(identity):
-        return identity
-    return _SERVER_IDENTITY if _server_session_enabled() else identity
+    """Personalized operations may renew only the requesting identity."""
+    return identity
 
 
 def _ytmusic_client_from_auth(auth_file):
@@ -2109,6 +2117,8 @@ def _promote_youtube_browser_headers(headers, identity=None):
     # The owner's credential stays the plain file it has always used; accounts are
     # encrypted in the database and the file is only a cache of that row.
     _remember_youtube_session(identity, headers)
+    _invalidate_youtube_auth_caches(identity)
+    _sync_local_library(identity)
 
 
 _youtube_browser_controller = BrowserController(
@@ -2437,8 +2447,12 @@ def _forget_player_identity(identity):
     disconnect can reuse it without touching playback.
     """
     _drop_alexa_state(identity)
+    with _playlist_tracks_cache_lock:
+        for key in list(_playlist_tracks_cache):
+            if isinstance(key, tuple) and key[0] == identity:
+                _playlist_tracks_cache.pop(key, None)
     for registry in (_player_registry, _playback_output_registry, _volume_registry,
-                     _playback_failover_registry):
+                     _playback_failover_registry, _mobile_devices_registry):
         registry.discard(identity)
     # The browser manager's own record, dropped rather than revoked: revoking
     # would re-create the entry it is meant to clear and fire a network close.
@@ -2481,6 +2495,10 @@ def _forget_account_artifacts(user_id, scopes=('all',)):
     failures = []
 
     if purge_all:
+        try:
+            LocalLibrary(get_db, identity).purge()
+        except Exception as exc:
+            failures.append('staged library: %s' % exc)
         # First, and before anything that could still write: the tombstone makes
         # this identity unreadable and unwritable, so a heartbeat already in flight
         # cannot re-create the snapshot row a moment after it was deleted.
@@ -2649,6 +2667,11 @@ def _account_purge_sweeper():
     interval = max(15.0, float(os.environ.get('ACCOUNT_PURGE_SWEEP_SECONDS', '60')))
     while not _account_purge_stop.wait(interval):
         _account_purge_sweep()
+        try:
+            if _multiuser_layer is not None:
+                _multiuser_layer.db.maintain()
+        except Exception:
+            logger.exception('Account database expiry maintenance failed; will retry')
 
 
 def _youtube_auth_proactive_loop():
@@ -3141,13 +3164,9 @@ _playback_output.snapshot()
 # snapshots. Open remotes re-fetch /api/playlists/ when it changes so a like
 # made elsewhere (voice command, another device) updates their heart icons
 # live instead of waiting for the next page load.
-_liked_version = 0
-
-
 def _bump_liked_version():
-    global _liked_version
     with _np_lock:
-        _liked_version += 1
+        _now_playing['_liked_version'] = _now_playing.get('_liked_version', 0) + 1
     _notify_sse()
 
 # Seek/resume-with-offset dispatch arms position_ms just before triggering
@@ -3270,7 +3289,7 @@ def _np_snapshot(serial=None, retain_errors=False):
         'volume': volume,
         'playback_error': playback_error,
         'playback_error_id': error_id,
-        'liked_version': _liked_version,
+        'liked_version': _now_playing.get('_liked_version', 0),
     }
 
 
@@ -3642,7 +3661,8 @@ def app_playback_output():
 
 
 from mobile_devices import MobileDevices
-_mobile_devices = MobileDevices()
+_mobile_devices_registry = _PlayerStateRegistry(lambda identity: MobileDevices())
+_mobile_devices = _PlayerStateProxy(_mobile_devices_registry)
 
 
 def _pause_echo_for_mobile(serial):
@@ -4800,7 +4820,7 @@ class Supporting:
         if not playlist_id:
             return None
 
-        cache_key = playlist_id.upper() if playlist_id.upper() == 'LM' else playlist_id
+        cache_key = (_current_identity(), playlist_id.upper() if playlist_id.upper() == 'LM' else playlist_id)
         now = time.time()
         with _playlist_tracks_cache_lock:
             cached = _playlist_tracks_cache.get(cache_key)
@@ -4830,9 +4850,11 @@ class Supporting:
             return None
 
         yt_home = _get_ytmusic_home()
+        if playlist_id.startswith('local_') or (playlist_id.upper() == 'LM' and not _has_own_youtube_session(_current_identity())):
+            yt_home = _local_library()
         try:
             try:
-                if cache_key == 'LM':
+                if cache_key[1] == 'LM':
                     search_results = await asyncio.to_thread(yt_home.get_liked_songs, 1000)
                 else:
                     # Home can return account-only collections such as the
@@ -7894,14 +7916,14 @@ def profile_status():
     browser_status = _youtube_browser_sessions.status(identity)
     own_auth_file = _youtube_credentials.path_for(identity)
     own_session = bool(own_auth_file and os.path.isfile(own_auth_file))
+    if own_session and yt_auth_working:
+        _sync_local_library(identity)
     payload = {
         "alexa_access_enabled": alexa_enabled,
         "youtube_auth_working": yt_auth_working,
         "youtube_auth_type": auth_type_str,
         "youtube_own_session": own_session,
-        "youtube_server_fallback": bool(
-            not own_session and yt_auth_working and identity != _SERVER_IDENTITY
-            and _server_session_enabled()),
+        "youtube_server_fallback": False,
         "youtube_cookies_own": own_cookies,
         "youtube_cookies_source": cookies_source,
         "youtube_cookies_present": cookies_source != 'none',
@@ -10044,7 +10066,7 @@ async def alexa_like():
     from ytmusicapi.auth.types import AuthType
     yt = _get_ytmusic_home()
     if yt.auth_type == AuthType.UNAUTHORIZED:
-        return jsonify({'error': 'YouTube Music authentication required. Please visit /setup/'}), 403
+        yt = _local_library()
     if request.method == "POST":
         body = request.get_json(silent=True) or {}
         video_id = (body.get('video_id') or '').strip()
@@ -10057,10 +10079,17 @@ async def alexa_like():
         video_id = np.get('video_id') or ''
     if not video_id:
         return jsonify({'error': 'No video_id provided and nothing playing'}), 400
+    if not _valid_video_id(video_id):
+        return error_response('Invalid video id.', 400)
     if action not in ('LIKE', 'DISLIKE', 'INDIFFERENT'):
         return jsonify({'error': 'action must be LIKE, DISLIKE, or INDIFFERENT'}), 400
     try:
-        await asyncio.to_thread(yt.rate_song, video_id, action)
+        if isinstance(yt, LocalLibrary):
+            await asyncio.to_thread(yt.rate_song, video_id, action, request.get_json(silent=True) or _metadata_from_queue(video_id) or {})
+        else:
+            await asyncio.to_thread(yt.rate_song, video_id, action)
+        with _playlist_tracks_cache_lock:
+            _playlist_tracks_cache.pop((_current_identity(), 'LM'), None)
         _bump_liked_version()
         return jsonify({'ok': True, 'action': action, 'video_id': video_id})
     except Exception as e:
@@ -10076,13 +10105,16 @@ async def api_get_liked_songs():
     from ytmusicapi.auth.types import AuthType
     yt = _get_ytmusic_home()
     if yt.auth_type == AuthType.UNAUTHORIZED:
-        return jsonify({'liked_songs': []}), 200  # not an error; just no data
+        return jsonify({'liked_songs': [t['videoId'] for t in _local_library().get_liked_songs(None)['tracks']]})
     try:
         raw = await asyncio.to_thread(yt.get_liked_songs, 1000)
         video_ids = [
             t.get('videoId') for t in (raw.get('tracks') or [])
             if t.get('videoId')
         ]
+        pending = {key: value['rating'] for key, value, _ in _local_library().rows('like')}
+        video_ids = [key for key in video_ids if pending.get(key, 'LIKE') == 'LIKE']
+        video_ids = list(dict.fromkeys(video_ids + [key for key, rating in pending.items() if rating == 'LIKE']))
         return jsonify({'liked_songs': video_ids})
     except Exception as e:
         logger.debug('[api/liked_songs] failed (likely unauthenticated): %s', e)
@@ -11513,9 +11545,13 @@ async def api_get_library():
     from ytmusicapi.auth.types import AuthType
     yt = _get_ytmusic_home()
     if yt.auth_type == AuthType.UNAUTHORIZED:
-        return jsonify({'error': 'YouTube Music authentication required. Please visit /setup/'}), 403
+        return jsonify({'playlists': [{'playlistId': 'LM', 'title': 'Liked Music'}] + _local_library().get_library_playlists(), 'albums': []})
+    _sync_local_library(_current_identity())
     try:
         playlists = await asyncio.to_thread(yt.get_library_playlists, 100)
+        staged = _local_library().get_library_playlists()
+        pending_remote = {p.get('remote_id') for p in staged if p.get('remote_id')}
+        playlists = [p for p in playlists or [] if p.get('playlistId') not in pending_remote]
         account = await asyncio.to_thread(yt.get_account_info)
         account_name = str((account or {}).get('accountName') or '').strip().casefold()
         for playlist in playlists or []:
@@ -11546,7 +11582,7 @@ async def api_get_library():
         except Exception as album_error:
             logger.warning("YouTube saved albums unavailable: %s", album_error)
             albums = []
-        return jsonify({"playlists": playlists, "albums": albums or []})
+        return jsonify({"playlists": (playlists or []) + staged, "albums": albums or []})
     except Exception as e:
         # Browser-header auth may reject some browse endpoints; show LM fallback.
         message = str(e)
@@ -11605,6 +11641,10 @@ def _youtube_subscription_error(error, method_name):
 async def api_subscribed_artists():
     """Read and mutate artist subscriptions in YouTube Music only."""
     _ensure_db()
+
+    from ytmusicapi.auth.types import AuthType
+    if request.method == 'GET' and _get_ytmusic_home().auth_type == AuthType.UNAUTHORIZED:
+        return jsonify({'artists': [], 'youtube_count': 0})
 
     if request.method == 'GET':
         method_name = 'get_library_subscriptions'
@@ -11705,15 +11745,16 @@ async def api_subscribed_artists():
 @app.route("/api/library/playlists/", methods=["POST"])
 async def api_create_library_playlist():
     from ytmusicapi.auth.types import AuthType
-    if _get_ytmusic_home().auth_type == AuthType.UNAUTHORIZED:
-        return jsonify({'error': 'YouTube Music authentication required. Please visit /setup/'}), 403
+    yt = _get_ytmusic_home()
+    if yt.auth_type == AuthType.UNAUTHORIZED:
+        yt = _local_library()
     body = request.get_json(silent=True) or {}
     name = (body.get("name") or "").strip()
     description = (body.get("description") or "").strip()
     if not name:
         return jsonify({'error': 'Name required'}), 400
     try:
-        pl_id = await asyncio.to_thread(_get_ytmusic_home().create_playlist, name, description)
+        pl_id = await asyncio.to_thread(yt.create_playlist, name, description)
         return jsonify({"id": pl_id, "name": name, "description": description, "status": "created"})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -11724,8 +11765,8 @@ async def api_add_library_playlist_track(pl_id):
     """Add one catalog track to a user's YouTube Music playlist."""
     from ytmusicapi.auth.types import AuthType
     yt = _get_ytmusic_home()
-    if yt.auth_type == AuthType.UNAUTHORIZED:
-        return jsonify({'error': 'YouTube Music authentication required. Please visit /setup/'}), 403
+    if yt.auth_type == AuthType.UNAUTHORIZED or pl_id.startswith('local_'):
+        yt = _local_library()
 
     pl_id = (pl_id or '').strip()
     body = request.get_json(silent=True) or {}
@@ -11743,6 +11784,7 @@ async def api_add_library_playlist_track(pl_id):
             pl_id,
             [video_id],
             duplicates=False,
+            **({'metadata': body} if isinstance(yt, LocalLibrary) else {}),
         )
         return jsonify({
             'playlist_id': pl_id,
@@ -11965,6 +12007,20 @@ async def api_get_library_playlist(pl_id):
     pl_id = (pl_id or '').strip()
     if not pl_id:
         return jsonify({'error': 'invalid playlist id'}), 400
+    if pl_id.startswith('local_') or (pl_id.upper() == 'LM' and not _has_own_youtube_session(_current_identity())):
+        if _jam_guest():
+            return error_response('This library is private.', 403)
+        local = _local_library()
+        try:
+            info = local.get_liked_songs(None) if pl_id.upper() == 'LM' else local.get_playlist(pl_id, None)
+            from playlist_paging import playlist_page_request
+            limit, offset = playlist_page_request(request.args)
+            tracks = info.get('tracks', [])
+            return jsonify(dict(info, title=info.get('title', 'Liked Music'), trackCount=len(tracks),
+                                tracks=tracks[offset:offset+limit], next_offset=offset+min(limit, max(0,len(tracks)-offset)),
+                                has_more=offset+limit<len(tracks)))
+        except ValueError:
+            return error_response('Playlist not found or invalid page.', 404)
     if not _detail_id_has_known_shape('playlist', pl_id):
         return jsonify({'error': {
             'code': 'not_a_playlist',
@@ -12140,8 +12196,9 @@ async def api_get_public_playlist(pl_id):
 async def api_rename_library_playlist(pl_id):
     """Rename a library playlist."""
     from ytmusicapi.auth.types import AuthType
-    if _get_ytmusic_home().auth_type == AuthType.UNAUTHORIZED:
-        return jsonify({'error': 'YouTube Music authentication required. Please visit /setup/'}), 403
+    yt = _get_ytmusic_home()
+    if yt.auth_type == AuthType.UNAUTHORIZED or pl_id.startswith('local_'):
+        yt = _local_library()
     pl_id = (pl_id or '').strip()
     if not pl_id:
         return jsonify({'error': 'invalid playlist id'}), 400
@@ -12151,7 +12208,7 @@ async def api_rename_library_playlist(pl_id):
     if not title:
         return jsonify({'error': 'Name required'}), 400
     try:
-        await asyncio.to_thread(_get_ytmusic_home().edit_playlist, pl_id, title=title, description=description or None)
+        await asyncio.to_thread(yt.edit_playlist, pl_id, title=title, description=description or None)
         return jsonify({'id': pl_id, 'title': title, 'status': 'renamed'})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -12160,13 +12217,14 @@ async def api_rename_library_playlist(pl_id):
 async def api_delete_library_playlist(pl_id):
     """Delete a library playlist."""
     from ytmusicapi.auth.types import AuthType
-    if _get_ytmusic_home().auth_type == AuthType.UNAUTHORIZED:
-        return jsonify({'error': 'YouTube Music authentication required. Please visit /setup/'}), 403
+    yt = _get_ytmusic_home()
+    if yt.auth_type == AuthType.UNAUTHORIZED or pl_id.startswith('local_'):
+        yt = _local_library()
     pl_id = (pl_id or '').strip()
     if not pl_id:
         return jsonify({'error': 'invalid playlist id'}), 400
     try:
-        await asyncio.to_thread(_get_ytmusic_home().delete_playlist, pl_id)
+        await asyncio.to_thread(yt.delete_playlist, pl_id)
         return jsonify({'id': pl_id, 'status': 'deleted'})
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -12602,9 +12660,21 @@ def api_track_listen(video_id):
     if _get_ytmusic_home().auth_type == AuthType.UNAUTHORIZED:
         return jsonify({'error': 'YouTube Music authentication required.'}), 403
     body = request.get_json(silent=True) or {}
-    _record_listen(video_id, str(body.get('title') or '')[:500],
-                   str(body.get('artist') or '')[:500], str(body.get('thumbnail') or '')[:2000])
-    return jsonify({'ok': True})
+    # Return success only after Google confirms the write. The phone retains
+    # pending local history on failures and retries after reconnect.
+    try:
+        yt = _get_ytmusic_home()
+        song = yt.get_song(video_id)
+        if not song:
+            return error_response('Song unavailable.', 502)
+        result = yt.add_history_item(song)
+        if getattr(result, 'status_code', 0) != 204:
+            return error_response('Google rejected history sync.', 502)
+        return jsonify({'ok': True})
+    except Exception:
+        logger.exception('Google history sync failed')
+        return error_response('History sync failed. Retry later.', 502)
+
 
 
 @app.route("/api/track/<video_id>/metadata", methods=["GET"])

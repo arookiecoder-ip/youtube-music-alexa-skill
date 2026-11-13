@@ -14,9 +14,14 @@ class MobileDevices:
         self.browser_wait_slots = threading.BoundedSemaphore(4)
         self.devices = {}
         self.retired = {}
+        self.retired_until = {}
 
     def _prune(self):
         now = self.clock()
+        for key in list(self.retired_until):
+            if self.retired_until[key] <= now and key not in self.devices:
+                self.retired.pop(key, None)
+                self.retired_until.pop(key, None)
         for key in list(self.devices):
             if self.devices[key]['until'] <= now:
                 del self.devices[key]
@@ -78,7 +83,12 @@ class MobileDevices:
         with self.lock:
             self._prune()
             device = self.devices.get(device_id)
+            if device is None and len(self.devices) >= 32:
+                raise ValueError('Too many active devices for this account')
+            if device_id not in self.retired and len(self.retired) >= 256:
+                raise ValueError('Too many recent device sessions; retry later')
             retired = self.retired.setdefault(device_id, [])
+            self.retired_until[device_id] = self.clock() + 120
             if session_id in retired:
                 raise ValueError('This app session was replaced by a newer one.')
             if device is not None and device['session'] != session_id:
@@ -117,6 +127,7 @@ class MobileDevices:
             if device and device['session'] == session_id:
                 retired = self.retired.setdefault(device_id, [])
                 retired.append(session_id)
+                self.retired_until[device_id] = self.clock() + 120
                 del retired[:-8]
                 del self.devices[device_id]
                 self.wake()

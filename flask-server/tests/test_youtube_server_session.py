@@ -1,21 +1,4 @@
-"""The deployment's own YouTube account: borrowed sessions, keepalive and alerts.
-
-Two behaviours are worth pinning down here.
-
-*Fallback* is a deliberate exception to "your own session or the public
-catalogue": an account that never connected YouTube reads the server's session,
-so `_yt_auth_file` returns that one credential for everybody when the account
-has none of its own, and the download-cookie lookup *prefers* the server jar for
-every identity (an account jar only covers an unusable server jar). Both must
-stop returning it the moment the switch is off. The server's own identity must
-never fall back to itself, or a missing `server.json` would become an infinite
-lookup.
-
-*Keepalive* decides when to sign in, and the expensive answers (authenticated,
-switched off, unconfigured, backing off) are all the same answer: don't. Only an
-unusable session on a due schedule may start a Google login, and a failure mails
-the configured address once with no credential anywhere in the body.
-"""
+"""Server credentials authorize downloads only; account calls stay private."""
 import os
 import sys
 import tempfile
@@ -118,9 +101,9 @@ class FallbackSessionTests(_TempStore):
         self.touch(SERVER)
         self.assertEqual(server._yt_auth_file(ACCOUNT), own)
 
-    def test_an_unlinked_account_borrows_the_server_credential(self):
+    def test_an_unlinked_account_never_borrows_the_server_credential(self):
         borrowed = self.touch(SERVER)
-        self.assertEqual(server._yt_auth_file(ACCOUNT), borrowed)
+        self.assertIsNone(server._yt_auth_file(ACCOUNT))
 
     def test_the_switch_turns_the_borrowed_session_off(self):
         self.touch(SERVER)
@@ -132,11 +115,11 @@ class FallbackSessionTests(_TempStore):
         # returning its own (absent) path would hide that from the check.
         self.assertIsNone(server._yt_auth_file(SERVER))
 
-    def test_the_owner_borrows_it_too_when_it_has_no_session_of_its_own(self):
+    def test_an_unlinked_owner_cannot_borrow_the_server_session(self):
         # The fallback is about "has no session", not about the account's name: a
         # legacy owner file that was never captured is as unlinked as any account.
         borrowed = self.touch(SERVER)
-        self.assertEqual(server._yt_auth_file(OWNER), borrowed)
+        self.assertIsNone(server._yt_auth_file(OWNER))
 
     def test_the_owners_own_session_still_wins(self):
         own = self.touch(OWNER)
@@ -189,7 +172,7 @@ class DownloadCookieFallbackTests(_TempStore):
 
 class RenewalTargetTests(_TempStore):
     def test_a_borrower_renews_the_session_it_reads(self):
-        self.assertEqual(server._youtube_renewal_identity(ACCOUNT), SERVER)
+        self.assertEqual(server._youtube_renewal_identity(ACCOUNT), ACCOUNT)
 
     def test_a_linked_account_renews_its_own_profile(self):
         self.touch(ACCOUNT)
@@ -207,8 +190,8 @@ class RenewalTargetTests(_TempStore):
             with self.assertRaises(RuntimeError):
                 server._with_youtube_auth_renewal(lambda: None, ACCOUNT)
         refresh.assert_called_once()
-        self.assertEqual(refresh.call_args.args[1], SERVER)
-        queued.assert_called_once_with()
+        self.assertEqual(refresh.call_args.args[1], ACCOUNT)
+        queued.assert_not_called()
 
     def test_a_linked_account_failure_does_not_queue_a_server_renewal(self):
         self.touch(ACCOUNT)

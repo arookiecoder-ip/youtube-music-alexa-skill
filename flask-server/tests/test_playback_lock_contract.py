@@ -46,14 +46,16 @@ class PlaybackLockContractTests(unittest.TestCase):
 
     def test_like_current_song_uses_snapshot_without_wrapping_its_lock(self):
         client=SimpleNamespace(auth_type=object(),rate_song=Mock())
-        namespace=dict(_np_lock=ProductionLock(),_now_playing={'video_id':'A'},
+        namespace=dict(_np_lock=ProductionLock(),_now_playing={'video_id':'abcdefghijk'},
+            _valid_video_id=lambda value: len(value)==11, LocalLibrary=type('LocalLibrary',(),{}),
+            _playlist_tracks_cache_lock=threading.Lock(), _playlist_tracks_cache={}, _current_identity=lambda:'owner',
             _get_ytmusic_home=lambda:client,_bump_liked_version=Mock(),
             asyncio=asyncio,request=request,jsonify=jsonify,logger=Mock())
         self.functions({'_get_now_playing','alexa_like'},namespace)
         with Flask(__name__).test_request_context('/alexa/like/',method='POST',json={'action':'LIKE'}):
             response=asyncio.run(namespace['alexa_like']())
-        self.assertEqual(response.get_json()['video_id'],'A')
-        client.rate_song.assert_called_once_with('A','LIKE')
+        self.assertEqual(response.get_json()['video_id'],'abcdefghijk')
+        client.rate_song.assert_called_once_with('abcdefghijk','LIKE')
 
     def test_lock_taking_helpers_are_never_called_inside_playback_lock(self):
         helpers={'_schedule_play_dispatch','_claim_alexa_output','_get_now_playing','_update_now_playing',

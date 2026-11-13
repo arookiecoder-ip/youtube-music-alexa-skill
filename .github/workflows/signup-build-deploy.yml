@@ -39,6 +39,13 @@ jobs:
         env:
           PYTHONPATH: flask-server:flask-server/tests
         run: python -m unittest discover -s flask-server/tests -p 'test_signup_steps.py'
+      - name: Account isolation, staging sync and retention regressions
+        env:
+          PYTHONPATH: flask-server:flask-server/tests
+        run: |
+          for suite in test_local_library test_staged_library_routes test_mobile_devices test_mobile_device_routes test_youtube_server_session test_security_boundaries test_account_purge test_current_audio test_playback_lock_contract; do
+            python -m unittest "$suite" || exit 1
+          done
       - name: Compile the backend image on the GitHub runner
         run: |
           docker build --label org.opencontainers.image.revision="$GITHUB_SHA" \

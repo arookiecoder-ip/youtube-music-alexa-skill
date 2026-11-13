@@ -13,7 +13,7 @@ import sqlite3
 import time
 from typing import Any, Iterable
 
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 13
 
 _SCHEMA_V1 = (
     """
@@ -415,6 +415,11 @@ class Database:
                     attempts INTEGER NOT NULL DEFAULT 0, verified INTEGER NOT NULL DEFAULT 0)""")
                 conn.execute("CREATE INDEX idx_signup_challenges_email ON signup_challenges(email)")
                 conn.execute("INSERT INTO multiuser_schema_migrations VALUES (12, ?)", (time.time(),))
+            if 13 not in applied:
+                for table, column in (('user_invites', 'expires_at'), ('alexa_pair_codes', 'expires_at'),
+                                      ('alexa_access_tokens', 'expires_at'), ('signup_challenges', 'expires')):
+                    conn.execute(f'CREATE INDEX IF NOT EXISTS idx_{table}_expiry ON {table}({column})')
+                conn.execute('INSERT INTO multiuser_schema_migrations VALUES (13, ?)', (time.time(),))
             now = time.time()
             # Bound the audit journal so a long-lived install cannot grow it
             # without limit. 90 days is intentionally conservative.
@@ -422,6 +427,32 @@ class Database:
             conn.execute("DELETE FROM user_sessions WHERE expires_at < ?", (now - 86400,))
             conn.execute("DELETE FROM user_email_tokens WHERE expires_at < ?", (now - 86400,))
         self._initialized = True
+
+    def maintain(self, now=None, batch=500):
+        """Small indexed expiry batches; live sessions and unsynced libraries survive.
+
+        Deleted pages are reused by SQLite. Avoid VACUUM on the request database:
+        it copies the entire file and monopolizes the writer for large installs.
+        """
+        now = time.time() if now is None else now
+        batch = min(1000, max(1, int(batch)))
+        expired = (
+            ('audit_log', 'created_at', now - 90 * 86400),
+            ('user_sessions', 'expires_at', now - 86400),
+            ('user_email_tokens', 'expires_at', now - 86400),
+            ('user_invites', 'expires_at', now - 86400),
+            ('alexa_pair_codes', 'expires_at', now),
+            ('alexa_access_tokens', 'expires_at', now - 86400),
+            ('signup_challenges', 'expires', now),
+        )
+        removed = 0
+        with self.connect() as conn:
+            for table, column, cutoff in expired:
+                removed += conn.execute(
+                    f'DELETE FROM {table} WHERE rowid IN '
+                    f'(SELECT rowid FROM {table} WHERE {column} < ? ORDER BY {column} LIMIT ?)',
+                    (cutoff, batch)).rowcount
+        return removed
 
     def fetchone(self, sql: str, params: tuple = ()) -> sqlite3.Row | None:
         with self.connect() as conn:
