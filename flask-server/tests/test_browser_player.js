@@ -5,7 +5,7 @@ const path = require('path');
 
 async function main() {
   let reportGate = null, presenceGate = null, metadataGate = null, failAckOnce = false;
-  let pending = false;
+  let pending = false, focused = true;
   let now = 1000, owner = 'browser-id1', token = 'lease1', sequence = 0, commands = [];
   const calls = [], timers = [], events = {}, windowEvents = {};
   const audio = {
@@ -34,7 +34,7 @@ async function main() {
     browserAudioUrl: id => '/audio/?video_id=' + id + '&wait=1' };
   const context = { window, Audio: window.Audio, crypto: { randomUUID: () => 'id' + (++sequence) },
     Date: { now: () => now }, setInterval: fn => { timers.push(fn); return 1; },
-    clearInterval() {}, setTimeout() {}, document: {getElementById: () => ({value: 'mobile:browser-id1'})} };
+    clearInterval() {}, setTimeout() {}, document: {visibilityState: 'visible', hasFocus: () => focused, getElementById: () => ({value: 'mobile:browser-id1'})} };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../templates/static/js/browser-player.js'), 'utf8'), context);
   const player = window.browserPlayback;
   await player.poll();
@@ -245,6 +245,16 @@ async function main() {
   assert(audio.paused);
   owner = player.id; token = 'lease6';
   await player.poll();
+  assert(player.available(), 'A focused browser can accept playback');
+  focused = false;
+  assert(!player.available(), 'A background idle browser must not be selectable');
+  audio.paused = false;
+  assert(player.available(), 'Existing audio stays selectable without focus');
+  audio.paused = true;
+  windowEvents.blur();
+  const visibility = calls.filter(call => call.body?.action === 'visibility').at(-1).body;
+  assert.equal(visibility.foreground, false);
+  assert.equal(visibility.playing, false);
   windowEvents.pagehide();
   const offline = calls.filter(call => call.url === '/api/app/devices/' && call.body.action === 'offline').at(-1).body;
   assert.equal(offline.reason, 'pagehide');

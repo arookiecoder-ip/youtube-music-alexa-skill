@@ -338,3 +338,77 @@ def test_unknown_account_stays_on_send_otp_step(login_page):
     expect(page.locator('#email-code')).not_to_be_visible()
     expect(page.locator('#creds-btn')).to_be_disabled()
     expect(page.locator('#username')).to_be_editable()
+
+@pytest.mark.parametrize('provider', ['amazon', 'youtube'])
+@pytest.mark.parametrize('width', [390, 1280])
+def test_provider_submission_replaces_fields_with_centered_loading(account_page, provider, width):
+    page, origin, calls, queue = account_page
+    page.set_viewport_size({'width': width, 'height': 844})
+    queue.append({'state': 'need_code', 'message': 'Enter your code.'})
+    page.goto(origin + '/accounts/' + provider)
+    path = '**/alexa/form_login/' if provider == 'amazon' else '**/api/youtube/browser-session/form/start'
+    pending = []
+    page.route(path, lambda route: pending.append(route))
+    page.locator('#email').fill('person@example.test')
+    page.locator('#password').fill('synthetic-password')
+    page.locator('#connect').click()
+    expect(page.locator('#working')).to_be_visible()
+    expect(page.locator('#credentials')).not_to_be_visible()
+    expect(page.locator('#fallback')).not_to_be_visible()
+    page.wait_for_timeout(50)
+    assert len(pending) == 1
+    pending[0].continue_()
+    expect(page.locator('#code-panel')).to_be_visible()
+    expect(page.locator('#working')).not_to_be_visible()
+    assert page.locator('#password').input_value() == ''
+    assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
+
+
+def test_amazon_interactive_option_only_appears_after_failure(account_page):
+    page, origin, calls, queue = account_page
+    queue.append({'state': 'error', 'message': 'The security picture could not load.'})
+    page.goto(origin + '/accounts/amazon')
+    expect(page.locator('#fallback')).not_to_be_visible()
+    page.locator('#email').fill('person@example.test')
+    page.locator('#password').fill('synthetic-password')
+    page.locator('#connect').click()
+    expect(page.locator('#fallback')).to_be_visible()
+    expect(page.locator('#retry')).to_be_visible()
+    page.locator('#fallback').click()
+    expect(page.locator('#connect')).to_have_text('Open Amazon sign-in')
+    page.route('**/alexa/proxy_login/', lambda route: route.fulfill(json={
+        'login_url': origin + '/alexa/proxy/', 'attempt_id': 'proxy-attempt'}))
+    page.route('**/alexa/proxy/', lambda route: route.fulfill(body='<p>Amazon verification</p>'))
+    page.locator('#password').fill('synthetic-password')
+    page.locator('#connect').click()
+    expect(page.locator('#interactive')).to_be_visible()
+    expect(page.frame_locator('#amazon-page').locator('p')).to_have_text('Amazon verification')
+    page.route('**/alexa/proxy_cancel/', lambda route: route.fulfill(json={'cancelled': True}))
+    page.locator('#interactive-cancel').click()
+    expect(page.locator('#interactive')).not_to_be_visible()
+    expect(page.locator('#credentials')).to_be_visible()
+
+
+def test_youtube_method_selection_and_picture_challenge_use_google_endpoints(account_page):
+    page, origin, calls, queue = account_page
+    queue.extend([
+        {'state': 'need_method', 'options': [{'value': 'totp', 'label': 'Authenticator'}]},
+        {'state': 'need_captcha', 'text': False, 'message': 'Select matching pictures.'},
+        {'state': 'connected'},
+    ])
+    page.route('**/api/youtube/browser-session/form/captcha?t=*', lambda route: route.fulfill(body=_png_bytes(), content_type='image/png'))
+    page.goto(origin + '/accounts/youtube')
+    page.locator('#email').fill('person@example.test')
+    page.locator('#password').fill('synthetic-password')
+    page.locator('#connect').click()
+    expect(page.locator('#method-panel')).to_be_visible()
+    page.locator('#method-submit').click()
+    expect(page.locator('#captcha-panel')).to_be_visible()
+    expect(page.locator('#captcha')).not_to_be_visible()
+    page.locator('#captcha-image').click(position={'x': 20, 'y': 20})
+    expect(page.locator('#captcha-selection')).to_have_text('1 pictures selected')
+    page.locator('#captcha-submit').click()
+    expect(page).to_have_url(origin + '/account?connected=youtube#panel-providers')
+    assert ('/api/youtube/browser-session/form/method', {'method': 'totp'}) in calls
+    answer = next(body for url, body in calls if url == '/api/youtube/browser-session/form/captcha')
+    assert len(answer['points']) == 1

@@ -52,12 +52,14 @@ class EchoPairingTests(SelfServiceTestBase):
         self.assertEqual(identity.resolve('alexa-user','device-a')['id'],user['id'])
         self.assertIsNone(identity.resolve('alexa-user','device-b'))
 
-    def test_pair_code_and_stream_capability_die_on_password_change(self):
+    def test_pair_code_and_stream_capability_survive_password_change(self):
         user=self.accounts.get_user_by_username('owner');identity=self.layer.alexa_identity
+        self.layer.alexa_access.set_enabled(user['id'], True)
         code=identity.issue(user);cap=identity.stream_token(user['id'],'dQw4w9WgXcQ')
+        self.assertIsNotNone(identity.stream_user(cap,'dQw4w9WgXcQ'))
         self.accounts.change_own_password(user,'Owner!Passw0rd','Changed!Passw0rd')
-        self.assertFalse(identity.pair(code,'alexa-user','device'))
-        self.assertIsNone(identity.stream_user(cap,'dQw4w9WgXcQ'))
+        self.assertTrue(identity.pair(code,'alexa-user','device'))
+        self.assertIsNotNone(identity.stream_user(cap,'dQw4w9WgXcQ'))
 
     def test_stream_capability_is_video_bound_and_tamper_resistant(self):
         user=self.accounts.get_user_by_username('owner');identity=self.layer.alexa_identity

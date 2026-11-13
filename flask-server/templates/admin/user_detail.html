@@ -151,7 +151,10 @@
 <strong>Private skill token</strong>
 <p>{% if not user.alexa_enabled %}Enable access before creating a token.{% elif not alexa_eligible %}Activate the account, verify its email and finish any required password change first.{% else %}Create a credential for this account’s private deployment.{% endif %}</p>
 </div>{% if can_manage %}<button class="btn small" type="button" data-dialog-open="token-create-dialog" {{ 'disabled' if not alexa_eligible else '' }}>{{ 'Rotate token' if has_active_alexa_token else 'Generate token' }}</button>{% endif %}</div>
-        {% if alexa_tokens %}<div class="ud-history-action"><button class="btn" type="button" data-dialog-open="token-history-dialog">Token history <span class="ud-count">{{ alexa_tokens|length }}</span></button></div>{% endif %}
+        <div class="ud-token-row" id="active-alexa-token">
+          <div><strong>Active token</strong><p>{% if active_alexa_token %}<code>{{ active_alexa_token.prefix }}</code>{% else %}No active token{% endif %}</p></div>
+          {% if active_alexa_token and can_manage %}<form method="post" action="{{ base_path }}/users/{{ user.id }}/alexa/" data-confirm-heading="Revoke Alexa token" data-confirm="Stop this token and its playback URLs?" data-confirm-button="Revoke token" data-confirm-danger>{{ csrf() }}<input type="hidden" name="action" value="revoke"><button class="btn small danger" type="submit">Revoke token</button></form>{% endif %}
+        </div>
         <p class="ud-footnote">For private-skill voice playback, use the same Amazon account in the user panel, Developer Console and Echo. The Music Box email can differ. Tokens expire after one year.</p>
       </section>
       {% if can_manage and not is_self %}<section class="ud-panel ud-danger" id="danger-zone">
@@ -236,21 +239,6 @@
   {% endif %}
 </div>
 
-{% if alexa_tokens and not deleted %}
-<dialog class="admin-dialog ud-dialog" id="token-history-dialog" aria-labelledby="token-history-title">
-{{ dialog_head('Token history', 'token-history-title') }}
-<div class="dialog-body"><p>Credentials issued for this account. Full tokens cannot be displayed again.</p><div class="ud-history-list" role="region" aria-label="Issued Alexa tokens" tabindex="0">{% for token in alexa_tokens %}<div class="ud-token-record">
-<div>
-<code>{{ token.id }}</code>
-<span>Issued {{ token.created_at|mu_relative }} · expires {{ token.expires_at|mu_datetime }}</span>
-</div>
-<span class="badge {{ 'active' if token.state == 'active' else 'neutral' }}">{{ token.state }}</span>
-</div>{% endfor %}</div></div>
-<div class="dialog-foot"><button class="btn ghost" type="button" data-dialog-close>Close</button>{% if can_manage %}<form method="post" action="{{ base_path }}/users/{{ user.id }}/alexa/" data-confirm-heading="Revoke Alexa tokens" data-confirm="Reject every existing Alexa token and its playback URLs for {{ user.username }}?" data-confirm-button="Revoke tokens" data-confirm-danger>{{ csrf() }}<input type="hidden" name="action" value="revoke">
-<button class="btn small danger" type="submit">Revoke all tokens</button>
-</form>{% endif %}</div>
-</dialog>
-{% endif %}
 {% for s in sessions %}
 <dialog class="admin-dialog ud-dialog" id="session-info-{{ loop.index }}" aria-labelledby="session-info-title-{{ loop.index }}">
 {{ dialog_head('Device details', 'session-info-title-' ~ loop.index) }}
@@ -333,12 +321,12 @@
 <button class="btn" type="button" data-dialog-close>Done</button>
 </div>
 </dialog>
-<dialog class="admin-dialog ud-dialog" id="token-create-dialog" aria-labelledby="token-create-title">{{ dialog_head('Create an Alexa token', 'token-create-title') }}<form method="post" action="{{ base_path }}/users/{{ user.id }}/alexa/">{{ csrf() }}<input type="hidden" name="action" value="generate">
+<dialog class="admin-dialog ud-dialog" id="token-create-dialog" aria-labelledby="token-create-title">{{ dialog_head('Create an Alexa token', 'token-create-title') }}<form method="post" action="{{ base_path }}/users/{{ user.id }}/alexa/" data-token-download>{{ csrf() }}<input type="hidden" name="action" value="generate">
 <div class="dialog-body">
-<p>A token gives this private skill access to <strong>{{ user.email }}</strong>. The Echo must use the Amazon account connected in this user’s panel.</p>
+<p>A token gives this private skill access to account <strong>{{ user.id }}</strong>. The Echo must use the Amazon account connected in this user’s panel.</p>
 <div class="ud-notice">
 <strong>Previous tokens will stop working</strong>
-<span>Generating a new token invalidates existing tokens and their playback URLs. Copy the new token immediately; it is shown once.</span>
+<span>Generating a new token invalidates existing tokens and their playback URLs. Download the private configuration once and replace the settings in the Alexa Console. The full token is never shown on this page.</span>
 </div>
 </div>
 <div class="dialog-foot">
@@ -348,19 +336,4 @@
 </form>
 </dialog>
 {% endif %}
-{% if alexa_token %}<dialog class="admin-dialog ud-dialog" id="token-reveal-dialog" aria-labelledby="token-reveal-title" data-autopen>{{ dialog_head('Your new Alexa token', 'token-reveal-title') }}<div class="dialog-body">
-<div class="ud-notice">
-<strong>Save this token now</strong>
-<span>It cannot be displayed again. Keep it in this user’s private skill configuration.</span>
-</div>
-<label class="ud-eyebrow" for="new-alexa-token">Private token</label>
-<textarea id="new-alexa-token" class="ud-token-secret" readonly spellcheck="false" autocomplete="off">{{ alexa_token }}</textarea>
-<button class="btn ud-button-blue" type="button" data-copy-target="new-alexa-token">Copy token</button>
-<span class="ud-copy-status" role="status" aria-live="polite">
-</span>
-</div>
-<div class="dialog-foot">
-<button class="btn" type="button" data-dialog-close>I have saved it</button>
-</div>
-</dialog>{% endif %}
 {% endblock %}

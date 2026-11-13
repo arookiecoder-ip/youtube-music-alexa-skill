@@ -18,7 +18,7 @@ from email.utils import formataddr, formatdate, make_msgid
 from datetime import datetime, timezone
 from typing import Optional
 
-EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+EMAIL_RE = re.compile(r"^[^@\s]+@[^@.\s]+\.[^@\s]+$")
 
 
 def _env_bool(name: str, default: bool = False) -> bool:

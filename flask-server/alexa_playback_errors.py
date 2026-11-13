@@ -6,10 +6,11 @@ MESSAGES = {
     'amazon_link_required': ('Connect Amazon in your account settings, then try again.', 'connect_amazon'),
     'amazon_link_changed': ('Your Amazon connection changed. Reconnect Amazon and try again.', 'reconnect_amazon'),
     'amazon_email_mismatch': ('Alexa authentication failed: this Echo uses a different Amazon account. Connect the same Amazon account in your account settings.', 'reconnect_amazon'),
-    'musicbox_email_mismatch': ('Alexa authentication failed: MUSICBOX_EMAIL does not match the account for this token. Correct the skill settings.', 'check_skill_settings'),
+    'musicbox_account_mismatch': ('Alexa authentication failed: MUSICBOX_ACCOUNT_ID does not match the account for this token. Copy your account ID from Account settings.', 'check_skill_settings'),
+    'musicbox_email_mismatch': ('Alexa authentication failed: the legacy email setting does not match this token. Set MUSICBOX_ACCOUNT_ID from Account settings.', 'check_skill_settings'),
     'amazon_permission_required': ('Alexa could not verify your Amazon account. Allow this skill to read your email in the Alexa app, then try again.', 'allow_amazon_email'),
     'amazon_profile_unavailable': ('Amazon account verification is temporarily unavailable. Playback stopped; try again later.', 'retry_later'),
-    'alexa_access_denied': ('Alexa access was denied. Check Alexa access in your account and update the skill with your active token.', 'check_alexa_access'),
+    'alexa_access_denied': ('Music Box access was denied. Check Alexa access in your account and update the skill with your active token.', 'check_alexa_access'),
     'alexa_authentication_required': ('Your Amazon session has expired or is inconsistent. Reconnect Amazon in your account settings, then try again.', 'reconnect_amazon'),
 }
 
@@ -18,6 +19,8 @@ def authentication_failure(error, code=None):
     code = code or getattr(error, 'code', None)
     if not isinstance(code, str):
         code = None
+    if 'MUSICBOX_EMAIL' in str(error or ''):
+        code = 'musicbox_account_mismatch'
     if code not in MESSAGES:
         text = str(error or '').casefold()
         if ('youtube' in text or 'ytmusic' in text) and 'alexa' not in text and 'amazon' not in text:
@@ -28,7 +31,7 @@ def authentication_failure(error, code=None):
             return {'type': 'alexa_authentication_required', 'code': code, 'message': message,
                     'action': action, 'terminal': True, 'retryable': False}
         markers = ('not signed in', 'sign in to amazon', 'amazon session',
-                   'alexa authentication', 'alexa access was denied', 'access denied',
+                   'alexa authentication', 'alexa access was denied', 'music box access was denied', 'access denied',
                    'authentication failed', 'unauthorized', 'unauthorised',
                    'session expired', 'invalid token', 'token expired')
         status = getattr(error, 'status', None) or getattr(getattr(error, 'response', None), 'status_code', None)

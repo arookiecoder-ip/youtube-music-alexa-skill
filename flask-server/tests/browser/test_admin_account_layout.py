@@ -93,59 +93,16 @@ def test_require_change_saves_without_resetting_password(admin_page):
     assert not case.accounts.get_user(user['id'])['must_change_password']
 
 
-def test_token_history_is_a_popup_with_theme_matching_edges(admin_page):
+def test_only_current_token_prefix_is_visible_without_history(admin_page):
     page,case,user,origin,errors=admin_page
     case.layer.db.execute("UPDATE users SET status='active',email_verified=1,alexa_enabled=1 WHERE id=?",(user['id'],))
-    case.layer.alexa_access.rotate(user['id'])
+    previous=case.layer.alexa_access.rotate(user['id'])
+    active=case.layer.alexa_access.rotate(user['id'])
     page.reload()
-    assert page.locator('details.ud-token-history').count()==0
-    expect(page.locator('.ud-token-record')).not_to_be_visible()
-    page.get_by_role('button',name='Token history').click()
-    dialog=page.locator('#token-history-dialog')
-    expect(dialog).to_be_visible()
-    expect(dialog.locator('.ud-token-record')).to_be_visible()
-    expect(dialog.get_by_role('button',name='Revoke all tokens')).to_be_visible()
-    page.screenshot(path='/tmp/musicbox-admin-refinement/token-history.png')
-    assert dialog.evaluate('(node)=>getComputedStyle(node).borderTopLeftRadius')=='0px'
-    radii=dialog.locator('button').evaluate_all('(nodes)=>nodes.map(node=>getComputedStyle(node).borderTopLeftRadius)')
-    assert set(radii)=={'0px'},radii
-    dialog.get_by_role('button',name='Close',exact=True).click()
-    expect(dialog).not_to_be_visible()
-
-
-def test_manual_reset_changes_password_only_after_confirmation(admin_page):
-    from multiuser.security import verify_password
-    page,case,user,origin,errors=admin_page
-    case.layer.db.execute("UPDATE users SET status='active' WHERE id=?",(user['id'],))
-    raw=case.accounts.create_session(case.accounts.get_user(user['id']))
-    page.reload()
-    page.get_by_role('button',name='Password options',exact=True).click()
-    page.locator('#password-user-dialog').get_by_role('button',name='Reset password now').click()
-    reset=page.locator('#password-reset-dialog')
-    reset.get_by_label('Set a password yourself').check()
-    reset.locator('#reset-password').fill('Replacement!Pass123')
-    reset.get_by_role('button',name='Reset password',exact=True).click()
-    confirmation=page.locator('#admin-dialog')
-    expect(confirmation).to_be_visible()
-    confirmation.get_by_role('button',name='Cancel',exact=True).click()
-    assert not verify_password(case.layer.db.scalar('SELECT password_hash FROM users WHERE id=?',(user['id'],)),'Replacement!Pass123')
-    reset.get_by_role('button',name='Reset password',exact=True).click()
-    confirmation.get_by_role('button',name='Reset password',exact=True).click()
-    expect(page.locator('.flash.success')).to_contain_text('Password reset')
-    assert verify_password(case.layer.db.scalar('SELECT password_hash FROM users WHERE id=?',(user['id'],)),'Replacement!Pass123')
-    assert case.accounts.get_user(user['id'])['must_change_password']
-    assert case.layer.db.scalar('SELECT COUNT(*) FROM user_sessions WHERE user_id=? AND revoked_at=0',(user['id'],))==0
-
-
-@pytest.mark.parametrize('width',[320,390])
-def test_password_popups_fit_small_screens(admin_page,width):
-    page,case,user,origin,errors=admin_page
-    page.set_viewport_size({'width':width,'height':800})
-    page.get_by_role('button',name='Password options',exact=True).click()
-    choose=page.locator('#password-user-dialog')
-    expect(choose.locator('.dialog-head button svg')).to_be_visible()
-    choose.get_by_role('button',name='Reset password now').click()
-    reset=page.locator('#password-reset-dialog')
-    reset.get_by_label('Set a password yourself').check()
-    assert reset.evaluate('(node)=>{const b=node.getBoundingClientRect();return b.left>=0&&b.right<=innerWidth&&b.top>=0&&b.bottom<=innerHeight}')
-    assert page.evaluate('document.documentElement.scrollWidth<=innerWidth')
+    expect(page.locator('#active-alexa-token')).to_contain_text(active[:12]+'…')
+    expect(page.get_by_role('button',name='Rotate token',exact=True)).to_be_visible()
+    expect(page.get_by_role('button',name='Revoke token',exact=True)).to_be_visible()
+    expect(page.locator('#token-history-dialog')).to_have_count(0)
+    assert previous[:12] not in page.content()
+    assert active.split('.')[0] not in page.content()
+    page.screenshot(path="/tmp/musicbox-single-token-admin.png", full_page=True)

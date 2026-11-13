@@ -6,6 +6,10 @@ This file summarizes behavior changes, explicitly records superseded work and li
 
 ## Unreleased
 
+- Fetch the dedicated songs results when a playlist leads mixed search, and recognize word-spacing variations in song titles so unrelated partial-word matches do not displace the requested song.
+
+- Restore the PO-token helper's private proxy-network attachment, fixing download-cookie checks that timed out on proxy DNS errors. Discover the egress network by its alias in the recovery script so container recreation preserves connectivity.
+
 - Give Amazon verification frames a guaranteed minimum height for Android WebView, size the YouTube sign-in browser for desktop versus mobile, and resize an existing browser when switching controllers. Retry only safe Amazon GET requests on temporary server errors and show a retry screen if the provider remains unavailable.
 
 - Fix cookie-authenticated access to the YouTube sign-in surface and account chooser, with a regression through the real authorization middleware. Share the original owner sign-in theme, reveal only decoded browser frames, stop on expired authorization, and retain natural page scrolling to the confirmation action.

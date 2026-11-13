@@ -577,7 +577,7 @@ def build_selfservice_blueprint(mu) -> Blueprint:
                 if not email:
                     raise AccountError("Enter your email address.")
             except AccountError as exc:
-                return page(str(exc), 422)
+                return page(exc.public_message, 422)
             blocked = _limited("signup-id", netids.identifier_bucket(email), html=True)
             if blocked:
                 return blocked
@@ -634,7 +634,7 @@ def build_selfservice_blueprint(mu) -> Blueprint:
                 user = mu.accounts.register_self_service(username=username, password=password,
                     email=pending["email"], email_verified=True, ip=ip, user_agent=ua)
             except AccountError as exc:
-                return page(str(exc), 422)
+                return page(exc.public_message, 422)
             from auth_sessions import replace_identity, complete_login
             raw_sid = mu.accounts.create_session(user, ip, ua)
             complete_login(mu, user, ip)
@@ -869,7 +869,7 @@ def build_selfservice_blueprint(mu) -> Blueprint:
                 consumed["user"]["id"], password, ip=_ip(), user_agent=_ua()
             )
         except AccountError as exc:
-            return page(str(exc), 400)
+            return page(exc.public_message, 400)
         rotate_csrf()
         return _result_page(
             "Account activated",
@@ -1067,7 +1067,7 @@ def build_selfservice_blueprint(mu) -> Blueprint:
                 user["id"], password, ip=ip, user_agent=user_agent
             )
         except AccountError as exc:
-            return page(None, None, str(exc), status=422, username=identifier)
+            return page(None, None, exc.public_message, status=422, username=identifier)
         session.pop(PENDING_VERIFY_KEY, None)
         rotate_csrf()
         return _result_page(
@@ -1193,7 +1193,7 @@ def build_selfservice_blueprint(mu) -> Blueprint:
                 g.ss_user, provider, ip=ip, user_agent=user_agent
             )
         except AccountError as exc:
-            return _json_error("invalid_provider", str(exc), 422)
+            return _json_error("invalid_provider", exc.public_message, 422)
         label = "YouTube Music" if provider == "youtube" else "Amazon"
         if failures:
             return jsonify({
@@ -1262,7 +1262,7 @@ def build_selfservice_blueprint(mu) -> Blueprint:
                 user_agent=user_agent,
             )
         except AccountError as exc:
-            message = str(exc)
+            message = exc.public_message
             if "current password" in message.lower():
                 return _json_error(
                     "bad_password", message, 403, fields={"current_password": message}
@@ -1313,7 +1313,7 @@ def build_selfservice_blueprint(mu) -> Blueprint:
                 keep_sid_hash=session.get("mu_sid") or "",
             )
         except AccountError as exc:
-            message = str(exc)
+            message = exc.public_message
             if "current password" in message.lower():
                 return _json_error(
                     "bad_password", message, 403, fields={"current_password": message}
@@ -1323,8 +1323,7 @@ def build_selfservice_blueprint(mu) -> Blueprint:
             {
                 "ok": True,
                 "message": (
-                    "Password changed. Other devices were signed out; this one stays "
-                    "signed in. Turn two-factor on while you are here."
+                    "Password changed. Your devices stay signed in."
                 ),
             }
         )
@@ -1416,7 +1415,7 @@ def build_selfservice_blueprint(mu) -> Blueprint:
                 fields={"code": "Wrong, used, or expired. Send a new code and try once."},
             )
         sign_out_others = body.get("sign_out_others")
-        sign_out_others = True if sign_out_others is None else bool(sign_out_others)
+        sign_out_others = False if sign_out_others is None else bool(sign_out_others)
         try:
             mu.accounts.reset_password_with_token(
                 user["id"],
@@ -1427,7 +1426,7 @@ def build_selfservice_blueprint(mu) -> Blueprint:
                 revoke_other_sessions=sign_out_others,
             )
         except AccountError as exc:
-            return _json_error("invalid", str(exc), 422)
+            return _json_error("invalid", exc.public_message, 422)
         # No CSRF rotation: the popup stays open and keeps posting with the token it
         # was rendered with, and this account's identity in this browser is unchanged.
         return jsonify(
@@ -1454,7 +1453,7 @@ def build_selfservice_blueprint(mu) -> Blueprint:
         try:
             mu.accounts.reauthenticate(g.ss_user, password=str(body.get("current_password") or ""), ip=_ip(), user_agent=_ua())
         except AccountError as exc:
-            return _json_error("bad_password", str(exc), 403)
+            return _json_error("bad_password", exc.public_message, 403)
         return jsonify({"ok": True})
 
     @bp.route("/api/account/code/check", methods=["POST"])
@@ -1522,7 +1521,7 @@ def build_selfservice_blueprint(mu) -> Blueprint:
         try:
             new_email = mu.accounts.validate_email(str(body.get("email") or ""))
         except AccountError as exc:
-            message = str(exc)
+            message = exc.public_message
             return _json_error("invalid", message, 422, fields={"email": message})
         if not new_email:
             message = "An email address is required, so you can reset your password later."
@@ -1569,7 +1568,7 @@ def build_selfservice_blueprint(mu) -> Blueprint:
                 user_agent=user_agent,
             )
         except AccountError as exc:
-            message = str(exc)
+            message = exc.public_message
             if "password" in message.lower():
                 return _json_error("bad_password", message, 403, fields={"current_password": message})
             if "code" in message.lower():
@@ -1654,9 +1653,9 @@ def build_selfservice_blueprint(mu) -> Blueprint:
                 "user": verified or mu.accounts.get_user(user["id"]),
                 "email_verified": True,
                 "verification_pending": False,
-                "sign_in_required": bool(user.get("pending_email")),
-                "redirect_url": "/login/?email_changed=1" if user.get("pending_email") else "",
-                "message": ("Email updated. Sign in again with your new email address." if user.get("pending_email") else f"{_mask(user.get('email') or '')} is confirmed."),
+                "sign_in_required": False,
+                "redirect_url": "",
+                "message": ("Email updated. Your devices stay signed in." if user.get("pending_email") else f"{_mask(user.get('email') or '')} is confirmed."),
             }
         )
 
@@ -1682,7 +1681,7 @@ def build_selfservice_blueprint(mu) -> Blueprint:
                 user_agent=_ua(),
             )
         except AccountError as exc:
-            return _json_error("invalid", str(exc), 422)
+            return _json_error("invalid", exc.public_message, 422)
         if killed_current:
             _drop_account_cookies()
         return jsonify({"ok": True, "revoked": revoked, "signed_out": killed_current})
@@ -1724,7 +1723,7 @@ def build_selfservice_blueprint(mu) -> Blueprint:
                 allow_existing=True,
             )
         except AccountError as exc:
-            message = str(exc)
+            message = exc.public_message
             if "password" in message.lower():
                 return _json_error(
                     "bad_password", message, 403, fields={"current_password": message}
@@ -1791,7 +1790,7 @@ def build_selfservice_blueprint(mu) -> Blueprint:
                 user_agent=_ua(),
             )
         except AccountError as exc:
-            message = str(exc)
+            message = exc.public_message
             bad_code = "did not match" in message.lower()
             return _json_error(
                 "totp_code" if bad_code else "invalid",
@@ -1831,7 +1830,7 @@ def build_selfservice_blueprint(mu) -> Blueprint:
         try:
             mu.accounts.cancel_totp_enrollment(g.ss_user, ip=_ip(), user_agent=_ua())
         except AccountError as exc:
-            return _json_error("invalid", str(exc), 422)
+            return _json_error("invalid", exc.public_message, 422)
         return jsonify({"ok": True})
 
     @bp.route("/api/account/totp/disable", methods=["POST"])
@@ -1854,7 +1853,7 @@ def build_selfservice_blueprint(mu) -> Blueprint:
                 user_agent=user_agent,
             )
         except AccountError as exc:
-            message = str(exc)
+            message = exc.public_message
             lowered = message.lower()
             if "password" in lowered:
                 return _json_error(
@@ -1918,7 +1917,7 @@ def build_selfservice_blueprint(mu) -> Blueprint:
                 user_agent=user_agent,
             )
         except AccountError as exc:
-            message = str(exc)
+            message = exc.public_message
             lowered = message.lower()
             if "incorrect" in lowered:
                 return _json_error("bad_password", message, 403, fields={"password": message})

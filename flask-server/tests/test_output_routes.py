@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock, AsyncMock
 import asyncio
 import copy
+import time
 
 from test_app_queue import PhoneQueueTests, A, B, track
 from playback_failover import PlaybackFailoverBudget
@@ -23,6 +24,8 @@ class OutputRoutesTests(PhoneQueueTests):
         self.namespace["_playback_failover_budget"] = PlaybackFailoverBudget()
         self.seek_dispatch = Mock(return_value=None)
         self.namespace['_dispatch_play_with_retry'] = self.seek_dispatch
+        self.schedule_seek = Mock()
+        self.namespace['_schedule_play_dispatch'] = self.schedule_seek
         self.namespace.update(_alexa_volume_lock=threading.RLock(), _alexa_volume_grace={},
             _record_volume_state=Mock())
         self.arm = Mock()
@@ -32,14 +35,20 @@ class OutputRoutesTests(PhoneQueueTests):
         self.namespace.update(_np_snapshot=lambda serial=None: copy.deepcopy(self.state), copy=copy, threading=threading, logger=Mock(), _effective_serial=lambda serial: serial,
             _touch_cached_audio=Mock(), _ensure_audio_ready_for_play=Mock(), _arm_play=self.arm,
             _watch_resume_confirmation=Mock(), _ARMED_PLAYS_LOCK=threading.Lock(), _ARMED_PLAYS={})
-        self.command = Mock(side_effect=lambda *args: self.state.update(playing=False, playback_processing=False))
+        def stopped(serial, *args):
+            self.state.update(playing=False, playback_processing=False,
+                _alexa_stop_ack={'received_at': time.monotonic(), 'serial': serial,
+                    'video_id': self.state['video_id'], 'token': self.state.get('alexa_token', '')})
+        self.command = Mock(side_effect=stopped)
+        self.namespace['_HANDOFF_PAUSE_TIMEOUT'] = .3
+        self.namespace['_known_alexa_auth_failure'] = Mock(return_value=None)
         self.namespace.update(alexa_remote=SimpleNamespace(remote=SimpleNamespace(command=self.command)),
                               _get_now_playing=lambda: dict(self.state),
                               _cancel_pending_dispatch=Mock(), _bump_playback_generation=Mock())
         source = Path(__file__).resolve().parents[1] / 'server.py'
         functions = [node for node in ast.parse(source.read_text()).body
                      if isinstance(node, ast.FunctionDef) and node.name in
-                     ('app_playback_output', '_claim_alexa_output', 'alexa_command', 'alexa_seek', '_command_alexa_volume')]
+                     ('app_playback_output', '_pause_echo_for_handoff', '_claim_alexa_output', 'alexa_command', 'alexa_seek', '_command_alexa_volume')]
         exec(compile(ast.Module(body=functions, type_ignores=[]), str(source), 'exec'), self.namespace)
 
     def output_request(self, action, token=''):
@@ -59,13 +68,68 @@ class OutputRoutesTests(PhoneQueueTests):
         self.command.assert_called_once_with('echo-one', 'pause')
         self.assertEqual(self.client.get('/api/app/output/').json['playback_output'], 'phone')
 
-    def test_echo_pause_failure_preserves_alexa_state(self):
+    def test_revoked_skill_credential_prioritizes_target_without_spoken_command(self):
+        self.namespace['_known_alexa_auth_failure'].return_value = {'code': 'alexa_access_denied'}
+        self.assertEqual(self.output_request('claim').status_code, 200)
+        self.command.assert_not_called()
+        self.assertEqual(self.output.snapshot()['playback_output'], 'phone')
+
+    def test_handoff_uses_bounded_pause_and_allows_target_after_timeout(self):
+        bounded = Mock(return_value='Alexa did not confirm the pause')
+        self.namespace['alexa_remote'].remote.handoff_pause = bounded
+        self.assertEqual(self.output_request('claim').status_code, 200)
+        bounded.assert_called_once_with('echo-one')
+        self.command.assert_not_called()
+
+    def test_echo_pause_failure_prioritizes_selected_phone(self):
         self.command.side_effect = None
         self.command.return_value = 'offline'
         result = self.output_request('claim')
-        self.assertEqual(result.status_code, 409)
-        self.assertEqual(result.json['playback_output'], 'alexa')
-        self.assertTrue(self.state['playing'])
+        self.assertEqual(result.status_code, 200)
+        self.assertEqual(result.json['playback_output'], 'phone')
+        self.assertFalse(self.state['playing'])
+
+    def test_missing_stop_confirmation_does_not_trap_playback(self):
+        self.command.side_effect = None
+        self.command.return_value = None
+        response = self.output_request('claim')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.output.snapshot()['playback_output'], 'phone')
+        self.assertFalse(self.state['playing'])
+
+    def test_stale_stop_does_not_prevent_target_priority(self):
+        self.state['_alexa_stop_ack'] = {'received_at': time.monotonic()+10_000,
+            'serial':'echo-one', 'video_id':self.state['video_id'], 'token':''}
+        self.command.side_effect = None
+        self.command.return_value = None
+        self.assertEqual(self.output_request('claim').status_code, 200)
+        self.assertEqual(self.output.snapshot()['playback_output'], 'phone')
+
+    def test_failed_pause_cannot_steal_a_newer_song(self):
+        def changed(*args):
+            self.state['video_id'] = B
+            return 'offline'
+        self.command.side_effect = changed
+        self.assertEqual(self.output_request('claim').status_code, 409)
+        self.assertEqual(self.output.snapshot()['playback_output'], 'alexa')
+        self.assertEqual(self.state['video_id'], B)
+
+    def test_new_echo_selection_cannot_be_released_by_the_old_echo_stop(self):
+        self.output.serial = 'echo-one'
+        def switched(*args):
+            self.output.serial = 'echo-two'
+            self.state['_alexa_stop_ack'] = {'received_at':time.monotonic(),
+                'serial':'echo-one', 'video_id':self.state['video_id'], 'token':''}
+        self.command.side_effect = switched
+        self.assertEqual(self.output_request('claim').status_code, 409)
+        self.assertEqual(self.output.snapshot()['playback_output'], 'alexa')
+        self.assertEqual(self.output.snapshot()['output_serial'], 'echo-two')
+
+    def test_paused_source_allows_target_priority(self):
+        self.command.side_effect = lambda *args: self.state.update(playing=False, playback_processing=False)
+        response = self.output_request('claim')
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.output.snapshot()['playback_output'], 'phone')
 
     def test_web_handoff_waits_for_ack_and_invalidates_phone_writes(self):
         claim = self.output_request('claim').json
@@ -118,17 +182,11 @@ class OutputRoutesTests(PhoneQueueTests):
         self.assertEqual(self.state, before)
         self.assertTrue(self.output.owns_phone('phone-one', claim['output_token']))
 
-    def test_phone_waits_for_native_pause_ack_without_waiting_for_skill_webhook(self):
+    def test_phone_waits_for_the_actual_matching_playback_stopped_callback(self):
         accepted = threading.Event()
         finished = threading.Event()
         responses = []
-        native_ack = threading.Event()
-        def pause(*args):
-            accepted.set()
-            if not native_ack.wait(1):
-                return 'Native pause request timed out'
-            return None
-        self.command.side_effect = pause
+        self.command.side_effect = lambda *args: accepted.set()
         def claim_phone():
             with self.app.test_client() as client:
                 responses.append(client.post('/api/app/output/', json={
@@ -137,14 +195,23 @@ class OutputRoutesTests(PhoneQueueTests):
         worker = threading.Thread(target=claim_phone)
         worker.start()
         self.assertTrue(accepted.wait(1))
-        self.assertFalse(finished.is_set())
+        self.assertFalse(finished.wait(.05))
         self.assertEqual(self.output.snapshot()['playback_output'], 'alexa')
-        native_ack.set()  # The delayed skill webhook is deliberately absent.
+        with self.namespace['_np_lock']:
+            self.state.update(playing=False, playback_processing=False,
+                _alexa_stop_ack={'received_at':time.monotonic(), 'serial':'echo-one',
+                    'video_id':self.state['video_id'], 'token':self.state.get('alexa_token','')})
         worker.join(1)
         self.assertFalse(worker.is_alive())
         self.assertEqual(responses[0].status_code, 200)
         self.assertEqual(responses[0].json['playback_output'], 'phone')
-        self.assertFalse(self.state['playing'])
+
+    def test_old_stop_does_not_block_explicit_target_selection(self):
+        self.state['alexa_token'] = 'current-instance'
+        self.command.side_effect = lambda *args: self.state.update(_alexa_stop_ack={
+            'received_at':time.monotonic(), 'serial':'echo-one', 'video_id':self.state['video_id'], 'token':'old-instance'})
+        self.assertEqual(self.output_request('claim').status_code, 200)
+        self.assertEqual(self.output.snapshot()['playback_output'], 'phone')
 
     def run_real_web_play(self, error=None):
         self.output_request('claim')
@@ -258,6 +325,37 @@ class OutputRoutesTests(PhoneQueueTests):
         self.assertEqual(self.state['position_ms'], 42500)
         self.assertTrue(self.state['playback_confirmed'])
         self.assertFalse(self.state['playback_processing'])
+
+    def test_async_seek_acknowledges_before_amazon_and_schedules_fenced_latest_offset(self):
+        self.state.update(playing=True, playback_confirmed=True)
+        self.seek_dispatch.side_effect = AssertionError('Must not wait on Amazon in HTTP worker')
+        response = self.client.post('/alexa/seek/', json={
+            'serial': 'echo-one', 'position_ms': 42000, 'video_id': A, 'async': True})
+        self.assertEqual(response.status_code, 202)
+        self.assertTrue(response.json['pending'])
+        self.assertEqual(self.state['position_ms'], 42000)
+        self.assertTrue(self.state['playback_processing'])
+        self.assertFalse(self.state['playback_confirmed'])
+        self.seek_dispatch.assert_not_called()
+        self.schedule_seek.assert_called_once_with('echo-one', A, offset_ms=42000, delay=0.075,
+            expected_intent=self.state['alexa_intent_at'],
+            expected_output=self.namespace['_playback_output'].snapshot()['output_token'])
+
+    def test_async_seek_while_paused_only_moves_cursor(self):
+        self.state.update(playing=False, playback_confirmed=True)
+        response = self.client.post('/alexa/seek/', json={
+            'serial': 'echo-one', 'position_ms': 42000, 'async': True})
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.json['paused'])
+        self.assertEqual(self.state['position_ms'], 42000)
+        self.seek_dispatch.assert_not_called()
+        self.schedule_seek.assert_not_called()
+
+    def test_async_seek_rejects_stale_identity_before_scheduling(self):
+        response = self.client.post('/alexa/seek/', json={
+            'serial': 'echo-one', 'position_ms': 42000, 'video_id': B, 'async': True})
+        self.assertEqual(response.status_code, 409)
+        self.schedule_seek.assert_not_called()
 
     def test_failed_seek_restores_cursor_but_not_a_newer_track(self):
         self.state.update(playing=True, playback_confirmed=True)

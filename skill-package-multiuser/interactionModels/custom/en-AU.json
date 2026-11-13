@@ -1,7 +1,7 @@
 {
   "interactionModel": {
     "languageModel": {
-      "invocationName": "music box multi",
+      "invocationName": "music box",
       "intents": [
         {
           "name": "AMAZON.CancelIntent",

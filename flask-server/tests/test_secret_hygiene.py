@@ -93,11 +93,16 @@ class SecretHygiene(unittest.TestCase):
         server_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
         proc = subprocess.run(
             [sys.executable, "-c",
-             "import sys; sys.path.insert(0, %r); import server" % server_dir],
+             "import sys,hashlib; sys.path.insert(0, %r); import server; print(hashlib.sha256(server.API_KEY.encode()).hexdigest())" % server_dir],
             cwd=os.path.dirname(server_dir), env=env, capture_output=True, text=True,
             timeout=120)
         self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
-        for name, length in (("api_key.txt", 32), ("secret_key.txt", 64)):
+        again = subprocess.run(proc.args, cwd=os.path.dirname(server_dir), env=env,
+                               capture_output=True, text=True, timeout=120)
+        self.assertEqual(again.returncode, 0, again.stderr[-2000:])
+        self.assertEqual(proc.stdout.strip().splitlines()[-1], again.stdout.strip().splitlines()[-1])
+        self.assertFalse(os.path.exists(os.path.join(data, "api_key.txt")))
+        for name, length in (("secret_key.txt", 64),):
             path = os.path.join(data, name)
             self.assertTrue(os.path.isfile(path), name)
             mode = stat.S_IMODE(os.stat(path).st_mode)

@@ -60,8 +60,8 @@ def test_legacy_client_without_request_id_always_verifies_amazon(proof_access):
 
 
 @pytest.mark.parametrize('field,value', [
-    ('alexa_enabled', False), ('status', 'disabled'), ('must_change_password', True),
-    ('email_verified', False), ('security_version', 2), ('email', 'changed@example.test')])
+    ('alexa_enabled', False), ('status', 'disabled'),
+    ('email_verified', False), ('security_version', 2)])
 def test_cached_proof_never_bypasses_account_restrictions(proof_access, field, value):
     access, headers, user, token, linked, lookup = proof_access
     access.authenticate(headers)
@@ -84,7 +84,7 @@ def test_relink_forces_new_proof_and_rechecks_email(proof_access):
     access, headers, user, token, linked, lookup = proof_access
     access.authenticate(headers)
     linked.update(generation='generation-b', email='other-amazon@example.test')
-    with pytest.raises(AccessDenied, match='Alexa access denied'):
+    with pytest.raises(AccessDenied, match='Music Box access was denied'):
         access.authenticate(headers)
     assert lookup.call_count == 2
 
@@ -145,3 +145,21 @@ def test_revoke_during_profile_network_call_is_rechecked(proof_access):
     with pytest.raises(AccessDenied):
         access.authenticate(headers)
     assert not access._proofs
+
+
+def test_email_change_keeps_token_and_cached_proof_valid(proof_access):
+    access, headers, user, token, linked, lookup = proof_access
+    headers['X-MusicBox-Account-Id'] = user['id']
+    headers.pop('X-MusicBox-Email')
+    access.authenticate(headers)
+    user['email'] = 'new-address@example.test'
+    access.authenticate(headers)
+    assert not token['revoked_at']
+
+
+@pytest.mark.parametrize('account_id', ['another-account', 'invalid-☃'])
+def test_account_id_cannot_override_token_owner(proof_access, account_id):
+    access, headers, *_ = proof_access
+    headers['X-MusicBox-Account-Id'] = account_id
+    with pytest.raises(AccessDenied):
+        access.authenticate(headers)

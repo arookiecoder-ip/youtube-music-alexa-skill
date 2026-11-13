@@ -183,7 +183,9 @@
       const current = row.getAttribute('data-device-current') === '1';
       $('device-current-note').hidden = !current;
       if (revoke) {
-        revoke.setAttribute('action', row.getAttribute('data-device-revoke') || '');
+        const destination = new URL(row.getAttribute('data-device-revoke') || '', window.location.origin);
+        if (destination.origin !== window.location.origin || !destination.pathname.startsWith('/admin/account/')) return;
+        revoke.action = destination.pathname;
         revoke.setAttribute('data-confirm-heading', 'Remove this device');
         revoke.setAttribute('data-confirm', current
           ? 'This is the browser you are using. It is signed out now, so this panel closes on you.'
@@ -362,5 +364,21 @@
      not the thing that owns the key. */
   document.addEventListener('keydown', (event) => {
     if (event.key === 'Escape' && !document.querySelector('dialog[open]')) setDrawer(false);
+  });
+  document.querySelectorAll('form[data-token-download]').forEach(form => {
+    form.addEventListener('submit', async event => {
+      event.preventDefault();
+      const button = form.querySelector('button[type=submit]');
+      if (button.disabled) return;
+      button.disabled = true;
+      try {
+        const response = await fetch(form.getAttribute('action'), {method:'POST', body:new FormData(form), credentials:'same-origin'});
+        if (!response.ok || !response.headers.get('Content-Disposition')?.includes('attachment')) throw new Error('Could not generate the private configuration. Reload and try again.');
+        const url = URL.createObjectURL(await response.blob());
+        const link = document.createElement('a'); link.href = url; link.download = 'musicbox-alexa.env';
+        link.click(); setTimeout(() => URL.revokeObjectURL(url), 30000);
+        setTimeout(() => window.location.reload(), 200);
+      } catch (error) { button.disabled = false; toast(form, error.message, 'error'); }
+    });
   });
 })();

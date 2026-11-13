@@ -1,0 +1,10 @@
+# Loaded by COMPOSE_FILE in the tunnel deployment environment file.
+# Public 80/443 serve only the Cloudflare-source-restricted fallback site.
+services:
+  caddy:
+    ports: !override
+      - "80:80"
+      - "443:443"
+      - "127.0.0.1:8080:8080"
+    environment:
+      CADDY_TUNNEL_PROXY_CIDRS: ${CADDY_TUNNEL_PROXY_CIDRS:?set the exact host-to-container connector peer CIDR}

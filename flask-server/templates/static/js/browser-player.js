@@ -21,6 +21,11 @@
   let pendingCurrent = null, mediaVideoId = '', preparingTrack = false, seekFeedbackUntil = 0;
   let mediaInstance = '';
   let resumeAttempt = 0, visibilityRevision = 0;
+  const focused = () => document.visibilityState === 'visible' && (!document.hasFocus || document.hasFocus());
+  const available = () => focused() || (!audio.paused && !audio.ended);
+  function publishAvailability() {
+    api('/api/app/devices/', {action:'visibility', device_id:id, session_id:session, foreground:focused(), playing:!audio.paused && !audio.ended, visibility_revision:++visibilityRevision}).catch(() => {});
+  }
   function mediaState(snapshot) {
     if (!owns() || !queue[index] || changingSource || preparingTrack || mediaVideoId !== queue[index].video_id || snapshot.output_token !== accepted ||
         snapshot.video_id !== queue[index].video_id) return null;
@@ -46,6 +51,13 @@
     duration_ms: item.duration_ms || Number(item.durationSec || item.duration_seconds || 0) * 1000,
     entry_id: item.entry_id || item.uuid || uuid()
   });
+  function activate() {
+    // Unlock the same media element during the user's tap, before a handoff
+    // performs network requests. Mobile browsers otherwise reject autoplay.
+    if (audio.src) return;
+    audio.src = 'data:audio/wav;base64,UklGRsQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YaAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
+    try { Promise.resolve(audio.play()).catch(() => {}); } catch (_) {}
+  }
   function notify(message) { if (window.toast) window.toast(message, 'error'); }
   function publish(replace = false) {
     if (!owns() || !queue[index] || changingSource) return Promise.resolve();
@@ -316,7 +328,7 @@
       const sentAcks = ack.splice(0, 32);
       let response;
       try { response = await api('/api/app/devices/', {
-        action: 'online', device_id: id, session_id: session, name: 'Browser player', foreground: document.visibilityState === 'visible', visibility_revision: ++visibilityRevision,
+        action: 'online', device_id: id, session_id: session, name: 'Browser player', kind: 'browser', playing: !audio.paused && !audio.ended, foreground: focused(), visibility_revision: ++visibilityRevision,
         wait, wait_seconds: 2, bounded_wait: true, busy_commands: Array.from(processing), revision: presenceRevision, output_token: output && output.output_token,
         ack: sentAcks, volume: Math.round(audio.volume * 100), include_handoff_state: true, accepted_token: accepted
       }); } catch (error) { ack.unshift(...sentAcks); throw error; }
@@ -386,6 +398,7 @@
       return { ok: true, volume: Math.round(audio.volume * 100) };
     }
     if (local && body && (controls[path] || path === '/alexa/command/')) {
+      activate();
       if (!owns()) await poll();
       const action = path === '/alexa/command/' ? body.action : path === '/alexa/queue_add/' && body.position === 'next' ? 'next_items' : controls[path];
       if (!owns() && ['song', 'queue', 'play'].includes(action) && output && !output.handoff_pending) {
@@ -436,8 +449,11 @@
     if (!stopped) setTimeout(tick, failed ? 1000 : presenceRetryMs);
   }
   document.addEventListener && document.addEventListener('visibilitychange', () => {
-    api('/api/app/devices/', {action:'visibility', device_id:id, session_id:session, foreground:document.visibilityState === 'visible', visibility_revision:++visibilityRevision}).catch(() => {});
+    publishAvailability();
   });
+  window.addEventListener('focus', publishAvailability);
+  window.addEventListener('blur', publishAvailability);
+  ['playing', 'pause', 'ended', 'error'].forEach(event => audio.addEventListener(event, publishAvailability));
   window.addEventListener('pagehide', () => {
     const position = pendingSeek ? pendingSeek.position : Math.round((audio.currentTime || 0) * 1000);
     stopped = true; generation++; resumePending = false; audio.pause(); clearInterval(watchdog);
@@ -445,6 +461,6 @@
       output_token: accepted, position_ms: position }).catch(() => {});
   });
   window.addEventListener('pageshow', event => { if (event.persisted) window.location.reload(); });
-  window.browserPlayback = { id, audio, owns, execute, poll, mediaState };
+  window.browserPlayback = { id, audio, owns, execute, poll, mediaState, activate, available };
   tick();
 })();

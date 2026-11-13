@@ -1,3 +1,5 @@
+from playback_events import playback_events
+from liked_songs_cache import LikedSongsCache
 from browser_coordination import browser_scope, BROKER
 import provider_commands
 from auth_sessions import replace_identity, password_change_allowed, complete_login
@@ -324,16 +326,16 @@ if not API_KEY:
         if os.path.exists(api_key_path):
             with open(api_key_path, 'r') as f:
                 API_KEY = f.read().strip()
-        else:
-            API_KEY = secrets.token_hex(16)
-            with open(api_key_path, 'w') as f:
-                f.write(API_KEY)
-            try:
-                os.chmod(api_key_path, 0o600)
-            except OSError:
-                pass
-    except Exception:
-        API_KEY = secrets.token_hex(16)
+    except OSError:
+        API_KEY = None
+    if not API_KEY:
+        # Derive the fallback from the already protected persistent signing key.
+        # Existing explicit credentials and legacy key files keep their identity;
+        # new installations need no additional plaintext secret file.
+        import hashlib as _key_hashlib
+        import hmac as _key_hmac
+        _signing_material = app.secret_key.encode() if isinstance(app.secret_key, str) else app.secret_key
+        API_KEY = _key_hmac.new(_signing_material, b'musicbox-legacy-api-key-v1', _key_hashlib.sha256).hexdigest()
 
 if not os.environ.get("API_KEY"):
     logger.warning("No API key configured in environment; using persistent generated credential.")
@@ -434,6 +436,12 @@ _PENDING_DISPATCH_LOCK = _IdentityLock(_pending_dispatch_registry)
 # The TTL bounds the case where Alexa silently drops a trigger: after it we
 # allow a fresh one rather than blocking playback forever.
 TRIGGER_INFLIGHT_TTL = 15.0
+# Do not let a trigger that Amazon accepted but never delivered suppress a
+# later, deliberate play for the entire marker lifetime.  Five seconds keeps a
+# normal rapid-click burst behind one trigger (and matches the cached-stream
+# confirmation watchdog), while a later click gets a new chance to reach the
+# skill instead of waiting for the 15-second cleanup TTL.
+TRIGGER_REUSE_WINDOW = float(os.environ.get('TRIGGER_REUSE_WINDOW', '5.0'))
 _trigger_inflight_registry = _PlayerStateRegistry(lambda identity: {})
 _TRIGGER_INFLIGHT = _PlayerStateView(_trigger_inflight_registry)
 _TRIGGER_INFLIGHT_LOCK = _IdentityLock(_trigger_inflight_registry)
@@ -444,15 +452,26 @@ def _note_trigger_sent(serial):
         _TRIGGER_INFLIGHT[serial or ''] = time.time()
 
 
-def _trigger_in_flight(serial):
-    """True while a trigger phrase for this device is sent but not yet served."""
+def _trigger_in_flight(serial, max_age=None):
+    """True while a trigger phrase for this device is sent but not yet served.
+
+    ``max_age`` is a non-destructive freshness bound for callers deciding
+    whether an old, unserved trigger is still safe to reuse.  The full TTL is
+    retained for cleanup and observability, but dispatch must not be wedged by
+    an accepted Amazon command that never invokes the skill.
+    """
     key = serial or ''
+    limit = TRIGGER_INFLIGHT_TTL if max_age is None else max(0.0, max_age)
     with _TRIGGER_INFLIGHT_LOCK:
         sent_at = _TRIGGER_INFLIGHT.get(key)
         if sent_at is None:
             return False
-        if time.time() - sent_at > TRIGGER_INFLIGHT_TTL:
-            del _TRIGGER_INFLIGHT[key]
+        if time.time() - sent_at > limit:
+            # A bounded reuse check must not erase the marker early: another
+            # observer may still need the full-TTL state.  The dispatcher will
+            # overwrite it immediately when it sends the replacement trigger.
+            if max_age is None:
+                del _TRIGGER_INFLIGHT[key]
             return False
         return True
 
@@ -526,7 +545,7 @@ def _schedule_play_dispatch(serial, video_id, offset_ms=0, delay=None, expected_
         # Always keep the arm current: this is what an in-flight trigger, or the
         # one we are about to send, will actually play.
         _arm_play(serial, video_id, offset_ms)
-        if _trigger_in_flight(serial):
+        if _trigger_in_flight(serial, max_age=TRIGGER_REUSE_WINDOW):
             # A trigger is already on its way to Alexa and will fetch the arm we
             # just refreshed. Sending another would make the Echo play this song
             # *and then* the next one. But that in-flight trigger can be dropped
@@ -926,7 +945,7 @@ def _safe_spa_target(value, default='/home'):
     # do not reinterpret their identifier as a query value before the shell has
     # loaded and the client router has normalized it.
     if path_style:
-        return normalized_path
+        return '/' + normalized_path.lstrip('/')
     canonical_path = normalized_path or '/'
     query = parse_qs(parsed.query, keep_blank_values=True)
     allowed = _SPA_QUERY_FIELDS.get(canonical_path, ())
@@ -937,7 +956,7 @@ def _safe_spa_target(value, default='/home'):
         value = _first_query_value(query, name)
         if value:
             clean.append((name, value))
-    return canonical_path + (('?' + urlencode(clean)) if clean else '')
+    return '/' + canonical_path.lstrip('/') + (('?' + urlencode(clean)) if clean else '')
 
 # Endpoints reachable with a logged-in web-remote session cookie (so the long
 # API key stays out of the browser URL). Everything here plus the remote page.
@@ -950,7 +969,7 @@ _SESSION_PATHS = ('/api/jam/session', '/audio', '/get_radio', '/status', '/api/s
                   '/alexa/queue_reorder', '/history', '/recommendations',
                   '/alexa/jam/start', '/alexa/jam/stop', '/alexa/jam/status',
                   '/alexa/jam/qr', '/api/home', '/api/library',
-                  '/api/subscribed_artists', '/api/app/output', '/api/app/devices', '/api/app/audio-token',
+                  '/api/subscribed_artists', '/api/app/output', '/api/app/devices', '/api/app/events/snapshot', '/api/app/audio-token',
                   '/alexa/like', '/api/liked_songs', '/api/profile_status',
                   '/api/youtube/download-cookies', '/api/youtube/download-cookies/status',
 '/alexa/amazon_signout', '/alexa/form_login', '/alexa/form_login/step',
@@ -1015,6 +1034,7 @@ def _remote_login_enabled():
 # sessions) survive restarts when SECRET_KEY is set.
 _SID_MAX_AGE = timedelta(days=30).total_seconds()  # mirrors PERMANENT_SESSION_LIFETIME
 _valid_sids = None  # in-memory mirror of web_sessions; None = not loaded yet
+_sid_deadlines = {}
 _sids_lock = threading.Lock()
 
 
@@ -1025,9 +1045,11 @@ def _sid_cache():
             with get_db() as conn:
                 conn.execute('DELETE FROM web_sessions WHERE created_at < ?',
                              (time.time() - _SID_MAX_AGE,))
-                rows = conn.execute('SELECT sid FROM web_sessions').fetchall()
+                rows = conn.execute('SELECT sid, created_at FROM web_sessions').fetchall()
                 conn.commit()
             _valid_sids = {r['sid'] for r in rows}
+            _sid_deadlines.clear()
+            _sid_deadlines.update((r['sid'], r['created_at'] + _SID_MAX_AGE) for r in rows)
         return _valid_sids
 
 
@@ -1039,6 +1061,7 @@ def _session_open():
                      (sid, time.time()))
         conn.commit()
     _sid_cache().add(sid)
+    _sid_deadlines[sid] = time.time() + _SID_MAX_AGE
     return sid
 
 
@@ -1047,6 +1070,8 @@ def _session_close(sid):
         conn.execute('DELETE FROM web_sessions WHERE sid = ?', (sid,))
         conn.commit()
     _sid_cache().discard(sid)
+    _sid_deadlines.pop(sid, None)
+    playback_events.publish()
 
 
 def _sessions_close_all():
@@ -1059,7 +1084,9 @@ def _sessions_close_all():
         conn.execute("INSERT OR REPLACE INTO kv (k, v) VALUES ('sessions_revoked_all', '1')")
         conn.commit()
     _sid_cache().clear()
+    _sid_deadlines.clear()
     _legacy_adoption_closed = True
+    playback_events.publish()
 
 
 # Whether "sign out everywhere" has ever been used (None = not checked yet).
@@ -1085,7 +1112,10 @@ def _client_ip():
     one correct derivation; importing it lazily keeps this optional layer
     optional, and a deployment without it falls back to the raw peer address."""
     try:
+        from multiuser import netids
         from multiuser.netids import client_ip
+        if request.remote_addr == '127.0.0.1' and request.headers.get('X-MusicBox-Client-IP'):
+            return netids.parse_ip(request.headers['X-MusicBox-Client-IP']) or request.remote_addr
         return client_ip(request)
     except Exception as exc:
         # Worth a line when the audit trail disagrees with the access log: this
@@ -1124,7 +1154,7 @@ def _logged_in():
     if not (_remote_login_enabled() and session.get('remote_user') == REMOTE_USER):
         return False
     sid = session.get('sid')
-    if sid in _sid_cache():
+    if _audio_session_valid(sid):
         return True
     if sid is None and _legacy_adoption_allowed():
         # Cookie issued before server-side sids existed. It carries the same
@@ -1371,9 +1401,17 @@ def _audio_session_valid(sid):
             return False
         _, user = _multiuser_layer.accounts.validate_session(sid[8:])
         return bool(user and not user.get('must_change_password'))
-    with get_db() as conn:
-        return conn.execute('SELECT 1 FROM web_sessions WHERE sid = ? AND created_at >= ?',
-                            (sid, time.time() - _SID_MAX_AGE)).fetchone() is not None
+    valid = _sid_cache()
+    return sid in valid and _sid_deadlines.get(sid, 0) > time.time()
+
+
+def _authorize_amazon_proxy(cookie_header, attempt, remote_instance=None):
+    remote = remote_instance if remote_instance is not None else alexa_remote.remote
+    bound = getattr(remote, '_proxy_owner_sid', None)
+    current = getattr(remote, '_proxy_attempt_id', None)
+    with app.test_request_context('/alexa/proxy/', headers={'Cookie': cookie_header}):
+        return bool(_logged_in() and isinstance(bound, str) and isinstance(current, str) and
+                    hmac.compare_digest(session.get('sid', ''), bound) and hmac.compare_digest(attempt, current))
 
 
 def _audio_subject_valid(data):
@@ -1482,7 +1520,7 @@ def _bind_player_identity():
             if request.environ.get('musicbox.alexa_denial_stale'):
                 return jsonify(error={'code':'stale_alexa_request', 'message':'A newer playback request superseded this Alexa request.'}), 403
             failure = _alexa_auth_error(exc, exc.code)
-            return jsonify(error={'code': exc.code, 'message': failure['message'] if failure else str(exc)}), 403
+            return jsonify(error={'code': exc.code, 'message': failure['message'] if failure else 'Alexa authorization denied.'}), 403
         _PLAYER_IDENTITY.set(_player_identity_for_user_id(linked['id']))
         request.environ['musicbox.alexa_identity'] = linked['id']
         request.environ['musicbox.alexa_binding'] = credential
@@ -1493,6 +1531,7 @@ def _bind_player_identity():
             blocked = _now_playing.get('_alexa_auth_blocked')
             failure = _now_playing.get('_alexa_auth_failure') or _alexa_auth_error('', 'alexa_authentication_required')
         if blocked:
+            failure = _alexa_auth_error(failure.get('message', ''), failure.get('code')) or failure
             return jsonify(error={'code':failure['code'], 'message':failure['message']}), 403
         return None
     subject, device = request.headers.get('X-Alexa-User-Id'), request.headers.get('X-Alexa-Device-Id')
@@ -1629,7 +1668,7 @@ def require_api_key():
                 return jsonify({'error': 'unauthorized'}), 401
         return None
     if not API_KEY:
-        return None
+        return jsonify({'error': {'code': 'unauthorized', 'message': 'Authentication required.'}}), 401
     supplied = request.args.get('key') or request.headers.get('X-Api-Key')
     if not _valid_key_supplied():
         # Device/skill endpoints must get a JSON error, never an HTML redirect.
@@ -1663,6 +1702,9 @@ def _check_rate_limit():
     group = _rate_limit_group(path)
     if group == 'static':
         return None
+    if (path == '/api/app/events/snapshot' and request.remote_addr == '127.0.0.1'
+            and request.headers.get('X-MusicBox-Internal-Snapshot') == '1'):
+        return None
     if group == 'audio':
         group = _audio_delivery_rate_group(request.args.get('video_id'), request.headers.get('X-MusicBox-Download') == '1')
     max_req, window = _RATE_LIMITS.get(group, _RATE_LIMITS['default'])
@@ -1671,6 +1713,8 @@ def _check_rate_limit():
     # Not remote_addr: behind Caddy that is one container address shared by every
     # visitor, which would make this a per-service budget instead of per-client.
     ip = _client_ip() or 'unknown'
+    if _logged_in() and isinstance(session.get('sid'), str):
+        ip = 'session:' + session['sid']
     allowed, retry_after = _rate_limiter.check(ip, group, max_req, window)
     if not allowed:
         resp, _ = error_response(f'Rate limit exceeded. Try again in {retry_after}s.',
@@ -2021,6 +2065,13 @@ def _ytmusic_client_from_auth(auth_file):
         return YTMusic()
 
 
+_liked_songs_registry = _PlayerStateRegistry(lambda identity: LikedSongsCache())
+
+
+def _liked_cache(identity=None):
+    return _liked_songs_registry.state_for(identity or _current_identity())
+
+
 def _get_ytmusic_home(identity=None):
     """A cached YTMusic client carrying *this identity's* YouTube Music session."""
     identity = identity or _current_identity()
@@ -2038,6 +2089,7 @@ def _get_ytmusic_home(identity=None):
             _YT_HOME_CACHE.drop(lambda cached, wanted=identity: cached[0] == wanted)
             _YT_HOME_CACHE_MTIME[identity] = current_mtime
             _home_cache.drop(identity)
+            _liked_cache(identity).clear()
         inst = _YT_HOME_CACHE.get(key)
         if inst is None:
             inst = _ytmusic_client_from_auth(auth_file)
@@ -2084,6 +2136,7 @@ def _signed_in_catalog_client():
 def _invalidate_youtube_auth_caches(identity=None):
     """Drop one identity's authenticated clients and personalized feeds."""
     identity = identity or _current_identity()
+    _liked_cache(identity).clear()
     with _YT_HOME_CACHE_LOCK:
         _YT_HOME_CACHE.drop(lambda cached, wanted=identity: cached[0] == wanted)
         path = _youtube_credentials.path_for(identity)
@@ -2154,8 +2207,7 @@ def _send_youtube_login_alert(outcome, detail, reason, snapshot):
     """
     recipient = (os.environ.get(youtube_auto_login.ENV_ALERT_TO) or '').strip()
     if not recipient:
-        logger.warning('YouTube sign-in failed (%s) and %s is not set, so nobody was told',
-                       outcome, youtube_auto_login.ENV_ALERT_TO)
+        logger.warning('YouTube sign-in failed and no alert recipient is configured.')
         return
     from multiuser.mailer import Mailer, render_alert_email
     app_name = (getattr(getattr(_multiuser_layer, 'config', None), 'app_name', '')
@@ -2776,7 +2828,7 @@ def _rate_limit_group(path: str) -> str:
         return 'proxy'
     if path == '/audio' or path.startswith('/audio/'):
         return 'audio'
-    if path in ('/api/app/output', '/api/app/queue', '/api/app/devices'):
+    if path in ('/api/app/output', '/api/app/queue', '/api/app/devices', '/api/app/events/snapshot'):
         return 'shared_playback'
     if path.startswith('/api/youtube/browser-session/'):
         return 'browser_session'
@@ -3250,6 +3302,8 @@ def _np_snapshot(serial=None, retain_errors=False):
                         or error_event['video_id'] != s.get('video_id')):
         playback_error = None
     error_id = error_event['id'] if playback_error and error_event else None
+    if isinstance(playback_error, dict) and isinstance(playback_error.get('message'), str):
+        playback_error = dict(playback_error, message=playback_error['message'].replace('MUSICBOX_EMAIL', 'MUSICBOX_ACCOUNT_ID').replace('Alexa access was denied', 'Music Box access was denied'))
     if output['playback_output'] == 'phone' and '_mobile_devices' in globals():
         volume = next((d.get('volume') for d in _mobile_devices.list() if d['id'] == output['output_owner']), None)
     if output['playback_output'] == 'phone' and output.get('output_controller') and output['phone_lease_ms'] <= 4000 and '_offline_phone_playing' not in s:
@@ -3259,8 +3313,11 @@ def _np_snapshot(serial=None, retain_errors=False):
     if output['playback_output'] == 'phone' and not output['phone_lease_ms']:
         _reset_progress(_computed_position_ms())
         s.update(playing=False, playback_confirmed=True, playback_processing=False)
+    event_epoch, event_revision = playback_events.version() if 'playback_events' in globals() else ('', 0)
     return {
         **output,
+        'event_epoch': event_epoch, 'event_revision': event_revision,
+        'presence_revision': _mobile_devices.revision if '_mobile_devices' in globals() else -1,
         'alexa_access_enabled': _alexa_access_enabled(),
         **({'amazon_connected': getattr(alexa_remote.remote, 'connection_state', None)} if _alexa_access_enabled() else {}),
         'remote_control_available': not (output['playback_output'] == 'alexa' and getattr(alexa_remote.remote, 'connection_state', None) is False),
@@ -3391,6 +3448,8 @@ def _notify_sse():
         if not video or (_now_playing.get('playing') and _now_playing.get('playback_confirmed')):
             _youtube_stream_for().current.activate(video)
         _playback_persistence.submit(_now_playing, _playback_output.snapshot(), _computed_position_ms())
+    if "playback_events" in globals():
+        playback_events.publish()
     _schedule_alexa_queue_sync()
     with _sse_lock:
         subscribers = list(_sse_subscribers.items())
@@ -3598,6 +3657,52 @@ def handle_output_conflict(error):
                     **_playback_output.snapshot()}), 409
 
 
+_HANDOFF_PAUSE_TIMEOUT = 0.4
+
+
+def _pause_echo_for_handoff(serial):
+    """Try to stop the source, without trapping playback on an unavailable Echo."""
+    if getattr(alexa_remote.remote, "connection_state", None) is False:
+        return None
+    if _get_now_playing().get("_alexa_auth_blocked") or _known_alexa_auth_failure():
+        return None
+    started = time.monotonic()
+    before = _playback_output.snapshot()
+    with _np_lock:
+        video = _now_playing.get('video_id', '')
+        token = _now_playing.get('alexa_token') or ''
+        previous_stop = _now_playing.get('_alexa_stop_ack')
+        intent = _now_playing.get('alexa_intent_at')
+    pause = getattr(alexa_remote.remote, 'handoff_pause', None)
+    try:
+        error = pause(serial) if pause else alexa_remote.remote.command(serial, 'pause')
+    except Exception:
+        logger.warning('Alexa source pause failed during output handoff', exc_info=True)
+        error = 'Alexa could not confirm the source pause.'
+    deadline = time.monotonic() + _HANDOFF_PAUSE_TIMEOUT
+    while True:
+        output = _playback_output.snapshot()
+        with _np_lock:
+            stopped = _now_playing.get('_alexa_stop_ack') or {}
+            matching = (stopped is not previous_stop and stopped.get('received_at', 0) >= started
+                        and stopped.get('video_id') == video
+                        and (stopped.get('serial') == serial or (token and stopped.get('token') == token))
+                        and (not token or stopped.get('token') == token))
+            changed = (_now_playing.get('video_id', '') != video
+                       or (_now_playing.get('alexa_token') or '') != token
+                       or _now_playing.get('alexa_intent_at') != intent)
+        if (output['output_token'] != before['output_token']
+                or output.get('output_serial') != before.get('output_serial') or changed):
+            return 'Playback changed while waiting for Alexa to stop. Retry the switch.'
+        if error:
+            return error
+        if matching:
+            return None
+        if time.monotonic() >= deadline:
+            return None
+        time.sleep(.05)
+
+
 @app.route('/api/app/output/', methods=['GET', 'POST'], strict_slashes=False)
 def app_playback_output():
     if request.method == 'GET':
@@ -3619,14 +3724,13 @@ def app_playback_output():
             if not serial:
                 raise OutputConflict('Choose an Alexa device before moving active playback to the phone.')
             _cancel_pending_dispatch(serial)
-            if getattr(alexa_remote.remote, 'connection_state', None) is False:
-                return
-            error = alexa_remote.remote.command(serial, 'pause')
-            if error:
-                raise OutputConflict('The Echo could not pause. Playback stayed on Alexa.')
+            error = _pause_echo_for_handoff(serial)
+            if error and error.startswith('Playback changed'):
+                raise OutputConflict(error)
         result = _playback_output.phone(owner, pause_echo, str(body.get('serial') or ''))
         with _np_lock:
             _reset_progress(_computed_position_ms())
+            _now_playing.pop('playback_error', None)
             _now_playing.update(playing=False, playback_confirmed=True, playback_processing=False)
             _now_playing['playback_revision'] = int(_now_playing.get('playback_revision', 0)) + 1
             _now_playing['updated_at'] = time.time()
@@ -3673,18 +3777,10 @@ def _pause_echo_for_mobile(serial):
     if not serial:
         raise OutputConflict('Choose an Alexa device first.')
     _cancel_pending_dispatch(serial)
-    offline = False
-    try:
-        devices, error = alexa_remote.remote.devices()
-        offline = not error and isinstance(devices, list) and any(
-            device.get('serial') == serial and device.get('online') is False for device in devices)
-    except Exception:
-        pass  # Unknown presence still requires the normal pause acknowledgment.
-    logged_out = getattr(alexa_remote.remote, 'connection_state', None) is False
-    if not offline and not logged_out and alexa_remote.remote.command(serial, 'pause'):
-        raise OutputConflict('The Echo could not pause. Playback stayed on Alexa.')
-    # Native PauseCommand is acknowledged by Amazon directly; the custom skill's
-    # PlaybackStopped webhook can arrive seconds later and is not a handoff gate.
+    error = _pause_echo_for_handoff(serial)
+    if error and error.startswith('Playback changed'):
+        raise OutputConflict(error)
+    # Target selection takes priority when the source cannot confirm a stop.
     with _np_lock:
         _reset_progress(_computed_position_ms())
         _now_playing.update(playing=False, playback_confirmed=True, playback_processing=False)
@@ -3696,7 +3792,7 @@ def _finish_browser_close(owner, token):
         return
     _reconcile_mobile_output(quiet=True)
     # Re-registration during refresh preserves this tab's silent selection.
-    if owner not in {device['id'] for device in _mobile_devices.list()}:
+    if owner not in {device['id'] for device in _mobile_devices.list(include_unavailable=True)}:
         _playback_output.close_phone(owner)
     _notify_sse()
 
@@ -3705,7 +3801,7 @@ def _reconcile_mobile_output(closed_owner='', quiet=False):
     output = _playback_output.snapshot()
     if output['playback_output'] != 'phone':
         return
-    online = {d['id'] for d in _mobile_devices.list()}
+    online = {d['id'] for d in _mobile_devices.list(include_unavailable=True)}
     owner, controller = output['output_owner'], output['output_controller']
     with _np_lock:
         closing = _now_playing.get('_browser_closing')
@@ -3804,7 +3900,7 @@ def app_mobile_devices():
     action = body.get('action')
     try:
         if action == 'visibility':
-            return jsonify(ok=_mobile_devices.visibility(owner, session_id, body.get('foreground'), body.get('visibility_revision')))
+            return jsonify(ok=_mobile_devices.visibility(owner, session_id, body.get('foreground'), body.get('visibility_revision'), body.get('playing')))
         if action == 'foreground':
             # A foreground visit is a preference change, never a play command.
             # Keep active/buffering audio and recently paused sessions elsewhere.
@@ -3840,7 +3936,7 @@ def app_mobile_devices():
                 _notify_sse()
             return jsonify(default_selected=selected, now_playing=snapshot, **result)
         if action == 'online':
-            commands = _mobile_devices.online(owner, session_id, body.get('name'), body.get('ack', []), body.get('volume'), body.get('volume_steps'), foreground=body.get('foreground'), visibility_revision=body.get('visibility_revision'))
+            commands = _mobile_devices.online(owner, session_id, body.get('name'), body.get('ack', []), body.get('volume'), body.get('volume_steps'), foreground=body.get('foreground'), visibility_revision=body.get('visibility_revision'), kind=body.get('kind'), playing=body.get('playing'))
             retry_ms = 50
             busy = body.get('busy_commands')
             busy = set(busy[:32]) if isinstance(busy, list) and all(isinstance(value, str) for value in busy[:32]) else set()
@@ -3848,11 +3944,8 @@ def app_mobile_devices():
                 # Opt-in keeps older clients' six-second HTTP deadline compatible.
                 requested_wait = body.get('wait_seconds', 2)
                 wait_seconds = min(8, max(0, requested_wait)) if isinstance(requested_wait, (int, float)) and not isinstance(requested_wait, bool) else 2
-                if body.get('bounded_wait') is True:
-                    if not _mobile_devices.wait_bounded(body.get('revision'), wait_seconds):
-                        retry_ms = 750
-                else:
-                    _mobile_devices.wait(body.get('revision'), wait_seconds)
+                if not _mobile_devices.wait_bounded(body.get('revision'), wait_seconds):
+                    retry_ms = 750
                 commands = _mobile_devices.pending_commands(owner, session_id)
                 _reconcile_mobile_output()
             _reconcile_mobile_output()
@@ -3876,7 +3969,7 @@ def app_mobile_devices():
                 if before['playback_output'] != 'phone' or before['handoff_pending']:
                     raise OutputConflict('Playback moved to another output.')
                 target = before['output_owner']
-                online = {d['id'] for d in _mobile_devices.list()}
+                online = {d['id'] for d in _mobile_devices.list(include_unavailable=True)}
                 if target and target in online and target != owner:
                     _mobile_devices.command(target, before['output_token'], 'play', {}, body.get('command_id'))
                     return jsonify(default_selected=False, **before)
@@ -7365,6 +7458,10 @@ def login():
 
 @app.route("/logout/", methods=["POST", "GET"])
 def logout():
+    if request.method == 'GET':
+        return redirect('/home' if _logged_in() else '/login/')
+    if not request.is_json:
+        return error_response('Use a JSON POST to sign out.', 415)
     # Revoke the sid server-side so every copy of this cookie dies now, not at
     # its 30-day expiry. "everywhere" kills all sessions on all devices; it is
     # accepted only from a JSON body (a cross-site form can't send one without
@@ -7745,8 +7842,16 @@ def alexa_proxy_login():
     if _is_local_host(request.host) and not behind_caddy:
         proxy_port = os.environ.get("ALEXA_PROXY_PORT", "5001")
         proxy_base_url = f"http://127.0.0.1:{proxy_port}/alexa/proxy/"
+    if not _logged_in():
+        return error_response('Owner session required.', 401)
+    remote = alexa_remote.remote
+    if callable(getattr(remote, 'set_proxy_authorizer', None)):
+        # Capture the concrete account instance: background proxy threads have no
+        # request identity and must never resolve the owner's remote by default.
+        instance = alexa_remote._remote_registry.state_for(_current_identity())
+        instance.set_proxy_authorizer(lambda cookie, attempt: _authorize_amazon_proxy(cookie, attempt, instance))
     url, error = alexa_remote.remote.proxy_start_url(
-        email, password, base_url=proxy_base_url
+        email, password, base_url=proxy_base_url, owner_sid=session.get('sid')
     )
     if error:
         # Every account signs into its own Amazon session now, so re-logging in
@@ -7861,7 +7966,7 @@ def download_cookie_status():
         result = download_cookies.status(Supporting.get_ytdlp_cookies_file(), _configure_cookie_probe,
                                         force=request.args.get('refresh') == '1')
     except download_cookies.ProbeBusy as exc:
-        return error_response(str(exc), 429)
+        return error_response('A cookie check is already running. Try again shortly.', 429)
     return jsonify(result)
 
 
@@ -7909,7 +8014,7 @@ def profile_status():
         try:
             cookie_test = download_cookies.status(cookies_file, _configure_cookie_probe)
         except download_cookies.ProbeBusy as exc:
-            cookie_test = {'valid': False, 'message': str(exc)}
+            cookie_test = {'valid': False, 'message': 'A cookie check is already running. Try again shortly.'}
     cookies_working = cookie_test['valid']
     cookies_debug = cookie_test['message']
 
@@ -9002,7 +9107,12 @@ def alexa_command():
         _notify_sse()
         # Refresh the cache mtime at pause time so TTL counts from the pause,
         # not the original download; the file is also pinned while selected.
-        error = alexa_remote.remote.command(serial, action, body.get("value"))
+        if body.get('native_handoff') is True:
+            # Compatibility with 2.5.5: its handoff hint now requests a
+            # confirmed skill pause, never the unreliable native transport.
+            error = _pause_echo_for_handoff(serial)
+        else:
+            error = alexa_remote.remote.command(serial, action, body.get("value"))
     else:
         error = alexa_remote.remote.command(serial, action, body.get("value"))
     if error:
@@ -9126,7 +9236,17 @@ def alexa_seek():
         revision = int(_now_playing.get('playback_revision', 0)) + 1
         _now_playing['playback_revision'] = revision
         _now_playing['updated_at'] = time.time()
+        seek_intent = _now_playing['alexa_intent_at']
+        seek_output = _playback_output.snapshot()['output_token']
     _notify_sse()
+    if body.get('async') is True:
+        # Acknowledge the staged cursor immediately. The shared dispatcher drops
+        # superseded seeks and re-arms an outstanding trigger with the latest
+        # offset instead of queueing several slow Amazon commands. Device/track
+        # fences and the confirmation watchdog remain authoritative.
+        _schedule_play_dispatch(serial, video_id, offset_ms=position_ms, delay=0.075,
+                                expected_intent=seek_intent, expected_output=seek_output)
+        return jsonify({'ok': True, 'pending': True}), 202
     error = _dispatch_play_with_retry(serial, video_id, position_ms)
     if error:
         with _np_lock:
@@ -9393,6 +9513,9 @@ def alexa_state_event():
             was_confirmed = bool(_now_playing.get('playback_confirmed'))
             _reset_progress(elapsed_ms)
             _now_playing['playing'] = False
+            _now_playing['_alexa_stop_ack'] = {
+                'received_at': time.monotonic(), 'serial': str(body.get('serial') or _playback_output.snapshot()['output_serial'] or ''),
+                'video_id': stopped_video_id, 'token': event_token}
             # PlaybackStopped is the authoritative completion of a pause/stop
             # transition. Clear the shared processing marker so every browser
             # settles, including clients that did not send the command.
@@ -10090,6 +10213,8 @@ async def alexa_like():
             await asyncio.to_thread(yt.rate_song, video_id, action)
         with _playlist_tracks_cache_lock:
             _playlist_tracks_cache.pop((_current_identity(), 'LM'), None)
+        _liked_cache().update(video_id, action == 'LIKE')
+
         _bump_liked_version()
         return jsonify({'ok': True, 'action': action, 'video_id': video_id})
     except Exception as e:
@@ -10107,18 +10232,38 @@ async def api_get_liked_songs():
     if yt.auth_type == AuthType.UNAUTHORIZED:
         return jsonify({'liked_songs': [t['videoId'] for t in _local_library().get_liked_songs(None)['tracks']]})
     try:
-        raw = await asyncio.to_thread(yt.get_liked_songs, 1000)
-        video_ids = [
-            t.get('videoId') for t in (raw.get('tracks') or [])
-            if t.get('videoId')
-        ]
+        identity = _current_identity()
+        def load():
+            raw = _get_ytmusic_home(identity).get_liked_songs(1000)
+            return [t['videoId'] for t in (raw.get('tracks') or []) if t.get('videoId')]
+        video_ids, stale = await asyncio.to_thread(_liked_cache(identity).get, load)
         pending = {key: value['rating'] for key, value, _ in _local_library().rows('like')}
         video_ids = [key for key in video_ids if pending.get(key, 'LIKE') == 'LIKE']
         video_ids = list(dict.fromkeys(video_ids + [key for key, rating in pending.items() if rating == 'LIKE']))
-        return jsonify({'liked_songs': video_ids})
+        return jsonify({'liked_songs': video_ids, 'stale': stale})
+
     except Exception as e:
-        logger.debug('[api/liked_songs] failed (likely unauthenticated): %s', e)
-        return jsonify({'liked_songs': []}), 200  # degrade gracefully
+        logger.debug('[api/liked_songs] refresh unavailable: %s', type(e).__name__)
+        return jsonify({'error': 'Liked songs temporarily unavailable', 'retryable': True}), 503
+
+
+@app.route('/api/app/events/snapshot/', methods=['GET'])
+def playback_event_snapshot():
+    # This read is also the gateway's authorization check on connect and every
+    # heartbeat. Never let an API key or Jam guest subscribe to owner state.
+    if not _logged_in():
+        return jsonify({'error': 'web_session_required'}), 401
+    serial = _effective_serial(request.args.get('serial')) or 'phone'
+    with _np_lock:
+        snapshot = _np_snapshot(serial, retain_errors=True)
+        epoch, revision = playback_events.version()
+        if (request.args.get('queue_version') == str(snapshot['queue_version']) and
+                request.args.get('output_token') == snapshot['output_token']):
+            snapshot.pop('queue', None)
+    response = jsonify(type='playback_state', event_epoch=epoch,
+                       event_revision=revision, state=snapshot)
+    response.headers['Cache-Control'] = 'no-store'
+    return response
 
 
 @app.route("/alexa/now_playing/", methods=["GET"])
@@ -10751,7 +10896,9 @@ def alexa_play_queue():
     # between the client's last snapshot and this request) and only fall back
     # to the by-id search otherwise.
     item = None
-    if not force_radio:
+    # A selection from search/library is a new queue even if its video is
+    # already present. Only explicit queue navigation may reuse the old list.
+    if not force_radio and not body.get("new_queue"):
         try:
             queue_index = int(body.get("queue_index"))
         except (TypeError, ValueError):
@@ -11405,7 +11552,7 @@ def alexa_search():
     # audio category only when it is absent; keep successful mixed results if
     # this optional request fails rather than blanking the Search page.
     if (not any(item.get('resultType') == 'song' for item in all_raw) or
-            any(item.get('category') == 'Top result' and item.get('resultType') == 'video' for item in all_raw)):
+            any(item.get('category') == 'Top result' and item.get('resultType') in ('video', 'playlist') for item in all_raw)):
         try:
             audio_raw = ytmusic.search(query=query, filter='songs',
                                       ignore_spelling=False, limit=40) or []
@@ -11457,6 +11604,16 @@ def alexa_search():
         names = ' '.join(str(artist.get('name') or '') for artist in item.get('artists') or [])
         text = ' '.join((str(item.get('title') or ''), str(item.get('artist') or ''), names))
         words = set(re.findall(r'[^\W_]+', text.casefold()))
+        # KU LO SA / KULO SA / KULOSA are equivalent title spellings.
+        # Preserve marks in non-Latin scripts and do not promote partial words.
+        import unicodedata
+        def compact(value):
+            return ''.join(ch for ch in unicodedata.normalize('NFKC', value).casefold()
+                           if ch.isalnum() or unicodedata.category(ch).startswith('M'))
+        compact_query = compact(query)
+        compact_title = compact(str(item.get('title') or ''))
+        if len(compact_query) >= 4 and compact_query == compact_title:
+            return 2
         return len(query_words & words) / max(1, len(query_words))
 
     results['songs'].sort(key=query_coverage, reverse=True)

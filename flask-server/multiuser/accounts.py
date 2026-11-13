@@ -50,7 +50,12 @@ _DUMMY_PASSWORD_HASH = hash_password("not-a-user-credential")
 
 
 class AccountError(ValueError):
-    """A validation or permission error safe to show to an administrator."""
+    """Public validation copy, deliberately separate from internal exceptions."""
+
+    @property
+    def public_message(self):
+        return self.args[0] if self.args and isinstance(self.args[0], str) else 'The account change could not be completed.'
+
 
 
 def _now() -> float:
@@ -129,12 +134,13 @@ class AccountService:
             generated = True
             password_file = os.path.join(
                 os.path.dirname(os.path.abspath(self.config.db_path)),
-                "multiuser_admin_password.txt",
+                "multiuser_admin_password.enc",
             )
             try:
-                with open(password_file, "w", encoding="utf-8") as handle:
-                    handle.write(password + "\n")
-                os.chmod(password_file, 0o600)
+                encrypted_password = self.secret_box.encrypt_json({"password": password})
+                descriptor = os.open(password_file, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+                with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+                    handle.write(encrypted_password + "\n")
             except OSError:
                 password_file = ""
         else:
@@ -278,7 +284,7 @@ class AccountService:
         email = _normalize_email(email)
         if not email:
             return ""
-        if len(email) > 254 or not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", email):
+        if len(email) > 254 or not re.match(r"^[^@\s]+@[^@.\s]+\.[^@\s]+$", email):
             raise AccountError("Enter a valid email address, or leave it blank.")
         return email
 
@@ -811,10 +817,6 @@ class AccountService:
                 "failed_login_count = 0, locked_until = 0, updated_at = ? WHERE id = ?",
                 (hash_password(password), _now(), user_id),
             )
-            conn.execute(
-                "UPDATE user_sessions SET revoked_at = ? WHERE user_id = ? AND revoked_at = 0",
-                (_now(), user_id),
-            )
             conn.execute("DELETE FROM user_email_tokens WHERE user_id = ?", (user_id,))
         self.audit(actor, "password_reset", user_id, {"self": self_edit, "generated": generated}, ip, user_agent)
         return self.get_user(user_id), password, generated
@@ -828,7 +830,7 @@ class AccountService:
         user_agent: str = "",
         *,
         keep_sid_hash: str = "",
-        revoke_other_sessions: bool = True,
+        revoke_other_sessions: bool = False,
     ) -> None:
         row = self.db.fetchone("SELECT * FROM users WHERE id = ? AND status = 'active'", (actor.get("id", ""),))
         if not row or not verify_password(row["password_hash"], current_password):
@@ -849,7 +851,7 @@ class AccountService:
         ip: str = "",
         user_agent: str = "",
         keep_sid_hash: str = "",
-        revoke_other_sessions: bool = True,
+        revoke_other_sessions: bool = False,
     ) -> None:
         """Set a new password for the signed-in account without the old one.
 
@@ -891,7 +893,7 @@ class AccountService:
         row: dict,
         new_password: str,
         keep_sid_hash: str = "",
-        revoke_other_sessions: bool = True,
+        revoke_other_sessions: bool = False,
     ) -> None:
         now = _now()
         keep = sha256_hex(keep_sid_hash) if keep_sid_hash else ""
@@ -901,12 +903,8 @@ class AccountService:
                 (hash_password(new_password), now, row["id"]),
             )
             conn.execute("DELETE FROM user_email_tokens WHERE user_id = ?", (row["id"],))
-            conn.execute("UPDATE user_sessions SET security_version=(SELECT security_version FROM users WHERE id=?) "
-                         "WHERE user_id=? AND revoked_at=0" + (" AND sid_hash=?" if revoke_other_sessions else ""),
-                         (row['id'], row['id'], keep) if revoke_other_sessions else (row['id'], row['id']))
             if revoke_other_sessions:
-                # A password change is the moment to evict whoever else knew the old
-                # one; without it a stolen password stays usable for 12 hours.
+                # Revoke other sessions only when explicitly requested.
                 conn.execute(
                     "UPDATE user_sessions SET revoked_at = ? "
                     "WHERE user_id = ? AND revoked_at = 0 AND sid_hash <> ?",
@@ -951,7 +949,7 @@ class AccountService:
         ip: str = "",
         user_agent: str = "",
         keep_sid_hash: str = "",
-        revoke_other_sessions: bool = True,
+        revoke_other_sessions: bool = False,
     ) -> dict:
         target = self.get_user(user_id)
         if not target:
@@ -976,10 +974,7 @@ class AccountService:
                     (hash_password(password), now, now, user_id),
                 )
             if revoke_other_sessions:
-                # A reset from a browser nobody else can see still means the old
-                # password is spent, so everybody else goes -- unless the person
-                # resetting from a signed-in session asks to keep their other
-                # devices. `keep_sid_hash` spares the one asking; "" spares nobody.
+                # An explicit request may revoke other signed-in devices.
                 keep = sha256_hex(keep_sid_hash) if keep_sid_hash else ""
                 conn.execute(
                     "UPDATE user_sessions SET revoked_at = ? "
@@ -987,10 +982,7 @@ class AccountService:
                     (now, user_id, keep),
                 )
             conn.execute("DELETE FROM user_email_tokens WHERE user_id = ?", (user_id,))
-            preserved = sha256_hex(keep_sid_hash) if keep_sid_hash else ''
-            conn.execute("UPDATE user_sessions SET security_version=(SELECT security_version FROM users WHERE id=?) "
-                         "WHERE user_id=? AND revoked_at=0" + (" AND sid_hash=?" if revoke_other_sessions else ""),
-                         (user_id, user_id, preserved) if revoke_other_sessions else (user_id, user_id))
+
         self.db.audit(
             None, "email", action, user_id,
             json.dumps({"method": "email", "activated": activate}), ip, user_agent,
@@ -1006,7 +998,7 @@ class AccountService:
         user_agent: str = "",
         *,
         keep_sid_hash: str = "",
-        revoke_other_sessions: bool = True,
+        revoke_other_sessions: bool = False,
     ) -> dict:
         return self._set_password_via_email(
             user_id,
@@ -1260,9 +1252,6 @@ class AccountService:
             conn.execute("UPDATE users SET totp_secret_enc=?, totp_pending_enc='', totp_pending_at=0, "
                          "totp_last_step=?, updated_at=? WHERE id=?",
                          (self.secret_box.encrypt_json({'secret': secret}), step, _now(), row['id']))
-            keep = sha256_hex(session_token) if session_token else ''
-            conn.execute('UPDATE user_sessions SET revoked_at=? WHERE user_id=? AND revoked_at=0 AND sid_hash<>?', (_now(), row['id'], keep))
-            conn.execute('UPDATE user_sessions SET security_version=(SELECT security_version FROM users WHERE id=?) WHERE sid_hash=?', (row['id'], keep))
         self.audit(actor, "totp_enabled", row["id"], {}, ip, user_agent)
         return self.get_user(row["id"])
 
@@ -1311,9 +1300,6 @@ class AccountService:
             "totp_last_step = 0, updated_at = ? WHERE id = ?",
             (_now(), row["id"]),
         )
-        keep = sha256_hex(session_token) if session_token else ""
-        self.db.execute("UPDATE user_sessions SET revoked_at=? WHERE user_id=? AND revoked_at=0 AND sid_hash<>?", (_now(), row["id"], keep))
-        self.db.execute("UPDATE user_sessions SET security_version=(SELECT security_version FROM users WHERE id=?) WHERE sid_hash=?", (row["id"], keep))
         self.audit(actor, "totp_disabled", row["id"], {"proof": proof}, ip, user_agent)
         return self.get_user(row["id"])
 
@@ -2187,7 +2173,6 @@ class AccountService:
             if row and row['pending_email']:
                 conn.execute("UPDATE users SET email=pending_email, pending_email='', pending_email_at=0, "
                              "email_verified=1, email_verified_at=?, updated_at=? WHERE id=?", (now, now, user_id))
-                conn.execute('UPDATE user_sessions SET revoked_at=? WHERE user_id=? AND revoked_at=0', (now, user_id))
             else:
                 conn.execute('UPDATE users SET email_verified=1, email_verified_at=?, updated_at=? WHERE id=?', (now, now, user_id))
         self.db.audit(

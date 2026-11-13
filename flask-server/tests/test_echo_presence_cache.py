@@ -42,3 +42,26 @@ def test_backend_failure_preserves_last_known_presence():
     assert devices is None and error
     assert not obj._devices_raw[0]['online']
     assert obj._devices_fetched_at == 95
+
+
+def test_handoff_timeout_cancels_the_amazon_operation_without_blocking_target():
+    from concurrent.futures import TimeoutError
+    tree = ast.parse(SOURCE.read_text())
+    cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and any(getattr(f, 'name', '') == 'handoff_pause' for f in n.body))
+    functions = [f for f in cls.body if getattr(f, 'name', '') in ('_run', 'handoff_pause')]
+    unreachable = type('AlexaUnreachable', (Exception,), {})
+    future = Mock()
+    future.result.side_effect = TimeoutError
+    scheduler = Mock(return_value=future)
+    ns = dict(CALL_TIMEOUT=60, FuturesTimeoutError=TimeoutError, AlexaUnreachable=unreachable,
+              asyncio=SimpleNamespace(run_coroutine_threadsafe=scheduler), logger=Mock())
+    exec(compile(ast.Module(body=functions, type_ignores=[]), str(SOURCE), 'exec'), ns)
+    operation = object()
+    obj = SimpleNamespace(_command=Mock(return_value=operation), _ensure_loop=Mock(return_value='loop'), _login_checked_at=1)
+    obj._run = lambda coro, timeout: ns['_run'](obj, coro, timeout)
+    assert ns['handoff_pause'](obj, 'echo')
+    obj._command.assert_called_once_with('echo', 'pause', None)
+    scheduler.assert_called_once_with(operation, 'loop')
+    future.result.assert_called_once_with(timeout=1.0)
+    future.cancel.assert_called_once()
+    assert obj._login_checked_at == 0

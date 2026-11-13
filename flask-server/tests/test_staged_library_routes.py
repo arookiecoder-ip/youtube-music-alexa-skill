@@ -22,7 +22,7 @@ class StagedLibraryRouteTests(unittest.TestCase):
                        LocalLibrary=LocalLibrary, _get_ytmusic_home=lambda: self.client_google,
                        _local_library=lambda: LocalLibrary(lambda: sqlite3.connect(self.tmp.name+'/db'), self.identity),
                        _current_identity=lambda: self.identity, _has_own_youtube_session=lambda identity: False,
-                       _sync_local_library=Mock(), _jam_guest=lambda: self.guest,
+                       _sync_local_library=Mock(), _liked_cache=lambda *args: Mock(), logger=Mock(), _jam_guest=lambda: self.guest,
                        _valid_video_id=lambda value: bool(re.fullmatch(r'[A-Za-z0-9_-]{11}', value or '')),
                        _valid_key_supplied=lambda: False, _get_now_playing=lambda: {}, _bump_liked_version=Mock(),
                        _playlist_tracks_cache_lock=threading.Lock(), _playlist_tracks_cache={},

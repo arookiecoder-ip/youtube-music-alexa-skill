@@ -98,3 +98,78 @@ class AccountLifecycleTests(MultiUserTestBase):
         self.assertEqual(response.status_code,200)
         self.assertIn(b'A password change is not required',response.data)
         self.assertFalse(self.accounts.get_user_by_username('generated-user')['must_change_password'])
+
+    def test_credential_updates_preserve_sessions_and_alexa_token_until_revoked(self):
+        import time
+        from multiuser.security import totp_at
+        sessions = [self.accounts.create_session(self.user, user_agent=name) for name in ('browser', 'phone')]
+        self.layer.alexa_access.set_enabled(self.user['id'], True)
+        raw = self.layer.alexa_access.rotate(self.user['id'])
+        token_id = raw.split('.')[0]
+        version = self.accounts.security_version(self.user['id'])
+
+        def still_valid():
+            for session in sessions:
+                self.assertIsNotNone(self.accounts.validate_session(session)[0])
+            self.assertEqual(self.layer.alexa_access.current(token_id)[0]['id'], self.user['id'])
+            self.assertEqual(self.accounts.security_version(self.user['id']), version)
+
+        self.accounts.db.execute('UPDATE users SET username=? WHERE id=?', ('renamed-listener', self.user['id']))
+        still_valid()
+        self.accounts.change_own_password(self.user, 'Target!Password12', 'Replacement!Password12')
+        still_valid()
+        with mock.patch.object(self.accounts, 'confirm_own_credentials', return_value='email'):
+            self.accounts.update_own_profile(self.user, email='replacement@example.test', current_password='Replacement!Password12')
+            self.accounts.verify_email_with_token(self.user['id'])
+            still_valid()
+            secret = self.accounts.begin_totp_enrollment(self.user, current_password='Replacement!Password12', session_token=sessions[0])['secret']
+            self.accounts.confirm_totp_enrollment(self.user, code=totp_at(secret, int(time.time()) // 30), session_token=sessions[0])
+            still_valid()
+            self.accounts.disable_totp(self.user, current_password='Replacement!Password12', session_token=sessions[0])
+            still_valid()
+        self.accounts.reset_password(self.owner, self.user['id'], 'Administrator!Password12')
+        still_valid()
+        # A temporary password still cannot mint new Alexa grants.
+        with self.assertRaises(ValueError):
+            self.layer.alexa_access.rotate(self.user['id'])
+        self.accounts.revoke_session(self.accounts.validate_session(sessions[1])[0]['sid_hash'])
+        self.assertIsNone(self.accounts.validate_session(sessions[1])[0])
+        self.assertIsNotNone(self.accounts.validate_session(sessions[0])[0])
+        self.layer.alexa_access.revoke(self.user['id'])
+        from multiuser.alexa_access import AccessDenied
+        with self.assertRaises(AccessDenied):
+            self.layer.alexa_access.current(token_id)
+
+    def test_password_change_does_not_restore_a_previously_invalidated_session(self):
+        session = self.accounts.create_session(self.user)
+        self.accounts.invalidate_security_proofs(self.user['id'])
+        self.assertIsNone(self.accounts.validate_session(session)[0])
+        self.accounts.change_own_password(self.user, 'Target!Password12', 'Replacement!Password12')
+        self.assertIsNone(self.accounts.validate_session(session)[0])
+
+    def test_existing_database_upgrade_keeps_valid_sessions_and_revocations(self):
+        live = self.accounts.create_session(self.user)
+        revoked = self.accounts.create_session(self.user)
+        self.accounts.revoke_session(self.accounts.validate_session(revoked)[0]['sid_hash'])
+        with self.layer.db.connect() as conn:
+            conn.execute('DROP TRIGGER users_security_version')
+            conn.execute("""CREATE TRIGGER users_security_version AFTER UPDATE OF password_hash ON users
+                BEGIN UPDATE users SET security_version=security_version+1 WHERE id=NEW.id; END""")
+            conn.execute('DELETE FROM multiuser_schema_migrations WHERE version=13')
+        self.layer.db._initialized = False
+        self.layer.db.initialize()
+        self.accounts.change_own_password(self.user, 'Target!Password12', 'Replacement!Password12')
+        self.assertIsNotNone(self.accounts.validate_session(live)[0])
+        self.assertIsNone(self.accounts.validate_session(revoked)[0])
+        self.assertEqual(self.layer.db.scalar('SELECT COUNT(*) FROM multiuser_schema_migrations WHERE version=13'), 1)
+
+    def test_upgrade_repairs_the_alternate_migration_13_without_revoking_sessions(self):
+        live=self.accounts.create_session(self.user)
+        with self.layer.db.connect() as conn:
+            conn.execute('DROP TRIGGER users_security_version')
+            conn.execute("CREATE TRIGGER users_security_version AFTER UPDATE OF password_hash ON users BEGIN UPDATE users SET security_version=security_version+1 WHERE id=NEW.id; END")
+            conn.execute('DELETE FROM multiuser_schema_migrations WHERE version=14')
+        self.layer.db._initialized=False
+        self.layer.db.initialize()
+        self.accounts.change_own_password(self.user,'Target!Password12','Replacement!Password12')
+        self.assertIsNotNone(self.accounts.validate_session(live)[0])

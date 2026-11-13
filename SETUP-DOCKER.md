@@ -266,7 +266,7 @@ directives — music simply won't play.
 3. Fill in these settings privately:
    ```dotenv
    MUSICBOX_SERVER_URL=https://your-server.example
-   MUSICBOX_EMAIL=your-verified-musicbox-email@example.com
+   MUSICBOX_ACCOUNT_ID=your-musicbox-account-id
    MUSICBOX_ALEXA_TOKEN=your-admin-issued-token
    ```
 4. Enable Amazon / Alexa access and issue this user's token in Admin → Users. The Music Box email must belong to that token. Use the same Amazon account in Developer Console, on the Echo and in the user panel; the Music Box email may differ.

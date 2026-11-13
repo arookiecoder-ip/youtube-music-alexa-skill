@@ -1,0 +1,3 @@
+# Historical synthetic fixture values: a repeated hex test key and RFC 6238 test secret.
+9848af8d14094e1b20c5584114201f948b17933d:flask-server/tests/test_youtube_server_session.py:generic-api-key:33
+9848af8d14094e1b20c5584114201f948b17933d:flask-server/tests/test_youtube_auto_login.py:generic-api-key:39

@@ -23,79 +23,79 @@
       "isAvailableWorldwide": true,
       "locales": {
         "en-US": {
-          "description": "Development skill for Music Box playback on supported Alexa devices.",
+          "description": "Music Box playback on supported Alexa devices.",
           "examplePhrases": [
-            "Alexa, open music box multi",
-            "Alexa, ask music box multi to play blinding lights",
-            "Alexa, ask music box multi to play some jazz"
+            "Alexa, open music box",
+            "Alexa, ask music box to play blinding lights",
+            "Alexa, ask music box to play some jazz"
           ],
           "keywords": [
             "music",
             "youtube music",
-            "multi user"
+            "music box"
           ],
-          "name": "Music Box Multi",
-          "summary": "Music Box playback for development testing."
+          "name": "Music Box",
+          "summary": "Your music on Alexa."
         },
         "en-CA": {
-          "description": "Development skill for Music Box playback on supported Alexa devices.",
+          "description": "Music Box playback on supported Alexa devices.",
           "examplePhrases": [
-            "Alexa, open music box multi",
-            "Alexa, ask music box multi to play blinding lights",
-            "Alexa, ask music box multi to play some jazz"
+            "Alexa, open music box",
+            "Alexa, ask music box to play blinding lights",
+            "Alexa, ask music box to play some jazz"
           ],
           "keywords": [
             "music",
             "youtube music",
-            "multi user"
+            "music box"
           ],
-          "name": "Music Box Multi",
-          "summary": "Music Box playback for development testing."
+          "name": "Music Box",
+          "summary": "Your music on Alexa."
         },
         "en-IN": {
-          "description": "Development skill for Music Box playback on supported Alexa devices.",
+          "description": "Music Box playback on supported Alexa devices.",
           "examplePhrases": [
-            "Alexa, open music box multi",
-            "Alexa, ask music box multi to play blinding lights",
-            "Alexa, ask music box multi to play some jazz"
+            "Alexa, open music box",
+            "Alexa, ask music box to play blinding lights",
+            "Alexa, ask music box to play some jazz"
           ],
           "keywords": [
             "music",
             "youtube music",
-            "multi user"
+            "music box"
           ],
-          "name": "Music Box Multi",
-          "summary": "Music Box playback for development testing."
+          "name": "Music Box",
+          "summary": "Your music on Alexa."
         },
         "en-AU": {
-          "description": "Development skill for Music Box playback on supported Alexa devices.",
+          "description": "Music Box playback on supported Alexa devices.",
           "examplePhrases": [
-            "Alexa, open music box multi",
-            "Alexa, ask music box multi to play blinding lights",
-            "Alexa, ask music box multi to play some jazz"
+            "Alexa, open music box",
+            "Alexa, ask music box to play blinding lights",
+            "Alexa, ask music box to play some jazz"
           ],
           "keywords": [
             "music",
             "youtube music",
-            "multi user"
+            "music box"
           ],
-          "name": "Music Box Multi",
-          "summary": "Music Box playback for development testing."
+          "name": "Music Box",
+          "summary": "Your music on Alexa."
         },
         "en-GB": {
-          "description": "Development skill for Music Box playback on supported Alexa devices.",
+          "description": "Music Box playback on supported Alexa devices.",
           "examplePhrases": [
-            "Alexa, open music box multi",
-            "Alexa, ask music box multi to play blinding lights",
-            "Alexa, ask music box multi to play some jazz"
+            "Alexa, open music box",
+            "Alexa, ask music box to play blinding lights",
+            "Alexa, ask music box to play some jazz"
           ],
           "keywords": [
             "music",
             "youtube music",
-            "multi user"
+            "music box"
           ],
-          "name": "Music Box Multi",
-          "summary": "Music Box playback for development testing."
+          "name": "Music Box",
+          "summary": "Your music on Alexa."
         }
       },
       "testingInstructions": "Private development skill. Configure MUSICBOX_SERVER_URL, MUSICBOX_EMAIL and MUSICBOX_ALEXA_TOKEN; enable and grant customer email permission. Pairing codes are disabled."
