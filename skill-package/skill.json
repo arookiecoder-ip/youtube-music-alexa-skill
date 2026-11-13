@@ -2,32 +2,12 @@
   "manifest": {
     "apis": {
       "custom": {
-        "endpoint": {
-          "uri": "arn:aws:lambda:eu-west-1:585768148514:function:88e08ac3-8775-47be-9b80-fd506c85f532:Release_0"
-        },
         "interfaces": [
           {
             "type": "AUDIO_PLAYER"
           }
         ],
-        "locales": {},
-        "regions": {
-          "EU": {
-            "endpoint": {
-              "uri": "arn:aws:lambda:eu-west-1:585768148514:function:88e08ac3-8775-47be-9b80-fd506c85f532:Release_0"
-            }
-          },
-          "NA": {
-            "endpoint": {
-              "uri": "arn:aws:lambda:us-east-1:585768148514:function:88e08ac3-8775-47be-9b80-fd506c85f532:Release_0"
-            }
-          },
-          "FE": {
-            "endpoint": {
-              "uri": "arn:aws:lambda:us-west-2:585768148514:function:88e08ac3-8775-47be-9b80-fd506c85f532:Release_0"
-            }
-          }
-        }
+        "locales": {}
       }
     },
     "manifestVersion": "1.0",
@@ -43,62 +23,116 @@
       "isAvailableWorldwide": true,
       "locales": {
         "en-US": {
-          "description": "Sample Full Description",
+          "description": "Music Box playback on supported Alexa devices.",
           "examplePhrases": [
-            "Alexa open hello world",
-            "hello",
-            "help"
+            "Alexa, open music box",
+            "Alexa, ask music box to play blinding lights",
+            "Alexa, ask music box to play some jazz"
           ],
-          "keywords": [],
-          "name": "Alexa Music Unofficial",
-          "summary": "Sample Short Description"
+          "keywords": [
+            "music",
+            "youtube music",
+            "music box"
+          ],
+          "name": "Music Box",
+          "summary": "Your music on Alexa."
         },
         "en-CA": {
-          "description": "Sample Full Description",
+          "description": "Music Box playback on supported Alexa devices.",
           "examplePhrases": [
-            "Alexa open hello world",
-            "hello",
-            "help"
+            "Alexa, open music box",
+            "Alexa, ask music box to play blinding lights",
+            "Alexa, ask music box to play some jazz"
           ],
-          "keywords": [],
-          "name": "Alexa Music Unofficial",
-          "summary": "Sample Short Description"
+          "keywords": [
+            "music",
+            "youtube music",
+            "music box"
+          ],
+          "name": "Music Box",
+          "summary": "Your music on Alexa."
         },
         "en-IN": {
-          "description": "Sample Full Description",
+          "description": "Music Box playback on supported Alexa devices.",
           "examplePhrases": [
-            "Alexa open hello world",
-            "hello",
-            "help"
+            "Alexa, open music box",
+            "Alexa, ask music box to play blinding lights",
+            "Alexa, ask music box to play some jazz"
           ],
-          "keywords": [],
-          "name": "Alexa Music Unofficial",
-          "summary": "Sample Short Description"
+          "keywords": [
+            "music",
+            "youtube music",
+            "music box"
+          ],
+          "name": "Music Box",
+          "summary": "Your music on Alexa."
         },
         "en-AU": {
-          "description": "Sample Full Description",
+          "description": "Music Box playback on supported Alexa devices.",
           "examplePhrases": [
-            "Alexa open hello world",
-            "hello",
-            "help"
+            "Alexa, open music box",
+            "Alexa, ask music box to play blinding lights",
+            "Alexa, ask music box to play some jazz"
           ],
-          "keywords": [],
-          "name": "Alexa Music Unofficial",
-          "summary": "Sample Short Description"
+          "keywords": [
+            "music",
+            "youtube music",
+            "music box"
+          ],
+          "name": "Music Box",
+          "summary": "Your music on Alexa."
         },
         "en-GB": {
-          "description": "Sample Full Description",
+          "description": "Music Box playback on supported Alexa devices.",
           "examplePhrases": [
-            "Alexa open hello world",
-            "hello",
-            "help"
+            "Alexa, open music box",
+            "Alexa, ask music box to play blinding lights",
+            "Alexa, ask music box to play some jazz"
           ],
-          "keywords": [],
-          "name": "Alexa Music Unofficial",
-          "summary": "Sample Short Description"
+          "keywords": [
+            "music",
+            "youtube music",
+            "music box"
+          ],
+          "name": "Music Box",
+          "summary": "Your music on Alexa."
         }
       },
-      "testingInstructions": "Sample Testing Instructions."
+      "testingInstructions": "Private development skill. Configure MUSICBOX_SERVER_URL, MUSICBOX_EMAIL and MUSICBOX_ALEXA_TOKEN; enable and grant customer email permission. Pairing codes are disabled."
+    },
+    "permissions": [
+      {
+        "name": "alexa::profile:email:read"
+      }
+    ],
+    "privacyAndCompliance": {
+      "allowsPurchases": false,
+      "usesPersonalInfo": true,
+      "isChildDirected": false,
+      "isExportCompliant": true,
+      "containsAds": false,
+      "locales": {
+        "en-US": {
+          "privacyPolicyUrl": "https://testalexa.synthora.in/privacy_policy/",
+          "termsOfUseUrl": "https://testalexa.synthora.in/terms_of_use/"
+        },
+        "en-CA": {
+          "privacyPolicyUrl": "https://testalexa.synthora.in/privacy_policy/",
+          "termsOfUseUrl": "https://testalexa.synthora.in/terms_of_use/"
+        },
+        "en-IN": {
+          "privacyPolicyUrl": "https://testalexa.synthora.in/privacy_policy/",
+          "termsOfUseUrl": "https://testalexa.synthora.in/terms_of_use/"
+        },
+        "en-AU": {
+          "privacyPolicyUrl": "https://testalexa.synthora.in/privacy_policy/",
+          "termsOfUseUrl": "https://testalexa.synthora.in/terms_of_use/"
+        },
+        "en-GB": {
+          "privacyPolicyUrl": "https://testalexa.synthora.in/privacy_policy/",
+          "termsOfUseUrl": "https://testalexa.synthora.in/terms_of_use/"
+        }
+      }
     }
   }
 }

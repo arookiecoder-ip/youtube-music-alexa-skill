@@ -1,0 +1,23 @@
+[Unit]
+Description=MusicBox primary tunnel DNS failover check
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+DynamicUser=yes
+StateDirectory=musicbox-tunnel-failover
+StateDirectoryMode=0700
+LoadCredential=cloudflare-api-token:/etc/musicbox-tunnel-failover/token
+LoadCredential=failover-config:/etc/musicbox-tunnel-failover/config.json
+ExecStart=/usr/bin/python3 /usr/local/lib/musicbox-tunnel-failover.py --config %d/failover-config
+TimeoutStartSec=65
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+UMask=0077

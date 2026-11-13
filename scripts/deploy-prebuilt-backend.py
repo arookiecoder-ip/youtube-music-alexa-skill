@@ -24,7 +24,7 @@ def command(*args):
 def healthy():
     try:
         client = http.client.HTTPConnection('127.0.0.1', 8080, timeout=3)
-        client.request('GET', '/health/ready', headers={'Host': 'testalexa.synthora.in'})
+        client.request('GET', '/health/ready', headers={'Host': 'alexa.synthora.in'})
         response = client.getresponse()
         body = json.loads(response.read(65536))
         client.close()
@@ -67,7 +67,7 @@ def main():
             temporary = STATE / 'compose.image.json.tmp'
             temporary.write_text(json.dumps({'services': {'ytmusic': {'image': image}}}))
             temporary.replace(override)
-        compose = ['docker', 'compose', '--env-file', str(ROOT / '.env.testalexa'),
+        compose = ['docker', 'compose', '--env-file', str(ROOT / '.env.production'),
                    '-p', 'musicbox-test', '-f', str(ROOT / 'docker-compose.yml'),
                    '-f', str(ROOT / 'docker-compose.tunnel.yml'), '-f', str(override)]
         def replace():
@@ -87,7 +87,7 @@ def main():
             replace()
             raise
         # Keep future ordinary compose operations on the same CI-built image.
-        envfile = ROOT / '.env.testalexa'
+        envfile = ROOT / '.env.production'
         lines = envfile.read_text().splitlines()
         value = 'COMPOSE_FILE=docker-compose.yml:docker-compose.tunnel.yml:' + str(override)
         found = False

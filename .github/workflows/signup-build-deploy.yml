@@ -1,14 +1,14 @@
-name: Signup backend build and deployment
+name: Backend build and deployment
 
 on:
   workflow_dispatch:
     inputs:
       deploy:
-        description: Deploy the tested prebuilt image to the multi-user test server
+        description: Deploy the tested prebuilt image to the primary Music Box server
         type: boolean
         default: true
   push:
-    branches: [fix/signup-flow, feat/multi-user]
+    branches: [master, feat/multi-user, release/production-cutover]
     paths:
       - flask-server/**
       - .github/workflows/signup-build-deploy.yml
@@ -55,7 +55,7 @@ jobs:
           retention-days: 7
 
   deploy:
-    if: ${{ (github.ref == 'refs/heads/fix/signup-flow' || github.ref == 'refs/heads/feat/multi-user') && (github.event_name == 'push' || inputs.deploy) }}
+    if: ${{ github.ref == 'refs/heads/master' && (github.event_name == 'push' || inputs.deploy) }}
     needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -89,8 +89,8 @@ jobs:
       - name: Verify public application and proxy authentication
         run: |
           set -eu
-          test "$(curl -A 'Mozilla/5.0 MusicBox-CI/1.0' -sS -o /dev/null -w '%{http_code}' https://testalexa.synthora.in/health/ready)" = 200
-          test "$(curl -A 'Mozilla/5.0 MusicBox-CI/1.0' -sS -o /dev/null -w '%{http_code}' https://testalexa.synthora.in/alexa/proxy/)" = 401
+          test "$(curl -A 'Mozilla/5.0 MusicBox-CI/1.0' -sS -o /dev/null -w '%{http_code}' https://alexa.synthora.in/health/ready)" = 200
+          test "$(curl -A 'Mozilla/5.0 MusicBox-CI/1.0' -sS -o /dev/null -w '%{http_code}' https://alexa.synthora.in/alexa/proxy/)" = 401
       - name: Remove ephemeral SSH private key
         if: always()
         run: rm -f "$RUNNER_TEMP/deploy_key"
