@@ -69,6 +69,23 @@ class OutputRoutesTests(PhoneQueueTests):
         self.assertEqual(result.json['playback_output'], 'alexa')
         self.assertTrue(self.state['playing'])
 
+    def test_phone_claim_waits_for_native_pause_and_avoids_voice_dispatch(self):
+        remote = self.namespace['alexa_remote'].remote
+        remote.pause_for_handoff = Mock(return_value=None)
+        claim = self.output_request('claim')
+        self.assertEqual(claim.status_code, 200)
+        remote.pause_for_handoff.assert_called_once_with('echo-one')
+        self.command.assert_not_called()
+
+    def test_failed_native_pause_never_grants_destination_ownership(self):
+        remote = self.namespace['alexa_remote'].remote
+        remote.pause_for_handoff = Mock(return_value='rejected')
+        result = self.output_request('claim')
+        self.assertEqual(result.status_code, 409)
+        self.assertEqual(result.json['playback_output'], 'alexa')
+        self.assertTrue(self.state['playing'])
+        self.command.assert_not_called()
+
     def test_web_handoff_waits_for_ack_and_invalidates_phone_writes(self):
         claim = self.output_request('claim').json
         changed = threading.Event()

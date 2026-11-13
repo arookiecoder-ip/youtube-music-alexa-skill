@@ -11,6 +11,16 @@ from mobile_devices import MobileDevices
 
 
 class MobileDeviceRoutesTests(OutputRoutesTests):
+    def test_native_echo_handoff_does_not_wait_for_a_preliminary_presence_read(self):
+        remote = self.namespace['alexa_remote'].remote
+        remote.pause_for_handoff = Mock(return_value=None)
+        remote.devices = Mock(side_effect=AssertionError('unnecessary presence round trip'))
+        self.namespace['_pause_echo_for_mobile']('echo-one')
+        remote.pause_for_handoff.assert_called_once_with('echo-one')
+        remote.devices.assert_not_called()
+        self.command.assert_not_called()
+        self.assertFalse(self.state['playing'])
+
     def test_last_track_clear_requires_current_phone_ownership(self):
         claim = self.output_request('claim').json
         self.state.update(queue=[track(A)], video_id=A, playing=True)

@@ -3658,7 +3658,8 @@ def app_playback_output():
             _cancel_pending_dispatch(serial)
             if getattr(alexa_remote.remote, 'connection_state', None) is False:
                 return
-            error = alexa_remote.remote.command(serial, 'pause')
+            native_pause = getattr(alexa_remote.remote, 'pause_for_handoff', None)
+            error = native_pause(serial) if callable(native_pause) else alexa_remote.remote.command(serial, 'pause')
             if error:
                 raise OutputConflict('The Echo could not pause. Playback stayed on Alexa.')
         result = _playback_output.phone(owner, pause_echo, str(body.get('serial') or ''))
@@ -3709,16 +3710,28 @@ def _pause_echo_for_mobile(serial):
     if not serial:
         raise OutputConflict('Choose an Alexa device first.')
     _cancel_pending_dispatch(serial)
-    offline = False
-    try:
-        devices, error = alexa_remote.remote.devices()
-        offline = not error and isinstance(devices, list) and any(
-            device.get('serial') == serial and device.get('online') is False for device in devices)
-    except Exception:
-        pass  # Unknown presence still requires the normal pause acknowledgment.
     logged_out = getattr(alexa_remote.remote, 'connection_state', None) is False
-    if not offline and not logged_out and alexa_remote.remote.command(serial, 'pause'):
-        raise OutputConflict('The Echo could not pause. Playback stayed on Alexa.')
+    native_pause = getattr(alexa_remote.remote, 'pause_for_handoff', None)
+    if not logged_out and callable(native_pause):
+        error = native_pause(serial)
+        if error:
+            # An offline source is already silent, but confirm that state
+            # after a failed native command rather than delaying every switch.
+            devices, presence_error = alexa_remote.remote.devices(refresh=True)
+            offline = not presence_error and isinstance(devices, list) and any(
+                device.get('serial') == serial and device.get('online') is False for device in devices)
+            if not offline:
+                raise OutputConflict('The Echo could not pause. Playback stayed on Alexa.')
+    elif not logged_out:
+        offline = False
+        try:
+            devices, error = alexa_remote.remote.devices()
+            offline = not error and isinstance(devices, list) and any(
+                device.get('serial') == serial and device.get('online') is False for device in devices)
+        except Exception:
+            pass
+        if not offline and alexa_remote.remote.command(serial, 'pause'):
+            raise OutputConflict('The Echo could not pause. Playback stayed on Alexa.')
     # Native PauseCommand is acknowledged by Amazon directly; the custom skill's
     # PlaybackStopped webhook can arrive seconds later and is not a handoff gate.
     with _np_lock:
@@ -9045,7 +9058,11 @@ def alexa_command():
         _notify_sse()
         # Refresh the cache mtime at pause time so TTL counts from the pause,
         # not the original download; the file is also pinned while selected.
-        error = alexa_remote.remote.command(serial, action, body.get("value"))
+        native_pause = getattr(alexa_remote.remote, 'pause_for_handoff', None)
+        if body.get('native_handoff') is True and callable(native_pause):
+            error = native_pause(serial)
+        else:
+            error = alexa_remote.remote.command(serial, action, body.get("value"))
     else:
         error = alexa_remote.remote.command(serial, action, body.get("value"))
     if error:
@@ -10814,7 +10831,9 @@ def alexa_play_queue():
     # between the client's last snapshot and this request) and only fall back
     # to the by-id search otherwise.
     item = None
-    if not force_radio:
+    # A selection from search/library is a new queue even if its video is
+    # already present. Only explicit queue navigation may reuse the old list.
+    if not force_radio and not body.get("new_queue"):
         try:
             queue_index = int(body.get("queue_index"))
         except (TypeError, ValueError):

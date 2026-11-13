@@ -1602,7 +1602,7 @@ class AlexaRemote:
                 return d
         return None
 
-    async def _api_for(self, serial: str, require_online: bool = False):
+    async def _api_for(self, serial: str, require_online: bool = False, cached_online: bool = False):
         """Returns (AlexaAPI, error string or None).
 
         When require_online is set, the target Echo must report as online before
@@ -1627,7 +1627,14 @@ class AlexaRemote:
             # one is offline. Re-fetch before trusting either reading, unless
             # the list is fresh enough.
             stale = time.monotonic() - self._devices_fetched_at > _DEVICE_STATE_TTL
-            if stale or (raw is not None and not raw.get("online")):
+            if stale and cached_online and raw is not None and raw.get("online"):
+                # Resume should not wait for a second Amazon HTTP round trip
+                # merely to re-confirm a known-online device. The command's
+                # actual response still decides success; refresh in parallel.
+                task = getattr(self, '_transport_presence_refresh', None)
+                if task is None or task.done():
+                    self._transport_presence_refresh = asyncio.create_task(self._refresh_transport_presence())
+            elif stale or (raw is not None and not raw.get("online")):
                 _, err = await self._devices(refresh=True)
                 if err:
                     return None, err
@@ -1639,6 +1646,35 @@ class AlexaRemote:
                 return None, f"{name} is offline. Turn it on (or pick another device) and try again."
         return AlexaAPI(device, self._login), None
 
+    async def _refresh_transport_presence(self):
+        try:
+            await self._devices(refresh=True)
+        except Exception:
+            logger.debug("background transport presence refresh failed", exc_info=True)
+
+    def pause_for_handoff(self, serial: str):
+        """Pause the device directly before granting a different output audio."""
+        return self._run(self._pause_for_handoff(serial))
+
+    async def _pause_for_handoff(self, serial):
+        api, error = await self._api_for(serial, require_online=True, cached_online=True)
+        if error:
+            return error
+        try:
+            # A handoff does not need Alexa NLU or a Lambda invocation. The
+            # real PlaybackStopped event still records the source's cursor.
+            await api.pause()
+            return None
+        except Exception as exc:
+            failure = authentication_failure(exc)
+            if failure:
+                self.connection_state = False
+                return failure['message']
+            # Older Echo firmware may reject the native transport. Keep the
+            # established skill pause as a fallback; never grant on failure.
+            logger.debug("native handoff pause failed; trying skill pause", exc_info=True)
+            return await self._command(serial, 'pause', None)
+
     def command(self, serial: str, action: str, value=None):
         """Transport control. Returns an error string, or None on success."""
         return self._run(self._command(serial, action, value))
@@ -1646,7 +1682,7 @@ class AlexaRemote:
     async def _command(self, serial, action, value):
         # Reject early if the target Echo is offline: it can't be reached, and a
         # transport/volume command would otherwise fail opaquely or hang.
-        api, error = await self._api_for(serial, require_online=True)
+        api, error = await self._api_for(serial, require_online=True, cached_online=action in ("play", "pause"))
         if error:
             return error
         try:

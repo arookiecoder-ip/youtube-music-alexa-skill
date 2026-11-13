@@ -150,6 +150,29 @@ class PlaylistFastStartTests(unittest.TestCase):
         with server._np_lock:
             return dict(server._now_playing)
 
+    def test_external_selection_of_existing_song_starts_a_fresh_queue(self):
+        from contextlib import ExitStack
+        with server._np_lock:
+            server._now_playing.update(queue=[_item(0), _item(1), _item(2)], queue_index=0, video_id=_vid(0))
+        with ExitStack() as stack:
+            for patch in self._quiet(): stack.enter_context(patch)
+            response = self._play(dict(serial='echo', video_id=_vid(1), title='Song 1',
+                                       new_queue=True, suppress_radio=True))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual([item['video_id'] for item in self._now_playing()['queue']], [_vid(1)])
+        self.assertEqual(self._now_playing()['queue_index'], 0)
+
+    def test_explicit_queue_navigation_still_keeps_surrounding_tracks(self):
+        from contextlib import ExitStack
+        with server._np_lock:
+            server._now_playing.update(queue=[_item(0), _item(1), _item(2)], queue_index=0, video_id=_vid(0))
+        with ExitStack() as stack:
+            for patch in self._quiet(): stack.enter_context(patch)
+            response = self._play(dict(serial='echo', video_id=_vid(1), queue_index=1, suppress_radio=True))
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(self._now_playing()['queue']), 3)
+        self.assertEqual(self._now_playing()['queue_index'], 1)
+
     def test_single_song_installs_single_item_queue_without_blocking_lookup(self):
         """The tap-a-song fast path: tiny request, one queue item, no upstream."""
         patches = self._quiet()
