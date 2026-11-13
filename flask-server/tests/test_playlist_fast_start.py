@@ -34,7 +34,7 @@ _TEST_ENV = {
     "SECRET_KEY": "test-secret-for-playlist-fast-start",
     "REMOTE_USER": "test-owner",
     "REMOTE_PASSWORD": "test-pass",
-    "API_KEY": "0123456789abcdef0123456789abcdef",
+    "API_KEY": "0123456789abcdef0123456789abcdef",  # gitleaks:allow -- synthetic fixture credential
 }
 
 
@@ -82,6 +82,7 @@ def _install_stubs():
                         type(attr, (), {"__init__": lambda self, *a, **kw: None}))
             ybs.browser_client_is_signed_in = lambda *a, **kw: False
             ybs.promote_browser_headers = lambda *a, **kw: None
+            ybs.normalize_browser_headers = lambda value: value
             sys.modules["youtube_browser_session"] = ybs
 
 
@@ -101,6 +102,12 @@ def _item(i):
 class PlaylistFastStartTests(unittest.TestCase):
     def setUp(self):
         server._reset_rate_limit_cooldown()
+        # The logged-out Echo guard reads a real Amazon check that another test
+        # module may already have run; this file is about queue behaviour.
+        echo = server.alexa_remote.remote
+        self.addCleanup(setattr, echo, 'connection_state',
+                        getattr(echo, 'connection_state', None))
+        echo.connection_state = True
         with server._PLAY_INTENT_LOCK:
             server._PLAY_INTENT_SEQS.clear()
         with server._PENDING_DISPATCH_LOCK:
@@ -109,11 +116,11 @@ class PlaylistFastStartTests(unittest.TestCase):
             server._PENDING_DISPATCH.clear()
         with server._TRIGGER_INFLIGHT_LOCK:
             server._TRIGGER_INFLIGHT.clear()
-        # server.py keeps ownership and the queue in module globals; every
-        # test starts from an idle Alexa output with an empty queue so neither
-        # a leaked phone lease (claim -> 409) nor a leftover queue can pollute
-        # the next test.
-        server._playback_output = server.PlaybackOutput()
+        # Every test starts from an idle Alexa output with an empty queue so
+        # neither a leaked phone lease (claim -> 409) nor a leftover queue can
+        # pollute the next test. Only this identity's output is replaced; the
+        # other players keep theirs.
+        server._playback_output_registry.replace_current(server.PlaybackOutput())
         with server._np_lock:
             server._now_playing.update(playing=False, playback_confirmed=True,
                                        playback_processing=False, video_id='',

@@ -19,6 +19,17 @@ from youtube_browser_session import (
 )
 
 
+# service.py imports the scripted Google helpers as top-level modules (it is
+# copied into the sidecar image, where browser-auth is the working directory).
+# Host-side tests load service.py by path, so make that import resolvable.
+BROWSER_AUTH = Path(__file__).resolve().parents[2] / "browser-auth"
+if str(BROWSER_AUTH) not in sys.path:
+    sys.path.insert(0, str(BROWSER_AUTH))
+if str(Path(__file__).resolve().parent) not in sys.path:
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+from sidecar_support import requires_sidecar  # noqa: E402
+
+
 def signed_in_account_menu(name="Owner"):
     return {"actions": [{"openPopupAction": {"popup": {
         "multiPageMenuRenderer": {"header": {"activeAccountHeaderRenderer": {
@@ -51,7 +62,7 @@ class LeaseTests(unittest.TestCase):
     def test_viewport_is_bounded_and_passed_to_the_private_browser(self):
         controller=FakeController();manager=YouTubeBrowserSessionManager(controller,lambda _:None)
         manager.start('owner',viewport={'width':1280,'height':800})
-        self.assertEqual(controller.last_payload,{'width':1280,'height':800})
+        self.assertEqual(controller.last_payload,{'profile':'','width':1280,'height':800})
         for viewport in [{'width':True,'height':800},{'width':4000,'height':800},{'width':1280,'height':0},'desktop']:
             with self.assertRaises(ValueError):manager.start('owner',viewport=viewport)
 
@@ -66,7 +77,7 @@ class LeaseTests(unittest.TestCase):
         now[0] = 111
         self.assertFalse(manager.authorize("owner-a", token))
         token, _ = manager.start("owner-a")
-        manager.revoke()
+        manager.revoke("owner-a")
         self.assertFalse(manager.authorize("owner-a", token))
 
     def test_replacement_invalidates_previous_lease(self):
@@ -141,7 +152,7 @@ class FlaskAuthorizationTests(unittest.TestCase):
                                return_value=status) as capture:
             response = self.client.post("/api/youtube/browser-session/capture", json={})
         self.assertEqual(response.status_code, 202)
-        capture.assert_called_once_with()
+        capture.assert_called_once_with("owner")
         self.assertNotIn("control", response.get_data(as_text=True).lower())
 
 
@@ -215,20 +226,22 @@ class CaptureTests(unittest.TestCase):
 
     def test_consumed_candidate_does_not_reset_validation_error(self):
         controller = FakeController(states=[{"state": "candidate_taken"}])
-        manager = YouTubeBrowserSessionManager(controller, lambda _: None)
-        manager._state = "reconnect_required"
-        manager._message = "Captured session was not accepted"
+        manager = YouTubeBrowserSessionManager(controller, lambda *_: None)
+        entry = manager._auth_for(None)
+        entry.state = "reconnect_required"
+        entry.message = "Captured session was not accepted"
         status = manager.poll()
         self.assertEqual(status["state"], "reconnect_required")
         self.assertNotIn(("/candidate/take", "POST"), controller.calls)
 
     def test_sidecar_complete_preserves_promoted_connected_state(self):
         controller = FakeController(states=[{"state": "complete"}])
-        manager = YouTubeBrowserSessionManager(controller, lambda _: None)
-        manager._state = "connected"
+        manager = YouTubeBrowserSessionManager(controller, lambda *_: None)
+        manager._auth_for(None).state = "connected"
         status = manager.poll()
         self.assertEqual(status["state"], "connected")
 
+    @requires_sidecar('service.py')
     def test_controller_rejects_missing_or_wrong_token(self):
         path = Path(__file__).parents[2] / "browser-auth" / "service.py"
         spec = importlib.util.spec_from_file_location("browser_service_test", path)
@@ -238,8 +251,10 @@ class CaptureTests(unittest.TestCase):
         client = module.app.test_client()
         self.assertEqual(client.get("/status").status_code, 401)
         self.assertEqual(client.get("/status", headers={"X-Control-Token": "wrong"}).status_code, 401)
-        self.assertEqual(client.get("/status", headers={"X-Control-Token": "correct"}).status_code, 200)
+        module._auth_attempt="test-attempt";module._auth_attempt_deadline=time.monotonic()+300
+        self.assertEqual(client.get("/status", headers={"X-Control-Token": "correct", "X-Auth-Attempt": "test-attempt"}).status_code, 200)
 
+    @requires_sidecar('service.py')
     def test_sidecar_rejects_signed_headers_without_active_account(self):
         path = Path(__file__).parents[2] / "browser-auth" / "service.py"
         spec = importlib.util.spec_from_file_location("browser_service_account_test", path)
@@ -253,6 +268,7 @@ class CaptureTests(unittest.TestCase):
             }}}
         }]}))
 
+    @requires_sidecar('service.py')
     def test_sidecar_identifies_signed_out_account_menu(self):
         path = Path(__file__).parents[2] / "browser-auth" / "service.py"
         spec = importlib.util.spec_from_file_location("browser_service_signed_out_test", path)
@@ -266,35 +282,40 @@ class CaptureTests(unittest.TestCase):
         self.assertFalse(module.account_menu_reports_signed_out(signed_in_account_menu()))
         self.assertFalse(module.account_menu_reports_signed_out({}))
 
+    @requires_sidecar('service.py')
     def test_google_login_process_has_fixed_cdp_but_no_automation_flag(self):
         path = Path(__file__).parents[2] / "browser-auth" / "service.py"
         spec = importlib.util.spec_from_file_location("browser_service_launch_test", path)
         module = importlib.util.module_from_spec(spec)
         with mock.patch.dict(os.environ, {"YT_BROWSER_CONTROL_TOKEN": "correct"}):
             spec.loader.exec_module(module)
-        login_command = module._plain_chromium_command(enable_capture=True)
-        self.assertNotIn("--enable-automation", login_command)
-        self.assertNotIn("--remote-debugging-pipe", login_command)
-        self.assertIn("--remote-debugging-port=9222", login_command)
-        self.assertIn("--remote-debugging-address=127.0.0.1", login_command)
-        self.assertIn("--hide-crash-restore-bubble", login_command)
+        with tempfile.TemporaryDirectory() as profile_dir:
+            login_command = module._plain_chromium_command(enable_capture=True, profile_dir=profile_dir)
+            self.assertNotIn("--enable-automation", login_command)
+            self.assertNotIn("--remote-debugging-pipe", login_command)
+            self.assertIn("--remote-debugging-port=9222", login_command)
+            self.assertIn("--remote-debugging-address=127.0.0.1", login_command)
+            self.assertIn("--hide-crash-restore-bubble", login_command)
 
-        capture_command = module._plain_chromium_command(enable_capture=True)
-        self.assertNotIn("--enable-automation", capture_command)
-        self.assertNotIn("--remote-debugging-pipe", capture_command)
-        self.assertIn("--remote-debugging-port=9222", capture_command)
+            capture_command = module._plain_chromium_command(enable_capture=True, profile_dir=profile_dir)
+            self.assertNotIn("--enable-automation", capture_command)
+            self.assertNotIn("--remote-debugging-pipe", capture_command)
+            self.assertIn("--remote-debugging-port=9222", capture_command)
 
+    @requires_sidecar('service.py')
     def test_failed_capture_keeps_same_chromium_process_for_retry(self):
         path = Path(__file__).parents[2] / "browser-auth" / "service.py"
         spec = importlib.util.spec_from_file_location("browser_service_same_process", path)
         module = importlib.util.module_from_spec(spec)
         with mock.patch.dict(os.environ, {"YT_BROWSER_CONTROL_TOKEN": "correct"}):
             spec.loader.exec_module(module)
+        profile_dir = tempfile.mkdtemp()
+        self.addCleanup(lambda: os.rmdir(profile_dir))
         with mock.patch.object(module, "_manual_login") as launch, \
              mock.patch.object(module, "_capture_from_running_browser",
                                return_value="signed_out") as validate, \
              mock.patch.object(module, "_stop_manual_browser") as stop:
-            worker = threading.Thread(target=module._capture, args=(True,))
+            worker = threading.Thread(target=module._capture, args=(True, profile_dir))
             worker.start()
             deadline = time.time() + 2
             while module._public_state()["state"] != "waiting_for_login" and time.time() < deadline:
@@ -307,10 +328,11 @@ class CaptureTests(unittest.TestCase):
             self.assertTrue(module._public_state()["interactive"])
             module._set_state("idle", interactive=False)
             worker.join(timeout=2)
-        launch.assert_called_once_with(enable_capture=True)
+        launch.assert_called_once_with(enable_capture=True, profile_dir=profile_dir)
         validate.assert_called_once_with(True)
         stop.assert_called_once_with()
 
+    @requires_sidecar('service.py')
     def test_capture_is_explicit_and_requires_running_plain_browser(self):
         path = Path(__file__).parents[2] / "browser-auth" / "service.py"
         spec = importlib.util.spec_from_file_location("browser_service_capture", path)
@@ -318,13 +340,15 @@ class CaptureTests(unittest.TestCase):
         with mock.patch.dict(os.environ, {"YT_BROWSER_CONTROL_TOKEN": "correct"}):
             spec.loader.exec_module(module)
         client = module.app.test_client()
-        headers = {"X-Control-Token": "correct"}
+        module._auth_attempt="test-attempt";module._auth_attempt_deadline=time.monotonic()+300
+        headers = {"X-Control-Token": "correct", "X-Auth-Attempt": "test-attempt"}
         self.assertEqual(client.post("/interactive/capture", headers=headers).status_code, 409)
         module._set_state("waiting_for_login", interactive=True)
         response = client.post("/interactive/capture", headers=headers)
         self.assertEqual(response.status_code, 202)
         self.assertTrue(module._capture_requested.is_set())
 
+    @requires_sidecar('novnc-controls.js')
     def test_novnc_controls_use_owner_api_not_sidecar_token(self):
         script = (Path(__file__).parents[2] / "browser-auth" / "novnc-controls.js").read_text()
         self.assertIn("/api/youtube/browser-session/", script)
@@ -382,8 +406,9 @@ class RenewalTests(unittest.TestCase):
     def test_capture_promotes_and_invalidates_cache(self):
         promoted, invalidated = [], []
         ctl = FakeController(states=[{"state": "captured"}])
-        manager = YouTubeBrowserSessionManager(ctl, promoted.append,
-                                               lambda: invalidated.append(True), refresh_cooldown=0)
+        manager = YouTubeBrowserSessionManager(
+            ctl, lambda headers, owner_id: promoted.append(headers),
+            lambda owner_id=None: invalidated.append(True), refresh_cooldown=0)
         self.assertTrue(manager.refresh())
         self.assertEqual(len(promoted), 1)
         self.assertEqual(invalidated, [True])
@@ -392,7 +417,7 @@ class RenewalTests(unittest.TestCase):
 
     def test_single_flight_concurrent_refresh(self):
         ctl = FakeController(states=[{"state": "captured"}], delay=.05)
-        manager = YouTubeBrowserSessionManager(ctl, lambda _: None,
+        manager = YouTubeBrowserSessionManager(ctl, lambda *_: None,
                                                refresh_cooldown=0, refresh_timeout=2)
         results = []
         threads = [threading.Thread(target=lambda: results.append(manager.refresh())) for _ in range(5)]
@@ -403,7 +428,7 @@ class RenewalTests(unittest.TestCase):
 
     def test_one_retry_only(self):
         manager = YouTubeBrowserSessionManager(FakeController(states=[{"state": "captured"}]),
-                                               lambda _: None, refresh_cooldown=0)
+                                               lambda *_: None, refresh_cooldown=0)
         calls = []
         def operation():
             calls.append(1)

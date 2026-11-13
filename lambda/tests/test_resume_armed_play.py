@@ -181,6 +181,13 @@ def _no_arm():
 
 
 class ResumeHonorsFreshResumeArm(unittest.TestCase):
+    def setUp(self):
+        # Controller mechanics use legacy-shaped doubles; real SDK tests verify
+        # mandatory authorization and scoped persistence before dispatch.
+        patcher = mock.patch.object(player.data, 'ALEXA_SKILL_NAMESPACE', '')
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     """The reported bug: persisted session says OLD, the web remote armed NEW."""
 
     def test_diverging_arm_plays_armed_track_at_armed_offset(self):

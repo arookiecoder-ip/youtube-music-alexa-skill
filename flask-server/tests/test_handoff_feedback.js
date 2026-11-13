@@ -15,7 +15,7 @@ async function main() {
       if (body && body.action === 'transfer') return new Promise((yes,no)=>{release=yes;reject=no;});
       return source;
     }};
-  const context = {window, document:{getElementById:id=>id==='device'?select:null},
+  const context = {window, document:{body:{dataset:{alexaEnabled:'true'}},getElementById:id=>id==='device'?select:null},
     Date:{now:()=>now}, setTimeout:(fn,delay)=>{timers.push({fn,delay}); return timers.length;}, clearTimeout(){}};
   vm.createContext(context);
   vm.runInContext(fs.readFileSync(path.join(__dirname,'../templates/static/js/device-connect.js'),'utf8'),context);

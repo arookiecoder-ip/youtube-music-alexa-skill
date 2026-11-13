@@ -1,0 +1,13 @@
+[Unit]
+Description=Cloudflare-only MusicBox public web ingress before Docker NAT
+After=network-pre.target
+Before=docker.service cloudflared.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/nft -f /etc/musicbox-origin-filter.nft
+ExecReload=/usr/sbin/nft -f /etc/musicbox-origin-filter.nft
+
+[Install]
+WantedBy=multi-user.target

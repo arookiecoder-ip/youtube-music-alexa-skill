@@ -1,0 +1,26 @@
+{% extends "admin/base.html" %}
+{% block body %}
+<div class="login-shell">
+  <div class="login-card">
+    <div class="login-brand">
+      <span class="eq-icon" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span></span>
+      <div>
+        <div class="brand-name">{{ mu_config.app_name }}</div>
+        <div class="brand-sub">Admin</div>
+      </div>
+    </div>
+    <div class="card center">
+      <div class="stat-label mb-2">Error {{ status }}</div>
+      <h1 class="display mb-3">{{ status }}</h1>
+      <p class="muted mb-5">{{ message }}</p>
+      <div class="btn-row center">
+        <a class="btn primary" href="{{ base_path }}/">Back to dashboard</a>
+        <a class="btn ghost" href="{{ base_path }}/login/">Sign in</a>
+      </div>
+    </div>
+    <div class="login-foot">
+      If this keeps happening, check the server logs for the request ID.
+    </div>
+  </div>
+</div>
+{% endblock %}

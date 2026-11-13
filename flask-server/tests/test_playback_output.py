@@ -112,3 +112,27 @@ class PlaybackOutputTests(unittest.TestCase):
         with self.assertRaises(OutputConflict):
             output.alexa(expected_owner='mobile', expected_token=old['output_token'])
         self.assertTrue(output.owns_phone('mobile', latest['output_token']))
+
+
+class RestrictedOutputTests(unittest.TestCase):
+    def test_disabling_echo_retires_pending_handoff_and_ownership(self):
+        output = PlaybackOutput()
+        output.serial = 'echo-one'
+        output.pending_owner, output.pending_until = 'phone-one', output.clock() + 12
+        old = output.snapshot()
+        self.assertTrue(output.restrict_alexa())
+        current = output.snapshot()
+        self.assertEqual(current['playback_output'], 'phone')
+        self.assertEqual(current['output_serial'], '')
+        self.assertFalse(current['handoff_pending'])
+        self.assertNotEqual(current['output_token'], old['output_token'])
+        self.assertFalse(output.owns_phone('phone-one', old['output_token']))
+        self.assertEqual(current['phone_lease_ms'], 0)
+
+    def test_disabling_echo_keeps_phone_lease_and_token(self):
+        output = PlaybackOutput()
+        output.phone('phone-one', Mock())
+        before = output.snapshot()
+        self.assertFalse(output.restrict_alexa())
+        self.assertEqual(output.snapshot()['output_token'], before['output_token'])
+        self.assertTrue(output.owns_phone('phone-one', before['output_token']))

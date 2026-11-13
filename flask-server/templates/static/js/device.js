@@ -24,6 +24,9 @@
     if (title) document.getElementById('jam-ended-title').textContent = title;
     if (msg) document.getElementById('jam-ended-msg').textContent = msg;
     overlay.style.display = 'flex';
+    // Everything behind this panel is unreachable now, so the keyboard goes with it.
+    const card = overlay.querySelector('.jam-ended-card');
+    if (card) card.focus();
   }
 
   async function leaveJam() {
@@ -99,7 +102,17 @@
     if (wrapper) wrapper.classList.remove('open');
   }
 
+  window.addEventListener('amazon-access', event => {
+    if (event.detail === false) {
+      window._connectEchoDevices = [];
+      if (deviceEl) { deviceEl.replaceChildren(); syncCustomDropdown(); }
+      try { localStorage.removeItem(window.CACHE_DEVICES_KEY || 'cachedDevices'); } catch (_) {}
+      if (loginSection) loginSection.hidden = true;
+    }
+  });
+
   async function loadDevices(refresh) {
+    if (document.body.dataset.alexaEnabled === 'false') return;
     const showStatusToast = !!refresh;
     if (showStatusToast) toast('Loading devices...');
     const prevSerial = deviceEl.value || localStorage.getItem('selectedSerial') || '';
@@ -253,6 +266,7 @@
   }
 
   async function refreshAuth() {
+    if (document.body.dataset.alexaEnabled === 'false') { showControls(false); return false; }
     try {
       const s = await api('/alexa/status/');
       if (!s.configured && !window.browserPlayback) {
@@ -280,8 +294,9 @@
           showJamEnded('Jam unavailable', 'The host\'s server is not fully configured.');
           return;
         }
-        if (!s.logged_in || !data.device_available || !data.serial) {
-          showJamEnded('Jam unavailable', 'The host does not have a playback device available.');
+        if (!data.device_available || !data.serial) {
+          showJamEnded('Jam not ready',
+            'The host is not playing anywhere right now. Ask them to open Music Box in a browser or link an Alexa device.');
           return;
         }
 
@@ -307,6 +322,13 @@
     const savedSerial = localStorage.getItem('selectedSerial') || '';
     try {
       const data = await api('/alexa/init/' + (savedSerial ? '?serial=' + encodeURIComponent(savedSerial) : ''));
+      if (data.alexa_access_enabled === false) {
+        window.updateAmazonAccess?.(false);
+        window._connectEchoDevices = [];
+        window._applyDevices([], '');
+        if (window.connectSSE) window.connectSSE();
+        return;
+      }
       const s = data.status || {};
       if (!s.configured && !window.browserPlayback) {
         showControls(false);
@@ -344,28 +366,26 @@
     }
   }
 
-  async function startProxyLogin(email, password, force) {
-    const data = await api('/alexa/proxy_login/', { email, password, force: !!force });
+  async function startProxyLogin(email, password) {
+    const data = await api('/alexa/form_login/', { email, password });
     document.getElementById('login-password').value = '';
-    window.open(data.login_url, '_blank', 'noopener');
-    toast('Complete login in the new tab...');
     clearInterval(loginPoll);
-    loginPoll = setInterval(async () => {
-      try {
-        const c = await api('/alexa/proxy_check/');
-        if (c.logged_in) {
-          clearInterval(loginPoll);
-          toast('Connected', 'ok');
-          if (loginBtn) loginBtn.disabled = false;
-          showControls(true);
-          loadDevices(false);
-        } else if (c.error) {
-          clearInterval(loginPoll);
-          if (loginBtn) loginBtn.disabled = false;
-          toast(c.error, 'error');
-        }
-      } catch (_) {}
-    }, 2500);
+    if (data.state === 'connected') {
+      toast('Connected', 'ok');
+      if (loginBtn) loginBtn.disabled = false;
+      showControls(true);
+      loadDevices(false);
+      return;
+    }
+    // Amazon wants a code, a captcha or an approval: that conversation lives
+    // on the sign-in page, and this login continues there without retyping.
+    if (data.state === 'need_code' || data.state === 'need_captcha' ||
+        data.state === 'need_choice' || data.state === 'need_approval') {
+      location.assign('/accounts/amazon');
+      return;
+    }
+    if (loginBtn) loginBtn.disabled = false;
+    toast(data.message || 'Amazon sign-in failed. Try again.', 'error');
   }
 
   function clearUiAfterPlaybackReset() {
@@ -474,17 +494,8 @@
         loginBtn.disabled = true;
         toast('Opening Amazon login...');
         try {
-          await startProxyLogin(email, password, false);
+          await startProxyLogin(email, password);
         } catch (e) {
-          if (e.message.includes('force') && confirm(e.message + '\n\nContinue and replace the current session?')) {
-            try {
-              await startProxyLogin(email, password, true);
-            } catch (e2) {
-              toast(e2.message, 'error');
-              loginBtn.disabled = false;
-            }
-            return;
-          }
           toast(e.message, 'error');
           loginBtn.disabled = false;
         }
@@ -578,14 +589,16 @@
 
     if (startBtn) startBtn.addEventListener('click', async () => {
       startBtn.disabled = true;
-      try { renderJam(await api('/alexa/jam/start/', {})); toast('Jam started - share the link', 'ok'); }
+      const deviceId = window.browserPlayback ? window.browserPlayback.id : '';
+      try { renderJam(await api('/alexa/jam/start/', { device_id: deviceId })); toast('Jam started - share the link', 'ok'); }
       catch (e) { toast(e.message, 'error'); }
       finally { startBtn.disabled = false; }
     });
 
     if (refreshBtn) refreshBtn.addEventListener('click', async () => {
       refreshBtn.disabled = true;
-      try { renderJam(await api('/alexa/jam/start/', {})); toast('Jam link refreshed - old link revoked', 'ok'); }
+      const deviceId = window.browserPlayback ? window.browserPlayback.id : '';
+      try { renderJam(await api('/alexa/jam/start/', { device_id: deviceId })); toast('Jam link refreshed - old link revoked', 'ok'); }
       catch (e) { toast(e.message, 'error'); }
       finally { refreshBtn.disabled = false; }
     });
@@ -679,4 +692,96 @@
   window.syncCustomDropdown = syncCustomDropdown;
   window.updateTriggerLabel = updateTriggerLabel;
   window.closeDropdown = closeDropdown;
+})();
+
+/* The device picker is built from divs. Its native <select> is display:none and the
+   trigger was never focusable, so changing device had exactly one route: click it.
+   This gives both instances the keyboard contract their appearance already promises.
+   Choosing still fires the option's own click handler, so no selection logic is
+   duplicated here — the keyboard is one more way in, not a second implementation. */
+(() => {
+  const PAIRS = [
+    ['device-wrapper', 'device-trigger', 'device-menu'],
+    ['device-sidebar-wrapper', 'device-sidebar-trigger', 'device-sidebar-menu'],
+  ];
+
+  for (const [wrapperId, triggerId, menuId] of PAIRS) {
+    const wrapper = document.getElementById(wrapperId);
+    const trigger = document.getElementById(triggerId);
+    const menu = document.getElementById(menuId);
+    if (!wrapper || !trigger || !menu) continue;
+
+    trigger.setAttribute('role', 'button');
+    trigger.setAttribute('tabindex', '0');
+    trigger.setAttribute('aria-haspopup', 'listbox');
+    trigger.setAttribute('aria-controls', menuId);
+    menu.setAttribute('role', 'listbox');
+
+    const items = () => [...menu.children];
+    const isOpen = () => wrapper.classList.contains('open');
+
+    // Every open path is a class toggle, whoever toggles it, so the state the
+    // trigger reports is read off the wrapper rather than set alongside it.
+    new MutationObserver(() => {
+      const open = isOpen();
+      trigger.setAttribute('aria-expanded', open ? 'true' : 'false');
+      if (!open) items().forEach((o) => o.removeAttribute('aria-selected'));
+    }).observe(wrapper, { attributes: true, attributeFilter: ['class'] });
+
+    function focusItem(index) {
+      const list = items();
+      if (!list.length) return;
+      const i = ((index % list.length) + list.length) % list.length;
+      list.forEach((o, n) => {
+        o.setAttribute('role', 'option');
+        o.tabIndex = -1;
+        o.setAttribute('aria-selected', String(n === i));
+      });
+      list[i].focus();
+    }
+
+    const selectedIndex = () => {
+      const i = items().findIndex((o) => o.classList.contains('selected'));
+      return i < 0 ? 0 : i;
+    };
+
+    trigger.addEventListener('keydown', (event) => {
+      const keys = ['Enter', ' ', 'ArrowDown', 'ArrowUp'];
+      if (!keys.includes(event.key)) return;
+      event.preventDefault();
+      wrapper.classList.add('open');
+      focusItem(event.key === 'ArrowUp' ? items().length - 1 : selectedIndex());
+    });
+
+    menu.addEventListener('keydown', (event) => {
+      const list = items();
+      const at = list.indexOf(document.activeElement);
+      if (at < 0) return;
+      if (event.key === 'Enter' || event.key === ' ') {
+        // Reuse the click path: offline and logged-out options guard themselves there.
+        event.preventDefault();
+        list[at].click();
+        trigger.focus();
+      } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp'
+        || event.key === 'Home' || event.key === 'End') {
+        event.preventDefault();
+        const next = event.key === 'Home' ? 0
+          : event.key === 'End' ? list.length - 1
+            : at + (event.key === 'ArrowDown' ? 1 : -1);
+        focusItem(next);
+      } else if (event.key === 'Escape') {
+        event.preventDefault();
+        wrapper.classList.remove('open');
+        trigger.focus();
+      }
+    });
+
+    // Tabbing out of an open list closes it, the way the existing outside-click
+    // handler closes a mouse session.
+    wrapper.addEventListener('focusout', (event) => {
+      if (isOpen() && !wrapper.contains(event.relatedTarget)) {
+        wrapper.classList.remove('open');
+      }
+    });
+  }
 })();

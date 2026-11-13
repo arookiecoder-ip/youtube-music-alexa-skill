@@ -13,13 +13,15 @@ import unittest
 from unittest import mock
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+# audio_test_support is a sibling module: importable however this file was loaded.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 
 def _install_stubs():
     os.environ.setdefault("SECRET_KEY", "test-secret-for-hygiene")
     os.environ.setdefault("REMOTE_USER", "test-owner")
     os.environ.setdefault("REMOTE_PASSWORD", "test-pass")
-    os.environ.setdefault("API_KEY", "0123456789abcdef0123456789abcdef")
+    os.environ.setdefault("API_KEY", "0123456789abcdef0123456789abcdef")  # gitleaks:allow -- synthetic fixture credential
 
     if "ytmusicapi" not in sys.modules:
         ytmusicapi = types.ModuleType("ytmusicapi")
@@ -59,6 +61,7 @@ def _install_stubs():
                         type(attr, (), {"__init__": lambda self, *a, **kw: None}))
             ybs.browser_client_is_signed_in = lambda *a, **kw: False
             ybs.promote_browser_headers = lambda *a, **kw: None
+            ybs.normalize_browser_headers = lambda value: value
             sys.modules["youtube_browser_session"] = ybs
 
 
@@ -74,10 +77,10 @@ class SecretHygiene(unittest.TestCase):
         self.addCleanup(self.tmp.cleanup)
         from current_audio import CurrentAudio
         current = CurrentAudio()
-        patcher = mock.patch.object(server._youtube_stream, 'current', current)
+        patcher = mock.patch.object(server._youtube_stream_for(), 'current', current)
         patcher.start(); self.addCleanup(patcher.stop); self.addCleanup(current.close)
         from audio_test_support import fake_relay
-        patcher = mock.patch.object(server._youtube_stream, 'open', side_effect=fake_relay)
+        patcher = mock.patch.object(server._youtube_stream_for(), 'open', side_effect=fake_relay)
         patcher.start(); self.addCleanup(patcher.stop)
         self.app = server.app.test_client()
 
@@ -87,13 +90,19 @@ class SecretHygiene(unittest.TestCase):
         env = dict(os.environ, DB_FILE=os.path.join(data, "data.db"),
                    API_KEY="", SECRET_KEY="", REMOTE_USER="u",
                    REMOTE_PASSWORD="p")
-        repo = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+        server_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
         proc = subprocess.run(
             [sys.executable, "-c",
-             "import sys; sys.path.insert(0, 'flask-server'); import server"],
-            cwd=repo, env=env, capture_output=True, text=True, timeout=120)
+             "import sys,hashlib; sys.path.insert(0, %r); import server; print(hashlib.sha256(server.API_KEY.encode()).hexdigest())" % server_dir],
+            cwd=os.path.dirname(server_dir), env=env, capture_output=True, text=True,
+            timeout=120)
         self.assertEqual(proc.returncode, 0, proc.stderr[-2000:])
-        for name, length in (("api_key.txt", 32), ("secret_key.txt", 64)):
+        again = subprocess.run(proc.args, cwd=os.path.dirname(server_dir), env=env,
+                               capture_output=True, text=True, timeout=120)
+        self.assertEqual(again.returncode, 0, again.stderr[-2000:])
+        self.assertEqual(proc.stdout.strip().splitlines()[-1], again.stdout.strip().splitlines()[-1])
+        self.assertFalse(os.path.exists(os.path.join(data, "api_key.txt")))
+        for name, length in (("secret_key.txt", 64),):
             path = os.path.join(data, name)
             self.assertTrue(os.path.isfile(path), name)
             mode = stat.S_IMODE(os.stat(path).st_mode)
@@ -125,3 +134,14 @@ class SecretHygiene(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class StreamCapabilityLoggingTests(unittest.TestCase):
+    def test_stream_authorization_queries_are_redacted(self):
+        with server.app.test_request_context('/proxy/?video_id=abcdefghijk&cap=private-capability&key=private-key&token=private-token'), mock.patch.object(server.logger, 'info') as log:
+            server._log_request(server.app.response_class('ok'))
+        arguments = log.call_args.args[3]
+        self.assertEqual(arguments['video_id'], 'abcdefghijk')
+        self.assertEqual(arguments['cap'], '***')
+        self.assertEqual(arguments['key'], '***')
+        self.assertEqual(arguments['token'], '***')

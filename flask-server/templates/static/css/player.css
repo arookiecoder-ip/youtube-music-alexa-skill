@@ -54,11 +54,11 @@
   }
 
   /* ---- Progress bar ---- */
-  .progress { margin-bottom: 14px; }
+  .progress { margin-bottom: var(--space-3); }
   .progress-track {
     position: relative;
     height: 4px;
-    background: #2a2a2a;
+    background: var(--surface-3);
     cursor: pointer;
     /* pad the hit area vertically without changing the visual bar height */
     padding: var(--space-2) 0;
@@ -105,7 +105,7 @@
     background: #333;
     color: #fff;
     padding: 4px 6px;
-    border-radius: 4px;
+    border-radius: 0;
     font-size: 11px;
     font-weight: 500;
     pointer-events: none;
@@ -129,7 +129,13 @@
     border-style: solid;
     border-color: #333 transparent transparent transparent;
   }
-  .progress-track:focus-visible { outline: none; }
+  /* The handle appearing at the playhead does not say the seek bar has focus —
+     it looks like the song simply reached that point. The bar is 2-4px tall, so
+     the ring is offset outward rather than drawn on top of it. */
+  .progress-track:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 4px;
+  }
   .progress-times {
     display: flex;
     justify-content: space-between;
@@ -202,12 +208,19 @@
   }
   html.js #volume,
   html.js #mobile-np-volume { --js: 1; }
+  /* The slider is drawn from scratch, so the UA ring is suppressed above. A
+     keyboard user still needs to see which of the two sliders is active. */
+  #volume:focus-visible,
+  #mobile-np-volume:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 6px;
+  }
 
   #volume::-webkit-slider-runnable-track,
   #mobile-np-volume::-webkit-slider-runnable-track {
     -webkit-appearance: none;
     height: var(--track-h);
-    border-radius: 999px;
+    border-radius: 0;
     background:
       /* filled segment: accent up to the thumb, hole carved at its end */
       radial-gradient(circle farthest-corner at 100% 50%,
@@ -235,7 +248,7 @@
   #mobile-np-volume::-moz-range-track {
     height: var(--track-h);
     border: none;
-    border-radius: 999px;
+    border-radius: 0;
     background:
       radial-gradient(circle farthest-corner at 100% 50%,
           transparent 0 var(--track-r), var(--accent) var(--track-r) 100%)
@@ -274,7 +287,7 @@
     border-radius: 50%;
   }
   .np-shuffle-btn:hover,
-  .np-like-btn:hover { color: var(--text); border-color: #444; }
+  .np-like-btn:hover { color: var(--text); border-color: var(--border-hover); }
   .np-shuffle-btn.shuffle-active {
     color: var(--accent);
     border-color: var(--accent);
@@ -423,7 +436,7 @@
 
 /* Base Redesign Styles (Both Desktop & Mobile) */
 .redesigned-bar .np-art {
-  border-radius: 6px !important;
+  border-radius: 0 !important;
 }
 .redesigned-bar .np-info {
   margin-left: 14px;
@@ -498,7 +511,7 @@
   flex: 1;
   height: 2px !important;
   background: #333 !important;
-  border-radius: 3px;
+  border-radius: 0;
   transition: height 0.15s ease;
 }
 .redesigned-bar .progress:hover .progress-track,
@@ -698,7 +711,7 @@
   z-index: -1;
   pointer-events: none;
   background: linear-gradient(to top,
-    #0b0503 0%,
+    var(--surface-deep) 0%,
     rgba(0, 0, 0, .55) 40%,
     rgba(0, 0, 0, 0) 100%);
 }
@@ -821,7 +834,7 @@
 }
 .np-page-like-btn:hover,
 .np-page-shuffle-btn:hover {
-  background: rgba(255,255,255,.08);
+  background: var(--lift);
   color: var(--text);
 }
 .np-page-like-btn svg,
@@ -858,7 +871,7 @@
 }
 #np-queue-list::-webkit-scrollbar { width: 6px; }
 #np-queue-list::-webkit-scrollbar-track { background: transparent; }
-#np-queue-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+#np-queue-list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 0; }
 
 /* np-queue-list reuses the queue-item / queue-swipe-wrapper styles from queue.css.
    Keep the desktop now-playing queue flat and non-swipeable; on touch layouts
@@ -880,7 +893,7 @@
 #np-queue-list .queue-item + .queue-item { border-top: none; }
 #np-queue-list .queue-item:hover { background: rgba(255,255,255,.06); }
 #np-queue-list .queue-item.active {
-  background: rgba(255,255,255,.08);
+  background: var(--lift);
   /* Preserve the original active-song marker without changing row layout. */
   border-left-color: var(--accent);
 }
@@ -977,8 +990,8 @@ body:not(.now-playing-route):not(.now-playing-closing) main:has(#now-playing-sec
   body.now-playing-route .np-page-right {
     min-height: 0;
     max-height: none;
-    border-top: 1px solid rgba(255,255,255,.08);
-    background: rgba(255,255,255,.045);
+    border-top: 1px solid var(--lift);
+    background: var(--lift-quiet);
   }
 
   body.now-playing-route .np-page-queue-head {
@@ -1028,7 +1041,7 @@ body:not(.now-playing-route):not(.now-playing-closing) main:has(#now-playing-sec
     z-index: 1100;
     pointer-events: none;
     padding: 6px 14px;
-    border-radius: 999px;
+    border-radius: 0;
     background: rgba(20, 20, 20, .85);
     -webkit-backdrop-filter: blur(10px);
     backdrop-filter: blur(10px);
@@ -1115,7 +1128,7 @@ body:not(.now-playing-route):not(.now-playing-closing) main:has(#now-playing-sec
     overflow-y: auto !important;
     z-index: 1000 !important;
     box-sizing: border-box !important;
-    background: #0b0503 !important;
+    background: var(--surface-deep) !important;
     isolation: isolate;
     /* YT Music-style entrance: the sheet is pre-scaled down toward the
        bottom bar (transform-origin at bottom center) so opening it looks
@@ -1153,7 +1166,7 @@ body:not(.now-playing-route):not(.now-playing-closing) main:has(#now-playing-sec
   body.now-playing-route #now-playing-section,
   body.now-playing-route .np-page::before,
   body.now-playing-route .np-page::after {
-    background: #0b0503 !important;
+    background: var(--surface-deep) !important;
     background-image: none !important;
   }
   body.now-playing-route .np-page::before,
@@ -1191,7 +1204,7 @@ body:not(.now-playing-route):not(.now-playing-closing) main:has(#now-playing-sec
     height: 57px !important;
     min-height: 57px !important;
     padding: 4px 14px 5px !important;
-    background: #2b1006 !important;
+    background: var(--ember) !important;
     background-image: none !important;
   }
 
@@ -1219,24 +1232,26 @@ body:not(.now-playing-route):not(.now-playing-closing) main:has(#now-playing-sec
   body main > header .rail-toggle-btn {
     transform: none !important;
     margin-left: 0 !important;
-    width: 28px !important;
-    height: 28px !important;
-    min-width: 28px !important;
-    min-height: 28px !important;
-    padding: 4px !important;
+    /* 40, not 34: the mobile header box is 57px tall, so the standard control
+       height fits with room to spare, and a rail toggle is a thumb target. */
+    width: 40px !important;
+    height: 40px !important;
+    min-width: 40px !important;
+    min-height: 40px !important;
+    padding: var(--space-1) !important;
   }
   body main > header > .brand { flex: 0 0 auto !important; }
   body main > header .header-actions {
     flex: 0 0 auto !important;
-    gap: 5px !important;
+    gap: var(--space-1) !important;
   }
   body main > header .profile-menu-trigger,
   body main > header .header-history-btn,
   body main > header .mobile-search-toggle {
-    width: 36px !important;
-    height: 36px !important;
-    min-width: 36px !important;
-    min-height: 36px !important;
+    width: 40px !important;
+    height: 40px !important;
+    min-width: 40px !important;
+    min-height: 40px !important;
     padding: 8px !important;
     box-sizing: border-box !important;
     transform: none !important;
@@ -1397,9 +1412,9 @@ body:not(.now-playing-route):not(.now-playing-closing) main:has(#now-playing-sec
     align-items: center;
     gap: 10px;
     padding: 12px 14px;
-    border: 1px solid rgba(255,255,255,.12);
-    background: #282828;
-    box-shadow: 0 12px 32px rgba(0,0,0,.55);
+    border: 1px solid var(--border);
+    background: var(--surface-2);
+    box-shadow: var(--pop-shadow);
   }
   body .mobile-volume-popover::before {
     content: "";
@@ -1408,9 +1423,9 @@ body:not(.now-playing-route):not(.now-playing-closing) main:has(#now-playing-sec
     right: var(--volume-arrow-right, 17px);
     width: 10px;
     height: 10px;
-    border-left: 1px solid rgba(255,255,255,.12);
-    border-top: 1px solid rgba(255,255,255,.12);
-    background: #282828;
+    border-left: 1px solid var(--border);
+    border-top: 1px solid var(--border);
+    background: var(--surface-2);
     transform: rotate(45deg);
   }
   body .mobile-volume-popover.open { display: flex !important; }
@@ -1466,11 +1481,11 @@ body:not(.now-playing-route):not(.now-playing-closing) main:has(#now-playing-sec
     right: 10px;
     z-index: 1200;
     min-width: 190px;
-    padding: 4px 0;
-    border: 1px solid rgba(255,255,255,.12);
+    padding: var(--space-1) 0;
+    border: 1px solid var(--border);
     border-radius: 0;
-    background: #282828;
-    box-shadow: 0 12px 32px rgba(0,0,0,.55);
+    background: var(--surface-2);
+    box-shadow: var(--pop-shadow);
   }
   body .mobile-now-playing-menu.mobile-open { display: block; }
   body .mobile-now-playing-menu button,
@@ -1500,7 +1515,7 @@ body:not(.now-playing-route):not(.now-playing-closing) main:has(#now-playing-sec
   }
   body .mobile-now-playing-menu button:hover,
   body .mobile-now-playing-menu a:hover {
-    background: rgba(255,255,255,.08);
+    background: var(--lift);
   }
   /* Hamburger stays in the header while the player opens/closes. */
   body.now-playing-route main > header .rail-toggle-btn,
@@ -1606,7 +1621,7 @@ body:not(.now-playing-route):not(.now-playing-closing) main:has(#now-playing-sec
     padding: 2px 0;
     background: #3a302b;
     background-clip: content-box;
-    border-radius: 3px;
+    border-radius: 0;
     cursor: pointer;
     box-sizing: border-box;
   }
@@ -1619,7 +1634,7 @@ body:not(.now-playing-route):not(.now-playing-closing) main:has(#now-playing-sec
     width: 0;
     height: 4px;
     background: var(--accent);
-    border-radius: 3px;
+    border-radius: 0;
     transform: translateY(-50%);
     box-sizing: border-box;
   }
@@ -1632,7 +1647,7 @@ body:not(.now-playing-route):not(.now-playing-closing) main:has(#now-playing-sec
     width: 14px;
     height: 14px;
     background: var(--accent);
-    border: 2px solid #0b0503;
+    border: 2px solid var(--surface-deep);
     border-radius: 50%;
     transform: translate(-50%, -50%);
     pointer-events: none;
@@ -1808,7 +1823,7 @@ body.results-open .player-section.is-visible { transform: none; }
 }
 .player-section .transport button:hover {
   color: #fff;
-  background: rgba(255, 255, 255, .08);
+  background: var(--lift);
 }
 .player-section .transport button svg { width: 18px; height: 18px; }
 .player-section .pp-btn,
@@ -1820,7 +1835,6 @@ body.results-open .player-section.is-visible { transform: none; }
   border: none;
   box-shadow: none;
   border-radius: 50% !important;
-  outline: none !important;
   aspect-ratio: 1 / 1;
 }
 
@@ -1843,10 +1857,17 @@ body.results-open .player-section.is-visible { transform: none; }
        correct padding, so leave it untouched. */
   }
 }
-.player-section .pp-btn:focus,
-.player-section .pp-btn:focus-visible {
-  outline: none !important;
+.player-section .pp-btn:focus {
   box-shadow: none !important;
+}
+.player-section .pp-btn:focus:not(:focus-visible) {
+  outline: none !important;
+}
+/* Play/pause is the one control every keyboard route lands on first, so it
+   cannot be the one control that shows nothing. */
+.player-section .pp-btn:focus-visible {
+  outline: 2px solid var(--accent) !important;
+  outline-offset: 3px !important;
 }
 .player-section .pp-btn:hover { filter: none; opacity: 0.85; }
 .player-section .pp-btn svg { width: 32px; height: 32px; fill: #ffffff; color: #ffffff; }
@@ -1890,7 +1911,7 @@ body.results-open .player-section.is-visible { transform: none; }
 }
 .queue-toggle-btn:hover {
   color: var(--text);
-  background: rgba(255, 255, 255, .08);
+  background: var(--lift);
 }
 .queue-toggle-btn.active { color: var(--accent); }
 .queue-toggle-btn.active:hover { background: rgba(232, 89, 12, .12); }
@@ -1934,7 +1955,7 @@ input[type=range]::-moz-range-thumb { border-radius: 50%; }
     left: 8px;
     right: 8px;
     bottom: calc(8px + env(safe-area-inset-bottom, 0px));
-    border: 1px solid rgba(255, 255, 255, .08);
+    border: 1px solid var(--lift);
     border-radius: var(--radius-xl);
     grid-template-columns: minmax(0, 1fr) auto auto;
     grid-template-areas: "np transport actions";
@@ -2025,7 +2046,7 @@ input[type=range]::-moz-range-thumb { border-radius: 50%; }
   position: static;
   transform: none;
   font-size: 0.68rem;
-  color: rgba(255,255,255,0.50);
+  color: var(--muted);
   font-variant-numeric: tabular-nums;
   letter-spacing: 0.03em;
   white-space: nowrap;
@@ -2071,7 +2092,7 @@ input[type=range]::-moz-range-thumb { border-radius: 50%; }
 }
 .player-section .player-expand-btn:hover {
   color: var(--text);
-  background: rgba(255, 255, 255, .08);
+  background: var(--lift);
 }
 .player-section .player-expand-btn svg {
   width: 19px;
@@ -2116,17 +2137,17 @@ body.now-playing-route .player-section .player-expand-btn svg {
      page's opaque chrome during that overlap so the rail and header do not
      briefly show the player/home backdrop and then flash dark at cleanup. */
   body.rail-collapsed.now-playing-closing:not(.home-route):not(.artist-route) .sidebar {
-    background: #000;
+    background: var(--bg);
     border-right-color: var(--border);
   }
   body.now-playing-closing.header-scrolled main header,
   body.now-playing-closing:not(.home-route):not(.artist-route):not(.album-route) main header {
-    background: #000;
+    background: var(--bg);
   }
   body.now-playing-closing.header-scrolled main header::before,
   body.now-playing-closing:not(.home-route):not(.artist-route):not(.album-route) main header::before {
-    background-color: #000;
-    border-bottom-color: rgba(255, 255, 255, .08);
+    background-color: var(--bg);
+    border-bottom-color: var(--lift);
   }
   /* Safety: home route is always scrollable, even if now-playing-closing
      was not cleaned up in time (rapid navigation, timer race, etc.). */
@@ -2234,11 +2255,11 @@ body.now-playing-route .player-section .player-expand-btn svg {
      opens are untouched. Higher specificity than the transparent rules above
      so the hold wins regardless of source order. */
   body.now-playing-route.now-playing-opening main header {
-    background: #000;
+    background: var(--bg);
   }
   body.now-playing-route.now-playing-opening main header::before {
-    background-color: #000;
-    border-bottom-color: rgba(255, 255, 255, .08);
+    background-color: var(--bg);
+    border-bottom-color: var(--lift);
   }
 }
 
@@ -2258,7 +2279,7 @@ body.now-playing-route .player-section .player-expand-btn svg {
     width: 34px;
     height: 34px;
   }
-  .player-section .transport { gap: 0; }
+  .player-section .transport { gap: var(--space-1); }
   .player-section .transport button,
   .player-section .pp-btn,
   .player-section .pp-btn:hover {
@@ -2266,6 +2287,20 @@ body.now-playing-route .player-section .player-expand-btn svg {
     height: 34px;
     min-width: 34px;
     min-height: 34px;
+  }
+  /* The discs stay 34px because the bar is 78px tall, but the tap area does not
+     have to: the row has room above and below, and half the 4px gap on each
+     side. Growing the hit box to exactly the pitch means the three controls tile
+     with no dead strip and no overlap stealing a neighbour's edge. */
+  .player-section .transport button,
+  .player-section .pp-btn {
+    position: relative;
+  }
+  .player-section .transport button::after,
+  .player-section .pp-btn::after {
+    content: "";
+    position: absolute;
+    inset: -12px -2px;
   }
   .player-section .pp-btn svg { width: 27px; height: 27px; }
   .player-section .transport button svg { width: 15px; height: 15px; }
@@ -2381,7 +2416,7 @@ body.now-playing-route .player-section .player-expand-btn svg {
     height: 3px !important;
     padding: 0;
     background: #333 !important;
-    border-radius: 3px;
+    border-radius: 0;
     box-shadow: none;
   }
   body .player-section .progress-fill { background: var(--accent) !important; }
@@ -2519,7 +2554,7 @@ body.now-playing-route .player-section .player-expand-btn svg {
     height: 44px;
     margin: 18px 20px calc(16px + env(safe-area-inset-bottom, 0px));
     border: 1px solid var(--border);
-    border-radius: 999px;
+    border-radius: 0;
     color: var(--text);
     background: var(--surface);
     font: inherit;
@@ -2829,12 +2864,12 @@ body.now-playing-route .player-section .player-expand-btn svg {
   display: inline-flex; align-items: center; justify-content: center;
   width: 38px; height: 38px; padding: 0; border: 0; background: transparent; color: #eee;
 }
-.player-section .np-more-btn:hover { background: rgba(255,255,255,.08); }
+.player-section .np-more-btn:hover { background: var(--lift); }
 .player-section .np-more-btn svg { width: 21px; height: 21px; }
 .player-section .np-more-menu {
-  display: none; position: absolute; right: 0; bottom: calc(100% + 10px); z-index: 500;
-  min-width: 190px; padding: 4px 0; border: 1px solid rgba(255,255,255,.12);
-  border-radius: 0; background: #282828; box-shadow: 0 12px 32px rgba(0,0,0,.55);
+  display: none; position: absolute; right: 0; bottom: calc(100% + var(--space-3)); z-index: 500;
+  min-width: 190px; padding: var(--space-1) 0; border: 1px solid var(--border);
+  border-radius: 0; background: var(--surface-2); box-shadow: var(--pop-shadow);
 }
 .player-section .np-more-wrap.open .np-more-menu { display: block; }
 .player-section .np-more-menu button,
@@ -2850,7 +2885,7 @@ body.now-playing-route .player-section .player-expand-btn svg {
   flex: none; width: 16px; height: 16px; color: var(--muted);
 }
 .player-section .np-more-menu button:hover,
-.player-section .np-more-menu a:hover { background: rgba(255,255,255,.08); }
+.player-section .np-more-menu a:hover { background: var(--lift); }
 .player-section .np-title {
   font-weight: 700;
   white-space: nowrap;
@@ -2901,8 +2936,8 @@ body.now-playing-route .player-section .player-expand-btn svg {
     grid-template-columns: 205px minmax(320px, 1fr) auto auto;
     /* Expand arrow cluster sits at the far right, after the volume */
     grid-template-areas: "transport np volume actions";
-    gap: 18px;
-    background: #202020;
+    gap: var(--space-5);
+    background: var(--surface);
   }
   .player-section .transport {
     grid-area: transport;
@@ -2961,7 +2996,7 @@ body.now-playing-route .player-section .player-expand-btn svg {
   .player-section .np-like-btn svg,
   .player-section .np-shuffle-btn svg { width: 22px; height: 22px; }
   .player-section .np-like-btn:hover,
-  .player-section .np-shuffle-btn:hover { background: rgba(255,255,255,.08); }
+  .player-section .np-shuffle-btn:hover { background: var(--lift); }
 
   .player-section .player-actions {
     grid-area: actions;
@@ -2996,7 +3031,7 @@ body.now-playing-route .player-section .player-expand-btn svg {
     transform: none;
     margin: 0;
     font-size: .72rem;
-    color: rgba(255,255,255,0.45);
+    color: var(--muted);
     white-space: nowrap;
     font-variant-numeric: tabular-nums;
     letter-spacing: 0.03em;
@@ -3041,7 +3076,7 @@ body.now-playing-route .player-section .player-expand-btn svg {
   }
 
   body.now-playing-route main > header {
-    background: #2b1006 !important;
+    background: var(--ember) !important;
     background-image: none !important;
     backdrop-filter: none;
     -webkit-backdrop-filter: none;
@@ -3109,8 +3144,8 @@ body.now-playing-route .player-section .player-expand-btn svg {
   /* Mobile header is always opaque on every route and overlay state. */
   body main > header,
   body main > header::before {
-    background: #2b1006 !important;
-    background-color: #2b1006 !important;
+    background: var(--ember) !important;
+    background-color: var(--ember) !important;
     background-image: none !important;
     border-bottom-color: transparent !important;
     opacity: 1 !important;
@@ -3190,7 +3225,7 @@ body.now-playing-route .player-section .player-expand-btn svg {
     justify-content: center;
     background: transparent;
     border: 1px solid rgba(255,255,255,.2);
-    border-radius: 2px !important;
+    border-radius: 0 !important;
     color: var(--text);
   }
   .mobile-search-toggle svg { width: 18px; height: 18px; }
@@ -3230,7 +3265,7 @@ body.results-open .player-section {
   body .home-item[data-kind="playlist"] .home-item-img-wrapper,
   body .playlist-card,
   body .playlist-card .playlist-card-art {
-    border-radius: 2px !important;
+    border-radius: 0 !important;
   }
 }
 
@@ -3258,11 +3293,11 @@ body.results-open .player-section {
    slide, so the body tint must not show through the transparent page shell. */
 @media (max-width: 899px) {
   body.now-playing-closing {
-    background-color: #0b0503 !important;
+    background-color: var(--surface-deep) !important;
     background-image: none !important;
   }
   body.now-playing-closing main {
-    background-color: #0b0503 !important;
+    background-color: var(--surface-deep) !important;
     background-image: none !important;
   }
 
@@ -3270,7 +3305,7 @@ body.results-open .player-section {
      shell on the same dark surface while it slides into place. */
   body.now-playing-route,
   body.now-playing-route main {
-    background-color: #0b0503 !important;
+    background-color: var(--surface-deep) !important;
     background-image: none !important;
   }
 
@@ -3387,7 +3422,7 @@ body.results-open .player-section {
     z-index: -1;
     pointer-events: none;
     background: linear-gradient(to top,
-      #0b0503 0%,
+      var(--surface-deep) 0%,
       rgba(0, 0, 0, .55) 40%,
       rgba(0, 0, 0, 0) 100%) !important;
   }
@@ -3466,8 +3501,8 @@ body.results-open .player-section {
     justify-content: center;
     gap: 5px;
     border: 1px solid rgba(255,255,255,.14);
-    border-radius: 10px;
-    background: rgba(255,255,255,.045);
+    border-radius: 0;
+    background: var(--lift-quiet);
     color: var(--text);
     text-decoration: none;
     padding: 6px 2px;
@@ -3501,8 +3536,8 @@ body.results-open .player-section {
     min-width: 0;
     margin: 0;
     border: 1px solid rgba(255,255,255,.14);
-    border-radius: 10px;
-    background: rgba(255,255,255,.045);
+    border-radius: 0;
+    background: var(--lift-quiet);
     font-size: .64rem;
     font-weight: 500;
     text-transform: none;

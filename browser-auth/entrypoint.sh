@@ -8,7 +8,17 @@ if [ "$(id -u)" = 0 ]; then
   fi
   exec gosu musicbox "$0" "$@"
 fi
+export HOME="${HOME:-/home/musicbox}"
+
 mkdir -p "${CHROME_USER_DATA_DIR:-/profile}"
+# A restart keeps this container's writable layer (including /tmp) but not the
+# processes in it. A lock left by the previous X server then makes the new Xvfb
+# refuse to start, and every browser launch fails with an empty display.
+if ! pgrep -x Xvfb >/dev/null 2>&1; then
+  display_number="${DISPLAY:-:99}"
+  display_number="${display_number#:}"
+  rm -f "/tmp/.X${display_number}-lock" "/tmp/.X11-unix/X${display_number}"
+fi
 Xvfb "${DISPLAY:-:99}" -screen 0 "${SCREEN_GEOMETRY:-1920x1080x24}" -nolisten tcp &
 # Wait for Xvfb before starting the window manager and authenticated touch API.
 python - <<'PY'

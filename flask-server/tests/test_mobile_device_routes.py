@@ -1,5 +1,6 @@
 """Exercise actual device routes with physical Echo/audio extraction stubbed."""
 import ast
+import contextvars
 import json
 import threading
 from pathlib import Path
@@ -25,10 +26,13 @@ class MobileDeviceRoutesTests(OutputRoutesTests):
     def setUp(self):
         super().setUp()
         self.registry = MobileDevices()
-        self.namespace.update(_mobile_devices=self.registry, json=json)
+        self.namespace.update(_mobile_devices=self.registry, json=json,
+                              _current_identity=lambda: 'owner',
+                              _jam_guest=lambda: False,
+                              _PLAYER_IDENTITY=contextvars.ContextVar('player_identity', default='owner'))
         path = Path(__file__).resolve().parents[1] / 'server.py'
         nodes = [n for n in ast.parse(path.read_text()).body if isinstance(n, ast.FunctionDef)
-                 and n.name in ('app_mobile_devices', '_finish_browser_close', '_mobile_handoff_snapshot', '_pause_echo_for_mobile', '_reconcile_mobile_output', 'route_mobile_web_controls')]
+                 and n.name in ('app_mobile_devices', '_finish_browser_close', '_mobile_handoff_snapshot', '_pause_echo_for_mobile', '_reconcile_mobile_output', 'route_mobile_web_controls', '_delayed')]
         exec(compile(ast.Module(body=nodes, type_ignores=[]), str(path), 'exec'), self.namespace)
 
     def device(self, action, owner='phone-one', **extra):

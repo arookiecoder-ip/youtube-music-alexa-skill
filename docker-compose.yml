@@ -1,11 +1,30 @@
 services:
+  # One-shot migration permits non-root processes to use existing root-owned volumes.
+  permissions:
+    image: python:3.12-slim-bookworm@sha256:e697c81897302a4c4333bade000d98038fbb21eb064f8ee1fd42d02ebcd9d337
+    user: '0:0'
+    network_mode: none
+    restart: 'no'
+    volumes:
+      - ytmusic_data:/state
+      - ytmusic_alexa_cookies:/alexa
+      - ytmusic_chromium_profile:/profile
+    entrypoint: ["chown", "-R", "10001:10001", "/state", "/alexa", "/profile"]
+
   ytmusic:
+    init: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 2g
+    cpus: 2
+    pids_limit: 256
+    tmpfs: ['/tmp:size=256m,mode=1777']
     build: ./flask-server
     container_name: ytmusic
     restart: unless-stopped
-    networks: [web, musicbox-egress]
+    networks: [web, app-private, browser-private, musicbox-egress]
     env_file:
-      - path: .env
+      - path: ${COMPOSE_ENV_FILE:-.env}
         required: false
     environment:
       - DB_FILE=/data/data.db
@@ -16,8 +35,10 @@ services:
       - http_proxy=http://musicbox-egress-internal:8890
       - HTTPS_PROXY=http://musicbox-egress-internal:8890
       - https_proxy=http://musicbox-egress-internal:8890
-      - NO_PROXY=localhost,127.0.0.1,::1,ytmusic,youtube-browser,musicbox-egress,musicbox-egress-internal
-      - no_proxy=localhost,127.0.0.1,::1,ytmusic,youtube-browser,musicbox-egress,musicbox-egress-internal
+      - NO_PROXY=localhost,127.0.0.1,::1,ytmusic,youtube-browser,musicbox-egress,musicbox-egress-internal,bgutil-provider
+      - no_proxy=localhost,127.0.0.1,::1,ytmusic,youtube-browser,musicbox-egress,musicbox-egress-internal,bgutil-provider
+      - YTDLP_BGUTIL_BASE_URL=http://bgutil-provider:4416
+      - BGUTIL_POT_URL=http://bgutil-provider:4416
       - YT_BROWSER_CONTROL_TOKEN=${YT_BROWSER_CONTROL_TOKEN:?set YT_BROWSER_CONTROL_TOKEN in .env}
       - ALEXA_PROXY_BEHIND_CADDY=1
     volumes:
@@ -30,16 +51,54 @@ services:
       # Amazon login.
       - ytmusic_alexa_cookies:/app/alexa_cookies
     depends_on:
+      permissions:
+        condition: service_completed_successfully
       musicbox-egress:
         condition: service_healthy
       youtube-browser:
         condition: service_healthy
+      bgutil-provider:
+        condition: service_healthy
+
+  # Mints the GVS PO tokens YouTube requires before it will serve a playable
+  # media URL. Two callers: the yt-dlp plugin (downloads) and the Node stream
+  # resolver (youtubei.js). Without it both resolve fine and then get HTTP 403
+  # from googlevideo, which is exactly the "cookies work but nothing plays"
+  # failure. It needs outbound access to Google's BotGuard script, so it joins
+  # the same egress network and proxy as the app.
+  bgutil-provider:
+    image: brainicism/bgutil-ytdlp-pot-provider@sha256:d7d34108b76e52c7d3b575fe9e797e4bf41c1b2a08f80c5292eff6f851ce8472
+    container_name: bgutil-provider
+    mem_limit: 768m
+    cpus: 1
+    pids_limit: 128
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    restart: unless-stopped
+    networks: [browser-private]
+    environment:
+      - PORT=4416
+      - HTTP_PROXY=http://musicbox-egress-internal:8890
+      - HTTPS_PROXY=http://musicbox-egress-internal:8890
+      - NO_PROXY=localhost,127.0.0.1,bgutil-provider
+      - TOKEN_TTL=3600000
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4416/ping').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      start_period: 20s
+      retries: 5
 
   youtube-browser:
+    init: true
+    mem_limit: 2g
+    cpus: 2
+    pids_limit: 512
+    tmpfs: ['/tmp:size=512m,mode=1777']
     build: ./browser-auth
     container_name: youtube-browser
     restart: unless-stopped
-    networks: [musicbox-egress]
+    networks: [browser-private]
     security_opt: [no-new-privileges:true]
     cap_drop: [ALL]
     cap_add: [CHOWN, DAC_OVERRIDE, SETUID, SETGID]
@@ -49,9 +108,13 @@ services:
       - YT_BROWSER_CAPTURE_TIMEOUT=${YT_BROWSER_CAPTURE_TIMEOUT:-120}
       - YT_BROWSER_LOGIN_TIMEOUT=${YT_BROWSER_LOGIN_TIMEOUT:-240}
       - YT_BROWSER_SUCCESS_DISPLAY=${YT_BROWSER_SUCCESS_DISPLAY:-12}
+      - MUSICBOX_CHROMIUM_DISABLE_SANDBOX=${MUSICBOX_CHROMIUM_DISABLE_SANDBOX:-0}
       - SCREEN_GEOMETRY=${YT_BROWSER_SCREEN_GEOMETRY:-1920x1080x24}
     volumes:
       - ytmusic_chromium_profile:/profile
+    depends_on:
+      permissions:
+        condition: service_completed_successfully
     shm_size: 512mb
 
   # Independent direct-network gateway. VPN is preferred when its optional
@@ -62,6 +125,8 @@ services:
     restart: unless-stopped
     networks:
       web: {}
+      browser-private:
+        aliases: [musicbox-egress-internal]
       musicbox-egress:
         aliases: [musicbox-egress-internal]
     environment:
@@ -91,7 +156,7 @@ services:
       - EGRESS_PORT=5000
 
   caddy:
-    image: caddy:2
+    image: caddy:2@sha256:844f60b64e4724a5aa8245e019dace0d3f199f7433ce6c57676cb30a920dbad9
     container_name: caddy
     restart: unless-stopped
     environment:
@@ -100,16 +165,27 @@ services:
       - "80:80"
       - "443:443"
     volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile
+      - ./${CADDYFILE:-Caddyfile}:/etc/caddy/Caddyfile:ro
       - caddy_data:/data
       - caddy_config:/config
     networks:
       - web
+      - browser-private
       #should only use if proxy is using else comment out
     depends_on:
-      - ytmusic
+      ytmusic:
+        condition: service_healthy
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 256m
+    pids_limit: 128
 
 networks:
+  browser-private:
+    internal: true
+  app-private:
+    internal: true
   musicbox-egress:
     internal: true
   web:

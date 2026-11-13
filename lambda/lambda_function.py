@@ -9,6 +9,7 @@ from ask_sdk_model import Response
 from mediaUtils import player
 from dataclasses import asdict
 from models import player_models
+from skill_security import SkillAuthorizationError, needs_state, persistence_key
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -16,17 +17,28 @@ logger.setLevel(logging.INFO)
 ddb_region = os.environ.get('DYNAMODB_PERSISTENCE_REGION')
 ddb_table_name = os.environ.get('DYNAMODB_PERSISTENCE_TABLE_NAME')
 ddb_resource = boto3.resource('dynamodb', region_name=ddb_region)
-dynamodb_adapter = DynamoDbAdapter(table_name=ddb_table_name, create_table=False, dynamodb_resource=ddb_resource)
+dynamodb_adapter = DynamoDbAdapter(table_name=ddb_table_name, create_table=False, dynamodb_resource=ddb_resource,
+                                  partition_keygen=persistence_key)
 
 sb = CustomSkillBuilder(persistence_adapter = dynamodb_adapter, api_client=DefaultApiClient())
 
+class LinkAccountIntentHandler(AbstractRequestHandler):
+    def can_handle(self, handler_input):
+        return ask_utils.is_intent_name('LinkAccountIntent')(handler_input)
+
+    def handle(self, handler_input):
+        # Handle requests from cached interaction models without redeeming old codes.
+        return handler_input.response_builder.speak('Echo pairing codes are no longer available.').response
+
+
 class LaunchRequestHandler(AbstractRequestHandler):
     def can_handle(self, handler_input: HandlerInput) -> Response:
-        return ask_utils.is_request_type("LaunchRequest")(handler_input)
+        return (ask_utils.is_request_type("LaunchRequest")(handler_input)
+                or ask_utils.is_intent_name("AMAZON.NavigateHomeIntent")(handler_input))
 
     def handle(self, handler_input: HandlerInput) -> Response:
         logger.info("In LaunchRequestHandler")
-        speak_output = "This is your d. j. Say 'help' to know how I can help."
+        speak_output = "Welcome to Music Box. Ask me to play a song, artist, album, or playlist."
         return (
             handler_input.response_builder
                 .speak(speak_output)
@@ -300,7 +312,7 @@ class LoopOnHandler(AbstractRequestHandler):
 
     def handle(self, handler_input: HandlerInput) -> Response:
         logger.info("In LoopOnHandler")
-        playback_setting = player.Attributes.get_playback_info(handler_input)
+        playback_setting = player.Attributes.get_playback_setting(handler_input)
         playback_setting["loop"] = True
 
         return handler_input.response_builder.speak(data.LOOP_ON_MSG).response
@@ -311,7 +323,7 @@ class LoopOffHandler(AbstractRequestHandler):
 
     def handle(self, handler_input: HandlerInput) -> Response:
         logger.info("In LoopOffHandler")
-        playback_setting = player.Attributes.get_playback_info(handler_input)
+        playback_setting = player.Attributes.get_playback_setting(handler_input)
         playback_setting["loop"] = False
 
         return handler_input.response_builder.speak(data.LOOP_OFF_MSG).response
@@ -344,7 +356,8 @@ class ShuffleOffHandler(AbstractRequestHandler):
 
 class StartOverHandler(AbstractRequestHandler):
     def can_handle(self, handler_input):
-        return ask_utils.is_intent_name("AMAZON.StartOverIntent")(handler_input)
+        return (ask_utils.is_intent_name("AMAZON.StartOverIntent")(handler_input)
+                or ask_utils.is_intent_name("AMAZON.RepeatIntent")(handler_input))
 
     def handle(self, handler_input: HandlerInput):
         logger.info("In StartOverHandler")
@@ -453,21 +466,8 @@ class SetApiurlHandler(AbstractRequestHandler):
         return ask_utils.is_intent_name("SetApiurlIntent")(handler_input)
 
     def handle(self, handler_input: HandlerInput) -> Response:
-        logger.info("In SetApiurlHandler")
-
-        slots = handler_input.request_envelope.request.intent.slots
-        api_url = slots['apiUrl'].value
-
-        logger.info(f'api_url -> {api_url}')
-        if not api_url or re.search(r'[^a-zA-Z0-9]', api_url): 
-            return handler_input.response_builder.speak(f'Please provide encoded url in hexadeximal format.').response
-        api_url_decoded = player.decode_hex(api_url.lower())
-        if not api_url_decoded:
-            return handler_input.response_builder.speak('That code does not look like valid hexadecimal. Please check it and try again.').response
-        logger.info(f'api_url_decoded -> {api_url_decoded}')
-        user_attr = player.Attributes.get_user_attributes(handler_input)
-        user_attr['api_url'] = api_url_decoded
-        return handler_input.response_builder.speak('Api url added.').response
+        return handler_input.response_builder.speak(
+            'The music server address can only be changed by the skill administrator.').response
 # ###################################################################
 
 
@@ -548,6 +548,19 @@ class CatchAllExceptionHandler(AbstractExceptionHandler):
         # events. A handler may have partially populated the shared builder
         # before raising, so explicitly strip every standard response property.
         request_type = handler_input.request_envelope.request.object_type or ''
+        if isinstance(exception, SkillAuthorizationError) and exception.code in ('stale_alexa_binding', 'stale_alexa_request'):
+            handler_input.request_envelope._musicbox_state_loaded = False
+            response = handler_input.response_builder.response
+            response.directives = []
+            response.output_speech = response.card = response.reprompt = response.should_end_session = None
+            return response
+        if isinstance(exception, SkillAuthorizationError):
+            if request_type in ('IntentRequest', 'LaunchRequest', 'AudioPlayer.PlaybackStarted', 'AudioPlayer.PlaybackNearlyFinished', 'AudioPlayer.PlaybackFinished', 'AudioPlayer.PlaybackFailed') or request_type.startswith('PlaybackController.'):
+                response = handler_input.response_builder.response
+                response.directives = [player.StopDirective(),
+                    player.ClearQueueDirective(clear_behavior=player.ClearBehavior.CLEAR_ALL)]
+                if request_type in ('IntentRequest', 'LaunchRequest'):
+                    response.should_end_session = True
         if request_type.startswith(('AudioPlayer.', 'PlaybackController.')) or request_type in ('SessionEndedRequest', 'System.ExceptionEncountered'):
             response = handler_input.response_builder.response
             response.output_speech = None
@@ -572,7 +585,11 @@ class CatchAllExceptionHandler(AbstractExceptionHandler):
                 response.directives = []
             return response
 
-        speak_output = "Sorry, I had trouble doing what you asked. Please try again."
+        if isinstance(exception, SkillAuthorizationError) and exception.code == 'amazon_permission_required':
+            from ask_sdk_model.ui import AskForPermissionsConsentCard
+            handler_input.response_builder.set_card(AskForPermissionsConsentCard(permissions=['alexa::profile:email:read']))
+        speak_output = (str(exception) if isinstance(exception, SkillAuthorizationError)
+                        else "Sorry, I had trouble doing what you asked. Please try again.")
 
         return (
             handler_input.response_builder
@@ -603,7 +620,7 @@ class PlaybackStartedEventHandler(AbstractRequestHandler):
         playback_info["current_token"] = handler_input.request_envelope.request.token
         playback_info["in_playback_session"] = True
         playback_info["has_previous_playback_session"] = True
-        logger.info(f'playback_info -> {playback_info}')
+        player.Attributes.log_attributes(handler_input)
 
         # Notify server: playback started (voice resume, auto-advance, etc.).
         # Include the offset so the web remote's progress bar can anchor its
@@ -807,9 +824,42 @@ class LogRequestInterceptor(AbstractRequestInterceptor):
     def process(self, handler_input: HandlerInput):
         logger.info(f"Request type: {handler_input.request_envelope.request.object_type}")
 
+
+class VerifyAccountRequestInterceptor(AbstractRequestInterceptor):
+    def process(self, handler_input):
+        envelope = handler_input.request_envelope
+        if not needs_state(envelope):
+            return
+        result, error = player.Api._get_json(handler_input, 'api/alexa/identity', {})
+        binding = result.get('binding') if isinstance(result, dict) else None
+        if error or not isinstance(binding, str) or not re.fullmatch(r'[0-9a-f]{64}', binding):
+            if isinstance(error, SkillAuthorizationError):
+                message = str(error)
+                if not message.startswith('Alexa access was denied.'):
+                    message = 'Alexa access was denied. ' + message
+                raise SkillAuthorizationError(message, code=error.code)
+            raise SkillAuthorizationError(
+                'Alexa access was denied. Check your Music Box token and account access, connect the same Amazon account as this Echo, and allow email access in the Alexa app.',
+                code=getattr(error, 'code', 'alexa_access_denied'))
+        # Old callbacks must not install A's track/queue into B's fresh state.
+        request_type = envelope.request.object_type or ''
+        if request_type.startswith('AudioPlayer.'):
+            token = getattr(envelope.request, 'token', '') or ''
+        elif request_type.startswith('PlaybackController.'):
+            token = getattr(getattr(envelope.context, 'audio_player', None), 'token', '') or ''
+        else:
+            token = ''
+        if (request_type.startswith('AudioPlayer.') or token) and not token.endswith('|b' + binding):
+            raise SkillAuthorizationError('This playback belongs to an earlier Echo account binding.', code='stale_alexa_binding')
+        envelope._musicbox_binding = binding
+
+
 class LoadPersistenceAttributesRequestInterceptor(AbstractRequestInterceptor):
     def process(self, handler_input: HandlerInput):
+        if not needs_state(handler_input.request_envelope):
+            return
         persistence_attr = handler_input.attributes_manager.persistent_attributes
+        handler_input.request_envelope._musicbox_state_loaded = True
 
         user_id = player.Attributes.get_user_id(handler_input)
 
@@ -859,10 +909,12 @@ class LoadPersistenceAttributesRequestInterceptor(AbstractRequestInterceptor):
 
 class SavePersistenceAttributesResponseInterceptor(AbstractResponseInterceptor):
     def process(self, handler_input: HandlerInput, response):
-        handler_input.attributes_manager.save_persistent_attributes()
+        if getattr(handler_input.request_envelope, '_musicbox_state_loaded', False):
+            handler_input.attributes_manager.save_persistent_attributes()
 # ###################################################################
 
 
+sb.add_request_handler(LinkAccountIntentHandler())
 sb.add_request_handler(LaunchRequestHandler())
 
 sb.add_request_handler(PlayArtistIntentHandler())
@@ -914,10 +966,16 @@ sb.add_request_handler(PreviousCommandHandler())
 
 # Exceptions
 sb.add_global_request_interceptor(LogRequestInterceptor())
+sb.add_global_request_interceptor(VerifyAccountRequestInterceptor())
 sb.add_exception_handler(CatchAllExceptionHandler())
 
 # Interceptors
 sb.add_global_request_interceptor(LoadPersistenceAttributesRequestInterceptor())
 sb.add_global_response_interceptor(SavePersistenceAttributesResponseInterceptor())
 
-lambda_handler = sb.lambda_handler()
+_sdk_lambda_handler = sb.lambda_handler()
+
+def lambda_handler(event, context):
+    # Amazon's Lambda trigger/resource policy authenticates the invoking skill.
+    # No deployment-specific application ID belongs in the shared source/config.
+    return _sdk_lambda_handler(event, context)

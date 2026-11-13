@@ -5,7 +5,8 @@ from ask_sdk_core.handler_input import HandlerInput
 from ask_sdk_model.services.directive import (SendDirectiveRequest, Header, SpeakDirective)
 import logging, random, urllib3, json, data, difflib, uuid, time
 from ask_sdk_model.interfaces import display
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit
+from skill_security import SkillAuthorizationError, scoped_token
 from xml.sax.saxutils import escape
 from dacite import from_dict
 from dataclasses import asdict
@@ -189,6 +190,63 @@ def _request_volume(handler_input):
     except Exception:
         return None
 
+def skill_identity_headers(handler_input):
+    system = getattr(getattr(handler_input.request_envelope, 'context', None), 'system', None)
+    user = getattr(getattr(system, 'user', None), 'user_id', '')
+    device = getattr(getattr(system, 'device', None), 'device_id', '')
+    headers = {
+        'Authorization': 'Bearer ' + data.MUSICBOX_ALEXA_TOKEN,
+        'X-MusicBox-Email': data.MUSICBOX_EMAIL,
+        'X-Alexa-User-Id': user or '', 'X-Alexa-Device-Id': device or '',
+        'X-Alexa-Profile-Token': getattr(system, 'api_access_token', '') or '',
+        'X-Alexa-Api-Endpoint': getattr(system, 'api_endpoint', '') or '',
+    }
+    request_id = getattr(getattr(handler_input.request_envelope, 'request', None), 'request_id', '')
+    if isinstance(request_id, str) and request_id:
+        headers['X-Alexa-Request-Id'] = request_id
+    request = getattr(handler_input.request_envelope, 'request', None)
+    request_type = getattr(request, 'object_type', '') or ''
+    if request_type:
+        headers['X-Alexa-Request-Type'] = request_type
+    intent_name = getattr(getattr(request, 'intent', None), 'name', '')
+    if intent_name:
+        headers['X-Alexa-Intent-Name'] = intent_name
+    playback_token = getattr(request, 'token', None)
+    if not playback_token and request_type.startswith('PlaybackController.'):
+        playback_token = getattr(getattr(handler_input.request_envelope.context, 'audio_player', None), 'token', None)
+    if playback_token:
+        headers['X-Alexa-Playback-Token'] = playback_token
+    current_token = getattr(getattr(request, 'current_playback_state', None), 'token', None)
+    if current_token:
+        headers['X-Alexa-Current-Playback-Token'] = current_token
+    timestamp = getattr(getattr(handler_input.request_envelope, 'request', None), 'timestamp', None)
+    if timestamp:
+        headers['X-Alexa-Request-Timestamp'] = timestamp.isoformat() if hasattr(timestamp, 'isoformat') else str(timestamp)
+    binding = getattr(handler_input.request_envelope, '_musicbox_binding', '')
+    if binding:
+        headers['X-Alexa-Binding'] = binding
+    return headers
+
+
+def _authorization_error(body):
+    try:
+        code = json.loads(body.decode('utf-8')).get('error', {}).get('code', 'alexa_access_denied')
+    except (ValueError, AttributeError, UnicodeDecodeError):
+        code = 'alexa_access_denied'
+    if not isinstance(code, str):
+        code = 'alexa_access_denied'
+    messages = {
+        'amazon_link_required': 'Connect your Amazon account in the Music Box user panel first.',
+        'amazon_email_mismatch': 'Use the same Amazon account for this Echo and the Amazon connection in your Music Box user panel.',
+        'musicbox_email_mismatch': 'Set MUSICBOX_EMAIL to the verified Music Box email belonging to your token.',
+        'amazon_permission_required': 'Allow email access for this skill in the Alexa app.',
+        'amazon_profile_unavailable': 'Amazon account verification is temporarily unavailable. Try again later.',
+        'amazon_link_changed': 'Your Amazon connection changed. Reconnect Amazon and try again.',
+        'stale_alexa_request': 'A newer playback request superseded this request.'}
+    return SkillAuthorizationError('Alexa access was denied. '+messages.get(code,
+        'Check your active token and account access.'), code=code)
+
+
 def _notify_server(handler_input, event: str, **extra):
     """Bounded POST reporting playback state; returns optional reconciliation advice.
     Failures are logged and swallowed so audio callbacks remain usable."""
@@ -209,7 +267,7 @@ def _notify_server(handler_input, event: str, **extra):
         if timestamp:
             extra.setdefault('event_timestamp', timestamp.isoformat() if hasattr(timestamp, 'isoformat') else str(timestamp))
         payload = json.dumps({'event': event, **extra})
-        url = f'{api_url}/alexa/state_event/?key={data.API_KEY}'
+        url = f'{api_url}/alexa/state_event/'
         logger.info(f'_notify_server: POST {event} to {api_url}/alexa/state_event/')
         # 'started' is the web remote's only signal that the track changed on
         # auto-advance — a dropped POST wedges its now-playing card. 'stopped'
@@ -227,13 +285,18 @@ def _notify_server(handler_input, event: str, **extra):
         resp = http.request(
             'POST', url,
             body=payload,
-            headers={'Content-Type': 'application/json'},
+            headers={'Content-Type': 'application/json', **skill_identity_headers(handler_input)},
             timeout=timeout,
             retries=retries,
+            redirect=False,
         )
         logger.info(f'_notify_server: response {resp.status}')
+        if resp.status in (401, 403):
+            raise _authorization_error(resp.data)
         if resp.status == 200:
             return json.loads(resp.data.decode('utf-8'))
+    except SkillAuthorizationError:
+        raise
     except Exception as e:
         logger.info(f'_notify_server FAILED: {e}')
 
@@ -512,24 +575,40 @@ class Attributes:
     
     @staticmethod
     def get_api_url(handler_input: HandlerInput) -> Tuple[str, Exception]:
-        user_attr = Attributes.get_user_attributes(handler_input)
-        api_url = user_attr.get('api_url') or data.DEFAULT_API_URL
+        # A voice-controlled destination would forward the deployment key to
+        # an arbitrary listener. Ignore all previously persisted overrides.
+        api_url = data.DEFAULT_API_URL
         if not api_url: return None, Exception(data.API_URL_NOT_SET)
+        try:
+            parsed = urlsplit(api_url)
+            if (parsed.scheme != 'https' or not parsed.hostname or parsed.username
+                    or parsed.password or parsed.query or parsed.fragment
+                    or any(char.isspace() or ord(char) < 32 for char in api_url)):
+                raise ValueError('Invalid configured backend URL')
+            parsed.port  # Validate port syntax before any authenticated call.
+        except (TypeError, ValueError):
+            return None, Exception('Configure a valid HTTPS backend URL in the skill settings.')
         return api_url.rstrip('/'), None
 
 
 class Api:
     @staticmethod
+    def link_account(handler_input, code):
+        return False
+
+    @staticmethod
     def _get_json(handler_input: HandlerInput, path: str, params: Dict) -> Tuple[Dict, Exception]:
         api_url, error = Attributes.get_api_url(handler_input)
         if error: return None, error
-        query = urlencode({**params, 'key': data.API_KEY})
+        query = urlencode(params)
         url = f"{api_url}/{path}/?{query}"
         started = time.monotonic()
         try:
-            control = path in ('armed_play', 'next_track')
-            response = http.request("GET", url, timeout=urllib3.Timeout(total=3.0 if control else 25.0),
-                                    retries=False if control else None)
+            control = path in ('armed_play', 'next_track', 'api/alexa/identity')
+            response = http.request("GET", url, headers=skill_identity_headers(handler_input), timeout=urllib3.Timeout(total=3.0 if control else 25.0),
+                                    retries=False if control else None, redirect=False)
+        except SkillAuthorizationError:
+            raise
         except Exception:
             logger.exception(f'Request to {path} failed')
             return None, Exception(data.API_CONNECTION_ISSUE)
@@ -538,6 +617,8 @@ class Api:
                         (time.monotonic() - started) * 1000, response.status)
         if response.status == 404:
             return None, Exception(data.NOT_FOUND)
+        if response.status in (401, 403):
+            raise _authorization_error(response.data)
         if response.status != 200:
             logger.error(f'{path} returned status {response.status}: {response.data[:500]}')
             return None, Exception(data.SERVICE_ISSUE)
@@ -576,6 +657,15 @@ class Api:
 
     @staticmethod
     def stream_video(handler_input: HandlerInput, video_id: str) -> Tuple[player_models.SongInfoList, Exception]:
+        envelope = handler_input.request_envelope
+        startup = getattr(envelope, '_musicbox_startup', None)
+        envelope._musicbox_startup = None
+        if isinstance(startup, dict):
+            try:
+                if startup['song_info']['metadata']['video_id'] == video_id:
+                    return from_dict(player_models.SongInfoList, startup), None
+            except Exception:
+                logger.info('Bundled startup metadata was invalid; fetching fresh song data')
         response_json, error = Api._get_json(handler_input, 'stream_video', {'video_id': video_id})
         if error: return None, error
         try:
@@ -730,7 +820,8 @@ class Api:
         With ``peek=True`` the arm is returned without consuming it, so a
         resume can inspect the web remote's intent without stealing the arm of
         an in-flight fresh play or seek (see /armed_play/)."""
-        params = {'peek': '1'} if peek else {}
+        handler_input.request_envelope._musicbox_startup = None
+        params = {'peek': '1'} if peek else {'include_stream': '1'}
         response_json, error = Api._get_json(handler_input, 'armed_play', params)
         if error:
             return None, error
@@ -750,6 +841,9 @@ class Api:
         except (TypeError, ValueError):
             armed_age_s = None
         kind = (response_json or {}).get('kind') or 'play'
+        startup = (response_json or {}).get('startup')
+        if not peek and kind == 'play' and isinstance(startup, dict):
+            handler_input.request_envelope._musicbox_startup = startup
         return (video_id, offset_ms, armed_age_s, kind), None
 
 
@@ -785,13 +879,32 @@ class Controller:
         handler_input.response_builder.add_directive(PlayDirective(
             play_behavior=PlayBehavior.REPLACE_ENQUEUED,
             audio_item=AudioItem(stream=Stream(url=stream.audio_url,
-                token=_make_token(index, metadata.video_id, 'q' + decision['decision_id']),
+                token=scoped_token(handler_input, _make_token(index, metadata.video_id, 'q' + decision['decision_id'])),
                 offset_in_milliseconds=0), metadata=Attributes.get_audio_item_metadata(metadata))))
         info['next_stream_enqueued'] = True
         return handler_input.response_builder.response
 
     @staticmethod
     def error_response(handler_input: HandlerInput, message, is_playback: bool = False) -> Response:
+        if isinstance(message, SkillAuthorizationError):
+            if message.code in ('stale_alexa_binding', 'stale_alexa_request'):
+                handler_input.request_envelope._musicbox_state_loaded = False
+                response = handler_input.response_builder.response
+                response.directives = []
+                response.output_speech = response.card = response.reprompt = response.should_end_session = None
+                return response
+            request_type = getattr(getattr(handler_input.request_envelope, 'request', None), 'object_type', 'IntentRequest') or ''
+            response = handler_input.response_builder.response
+            if request_type in ('IntentRequest', 'LaunchRequest', 'AudioPlayer.PlaybackStarted', 'AudioPlayer.PlaybackNearlyFinished', 'AudioPlayer.PlaybackFinished', 'AudioPlayer.PlaybackFailed') or request_type.startswith('PlaybackController.'):
+                response.directives = [StopDirective(), ClearQueueDirective(clear_behavior=ClearBehavior.CLEAR_ALL)]
+            else:
+                response.directives = []
+            if request_type.startswith(('AudioPlayer.', 'PlaybackController.')):
+                response.output_speech = response.card = response.reprompt = response.should_end_session = None
+                return response
+            if not is_playback:
+                handler_input.response_builder.speak(str(message))
+            return handler_input.response_builder.set_should_end_session(True).response
         if is_playback:
             return handler_input.response_builder.set_should_end_session(True).response
         return handler_input.response_builder.speak(str(message)).response
@@ -863,7 +976,10 @@ class Controller:
             return Controller.error_response(handler_input, error, is_playback)
         playlist = song_info_list.playlist or [song_info_list.song_info.metadata]
         song_info = song_info_list.song_info
-        index = next((i for i, item in enumerate(playlist) if item.video_id == video_id), 0)
+        index = getattr(song_info_list, 'queue_index', None)
+        if (type(index) is not int or not 0 <= index < len(playlist)
+                or playlist[index].video_id != video_id):
+            index = next((i for i, item in enumerate(playlist) if item.video_id == video_id), 0)
         playlist, index = _window_playlist(playlist, index)
 
         user_attr = Attributes.get_user_attributes(handler_input)
@@ -910,6 +1026,8 @@ class Controller:
             Attributes.set_play_order(handler_input)
             logger.info(f'expand_radio_queue: playlist now {len(merged)} tracks')
             return True
+        except SkillAuthorizationError:
+            raise
         except Exception:
             logger.exception('expand_radio_queue failed')
             return False
@@ -1029,7 +1147,7 @@ class Controller:
             if not Api.validate_next(handler_input, current_video_id, decision):
                 playback_info['next_stream_enqueued'] = False
                 return False
-            enqueue_token = _make_token(enqueue_index, enqueue_video_id, ('q' + decision['decision_id']) if decision.get('decision_id') else None)
+            enqueue_token = scoped_token(handler_input, _make_token(enqueue_index, enqueue_video_id, ('q' + decision['decision_id']) if decision.get('decision_id') else None))
             # expected_previous_token must equal the stream Alexa is playing
             # right now. Reuse the exact token persisted when it started; fall
             # back to the bare video_id for legacy sessions predating the
@@ -1051,6 +1169,8 @@ class Controller:
             logger.info(f'enqueue_next_stream: enqueued {enqueue_video_id} after {current_video_id} '
                         f'(index {current_index} -> {enqueue_index})')
             return True
+        except SkillAuthorizationError:
+            raise
         except Exception:
             logger.exception('enqueue_next_stream failed')
             playback_info = Attributes.get_playback_info(handler_input)
@@ -1115,6 +1235,8 @@ class Controller:
             play_order.insert(target, physical)
             playback_info['play_order'] = play_order
             return play_order.index(physical)
+        except SkillAuthorizationError:
+            raise
         except Exception:
             logger.exception('_stage_next_track failed')
             return None
@@ -1170,6 +1292,8 @@ class Controller:
                         handler_input, Controller._dedupe_against_playlist(playlist, tracks))
                     if grew:
                         logger.info('extend_queue: extended from server queue')
+        except SkillAuthorizationError:
+            raise
         except Exception:
             logger.exception('extend_queue: server-queue continuation failed')
         if not grew:
@@ -1205,6 +1329,8 @@ class Controller:
                 return False
             logger.info(f'extend_radio_queue: appended {len(new_tracks[:25])} tracks')
             return True
+        except SkillAuthorizationError:
+            raise
         except Exception:
             logger.exception('extend_radio_queue failed')
             return False
@@ -1270,7 +1396,7 @@ class Controller:
         # be told apart from an earlier occurrence. Persist the exact token we
         # send: the next ENQUEUE's expected_previous_token must match it
         # verbatim, which stays correct even after a window trim shifts index.
-        token = _make_token(playback_info.get('index', 0), song_info.metadata.video_id, uuid.uuid4().hex[:24])
+        token = scoped_token(handler_input, _make_token(playback_info.get('index', 0), song_info.metadata.video_id, uuid.uuid4().hex[:24]))
         playback_info['current_token'] = token
 
         response_builder.add_directive(
@@ -1325,7 +1451,11 @@ class Controller:
         # so an in-flight fresh play/seek keeps its own arm, and only honor
         # fresh 'resume' arms so an old intent can never hijack playback.
         try:
-            armed, _ = Api.get_armed_play(handler_input, peek=True)
+            armed, arm_error = Api.get_armed_play(handler_input, peek=True)
+            if isinstance(arm_error, SkillAuthorizationError):
+                return Controller.error_response(handler_input, arm_error, is_playback)
+        except SkillAuthorizationError:
+            raise
         except Exception:
             logger.exception('resume: armed-play peek failed; using persisted session')
             armed = None
@@ -1353,7 +1483,7 @@ class Controller:
             return handler_input.response_builder.set_should_end_session(True).response
         if not metadata:
             return Controller.error_response(handler_input, data.NOTHING_TO_RESUME, is_playback)
-        if (playback_info.get('stream_url')
+        if (not getattr(data, 'ALEXA_SKILL_NAMESPACE', '') and playback_info.get('stream_url')
                 and playback_info.get('stream_url_video_id') == metadata.video_id):
             stream = player_models.Stream(playback_info.get('stream_url'))
         else:
@@ -1412,9 +1542,9 @@ class Controller:
         playback_info["offset_in_ms"] = offset_in_ms
         playback_info["next_stream_enqueued"] = False
 
-        # Reuse the already-resolved stream url when we have it; only hit the API
-        # when we must (avoids a round-trip on every scrub).
-        if (playback_info.get('stream_url')
+        # Paired streams must be freshly authorized; cached capabilities may
+        # have expired or belong to an earlier binding.
+        if (not getattr(data, 'ALEXA_SKILL_NAMESPACE', '') and playback_info.get('stream_url')
                 and playback_info.get('stream_url_video_id') == metadata.video_id):
             stream = player_models.Stream(playback_info.get('stream_url'))
         else:

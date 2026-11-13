@@ -47,6 +47,23 @@ def _parse(path):
         raise ValueError('The export contains no unexpired YouTube cookies.')
 
 
+def is_usable(path):
+    """Whether *path* holds at least one live YouTube cookie.
+
+    The docker bind mount creates an empty ``cookies.txt`` before anything is
+    uploaded, and an existing file is not the same thing as a usable jar: a
+    resolver handed the empty one asks YouTube anonymously and fails with
+    ``authentication_required`` even though a refreshed server jar sits beside
+    it."""
+    if not path:
+        return False
+    try:
+        _parse(path)
+    except (OSError, ValueError):
+        return False
+    return True
+
+
 def _probe(path, configure_command):
     """Fetch an uncached audio sample using this export, never the live cookie jar."""
     try:
@@ -108,12 +125,12 @@ def status(path, configure_command, force=False):
         return dict(result)
 
 
-def replace(raw, configure_command):
+def replace(raw, configure_command, destination=None):
     if not isinstance(raw, str) or not raw.strip():
         raise ValueError('Paste cookies or choose a cookies.txt file.')
     if len(raw.encode('utf-8')) > MAX_BYTES:
         raise ValueError('Cookie export must be smaller than 128 KB.')
-    destination = saved_path()
+    destination = Path(destination) if destination else saved_path()
     destination.parent.mkdir(parents=True, exist_ok=True)
     # Same filesystem ensures promotion is atomic. Failed candidates never replace the live jar.
     with _exclusive_probe():

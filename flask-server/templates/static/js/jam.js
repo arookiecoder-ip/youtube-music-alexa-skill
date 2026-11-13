@@ -22,6 +22,9 @@
     if (title) document.getElementById('jam-ended-title').textContent = title;
     if (msg) document.getElementById('jam-ended-msg').textContent = msg;
     overlay.style.display = 'flex';
+    // Everything behind this panel is unreachable now, so the keyboard goes with it.
+    const card = overlay.querySelector('.jam-ended-card');
+    if (card) card.focus();
   }
 
   async function leaveJam() {

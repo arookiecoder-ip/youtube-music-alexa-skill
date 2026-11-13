@@ -2,9 +2,18 @@
 
 Signed URLs stay on a private child-process pipe. The public endpoints retain
 Flask authorization and never redirect clients to a credential-bearing URL.
+
+``Resolver`` owns the expensive, credential-scoped part (the worker process, its
+Innertube session and its resolved-URL cache) and is meant to be shared by every
+identity that downloads with the same cookie jar: the sign-in handshake is paid
+once for the install, not once per account. ``YouTubeStream`` adds the
+account-scoped playback state around it -- the stream-slot budget and the bytes
+already relayed to that account's player.
 """
 import atexit
 import hashlib
+import http.client
+import logging
 import json
 import os
 from pathlib import Path
@@ -41,6 +50,75 @@ class _MediaRedirect(urllib.request.HTTPRedirectHandler):
         if not valid_media_url(newurl):
             raise StreamError('invalid_media', 502)
         return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
+class _RecoveringAudio:
+    """Resume a broken upstream at the first byte not yet returned to the player.
+
+    A refreshed signed URL must describe the same representation. Recovery keeps
+    the original response headers and stream slot, and never repeats audio bytes.
+    """
+    def __init__(self, upstream, start, end, segment_end, reopen, video_id, partial):
+        self.upstream, self.position, self.end = upstream, start, end
+        self.segment_end = segment_end
+        self.status = 206 if partial else 200
+        self.headers = {'Content-Type': upstream.headers['Content-Type'],
+                        'Content-Length': str(end-start+1), 'Accept-Ranges': 'bytes'}
+        if partial:
+            total = upstream.headers['Content-Range'].rsplit('/', 1)[1]
+            self.headers['Content-Range'] = f'bytes {start}-{end}/{total}'
+        self.reopen, self.video_id = reopen, video_id
+        self.attempts, self.closed = 0, False
+
+    @staticmethod
+    def _close_error(error):
+        if isinstance(error, urllib.error.HTTPError):
+            error.close()
+
+    def _advance(self, recovery=False):
+        self.upstream.close()
+        if not recovery:
+            try:
+                self.upstream, self.segment_end = self.reopen(self.position, self.end, False)
+                return
+            except (OSError, urllib.error.URLError, http.client.HTTPException) as error:
+                self._close_error(error)
+        # Segment boundaries are normal progress; only broken transfers or
+        # failed opens spend the response's two-attempt recovery budget.
+        while True:
+            if self.attempts >= 2:
+                raise StreamError('upstream_interrupted', 502)
+            self.attempts += 1
+            try:
+                self.upstream, self.segment_end = self.reopen(self.position, self.end, True)
+                break
+            except (OSError, urllib.error.URLError, http.client.HTTPException) as error:
+                self._close_error(error)
+        logging.getLogger(__name__).info(
+            '[stream-recovery] resumed video=%s offset=%s attempt=%s',
+            self.video_id, self.position, self.attempts)
+
+    def read1(self, count):
+        if self.closed or self.position > self.end or count <= 0:
+            return b''
+        while True:
+            if self.position > self.segment_end:
+                self._advance()
+            try:
+                block = self.upstream.read1(min(count, self.segment_end-self.position+1))
+            except http.client.IncompleteRead as error:
+                block = error.partial
+            except (OSError, http.client.HTTPException):
+                block = b''
+            if block:
+                self.position += len(block)
+                return block
+            self._advance(recovery=True)
+
+    def close(self):
+        if not self.closed:
+            self.closed = True
+            self.upstream.close()
 
 
 class Relay:
@@ -81,33 +159,41 @@ class Relay:
             self.close()
 
 
-class YouTubeStream:
-    def __init__(self, cookie_file, enabled=False, worker=None, timeout=10,
-                 opener=None, popen=subprocess.Popen, capacity=8, current=None):
-        self.enabled, self.cookie_file = enabled, cookie_file
+class Resolver:
+    """One persistent worker, session and URL cache for one download credential.
+
+    The cold-play cost -- Node startup, the Innertube handshake and the player
+    setup -- depends only on the cookie jar the URL is signed with. Keying this
+    object by that jar instead of by the person lets every account on the same
+    credential share one warm session and one URL cache.
+
+    No playback state lives here: the current-track bytes and the relay slots
+    belong to the per-identity ``YouTubeStream`` facade below.
+    """
+    def __init__(self, cookie_file, worker=None, timeout=15, popen=subprocess.Popen):
+        self.cookie_file = cookie_file
         self.worker = worker or str(Path(__file__).with_name('youtube-stream') / 'worker.mjs')
         self.timeout, self.popen = timeout, popen
-        self.opener = opener or urllib.request.build_opener(
-            urllib.request.ProxyHandler({}), _MediaRedirect())
-        self.slots = threading.BoundedSemaphore(capacity)
-        self.capacity = capacity
-        self.current = current or CurrentAudio()
-        self._active = {}
-        self._active_sequence = 0
         self._lock = threading.RLock()
         self._process = None
         self._cookie_path = None
         self._pending = {}
         self._sequence = 0
+        self._retired = False
         atexit.register(self.close)
-        atexit.register(self.current.close)
+
+    def retire_if_idle(self):
+        with self._lock:
+            if self._pending:
+                return False
+            self._retired = True
+            self.close()
+            atexit.unregister(self.close)
+            return True
 
     def snapshot(self):
         with self._lock:
-            return {'active_streams':len(self._active), 'stream_slots':self.capacity,
-                    'resolving':len(self._pending), 'streams':[
-                        {'video_id':v, 'age_seconds':max(0,time.monotonic()-started)}
-                        for v,started in self._active.values()]}
+            return {'resolving': len(self._pending)}
 
     def close(self):
         with self._lock:
@@ -160,6 +246,8 @@ class YouTubeStream:
             raise StreamError('invalid_video', 400)
         waiter = queue.Queue(maxsize=1)
         with self._lock:
+            if self._retired:
+                raise StreamError("busy")
             cookie_path = self.cookie_file() or ''
             if self._process and cookie_path != self._cookie_path:
                 self.close()
@@ -170,7 +258,8 @@ class YouTubeStream:
                 # The worker only needs runtime/TLS settings, not Amazon
                 # credentials, Flask secrets or the application's API key.
                 env = {k: os.environ[k] for k in (
-                    'PATH', 'HOME', 'SSL_CERT_FILE', 'SSL_CERT_DIR', 'NODE_EXTRA_CA_CERTS')
+                    'PATH', 'HOME', 'SSL_CERT_FILE', 'SSL_CERT_DIR', 'NODE_EXTRA_CA_CERTS',
+                    'BGUTIL_POT_URL')
                     if k in os.environ}
                 try:
                     allowed = [str(Path(self.worker).resolve().parent)]
@@ -220,6 +309,87 @@ class YouTubeStream:
             with self._lock:
                 self._pending.pop(request_id, None)
 
+
+class YouTubeStream:
+    """One identity's relay over a (usually shared) resolver.
+
+    ``resolver`` is a worker shared by every identity with the same credential.
+    ``resolver_for`` looks one up per call instead, so a credential change moves
+    this facade to the worker for the new jar without disturbing the one another
+    account is still using. With neither supplied the facade owns a private
+    resolver.
+
+    ``close()`` never stops a shared resolver: doing so would cold-start every
+    other account playing through it.
+    """
+    UPSTREAM_CHUNK_BYTES = 512 * 1024
+
+    def __init__(self, cookie_file, enabled=False, worker=None, timeout=15,
+                 opener=None, popen=subprocess.Popen, capacity=8, current=None,
+                 resolver=None, resolver_for=None, global_slots=None):
+        self.enabled, self.cookie_file = enabled, cookie_file
+        self._worker, self._timeout, self._popen = worker, timeout, popen
+        self.opener = opener or urllib.request.build_opener(
+            urllib.request.ProxyHandler({}), _MediaRedirect())
+        self.slots = threading.BoundedSemaphore(capacity)
+        self.capacity = capacity
+        self.global_slots = global_slots
+        self._retired = False
+        self.current = current or CurrentAudio()
+        self._resolver = resolver
+        self._resolver_for = resolver_for
+        self._owns_resolver = resolver is None and resolver_for is None
+        self._active = {}
+        self._active_sequence = 0
+        self._lock = threading.RLock()
+        atexit.register(self.close)
+        atexit.register(self.current.close)
+
+    def _active_resolver(self):
+        with self._lock:
+            if self._resolver_for is not None:
+                self._resolver = self._resolver_for()
+            elif self._resolver is None:
+                self._resolver = Resolver(self.cookie_file, worker=self._worker,
+                                          timeout=self._timeout, popen=self._popen)
+            return self._resolver
+
+    # Worker lifecycle stays reachable here for diagnostics and tests.
+    @property
+    def _process(self):
+        resolver = self._resolver
+        return resolver._process if resolver else None
+
+    @property
+    def _pending(self):
+        resolver = self._resolver
+        return resolver._pending if resolver else {}
+
+    def snapshot(self):
+        with self._lock:
+            active = list(self._active.values())
+            resolver = self._resolver
+            resolving = resolver.snapshot()['resolving'] if resolver else 0
+        return {'active_streams':len(active), 'stream_slots':self.capacity,
+                'resolving':resolving, 'resolver_id':id(resolver) if resolver else None,
+                'streams':[
+                    {'video_id':v, 'age_seconds':max(0,time.monotonic()-started)}
+                    for v,started in active]}
+
+    def close(self):
+        with self._lock:
+            self._retired = True
+            resolver = self._resolver if self._owns_resolver else None
+        self.current.close()
+        atexit.unregister(self.close)
+        atexit.unregister(self.current.close)
+        if resolver is not None:
+            resolver.close()
+            atexit.unregister(resolver.close)
+
+    def resolve(self, video_id=None, refresh=False):
+        return self._active_resolver().resolve(video_id, refresh=refresh)
+
     def metadata(self, video_id):
         """Public metadata only; signed transport URLs never leave the relay."""
         metadata = self.resolve(video_id).get('metadata') or {}
@@ -228,7 +398,10 @@ class YouTubeStream:
     def open(self, video_id, method='GET', byte_range=None, if_range=None):
         if byte_range and not re.fullmatch(r'bytes=(?:\d+-\d*|-\d+)', byte_range):
             raise StreamError('invalid_range', 416)
-        if not self.slots.acquire(blocking=False):
+        if self._retired or not self.slots.acquire(blocking=False):
+            raise StreamError('busy')
+        if self.global_slots is not None and not self.global_slots.acquire(blocking=False):
+            self.slots.release()
             raise StreamError('busy')
         with self._lock:
             self._active_sequence += 1
@@ -238,6 +411,8 @@ class YouTubeStream:
             with self._lock:
                 self._active.pop(active_id, None)
             self.slots.release()
+            if self.global_slots is not None:
+                self.global_slots.release()
         upstream = None
         try:
             try:
@@ -267,39 +442,73 @@ class YouTubeStream:
                 # If-Range must compare the same stable representation, not a
                 # signed URL that changes each time YouTube refreshes it.
                 selected_range = byte_range if not if_range or if_range == etag else None
-                expected_range = None
-                if selected_range:
-                    # Googlevideo rejects suffix ranges on some edges. Turn
-                    # every supported single range into explicit byte bounds,
-                    # using the fixed format's known complete length.
-                    length = int(media['length'])
-                    try:
-                        start, end = byte_bounds(selected_range, length)
-                    except ValueError:
-                        raise StreamError('invalid_range', 416, {'Content-Range':f'bytes */{length}'})
-                    selected_range = f'bytes={start}-{end}'
-                    expected_range = f'bytes {start}-{end}/{length}'
-                    headers['Range'] = selected_range
+                total_length = int(media['length'])
+                if total_length <= 0:
+                    raise StreamError('invalid_audio_length', 502)
+                try:
+                    stream_start, stream_end = byte_bounds(selected_range, total_length)
+                except ValueError:
+                    raise StreamError('invalid_range', 416, {'Content-Range':f'bytes */{total_length}'}) from None
+                segment_end = (stream_end if method == 'HEAD' else
+                               min(stream_end, stream_start+self.UPSTREAM_CHUNK_BYTES-1))
+                # Whole-file Googlevideo responses can be paced below the audio
+                # bitrate. Bounded ranges deliver the same bytes promptly.
+                if method != 'HEAD' or selected_range:
+                    headers['Range'] = f'bytes={stream_start}-{segment_end}'
+                expected_range = f'bytes {stream_start}-{segment_end}/{total_length}'
                 try:
                     upstream = self.opener.open(urllib.request.Request(
                         media['url'], headers=headers, method=method), timeout=10)
                     if upstream.status not in (200, 206):
                         raise StreamError('upstream_error', 502)
-                    if selected_range and upstream.status != 206:
+                    full_representation = stream_start == 0 and segment_end == total_length-1
+                    if upstream.status != 206 and (selected_range or not full_representation):
                         raise StreamError('range_ignored', 502)
-                    if selected_range and upstream.headers.get('Content-Range') != expected_range:
+                    if upstream.status == 206 and upstream.headers.get('Content-Range') != expected_range:
                         raise StreamError('range_mismatch', 502)
                     if not upstream.headers.get('Content-Type', '').startswith('audio/mp4'):
                         raise StreamError('invalid_audio', 502)
+                    advertised_length = upstream.headers.get('Content-Length')
+                    if advertised_length is not None and int(advertised_length) != segment_end-stream_start+1:
+                        raise StreamError('invalid_audio_length', 502)
+                    expected_length = stream_end-stream_start+1
+                    if method != 'HEAD':
+                        transport_media = [media]
+                        original_etag = etag
+                        def reopen(offset, last, refresh, original_etag=original_etag):
+                            if refresh:
+                                refreshed = self.resolve(video_id, refresh=True)
+                                refreshed_etag = '"'+hashlib.sha256(
+                                    f'{video_id}:{refreshed.get("itag")}:{refreshed.get("length")}:{refreshed.get("modified")}'.encode()
+                                ).hexdigest()+'"'
+                                if refreshed_etag != original_etag:
+                                    raise StreamError('audio_representation_changed', 502)
+                                transport_media[0] = refreshed
+                            segment_last = min(last, offset+self.UPSTREAM_CHUNK_BYTES-1)
+                            response = self.opener.open(urllib.request.Request(
+                                transport_media[0]['url'], headers={'Accept-Encoding': 'identity',
+                                    'Range': f'bytes={offset}-{segment_last}'}, method='GET'), timeout=10)
+                            try:
+                                if (response.status != 206
+                                        or response.headers.get('Content-Range') != f'bytes {offset}-{segment_last}/{total_length}'
+                                        or not response.headers.get('Content-Type', '').startswith('audio/mp4')
+                                        or int(response.headers.get('Content-Length', '-1')) != segment_last-offset+1):
+                                    raise StreamError('invalid_recovery_range', 502)
+                            except Exception:
+                                response.close()
+                                raise
+                            return response, segment_last
+                        upstream = _RecoveringAudio(upstream, stream_start, stream_end,
+                            segment_end, reopen, video_id, bool(selected_range))
                     first = upstream.read1(16384) if method != 'HEAD' else b''
                     if method != 'HEAD' and not first:
                         raise StreamError('empty_audio', 502)
-                    offset = [start if selected_range else 0]
+                    offset = [stream_start]
                     def remember(block):
                         self.current.write(ticket, etag, int(media['length']), offset[0], block)
                         offset[0] += len(block)
                     relay = Relay(upstream, first, release, remember)
-                    relay.headers.update({'ETag': etag, 'Cache-Control': 'no-store',
+                    relay.headers.update({'ETag': etag, 'Content-Length': str(expected_length), 'Cache-Control': 'no-store',
                         'Accept-Ranges': 'bytes', 'X-Audio-Delivery': 'youtube-stream',
                         'X-Audio-Source':'youtube'})
                     return relay

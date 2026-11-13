@@ -1,0 +1,200 @@
+{% extends "admin/base.html" %}
+{% block head %}<link rel="stylesheet" href="{{ asset_url('css/admin-users.css') }}">{% endblock %}
+{% block topbar_actions %}
+  <a class="btn small primary" href="{{ base_path }}/users/new/">Create user</a>
+{% endblock %}
+{% block content %}
+<div class="user-directory">
+<div class="page-head">
+  <div>
+    <h1>Users</h1>
+    <p>Every account on this Music Box, the roles they hold and what they have linked.</p>
+  </div>
+</div>
+{# The door that lets people in is governed next to the list of people who came
+   through it, not on a system page three clicks away. #}
+{% if admin_user.role == 'owner' and mu_config.self_signup_enabled %}
+  <form class="switch-bar {{ '' if signup_policy.open else 'closed' }}" method="post"
+        action="{{ base_path }}/users/signup/"
+        data-confirm-heading="Public sign-ups"
+        {% if signup_policy.open %}
+          data-confirm="Close public sign-ups? Nobody new can create an account. Existing accounts, invitations, code verification and password reset all keep working, and you can still create accounts here."
+          data-confirm-button="Close the door"
+          data-confirm-danger
+        {% else %}
+          data-confirm="Open public sign-ups again? Anyone with an email address can create an account on this Music Box and must verify that address before signing in."
+          data-confirm-button="Open the door"
+        {% endif %}>
+    <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+    <input type="hidden" name="state" value="{{ 'disable' if signup_policy.open else 'enable' }}">
+    <span class="copy">
+      <strong>Public sign-ups {% if signup_policy.open %}are open{% else %}are closed{% endif %}</strong>
+      <span>
+        {%- if signup_policy.open -%}
+          Anyone with an email address can create an account.
+          {%- if signup_policy.remaining is not none %} {{ signup_policy.remaining }} of
+            {{ signup_policy.limit }} left today.{% endif -%}
+        {%- elif signup_policy.reason == 'daily_cap' -%}
+          Stopped by the daily cap ({{ signup_policy.count }} of {{ signup_policy.limit }}).
+          It reopens on its own tomorrow.
+        {%- else -%}
+          Closed by {{ signup_switch.username or 'a removed account' }}
+          {%- if signup_switch.updated_at %} {{ signup_switch.updated_at|mu_relative }}{% endif -%}
+          — only accounts created here can sign up.
+        {%- endif -%}
+      </span>
+    </span>
+    <button class="btn {{ 'danger' if signup_policy.open else 'primary' }}" type="submit">
+      {{ 'Close sign-ups' if signup_policy.open else 'Open sign-ups' }}
+    </button>
+  </form>
+{% elif admin_user.role == 'owner' %}
+  {# Nothing to switch, but a silent page is worse than a dead one: the door is
+     closed by the environment and an owner needs to know where to change it. #}
+  <div class="switch-bar closed">
+    <span class="copy">
+      <strong>Public sign-ups are closed</strong>
+      <span>Turned off for this whole deployment by
+        <span class="mono">MULTIUSER_SELF_SIGNUP_ENABLED=0</span>, so no switch can open it.
+        Only accounts created here can sign up.</span>
+    </span>
+    <a class="btn" href="{{ base_path }}/system/">System settings</a>
+  </div>
+{% endif %}
+
+<div class="card filter-card">
+  <div class="card-body">
+    <form class="search-form" method="get" action="{{ base_path }}/users/">
+      <div class="search-field">
+        <label for="user-q">Search</label>
+        <input id="user-q" type="search" name="q" value="{{ q }}" placeholder="Username or email">
+      </div>
+      <div class="search-field">
+        <label for="user-role">Role</label>
+        <select id="user-role" name="role">
+          <option value="">All roles</option>
+          {% for role in roles %}
+            <option value="{{ role }}" {{ 'selected' if role_filter == role else '' }}>{{ role }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="search-field">
+        <label for="user-status">Status</label>
+        <select id="user-status" name="status">
+          <option value="">All statuses</option>
+          {% for status in statuses %}
+            <option value="{{ status }}" {{ 'selected' if status_filter == status else '' }}>{{ status }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <button class="btn" type="submit">Filter</button>
+      {% if q or role_filter or status_filter %}
+        <a class="btn ghost" href="{{ base_path }}/users/">Clear</a>
+      {% endif %}
+      <span class="result-count ml-auto">{{ pagination.total }} user{% if pagination.total != 1 %}s{% endif %}</span>
+    </form>
+  </div>
+</div>
+
+<div class="card flush">
+  {% if users %}
+    <div class="table-wrap">
+      <table>
+        <caption class="visually-hidden">Accounts{% if status_filter %} filtered by {{ status_filter }}{% endif %}</caption>
+        <thead>
+          <tr>
+            <th scope="col">Account</th>
+            <th scope="col">Role</th>
+            <th scope="col">Status</th>
+            <th scope="col">Linked</th>
+            <th scope="col">Last sign-in</th>
+            <th scope="col">Created</th>
+            <th scope="col" class="right">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for user in users %}
+            <tr>
+              <td>
+                <a class="table-user" href="{{ base_path }}/users/{{ user.id }}/">
+                  <span class="avatar" aria-hidden="true">{{ (user.username or '?')[0] }}</span>
+                  <span>
+                    <span class="name">{{ user.username }}</span><br>
+                    <span class="sub">{{ user.email or '—' }}</span>
+                  </span>
+                </a>
+              </td>
+              <td><span class="badge {{ user.role }}">{{ user.role }}</span></td>
+              <td><span class="badge {{ user.status }}">{{ user.status }}</span></td>
+              <td>
+                <div class="btn-row tight">
+                  {% set yt = user.providers.get('youtube') %}
+                  {% set amz = user.providers.get('amazon') %}
+                  <span class="badge {{ yt.status if yt else 'neutral' }}" title="YouTube Music">
+                    {{ 'YouTube' if yt else 'No YouTube' }}
+                  </span>
+                  <span class="badge {{ amz.status if amz else 'neutral' }}" title="Amazon / Alexa">
+                    {{ 'Amazon' if amz else 'No Amazon' }}
+                  </span>
+                </div>
+              </td>
+              <td class="faint nowrap">{{ user.last_login_at|mu_relative }}</td>
+              <td class="faint nowrap">{{ user.created_at|mu_datetime }}</td>
+              <td class="right nowrap">
+                <div class="btn-row tight">
+                  <a class="btn small" href="{{ base_path }}/users/{{ user.id }}/">{{ 'View' if user.status == 'deleted' else 'Manage' }}</a>
+                  {% if user.status == 'deleted' and admin_user.role == 'owner' %}
+                    {# A soft delete was a one-way door while this row had no route out. #}
+                    <form method="post" action="{{ base_path }}/users/{{ user.id }}/restore/"
+                          data-confirm-heading="Restore account"
+                          data-confirm="Restore @{{ user.username }}? It comes back disabled, so nothing signs in until you set a password and activate it."
+                          data-confirm-button="Yes, restore">
+                      <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+                      <button class="btn small" type="submit">Restore</button>
+                    </form>
+                  {% endif %}
+                </div>
+              </td>
+            </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    <div class="pagination">
+      <span>Showing {{ pagination.start }}–{{ pagination.end }} of {{ pagination.total }}</span>
+      <span class="pager">
+        {% if pagination.has_prev %}
+          <a class="btn small" href="{{ pagination.prev_url }}">← Previous</a>
+        {% else %}
+          <button class="btn small" type="button" disabled>← Previous</button>
+        {% endif %}
+        <span class="where">Page {{ pagination.page }} / {{ pagination.pages }}</span>
+        {% if pagination.has_next %}
+          <a class="btn small" href="{{ pagination.next_url }}">Next →</a>
+        {% else %}
+          <button class="btn small" type="button" disabled>Next →</button>
+        {% endif %}
+      </span>
+    </div>
+  {% else %}
+    <div class="empty">
+      <strong>No users match this filter</strong>
+      {% if status_filter == 'deleted' %}
+        No deleted account is hidden behind this filter.
+      {% else %}
+        Try clearing the search, or <a href="{{ base_path }}/users/new/">create a user</a>.
+      {% endif %}
+    </div>
+  {% endif %}
+</div>
+
+<p class="hint mt-3">
+  {% if status_filter == 'deleted' %}
+    <a href="{{ base_path }}/users/">Back to live accounts</a>. Deleted accounts keep their row
+    and are hidden from the ordinary list.
+  {% else %}
+    <a href="{{ base_path }}/users/?status=deleted">Show deleted accounts</a>.
+  {% endif %}
+</p>
+</div>
+{% endblock %}

@@ -31,7 +31,7 @@ _TEST_ENV = {
     "SECRET_KEY": "test-secret-for-resume-current-song",
     "REMOTE_USER": "test-owner",
     "REMOTE_PASSWORD": "test-pass",
-    "API_KEY": "0123456789abcdef0123456789abcdef",
+    "API_KEY": "0123456789abcdef0123456789abcdef",  # gitleaks:allow -- synthetic fixture credential
 }
 
 
@@ -80,6 +80,7 @@ def _install_stubs():
                         type(attr, (), {"__init__": lambda self, *a, **kw: None}))
             ybs.browser_client_is_signed_in = lambda *a, **kw: False
             ybs.promote_browser_headers = lambda *a, **kw: None
+            ybs.normalize_browser_headers = lambda value: value
             sys.modules["youtube_browser_session"] = ybs
 
 
@@ -100,7 +101,7 @@ class _CleanState(unittest.TestCase):
         warm = mock.patch.object(server, '_ensure_audio_ready_for_play', return_value=False)
         warm.start()
         self.addCleanup(warm.stop)
-        download = mock.patch.object(server._youtube_stream, 'resolve', return_value=None)
+        download = mock.patch.object(server._youtube_stream_for(), 'resolve', return_value=None)
         download.start()
         self.addCleanup(download.stop)
         with server._np_lock:

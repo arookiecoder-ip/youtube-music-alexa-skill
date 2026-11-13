@@ -100,6 +100,18 @@ class DownloadCookies(unittest.TestCase):
             self.assertTrue(cookies.status(self.original, lambda _: None, force=True)['valid'])
             self.assertEqual(run.call_count, 2)
 
+    def test_is_usable_rejects_missing_empty_and_expired_jars(self):
+        empty = Path(self.temp.name) / 'empty.txt'
+        empty.write_text('')
+        expired = Path(self.temp.name) / 'expired.txt'
+        expired.write_text(EXPORT.replace('2000000000', '1'))
+        malformed = Path(self.temp.name) / 'malformed.txt'
+        malformed.write_text('not cookies')
+        for path in (None, '', self.original, self.original.parent / 'missing.txt'):
+            self.assertEqual(cookies.is_usable(path), path == self.original)
+        for path in (empty, expired, malformed):
+            self.assertFalse(cookies.is_usable(path))
+
 
 if __name__ == '__main__':
     unittest.main()

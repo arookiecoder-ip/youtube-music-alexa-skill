@@ -21,6 +21,8 @@ def _install_stubs():
     sys.modules['ytmusicapi.auth.browser'] = browser
     sys.modules['home_feed'] = types.ModuleType('home_feed')
     alexa = types.ModuleType('alexa_remote')
+    alexa.set_access_policy = lambda policy: None
+    alexa.set_identity_hook = lambda hook: None
     alexa.AlexaUnreachable = type('AlexaUnreachable', (Exception,), {})
     alexa_remote = types.ModuleType('alexa_remote.remote')
     alexa_remote.devices = lambda refresh=False: ([], 'stub')
@@ -33,6 +35,7 @@ def _install_stubs():
         setattr(ybs, attr, type(attr, (), {'__init__': lambda self, *a, **kw: None}))
     ybs.browser_client_is_signed_in = lambda *a, **kw: False
     ybs.promote_browser_headers = lambda *a, **kw: None
+    ybs.normalize_browser_headers = lambda value: value
     ybs.is_authentication_error = lambda *a, **kw: False
     sys.modules['youtube_browser_session'] = ybs
 

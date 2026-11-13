@@ -1,0 +1,162 @@
+{#- The shared chrome. Every admin page gets it from the blueprint's own context
+    processor; /status is rendered by server.py and passes the same variables,
+    and a deployment without the multi-user layer has neither -- hence the
+    defaults, so one template serves all three rather than a second copy of the
+    shell that drifts. -#}
+{%- set shell_app_name = (mu_config.app_name if mu_config else "Music Box")
+                         if (mu_config is defined and mu_config) else "Music Box" -%}
+{%- set shell_theme = theme if (theme is defined and theme) else 'dark' -%}
+<!doctype html>
+<html lang="en" data-theme="{{ shell_theme }}">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="{{ 'light dark' if shell_theme == 'light' else 'dark' }}">
+  <meta name="theme-color" content="{{ '#f3f3f5' if shell_theme == 'light' else '#101013' }}">
+  <meta name="robots" content="noindex, nofollow">
+  <title>{{ title or "Admin" }} · {{ shell_app_name }}</title>
+  <link rel="icon" href="/favicon.ico">
+  <link rel="stylesheet" href="{{ asset_url('css/theme.css') }}">
+  <link rel="stylesheet" href="{{ asset_url('css/admin.css') }}">
+  <script defer src="{{ asset_url('js/admin.js') }}"></script>
+  {% block head %}{% endblock %}
+  <link rel="stylesheet" href="{{ asset_url('css/account-design.css') }}">
+</head>
+<body class="{% block body_class %}{% endblock %}">
+{% block body %}
+<a class="skip-link" href="#main-content">Skip to content</a>
+<div class="nav-scrim" hidden></div>
+<div class="layout">
+  <aside class="sidebar" id="admin-nav" aria-label="Administration">
+    <a class="brand" href="{{ base_path }}/">
+      {# The player's own mark, not a music note in a box: the panel is the same
+         product and should announce itself the same way. #}
+      <span class="eq-icon" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span></span>
+      <span class="brand-text">
+        <span class="brand-name">{{ shell_app_name }}</span>
+        <span class="brand-sub">Admin</span>
+      </span>
+    </a>
+
+    <nav class="nav" aria-label="Administration">
+      <div class="nav-label">Overview</div>
+      <a href="{{ base_path }}/" class="{{ 'active' if page == 'dashboard' else '' }}"
+         {% if page == 'dashboard' %}aria-current="page"{% endif %}>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="9" rx="1.5"/><rect x="14" y="3" width="7" height="5" rx="1.5"/><rect x="14" y="12" width="7" height="9" rx="1.5"/><rect x="3" y="16" width="7" height="5" rx="1.5"/></svg>
+        <span>Dashboard</span>
+      </a>
+      <a href="{{ base_path }}/users/" class="{{ 'active' if page == 'users' else '' }}"
+         {% if page == 'users' %}aria-current="page"{% endif %}>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="9" cy="8" r="3.4"/><path d="M2.8 20a6.2 6.2 0 0 1 12.4 0"/><path d="M16 5.5a3 3 0 0 1 0 5.6M17.5 14.2A5.6 5.6 0 0 1 21.2 20"/></svg>
+        <span>Users</span>
+      </a>
+      <a href="{{ base_path }}/audit/" class="{{ 'active' if page == 'audit' else '' }}"
+         {% if page == 'audit' %}aria-current="page"{% endif %}>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 3h11l3 3v15H5z"/><path d="M8 9h8M8 13h8M8 17h5"/></svg>
+        <span>Audit log</span>
+      </a>
+
+      <div class="nav-label">Music Box</div>
+      <a href="{{ base_path }}/youtube/" class="{{ 'active' if page == 'youtube' else '' }}"
+         {% if page == 'youtube' %}aria-current="page"{% endif %}>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v11m-4-4 4 4 4-4"/><path d="M4 16v5h16v-5"/></svg>
+        <span>YouTube downloads</span>
+      </a>
+      <a href="/status" class="{{ 'active' if page == 'status' else '' }}"
+         {% if page == 'status' %}aria-current="page"{% endif %}>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12h4l3-8 6 16 3-8h4"/></svg>
+        <span>Service status</span>
+      </a>
+
+      <div class="nav-label">Settings</div>
+      <a href="{{ base_path }}/system/" class="{{ 'active' if page == 'system' else '' }}"
+         {% if page == 'system' %}aria-current="page"{% endif %}>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="6" rx="1.6"/><rect x="3" y="14" width="18" height="6" rx="1.6"/><path d="M7 7h.01M7 17h.01M12 7h5M12 17h5"/></svg>
+        <span>System</span>
+      </a>
+      <a href="{{ base_path }}/account/" class="{{ 'active' if page == 'account' else '' }}"
+         {% if page == 'account' %}aria-current="page"{% endif %}>
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="8" r="3.6"/><path d="M4.5 20a7.5 7.5 0 0 1 15 0"/></svg>
+        <span>My account</span>
+      </a>
+    </nav>
+
+    {% if admin_user %}
+    <div class="sidebar-foot">
+      <div class="sidebar-user">
+        <span class="avatar" aria-hidden="true">{{ (admin_user.username or '?')[0] }}</span>
+        <span class="sidebar-user-copy">
+          <span class="sidebar-user-name">{{ admin_user.username }}</span>
+          <span class="sidebar-user-role">{{ admin_user.role }}</span>
+        </span>
+      </div>
+      {# The theme is a stored preference, not a script's guess: a page that
+         rendered dark and then flipped would flash on every load, and a
+         preference kept in localStorage would not follow the person to another
+         browser where they are signed in as the same administrator. #}
+      <form method="post" action="{{ base_path }}/theme/">
+        <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+        <input type="hidden" name="state" value="{{ 'dark' if shell_theme == 'light' else 'light' }}">
+        <input type="hidden" name="next" value="{{ request.path }}">
+        <button class="btn ghost small block" type="submit">
+          {{ 'Switch to dark theme' if shell_theme == 'light' else 'Switch to light theme' }}
+        </button>
+      </form>
+      <form method="post" action="{{ base_path }}/logout/"
+            data-confirm-heading="Sign out"
+            data-confirm="Sign out of @{{ admin_user.username }} on this browser? Other devices stay signed in."
+            data-confirm-button="Yes, sign out">
+        <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+        <button class="btn ghost small block" type="submit">Sign out</button>
+      </form>
+    </div>
+    {% endif %}
+  </aside>
+
+  <main class="main" id="main-content">
+    <header class="topbar">
+      <div class="topbar-left">
+        <button class="nav-toggle" type="button" id="nav-toggle"
+                aria-controls="admin-nav" aria-expanded="false" aria-label="Navigation">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"/></svg>
+        </button>
+        <span class="topbar-title">{{ title or "Admin" }}</span>
+      </div>
+      <div class="topbar-actions">
+        {% block topbar_actions %}{% endblock %}
+      </div>
+    </header>
+    <div class="content">
+      {% with messages = get_flashed_messages(with_categories=true) %}
+        <div class="flash-stack" role="status" aria-live="polite">{% for category, message in messages %}<div class="flash {{ category }}">
+              <span>
+                {% if category == 'password' %}
+                  {{ message.split(': ', 1)[0] }}: <code>{{ message.split(': ', 1)[1] if ': ' in message else message }}</code>
+                {% else %}
+                  {{ message }}
+                {% endif %}
+              </span>
+            </div>{% endfor %}</div>
+      {% endwith %}
+      {% block content %}{% endblock %}
+    </div>
+  </main>
+</div>
+{% endblock %}
+{# One dialog for the whole panel: admin.js borrows it for a confirmation, an
+   audit payload or anything else a row can open.  It is in the shell rather than
+   per page so the escape key, the backdrop click and the focus return are
+   written once. #}
+<dialog class="admin-dialog" id="admin-dialog" aria-labelledby="admin-dialog-title"
+         aria-describedby="admin-dialog-body">
+  <div class="dialog-head">
+    <h2 id="admin-dialog-title">Are you sure?</h2>
+    <button class="btn icon ghost" type="button" data-dialog-close aria-label="Close"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" aria-hidden="true" focusable="false"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
+  </div>
+  <div class="dialog-body" id="admin-dialog-body"></div>
+  <div class="dialog-foot" id="admin-dialog-foot"></div>
+</dialog>
+{% block scripts %}{% endblock %}
+<script defer src="{{ asset_url('js/auth-ui.js') }}"></script>
+</body>
+</html>

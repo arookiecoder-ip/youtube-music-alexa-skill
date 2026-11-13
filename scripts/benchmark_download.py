@@ -30,7 +30,7 @@ sys.path.insert(0, FLASK_SERVER)
 # Local dev has no bgutil sidecar; opt out so yt-dlp doesn't wait on it.
 os.environ.setdefault("YTDLP_BGUTIL_BASE_URL", "")
 os.environ.setdefault("SECRET_KEY", "benchmark-secret")
-os.environ.setdefault("API_KEY", "0123456789abcdef0123456789abcdef")
+os.environ.setdefault("API_KEY", "0123456789abcdef0123456789abcdef")  # gitleaks:allow -- synthetic benchmark import fixture
 
 # Stub the heavy deps (not installed) so server.py imports; mirror the test
 # convention. yt-dlp itself IS installed, so no stub is needed for it.

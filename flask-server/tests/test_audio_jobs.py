@@ -27,6 +27,42 @@ class AudioJobsTests(unittest.TestCase):
         self.assertFalse(self.pool.contains('song'))
         self.assertEqual(self.pool.snapshot()['coalesced'], 1)
 
+    def test_job_runs_with_the_identity_that_submitted_it(self):
+        """A pool thread must resolve audio as its caller, not as the owner."""
+        from player_state import IDENTITY
+        seen = {}
+
+        def record(name):
+            def action():
+                seen[name] = IDENTITY.get()
+                return True
+            return action
+
+        def submit_as(name, identity):
+            """Submit from a thread carrying *identity*, the way a request does."""
+            box = []
+            def runner():
+                IDENTITY.set(identity)
+                box.append(self.pool.submit((identity, name), record(name)))
+            thread = threading.Thread(target=runner)
+            thread.start()
+            thread.join(3)
+            return box[0]
+
+        one, two = 'user:' + '1' * 36, 'user:' + '2' * 36
+        first = submit_as('one', one)
+        second = submit_as('two', two)
+        self.assertTrue(first.result(3))
+        self.assertTrue(second.result(3))
+        self.assertEqual(seen, {'one': one, 'two': two})
+
+    def test_same_video_for_two_identities_is_not_one_job(self):
+        video = 'AAAAAAAAAAA'
+        owner = self.pool.submit(('owner', video), lambda: 'owner-url')
+        account = self.pool.submit(('user:abc', video), lambda: 'account-url')
+        self.assertEqual(owner.result(3), 'owner-url')
+        self.assertEqual(account.result(3), 'account-url')
+
     def test_prefetch_leaves_worker_available_for_requested_play(self):
         started = threading.Event()
         self.pool.submit('prefetch', lambda: self.blocked(started), prefetch=True)
@@ -97,7 +133,7 @@ class AudioJobIntegrationTests(unittest.TestCase):
             return {'url':'https://rr1.googlevideo.com/audio'}
         try:
             with mock.patch.object(server, '_audio_jobs', pool), \
-                 mock.patch.object(server._youtube_stream, 'resolve', side_effect=download) as fetch, \
+                 mock.patch.object(server._youtube_stream_for(), 'resolve', side_effect=download) as fetch, \
                  mock.patch.object(server, 'PUBLIC_BASE_URL', 'https://audio.example'):
                 server._ensure_audio_ready_for_play('AAAAAAAAAAA')
                 self.assertTrue(started.wait(1))
@@ -107,7 +143,7 @@ class AudioJobIntegrationTests(unittest.TestCase):
                 self.assertIn('/proxy/', stream['audio_url'])
                 self.assertTrue(server._download_in_progress('AAAAAAAAAAA'))
                 self.assertEqual(fetch.call_count, 1)
-                future = pool.submit('AAAAAAAAAAA', lambda: None)
+                future = pool.submit(server._audio_job_key('AAAAAAAAAAA'), lambda: None)
                 release.set()
                 self.assertEqual(future.result(2), {'url':'https://rr1.googlevideo.com/audio'})
         finally:

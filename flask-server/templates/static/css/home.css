@@ -66,7 +66,7 @@
 .home-filter-chip {
   background: rgba(255, 255, 255, 0.1);
   border: 1px solid transparent;
-  border-radius: 16px;
+  border-radius: 0;
   color: var(--text);
   padding: 6px 16px;
   font-size: 0.9rem;
@@ -140,12 +140,18 @@
   background: transparent;
   border: 1px solid rgba(255, 255, 255, 0.2);
   color: var(--text);
-  border-radius: 16px;
-  padding: 4px 12px;
+  border-radius: 0;
+  display: inline-flex;
+  align-items: center;
+  min-height: var(--control-h-sm);
+  padding: 0 var(--space-3);
   font-size: 0.8rem;
   font-weight: 600;
   cursor: pointer;
   transition: background 0.2s, border-color 0.2s;
+}
+@media (hover: none), (max-width: 899px) {
+  .home-shelf-play-all { min-height: var(--control-h-md); }
 }
 .home-shelf-play-all:hover, .home-shelf-play-all:focus-visible {
   background: rgba(255, 255, 255, 0.1);
@@ -235,7 +241,7 @@
   display: block;
   width: 2px;
   height: 8px;
-  border-radius: 2px;
+  border-radius: 0;
   background: #fff;
   transform-origin: center;
   animation: music-bar 0.9s ease-in-out infinite alternate;
@@ -280,7 +286,7 @@
   display: flex;
   align-items: center;
   background: rgba(255, 255, 255, 0.05);
-  border-radius: 4px;
+  border-radius: 0;
   overflow: hidden;
   height: 56px;
 }
@@ -327,7 +333,7 @@
   display: flex;
   align-items: center;
   padding: 4px 0;
-  border-radius: 4px;
+  border-radius: 0;
 }
 .home-item-song:hover, .home-item-song:focus-within {
   background: rgba(255, 255, 255, 0.05);
@@ -335,7 +341,7 @@
 .home-item-song .home-item-img {
   width: 48px;
   height: 48px;
-  border-radius: 4px;
+  border-radius: 0;
   flex-shrink: 0;
 }
 .home-item-song .home-item-text {
@@ -351,7 +357,7 @@
   left: 0; /* over the image */
   width: 48px;
   height: 48px;
-  border-radius: 4px;
+  border-radius: 0;
 }
 
 /* 3. Cards */
@@ -504,7 +510,7 @@
 .home-skeleton-card .skeleton-line {
   height: 14px;
   background: var(--surface);
-  border-radius: 2px;
+  border-radius: 0;
 }
 .home-skeleton-card .skeleton-line-title { width: 80%; }
 .home-skeleton-card .skeleton-line-artist { width: 60%; }
@@ -786,7 +792,7 @@
 }
 
 /* Idle hero */
-.idle-hero-text { color: #3d3d3d; }
+.idle-hero-text { color: var(--text); }
 .idle-hero-accent {
   background: var(--accent-grad);
   -webkit-background-clip: text;
@@ -1097,12 +1103,15 @@
   height: auto;
 }
 
-/* Jam-ended overlay (owner side) */
+/* Jam-ended overlay.  Defined once, here: both the owner page and the guest jam
+   page load this file, and jam.css used to carry a second copy of every rule with
+   a 380px card and a square icon -- so the same message was a round grey disc on
+   /remote and a bordered square on /jam. */
 #jam-ended-overlay {
   position: fixed;
   inset: 0;
   z-index: 10000;
-  background: var(--bg, #0a0a0a);
+  background: var(--bg);
   align-items: center;
   justify-content: center;
   display: none;
@@ -1118,8 +1127,8 @@
   width: 56px;
   height: 56px;
   margin: 0 auto 20px;
-  border: 2px solid rgba(255,255,255,.15);
-  border-radius: 50%;
+  border: 1px solid var(--border);
+  border-radius: 0;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1157,18 +1166,13 @@
 #jam-modal .history-modal-header {
   min-height: 60px;
   box-sizing: border-box;
-  padding: 14px 20px;
-  border-bottom-color: var(--border);
 }
 
 #jam-modal .history-modal-header h3 {
   display: flex;
   align-items: center;
+  gap: var(--space-2);
   margin: 0;
-}
-
-#jam-modal-close {
-  border-radius: 0;
 }
 
 /* ============================================================
@@ -1252,10 +1256,10 @@
 }
 .explore-card-art {
   aspect-ratio: 1;
-  border-radius: 8px;
+  border-radius: 0;
   overflow: hidden;
-  background: #1a1a1a;
-  margin-bottom: 8px;
+  background: var(--surface-2);
+  margin-bottom: var(--space-2);
   flex-shrink: 0;
   position: relative;
 }
@@ -1288,7 +1292,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #444;
+  color: var(--muted);
 }
 .explore-thumb-placeholder svg { width: 36px; height: 36px; }
 .explore-card-play.home-play-btn {
@@ -1326,9 +1330,9 @@
 .explore-scroll-btn:disabled { opacity: .28; cursor: default; }
 .explore-scroll-btn svg { width: 20px; height: 20px; }
 .explore-quick-nav { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:14px; margin-bottom:42px; }
-.explore-quick-card { display:flex; align-items:center; gap:12px; min-height:68px; padding:0 18px; border:1px solid rgba(255,255,255,.08); border-radius:var(--radius-sm); background:#242424; color:var(--text); font-weight:750; font-size:.95rem; text-align:left; cursor:pointer; transition:background .18s, border-color .18s; }
+.explore-quick-card { display:flex; align-items:center; gap:var(--space-3); min-height:68px; padding:0 var(--space-4); border:1px solid var(--border-soft); border-radius:var(--radius-sm); background:var(--surface-2); color:var(--text); font-weight:750; font-size:.95rem; text-align:left; cursor:pointer; transition:background .18s, border-color .18s; }
 .explore-quick-card:hover,
-.explore-quick-card:focus-visible { background:#161616; border-color:rgba(255,255,255,.18); }
+.explore-quick-card:focus-visible { background:var(--surface-3); border-color:var(--border); }
 .explore-quick-icon { color:var(--accent); font-size:1.35rem; }
 @media (max-width:620px) { .explore-quick-nav { grid-template-columns:repeat(2,1fr); } .explore-quick-card { min-height:58px; padding:0 12px; } }
 .explore-card-info {
@@ -1408,7 +1412,7 @@
   font-weight: 600;
   color: var(--muted);
   background: rgba(255,255,255,.09);
-  border-radius: 20px;
+  border-radius: 0;
   padding: 2px 9px;
 }
 .library-grid {
@@ -1449,8 +1453,8 @@
   aspect-ratio: 1;
   border-radius: 0;
   overflow: hidden;
-  background: #1a1a1a;
-  margin-bottom: 9px;
+  background: var(--surface-2);
+  margin-bottom: var(--space-2);
   flex-shrink: 0;
 }
 .library-card-art img {
@@ -1502,7 +1506,7 @@
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #444;
+  color: var(--muted);
 }
 .library-card-art-placeholder svg { width: 36px; height: 36px; }
 .library-card-liked .library-card-art {
@@ -1618,11 +1622,11 @@
 .explore-mood-controls { display: flex; align-items: center; gap: 16px; }
 .explore-mood-card {
   min-height: 48px;
-  padding: 11px 14px 11px 18px;
+  padding: var(--space-2) var(--space-3) var(--space-2) var(--space-4);
   border: 0;
   border-left: 6px solid var(--mood-accent);
   border-radius: 0;
-  background: #2b2b2b;
+  background: var(--surface-2);
   color: var(--text);
   font: inherit;
   font-size: .86rem;
@@ -1696,11 +1700,11 @@
 .mood-page-skeleton > span {
   display: block;
   height: 12px;
-  margin: 9px 4px 0;
-  border-radius: 4px;
-  background: #242424;
+  margin: var(--space-2) var(--space-1) 0;
+  border-radius: 0;
+  background: var(--surface-2);
 }
-.mood-page-skeleton > span:last-child { width: 62%; height: 10px; margin-top: 6px; }
+.mood-page-skeleton > span:last-child { width: 62%; height: 10px; margin-top: var(--space-1); }
 @keyframes moodSkeleton { to { background-position: -220% 0; } }
 @media (min-width: 700px) {
   .mood-page-skeleton-grid { grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); }
@@ -2185,7 +2189,7 @@
   width: 78px;
   height: 13px;
   margin: 10px 20px var(--space-1);
-  border-radius: 4px;
+  border-radius: 0;
 }
 .history-page-skeleton .history-skeleton-row {
   /* Same flex layout, gap, padding as .history-item so vertical rhythm
@@ -2219,7 +2223,7 @@
 .history-page-skeleton .history-skeleton-row .history-skeleton-duration {
   width: 32px;
   height: 11px;
-  border-radius: 4px;
+  border-radius: 0;
 }
 .history-page-skeleton .history-skeleton-row .history-skeleton-like {
   width: 28px;
@@ -2299,7 +2303,7 @@
 .explore-page-skeleton .explore-card-skeleton .explore-skeleton-art {
   width: 100%;
   aspect-ratio: 1;
-  border-radius: 8px;
+  border-radius: 0;
   margin-bottom: 8px;
   background: linear-gradient(90deg, var(--border) 25%, #2a2a2a 37%, var(--border) 63%);
   background-size: 400% 100%;

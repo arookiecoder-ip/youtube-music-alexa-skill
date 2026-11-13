@@ -12,6 +12,8 @@ import unittest
 from unittest import mock
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+# audio_test_support is a sibling module: importable however this file was loaded.
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 
 def _install_stubs():
@@ -20,7 +22,7 @@ def _install_stubs():
     os.environ.setdefault("SECRET_KEY", "test-secret-for-audio-endpoint")
     os.environ.setdefault("REMOTE_USER", "test-owner")
     os.environ.setdefault("REMOTE_PASSWORD", "test-pass")
-    os.environ.setdefault("API_KEY", "0123456789abcdef0123456789abcdef")
+    os.environ.setdefault("API_KEY", "0123456789abcdef0123456789abcdef")  # gitleaks:allow -- synthetic fixture credential
 
     if "ytmusicapi" not in sys.modules:
         ytmusicapi = types.ModuleType("ytmusicapi")
@@ -60,6 +62,7 @@ def _install_stubs():
                         type(attr, (), {"__init__": lambda self, *a, **kw: None}))
             ybs.browser_client_is_signed_in = lambda *a, **kw: False
             ybs.promote_browser_headers = lambda *a, **kw: None
+            ybs.normalize_browser_headers = lambda value: value
             sys.modules["youtube_browser_session"] = ybs
 
 
@@ -79,10 +82,10 @@ class _CacheDir(unittest.TestCase):
         self.dir = self.tmp.name
         from current_audio import CurrentAudio
         current = CurrentAudio()
-        patcher = mock.patch.object(server._youtube_stream, 'current', current)
+        patcher = mock.patch.object(server._youtube_stream_for(), 'current', current)
         patcher.start(); self.addCleanup(patcher.stop); self.addCleanup(current.close)
         from audio_test_support import fake_relay
-        patcher = mock.patch.object(server._youtube_stream, 'open', side_effect=fake_relay)
+        patcher = mock.patch.object(server._youtube_stream_for(), 'open', side_effect=fake_relay)
         patcher.start(); self.addCleanup(patcher.stop)
 
     def make(self, video_id, size=MB, written_ago=600.0, used_ago=None, suffix=".m4a"):
@@ -134,7 +137,7 @@ class AudioSearch(_CacheDir):
         self.assertEqual(self.ytm.search.call_count, 1)
 
     def test_info_mode_returns_json_without_downloading(self):
-        with mock.patch.object(server._youtube_stream, "open") as dl, \
+        with mock.patch.object(server._youtube_stream_for(), "open") as dl, \
              mock.patch.object(server, "_serve_youtube_stream") as stream:
             resp = self.app.get("/audio/?q=song%20a&duration=213&info=1", headers=self.headers)
         body = resp.get_json()

@@ -32,6 +32,18 @@ class PlaybackOutput:
                     'handoff_pending': bool(self.pending_owner and self.pending_until > self.clock()),
                     'phone_lease_ms': max(0, int((self.lease_until - self.clock()) * 1000))}
 
+    def restrict_alexa(self):
+        """Retire an Echo lease after permission removal; preserve phone playback."""
+        with self.condition:
+            if self.mode != 'alexa':
+                return False
+            self.mode, self.owner, self.controller, self.serial = 'phone', '', '', ''
+            self.token = secrets.token_hex(16)
+            self.revision += 1
+            self.lease_until, self.pending_until, self.pending_owner = 0, 0, ''
+            self.condition.notify_all()
+            return True
+
     def owns_phone(self, owner, token):
         with self.condition:
             return self.mode == 'phone' and bool(owner) and self.owner == owner and self.token == token and not (self.pending_owner and self.pending_until > self.clock())

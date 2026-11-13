@@ -1,0 +1,84 @@
+{% extends "admin/base.html" %}
+{% block body %}
+<div class="login-shell">
+  <div class="login-card">
+    <a class="brand-home" href="/welcome">Music Box home</a>
+    <div class="login-brand">
+      <span class="eq-icon" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span></span>
+      <div>
+        <div class="brand-name">{{ mu_config.app_name }}</div>
+        <div class="brand-sub">Admin login</div>
+      </div>
+    </div>
+    <div class="card">
+      <h1>Sign in</h1>
+      <div class="sub">Owner access. Sign in to manage this Music Box.</div>
+
+      {% if not mail_configured %}
+        <div class="banner mb-4">
+          <span>⚑</span>
+          <span>Email delivery is not configured. Password resets and email sign-in links are written to the local outbox until <span class="mono">MULTIUSER_SMTP_*</span> is set.</span>
+        </div>
+      {% endif %}
+
+      {% with messages = get_flashed_messages(with_categories=true) %}
+        {% if messages %}
+          <div class="flash-stack">
+            {% for category, message in messages %}
+              <div class="flash {{ category }}"><span>{{ message }}</span></div>
+            {% endfor %}
+          </div>
+        {% endif %}
+      {% endwith %}
+
+      {% if step == 'code' %}
+      <form class="stack" method="post" action="{{ base_path }}/login/" autocomplete="off">
+        <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+        <input type="hidden" name="step" value="code">
+        <input type="hidden" name="pending" value="{{ pending }}">
+        <input type="hidden" name="next" value="{{ next_target or base_path ~ '/' }}">
+        <div class="field">
+          <label for="code">Authentication code</label>
+          <input id="code" name="code" type="text" inputmode="numeric" pattern="[0-9]*"
+                 autocomplete="one-time-code" maxlength="6" autofocus required>
+          <div class="hint">Six digits from your authenticator app. This step is single-use: a
+            wrong code ends the attempt and you enter your password again.</div>
+        </div>
+        <div class="form-actions">
+          <button class="btn primary block" type="submit">Verify code</button>
+        </div>
+      </form>
+      {% else %}
+      <form class="stack" method="post" action="{{ base_path }}/login/" autocomplete="on">
+        <input type="hidden" name="_csrf" value="{{ csrf_token }}">
+        <input type="hidden" name="next" value="{{ next_target or base_path ~ '/' }}">
+        <div class="field">
+          <label for="username">Email or username</label>
+          <input id="username" name="username" type="text" autocomplete="username" required autofocus
+                 maxlength="254" spellcheck="false" autocapitalize="none"
+                 placeholder="you@synthora.in">
+          <span class="hint">Either one works — the username is the account's only name.</span>
+        </div>
+        <div class="field">
+          <label for="password">Password</label>
+          <input id="password" name="password" type="password" autocomplete="current-password" required maxlength="200">
+        </div>
+        <div class="form-actions">
+          <button class="btn primary block" type="submit">Sign in</button>
+        </div>
+      </form>
+      {% endif %}
+      <div class="row spread mt-4">
+        <a class="small" href="{{ base_path }}/forgot-password/">Forgot password?</a>
+        {% if magic_link_enabled %}
+          <a class="small" href="{{ base_path }}/email-login/">Email me a sign-in link</a>
+        {% endif %}
+      </div>
+    </div>
+    <div class="login-foot">
+      Accounts, sessions and provider credentials live in the admin panel.<br>
+      Player sign-in remains at <a href="/login/">/login/</a>.
+    </div>
+  </div>
+</div>
+{% endblock %}

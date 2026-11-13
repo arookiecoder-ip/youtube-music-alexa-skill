@@ -1,0 +1,787 @@
+{%- set page_theme = theme if (theme is defined and theme in ('dark', 'light')) else 'dark' -%}
+{%- set open_step = step if (step is defined and step in ('password', 'reset', 'email', 'totp', 'delete')) else '' -%}
+{%- set pw_view = 'reset' if open_step == 'reset' else ('change' if open_step == 'password' else '') -%}
+<!DOCTYPE html>
+<html lang="en" data-theme="{{ page_theme }}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+{# The two declarations a browser needs before it paints anything: which palette the
+   form controls and the canvas should be drawn in, and what colour to tint the
+   address bar. Without them a light page arrives with dark widgets and a dark bar. #}
+<meta name="color-scheme" content="{{ 'light dark' if page_theme == 'light' else 'dark' }}">
+<meta name="theme-color" content="{{ '#f3f3f5' if page_theme == 'light' else '#101013' }}">
+<meta name="robots" content="noindex">
+<title>{{ app_name }} · Your account</title>
+<link rel="stylesheet" href="{{ asset_url('css/theme.css') }}">
+<link rel="stylesheet" href="{{ asset_url('css/signin.css') }}">
+<link rel="stylesheet" href="{{ asset_url('css/account.css') }}">
+<link rel="stylesheet" href="{{ asset_url('css/account-design.css') }}">
+</head>
+{# Server-rendered so the page is complete before account.js runs; the script only
+   refreshes individual sections after an action. No inline script or style anywhere,
+   which is what lets the blueprint serve `script-src 'self'` / `style-src 'self'`.
+
+   The sidebar shows one section at a time while JavaScript is running, and it does
+   that by setting `hidden` on the other three. A browser without the script, and a
+   visitor who arrived straight at /account#panel-sessions, gets every section on the
+   page exactly as it is written below.
+
+   The popups at the end of <main> are the only place a password box lives now.
+   `?step=` names one, which is what keeps their trigger links real links: with no
+   script a click loads the page with that dialog open and every field in it
+   reachable, and with a script the click opens the same dialog in place. #}
+{% macro prov_badge(row) -%}
+  {%- if not row -%}
+    <span class="badge">Not connected</span>
+  {%- elif row.status == 'connected' -%}
+    <span class="badge ok">Connected</span>
+  {%- elif row.status == 'expired' -%}
+    <span class="badge warn">Needs signing in again</span>
+  {%- else -%}
+    <span class="badge bad">{{ row.status }}</span>
+  {%- endif -%}
+{%- endmacro %}
+{% macro chip(id, label, text, kind) -%}
+  <li class="chip">
+    <span class="chip-label">{{ label }}</span>
+    <span class="badge {{ kind }}" id="{{ id }}">{{ text }}</span>
+  </li>
+{%- endmacro %}
+<body data-alexa-enabled="{{ 'true' if alexa_access_enabled else 'false' }}" class="account" data-csrf="{{ csrf_form }}" data-min-password="{{ password_min_length }}"
+      data-username="{{ username }}" data-has-email="{{ '1' if email else '0' }}">
+<a class="skip-link" href="#account-main">Skip to account settings</a>
+<main id="account-main">
+  <div class="brand">
+    <div class="eq-icon">
+      <span></span><span></span><span></span><span></span><span></span>
+    </div>
+    <div>
+      <h1>{{ app_name }}</h1>
+      <p>Your account</p>
+    </div>
+  </div>
+
+  <!-- The identity band: who you are, and at a glance whether the account is
+       healthy. Everything below is a thing you can change. -->
+  <header class="account-head">
+    <div class="who">
+      <span class="avatar" aria-hidden="true">{{ (username or '?')[0]|upper }}</span>
+      <div>
+        <h2>@{{ username }}</h2>
+        <p id="head-since">{{ role_text }} · joined {{ created_text or 'unknown' }}
+          {%- if created_by == 'self' %} · created by you{% endif %}</p>
+      </div>
+    </div>
+    <div class="account-actions-top">
+      <a class="ghost-link" href="/">Player</a>
+      {# The one control up here that ends this browser's session sits a hand's width
+         from "Player", so it asks in a popup before leaving. The href stays real:
+         without the script this is the plain link it always was. #}
+      <a class="ghost-link signout-link" href="/logout/"
+         data-dialog="dialog-signout">Sign out</a>
+    </div>
+  </header>
+
+  <ul class="status-strip">
+    {% if not email %}
+      {{ chip('verify-badge', 'Email', 'No email address', 'bad') }}
+    {% elif email_verified %}
+      {{ chip('verify-badge', 'Email', 'Confirmed', 'ok') }}
+    {% else %}
+      {{ chip('verify-badge', 'Email', 'Unconfirmed', 'warn') }}
+    {% endif %}
+    {{ chip('totp-badge', 'Two-factor',
+            'On' if totp_enabled else ('Setup waiting' if totp_pending else 'Off'),
+            'ok' if totp_enabled else ('warn' if totp_pending else '')) }}
+    {{ chip('sum-services', 'Services',
+            (providers|length ~ (' of 2 linked' if alexa_access_enabled else ' linked')) if providers else 'None linked',
+            'ok' if providers|length == 2 else ('warn' if providers else '')) }}
+    {{ chip('sum-devices', 'Devices',
+            'This one only' if sessions|length <= 1 else (sessions|length ~ ' signed in'),
+            '') }}
+  </ul>
+
+  <div class="account-shell">
+    <nav class="section-nav" aria-label="Account sections">
+      <a href="#panel-profile">Account</a>
+      <a href="#panel-providers">Services</a>
+      <a href="#panel-sessions">Devices</a>
+    </nav>
+
+    <div class="account-panes">
+      <div class="note-stack" id="notes" role="status" aria-live="polite"></div>
+
+      <!-- ------------------------------------------------------ 1. account -->
+      {# A summary, not a form: three facts, each ending in the buttons that change
+         it. Every button opens the popup that owns its steps, so no panel on this
+         page carries a password box. They are real links -- see the note at the top
+         of the file. #}
+      <section class="panel" id="panel-profile" tabindex="-1" aria-labelledby="title-profile">
+        <h3 id="title-profile">Sign-in details</h3>
+
+        {% if must_change_password %}
+          <p class="note warn" id="must-change-note">This account was created with a password
+            you did not choose. Open <strong>Change password</strong> and set your own.</p>
+        {% endif %}
+
+        <div class="state-line">
+          <span class="label">Username</span>
+          <span class="mono">@{{ username }}</span>
+        </div>
+        <div class="state-line">
+          <span class="label">Email</span>
+          <span class="prov-cell">
+            <span class="mono value" id="profile-email">{{ email or 'No email address' }}</span>
+            <a class="tiny-link" href="/account?step=email#panel-profile"
+               data-dialog="dialog-email">Change</a>
+          </span>
+        </div>
+
+        <div class="state-line">
+          <span class="label">Password</span>
+          <span class="prov-cell">
+            <a class="tiny-link" href="/account?step=password#panel-profile"
+               data-dialog="dialog-password" data-view="change">Change password</a>
+            <a class="tiny-link" href="/account?step=reset#panel-profile"
+               data-dialog="dialog-password" data-view="reset">Reset password</a>
+          </span>
+        </div>
+
+        <div class="state-line">
+          <span class="label">Two-factor
+            <span class="badge {{ 'ok' if totp_enabled else ('warn' if totp_pending else '') }}"
+                  id="totp-state">{{ 'On' if totp_enabled else ('Setup waiting' if totp_pending else 'Off') }}</span>
+          </span>
+          <span class="prov-cell">
+            <a class="tiny-link" id="totp-change-link" href="/account?step=totp#panel-profile"
+               data-dialog="dialog-totp"
+               data-view="{{ 'enroll' if totp_pending else 'change' }}">{{ 'Finish setup' if totp_pending else ('Change authenticator' if totp_enabled else 'Turn on authenticator') }}</a>
+            <a class="tiny-link destructive" id="totp-remove-link"
+               href="/account?step=totp#panel-profile" data-dialog="dialog-totp"
+               data-view="remove" {{ '' if totp_enabled else 'hidden' }}>Remove authenticator</a>
+          </span>
+        </div>
+
+        {# The code the email carries is typed here, not clicked: a link in a message is
+           something a stranger with access to the mailbox can follow unseen. Both the
+           code box and the resend control live in this one form, so an account with a
+           confirmed address shows no verification furniture at all. #}
+        <form id="form-verify-code" class="inline-form" autocomplete="off"
+              {{ '' if verification_pending else 'hidden' }}>
+          <div class="state-line">
+            <span class="label">Email verification</span>
+            <span class="prov-cell">
+              <button class="tiny" id="resend-verify" type="button">Send a new code</button>
+            </span>
+          </div>
+          <label for="email_code">Verification code</label>
+          <input type="text" id="email_code" name="code" inputmode="numeric" pattern="[0-9 ]*"
+                 maxlength="7" autocomplete="one-time-code" spellcheck="false" placeholder="••••••">
+          <p class="field-help" id="verify-tries"
+             {{ '' if verification and verification.attempts_left is not none else 'hidden' }}>
+            {%- if verification and verification.attempts_left is not none -%}
+              {% if verification.attempts_left %}{{ verification.attempts_left }} tries left on
+                this code{% else %}This code is spent. Send a new one.{% endif %}
+            {%- endif -%}
+          </p>
+          <p class="field-error" id="err-verify-code" hidden></p>
+          <button class="primary" type="submit" data-submit>Confirm my email</button>
+        </form>
+
+        <div class="section-notes" id="notes-profile" role="status" aria-live="polite"></div>
+      </section>
+
+      <!-- ------------------------------------------- 2. linked services -->
+      <section class="panel" id="panel-providers" tabindex="-1" aria-labelledby="title-providers">
+        <h3 id="title-providers">Linked services</h3>
+        <ul class="service-list">
+          {% if alexa_access_enabled %}
+          <li class="service" id="service-amazon">
+            <div class="service-main">
+              <span class="service-name">Amazon / Alexa</span>
+              <span class="service-hint">Controls your Echo devices and room audio.</span>
+            </div>
+            <div class="prov-cell">
+              <span id="prov-amazon">{{ prov_badge(provider_map.get('amazon')) }}</span>
+              <a class="tiny-link" id="link-amazon" href="/accounts/amazon"
+                 data-connect="amazon"
+                 {{ 'hidden' if provider_map.get('amazon') else '' }}>Sign in</a>
+              <button class="tiny destructive" id="disconnect-amazon" type="button"
+                      {{ '' if provider_map.get('amazon') else 'hidden' }}>Disconnect</button>
+            </div>
+          </li>
+          {% endif %}
+          <li class="service" id="service-youtube">
+            <div class="service-main">
+              <span class="service-name">YouTube Music</span>
+              <span class="service-hint">Your playlists, likes and listening history.</span>
+            </div>
+            <div class="prov-cell">
+              <span id="prov-youtube">{{ prov_badge(provider_map.get('youtube')) }}</span>
+              <a class="tiny-link" id="link-youtube" href="/accounts/youtube"
+                 data-connect="youtube"
+                 {{ 'hidden' if provider_map.get('youtube') else '' }}>Sign in</a>
+              <button class="tiny destructive" id="disconnect-youtube" type="button"
+                      {{ '' if provider_map.get('youtube') else 'hidden' }}>Disconnect</button>
+            </div>
+          </li>
+        </ul>
+        <p class="field-help" id="providers-note" hidden></p>
+        <div class="section-notes" id="notes-providers" role="status" aria-live="polite"></div>
+      </section>
+
+      <!-- ---------------------------------------------------- 3. devices -->
+      <section class="panel" id="panel-sessions" tabindex="-1" aria-labelledby="title-sessions">
+        <h3 id="title-sessions">Devices</h3>
+        {# The only list on this page with no fixed length: an account signed in from a
+           phone, a laptop, a tablet and three browsers used to push everything below it
+           off the screen. So the rows scroll inside the panel and the panel keeps one
+           height whatever the number. #}
+        <ul class="devices" id="devices">
+          {% for row in sessions %}
+            <li>
+              <div class="device-main">
+                <div class="device-line">
+                  <div class="device-title">{{ row.device or 'Unlisted browser' }}</div>
+                  {%- if row.current %} <span class="this-one">This device</span>{% endif %}
+                </div>
+                <div class="device-meta">seen {{ row.seen_text }}{% if row.ip %} · from {{ row.ip }}{% endif %}
+                  · signed in {{ row.signed_in_text }}</div>
+                {# The header the label was read from, kept one step down the page:
+                   a name is a claim, and this is the evidence behind it. #}
+                {%- if row.device_ua %}<div class="device-ua">{{ row.device_ua }}</div>{% endif %}
+              </div>
+              {% if not row.current %}
+                <button class="tiny destructive" type="button" data-revoke="{{ row.id }}">Sign out</button>
+              {% endif %}
+            </li>
+          {% endfor %}
+        </ul>
+        <p class="field-help" id="devices-empty" {{ '' if sessions|length <= 1 else 'hidden' }}>
+          No other device is signed in.</p>
+        <p><button class="ghost destructive" id="signout-others" type="button"
+                   {{ 'disabled' if sessions|length <= 1 else '' }}>Sign out other devices</button></p>
+        <div class="section-notes" id="notes-devices" role="status" aria-live="polite"></div>
+      </section>
+    </div>
+  </div>
+
+  {# The one action that cannot be undone sits outside the grid, below everything
+     it erases, rather than as a fourth item in the rail. #}
+  <div class="danger-zone">
+    <button class="ghost destructive" type="button"
+       data-dialog="dialog-delete-warning">Delete account</button>
+  </div>
+
+  {# ------------------------------------------------------------ the popups
+     These sit outside .account-panes on purpose: the rail hides panels, and a
+     dialog inside a hidden panel would open into nothing. A native <dialog> gets
+     the focus trap, the Escape key and the top layer for free, and `data-autopen`
+     (never `open`) is what lets showModal() run without throwing. A dialog that is
+     not open is display:none, so nothing here costs the page any height. #}
+
+  <dialog class="account-dialog" id="dialog-password"
+          {{ 'data-autopen' if open_step in ('password', 'reset') else '' }}
+          data-default-view="{{ pw_view or 'change' }}"
+          {{ ('data-view="%s"' % pw_view) if pw_view else '' }}
+          aria-labelledby="dialog-password-title">
+    <div class="dialog-head">
+      <h2 id="dialog-password-title">Password</h2>
+      <button class="tiny" type="button" data-dialog-close aria-label="Close">&#10005;</button>
+    </div>
+    <div class="dialog-body">
+      <div class="dialog-block" data-dialog-block="change"
+           {{ 'hidden' if pw_view == 'reset' else '' }}>
+        <h3>Change password</h3>
+
+        <form id="form-password" autocomplete="off" data-password-form>
+          {% if email %}
+          <p class="field-help">Send a verification code to {{ email }}.</p>
+          <button class="tiny" type="button" id="change-send">Send a code</button>
+          <p class="note" id="change-code-note" role="status" hidden></p>
+          <label for="change-code">Verification code</label>
+          <input class="code-input" id="change-code" name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="6">
+          <p class="field-error" id="err-change-code" hidden></p>
+          {% endif %}
+          <div class="current-password-proof" {{ 'hidden' if email else '' }}>
+          <label>Current password
+            <input type="password" name="current_password" autocomplete="current-password">
+          </label>
+          <p class="field-error" id="err-current_password" hidden></p>
+          </div>
+
+          <label for="pw_new">New password</label>
+          <input type="password" id="pw_new" name="password" data-strength autocomplete="new-password">
+          <p class="pw-meter" data-meter-for="pw_new">
+            <span class="pw-meter-bar"></span><span class="pw-meter-text"></span>
+          </p>
+          <p class="field-help">At least {{ password_min_length }} characters, two of:
+            lowercase, uppercase, digit, symbol. Not your username.</p>
+          <p class="field-error" id="err-password" hidden></p>
+
+          <label for="pw_confirm">Type it again</label>
+          <input type="password" id="pw_confirm" name="confirm_password" autocomplete="new-password">
+          <p class="field-error" id="err-confirm_password" hidden></p>
+
+          <button class="primary" type="submit" data-submit>Change password</button>
+        </form>
+      </div>
+
+      <div class="dialog-block" data-dialog-block="reset"
+           {{ 'hidden' if pw_view == 'change' else '' }}>
+        <h3>Reset password</h3>
+        <p class="field-help">Do not know the current one? A six-digit code goes to
+          <strong>{{ email or 'the address on file' }}</strong>. Typing it proves the mailbox,
+          and then you choose a new password.</p>
+        <form id="form-password-reset" autocomplete="off">
+          <div class="state-line">
+            <span class="label">Email code</span>
+            <span class="prov-cell">
+              <button class="tiny" id="reset-send" type="button"
+                      {{ 'disabled' if not email else '' }}>Send a code</button>
+            </span>
+          </div>
+          <p class="note" id="reset-note" role="status" hidden></p>
+
+          <label for="reset_code">Code from your email</label>
+          <input class="code-input" type="text" id="reset_code" name="code" inputmode="numeric"
+                 pattern="[0-9 ]*" maxlength="7" autocomplete="one-time-code" spellcheck="false"
+                 placeholder="••••••">
+          <p class="field-error" id="err-reset_code" hidden></p>
+
+          <label for="reset_password">New password</label>
+          <input type="password" id="reset_password" name="password" data-strength
+                 autocomplete="new-password">
+          <p class="pw-meter" data-meter-for="reset_password">
+            <span class="pw-meter-bar"></span><span class="pw-meter-text"></span>
+          </p>
+          <p class="field-error" id="err-reset_password" hidden></p>
+
+          <label for="reset_confirm">Type it again</label>
+          <input type="password" id="reset_confirm" name="confirm_password" autocomplete="new-password">
+          <p class="field-error" id="err-reset_confirm" hidden></p>
+
+          <label class="check">
+            <input type="checkbox" name="sign_out_others" value="1" checked>
+            <span>Sign out every other device</span>
+          </label>
+          <p class="field-help">This browser stays signed in either way. Leave it ticked if the
+            password you lost may have been used somewhere else.</p>
+
+          <button class="primary" type="submit" data-submit>Set the new password</button>
+        </form>
+      </div>
+    </div>
+    <div class="dialog-foot">
+      <button class="tiny" type="button" data-dialog-close>Close</button>
+    </div>
+  </dialog>
+
+  <dialog class="account-dialog" id="dialog-email"
+          {{ 'data-autopen' if open_step == 'email' else '' }}
+          aria-labelledby="dialog-email-title">
+    <div class="dialog-head">
+      <h2 id="dialog-email-title">Change email address</h2>
+      <button class="tiny" type="button" data-dialog-close aria-label="Close">&#10005;</button>
+    </div>
+    <div class="dialog-body">
+      <div class="dialog-block">
+        <h3>Confirm your current email</h3>
+        {% if email %}
+          <p class="field-help">A six-digit code goes to <strong>{{ email }}</strong>.</p>
+          <p><button class="tiny" id="reauth-send" type="button"
+                     {{ 'data-autofocus' if not (reauth and reauth.attempts_left is not none) else '' }}>Send a code</button></p>
+          <p class="note" id="reauth-note" role="status" hidden></p>
+          <p class="field-help" id="reauth-tries"
+             {{ '' if reauth and reauth.attempts_left is not none else 'hidden' }}>
+            {%- if reauth and reauth.attempts_left is not none -%}
+              {% if reauth.attempts_left %}{{ reauth.attempts_left }} tries left on the code
+                already sent{% else %}That code is spent. Send a new one.{% endif %}
+            {%- endif -%}
+          </p>
+        {% else %}
+          <p class="field-help">This account has no email address yet, so there is nothing to
+            confirm. Set one in the next step with your password.</p>
+        {% endif %}
+      </div>
+
+      <div class="dialog-block">
+        <h3>2. Enter the new address</h3>
+        <form id="form-email-change" autocomplete="off">
+          {% if email %}
+            <label for="email_change_code">Code from your current address</label>
+            <input class="code-input" type="text" id="email_change_code" name="email_code"
+                   inputmode="numeric" pattern="[0-9 ]*" maxlength="7" autocomplete="one-time-code"
+                   spellcheck="false" placeholder="••••••"
+                   {{ 'data-autofocus' if reauth and reauth.attempts_left is not none else '' }}>
+            <p class="field-error" id="err-email_change_code" hidden></p>
+          {% endif %}
+
+          <label>Your password
+            <input type="password" name="current_password" autocomplete="current-password">
+          </label>
+          <p class="field-error" id="err-email_change_password" hidden></p>
+
+          <label for="profile_email">New email address</label>
+          <input type="email" id="profile_email" name="email" maxlength="254" value="{{ email }}">
+          <p class="field-error" id="err-new_email" hidden></p>
+
+          <button class="primary" type="submit" data-submit>Change the address</button>
+        </form>
+      </div>
+    </div>
+    <div class="dialog-foot">
+      <button class="tiny" type="button" data-dialog-close>Close</button>
+    </div>
+  </dialog>
+
+  <dialog class="account-dialog" id="dialog-totp"
+          {{ 'data-autopen' if open_step == 'totp' else '' }}
+          data-default-view="{{ 'enroll' if totp_pending else 'change' }}"
+          aria-labelledby="dialog-totp-title">
+    <div class="dialog-head">
+      <h2 id="dialog-totp-title">Two-factor sign-in
+        <span class="badge {{ 'ok' if totp_enabled else ('warn' if totp_pending else '') }}"
+              id="totp-dialog-state">{{ 'On' if totp_enabled else ('Setup waiting' if totp_pending else 'Off') }}</span>
+      </h2>
+      <button class="tiny" type="button" data-dialog-close aria-label="Close">&#10005;</button>
+    </div>
+    <div class="dialog-body">
+      <div class="dialog-block" id="totp-begin-block" data-dialog-block="change"
+           {{ 'hidden' if totp_pending else '' }}>
+        <h3 id="totp-begin-title">Verify your email</h3>
+        <form id="form-totp-begin" autocomplete="off">
+          <label>Your password
+            <input type="password" name="current_password" autocomplete="current-password">
+          </label>
+          <p class="field-error" id="err-totp_current_password" hidden></p>
+
+          <div class="state-line">
+            <span class="label" id="begin-email-address">{{ email }}</span>
+          </div>
+          <p class="note" id="totp-begin-note" role="status" hidden></p>
+          <div class="begin-code-slot">
+            <button class="primary" id="reauth-send-begin" type="button">Send a code</button>
+            <div id="begin-otp-fields" hidden>
+              <label for="begin_email_code">Enter OTP</label>
+              <div class="begin-otp-row">
+                <input class="code-input" type="text" id="begin_email_code" name="email_code"
+                       inputmode="numeric" pattern="[0-9 ]*" maxlength="7" autocomplete="one-time-code"
+                       spellcheck="false" placeholder="••••••">
+                <button class="tiny" id="reauth-resend-begin" type="button" data-rest-label="Resend">Resend</button>
+              </div>
+            </div>
+          </div>
+          <p class="field-error" id="err-begin_code" hidden></p>
+
+          <button class="primary" type="submit" data-submit id="totp-begin-submit">
+            {{ 'Set up the new app' if totp_enabled else 'Start setup' }}</button>
+        </form>
+      </div>
+
+      <div class="enroll" id="enroll" data-dialog-block="enroll"
+           {{ '' if totp_pending else 'hidden' }}>
+        <div class="enroll-grid">
+          <div class="qr-frame" id="qr-frame" {{ '' if totp_pending else 'hidden' }}>
+            <img id="qr-img" alt="Two-factor setup barcode" width="148" height="148">
+          </div>
+          <div class="enroll-steps">
+            <ol>
+              <li>Add a setup key in your authenticator app, or scan the code.</li>
+              <li>Otherwise type the secret below, with Time-based (TOTP) selected.</li>
+              <li>Enter the six-digit code the app shows to confirm.</li>
+            </ol>
+            <p class="secret-code" id="enroll-secret" hidden></p>
+            <p class="qr-fallback" id="enroll-issuer">
+              {%- if totp_pending -%}
+                A setup is already waiting. Scan the code or confirm it, or cancel and start again.
+              {%- endif -%}
+            </p>
+          </div>
+        </div>
+        <form id="form-totp-confirm" autocomplete="off">
+          <label for="totp_code">Code from your app</label>
+          <input class="code-input" type="text" id="totp_code" name="code" inputmode="numeric"
+                 autocomplete="one-time-code" maxlength="6" pattern="[0-9]{6}">
+          <p class="field-error" id="err-totp-code" hidden></p>
+          <div class="row">
+            <button class="primary" type="submit" data-submit>Confirm</button>
+            <button class="ghost" type="button" id="totp-cancel">Cancel setup</button>
+          </div>
+        </form>
+      </div>
+
+      <div class="dialog-block" id="totp-disable-block" data-dialog-block="remove"
+           {{ '' if totp_enabled else 'hidden' }}>
+        <h3>Turn it off</h3>
+        <p class="field-help">Verify your email code, then confirm with your password. You will receive an email when two-factor sign-in is removed.</p>
+        <form id="form-totp-disable" autocomplete="off">
+          <label>Password
+            <input type="password" name="current_password" autocomplete="current-password">
+          </label>
+          <p class="field-error" id="err-disable_password" hidden></p>
+
+          <div class="state-line">
+            <span class="label">Email code</span>
+            <span class="prov-cell">
+              <button class="tiny" id="reauth-send-totp" type="button">Send a code</button>
+            </span>
+          </div>
+
+          <label for="disable_email_code">Code from your email
+            <span class="optional">required</span></label>
+          <input required class="code-input" type="text" id="disable_email_code" name="email_code"
+                 inputmode="numeric" pattern="[0-9 ]*" maxlength="7" autocomplete="one-time-code"
+                 spellcheck="false" placeholder="••••••">
+          <p class="field-error" id="err-disable_code" hidden></p>
+
+          <button class="ghost destructive" type="submit" data-submit>Turn two-factor off</button>
+        </form>
+      </div>
+      <p class="note" id="totp-note" role="status" hidden></p>
+    </div>
+    <div class="dialog-foot">
+      <button class="tiny" type="button" data-dialog-close>Close</button>
+    </div>
+  </dialog>
+
+  {# Ending this browser's session is one question, asked once. The confirm control
+     keeps the real href, so it leaves by the route the header link always used. #}
+  <dialog class="account-dialog" id="dialog-signout"
+          aria-labelledby="dialog-signout-title">
+    <div class="dialog-head">
+      <h2 id="dialog-signout-title">Sign out of this browser?</h2>
+      <button class="tiny" type="button" data-dialog-close aria-label="Close">&#10005;</button>
+    </div>
+    <div class="dialog-body">
+      <p class="field-help">The next visit to this browser asks you to sign in again.
+        Your other devices stay signed in.</p>
+    </div>
+    <div class="dialog-foot">
+      <button class="tiny" type="button" data-dialog-close>Cancel</button>
+      <a class="tiny-link destructive" id="signout-confirm" href="/logout/">Sign out</a>
+    </div>
+  </dialog>
+
+  {# One question in front of everything else that cannot be undone: the two
+     provider disconnects, signing out every other device, and signing out one
+     row of them. The sentence belongs to the trigger and is written in the
+     popup when it opens, so the same control never asks for the same thing
+     twice. #}
+  <dialog class="account-dialog" id="dialog-confirm"
+          aria-labelledby="dialog-confirm-title"
+          aria-describedby="dialog-confirm-message">
+    <div class="dialog-head">
+      <h2 id="dialog-confirm-title"></h2>
+      <button class="tiny" type="button" data-dialog-close aria-label="Close">&#10005;</button>
+    </div>
+    <div class="dialog-body">
+      <p class="field-help" id="dialog-confirm-message"></p>
+    </div>
+    <div class="dialog-foot">
+      <button class="tiny" type="button" data-dialog-close>Cancel</button>
+      <button class="ghost destructive" type="button" id="dialog-confirm-yes"></button>
+    </div>
+  </dialog>
+
+  {# Connecting a service runs the provider's own sign-in in a background browser,
+     so this popup asks only for what must come from the person: the credentials,
+     then a code, a captcha or a choice if the provider asks for one. The trigger
+     links keep /accounts/<provider> as their href, so without the script they
+     still go to that page and the flow there is unchanged. #}
+  <dialog class="account-dialog" id="dialog-connect"
+          aria-labelledby="dialog-connect-title">
+    <div class="dialog-head">
+      <h2 id="dialog-connect-title">Connect a service</h2>
+      <button class="tiny" type="button" data-dialog-close aria-label="Close">&#10005;</button>
+    </div>
+    <div class="dialog-body">
+      <p class="field-help" id="connect-intro"></p>
+
+      <div id="connect-setup">
+        <form id="connect-credentials" autocomplete="on">
+          <label for="connect_email" id="connect-email-label">Email</label>
+          <input id="connect_email" name="email" type="email" autocomplete="username"
+                 required spellcheck="false" autocapitalize="none">
+          <label for="connect_password">Password</label>
+          <input id="connect_password" name="password" type="password"
+                 autocomplete="current-password" required>
+          <button class="primary" type="submit" id="connect-submit">Continue</button>
+        </form>
+        <p class="field-help" id="connect-hint"></p>
+      </div>
+
+      <div id="connect-steps" hidden>
+        <div id="connect-code-panel" hidden>
+          <p class="field-help" id="connect-code-message"></p>
+          <p class="field-help" id="connect-code-hint" hidden></p>
+          <label for="connect_code" id="connect-code-label">Code</label>
+          <input id="connect_code" autocomplete="one-time-code" autocapitalize="characters"
+                 spellcheck="false" maxlength="16">
+          <button class="primary" id="connect-code-submit" type="button">Verify</button>
+          <button class="tiny" id="connect-code-different" type="button" hidden>
+            Different verification method</button>
+        </div>
+
+        <div id="connect-captcha-panel" hidden>
+          <p class="field-help" id="connect-captcha-message"></p>
+          <div class="connect-captcha-frame" id="connect-captcha-frame">
+            <img class="connect-captcha" id="connect_captcha_image"
+                 alt="Security check picture" width="308" height="90">
+          </div>
+          <p class="field-help" id="connect-captcha-hint" hidden></p>
+          <button class="tiny" id="connect-captcha-clear" type="button" hidden>
+            Clear selection</button>
+          <label for="connect_captcha" id="connect-captcha-label">
+            Type the characters you see</label>
+          <input id="connect_captcha" autocomplete="off" autocapitalize="none" spellcheck="false">
+          <button class="primary" id="connect-captcha-submit" type="button">Verify</button>
+        </div>
+
+        <div id="connect-method-panel" hidden>
+          <p class="field-help" id="connect-method-message"></p>
+          <div id="connect-method-options"></div>
+          <button class="primary" id="connect-method-submit" type="button">Continue</button>
+        </div>
+
+        <div id="connect-choice-panel" hidden>
+          <p class="field-help" id="connect-choice-message"></p>
+          <div id="connect-choice-options"></div>
+          <label id="connect-choice-manual-label" for="connect_choice_manual" hidden>
+            Enter the number of your choice</label>
+          <input id="connect_choice_manual" type="number" min="0" step="1"
+                 autocomplete="off" hidden>
+          <button class="primary" id="connect-choice-submit" type="button">Continue</button>
+        </div>
+
+        <div id="connect-approval-panel" hidden>
+          <p class="field-help" id="connect-approval-message"></p>
+          <button class="primary" id="connect-approval-check" type="button">
+            I approved it — continue</button>
+          <button class="tiny" id="connect-approval-different" type="button" hidden>
+            Different verification method</button>
+        </div>
+      </div>
+
+      <p class="connect-working" id="connect-working" role="status" aria-live="polite"
+         hidden>
+        <span class="connect-spinner" aria-hidden="true"></span>
+        <span id="connect-working-text"></span>
+      </p>
+      <p class="connect-status" id="connect-status" role="status" aria-live="polite"></p>
+      <button class="tiny" type="button" id="connect-retry" hidden>Start over</button>
+    </div>
+    <div class="dialog-foot">
+      <button class="tiny" type="button" data-dialog-close>Cancel</button>
+    </div>
+  </dialog>
+
+  {# Deleting is four questions, each in its own popup: who you are, whether you
+     mean it, the code from the mailbox, and one last confirmation. #}
+  <dialog class="account-dialog" id="dialog-delete-warning"
+          {{ 'data-autopen' if open_step == 'delete' else '' }} aria-labelledby="delete-warning-title">
+    <div class="dialog-head"><h2 id="delete-warning-title">Delete this account?</h2></div>
+    <div class="dialog-body"><p>This permanently removes your account, playlists, likes and connected services. It cannot be undone.</p></div>
+    <div class="dialog-foot">
+      <button class="tiny" type="button" data-dialog-close>Keep my account</button>
+      <button class="ghost destructive" type="button" id="delete-warning-continue">Continue</button>
+    </div>
+  </dialog>
+  <dialog class="account-dialog" id="dialog-delete-check"
+          aria-labelledby="dialog-delete-check-title">
+    <div class="dialog-head">
+      <h2 id="dialog-delete-check-title">Delete this account</h2>
+      <button class="tiny" type="button" data-dialog-close aria-label="Close">&#10005;</button>
+    </div>
+    <div class="dialog-body">
+      <form id="form-delete-check" autocomplete="off">
+        <label>Your password
+          <input type="password" name="current_password" autocomplete="current-password">
+        </label>
+
+        <label for="del_username">Your username</label>
+        <input type="text" id="del_username" name="confirm_username"
+               autocomplete="off" autocapitalize="none" spellcheck="false">
+      </form>
+    </div>
+    <div class="dialog-foot">
+      <button class="tiny" type="button" data-dialog-close>Cancel</button>
+      <button class="ghost destructive" type="submit" form="form-delete-check"
+              data-submit>Continue</button>
+    </div>
+  </dialog>
+
+  <dialog class="account-dialog" id="dialog-delete-confirm"
+          data-has-email="{{ '1' if email else '0' }}"
+          aria-labelledby="dialog-delete-confirm-title">
+    <div class="dialog-head">
+      <h2 id="dialog-delete-confirm-title">Delete this account?</h2>
+      <button class="tiny" type="button" data-dialog-close aria-label="Close">&#10005;</button>
+    </div>
+    <div class="dialog-body">
+      <p class="field-help">This cannot be undone, and an administrator cannot recover it. It
+        removes @{{ username }}, its queue and playlists, the {% if alexa_access_enabled %}Amazon and {% endif %}YouTube sign-ins,
+        the saved cookies and browser profile on this server, and every signed-in device.</p>
+      {% if email %}
+        <p class="field-help">A six-digit code goes to <strong>{{ email }}</strong> before
+          anything is deleted.</p>
+      {% endif %}
+    </div>
+    <div class="dialog-foot">
+      <button class="tiny" type="button" data-dialog-close>Cancel</button>
+      <button class="ghost destructive" type="button" id="delete-confirm-yes">Yes, continue</button>
+    </div>
+  </dialog>
+
+  {% if email %}
+    <dialog class="account-dialog" id="dialog-delete-code"
+            aria-labelledby="dialog-delete-code-title">
+      <div class="dialog-head">
+        <h2 id="dialog-delete-code-title">Confirm with your email</h2>
+        <button class="tiny" type="button" data-dialog-close aria-label="Close">&#10005;</button>
+      </div>
+      <div class="dialog-body">
+        <p class="field-help">Send a code to <strong>{{ email }}</strong> when you are ready.</p>
+        <form id="form-delete-code" autocomplete="off">
+          <button class="ghost" type="button" id="delete-send-code">Send OTP</button>
+          <div id="delete-code-fields" hidden>
+          <label for="delete_code">Code from your email</label>
+          <input class="code-input" type="text" id="delete_code" name="code" inputmode="numeric"
+                 pattern="[0-9 ]*" maxlength="7" autocomplete="one-time-code" spellcheck="false"
+                 placeholder="••••••" required>
+          </div>
+          <p class="note" id="del-code-note" role="status" hidden></p>
+        </form>
+      </div>
+      <div class="dialog-foot">
+        <button class="tiny" type="button" data-dialog-close>Cancel</button>
+        <button class="ghost destructive" type="submit" form="form-delete-code"
+                data-submit>Continue</button>
+      </div>
+    </dialog>
+  {% endif %}
+
+  <dialog class="account-dialog" id="dialog-delete-final"
+          aria-labelledby="dialog-delete-final-title">
+    <div class="dialog-head">
+      <h2 id="dialog-delete-final-title">Delete permanently</h2>
+      <button class="tiny" type="button" data-dialog-close aria-label="Close">&#10005;</button>
+    </div>
+    <div class="dialog-body">
+      <p class="field-help">One last confirmation. @{{ username }} and everything on it is
+        erased the moment you press the button below, and there is no way back.</p>
+      <p class="note" id="del-final-note" role="status" hidden></p>
+    </div>
+    <div class="dialog-foot">
+      <button class="tiny" type="button" data-dialog-close>Cancel</button>
+      <button class="ghost destructive" type="button" id="delete-final-yes">Delete account</button>
+    </div>
+  </dialog>
+</main>
+<script src="{{ asset_url('js/selfservice.js') }}" defer></script>
+<script src="{{ asset_url('js/account.js') }}" defer></script>
+<script src="{{ asset_url('js/account-connect.js') }}" defer></script>
+<script defer src="{{ asset_url('js/auth-ui.js') }}"></script>
+</body>
+</html>

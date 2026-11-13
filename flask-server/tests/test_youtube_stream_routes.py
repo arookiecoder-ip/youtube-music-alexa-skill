@@ -20,7 +20,7 @@ class StreamRoutes(unittest.TestCase):
         self.upstream=Upstream()
         self.relay=Relay(self.upstream,b'audio',self.release)
         for name,value in [('enabled',True),('open',mock.Mock(return_value=self.relay))]:
-            patch=mock.patch.object(server._youtube_stream,name,value);patch.start();self.addCleanup(patch.stop)
+            patch=mock.patch.object(server._youtube_stream_for(),name,value);patch.start();self.addCleanup(patch.stop)
         self.addCleanup(self.relay.close)
 
     def test_audio_wait_hint_streams_without_disk_or_echo_side_effects(self):
@@ -32,7 +32,7 @@ class StreamRoutes(unittest.TestCase):
 
     def test_unauthorized_requests_never_resolve_media(self):
         r=self.client.get('/audio/?video_id='+VID)
-        self.assertEqual(r.status_code,401);server._youtube_stream.open.assert_not_called()
+        self.assertEqual(r.status_code,401);server._youtube_stream_for().open.assert_not_called()
 
     def test_head_releases_upstream_and_preserves_length(self):
         r=self.client.head('/audio/?video_id='+VID,headers=self.headers)
@@ -42,10 +42,10 @@ class StreamRoutes(unittest.TestCase):
 
     def test_range_and_if_range_are_forwarded_to_relay(self):
         r=self.client.get('/audio/?video_id='+VID,headers={**self.headers,'Range':'bytes=3-','If-Range':'"same"'})
-        server._youtube_stream.open.assert_called_once_with(VID,method='GET',byte_range='bytes=3-',if_range='"same"');r.close()
+        server._youtube_stream_for().open.assert_called_once_with(VID,method='GET',byte_range='bytes=3-',if_range='"same"');r.close()
 
     def test_upstream_failure_is_structured_and_retryable(self):
-        server._youtube_stream.open.side_effect=StreamError('resolve_timeout')
+        server._youtube_stream_for().open.side_effect=StreamError('resolve_timeout')
         r=self.client.get('/audio/?video_id='+VID,headers=self.headers)
         self.assertEqual(r.status_code,503);self.assertTrue(r.json['error']['retryable'])
         self.assertEqual(r.headers['Retry-After'],'2');self.assertNotIn('googlevideo',r.get_data(as_text=True))
@@ -54,13 +54,52 @@ class StreamRoutes(unittest.TestCase):
         with mock.patch.object(server,'_ensure_audio_ready_for_play') as prepare:
             r=self.client.get('/audio/?video_id='+VID+'&prefetch=1',headers=self.headers)
             self.assertEqual(r.status_code,202);prepare.assert_called_once_with(VID,prefetch=True)
-            server._youtube_stream.open.assert_not_called()
+            server._youtube_stream_for().open.assert_not_called()
 
     def test_preparation_never_schedules_file_download(self):
-        with mock.patch.object(server._audio_jobs,'submit') as submit, mock.patch.object(server._youtube_stream,'resolve') as resolve:
+        with mock.patch.object(server._audio_jobs,'submit') as submit, mock.patch.object(server._youtube_stream_for(),'resolve') as resolve:
             server._ensure_audio_ready_for_play(VID)
             submit.call_args.args[1]()
             resolve.assert_called_once_with(VID)
+
+    def test_paused_same_song_cannot_be_reconfirmed_by_old_stream(self):
+        with server.app.test_request_context('/proxy/?video_id='+VID), \
+                mock.patch.dict(server._now_playing, {'video_id': VID, 'alexa_intent_at': 10}), \
+                mock.patch.object(server, '_confirm_stream_delivery') as confirm:
+            response = server._serve_youtube_stream(VID, confirm=True)
+            # Pause can arrive while the upstream is still preparing its body.
+            server._now_playing.update(playing=False, alexa_intent_at=11)
+            self.assertEqual(list(response.response), [])
+            response.close()
+            confirm.assert_not_called()
+        self.release.assert_called_once()
+
+    def test_pause_does_not_truncate_an_already_started_audio_response(self):
+        with server.app.test_request_context('/proxy/?video_id='+VID), \
+                mock.patch.dict(server._now_playing, {'video_id': VID, 'alexa_intent_at': 10}), \
+                mock.patch.object(server, '_confirm_stream_delivery') as confirm:
+            response = server._serve_youtube_stream(VID, confirm=True)
+            chunks = iter(response.response)
+            self.assertEqual(next(chunks), b'audio')
+            server._now_playing.update(playing=False, alexa_intent_at=11)
+            self.assertEqual(b''.join(chunks), b'123456789012')
+            response.close()
+            confirm.assert_called_once_with(VID)
+        self.release.assert_called_once()
+
+    def test_pause_while_upstream_opens_cannot_be_adopted_as_new_intent(self):
+        def opened(*args, **kwargs):
+            server._now_playing.update(playing=False, alexa_intent_at=11)
+            return self.relay
+        server._youtube_stream_for().open.side_effect = opened
+        with server.app.test_request_context('/proxy/?video_id='+VID), \
+                mock.patch.dict(server._now_playing, {'video_id': VID, 'alexa_intent_at': 10}), \
+                mock.patch.object(server, '_confirm_stream_delivery') as confirm:
+            response = server._serve_youtube_stream(VID, confirm=True)
+            self.assertEqual(list(response.response), [])
+            response.close()
+            confirm.assert_not_called()
+        self.release.assert_called_once()
 
     def test_closed_uniterated_response_releases_stream(self):
         with server.app.test_request_context('/audio/?video_id='+VID):
@@ -77,18 +116,18 @@ class StreamRoutes(unittest.TestCase):
             self.assertEqual(b''.join(r.response),b'');r.close();confirm.assert_not_called()
 
     def test_explicit_download_streams_with_an_attachment_filename(self):
-        before=server._youtube_stream.current.video
+        before=server._youtube_stream_for().current.video
         r=self.client.get('/audio/?video_id='+VID,headers={**self.headers,'X-MusicBox-Download':'1'})
         self.assertEqual(r.status_code,200)
         self.assertIn('attachment',r.headers['Content-Disposition'])
         self.assertTrue(r.data.startswith(b'audio'));r.close()
-        self.assertEqual(server._youtube_stream.current.video,before)
+        self.assertEqual(server._youtube_stream_for().current.video,before)
 
 
 
     def test_echo_stream_closes_after_same_song_handoff_without_generation_change(self):
         owner={'playback_output':'alexa','output_token':'echo-token'}
-        with server.app.test_request_context('/proxy/?video_id='+VID), mock.patch.object(server._playback_output,'snapshot',side_effect=lambda:dict(owner)), mock.patch.object(server,'_confirm_stream_delivery'), mock.patch.object(server._youtube_stream.current,'activate'):
+        with server.app.test_request_context('/proxy/?video_id='+VID), mock.patch.object(server._playback_output,'snapshot',side_effect=lambda:dict(owner)), mock.patch.object(server,'_confirm_stream_delivery'), mock.patch.object(server._youtube_stream_for().current,'activate'):
             response=server._serve_youtube_stream(VID,confirm=True,cancellable=True)
             chunks=iter(response.response)
             self.assertEqual(next(chunks),b'audio')

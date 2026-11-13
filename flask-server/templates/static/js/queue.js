@@ -1625,6 +1625,7 @@ async function playCollection(items, options) {
       serial: serial,
       playlist_id: playlistId || undefined,
       queue_items: playlistId ? undefined : queueItems,
+      brief_response: true,
       target_video_id: startVideoId || undefined,
       start_index: requestedStartIndex,
       shuffle: !!options.shuffle,
@@ -1696,6 +1697,7 @@ async function addCollectionToQueue(items, options) {
       position: 'last',
       playlist_id: playlistId || undefined,
       queue_items: playlistId ? undefined : queueItems,
+      brief_response: true,
     });
     const count = Number(data && data.added_count) || queueItems.length;
     const skipped = Number(data && data.skipped_count) || 0;
@@ -2005,6 +2007,7 @@ function scheduleHistoryRefresh() {
   // popstate falls through to the router's now-playing branch and minimizes
   // the player along with the queue.
   let queueHistoryBackPending = false;
+  let queueModalOpener = null;
 
   function openQueueModal(options) {
     renderQueueModal();
@@ -2042,6 +2045,10 @@ function scheduleHistoryRefresh() {
       if (window.matchMedia('(max-width: 899px)').matches) scrollPlayingQueueRowToTop();
     }
     if (window.syncModalScrollLock) syncModalScrollLock();
+    // A sheet that appears under a tap but leaves focus on the page behind it
+    // drops a keyboard reader halfway down the document.
+    queueModalOpener = document.activeElement;
+    if (modal) modal.focus({ preventScroll: true });
   }
 
   function finishInlineQueueProgress(shouldOpen) {
@@ -2085,11 +2092,20 @@ function scheduleHistoryRefresh() {
       modal.style.transition = '';
       modal.style.transform = '';
     }
+    if (queueModalOpener && document.contains(queueModalOpener)) queueModalOpener.focus({ preventScroll: true });
+    queueModalOpener = null;
     if (window.syncModalScrollLock) syncModalScrollLock();
   }
 
   const closeBtn = document.getElementById('queue-modal-close');
   if (closeBtn) closeBtn.addEventListener('click', closeQueueModal);
+  document.addEventListener('keydown', (event) => {
+    if (event.key !== 'Escape' || !overlay.classList.contains('open')) return;
+    // A menu or dialog sitting on top of the sheet answers Escape first.
+    if (document.querySelector('dialog[open], .history-modal-overlay.open, .queue-more-menu.open')) return;
+    event.preventDefault();
+    closeQueueModal();
+  });
   const closeFromBackdrop = (event) => {
     if (event.target === overlay) {
       event.preventDefault();

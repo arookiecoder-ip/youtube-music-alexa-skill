@@ -1,0 +1,20 @@
+{% extends "admin/base.html" %}
+{% block body %}
+<div class="login-shell">
+  <div class="login-card">
+    <div class="login-brand">
+      <span class="eq-icon" aria-hidden="true"><span></span><span></span><span></span><span></span><span></span></span>
+      <div>
+        <div class="brand-name">{{ mu_config.app_name }}</div>
+        <div class="brand-sub">Account</div>
+      </div>
+    </div>
+    <div class="card center">
+      <div class="result-mark mb-4">✓</div>
+      <h1>{{ heading }}</h1>
+      <p class="muted mt-2 mb-5">{{ message }}</p>
+      <a class="btn primary" href="{{ action_url }}">{{ action_label }}</a>
+    </div>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,1645 @@
+from typing import Dict, List, Optional, Tuple
+from ask_sdk_model import Response
+from ask_sdk_model.interfaces.audioplayer import PlayDirective, PlayBehavior, AudioItem, Stream, AudioItemMetadata, StopDirective, ClearQueueDirective, ClearBehavior
+from ask_sdk_core.handler_input import HandlerInput
+from ask_sdk_model.services.directive import (SendDirectiveRequest, Header, SpeakDirective)
+import logging, random, urllib3, json, data, difflib, uuid, time
+from ask_sdk_model.interfaces import display
+from urllib.parse import urlencode, urlsplit
+from skill_security import SkillAuthorizationError, scoped_token
+from xml.sax.saxutils import escape
+from dacite import from_dict
+from dataclasses import asdict
+from decimal import Decimal
+from models import player_models
+import re
+
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+http = urllib3.PoolManager()
+
+# Sliding playlist window. The whole persisted state lives in one DynamoDB item
+# (hard 400KB cap), so the full 1000-track playlist can never be stored — a
+# playlist that size made every save throw and killed playback at the first
+# auto-advance. Instead we hold a bounded window of tracks and page the rest
+# from the server (/queue_tracks/, seeded by our last track's video_id) as
+# playback nears the window's end; trim_window drops already-played tracks
+# beyond a small "previous" allowance to keep the item bounded forever.
+_QUEUE_BATCH = 75        # tracks fetched per window request/extension
+_MAX_STORED_TRACKS = 150  # hard bound on tracks kept in DynamoDB
+_KEEP_BEHIND = 25        # played tracks kept for "previous" before trimming
+
+# Tracks that start with less than this much remaining get their next stream
+# enqueued immediately at PlaybackStarted. Alexa only sends the
+# PlaybackNearlyFinished prompt when playback *crosses into* the final ~30s
+# window; a resume/seek that starts inside it never gets the prompt, so the
+# next track would never be queued and playback would stop at the end. Kept
+# above Alexa's threshold so the two paths overlap safely (the
+# next_stream_enqueued guard makes the later prompt a no-op).
+NEARLY_FINISHED_WINDOW_MS = 40000
+
+# A web resume arms the exact track+offset it is showing (kind='resume', peeked
+# -- never consumed -- by Controller.resume below). Only arms this fresh may
+# redirect a resume: long enough to cover the voice-command round-trip plus the
+# server's one retry, short enough that yesterday's intent can never hijack
+# today's playback. Well inside the server's 60s arm TTL.
+RESUME_ARM_MAX_AGE_S = 30.0
+
+
+def _window_playlist(playlist: List, index: int) -> Tuple[List, int]:
+    """Clamp an incoming playlist to the storable window around index,
+    returning (windowed_playlist, adjusted_index). Defensive: the server
+    already windows its responses, but an older server returns everything."""
+    if len(playlist) <= _MAX_STORED_TRACKS:
+        return playlist, index
+    start = max(0, index - _KEEP_BEHIND)
+    return playlist[start:start + _MAX_STORED_TRACKS], index - start
+
+
+_TOKEN_SEPARATOR = '|'
+
+def _make_token(index: int, video_id: str, revision: str = None) -> str:
+    """Composite AudioPlayer token encoding the logical queue index. The old
+    token was the bare video_id, so a repeated song was indistinguishable from
+    an earlier occurrence and get_calculated_index()'s .index() picked the
+    first match -- the queue then got stuck repeating that song."""
+    return f"{int(index)}{_TOKEN_SEPARATOR}{video_id}" + (f"|{revision}" if revision else "")
+
+
+def _parse_token(token: str) -> Tuple[Optional[int], str]:
+    """Return (logical_index, video_id) for a composite token, or
+    (None, token) when the token is a legacy bare video_id."""
+    if token and _TOKEN_SEPARATOR in token:
+        head, _, video_id = token.partition(_TOKEN_SEPARATOR)
+        try:
+            return int(head), video_id.partition(_TOKEN_SEPARATOR)[0]
+        except (TypeError, ValueError):
+            pass
+    return None, token
+
+
+def _coerce_decimals(value):
+    """Recursively convert DynamoDB's Decimal (boto3's persistence adapter
+    converts all numbers on save) back to int/float so dacite's strict typing
+    doesn't reject persisted data on read."""
+    if isinstance(value, Decimal):
+        as_int = int(value)
+        return as_int if as_int == value else float(value)
+    if isinstance(value, dict):
+        return {k: _coerce_decimals(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_coerce_decimals(v) for v in value]
+    return value
+
+# Leading token the web remote prepends to play queries so app-initiated
+# playback runs silently. Must match AlexaRemote.SILENT_PLAY_MARKER on the
+# Flask side. Detected case-insensitively as a leading whole word (Alexa's
+# NLU lowercases and may add/trim surrounding whitespace).
+SILENT_PLAY_MARKER = "silentmode"
+_SILENT_MARKER_RE = re.compile(rf'^\s*{SILENT_PLAY_MARKER}\b[\s,]*', re.IGNORECASE)
+DIRECT_VIDEO_MARKER = "silentid"
+_DIRECT_VIDEO_RE = re.compile(
+    rf'^\s*{DIRECT_VIDEO_MARKER}\b[\s,:-]*([a-f0-9]{{12,}})(?:\s+([a-f0-9]+))?\s*$',
+    re.IGNORECASE)
+
+# Short, NLU-safe phrase the web remote sends for a direct (armed) play. The
+# exact video id is armed server-side and fetched via /armed_play/, so we only
+# need to recognise this phrase — plain words survive Alexa's speech NLU intact,
+# unlike the hex id the DIRECT_VIDEO_MARKER path relied on. Matched loosely
+# (NLU may drop "the", add punctuation, or change case).
+_APP_SELECTION_RE = re.compile(r'^\s*(?:the\s+)?app\s+selection\s*$', re.IGNORECASE)
+
+
+def is_app_selection_request(query: str) -> bool:
+    """True when the query is the web remote's armed-play trigger phrase."""
+    return bool(query) and bool(_APP_SELECTION_RE.match(query))
+
+def strip_silent_marker(query: str) -> Tuple[bool, str]:
+    """Return (is_silent, cleaned_query). If the query starts with the silent
+    marker, strip it and report True; otherwise pass the query through."""
+    if not query:
+        return False, query
+    cleaned, n = _SILENT_MARKER_RE.subn('', query)
+    if n:
+        return True, cleaned.strip()
+    return False, query
+
+def direct_play_request(query: str):
+    if not query:
+        return None
+    match = _DIRECT_VIDEO_RE.match(query)
+    if not match:
+        return None
+    video_id = decode_hex(match.group(1))
+    if not video_id or not re.fullmatch(r'[A-Za-z0-9_-]{6,}', video_id):
+        return None
+    offset_ms = 0
+    if match.group(2):
+        try:
+            offset_ms = max(0, int(match.group(2), 16) * 1000)
+        except ValueError:
+            offset_ms = 0
+    return video_id, offset_ms
+
+def _normalise_volume(value):
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if number <= 1:
+        number *= 100
+    if 0 <= number <= 100:
+        return int(round(number))
+    return None
+
+def _extract_volume(obj):
+    if isinstance(obj, dict):
+        for key, value in obj.items():
+            if 'volume' not in str(key).lower():
+                continue
+            if isinstance(value, (dict, list)):
+                if isinstance(value, dict):
+                    for nested_key in ("value", "level", "percent", "volume"):
+                        direct = _normalise_volume(value.get(nested_key))
+                        if direct is not None:
+                            return direct
+                found = _extract_volume(value)
+                if found is not None:
+                    return found
+            direct = _normalise_volume(value)
+            if direct is not None:
+                return direct
+        for value in obj.values():
+            if isinstance(value, (dict, list)):
+                found = _extract_volume(value)
+                if found is not None:
+                    return found
+    elif isinstance(obj, list):
+        for item in obj:
+            if isinstance(item, (dict, list)):
+                found = _extract_volume(item)
+                if found is not None:
+                    return found
+    return None
+
+def _request_volume(handler_input):
+    try:
+        envelope = handler_input.request_envelope
+        data_dict = envelope.to_dict() if hasattr(envelope, 'to_dict') else {}
+        return _extract_volume(data_dict)
+    except Exception:
+        return None
+
+def skill_identity_headers(handler_input):
+    system = getattr(getattr(handler_input.request_envelope, 'context', None), 'system', None)
+    user = getattr(getattr(system, 'user', None), 'user_id', '')
+    device = getattr(getattr(system, 'device', None), 'device_id', '')
+    headers = {
+        'Authorization': 'Bearer ' + data.MUSICBOX_ALEXA_TOKEN,
+        'X-MusicBox-Email': data.MUSICBOX_EMAIL,
+        'X-Alexa-User-Id': user or '', 'X-Alexa-Device-Id': device or '',
+        'X-Alexa-Profile-Token': getattr(system, 'api_access_token', '') or '',
+        'X-Alexa-Api-Endpoint': getattr(system, 'api_endpoint', '') or '',
+    }
+    request_id = getattr(getattr(handler_input.request_envelope, 'request', None), 'request_id', '')
+    if isinstance(request_id, str) and request_id:
+        headers['X-Alexa-Request-Id'] = request_id
+    request = getattr(handler_input.request_envelope, 'request', None)
+    request_type = getattr(request, 'object_type', '') or ''
+    if request_type:
+        headers['X-Alexa-Request-Type'] = request_type
+    intent_name = getattr(getattr(request, 'intent', None), 'name', '')
+    if intent_name:
+        headers['X-Alexa-Intent-Name'] = intent_name
+    playback_token = getattr(request, 'token', None)
+    if not playback_token and request_type.startswith('PlaybackController.'):
+        playback_token = getattr(getattr(handler_input.request_envelope.context, 'audio_player', None), 'token', None)
+    if playback_token:
+        headers['X-Alexa-Playback-Token'] = playback_token
+    current_token = getattr(getattr(request, 'current_playback_state', None), 'token', None)
+    if current_token:
+        headers['X-Alexa-Current-Playback-Token'] = current_token
+    timestamp = getattr(getattr(handler_input.request_envelope, 'request', None), 'timestamp', None)
+    if timestamp:
+        headers['X-Alexa-Request-Timestamp'] = timestamp.isoformat() if hasattr(timestamp, 'isoformat') else str(timestamp)
+    binding = getattr(handler_input.request_envelope, '_musicbox_binding', '')
+    if binding:
+        headers['X-Alexa-Binding'] = binding
+    return headers
+
+
+def _authorization_error(body):
+    try:
+        code = json.loads(body.decode('utf-8')).get('error', {}).get('code', 'alexa_access_denied')
+    except (ValueError, AttributeError, UnicodeDecodeError):
+        code = 'alexa_access_denied'
+    if not isinstance(code, str):
+        code = 'alexa_access_denied'
+    messages = {
+        'amazon_link_required': 'Connect your Amazon account in the Music Box user panel first.',
+        'amazon_email_mismatch': 'Use the same Amazon account for this Echo and the Amazon connection in your Music Box user panel.',
+        'musicbox_email_mismatch': 'Set MUSICBOX_EMAIL to the verified Music Box email belonging to your token.',
+        'amazon_permission_required': 'Allow email access for this skill in the Alexa app.',
+        'amazon_profile_unavailable': 'Amazon account verification is temporarily unavailable. Try again later.',
+        'amazon_link_changed': 'Your Amazon connection changed. Reconnect Amazon and try again.',
+        'stale_alexa_request': 'A newer playback request superseded this request.'}
+    return SkillAuthorizationError('Alexa access was denied. '+messages.get(code,
+        'Check your active token and account access.'), code=code)
+
+
+def _notify_server(handler_input, event: str, **extra):
+    """Bounded POST reporting playback state; returns optional reconciliation advice.
+    Failures are logged and swallowed so audio callbacks remain usable."""
+    try:
+        api_url, error = Attributes.get_api_url(handler_input)
+        if error:
+            logger.info(f'_notify_server: no api_url, skipping')
+            return
+        if 'volume' not in extra:
+            volume = _request_volume(handler_input)
+            if volume is not None:
+                extra['volume'] = volume
+        request = getattr(handler_input.request_envelope, 'request', None)
+        token = getattr(request, 'token', None)
+        if token:
+            extra.setdefault('token', token)
+        timestamp = getattr(request, 'timestamp', None)
+        if timestamp:
+            extra.setdefault('event_timestamp', timestamp.isoformat() if hasattr(timestamp, 'isoformat') else str(timestamp))
+        payload = json.dumps({'event': event, **extra})
+        url = f'{api_url}/alexa/state_event/'
+        logger.info(f'_notify_server: POST {event} to {api_url}/alexa/state_event/')
+        # 'started' is the web remote's only signal that the track changed on
+        # auto-advance — a dropped POST wedges its now-playing card. 'stopped'
+        # is the matching correction signal (pause, or the Echo giving up on a
+        # slow resume fetch): losing it leaves the website stuck showing
+        # "playing" for silent audio until the user toggles pause/play by hand.
+        # Both get a slightly longer timeout and one retry; other events stay
+        # cheap. Re-delivering the same state event is harmless (idempotent).
+        _retryable = event in ('started', 'stopped')
+        timeout = urllib3.Timeout(total=3.0 if _retryable else 2.0)
+        # allowed_methods=None: retry POST too (urllib3 excludes it by default);
+        # re-delivering the same state event is harmless.
+        retries = (urllib3.Retry(total=1, backoff_factor=0.3, allowed_methods=None)
+                   if _retryable else False)
+        resp = http.request(
+            'POST', url,
+            body=payload,
+            headers={'Content-Type': 'application/json', **skill_identity_headers(handler_input)},
+            timeout=timeout,
+            retries=retries,
+            redirect=False,
+        )
+        logger.info(f'_notify_server: response {resp.status}')
+        if resp.status in (401, 403):
+            raise _authorization_error(resp.data)
+        if resp.status == 200:
+            return json.loads(resp.data.decode('utf-8'))
+    except SkillAuthorizationError:
+        raise
+    except Exception as e:
+        logger.info(f'_notify_server FAILED: {e}')
+
+def send_progressive_response(handler_input: HandlerInput, message: str):
+    # Progressive responses are best-effort; a failure here (expired window,
+    # directive service hiccup) must not abort the actual request handling.
+    try:
+        request_id_holder = handler_input.request_envelope.request.request_id
+        directive_header = Header(request_id=request_id_holder)
+        speech = SpeakDirective(speech=message)
+        directive_request = SendDirectiveRequest(header=directive_header, directive=speech)
+        directive_service_client = handler_input.service_client_factory.get_directive_service()
+        directive_service_client.enqueue(directive_request)
+    except Exception:
+        logger.exception('Failed to send progressive response')
+    return
+
+# Real playlist ids / api urls hex-encode to well under this; a slot value
+# anywhere near it is malformed input, not a legitimate longer URL.
+_MAX_HEX_INPUT_LEN = 512
+
+def decode_hex(encoded_string: str) -> str:
+    # Returns None when the input is not a valid hex string (odd length,
+    # non-hex characters, or unreasonably long) so callers can respond with
+    # guidance instead of crashing or doing unbounded work on a slot value.
+    lower_encoded_string = encoded_string.lower()
+    if len(lower_encoded_string) > _MAX_HEX_INPUT_LEN:
+        return None
+    if len(lower_encoded_string) % 2 != 0:
+        return None
+    try:
+        return ''.join([chr(int(lower_encoded_string[i:i+2], 16)) for i in range(0, len(lower_encoded_string), 2)])
+    except ValueError:
+        return None
+
+def ssml_safe(text) -> str:
+    # song/artist/playlist names can contain &, <, > which break SSML (XML)
+    return escape(str(text))
+
+def get_similarity(x: str, y: str):
+    if not x or not y:
+        return 0.0
+    return difflib.SequenceMatcher(None, x.lower(), y.lower()).ratio()
+
+
+class Attributes:
+    @staticmethod
+    def log_attributes(handler_input: HandlerInput):
+        # Deliberately compact: dumping the full persistent attributes logged
+        # the entire stored playlist (hundreds of KB) on every play/enqueue.
+        try:
+            user_attr = Attributes.get_user_attributes(handler_input) or {}
+            playback_info = user_attr.get('playback_info') or {}
+            logger.info(
+                'attributes: playlist=%d index=%s play_order=%d offset_ms=%s enqueued=%s',
+                len(user_attr.get('playlist') or []),
+                playback_info.get('index'),
+                len(playback_info.get('play_order') or []),
+                playback_info.get('offset_in_ms'),
+                playback_info.get('next_stream_enqueued'))
+        except Exception:
+            pass
+
+    @staticmethod
+    def get_user_id(handler_input: HandlerInput) -> str:
+        user_id = handler_input.request_envelope.context.system.user.user_id
+        return user_id
+
+    @staticmethod
+    def get_user_attributes(handler_input: HandlerInput) -> Dict:
+        persistent_attr = handler_input.attributes_manager.persistent_attributes
+        user_attr = persistent_attr.get(Attributes.get_user_id(handler_input))
+        return user_attr
+    
+    @staticmethod
+    def get_playback_info(handler_input: HandlerInput) -> Dict:
+        user_attr = Attributes.get_user_attributes(handler_input)
+        playback_info = user_attr.get('playback_info')
+        return playback_info
+    
+    @staticmethod
+    def get_playback_setting(handler_input: HandlerInput) -> Dict:
+        user_attr = Attributes.get_user_attributes(handler_input)
+        playback_setting = user_attr.get("playback_setting")
+        return playback_setting
+
+    @staticmethod
+    def get_playlist(handler_input: HandlerInput) -> List[player_models.Metadata]:
+        user_attr = Attributes.get_user_attributes(handler_input)
+        # DynamoDB round-trips numbers as Decimal (boto3's persistence adapter
+        # converts on save), but Metadata/Thumbnail's int fields are typed as
+        # plain int and dacite's strict checking rejects Decimal — coerce back
+        # before parsing.
+        raw_playlist = [_coerce_decimals(item) for item in user_attr.get('playlist') or []]
+        playlist = [from_dict(player_models.Metadata, i) for i in raw_playlist]
+        return playlist
+    
+    @staticmethod
+    def set_playlist(handler_input: HandlerInput, playlist: List[player_models.Metadata]) -> None:
+        user_attr = Attributes.get_user_attributes(handler_input)
+        user_attr['playlist'] = [asdict(i) for i in playlist]
+
+    @staticmethod
+    def get_play_order(handler_input: HandlerInput):
+        playback_info = Attributes.get_playback_info(handler_input)
+        return playback_info['play_order']
+
+    @staticmethod
+    def set_play_order(handler_input: HandlerInput) -> None:
+        playback_setting = Attributes.get_playback_setting(handler_input)
+        playback_info = Attributes.get_playback_info(handler_input)
+        playlist = Attributes.get_playlist(handler_input)
+        shuffle = playback_setting['shuffle']
+
+        if shuffle:
+            shuffled_play_order = Attributes.shuffle_order(handler_input)
+            playback_info['play_order'] = shuffled_play_order
+            shuffled_index_adjusted_play_order = Attributes.rotate_to_match_index(handler_input)
+            playback_info["play_order"] = shuffled_index_adjusted_play_order
+        else:
+            playback_info["play_order"] = [l for l in range(0, len(playlist))]
+
+    @staticmethod
+    def get_from_saved_playlists(handler_input: HandlerInput, playlist_name: str) -> player_models.Playlist:
+        if not playlist_name: return None
+        user_attr = Attributes.get_user_attributes(handler_input)
+        saved_playlists = user_attr.get('saved_playlists') or {}
+        playlist = saved_playlists.get(playlist_name)
+        logger.info(f'saved_playlists -> {saved_playlists}, playlist -> {playlist}, playlist_name -> {playlist_name}')
+        if playlist: return from_dict(player_models.Playlist, playlist)
+
+    @staticmethod
+    def get_offset_in_ms(handler_input: HandlerInput):
+        return handler_input.request_envelope.request.offset_in_milliseconds
+
+    @staticmethod
+    def get_token(handler_input: HandlerInput):
+        # The webhook sends this as the plain video_id; strip the composite
+        # index prefix so Flask's _valid_video_id() accepts it.
+        token = handler_input.request_envelope.request.token
+        _, video_id = _parse_token(token)
+        return video_id
+
+    @staticmethod
+    def get_metadata_by_play_order(handler_input: HandlerInput, index: int = None) -> player_models.Metadata:
+        # Returns None when there is no playlist or the index is stale
+        # (e.g. state overwritten from another device).
+        playback_info = Attributes.get_playback_info(handler_input)
+        if index is None: index = playback_info["index"]
+        play_order = playback_info.get('play_order') or []
+        playlist = Attributes.get_playlist(handler_input)
+        if not playlist or index >= len(play_order):
+            return None
+        play_order_index = play_order[index]
+        if play_order_index >= len(playlist):
+            return None
+        return playlist[play_order_index]
+
+    @staticmethod
+    def get_queue_snapshot(handler_input: HandlerInput) -> List[Dict]:
+        """Return the skill's playback-order queue in the web API shape.
+
+        The Flask remote and the Alexa skill can both grow a radio queue.  The
+        result is not guaranteed to be identical for separate YouTube Music
+        requests, so the remote must receive the *skill's* queue when Alexa
+        changes tracks.  That makes voice next/previous use the same queue the
+        Echo is actually playing instead of causing Flask to generate a new
+        one around every new token.
+        """
+        playlist = Attributes.get_playlist(handler_input)
+        playback_info = Attributes.get_playback_info(handler_input) or {}
+        play_order = list(playback_info.get('play_order') or [])
+        # A partially-saved/legacy play_order must not produce a truncated
+        # snapshot that the server could mistake for the complete live queue.
+        # A valid order contains every physical playlist index exactly once.
+        try:
+            normalized_order = [int(i) for i in play_order]
+        except (TypeError, ValueError):
+            normalized_order = []
+        if (len(normalized_order) != len(playlist)
+                or sorted(normalized_order) != list(range(len(playlist)))):
+            normalized_order = list(range(len(playlist)))
+        result = []
+        for playlist_index in normalized_order:
+            metadata = playlist[playlist_index]
+            if not metadata.video_id:
+                continue
+            thumbnail = metadata.thumbnail.url if metadata.thumbnail else ''
+            result.append({
+                'title': metadata.title or '',
+                'artist': metadata.artist or '',
+                'thumbnail': thumbnail or '',
+                'video_id': metadata.video_id,
+                'duration_ms': metadata.duration_ms or 0,
+            })
+        return result
+
+    @staticmethod
+    def shuffle_order(handler_input: HandlerInput) -> List[int]:
+        play_order = [l for l in range(0, len(Attributes.get_playlist(handler_input)))]
+        random.shuffle(play_order)
+        return play_order
+    
+    @staticmethod
+    def rotate_to_match_index(handler_input: HandlerInput) -> List[int]:
+        playback_info = Attributes.get_playback_info(handler_input)
+        play_order = playback_info['play_order']
+        current_index = playback_info['index']
+        try:
+            diff = play_order.index(current_index)-current_index
+        except ValueError:
+            # Stale index (playlist changed underneath); skip the rotation.
+            return play_order
+        return play_order[diff:]+play_order[:diff]
+    
+    @staticmethod
+    def match_playlist_name(handler_input: HandlerInput, playlist_name: str, match_similarity: float = 0.7) -> str:
+        if not playlist_name: return None
+        user_attr = Attributes.get_user_attributes(handler_input)
+        saved_playlists = user_attr.get('saved_playlists') or {}
+        all_list = list(saved_playlists.keys())
+        for name in all_list:
+            similarity = get_similarity(name, playlist_name)
+            logger.info(f'similarity -> {similarity}, left -> {name}, right -> {playlist_name}')
+            if similarity > match_similarity: return name
+        return None
+    
+    @staticmethod
+    def get_audio_item_metadata(metadata: player_models.Metadata) -> AudioItemMetadata:
+        if not metadata.thumbnail:
+            return AudioItemMetadata(title=metadata.title, subtitle=metadata.artist)
+        metadata = AudioItemMetadata(
+            title=metadata.title,
+            subtitle=metadata.artist,
+            art=display.Image(
+                content_description=metadata.title,
+                sources=[
+                    display.ImageInstance(
+                        url=metadata.thumbnail.url)
+                ]
+            )
+            , background_image=display.Image(
+                content_description=metadata.title,
+                sources=[
+                    display.ImageInstance(
+                        url=metadata.thumbnail.url)
+                ]
+            )
+        )
+        return metadata
+    
+    @staticmethod
+    def get_calculated_index(handler_input: HandlerInput) -> int:
+        token = handler_input.request_envelope.request.token
+        encoded_index, video_id = _parse_token(token)
+        playlist = Attributes.get_playlist(handler_input)
+        play_order = Attributes.get_play_order(handler_input)
+        playlist_tokens = [i.video_id for i in playlist]
+        # Composite tokens carry the logical index, which disambiguates a
+        # repeated video_id from an earlier occurrence. Trust it only while it
+        # still points at the same video (a sliding-window trim can shift the
+        # index after the token was issued).
+        if encoded_index is not None and 0 <= encoded_index < len(play_order):
+            playlist_index = play_order[encoded_index]
+            if (0 <= playlist_index < len(playlist)
+                    and playlist[playlist_index].video_id == video_id):
+                return encoded_index
+        try:
+            playlist_index = playlist_tokens.index(video_id)
+            return play_order.index(playlist_index)
+        except ValueError:
+            # Token not in the stored playlist (state overwritten from another
+            # device or a stale event); keep the current index instead of crashing.
+            logger.warning(f'Token {video_id} not found in stored playlist; keeping current index.')
+            return Attributes.get_playback_info(handler_input).get("index", 0)
+    
+    @staticmethod
+    def get_api_url(handler_input: HandlerInput) -> Tuple[str, Exception]:
+        # A voice-controlled destination would forward the deployment key to
+        # an arbitrary listener. Ignore all previously persisted overrides.
+        api_url = data.DEFAULT_API_URL
+        if not api_url: return None, Exception(data.API_URL_NOT_SET)
+        try:
+            parsed = urlsplit(api_url)
+            if (parsed.scheme != 'https' or not parsed.hostname or parsed.username
+                    or parsed.password or parsed.query or parsed.fragment
+                    or any(char.isspace() or ord(char) < 32 for char in api_url)):
+                raise ValueError('Invalid configured backend URL')
+            parsed.port  # Validate port syntax before any authenticated call.
+        except (TypeError, ValueError):
+            return None, Exception('Configure a valid HTTPS backend URL in the skill settings.')
+        return api_url.rstrip('/'), None
+
+
+class Api:
+    @staticmethod
+    def link_account(handler_input, code):
+        return False
+
+    @staticmethod
+    def _get_json(handler_input: HandlerInput, path: str, params: Dict) -> Tuple[Dict, Exception]:
+        api_url, error = Attributes.get_api_url(handler_input)
+        if error: return None, error
+        query = urlencode(params)
+        url = f"{api_url}/{path}/?{query}"
+        started = time.monotonic()
+        try:
+            control = path in ('armed_play', 'next_track', 'api/alexa/identity')
+            response = http.request("GET", url, headers=skill_identity_headers(handler_input), timeout=urllib3.Timeout(total=3.0 if control else 25.0),
+                                    retries=False if control else None, redirect=False)
+        except SkillAuthorizationError:
+            raise
+        except Exception:
+            logger.exception(f'Request to {path} failed')
+            return None, Exception(data.API_CONNECTION_ISSUE)
+        if control:
+            logger.info('[control-timing] %s %.0fms status=%s', path,
+                        (time.monotonic() - started) * 1000, response.status)
+        if response.status == 404:
+            return None, Exception(data.NOT_FOUND)
+        if response.status in (401, 403):
+            raise _authorization_error(response.data)
+        if response.status != 200:
+            logger.error(f'{path} returned status {response.status}: {response.data[:500]}')
+            return None, Exception(data.SERVICE_ISSUE)
+        try:
+            response_json = json.loads(response.data.decode("utf-8"))
+        except (ValueError, UnicodeDecodeError):
+            logger.exception(f'{path} returned unparseable body')
+            return None, Exception(data.SERVICE_ISSUE)
+        if response_json is None:
+            return None, Exception(data.NOT_FOUND)
+        return response_json, None
+
+    @staticmethod
+    def find_stream_list(handler_input: HandlerInput, query: str, filter: player_models.Filter) -> Tuple[player_models.SongInfoList, Exception]:
+        response_json, error = Api._get_json(handler_input, 'find_stream_list', {'query': query, 'filter': filter.value})
+        if error: return None, error
+        try:
+            return from_dict(player_models.SongInfoList, response_json), None
+        except Exception:
+            logger.exception('find_stream_list returned unexpected shape')
+            return None, Exception(data.SERVICE_ISSUE)
+
+    @staticmethod
+    def stream_playlist(handler_input: HandlerInput, playlist_id: str) -> Tuple[player_models.SongInfoList, Exception]:
+        # limit: ask for a window only — the full playlist can't be persisted
+        # (see the sliding-window notes at the top of this module). An older
+        # server ignores it; _window_playlist clamps that case on our side.
+        response_json, error = Api._get_json(handler_input, 'stream_playlist',
+                                             {'id': playlist_id, 'limit': _QUEUE_BATCH})
+        if error: return None, error
+        try:
+            return from_dict(player_models.SongInfoList, response_json), None
+        except Exception:
+            logger.exception('stream_playlist returned unexpected shape')
+            return None, Exception(data.SERVICE_ISSUE)
+
+    @staticmethod
+    def stream_video(handler_input: HandlerInput, video_id: str) -> Tuple[player_models.SongInfoList, Exception]:
+        envelope = handler_input.request_envelope
+        startup = getattr(envelope, '_musicbox_startup', None)
+        envelope._musicbox_startup = None
+        if isinstance(startup, dict):
+            try:
+                if startup['song_info']['metadata']['video_id'] == video_id:
+                    return from_dict(player_models.SongInfoList, startup), None
+            except Exception:
+                logger.info('Bundled startup metadata was invalid; fetching fresh song data')
+        response_json, error = Api._get_json(handler_input, 'stream_video', {'video_id': video_id})
+        if error: return None, error
+        try:
+            return from_dict(player_models.SongInfoList, response_json), None
+        except Exception:
+            logger.exception('stream_video returned unexpected shape')
+            return None, Exception(data.SERVICE_ISSUE)
+
+    @staticmethod
+    def get_stream(handler_input: HandlerInput, video_id: str) -> Tuple[player_models.Stream, Exception]:
+        response_json, error = Api._get_json(handler_input, 'get_stream', {'video_id': video_id})
+        if error: return None, error
+        try:
+            stream = from_dict(player_models.Stream, response_json)
+        except Exception:
+            logger.exception('get_stream returned unexpected shape')
+            return None, Exception(data.SERVICE_ISSUE)
+        player_info = Attributes.get_playback_info(handler_input)
+        player_info['stream_url'] = stream.audio_url
+        player_info['stream_url_video_id'] = video_id
+        return stream, None
+
+    @staticmethod
+    def get_playlist_info(handler_input: HandlerInput, playlist_id: str) -> Tuple[player_models.Playlist, Exception]:
+        response_json, error = Api._get_json(handler_input, 'get_playlist_info', {'id': playlist_id})
+        if error: return None, error
+        if not isinstance(response_json, dict) or 'id' not in response_json:
+            return None, Exception(data.SERVICE_ISSUE)
+        return player_models.Playlist(response_json['id'], response_json.get('title', 'Untitled')), None
+
+    @staticmethod
+    def get_radio(handler_input: HandlerInput, video_id: str, continuation=False) -> Tuple[List[player_models.Metadata], Exception]:
+        """Radio/autoplay continuation for a seed video. The server returns the
+        full queue (tracks 2+) so playback can continue past the seed track."""
+        params = {'video_id': video_id}
+        if continuation:
+            params.update(continuation='1', token=Attributes.get_playback_info(handler_input).get('current_token') or '')
+        response_json, error = Api._get_json(handler_input, 'get_radio', params)
+        if error: return None, error
+        try:
+            tracks = (response_json or {}).get('playlist') or []
+            return [from_dict(player_models.Metadata, t) for t in tracks], None
+        except Exception:
+            logger.exception('get_radio returned unexpected shape')
+            return None, Exception(data.SERVICE_ISSUE)
+
+    @staticmethod
+    def get_queue_tracks(handler_input: HandlerInput, after_video_id: str) -> Tuple[Optional[List[player_models.Metadata]], Optional[Exception]]:
+        """Continuation batch for the sliding playlist window: the tracks that
+        follow after_video_id in the server's current queue. Empty list when the
+        server's queue moved on (caller falls back to radio continuation)."""
+        playback_info = Attributes.get_playback_info(handler_input)
+        params = {'after': after_video_id, 'limit': _QUEUE_BATCH}
+        if playback_info.get('queue_id'):
+            params['queue_id'] = playback_info['queue_id']
+            params['offset'] = max(0, int(playback_info.get('queue_offset', 0) or 0))
+        response_json, error = Api._get_json(handler_input, 'queue_tracks', params)
+        if error: return None, error
+        try:
+            tracks = (response_json or {}).get('tracks') or []
+            parsed = [from_dict(player_models.Metadata, t) for t in tracks]
+            if parsed and response_json.get('next_offset') is not None:
+                playback_info['queue_offset'] = max(
+                    0, int(response_json.get('next_offset') or 0))
+            return parsed, None
+        except Exception:
+            logger.exception('queue_tracks returned unexpected shape')
+            return None, Exception(data.SERVICE_ISSUE)
+
+    @staticmethod
+    def next_track(handler_input: HandlerInput, after_video_id: str) -> Tuple[Optional[player_models.Metadata], Optional[Exception]]:
+        """The authoritative next track as resolved by the server's live queue.
+
+        This replaces trusting the skill's own window for the immediate next
+        track. It reflects the live queue order, so a reorder / add / remove /
+        shuffle made on the web remote is already visible by the time a song
+        nearly finishes. Returns (None, None) for a genuine end-of-queue (the
+        server has no track after ``after_video_id``, or the current video is
+        no longer in its queue) — the caller then falls back to its window
+        wrap / extension logic."""
+        if not after_video_id:
+            return None, None
+        Attributes.get_playback_info(handler_input).pop('next_decision', None)
+        response_json, error = Api._get_json(
+            handler_input, 'next_track', {
+                'after': after_video_id, 'protocol': '2',
+                'token': Attributes.get_playback_info(handler_input).get('current_token') or '',
+                'loop': '1' if Attributes.get_playback_setting(handler_input).get('loop') else '0'})
+        if error:
+            return None, error
+        try:
+            info = Attributes.get_playback_info(handler_input)
+            info['next_decision'] = {k: response_json.get(k) for k in
+                ('authoritative', 'permitted', 'decision_id', 'queue_version', 'allow_continuation')}
+            track = (response_json or {}).get('track')
+            if not track or not track.get('video_id'):
+                return None, None
+            return from_dict(player_models.Metadata, track), None
+        except Exception:
+            logger.exception('next_track returned unexpected shape')
+            return None, Exception(data.SERVICE_ISSUE)
+
+    @staticmethod
+    def validate_next(handler_input, after, decision):
+        if not decision.get('authoritative'):
+            return True  # Older server compatibility; no protocol claim.
+        if not decision.get('permitted') or not decision.get('decision_id'):
+            return False
+        info = Attributes.get_playback_info(handler_input)
+        response, error = Api._get_json(handler_input, 'next_track', {
+            'after': after, 'protocol': '2', 'token': info.get('current_token') or '',
+            'validate': decision['decision_id'],
+            'loop': '1' if Attributes.get_playback_setting(handler_input).get('loop') else '0'})
+        return not error and bool((response or {}).get('valid'))
+
+    @staticmethod
+    def play_genre(handler_input: HandlerInput, genre: str) -> Tuple[Optional[player_models.SongInfoList], Optional[Exception]]:
+        """Ask the server for a genre queue (it searches YT Music for a top
+        '<genre> music' playlist and streams it). Same response shape as
+        stream_playlist, so the result plugs into Controller.play directly."""
+        response_json, error = Api._get_json(handler_input, 'play_genre',
+                                             {'genre': genre, 'limit': _QUEUE_BATCH})
+        if error: return None, error
+        try:
+            return from_dict(player_models.SongInfoList, response_json), None
+        except Exception:
+            logger.exception('play_genre returned unexpected shape')
+            return None, Exception(data.SERVICE_ISSUE)
+
+    @staticmethod
+    def like_song(handler_input: HandlerInput, metadata: player_models.Metadata) -> Tuple[Optional[Dict], Optional[Exception]]:
+        """Add a track to the web remote's Liked Songs playlist. Returns the
+        server's {'ok': ..., 'already_liked': ...} payload."""
+        params = {
+            'video_id': metadata.video_id,
+            'title': metadata.title or '',
+            'artist': metadata.artist or '',
+            'duration_ms': metadata.duration_ms or 0,
+        }
+        if metadata.thumbnail and metadata.thumbnail.url:
+            params['thumbnail'] = metadata.thumbnail.url
+        return Api._get_json(handler_input, 'alexa/like', params)
+
+    @staticmethod
+    def get_armed_play(handler_input: HandlerInput, peek: bool = False) -> Tuple[Optional[Tuple[str, int, Optional[float], str]], Optional[Exception]]:
+        """Fetch the video id the web remote armed for a direct play. Returns
+        ((video_id, offset_ms, armed_age_s, kind), None) when one is pending,
+        else (None, error). ``armed_age_s`` is how old the arm was when read
+        (None when the server did not report it); ``kind`` is 'play' for a
+        fresh track or 'resume' for a web resume's exact-track hint.
+
+        With ``peek=True`` the arm is returned without consuming it, so a
+        resume can inspect the web remote's intent without stealing the arm of
+        an in-flight fresh play or seek (see /armed_play/)."""
+        handler_input.request_envelope._musicbox_startup = None
+        params = {'peek': '1'} if peek else {'include_stream': '1'}
+        response_json, error = Api._get_json(handler_input, 'armed_play', params)
+        if error:
+            return None, error
+        video_id = (response_json or {}).get('video_id')
+        if not video_id:
+            return None, Exception(data.NOT_FOUND)
+        try:
+            offset_ms = max(0, int((response_json or {}).get('offset_ms') or 0))
+        except (TypeError, ValueError):
+            offset_ms = 0
+        armed_age_s = None
+        try:
+            armed_at = (response_json or {}).get('armed_at')
+            if armed_at is not None:
+                import time as _time
+                armed_age_s = max(0.0, _time.time() - float(armed_at))
+        except (TypeError, ValueError):
+            armed_age_s = None
+        kind = (response_json or {}).get('kind') or 'play'
+        startup = (response_json or {}).get('startup')
+        if not peek and kind == 'play' and isinstance(startup, dict):
+            handler_input.request_envelope._musicbox_startup = startup
+        return (video_id, offset_ms, armed_age_s, kind), None
+
+
+class Controller:
+    @staticmethod
+    def replace_pending(handler_input, expected_token):
+        """Replace only Echo's buffered successor; never restart the current song."""
+        context = getattr(handler_input.request_envelope.context, 'audio_player', None)
+        actual = getattr(context, 'token', None)
+        info = Attributes.get_playback_info(handler_input)
+        if not expected_token or actual != expected_token or info.get('current_token') != expected_token:
+            return handler_input.response_builder.response
+        _, current_video = _parse_token(expected_token)
+        metadata, error = Api.next_track(handler_input, current_video)
+        decision = info.get('next_decision') or {}
+        if error or not decision.get('authoritative') or not decision.get('permitted'):
+            return handler_input.response_builder.response
+        if metadata is None:
+            if Api.validate_next(handler_input, current_video, decision):
+                info['next_stream_enqueued'] = False
+                handler_input.response_builder.add_directive(ClearQueueDirective(clear_behavior=ClearBehavior.CLEAR_ENQUEUED))
+            return handler_input.response_builder.response
+        saved_stream = {key: info.get(key) for key in ('stream_url', 'stream_url_video_id')}
+        try:
+            stream, error = Api.get_stream(handler_input, metadata.video_id)
+        finally:
+            info.update(saved_stream)
+        if error or not Api.validate_next(handler_input, current_video, decision):
+            return handler_input.response_builder.response
+        index = Controller._stage_next_track(handler_input, metadata, info.get('index', 0))
+        if index is None:
+            return handler_input.response_builder.response
+        handler_input.response_builder.add_directive(PlayDirective(
+            play_behavior=PlayBehavior.REPLACE_ENQUEUED,
+            audio_item=AudioItem(stream=Stream(url=stream.audio_url,
+                token=scoped_token(handler_input, _make_token(index, metadata.video_id, 'q' + decision['decision_id'])),
+                offset_in_milliseconds=0), metadata=Attributes.get_audio_item_metadata(metadata))))
+        info['next_stream_enqueued'] = True
+        return handler_input.response_builder.response
+
+    @staticmethod
+    def error_response(handler_input: HandlerInput, message, is_playback: bool = False) -> Response:
+        if isinstance(message, SkillAuthorizationError):
+            if message.code in ('stale_alexa_binding', 'stale_alexa_request'):
+                handler_input.request_envelope._musicbox_state_loaded = False
+                response = handler_input.response_builder.response
+                response.directives = []
+                response.output_speech = response.card = response.reprompt = response.should_end_session = None
+                return response
+            request_type = getattr(getattr(handler_input.request_envelope, 'request', None), 'object_type', 'IntentRequest') or ''
+            response = handler_input.response_builder.response
+            if request_type in ('IntentRequest', 'LaunchRequest', 'AudioPlayer.PlaybackStarted', 'AudioPlayer.PlaybackNearlyFinished', 'AudioPlayer.PlaybackFinished', 'AudioPlayer.PlaybackFailed') or request_type.startswith('PlaybackController.'):
+                response.directives = [StopDirective(), ClearQueueDirective(clear_behavior=ClearBehavior.CLEAR_ALL)]
+            else:
+                response.directives = []
+            if request_type.startswith(('AudioPlayer.', 'PlaybackController.')):
+                response.output_speech = response.card = response.reprompt = response.should_end_session = None
+                return response
+            if not is_playback:
+                handler_input.response_builder.speak(str(message))
+            return handler_input.response_builder.set_should_end_session(True).response
+        if is_playback:
+            return handler_input.response_builder.set_should_end_session(True).response
+        return handler_input.response_builder.speak(str(message)).response
+
+    @staticmethod
+    def fetch(
+        handler_input: HandlerInput,
+        query: str = None,
+        playlist_id: str = None,
+        genre: str = None,
+        filter: player_models.Filter = player_models.Filter.SONGS,
+        is_playback: bool = True
+    ) -> Response:
+        if genre:
+            song_info_list, error = Api.play_genre(handler_input, genre)
+            if error:
+                # No suitable genre playlist (or older server without the
+                # endpoint): fall back to a plain song search for the genre.
+                song_info_list, error = Api.find_stream_list(
+                    handler_input, f'{genre} music', player_models.Filter.SONGS)
+            if error: return Controller.error_response(handler_input, error, is_playback)
+            playlist = song_info_list.playlist
+            song_info = song_info_list.song_info
+        elif query:
+            song_info_list, error = Api.find_stream_list(handler_input, query, filter)
+            if error: return Controller.error_response(handler_input, error, is_playback)
+            playlist = song_info_list.playlist
+            song_info = song_info_list.song_info
+        else:
+            song_info_list, error = Api.stream_playlist(handler_input, playlist_id)
+            if error: return Controller.error_response(handler_input, error, is_playback)
+            playlist = song_info_list.playlist
+            song_info = song_info_list.song_info
+
+        playlist, _ = _window_playlist(playlist, 0)
+        user_attr = Attributes.get_user_attributes(handler_input)
+        Attributes.set_playlist(handler_input, playlist)
+        # queue_id/next_offset were added to SongInfoList for sliding-window
+        # playlist continuation. Custom-skill deployments can briefly contain
+        # a newer player.py beside an older cached/player_models.py (as seen in
+        # Lambda versioned deployments). Treat the cursor fields as optional so
+        # ordinary song playback never crashes during that rollout window.
+        queue_id = getattr(song_info_list, 'queue_id', None)
+        try:
+            queue_offset = max(0, int(getattr(song_info_list, 'next_offset', 0) or 0))
+        except (TypeError, ValueError):
+            queue_offset = 0
+        user_attr['playback_info'] = {
+            'index': 0,
+            'offset_in_ms': 0,
+            'play_order': [l for l in range(0, len(playlist))],
+            'stream_url': song_info.stream.audio_url,
+            'stream_url_video_id': song_info.metadata.video_id,
+            'queue_id': queue_id,
+            'queue_offset': queue_offset,
+        }
+        Attributes.set_play_order(handler_input)
+        return Controller.play(handler_input, song_info, is_playback)
+
+    @staticmethod
+    def fetch_video_id(
+        handler_input: HandlerInput,
+        video_id: str,
+        is_playback: bool = True,
+        offset_in_ms: int = 0
+    ) -> Response:
+        song_info_list, error = Api.stream_video(handler_input, video_id)
+        if error:
+            return Controller.error_response(handler_input, error, is_playback)
+        playlist = song_info_list.playlist or [song_info_list.song_info.metadata]
+        song_info = song_info_list.song_info
+        index = getattr(song_info_list, 'queue_index', None)
+        if (type(index) is not int or not 0 <= index < len(playlist)
+                or playlist[index].video_id != video_id):
+            index = next((i for i, item in enumerate(playlist) if item.video_id == video_id), 0)
+        playlist, index = _window_playlist(playlist, index)
+
+        user_attr = Attributes.get_user_attributes(handler_input)
+        Attributes.set_playlist(handler_input, playlist)
+        user_attr['playback_info'] = {
+            'index': index,
+            'offset_in_ms': max(0, int(offset_in_ms or 0)),
+            'play_order': [l for l in range(0, len(playlist))],
+            'stream_url': song_info.stream.audio_url,
+            'stream_url_video_id': song_info.metadata.video_id
+        }
+        Attributes.set_play_order(handler_input)
+        return Controller.play(handler_input, song_info, is_playback)
+
+    @staticmethod
+    def expand_radio_queue(handler_input: HandlerInput) -> bool:
+        """Lazily fill the autoplay queue from the currently-playing seed track.
+
+        find_stream_list now returns only the seed (fast start); this fetches the
+        radio continuation once playback has begun so tracks 2+ are ready before
+        the seed nearly finishes. No-op (returns False) if the queue already has
+        more than one track. Never raises."""
+        try:
+            playlist = Attributes.get_playlist(handler_input)
+            if not playlist or len(playlist) > 1:
+                return False  # already expanded, or nothing to expand
+            seed = playlist[0]
+            radio, error = Api.get_radio(handler_input, seed.video_id, continuation=True)
+            if error or not radio:
+                logger.info(f'expand_radio_queue: no queue ({error})')
+                return False
+            # Radio queue is seeded from the same video, so its first track is
+            # usually the seed itself — drop duplicates of what we already have.
+            have = {seed.video_id}
+            merged = [seed]
+            for m in radio:
+                if m.video_id and m.video_id not in have:
+                    merged.append(m)
+                    have.add(m.video_id)
+            if len(merged) <= 1:
+                return False
+            Attributes.set_playlist(handler_input, merged)
+            # Rebuild play order to cover the newly-added tracks (index stays 0).
+            Attributes.set_play_order(handler_input)
+            logger.info(f'expand_radio_queue: playlist now {len(merged)} tracks')
+            return True
+        except SkillAuthorizationError:
+            raise
+        except Exception:
+            logger.exception('expand_radio_queue failed')
+            return False
+
+    @staticmethod
+    def enqueue_next_stream(handler_input: HandlerInput, allow_extension=True) -> bool:
+        """Enqueue the next track in playback order (Alexa ENQUEUE directive).
+
+        Shared by the PlaybackNearlyFinished handler (Alexa's "nearly done"
+        prompt) and PlaybackStarted when a track resumes/seeks inside the final
+        ~40s — a stream that starts already inside the nearly-finished window
+        never gets that prompt, so without this the next track is never queued
+        and playback stops at the end of the current one.
+
+        Returns True iff a next stream was enqueued; False when there is
+        nothing to enqueue (already enqueued, no playlist, window extension or
+        stream lookup failed). Never raises."""
+        try:
+            playback_info = Attributes.get_playback_info(handler_input)
+            playlist = Attributes.get_playlist(handler_input)
+            playback_setting = Attributes.get_playback_setting(handler_input)
+
+            request = getattr(handler_input.request_envelope, 'request', None)
+            event_token = getattr(request, 'token', None)
+            current_token = playback_info.get('current_token')
+            if event_token and current_token and event_token != current_token:
+                return False
+            if playback_info.get("next_stream_enqueued"):
+                return False
+
+            if not playlist:
+                return False
+
+            current_index = playback_info.get("index", 0)
+            current_metadata = Attributes.get_metadata_by_play_order(handler_input, current_index)
+            if not current_metadata or not current_metadata.video_id:
+                # Stale state; nothing sensible to enqueue. Speech is not
+                # allowed in responses to AudioPlayer events, so end quietly.
+                return False
+            current_video_id = current_metadata.video_id
+
+            playback_info["next_stream_enqueued"] = True
+
+            # Authoritative next from the server's live queue. This is the
+            # single source of truth for what plays next: a reorder / add /
+            # shuffle made on the web remote (even moments before a song ends)
+            # is already reflected, and it stays correct even when the skill's
+            # window is stale.
+            authoritative, track_error = Api.next_track(handler_input, current_video_id)
+            if authoritative is not None and authoritative.video_id:
+                enqueue_index = Controller._stage_next_track(
+                    handler_input, authoritative, current_index)
+                if enqueue_index is None:
+                    playback_info["next_stream_enqueued"] = False
+                    return False
+                enqueue_metadata = Attributes.get_metadata_by_play_order(
+                    handler_input, enqueue_index)
+            else:
+                decision = playback_info.get('next_decision') or {}
+                if (not track_error and decision.get('authoritative') and decision.get('permitted')
+                        and decision.get('allow_continuation') and allow_extension):
+                    Controller._discard_stale_successors(handler_input)
+                    playback_info['next_stream_enqueued'] = False
+                    if Controller.extend_radio_queue(handler_input):
+                        return Controller.enqueue_next_stream(handler_input, allow_extension=False)
+                    return False
+                if track_error or decision.get('authoritative'):
+                    # Never resurrect the stale skill window after a failed live
+                    # lookup, ownership loss or an authoritative queue end.
+                    playback_info['next_stream_enqueued'] = False
+                    return False
+                if not track_error and playback_setting.get('loop'):
+                    playback_info['next_stream_enqueued'] = False
+                    return False
+                Controller._discard_stale_successors(handler_input)
+                playlist = Attributes.get_playlist(handler_input)
+                current_index = playback_info.get('index', 0)
+                # No authoritative next (genuine end of queue, or current video no
+                # longer tracked): keep the previous window wrap / extension
+                # behavior so loop and radio continuation still work.
+                enqueue_index = (current_index + 1) % len(playlist)
+                if enqueue_index == 0 and not playback_setting.get("loop"):
+                    # Reached the end of the stored window: page in the next
+                    # batch from the server (or radio continuation as a
+                    # fallback). This may trim long-played tracks, shifting
+                    # the index.
+                    if not Controller.extend_queue(handler_input):
+                        playback_info["next_stream_enqueued"] = False
+                        return False
+                    playlist = Attributes.get_playlist(handler_input)
+                    current_index = playback_info.get("index", 0)
+                    enqueue_index = current_index + 1
+                enqueue_metadata = Attributes.get_metadata_by_play_order(handler_input, enqueue_index)
+                if not enqueue_metadata:
+                    playback_info["next_stream_enqueued"] = False
+                    return False
+
+            if not enqueue_metadata or not enqueue_metadata.video_id:
+                playback_info["next_stream_enqueued"] = False
+                return False
+            enqueue_video_id = enqueue_metadata.video_id
+            saved_stream = {key: playback_info.get(key) for key in ('stream_url', 'stream_url_video_id')}
+            try:
+                enqueue_stream, error = Api.get_stream(handler_input, enqueue_video_id)
+            finally:
+                playback_info.update(saved_stream)
+            if error:
+                logger.error(f'Could not enqueue next stream: {error}')
+                playback_info["next_stream_enqueued"] = False
+                return False
+
+            # Log all attributes ----------------------------------
+            Attributes.log_attributes(handler_input)
+            # -----------------------------------------------------
+
+            decision = playback_info.get('next_decision') or {}
+            if not Api.validate_next(handler_input, current_video_id, decision):
+                playback_info['next_stream_enqueued'] = False
+                return False
+            enqueue_token = scoped_token(handler_input, _make_token(enqueue_index, enqueue_video_id, ('q' + decision['decision_id']) if decision.get('decision_id') else None))
+            # expected_previous_token must equal the stream Alexa is playing
+            # right now. Reuse the exact token persisted when it started; fall
+            # back to the bare video_id for legacy sessions predating the
+            # composite-token format (their in-flight stream still has the old
+            # plain token).
+            expected_previous_token = playback_info.get('current_token') or current_video_id
+
+            handler_input.response_builder.add_directive(
+                PlayDirective(
+                    play_behavior=PlayBehavior.ENQUEUE,
+                    audio_item=AudioItem(
+                        stream=Stream(
+                            token=enqueue_token,
+                            url=enqueue_stream.audio_url,
+                            offset_in_milliseconds=0,
+                            expected_previous_token=expected_previous_token),
+                        metadata=Attributes.get_audio_item_metadata(enqueue_metadata))))
+
+            logger.info(f'enqueue_next_stream: enqueued {enqueue_video_id} after {current_video_id} '
+                        f'(index {current_index} -> {enqueue_index})')
+            return True
+        except SkillAuthorizationError:
+            raise
+        except Exception:
+            logger.exception('enqueue_next_stream failed')
+            playback_info = Attributes.get_playback_info(handler_input)
+            if playback_info is not None:
+                playback_info["next_stream_enqueued"] = False
+            return False
+
+    @staticmethod
+    def _stage_next_track(handler_input: HandlerInput, next_metadata: player_models.Metadata,
+                          current_index: int) -> Optional[int]:
+        """Reorder the skill's window so ``next_metadata`` fills the immediate
+        next play-order slot, returning that slot's index (or None if it can't
+        be staged).
+
+        Called with the authoritative next the server resolved. It makes the
+        local window agree with the live queue before enqueueing, so a
+        reorder / add / shuffle takes effect, while leaving state untouched in
+        the common case where the window already agrees. If the track isn't in
+        the window it is appended (and persisted) so enqueue bookkeeping has a
+        slot. The current track keeps its position unless a previously-played
+        slot had to move, in which case ``playback_info['index']`` is adjusted
+        to keep pointing at it.
+        """
+        try:
+            playback_info = Attributes.get_playback_info(handler_input)
+            playlist = list(Attributes.get_playlist(handler_input))
+            play_order = list(playback_info.get('play_order') or [])
+            if len(play_order) != len(playlist):
+                play_order = list(range(len(playlist)))
+            vid = next_metadata.video_id
+
+            # Already the immediate next? No mutation needed (the common case
+            # where the window and the server agree).
+            if current_index + 1 < len(play_order):
+                existing = play_order[current_index + 1]
+                if (existing < len(playlist)
+                        and playlist[existing].video_id == vid):
+                    return current_index + 1
+
+            # Ensure the track has a physical slot in the window.
+            current_physical = play_order[current_index] if 0 <= current_index < len(play_order) else None
+            physicals = [i for i, m in enumerate(playlist)
+                         if m.video_id == vid and i != current_physical]
+            if not physicals:
+                playlist = playlist + [next_metadata]
+                physical = len(playlist) - 1
+                Attributes.set_playlist(handler_input, playlist)
+            else:
+                physical = physicals[0]
+
+            # Remove any existing pointer to this slot, adjusting the current
+            # index if the removed pointer sat before the current track.
+            if physical in play_order:
+                removed_at = play_order.index(physical)
+                play_order.pop(removed_at)
+                if removed_at < current_index:
+                    current_index -= 1
+                    playback_info['index'] = current_index
+
+            # Insert it into the immediate-next slot and persist the order.
+            target = min(current_index + 1, len(play_order))
+            play_order.insert(target, physical)
+            playback_info['play_order'] = play_order
+            return play_order.index(physical)
+        except SkillAuthorizationError:
+            raise
+        except Exception:
+            logger.exception('_stage_next_track failed')
+            return None
+
+    @staticmethod
+    def _append_tracks(handler_input: HandlerInput, new_tracks: List[player_models.Metadata]) -> bool:
+        """Append already-deduped tracks to playlist + play_order in place
+        (does not touch index or any already-played ordering). New tracks are
+        shuffled among themselves when shuffle is on."""
+        if not new_tracks:
+            return False
+        playlist = Attributes.get_playlist(handler_input)
+        base = len(playlist)
+        Attributes.set_playlist(handler_input, playlist + new_tracks)
+
+        playback_info = Attributes.get_playback_info(handler_input)
+        playback_setting = Attributes.get_playback_setting(handler_input)
+        new_indices = list(range(base, base + len(new_tracks)))
+        if playback_setting.get('shuffle'):
+            random.shuffle(new_indices)
+        playback_info['play_order'] = list(playback_info.get('play_order') or []) + new_indices
+        return True
+
+    @staticmethod
+    def _dedupe_against_playlist(playlist: List[player_models.Metadata],
+                                 candidates: List[player_models.Metadata]) -> List[player_models.Metadata]:
+        have = {m.video_id for m in playlist if m.video_id}
+        new_tracks = []
+        for m in candidates:
+            if m.video_id and m.video_id not in have:
+                new_tracks.append(m)
+                have.add(m.video_id)
+        return new_tracks
+
+    @staticmethod
+    def extend_queue(handler_input: HandlerInput) -> bool:
+        """Grow the playlist when playback reaches the end of the stored window.
+
+        Tries the server-queue continuation first (/queue_tracks/ after our
+        last track — this is how a windowed 1000-track playlist keeps playing
+        in order), then falls back to radio continuation. Trims already-played
+        tracks afterwards so the DynamoDB item stays bounded. Never raises.
+        Returns True iff new tracks were appended."""
+        grew = False
+        try:
+            playlist = Attributes.get_playlist(handler_input)
+            if playlist and playlist[-1].video_id:
+                tracks, error = Api.get_queue_tracks(handler_input, playlist[-1].video_id)
+                if error or not tracks:
+                    logger.info(f'extend_queue: no server-queue continuation ({error})')
+                else:
+                    grew = Controller._append_tracks(
+                        handler_input, Controller._dedupe_against_playlist(playlist, tracks))
+                    if grew:
+                        logger.info('extend_queue: extended from server queue')
+        except SkillAuthorizationError:
+            raise
+        except Exception:
+            logger.exception('extend_queue: server-queue continuation failed')
+        if not grew:
+            grew = Controller.extend_radio_queue(handler_input)
+        if grew:
+            Controller.trim_window(handler_input)
+        return grew
+
+    @staticmethod
+    def extend_radio_queue(handler_input: HandlerInput) -> bool:
+        """Grow the playlist with another batch of radio continuation once the
+        end of the current queue is reached. Seeded from the last track already
+        in the playlist so YT Music keeps the recommendation thread going.
+        Never raises. Returns True iff new tracks were appended."""
+        try:
+            playlist = Attributes.get_playlist(handler_input)
+            if not playlist:
+                return False
+            seed = playlist[-1]
+            if not seed.video_id:
+                return False
+            radio, error = Api.get_radio(handler_input, seed.video_id)
+            if error or not radio:
+                logger.info(f'extend_radio_queue: no continuation ({error})')
+                return False
+            new_tracks = Controller._dedupe_against_playlist(playlist, radio)
+            if not new_tracks:
+                logger.info('extend_radio_queue: nothing new to append')
+                return False
+            # Bound growth per extension; trim_window keeps the overall size in
+            # check, so radio can extend indefinitely.
+            if not Controller._append_tracks(handler_input, new_tracks[:25]):
+                return False
+            logger.info(f'extend_radio_queue: appended {len(new_tracks[:25])} tracks')
+            return True
+        except SkillAuthorizationError:
+            raise
+        except Exception:
+            logger.exception('extend_radio_queue failed')
+            return False
+
+    @staticmethod
+    def trim_window(handler_input: HandlerInput) -> None:
+        """Drop long-played tracks so the stored playlist never exceeds
+        _MAX_STORED_TRACKS (the whole persisted state must fit DynamoDB's 400KB
+        item cap). Keeps _KEEP_BEHIND already-played tracks for "previous".
+        Remaps play_order/index to the trimmed playlist. Never raises."""
+        try:
+            playback_info = Attributes.get_playback_info(handler_input)
+            playlist = Attributes.get_playlist(handler_input)
+            excess = len(playlist) - _MAX_STORED_TRACKS
+            if excess <= 0:
+                return
+            play_order = list(playback_info.get('play_order') or [])
+            index = int(playback_info.get('index', 0) or 0)
+            if len(play_order) != len(playlist):
+                # Inconsistent state (shouldn't happen): rebuild a sequential
+                # order rather than guessing which entries map where.
+                play_order = list(range(len(playlist)))
+                index = min(max(index, 0), len(playlist) - 1)
+            # Only play_order positions well behind the needle are trimmable.
+            drop_n = min(excess, max(0, index - _KEEP_BEHIND))
+            if drop_n <= 0:
+                return
+            dropped = set(play_order[:drop_n])
+            remap = {}
+            new_i = 0
+            for old_i in range(len(playlist)):
+                if old_i in dropped:
+                    continue
+                remap[old_i] = new_i
+                new_i += 1
+            Attributes.set_playlist(
+                handler_input, [m for i, m in enumerate(playlist) if i not in dropped])
+            playback_info['play_order'] = [remap[i] for i in play_order[drop_n:]]
+            playback_info['index'] = index - drop_n
+            logger.info(f'trim_window: dropped {drop_n} tracks, playlist now {new_i}')
+        except Exception:
+            logger.exception('trim_window failed')
+
+    @staticmethod
+    def play(
+        handler_input: HandlerInput,
+        song_info: player_models.SongInfo,
+        is_playback: bool = False,
+        play_behavior: PlayBehavior = PlayBehavior.REPLACE_ALL
+    ) -> Response:
+        response_builder = handler_input.response_builder
+
+        playback_info = Attributes.get_playback_info(handler_input)
+        offset_in_ms = playback_info.get('offset_in_ms')
+        if play_behavior == PlayBehavior.REPLACE_ALL: playback_info['next_stream_enqueued'] = False
+        else: playback_info['next_stream_enqueued'] = True
+
+        # Log all attrubutes ----------------------------------
+        Attributes.log_attributes(handler_input)
+        # -----------------------------------------------------
+
+        # Composite token encodes the logical index so a repeated video_id can
+        # be told apart from an earlier occurrence. Persist the exact token we
+        # send: the next ENQUEUE's expected_previous_token must match it
+        # verbatim, which stays correct even after a window trim shifts index.
+        token = scoped_token(handler_input, _make_token(playback_info.get('index', 0), song_info.metadata.video_id, uuid.uuid4().hex[:24]))
+        playback_info['current_token'] = token
+
+        response_builder.add_directive(
+            PlayDirective(
+                play_behavior=play_behavior,
+                audio_item=AudioItem(
+                    stream=Stream(
+                        token=token,
+                        url=song_info.stream.audio_url,
+                        offset_in_milliseconds=offset_in_ms,
+                        expected_previous_token=None),
+                    metadata=Attributes.get_audio_item_metadata(song_info.metadata)))
+        ).set_should_end_session(True)
+        if not is_playback:
+            response_builder.speak(data.PLAYBACK_PLAY.format(ssml_safe(song_info.metadata.title), ssml_safe(song_info.metadata.artist)))
+        return response_builder.response
+
+    @staticmethod
+    def stop(handler_input: HandlerInput) -> Response:
+        playback_info = Attributes.get_playback_info(handler_input)
+        playback_info['in_playback_session'] = False
+        # StopDirective clears Alexa's AudioPlayer queue, but our own session
+        # attributes don't know that -- if PlaybackNearlyFinished had already
+        # enqueued the next track before this stop, next_stream_enqueued would
+        # stay True and PlaybackNearlyFinished would then skip re-enqueuing on
+        # the next real playback, leaving no track queued for the *actual*
+        # next auto-advance.
+        playback_info['next_stream_enqueued'] = False
+
+        handler_input.response_builder.add_directive(StopDirective())
+        return handler_input.response_builder.response
+    
+    @staticmethod
+    def pause(handler_input: HandlerInput) -> Response:
+        return Controller.stop(handler_input)
+
+    
+    @staticmethod
+    def resume(handler_input: HandlerInput, is_playback=False, guard_active=False) -> Response:
+        playback_info = Attributes.get_playback_info(handler_input)
+        was_enqueued = playback_info.get('next_stream_enqueued', False)
+        playback_info["next_stream_enqueued"] = False
+
+        metadata = Attributes.get_metadata_by_play_order(handler_input)
+        # Self-correction for a stale persisted session. The web remote arms
+        # the exact track it is showing on every resume; when that names a
+        # *different* track than this session remembers (a voice play the
+        # skill never persisted, a lost save, or voice and web driving two
+        # Amazon accounts with separate persistence), resuming the persisted
+        # track would restart the wrong song -- e.g. the one playing *before*
+        # the voice request instead of the requested one. Peek (never consume)
+        # so an in-flight fresh play/seek keeps its own arm, and only honor
+        # fresh 'resume' arms so an old intent can never hijack playback.
+        try:
+            armed, arm_error = Api.get_armed_play(handler_input, peek=True)
+            if isinstance(arm_error, SkillAuthorizationError):
+                return Controller.error_response(handler_input, arm_error, is_playback)
+        except SkillAuthorizationError:
+            raise
+        except Exception:
+            logger.exception('resume: armed-play peek failed; using persisted session')
+            armed = None
+        fresh_resume = False
+        if armed:
+            armed_video_id, armed_offset_ms, armed_age_s, armed_kind = armed
+            fresh = armed_age_s is None or armed_age_s <= RESUME_ARM_MAX_AGE_S
+            fresh_resume = armed_kind == 'resume' and fresh and bool(armed_video_id)
+            persisted_video_id = metadata.video_id if metadata else None
+            if (armed_kind == 'resume' and fresh and armed_video_id
+                    and armed_video_id != persisted_video_id):
+                logger.info(f'resume: persisted {persisted_video_id} disagrees with '
+                            f'armed {armed_video_id} (age {armed_age_s}); '
+                            f'playing the armed track')
+                return Controller.fetch_video_id(
+                    handler_input, armed_video_id,
+                    is_playback=is_playback,
+                    offset_in_ms=armed_offset_ms)
+            if (armed_kind == 'resume' and fresh and armed_video_id == persisted_video_id):
+                playback_info['offset_in_ms'] = max(0, int(armed_offset_ms or 0))
+        context_player = getattr(handler_input.request_envelope.context, 'audio_player', None)
+        activity = getattr(context_player, 'player_activity', None)
+        if guard_active and not fresh_resume and str(getattr(activity, 'value', activity)) == 'PLAYING':
+            playback_info['next_stream_enqueued'] = was_enqueued
+            return handler_input.response_builder.set_should_end_session(True).response
+        if not metadata:
+            return Controller.error_response(handler_input, data.NOTHING_TO_RESUME, is_playback)
+        if (not getattr(data, 'ALEXA_SKILL_NAMESPACE', '') and playback_info.get('stream_url')
+                and playback_info.get('stream_url_video_id') == metadata.video_id):
+            stream = player_models.Stream(playback_info.get('stream_url'))
+        else:
+            stream, error = Api.get_stream(handler_input, metadata.video_id)
+            if error: return Controller.error_response(handler_input, error, is_playback)
+        song_info = player_models.SongInfo(metadata, stream)
+
+        return Controller.play(handler_input, song_info, is_playback=is_playback)
+
+    @staticmethod
+    def record_stop(handler_input: HandlerInput, token_video_id, request_offset_ms) -> bool:
+        """Record an AudioPlayer stop/pause offset. Returns True when the stop
+        is stale -- it names a *different* track than this session's current
+        one. That happens when a voice play interrupts the current track: Alexa
+        emits PlaybackStopped for the interrupted track, possibly after the new
+        track already started. A stale stop must change nothing: overwriting
+        the new track's offset with the old song's position corrupts the next
+        resume (wrong position, and -- combined with a lost persistence save --
+        the wrong song entirely). Never raises."""
+        try:
+            playback_info = Attributes.get_playback_info(handler_input)
+            request = getattr(handler_input.request_envelope, 'request', None)
+            event_token = getattr(request, 'token', None)
+            if event_token and playback_info.get('current_token') and event_token != playback_info['current_token']:
+                return True
+            metadata = Attributes.get_metadata_by_play_order(handler_input)
+            current_video_id = metadata.video_id if metadata else None
+            if (token_video_id and current_video_id
+                    and token_video_id != current_video_id):
+                logger.info(f'record_stop: ignoring stale stop for {token_video_id} '
+                            f'(current is {current_video_id})')
+                return True
+            playback_info["offset_in_ms"] = max(0, int(request_offset_ms or 0))
+            # Any stop (skill stop directive, device button, interruption) clears
+            # Alexa's AudioPlayer queue, so an already-enqueued next track is gone.
+            # Reset the flag so the next real playback re-enqueues instead of
+            # trusting a stale "already enqueued" state and stopping at the end.
+            playback_info["next_stream_enqueued"] = False
+            return False
+        except Exception:
+            logger.exception('record_stop failed')
+            return False
+
+    @staticmethod
+    def seek(handler_input: HandlerInput, offset_in_ms: int, is_playback=True) -> Response:
+        """Jump the current track to offset_in_ms. Alexa's AudioPlayer has no
+        seek directive, so we re-issue a PlayDirective (REPLACE_ALL) for the same
+        track starting at the requested offset. The stream re-buffers from there."""
+        metadata = Attributes.get_metadata_by_play_order(handler_input)
+        if not metadata:
+            return Controller.error_response(handler_input, data.NOTHING_TO_RESUME, is_playback)
+
+        playback_info = Attributes.get_playback_info(handler_input)
+        if offset_in_ms < 0:
+            offset_in_ms = 0
+        playback_info["offset_in_ms"] = offset_in_ms
+        playback_info["next_stream_enqueued"] = False
+
+        # Paired streams must be freshly authorized; cached capabilities may
+        # have expired or belong to an earlier binding.
+        if (not getattr(data, 'ALEXA_SKILL_NAMESPACE', '') and playback_info.get('stream_url')
+                and playback_info.get('stream_url_video_id') == metadata.video_id):
+            stream = player_models.Stream(playback_info.get('stream_url'))
+        else:
+            stream, error = Api.get_stream(handler_input, metadata.video_id)
+            if error:
+                return Controller.error_response(handler_input, error, is_playback)
+        song_info = player_models.SongInfo(metadata, stream)
+        return Controller.play(handler_input, song_info, is_playback=is_playback)
+
+    @staticmethod
+    def _discard_stale_successors(handler_input):
+        """An authoritative queue end invalidates every locally stored successor."""
+        info = Attributes.get_playback_info(handler_input)
+        playlist = Attributes.get_playlist(handler_input)
+        order = info.get("play_order") or list(range(len(playlist)))
+        kept = [playlist[i] for i in order[:info.get("index", 0) + 1] if 0 <= i < len(playlist)]
+        Attributes.get_user_attributes(handler_input)["playlist"] = [asdict(item) for item in kept]
+        info["play_order"] = list(range(len(kept)))
+        info["index"] = max(0, len(kept) - 1)
+
+
+    @staticmethod
+    def play_next(handler_input: HandlerInput, is_playback=False) -> Response:
+        playlist = Attributes.get_playlist(handler_input)
+        if not playlist:
+            return Controller.error_response(handler_input, data.NOTHING_TO_RESUME, is_playback)
+        playback_info = Attributes.get_playback_info(handler_input)
+        playback_setting = Attributes.get_playback_setting(handler_input)
+        current_index = playback_info.get("index", 0)
+        current = Attributes.get_metadata_by_play_order(handler_input, current_index)
+        if not current:
+            return Controller.error_response(handler_input, data.NOTHING_TO_RESUME, is_playback)
+        authoritative, error = Api.next_track(handler_input, current.video_id)
+        if error:
+            # Fail closed: a stale skill window may contain deleted tracks.
+            return Controller.error_response(handler_input, error, is_playback)
+        if authoritative is not None and authoritative.video_id:
+            next_index = Controller._stage_next_track(handler_input, authoritative, current_index)
+            if next_index is None:
+                return Controller.error_response(handler_input, data.NOTHING_TO_RESUME, is_playback)
+        elif playback_setting.get("loop"):
+            # Older servers may not support authoritative loop resolution.
+            # Do not replay the old window: a deleted first row may live there.
+            return Controller.error_response(handler_input, data.NOTHING_TO_RESUME, is_playback)
+        else:
+            Controller._discard_stale_successors(handler_input)
+            if Controller.extend_queue(handler_input):
+                next_index = playback_info.get("index", 0) + 1
+            else:
+                if not is_playback:
+                    handler_input.response_builder.speak(data.PLAYBACK_NEXT_END)
+                return handler_input.response_builder.add_directive(StopDirective()).response
+
+        playback_info["index"] = next_index
+        playback_info["offset_in_ms"] = 0
+        playback_info["next_stream_enqueued"] = False
+
+        metadata = Attributes.get_metadata_by_play_order(handler_input)
+        if not metadata:
+            return Controller.error_response(handler_input, data.NOTHING_TO_RESUME, is_playback)
+        stream, error = Api.get_stream(handler_input, metadata.video_id)
+        if error: return Controller.error_response(handler_input, error, is_playback)
+        song_info = player_models.SongInfo(metadata, stream)
+
+        return Controller.play(handler_input, song_info, is_playback=is_playback)
+
+    @staticmethod
+    def play_previous(handler_input: HandlerInput, is_playback=False) -> Response:
+        playlist = Attributes.get_playlist(handler_input)
+        if not playlist:
+            return Controller.error_response(handler_input, data.NOTHING_TO_RESUME, is_playback)
+        playback_info = Attributes.get_playback_info(handler_input)
+        playback_setting = Attributes.get_playback_setting(handler_input)
+        prev_index = playback_info.get("index", 0) - 1
+
+        if prev_index == -1:
+            if playback_setting.get("loop"):
+                prev_index += len(playlist)
+            else:
+                if not is_playback:
+                    handler_input.response_builder.speak(
+                        data.PLAYBACK_PREVIOUS_END)
+
+                return handler_input.response_builder.add_directive(
+                    StopDirective()).response
+
+        playback_info["index"] = prev_index
+        playback_info["offset_in_ms"] = 0
+        playback_info["next_stream_enqueued"] = False
+
+        metadata = Attributes.get_metadata_by_play_order(handler_input)
+        if not metadata:
+            return Controller.error_response(handler_input, data.NOTHING_TO_RESUME, is_playback)
+        stream, error = Api.get_stream(handler_input, metadata.video_id)
+        if error: return Controller.error_response(handler_input, error, is_playback)
+        song_info = player_models.SongInfo(metadata, stream)
+
+        return Controller.play(handler_input, song_info, is_playback=is_playback)

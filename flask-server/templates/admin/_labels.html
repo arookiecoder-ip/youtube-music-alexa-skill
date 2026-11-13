@@ -1,0 +1,58 @@
+{# Readable names for the codes the audit log stores.
+
+   The stored action stays the filter value and the machine-readable truth; this
+   is only what a person sees in a table. Anything not listed falls back to the
+   code with its underscores turned into words, so a new event is never blank or
+   left showing `some_new_action` in a report. #}
+{% set ACTION_LABELS = {
+  'account_delete_failed': 'Account deletion failed',
+  'account_deleted_self': 'Account deleted itself',
+  'admin_login': 'Administrator signed in',
+  'admin_login_denied': 'Administrator sign-in denied',
+  'admin_logout': 'Administrator signed out',
+  'backup_created': 'Backup created',
+  'email_verified': 'Email verified',
+  'invitation_email_sent': 'Invitation sent',
+  'login_blocked': 'Sign-in blocked',
+  'login_failed': 'Failed sign-in',
+  'login_success': 'Signed in',
+  'magic_login': 'Signed in with an email link',
+  'password_reset': 'Password reset',
+  'password_reset_failed': 'Password reset refused',
+  'password_reset_code_email_sent': 'Reset code sent',
+  'password_reset_code_requested': 'Reset code requested',
+  'password_reset_completed': 'Password reset completed',
+  'password_reset_email_sent': 'Reset email sent',
+  'password_reset_requested': 'Password reset requested',
+  'player_login': 'Signed in to the player',
+  'profile_updated': 'Profile updated',
+  'provider_disconnected': 'Service disconnected',
+  'reauth_code_email_sent': 'Confirmation code sent',
+  'sessions_revoked_self': 'Signed out everywhere',
+  'signup': 'Account self-created',
+  'system_bootstrap': 'System bootstrapped',
+  'system_setting_changed': 'System setting changed',
+  'test_email_sent': 'Test email sent',
+  'totp_disabled': 'Two-factor turned off',
+  'totp_enabled': 'Two-factor turned on',
+  'totp_enrollment_expired': 'Two-factor setup expired',
+  'totp_enrollment_failed': 'Two-factor setup failed',
+  'totp_enrollment_replaced': 'New authenticator started',
+  'totp_enrollment_started': 'Two-factor setup started',
+  'totp_reauth_failed': 'Verification for a two-factor change failed',
+  'totp_reset': 'Two-factor reset by an administrator',
+  'user_created': 'Account created',
+  'user_deleted': 'Account deleted',
+  'user_permanently_deleted': 'Account permanently deleted',
+  'user_restored': 'Account restored',
+  'user_status_changed': 'Account status changed',
+  'user_updated': 'Account updated',
+  'verification_code_email_sent': 'Verification code sent',
+  'verification_code_resent': 'Verification code resent',
+  'verification_email_sent': 'Verification email sent',
+  'youtube_server_signin_started': 'YouTube sign-in started'
+} %}
+
+{% macro action_name(action) -%}
+  {{- ACTION_LABELS.get(action, action | replace('_', ' ') | capitalize) -}}
+{%- endmacro %}

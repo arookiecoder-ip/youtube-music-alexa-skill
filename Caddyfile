@@ -7,9 +7,9 @@
 # If you set ALEXA_PROXY_BASE_URL in .env to a DIFFERENT hostname than
 # PUBLIC_BASE_URL (i.e. the Amazon login proxy gets its own domain instead
 # of sharing /alexa/proxy/* below), add a second site block instead:
-#   alexa.example.com {
-#       reverse_proxy ytmusic:5001
-# 
+# Repeat the authenticated /alexa/proxy/* handler below in that site block;
+# never expose port 5001 with an unguarded reverse_proxy.
+#
 
 {$SITE_ADDRESS:localhost} {
     handle_path /youtube-login/* {
@@ -26,6 +26,13 @@
         reverse_proxy youtube-browser:6080
     }
     handle /alexa/proxy/* {
+        forward_auth ytmusic:5000 {
+            uri /alexa/proxy_authorize/
+            header_up -Connection
+            header_up -Upgrade
+            copy_headers X-MusicBox-Proxy-Authorization
+        }
+        header Cache-Control "no-store"
         reverse_proxy ytmusic:5001
     }
     handle {

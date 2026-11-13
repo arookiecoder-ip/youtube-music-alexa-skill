@@ -15,7 +15,7 @@ def _install_stubs():
     os.environ.setdefault("SECRET_KEY", "test-secret-for-download-latency")
     os.environ.setdefault("REMOTE_USER", "test-owner")
     os.environ.setdefault("REMOTE_PASSWORD", "test-pass")
-    os.environ.setdefault("API_KEY", "0123456789abcdef0123456789abcdef")
+    os.environ.setdefault("API_KEY", "0123456789abcdef0123456789abcdef")  # gitleaks:allow -- synthetic fixture credential
 
     if "ytmusicapi" not in sys.modules:
         ytmusicapi = types.ModuleType("ytmusicapi")
@@ -56,6 +56,7 @@ def _install_stubs():
                         type(attr, (), {"__init__": lambda self, *a, **kw: None}))
             ybs.browser_client_is_signed_in = lambda *a, **kw: False
             ybs.promote_browser_headers = lambda *a, **kw: None
+            ybs.normalize_browser_headers = lambda value: value
             sys.modules["youtube_browser_session"] = ybs
 
 

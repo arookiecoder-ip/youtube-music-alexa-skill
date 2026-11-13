@@ -1,0 +1,41 @@
+{% extends "selfservice_base.html" %}
+{% from "_form_macros.html" import field_error, general_error, honeypot, code_field %}
+
+{% block page_title %}Confirm your email{% endblock %}
+{% block brand_sub %}Enter your code{% endblock %}
+
+{% block card %}
+{# There is no link in the email to click, so this is the page the code is for.
+   It is reachable cold (typed username) and warm (the browser that just signed
+   up), and neither answer tells a stranger which one happened. #}
+<form method="post" action="/verify" class="step active">
+  <input type="hidden" name="_csrf" value="{{ csrf_form }}">
+  {{ honeypot() }}
+  <p class="step-title">Enter the six-digit code</p>
+  <p class="step-hint">
+    We sent a code to <b>{{ masked_email or 'the address you signed up with' }}</b>.
+    It expires after {{ code_minutes }} minutes, works once, and stops working after
+    {{ code_attempts }} wrong tries.
+  </p>
+  {{ general_error(form_error) }}
+
+  <label for="username">Username</label>
+  <input id="username" name="username" type="text" value="{{ username or '' }}"
+         autocomplete="username" maxlength="120" spellcheck="false" required>
+  {{ field_error(field_errors, 'username') }}
+
+  {{ code_field(label='Verification code') }}
+  {{ field_error(field_errors, 'code') }}
+
+  <button type="submit" class="primary" data-submit>Confirm my email</button>
+  <p class="step-hint">
+    Wrong address, or nothing arrived?
+    <a href="/resend-code">Send a new code</a>.
+  </p>
+</form>
+{% endblock %}
+
+{% block door_links %}
+  <a href="{{ login_url }}">Back to sign in</a>
+  <a href="/resend-code">Send a new code</a>
+{% endblock %}

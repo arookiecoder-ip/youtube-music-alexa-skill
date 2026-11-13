@@ -11,7 +11,7 @@ class LoggedOutEchoTests(unittest.TestCase):
         self.out={'playback_output':'alexa','output_serial':'echo-one','output_token':'echo-token'}
         self.np={'playing':True,'playback_processing':False,'video_id':'AAAAAAAAAAA'}
         self.remote=SimpleNamespace(connection_state=False,_devices_raw=[{'serialNumber':'echo-one','accountName':'Bedroom'}],devices=Mock(return_value=(None,'Not signed in')),command=Mock())
-        self.app=Flask(__name__);self.ns=dict(app=self.app,request=request,jsonify=jsonify,
+        self.app=Flask(__name__);self.ns=dict(app=self.app,request=request,jsonify=jsonify,_alexa_access_enabled=lambda:True,
             _playback_output=SimpleNamespace(snapshot=lambda:dict(self.out)),alexa_remote=SimpleNamespace(remote=self.remote),
             _get_now_playing=lambda:dict(self.np),error_response=lambda message,status,**kwargs:(jsonify(error={'message':message,**kwargs}),status),
             _cancel_pending_dispatch=Mock(),OutputConflict=RuntimeError)

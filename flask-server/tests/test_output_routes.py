@@ -10,11 +10,15 @@ import copy
 from test_app_queue import PhoneQueueTests, A, B, track
 from playback_failover import PlaybackFailoverBudget
 from playback_contract import restore_snapshot
+from alexa_playback_errors import authentication_failure
 
 
 class OutputRoutesTests(PhoneQueueTests):
     def setUp(self):
         super().setUp()
+        self.namespace['_alexa_access_enabled'] = lambda: True
+        self.namespace['_alexa_auth_error'] = authentication_failure
+        self.namespace['_stop_alexa_auth_failure'] = Mock()
         self.namespace['restore_snapshot'] = restore_snapshot
         self.namespace["_playback_failover_budget"] = PlaybackFailoverBudget()
         self.seek_dispatch = Mock(return_value=None)
@@ -24,6 +28,9 @@ class OutputRoutesTests(PhoneQueueTests):
         self.namespace.update(_alexa_volume_lock=threading.RLock(), _alexa_volume_grace={},
             _record_volume_state=Mock())
         self.arm = Mock()
+        self.background = []
+        self.namespace.update(_bg_thread=lambda target, args=(), name=None: self.background.append((target, args, name)),
+            _lookup_and_update_np=Mock(), _refresh_radio_queue=Mock(), _prewarm_queue_audio=Mock())
         self.namespace.update(_np_snapshot=lambda serial=None: copy.deepcopy(self.state), copy=copy, threading=threading, logger=Mock(), _effective_serial=lambda serial: serial,
             _touch_cached_audio=Mock(), _ensure_audio_ready_for_play=Mock(), _arm_play=self.arm,
             _watch_resume_confirmation=Mock(), _ARMED_PLAYS_LOCK=threading.Lock(), _ARMED_PLAYS={})

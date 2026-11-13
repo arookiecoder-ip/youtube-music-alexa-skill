@@ -26,7 +26,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 os.environ.setdefault("SECRET_KEY", "test-secret-reorder-authority")
 os.environ.setdefault("REMOTE_USER", "test-owner")
 os.environ.setdefault("REMOTE_PASSWORD", "test-pass")
-os.environ.setdefault("API_KEY", "0123456789abcdef0123456789abcdef")
+os.environ.setdefault("API_KEY", "0123456789abcdef0123456789abcdef")  # gitleaks:allow -- synthetic fixture credential
 
 if "ytmusicapi" not in sys.modules:
     ytmusicapi = types.ModuleType("ytmusicapi")
@@ -63,6 +63,7 @@ if "youtube_browser_session" not in sys.modules:
     ybs.browser_client_is_signed_in = lambda *args, **kwargs: False
     ybs.is_authentication_error = lambda *args, **kwargs: False
     ybs.promote_browser_headers = lambda *args, **kwargs: None
+    ybs.normalize_browser_headers = lambda value: value
     sys.modules["youtube_browser_session"] = ybs
 
 import server  # noqa: E402
@@ -107,6 +108,13 @@ class ReorderAuthorityBase(unittest.TestCase):
             p = mock.patch.object(target, attr)
             self._patches.append(p)
             p.start()
+        # The logged-out Echo guard answers 409 once any earlier module has
+        # really checked the Amazon session; queue authority is what this file
+        # tests, so declare the Echo signed in.
+        signed_in = mock.patch.object(server.alexa_remote.remote,
+                                      'connection_state', True, create=True)
+        self._patches.append(signed_in)
+        signed_in.start()
         # Record every _schedule_play_dispatch call (the auto-skip trigger).
         self.dispatches = []
         dispatch_patch = mock.patch.object(

@@ -1,5 +1,14 @@
   *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
+  /* One focus language for the whole player. It sits at the lowest possible
+     specificity (`:where`) so every surface that already draws its own ring keeps
+     it, and the controls that had nothing — sidebar toggles, links, sheet
+     buttons — stop being invisible to a keyboard. */
+  :where(a, button, summary, input, select, textarea, [tabindex]):focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+
   /* Artwork is interactive UI, not draggable page content. This also stops
      the image callout/drag gesture on mobile Safari and Chromium. */
   img {
@@ -79,7 +88,7 @@
     flex: none;
     width: 40px;
     height: 40px;
-    border-radius: 10px;
+    border-radius: 0;
     background: var(--accent);
     display: flex;
     align-items: center;
@@ -241,47 +250,10 @@
     100% { transform: scale(2); opacity: 0; }
   }
 
-  :root {
-    --bg: #030303;
-    --surface: #212121;
-    --border: #3d3d3d;
-    --text: #ffffff;
-    --muted: #aaaaaa;
-    --accent: #e8590c;
-    --accent-hover: #f76707;
-    --danger: #e03131;
-    --ok: #2f9e44;
-    /* Spacing scale */
-    --space-1: 4px;
-    --space-2: 8px;
-    --space-3: 12px;
-    --space-4: 16px;
-    --space-5: 24px;
-    --space-6: 32px;
-    /* Border radius */
-    --radius-sm: 4px;
-    --radius-md: 8px;
-    --radius-lg: 12px;
-    --radius-xl: 16px;
-    --radius-full: 9999px;
-    /* Card / row tokens */
-    --card-radius: 8px;
-    --card-padding-x: 14px;
-    --card-padding-y: 10px;
-    --card-gap: 10px;
-    /* Typography scale */
-    --text-2xs: 0.55rem;
-    --text-xs: 0.62rem;
-    --text-sm: 0.7rem;
-    --text-base: 0.85rem;
-    --text-lg: 1.05rem;
-    --text-xl: 1.25rem;
-    --text-2xl: 1.6rem;
-    --text-3xl: 2.2rem;
-  }
+  /* Colour and size tokens live in theme.css, which every surface loads first. */
 
   body {
-    font-family: -apple-system, 'Segoe UI', system-ui, sans-serif;
+    font-family: var(--font-sans);
     background: var(--bg);
     color: var(--text);
     min-height: 100dvh;
@@ -447,8 +419,11 @@
     transition: border-color .15s;
   }
   select { cursor: pointer; -webkit-appearance: none; }
-  input::placeholder { color: #3e3e3e; }
-  select:focus, input:focus { outline: none; border-color: var(--accent); }
+  input::placeholder { color: var(--faint); }
+  select:focus, input:focus { border-color: var(--accent); }
+  /* The ring is for the keyboard. A mouse click into a field gets the border
+     change only, which is what the rest of the player does for hover. */
+  select:focus:not(:focus-visible), input:focus:not(:focus-visible) { outline: none; }
 
   /* ---- Custom device dropdown ---- */
   .custom-select {
@@ -473,7 +448,7 @@
     overflow: hidden;
     text-overflow: ellipsis;
   }
-  .custom-select-trigger:hover { border-color: #444; }
+  .custom-select-trigger:hover { border-color: var(--border-hover); }
   .custom-select.open .custom-select-trigger { border-color: var(--accent); }
   .custom-select-trigger .cs-arrow {
     flex: none;
@@ -537,7 +512,7 @@
     justify-content: center;
   }
   button[hidden] { display: none; }
-  button:hover { border-color: #444; }
+  button:hover { border-color: var(--border-hover); }
   button:active { /* Ripple effect handled by JS */ }
   button:disabled { opacity: .3; cursor: default; pointer-events: none; }
   /* A disabled button showing a .spin icon (Sync/Import in progress) should
@@ -554,6 +529,9 @@
     letter-spacing: .1em;
     font-size: .72rem;
     padding: 10px 20px;
+    /* Every labelled primary action on the site is this tall; the dialog
+       footers were 5px shorter than the fields directly above them. */
+    min-height: var(--control-h-md);
   }
   .btn-accent:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
   .play-all-btn { display: flex; }
@@ -578,7 +556,7 @@
   }
   #login-section input {
     width: 100%;
-    margin-bottom: 8px;
+    margin-bottom: var(--space-3);
     background: var(--bg);
     color: var(--text);
     border: 1px solid var(--border);
@@ -586,8 +564,8 @@
     font-size: var(--text-base);
     font-family: inherit;
   }
-  #login-section input:focus { outline: none; border-color: var(--accent); }
-  #login-section input::placeholder { color: #3e3e3e; }
+  #login-section input:focus { border-color: var(--accent); }
+  #login-section input:focus:not(:focus-visible) { outline: none; }
 
   /* ---- Section head (label + clear-all button) ---- */
   .section-head {
@@ -694,7 +672,7 @@
     font-weight: 800;
     line-height: 1.2;
     letter-spacing: -.02em;
-    color: #333;
+    color: var(--text);
     opacity: 0;
     animation: heroFadeIn .5s ease forwards;
   }
@@ -702,7 +680,7 @@
   .idle-hero-text:nth-child(2) { animation-delay: .25s; }
   .idle-hero-text:nth-child(3) { animation-delay: .4s; }
   .idle-hero-accent {
-    background: linear-gradient(135deg, var(--accent), #ff6a00);
+    background: var(--accent-grad);
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
     background-clip: text;
@@ -710,7 +688,7 @@
   .idle-hero-sub {
     margin-top: 8px;
     font-size: .72rem;
-    color: #444;
+    color: var(--muted);
     letter-spacing: .06em;
     opacity: 0;
     animation: heroFadeIn .5s ease forwards;
@@ -823,18 +801,23 @@ body.jam-guest .jam-owner-only {
    ============================================================ */
 
 .browser-auth-modal { width: min(560px, 94vw); }
-.browser-auth-modal .login-modal-body { display: grid; gap: 14px; }
-.browser-auth-actions { display: flex; flex-wrap: wrap; gap: 10px; }
-.browser-auth-actions button { min-height: 42px; padding: 10px 14px; }
+.browser-auth-modal .login-modal-body { display: grid; gap: var(--space-4); }
+.browser-auth-actions { display: flex; flex-wrap: wrap; gap: var(--space-3); }
+.browser-auth-actions button { min-height: var(--control-h-md); padding: 0 var(--space-4); }
 .browser-session-link { color: var(--accent); font-weight: 700; }
-.browser-auth-advanced { border-top: 1px solid var(--border); padding-top: 14px; }
-.browser-auth-advanced summary { cursor: pointer; color: var(--muted); }
-.browser-auth-advanced[open] summary { margin-bottom: 12px; }
-.browser-auth-input { box-sizing: border-box; width: 100%; margin: 10px 0; }
+.browser-auth-advanced { border-top: 1px solid var(--border); padding-top: var(--space-4); }
+.browser-auth-advanced summary { cursor: pointer; color: var(--muted); min-height: 24px; }
+/* "Advanced" is a one-line disclosure: readable at a desk with a mouse, but a
+   thumb needs the standard control height. The width half is the phone case. */
+@media (hover: none), (max-width: 899px) {
+  .browser-auth-advanced summary { min-height: var(--control-h-md); }
+}
+.browser-auth-advanced[open] summary { margin-bottom: var(--space-3); }
+.browser-auth-input { box-sizing: border-box; width: 100%; margin: var(--space-3) 0; }
 .auth-status { min-height: 22px; margin: 0; color: var(--muted); }
-#youtube-browser-auth-modal-wrap[data-browser-state="connected"] .auth-status { color: #4ade80; }
+#youtube-browser-auth-modal-wrap[data-browser-state="connected"] .auth-status { color: var(--ok-tint); }
 #youtube-browser-auth-modal-wrap[data-browser-state="reconnect_required"] .auth-status,
-#youtube-browser-auth-modal-wrap[data-browser-state="unavailable"] .auth-status { color: #ffb4b0; }
+#youtube-browser-auth-modal-wrap[data-browser-state="unavailable"] .auth-status { color: var(--danger-tint); }
 
 /* Auth Modals */
 .login-modal-wrap {
@@ -855,7 +838,7 @@ body.jam-guest .jam-owner-only {
 .login-modal {
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: 0;
   box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55);
   width: 90%;
   max-width: 400px;
@@ -883,7 +866,7 @@ body.jam-guest .jam-owner-only {
   padding: 4px;
   width: 32px;
   height: 32px;
-  border-radius: 3px;
+  border-radius: 0;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -944,9 +927,11 @@ body.jam-guest .jam-owner-only {
 .browser-auth-save:disabled { opacity: .55; cursor: wait; }
 
 /* ============================================================
-   Redesign shell tokens. Moved from redesign.css. These override
-   --card-radius (8px -> 12px) and add rail/topbar/playbar sizing
-   used by the desktop shell, header, sidebar, and player.
+   Shell layout tokens. Moved from redesign.css. These size the
+   rail, topbar, playbar and queue column used by the desktop shell,
+   header, sidebar and player. Colour and geometry come from
+   theme.css -- nothing here may redeclare them, which is what let a
+   12px card radius survive here after the product went square.
    ============================================================ */
 :root {
   --rail-w: 224px;
@@ -958,11 +943,9 @@ body.jam-guest .jam-owner-only {
   --playbar-h: 72px;
   --playbar-h-mobile: 72px;
   --queue-w: 320px;
-  --accent-grad: linear-gradient(135deg, var(--accent), #ff6a00);
-  --shell-bg: #030303;
-  --pill-bg: #212121;
-  /* Softer, rounder look everywhere */
-  --card-radius: 12px;
+  --accent-grad: linear-gradient(135deg, var(--accent), var(--accent-hover));
+  --shell-bg: var(--bg);
+  --pill-bg: var(--surface);
 }
 
 /* ============================================================
@@ -1077,19 +1060,18 @@ img[data-image-ready="true"] {
 
 #login-section {
   background: var(--shell-bg);
-  border: 1px solid rgba(255, 255, 255, .08);
+  border: 1px solid var(--lift);
   border-radius: 0;
   max-width: 420px;
   margin: 10vh auto 0;
   padding: 28px 26px;
   box-shadow: 0 24px 80px rgba(0, 0, 0, .5);
 }
-#login-section input { border-radius: 0; }
 #login-section .btn-accent {
-  border-radius: 0;
+  width: 100%;
   background: var(--accent-grad);
   border: none;
-  padding: 12px 20px;
+  padding: var(--space-3) var(--space-5);
 }
 
 /* Blank state: the navigation rail and persistent playbar belong to the
@@ -1121,23 +1103,17 @@ body:not(.app-logged-in) .hamburger-btn {
    from redesign.css.
    ============================================================ */
 
-.confirm-dialog { border-radius: 4px; background: #1e1e1e !important; border: 1px solid rgba(255,255,255,.12) !important; }
-.confirm-actions button { border-radius: 6px; }
-.btn-accent { border-radius: var(--radius-full); }
-
-/* Buttons across the app pick up soft corners */
+/* One edge language for every control: buttons take the geometry token rather
+   than the engine default, so the whole site squares or rounds from theme.css. */
 button { border-radius: var(--radius-md); }
 
 /* Thin dark scrollbars */
 * {
   scrollbar-width: thin;
-  scrollbar-color: #333 transparent;
+  scrollbar-color: var(--scrollbar-thumb) transparent;
 }
 ::-webkit-scrollbar { width: 8px; height: 8px; }
-::-webkit-scrollbar-thumb {
-  background: #333;
-  border-radius: var(--radius-full);
-}
+::-webkit-scrollbar-thumb { background: var(--scrollbar-thumb); }
 ::-webkit-scrollbar-track { background: transparent; }
 
 /* ============================================================

@@ -1,10 +1,10 @@
 # Music Box backend architecture
 
-Verified against `master` at `08139f16aac382d80703d59104838c4ecd1fb40a`, 2026-10-25. [Changelog](CHANGELOG.md) · [Android architecture](https://github.com/arookiecoder-ip/MusicBox-APP/blob/feat/alexa-backend/ARCHITECTURE.md).
+Updated for the security remediation working tree based on `a17cc6c`. See [security rollout and verification](docs/SECURITY-ROLLOUT.md) and the [account route contract](docs/api-security-contract.json).
 
 ## Runtime and authority
 
-One owner can operate multiple browser/phone/Echo renderers and invite restricted Jam guests. One Flask process is authoritative for shared queue and output state. The supported Docker image runs Waitress with 16 threads; ownership locks, leases, queue decisions, URL caches and in-memory counters are process-local. Multiple independent WSGI processes/replicas would split that authority.
+Each account owns its queue, output lease and provider sessions; browser/phone/Echo renderers operate within that account. Owners may invite restricted Jam guests. One Flask process is authoritative for shared queue and output state. The supported Docker image runs Waitress with 16 threads; ownership locks, leases, queue decisions, URL caches and in-memory counters are process-local. Multiple independent WSGI processes/replicas would split that authority.
 
 ```mermaid
 flowchart TB
@@ -13,7 +13,8 @@ flowchart TB
     HTTPS --> API[Flask API / shared state]
     API --> Store[SQLite persistence]
     API --> Catalog[ytmusicapi catalog / account data]
-    API --> Resolver[Private Node YouTube.js resolver]
+    API --> Resolver[Private Node YouTube.js resolver per credential]
+    Resolver --> PO[Private PO-token provider]
     Resolver --> Media[YouTube media CDN]
     Media --> Relay[Python authenticated byte relay]
     Relay --> Browser
@@ -65,10 +66,10 @@ The normal Docker playback path uses YouTube.js, not a fresh yt-dlp process per 
 
 | Resource | Current bound / behavior |
 | --- | --- |
-| Current audio bytes | One anonymous temporary file, at most 64 MiB retained bytes and 512 tracked ranges. Sparse holes are never served as valid audio. |
+| Current audio bytes | One anonymous temporary file per active account relay, at most 64 MiB retained bytes and 512 tracked ranges. Sparse holes are never served as valid audio. |
 | URL cache | Up to 128 entries; at most five minutes and less near signed expiry. Bound to cookie/session generation. |
-| Resolver work | Four concurrent resolutions; duplicate requests coalesce. |
-| Active audio responses | Eight response slots; capacity exhaustion is retryable. |
+| Resolver work | Eight concurrent resolutions per credential worker; duplicate requests coalesce. A 12-second total deadline precedes the Python 15-second RPC deadline; optional PO-token work is limited to 1.5 seconds. |
+| Active audio responses | Eight global slots by default (`AUDIO_GLOBAL_STREAMS`) plus eight per account relay; capacity exhaustion is retryable. Retired relays free temporary retention; busy resolvers are not evicted. |
 | Preparation pool | Four workers, at most 16 unique queued/running jobs; speculation limited to two workers/jobs, with demand promotion. |
 | Device presence | 15-second TTL; negotiated waits up to eight seconds do not themselves renew a disconnected device. |
 | Command/error/diagnostic history | Bounded stores/journal/payloads; no unbounded request-thread fan-out for preparation. |
@@ -122,7 +123,7 @@ Absolute seek uses Play with `offsetInMilliseconds`, so stream/skill/device star
 
 Owner web sessions, optional TOTP, JSON mutation/CSRF checks and live-session revocation protect account/control APIs. Jam is a restricted guest capability, not an owner login. Status details and error acknowledgment retain owner authorization even when subroutes are called directly.
 
-`audio_credentials.py` issues scoped audio tokens after owner-session authentication (two hours playback, 24 hours downloads). They do not authorize account or queue mutations. Historical skill/global-key access remains for compatibility; current Android BuildConfig embeds no global server key. Audio authorization and range delivery remain in Flask rather than exposing temporary media directly through Caddy.
+`audio_credentials.py` issues scoped audio tokens after account/owner-session authentication (two hours playback, 24 hours downloads). Account tokens bind the live account session and credential generation and establish that tenant before routing. They do not authorize account or queue mutations. In multi-user mode the updated skill supplies verified Alexa user/device headers and pairs each Echo using a short-lived account code. Stream URLs carry video-bound account-generation capabilities. Key-only legacy skill owner behavior is an explicit opt-in (`ALLOW_LEGACY_SKILL_OWNER=1`), not the default; current Android BuildConfig embeds no global server key. Audio authorization and range delivery remain in Flask rather than exposing temporary media directly through Caddy.
 
 Catalog account headers and audio cookies have separate validation/replacement paths. The private sidecar launches ordinary Chromium for interactive Google login, captures a signed-in browse request after handoff, validates it and atomically promotes headers. The responsive `/accounts/youtube` page uses an owner-bound, short-lived lease for X11 browser frames, bounded touch/keyboard input, capture and cancellation; the UI no longer opens the legacy noVNC viewer. The controller token is private between services. Account revocation/challenges require renewed login. Amazon’s responsive account page embeds its browser-driven login proxy. Replacement credentials are staged independently and promoted after verification, preserving the prior session on cancellation/failure. The profile indicator uses lightweight session checks, without triggering audio download probes.
 
@@ -130,7 +131,7 @@ Avoid logging/exporting cookie values, signed URLs, session credentials, capture
 
 ## Deployment and source layout
 
-Flask and Chromium have independent bridge networking. Caddy reaches the application and browser directly by service name, with owner `forward_auth` on the desktop route. A separate private gateway binds only its internal-network interface and establishes outbound HTTP/CONNECT tunnels through an authenticated endpoint in the optional Gluetun namespace. VPN connection failures use direct egress before any request body is forwarded. A bounded cooldown restores VPN preference on subsequent connections; in-flight tunnels are never replayed. The lifecycle timer reattaches only the VPN endpoint after container restart/recreation. Application ingress, browser-controller access, startup and direct egress remain independent of VPN availability. Other Caddy site blocks remain independent services.
+Flask remains on public ingress; Chromium and its controller/viewer use a dedicated internal `browser-private` network. Flask and Chromium run as non-root UID 10001; a network-isolated one-shot service migrates existing volume ownership. Chromium requires host support for its sandbox; an explicit compatibility override is documented in the rollout guide. Caddy reaches the application and browser directly by service name, with owner `forward_auth` on the desktop route. A separate private gateway binds only its internal-network interface and establishes outbound HTTP/CONNECT tunnels through an authenticated endpoint in the optional Gluetun namespace. VPN connection failures use direct egress before any request body is forwarded. A bounded cooldown restores VPN preference on subsequent connections; in-flight tunnels are never replayed. The lifecycle timer reattaches only the VPN endpoint after container restart/recreation. Application ingress, browser-controller access, startup and direct egress remain independent of VPN availability. Other Caddy site blocks remain independent services.
 
 Artist details expose optional normalized `playlists` and `featured` shelves. The upstream parser omits some artist playlist headings, so a bounded per-client cache extracts them from the original browse response. Optional-shelf failure does not fail the artist page. Additional playable artist shelves retain their item types instead of being silently discarded. Home fetches up to forty native shelves with a combined safety cap of sixty-four, preserves single-item shelves and distinguishes same-title shelves by content. Both clients hide empty shelves and use the existing bounded `/api/artist/<id>/releases?kind=...` pagination contract. Website collection state is encoded as `/artist?channel=...&collection=albums|singles|playlists|featured`, with stale-navigation fencing and retry controls.
 
@@ -147,3 +148,13 @@ The [regression workflow](.github/workflows/alexa-regressions.yml) runs Node res
 Snapshot evidence: [841 Python tests, 31 JavaScript files, 44 skill tests and 35 browser tests passed](https://github.com/arookiecoder-ip/youtube-music-alexa-skill/actions/runs/40127521237). The companion app passed 444 JVM and 30 API 35 interaction checks. The deterministic boundary suite reproduces deleted-successor, same-song seek/stop, Next/finish, explicit-pause, finite-end and loop-prefetch cases.
 
 A single live probe observed roughly 90 ms seek HTTP acknowledgment and 3.7 seconds to server playback confirmation. That is not audible-output timing or a latency distribution. Its longer boundary attempt was interrupted by a separate Pause request; the original queue/paused position was restored, and no successful live boundary transition is claimed. Streaming notes' first-byte measurements exclude Alexa command/device startup. Physical Samsung/carrier/Bluetooth behavior and battery/FPS improvements require device-specific measurements.
+
+## Security lifecycle and operations
+
+Schema version 7 adds credential generations, persistent second-factor attempt limits, staged email replacement, session-bound authenticator setup, and Echo pairing. Password/factor/address/role/status changes retire older proofs; user sessions and scoped capabilities check live account state. Login replaces the complete browser identity, so a rejected account credential cannot fall back to retained legacy owner fields. A temporary password grants a restricted session until changed.
+
+All email-change entry points share the service policy: current password plus recovery-mailbox proof, then confirmation of the proposed new mailbox before promotion. Removing/replacing a live authenticator requires password plus an independent recovery-email code. Magic-link GET only displays confirmation; POST consumes the link, and enrolled TOTP remains required.
+
+`browser_coordination.py` serializes access to the physical browser across interactive, scripted and automatic flows. Commands and queued work carry an attempt capability; captured candidates are generation-fenced. Amazon form promotion revalidates the active login after network waits. `auth_sessions.py`, `alexa_identity.py`, `stream_pools.py` and `provider_commands.py` move security/lifecycle boundaries out of HTTP composition; continue extracting playback coordination incrementally while retaining one authoritative process.
+
+Public `/health/live` and `/health/ready` expose only liveness/readiness. Readiness checks local storage and configured authentication, not optional provider uptime. Status diagnostics report effective global stream admission separately from per-account capacity. Builds use hashed Python locks, pinned container/action digests, non-root execution and bounded resources. Security CI runs advisory, container, secret, capability and restore checks. Offline encrypted backup/restore and key rotation live in `scripts/security_storage.py`; restoring retires sessions, email proofs, pairing and scoped capabilities. A browser/provider login and physical Echo test are still required for a deployment-specific rollout.

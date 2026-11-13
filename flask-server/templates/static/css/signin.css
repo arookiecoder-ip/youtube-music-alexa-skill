@@ -1,19 +1,10 @@
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
-  :root {
-    --bg: #0a0a0a;
-    --surface: #141414;
-    --border: #252525;
-    --text: #e8e8e8;
-    --muted: #666;
-    --accent: #e8590c;
-    --accent-hover: #f76707;
-    --danger: #e03131;
-  }
+  /* Tokens come from theme.css -- the same palette the player runs on. */
 
   html, body { height: 100%; }
   body {
-    font-family: -apple-system, 'Segoe UI', system-ui, sans-serif;
+    font-family: var(--font-sans);
     background: var(--bg);
     color: var(--text);
     display: flex;
@@ -111,10 +102,17 @@
     font-family: inherit;
     transition: border-color .15s;
   }
-  input::placeholder { color: #3e3e3e; }
+  input::placeholder { color: var(--placeholder); }
   input:focus {
     outline: none;
     border-color: var(--accent);
+  }
+  /* Border colour alone is a weak place-marker once a form has four fields, and
+     it is invisible to anyone who cannot see the accent hue. Keyboard focus gets
+     a real ring; the border change stays for the pointer. */
+  input:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
   }
 
   .code-input {
@@ -128,9 +126,10 @@
   button.primary {
     width: 100%;
     margin-top: 22px;
+    min-height: 44px;
     border: 1px solid var(--accent);
     background: var(--accent);
-    color: #fff;
+    color: var(--on-accent);
     padding: 12px 14px;
     font-size: .72rem;
     font-weight: 700;
@@ -141,6 +140,7 @@
     transition: background .12s, border-color .12s;
   }
   button.primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+  button.primary:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
   button.primary:disabled { opacity: .4; cursor: default; }
 
   .back {
@@ -178,3 +178,63 @@
     min-height: 1.1em;
     margin-top: 14px;
   }
+
+  /* Sign-up and recovery live on the player's own door, so the two ways in are
+     offered here rather than being URLs a visitor has to guess. */
+  .door-links {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--space-2) var(--space-4);
+    justify-content: space-between;
+    margin-top: var(--space-4);
+    padding-top: var(--space-4);
+    border-top: 1px solid var(--border);
+  }
+  .door-links a {
+    /* These are the only route to a reset code on a phone, and a flex item can
+       take the standard control height without disturbing the line it sits on. */
+    display: inline-flex;
+    align-items: center;
+    min-height: var(--control-h-md);
+    font-size: .76rem;
+    color: var(--muted);
+    text-decoration: none;
+  }
+  .door-links a:hover { color: var(--text); text-decoration: underline; }
+
+.login-panel[hidden], #otp-entry[hidden], #send-otp[hidden] { display: none; }
+.signup-actions {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+  margin-top: 8px;
+  font-size: .76rem;
+}
+.signup-actions form { margin: 0; min-width: 0; }
+.signup-actions form:last-child { margin-left: auto; text-align: right; }
+.signup-actions button {
+  appearance: none;
+  background: none;
+  border: 0;
+  box-shadow: none;
+  color: var(--muted);
+  font: inherit;
+  line-height: 1.4;
+  text-align: inherit;
+  padding: 8px 0;
+  min-height: 44px;
+  cursor: pointer;
+}
+.signup-actions button:hover { color: var(--text); text-decoration: underline; }
+.signup-actions button:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+#password-section label { margin-top: 18px; }
+.login-mode { display: block; background: none; border: 0; color: var(--accent); font: inherit; font-size: .78rem; padding: 12px 0; cursor: pointer; }
+.login-mode:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.otp-field { position: relative; }
+.otp-field input { padding-right: 118px; letter-spacing: .25em; font-variant-numeric: tabular-nums; }
+.otp-field button { position: absolute; right: 5px; top: 5px; bottom: 5px; border: 0; background: var(--surface); color: var(--accent); padding: 0 9px; cursor: pointer; }
+.otp-field button:disabled { color: var(--muted); cursor: default; }
+#otp-hint { margin-top: 10px; }
+button.primary { transition: opacity .18s ease, background .12s, border-color .12s; }
+@media (prefers-reduced-motion: reduce) { .step.active, .eq-icon span { animation: none; } button.primary { transition: none; } }

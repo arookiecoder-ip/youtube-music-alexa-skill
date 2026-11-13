@@ -36,7 +36,7 @@ _TEST_ENV = {
     "REMOTE_PASSWORD": "test-pass",
     # Any non-empty value avoids server.py's auto-generate-and-write-to-disk
     # api_key.txt path, which would litter the working directory on first run.
-    "API_KEY": "0123456789abcdef0123456789abcdef",
+    "API_KEY": "0123456789abcdef0123456789abcdef",  # gitleaks:allow -- synthetic fixture credential
 }
 _ORIGINAL_ENV = os.environ.copy()
 _STUB_MODULE_NAMES = (
@@ -84,6 +84,7 @@ def _install_stubs():
         setattr(ybs, attr, type(attr, (), {"__init__": lambda self, *a, **kw: None}))
     ybs.browser_client_is_signed_in = lambda *a, **kw: False
     ybs.promote_browser_headers = lambda *a, **kw: None
+    ybs.normalize_browser_headers = lambda value: value
     # Prefer the real module when it is importable (it has no import-time side
     # effects). Overwriting it unconditionally poisoned sys.modules for
     # test_youtube_browser_session.py, which imports the real symbols — a plain

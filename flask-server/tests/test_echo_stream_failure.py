@@ -8,6 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 from flask import Flask, request, has_request_context, jsonify
+from alexa_playback_errors import authentication_failure
 from datetime import datetime
 import time, sys
 
@@ -27,7 +28,7 @@ class EchoStreamFailureTests(unittest.TestCase):
         fn = next(n for n in cls.body if isinstance(n, ast.AsyncFunctionDef) and n.name == 'get_stream')
         fn.decorator_list = []
         direct = Mock(side_effect=AssertionError('Echo must never receive IP-locked URL'))
-        ns = {'PUBLIC_BASE_URL': '', 'has_request_context': has_request_context, 'request': request,
+        ns = {'_multiuser_layer': None, 'PUBLIC_BASE_URL': '', 'has_request_context': has_request_context, 'request': request,
               '_ensure_audio_ready_for_play': Mock(),
               'threading': SimpleNamespace(Thread=Mock(return_value=Mock())), 'API_KEY': 'test-key',
               'Supporting': SimpleNamespace(ensure_downloaded=Mock(), resolve_direct_url=direct), 'asyncio': asyncio}
@@ -47,7 +48,10 @@ class EchoStreamFailureTests(unittest.TestCase):
     def test_pending_failure_retry_is_cancelled_by_new_transport_intent(self):
         self._failure_case('newtrack001', ignored=False, cancel_retry=True)
 
-    def _failure_case(self, video, ignored, cancel_retry=False):
+    def test_confirmed_unavailable_song_can_advance(self):
+        self._failure_case('newtrack001', ignored=False, unavailable=True)
+
+    def _failure_case(self, video, ignored, cancel_retry=False, unavailable=False):
         tree = ast.parse(SOURCE.read_text())
         fn = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == 'alexa_state_event')
         fn.decorator_list = []
@@ -58,12 +62,15 @@ class EchoStreamFailureTests(unittest.TestCase):
         callbacks = []
         timer = Mock(side_effect=lambda seconds, callback: callbacks.append(callback) or Mock())
         advance = Mock()
-        ns = {'request': request, 'jsonify': jsonify, 'datetime': datetime, 'time': time, 'sys': sys,
+        ns = {'_alexa_auth_error': authentication_failure, '_stop_alexa_auth_failure': Mock(),
+              'request': request, 'jsonify': jsonify, 'datetime': datetime, 'time': time, 'sys': sys,
               '_np_lock': threading.RLock(), '_now_playing': state,
               '_playback_output': SimpleNamespace(snapshot=lambda: {'playback_output': 'alexa', 'output_serial': 'echo'}),
               '_valid_video_id': lambda x: isinstance(x, str) and len(x) == 11,
               '_computed_position_ms': lambda: 2000, '_reset_progress': Mock(), '_notify_sse': notify, 'logger': Mock(), 'threading': SimpleNamespace(Timer=timer),
-              '_still_relevant_video': lambda vid: state['video_id'] == vid, '_auto_advance_after_failure': advance}
+              '_is_dead_or_flaky_video': lambda vid: unavailable,
+              '_still_relevant_video': lambda vid: state['video_id'] == vid, '_auto_advance_after_failure': advance,
+              '_delayed': lambda seconds, target, args=(), start=True: timer(seconds, lambda: target(*args))}
         exec(compile(ast.Module(body=[fn], type_ignores=[]), str(SOURCE), 'exec'), ns)
         with Flask(__name__).test_request_context('/', method='POST', json={
             'event': 'failed', 'video_id': video, 'error_type': 'MEDIA_ERROR_SERVICE_UNAVAILABLE'}):
@@ -79,7 +86,7 @@ class EchoStreamFailureTests(unittest.TestCase):
             if cancel_retry:
                 state['playback_revision'] += 1
             callbacks[0]()
-            if cancel_retry: advance.assert_not_called()
+            if cancel_retry or not unavailable: advance.assert_not_called()
             else: advance.assert_called_once_with('echo', video, 'MEDIA_ERROR_SERVICE_UNAVAILABLE')
 
 if __name__ == '__main__': unittest.main()

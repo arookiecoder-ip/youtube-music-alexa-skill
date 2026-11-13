@@ -2,11 +2,18 @@
 
 This pool owns only background cache work. HTTP streaming keeps its existing
 budget. Keys and callables are discarded on completion; diagnostics are aggregate.
+
+A job runs in a pool thread, which does not inherit the submitting request's
+playback identity, so the identity is captured at submit and re-bound while the
+action runs. Prepare work therefore resolves the caller's own stream worker and
+reads the caller's own playback generation.
 """
 from collections import deque
 from concurrent.futures import Future
 import threading
 import time
+
+from player_state import IDENTITY
 
 
 class AudioJobs:
@@ -29,6 +36,7 @@ class AudioJobs:
         A requested play promotes a queued speculative job and replaces its
         generation-sensitive callable. Running jobs remain shared.
         """
+        identity = IDENTITY.get()
         with self.condition:
             if self.closed:
                 return None
@@ -44,7 +52,8 @@ class AudioJobs:
             if len(self.jobs) >= self.capacity or (prefetch and speculative >= self.prefetch_capacity):
                 self.counts['rejected'] += 1
                 return None
-            job = dict(key=key, action=action, prefetch=prefetch, running=False, future=Future())
+            job = dict(key=key, action=action, prefetch=prefetch, running=False,
+                       identity=identity, future=Future())
             self.jobs[key] = job
             self.pending.append(job)
             self.counts['submitted'] += 1
@@ -103,6 +112,7 @@ class AudioJobs:
                     job = self._take()
             started = time.monotonic()
             result, error = None, None
+            token = IDENTITY.set(job['identity'])
             try:
                 if job['future'].set_running_or_notify_cancel():
                     result = job['action']()
@@ -119,6 +129,7 @@ class AudioJobs:
                     self.counts['total_ms'] += elapsed
                     self.counts['max_ms'] = max(self.counts['max_ms'], elapsed)
                     self.condition.notify_all()
+                IDENTITY.reset(token)
             if not job['future'].cancelled():
                 if error is None:
                     job['future'].set_result(result)

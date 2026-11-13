@@ -4,10 +4,13 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Music Box - Sign in</title>
+<link rel="stylesheet" href="/static/css/theme.css?v={{ asset_v }}">
 <link rel="stylesheet" href="/static/css/signin.css?v={{ asset_v }}">
+<link rel="stylesheet" href="/static/css/account-design.css?v={{ asset_v }}">
 </head>
 <body>
 <main>
+  <a class="brand-home" href="/welcome">Music Box home</a>
   <div class="brand">
     <div class="eq-icon">
       <span></span><span></span><span></span><span></span><span></span>
@@ -19,24 +22,41 @@
   </div>
 
   <div class="card">
+    {% if email_changed %}<p class="step-hint" role="status">Your email was updated. Sign in with your new address.</p>{% endif %}
     <!-- Step 1: credentials -->
-    <form class="step active" id="step-creds" data-step="1">
-      <label for="username">Username</label>
-      <input type="text" id="username" name="username" autocomplete="username" autofocus>
+    <form class="step active" id="step-creds" data-step="1" data-otp-start="{{ '1' if otp_start else '0' }}" data-code-ready="{{ '1' if code_ready else '0' }}">
+      <label for="username">Email or username</label>
+      <input type="text" id="username" name="username" autocomplete="username" autofocus
+             placeholder="you@example.com" value="{{ initial_username|default('') }}">
 
-      <label for="password">Password</label>
-      <input type="password" id="password" name="password" autocomplete="current-password">
+      <div id="password-section" class="login-panel">
+        <label for="password">Password</label>
+        <input type="password" id="password" name="password" autocomplete="current-password">
+      </div>
+      {% if otp_available %}
+      <button type="button" class="login-mode" id="otp-toggle" aria-expanded="false" aria-controls="otp-section">Login via OTP</button>
+      <div id="otp-section" class="login-panel" hidden>
+        <button type="button" class="primary" id="send-otp">Send OTP</button>
+        <div id="otp-entry" hidden>
+          <label for="email-code">Email code</label>
+          <div class="otp-field">
+            <input type="text" id="email-code" disabled inputmode="numeric" autocomplete="one-time-code" maxlength="6" pattern="[0-9]{6}" placeholder="------">
+            <button type="button" id="resend-otp" disabled>Resend</button>
+          </div>
+          <p class="step-hint" id="otp-hint" role="status"></p>
+        </div>
+      </div>
+      {% endif %}
 
-      <button type="submit" class="primary" id="creds-btn">
-        {% if totp %}Continue{% else %}Sign in{% endif %}
-      </button>
+      <button type="submit" class="primary" id="creds-btn">Sign in</button>
     </form>
 
-    <!-- Step 2: 2FA code (only when TOTP is enabled) -->
-    {% if totp %}
+    <!-- Step 2: always in the page. Whether it is needed is decided per account
+         at submit time, and a deployment whose *owner* has no 2FA can still have
+         accounts that do. -->
     <form class="step" id="step-code" data-step="2">
       <button type="button" class="back" id="back-btn">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2">
           <path d="M19 12H5M12 19l-7-7 7-7"/>
         </svg>
         Back
@@ -48,88 +68,20 @@
              autocomplete="one-time-code" pattern="[0-9]*" maxlength="6" placeholder="------">
       <button type="submit" class="primary" id="code-btn">Sign in</button>
     </form>
-    {% endif %}
 
-    <p id="status"></p>
+    <p id="status" role="alert"></p>
+
+    {% if signup_open or forgot_url %}
+    <nav class="door-links">
+      {% if signup_open %}<a href="/signup">Create an account</a>{% endif %}
+      {% if forgot_url %}<a href="{{ forgot_url }}">Forgot password?</a>{% endif %}
+    </nav>
+    {% endif %}
   </div>
 </main>
 
-<script>
-const TOTP = {{ 'true' if totp else 'false' }};
-const NEXT_TARGET = {{ next_target|tojson }};
-const statusEl = document.getElementById('status');
-const stepCreds = document.getElementById('step-creds');
-const credsBtn = document.getElementById('creds-btn');
-
-function setError(msg) { statusEl.textContent = msg || ''; }
-
-function showStep(el) {
-  document.querySelectorAll('.step').forEach(s => s.classList.remove('active'));
-  el.classList.add('active');
-  setError('');
-  const input = el.querySelector('input');
-  if (input) setTimeout(() => input.focus(), 60);
-}
-
-async function post(payload) {
-  const res = await fetch('/login/', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    credentials: 'same-origin',
-    body: JSON.stringify(payload),
-  });
-  const json = await res.json().catch(() => ({}));
-  if (!res.ok) {
-    const error = json && json.error;
-    const message = typeof error === 'string'
-      ? error
-      : (error && typeof error.message === 'string' ? error.message : 'HTTP ' + res.status);
-    throw new Error(message);
-  }
-  return json;
-}
-
-stepCreds.addEventListener('submit', async (e) => {
-  e.preventDefault();
-  setError('');
-  credsBtn.disabled = true;
-  try {
-    const json = await post({
-      username: document.getElementById('username').value.trim(),
-      password: document.getElementById('password').value,
-      next: NEXT_TARGET,
-    });
-    if (json.totp_required) {
-      window._loginToken = json.token;
-      showStep(document.getElementById('step-code'));
-    } else {
-      location.href = json.next || '/home';
-    }
-  } catch (err) {
-    setError(err.message);
-  } finally {
-    credsBtn.disabled = false;
-  }
-});
-
-if (TOTP) {
-  const stepCode = document.getElementById('step-code');
-  const codeBtn = document.getElementById('code-btn');
-  document.getElementById('back-btn').onclick = () => showStep(stepCreds);
-  stepCode.addEventListener('submit', async (e) => {
-    e.preventDefault();
-    setError('');
-    codeBtn.disabled = true;
-    try {
-      const json = await post({ step: 'totp', code: document.getElementById('code').value.trim(), token: window._loginToken });
-      location.href = json.next || '/home';
-    } catch (err) {
-      setError(err.message);
-    } finally {
-      codeBtn.disabled = false;
-    }
-  });
-}
-</script>
+<script>const NEXT_TARGET = {{ next_target|tojson }};</script>
+<script defer src="/static/js/login.js?v={{ asset_v }}"></script>
+<script defer src="/static/js/auth-ui.js?v={{ asset_v }}"></script>
 </body>
 </html>

@@ -5,6 +5,10 @@ from types import SimpleNamespace
 from unittest.mock import Mock,patch
 import unittest
 
+sys.path.insert(0,str(Path(__file__).resolve().parent))
+from sidecar_support import requires_sidecar
+
+@requires_sidecar('touch_browser.py')
 class TouchInputTests(unittest.TestCase):
     def setUp(self):
         path=Path(__file__).resolve().parents[2]/'browser-auth'/'touch_browser.py'

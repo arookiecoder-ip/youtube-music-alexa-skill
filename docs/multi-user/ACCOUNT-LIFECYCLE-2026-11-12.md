@@ -1,0 +1,11 @@
+# Permanent deletion and optional initial password changes
+
+Deleted account detail pages now offer **Delete permanently** to active owners. The dialog requires the account's exact username. The server independently rechecks the current owner's role/status, refuses self-deletion, requires the target still to be deleted, and validates the typed name inside the deletion transaction. A restored/active account cannot be removed through a stale deleted-account page. CSRF remains required.
+
+Permanent deletion removes the user row and cascades its account-owned sessions, provider records, preferences, email proofs, Alexa tokens and bindings. The account disappears from both active and deleted lists and cannot be restored. Existing artifact cleanup/retries continue after row deletion; an audit event records the administrator's action. The legacy owner playback identity is pinned independently of the row, so permanently removing an old owner never transfers its playback slot to another owner.
+
+Admin-created accounts no longer require a password change by default. The **Require a password change at first sign-in (optional)** checkbox remains available and is respected when selected. Blank-password creation still generates a password and displays it once, with a message matching the selected policy. Explicit administrative password resets and existing password-change requirements retain their current behavior; users with an existing requirement can clear it under **Security → Password → Manage → Clear requirement** when appropriate.
+
+Verification covers irreversible removal, dependent-record deletion, stale/restored targets, typed confirmation, CSRF, owner permissions and forged role claims, owner-slot isolation, supplied/generated passwords, and the optional checkbox. Browser cases exercise the confirmation dialog, deleted-list removal and both password-policy choices using real admin routes and temporary databases. No live account was deleted as part of testing.
+
+All 117 isolated server/web regression files passed, along with 24 Chromium admin-page cases. The focused account/Alexa suite passed 24 tests plus three subtests, and artifact-cleanup coverage passed 48 tests plus five subtests.

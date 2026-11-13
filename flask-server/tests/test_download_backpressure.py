@@ -52,7 +52,7 @@ _TEST_ENV = {
     "REMOTE_PASSWORD": "test-pass",
     # Any non-empty value avoids server.py's auto-generate-and-write-to-disk
     # api_key.txt path, which would litter the working directory on first run.
-    "API_KEY": "0123456789abcdef0123456789abcdef",
+    "API_KEY": "0123456789abcdef0123456789abcdef",  # gitleaks:allow -- synthetic fixture credential
 }
 
 
@@ -102,6 +102,7 @@ def _install_stubs():
                         type(attr, (), {"__init__": lambda self, *a, **kw: None}))
             ybs.browser_client_is_signed_in = lambda *a, **kw: False
             ybs.promote_browser_headers = lambda *a, **kw: None
+            ybs.normalize_browser_headers = lambda value: value
             sys.modules["youtube_browser_session"] = ybs
 
 
@@ -782,7 +783,7 @@ class DispatchCoalescing(_CleanServerState):
             time.sleep(0.4)
         self.assertEqual(sent, ["LONE1111111"])
 
-    def test_devices_do_not_coalesce_with_each_other(self):
+    def test_new_device_selection_supersedes_same_accounts_old_dispatch(self):
         sent = []
         with mock.patch.object(server, "_dispatch_play_with_retry",
                                side_effect=lambda s, v, o=0: sent.append((s, v))):
@@ -790,8 +791,8 @@ class DispatchCoalescing(_CleanServerState):
             server._schedule_play_dispatch("DEVICE2", "BBBBBBBBBBB", delay=0.15)
             time.sleep(0.5)
         self.assertEqual(sorted(sent),
-                         [("DEVICE1", "AAAAAAAAAAA"), ("DEVICE2", "BBBBBBBBBBB")],
-                         msg="one device's burst must not cancel another's play")
+                         [("DEVICE2", "BBBBBBBBBBB")],
+                         msg="an older device selection must not start after a newer one")
 
     def test_the_echo_ends_up_playing_the_last_clicked_song(self):
         """The end-to-end property that matters, at several click cadences.
@@ -938,7 +939,7 @@ class DispatchCoalescing(_CleanServerState):
                 mock.patch.object(server, "PLAYBACK_CONFIRM_TIMEOUT_CACHED", 0.1), \
                 mock.patch.object(server, "PLAYBACK_CONFIRM_POLL_INTERVAL", 0.02), \
                 mock.patch.object(server, "PLAYBACK_BUFFERING_FEEDBACK_DELAY", 10.0), \
-                mock.patch.object(server._youtube_stream.current, "has",
+                mock.patch.object(server._youtube_stream_for().current, "has",
                                   staticmethod(lambda vid: None)):
             # First click dispatches normally, leaving a trigger in flight.
             server._schedule_play_dispatch("DEVICE1", "FIRST111111", delay=0.05)
@@ -997,7 +998,7 @@ class RapidClickScenario(_CleanServerState):
         queue = [{'video_id': f"song{i:07d}", 'title': f"s{i}"} for i in range(12)]
         clicks = (0, 5, 9)
 
-        with mock.patch.object(server._youtube_stream.current, "has",
+        with mock.patch.object(server._youtube_stream_for().current, "has",
                                staticmethod(lambda vid: None)), \
                 mock.patch.object(server, "_ensure_audio_ready_for_play",
                                   side_effect=defer), \
@@ -1028,7 +1029,7 @@ class RapidClickScenario(_CleanServerState):
 
     def test_a_429_during_the_burst_stops_all_prefetch(self):
         queue = [{'video_id': f"song{i:07d}", 'title': f"s{i}"} for i in range(12)]
-        with mock.patch.object(server._youtube_stream.current, "has",
+        with mock.patch.object(server._youtube_stream_for().current, "has",
                                staticmethod(lambda vid: None)), \
                 mock.patch.object(server, "_ensure_audio_ready_for_play") as ensure, \
                 mock.patch.object(server, "_notify_sse"):
@@ -1088,7 +1089,7 @@ class PlaybackFailureAutoAdvance(_CleanServerState):
                 mock.patch.object(server, "PLAYBACK_CONFIRM_TIMEOUT_CACHED", 0.05), \
                 mock.patch.object(server, "PLAYBACK_CONFIRM_POLL_INTERVAL", 0.02), \
                 mock.patch.object(server, "PLAYBACK_BUFFERING_FEEDBACK_DELAY", 10.0), \
-                mock.patch.object(server._youtube_stream.current, "has",
+                mock.patch.object(server._youtube_stream_for().current, "has",
                                   staticmethod(lambda vid: None)), \
                 mock.patch.object(server, "_dispatch_play_with_retry",
                                   side_effect=lambda s, v, o=0: dispatched.append(v)), \
@@ -1115,7 +1116,7 @@ class PlaybackFailureAutoAdvance(_CleanServerState):
                 mock.patch.object(server, "PLAYBACK_CONFIRM_TIMEOUT_CACHED", 0.05), \
                 mock.patch.object(server, "PLAYBACK_CONFIRM_POLL_INTERVAL", 0.02), \
                 mock.patch.object(server, "PLAYBACK_BUFFERING_FEEDBACK_DELAY", 10.0), \
-                mock.patch.object(server._youtube_stream.current, "has",
+                mock.patch.object(server._youtube_stream_for().current, "has",
                                   staticmethod(lambda vid: None)), \
                 mock.patch.object(server, "_refresh_radio_queue"), \
                 mock.patch.object(server, "_notify_sse"), \
@@ -1127,7 +1128,7 @@ class PlaybackFailureAutoAdvance(_CleanServerState):
         self.assertTrue(errors)
         self.assertEqual(errors[-1]['type'], 'unavailable')
 
-    def test_final_transport_timeout_advances_with_bounded_failure_budget(self):
+    def test_final_transport_timeout_preserves_selected_track_and_queue(self):
         current, nxt = "TIMEOUTTIME", "AFTERAFTERA"
         self._install_queue(current, nxt)
         dispatched = []
@@ -1135,7 +1136,7 @@ class PlaybackFailureAutoAdvance(_CleanServerState):
                 mock.patch.object(server, "PLAYBACK_CONFIRM_TIMEOUT_CACHED", 0.05), \
                 mock.patch.object(server, "PLAYBACK_CONFIRM_POLL_INTERVAL", 0.02), \
                 mock.patch.object(server, "PLAYBACK_BUFFERING_FEEDBACK_DELAY", 10.0), \
-                mock.patch.object(server._youtube_stream.current, "has",
+                mock.patch.object(server._youtube_stream_for().current, "has",
                                   staticmethod(lambda vid: None)), \
                 mock.patch.object(server, "_dispatch_play_with_retry",
                                   side_effect=lambda s, v, o=0: dispatched.append(v)), \
@@ -1148,10 +1149,11 @@ class PlaybackFailureAutoAdvance(_CleanServerState):
             # confirmed, so the second _wait_once also times out.
             server._watch_playback_confirmation(
                 "DEVICE1", current, lambda: dispatched.append(current) or None)
-        self.assertEqual(dispatched, [current, nxt])
+        self.assertEqual(dispatched, [current])
         snap = server._get_now_playing()
-        self.assertEqual(snap['video_id'], nxt)
-        self.assertTrue(snap['playing'])
+        self.assertEqual(snap['video_id'], current)
+        self.assertFalse(snap['playing'])
+        self.assertFalse(snap['playback_processing'])
         self.assertEqual(snap['playback_error']['type'], 'timeout')
         self.assertEqual([t['video_id'] for t in snap['queue']], [current, nxt])
 
@@ -1171,7 +1173,7 @@ class PlaybackFailureRateLimit(_CleanServerState):
                 mock.patch.object(server, "PLAYBACK_CONFIRM_TIMEOUT_CACHED", 0.05), \
                 mock.patch.object(server, "PLAYBACK_CONFIRM_POLL_INTERVAL", 0.02), \
                 mock.patch.object(server, "PLAYBACK_BUFFERING_FEEDBACK_DELAY", 10.0), \
-                mock.patch.object(server._youtube_stream.current, "has",
+                mock.patch.object(server._youtube_stream_for().current, "has",
                                   staticmethod(lambda vid: None)), \
                 mock.patch.object(server, "_notify_sse"), \
                 mock.patch.object(server, "_update_now_playing",
@@ -1199,7 +1201,7 @@ class PlaybackFailureRateLimit(_CleanServerState):
                 mock.patch.object(server, "PLAYBACK_CONFIRM_TIMEOUT_CACHED", 0.05), \
                 mock.patch.object(server, "PLAYBACK_CONFIRM_POLL_INTERVAL", 0.02), \
                 mock.patch.object(server, "PLAYBACK_BUFFERING_FEEDBACK_DELAY", 10.0), \
-                mock.patch.object(server._youtube_stream.current, "has",
+                mock.patch.object(server._youtube_stream_for().current, "has",
                                   staticmethod(lambda vid: None)), \
                 mock.patch.object(server, "_notify_sse"):
             server._watch_playback_confirmation(
@@ -1221,7 +1223,7 @@ class PlaybackFailureAdaptiveTimeout(_CleanServerState):
                 mock.patch.object(server, "PLAYBACK_CONFIRM_TIMEOUT_CACHED", 0.2), \
                 mock.patch.object(server, "PLAYBACK_CONFIRM_POLL_INTERVAL", 0.02), \
                 mock.patch.object(server, "PLAYBACK_BUFFERING_FEEDBACK_DELAY", 10.0), \
-                mock.patch.object(server._youtube_stream.current, "has",
+                mock.patch.object(server._youtube_stream_for().current, "has",
                                   staticmethod(lambda vid: ("/tmp/x.m4a" if cached else None))), \
                 mock.patch.object(server, "_notify_sse"):
             server._watch_playback_confirmation(
@@ -1252,7 +1254,7 @@ class PlaybackFailureBufferingFeedback(_CleanServerState):
                 mock.patch.object(server, "PLAYBACK_CONFIRM_TIMEOUT_CACHED", 2.0), \
                 mock.patch.object(server, "PLAYBACK_CONFIRM_POLL_INTERVAL", 0.02), \
                 mock.patch.object(server, "PLAYBACK_BUFFERING_FEEDBACK_DELAY", 0.1), \
-                mock.patch.object(server._youtube_stream.current, "has",
+                mock.patch.object(server._youtube_stream_for().current, "has",
                                   staticmethod(lambda vid: None)), \
                 mock.patch.object(server, "_notify_sse"), \
                 mock.patch.object(server, "_update_now_playing",
@@ -1312,7 +1314,7 @@ class PlaybackFailureRetryRaceGuard(_CleanServerState):
                 mock.patch.object(server, "PLAYBACK_CONFIRM_TIMEOUT_CACHED", 0.05), \
                 mock.patch.object(server, "PLAYBACK_CONFIRM_POLL_INTERVAL", 0.02), \
                 mock.patch.object(server, "PLAYBACK_BUFFERING_FEEDBACK_DELAY", 10.0), \
-                mock.patch.object(server._youtube_stream.current, "has",
+                mock.patch.object(server._youtube_stream_for().current, "has",
                                   staticmethod(lambda vid: None)), \
                 mock.patch.object(server, "_download_in_progress",
                                   side_effect=fake_in_progress), \
@@ -1330,7 +1332,7 @@ class PausedSeekProcessing(unittest.TestCase):
 
     def setUp(self):
         with server._np_lock:
-            self._previous_now_playing = copy.deepcopy(server._now_playing)
+            self._previous_now_playing = copy.deepcopy(dict(server._now_playing))
         self.addCleanup(self._restore_now_playing)
         with server._np_lock:
             server._now_playing.update({

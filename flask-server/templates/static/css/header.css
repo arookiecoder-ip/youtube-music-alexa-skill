@@ -45,7 +45,7 @@
     }
   }
 
-  .brand { display: flex; align-items: center; gap: 14px; }
+  .brand { display: flex; align-items: center; gap: var(--space-3); }
 
   /* clamp() scales the icon down on narrow phones and up on wide screens
      instead of a fixed size that looks oversized on small viewports. */
@@ -75,30 +75,16 @@
     text-transform: uppercase;
   }
 
-  .btn-ghost {
-    background: none;
-    border: 1px solid var(--border);
-    color: var(--muted);
-    padding: 6px 14px;
-    font-size: var(--text-sm);
-    font-family: inherit;
-    cursor: pointer;
-    text-transform: uppercase;
-    letter-spacing: .1em;
-    transition: color .15s, border-color .15s;
-  }
-  .btn-ghost:hover { color: var(--text); border-color: #444; }
-
   /* Right side of the header: device picker + sign out */
   .header-actions {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: var(--space-2);
   }
   .device-section-inline {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: var(--space-2);
   }
   .device-section-inline[hidden] { display: none !important; }
   .device-section-inline .custom-select {
@@ -106,11 +92,15 @@
     width: 140px;
   }
   .device-section-inline .custom-select-trigger {
-    padding: 7px 10px;
+    padding: 0 var(--space-3);
+    /* One height for the pair: the picker and the refresh button sit side by side
+       and a 3px difference between two adjacent controls reads as a mistake. */
+    min-height: var(--control-h-md);
     font-size: .78rem;
   }
   .device-section-inline #refresh {
-    padding: 7px 9px;
+    min-height: var(--control-h-md);
+    padding: 0 var(--space-2);
   }
   .device-section-inline #refresh svg { width: 14px; height: 14px; }
 
@@ -128,11 +118,11 @@
   }
   .confirm-overlay.open { display: flex; }
   .confirm-dialog {
-    background: transparent;
+    background: var(--surface);
     border: 1px solid var(--border);
     width: 320px;
     max-width: 90vw;
-    padding: 28px var(--space-5) 20px;
+    padding: var(--space-6) var(--space-5) var(--space-5);
     animation: confirmIn .2s ease-out;
     text-align: center;
   }
@@ -154,33 +144,42 @@
   .confirm-title {
     font-size: .9rem;
     font-weight: 700;
-    margin-bottom: 8px;
+    margin-bottom: var(--space-2);
     color: var(--text);
   }
   .confirm-message {
     font-size: .78rem;
     color: var(--muted);
     line-height: 1.5;
-    margin-bottom: 22px;
+    margin-bottom: var(--space-4);
   }
+  /* Both gaps below the description are the same 16px.  This row used to pull
+     itself up with a -12px margin to undo the message's 22px, which put the
+     dialog's rhythm on the half-grid and made the checkbox sit closer to the
+     text above it than to the buttons it belongs with. */
   .confirm-option {
     display: flex;
     align-items: center;
     justify-content: center;
     gap: var(--space-2);
+    min-height: var(--control-h-md);
     font-size: .75rem;
     color: var(--muted);
-    margin: -12px 0 18px;
+    margin: 0 0 var(--space-4);
     cursor: pointer;
     user-select: none;
   }
-  .confirm-option input { accent-color: var(--danger); cursor: pointer; }
+  /* The native checkbox renders 13x13 here, which is the only thing inside this
+     dialog a thumb can miss. 20px box, and the 40px label row already carries the
+     rest of the hit area. */
+  .confirm-option input { width: 20px; height: 20px; accent-color: var(--danger); cursor: pointer; }
   .confirm-actions {
     display: flex;
-    gap: 10px;
+    gap: var(--space-2);
   }
   .confirm-actions button {
     flex: 1;
+    min-height: var(--control-h-md);
     padding: 10px var(--space-4);
     font-size: .75rem;
     font-weight: 600;
@@ -195,7 +194,7 @@
     background: var(--bg);
     color: var(--text);
   }
-  .confirm-cancel:hover { border-color: #444; }
+  .confirm-cancel:hover { border-color: var(--border-hover); }
   .confirm-proceed {
     background: var(--danger);
     border-color: var(--danger);
@@ -208,7 +207,7 @@
   .header-history-btn {
     display: inline-flex;
     align-items: center;
-    gap: 6px;
+    gap: var(--space-2);
     padding: 7px var(--space-3);
     background: none;
     border: 1px solid var(--border);
@@ -245,7 +244,7 @@
     position: relative;
     z-index: 1;
   }
-  .history-item:hover { background: rgba(255, 255, 255, .045); }
+  .history-item:hover { background: var(--lift-quiet); }
   /* Press feedback belongs to direct row clicks only. Clicking embedded
      controls (Like, More, artist links) must not shrink the whole song. */
   .history-item:active:not(:has(button:active)):not(:has(a:active)) {
@@ -267,7 +266,7 @@
     font-size: .65rem;
     font-weight: 700;
     line-height: 1.5;
-    border-radius: 8px;
+    border-radius: 0;
     background: var(--accent);
     color: #fff;
     vertical-align: middle;
@@ -326,7 +325,7 @@
   }
   .history-modal-overlay.open { opacity: 1; visibility: visible; }
   .history-modal {
-    width: 506px;
+    width: 512px;
     max-width: 92vw;
     max-height: 80vh;
     background: var(--surface);
@@ -350,7 +349,9 @@
     display: flex;
     align-items: center;
     justify-content: space-between;
-    padding: var(--space-4) var(--space-4) var(--space-4) 20px;
+    /* Matches the 20px body padding so the title and the first row of content
+       share one left edge. */
+    padding: var(--space-4) var(--space-5);
     border-bottom: 1px solid var(--border);
   }
   .history-modal-header h3 {
@@ -363,19 +364,33 @@
   .history-modal-header-actions {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: var(--space-2);
   }
   .history-modal-close {
     background: none;
     border: none;
     color: var(--muted);
     padding: var(--space-1);
+    min-width: var(--control-h-sm);
+    min-height: var(--control-h-sm);
+    align-items: center;
+    justify-content: center;
     cursor: pointer;
     display: flex;
   }
   .history-modal-close[hidden] { display: none; }
   .history-modal-close:hover { color: var(--text); }
   .playlist-more-menu {
+    /* JS places this against the trigger, so it is fixed rather than absolute;
+       everything else about it is the panel's own token vocabulary. */
+    position: fixed;
+    z-index: 9999;
+    min-width: 180px;
+    padding: var(--space-1);
+    background: var(--surface-2);
+    border: 1px solid var(--border);
+    box-shadow: var(--pop-shadow);
+    overflow: hidden;
     display: block;
     opacity: 0;
     visibility: hidden;
@@ -390,7 +405,7 @@
     pointer-events: auto;
   }
   .playlist-more-btn {
-    border-radius: 50%;
+    border-radius: 0;
     width: 28px;
     height: 28px;
     align-items: center;
@@ -414,10 +429,84 @@
     display: flex;
     align-items: center;
     justify-content: center;
-    padding: 40px 20px;
+    padding: var(--space-6) var(--space-5);
     color: var(--muted);
     font-size: .82rem;
   }
+
+  /* ---- Dialog shapes the player shares ----
+     A short question (confirm, rename, import) wants a narrower panel and one
+     body rhythm; five of them used to carry that as inline styles, which is why
+     the widths disagreed by 20px and the Cancel button was the only rounded
+     control left on the site. */
+  .history-modal.compact { width: 400px; }
+  .history-modal.compact .history-modal-body {
+    padding: var(--space-5);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+  }
+  /* A confirm can open on top of an import dialog that is still open behind it. */
+  .history-modal-overlay.raised { z-index: 600; }
+  .modal-row { display: flex; align-items: center; gap: var(--space-2); flex-shrink: 0; }
+  .modal-actions { display: flex; justify-content: flex-end; gap: var(--space-2); }
+  /* Only one scroll container per dialog: the body holds still and the list
+     inside it scrolls, otherwise a wheel at the end of the list keeps chaining. */
+  .history-modal-body.split {
+    padding: var(--space-5);
+    display: flex;
+    flex-direction: column;
+    gap: var(--space-4);
+    min-height: 0;
+    overflow: hidden;
+  }
+  .modal-scroll { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior-y: contain; }
+  /* The list states playlists.js renders -- empty, loading, failed -- were the
+     only place on the site where presentation lived in inline style attributes,
+     which no theme can reach. */
+  .modal-note { padding: var(--space-5); color: var(--muted); text-align: center; }
+  .modal-note.tight { padding: var(--space-3); }
+  .playlist-pick-row {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    min-height: var(--control-h-md);
+    padding: var(--space-3);
+    border: 0;
+    border-bottom: 1px solid var(--border);
+    background: transparent;
+    color: var(--text);
+    text-align: left;
+    cursor: pointer;
+  }
+  .playlist-pick-row:hover { background: var(--surface-2); }
+  .playlist-pick-row:disabled { opacity: .55; cursor: progress; }
+  .playlist-pick-name { flex: 1; font-weight: 500; }
+  .playlist-pick-cover {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: var(--surface-2);
+  }
+  .playlist-pick-cover svg { width: 20px; height: 20px; }
+  .confirm-dialog-message { color: var(--text); font-size: .9rem; line-height: 1.5; }
+  .modal-btn {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--muted);
+    font-family: inherit;
+    font-size: .72rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .1em;
+    min-height: var(--control-h-md);
+    padding: 10px var(--space-5);
+    cursor: pointer;
+    transition: background .15s, border-color .15s, color .15s;
+  }
+  .modal-btn:hover { color: var(--text); border-color: var(--text); background: var(--surface-2); }
+  .modal-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 /* Owner-side live jam indicator */
 #jam-btn.jam-live,
@@ -438,7 +527,7 @@
   margin-left: 10px;
   padding: 2px var(--space-2);
   border: 1px solid var(--accent, #e8590c);
-  border-radius: 999px;
+  border-radius: 0;
   color: var(--accent, #e8590c);
   font-size: .62rem;
   font-weight: 700;
@@ -488,8 +577,8 @@ header {
     position: absolute;
     inset: 0 0 0 calc(-1 * var(--rail-w));
     z-index: -1;
-    background-color: #000;
-    border-bottom: 1px solid rgba(255, 255, 255, .08);
+    background-color: var(--bg);
+    border-bottom: 1px solid var(--lift);
     pointer-events: none;
     transition: left .25s ease, background-color .28s ease, border-color .28s ease;
   }
@@ -518,11 +607,14 @@ header > .brand h1 {
   transform: translateX(6px);
 }
 
-/* Icon-only round header buttons (labels shown as tooltips) */
+/* Icon-only header buttons (labels shown as tooltips). Square like every other
+   control; the small-control height keeps the icon optically centred without a
+   third button size next to the 32/40px pair used by the rest of the chrome. */
 .header-history-label { display: none; }
 .header-history-btn {
-  border-radius: var(--radius-full);
-  padding: 8px 10px;
+  border-radius: 0;
+  min-height: var(--control-h-sm);
+  padding: 0 10px;
 }
 .header-history-btn:hover {
   background: rgba(232, 89, 12, .08);
@@ -535,11 +627,6 @@ header > .brand h1 {
      the header device-refresh icon and the rail's Refresh Page for mobile. */
   .device-section-inline #refresh { display: none !important; }
   #refresh-page-btn { display: none !important; }
-}
-
-.btn-ghost {
-  border-radius: var(--radius-full);
-  padding: 8px 16px;
 }
 
 .device-section-inline .custom-select-trigger {
@@ -567,8 +654,8 @@ header > .brand h1 {
 .custom-select-menu {
   border-radius: 0;
   overflow: hidden;
-  background: #1b1b1b;
-  border-color: #2c2c2c;
+  background: var(--surface);
+  border-color: var(--border-soft);
 }
 
 /* Scroll performance: fixed/sticky backdrop blur forces Chromium to repaint
@@ -579,7 +666,7 @@ header > .brand h1 {
   header,
   main.has-queue header,
   body.results-open main header {
-    background: #000;
+    background: var(--bg);
     transition: background-color .28s ease, margin .25s ease;
     backdrop-filter: none;
     -webkit-backdrop-filter: none;

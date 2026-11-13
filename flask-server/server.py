@@ -1,16 +1,25 @@
 from playback_events import playback_events
 from liked_songs_cache import LikedSongsCache
-_liked_songs_cache = LikedSongsCache()
+from browser_coordination import browser_scope, BROKER
+import provider_commands
+from auth_sessions import replace_identity, password_change_allowed, complete_login
 from flask import has_request_context
 import download_cookies
+import account_purge
+import youtube_auto_login
 import traceback
 from status_journal import Journal, JournalHandler
 from status_monitor import Metrics, CachedCollector, file_info, system_snapshot
 from playback_failover import PlaybackFailoverBudget
+from alexa_playback_errors import authentication_failure as _alexa_auth_error
 from audio_jobs import AudioJobs
-from youtube_stream import YouTubeStream, StreamError
+from youtube_stream import Resolver, YouTubeStream, StreamError
 from playback_contract import restore_snapshot
-import asyncio, collections, difflib, glob, hashlib, hmac, itertools, json, math, os, random, secrets, shutil, sys, threading, time, re, subprocess, logging, copy, uuid, tempfile, shlex
+from player_state import (IDENTITY as _PLAYER_IDENTITY, PlayerStateRegistry as _PlayerStateRegistry,
+                          PlayerStateView as _PlayerStateView, PlayerStateProxy as _PlayerStateProxy,
+                          IdentityLock as _IdentityLock, spawn as _spawn_for_identity,
+                          IdentityIterator as _IdentityIterator)
+import asyncio, base64, collections, difflib, glob, hashlib, hmac, itertools, json, math, os, random, secrets, shutil, sys, threading, time, re, subprocess, logging, copy, uuid, tempfile, shlex
 from datetime import timedelta, datetime
 from urllib.parse import parse_qs, quote, unquote, urlencode, urlparse
 
@@ -18,20 +27,45 @@ import home_feed
 from ytmusicapi import YTMusic
 
 import alexa_remote
+from youtube_credentials import (OWNER as _OWNER_IDENTITY, SERVER as _SERVER_IDENTITY,
+                                 YouTubeCredentialStore, account_user_id)
 from youtube_browser_session import (BrowserController, YouTubeBrowserSessionManager,
                                      browser_client_is_signed_in,
                                      is_authentication_error,
+                                     normalize_browser_headers,
                                      promote_browser_headers)
 from flask import (Flask, request, render_template, jsonify, send_file,
-                   send_from_directory, abort, session, redirect, Response)
+                   send_from_directory, abort, session, redirect, Response, g)
 from werkzeug.exceptions import HTTPException
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s')
 logger = logging.getLogger(__name__)
 
-_youtube_stream = YouTubeStream(
-    lambda: Supporting.get_ytdlp_cookies_file(),
-    enabled=os.environ.get('YOUTUBE_STREAMING', '0').lower() in ('1', 'true', 'yes'))
+from stream_pools import _YouTubeStreamPool, _YouTubeResolverPool
+
+_YOUTUBE_STREAMING_ENABLED = os.environ.get('YOUTUBE_STREAMING', '0').lower() in ('1', 'true', 'yes')
+
+_YOUTUBE_STREAM_LIMIT = os.environ.get('YOUTUBE_STREAM_WORKERS', '4')
+
+_global_audio_slots = threading.BoundedSemaphore(max(1, int(os.environ.get("AUDIO_GLOBAL_STREAMS", "8"))))
+
+_youtube_resolvers = _YouTubeResolverPool(limit=_YOUTUBE_STREAM_LIMIT)
+
+_youtube_streams = _YouTubeStreamPool(
+    lambda identity: YouTubeStream(
+        lambda: Supporting.get_ytdlp_cookies_file(identity),
+        enabled=_YOUTUBE_STREAMING_ENABLED, global_slots=_global_audio_slots,
+        # Resolved per play, not captured: when the credential changes the next
+        # song uses the worker for the new jar, and the old worker stays warm for
+        # whoever is still on it until the LRU drops it.
+        resolver_for=lambda: _youtube_resolvers.get(
+            Supporting.get_ytdlp_cookies_file(identity))),
+    limit=_YOUTUBE_STREAM_LIMIT, enabled=lambda: _YOUTUBE_STREAMING_ENABLED, global_limit=max(1, int(os.environ.get("AUDIO_GLOBAL_STREAMS", "8"))))
+
+
+def _youtube_stream_for(identity=None):
+    """This identity's relay facade over its credential's shared resolver."""
+    return _youtube_streams.get(identity)
 
 
 
@@ -51,6 +85,7 @@ _status_storage = CachedCollector(10)
 def _operational_request_start():
     if not request.path.startswith('/static/') and request.path.rstrip('/') != '/status' and not request.path.startswith('/api/status'):
         request.environ['musicbox.metrics_start'] = _operational.begin_request()
+        request.environ['musicbox.request_started_at'] = time.monotonic()
         request.environ['musicbox.trace'] = uuid.uuid4().hex
 
 
@@ -167,6 +202,24 @@ def _compute_static_version():
 _STATIC_VERSION = _compute_static_version()
 
 
+@app.template_global('asset_url')
+def _asset_url(relative: str) -> str:
+    """One idiom for a versioned asset URL, available to every template.
+
+    The multi-user blueprints register their own per-file-mtime version, which
+    wins wherever they are mounted; this exists so a page outside those
+    blueprints -- /status, rendered here -- can share the same shell markup
+    without failing on a missing global when MULTI_USER_ENABLED=0."""
+    return f'/static/{relative}?v={_STATIC_VERSION}'
+
+
+@app.context_processor
+def _shell_context():
+    """Defaults the shared admin shell reads, so one template works for the
+    panel, for /status, and for a single-owner deployment with no layer at all."""
+    return {'asset_v': _STATIC_VERSION, 'base_path': '/admin'}
+
+
 # ---- static asset serving ----
 # The web-remote shell loads its CSS/JS as external files under /static/,
 # versioned with ?v=<_STATIC_VERSION> so browsers can cache them long-term and
@@ -232,18 +285,30 @@ def _totp_at(secret_b32: str, counter: int) -> str:
 
 
 def _totp_verify(code: str, window: int = 1) -> bool:
-    if not _totp_enabled() or not re.fullmatch(r"\d{6}", code or ""):
+    from multiuser.security import totp_counter
+    if not _totp_enabled():
         return False
-    counter = int(time.time()) // 30
-    # accept the current step plus +/- `window` steps for clock drift
-    for step in range(-window, window + 1):
-        try:
-            candidate = _totp_at(REMOTE_TOTP_SECRET, counter + step)
-        except Exception:
+    with get_db() as conn:
+        conn.execute('BEGIN IMMEDIATE')
+        row = conn.execute("SELECT v FROM kv WHERE k='remote_totp_budget'").fetchone()
+        failures, locked_until = json.loads(row[0]) if row else (0, 0)
+        now = time.time()
+        if locked_until > now:
             return False
-        if hmac.compare_digest(candidate, code):
-            return True
-    return False
+        if locked_until:
+            failures = 0
+        step = totp_counter(REMOTE_TOTP_SECRET, code, window)
+        previous = conn.execute("SELECT v FROM kv WHERE k='remote_totp_last_step'").fetchone()
+        if step is None or (previous and step <= int(previous[0])):
+            failures += 1
+            conn.execute("INSERT OR REPLACE INTO kv(k,v) VALUES('remote_totp_budget',?)",
+                         (json.dumps([failures, now + 300 if failures >= 5 else 0]),))
+            conn.commit()
+            return False
+        conn.execute("INSERT OR REPLACE INTO kv(k,v) VALUES('remote_totp_last_step',?)", (str(step),))
+        conn.execute("DELETE FROM kv WHERE k='remote_totp_budget'")
+        conn.commit()
+    return True
 
 # Public authenticated audio origin used by Echo stream URLs. The server
 # relays YouTube audio and retains only temporary current-track bytes.
@@ -261,21 +326,16 @@ if not API_KEY:
         if os.path.exists(api_key_path):
             with open(api_key_path, 'r') as f:
                 API_KEY = f.read().strip()
-            if not API_KEY:
-                API_KEY = secrets.token_hex(32)
-                with open(api_key_path, 'w') as f:
-                    f.write(API_KEY)
-                os.chmod(api_key_path, 0o600)
-        else:
-            API_KEY = secrets.token_hex(16)
-            with open(api_key_path, 'w') as f:
-                f.write(API_KEY)
-            try:
-                os.chmod(api_key_path, 0o600)
-            except OSError:
-                pass
-    except Exception:
-        API_KEY = secrets.token_hex(16)
+    except OSError:
+        API_KEY = None
+    if not API_KEY:
+        # Derive the fallback from the already protected persistent signing key.
+        # Existing explicit credentials and legacy key files keep their identity;
+        # new installations need no additional plaintext secret file.
+        import hashlib as _key_hashlib
+        import hmac as _key_hmac
+        _signing_material = app.secret_key.encode() if isinstance(app.secret_key, str) else app.secret_key
+        API_KEY = _key_hmac.new(_signing_material, b'musicbox-legacy-api-key-v1', _key_hashlib.sha256).hexdigest()
 
 if not os.environ.get("API_KEY"):
     logger.warning("No API key configured in environment; using persistent generated credential.")
@@ -286,8 +346,9 @@ if not os.environ.get("API_KEY"):
 # per device and sends the skill a short, NLU-safe trigger phrase. The skill
 # then GETs /armed_play/ to learn what to play. Latest-arm-wins, single slot per
 # serial, with a short TTL so a stale arm never plays unexpectedly.
-_ARMED_PLAYS = {}
-_ARMED_PLAYS_LOCK = threading.Lock()
+_armed_plays_registry = _PlayerStateRegistry(lambda identity: {})
+_ARMED_PLAYS = _PlayerStateView(_armed_plays_registry)
+_ARMED_PLAYS_LOCK = _IdentityLock(_armed_plays_registry)
 ARMED_PLAY_TTL = 60.0  # seconds
 
 # ---- play-intent claims (rapid-click coalescing) ----
@@ -304,8 +365,9 @@ ARMED_PLAY_TTL = 60.0  # seconds
 # collapses into exactly one dispatch for the song the user actually landed on.
 # Requests without a seq (voice commands, the Lambda, older clients) always
 # claim, preserving existing behaviour.
-_PLAY_INTENT_SEQS = {}
-_PLAY_INTENT_LOCK = threading.Lock()
+_play_intent_registry = _PlayerStateRegistry(lambda identity: {})
+_PLAY_INTENT_SEQS = _PlayerStateView(_play_intent_registry)
+_PLAY_INTENT_LOCK = _IdentityLock(_play_intent_registry)
 
 
 def _claim_play_intent(serial, seq, client_id=''):
@@ -358,8 +420,9 @@ def _play_intent_seq_arg(body):
 # whatever the user landed on. The delay is short enough to be invisible next to
 # the ~9-10s cold-start path but long enough to absorb ordinary rapid clicking.
 PLAY_DISPATCH_DEBOUNCE = float(os.environ.get('PLAY_DISPATCH_DEBOUNCE', '0.15'))
-_PENDING_DISPATCH = {}
-_PENDING_DISPATCH_LOCK = threading.Lock()
+_pending_dispatch_registry = _PlayerStateRegistry(lambda identity: {})
+_PENDING_DISPATCH = _PlayerStateView(_pending_dispatch_registry)
+_PENDING_DISPATCH_LOCK = _IdentityLock(_pending_dispatch_registry)
 
 # A short debounce only merges clicks that land within its window; clicks ~1s
 # apart still produced one trigger each. The timing-independent half of the fix
@@ -379,8 +442,9 @@ TRIGGER_INFLIGHT_TTL = 15.0
 # confirmation watchdog), while a later click gets a new chance to reach the
 # skill instead of waiting for the 15-second cleanup TTL.
 TRIGGER_REUSE_WINDOW = float(os.environ.get('TRIGGER_REUSE_WINDOW', '5.0'))
-_TRIGGER_INFLIGHT = {}
-_TRIGGER_INFLIGHT_LOCK = threading.Lock()
+_trigger_inflight_registry = _PlayerStateRegistry(lambda identity: {})
+_TRIGGER_INFLIGHT = _PlayerStateView(_trigger_inflight_registry)
+_TRIGGER_INFLIGHT_LOCK = _IdentityLock(_trigger_inflight_registry)
 
 
 def _note_trigger_sent(serial):
@@ -445,8 +509,11 @@ def _schedule_play_dispatch(serial, video_id, offset_ms=0, delay=None, expected_
     now-playing's `playback_error` (the web remote already toasts it) rather than
     this call's return value, because the send happens after the response.
     """
+    correction = expected_intent is not None
     if expected_intent is None:
         with _np_lock:
+            if _now_playing.get('_alexa_auth_blocked'):
+                return None
             _now_playing['alexa_intent_at'] = time.time()
             _now_playing.pop('_alexa_finished_token', None)
     with _np_lock:
@@ -456,7 +523,12 @@ def _schedule_play_dispatch(serial, video_id, offset_ms=0, delay=None, expected_
     if delay is None:
         delay = PLAY_DISPATCH_DEBOUNCE
 
+    if expected_intent is None:
+        expected_intent, expected_output = dispatch_intent, dispatch_output
+
     def _fire():
+        if _now_playing.get('_alexa_auth_blocked'):
+            return
         with _PENDING_DISPATCH_LOCK:
             pending = _PENDING_DISPATCH.get(key)
             # A newer click replaced us between the timer firing and this lock.
@@ -467,7 +539,7 @@ def _schedule_play_dispatch(serial, video_id, offset_ms=0, delay=None, expected_
             with _np_lock:
                 out = _playback_output.snapshot()
                 if (_now_playing.get('alexa_intent_at') != expected_intent or
-                        not _now_playing.get('playing') or _now_playing.get('video_id') != video_id or
+                        (correction and (not _now_playing.get('playing') or _now_playing.get('video_id') != video_id)) or
                         out['playback_output'] != 'alexa' or out['output_token'] != expected_output):
                     return
         # Always keep the arm current: this is what an in-flight trigger, or the
@@ -483,15 +555,19 @@ def _schedule_play_dispatch(serial, video_id, offset_ms=0, delay=None, expected_
             # while the web remote already shows it as "playing".
             logger.info("[play-dispatch] reusing in-flight trigger for %s", video_id)
             def _resend():
+                if _now_playing.get('_alexa_auth_blocked'):
+                    return 'Alexa authentication failed. Reconnect Amazon before retrying.'
                 _arm_play(serial, video_id, offset_ms)
                 return alexa_remote.remote.play_video_id(serial, video_id, offset_ms)
-            threading.Thread(
-                target=_watch_playback_confirmation, args=(serial, video_id, _resend),
-                daemon=True).start()
+            _spawn_for_identity(_current_identity(), _watch_playback_confirmation,
+                               args=(serial, video_id, _resend, (dispatch_intent, dispatch_output)), name='playback-watchdog')
             return
         try:
             _note_trigger_sent(serial)
+            trigger_started = time.monotonic()
             error = _dispatch_play_with_retry(serial, video_id, offset_ms)
+            logger.info('[play-dispatch] video=%s command completed in %.0fms', video_id,
+                        (time.monotonic() - trigger_started) * 1000)
             if error:
                 _clear_trigger_inflight(serial)
                 logger.error("[play-dispatch] %s failed: %s", video_id, error)
@@ -503,13 +579,14 @@ def _schedule_play_dispatch(serial, video_id, offset_ms=0, delay=None, expected_
                                 'Alexa could not start playback. Check the device is online and retry.')
 
     token = object()
-    timer = threading.Timer(delay, _fire)
-    timer.daemon = True
+    timer = _delayed(delay, _fire, start=False)
     with _np_lock:
+        if _now_playing.get('_alexa_auth_blocked'):
+            return None
         if expected_intent is not None:
             output = _playback_output.snapshot()
             if (_now_playing.get('alexa_intent_at') != expected_intent or
-                    not _now_playing.get('playing') or _now_playing.get('video_id') != video_id or
+                    (correction and (not _now_playing.get('playing') or _now_playing.get('video_id') != video_id)) or
                     output['playback_output'] != 'alexa' or output['output_token'] != expected_output):
                 return None
         # Stage under the same lock as the fence: a superseded correction must
@@ -567,8 +644,8 @@ def _consume_armed_play(serial=None):
 
     The skill can't map its opaque Alexa deviceId to the AlexaPy serialNumber
     used when arming, so when ``serial`` is None (the skill's call) we return the
-    single most-recently-armed play. This is safe for a single-user remote where
-    the trigger phrase follows its arm within ~1s."""
+    most-recently-armed play belonging to the authenticated account.
+    Other accounts' arms are never visible to this lookup."""
     with _ARMED_PLAYS_LOCK:
         if serial is not None:
             entry = _ARMED_PLAYS.pop(serial, None)
@@ -633,9 +710,14 @@ def init_db():
         conn.execute('''
             CREATE TABLE IF NOT EXISTS jam_tokens (
                 token TEXT PRIMARY KEY,
-                created_at REAL
+                created_at REAL,
+                user_id TEXT
             )
         ''')
+        try:
+            conn.execute('ALTER TABLE jam_tokens ADD COLUMN user_id TEXT')
+        except sqlite3.OperationalError:
+            pass  # column already present (fresh DB or migrated)
         conn.execute('''
             CREATE TABLE IF NOT EXISTS playlist_tracks (
                 uuid TEXT PRIMARY KEY,
@@ -663,32 +745,36 @@ def _ensure_db():
 # add_history_item on YT Music, so a per-video cooldown keeps one play from
 # pushing the same song several times (local history rows are INSERT OR
 # REPLACE, so duplicates were already harmless there).
-_listen_pushed = {}  # video_id -> time.time() of the most recent push
+_listen_pushed = {}  # (identity, video_id) -> time.time() of the most recent push
 _listen_pushed_lock = threading.Lock()
 _LISTEN_PUSH_COOLDOWN = 60.0  # seconds between YouTube history pushes per video
 
 
 def _record_listen(video_id, title, artist, thumbnail_url):
     from ytmusicapi.auth.types import AuthType
-    if not video_id or _get_ytmusic_home().auth_type == AuthType.UNAUTHORIZED:
+    identity = _current_identity()
+    if not video_id or _get_ytmusic_home(identity).auth_type == AuthType.UNAUTHORIZED:
         return
     with _listen_pushed_lock:
-        last = _listen_pushed.get(video_id, 0.0)
+        last = _listen_pushed.get((identity, video_id), 0.0)
         if time.time() - last < _LISTEN_PUSH_COOLDOWN:
             return
-        _listen_pushed[video_id] = time.time()
+        _listen_pushed[(identity, video_id)] = time.time()
         if len(_listen_pushed) > 512:
             for stale in list(_listen_pushed)[:-256]:
                 del _listen_pushed[stale]
     def push_bg():
         try:
             # ytmusicapi add_history_item requires a song object with tracking parameters
-            song = _get_ytmusic_home().get_song(video_id)
+            yt_home = _get_ytmusic_home()
+            song = yt_home.get_song(video_id)
             if song:
-                _get_ytmusic_home().add_history_item(song)
+                yt_home.add_history_item(song)
         except Exception as e:
             logger.debug("Failed to push history for %s (likely unauthenticated): %s", video_id, e)
-    threading.Thread(target=push_bg, daemon=True).start()
+    # Threads do not inherit the request identity; without this the song would land
+    # in the owner's YouTube history no matter who played it.
+    _spawn_for_identity(identity, push_bg, name='yt-history-push')
 
 
 
@@ -697,13 +783,23 @@ def _record_listen(video_id, title, artist, thumbnail_url):
 # Endpoints that never need auth (public policy pages + the login flow itself,
 # plus the PWA manifest / service worker / icons, which the browser fetches with
 # no ?key= and which contain no private data).
-_PUBLIC_PATHS = ('/', '/privacy_policy', '/terms_of_use', '/login', '/logout', '/favicon.ico',
-                 '/manifest.webmanifest', '/service-worker.js', '/__not_found__')
+# The multi-user self-service door pages are listed here too: they are anonymous
+# by design and each enforces its own CSRF token, rate limit and email
+# verification rule inside multiuser/selfservice.py. They only exist at all when
+# MULTI_USER_ENABLED=1 registers that blueprint, so on a single-owner deployment
+# these entries match nothing and Flask answers 404.
+_PUBLIC_PATHS = ('/health/live', '/health/ready', '/', '/welcome', '/privacy_policy', '/terms_of_use', '/login', '/logout', '/favicon.ico',
+                 '/manifest.webmanifest', '/service-worker.js', '/__not_found__',
+                 '/signup', '/resend-code', '/verify', '/forgot-password',
+                 '/reset-password')
 # Public path prefixes (startswith match) — static assets (CSS, JS, icons),
 # plus jam join links (/j/<token> and legacy /jam/<token> — the token itself is
-# the credential). The Amazon proxy listener independently verifies the owner
-# session and current login attempt on every request, including subresources.
-_PUBLIC_PREFIXES = ('/static/', '/j/', '/jam/', '/alexa/proxy/')
+# the credential). Amazon proxy access is checked by Caddy forward_auth
+# against the signed-in account and its active login attempt.
+# Verification and reset are typed six-digit codes now, so no emailed credential
+# lives in a URL on the player door: /signup/ is the sign-up form itself, and
+# /invite/ carries the one remaining emailed link, an administrator's invitation.
+_PUBLIC_PREFIXES = ('/static/', '/j/', '/jam/', '/signup/', '/invite/')
 
 # Canonical SPA document URLs. These exact paths (no trailing slash) render
 # the same protected shell as `/`; nearby API paths such as `/history/` remain
@@ -849,7 +945,7 @@ def _safe_spa_target(value, default='/home'):
     # do not reinterpret their identifier as a query value before the shell has
     # loaded and the client router has normalized it.
     if path_style:
-        return normalized_path
+        return '/' + normalized_path.lstrip('/')
     canonical_path = normalized_path or '/'
     query = parse_qs(parsed.query, keep_blank_values=True)
     allowed = _SPA_QUERY_FIELDS.get(canonical_path, ())
@@ -860,13 +956,13 @@ def _safe_spa_target(value, default='/home'):
         value = _first_query_value(query, name)
         if value:
             clean.append((name, value))
-    return canonical_path + (('?' + urlencode(clean)) if clean else '')
+    return '/' + canonical_path.lstrip('/') + (('?' + urlencode(clean)) if clean else '')
 
 # Endpoints reachable with a logged-in web-remote session cookie (so the long
 # API key stays out of the browser URL). Everything here plus the remote page.
-_SESSION_PATHS = ('/audio', '/get_radio', '/status', '/api/status', '/remote', '/alexa/status', '/alexa/init', '/alexa/devices', '/alexa/command',
+_SESSION_PATHS = ('/api/jam/session', '/audio', '/get_radio', '/status', '/api/status', '/remote', '/alexa/status', '/alexa/init', '/alexa/devices', '/alexa/command',
                   '/alexa/play', '/alexa/suggest', '/alexa/proxy_login',
-                  '/alexa/proxy_cancel', '/alexa/proxy_check', '/alexa/now_playing', '/alexa/state_event',
+                  '/alexa/proxy_cancel', '/alexa/proxy_authorize', '/alexa/proxy_check', '/alexa/now_playing', '/alexa/state_event',
                   '/alexa/seek', '/alexa/volume', '/alexa/play_queue',
                   '/alexa/shuffle_queue', '/alexa/search', '/alexa/clear',
                   '/alexa/queue_add', '/alexa/queue_remove',
@@ -876,7 +972,8 @@ _SESSION_PATHS = ('/audio', '/get_radio', '/status', '/api/status', '/remote', '
                   '/api/subscribed_artists', '/api/app/output', '/api/app/devices', '/api/app/events/snapshot', '/api/app/audio-token',
                   '/alexa/like', '/api/liked_songs', '/api/profile_status',
                   '/api/youtube/download-cookies', '/api/youtube/download-cookies/status',
-'/alexa/amazon_signout',
+'/alexa/amazon_signout', '/alexa/form_login', '/alexa/form_login/step',
+'/alexa/form_login/cancel', '/alexa/form_login/captcha',
                    '/api/youtube/browser-auth',
                    '/api/youtube/browser-session/start',
                    '/api/youtube/browser-session/status',
@@ -886,10 +983,18 @@ _SESSION_PATHS = ('/audio', '/get_radio', '/status', '/api/status', '/remote', '
                    '/api/youtube/browser-session/capture',
                    '/api/youtube/browser-session/surface',
                    '/api/youtube/browser-session/choose-account',
-                   '/api/youtube/browser-session/authorize')
-_SESSION_PREFIXES = ('/accounts/', '/api/status/', '/alexa/now_playing/', '/history/', '/api/playlists/', '/recommendations/',
-                     '/api/artist/', '/api/album/', '/api/library/', '/api/explore/', '/api/home/',
-                     '/api/track/', '/api/app/queue/')
+                   '/api/youtube/browser-session/authorize',
+                   '/api/youtube/browser-session/form/start',
+                   '/api/youtube/browser-session/form/code',
+                   '/api/youtube/browser-session/form/poll',
+                   '/api/youtube/browser-session/form/stop',
+                   '/api/youtube/browser-session/form/methods',
+                   '/api/youtube/browser-session/form/method',
+                   '/api/youtube/browser-session/form/captcha',
+)
+_SESSION_PREFIXES = ('/accounts/', '/api/jam/', '/api/status/', '/alexa/now_playing/', '/history/', '/api/playlists/', '/recommendations/',
+                    '/api/artist/', '/api/album/', '/api/library/', '/api/explore/', '/api/home/',
+                    '/api/track/', '/api/app/queue/', '/api/account/')
 
 # API/device endpoints: the Alexa skill and web-remote JS hit these directly
 # and need a machine-readable JSON error, never an HTML redirect, on failure.
@@ -999,7 +1104,53 @@ def _legacy_adoption_allowed():
     return not _legacy_adoption_closed
 
 
+def _client_ip():
+    """The visitor's real address, not the reverse proxy's.
+
+    Caddy is the only published port, so `request.remote_addr` is the same
+    container address for every browser on earth. The multi-user layer owns the
+    one correct derivation; importing it lazily keeps this optional layer
+    optional, and a deployment without it falls back to the raw peer address."""
+    try:
+        from multiuser import netids
+        from multiuser.netids import client_ip
+        if request.remote_addr == '127.0.0.1' and request.headers.get('X-MusicBox-Client-IP'):
+            return netids.parse_ip(request.headers['X-MusicBox-Client-IP']) or request.remote_addr
+        return client_ip(request)
+    except Exception as exc:
+        # Worth a line when the audit trail disagrees with the access log: this
+        # fallback is what a deployment without the layer (or with a broken
+        # import) lands on, and behind a proxy it means one shared bucket.
+        logger.debug('[client-ip] address resolution fell back to the peer: %s', exc)
+        return request.remote_addr or ''
+
+
+def _mu_web_identity():
+    """The signed-in multi-user account for this request, or None.
+
+    Validates the `mu_sid` cookie against the account session table once per
+    request and caches the user on `g`. Background/CLI callers have no request
+    context and get None, which keeps them on the legacy owner path."""
+    if _multiuser_layer is None or not has_request_context():
+        return None
+    if not session.get('mu_sid'):
+        return None
+    if hasattr(g, '_mu_user_cache'):
+        return g._mu_user_cache
+    try:
+        _sess, user = _multiuser_layer.accounts.validate_session(session['mu_sid'])
+    except Exception:
+        logger.exception('multiuser session validation failed')
+        user = None
+    g._mu_user_cache = user or None
+    return g._mu_user_cache
+
+
 def _logged_in():
+    if _mu_web_identity() is not None:
+        return True
+    if session.get("mu_sid"):
+        return False
     if not (_remote_login_enabled() and session.get('remote_user') == REMOTE_USER):
         return False
     sid = session.get('sid')
@@ -1014,6 +1165,21 @@ def _logged_in():
         session['sid'] = _session_open()
         return True
     return False  # sid revoked (signed out here or everywhere)
+
+
+def _admin_logged_in():
+    """Whether this session may see server-wide administration.
+
+    A multi-user owner, or the legacy single-user owner session on
+    a deployment without the layer. Plain players and Jam guests never qualify."""
+    user = _mu_web_identity()
+    if user is not None:
+        return user.get('role') == 'owner' and user.get('status') == 'active'
+    # The owner API key is the legacy single-user credential: the skill, CLI
+    # diagnostics and key-in-URL status page have no session cookie, but they
+    # are still the owner. Without this, moving /status behind the admin check
+    # locked the key out of the diagnostics it has always used.
+    return bool(_valid_key_supplied()) or _logged_in()
 
 
 # ---- Jam (guest) sessions ----
@@ -1036,50 +1202,74 @@ def _jam_cache():
             with get_db() as conn:
                 conn.execute('DELETE FROM jam_tokens WHERE created_at < ?',
                              (time.time() - JAM_MAX_AGE,))
-                rows = conn.execute('SELECT token, created_at FROM jam_tokens').fetchall()
+                rows = conn.execute('SELECT token, created_at, user_id FROM jam_tokens').fetchall()
                 conn.commit()
-            _valid_jams = {r['token']: r['created_at'] for r in rows}
+            _valid_jams = {r['token']: {'created_at': r['created_at'], 'user_id': r['user_id']} for r in rows}
         return _valid_jams
+
+
+def _jam_identity_id():
+    """Who a Jam belongs to on this request: the signed-in account id, or None
+    for the legacy owner. Guests never open jams; they only join one."""
+    user = _mu_web_identity()
+    return str(user['id']) if user else None
 
 
 def _jam_token_valid(token):
     if not token:
         return False
-    created = _jam_cache().get(token)
-    if created is None:
+    entry = _jam_cache().get(token)
+    if entry is None:
         return False
-    if time.time() - created > JAM_MAX_AGE:
-        _jam_close_all()  # expired: purge so guests are cut off, not just this check
+    if time.time() - entry['created_at'] > JAM_MAX_AGE:
+        _jam_purge_token(token)  # expired: purge so guests are cut off, not just this check
         return False
     return True
 
 
-def _jam_open():
-    """Start a jam (revoking any previous one) and return its share token."""
+def _jam_purge_token(token):
+    with get_db() as conn:
+        conn.execute('DELETE FROM jam_tokens WHERE token = ?', (token,))
+        conn.commit()
+    _jam_cache().pop(token, None)
+
+
+def _jam_open(user_id=None):
+    """Start this identity's jam (revoking its previous one) and return the token."""
     token = secrets.token_urlsafe(9)
     now = time.time()
+    clause = 'user_id IS NULL' if user_id is None else 'user_id = ?'
+    params = () if user_id is None else (user_id,)
     with get_db() as conn:
-        conn.execute('DELETE FROM jam_tokens')
-        conn.execute('INSERT INTO jam_tokens (token, created_at) VALUES (?, ?)', (token, now))
+        conn.execute(f'DELETE FROM jam_tokens WHERE {clause}', params)
+        conn.execute('INSERT INTO jam_tokens (token, created_at, user_id) VALUES (?, ?, ?)', (token, now, user_id))
         conn.commit()
     cache = _jam_cache()
-    cache.clear()
-    cache[token] = now
+    for existing, entry in [item for item in cache.items() if item[1]['user_id'] == user_id]:
+        cache.pop(existing, None)
+    cache[token] = {'created_at': now, 'user_id': user_id}
     return token
 
 
-def _jam_close_all():
+def _jam_close_all(user_id=None):
+    clause = 'user_id IS NULL' if user_id is None else 'user_id = ?'
+    params = () if user_id is None else (user_id,)
     with get_db() as conn:
-        conn.execute('DELETE FROM jam_tokens')
+        conn.execute(f'DELETE FROM jam_tokens WHERE {clause}', params)
         conn.commit()
-    _jam_cache().clear()
+    cache = _jam_cache()
+    for existing, entry in [item for item in cache.items() if item[1]['user_id'] == user_id]:
+        cache.pop(existing, None)
 
 
-def _jam_active_token():
+def _jam_active_token(user_id=None):
     # Copy before iterating: _jam_open()/_jam_close_all() on another thread
     # mutate the dict, which would raise RuntimeError mid-iteration.
-    for token, created in list(_jam_cache().items()):
-        if time.time() - created <= JAM_MAX_AGE:
+    for token, entry in list(_jam_cache().items()):
+        if entry['user_id'] != user_id:
+            continue
+        created_at = entry['created_at']
+        if time.time() - created_at <= JAM_MAX_AGE:
             return token
     return None
 
@@ -1138,16 +1328,53 @@ def _jam_request_allowed(path):
             request.path.startswith(_JAM_PUBLIC_GET_PREFIXES))
 
 
-def _jam_device_serial():
-    """Resolve the shared playback target server-side for a guest.
+def _jam_resolve_serial():
+    """The host's live speaker, as ``mobile:<id>`` or an Echo serial.
+
+    A jam used to require an Echo on the host's Amazon account, so a host
+    listening in the web player was told they had no playback device even
+    though their browser was playing. The browser/phone player is a full
+    output (it leases, acknowledges pauses and accepts commands), so it wins
+    whenever it is the active, still-online output.
+    """
+    output = _playback_output.snapshot()
+    owner = output.get('output_owner') or ''
+    if output['playback_output'] == 'phone' and owner:
+        if any(device['id'] == owner for device in _mobile_devices.list()):
+            return 'mobile:' + owner
+    if output['playback_output'] == 'alexa' and output['output_serial']:
+        return output['output_serial']
+    devices, error = alexa_remote.remote.devices(refresh=False)
+    if not error:
+        for device in devices or []:
+            if device.get('online') and device.get('serial'):
+                return device['serial']
+    return None
+
+
+def _jam_device_serial(claim=''):
+    """Resolve the shared playback target server-side.
 
     Device names and serials are personal account data, so the guest browser
     receives only the opaque value ``jam`` and never the real device record.
+
+    ``claim`` names the host's own browser when they start a jam: without it a
+    host who had never played anything (and has no Echo) would mint a link that
+    could not play. Only the host opening a jam passes it; guest requests never
+    select a speaker on the host's behalf.
     """
-    devices, error = alexa_remote.remote.devices(refresh=False)
-    if error or not devices:
+    serial = _jam_resolve_serial()
+    if serial or not claim:
+        return serial
+    try:
+        _mobile_devices.require_online(claim)
+    except ValueError:
         return None
-    return devices[0].get('serial')
+    with _np_lock:
+        output = _playback_output.snapshot()
+        if output['playback_output'] != 'phone' or output['output_owner'] != claim:
+            _playback_output.select_idle_phone(claim, output['output_token'])
+    return 'mobile:' + claim
 
 
 def _effective_serial(serial):
@@ -1169,14 +1396,17 @@ _audio_credentials = AudioCredentials(app.secret_key)
 def _audio_session_valid(sid):
     if not isinstance(sid, str) or not sid:
         return False
+    if sid.startswith('account:'):
+        if _multiuser_layer is None:
+            return False
+        _, user = _multiuser_layer.accounts.validate_session(sid[8:])
+        return bool(user and not user.get('must_change_password'))
     valid = _sid_cache()
     return sid in valid and _sid_deadlines.get(sid, 0) > time.time()
 
 
-def _authorize_amazon_proxy(cookie_header, attempt):
-    # Bind the attempt to its initiating SID on the server. Ordinary permanent
-    # cookie refreshes cannot overwrite the binding with an older cookie payload.
-    remote = alexa_remote.remote
+def _authorize_amazon_proxy(cookie_header, attempt, remote_instance=None):
+    remote = remote_instance if remote_instance is not None else alexa_remote.remote
     bound = getattr(remote, '_proxy_owner_sid', None)
     current = getattr(remote, '_proxy_attempt_id', None)
     with app.test_request_context('/alexa/proxy/', headers={'Cookie': cookie_header}):
@@ -1184,24 +1414,214 @@ def _authorize_amazon_proxy(cookie_header, attempt):
                     hmac.compare_digest(session.get('sid', ''), bound) and hmac.compare_digest(attempt, current))
 
 
-if callable(getattr(getattr(alexa_remote, 'remote', None), 'set_proxy_authorizer', None)):
-    alexa_remote.remote.set_proxy_authorizer(_authorize_amazon_proxy)
+def _audio_subject_valid(data):
+    sid = data.get('sid')
+    if not _audio_session_valid(sid):
+        return False
+    if isinstance(sid, str) and sid.startswith('account:'):
+        _, user = _multiuser_layer.accounts.validate_session(sid[8:])
+        if (not user or user['id'] != data.get('user_id')
+                or user['security_version'] != data.get('security_version')):
+            return False
+        _PLAYER_IDENTITY.set(_player_identity_for_user_id(user['id'], user['role']))
+    elif data.get('user_id'):
+        return False
+    return True
+
 
 @app.route('/api/app/audio-token/', methods=['POST'], strict_slashes=False)
 def app_audio_token():
     if not _logged_in():
         return error_response('Web session required.', 401)
     body = request.get_json(silent=True) or {}
-    download = body.get('download') is True
-    return _no_store(jsonify({'token': _audio_credentials.issue(session.get('sid'), download),
-                              'expires_in': 86400 if download else 7200}))
+    user = _mu_web_identity()
+    sid = 'account:' + session['mu_sid'] if user else session.get('sid')
+    return _no_store(jsonify({'token': _audio_credentials.issue(sid, body.get('download') is True,
+        user_id=user['id'] if user else None,
+        security_version=user['security_version'] if user else None),
+        'expires_in': 86400 if body.get('download') is True else 7200}))
+
+_owner_row_read = [0.0, '']
+
+
+def _owner_row_id():
+    """The id of the account that owns this install, or '' when there is none.
+
+    It is the one account that keeps the pre-multiuser slot -- the auth file, download
+    jar, Chromium profile and persisted queue it already built -- so switching on
+    multi-user does not ask its owner to reconnect everything. Cached because callers
+    that lack the role on hand (jam guests) resolve it per request, and a read here
+    would open a SQLite connection each time; sixty seconds is the worst a role change
+    takes to land. The bootstrap identity remains fixed even if that account is
+    disabled or demoted: changing administrators must never transfer its cookies
+    or queue to somebody else."""
+    now = time.monotonic()
+    if _owner_row_read[0] > 0 and now - _owner_row_read[0] < 60:
+        return _owner_row_read[1]
+    user_id = ''
+    if _multiuser_layer is not None:
+        try:
+            user_id = _multiuser_layer.accounts.legacy_owner_id()
+        except Exception:
+            logger.exception('Could not look up the owning account')
+            return _owner_row_read[1]
+    _owner_row_read[0], _owner_row_read[1] = now, user_id
+    return user_id
+
+
+def _player_identity_for_user_id(user_id, role=None):
+    """The playback and provider slot belonging to one account id.
+
+    `role` is the account's role when the caller already loaded it, which is the
+    usual case for a signed-in web request."""
+    if not user_id:
+        return _OWNER_IDENTITY
+    owner = str(user_id) == _owner_row_id()
+    return _OWNER_IDENTITY if owner else 'user:' + str(user_id)
+
+
+def _alexa_access_enabled():
+    if _multiuser_layer is None:
+        return True
+    user_id = _identity_account_id(_current_identity())
+    return bool(user_id and _multiuser_layer.alexa_access.enabled(user_id))
+
+
+@app.context_processor
+def _alexa_access_template_context():
+    return {'alexa_access_enabled': _alexa_access_enabled()}
+
+
+@app.before_request
+def _bind_player_identity():
+    # Every request must resolve playback state to exactly one identity, and it
+    # must happen before anything touches _now_playing. A signed-in account owns
+    # its queue; a Jam guest is bound to the host's identity through the jam
+    # token; everything else (owner web session, Alexa, API keys, background
+    # threads) stays on the legacy 'owner' state.
+    layer = _multiuser_layer
+    from multiuser.alexa_access import AccessDenied, SKILL_PATHS
+    if layer is not None and request.headers.get('Authorization', '').startswith('Bearer '):
+        if request.path.rstrip('/') not in SKILL_PATHS:
+            return jsonify(error={'code': 'alexa_scope_denied', 'message': 'This token is restricted to skill playback.'}), 403
+        try:
+            linked, credential = layer.alexa_access.authenticate(request.headers)
+            if not request.headers.get('X-Alexa-User-Id') or not request.headers.get('X-Alexa-Device-Id'):
+                raise AccessDenied()
+            supplied = request.headers.get('X-Alexa-Binding')
+            if supplied and not hmac.compare_digest(supplied.encode(), credential['version'].encode()):
+                raise AccessDenied()
+        except AccessDenied as exc:
+            # A denied route stays denied. Only possession of a current token
+            # may report a failure to that token's own pending playback.
+            owner = layer.alexa_access.failure_owner(request.headers)
+            if owner:
+                _report_alexa_auth_denial(owner['id'], exc.code)
+            if request.environ.get('musicbox.alexa_denial_stale'):
+                return jsonify(error={'code':'stale_alexa_request', 'message':'A newer playback request superseded this Alexa request.'}), 403
+            failure = _alexa_auth_error(exc, exc.code)
+            return jsonify(error={'code': exc.code, 'message': failure['message'] if failure else 'Alexa authorization denied.'}), 403
+        _PLAYER_IDENTITY.set(_player_identity_for_user_id(linked['id']))
+        request.environ['musicbox.alexa_identity'] = linked['id']
+        request.environ['musicbox.alexa_binding'] = credential
+        request.environ['musicbox.alexa_token_authorized'] = True
+        _accept_verified_alexa_retry()
+        with _np_lock:
+            _now_playing['_alexa_verified_token_id'] = credential['id']
+            blocked = _now_playing.get('_alexa_auth_blocked')
+            failure = _now_playing.get('_alexa_auth_failure') or _alexa_auth_error('', 'alexa_authentication_required')
+        if blocked:
+            return jsonify(error={'code':failure['code'], 'message':failure['message']}), 403
+        return None
+    subject, device = request.headers.get('X-Alexa-User-Id'), request.headers.get('X-Alexa-Device-Id')
+    skill = ''
+    if layer is not None:
+        skill = layer.alexa_identity.skill_namespace(request.headers.get('X-Alexa-Skill-Id'))
+        if skill is None:
+            return jsonify(error={'code':'invalid_skill','message':'Invalid Alexa skill identity.'}), 400
+    alexa_headers = any(name in request.headers for name in
+                        ('X-Alexa-User-Id', 'X-Alexa-Device-Id', 'X-Alexa-Skill-Id', 'X-Alexa-Binding'))
+    if layer is not None and alexa_headers:
+        if not _valid_key_supplied():
+            return jsonify(error={'code': 'unauthorized', 'message': 'Invalid skill credential.'}), 401
+        if not subject or not device:
+            return jsonify(error={'code': 'link_account_required', 'message': 'Complete Echo identity required.'}), 403
+        if request.path.rstrip('/') == '/api/alexa/link':
+            return None
+        linked, binding = layer.alexa_identity.binding(subject, device, skill)
+        if not linked or not layer.alexa_access.enabled(linked['id']):
+            return jsonify(error={'code':'link_account_required','message':'This Echo is not authorized for this account.'}), 403
+        supplied_binding = request.headers.get('X-Alexa-Binding')
+        if supplied_binding is not None and not hmac.compare_digest(supplied_binding.encode(), binding['version'].encode()):
+            return jsonify(error={'code': 'link_account_required', 'message': 'Echo account binding changed.'}), 403
+        _PLAYER_IDENTITY.set(_player_identity_for_user_id(linked['id'], linked['role']))
+        request.environ['musicbox.alexa_identity'] = linked['id']
+        request.environ['musicbox.alexa_skill'] = skill
+        request.environ['musicbox.alexa_binding'] = binding
+        return None
+    if layer is not None and request.path.rstrip('/') == '/proxy' and request.args.get('cap'):
+        linked = layer.alexa_identity.stream_user(request.args['cap'], request.args.get('video_id'))
+        if not linked:
+            return jsonify(error='unauthorized'), 401
+        _PLAYER_IDENTITY.set(_player_identity_for_user_id(linked['id'], linked['role']))
+        request.environ['musicbox.echo_capability'] = True
+        return None
+    user = _mu_web_identity()
+    if user is not None:
+        _PLAYER_IDENTITY.set(_player_identity_for_user_id(user['id'], user.get('role')))
+        if not layer.alexa_access.enabled(user['id']):
+            with _np_lock:
+                if _playback_output.restrict_alexa():
+                    _reset_progress(_computed_position_ms())
+                    _now_playing.update(playing=False, playback_confirmed=True, playback_processing=False,
+                        output_serial='', alexa_token=None, alexa_intent_at=time.time())
+        return
+    jam_token = session.get('jam')
+    if jam_token:
+        entry = _jam_cache().get(jam_token)
+        if entry and entry.get('user_id'):
+            _PLAYER_IDENTITY.set(_player_identity_for_user_id(entry['user_id']))
+            return
+    _PLAYER_IDENTITY.set('owner')
+
 
 @app.before_request
 def require_api_key():
     path = request.path.rstrip('/') or '/'
+    user = _mu_web_identity()
+    if request.environ.get('musicbox.alexa_token_authorized'):
+        return None
+    if user and user.get('must_change_password') and not password_change_allowed(path, request.method):
+        if request.method == 'GET' and not _is_api_path(request.path):
+            return redirect('/account?step=password')
+        return jsonify({'error': {'code': 'password_change_required', 'message': 'Change your temporary password first.'}}), 403
+    if user and _multiuser_layer is not None and not _multiuser_layer.alexa_access.enabled(user['id']):
+        amazon_paths = ('/accounts/amazon', '/alexa/login', '/alexa/form_login', '/alexa/proxy',
+                        '/alexa/status', '/alexa/devices', '/alexa/logout', '/alexa/volume', '/alexa/text_command',
+                        '/alexa/proxy_login', '/alexa/proxy_check', '/alexa/proxy_cancel', '/alexa/amazon_signout')
+        if any(path == prefix or path.startswith(prefix + '/') for prefix in amazon_paths):
+            return jsonify(error={'code': 'alexa_access_disabled', 'message': 'Amazon access is disabled.'}), 403
+    # The optional multi-user admin panel owns its own session/CSRF auth. Its
+    # routes must not be blocked by the device API key middleware, but only
+    # once the layer has actually registered itself.
+    if (path == '/admin' or path.startswith('/admin/')) and app.extensions.get('multiuser'):
+        return None
     # Keep diagnostics available to a valid owner key during a database outage.
     if (path == '/status' or path == '/api/status' or path.startswith('/api/status/')) and _valid_key_supplied():
         return None
+    # Allow jam session endpoint for authenticated users and jam guests
+    if path == '/api/jam/session' and (_logged_in() or _jam_guest()):
+        return None
+    # Allow jam home endpoint for authenticated users
+    if path == '/api/jam/home' and _logged_in():
+        return None
+    if request.environ.get('musicbox.echo_capability'):
+        return None
+    if (_multiuser_layer is not None and _valid_key_supplied()
+            and path in ('/armed_play', '/next_track', '/alexa/state_event', '/proxy')
+            and not request.environ.get('musicbox.alexa_identity')
+            and os.environ.get('ALLOW_LEGACY_SKILL_OWNER', '0') != '1'):
+        return jsonify(error={'code': 'link_account_required', 'message': 'An authorized Alexa skill identity is required.'}), 403
     _ensure_db()
     # Let the shared shell renderer apply the same owner/jam/login policy as
     # the public root document. The SPA bypass accepts both the slash-less
@@ -1223,7 +1643,7 @@ def require_api_key():
         return _no_store(app.make_response((_JAM_ENDED_HTML, 410)))
     if path in ('/audio', '/get_radio', '/queue_tracks', '/next_track'):
         token = request.headers.get('X-MusicBox-Audio-Token', '')
-        if token and _audio_credentials.verify(token, path, _audio_session_valid):
+        if token and _audio_credentials.verify(token, path, _audio_session_valid, subject_valid=_audio_subject_valid):
             request.environ['musicbox.audio_scoped'] = True
             return None
     # A valid session cookie authorizes the remote page and its /alexa/* calls.
@@ -1289,9 +1709,9 @@ def _check_rate_limit():
     max_req, window = _RATE_LIMITS.get(group, _RATE_LIMITS['default'])
     if max_req <= 0:
         return None
-    ip = (request.headers.get('X-MusicBox-Client-IP') if request.remote_addr == '127.0.0.1' else None) or request.remote_addr or 'unknown'
-    # Signed, validated sessions provide fair budgets behind Caddy/NAT without
-    # trusting a caller-controlled X-Forwarded-For header.
+    # Not remote_addr: behind Caddy that is one container address shared by every
+    # visitor, which would make this a per-service budget instead of per-client.
+    ip = _client_ip() or 'unknown'
     if _logged_in() and isinstance(session.get('sid'), str):
         ip = 'session:' + session['sid']
     allowed, retry_after = _rate_limiter.check(ip, group, max_req, window)
@@ -1359,6 +1779,12 @@ class _BoundedCache:
             if len(self._data) > self._maxsize:
                 self._data.popitem(last=False)
 
+    def drop(self, predicate):
+        """Evict entries matching predicate(key). Used to forget one identity."""
+        with self._lock:
+            for key in [k for k in self._data if predicate(k)]:
+                self._data.pop(key, None)
+
     def clear(self):
         with self._lock:
             self._data.clear()
@@ -1381,58 +1807,284 @@ def _get_ytmusic():
             _YT_CACHE.set(tid, inst)
         return inst
 
-# Home-feed cache (defined before _get_ytmusic_home which references it)
-_home_cache = {'built_at': 0, 'data': None}
-_home_lock = threading.Lock()
+class _IdentitySlotCache:
+    """A TTL value and a single-flight lock per identity.
+
+    Personalized feeds cannot share one global entry: whoever hits the route next
+    would be served somebody else's library. Rebuild locks are per identity for the
+    same reason -- one account's slow rebuild must not make the others wait."""
+
+    def __init__(self):
+        self._guard = threading.Lock()
+        self._slots = {}
+
+    def _slot(self, identity):
+        with self._guard:
+            slot = self._slots.get(identity)
+            if slot is None:
+                slot = self._slots[identity] = {'built_at': 0.0, 'lock': threading.Lock(),
+                                                'value': None}
+            return slot
+
+    def lock(self, identity):
+        return self._slot(identity)['lock']
+
+    def get(self, identity):
+        slot = self._slot(identity)
+        return slot['value'], time.time() - slot['built_at']
+
+    def set(self, identity, value):
+        slot = self._slot(identity)
+        slot['value'] = value
+        slot['built_at'] = time.time()
+
+    def drop(self, identity):
+        with self._guard:
+            self._slots.pop(identity, None)
+
+
+# Home-feed cache, keyed by identity: one account's personalized shelf must never
+# be served to the next account that reaches the same code path.
+_home_cache = _IdentitySlotCache()
 
 _YT_HOME_CACHE = _BoundedCache(name="account_ytmusic_clients")
 _YT_HOME_CACHE_LOCK = threading.Lock()
-_YT_HOME_CACHE_MTIME = 0
+# identity -> mtime of the auth file its cached clients were built against. A
+# single global mtime would let one account's re-login throw everyone else's
+# authenticated clients away.
+_YT_HOME_CACHE_MTIME = {}
 
-def _get_ytmusic_home():
-    """Get a cached YTMusic instance for home feed with optional auth. Reloads if auth file changes."""
-    global _YT_HOME_CACHE_MTIME
-    tid = threading.get_ident()
-    with _YT_HOME_CACHE_LOCK:
-        auth_file = os.environ.get("YTMUSIC_AUTH_FILE") or "headers_auth.json"
-        
-        # Invalidate cache if auth file was modified (e.g., user updated cookies)
-        current_mtime = 0
-        if auth_file and os.path.isfile(auth_file):
-            current_mtime = os.path.getmtime(auth_file)
-            
-        if current_mtime != _YT_HOME_CACHE_MTIME:
-            if '_liked_songs_cache' in globals():
-                _liked_songs_cache.clear()
-            _YT_HOME_CACHE.clear()
-            _YT_HOME_CACHE_MTIME = current_mtime
-            
-            # Also clear the home feed cache so they see new results immediately
-            with _home_lock:
-                _home_cache['data'] = None
-                _home_cache['built_at'] = 0
+_youtube_credentials = YouTubeCredentialStore(
+    os.path.join(os.path.dirname(os.path.abspath(DB_FILE)), 'youtube_auth'),
+    lambda: os.environ.get("YTMUSIC_AUTH_FILE") or "headers_auth.json",
+)
 
-        inst = _YT_HOME_CACHE.get(tid)
-        if inst is None:
-            auth_file = os.environ.get("YTMUSIC_AUTH_FILE") or "headers_auth.json"
+
+def _current_identity():
+    """Whose playback state and provider credentials this call belongs to."""
+    return _PLAYER_IDENTITY.get() or _OWNER_IDENTITY
+
+
+def _bg_thread(target, args=(), name=None):
+    """Run a background job as the account that asked for it.
+
+    `threading.Thread` does not copy the identity contextvar, so an unbound
+    worker reads and writes the *owner's* now-playing and the owner's YouTube
+    session. Every job that touches playback has to carry its caller instead."""
+    return _spawn_for_identity(_current_identity(), target, args=args, name=name)
+
+
+def _delayed(seconds, target, args=(), start=True):
+    """Run `target` after a delay under the identity that scheduled it.
+
+    A plain `threading.Timer` starts with no identity bound, so a deferred
+    browser-close or retry would release the *owner's* output instead of the
+    account that closed the tab."""
+    identity = _current_identity()
+
+    def run():
+        _PLAYER_IDENTITY.set(identity)
+        target(*args)
+
+    timer = threading.Timer(seconds, run)
+    timer.daemon = True
+    if start:
+        timer.start()
+    return timer
+
+
+def _mu_provider_secret(user_id, provider):
+    """Decrypted provider payload for one account, or {} if there is none."""
+    if _multiuser_layer is None or not user_id:
+        return {}
+    try:
+        return _multiuser_layer.accounts.get_provider_secret(user_id, provider)
+    except Exception:
+        logger.exception('Provider credential lookup failed')
+        return {}
+
+
+def _write_browser_auth_file(headers_raw, dest):
+    """Turn raw browser headers into a ytmusicapi auth JSON, atomically."""
+    from ytmusicapi.auth.browser import setup_browser
+    parent = os.path.dirname(os.path.abspath(dest))
+    os.makedirs(parent, exist_ok=True)
+    fd, temp_path = tempfile.mkstemp(prefix='ytmusic-browser-', suffix='.json', dir=parent)
+    os.close(fd)
+    try:
+        setup_browser(filepath=temp_path, headers_raw=normalize_browser_headers(headers_raw))
+        os.replace(temp_path, dest)
+    finally:
+        if os.path.exists(temp_path):
+            os.unlink(temp_path)
+
+
+def _server_session_enabled():
+    """Whether the deployment's own Google account may stand in for an unlinked one.
+
+    Off is the conservative choice for a deployment that would rather show the
+    public catalogue than share one account's listening history between people.
+    """
+    return os.environ.get('YOUTUBE_SERVER_SESSION', '1').strip().lower() not in {
+        '0', 'false', 'no', 'off'}
+
+
+def _server_session_auth_file(identity):
+    """The keepalive-renewed server session, when this identity has none of its own.
+
+    This is the documented exception to "your own session or the public catalogue":
+    an account that never linked YouTube Music gets exactly what the deployment's
+    Google account sees, including its Home, library and watch history. The owner's
+    personal file is never part of this -- the server keeps its own credential, so
+    a renewal cannot overwrite a person's linked session.
+    """
+    if identity == _SERVER_IDENTITY or not _server_session_enabled():
+        return None
+    path = _youtube_credentials.path_for(_SERVER_IDENTITY)
+    return path if path and os.path.isfile(path) else None
+
+
+def _has_server_session():
+    """Whether the deployment's own Google session is saved on disk.
+
+    ``_server_session_auth_file`` deliberately answers None for the server
+    identity itself -- it exists to say what *other* identities may borrow. The
+    admin card asks the narrower question, so it checks the file directly."""
+    path = _youtube_credentials.path_for(_SERVER_IDENTITY)
+    return bool(path and os.path.isfile(path))
+
+
+def _yt_auth_file(identity):
+    """This identity's auth JSON, rebuilt from its encrypted row if the file is gone.
+
+    None means "no YouTube session at all", which callers read as public catalog
+    only. An identity without a session of its own falls back to the server's,
+    never to another person's.
+
+    The encrypted `user_provider_credentials` row is the source of truth for
+    accounts; this file is a derived cache, so a restarted container or a restored
+    backup needs no re-login."""
+    path = _youtube_credentials.path_for(identity)
+    if path and os.path.isfile(path):
+        return path
+    if path and identity != _OWNER_IDENTITY:
+        headers_raw = _mu_provider_secret(account_user_id(identity), 'youtube').get('headers_raw')
+        if headers_raw:
             try:
-                if auth_file and os.path.isfile(auth_file):
-                    import json as _json
-                    with open(auth_file, 'r') as _f:
-                        _raw = _f.read(512)
-                    if _raw.strip().startswith('{') and '"access_token"' in _raw:
-                        logger.warning("Stale OAuth token detected in %s — OAuth support removed, only browser headers work. Renaming to %s.deprecated", auth_file, auth_file)
-                        import shutil as _shutil
-                        _shutil.move(auth_file, auth_file + '.deprecated')
-                        inst = YTMusic()
-                    else:
-                        inst = YTMusic(auth=auth_file)
-                else:
-                    inst = YTMusic()
-            except Exception as e:
-                logger.warning(f"Failed to initialize authenticated YTMusic for home feed: {e}. Falling back to anonymous.")
-                inst = YTMusic()
-            _YT_HOME_CACHE.set(tid, inst)
+                _write_browser_auth_file(headers_raw, path)
+                return path
+            except Exception as exc:
+                logger.warning('Could not rebuild the YouTube session for %s: %s', identity, exc)
+    fallback = _server_session_auth_file(identity)
+    if fallback:
+        logger.debug('%s has no YouTube session of its own; using the server account',
+                     identity)
+    return fallback
+
+
+def _download_cookie_path(identity=None):
+    """Where *this* identity's download-cookie jar lives, whether or not it exists yet.
+
+    The owner keeps the one file every existing install already used; accounts get a
+    sibling per user, so an uploaded export is never shared with anyone else."""
+    saved = download_cookies.saved_path()
+    user_id = account_user_id(identity or _current_identity())
+    if not user_id:
+        return str(saved)
+    return str(saved.with_name(f'download_cookies_{user_id}.txt'))
+
+
+def _server_download_cookie_path():
+    """The jar the keepalive writes for the deployment's own Google account."""
+    return str(download_cookies.saved_path().with_name('download_cookies_server.txt'))
+
+
+def _server_cookie_fallback():
+    """The server's jar: the primary download credential for every other identity.
+
+    None when the server-session switch is off or the jar is missing/unusable, in
+    which case the caller may still have a jar of its own."""
+    if not _server_session_enabled():
+        return None
+    path = _server_download_cookie_path()
+    return path if download_cookies.is_usable(path) else None
+
+
+def _discard_account_resolver(identity):
+    """Close a resolver built on this account's own fallback jar.
+
+    The shared server jar's worker is deliberately untouched: every other account
+    plays through it, and stopping it would cold-start them all for one deletion.
+    A worker keyed by the account's private jar has no other user."""
+    _youtube_resolvers.discard(_download_cookie_path(identity))
+
+
+def _has_own_youtube_session(identity):
+    """Whether this identity has a YouTube session of its own on disk."""
+    path = _youtube_credentials.path_for(identity)
+    return bool(path and os.path.isfile(path))
+
+
+def _youtube_renewal_identity(identity):
+    """Whose saved session a renewal has to replace for *this* identity.
+
+    An account that never linked YouTube is served by the server's credential, so
+    renewing that account's own (empty) profile would leave every fallback reader
+    stuck on the dead session they were actually using.
+    """
+    if identity == _SERVER_IDENTITY or _has_own_youtube_session(identity):
+        return identity
+    return _SERVER_IDENTITY if _server_session_enabled() else identity
+
+
+def _ytmusic_client_from_auth(auth_file):
+    """Build a client for one auth file, degrading to anonymous when unusable."""
+    if not auth_file:
+        return YTMusic()
+    try:
+        with open(auth_file, 'r') as _f:
+            _raw = _f.read(512)
+        if _raw.strip().startswith('{') and '"access_token"' in _raw:
+            logger.warning("Stale OAuth token detected in %s — OAuth support removed, "
+                           "only browser headers work. Renaming to %s.deprecated",
+                           auth_file, auth_file)
+            shutil.move(auth_file, auth_file + '.deprecated')
+            return YTMusic()
+        return YTMusic(auth=auth_file)
+    except Exception as e:
+        logger.warning(f"Failed to initialize authenticated YTMusic: {e}. Falling back to anonymous.")
+        return YTMusic()
+
+
+_liked_songs_registry = _PlayerStateRegistry(lambda identity: LikedSongsCache())
+
+
+def _liked_cache(identity=None):
+    return _liked_songs_registry.state_for(identity or _current_identity())
+
+
+def _get_ytmusic_home(identity=None):
+    """A cached YTMusic client carrying *this identity's* YouTube Music session."""
+    identity = identity or _current_identity()
+    auth_file = _yt_auth_file(identity)
+    try:
+        current_mtime = os.path.getmtime(auth_file) if auth_file else 0
+    except OSError:
+        current_mtime = 0
+    # ytmusicapi's requests.Session is not thread-safe, so clients are cached per
+    # (identity, thread) rather than per thread -- a warm owner client must not be
+    # handed to an account thread.
+    key = (identity, threading.get_ident())
+    with _YT_HOME_CACHE_LOCK:
+        if current_mtime > _YT_HOME_CACHE_MTIME.get(identity, 0):
+            _YT_HOME_CACHE.drop(lambda cached, wanted=identity: cached[0] == wanted)
+            _YT_HOME_CACHE_MTIME[identity] = current_mtime
+            _home_cache.drop(identity)
+            _liked_cache(identity).clear()
+        inst = _YT_HOME_CACHE.get(key)
+        if inst is None:
+            inst = _ytmusic_client_from_auth(auth_file)
+            _YT_HOME_CACHE.set(key, inst)
         return inst
 
 
@@ -1446,31 +2098,69 @@ def _ytmusic_client_is_authenticated(yt_home):
     return True
 
 
-def _ytmusic_is_authenticated():
-    """Return whether the configured YT Music account is currently usable."""
-    return _ytmusic_client_is_authenticated(_get_ytmusic_home())
+def _ytmusic_is_authenticated(identity=None):
+    """Return whether *this* identity's YouTube Music account is currently usable."""
+    return _ytmusic_client_is_authenticated(_get_ytmusic_home(identity))
 
 
-def _invalidate_youtube_auth_caches():
-    """Drop every thread-local authenticated client and personalized feed."""
-    _liked_songs_cache.clear()
-    global _YT_HOME_CACHE_MTIME
+def _catalog_client():
+    """The client to browse the catalog with for whoever is asking.
+
+    Jam guests stay anonymous; a signed-in account gets its own YouTube Music session,
+    or the anonymous client when it has not connected one yet."""
+    if _jam_guest():
+        return _get_ytmusic()
+    return _get_ytmusic_home()
+
+
+def _signed_in_catalog_client():
+    """Like _catalog_client, but insists on a usable session.
+
+    Reads that only make sense for a logged-in account (history, "liked", the account
+    menu) use this: an expired credential falls back to the anonymous client instead of
+    issuing a call YouTube will reject."""
+    if _jam_guest() or not _ytmusic_is_authenticated():
+        return _get_ytmusic()
+    return _get_ytmusic_home()
+
+
+def _invalidate_youtube_auth_caches(identity=None):
+    """Drop one identity's authenticated clients and personalized feeds."""
+    identity = identity or _current_identity()
+    _liked_cache(identity).clear()
     with _YT_HOME_CACHE_LOCK:
-        _YT_HOME_CACHE.clear()
-        auth_file = os.environ.get("YTMUSIC_AUTH_FILE") or "headers_auth.json"
-        _YT_HOME_CACHE_MTIME = os.path.getmtime(auth_file) if os.path.isfile(auth_file) else 0
-    with _YT_CACHE_LOCK:
-        _YT_CACHE.clear()
-    with _home_lock:
-        _home_cache['data'] = None
-        _home_cache['built_at'] = 0
+        _YT_HOME_CACHE.drop(lambda cached, wanted=identity: cached[0] == wanted)
+        path = _youtube_credentials.path_for(identity)
+        _YT_HOME_CACHE_MTIME[identity] = (os.path.getmtime(path)
+                                          if path and os.path.isfile(path) else 0)
+    _home_cache.drop(identity)
 
 
-def _promote_youtube_browser_headers(headers):
+def _remember_youtube_session(identity, headers_raw):
+    """Keep an account's own session encrypted at rest, as the source of truth."""
+    user_id = account_user_id(identity)
+    if _multiuser_layer is None or not user_id:
+        return
+    try:
+        _multiuser_layer.accounts.set_provider_credentials(
+            None, user_id, 'youtube',
+            {'headers_raw': normalize_browser_headers(headers_raw)},
+            {'kind': 'browser_headers'})
+    except Exception:
+        logger.exception('Could not store the YouTube session for %s', identity)
+
+
+def _promote_youtube_browser_headers(headers, identity=None):
+    identity = identity or _current_identity()
     from ytmusicapi.auth.browser import setup_browser
-    auth_file = os.environ.get("YTMUSIC_AUTH_FILE") or "headers_auth.json"
+    auth_file = _youtube_credentials.path_for(identity)
+    if not auth_file:
+        raise ValueError("This identity has no YouTube Music credential store.")
     promote_browser_headers(headers, auth_file, setup_browser,
                             lambda path: YTMusic(auth=path))
+    # The owner's credential stays the plain file it has always used; accounts are
+    # encrypted in the database and the file is only a cache of that row.
+    _remember_youtube_session(identity, headers)
 
 
 _youtube_browser_controller = BrowserController(
@@ -1487,30 +2177,565 @@ _youtube_browser_sessions = YouTubeBrowserSessionManager(
 )
 
 
+def _mail_outbox_dir():
+    """Where the optional multiuser layer writes unsent mail; used when it is off."""
+    return os.path.join(os.path.dirname(os.path.abspath(DB_FILE)), 'mail-outbox')
+
+
+def _alert_time(timestamp):
+    return time.strftime('%Y-%m-%d %H:%M UTC', time.gmtime(timestamp)) if timestamp else ''
+
+
+def _send_youtube_login_alert(outcome, detail, reason, snapshot):
+    """Mail the operator once per distinct problem; the caller throttles repeats.
+
+    Sent through the same Mailer the account emails use, so a deployment that can
+    sign people up can also tell its operator that the shared session died. The
+    message carries a description of the page Google stopped on, never a
+    password, a code or a cookie.
+    """
+    recipient = (os.environ.get(youtube_auto_login.ENV_ALERT_TO) or '').strip()
+    if not recipient:
+        logger.warning('YouTube sign-in failed and no alert recipient is configured.')
+        return
+    from multiuser.mailer import Mailer, render_alert_email
+    app_name = (getattr(getattr(_multiuser_layer, 'config', None), 'app_name', '')
+                or os.environ.get('MULTIUSER_APP_NAME') or 'Music Box')
+    failures = int(snapshot.get('consecutive_failures') or 0)
+    for_user = reason.split(':', 1)[1] if reason.startswith('admin:') else ''
+    if for_user:
+        heading = 'YouTube Music sign-in for an account failed'
+        intro = ('An administrator started an automatic sign-in for %s, and it stopped '
+                 'before a session was created. Nothing was linked for that account.'
+                 % for_user)
+    else:
+        heading = 'Automatic YouTube Music sign-in failed'
+        intro = ('The server could not renew the YouTube Music session that every account '
+                 'without its own connection borrows. Those accounts stay on the public '
+                 'catalogue until a sign-in succeeds.')
+    text, html = render_alert_email(
+        app_name=app_name,
+        heading=heading,
+        intro=intro,
+        rows=(
+            ('What happened', youtube_auto_login.describe_outcome(outcome)),
+            ('Detail', detail),
+            ('Google account', _youtube_server_login.account.email),
+            ('Started for', for_user),
+            ('Consecutive failures', ('%d in a row' % failures) if failures else ''),
+            ('Next automatic attempt', _alert_time(snapshot.get('next_attempt_at'))),
+        ),
+        note=('A password, code, captcha or phone prompt can only be finished by a person: '
+              'open the admin panel and run the desktop sign-in for the account that needs it.'),
+        footer=('Triggered by %s.' % reason) if reason else '',
+    )
+    result = Mailer.from_env(default_outbox_dir=_mail_outbox_dir()).send(
+        recipient, f'{app_name}: YouTube Music sign-in needs attention', text, html)
+    if not result.ok:
+        logger.warning('YouTube sign-in alert was not delivered: %s', result.detail)
+
+
+def _write_cookie_jar(raw, destination):
+    """Atomically replace a download-cookie jar with a captured browser export."""
+    destination = str(destination)
+    parent = os.path.dirname(os.path.abspath(destination))
+    os.makedirs(parent, exist_ok=True)
+    fd, temp_path = tempfile.mkstemp(prefix='.captured-cookies-', dir=parent)
+    try:
+        with os.fdopen(fd, 'w', encoding='utf-8') as stream:
+            stream.write(raw.strip() + '\n')
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.chmod(temp_path, 0o600)
+        # No network probe here: this runs after a sign-in the sidecar has already
+        # validated, and a yt-dlp sample download would fight the manual upload flow
+        # for the probe lock. A jar with no live YouTube cookie is still refused.
+        if not download_cookies.inspection(temp_path).get('youtube_active'):
+            raise ValueError('The captured browser export had no live YouTube cookies')
+        os.replace(temp_path, destination)
+    finally:
+        if os.path.exists(temp_path):
+            os.unlink(temp_path)
+
+
+def _write_server_cookie_jar(raw):
+    """The jar that stands in for accounts with no download cookies of their own."""
+    _write_cookie_jar(raw, download_cookies.saved_path().with_name('download_cookies_server.txt'))
+
+
+def _save_server_session(headers, cookies):
+    """Promote an automated login into the session every unlinked player reads.
+
+    Deliberately not `_promote_youtube_browser_headers`: that one records an
+    encrypted account row, and the server's own login must never become somebody's
+    linked account. `server.json` and `download_cookies_server.txt` are the only
+    files this writes, so a renewal cannot overwrite a person's session.
+    """
+    path = _youtube_credentials.path_for(_SERVER_IDENTITY)
+    if not path:
+        raise ValueError('The server identity has no credential path')
+    from ytmusicapi.auth.browser import setup_browser
+    promote_browser_headers(headers, path, setup_browser, lambda candidate: YTMusic(auth=candidate, requests_timeout=10))
+    if cookies:
+        _write_server_cookie_jar(cookies)
+    else:
+        logger.warning('Signed in, but the automated capture carried no download cookies')
+    _invalidate_youtube_auth_caches(_SERVER_IDENTITY)
+    logger.info('The server YouTube Music session was renewed automatically')
+
+
+# The automated ladder waits on Google's own pacing (a challenge page can take a
+# while to paint), so it needs a longer control timeout than a human-driven call.
+_youtube_auto_login_controller = BrowserController(
+    os.environ.get("YT_BROWSER_SERVICE_URL", "http://youtube-browser:8765"),
+    os.environ.get("YT_BROWSER_CONTROL_TOKEN", ""),
+    timeout=float(os.environ.get("YT_BROWSER_AUTO_LOGIN_TIMEOUT", "120")),
+)
+
+_youtube_server_login = youtube_auto_login.GoogleAutoLogin.from_env(
+    _youtube_auto_login_controller,
+    on_session=_save_server_session,
+    alert=_send_youtube_login_alert,
+)
+
+_BROWSER_AS_SALT = 'musicbox.browser-signin-as'
+_BROWSER_AS_MAX_AGE = 1800
+
+
+def _browser_as_serializer():
+    from itsdangerous import URLSafeTimedSerializer
+    return URLSafeTimedSerializer(app.secret_key, salt=_BROWSER_AS_SALT)
+
+
+def issue_browser_as_token(admin_identity, target_identity):
+    """A short-lived, signed permission to drive one account's sign-in profile."""
+    return _browser_as_serializer().dumps({'admin': admin_identity,
+                                           'target': target_identity})
+
+
+def _identity_account_id(identity):
+    """The users-table id behind a player identity, including the owner slot."""
+    if identity == _OWNER_IDENTITY:
+        return _owner_row_id()
+    return account_user_id(identity)
+
+
+def _browser_as_target():
+    """The account whose sign-in profile this request may drive, if a token says so.
+
+    Narrow on purpose: only `_browser_owner_id` consults this, so nothing outside
+    the sign-in browser ever runs as the other account. The token cannot be
+    replayed by anyone else (it names the admin it was minted for), cannot point
+    at the owner slot, and stops working when the admin no longer manages the
+    account.
+    """
+    token = request.args.get('as') or ''
+    if not token or _multiuser_layer is None:
+        return None
+    try:
+        data = _browser_as_serializer().loads(token, max_age=_BROWSER_AS_MAX_AGE)
+    except Exception:
+        return None
+    admin = str(data.get('admin') or '')
+    target = str(data.get('target') or '')
+    if not admin or admin != _current_identity() or not target.startswith('user:'):
+        return None
+    actor = _mu_web_identity()
+    user_id = account_user_id(target)
+    if not actor or not user_id or actor.get('id') != _identity_account_id(admin):
+        return None
+    try:
+        from multiuser.accounts import AccountService
+        target_user = _multiuser_layer.accounts.get_user(user_id)
+    except Exception:
+        logger.exception('Could not validate an admin sign-in target')
+        return None
+    if not target_user or not AccountService.can_manage_user(actor, target_user):
+        return None
+    if _player_identity_for_user_id(target_user['id'], target_user.get('role')) != target:
+        return None
+    return target
+
+
+class _YouTubeAdminHooks:
+    """The only YouTube surface the admin blueprint is allowed to call."""
+
+    @staticmethod
+    def server_status():
+        state = dict(_youtube_server_login.status())
+        state['last_success_at'] = _alert_time(state.get('last_success'))
+        state['last_attempt_at'] = _alert_time(state.get('last_attempt'))
+        state['next_attempt_at_text'] = _alert_time(state.get('next_attempt_at'))
+        state['alerted_at_text'] = _alert_time(state.get('alerted_at'))
+        state['outcome_text'] = (
+            youtube_auto_login.describe_outcome(state['last_outcome'])
+            if state.get('last_outcome') else '')
+        state['server_session'] = _has_server_session()
+        state['fallback_enabled'] = _server_session_enabled()
+        state['alert_configured'] = bool(
+            (os.environ.get(youtube_auto_login.ENV_ALERT_TO) or '').strip())
+        return state
+
+    @staticmethod
+    def start_server_signin():
+        if not _youtube_server_login.enabled or not _youtube_server_login.account.configured:
+            return 'unavailable'
+        threading.Thread(
+            target=_youtube_server_login.sign_in,
+            kwargs={'profile_key': _SERVER_IDENTITY, 'reason': 'on_demand'},
+            daemon=True, name='youtube-server-signin').start()
+        return 'started'
+
+_server_renewal_pending = threading.Event()
+
+
+def _request_server_session_renewal():
+    """Queue one automated renewal after a request found the shared session dead."""
+    if _server_renewal_pending.is_set():
+        return
+    _server_renewal_pending.set()
+
+    def run():
+        try:
+            _youtube_server_session_tick()
+        except Exception:
+            logger.exception('On-demand YouTube session renewal failed')
+        finally:
+            _server_renewal_pending.clear()
+
+    threading.Thread(target=run, daemon=True, name='youtube-server-renewal').start()
+
+
+def _youtube_server_session_tick():
+    """One keepalive decision: renew only a shared session that is actually unusable.
+
+    Checking the live session -- not a stored expiry -- is what catches the deaths
+    a clock cannot predict: a password change, Google's risk challenge, a cookie
+    reset. An unconfigured account or a switched-off deployment costs one cheap
+    check and no mail.
+    """
+    if not _server_session_enabled():
+        logger.info('YouTube server keepalive: automatic fallback session is switched off')
+        return None
+    if not _youtube_server_login.account.configured or not _youtube_server_login.enabled:
+        logger.info('YouTube server keepalive: no server Google account configured '
+                    'or automatic sign-in is off')
+        return None
+    if _ytmusic_is_authenticated(_SERVER_IDENTITY):
+        logger.info('YouTube server keepalive: the saved server session still works')
+        return None
+    if not _youtube_server_login.log.due():
+        # The backoff after a failure is a promise to Google as much as to us: a
+        # locked or captcha'd account must not be knocked on every interval.
+        logger.info('YouTube server keepalive: waiting out the retry backoff')
+        return None
+    logger.info('YouTube server keepalive: renewing the server session now')
+    _PLAYER_IDENTITY.set(_SERVER_IDENTITY)
+    return _youtube_server_login.sign_in(_SERVER_IDENTITY, reason='scheduled')
+
+
+def _youtube_server_session_loop():
+    """Keep the deployment's own YouTube Music session alive without a human."""
+    start = max(0.0, float(os.environ.get('YOUTUBE_SERVER_KEEPALIVE_START', '120')))
+    interval = max(600.0, float(os.environ.get('YOUTUBE_SERVER_KEEPALIVE_SECONDS', '21600')))
+    logger.info('YouTube server keepalive started (first check in %ds, then every %ds)',
+                int(start), int(interval))
+    if start:
+        time.sleep(start)
+    while True:
+        try:
+            _youtube_server_session_tick()
+        except Exception:
+            # The tick has already recorded and reported its own failure; anything
+            # reaching here is a bug in the check itself and must not kill the loop.
+            logger.exception('YouTube server keepalive pass failed')
+        time.sleep(interval)
+
+
+def start_youtube_server_keepalive():
+    """Start the keepalive once, from the real server entry point.
+
+    Started by `serve.py` rather than on import: a test process imports this module
+    dozens of times and must never sign into Google as a side effect, and the
+    sidecar's single Chromium is a shared resource worth not touching by accident.
+    """
+    global _youtube_keepalive_thread
+    with _youtube_keepalive_guard:
+        if _youtube_keepalive_thread is not None and _youtube_keepalive_thread.is_alive():
+            return _youtube_keepalive_thread
+        _youtube_keepalive_thread = threading.Thread(
+            target=_youtube_server_session_loop, daemon=True,
+            name='youtube-server-keepalive')
+        _youtube_keepalive_thread.start()
+        return _youtube_keepalive_thread
+
+
+_youtube_keepalive_guard = threading.Lock()
+_youtube_keepalive_thread = None
+
+
+def _forget_player_identity(identity):
+    """Drop every in-process holder that belongs to one identity.
+
+    Deleting the database row cannot reach these: a queue, an output lease, a
+    volume cache, a resolver worker and an Amazon session all live in dicts keyed
+    by the identity string, and an identity is a uuid that could be issued to a
+    different person one day.
+
+    The queue-sync timer is cancelled *before* its slot is discarded -- a Timer
+    left armed would fire seconds later under a rebound identity and drive some
+    other account's Echo. That half lives in ``_drop_alexa_state`` so a provider
+    disconnect can reuse it without touching playback.
+    """
+    _drop_alexa_state(identity)
+    for registry in (_player_registry, _playback_output_registry, _volume_registry,
+                     _playback_failover_registry):
+        registry.discard(identity)
+    # The browser manager's own record, dropped rather than revoked: revoking
+    # would re-create the entry it is meant to clear and fire a network close.
+    _youtube_browser_sessions.forget(identity)
+    _youtube_streams.discard(identity)
+    _discard_account_resolver(identity)
+    _invalidate_youtube_auth_caches(identity)
+    with _YT_HOME_CACHE_LOCK:
+        _YT_HOME_CACHE_MTIME.pop(identity, None)
+
+
+def _forget_account_artifacts(user_id, scopes=('all',)):
+    """Erase the artifacts one or more providers left outside the database.
+
+    Runs after the row is gone, so it works from the id alone -- which is exactly
+    why the playback identity is the literal ``'user:' + id`` and not
+    ``_player_identity_for_user_id``: that helper maps the *bootstrap owner's* row
+    onto ``'owner'``, and after the row is deleted it could hand the human's own
+    artifacts to a purge.
+
+    ``scopes`` is any of ``youtube``, ``amazon`` and ``all``. A disconnect passes
+    the one provider it removed; only ``all`` touches the playback tombstone and
+    the shared player registries, because disconnecting a provider must not freeze
+    a live account's queue or release the output it is playing on.
+
+    Returns the steps that failed. Removing secrets at rest has to succeed or be
+    retried; the in-process drops are best effort because a restart clears them.
+    """
+    user_id = str(user_id or '')
+    identity = 'user:' + user_id
+    if not user_id or account_user_id(identity) != user_id:
+        logger.error('Refusing to purge artifacts for %r: not an account id', user_id)
+        return ['identity']
+    wanted = {scope for scope in scopes if scope in _ARTIFACT_SCOPES}
+    if not wanted:
+        return []
+    purge_all = 'all' in wanted
+    purge_youtube = purge_all or 'youtube' in wanted
+    purge_amazon = purge_all or 'amazon' in wanted
+    failures = []
+
+    if purge_all:
+        # First, and before anything that could still write: the tombstone makes
+        # this identity unreadable and unwritable, so a heartbeat already in flight
+        # cannot re-create the snapshot row a moment after it was deleted.
+        try:
+            _playback_store.tombstone(identity, account_purge.TOMBSTONE_SECONDS)
+        except (sqlite3.Error, OSError, ValueError) as exc:
+            failures.append('playback: %s' % exc)
+
+        try:
+            _forget_player_identity(identity)
+        except Exception:
+            logger.exception('Could not drop in-process state for account %s', user_id)
+
+    if purge_youtube:
+        for label, remove, path in (
+            ('youtube auth', lambda: _youtube_credentials.remove(identity),
+             _youtube_credentials.path_for(identity)),
+            ('download cookies', lambda: account_purge.remove_file(_download_cookie_path(identity)),
+             _download_cookie_path(identity)),
+        ):
+            try:
+                remove()
+            except Exception as exc:
+                failures.append('%s: %s' % (label, exc))
+                continue
+            if path and os.path.exists(path):
+                # The helpers report "nothing was there", so existence is the only
+                # honest answer to "is the secret gone".
+                failures.append('%s: still present' % label)
+
+        # The live session and the Home cache are per identity; leaving them behind
+        # would let the next request keep browsing with a credential we just deleted.
+        _youtube_streams.discard(identity)
+        _discard_account_resolver(identity)
+        _invalidate_youtube_auth_caches(identity)
+        with _YT_HOME_CACHE_LOCK:
+            _YT_HOME_CACHE_MTIME.pop(identity, None)
+
+        try:
+            result = _youtube_browser_sessions.controller.call(
+                '/profile/delete', 'POST', {'profile': user_id})
+        except Exception as exc:
+            failures.append('browser profile: %s' % exc)
+        else:
+            if not isinstance(result, dict) or 'deleted' not in result:
+                # A browser still holding the profile answers 409; the sweeper will
+                # come back for it once Chromium has let go.
+                failures.append('browser profile: %s' % (result or 'no answer'))
+
+    if purge_amazon:
+        try:
+            alexa_remote.purge_cookie_dir(identity)
+        except Exception as exc:
+            failures.append('alexa cookies: %s' % exc)
+        else:
+            if os.path.exists(alexa_remote.cookie_dir_for(identity)):
+                failures.append('alexa cookies: still present')
+
+        try:
+            _jam_close_all(user_id)
+        except Exception as exc:
+            # A jam token outliving its account would let a stranger keep conducting
+            # a listening session, so this is retried like the files.
+            failures.append('jam: %s' % exc)
+
+        _drop_alexa_state(identity)
+
+    if failures:
+        logger.error('Purge of account %s (%s) incomplete: %s',
+                     user_id, ','.join(sorted(wanted)), '; '.join(failures))
+    return failures
+
+
+_ARTIFACT_SCOPES = ('youtube', 'amazon', 'all')
+
+
+def _drop_alexa_state(identity):
+    """Drop the Alexa-side holders for one identity without touching playback.
+
+    The queue-sync timer is cancelled before its slot is discarded: a Timer left
+    armed would fire seconds later and drive an Echo for a provider that is gone.
+    """
+    # Cancel dispatch timers before discarding their account slots. A timer
+    # already running is also fenced by the retired account's play intent.
+    with _pending_dispatch_registry.lock_for(identity):
+        pending = _pending_dispatch_registry.peek(identity) or {}
+        for entry in pending.values():
+            entry['timer'].cancel()
+        pending.clear()
+    for registry in (_armed_plays_registry, _play_intent_registry,
+                     _pending_dispatch_registry, _trigger_inflight_registry):
+        registry.discard(identity)
+    timer = None
+    with _player_registry.lock_for(identity):
+        slot = _alexa_queue_sync_slot_registry.peek(identity)
+        timer = slot.get('timer') if slot else None
+        if timer is not None:
+            slot['timer'] = None
+    if timer is not None:
+        try:
+            timer.cancel()
+        except Exception:
+            logger.exception('Could not cancel a queued Alexa sync for a deleted account')
+    for registry in (_alexa_volume_grace_registry, _alexa_queue_decisions_registry,
+                     _alexa_queue_sync_slot_registry, alexa_remote._remote_registry):
+        registry.discard(identity)
+
+
+def _purge_account_artifacts(user_id):
+    """Everything a deleted account held: the full purge, both providers."""
+    return _forget_account_artifacts(user_id, ('all',))
+
+
+_pending_purges = account_purge.PendingPurges(get_db)
+
+
+def _purge_account_artifacts_hook(user_id):
+    """What the account layer calls after deleting a row: purge, or queue it."""
+    failures = _purge_account_artifacts(user_id)
+    if failures and not _pending_purges.record(user_id, '; '.join(failures)):
+        logger.error('Account %s artifacts could not be removed and will not be retried', user_id)
+
+
+def _provider_artifact_hook(user_id, provider):
+    """What the account layer calls after a disconnect: erase that provider's secrets.
+
+    Returns the steps that could not be finished. A failure here is not queued for
+    the delete sweeper: the account still exists, so the next disconnect (or the
+    next delete) is the natural retry, and the caller tells the person what is
+    still there instead of claiming success.
+    """
+    return _forget_account_artifacts(user_id, (provider,))
+
+
+def _account_purge_sweep():
+    """One pass over the retry queue. Returns the accounts whose purge finished."""
+    settled = []
+    for user_id in _pending_purges.due():
+        try:
+            failures = _forget_account_artifacts(
+                user_id, _pending_purges.scopes_of(user_id))
+        except Exception as exc:
+            failures = [str(exc)]
+            logger.exception('Purge sweep failed for account %s', user_id)
+        if not failures:
+            _pending_purges.done(user_id)
+            settled.append(user_id)
+            continue
+        if not _pending_purges.record(
+                user_id, '; '.join(failures),
+                scope=','.join(_pending_purges.scopes_of(user_id))):
+            logger.error('Stopped retrying the purge of account %s', user_id)
+    return settled
+
+
+_account_purge_stop = threading.Event()
+
+
+def _account_purge_sweeper():
+    """Finish the purges a delete request could not complete.
+
+    Sits next to the YouTube auth keepalive for the same reason: the work outlives
+    the request that caused it, and an unfinished purge is a privacy failure rather
+    than a cosmetic one.
+    """
+    interval = max(15.0, float(os.environ.get('ACCOUNT_PURGE_SWEEP_SECONDS', '60')))
+    while not _account_purge_stop.wait(interval):
+        _account_purge_sweep()
+
+
 def _youtube_auth_proactive_loop():
-    """Occasionally validate saved browser auth before a user needs it."""
+    """Occasionally validate each saved browser auth before its user needs it."""
     interval = max(900.0, float(os.environ.get("YT_BROWSER_PROACTIVE_INTERVAL", "21600")))
     while True:
         time.sleep(interval)
-        auth_file = os.environ.get("YTMUSIC_AUTH_FILE") or "headers_auth.json"
-        if not os.path.isfile(auth_file):
-            continue
-        try:
-            if not _ytmusic_is_authenticated():
-                _youtube_browser_sessions.refresh(wait=False)
-        except Exception:
-            # Probe failures are intentionally quiet and bounded by the
-            # manager cooldown; the normal status endpoint remains authoritative.
-            logger.debug("Proactive YouTube auth check could not complete")
+        # Threads do not inherit a request identity, so this loop names the
+        # identity explicitly for every credential it touches.
+        for identity in _youtube_credentials.identities():
+            _PLAYER_IDENTITY.set(identity)
+            try:
+                if not _ytmusic_is_authenticated(identity):
+                    _youtube_browser_sessions.refresh(identity, wait=False)
+            except Exception:
+                # Probe failures are intentionally quiet and bounded by the
+                # manager cooldown; the normal status endpoint remains authoritative.
+                logger.debug("Proactive YouTube auth check could not complete for %s", identity)
 
 
 threading.Thread(target=_youtube_auth_proactive_loop, daemon=True,
                  name="youtube-auth-proactive").start()
 
 
-def _with_youtube_auth_renewal(operation):
-    """Run a personalized operation with at most one saved-profile renewal."""
-    return _youtube_browser_sessions.call_with_one_refresh(operation)
+def _with_youtube_auth_renewal(operation, identity=None):
+    """Run a personalized operation with at most one renewal of the session it reads."""
+    identity = identity or _current_identity()
+    target = _youtube_renewal_identity(identity)
+    try:
+        return _youtube_browser_sessions.call_with_one_refresh(operation, target)
+    except Exception:
+        if target == _SERVER_IDENTITY and identity != _SERVER_IDENTITY:
+            # The borrowed session could not be reloaded from the saved profile; the
+            # automated sign-in is the only thing that can put a fresh one there.
+            _request_server_session_renewal()
+        raise
 
 
 def _yt_call(method, *args, timeout=15, **kwargs):
@@ -1567,7 +2792,7 @@ _RATE_LIMITS = {
 
 def _audio_delivery_rate_group(video_id, download=False):
     # Only complete server-cached files get the burst budget. Cold downloads keep their limit.
-    if _valid_video_id(video_id) and _youtube_stream.current.has(video_id):
+    if _valid_video_id(video_id) and _youtube_stream_for().current.has(video_id):
         return 'cached_download' if download else 'cached_audio'
     return 'audio'
 
@@ -1708,7 +2933,10 @@ def _mark_video_dead(video_id: str):
 
 def _evict_bad_cache_entry(video_id):
     """Discard only this track's temporary bytes; never another current song."""
-    _youtube_stream.current.discard(video_id)
+    # Only the caller's worker forgets the track: another account may be playing
+    # the same video, and dropping its protection would let the file be pruned
+    # while that user is still streaming it.
+    _youtube_stream_for().current.discard(video_id)
 
 
 
@@ -1867,7 +3095,7 @@ _PLAYLIST_TRACKS_CACHE_TTL = 300
 # Amazon's /api/np/player returns empty data for custom-skill audio, so we
 # track the state ourselves. Every stream goes through /proxy/, so we capture
 # the video_id there and look up metadata.
-_now_playing = {
+_default_playback_state = {
     'playing': False,
     'title': '',
     'artist': '',
@@ -1909,23 +3137,56 @@ _now_playing = {
     # surfaces to the client exactly once instead of re-toasting forever.
     'playback_error': None,
 }
-_volume_by_serial = {}
-_alexa_volume_lock = threading.RLock()
-_alexa_volume_grace = {}
-_np_lock = threading.Lock()
 from queue_commands import QueueCommands
 _queue_commands = QueueCommands()
 from playback_store import PlaybackStore, PlaybackPersistence, stable_queue_entries
 from playback_output import PlaybackOutput, OutputConflict
-_playback_output = PlaybackOutput()
 _playback_store = PlaybackStore(DB_FILE)
-try:
-    _restored_playback = _playback_store.load()
-    _now_playing.update(_restored_playback)
-    _playback_output.serial = _restored_playback.get('output_serial') or ''
-except (sqlite3.Error, ValueError, OSError):
-    logger.exception('Could not restore playback metadata')
+
+
+def _new_player_state(identity):
+    """A fresh playback state for one identity, restored from its own snapshot.
+
+    Keying the durable store by the same identity as the in-memory state is what
+    lets an account's queue survive a restart without ever overwriting the
+    owner's."""
+    state = dict(_default_playback_state)
+    try:
+        state.update(_playback_store.load(identity))
+    except (sqlite3.Error, ValueError, OSError):
+        logger.exception('Could not restore playback metadata for %s', identity)
+    return state
+
+
+def _new_playback_output(identity):
+    """One output lease per identity, remembering only the device it last used."""
+    output = PlaybackOutput()
+    output.serial = _player_registry.state_for(identity).get('output_serial') or ''
+    return output
+
+
+_player_registry = _PlayerStateRegistry(factory=_new_player_state)
+_now_playing = _PlayerStateView(_player_registry)
+_np_lock = _IdentityLock(_player_registry)
+_playback_output_registry = _PlayerStateRegistry(factory=_new_playback_output)
+_playback_output = _PlayerStateProxy(_playback_output_registry)
+# Device volume and the read-after-command grace window belong to whoever owns
+# the device, so they follow the identity: an account's Echo volume is never
+# read or written through another account's session.
+#
+# Every per-identity holder below is bound to a *named* registry, not an inline
+# anonymous one: deleting an account has to reach the state and its lock to drop
+# them, and a purge cannot hold on to an object nothing else can name.
+_volume_registry = _PlayerStateRegistry(factory=lambda identity: {})
+_volume_by_serial = _PlayerStateView(_volume_registry)
+_alexa_volume_grace_registry = _PlayerStateRegistry(factory=lambda identity: {})
+_alexa_volume_grace = _PlayerStateView(_alexa_volume_grace_registry)
+_alexa_volume_lock = threading.RLock()
 _playback_persistence = PlaybackPersistence(_playback_store, lambda: logger.error('Could not persist playback metadata'))
+# Warm the owner's entries at import: a snapshot that cannot be read is then a
+# boot-time log line rather than something that lands on whoever asks first.
+_now_playing.get('video_id')
+_playback_output.snapshot()
 
 # Version counter for the local Liked Songs playlist, included in SSE
 # snapshots. Open remotes re-fetch /api/playlists/ when it changes so a like
@@ -1965,7 +3226,12 @@ _sse_lock = threading.Lock()
 # id from being reused by a successor allocation.
 _queue_seen_obj = None
 _queue_version = 0
-_alexa_queue_decisions = collections.OrderedDict()
+# Superseded-queue-start evidence, one ledger per identity: a queued-start token
+# recorded while one account edited its queue must never be read, evicted or
+# acted on by another account's webhook.
+_alexa_queue_decisions_registry = _PlayerStateRegistry(
+    factory=lambda identity: collections.OrderedDict())
+_alexa_queue_decisions = _PlayerStateView(_alexa_queue_decisions_registry)
 
 def _queue_version_locked():
     """Current queue version, bumping it if the queue list was replaced.
@@ -2030,7 +3296,8 @@ def _np_snapshot(serial=None, retain_errors=False):
         **output,
         'event_epoch': event_epoch, 'event_revision': event_revision,
         'presence_revision': _mobile_devices.revision if '_mobile_devices' in globals() else -1,
-        'amazon_connected': getattr(alexa_remote.remote, 'connection_state', None),
+        'alexa_access_enabled': _alexa_access_enabled(),
+        **({'amazon_connected': getattr(alexa_remote.remote, 'connection_state', None)} if _alexa_access_enabled() else {}),
         'remote_control_available': not (output['playback_output'] == 'alexa' and getattr(alexa_remote.remote, 'connection_state', None) is False),
         'playing': s['playing'], 'title': s['title'],
         'artist': s['artist'], 'artists': s.get('artists', []),
@@ -2082,13 +3349,15 @@ def _computed_position_ms():
         pos = min(pos, duration)
     return max(0, pos)
 
-_alexa_queue_sync_lock = threading.Lock()
-_alexa_queue_sync_timer = None
+_alexa_queue_sync_lock = _IdentityLock(_player_registry)
+# One pending timer per identity: a shared timer would let one account's queue
+# edit cancel the sync another account had just scheduled.
+_alexa_queue_sync_slot_registry = _PlayerStateRegistry(factory=lambda identity: {'timer': None})
+_alexa_queue_sync_slot = _PlayerStateView(_alexa_queue_sync_slot_registry)
 
 
 def _schedule_alexa_queue_sync():
     """Coalesce queue edits only after a protocol-2 skill buffered a successor."""
-    global _alexa_queue_sync_timer
     with _np_lock:
         pending = _now_playing.get('_alexa_pending')
         output = _playback_output.snapshot()
@@ -2105,7 +3374,12 @@ def _schedule_alexa_queue_sync():
         serial = output.get('output_serial') or _now_playing.get('serial')
         if not serial:
             return
+    identity = _PLAYER_IDENTITY.get()
+
     def fire():
+        # A Timer thread does not inherit the requester's context, so without
+        # this an account's queue sync would read and dispatch to the owner's.
+        _PLAYER_IDENTITY.set(identity)
         with _np_lock:
             live = _now_playing.get('_alexa_pending')
             out = _playback_output.snapshot()
@@ -2132,22 +3406,25 @@ def _schedule_alexa_queue_sync():
         except Exception:
             logger.exception('[queue-sync] Echo queue replacement dispatch failed')
     with _alexa_queue_sync_lock:
-        if _alexa_queue_sync_timer:
-            _alexa_queue_sync_timer.cancel()
-        _alexa_queue_sync_timer = threading.Timer(0.15, fire)
-        _alexa_queue_sync_timer.daemon = True
-        _alexa_queue_sync_timer.start()
+        timer = _alexa_queue_sync_slot['timer']
+        if timer:
+            timer.cancel()
+        timer = _delayed(0.15, fire, start=False)
+        _alexa_queue_sync_slot['timer'] = timer
+        timer.start()
 
 
 def _notify_sse():
     """Push current state to all SSE subscriber queues (non-blocking)."""
     if "_mobile_devices" in globals():
         _mobile_devices.wake()
+    # Each identity writes its own snapshot row and drives the queue sync of
+    # its own Echo session.
     with _np_lock:
         _queue_version_locked()
         video = _now_playing.get('video_id') or ''
         if not video or (_now_playing.get('playing') and _now_playing.get('playback_confirmed')):
-            _youtube_stream.current.activate(video)
+            _youtube_stream_for().current.activate(video)
         _playback_persistence.submit(_now_playing, _playback_output.snapshot(), _computed_position_ms())
     if "playback_events" in globals():
         playback_events.publish()
@@ -2284,8 +3561,10 @@ def _ensure_heartbeat():
             _heartbeat_thread.start()
 
 
-def _update_now_playing(**kwargs):
+def _update_now_playing(_require_alexa_access=False, **kwargs):
     with _np_lock:
+        if _require_alexa_access and _now_playing.get('_alexa_auth_blocked'):
+            return False
         # A change of video_id means a new track: re-anchor the progress bar to
         # the start (or to an explicit position_ms if the caller passed one, e.g.
         # a seek) and drop the previous track's duration until it's looked up
@@ -2368,6 +3647,8 @@ def app_playback_output():
     if action == 'claim':
         source_playing = bool(_get_now_playing().get('playing'))
         def pause_echo():
+            if not _alexa_access_enabled():
+                return
             current = _get_now_playing()
             if not current.get('playing') and not current.get('playback_processing'):
                 return
@@ -2665,9 +3946,7 @@ def app_mobile_devices():
                             _now_playing.pop('playback_error', None)
                             _now_playing.pop('_playback_error_event', None)
                 if deliberate:
-                    timer = threading.Timer(.85, _finish_browser_close, args=(owner, output['output_token']))
-                    timer.daemon = True
-                    timer.start()
+                    _delayed(.85, _finish_browser_close, (owner, output['output_token']))
                 _reconcile_mobile_output(closed_owner=owner, quiet=deliberate)
                 if not deliberate:
                     _playback_output.close_phone(owner)
@@ -2777,10 +4056,14 @@ def route_mobile_web_controls():
     if not action:
         return
     body = request.get_json(silent=True) or {} if request.method == 'POST' else {}
-    serial = str(body.get('serial') or request.args.get('serial') or '')
+    serial = _effective_serial(str(body.get('serial') or request.args.get('serial') or ''))
     if not serial.startswith('mobile:'):
         return
     output = _playback_output.snapshot()
+    if _jam_guest() and request.method == 'POST':
+        # A guest holds no lease of its own; the room's current token is the
+        # authorization to drive the host's selected speaker.
+        body['output_token'] = output['output_token']
     target = serial[len('mobile:'):]
     if output['playback_output'] != 'phone' or output['output_owner'] != target or output['handoff_pending']:
         raise OutputConflict('Playback changed. Select the active device again.')
@@ -2953,12 +4236,14 @@ def _error_code_for_status(status: int) -> str:
 @app.after_request
 def _log_request(response):
     path = request.path
+    if request.url_rule and any(marker in request.url_rule.rule for marker in ("<token>", "<secret>")):
+        path = request.url_rule.rule
     # Skip static files and SSE streams to keep logs readable
     if path.startswith('/static/') or path == '/alexa/now_playing/stream':
         return response
     # _mark_start_time is skipped when an earlier before_request hook (auth,
     # rate limit) short-circuits the request, so fall back gracefully.
-    duration = time.time() - getattr(request, '_start_time', time.time())
+    duration = time.monotonic() - request.environ.get('musicbox.request_started_at', time.monotonic())
     extra = ''
     ct = response.content_type or ''
     if ct.startswith('application/json') and response.status_code >= 400 and response.data:
@@ -2973,8 +4258,9 @@ def _log_request(response):
         except Exception:
             pass
     args = request.args.to_dict()
-    if 'key' in args:
-        args['key'] = '***'
+    for sensitive in ('key', 'cap', 'token', 'access_token', 'code'):
+        if sensitive in args:
+            args[sensitive] = '***'
     logger.info('[%s] %s %s -> %s%s (%.1fms)', request.method, path,
                 args or '', response.status_code, extra,
                 duration * 1000)
@@ -3187,8 +4473,8 @@ def _lookup_video_metadata(video_id):
         return title_known(result.get('title')) and (duration(result.get('duration_ms')) > 0 or result.get('is_live') is True)
     if complete() and result.get('artist'):
         return result
-    relay = globals().get('_youtube_stream')
-    if relay is not None and getattr(relay, 'enabled', False):
+    relay = _youtube_stream_for()
+    if relay.enabled:
         try:
             merge(relay.metadata(video_id))
         except Exception:
@@ -3244,21 +4530,32 @@ def _prewarm_queue_audio(queue, current_index=0, limit=4):
     return warmed
 
 
+def _audio_job_key(video_id):
+    """Pool key for preparing one video's stream URL.
+
+    Identity stays in the key: an account on its own fallback jar signs a URL
+    nobody else can use, and the pool attributes work to the account that asked
+    for it. Accounts on the shared server jar still pay only a cache hit on the
+    resolver for a duplicate."""
+    return (_current_identity(), video_id)
+
+
 def _ensure_audio_ready_for_play(video_id, wait=False, generation=None, prefetch=False):
     """Prepare a playable URL without downloading or replacing current audio."""
     if not _valid_video_id(video_id):
         return False
     if prefetch and _ytdlp_rate_limited():
         return False
+    identity = _current_identity()
     def prepare_url():
         if not _generation_superseded(generation):
             try:
-                return _youtube_stream.resolve(video_id)
+                return _youtube_stream_for(identity).resolve(video_id)
             except StreamError:
                 return None
     if wait:
         return bool(prepare_url())
-    _audio_jobs.submit(video_id, prepare_url, prefetch=prefetch)
+    _audio_jobs.submit(_audio_job_key(video_id), prepare_url, prefetch=prefetch)
     return False
 
 
@@ -3682,8 +4979,25 @@ class Supporting:
         return client not in {"android_vr", "ios"}
 
     @staticmethod
-    def get_ytdlp_cookies_file():
-        """Return configured/discovered Netscape cookie file, if present."""
+    def get_ytdlp_cookies_file(identity=None):
+        """The download credential for every identity: the shared server jar first.
+
+        One jar for all accounts means one credential generation instead of a
+        per-account session/handshake. An account's own jar is only a fallback
+        when the server jar is missing or unusable (or the server fallback is
+        switched off). The owner's legacy candidates stay behind that same
+        fallback so an existing install keeps working without a server login."""
+        identity = identity or _current_identity()
+        if identity == _SERVER_IDENTITY:
+            path = _server_download_cookie_path()
+            return path if download_cookies.is_usable(path) else None
+        server = _server_cookie_fallback()
+        if server:
+            return server
+        user_id = account_user_id(identity)
+        if user_id:
+            path = _download_cookie_path(identity)
+            return path if download_cookies.is_usable(path) else None
         configured = (os.environ.get("YTDLP_COOKIES_FILE")
                       or os.environ.get("YTDLP_COOKIES"))
         server_dir = os.path.dirname(os.path.abspath(__file__))
@@ -3694,8 +5008,11 @@ class Supporting:
             os.path.join(os.path.dirname(server_dir), "cookies.txt"),
             os.path.join(os.getcwd(), "cookies.txt"),
         ]
+        # `os.path.isfile` is not enough: the compose bind mount guarantees an
+        # empty cookies.txt, and picking it made every anonymous-looking resolve
+        # shadow the refreshed server jar.
         return next(
-            (path for path in candidates if path and os.path.isfile(path)), None
+            (path for path in candidates if download_cookies.is_usable(path)), None
         )
 
     @staticmethod
@@ -3708,11 +5025,7 @@ class Supporting:
         """
         cookies_file = Supporting.get_ytdlp_cookies_file()
         if cookies_file:
-            import shutil
-            import tempfile
-            tmp_cookies = os.path.join(tempfile.gettempdir(), "yt_dlp_cookies.txt")
-            shutil.copy2(cookies_file, tmp_cookies)
-            command.extend(["--cookies", tmp_cookies])
+            provider_commands.attach_cookies(command, cookies_file)
             return
         if browser := os.environ.get("YTDLP_BROWSER"):
             command.extend(["--cookies-from-browser", browser])
@@ -3792,7 +5105,10 @@ class Supporting:
             if extractor_args:
                 command.extend(["--extractor-args", ",".join(extractor_args)])
             command += ["--", video_id]
-            result = subprocess.run(command, capture_output=True, text=True)
+            try:
+                result = provider_commands.run(command, capture_output=True, text=True)
+            except (subprocess.TimeoutExpired, OSError):
+                continue
             if result.returncode == 0:
                 return result.stdout.strip()
             last_error = result.stderr.strip()
@@ -3827,7 +5143,7 @@ class Supporting:
                 command.extend(["--extractor-args", ",".join(extractor_args)])
             command += ["--", video_id]
             try:
-                result = subprocess.run(command, capture_output=True, text=True, timeout=25)
+                result = provider_commands.run(command, capture_output=True, text=True, timeout=25)
                 if result.returncode == 0:
                     break
             except (subprocess.SubprocessError, OSError):
@@ -3914,6 +5230,13 @@ class Supporting:
         if base:
             # Answer immediately; pre-warm the cache so the device's fetch is fast.
             _ensure_audio_ready_for_play(video_id)
+            if _multiuser_layer is not None:
+                user_id = _identity_account_id(_current_identity())
+                if not user_id:
+                    raise ValueError('An authorized account is required for Echo playback')
+                binding = request.environ.get('musicbox.alexa_binding') if has_request_context() else None
+                cap = _multiuser_layer.alexa_identity.stream_token(user_id, video_id, binding=binding)
+                return {'audio_url': f"{base}/proxy/?video_id={video_id}&cap={quote(cap)}"}
             key_param = f"&key={API_KEY}" if API_KEY else ""
             return {'audio_url': f"{base}/proxy/?video_id={video_id}{key_param}"}
         url = await asyncio.to_thread(Supporting.resolve_direct_url, video_id)
@@ -4454,7 +5777,7 @@ async def get_radio():
         return error_response('missing required parameter "video_id"', 400)
     if not _valid_video_id(video_id):
         return error_response('invalid "video_id"', 400)
-    continuation = request.args.get('continuation') == '1'
+    continuation = request.args.get('continuation') == '1' and not request.environ.get('musicbox.audio_scoped')
     guard = None
     if continuation:
         with _np_lock:
@@ -4608,6 +5931,9 @@ def proxy_stream():
     video_id = request.args.get("video_id")
     if not _valid_video_id(video_id):
         return error_response('missing or invalid "video_id"', 400)
+    if _now_playing.get('_alexa_auth_blocked'):
+        return error_response('Alexa authentication failed. Reconnect Amazon or correct the skill settings before retrying.',
+                              403, code='alexa_authentication_required')
     output = _playback_output.snapshot()
     if output['playback_output'] == 'phone':
         return error_response('Phone owns playback; stale Echo stream ignored.', 409)
@@ -4653,7 +5979,7 @@ def proxy_stream():
             _update_now_playing(playing=False, video_id=video_id,
                                 title='', artist='', thumbnail='', duration_ms=0,
                                 playback_confirmed=False, queue_index=-1)
-            threading.Thread(target=_lookup_and_update_np, args=(video_id,), daemon=True).start()
+            _bg_thread(_lookup_and_update_np, args=(video_id,))
             sys.stderr.write(f"[np] proxy metadata: new video_id={video_id} (not in queue, looking up)\n")
             sys.stderr.flush()
     else:
@@ -4662,8 +5988,8 @@ def proxy_stream():
     # find_stream_list paths set title/artist but never duration_ms, so
     # without this the progress bar has no total time.
     if not _get_now_playing().get('duration_ms'):
-        threading.Thread(target=_lookup_and_update_np, args=(video_id,), daemon=True).start()
-    threading.Thread(target=_refresh_radio_queue, args=(video_id,), daemon=True).start()
+        _bg_thread(_lookup_and_update_np, args=(video_id,))
+    _bg_thread(_refresh_radio_queue, args=(video_id,))
     return _serve_youtube_stream(video_id, confirm=True, cancellable=True)
 
 
@@ -4778,7 +6104,7 @@ def audio_stream():
     if _audio_truthy(request.args.get('info')):
         base = PUBLIC_BASE_URL or request.url_root.rstrip('/')
         return jsonify(dict(meta or {'video_id': video_id},
-            cached=_youtube_stream.current.has(video_id),
+            cached=_youtube_stream_for().current.has(video_id),
             audio_url=f'{base}/audio/?video_id={video_id}'))
     if _audio_truthy(request.args.get('prefetch')):
         _ensure_audio_ready_for_play(video_id, prefetch=True)
@@ -4816,8 +6142,14 @@ def _stream_superseded(video_id) -> bool:
 def _serve_youtube_stream(video_id, confirm=False, cancellable=False, meta=None):
     generation = _current_playback_generation()
     started = time.monotonic()
+    # Snapshot before resolution/open: a pause or handoff during that network
+    # wait must not let this older request adopt the newer playback intent.
+    with _np_lock:
+        echo_output_token = _playback_output.snapshot()['output_token'] if confirm else None
+        echo_intent = _now_playing.get('alexa_intent_at') if confirm else None
+    stream_identity = _current_identity()
     try:
-        relay = _youtube_stream.open(video_id, method=request.method,
+        relay = _youtube_stream_for().open(video_id, method=request.method,
             byte_range=request.headers.get('Range'), if_range=request.headers.get('If-Range'))
     except StreamError as error:
         # Upstream URLs/cookies never cross the API or enter the journal.
@@ -4829,16 +6161,22 @@ def _serve_youtube_stream(video_id, confirm=False, cancellable=False, meta=None)
             response.headers['Retry-After'] = '2'
         return response
 
-    echo_output_token = _playback_output.snapshot()['output_token'] if confirm else None
-
     def generate():
+        # The body is iterated after the view returns, so re-bind the account this
+        # stream was opened for: its output lease, stream slot and now-playing are
+        # the only ones this loop may read or touch.
+        _PLAYER_IDENTITY.set(stream_identity)
         first = True
         try:
             for block in relay.chunks():
                 if confirm:
-                    owner = _playback_output.snapshot()
-                    if owner['playback_output'] != 'alexa' or owner['output_token'] != echo_output_token:
-                        return
+                    with _np_lock:
+                        owner = _playback_output.snapshot()
+                        if (owner['playback_output'] != 'alexa'
+                                or owner['output_token'] != echo_output_token
+                                or _now_playing.get('_alexa_auth_blocked')
+                                or (first and _now_playing.get('alexa_intent_at') != echo_intent)):
+                            return
                 if (cancellable and _generation_superseded(generation)
                         and _stream_superseded(video_id)):
                     return
@@ -4851,9 +6189,12 @@ def _serve_youtube_stream(video_id, confirm=False, cancellable=False, meta=None)
                     if request_download is False:
                         with _np_lock:
                             if _now_playing.get('video_id') == video_id:
-                                _youtube_stream.current.activate(video_id)
+                                _youtube_stream_for().current.activate(video_id)
                     logger.info('[stream-timing] youtube first byte %.0fms for %s',
                                 (time.monotonic() - started) * 1000, video_id)
+                    if confirm and isinstance(echo_intent, (int, float)) and echo_intent > 0:
+                        logger.info('[startup-timing] video=%s intent to first audio byte %.0fms',
+                                    video_id, max(0, time.time() - echo_intent) * 1000)
                 relay.remember(block)
                 yield block
         finally:
@@ -4862,7 +6203,7 @@ def _serve_youtube_stream(video_id, confirm=False, cancellable=False, meta=None)
     request_download = request.headers.get('X-MusicBox-Download') == '1'
     headers = _audio_meta_headers(video_id, meta)
     headers.update(relay.headers)
-    response = Response(generate() if request.method != 'HEAD' else (),
+    response = Response(_IdentityIterator(generate(), stream_identity) if request.method != 'HEAD' else (),
                         status=relay.status, headers=headers)
     # Closing an uniterated response (HEAD, device abort before first yield)
     # must release its upstream socket and stream slot too.
@@ -4882,13 +6223,15 @@ def _serve_youtube_stream(video_id, confirm=False, cancellable=False, meta=None)
 # builds, each making independent YTMusic network calls (and, before the cache
 # was bounded, each creating its own permanently-cached YTMusic client). These
 # single-flight/cooldown guards collapse that to exactly one run per video_id.
+# The keys carry the identity as well: a queue or now-playing repair is decided
+# per account, so one account's in-flight build must not silently skip another's.
 _np_lookup_inflight = set()
 _np_lookup_lock = threading.Lock()
 
 _radio_refresh_inflight = set()
 _radio_refresh_lock = threading.Lock()
 _RADIO_REFRESH_COOLDOWN = 30.0  # seconds; recorded only after a successful build
-_radio_refresh_done = {}  # video_id -> time.time() of the last successful build
+_radio_refresh_done = {}  # (identity, video_id) -> time.time() of the last successful build
 _radio_refresh_done_lock = threading.Lock()
 
 
@@ -4896,10 +6239,11 @@ def _lookup_and_update_np(video_id):
     """Fill missing current/queue metadata without moving a playback cursor."""
     if not _valid_video_id(video_id):
         return
+    flight_key = (_current_identity(), video_id)
     with _np_lookup_lock:
-        if video_id in _np_lookup_inflight:
+        if flight_key in _np_lookup_inflight:
             return
-        _np_lookup_inflight.add(video_id)
+        _np_lookup_inflight.add(flight_key)
     try:
         metadata = _lookup_video_metadata(video_id)
         if not metadata:
@@ -4943,7 +6287,7 @@ def _lookup_and_update_np(video_id):
         logger.exception('Current metadata enrichment failed')
     finally:
         with _np_lookup_lock:
-            _np_lookup_inflight.discard(video_id)
+            _np_lookup_inflight.discard(flight_key)
 
 
 def _refresh_radio_queue(video_id, force=False):
@@ -4962,20 +6306,22 @@ def _refresh_radio_queue(video_id, force=False):
     """
     if not _valid_video_id(video_id):
         return False
-    # Single-flight per video_id plus a success cooldown: /proxy/, play_queue,
-    # and the 'started' webhook can each trigger a rebuild within one play
-    # cycle, and every rebuild is a full YTMusic radio fetch. force=True still
-    # bypasses the cooldown (Play Radio must replace the queue) but never runs
-    # two builds of the same track at once.
+    # Single-flight per (account, video_id) plus a success cooldown: /proxy/,
+    # play_queue, and the 'started' webhook can each trigger a rebuild within one
+    # play cycle, and every rebuild is a full YTMusic radio fetch. force=True
+    # still bypasses the cooldown (Play Radio must replace the queue) but never
+    # runs two builds of the same track at once. The account is part of the key
+    # because radio seeds are personalized: one account's build fills one queue.
+    flight_key = (_current_identity(), video_id)
     with _radio_refresh_lock:
-        if video_id in _radio_refresh_inflight:
+        if flight_key in _radio_refresh_inflight:
             return False
         if not force:
             with _radio_refresh_done_lock:
-                last = _radio_refresh_done.get(video_id, 0.0)
+                last = _radio_refresh_done.get(flight_key, 0.0)
             if time.time() - last < _RADIO_REFRESH_COOLDOWN:
                 return False
-        _radio_refresh_inflight.add(video_id)
+        _radio_refresh_inflight.add(flight_key)
     succeeded = False
     try:
         cur = _get_now_playing()
@@ -5041,17 +6387,17 @@ def _refresh_radio_queue(video_id, force=False):
             # "Up Next" doesn't permanently show a blank banner for them.
             missing = [q['video_id'] for q in queue if not q.get('thumbnail')][:5]
             for vid in missing:
-                threading.Thread(target=_backfill_queue_thumbnail, args=(vid,), daemon=True).start()
+                _bg_thread(_backfill_queue_thumbnail, args=(vid,))
             succeeded = True
             return True
     except Exception:
         logger.exception("")
     finally:
         with _radio_refresh_lock:
-            _radio_refresh_inflight.discard(video_id)
+            _radio_refresh_inflight.discard(flight_key)
         if succeeded:
             with _radio_refresh_done_lock:
-                _radio_refresh_done[video_id] = time.time()
+                _radio_refresh_done[flight_key] = time.time()
                 if len(_radio_refresh_done) > 256:
                     for stale in list(_radio_refresh_done)[:-128]:
                         del _radio_refresh_done[stale]
@@ -5163,8 +6509,8 @@ def _promote_next_track(reason, position_ms=0):
     _record_listen(vid, next_item.get('title', ''), next_item.get('artist', ''),
                    _thumbnail_url(next_item.get('thumbnail')))
     if not next_item.get('title'):
-        threading.Thread(target=_lookup_and_update_np, args=(vid,), daemon=True).start()
-    threading.Thread(target=_refresh_radio_queue, args=(vid,), daemon=True).start()
+        _bg_thread(_lookup_and_update_np, args=(vid,))
+    _bg_thread(_refresh_radio_queue, args=(vid,))
     return True
 
 
@@ -5381,10 +6727,10 @@ PLAYBACK_BUFFERING_FEEDBACK_DELAY = 4.0
 
 def _download_in_progress(video_id):
     """Compatibility watchdog query: only URL preparation can be pending."""
-    return _audio_jobs.contains(video_id)
+    return _audio_jobs.contains(_audio_job_key(video_id))
 
 
-def _watch_playback_confirmation(serial, video_id, resend):
+def _watch_playback_confirmation(serial, video_id, resend, expected=None):
     """Background watchdog: retries `resend()` once if `video_id` isn't
     confirmed playing within PLAYBACK_CONFIRM_TIMEOUT. `resend` is a zero-arg
     callable that re-arms and resends the play command; it should return an
@@ -5394,17 +6740,25 @@ def _watch_playback_confirmation(serial, video_id, resend):
 
     with _np_lock:
         intent_revision = int(_now_playing.get('playback_revision', 0))
+        if expected is None:
+            expected = (_now_playing.get('alexa_intent_at'),
+                        _playback_output.snapshot()['output_token'])
+
+    def _relevant_locked():
+        # A pause, same-song replay or output handoff also supersedes this attempt.
+        return (not _now_playing.get('_alexa_auth_blocked')
+                and _now_playing.get('video_id') == video_id
+                and _now_playing.get('alexa_intent_at') == expected[0]
+                and _playback_output.snapshot()['output_token'] == expected[1]
+                and int(_now_playing.get('failed_playback_revision', 0)) <= intent_revision)
 
     def _confirmed():
         with _np_lock:
-            return (_now_playing.get('video_id') == video_id
-                    and bool(_now_playing.get('playback_confirmed')))
+            return _relevant_locked() and bool(_now_playing.get('playback_confirmed'))
 
     def _still_relevant():
-        # Give up quietly if the user has since moved on to another track.
         with _np_lock:
-            return (_now_playing.get('video_id') == video_id
-                    and int(_now_playing.get('failed_playback_revision', 0)) <= intent_revision)
+            return _relevant_locked()
 
     def _wait_once():
         # A cache hit has nothing left to wait on but the trigger + /proxy/
@@ -5412,7 +6766,7 @@ def _watch_playback_confirmation(serial, video_id, resend):
         # up mid-wait (handled below by resetting the deadline with the full
         # window, same as the pre-existing "don't count download time" logic).
         base_timeout = (PLAYBACK_CONFIRM_TIMEOUT_CACHED
-                        if _youtube_stream.current.has(video_id)
+                        if _youtube_stream_for().current.has(video_id)
                         else PLAYBACK_CONFIRM_TIMEOUT)
         deadline = time.time() + base_timeout
         buffering_deadline = time.time() + PLAYBACK_BUFFERING_FEEDBACK_DELAY
@@ -5426,7 +6780,9 @@ def _watch_playback_confirmation(serial, video_id, resend):
             # toward the timeout — a resend mid-download wouldn't start
             # playback any sooner.
             if _download_in_progress(video_id):
-                deadline = time.time() + PLAYBACK_CONFIRM_TIMEOUT
+                if (_multiuser_layer is None
+                        or _now_playing.get('_alexa_verified_intent_at') == expected[0]):
+                    deadline = time.time() + PLAYBACK_CONFIRM_TIMEOUT
             elif not buffering_sent and time.time() >= buffering_deadline:
                 # Non-fatal, informational only: lets the UI show "still
                 # working on it" instead of sitting silent until a real
@@ -5443,6 +6799,17 @@ def _watch_playback_confirmation(serial, video_id, resend):
         if _wait_once():
             return
         if not _still_relevant():
+            return
+        authentication = _known_alexa_auth_failure()
+        if authentication:
+            _stop_alexa_auth_failure('', authentication['code'], video_id, expected[0], expected[1])
+            return
+        if (_multiuser_layer is not None
+                and _now_playing.get('_alexa_verified_intent_at') != expected[0]):
+            # An unknown/revoked credential cannot write another user's player.
+            # Without an authenticated arm acknowledgement, stop this pending
+            # attempt instead of treating it as a bad song or sending again.
+            _stop_alexa_auth_failure('', 'alexa_request_unverified', video_id, expected[0], expected[1])
             return
         # A permanently unavailable track must stop here, but the queue can
         # still move on: substituting a *different* upload would be wrong,
@@ -5485,19 +6852,28 @@ def _watch_playback_confirmation(serial, video_id, resend):
             if not _still_relevant():
                 return
         logger.warning("[playback-watchdog] no confirmation for %s in %ss, retrying once", video_id, PLAYBACK_CONFIRM_TIMEOUT)
+        if not _still_relevant():
+            return
         error = resend()
         if error:
             logger.error("[playback-watchdog] retry dispatch failed: %s", error)
-            _update_now_playing(playback_error={'type': 'dispatch_error', 'message': error})
+            _fail_play_dispatch(video_id, expected[0], expected[1], error)
             return
         if _wait_once():
             return
         if not _still_relevant():
             return
         logger.warning("[playback-watchdog] retry for %s also unconfirmed", video_id)
-        if not _auto_advance_after_failure(serial, video_id, 'timeout'):
-            _update_now_playing(playing=False, playback_processing=False,
-                playback_error={'type': 'timeout', 'message': _playback_failure_message('timeout')})
+        # Device timeouts do not prove the selected song is unavailable.
+        with _np_lock:
+            if not _relevant_locked():
+                return
+            _reset_progress(_computed_position_ms())
+            _now_playing.update(playing=False, playback_processing=False, playback_confirmed=False,
+                playback_error={'type': 'timeout', 'message': _playback_failure_message('timeout')},
+                updated_at=time.time())
+            _now_playing['playback_revision'] = int(_now_playing.get('playback_revision', 0)) + 1
+        _notify_sse()
     except Exception:
         logger.exception("")
 
@@ -5520,6 +6896,10 @@ def _watch_resume_confirmation(serial, video_id, staged_revision):
     if not _valid_video_id(video_id):
         return
 
+    with _np_lock:
+        resume_intent = _now_playing.get('alexa_intent_at')
+        resume_output = _playback_output.snapshot()['output_token']
+
     def _confirmed():
         with _np_lock:
             return (_now_playing.get('video_id') == video_id
@@ -5535,7 +6915,7 @@ def _watch_resume_confirmation(serial, video_id, staged_revision):
 
     def _wait_once():
         base_timeout = (PLAYBACK_CONFIRM_TIMEOUT_CACHED
-                        if _youtube_stream.current.has(video_id)
+                        if _youtube_stream_for().current.has(video_id)
                         else PLAYBACK_CONFIRM_TIMEOUT)
         deadline = time.time() + base_timeout
         while time.time() < deadline:
@@ -5546,18 +6926,32 @@ def _watch_resume_confirmation(serial, video_id, staged_revision):
             # evicted the cached file, and a resend mid-download would not
             # start playback any sooner.
             if _download_in_progress(video_id):
-                deadline = time.time() + PLAYBACK_CONFIRM_TIMEOUT
+                if (_multiuser_layer is None
+                        or _now_playing.get('_alexa_verified_intent_at') == resume_intent):
+                    deadline = time.time() + PLAYBACK_CONFIRM_TIMEOUT
             time.sleep(PLAYBACK_CONFIRM_POLL_INTERVAL)
         return _confirmed() or _superseded()
 
     try:
         if _wait_once():
             return
+        authentication = _known_alexa_auth_failure()
+        if authentication:
+            _stop_alexa_auth_failure('', authentication['code'], video_id, resume_intent, resume_output)
+            return
+        if (_multiuser_layer is not None
+                and _now_playing.get('_alexa_verified_intent_at') != resume_intent):
+            _stop_alexa_auth_failure('', 'alexa_request_unverified', video_id, resume_intent, resume_output)
+            return
         logger.warning("[resume-watchdog] no confirmation for %s in %ss, retrying once",
                        video_id, PLAYBACK_CONFIRM_TIMEOUT)
         error = alexa_remote.remote.command(serial, 'play')
         if error:
             logger.error("[resume-watchdog] retry dispatch failed: %s", error)
+            if _alexa_auth_error(error):
+                _stop_alexa_auth_failure(error, expected_video=video_id,
+                    expected_intent=resume_intent, expected_output=resume_output)
+                return
             with _np_lock:
                 still_staged = (int(_now_playing.get('playback_revision', 0)) == staged_revision
                                 and _now_playing.get('video_id') == video_id
@@ -5581,7 +6975,11 @@ def _watch_resume_confirmation(serial, video_id, staged_revision):
         logger.exception("")
 
 
-_playback_failover_budget = PlaybackFailoverBudget(limit=5)
+# One failover budget per identity: a stream that keeps dying for one account
+# must not exhaust the retries another account's playback is entitled to.
+_playback_failover_registry = _PlayerStateRegistry(
+    factory=lambda identity: PlaybackFailoverBudget(limit=5))
+_playback_failover_budget = _PlayerStateProxy(_playback_failover_registry)
 
 
 def _playback_failure_message(reason, stopped=False):
@@ -5606,7 +7004,16 @@ def _auto_advance_after_failure(serial, video_id, reason):
     """
     if not _still_relevant_video(video_id):
         return False
+    if _alexa_auth_error(reason, reason):
+        _stop_alexa_auth_failure(reason, reason, expected_video=video_id)
+        return True
+    authentication = _known_alexa_auth_failure()
+    if authentication:
+        _stop_alexa_auth_failure('', authentication['code'], expected_video=video_id)
+        return True
     with _np_lock:
+        if _now_playing.get('_alexa_auth_blocked'):
+            return True
         occurrence = (serial, video_id, _now_playing.get('queue_index', -1))
     count, fresh = _playback_failover_budget.fail(occurrence)
     if not fresh:
@@ -5627,7 +7034,7 @@ def _auto_advance_after_failure(serial, video_id, reason):
         return False
     logger.warning("[playback-watchdog] auto-advancing to %s after %s (%s)",
                    next_id, video_id, reason)
-    _update_now_playing(
+    staged = _update_now_playing(_require_alexa_access=True,
         video_id=next_id, queue_index=next_idx, playing=True,
         title=next_item.get('title', ''), artist=next_item.get('artist', ''),
         thumbnail=next_item.get('thumbnail', ''),
@@ -5635,9 +7042,14 @@ def _auto_advance_after_failure(serial, video_id, reason):
         playback_confirmed=False,
         playback_error={'type': reason, 'message': f'Song failed ({count}/5). Trying the next song.',
                         'terminal': False, 'skipped_video_id': video_id})
+    if staged is False:
+        return True
     dispatch_error = _dispatch_play_with_retry(serial, next_id)
     if dispatch_error:
         logger.error("[playback-watchdog] auto-advance dispatch failed: %s", dispatch_error)
+        if _alexa_auth_error(dispatch_error):
+            _stop_alexa_auth_failure(dispatch_error, expected_video=next_id)
+            return True
         _update_now_playing(playing=False, playback_processing=False, playback_error={
             'type': 'offline' if 'offline' in str(dispatch_error).lower() else 'dispatch_error',
             'message': str(dispatch_error)})
@@ -5656,15 +7068,22 @@ def _dispatch_play_with_retry(serial, video_id, offset_ms=0):
     any) happens in the background and reports failure via 'playback_error'
     in now_playing rather than this return value."""
     def _send():
+        if _now_playing.get('_alexa_auth_blocked'):
+            return 'Alexa authentication failed. Reconnect Amazon or correct the skill settings before retrying.'
         _arm_play(serial, video_id, offset_ms)
         return alexa_remote.remote.play_video_id(serial, video_id, offset_ms)
 
+    with _np_lock:
+        expected = (_now_playing.get('alexa_intent_at'),
+                    _playback_output.snapshot()['output_token'])
     error = _send()
     if error:
+        if _alexa_auth_error(error):
+            _stop_alexa_auth_failure(error, expected_video=video_id,
+                expected_intent=expected[0], expected_output=expected[1])
         return error
-    threading.Thread(
-        target=_watch_playback_confirmation, args=(serial, video_id, _send), daemon=True
-    ).start()
+    _spawn_for_identity(_current_identity(), _watch_playback_confirmation,
+                        args=(serial, video_id, _send, expected), name='playback-watchdog')
     return None
 
 
@@ -5673,47 +7092,226 @@ def _dispatch_play_with_retry(serial, video_id, offset_ms=0):
 # How long a password-verified login has to enter its 2FA code before the
 # pending state expires and it must start over.
 _PENDING_TTL = 300  # seconds
-# Server-side pending store (keyed by random token, NOT the session cookie)
-# so concurrent requests from other tabs can't race and lose the state.
-_pending_store = {}
-_pending_lock = threading.Lock()
-_PENDING_LIMIT = 64
+# Step one of sign-in leaves nothing in the cookie that reads as "already past
+# the password": the proof is a single-use random token handed to the browser
+# while the record behind it stays here. One store for both identities -- the
+# legacy owner and a multi-user account -- discriminated by ``kind``, so the two
+# never need separate mechanisms for the same few seconds of waiting.
+_pending_2fa = None
 
 
-def _prune_pending_logins():
-    """Caller holds _pending_lock; bound abandoned password-verified challenges."""
-    now = time.time()
-    for token, pending in list(_pending_store.items()):
-        if now - pending.get('at', 0) >= _PENDING_TTL:
-            _pending_store.pop(token, None)
+def _pending_2fa_door():
+    """``(store, this browser's fingerprint)``.
+
+    Imported lazily: ``multiuser.pending`` is standard library only, but the
+    single-owner boot path should not have to care even in principle.
+    """
+    global _pending_2fa
+    from multiuser import pending as mu_pending
+    if _pending_2fa is None:
+        _pending_2fa = mu_pending.PendingSecondFactor(ttl_seconds=_PENDING_TTL)
+    # Bucketed, not raw: an IPv6 client that rotates its address inside the few
+    # minutes this waits should not have to start over, and the bucket is the same
+    # granularity the login budget is already keyed on.
+    return _pending_2fa, mu_pending.bind_value(
+        _netids().ip_bucket(_client_ip()), request.headers.get('User-Agent', ''))
+
+
+def _netids():
+    """Client-addressing, shared with the multi-user layer's own abuse controls."""
+    from multiuser import netids
+    return netids
+
+
+def _login_door_links():
+    """Whether this door has an account side: ``(signup_open, forgot_url)``.
+
+    ``account_available`` cannot be reused for that: it means "this browser
+    already holds an account session", which is false exactly where the links are
+    needed.
+    """
+    layer = _multiuser_layer
+    if layer is None:
+        return False, ''
+    return layer.accounts.registration_open(), '/forgot-password'
+
+
+@app.get('/api/alexa/identity/')
+def alexa_account_identity():
+    binding = request.environ.get('musicbox.alexa_binding')
+    if binding is None:
+        return error_response('This Echo is not authorized for this account.', 403)
+    return _no_store(jsonify(binding=binding['version']))
+
+
+@app.post('/api/alexa/link/')
+def link_alexa_account():
+    return error_response('Echo pairing codes are no longer available.', 410)
+
+
+@app.get('/health/live')
+def health_live():
+    return jsonify(status='alive')
+
+
+@app.get('/health/ready')
+def health_ready():
+    try:
+        with get_db() as conn:
+            conn.execute('SELECT 1').fetchone()
+        if os.environ.get('MULTI_USER_ENABLED') == '1' and _multiuser_layer is None:
+            raise RuntimeError('authentication unavailable')
+    except Exception:
+        return jsonify(status='unavailable'), 503
+    return jsonify(status='ready', protocol_version=2)
 
 
 @app.route("/login/", methods=["GET", "POST"])
 def login():
-    if not _remote_login_enabled():
+    if request.content_length and request.content_length > 32768:
+        return error_response("Sign-in request is too large.", 413)
+    if not _remote_login_enabled() and _multiuser_layer is None:
         # No credentials configured; fall back to the key-in-URL scheme.
         return redirect('/remote/')
     if request.method == "GET":
         if _logged_in():
             return redirect(_safe_spa_target(request.args.get('next')))
+        signup_open, forgot_url = _login_door_links()
+        # `totp` is deliberately not passed any more: which accounts need a code is
+        # a per-account fact the page cannot know before the password is typed, so
+        # step two is always in the document and revealed by the response.
         return _no_store(app.make_response(render_template(
-            "login.html", totp=_totp_enabled(), asset_v=_STATIC_VERSION,
-            next_target=_safe_spa_target(request.args.get('next')))))
+            "login.html", asset_v=_STATIC_VERSION,
+            email_changed=request.args.get('email_changed') == '1',
+            next_target=_safe_spa_target(request.args.get('next')),
+            signup_open=signup_open, forgot_url=forgot_url, otp_available=_multiuser_layer is not None,
+            initial_username=(session.get('mu_ss_pending_verify') or ['', ''])[1],
+            otp_start=request.args.get('otp') == '1', code_ready=request.args.get('code') == '1')))
 
+    if request.method == "POST" and not request.is_json:
+        return error_response("JSON sign-in required.", 415)
     body = request.get_json(silent=True) or request.form
+
+    # Email sign-in uses the existing single-use magic credential storage, with
+    # encrypted numeric codes rather than administrator sign-in URLs.
+    if body.get("step") in {"send_otp", "email_otp"}:
+        layer = _multiuser_layer
+        if layer is None:
+            return error_response('Email sign-in is unavailable.', 404)
+        from multiuser import emails
+        identifier = str(body.get("username") or "").strip()[:254]
+        ip = _client_ip()
+        user_agent = request.headers.get('User-Agent', '')[:400]
+        sending = body.get("step") == "send_otp"
+        user = (layer.accounts.find_user_by_email(identifier) if '@' in identifier
+                else layer.accounts.get_user_by_username(identifier))
+        # Canonicalize aliases: username and email share one account budget.
+        account_key = (user or {}).get('id') or _netids().identifier_bucket(identifier)
+        for scope, key, limit, window in (
+            ('otp-send-ip' if sending else 'otp-check-ip', _netids().ip_bucket(ip), 30, 600),
+            ('otp-send-account' if sending else 'otp-check-account', account_key,
+             5 if sending else layer.config.login_max_attempts, 600),
+        ):
+            allowed, retry = layer.rate_limiter.allow(scope, key, limit, window)
+            if not allowed:
+                response, status = error_response(f'Too many attempts. Try again in {retry}s.', 429)
+                response.headers['Retry-After'] = str(max(1, retry))
+                return response, status
+        if sending:
+            if not user:
+                return error_response('No account exists with that email or username.', 404)
+            if user.get('status') != 'active':
+                return error_response('This account is not active. Contact an administrator.', 403)
+            if not user.get('email'):
+                return error_response('This account has no email address. Sign in with your password.', 422)
+            # The cooldown is server-enforced even across tabs and aliases.
+            allowed, retry = layer.rate_limiter.allow('otp-send-cooldown', account_key, 1, 60)
+            if not allowed:
+                response, status = error_response(f'Wait {retry}s before requesting another code.', 429)
+                response.headers['Retry-After'] = str(max(1, retry))
+                return response, status
+            code = layer.accounts.create_email_code(user['id'], 'magic', user['email'], ip, user_agent)
+            delivery = emails.send_code_email(layer, user, 'magic', code, where='the Music Box sign-in page',
+                                              ip=ip, user_agent=user_agent)
+            if delivery.status != 'sent':
+                response, status = error_response('The email could not be sent. Try again later or sign in with your password.', 503)
+                response.headers['Retry-After'] = '60'
+                return response, status
+            return jsonify(ok=True, retry_after=60, message='A six-digit code was sent to your email.')
+        proof = (layer.accounts.consume_email_code(user['id'], 'magic', str(body.get('code') or ''))
+                 if user and user.get('status') == 'active' else None)
+        if (not proof and user and user.get('status') == 'active'
+                and not user.get('email_verified') and not user.get('pending_email')):
+            # A signup verification code proves the same current mailbox. Pending
+            # email-change codes must never become login credentials.
+            proof = layer.accounts.consume_email_code(user['id'], 'verify', str(body.get('code') or ''))
+        if not proof:
+            return error_response('Invalid or expired code. Request a new code and try again.', 401)
+        # Mailbox possession also completes initial address verification. Pending
+        # address changes remain bound to their separate verification purpose.
+        if not user.get('email_verified'):
+            layer.accounts.mark_email_verified(user, user['id'], ip=ip, user_agent=user_agent, method='email_otp')
+        user = layer.accounts.get_user(user['id'])
+        if not user or user.get('status') != 'active':
+            return error_response('This account cannot sign in.', 401)
+        if layer.accounts.totp_is_enabled(user):
+            store, bind = _pending_2fa_door()
+            token = store.issue({'kind': 'account', 'uid': user['id'],
+                                 'security_version': user['security_version'],
+                                 'next': _safe_spa_target(body.get('next'))}, bind)
+            return jsonify(ok=True, totp_required=True, token=token)
+        raw_sid = layer.accounts.create_session(user, ip=ip, user_agent=user_agent)
+        complete_login(layer, user, ip)
+        replace_identity()
+        session['mu_sid'] = raw_sid
+        session['mu_user_id'] = user['id']
+        session['sid'] = _session_open()
+        session.permanent = True
+        return jsonify(ok=True, next=_safe_spa_target(body.get('next')))
 
     # Step 2: a password-verified session submitting its 2FA code.
     if body.get("step") == "totp":
-        token = str(body.get("token") or "")
-        with _pending_lock:
-            _prune_pending_logins()
-            pending = _pending_store.pop(token, None)
-        if not pending or pending.get('user') != REMOTE_USER or (time.time() - pending.get('at', 0)) > _PENDING_TTL:
+        store, bind = _pending_2fa_door()
+        # consume() pops: a replay, a second tab, and a wrong code all land on
+        # None, which is why there is no code-retry oracle here.
+        pending = store.consume(str(body.get("token") or ""), bind)
+        if not pending:
             return error_response('login timed out, start again', 401)
-        # str(): a JSON body can carry the 6-digit code as a number, and
-        # .strip() on an int would 500 instead of failing the check cleanly.
-        if not _totp_verify(str(body.get("code") or "").strip()):
+        # JSON numbers lose leading zeroes; restore exactly six digits while
+        # leaving booleans, fractions and out-of-range values invalid.
+        raw_code = body.get("code")
+        code = (f"{raw_code:06d}" if type(raw_code) is int and 0 <= raw_code <= 999999
+                else str(raw_code or "").strip())
+        if pending.get('kind') == 'account':
+            layer = _multiuser_layer
+            uid = str(pending.get('uid') or '')
+            if layer is None:
+                return error_response('login timed out, start again', 401)
+            if pending.get('security_version') != layer.accounts.security_version(uid):
+                return error_response('login changed, start again', 401)
+            if not layer.accounts.verify_totp_code(uid, code):
+                return error_response('invalid authentication code', 401)
+            # Re-read the account: it could have been disabled, deleted, or had
+            # its second factor turned off between the two steps.
+            user = layer.accounts.get_user(uid)
+            if (not user or user.get('status') != 'active'
+                    or not layer.accounts.totp_is_enabled(user)):
+                return error_response('login timed out, start again', 401)
+            raw_sid = layer.accounts.create_session(
+                user, ip=_client_ip(),
+                user_agent=request.headers.get('User-Agent', '')[:400])
+            complete_login(layer, user, _client_ip())
+            replace_identity()
+            session['mu_sid'] = raw_sid
+            session['mu_user_id'] = user['id']
+            session['sid'] = _session_open()
+            session.permanent = True
+            return jsonify({'ok': True, 'next': pending.get('next') or '/home'})
+        if pending.get('user') != REMOTE_USER:
+            return error_response('login timed out, start again', 401)
+        if not _totp_verify(code):
             return error_response('invalid authentication code', 401)
+        replace_identity()
         session['remote_user'] = REMOTE_USER
         session['sid'] = _session_open()
         session.permanent = True
@@ -5724,20 +7322,72 @@ def login():
     # raises TypeError on mismatched types instead of just failing the check.
     username = str(body.get("username") or "").strip()
     password = str(body.get("password") or "")
-    if not (hmac.compare_digest(username, REMOTE_USER) and hmac.compare_digest(password, REMOTE_PASSWORD)):
+    # Multi-user accounts sign in through the same door as the legacy owner.
+    if _multiuser_layer is not None and username:
+        layer = _multiuser_layer
+        netids = _netids()
+        ip = _client_ip()
+        user_agent = request.headers.get('User-Agent', '')[:400]
+        # Two budgets, byte-identical to the administrator door's scope strings:
+        # one attacker does not get a fresh allowance per way into the same
+        # password, and a successful sign-in clears both.
+        account_key = netids.identifier_bucket(username)
+        ip_key = netids.ip_bucket(ip)
+        account_allowed, account_retry = layer.rate_limiter.allow(
+            "login-account", account_key,
+            layer.config.login_max_attempts, layer.config.login_window_seconds)
+        ip_allowed, ip_retry = layer.rate_limiter.allow(
+            "login-ip", ip_key,
+            layer.config.login_max_attempts * 10, layer.config.login_window_seconds)
+        if not account_allowed or not ip_allowed:
+            retry = max(account_retry, ip_retry, 1)
+            layer.accounts.audit(
+                None, 'login_rate_limited', None,
+                {'retry_after': retry, 'attempted': username[:120]}, ip, user_agent)
+            response, status = error_response(
+                f'too many sign-in attempts, try again in {retry}s', 429,
+                code='rate_limited', retryable=True)
+            response.status_code = status
+            response.headers['Retry-After'] = str(retry)
+            return response
+        mu_user, mu_error = layer.accounts.authenticate(
+            username, password, ip=ip, user_agent=user_agent)
+        if mu_user is not None:
+            if layer.accounts.totp_is_enabled(mu_user):
+                # The password alone no longer buys a session: hold the verified
+                # identity for a few minutes under a token bound to this browser.
+                store, bind = _pending_2fa_door()
+                pending_token = store.issue({
+                    'kind': 'account', 'uid': mu_user['id'],
+                    'security_version': mu_user['security_version'],
+                    'next': _safe_spa_target(body.get('next')),
+                }, bind)
+                return jsonify({'ok': True, 'totp_required': True, 'token': pending_token})
+            raw_sid = layer.accounts.create_session(
+                mu_user, ip=ip, user_agent=user_agent)
+            complete_login(layer, mu_user, ip)
+            replace_identity()
+            session['mu_sid'] = raw_sid
+            session['mu_user_id'] = mu_user['id']
+            session['sid'] = _session_open()
+            session.permanent = True
+            return jsonify({'ok': True, 'next': _safe_spa_target(body.get('next'))})
+        # A named failure (locked, inactive, unverified) is real feedback;
+        # the generic invalid-credentials reply may still be the legacy owner,
+        # so fall through to the REMOTE_USER comparison in that case.
+        if mu_error and mu_error != "Invalid username or password.":
+            return error_response(mu_error, 401)
+    if not (_remote_login_enabled() and hmac.compare_digest(username, REMOTE_USER) and hmac.compare_digest(password, REMOTE_PASSWORD)):
         return error_response('invalid username or password', 401)
     if _totp_enabled():
         # Hold the verified identity briefly while the browser collects the code.
-        token = secrets.token_urlsafe(32)
-        with _pending_lock:
-            _prune_pending_logins()
-            if len(_pending_store) >= _PENDING_LIMIT:
-                return error_response('Too many pending sign-ins. Try again shortly.', 429)
-            _pending_store[token] = {
-                'user': REMOTE_USER, 'at': time.time(),
-                'next': _safe_spa_target(body.get('next')),
-            }
+        store, bind = _pending_2fa_door()
+        token = store.issue({
+            'kind': 'owner', 'user': REMOTE_USER,
+            'next': _safe_spa_target(body.get('next')),
+        }, bind)
         return jsonify({'ok': True, 'totp_required': True, 'token': token})
+    replace_identity()
     session['remote_user'] = REMOTE_USER
     session['sid'] = _session_open()
     session.permanent = True
@@ -5755,11 +7405,25 @@ def logout():
     # accepted only from a JSON body (a cross-site form can't send one without
     # failing CORS preflight) and only from a currently-valid session.
     body = request.get_json(silent=True) or {}
-    owner_logged_in = _logged_in()
-    if owner_logged_in:
+    mu_user = _mu_web_identity()
+    legacy_logged_in = mu_user is None and _logged_in()
+    if mu_user is not None:
+        # An account logout must not disturb the owner's Jam or YouTube
+        # browser session — it closes this account's own jam and session only.
+        _jam_close_all(_jam_identity_id())
+        try:
+            _sess, _u = _multiuser_layer.accounts.validate_session(session.get('mu_sid'))
+            if _sess:
+                _multiuser_layer.accounts.revoke_session(_sess['sid_hash'])
+        except Exception:
+            logger.exception('multiuser session revoke failed at logout')
+        # Only the capture window closes; the account's stored YouTube session
+        # stays, so signing out of the web remote is not a forced re-login.
+        _youtube_browser_sessions.revoke(_current_identity())
+    elif legacy_logged_in:
         _jam_close_all()
-        _youtube_browser_sessions.revoke()
-    if body.get('everywhere') and owner_logged_in:
+        _youtube_browser_sessions.revoke(_current_identity())
+    if body.get('everywhere') and legacy_logged_in:
         _sessions_close_all()
     elif session.get('sid'):
         _session_close(session['sid'])
@@ -5791,10 +7455,12 @@ def remote_page():
             'remote.html', asset_v=_STATIC_VERSION,
             jam_guest=True, remote_username='Jam guest',
             is_authenticated=False)))
+    mu_user = _mu_web_identity()
     is_auth = _ytmusic_is_authenticated()
     return _no_store(app.make_response(render_template(
         "remote.html", asset_v=_STATIC_VERSION,
-        jam_guest=_jam_guest() and not _valid_key_supplied(), remote_username=REMOTE_USER,
+        jam_guest=_jam_guest() and not _valid_key_supplied(),
+        remote_username=(mu_user or {}).get('username') or REMOTE_USER,
         is_authenticated=is_auth)))
 
 
@@ -5804,7 +7470,14 @@ def remote_page():
 def jam_start():
     """Owner-only (session or API key — guests can't reach /alexa/jam/*).
     Mints a fresh share token; any previous jam is revoked in the same step."""
-    token = _jam_open()
+    body = request.get_json(silent=True) or {}
+    device_id = body.get('device_id')
+    serial = _jam_device_serial(claim=device_id if isinstance(device_id, str) else '')
+    if not serial:
+        return error_response(
+            'No playback device. Play something in this browser or link an Alexa '
+            'device, then start the jam again.', 409)
+    token = _jam_open(_jam_identity_id())
     return jsonify({'ok': True, 'active': True, 'url': _jam_url(token)})
 
 
@@ -5812,13 +7485,13 @@ def jam_start():
 def jam_stop():
     """Revoke the jam. Every guest's next request 401s and their SSE stream
     closes on its next tick — revocation is effectively immediate."""
-    _jam_close_all()
+    _jam_close_all(_jam_identity_id())
     return jsonify({'ok': True, 'active': False})
 
 
 @app.route("/alexa/jam/status/", methods=["GET"])
 def jam_status():
-    token = _jam_active_token()
+    token = _jam_active_token(_jam_identity_id())
     if not token:
         return jsonify({'active': False})
     return jsonify({'active': True, 'url': _jam_url(token)})
@@ -5826,7 +7499,7 @@ def jam_status():
 
 @app.route("/alexa/jam/qr/", methods=["GET"])
 def jam_qr():
-    token = _jam_active_token()
+    token = _jam_active_token(_jam_identity_id())
     if not token:
         return jsonify({'error': 'no active jam'}), 404
     try:
@@ -5989,8 +7662,16 @@ def _build_jam_india_home():
 
 @app.route('/api/jam/session/', methods=['GET'])
 def jam_guest_session():
+    """The guest handshake: what the room plays and where it plays.
+
+    The jam cookie has already bound this request to the host's identity, so
+    `status` and the playback target describe the host's account. A guest has
+    no session of its own, which is why availability is decided by the
+    resolved target — an Echo *or* the host's live browser — rather than by
+    the guest's Amazon login.
+    """
     status = alexa_remote.remote.status()
-    serial = _jam_device_serial() if status.get('logged_in') else None
+    serial = _jam_device_serial()
     now_playing = None
     if serial:
         with _np_lock:
@@ -6044,8 +7725,10 @@ def alexa_status():
 def alexa_init():
     """Combined startup endpoint: returns auth status + device list + now-playing
     in one round-trip so the page can render instantly on load."""
+    if not _alexa_access_enabled():
+        return jsonify(alexa_access_enabled=False, devices=[], now_playing=None)
     status = alexa_remote.remote.status()
-    result = {'status': status, 'devices': [], 'now_playing': None}
+    result = {'alexa_access_enabled': True, 'status': status, 'devices': [], 'now_playing': None}
     if status.get('logged_in'):
         devices, _ = alexa_remote.remote.devices(refresh=False)
         result['devices'] = devices
@@ -6065,6 +7748,19 @@ def alexa_init():
     return jsonify(result)
 
 
+@app.get('/alexa/proxy_authorize/')
+def alexa_proxy_authorize():
+    # Caddy copies this credential internally; only the active account may enter.
+    if not _logged_in() or not _alexa_access_enabled():
+        return _no_store(Response(status=401))
+    credential = alexa_remote.remote.proxy_authorization()
+    if not credential:
+        return _no_store(Response(status=403))
+    response = Response(status=204)
+    response.headers['X-MusicBox-Proxy-Authorization'] = credential
+    return _no_store(response)
+
+
 @app.route("/alexa/proxy_login/", methods=["POST"])
 def alexa_proxy_login():
     """Start the interactive proxy login; returns the URL for the user to open.
@@ -6075,16 +7771,7 @@ def alexa_proxy_login():
     email = str(body.get("email") or "").strip()
     password = str(body.get("password") or "")
     if not email or not password:
-        return error_response('Enter your Amazon email and password.', 400)
-    # There is only one live Alexa session for the whole server (see
-    # AlexaRemote); logging in again silently replaces whichever Amazon
-    # account currently controls every Echo. Require an explicit 'force' from
-    # a stale tab/accidental resubmit instead of swapping accounts unnoticed.
-    if alexa_remote.remote.is_logged_in() and not body.get("force"):
-        return error_response(
-            'Already signed in to Amazon. Signing in again will replace the '
-            'current session for every device. Resubmit with "force": true '
-            'to continue.', 409)
+        return error_response('Enter your Amazon email or mobile number and password.', 400)
     proxy_base_url = None
     # Direct local development exposes AlexaProxy itself on 127.0.0.1:5001.
     # In Docker Compose that port is private and Caddy publishes the proxy at
@@ -6095,21 +7782,32 @@ def alexa_proxy_login():
         proxy_base_url = f"http://127.0.0.1:{proxy_port}/alexa/proxy/"
     if not _logged_in():
         return error_response('Owner session required.', 401)
+    remote = alexa_remote.remote
+    if callable(getattr(remote, 'set_proxy_authorizer', None)):
+        # Capture the concrete account instance: background proxy threads have no
+        # request identity and must never resolve the owner's remote by default.
+        instance = alexa_remote._remote_registry.state_for(_current_identity())
+        instance.set_proxy_authorizer(lambda cookie, attempt: _authorize_amazon_proxy(cookie, attempt, instance))
     url, error = alexa_remote.remote.proxy_start_url(
         email, password, base_url=proxy_base_url, owner_sid=session.get('sid')
     )
     if error:
-        return error_response(error, 502)
-    return jsonify({'login_url': url, 'attempt_id':getattr(alexa_remote.remote, '_proxy_attempt_id', None)})
+        # Every account signs into its own Amazon session now, so re-logging in
+        # only ever replaces the caller's session. The single thing still shared
+        # is the login proxy's port: a concurrent login is refused, not queued.
+        status_code = 409 if error == alexa_remote.PROXY_PORT_BUSY else 502
+        return error_response(error, status_code)
+    return jsonify({'login_url': url,
+                    'attempt_id': getattr(alexa_remote.remote, '_proxy_attempt_id', None)})
 
 
 @app.post('/alexa/proxy_cancel/')
 def alexa_proxy_cancel():
     if not _logged_in():
-        return error_response('Owner session required.',401)
-    body=request.get_json(silent=True) or {}
-    cancelled=alexa_remote.remote.proxy_cancel(body.get('attempt_id'))
-    return jsonify({'cancelled':bool(cancelled)})
+        return error_response('Sign in to cancel the login attempt.', 401)
+    body = request.get_json(silent=True) or {}
+    cancelled = alexa_remote.remote.proxy_cancel(body.get('attempt_id'))
+    return jsonify({'cancelled': bool(cancelled)})
 
 
 @app.route("/alexa/proxy_check/", methods=["GET"])
@@ -6123,63 +7821,108 @@ def alexa_amazon_signout():
     alexa_remote.remote.logout()
     return jsonify({"success": True})
 
+
+# Scripted Amazon sign-in: the user types each answer into Music Box's own
+# form and alexapy submits it in the background. No mirrored Amazon pages,
+# no embedded browser; the login state machine lives in AlexaRemote.
+@app.route("/alexa/form_login/", methods=["POST"])
+def alexa_form_login():
+    if not _logged_in():
+        return error_response("Sign in to connect Amazon.", 401)
+    body = request.get_json(silent=True) or {}
+    email = str(body.get("email") or "").strip()
+    password = str(body.get("password") or "")
+    if not email or not password:
+        return error_response("Enter your Amazon email or mobile number and password.", 400)
+    return jsonify(alexa_remote.remote.form_login(email, password))
+
+
+_FORM_LOGIN_ANSWERS = ("securitycode", "verificationcode", "captcha",
+                       "claimsoption", "authselectoption", "poll")
+
+
+@app.route("/alexa/form_login/step/", methods=["POST"])
+def alexa_form_login_step():
+    if not _logged_in():
+        return error_response("Sign in to continue.", 401)
+    body = request.get_json(silent=True) or {}
+    expected = getattr(alexa_remote.remote, "_form_attempt_id", None)
+    if not expected or not hmac.compare_digest(str(body.get("attempt_id") or ""), str(expected)):
+        return error_response("This sign-in was replaced. Start again.", 409)
+    kind = str(body.get("kind") or "")
+    value = str(body.get("value") or "").strip()
+    if kind not in _FORM_LOGIN_ANSWERS:
+        return error_response("Amazon is not asking for that answer.", 400)
+    if kind != "poll" and not value:
+        return error_response("Enter the answer Amazon is waiting for.", 400)
+    return jsonify(alexa_remote.remote.form_login_step(kind, value, attempt_id=expected))
+
+
+@app.route("/alexa/form_login/cancel/", methods=["POST"])
+def alexa_form_login_cancel():
+    body = request.get_json(silent=True) or {}
+    expected = getattr(alexa_remote.remote, "_form_attempt_id", None)
+    if not expected or not hmac.compare_digest(str(body.get("attempt_id") or ""), str(expected)):
+        return error_response("This sign-in was replaced. Start again.", 409)
+    if not _logged_in():
+        return error_response("Sign in to cancel the login attempt.", 401)
+    if not alexa_remote.remote.form_login_cancel(attempt_id=expected):
+        return error_response("This sign-in was replaced. Start again.", 409)
+    return jsonify({"cancelled": True})
+
+
+@app.route("/alexa/form_login/captcha/", methods=["GET"])
+def alexa_form_login_captcha():
+    """The captcha picture for this identity's scripted login, if one is waiting.
+
+    Served same-origin instead of as a data URL so a strict img-src policy
+    cannot break the flow, and so the picture never travels inside JSON."""
+    if not _logged_in():
+        return error_response("Sign in to continue.", 401)
+    captcha = alexa_remote.remote.form_login_captcha()
+    if captcha is None:
+        return error_response("No captcha is waiting. Start again.", 404)
+    content_type, data = captcha
+    return _no_store(Response(data, content_type=content_type,
+                              headers={"Cache-Control": "no-store"}))
+
+
 def _configure_cookie_probe(command):
     Supporting.add_ytdlp_js_runtime(command)
     Supporting.add_ytdlp_pot_provider(command)
 
 
-def _download_cookie_owner():
-    supplied = request.args.get('key') or request.headers.get('X-Api-Key') or ''
-    return _logged_in() or bool(API_KEY and hmac.compare_digest(supplied, API_KEY))
-
-
 @app.route("/api/youtube/download-cookies/status", methods=["GET"])
 def download_cookie_status():
-    if not _download_cookie_owner():
-        return error_response('Owner session or API key required.', 401)
+    """Diagnostic for the one server jar; administrators only.
+
+    Replacing that jar is the download account's job (see the admin YouTube
+    page), so the player no longer offers an upload door at all."""
+    if not _admin_logged_in():
+        return error_response('Administrator access required.', 401)
     try:
         result = download_cookies.status(Supporting.get_ytdlp_cookies_file(), _configure_cookie_probe,
                                         force=request.args.get('refresh') == '1')
     except download_cookies.ProbeBusy as exc:
-        return error_response(str(exc), 429)
+        return error_response('A cookie check is already running. Try again shortly.', 429)
     return jsonify(result)
-
-
-@app.route("/api/youtube/download-cookies", methods=["POST"])
-def replace_download_cookies():
-    if not _download_cookie_owner():
-        return error_response('Owner session or API key required.', 401)
-    if request.content_length and request.content_length > 1024 * 1024:
-        return error_response('Cookie upload is too large.', 413)
-    body = request.get_json(silent=True)
-    if not isinstance(body, dict):
-        return error_response('JSON object required.', 400)
-    try:
-        result = download_cookies.replace(body.get('cookies'), _configure_cookie_probe)
-    except download_cookies.ProbeBusy as exc:
-        return error_response(str(exc), 429)
-    except ValueError as exc:
-        return error_response(str(exc), 400)
-    except OSError:
-        return error_response('Could not save cookies. Existing cookies were kept.', 500)
-    if not result['valid']:
-        return error_response(result['message'], 422)
-    with _flaky_video_ids_lock:
-        _flaky_video_ids.clear()
-    _reset_rate_limit_cooldown()
-    return jsonify(success=True, **result)
 
 
 @app.route("/api/profile_status/", methods=["GET"])
 def profile_status():
-    """Returns auth statuses for Amazon, YouTube headers, and yt-dlp cookies."""
+    """Auth statuses for the *caller's* account: Amazon, YouTube headers, cookies.
+
+    Every YouTube figure describes this identity, so one account's "Not connected"
+    is genuinely its own and not the owner's session leaking through the UI."""
+    identity = _current_identity()
     # Amazon
-    amazon_status = alexa_remote.remote.status()
+    alexa_enabled = _alexa_access_enabled()
+    amazon_status = alexa_remote.remote.status() if alexa_enabled else {}
     amazon_connected = bool(amazon_status.get("logged_in"))
     amazon_debug = f"logged_in={amazon_connected}, error={amazon_status.get('login_error')}"
     
     # YouTube Auth
-    yt_home = _get_ytmusic_home()
+    yt_home = _get_ytmusic_home(identity)
     auth_type_str = str(getattr(yt_home, 'auth_type', 'UNAUTHORIZED'))
     yt_auth_working = _ytmusic_client_is_authenticated(yt_home)
     if not yt_auth_working:
@@ -6189,7 +7932,18 @@ def profile_status():
         # background capture browser as though it were the login browser.
     headers_debug = f"auth_type={auth_type_str}"
 
-    cookies_file = Supporting.get_ytdlp_cookies_file()
+    cookies_file = Supporting.get_ytdlp_cookies_file(identity)
+    # The effective jar is normally the shared server jar; an account's own jar
+    # is only the fallback. Report which file is actually in use rather than
+    # inferring it from which files exist.
+    own_cookie_path = _download_cookie_path(identity)
+    own_cookies = download_cookies.is_usable(own_cookie_path)
+    if not cookies_file:
+        cookies_source = 'none'
+    elif os.path.abspath(cookies_file) == os.path.abspath(_server_download_cookie_path()):
+        cookies_source = 'server'
+    else:
+        cookies_source = 'account'
     if request.args.get('audio_check') == '0':
         # Native startup only needs account linkage. Download probes are an
         # explicit profile action and can take up to 50 seconds.
@@ -6198,16 +7952,24 @@ def profile_status():
         try:
             cookie_test = download_cookies.status(cookies_file, _configure_cookie_probe)
         except download_cookies.ProbeBusy as exc:
-            cookie_test = {'valid': False, 'message': str(exc)}
+            cookie_test = {'valid': False, 'message': 'A cookie check is already running. Try again shortly.'}
     cookies_working = cookie_test['valid']
     cookies_debug = cookie_test['message']
 
-    browser_status = _youtube_browser_sessions.status()
-    return jsonify({
-        "amazon_connected": amazon_connected,
+    browser_status = _youtube_browser_sessions.status(identity)
+    own_auth_file = _youtube_credentials.path_for(identity)
+    own_session = bool(own_auth_file and os.path.isfile(own_auth_file))
+    payload = {
+        "alexa_access_enabled": alexa_enabled,
         "youtube_auth_working": yt_auth_working,
         "youtube_auth_type": auth_type_str,
-        "youtube_cookies_present": bool(cookies_file),
+        "youtube_own_session": own_session,
+        "youtube_server_fallback": bool(
+            not own_session and yt_auth_working and identity != _SERVER_IDENTITY
+            and _server_session_enabled()),
+        "youtube_cookies_own": own_cookies,
+        "youtube_cookies_source": cookies_source,
+        "youtube_cookies_present": cookies_source != 'none',
         "youtube_cookies_working": cookies_working,
         "youtube_browser_available": browser_status["available"],
         "youtube_browser_refreshing": browser_status["refreshing"],
@@ -6215,11 +7977,14 @@ def profile_status():
         "youtube_browser_reconnect_required": browser_status["reconnect_required"],
         "youtube_browser_last_successful_renewal": browser_status["last_successful_renewal"],
         "debug": {
-            "amazon": amazon_debug,
             "headers": headers_debug,
             "cookies": cookies_debug
         }
-    })
+    }
+    if alexa_enabled:
+        payload["amazon_connected"] = amazon_connected
+        payload["debug"]["amazon"] = amazon_debug
+    return jsonify(payload)
 
 
 
@@ -6228,7 +7993,7 @@ def profile_status():
 def youtube_browser_auth():
     """Import YouTube Music browser request headers."""
     if not _logged_in():
-        return error_response("Owner session required.", 401)
+        return error_response("Sign in to connect YouTube Music.", 401)
     body = request.get_json(silent=True) or {}
     headers_raw = body.get("headers")
     if not isinstance(headers_raw, str) or not headers_raw.strip():
@@ -6246,18 +8011,35 @@ def youtube_browser_auth():
 
 
 def _browser_owner_id():
-    return session.get('sid') or ''
+    """The identity that owns a capture session: its own credential, its own profile.
+
+    This used to be the web session id, which is per-cookie rather than per-account:
+    two tabs of the same account would have looked like two different owners. An
+    admin driving a *user's* profile through the panel is the one exception, and it
+    is scoped to this browser's calls by a signed token (see `_browser_as_target`)."""
+    return _browser_as_target() or _current_identity()
 
 
-@app.route("/api/youtube/browser-session/start", methods=["POST"])
-def youtube_browser_session_start():
-    if not _logged_in():
-        return error_response("Owner session required.", 401)
-    viewport=(request.get_json(silent=True) or {}).get('viewport')
+def _browser_profile_key():
+    """The sidecar's Chromium profile directory for this identity.
+
+    The owner keeps the base profile, where its existing Google login lives;
+    an account gets its own directory so signing in never overwrites anyone else."""
+    return account_user_id(_browser_owner_id())
+
+
+def _browser_session_start(owner_id):
+    """Open the touch sign-in surface for *this* identity's Chromium profile."""
+    viewport = (request.get_json(silent=True) or {}).get('viewport')
     try:
-        token, status = _youtube_browser_sessions.start(_browser_owner_id(), viewport=viewport) if viewport is not None else _youtube_browser_sessions.start(_browser_owner_id())
+        token, status = _youtube_browser_sessions.start(
+            owner_id, _browser_profile_key(), viewport=viewport)
     except ValueError:
-        return error_response('Invalid sign-in browser size.',400)
+        return error_response('Invalid sign-in browser size.', 400)
+    if token is None:
+        # The sidecar drives one visible browser at a time, so a second account's
+        # sign-in is refused rather than silently stealing the first one's window.
+        return jsonify(status), 409
     response = jsonify(dict(status, url="/accounts/youtube"))
     response.set_cookie(_youtube_browser_sessions.COOKIE_NAME, token,
                         max_age=int(_youtube_browser_sessions.lease_ttl),
@@ -6266,38 +8048,36 @@ def youtube_browser_session_start():
     return response
 
 
+@app.route("/api/youtube/browser-session/start", methods=["POST"])
+def youtube_browser_session_start():
+    if not _logged_in():
+        return error_response("Sign in to connect YouTube Music.", 401)
+    return _browser_session_start(_browser_owner_id())
+
+
 @app.route("/api/youtube/browser-session/status", methods=["GET"])
 def youtube_browser_session_status():
     if not _logged_in():
-        return error_response("Owner session required.", 401)
-    return jsonify(_youtube_browser_sessions.poll())
+        return error_response("Sign in to connect YouTube Music.", 401)
+    return jsonify(_youtube_browser_sessions.poll(_browser_owner_id()))
 
 
 @app.route("/api/youtube/browser-session/retry", methods=["POST"])
 def youtube_browser_session_retry():
     if not _logged_in():
-        return error_response("Owner session required.", 401)
-    viewport=(request.get_json(silent=True) or {}).get('viewport')
-    try:
-        token, status = _youtube_browser_sessions.start(_browser_owner_id(), viewport=viewport) if viewport is not None else _youtube_browser_sessions.start(_browser_owner_id())
-    except ValueError:
-        return error_response('Invalid sign-in browser size.',400)
-    response = jsonify(dict(status, url="/accounts/youtube"))
-    response.set_cookie(_youtube_browser_sessions.COOKIE_NAME, token,
-                        max_age=int(_youtube_browser_sessions.lease_ttl), secure=app.config['SESSION_COOKIE_SECURE'],
-                        httponly=True, samesite='Lax', path='/')
-    return response
+        return error_response("Sign in to connect YouTube Music.", 401)
+    return _browser_session_start(_browser_owner_id())
 
 
 @app.route("/api/youtube/browser-session/stop", methods=["POST"])
 def youtube_browser_session_stop():
     if not _logged_in():
-        return error_response("Owner session required.", 401)
+        return error_response("Sign in to connect YouTube Music.", 401)
     if not _youtube_browser_sessions.authorize(_browser_owner_id(), request.cookies.get(_youtube_browser_sessions.COOKIE_NAME)):
         # Completion already revokes its lease; a late Close must not stop a
         # newer sign-in started on another device.
         return error_response("Sign-in session expired.", 403)
-    _youtube_browser_sessions.revoke()
+    _youtube_browser_sessions.revoke(_browser_owner_id())
     response = jsonify({"success": True})
     response.delete_cookie(_youtube_browser_sessions.COOKIE_NAME, path='/')
     return response
@@ -6306,13 +8086,14 @@ def youtube_browser_session_stop():
 @app.route("/api/youtube/browser-session/open-youtube", methods=["POST"])
 def youtube_browser_session_open_youtube():
     if not _logged_in():
-        return error_response("Owner session required.", 401)
-    if not _youtube_browser_sessions.authorize(_browser_owner_id(), request.cookies.get(_youtube_browser_sessions.COOKIE_NAME)):
-        # Completion already revokes its lease; a late Close must not stop a
-        # newer sign-in started on another device.
+        return error_response("Sign in to connect YouTube Music.", 401)
+    # A late command from a stale tab must not drive another sign-in that has
+    # since replaced this identity's lease.
+    if not _youtube_browser_sessions.authorize(
+            _browser_owner_id(), request.cookies.get(_youtube_browser_sessions.COOKIE_NAME)):
         return error_response("Sign-in session expired.", 403)
     try:
-        return jsonify(_youtube_browser_sessions.open_youtube())
+        return jsonify(_youtube_browser_sessions.open_youtube(_browser_owner_id()))
     except Exception:
         return error_response("Browser window is unavailable.", 503)
 
@@ -6320,13 +8101,12 @@ def youtube_browser_session_open_youtube():
 @app.route("/api/youtube/browser-session/capture", methods=["POST"])
 def youtube_browser_session_capture():
     if not _logged_in():
-        return error_response("Owner session required.", 401)
-    if not _youtube_browser_sessions.authorize(_browser_owner_id(), request.cookies.get(_youtube_browser_sessions.COOKIE_NAME)):
-        # Completion already revokes its lease; a late Close must not stop a
-        # newer sign-in started on another device.
+        return error_response("Sign in to connect YouTube Music.", 401)
+    if not _youtube_browser_sessions.authorize(
+            _browser_owner_id(), request.cookies.get(_youtube_browser_sessions.COOKIE_NAME)):
         return error_response("Sign-in session expired.", 403)
     try:
-        return jsonify(_youtube_browser_sessions.request_capture()), 202
+        return jsonify(_youtube_browser_sessions.request_capture(_browser_owner_id())), 202
     except Exception:
         return error_response("Browser window is unavailable.", 503)
 
@@ -6344,17 +8124,34 @@ def account_signin_page(provider):
         return redirect('/login')
     if provider not in ('amazon', 'youtube'):
         abort(404)
-    return _no_store(app.make_response(render_template('account_signin.html', provider=provider, asset_v=_STATIC_VERSION)))
+    as_token = ''
+    return_to = ''
+    target_name = ''
+    if provider == 'youtube' and request.args.get('as'):
+        target = _browser_as_target()
+        if target:
+            as_token = request.args.get('as')
+            return_to = '/admin/users/' + account_user_id(target) + '/'
+            try:
+                target_name = (_multiuser_layer.accounts.get_user(
+                    account_user_id(target)) or {}).get('username') or ''
+            except Exception:
+                target_name = ''
+    return _no_store(app.make_response(render_template(
+        'account_signin.html', provider=provider, asset_v=_STATIC_VERSION,
+        as_token=as_token, return_to=return_to, target_name=target_name)))
 
 
 @app.post('/api/youtube/browser-session/choose-account')
 def youtube_browser_choose_account():
     if not _logged_in():
-        return error_response('Owner session required.',401)
-    if not _youtube_browser_sessions.authorize(_browser_owner_id(), request.cookies.get(_youtube_browser_sessions.COOKIE_NAME)):
-        return error_response('Sign-in session expired.',403)
+        return error_response('Sign in to connect YouTube Music.', 401)
+    if not _youtube_browser_sessions.authorize(
+            _browser_owner_id(), request.cookies.get(_youtube_browser_sessions.COOKIE_NAME)):
+        return error_response('Sign-in session expired.', 403)
     try:
-        return jsonify(_youtube_browser_sessions.controller.call('/interactive/choose-account','POST'))
+        with BROKER.lock, _youtube_browser_sessions._lock, browser_scope(_browser_owner_id()):
+            return jsonify(_youtube_browser_sessions.controller.call('/interactive/choose-account','POST'))
     except Exception:
         return error_response('Sign-in browser is not ready.',503)
 
@@ -6362,17 +8159,504 @@ def youtube_browser_choose_account():
 @app.route('/api/youtube/browser-session/surface', methods=['GET', 'POST'])
 def youtube_browser_surface():
     if not _logged_in():
-        return error_response('Owner session required.', 401)
-    token=request.cookies.get(_youtube_browser_sessions.COOKIE_NAME)
-    if not _youtube_browser_sessions.authorize(_browser_owner_id(), token):
+        return error_response('Sign in to connect YouTube Music.', 401)
+    if not _youtube_browser_sessions.authorize(
+            _browser_owner_id(), request.cookies.get(_youtube_browser_sessions.COOKIE_NAME)):
         return error_response('Sign-in session expired. Start again.', 403)
     try:
         path='/interactive/frame' if request.method == 'GET' else '/interactive/input'
-        data=_youtube_browser_sessions.controller.call(path, request.method,
-            payload=request.get_json(silent=True) or {}) if request.method == 'POST' else _youtube_browser_sessions.controller.call(path)
+        with BROKER.lock, _youtube_browser_sessions._lock, browser_scope(_browser_owner_id()):
+            data=_youtube_browser_sessions.controller.call(path, request.method,
+                payload=request.get_json(silent=True) or {}) if request.method == 'POST' else _youtube_browser_sessions.controller.call(path)
         return _no_store(app.make_response(jsonify(data)))
     except Exception:
         return error_response('Sign-in browser is not ready. Try again.', 503)
+
+
+# Scripted Google sign-in: the user types each answer into Music Box's own
+# form and the sidecar's automation ladder submits it into a headless
+# Chromium. No screenshot surface, no remote keyboard. The sidecar keeps the
+# page open between steps, so the server guards the one browser with a claim
+# that expires when the person stops answering.
+
+_YOUTUBE_FORM_BUSY = ('Another sign-in is using the browser right now. '
+                      'Try again in a minute.')
+_YOUTUBE_FORM_TTL = 300.0
+_google_form_guard = threading.Lock()
+_google_form_holder = ['']
+_google_form_expires = [0.0]
+
+
+def _google_form_claim(identity):
+    with _google_form_guard:
+        holder, expires = _google_form_holder[0], _google_form_expires[0]
+        now = time.monotonic()
+        if holder and holder != identity and now < expires:
+            return False
+        _google_form_holder[0] = identity
+        _google_form_expires[0] = now + _YOUTUBE_FORM_TTL
+        return True
+
+
+def _google_form_renew(identity):
+    with _google_form_guard:
+        if _google_form_holder[0] == identity:
+            _google_form_expires[0] = time.monotonic() + _YOUTUBE_FORM_TTL
+
+
+def _google_form_release(identity):
+    if has_request_context():
+        from browser_coordination import BROKER
+        supplied = (request.get_json(silent=True) or {}).get("attempt_id")
+        if supplied and BROKER.token and supplied != BROKER.token:
+            return
+    with _google_form_guard:
+        if _google_form_holder[0] == identity:
+            _google_form_holder[0] = ''
+            _google_form_expires[0] = 0.0
+
+
+def _google_form_held_by(identity):
+    with _google_form_guard:
+        return (_google_form_holder[0] == identity
+                and time.monotonic() < _google_form_expires[0])
+
+
+def _youtube_form_sidecar(path, payload=None, method='POST'):
+    """One scripted sidecar step. Returns the answer dict, or None when the
+    sidecar itself could not be reached."""
+    try:
+        with browser_scope(_browser_owner_id(), request.get_json(silent=True).get('attempt_id') if has_request_context() and isinstance(request.get_json(silent=True), dict) else None):
+            answer = _youtube_auto_login_controller.call(path, method, payload)
+            if isinstance(answer, dict) and answer.get("attempt_id") and has_request_context():
+                request.environ["musicbox.auth_attempt"] = answer["attempt_id"]
+            return answer
+    except Exception:
+        logger.warning('YouTube form sign-in sidecar call %s failed', path, exc_info=True)
+        return None
+
+
+def _youtube_form_stop(profile, identity):
+    """Release the sidecar browser and this identity's claim on it."""
+    if not _google_form_held_by(identity):
+        return
+    _youtube_form_sidecar('/google/stop', {'profile': profile})
+    _google_form_release(identity)
+
+
+# The only ways this popup offers to verify.  Google's chooser can also list a
+# passkey or a recovery email; neither can be finished by typing an answer here,
+# so they are deliberately absent.
+_YOUTUBE_VERIFY_METHODS = (
+    {'value': 'totp', 'label': 'Authenticator code'},
+    {'value': 'phone', 'label': 'Text message code'},
+    {'value': 'backup', 'label': 'Backup code'},
+)
+_YOUTUBE_METHOD_VALUES = {method['value'] for method in _YOUTUBE_VERIFY_METHODS}
+
+
+def _method_state(message):
+    return {'state': 'need_method', 'message': message,
+            'options': [dict(method) for method in _YOUTUBE_VERIFY_METHODS]}
+
+
+def _masked_phone(value):
+    """The sidecar's masked number, re-masked here so only four digits survive.
+
+    Two digits are enough when Google itself only prints the tail ("a code at
+    •••50"); showing that tail is what lets the person tell which phone rang.
+    """
+    digits = re.sub(r'\D', '', str(value or ''))
+    return f'•••• {digits[-4:]}' if len(digits) >= 2 else ''
+
+
+def _captcha_state(answer):
+    answer = answer or {}
+    # A step answer nests the picture's shape under ``captcha``; the capture
+    # answer carries the same keys at the top because the picture is the answer.
+    meta = answer.get('captcha')
+    if not isinstance(meta, dict):
+        meta = answer
+    typed = bool(meta.get('text'))
+    message = ('Google wants a security check. Type the characters you see.'
+               if typed else
+               'Google wants a security check. Tap every picture that matches the '
+               'prompt, then choose Verify.')
+    return {'state': 'need_captcha', 'message': message, 'text': typed,
+            'hint': str(meta.get('hint') or '')[:160]}
+
+
+def _youtube_form_map(owner, profile, answer):
+    """One sidecar verdict, as the sign-in form's next state."""
+    answer = answer or {}
+    outcome = answer.get('outcome') or 'unsupported'
+    detail = (answer.get('detail') or '').strip()
+    if outcome == 'signed_in':
+        _google_form_renew(owner)
+        return _youtube_form_capture(owner, profile)
+    if outcome in ('need_totp', 'need_backup_code', 'bad_code'):
+        _google_form_renew(owner)
+        return {'state': 'need_code',
+                'kind': 'backup' if outcome == 'need_backup_code' else 'totp',
+                'different': True,
+                'message': ('That code was not accepted. Check it and try again.'
+                            if outcome == 'bad_code' else
+                            'Enter one of your backup codes.' if outcome == 'need_backup_code'
+                            else 'Enter the code from your authenticator app.')}
+    if outcome == 'need_phone':
+        _google_form_renew(owner)
+        phone = _masked_phone(answer.get('phone'))
+        return {'state': 'need_code', 'kind': 'phone', 'different': True,
+                'message': (f'Google sent a code to the number ending {phone.split()[-1]}. '
+                            'Enter it below.' if phone else
+                            'Google sent a code to your phone. Enter it below.')}
+    if outcome == 'need_choice':
+        _google_form_renew(owner)
+        return _method_state('Choose how to verify it is you.')
+    if outcome == 'method_unavailable':
+        _google_form_renew(owner)
+        return _method_state('That way did not work for this account. '
+                             'Choose another.')
+    if outcome == 'need_passkey':
+        _google_form_renew(owner)
+        return _method_state('Google asked for a passkey, which this sign-in cannot '
+                             'answer. Choose a different way to verify.')
+    if outcome == 'need_prompt':
+        # The browser stays on the waiting page; approving on the phone
+        # navigates it, which the poll endpoint then reads.
+        _google_form_renew(owner)
+        prompt = str(answer.get('prompt') or '').strip()
+        devices = str(answer.get('devices') or '').strip()[:160]
+        message = (f'Google sent a notification to {devices}. Confirm it there, '
+                   'then continue.' if devices else
+                   'Google is waiting for you to confirm this sign-in on your phone '
+                   'or tablet.')
+        if prompt:
+            message += f' Tap {prompt} there so the numbers match.'
+        return {'state': 'need_prompt', 'different': True, 'message': message}
+    if outcome == 'captcha':
+        _google_form_renew(owner)
+        return _captcha_state(answer)
+    if outcome == 'browser_in_use':
+        _google_form_release(owner)
+        return {'state': 'busy', 'message': _YOUTUBE_FORM_BUSY}
+    _youtube_form_stop(profile, owner)
+    logger.info('YouTube form sign-in stopped at %s: %s', outcome, detail)
+    return {'state': 'error', 'message': youtube_auto_login.describe_outcome(outcome)}
+
+
+def _youtube_form_follow(owner, profile, answer, steps, auto=2):
+    """Answer the pages the server can answer itself, then report the first
+    one only a person can.
+
+    ``steps`` is the ordered list of scripted answers this request carries
+    (start carries the address and the password; later steps carry none).
+    ``auto`` bounds the consent hops, which are always ours to click.  The
+    verification chooser is deliberately *not* hopped: which way to prove the
+    account is the person's decision, not the sequence's."""
+    while True:
+        outcome = (answer or {}).get('outcome') or 'unsupported'
+        if outcome == 'consent' and auto > 0:
+            auto -= 1
+            answer = _youtube_form_sidecar('/google/consent', {'profile': profile})
+            if answer is None:
+                _youtube_form_stop(profile, owner)
+                return {'state': 'error',
+                        'message': 'The automatic sign-in stopped responding. Try again in a moment.'}
+            continue
+        matched = next((index for index, step in enumerate(steps)
+                        if step['expect'] == outcome), None)
+        if matched is None:
+            break
+        step = steps.pop(matched)
+        answer = _youtube_form_sidecar(step['path'], dict(step['payload'], profile=profile))
+        if answer is None:
+            _youtube_form_stop(profile, owner)
+            return {'state': 'error',
+                    'message': 'The automatic sign-in stopped responding. Try again in a moment.'}
+    return _youtube_form_map(owner, profile, answer)
+
+
+_CAPTURE_FAILURES = {
+    'signed_out': 'The sign-in finished, but YouTube Music stayed signed out. '
+                  'Try again.',
+    'timeout': 'The sign-in finished, but YouTube Music did not finish loading. '
+               'Try again.',
+    'not_signed_in': 'The sign-in browser closed before the session could be saved. '
+                     'Try again.',
+    'cancelled': 'The sign-in was cancelled before the session could be saved.',
+}
+
+
+def _youtube_form_capture(owner, profile):
+    """Turn the signed-in browser into this identity's saved session."""
+    answer = _youtube_form_sidecar('/google/capture', {'profile': profile}) or {}
+    if answer.get('outcome') != 'captured':
+        outcome = answer.get('outcome') or 'timeout'
+        if outcome == 'captcha':
+            # The browser is still on the check, so the person can clear it and
+            # the capture can be tried again without repeating the password.
+            _google_form_renew(owner)
+            return _captcha_state(answer)
+        _youtube_form_stop(profile, owner)
+        logger.warning('YouTube form sign-in could not be saved: %s at %s (%s)',
+                       outcome, answer.get('url') or '', answer.get('detail') or '')
+        return {'state': 'error',
+                'message': _CAPTURE_FAILURES.get(
+                    outcome,
+                    'Signed in, but the YouTube Music session could not be saved. '
+                    'Try again.')}
+    try:
+        _promote_youtube_browser_headers(answer.get('headers'), owner)
+    except Exception as exc:
+        logger.warning('YouTube form sign-in could not be saved: %s', exc, exc_info=True)
+        _youtube_form_stop(profile, owner)
+        return {'state': 'error',
+                'message': 'Signed in, but the YouTube Music session could not be saved. '
+                           'Try again.'}
+    cookies = answer.get('cookies') or ''
+    if cookies:
+        try:
+            _write_cookie_jar(cookies, _download_cookie_path(owner))
+        except Exception:
+            # The headers are the credential; a jar that cannot be written only
+            # costs the download path its authenticated formats.
+            logger.warning('YouTube form sign-in could not save download cookies', exc_info=True)
+    _invalidate_youtube_auth_caches(owner)
+    _youtube_browser_sessions.mark_connected(owner)
+    _youtube_form_stop(profile, owner)
+    logger.info('YouTube Music form sign-in completed for %s', owner)
+    return {'state': 'connected'}
+
+
+def _fenced_browser_capture(operation):
+    def capture(owner, profile):
+        expected = request.environ.get('musicbox.auth_attempt') or (request.get_json(silent=True) or {}).get('attempt_id')
+        with BROKER.lock:
+            if BROKER.owner != owner or not expected or BROKER.token != expected:
+                return {'state':'error', 'message':'This sign-in was replaced. Start again.'}
+            return operation(owner, profile)
+    return capture
+
+
+_youtube_form_capture = _fenced_browser_capture(_youtube_form_capture)
+
+
+def _youtube_form_guard_busy(owner):
+    """True when the one scripted browser belongs to someone else right now."""
+    if _google_form_held_by(owner):
+        return ''
+    if not _google_form_claim(owner):
+        return _YOUTUBE_FORM_BUSY
+    if getattr(_youtube_server_login, '_run_lock', None).locked():
+        _google_form_release(owner)
+        return 'The server is renewing its own YouTube session. Try again in a minute.'
+    return ''
+
+
+@app.after_request
+def _provider_attempt_response(response):
+    attempt = request.environ.get('musicbox.auth_attempt')
+    if attempt and response.is_json:
+        data = response.get_json()
+        if isinstance(data, dict) and 'state' in data:
+            response.set_data(app.json.dumps(dict(data, attempt_id=attempt)))
+    return response
+
+
+@app.post('/api/youtube/browser-session/form/start')
+def youtube_form_signin_start():
+    if not _logged_in():
+        return error_response('Sign in to connect YouTube Music.', 401)
+    body = request.get_json(silent=True) or {}
+    email = str(body.get('email') or '').strip()
+    password = str(body.get('password') or '')
+    if not email or not password:
+        return error_response('Enter your Google account email and password.', 400)
+    owner = _browser_owner_id()
+    busy = _youtube_form_guard_busy(owner)
+    if busy:
+        return jsonify({'state': 'busy', 'message': busy}), 409
+    profile = _browser_profile_key()
+    answer = _youtube_form_sidecar('/google/start', {'profile': profile, 'email': email})
+    if answer is None:
+        _google_form_release(owner)
+        return error_response(
+            'The automatic sign-in could not start. Try again in a moment.', 503)
+    steps = [
+        {'expect': 'need_identifier', 'path': '/google/identifier',
+         'payload': {'email': email}},
+        {'expect': 'need_password', 'path': '/google/password',
+         'payload': {'password': password}},
+    ]
+    return jsonify(_youtube_form_follow(owner, profile, answer, steps))
+
+
+@app.post('/api/youtube/browser-session/form/code')
+def youtube_form_signin_code():
+    if not _logged_in():
+        return error_response('Sign in to continue.', 401)
+    body = request.get_json(silent=True) or {}
+    code = str(body.get('code') or '').strip()
+    if not 4 <= len(code) <= 16 or not re.fullmatch(r'[A-Za-z0-9-]+', code):
+        return error_response('Enter the code exactly as your app shows it.', 400)
+    owner = _browser_owner_id()
+    attempt = (request.get_json(silent=True) or {}).get("attempt_id") if request.method == "POST" else request.args.get("attempt_id")
+    if not isinstance(attempt, str) or not attempt:
+        return error_response("Sign-in attempt required. Start again.", 409)
+    if not _google_form_held_by(owner):
+        return jsonify({'state': 'error', 'message': 'This sign-in has ended. Start again.'}), 409
+    profile = _browser_profile_key()
+    answer = _youtube_form_sidecar('/google/code', {'profile': profile, 'code': code})
+    if answer is None:
+        _youtube_form_stop(profile, owner)
+        return error_response(
+            'The automatic sign-in stopped responding. Try again in a moment.', 503)
+    return jsonify(_youtube_form_follow(owner, profile, answer, []))
+
+
+@app.post('/api/youtube/browser-session/form/methods')
+def youtube_form_signin_methods():
+    """Open the full chooser, then let the person pick one of the three ways."""
+    if not _logged_in():
+        return error_response('Sign in to continue.', 401)
+    owner = _browser_owner_id()
+    attempt = (request.get_json(silent=True) or {}).get("attempt_id") if request.method == "POST" else request.args.get("attempt_id")
+    if not isinstance(attempt, str) or not attempt:
+        return error_response("Sign-in attempt required. Start again.", 409)
+    if not _google_form_held_by(owner):
+        return jsonify({'state': 'error', 'message': 'This sign-in has ended. Start again.'}), 409
+    profile = _browser_profile_key()
+    answer = _youtube_form_sidecar('/google/methods', {'profile': profile})
+    if answer is None:
+        _youtube_form_stop(profile, owner)
+        return error_response(
+            'The automatic sign-in stopped responding. Try again in a moment.', 503)
+    return jsonify(_youtube_form_follow(owner, profile, answer, []))
+
+
+@app.post('/api/youtube/browser-session/form/method')
+def youtube_form_signin_method():
+    if not _logged_in():
+        return error_response('Sign in to continue.', 401)
+    body = request.get_json(silent=True) or {}
+    method = str(body.get('method') or '').strip()
+    if method not in _YOUTUBE_METHOD_VALUES:
+        return error_response('Choose one of the verification methods.', 400)
+    owner = _browser_owner_id()
+    attempt = (request.get_json(silent=True) or {}).get("attempt_id") if request.method == "POST" else request.args.get("attempt_id")
+    if not isinstance(attempt, str) or not attempt:
+        return error_response("Sign-in attempt required. Start again.", 409)
+    if not _google_form_held_by(owner):
+        return jsonify({'state': 'error', 'message': 'This sign-in has ended. Start again.'}), 409
+    profile = _browser_profile_key()
+    answer = _youtube_form_sidecar(
+        '/google/method', {'profile': profile, 'method': method})
+    if answer is None:
+        _youtube_form_stop(profile, owner)
+        return error_response(
+            'The automatic sign-in stopped responding. Try again in a moment.', 503)
+    return jsonify(_youtube_form_follow(owner, profile, answer, []))
+
+
+@app.get('/api/youtube/browser-session/form/captcha')
+def youtube_form_captcha():
+    """The security-check picture for this identity's sign-in, same-origin.
+
+    Served as a picture rather than JSON so the page's strict ``img-src 'self'``
+    policy keeps working and the capture never has to travel inside an answer.
+    """
+    if not _logged_in():
+        return error_response('Sign in to continue.', 401)
+    owner = _browser_owner_id()
+    attempt = (request.get_json(silent=True) or {}).get("attempt_id") if request.method == "POST" else request.args.get("attempt_id")
+    if not isinstance(attempt, str) or not attempt:
+        return error_response("Sign-in attempt required. Start again.", 409)
+    if not _google_form_held_by(owner):
+        return error_response('This sign-in has ended. Start again.', 409)
+    answer = _youtube_form_sidecar(
+        '/google/captcha?profile=' + quote(_browser_profile_key()), None, method='GET')
+    image = (answer or {}).get('image') or ''
+    if not image:
+        return error_response('No security check is waiting.', 404)
+    try:
+        picture = base64.b64decode(image, validate=True)
+    except (ValueError, TypeError):
+        return error_response('The security check could not be shown.', 503)
+    return _no_store(Response(picture, content_type='image/jpeg',
+                              headers={'Cache-Control': 'no-store'}))
+
+
+@app.post('/api/youtube/browser-session/form/captcha')
+def youtube_form_captcha_answer():
+    if not _logged_in():
+        return error_response('Sign in to continue.', 401)
+    body = request.get_json(silent=True) or {}
+    text = str(body.get('text') or '').strip()
+    points = body.get('points') or []
+    if text and len(text) > 120:
+        return error_response('That answer is too long.', 400)
+    if text and points:
+        return error_response('Answer the security check one way only.', 400)
+    if points:
+        if not isinstance(points, list) or not 1 <= len(points) <= 20:
+            return error_response('Choose the pictures the check asks for.', 400)
+        for point in points:
+            if (not isinstance(point, list) or len(point) != 2
+                    or not all(isinstance(value, (int, float))
+                               and not isinstance(value, bool) and 0 <= value <= 1
+                               for value in point)):
+                return error_response('Choose the pictures the check asks for.', 400)
+    if not text and not points:
+        return error_response('Answer the security check.', 400)
+    owner = _browser_owner_id()
+    attempt = (request.get_json(silent=True) or {}).get("attempt_id") if request.method == "POST" else request.args.get("attempt_id")
+    if not isinstance(attempt, str) or not attempt:
+        return error_response("Sign-in attempt required. Start again.", 409)
+    if not _google_form_held_by(owner):
+        return jsonify({'state': 'error', 'message': 'This sign-in has ended. Start again.'}), 409
+    profile = _browser_profile_key()
+    answer = _youtube_form_sidecar(
+        '/google/captcha', {'profile': profile, 'text': text, 'points': points})
+    if answer is None:
+        _youtube_form_stop(profile, owner)
+        return error_response(
+            'The automatic sign-in stopped responding. Try again in a moment.', 503)
+    return jsonify(_youtube_form_follow(owner, profile, answer, []))
+
+
+@app.post('/api/youtube/browser-session/form/poll')
+def youtube_form_signin_poll():
+    """Read the waiting page again after an out-of-band answer (phone prompt)."""
+    if not _logged_in():
+        return error_response('Sign in to continue.', 401)
+    owner = _browser_owner_id()
+    attempt = (request.get_json(silent=True) or {}).get("attempt_id") if request.method == "POST" else request.args.get("attempt_id")
+    if not isinstance(attempt, str) or not attempt:
+        return error_response("Sign-in attempt required. Start again.", 409)
+    if not _google_form_held_by(owner):
+        return jsonify({'state': 'error', 'message': 'This sign-in has ended. Start again.'}), 409
+    profile = _browser_profile_key()
+    answer = _youtube_form_sidecar('/google/state', None, method='GET')
+    if answer is None:
+        _youtube_form_stop(profile, owner)
+        return error_response(
+            'The automatic sign-in stopped responding. Try again in a moment.', 503)
+    if (answer.get('outcome') or 'idle') == 'idle':
+        _youtube_form_stop(profile, owner)
+        return jsonify({'state': 'error', 'message': 'This sign-in has ended. Start again.'})
+    return jsonify(_youtube_form_follow(owner, profile, answer, []))
+
+
+@app.post('/api/youtube/browser-session/form/stop')
+def youtube_form_signin_stop():
+    if not _logged_in():
+        return error_response('Sign in to cancel.', 401)
+    owner = _browser_owner_id()
+    if not (request.get_json(silent=True) or {}).get("attempt_id"):
+        return error_response("Sign-in attempt required.", 409)
+    _youtube_form_stop(_browser_profile_key(), owner)
+    return jsonify({'success': True})
 
 
 def _active_logged_out_echo():
@@ -6397,6 +8681,8 @@ def guard_logged_out_echo_controls():
         body=request.get_json(silent=True) or {}
         target=str(body.get('serial') or '')
         physical_target=target and not target.startswith('mobile:') and target != 'phone'
+        if not _alexa_access_enabled() and (physical_target or out['playback_output'] == 'alexa'):
+            return error_response('Amazon access is disabled. Choose a phone or browser.', 403, code='alexa_access_disabled')
         if getattr(alexa_remote.remote, 'connection_state', None) is False and (physical_target or out['playback_output']=='alexa'):
             return error_response('Sign in to Amazon to control Alexa, or choose another playback device.',409,code='amazon_login_required')
 
@@ -6430,8 +8716,143 @@ def alexa_volume():
     return jsonify({'volume': volume, 'available': True, 'stale': False})
 
 
+def _accept_verified_alexa_retry():
+    """Only a fresh, authenticated user play can release an auth-failure latch."""
+    kind = request.headers.get('X-Alexa-Request-Type', '')
+    intent = request.headers.get('X-Alexa-Intent-Name', '')
+    manual = (kind == 'IntentRequest' and intent in {
+        'PlaySongIntent', 'PlayArtistIntent', 'PlayAlbumIntent', 'StartPlaylistIntent', 'PlayAudio',
+        'PlayGenreIntent', 'AMAZON.ResumeIntent', 'AMAZON.NextIntent', 'AMAZON.PreviousIntent',
+        'SeekIntent', 'FastForwardIntent', 'RewindIntent', 'AMAZON.StartOverIntent', 'AMAZON.RepeatIntent'})
+    if not manual and kind != 'PlaybackController.PlayCommandIssued':
+        return False
+    try:
+        raw = request.headers.get('X-Alexa-Request-Timestamp', '')
+        at = datetime.fromisoformat(raw.replace('Z', '+00:00')).timestamp()
+    except (ValueError, TypeError, OverflowError):
+        return False
+    if not time.time()-60 <= at <= time.time()+5:
+        return False
+    with _np_lock:
+        since = _now_playing.get('alexa_intent_at') or 0
+        threshold = int(since) if '.' not in raw else since
+        if not _now_playing.get('_alexa_auth_blocked') or at < threshold:
+            return False
+        _now_playing.update(_alexa_auth_blocked=False, playback_error=None, alexa_intent_at=time.time())
+        _now_playing.pop('_playback_error_event', None)
+        if intent in ('AMAZON.ResumeIntent', 'PlayAudio') or kind == 'PlaybackController.PlayCommandIssued':
+            video_id = _now_playing.get('video_id')
+            if _valid_video_id(video_id):
+                # Resume the preserved failed selection, not an older DynamoDB song.
+                serial = _playback_output.snapshot().get('output_serial') or None
+                _arm_play(serial, video_id, _computed_position_ms(), kind='resume')
+    return True
+
+
+def _known_alexa_auth_failure():
+    """A revoked last-used skill credential cannot justify a music fallback."""
+    layer = _multiuser_layer
+    token_id = _now_playing.get('_alexa_verified_token_id')
+    if layer is None or not token_id:
+        return None
+    from multiuser.alexa_access import AccessDenied
+    try:
+        user, _credential = layer.alexa_access.current(token_id)
+    except AccessDenied:
+        return _alexa_auth_error('', 'alexa_access_denied')
+    if _player_identity_for_user_id(user['id']) != _current_identity():
+        return _alexa_auth_error('', 'alexa_access_denied')
+    return None
+
+
+def _stop_alexa_auth_failure(error, code=None, expected_video=None, expected_intent=None, expected_output=None):
+    failure = _alexa_auth_error(error, code)
+    if failure is None:
+        return False
+    with _np_lock:
+        output = _playback_output.snapshot()
+        if (output['playback_output'] != 'alexa'
+                or (expected_video is not None and _now_playing.get('video_id') != expected_video)
+                or (expected_intent is not None and _now_playing.get('alexa_intent_at') != expected_intent)
+                or (expected_output is not None and output['output_token'] != expected_output)):
+            return False
+        if _now_playing.get('_alexa_auth_blocked'):
+            return True
+        _reset_progress(_computed_position_ms())
+        _now_playing.update(playing=False, playback_processing=False, playback_confirmed=False,
+                            playback_error=failure, _alexa_auth_failure=failure, _alexa_auth_blocked=True, updated_at=time.time())
+        _now_playing['playback_revision'] = int(_now_playing.get('playback_revision', 0)) + 1
+        _now_playing['failed_playback_revision'] = _now_playing['playback_revision']
+        # Retire workers and callbacks from this attempt, even for the same song.
+        _now_playing['alexa_intent_at'] = time.time()
+        with _PENDING_DISPATCH_LOCK:
+            pending = list(_PENDING_DISPATCH.values())
+            _PENDING_DISPATCH.clear()
+        with _ARMED_PLAYS_LOCK:
+            _ARMED_PLAYS.clear()
+        with _TRIGGER_INFLIGHT_LOCK:
+            _TRIGGER_INFLIGHT.clear()
+    for entry in pending:
+        entry['timer'].cancel()
+    _notify_sse()
+    return True
+
+
+def _report_alexa_auth_denial(user_id, code):
+    # A late callback cannot cancel a newer user intent. Old clients without a
+    # request timestamp remain rejected but cannot write playback diagnostics.
+    try:
+        raw = request.headers.get('X-Alexa-Request-Timestamp', '')
+        at = datetime.fromisoformat(raw.replace('Z', '+00:00')).timestamp()
+    except (ValueError, TypeError, OverflowError):
+        return False
+    if at > time.time() + 5:
+        return False
+    if time.time() - at > 60:
+        request.environ['musicbox.alexa_denial_stale'] = True
+        return False
+    identity_token = _PLAYER_IDENTITY.set(_player_identity_for_user_id(user_id))
+    try:
+        with _np_lock:
+            intent = _now_playing.get('alexa_intent_at') or 0
+            threshold = int(intent) if '.' not in raw else intent
+            if at < threshold:
+                request.environ['musicbox.alexa_denial_stale'] = True
+                return False
+            if not (_now_playing.get('playback_processing') or _now_playing.get('playing')):
+                return False
+            kind = request.headers.get('X-Alexa-Request-Type', '')
+            if kind.startswith(('AudioPlayer.', 'PlaybackController.')):
+                supplied = request.headers.get('X-Alexa-Playback-Token', '')
+                parts = supplied.split('|')
+                actual = _now_playing.get('alexa_token')
+                # A failure while buffering the successor can name that song
+                # while currentPlaybackState still proves the active stream.
+                current = request.headers.get('X-Alexa-Current-Playback-Token')
+                queued_current = kind == 'AudioPlayer.PlaybackFailed' and actual and current == actual
+                if (len(parts) < 2 or parts[1] != _now_playing.get('video_id')) and not queued_current:
+                    request.environ['musicbox.alexa_denial_stale'] = True
+                    return False
+                if actual and actual != supplied and not _now_playing.get('playback_processing') and not queued_current:
+                    request.environ['musicbox.alexa_denial_stale'] = True
+                    return False
+            out = _playback_output.snapshot()
+            if out['playback_output'] != 'alexa':
+                return False
+            video, output = _now_playing.get('video_id'), out['output_token']
+        stopped = _stop_alexa_auth_failure('', code, video, intent, output)
+        if not stopped:
+            request.environ['musicbox.alexa_denial_stale'] = True
+        return stopped
+    finally:
+        _PLAYER_IDENTITY.reset(identity_token)
+
+
 def _fail_play_dispatch(video_id, intent, output_token, error):
     """A late offline response must never stop a newer song or phone handoff."""
+    if _alexa_auth_error(error):
+        return _stop_alexa_auth_failure(error, expected_video=video_id,
+            expected_intent=intent, expected_output=output_token)
     with _np_lock:
         output = _playback_output.snapshot()
         if (output['playback_output'] != 'alexa' or output['output_token'] != output_token
@@ -6452,6 +8873,10 @@ def _device_dispatch_failed(error):
     no longer under our control, so stop claiming it's live — this freezes the
     progress bar on every open remote instead of ticking on forever — then
     surface a clear 502."""
+    failure = _alexa_auth_error(error)
+    if failure:
+        _stop_alexa_auth_failure(error)
+        return error_response(failure['message'], 403, code=failure['code'])
     with _np_lock:
         _reset_progress(_computed_position_ms())
         _now_playing.update(playing=False, playback_processing=False, playback_confirmed=False)
@@ -6472,6 +8897,8 @@ def alexa_command():
         _claim_alexa_output(serial, expected_owner=body.get('output_owner'),
                             expected_token=body.get('output_token'),
                             source_paused=body.get('phone_paused') is True)
+        with _np_lock:
+            _now_playing['_alexa_auth_blocked'] = False
     if action == 'pause' and _playback_output.snapshot()['playback_output'] == 'phone':
         # Stop a stale Echo transport without rewriting the active phone's mirrored state.
         error = alexa_remote.remote.command(serial, action, body.get('value'))
@@ -6536,13 +8963,16 @@ def alexa_command():
         # that never had one) would otherwise show --:-- forever once they
         # become current -- mirrors the same fallback in alexa_play_track.
         if not int(item.get('duration_ms') or 0):
-            threading.Thread(target=_lookup_and_update_np, args=(video_id,), daemon=True).start()
+            _bg_thread(_lookup_and_update_np, args=(video_id,))
         return jsonify({'ok': True, 'now_playing': item, 'queue_index': target_idx})
+    with _np_lock:
+        command_fence = (_now_playing.get('video_id'), _now_playing.get('alexa_intent_at'),
+                         _playback_output.snapshot()['output_token'])
     resume_position_ms = None
     previous_now_playing = None
     if action in ('play', 'pause'):
         with _np_lock:
-            previous_now_playing = copy.deepcopy(_now_playing)
+            previous_now_playing = copy.deepcopy(dict(_now_playing))
     if action == 'play':
         # Stage the pending state before sending the command. Alexa can deliver
         # PlaybackStarted while remote.command() is still waiting for Amazon's
@@ -6563,6 +8993,8 @@ def alexa_command():
             _now_playing['alexa_intent_at'] = time.time()
             staged_video_id = _now_playing.get('video_id', '')
             staged_revision = int(_now_playing.get('playback_revision', 0))
+            command_fence = (staged_video_id, _now_playing.get('alexa_intent_at'),
+                             _playback_output.snapshot()['output_token'])
         _notify_sse()
         # Prepare the URL while Alexa handles resume; paused current bytes remain.
         if _valid_video_id(staged_video_id):
@@ -6595,10 +9027,7 @@ def alexa_command():
             # falsely claiming playback the user must fix with another
             # pause/play. Bound to the staged revision so a newer user intent
             # (pause/seek/track change) is never disturbed.
-            threading.Thread(
-                target=_watch_resume_confirmation,
-                args=(serial, staged_video_id, staged_revision),
-                daemon=True).start()
+            _bg_thread(_watch_resume_confirmation, args=(serial, staged_video_id, staged_revision))
     elif action == 'pause':
         # Freeze the progress anchor before dispatch for the same reason: the
         # skill's PlaybackStopped event may arrive before the HTTP call returns.
@@ -6611,6 +9040,8 @@ def alexa_command():
             _now_playing['playback_revision'] = int(_now_playing.get('playback_revision', 0)) + 1
             _now_playing['updated_at'] = time.time()
             paused_video_id = _now_playing.get('video_id', '')
+            command_fence = (paused_video_id, _now_playing.get('alexa_intent_at'),
+                             _playback_output.snapshot()['output_token'])
         _notify_sse()
         # Refresh the cache mtime at pause time so TTL counts from the pause,
         # not the original download; the file is also pinned while selected.
@@ -6618,6 +9049,11 @@ def alexa_command():
     else:
         error = alexa_remote.remote.command(serial, action, body.get("value"))
     if error:
+        failure = _alexa_auth_error(error)
+        if failure:
+            _stop_alexa_auth_failure(error, expected_video=command_fence[0],
+                expected_intent=command_fence[1], expected_output=command_fence[2])
+            return error_response(failure['message'], 403, code=failure['code'])
         if previous_now_playing is not None:
             # A rejected command must not leave every browser stuck in an
             # unconfirmed pending state. Restore the pre-command snapshot only
@@ -6723,7 +9159,7 @@ def alexa_seek():
     with _np_lock:
         if _now_playing.get('video_id') != video_id:
             return error_response('playback changed while seeking', 409)
-        previous = copy.deepcopy(_now_playing)
+        previous = copy.deepcopy(dict(_now_playing))
         _reset_progress(position_ms)
         _now_playing['alexa_intent_at'] = time.time()
         _now_playing.pop('_alexa_finished_token',None)
@@ -6766,7 +9202,7 @@ def _reconcile_buffered_alexa_start(token, offset_ms=0, event_at=None, second_pr
     REPLACE_ENQUEUED has no expectedPreviousToken field. Even with validation,
     a track can finish between the skill response and device receipt.
     """
-    parts = token.split('|', 2)
+    parts = token.split('|')[:3]
     if len(parts) != 3 or not parts[2].startswith('q'):
         return None  # Voice/new plays and old skill tokens retain their behavior.
     with _np_lock:
@@ -6892,7 +9328,7 @@ def alexa_state_event():
             if queued_offset < 5000 and not _jam_guest():
                 _record_listen(item['video_id'], item.get('title', ''), item.get('artist', ''), _thumbnail_url(item.get('thumbnail')))
             if not int(item.get('duration_ms') or 0):
-                threading.Thread(target=_lookup_and_update_np, args=(item['video_id'],), daemon=True).start()
+                _bg_thread(_lookup_and_update_np, args=(item['video_id'],))
             return jsonify({'ok': True})
         elif reconciliation is not None:
             if reconciliation.get('correcting') or reconciliation.get('ignored') == 'queue ended':
@@ -6944,6 +9380,10 @@ def alexa_state_event():
     sys.stderr.flush()
     if event == 'failed':
         failed_id = body.get('video_id', '')
+        failure = _alexa_auth_error(body.get('error_message'), body.get('error_type'))
+        if failure and _valid_video_id(failed_id):
+            stopped = _stop_alexa_auth_failure('', failure['code'], expected_video=failed_id)
+            return jsonify({'ok': True, 'authentication_failed': stopped})
         with _np_lock:
             if not _valid_video_id(failed_id) or failed_id != _now_playing.get('video_id'):
                 return jsonify({'ok': True, 'ignored': 'stale or unidentified playback failure'})
@@ -6963,11 +9403,11 @@ def alexa_state_event():
             def recover_failure():
                 if (_still_relevant_video(failed_id)
                         and _now_playing.get('playback_revision') == failed_revision
-                        and _playback_output.snapshot()['playback_output'] == 'alexa'):
+                        and _playback_output.snapshot()['playback_output'] == 'alexa'
+                        and _is_dead_or_flaky_video(failed_id)):
+                    # Service, auth and device failures must not consume the queue.
                     _auto_advance_after_failure(serial, failed_id, str(body.get('error_type') or 'server_issue'))
-            timer = threading.Timer(1.0, recover_failure)
-            timer.daemon = True
-            timer.start()
+            timer = _delayed(1.0, recover_failure)
         return jsonify({'ok': True})
     if event == 'stopped':
         # Newer skills report which track stopped. When a voice play
@@ -7192,7 +9632,7 @@ def alexa_state_event():
                 # duration up in the background, same fallback as the
                 # not-in-queue branch below.
                 if not int(matched.get('duration_ms') or 0):
-                    threading.Thread(target=_lookup_and_update_np, args=(video_id,), daemon=True).start()
+                    _bg_thread(_lookup_and_update_np, args=(video_id,))
             else:
                 # queue_index=-1: this track isn't in the visible queue, so the
                 # old highlight is wrong until _refresh_radio_queue rebuilds it.
@@ -7208,7 +9648,7 @@ def alexa_state_event():
                 # backfills the real title/artist/thumbnail once it lands.
                 if offset_in_ms < 5000:
                     _record_listen(video_id, '', '', '')
-                threading.Thread(target=_lookup_and_update_np, args=(video_id,), daemon=True).start()
+                _bg_thread(_lookup_and_update_np, args=(video_id,))
             # ---- Auto-skip a stale next track ----
             # The skill's ENQUEUE directive is already sitting in the Echo's
             # AudioPlayer queue when a web reorder lands in the final ~30-40s
@@ -7259,8 +9699,7 @@ def alexa_state_event():
                                                    expected_next.get('artist', ''),
                                                    _thumbnail_url(expected_next.get('thumbnail')))
                                 if not int(expected_next.get('duration_ms') or 0):
-                                    threading.Thread(target=_lookup_and_update_np,
-                                                     args=(skip_vid,), daemon=True).start()
+                                    _bg_thread(_lookup_and_update_np, args=(skip_vid,))
             live_queue = _get_now_playing().get('queue') or []
             has_playable_queue = (len(live_queue) > 1
                                   and any(item.get('video_id') == video_id
@@ -7271,7 +9710,7 @@ def alexa_state_event():
             # here creates two independent radio requests; whichever finishes
             # first wins, so Alexa and the website can immediately diverge.
             if not has_playable_queue and not skill_queue_received:
-                threading.Thread(target=_refresh_radio_queue, args=(video_id,), daemon=True).start()
+                _bg_thread(_refresh_radio_queue, args=(video_id,))
         else:
             # Same track re-starting (a seek) -- OR a redundant confirmation
             # for a track _confirm_stream_delivery already confirmed (that
@@ -7351,15 +9790,14 @@ def alexa_state_event():
                                       and any(item.get('video_id') == video_id
                                               for item in live_queue))
                 if not has_playable_queue and not skill_queue_received:
-                    threading.Thread(target=_refresh_radio_queue, args=(video_id,), daemon=True).start()
+                    _bg_thread(_refresh_radio_queue, args=(video_id,))
         # Pre-download the next few songs in the queue now that playback has
         # started. This gives the full song duration (~3-5 min) to download,
         # instead of racing against PlaybackNearlyFinished's ~30s window.
         queue = _now_playing.get('queue', [])
         idx = _now_playing.get('queue_index', 0)
         if len(queue) > 1:
-            threading.Thread(target=_prewarm_queue_audio,
-                             args=(queue, idx), daemon=True).start()
+            _bg_thread(_prewarm_queue_audio, args=(queue, idx))
     elif event == 'finished':
         with _np_lock:
             _now_playing['_alexa_finished_token'] = event_token
@@ -7372,8 +9810,7 @@ def alexa_state_event():
         # The Echo starts the pre-buffered next track right away; if the
         # matching 'started' webhook gets lost, promote it ourselves after a
         # grace period so the card doesn't stay wedged on the finished song.
-        threading.Thread(target=_promote_after_finish,
-                         args=(prev_video_id,event_token,finish_intent,finish_output), daemon=True).start()
+        _bg_thread(_promote_after_finish, args=(prev_video_id,event_token,finish_intent,finish_output))
     return jsonify({'ok': True})
 
 
@@ -7381,18 +9818,16 @@ def alexa_state_event():
 # ---- Home feed (categorized recommendation rows) ----
 _HOME_CACHE_TTL = 3 * 60
 _HOME_FORCE_MIN_INTERVAL = 30
-_home_rebuild_lock = threading.Lock() # single flight
 
-async def _fetch_home_sources():
+async def _fetch_home_sources(identity):
     sources = {}
 
     # Concurrently fetch ytmusic parts
     async def get_native_home():
         try:
-            ytm = await asyncio.to_thread(_get_ytmusic_home)
             return await asyncio.wait_for(
-                asyncio.to_thread(_with_youtube_auth_renewal,
-                                  lambda: _get_ytmusic_home().get_home(limit=40)),
+                asyncio.to_thread(lambda: _with_youtube_auth_renewal(
+                    lambda: _get_ytmusic_home(identity).get_home(limit=40), identity)),
                 timeout=home_feed.SOURCE_TIMEOUTS['ytmusic_home'])
         except Exception as e:
             logger.warning(f"ytm_home failed: {e}")
@@ -7422,18 +9857,18 @@ async def _fetch_home_sources():
 @app.route("/api/home/", methods=["GET"])
 def get_home():
     force = request.args.get('refresh') == '1'
+    identity = _current_identity()
 
-    with _home_lock:
-        data = _home_cache['data']
-        age = time.time() - _home_cache['built_at']
-
+    data, age = _home_cache.get(identity)
     fresh_enough = age < _HOME_CACHE_TTL
 
     if fresh_enough and data and (not force or age < _HOME_FORCE_MIN_INTERVAL):
         return jsonify(data)
 
-    # Single flight rebuild
-    acquired = _home_rebuild_lock.acquire(blocking=False)
+    # Single flight rebuild, per identity: one account's rebuild must neither block
+    # another account nor hand it a feed built from somebody's library.
+    rebuild = _home_cache.lock(identity)
+    acquired = rebuild.acquire(blocking=False)
     if not acquired:
         # If we have stale data, serve it immediately while rebuild happens in background
         if data:
@@ -7441,23 +9876,19 @@ def get_home():
             stale_data['stale'] = True
             return jsonify(stale_data)
         # Cold start, we must wait
-        _home_rebuild_lock.acquire()
+        rebuild.acquire()
 
     try:
         # Check cache again after acquiring lock in case it was built while waiting
-        with _home_lock:
-            data = _home_cache['data']
-            age = time.time() - _home_cache['built_at']
+        data, age = _home_cache.get(identity)
         fresh_enough = age < _HOME_CACHE_TTL
         if fresh_enough and data and (not force or age < _HOME_FORCE_MIN_INTERVAL):
             return jsonify(data)
 
-        sources = asyncio.run(_fetch_home_sources())
+        sources = asyncio.run(_fetch_home_sources(identity))
         feed = home_feed.assemble_home_feed(sources)
 
-        with _home_lock:
-            _home_cache['data'] = feed
-            _home_cache['built_at'] = time.time()
+        _home_cache.set(identity, feed)
 
         return jsonify(feed)
     except Exception as e:
@@ -7477,7 +9908,7 @@ def get_home():
             "shelves": []
         })
     finally:
-        _home_rebuild_lock.release()
+        rebuild.release()
 
 
 # ---- Blank-state recommendations (web remote) ----
@@ -7492,6 +9923,9 @@ _RECS_CACHE_TTL = 3 * 60
 # fire their own 5-radio YT Music build (and stack up waitress threads behind
 # _recs_lock). Within this window a forced refresh serves the cache instead.
 _RECS_FORCE_MIN_INTERVAL = 60
+# Deliberately shared rather than per identity: this mix is seeded from public charts
+# (the history seed below is currently empty), so splitting it would only multiply the
+# calls to YouTube. Revisit if history-based seeding comes back.
 _recs_cache = {'built_at': 0, 'items': []}
 _recs_lock = threading.Lock()
 
@@ -7677,8 +10111,11 @@ async def remove_history_item(video_id):
 
 @app.route("/alexa/like/", methods=["GET", "POST"])
 async def alexa_like():
-    if request.method == 'GET' and not _valid_key_supplied():
-        return error_response('Use an authenticated JSON POST to change likes.', 405)
+    # A top-level cross-site GET can carry a SameSite=Lax browser cookie.
+    # Keep the key-authenticated skill's GET contract; browser mutations must
+    # use the JSON POST path protected by the session middleware.
+    if request.method == 'GET' and not (_valid_key_supplied() or request.environ.get('musicbox.alexa_token_authorized')):
+        return error_response('Use POST to change liked songs.', 405)
     from ytmusicapi.auth.types import AuthType
     yt = _get_ytmusic_home()
     if yt.auth_type == AuthType.UNAUTHORIZED:
@@ -7699,8 +10136,7 @@ async def alexa_like():
         return jsonify({'error': 'action must be LIKE, DISLIKE, or INDIFFERENT'}), 400
     try:
         await asyncio.to_thread(yt.rate_song, video_id, action)
-        if '_liked_songs_cache' in globals():
-            _liked_songs_cache.update(video_id, action == 'LIKE')
+        _liked_cache().update(video_id, action == 'LIKE')
         _bump_liked_version()
         return jsonify({'ok': True, 'action': action, 'video_id': video_id})
     except Exception as e:
@@ -7718,10 +10154,11 @@ async def api_get_liked_songs():
     if yt.auth_type == AuthType.UNAUTHORIZED:
         return jsonify({'liked_songs': []}), 200  # not an error; just no data
     try:
+        identity = _current_identity()
         def load():
-            raw = _get_ytmusic_home().get_liked_songs(1000)
+            raw = _get_ytmusic_home(identity).get_liked_songs(1000)
             return [t['videoId'] for t in (raw.get('tracks') or []) if t.get('videoId')]
-        video_ids, stale = await asyncio.to_thread(_liked_songs_cache.get, load)
+        video_ids, stale = await asyncio.to_thread(_liked_cache(identity).get, load)
         return jsonify({'liked_songs': video_ids, 'stale': stale})
     except Exception as e:
         logger.debug('[api/liked_songs] refresh unavailable: %s', type(e).__name__)
@@ -7916,6 +10353,11 @@ async def alexa_play():
     query = str(body.get("query") or "").strip()
     if not serial or not query:
         return error_response('missing "serial" or "query"', 400)
+    with _np_lock:
+        _now_playing['_alexa_auth_blocked'] = False
+        _now_playing['alexa_intent_at'] = time.time()
+        requested_intent = _now_playing['alexa_intent_at']
+        requested_output = _playback_output.snapshot()['output_token']
     logger.info("[alexa/play] query=%r serial=%s", query, serial)
     # For plain-text queries (non-URLs), skip the blocking resolve and fire
     # everything in the background so the web remote gets an instant response.
@@ -8017,7 +10459,7 @@ async def alexa_play():
                 logger.exception("")
                 _update_now_playing(playing=False)
 
-        threading.Thread(target=_bg_play_direct_link, daemon=True).start()
+        _bg_thread(_bg_play_direct_link)
         logger.info("[alexa/play] dispatched direct link video_id=%s", direct_video_id)
         return jsonify({'ok': True, 'now_playing': optimistic_info})
 
@@ -8073,7 +10515,7 @@ async def alexa_play():
                     logger.exception("")
                     _update_now_playing(playing=False)
 
-            threading.Thread(target=_bg_play_playlist, daemon=True).start()
+            _bg_thread(_bg_play_playlist)
             logger.info("[alexa/play] dispatched playlist (%d tracks) video_id=%s", len(queue), first['video_id'])
             return jsonify({'ok': True, 'now_playing': first})
         # Unreadable playlist (private, radio-only id, etc.): fall through to
@@ -8106,6 +10548,8 @@ async def alexa_play():
                 error = alexa_remote.remote.play_query(serial, spoken)
                 if error:
                     logger.error("[alexa/play] play_query failed: %s", error)
+                    _stop_alexa_auth_failure(error, expected_intent=requested_intent,
+                                             expected_output=requested_output)
                     _update_now_playing(playing=False)
                 return
             thumb = ''
@@ -8135,6 +10579,8 @@ async def alexa_play():
                 error = alexa_remote.remote.play_query(serial, spoken)
             if error:
                 logger.error("[alexa/play] play failed: %s", error)
+                _stop_alexa_auth_failure(error, expected_intent=requested_intent,
+                                         expected_output=requested_output)
                 _update_now_playing(playing=False)
             else:
                 logger.info("[alexa/play] sent successfully")
@@ -8144,7 +10590,7 @@ async def alexa_play():
             logger.exception("")
             _update_now_playing(playing=False)
 
-    threading.Thread(target=_bg_prepare_and_play, daemon=True).start()
+    _bg_thread(_bg_prepare_and_play)
 
     logger.info("[alexa/play] dispatched to background")
     return jsonify({'ok': True, 'now_playing': optimistic_info})
@@ -8284,7 +10730,9 @@ def alexa_play_queue():
                 target_idx = requested_index
 
         first = validated_items[target_idx]
-        _update_now_playing(queue_session_id=_intent_queue_session, playing=False,
+        with _np_lock:
+            _now_playing['_alexa_auth_blocked'] = False
+        _update_now_playing(queue_session_id=_intent_queue_session, playing=False, playback_processing=True,
                             title=first['title'], artist=first['artist'],
                             artists=first.get('artists', []),
                             thumbnail=first['thumbnail'], video_id=first['video_id'],
@@ -8352,6 +10800,9 @@ def alexa_play_queue():
     if not _valid_video_id(video_id):
         return error_response('invalid "video_id"', 400)
 
+    with _np_lock:
+        _now_playing['_alexa_auth_blocked'] = False
+
     cur = _get_now_playing()
     queue = cur.get('queue') or []
     # A song can appear more than once in the queue (added twice, or a repeat
@@ -8405,12 +10856,6 @@ def alexa_play_queue():
             target_idx = queue.index(item)
 
     _ensure_audio_ready_for_play(video_id, wait=False)
-    # Coalesced: see _schedule_play_dispatch. A burst of queue-row clicks sends
-    # one trigger phrase for the row the user landed on.
-    replaced = _schedule_play_dispatch(serial, video_id)
-    if replaced:
-        logger.info("play_queue: coalesced pending dispatch %s -> %s",
-                    replaced, video_id)
 
     # Preserve the structured artist IDs supplied by the browser. The old
     # direct-play path kept only the display string, so the playback page had
@@ -8432,7 +10877,7 @@ def alexa_play_queue():
     # duplicate call from the webhook is harmless.
     if not _jam_guest():
         _record_listen(video_id, item.get('title', ''), item.get('artist', ''), thumb)
-    _update_now_playing(queue_session_id=_intent_queue_session, playing=False,
+    _update_now_playing(queue_session_id=_intent_queue_session, playing=False, playback_processing=True,
                         title=item.get('title', ''),
                         artist=item.get('artist', ''),
                         artists=item.get('artists', []),
@@ -8447,18 +10892,25 @@ def alexa_play_queue():
                         # authoritative until the skill syncs (see
                         # alexa_state_event).
                         queue_web_dirty=True)
+    # Coalesced: see _schedule_play_dispatch. A burst of queue-row clicks sends
+    # one trigger phrase for the row the user landed on.
+    replaced = _schedule_play_dispatch(serial, video_id)
+    if replaced:
+        logger.info("play_queue: coalesced pending dispatch %s -> %s",
+                    replaced, video_id)
+
     # Recommendations/charts carry no duration, so the progress bar would show
     # --:-- with no total. Look the real metadata (incl. length) up in the
     # background and patch it into now-playing without blocking playback.
     if not int(item.get('duration_ms') or 0):
-        threading.Thread(target=_lookup_and_update_np, args=(video_id,), daemon=True).start()
+        _bg_thread(_lookup_and_update_np, args=(video_id,))
     # Build the "Up Next" radio queue for this track right away. When a song is
     # played from a recommendation/search it lands here with a single-item
     # queue; without this the UP NEXT panel stays empty until (and unless) the
     # skill's started webhook happens to rebuild it. Skipped when the caller
     # is about to build a real queue itself (see suppress_radio above).
     if not suppress_radio:
-        threading.Thread(target=_refresh_radio_queue, args=(video_id, force_radio), daemon=True).start()
+        _bg_thread(_refresh_radio_queue, args=(video_id, force_radio))
     return jsonify({'ok': True, 'now_playing': {
         'title': item.get('title', ''),
         'artist': item.get('artist', ''),
@@ -8759,21 +11211,50 @@ def armed_play():
         if not peeked:
             return jsonify({'video_id': None})
         video_id, offset_ms, armed_at, kind = peeked
+        if kind == 'resume' and request.environ.get('musicbox.alexa_token_authorized'):
+            with _np_lock:
+                if _now_playing.get('video_id') == video_id:
+                    _now_playing['_alexa_verified_intent_at'] = _now_playing.get('alexa_intent_at')
         return jsonify({'video_id': video_id, 'offset_ms': offset_ms,
                         'armed_at': armed_at, 'kind': kind})
     armed = _consume_armed_play(serial)
     if not armed:
         return jsonify({'video_id': None})
     video_id, offset_ms, armed_at, kind = armed
+    if request.environ.get('musicbox.alexa_token_authorized'):
+        with _np_lock:
+            if _now_playing.get('video_id') == video_id:
+                _now_playing['_alexa_verified_intent_at'] = _now_playing.get('alexa_intent_at')
     # The outstanding trigger has now been served, so a later click may send a
     # fresh one. Until this point additional clicks only re-arm (see
     # _trigger_in_flight), which is what stops the Echo playing every song in a
     # rapid-click burst one after another.
     _clear_trigger_inflight(serial)
-    # armed_at/kind let the skill judge freshness (a resume honors only a
-    # recent 'resume' arm); older skill versions simply ignore the extra fields.
-    return jsonify({'video_id': video_id, 'offset_ms': offset_ms,
-                    'armed_at': armed_at, 'kind': kind})
+    # New clients can start from this response instead of requesting the same
+    # song again through /stream_video/. Old clients keep the original shape.
+    payload = {'video_id': video_id, 'offset_ms': offset_ms,
+               'armed_at': armed_at, 'kind': kind}
+    if request.args.get('include_stream') == '1' and kind == 'play':
+        with _np_lock:
+            current = _now_playing.get('video_id')
+            queue = _now_playing.get('queue') or []
+            index = _now_playing.get('queue_index', -1)
+            selected = isinstance(index, int) and 0 <= index < len(queue)
+            start = max(0, index - _SKILL_QUEUE_BEHIND) if selected and len(queue) > _SKILL_QUEUE_WINDOW else 0
+            queue = copy.deepcopy(queue[start:start + _SKILL_QUEUE_WINDOW])
+        if current == video_id and selected:
+            queue = [{'title': row.get('title', ''), 'artist': row.get('artist', ''),
+                      'video_id': row.get('video_id', ''),
+                      'thumbnail': _thumbnail_metadata(row.get('thumbnail')),
+                      'duration_ms': row.get('duration_ms', 0)} for row in queue]
+            metadata = queue[index - start]
+            if metadata.get('video_id') == video_id and metadata.get('title'):
+                stream = asyncio.run(Supporting.get_stream(video_id))
+                if stream:
+                    # A repeated song keeps its actual selected queue occurrence.
+                    payload['startup'] = {'song_info': {'metadata': metadata, 'stream': stream},
+                                          'playlist': queue, 'queue_index': index - start}
+    return jsonify(payload)
 
 
 @app.route("/alexa/search/", methods=["GET"])
@@ -9603,7 +12084,7 @@ async def api_get_library_playlist(pl_id):
     if _jam_guest() and pl_id.upper() == 'LM':
         return jsonify({'error': 'Liked Music is private to the host account.'}), 403
     try:
-        yt = _get_ytmusic() if _jam_guest() else _get_ytmusic_home()
+        yt = _catalog_client()
         from playlist_paging import playlist_page_request
         try:
             page_limit, page_offset = playlist_page_request(request.args)
@@ -9855,7 +12336,7 @@ async def api_resolve_track_album(video_id):
             'artist': artists[0].get('name') or '' if artists else '',
         }
 
-    clients = [_get_ytmusic() if _jam_guest() else _get_ytmusic_home()]
+    clients = [_catalog_client()]
     try:
         from ytmusicapi import YTMusic
         clients.append(YTMusic())
@@ -9964,7 +12445,7 @@ async def api_get_track_artwork(video_id):
         return {'urls': [url for url in urls if url not in catalog_direct_urls]
                 + [url for url in catalog_direct_urls if url not in urls]}
 
-    clients = [_get_ytmusic_home()]
+    clients = [_catalog_client()]
     try:
         from ytmusicapi import YTMusic
         clients.append(YTMusic())
@@ -10008,7 +12489,7 @@ async def api_get_album(browse_id):
     # playlist classifier to a clean 404 instead of a 502 toast.
     if browse_id.upper().startswith('OLAK'):
         try:
-            yt = _get_ytmusic() if _jam_guest() else _get_ytmusic_home()
+            yt = _catalog_client()
             raw_pl = await asyncio.to_thread(yt.get_playlist, browse_id, 100)
         except Exception as e:
             message = str(e)
@@ -10022,7 +12503,7 @@ async def api_get_album(browse_id):
                 return _album_provider_error_response(e, browse_id, 'OLAK playlist load failed')
         return jsonify(_normalize_olak_album(raw_pl, browse_id))
     try:
-        yt = _get_ytmusic() if _jam_guest() else _get_ytmusic_home()
+        yt = _catalog_client()
         raw = await asyncio.to_thread(yt.get_album, browse_id)
     except Exception as e:
         message = str(e)
@@ -10183,7 +12664,7 @@ async def api_resolve_artist():
             return jsonify({'name': cached[1][0], 'channel_id': cached[1][1]})
         if cached:
             _artist_resolve_cache.pop(cache_key, None)
-    yt = _get_ytmusic() if _jam_guest() else _get_ytmusic_home()
+    yt = _catalog_client()
     try:
         results = await asyncio.to_thread(
             yt.search, query=name, filter='artists', limit=10)
@@ -10261,7 +12742,7 @@ async def api_artist_releases(channel_id):
         if isinstance(artist_response, tuple):
             return artist_response
         artist = artist_response.get_json().get('artist') or {}
-        yt = _get_ytmusic() if _jam_guest() else _get_ytmusic_home()
+        yt = _catalog_client()
         section = artist.get(kind) or {}
         params = section.get('params')
         browse_id = section.get('browseId')
@@ -10296,7 +12777,7 @@ async def api_get_artist_songs(channel_id):
 
     last_error = None
     try:
-        clients = [_get_ytmusic() if _jam_guest() else _get_ytmusic_home()]
+        clients = [_catalog_client()]
         try:
             clients.append(YTMusic())
         except Exception as error:
@@ -10483,7 +12964,7 @@ async def api_get_artist(channel_id):
         }
 
     try:
-        yt = _get_ytmusic() if _jam_guest() else _get_ytmusic_home()
+        yt = _catalog_client()
         raw = await asyncio.to_thread(yt.get_artist, channel_id)
     except Exception as e:
         message = str(e)
@@ -10588,7 +13069,7 @@ async def api_get_explore():
         # Keep Explore separate from Home.  get_home contains account-specific
         # shelves such as Liked Music and Listen again; those belong on Home,
         # not in the public discovery browser.
-        ytm = _get_ytmusic() if _jam_guest() else (_get_ytmusic_home() if _ytmusic_is_authenticated() else _get_ytmusic())
+        ytm = _signed_in_catalog_client()
         explore = await asyncio.to_thread(ytm.get_explore)
         return jsonify(explore or {})
     except Exception as e:
@@ -10606,7 +13087,7 @@ async def api_get_explore_moods():
     if not params:
         return jsonify({'error': 'A mood or genre is required.'}), 400
     try:
-        ytm = _get_ytmusic() if _jam_guest() else (_get_ytmusic_home() if _ytmusic_is_authenticated() else _get_ytmusic())
+        ytm = _signed_in_catalog_client()
         featured_playlists, community_playlists, songs, albums = await asyncio.gather(
             asyncio.to_thread(ytm.get_mood_playlists, params),
             asyncio.to_thread(ytm.search, f'{title or "music"} music', 'playlists', None, 24),
@@ -10678,7 +13159,7 @@ async def alexa_suggest():
     try:
         # Never use the host's authenticated YouTube Music session for a
         # guest's suggestions.
-        ytmusic = _get_ytmusic() if _jam_guest() else _get_ytmusic_home()
+        ytmusic = _catalog_client()
         raw = await asyncio.to_thread(ytmusic.get_search_suggestions, query)
     except Exception as e:
         logger.error("[alexa/suggest] failed: %s", e)
@@ -10720,8 +13201,11 @@ def _render_root_shell():
             is_authenticated=is_auth)))
     is_auth = _ytmusic_is_authenticated()
     if _logged_in():
+        mu_user = _mu_web_identity()
         return _no_store(app.make_response(render_template(
-            "remote.html", asset_v=_STATIC_VERSION, remote_username=REMOTE_USER, is_authenticated=is_auth)))
+            "remote.html", asset_v=_STATIC_VERSION,
+            remote_username=(mu_user or {}).get('username') or REMOTE_USER,
+            is_authenticated=is_auth)))
     if _jam_guest():
         if request.path in _JAM_PRIVATE_SPA_PATHS:
             return redirect('/')
@@ -10780,7 +13264,7 @@ def _status_snapshot():
             return fallback
     storage = read_component('storage', lambda: _status_storage.get(lambda: {
         'captured_at': time.time(), 'system': system_snapshot(tempfile.gettempdir(), DB_FILE)}), {'available': False})
-    streaming = _youtube_stream.snapshot()
+    streaming = _youtube_streams.snapshot()
     cookie = read_component('download cookies', lambda: download_cookies.inspection(Supporting.get_ytdlp_cookies_file()), {'present': False})
     amazon = read_component('Amazon session', alexa_remote.remote.is_logged_in, None)
     if isinstance(amazon, tuple):
@@ -10832,9 +13316,31 @@ def _status_snapshot():
 @app.route('/status', methods=['GET'])
 @app.route('/status/', methods=['GET'])
 def status_panel():
-    if not (_valid_key_supplied() or _logged_in()):
-        return _no_store(redirect('/login/?next=%2Fstatus'))
-    response = _no_store(app.make_response(render_template('status.html', asset_v=_STATIC_VERSION)))
+    # Service status lives with the administrator now; players never saw
+    # anything actionable there and it exposes server-wide figures. The owner
+    # key still opens it because the middleware promises diagnostics while the
+    # database — and therefore an admin login — is unavailable.
+    if not (_valid_key_supplied() or _admin_logged_in()):
+        return _no_store(redirect('/admin/' if _logged_in() else '/login/?next=%2Fstatus'))
+    # Rendered inside the administrator shell rather than as its own site: the
+    # page is an admin destination, and opening it used to feel like leaving the
+    # panel. The route stays here, not on the blueprint, because the owner key
+    # must still open diagnostics while the database -- and so any admin session
+    # -- is unavailable.
+    layer = _multiuser_layer
+    identity = _mu_web_identity()
+    # The status page is rendered by this route instead of the blueprint, so it
+    # has to ask for the shell's theme itself -- otherwise a light-theme panel
+    # would open a dark page at the one destination admins actually visit.
+    from multiuser.admin import _theme_for
+    response = _no_store(app.make_response(render_template(
+        'status.html', asset_v=_STATIC_VERSION, back_href='/admin/', back_label='Back to admin',
+        page='status', title='Service status',
+        base_path=layer.config.base_path if layer is not None else '/admin',
+        mu_config=layer.config if layer is not None else None,
+        admin_user=identity,
+        theme=_theme_for(layer, identity) if layer is not None else 'dark',
+        csrf_token=session.get('mu_csrf', ''))))
     response.headers['Referrer-Policy'] = 'no-referrer'
     response.headers['X-Frame-Options'] = 'DENY'
     response.headers['Content-Security-Policy'] = "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'"
@@ -10844,16 +13350,19 @@ def status_panel():
 @app.route('/api/status', methods=['GET'])
 @app.route('/api/status/', methods=['GET'])
 def status_api():
-    if not (_valid_key_supplied() or _logged_in()):
-        return _no_store(app.make_response(error_response('Owner access required.', 401)))
+    if not (_valid_key_supplied() or _admin_logged_in()):
+        return _no_store(app.make_response(error_response('Owner or administrator access required.', 401)))
     response = _no_store(jsonify(_status_snapshot()))
     response.headers['Referrer-Policy'] = 'no-referrer'
     return response
 
 
 def _status_owner_error():
-    if not (_valid_key_supplied() or _logged_in()):
-        return _no_store(app.make_response(error_response('Owner access required.', 401)))
+    # The API key stays valid here on purpose: the middleware above promises
+    # diagnostics during a database outage, and an admin session cannot exist
+    # while the login store is down.
+    if not (_valid_key_supplied() or _admin_logged_in()):
+        return _no_store(app.make_response(error_response('Owner or administrator access required.', 401)))
 
 
 def _status_args():
@@ -10944,7 +13453,16 @@ threading.Thread(target=_status_watchdog_loop, daemon=True, name='status-watchdo
 
 @app.route("/", methods=["GET"])
 def root():
+    if not (_logged_in() or _valid_key_supplied() or _jam_guest() or session.get('jam')):
+        return welcome()
     return _render_root_shell()
+
+
+@app.route("/welcome", methods=["GET"])
+def welcome():
+    base = _multiuser_layer.config.base_path if _multiuser_layer else '/admin'
+    return _no_store(app.make_response(render_template(
+        "landing.html", asset_v=_STATIC_VERSION, admin_login_url=base + '/login/')))
 
 
 def spa_document():
@@ -11215,16 +13733,67 @@ def service_worker():
 
 
 # Main entry point
-if _youtube_stream.enabled:
+# The multi-user layer is additive and disabled unless MULTI_USER_ENABLED=1.
+# Explicitly configured authentication fails closed on initialization errors;
+# an unavailable identity database must not enable a legacy fallback.
+try:
+    from multiuser import init_multiuser as _init_multiuser
+
+    _multiuser_layer = _init_multiuser(app)
+    def _amazon_access_policy(identity, email=None):
+        if _multiuser_layer is None:
+            return None
+        user_id = _identity_account_id(identity)
+        user = _multiuser_layer.accounts.get_user(user_id) if user_id else None
+        if not _multiuser_layer.alexa_access.eligible(user):
+            return 'Amazon access requires an active account, admin permission and a verified email.'
+        # Amazon proves its own account during sign-in. The identifier may be
+        # different from the Music Box mailbox, including a mobile number.
+        return None
+    if _multiuser_layer is not None:
+        alexa_remote.set_access_policy(_amazon_access_policy)
+        def _remember_amazon_identity(identity, email, customer_id):
+            user_id = _identity_account_id(identity)
+            if email is None:
+                if user_id:
+                    _multiuser_layer.alexa_access.unlink_amazon(user_id)
+                return
+            if not user_id:
+                raise ValueError('An authenticated Music Box account is required.')
+            _multiuser_layer.alexa_access.link_amazon(user_id, email, customer_id)
+        alexa_remote.set_identity_hook(_remember_amazon_identity)
+
+    if _multiuser_layer is not None:
+        # Deleting the row is only the beginning: the queue snapshot, the Amazon
+        # session, the credential file, the download jar and the Chromium profile
+        # belong to this module, so this module is what erases them.
+        _multiuser_layer.accounts.set_purge_hook(_purge_account_artifacts_hook)
+        # A disconnect deletes the database row; the files and the live session are
+        # this module's, so the account layer calls back for those too.
+        _multiuser_layer.accounts.set_artifact_hook(_provider_artifact_hook)
+        # The panel may start a YouTube sign-in for an account and show the
+        # server account's health. Those functions live in this module because
+        # they own the sidecar and the credential files, not the account layer.
+        _multiuser_layer.youtube_admin = _YouTubeAdminHooks()
+        # Only a delete can put work in that queue, and only this layer deletes
+        # accounts -- so a single-owner install never pays for the sweep.
+        threading.Thread(target=_account_purge_sweeper, daemon=True,
+                         name='account-purge-sweeper').start()
+except Exception:  # noqa: BLE001 - optional subsystem must not break startup
+    _multiuser_layer = None
+    raise RuntimeError("Multi-user authentication initialization failed; refusing to start") from None
+
+if _YOUTUBE_STREAMING_ENABLED:
     def _initialize_youtube_stream():
         try:
-            _youtube_stream.resolve()
+            _youtube_stream_for(_OWNER_IDENTITY).resolve()
         except StreamError:
             logger.warning('YouTube streaming client will retry initialization on playback.')
     _audio_jobs.submit('__youtube_stream_init__', _initialize_youtube_stream)
 
 if __name__ == "__main__":
     import waitress
+    start_youtube_server_keepalive()
     # Keep enough workers for simultaneous catalog/device calls. The legacy
     # SSE compatibility endpoint is finite and no longer owns a worker.
     waitress.serve(app, host="0.0.0.0", port=5000, threads=16)

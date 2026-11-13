@@ -18,15 +18,15 @@ class CurrentAudioRoutes(unittest.TestCase):
         self.old=self.current.file
         state=dict(server._now_playing,video_id=A,playing=True,playback_confirmed=True,
                    playback_processing=False,duration_ms=180000,queue=[])
-        patches=[mock.patch.object(server._youtube_stream,'current',self.current),
+        patches=[mock.patch.object(server._youtube_stream_for(),'current',self.current),
                  mock.patch.object(server,'_now_playing',state),
                  mock.patch.object(server,'_schedule_alexa_queue_sync'),
                  mock.patch.object(server._playback_persistence,'submit'),
                  mock.patch.object(server,'_refresh_radio_queue'),
                  mock.patch.object(server,'_lookup_and_update_np'),
-                 mock.patch.object(server._youtube_stream,'resolve',return_value={
+                 mock.patch.object(server._youtube_stream_for(),'resolve',return_value={
                      'url':'https://rr1.googlevideo.com/audio','itag':140,'length':12,'modified':'1'}),
-                 mock.patch.object(server._youtube_stream.opener,'open',side_effect=lambda *a,**kw:Upstream())]
+                 mock.patch.object(server._youtube_stream_for().opener,'open',side_effect=lambda *a,**kw:Upstream())]
         for patch in patches:patch.start();self.addCleanup(patch.stop)
         self.client=server.app.test_client();self.headers={'X-Api-Key':server.API_KEY}
 
@@ -42,7 +42,7 @@ class CurrentAudioRoutes(unittest.TestCase):
         r=self.client.get('/audio/?video_id='+B,headers=self.headers)
         self.assertEqual(r.data,b'123456789012');r.close()
         self.assertTrue(self.old.closed);self.assertEqual(self.current.video,B)
-        with mock.patch.object(server._youtube_stream,'resolve',side_effect=AssertionError('network on replay')):
+        with mock.patch.object(server._youtube_stream_for(),'resolve',side_effect=AssertionError('network on replay')):
             replay=self.client.get('/audio/?video_id='+B,headers=self.headers)
             self.assertEqual(replay.headers['X-Audio-Source'],'current-track')
             self.assertEqual(replay.data,b'123456789012');replay.close()
@@ -65,7 +65,7 @@ class CurrentAudioRoutes(unittest.TestCase):
 
     def test_failed_next_track_keeps_previous_bytes(self):
         server._update_now_playing(video_id=B,playing=False,playback_confirmed=False)
-        with mock.patch.object(server._youtube_stream,'open',side_effect=StreamError('track_unavailable',404)):
+        with mock.patch.object(server._youtube_stream_for(),'open',side_effect=StreamError('track_unavailable',404)):
             r=self.client.get('/audio/?video_id='+B,headers=self.headers)
         self.assertEqual(r.status_code,404);self.assertIs(self.current.file,self.old)
 

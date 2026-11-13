@@ -24,7 +24,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')
 os.environ.setdefault("SECRET_KEY", "test-secret-next-track")
 os.environ.setdefault("REMOTE_USER", "test-owner")
 os.environ.setdefault("REMOTE_PASSWORD", "test-pass")
-os.environ.setdefault("API_KEY", "0123456789abcdef0123456789abcdef")
+os.environ.setdefault("API_KEY", "0123456789abcdef0123456789abcdef")  # gitleaks:allow -- synthetic fixture credential
 
 if "ytmusicapi" not in sys.modules:
     ytmusicapi = types.ModuleType("ytmusicapi")
@@ -61,6 +61,7 @@ if "youtube_browser_session" not in sys.modules:
     ybs.browser_client_is_signed_in = lambda *args, **kwargs: False
     ybs.is_authentication_error = lambda *args, **kwargs: False
     ybs.promote_browser_headers = lambda *args, **kwargs: None
+    ybs.normalize_browser_headers = lambda value: value
     sys.modules["youtube_browser_session"] = ybs
 
 import server  # noqa: E402
@@ -81,6 +82,12 @@ class NextTrackBase(unittest.TestCase):
 
     def setUp(self):
         server._reset_rate_limit_cooldown()
+        # The logged-out Echo guard reads a real Amazon check that another test
+        # module may already have run; this file is about queue behaviour.
+        echo = server.alexa_remote.remote
+        self.addCleanup(setattr, echo, 'connection_state',
+                        getattr(echo, 'connection_state', None))
+        echo.connection_state = True
         with server._np_lock:
             server._saved_now_playing = dict(server._now_playing)
             server._now_playing.clear()
