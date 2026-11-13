@@ -156,7 +156,7 @@ services:
       - EGRESS_PORT=5000
 
   caddy:
-    image: caddy:2@sha256:36c24ad91a7ff7bc4c87fe22bfa8df3c4b18da0773d73fc12ee2c52b98c0bb7e
+    image: caddy:2@sha256:844f60b64e4724a5aa8245e019dace0d3f199f7433ce6c57676cb30a920dbad9
     container_name: caddy
     restart: unless-stopped
     environment:

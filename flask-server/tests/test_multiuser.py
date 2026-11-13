@@ -854,4 +854,4 @@ class EncryptedBootstrapTests(MultiUserTestBase):
         self.assertFalse((Path(self.tmp) / 'multiuser_admin_password.txt').exists())
         user, error = self.layer.accounts.authenticate('owner', password, '127.0.0.1', 'test')
         self.assertIsNotNone(user)
-        self.assertIsNone(error)
+        self.assertFalse(error)
