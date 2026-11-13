@@ -129,6 +129,7 @@ class SelfServiceTestBase(unittest.TestCase):
         if no_nonce:
             with self.client.session_transaction() as session:
                 session.pop("mu_ss_signup", None)
+        self.pending_signup_email = email_address or f"{username}@example.test"
         self.pending_signup_details = {
             "username": username,
             "password": extra.pop("password", PASSWORD),
@@ -180,7 +181,20 @@ class SelfServiceTestBase(unittest.TestCase):
         """The six digits from the newest code email of this purpose."""
         heading = CODE_HEADINGS[purpose]
         found: list[str] = []
-        for body in self._outbox_bodies():
+        bodies = self._outbox_bodies()
+        if purpose == "verify" and getattr(self, "pending_signup_details", None):
+            # Two signup messages can share a timestamp; select the current
+            # recipient instead of relying on the filename's random suffix.
+            bodies = []
+            for path in sorted(glob.glob(os.path.join(self.outbox, "*.eml"))):
+                with open(path, "rb") as handle:
+                    message = email.message_from_bytes(handle.read())
+                if email.utils.parseaddr(message.get("To", ""))[1] != self.pending_signup_email:
+                    continue
+                for part in message.walk():
+                    if part.get_content_type() == "text/plain":
+                        bodies.append((part.get_payload(decode=True) or b"").decode("utf-8", "replace"))
+        for body in bodies:
             if heading in body:
                 found.extend(match.group(1) for match in CODE_RE.finditer(body))
         self.assertTrue(found, f"no {purpose} code in the outbox")
