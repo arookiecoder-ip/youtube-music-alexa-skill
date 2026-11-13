@@ -358,10 +358,18 @@ def _robot_check_form(login):
         if name:
             fields[name] = field.get("value") or ""
     image = None
-    for img in soup.find_all("img", src=True):
-        if "captcha" in img["src"].lower():
-            image = img["src"]
+    for img in soup.find_all("img"):
+        source = img.get("src") or img.get("data-src") or ""
+        description = " ".join(str(img.get(key) or "") for key in ("alt", "id"))
+        if source and ("captcha" in source.lower() or "captcha" in description.lower()):
+            image = source
             break
+    # Some robot pages use an opaque CDN filename. The picture inside the
+    # challenge form is authoritative; never pick a header/logo outside it.
+    if not image:
+        candidate = form.find("img")
+        if candidate:
+            image = candidate.get("src") or candidate.get("data-src")
     return {"action": form.get("action") or "", "fields": fields, "image": image}
 
 
@@ -730,6 +738,10 @@ class AlexaRemote:
         error = self._access_error(email)
         if error:
             return None, error
+        # An image-load failure may leave a scripted challenge alive. Retire
+        # it before the interactive flow takes the same account's login slot.
+        if getattr(self, '_form_login', None) is not None:
+            await self._form_cleanup()
         error = await self._start_proxy(email, password, base_url, owner_sid)
         if error:
             return None, error
@@ -1095,7 +1107,7 @@ class AlexaRemote:
             fetched = await self._form_fetch_captcha(login, status.get("captcha_image_url"))
             if fetched is None:
                 return {"state": "error",
-                        "message": "Amazon asked for a captcha picture that could not be loaded. Try again."}
+                        "message": "Amazon asked for a captcha picture that could not be loaded. Retry or use the Amazon page instead."}
             self._form_captcha = fetched
             return {"state": "need_captcha", "answer": "captcha", "text": True,
                     "message": note or "Type the characters you see in the picture.",
@@ -1141,8 +1153,8 @@ class AlexaRemote:
                         "verification": False}
             return {"state": "error",
                     "message": "Amazon wants to make sure this is a person, but its "
-                               "check picture could not be loaded. Try again in a "
-                               "moment."}
+                               "check picture could not be loaded. Retry or use the "
+                               "Amazon page instead to complete the check."}
         # Amazon's new claim flow answers an identifier it cannot sign in with
         # by offering to register it, so nothing was refused yet and retrying
         # the password cannot help. Mobile-only accounts reach this by email.
@@ -1190,11 +1202,28 @@ class AlexaRemote:
         url = _page_join(_last_page_url(login), url)
         try:
             from urllib.parse import urlsplit
-            parsed = urlsplit(url)
             domain = AMAZON_DOMAIN.lower()
-            if parsed.scheme != 'https' or not (parsed.hostname == 'www.' + domain or parsed.hostname == domain or (parsed.hostname or '').endswith('.amazon.com') or parsed.hostname == 'images-na.ssl-images-amazon.com'):
+            # Redirects must be checked at every hop: Amazon moves captcha
+            # assets between its image CDNs, but arbitrary URLs are forbidden.
+            for hop in range(4):
+                parsed = urlsplit(url)
+                host = (parsed.hostname or '').lower()
+                allowed = (host in (domain, 'www.' + domain) or
+                           any(host == suffix or host.endswith('.' + suffix)
+                               for suffix in ('amazon.com', 'media-amazon.com', 'ssl-images-amazon.com')))
+                if parsed.scheme != 'https' or parsed.port not in (None, 443) or parsed.username or parsed.password or not allowed:
+                    return None
+                response = await login._session.get(url, ssl=login._ssl, allow_redirects=False)
+                if response.status in (301, 302, 303, 307, 308):
+                    location = response.headers.get('Location')
+                    response.close()
+                    if not location:
+                        return None
+                    url = _page_join(url, location)
+                    continue
+                break
+            else:
                 return None
-            response = await login._session.get(url, ssl=login._ssl, allow_redirects=False)
             if response.status != 200:
                 response.close()
                 return None

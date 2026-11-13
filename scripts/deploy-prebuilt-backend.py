@@ -74,7 +74,8 @@ def main():
                    '-f', str(ROOT / 'docker-compose.tunnel.yml'), '-f', str(override)]
         def replace():
             subprocess.run(compose + ['up', '-d', '--no-deps', '--no-build', '--pull', 'never', 'ytmusic'],
-                           cwd=ROOT, check=True, timeout=120)
+                           cwd=ROOT, check=True, timeout=120,
+                           env=dict(os.environ, COMPOSE_ENV_FILE=str(ROOT / '.env.production')))
         try:
             write_override(tag)
             replace()

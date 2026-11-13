@@ -89,10 +89,13 @@
   function working(text) {
     q('connect-working-text').textContent = text || '';
     q('connect-working').hidden = false;
+    dialog.classList.add('provider-working');
+    q('connect-fallback').hidden = true;
   }
 
   function stopWorking() {
     q('connect-working').hidden = true;
+    dialog.classList.remove('provider-working');
     q('connect-working-text').textContent = '';
   }
 
@@ -160,7 +163,7 @@
       : '/api/youtube/browser-session/form/stop';
     fetch(path, {
       method: 'POST', credentials: 'same-origin', keepalive: true,
-      headers: { 'Content-Type': 'application/json' }, body: '{}',
+      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({attempt_id: attemptId}),
     }).catch(() => {});
   }
 
@@ -175,9 +178,11 @@
   }
 
   function handle(data) {
+    q('connect-fallback').hidden = true;
     if (!data || !data.state) {
       reset();
       q('connect-retry').hidden = false;
+      q('connect-fallback').hidden = provider !== 'amazon';
       say('Connection failed. Try again.', true);
       return;
     }
@@ -270,6 +275,7 @@
         q('connect-approval-different').hidden = !data.different;
         showPanel('connect-approval-panel');
         working('Waiting for you to confirm on your phone…');
+        dialog.classList.remove('provider-working');
         say('');
         schedulePoll();
         return;
@@ -277,12 +283,14 @@
         stopPolling();
         reset();
         q('connect-retry').hidden = false;
+        q('connect-fallback').hidden = provider !== 'amazon';
         say(data.message || 'The sign-in browser is busy. Try again in a minute.', true);
         return;
       default:
         stopPolling();
         reset();
         q('connect-retry').hidden = false;
+        q('connect-fallback').hidden = provider !== 'amazon';
         say(data.message || 'The sign-in could not continue. Try again.', true);
     }
   }
@@ -363,10 +371,7 @@
       if (id !== run) return;
       handle(data);
     } catch (error) {
-      if (id === run) {
-        stopWorking();
-        say(error.message, true);
-      }
+      if (id === run) handle({state: 'error', message: error.message});
     } finally {
       busy = false;
       if (button) button.disabled = false;
@@ -388,10 +393,7 @@
       if (id !== run) return;
       handle(data);
     } catch (error) {
-      if (id === run) {
-        stopWorking();
-        say(error.message, true);
-      }
+      if (id === run) handle({state: 'error', message: error.message});
     } finally {
       busy = false;
       if (button) button.disabled = false;
@@ -401,6 +403,7 @@
   function open(name) {
     if (name === 'amazon' && document.body.dataset.alexaEnabled !== 'true') return;
     provider = name;
+    q('connect-fallback').hidden = true;
     const words = PROVIDERS[name];
     ++run;
     busy = false;
@@ -456,6 +459,12 @@
     active = false;
   });
 
+  q('connect_captcha_image').addEventListener('error', () => {
+    if (!dialog.open || q('connect-captcha-panel').hidden) return;
+    handle({state: 'error', message: provider === 'amazon'
+      ? 'The security picture could not load. Retry sign-in or use the Amazon page instead.'
+      : 'The security picture could not load. Retry sign-in.'});
+  });
   q('connect-credentials').addEventListener('submit', submit);
   q('connect-code-submit').addEventListener('click', () => {
     const code = q('connect_code').value.trim();
@@ -535,6 +544,7 @@
   q('connect-retry').addEventListener('click', () => {
     ++run;
     reset();
+    q('connect-fallback').hidden = true;
     q('connect-retry').hidden = true;
     say('Start again when you are ready.');
     q('connect_email').focus();

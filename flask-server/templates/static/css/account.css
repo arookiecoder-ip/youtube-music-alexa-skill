@@ -1075,3 +1075,28 @@ details.reveal > .reveal-body { margin-top: var(--space-2); }
 #dialog-totp .begin-otp-row { display: flex; gap: 12px; align-items: center; }
 #dialog-totp .begin-otp-row input { flex: 1; min-width: 0; width: 0; }
 #reauth-resend-begin { flex: 0 0 120px; min-height: 44px; }
+
+/* A submitted answer gives way to a centered wait, then the next question. */
+#dialog-connect.provider-working #connect-setup,
+#dialog-connect.provider-working #connect-steps,
+#dialog-connect.provider-working #connect-intro { display: none; }
+#dialog-connect.provider-working #connect-working {
+  min-height: 240px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 24px;
+  text-align: center;
+}
+#dialog-connect.provider-working .connect-spinner { width: 42px; height: 42px; }
+@keyframes provider-step-enter {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+#connect-setup:not([hidden]), #connect-steps:not([hidden]), #connect-working:not([hidden]) {
+  animation: provider-step-enter .25s ease-out;
+}
+@media (prefers-reduced-motion: reduce) {
+  #connect-setup, #connect-steps, #connect-working { animation: none; }
+}

@@ -4,3 +4,37 @@ html,body{height:auto;min-height:100%}body.account-signin{min-height:100dvh;alig
 #steps .step-hint{color:var(--faint);font-size:.78rem;line-height:1.5;margin:0 0 var(--space-1)}#steps label{margin-top:var(--space-4)}#steps .primary{width:100%;margin-top:var(--space-5)}#captcha-image{display:block;margin-top:var(--space-3);max-width:100%;border:1px solid var(--border);background:var(--qr-frame);height:auto}.choice-option{display:flex;align-items:flex-start;gap:var(--space-3);font-size:.8rem;color:var(--text);text-transform:none;letter-spacing:0;font-weight:400;margin:var(--space-3) 0 0;cursor:pointer;line-height:1.5}.choice-option input{height:auto;margin-top:var(--space-1);flex:none;accent-color:var(--accent)}#choice-manual{margin-top:var(--space-2)}.hint{color:var(--muted);font-size:.72rem;line-height:1.5;margin:var(--space-3) 0 0}[hidden]{display:none!important}
 @media(max-width:480px){.account-signin .card{padding:var(--space-5) var(--space-4)}.account-signin .back{margin-bottom:var(--space-5)}}
 @media(prefers-reduced-motion:reduce){.eq-icon span{animation:none}}
+
+/* Keep the wait centered while each provider exchanges a submitted answer. */
+#working {
+  min-height: 250px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  gap: 24px;
+  color: var(--muted);
+  text-align: center;
+}
+.signin-spinner {
+  width: 42px;
+  height: 42px;
+  border: 3px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: signin-spin .8s linear infinite;
+}
+@keyframes signin-spin { to { transform: rotate(360deg); } }
+@keyframes signin-enter {
+  from { opacity: 0; transform: translateY(8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+#setup:not([hidden]), #steps:not([hidden]), #working:not([hidden]), #interactive:not([hidden]) {
+  animation: signin-enter .25s ease-out;
+}
+#amazon-page { width: 100%; height: 65dvh; min-height: 420px; border: 0; background: white; }
+.account-signin main:has(#interactive:not([hidden])) { max-width: 760px; width: 100%; }
+@media (prefers-reduced-motion: reduce) {
+  #setup, #steps, #working, #interactive { animation: none !important; }
+  .signin-spinner { animation-duration: 2s; }
+}

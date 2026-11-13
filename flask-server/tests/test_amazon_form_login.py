@@ -379,3 +379,65 @@ class AmazonReconnectDirectoryTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(Path(owner._form_stage).is_dir())
             self.assertTrue((account/'.storage').is_dir())
             self.assertEqual(cookie.read_text(),'preserved')
+
+class AmazonOpaqueCaptchaTests(unittest.TestCase):
+    def test_picture_inside_challenge_form_can_have_opaque_cdn_filename(self):
+        login = SimpleNamespace(_page_html='''<img src="/logo.png"><form action="/errors/validateCaptcha">
+            <input name="field-keywords"><img src="https://m.media-amazon.com/images/I/opaque.jpg"></form>''')
+        self.assertEqual(_namespace()['_robot_check_form'](login)['image'],
+                         'https://m.media-amazon.com/images/I/opaque.jpg')
+
+    def test_lazy_captcha_picture_is_recognized(self):
+        login = SimpleNamespace(_page_html='''<form action="/errors/validateCaptcha">
+            <img alt="Captcha" data-src="/opaque.jpg"></form>''')
+        self.assertEqual(_namespace()['_robot_check_form'](login)['image'], '/opaque.jpg')
+
+
+class AmazonCaptchaRedirectTests(unittest.IsolatedAsyncioTestCase):
+    async def fetch(self, url, responses):
+        from unittest.mock import Mock
+        functions, methods = _nodes()
+        namespace = {'AMAZON_DOMAIN': 'amazon.in', 'logger': Mock()}
+        exec(compile(ast.Module(body=[functions['_page_join'], functions['_last_page_url'],
+                                     methods['_form_fetch_captcha']], type_ignores=[]), str(SOURCE), 'exec'), namespace)
+        session = SimpleNamespace(get=AsyncMock(side_effect=responses))
+        login = SimpleNamespace(_page_url='https://www.amazon.in/ap/signin', _session=session, _ssl=True)
+        return await namespace['_form_fetch_captcha'](SimpleNamespace(), login, url), session
+
+    def response(self, status, location=None):
+        from unittest.mock import Mock
+        return SimpleNamespace(status=status, headers={'Location': location} if location else {},
+            content=SimpleNamespace(read=AsyncMock(return_value=b'picture')), close=Mock(), content_type='image/png')
+
+    async def test_cdn_redirect_is_followed_and_closed(self):
+        first, second = self.response(302, 'https://m.media-amazon.com/captcha/image.png'), self.response(200)
+        result, session = await self.fetch('https://www.amazon.in/captcha/image', [first, second])
+        self.assertEqual(result, ('image/png', b'picture'))
+        self.assertEqual(session.get.await_count, 2)
+        first.close.assert_called_once(); second.close.assert_called_once()
+
+    async def test_redirect_cannot_fetch_private_or_untrusted_hosts(self):
+        for location in ('http://127.0.0.1/private', 'https://amazon.com.attacker.test/image',
+                         'https://m.media-amazon.com:8443/image', 'https://user:pass@amazon.com/image'):
+            first = self.response(302, location)
+            result, session = await self.fetch('https://www.amazon.in/captcha/image', [first])
+            self.assertIsNone(result)
+            self.assertEqual(session.get.await_count, 1)
+            first.close.assert_called_once()
+
+class AmazonInteractiveRecoveryTests(unittest.IsolatedAsyncioTestCase):
+    async def test_interactive_retry_retires_scripted_challenge_before_starting(self):
+        from unittest.mock import Mock
+        _, methods = _nodes()
+        namespace = {}
+        exec(compile(ast.Module(body=[methods['_proxy_start_url']], type_ignores=[]), str(SOURCE), 'exec'), namespace)
+        events = []
+        async def cleanup(): events.append('cleanup')
+        async def start(*args): events.append('start'); return None
+        owner = SimpleNamespace(_access_error=Mock(return_value=None), _form_login=object(),
+            _form_cleanup=cleanup, _start_proxy=start,
+            _proxy=SimpleNamespace(reset=Mock(), access_url=Mock(return_value='https://music.test/alexa/proxy/')))
+        url, error = await namespace['_proxy_start_url'](owner, 'person@example.test', 'synthetic-password')
+        self.assertEqual(events, ['cleanup', 'start'])
+        self.assertEqual(url, 'https://music.test/alexa/proxy/')
+        self.assertIsNone(error)

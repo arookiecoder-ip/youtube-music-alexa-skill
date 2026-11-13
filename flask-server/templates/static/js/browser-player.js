@@ -46,6 +46,13 @@
     duration_ms: item.duration_ms || Number(item.durationSec || item.duration_seconds || 0) * 1000,
     entry_id: item.entry_id || item.uuid || uuid()
   });
+  function activate() {
+    // Unlock the same media element during the user's tap, before a handoff
+    // performs network requests. Mobile browsers otherwise reject autoplay.
+    if (audio.src) return;
+    audio.src = 'data:audio/wav;base64,UklGRsQAAABXQVZFZm10IBAAAAABAAEAQB8AAIA+AAACABAAZGF0YaAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
+    try { Promise.resolve(audio.play()).catch(() => {}); } catch (_) {}
+  }
   function notify(message) { if (window.toast) window.toast(message, 'error'); }
   function publish(replace = false) {
     if (!owns() || !queue[index] || changingSource) return Promise.resolve();
@@ -386,6 +393,7 @@
       return { ok: true, volume: Math.round(audio.volume * 100) };
     }
     if (local && body && (controls[path] || path === '/alexa/command/')) {
+      activate();
       if (!owns()) await poll();
       const action = path === '/alexa/command/' ? body.action : path === '/alexa/queue_add/' && body.position === 'next' ? 'next_items' : controls[path];
       if (!owns() && ['song', 'queue', 'play'].includes(action) && output && !output.handoff_pending) {
@@ -445,6 +453,6 @@
       output_token: accepted, position_ms: position }).catch(() => {});
   });
   window.addEventListener('pageshow', event => { if (event.persisted) window.location.reload(); });
-  window.browserPlayback = { id, audio, owns, execute, poll, mediaState };
+  window.browserPlayback = { id, audio, owns, execute, poll, mediaState, activate };
   tick();
 })();
