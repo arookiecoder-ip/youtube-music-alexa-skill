@@ -39,3 +39,12 @@ class JamPreparationTests(JamRoomsTests):
         worker=JamPreparation(self.rooms,lambda _:False,radio,warm,lambda identity,job:job())
         worker.schedule('room',self.state(),'user:host',True)
         radio.assert_not_called();warm.assert_not_called()
+
+    def test_queue_recommendations_are_created_even_before_a_device_is_selected(self):
+        state=self.command('queue',tracks=self.songs()[:1])
+        state=self.command('configure',mode='multiple',selected=[])
+        warm=Mock()
+        worker=JamPreparation(self.rooms,lambda _:True,lambda _:self.songs(),warm,lambda identity,job:job())
+        worker.schedule('room',state,'user:host',True)
+        self.assertEqual(len(self.state()['queue']),3)
+        warm.assert_not_called()
