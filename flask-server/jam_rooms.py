@@ -313,7 +313,7 @@ class JamRooms:
             reports.append((output,report,fresh,ready))
         confirmed=bool(reports) and (all(r[3] for r in reports) if state['mode']=='single' else any(r[3] for r in reports))
         state['playback_confirmed']=confirmed
-        state['playback_processing']=state['playing'] and not confirmed
+        state['playback_processing']=bool(selected) and state['playing'] and not confirmed
         if reports:
             output,report,fresh,ready=next((r for r in reports if r[3]),reports[0])
             if fresh:
