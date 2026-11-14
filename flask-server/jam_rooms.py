@@ -88,12 +88,15 @@ class JamRooms:
                     break
                 if state['repeat'] == 'one':
                     state['position_ms'] %= duration
+                    state['seek_revision'] += 1
+                    state['revision'] += 1
                     break
                 state['position_ms'] -= duration
                 if state['queue_index'] + 1 < len(state['queue']):
                     state['queue_index'] += 1
                 elif state['repeat'] == 'all':
                     state['queue_index'] = 0
+                    state['seek_revision'] += 1
                     total = sum(row['duration_ms'] for row in state['queue'])
                     if total and all(row['duration_ms'] for row in state['queue']):
                         state['position_ms'] %= total
@@ -125,7 +128,7 @@ class JamRooms:
             if selected_rows:
                 current=state['queue'][state['queue_index']] if state['queue_index']>=0 else {}
                 reports=[(row,json.loads(row['status'])) for row in selected_rows]
-                ready=[(row,report) for row,report in reports if self.clock()-row['seen']<8 and report.get('video_id')==current.get('video_id') and report.get('confirmed') is True and not report.get('processing') and report.get('playing') is True]
+                ready=[(row,report) for row,report in reports if self.clock()-row['seen']<8 and report.get('video_id')==current.get('video_id') and report.get('seek_revision',0)==state['seek_revision'] and (not state.get('targets',{}).get(row['device']) or report.get('target_id')==state['targets'][row['device']]) and report.get('confirmed') is True and not report.get('processing') and report.get('playing') is True]
                 running=bool(ready) and (len(ready)==len(state['selected']) if state['mode']=='single' else True)
                 if running and not state.get('_running',True):
                     row,report=ready[0]
@@ -163,6 +166,10 @@ class JamRooms:
         if action in ('play', 'pause', 'seek', 'next', 'previous', 'select') and not queue:
             raise ValueError('Add a song to the Jam first.')
         if action == 'play':
+            duration=queue[state['queue_index']]['duration_ms']
+            if duration and state['position_ms']>=duration:
+                state['position_ms']=0
+                state['seek_revision']+=1
             state['playing'] = True
         elif action == 'pause':
             state['playing'] = False
@@ -180,6 +187,7 @@ class JamRooms:
             if isinstance(index, bool) or not isinstance(index, int) or not 0 <= index < len(queue):
                 raise ValueError('No song at that position.')
             state.update(queue_index=index, position_ms=0)
+            state['seek_revision'] += 1
         elif action in ('queue', 'append', 'next_items'):
             tracks = self.tracks(body.get('tracks'))
             if not tracks:
@@ -258,8 +266,8 @@ class JamRooms:
                 raise PermissionError('This output belongs to another participant.')
             details = details if isinstance(details, dict) else {}
             status = status if isinstance(status, dict) else {}
-            safe_status = {key: status[key] for key in ('video_id','entry_id','playing','confirmed','processing','position_ms','duration_ms','volume') if key in status}
-            for key in ('position_ms','duration_ms','volume'):
+            safe_status = {key: status[key] for key in ('video_id','entry_id','target_id','seek_revision','playing','confirmed','processing','position_ms','duration_ms','volume') if key in status}
+            for key in ('position_ms','duration_ms','volume','seek_revision'):
                 value=safe_status.get(key)
                 if value is not None and (isinstance(value,bool) or not isinstance(value,int) or not 0 <= value <= (100 if key=='volume' else 86400000)):
                     raise ValueError('Invalid output state.')
@@ -290,7 +298,7 @@ class JamRooms:
         with self.database() as db:
             db.execute('DELETE FROM jam_device_commands WHERE token=? AND device=?',(token,device))
             db.execute('INSERT INTO jam_device_commands VALUES(?,?,?,?,?)',
-                (token,device,secrets.token_hex(16),json.dumps({'action':'volume','value':value}),self.clock()))
+                (token,device,secrets.token_hex(16),json.dumps({'action':'volume','value':value,'target_id':state.get('targets',{}).get(device,'')}),self.clock()))
             db.commit()
 
     def device_commands(self, token, device, member):
@@ -308,7 +316,7 @@ class JamRooms:
         for device in selected:
             output=outputs.get(device)
             report=json.loads(output['status']) if output else {}
-            fresh=bool(output and self.clock()-output['seen']<8 and report.get('video_id')==state.get('video_id'))
+            fresh=bool(output and self.clock()-output['seen']<8 and report.get('video_id')==state.get('video_id') and report.get('seek_revision',0)==state['seek_revision'] and (not state.get('targets',{}).get(device) or report.get('target_id')==state['targets'][device]))
             ready=fresh and report.get('confirmed') is True and not report.get('processing') and report.get('playing')==state['playing']
             reports.append((output,report,fresh,ready))
         confirmed=bool(reports) and (all(r[3] for r in reports) if state['mode']=='single' else any(r[3] for r in reports))

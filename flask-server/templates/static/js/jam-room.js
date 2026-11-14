@@ -85,7 +85,7 @@
       state=data;lastSuccess=Date.now();render();
       await syncAudio();
       const presence=await api('/api/jam/presence/',{device_id:device,name:'Browser player',error:audio.error?'Audio unavailable':'',
-        kind:'phone',ack:volumeAck,status:{video_id:current===state.playback.entry_id?state.playback.video_id:'',entry_id:current,
+        kind:'phone',ack:volumeAck,status:{target_id:'phone',seek_revision:lastSeek<0?0:lastSeek,video_id:current===state.playback.entry_id?state.playback.video_id:'',entry_id:current,
           playing:!audio.paused,confirmed:audio.readyState>=3&&!audio.error,processing:state.listen&&state.playback.playing&&audio.readyState<3,
           position_ms:Math.max(0,Math.round(audio.currentTime*1000)),volume:Math.round(audio.volume*100)}});
       volumeAck=[];
