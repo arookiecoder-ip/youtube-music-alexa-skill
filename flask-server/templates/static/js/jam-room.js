@@ -13,11 +13,17 @@
     if(!response.ok) throw Error(typeof data.error==='string'?data.error:data.error?.message || 'Could not update Jam. Try again.');
     return data;
   }
+  function lockControls() {
+    for(const node of document.querySelectorAll('main button, main input')) {
+      if(busy) {if(!node.hasAttribute('data-before-busy'))node.dataset.beforeBusy=node.disabled?'1':'0';node.disabled=true;}
+      else if(node.hasAttribute('data-before-busy')) {node.disabled=node.dataset.beforeBusy==='1';delete node.dataset.beforeBusy;}
+    }
+  }
   async function control(action, fields={}) {
     if(busy || !state?.active) return;
-    busy=true;
+    busy=true;lockControls();
     try { await api('/api/jam/control/', {...fields,action,revision:state.playback.revision,command_id:crypto.randomUUID()});error('');await poll(); }
-    catch(e) { error(e.message); } finally { busy=false; }
+    catch(e) { error(e.message); } finally { busy=false;lockControls(); }
   }
   function button(label, run, style='') {const b=document.createElement('button');b.textContent=label;b.className=style;b.onclick=run;return b;}
   function text(tag, value) {const el=document.createElement(tag);el.textContent=value;return el;}
@@ -31,7 +37,7 @@
     $('queue').replaceChildren(...p.queue.map((song,index)=>{
       const row=document.createElement('li');row.className='song'+(index===p.queue_index?' active':'');
       const name=text('span',song.title);name.append(text('small',song.artist));row.append(name);
-      row.append(button(index===p.queue_index?'Playing':'Play',()=>control('select',{index})));
+      const play=button(index===p.queue_index?'Playing':'Play',()=>control('select',{index}));play.disabled=index===p.queue_index;row.append(play);
       if(index!==p.queue_index)row.append(button('Remove',()=>control('remove',{entry_id:song.entry_id})));
       return row;
     }));
@@ -51,6 +57,7 @@
         }));return row;
       }));
     }
+    lockControls();
   }
   async function syncAudio() {
     const p=state.playback;
