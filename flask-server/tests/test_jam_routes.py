@@ -1,6 +1,7 @@
 """Run production Jam routes and authorization hooks without booting providers."""
 import ast
 import contextvars
+import secrets
 from pathlib import Path
 import time
 from types import SimpleNamespace
@@ -29,7 +30,7 @@ class JamRouteTests(unittest.TestCase):
         layer=SimpleNamespace(alexa_identity=SimpleNamespace(skill_namespace=lambda _:''),
             alexa_access=SimpleNamespace(enabled=lambda _:True))
         self.ns=dict(app=app,request=request,session=session,jsonify=jsonify,render_template=render_template,
-            time=time,get_db=self.database,_jam_members=self.members,_jam_rooms=self.rooms,JamConflict=JamConflict,
+            time=time,secrets=secrets,get_db=self.database,_jam_members=self.members,_jam_rooms=self.rooms,JamConflict=JamConflict,
             _jam_cache=lambda:cache,JAM_MAX_AGE=86400,
             _mu_web_identity=lambda:dict(id=request.headers['Test-User'],username=request.headers['Test-User'],role='user') if request.headers.get('Test-User') else None,
             _logged_in=lambda:bool(request.headers.get('Test-User')),
@@ -45,7 +46,7 @@ class JamRouteTests(unittest.TestCase):
             password_change_allowed=lambda *_:True,API_KEY='secret',
             _remote_login_enabled=lambda:True,_alexa_auth_error=Mock())
         names={'_jam_membership','_jam_identity_id','_jam_token_valid','_jam_purge_token','_jam_active_token',
-            '_jam_guest','_jam_request_allowed','_bind_player_identity','require_api_key',
+            '_jam_guest','_jam_prune_records','_jam_request_allowed','_bind_player_identity','require_api_key',
             'jam_join','_jam_access_token','jam_state','jam_presence','jam_control','jam_remove_member',
             'jam_guest_leave','android_asset_links','jam_room_page'}
         tree=ast.parse((root/'server.py').read_text())
@@ -148,6 +149,34 @@ class JamRouteTests(unittest.TestCase):
         self.members.remove('room',member)
         self.assertEqual(self.alice.post('/alexa/like/',json={},headers={'Test-User':'alice'}).status_code,200)
         self.assertTrue(self.alice.get('/api/jam/state/',headers={'Test-User':'alice'}).get_json()['revoked'])
+
+    def test_removed_anonymous_guest_can_observe_revocation_and_clear_cookie(self):
+        self.join(self.guest)
+        with self.guest.session_transaction() as cookie:member=cookie['jam_member']
+        self.members.remove('room',member)
+        data=self.guest.get('/api/jam/state/').get_json()
+        self.assertFalse(data['active']);self.assertTrue(data['revoked'])
+        self.assertEqual(self.guest.post('/api/jam/leave/',json={}).status_code,200)
+        with self.guest.session_transaction() as cookie:self.assertNotIn('jam',cookie)
+
+    def test_other_workers_token_revocation_is_seen_without_cache_restart(self):
+        self.join(self.alice,'alice')
+        with self.database() as db:
+            db.execute("DELETE FROM jam_tokens WHERE token='room'");db.commit()
+        data=self.alice.get('/api/jam/state/',headers={'Test-User':'alice'}).get_json()
+        self.assertFalse(data['active']);self.assertTrue(data['revoked'])
+
+    def test_expired_invitation_cannot_be_joined(self):
+        with self.database() as db:
+            db.execute('UPDATE jam_tokens SET created_at=?',(time.time()-90000,));db.commit()
+        self.assertEqual(self.join(self.alice,'alice').status_code,410)
+
+    def test_removed_guest_cannot_bypass_removal_by_clicking_leave_then_reopening_invite(self):
+        self.join(self.guest)
+        with self.guest.session_transaction() as cookie:member=cookie['jam_member']
+        self.members.remove('room',member)
+        self.guest.post('/api/jam/leave/',json={})
+        self.assertEqual(self.join(self.guest).status_code,403)
 
     def test_public_app_association_uses_expected_package_and_certificate(self):
         data=self.guest.get('/.well-known/assetlinks.json').get_json()[0]['target']
