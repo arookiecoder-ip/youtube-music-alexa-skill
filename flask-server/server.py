@@ -7899,6 +7899,19 @@ def jam_audio(video_id):
     return response
 
 
+from jam_preparation import JamPreparation
+_jam_preparation = JamPreparation(_jam_rooms, _jam_token_valid,
+    lambda video: asyncio.run(Supporting.get_radio_queue(video)),
+    lambda video: _ensure_audio_ready_for_play(video, prefetch=True), _spawn_for_identity)
+
+
+def _jam_prepare(token, playback, expand=False):
+    entry=_jam_cache().get(token)
+    if not entry:return
+    identity=_player_identity_for_user_id(entry['user_id']) if entry['user_id'] else 'owner'
+    _jam_preparation.schedule(token,playback,identity,expand)
+
+
 @app.route('/api/jam/state/', methods=['GET'])
 def jam_state():
     token, member = _jam_access_token()
@@ -7907,6 +7920,7 @@ def jam_state():
     try:
         playback = _jam_rooms.transact(token, member=member['id'] if member else None)
         _jam_drive(token)
+        _jam_prepare(token,playback,expand=bool(playback['queue']) and len(playback['queue'])-playback['queue_index']<=2)
         playback = _jam_rooms.presented(token, playback)
     except (JamConflict, PermissionError) as exc:
         return jsonify(error=str(exc)), 409
@@ -7987,6 +8001,8 @@ def jam_control():
             return jsonify(ok=True)
         state = _jam_rooms.transact(token, action, body, member['id'] if member else None)
         _jam_drive(token)
+        if action in ('queue','select','next','previous','play','retry'):
+            _jam_prepare(token,state,expand=action=='queue' and len(state['queue'])==1)
         state = _jam_rooms.presented(token,state)
     except PermissionError as exc:
         return jsonify(error=str(exc)), 403

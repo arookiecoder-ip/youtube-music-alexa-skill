@@ -187,6 +187,27 @@ class JamRooms:
                       playback_revision=state['revision'], server_time_ms=int(self.clock() * 1000))
         return result
 
+    def extend_radio(self, token, queue_version, seed, items):
+        """Late recommendations must never replace a user's newer queue edits."""
+        tracks=self.tracks(items)
+        with self.database() as db:
+            db.execute('BEGIN IMMEDIATE')
+            row=db.execute('SELECT state FROM jam_rooms WHERE token=? AND EXISTS(SELECT 1 FROM jam_tokens WHERE token=?)',(token,token)).fetchone()
+            if not row:return False
+            state=json.loads(row['state'])
+            if state['queue_version']!=queue_version or not any(t['video_id']==seed for t in state['queue']):return False
+            seen={t['video_id'] for t in state['queue']}
+            additions=[]
+            for track in tracks:
+                if track['video_id'] not in seen:
+                    seen.add(track['video_id']);additions.append(track)
+            additions=additions[:5000-len(state['queue'])]
+            if not additions:return False
+            state['queue'].extend(additions)
+            state['queue_version']+=1;state['revision']+=1
+            db.execute('UPDATE jam_rooms SET state=? WHERE token=?',(json.dumps(state),token));db.commit()
+            return True
+
     def _command(self, state, action, body):
         queue = state['queue']
         if action in ('play','pause','seek','next','previous','select','queue','retry'):

@@ -53,7 +53,7 @@ jobs:
       - name: Jam device selection, audio authorization and playback regressions
         env:
           PYTHONPATH: flask-server:flask-server/tests
-        run: python -m unittest test_jam_rooms test_jam_routes test_jam_echo test_jam_echo_adapter -v
+        run: python -m unittest test_jam_rooms test_jam_routes test_jam_echo test_jam_echo_adapter test_jam_preparation -v
       - name: Compile the backend image on the GitHub runner
         run: |
           docker build --label org.opencontainers.image.revision="$GITHUB_SHA" \
