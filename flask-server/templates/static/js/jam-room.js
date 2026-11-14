@@ -4,6 +4,8 @@
   const $ = id => document.getElementById(id), audio = $('audio');
   let state = null, busy = false, stopped = false, listening = false, current = '', lastSuccess = Date.now();
   let device, lastAudioRetry=0, lastSeek=-1;
+  let volumeAck=[];
+  const volumeTimers=new Map();
   try { device=sessionStorage.getItem('musicbox_browser_id'); if(!device){device='browser-'+crypto.randomUUID();sessionStorage.setItem('musicbox_browser_id',device);} } catch (_) { device='browser-'+crypto.randomUUID(); }
   const error = message => { $('error').textContent=message; $('error').hidden=!message; };
   const notice = message => { $('notice').textContent=message; $('notice').hidden=!message; };
@@ -32,7 +34,7 @@
     $('people').textContent=`${state.member_count} people · ${p.mode==='multiple'?'Multiple selected outputs':'One selected output'} · one queue`;
     $('title').textContent=p.title || 'Your shared queue';$('artist').textContent=p.artist || (p.video_id?'Shared with the Jam':'Add a song to get started');
     $('art').hidden=!p.thumbnail;if(p.thumbnail)$('art').src=p.thumbnail;
-    $('play').textContent=p.playing?'Pause':'Play';$('seek').max=String(p.duration_ms||1);$('seek').value=String(p.position_ms||0);
+    $('play').textContent=p.playback_processing?'Loading…':p.playing?'Pause':'Play';$('seek').max=String(p.duration_ms||1);$('seek').value=String(p.position_ms||0);
     $('repeat').textContent='Repeat: '+p.repeat;
     $('queue').replaceChildren(...p.queue.map((song,index)=>{
       const row=document.createElement('li');row.className='song'+(index===p.queue_index?' active':'');
@@ -41,20 +43,47 @@
       if(index!==p.queue_index)row.append(button('Remove',()=>control('remove',{entry_id:song.entry_id})));
       return row;
     }));
-    $('host').hidden=!state.host;
-    if(state.host) {
+    $('host').hidden=false;
+    $('end').hidden=!state.host;
+    {
       $('multiple').checked=p.mode==='multiple';
-      $('outputs').replaceChildren(...state.outputs.map(output=>{
-        const row=document.createElement('label');row.className='output';const name=text('span',output.name);
-        name.append(text('small',!output.online?'Offline':output.error||'Connected'));row.append(name);
-        const check=document.createElement('input');check.type='checkbox';check.checked=p.selected.includes(output.device);check.disabled=!output.online&&!check.checked;
-        check.onchange=()=>{const selected=p.mode==='single'?(check.checked?[output.device]:[]):check.checked?[...p.selected,output.device]:p.selected.filter(id=>id!==output.device);control('configure',{mode:p.mode,selected});};row.append(check);return row;
-      }));
-      $('members').replaceChildren(text('p','You · Host'),...state.members.map(member=>{
+      const outputRows=[];
+      const groups=new Map();
+      for(const output of state.outputs){const username=output.username||'Host';if(!groups.has(username))groups.set(username,[]);groups.get(username).push(output);}
+      for(const [username,outputs] of groups){
+        outputRows.push(text('h3',username));
+        for(const output of outputs){
+          const devices=output.devices?.length?output.devices:[{id:'current',name:output.name,active:true,online:true}];
+          const target=p.targets?.[output.device]||devices.find(d=>d.active)?.id||devices[0].id;
+          for(const deviceOption of devices){
+            const row=document.createElement('label');row.className='output';const name=text('span',deviceOption.name);
+            name.append(text('small',!output.online||deviceOption.online===false?'Offline':output.error||'Available'));row.append(name);
+            const check=document.createElement('input');check.type='checkbox';check.checked=p.selected.includes(output.device)&&target===deviceOption.id;
+            check.disabled=(!output.online||deviceOption.online===false)&&!check.checked;
+            check.setAttribute('aria-label',`Play on ${deviceOption.name} · ${username}`);
+            check.onchange=()=>{const selected=p.mode==='single'?(check.checked?[output.device]:[]):check.checked?[...new Set([...p.selected,output.device])]:p.selected.filter(id=>id!==output.device);
+              const targets={...(p.targets||{})};if(deviceOption.id!=='current')targets[output.device]=deviceOption.id;
+              control('configure',{mode:p.mode,selected,targets});};row.append(check);outputRows.push(row);
+          }
+        }
+      }
+      $('outputs').replaceChildren(...outputRows);
+      $('participants').hidden=!state.host;
+      $('members').replaceChildren(...(state.host?[text('p','You · Host')]:[]),...state.members.map(member=>{
         const row=document.createElement('div');row.className='member';row.append(text('span',member.name),button('Remove',async()=>{
           if(!confirm(`Remove ${member.name} from this Jam?`))return;
           try{await api('/alexa/jam/remove/',{member_id:member.id});await poll();}catch(e){error(e.message);}
         }));return row;
+      }));
+    }
+    if(state.error)error(state.error);
+    if(!$('volumes').contains(document.activeElement)){
+      $('volumes').replaceChildren(...state.outputs.filter(output=>p.selected.includes(output.device)).map(output=>{
+        const row=document.createElement('label');row.className='seek';row.append(text('span',`${output.name} · ${output.username||'Host'} volume`));
+        const slider=document.createElement('input');slider.type='range';slider.min='0';slider.max='100';slider.value=String(output.volume??50);slider.disabled=!output.online;
+        slider.setAttribute('aria-label',`Volume: ${output.name}`);
+        slider.oninput=()=>{clearTimeout(volumeTimers.get(output.device));const value=Number(slider.value);
+          volumeTimers.set(output.device,setTimeout(async()=>{try{await api('/api/jam/control/',{action:'volume',device_id:output.device,value});}catch(e){error(e.message);}},150));};row.append(slider);return row;
       }));
     }
     lockControls();
@@ -81,8 +110,13 @@
       if(!data.active){stopped=true;audio.pause();error('This Jam ended, or your access was removed.');$('people').textContent='Jam disconnected';return;}
       if(!data.playback.queue){if(data.playback.queue_epoch!==state?.playback.queue_epoch)throw Error('Jam queue needs a refresh.');data.playback.queue=state.playback.queue;}
       state=data;lastSuccess=Date.now();render();
-      await api('/api/jam/presence/',{device_id:device,name:'Browser player',error:audio.error?'Audio unavailable':''});
       await syncAudio();
+      const presence=await api('/api/jam/presence/',{device_id:device,name:'Browser player',error:audio.error?'Audio unavailable':'',
+        kind:'phone',ack:volumeAck,status:{target_id:'phone',seek_revision:lastSeek<0?0:lastSeek,video_id:current===state.playback.entry_id?state.playback.video_id:'',entry_id:current,
+          playing:!audio.paused,confirmed:audio.readyState>=3&&!audio.error,processing:state.listen&&state.playback.playing&&audio.readyState<3,
+          position_ms:Math.max(0,Math.round(audio.currentTime*1000)),volume:Math.round(audio.volume*100)}});
+      volumeAck=[];
+      for(const command of presence.commands||[]){if(command.action==='volume'){audio.volume=command.value/100;volumeAck.push(command.id);}}
     }catch(e){error(e.message);if(Date.now()-lastSuccess>12000)audio.pause();}
   }
   const enable=button('Enable audio',async()=>{try{await audio.play();enable.hidden=true;notice('');}catch(e){error(e.message);}},'primary');enable.id='enable-audio';enable.hidden=true;$('notice').after(enable);
