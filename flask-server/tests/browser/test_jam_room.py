@@ -5,7 +5,7 @@ import threading
 import time
 import io
 import wave
-from flask import Response
+from flask import send_file
 import unittest
 from werkzeug.serving import make_server
 from playwright.sync_api import sync_playwright, expect
@@ -23,7 +23,7 @@ class JamBrowserTests(unittest.TestCase):
         with wave.open(audio,'wb') as fixture:
             fixture.setnchannels(1);fixture.setsampwidth(2);fixture.setframerate(8000)
             fixture.writeframes(b'\0\0'*80000)
-        self.case.ns['_serve_youtube_stream']=lambda video:Response(audio.getvalue(),mimetype='audio/wav')
+        self.case.ns['_serve_youtube_stream']=lambda video:send_file(io.BytesIO(audio.getvalue()),mimetype='audio/wav',conditional=True,download_name='fixture.wav')
         revision=self.case.rooms.transact('room')['revision']
         self.case.rooms.transact('room','configure',{'command_id':'fixture-output','revision':revision,'mode':'single','selected':[]})
         self.server=make_server('127.0.0.1',0,self.case.app,threaded=True)
@@ -113,7 +113,7 @@ class JamBrowserTests(unittest.TestCase):
         except Exception:
             print('ROOM SEEK:',{key:expected[key] for key in ('position_ms','playing','seek_revision')},flush=True)
             for name,page in [('host',self.page),('member',friend)]:
-                print(name,page.evaluate("()=>{const a=document.querySelector('#audio');return {position:a.currentTime,duration:a.duration,ready:a.readyState,paused:a.paused,error:a.error?.message,uiError:document.querySelector('#error').textContent};}"),flush=True)
+                print(name,page.evaluate("()=>{const a=document.querySelector('#audio');return {position:a.currentTime,duration:a.duration,ready:a.readyState,paused:a.paused,seekable:Array.from({length:a.seekable.length},(_,i)=>[a.seekable.start(i),a.seekable.end(i)]),error:a.error?.message,uiError:document.querySelector('#error').textContent};}"),flush=True)
                 page.screenshot(path=str(self.artifacts/(name+'-seek-failure.png')),full_page=True)
             raise
         member.close()
