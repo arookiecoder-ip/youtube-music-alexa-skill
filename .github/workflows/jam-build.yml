@@ -27,7 +27,7 @@ jobs:
         env:
           PYTHONPATH: flask-server:flask-server/tests
         run: |
-          for suite in test_app_queue test_active_session_renewal test_session_validation_outage test_alexa_startup_bundle test_alexa_logged_out test_alexa_authentication_stop test_transport_resume_latency test_alexa_transport test_direct_alexa_commands test_echo_presence_cache; do
+          for suite in test_app_queue test_active_session_renewal test_session_validation_outage test_alexa_startup_bundle test_alexa_logged_out test_alexa_authentication_stop test_transport_resume_latency test_alexa_transport test_direct_alexa_commands test_echo_presence_cache test_resume_after_pause; do
             python -m pytest -q "flask-server/tests/$suite.py" || exit 1
           done
       - name: Skill resume and real SDK authorization regressions

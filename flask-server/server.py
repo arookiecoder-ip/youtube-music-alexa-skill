@@ -7077,8 +7077,13 @@ def _watch_resume_confirmation(serial, video_id, staged_revision):
                 still_staged = (int(_now_playing.get('playback_revision', 0)) == staged_revision
                                 and _now_playing.get('video_id') == video_id
                                 and not _now_playing.get('playback_confirmed'))
+                if still_staged:
+                    _reset_progress(_computed_position_ms())
+                    _now_playing.update(playing=False, playback_processing=False, playback_confirmed=False,
+                        playback_error={'type': 'dispatch_error', 'message': error}, updated_at=time.time())
+                    _now_playing['playback_revision'] = staged_revision + 1
             if still_staged:
-                _update_now_playing(playback_error={'type': 'dispatch_error', 'message': error})
+                _notify_sse()
             return
         if _wait_once():
             return
