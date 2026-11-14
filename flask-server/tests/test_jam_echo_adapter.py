@@ -6,6 +6,7 @@ import threading
 from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock
+from test_playback_lock_contract import ProductionLock
 
 
 class EchoAdapterTests(unittest.TestCase):
@@ -25,9 +26,12 @@ class EchoAdapterTests(unittest.TestCase):
                         playing=True,position_ms=1000,seek_revision=0,transport_revision=1,selected=['echo-a','echo-b'])
         def output():return self.outputs.setdefault(self.identity.get(),dict(playback_output='phone',output_serial='',output_token='original'))
         def claim(serial,**kwargs):output().update(playback_output='alexa',output_serial=serial,output_token='new')
-        def update(**kwargs):self.updates.append((self.identity.get(),kwargs));self.player.update(**kwargs)
+        lock=ProductionLock()
+        def update(**kwargs):
+            with lock:
+                self.updates.append((self.identity.get(),kwargs));self.player.update(**kwargs)
         def play(serial,video,offset):self.sent.append((self.identity.get(),serial,video,offset))
-        self.ns=dict(_PLAYER_IDENTITY=self.identity,_np_lock=threading.RLock(),_now_playing=self.player,
+        self.ns=dict(_PLAYER_IDENTITY=self.identity,_np_lock=lock,_now_playing=self.player,
             _playback_output=SimpleNamespace(snapshot=output),_claim_alexa_output=Mock(side_effect=claim),
             _notify_sse=Mock(),_update_now_playing=update,_ensure_audio_ready_for_play=Mock(),_arm_play=Mock(),_jam_token_valid=lambda token:True,
             _jam_rooms=SimpleNamespace(transact=lambda token:self.state),JamConflict=ValueError,
