@@ -73,7 +73,7 @@ class JamEchoDriver:
             self.rooms.echo_report(token,output['device'],key,report)
             return
         self.rooms.echo_report(token,output['device'],key,dict(video_id=state.get('video_id','') if state else '',
-            playing=bool(state and state['playing']),confirmed=False,processing=bool(state and state['playing']),
+            playing=bool(state and state['playing']),confirmed=False,ended=False,processing=bool(state and state['playing']),
             retryable=True,dispatch_at=self.clock(),position_ms=state.get('position_ms',0) if state else 0,seek_revision=state.get('seek_revision',0) if state else 0))
         try:
             error = self.send(token,details,state)

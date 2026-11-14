@@ -137,9 +137,9 @@ class JamRooms:
                     state['anchored_at']=self.clock()
                     state['_report_seen']=[row['device'],row['seen']]
                 state['_running']=running
-                ended=any(report.get('ended') and report.get('entry_id')==current.get('entry_id') and report.get('seek_revision',0)==state['seek_revision'] for _,report in reports)
-                next_entry=state['queue'][state['queue_index']+1]['entry_id'] if state['queue_index']+1<len(state['queue']) else None
-                advanced=any(next_entry and report.get('entry_id')==next_entry and report.get('playing') and report.get('confirmed') for _,report in reports)
+                ended=any(report.get('ended') and report.get('confirmed') and not report.get('processing') and report.get('entry_id')==current.get('entry_id') and report.get('seek_revision',0)==state['seek_revision'] for _,report in reports)
+                next_entry=state['queue'][state['queue_index']+1]['entry_id'] if state['queue_index']+1<len(state['queue']) else (state['queue'][0]['entry_id'] if state['queue'] and state['repeat']=='all' else None)
+                advanced=any(next_entry and report.get('entry_id')==next_entry and report.get('playing') and report.get('confirmed') and report.get('seek_revision',0)==state['seek_revision'] for _,report in reports)
                 if state['playing'] and (ended or advanced) and current.get('duration_ms'):
                     state['position_ms']=current['duration_ms']
                     state['anchored_at']=self.clock()

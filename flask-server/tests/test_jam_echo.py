@@ -101,3 +101,17 @@ class JamEchoTests(JamRoomsTests):
         output=next(o for o in self.rooms.outputs('room') if o['device']==echo['device'])
         self.assertEqual(json.loads(output['status'])['volume'],25)
         self.assertIn('Volume:',json.loads(output['status'])['volume_error'])
+
+    def test_repeat_restart_clears_the_old_finished_report_before_dispatch(self):
+        echo=self.register();self.command('repeat');self.command('repeat')
+        state=self.state();self.rooms.claim_echo('room',echo['device'],'finished')
+        self.rooms.echo_report('room',echo['device'],'finished',dict(video_id=state['video_id'],entry_id=state['entry_id'],
+            ended=True,playing=False,confirmed=True,processing=False,position_ms=10000,seek_revision=0))
+        repeated=self.state();self.assertEqual(repeated['seek_revision'],1)
+        sent=[]
+        def send(token,details,desired):
+            self.assertEqual(self.state()['seek_revision'],desired['seek_revision'])
+            sent.append(desired['seek_revision'])
+        driver=JamEchoDriver(self.rooms,send,Mock(return_value=None),clock=lambda:self.now)
+        driver._dispatch('room',echo,repeated)
+        self.assertEqual(sent,[1]);self.assertEqual(self.state()['seek_revision'],1)

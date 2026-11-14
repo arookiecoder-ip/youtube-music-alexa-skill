@@ -7767,6 +7767,7 @@ def _jam_echo_snapshot(token, details, state):
                     _jam_driver_queue_version=state['queue_version'])
                 ours=True
             if not ours and output.get('output_serial')!=details['serial']:return None
+            reported_seek=_now_playing.get('_jam_driver_seek',state['seek_revision']) if ours else state['seek_revision']
             finished=bool(_now_playing.get('_alexa_finished_token') and _now_playing.get('_jam_driver_entry')==state['entry_id'])
             next_index=state['queue_index']+1
             advanced=ours and actual==next_index and occurrence.get('video_id')==np.get('video_id') and np.get('playing') and np.get('playback_confirmed')
@@ -7784,7 +7785,7 @@ def _jam_echo_snapshot(token, details, state):
                     video_id=np['video_id'],entry_id=occurrence.get('entry_id',state['entry_id']),ended=finished,
                     playing=bool(np.get('playing')),confirmed=bool(np.get('playback_confirmed')),
                     processing=bool(np.get('playback_processing')),position_ms=state['duration_ms'] if finished else int(np.get('position_ms') or 0),
-                    duration_ms=int(np.get('duration_ms') or 0),seek_revision=state['seek_revision'],target_id='alexa:'+details['serial'])
+                    duration_ms=int(np.get('duration_ms') or 0),seek_revision=reported_seek,target_id='alexa:'+details['serial'])
     finally:_PLAYER_IDENTITY.reset(identity_token)
 
 def _jam_send_echo(token, details, state):
