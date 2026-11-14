@@ -7628,9 +7628,13 @@ def jam_start():
     _jam_rooms.start(token, seed, device_id if isinstance(device_id, str) else '')
     if isinstance(device_id,str) and device_id and isinstance(body.get('devices'),list):
         user=_mu_web_identity()
-        _jam_rooms.presence(token,device_id,None,body.get('name') or 'This phone',
-            details={'username':(user or {}).get('username','Host'),'kind':body.get('kind','phone'),
-                     'identity':_player_identity_for_user_id(user['id']) if user else 'owner','devices':body['devices'][:32]},status=body.get('status'))
+        try:
+            _jam_rooms.presence(token,device_id,None,body.get('name') or 'This phone',
+                details={'username':(user or {}).get('username','Host'),'kind':body.get('kind','phone'),
+                         'identity':_player_identity_for_user_id(user['id']) if user else 'owner','devices':body['devices'][:32]},status=body.get('status'))
+        except JamConflict as exc:
+            _jam_close_all(_jam_identity_id())
+            return error_response(str(exc),409)
         _jam_drive(token)
     return jsonify({'ok': True, 'active': True, 'url': _jam_url(token)})
 
@@ -7793,7 +7797,12 @@ def _jam_send_echo(token, details, state):
             if not error:_record_volume_state(serial,state['value'],notify=True)
             return error
         if not state or not state['playing']:
-            if state is None and _now_playing.get('_jam_driver_room')!=token:return None
+            if state is None:
+                if _now_playing.get('_jam_driver_room')!=token:return None
+                if _jam_token_valid(token):
+                    try:
+                        if details.get('device') in _jam_rooms.transact(token)['selected']:return None
+                    except (PermissionError,JamConflict):pass
             return alexa_remote.remote.command(serial,'pause')
         if not _jam_token_valid(token):return 'This Jam has ended.'
         with _np_lock:
@@ -7936,6 +7945,8 @@ def jam_presence():
                      'identity':_player_identity_for_user_id(_mu_web_identity()['id']) if _mu_web_identity() else ('owner' if member is None else None),
                      'devices':body.get('devices',[])[:32] if isinstance(body.get('devices',[]),list) else []},
             status=body.get('status'),ack=body.get('ack'))
+    except JamConflict as exc:
+        return jsonify(error=str(exc)),409
     except (ValueError, TypeError) as exc:
         return jsonify(error=str(exc)),400
     except PermissionError as exc:

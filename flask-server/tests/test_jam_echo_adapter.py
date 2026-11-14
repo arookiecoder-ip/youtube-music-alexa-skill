@@ -99,3 +99,8 @@ class EchoAdapterTests(unittest.TestCase):
         self.players['user:alice']=dict(_jam_driver_room='another-room')
         self.ns['_jam_send_echo']('room',self.a,None)
         self.ns['alexa_remote'].remote.command.assert_not_called()
+
+    def test_late_deselection_does_not_pause_an_output_that_was_reselected(self):
+        self.players['user:alice']=dict(_jam_driver_room='room')
+        self.ns['_jam_send_echo']('room',self.a,None)
+        self.ns['alexa_remote'].remote.command.assert_not_called()

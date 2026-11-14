@@ -147,7 +147,9 @@ class JamRooms:
             if not state['selected']:state['_running']=False
             self._advance(state)
             detached = {row['device'] for row in db.execute('''SELECT o.device FROM jam_outputs o
-                JOIN jam_members m ON m.id=o.member WHERE o.token=? AND (m.removed=1 OR m.left_room=1)''', (token,))}
+                JOIN jam_members m ON m.id=o.member WHERE o.token=? AND (m.removed=1 OR m.left_room=1)
+                AND NOT(json_extract(o.details,'$.server_echo')=1 AND EXISTS(
+                    SELECT 1 FROM jam_members active WHERE active.token=o.token AND active.user_id=m.user_id AND active.removed=0 AND active.left_room=0))''', (token,))}
             state['selected'] = [device for device in state['selected'] if device not in detached]
             if action:
                 command = body.get('command_id')
@@ -157,6 +159,7 @@ class JamRooms:
                 if not duplicate:
                     if action in ('remove', 'reorder', 'queue', 'shuffle', 'next', 'previous', 'select', 'repeat', 'configure', 'sort', 'clear_played') and body.get('revision') != state['revision']:
                         raise JamConflict('The Jam changed. Refresh and try again.')
+                    if action=='configure':self._check_echo_reservations(db,token,body.get('selected',[]))
                     self._command(state, action, body)
                     state['revision'] += 1
                     db.execute('INSERT INTO jam_commands VALUES(?,?)', (token, command))
@@ -308,6 +311,7 @@ class JamRooms:
                     if room:
                         room_state=json.loads(room['state'])
                         if device in room_state['selected'] and not room_state.get('targets',{}).get(device):
+                            self._check_echo_reservations(db,token,[echo])
                             room_state['selected']=[echo if d==device else d for d in room_state['selected']]
                             db.execute('UPDATE jam_rooms SET state=? WHERE token=?',(json.dumps(room_state),token))
                 # Root output is always the phone, regardless of personal routing.
@@ -324,7 +328,9 @@ class JamRooms:
         with self.database() as db:
             return [dict(row) for row in db.execute('''SELECT o.device,o.name,o.seen,o.error,o.details,o.status,o.member,m.name AS member_name FROM jam_outputs o
                 LEFT JOIN jam_members m ON m.id=o.member WHERE o.token=?
-                AND (o.member IS NULL OR (m.removed=0 AND m.left_room=0))''', (token,))]
+                AND (o.member IS NULL OR (m.removed=0 AND m.left_room=0) OR
+                (json_extract(o.details,'$.server_echo')=1 AND EXISTS(SELECT 1 FROM jam_members active
+                 WHERE active.token=o.token AND active.user_id=m.user_id AND active.removed=0 AND active.left_room=0)))''', (token,))]
 
     def volume(self, token, device, value, member=None):
         if isinstance(value,bool) or not isinstance(value,int) or not 0<=value<=100:
@@ -423,3 +429,11 @@ class JamRooms:
                 status=json.loads(row['status']);status['volume_error']='Volume: '+str(error)[:150]
                 db.execute('UPDATE jam_outputs SET status=? WHERE token=? AND device=?',(json.dumps(status),token,device))
             db.execute('DELETE FROM jam_device_commands WHERE token=? AND device=? AND id=?',(token,device,command));db.commit()
+
+    def _check_echo_reservations(self, db, token, selected):
+        if not isinstance(selected,list):return
+        echoes={device for device in selected if isinstance(device,str) and device.startswith('echo:')}
+        if not echoes:return
+        for row in db.execute('SELECT r.state FROM jam_rooms r JOIN jam_tokens t ON t.token=r.token WHERE r.token<>? AND t.created_at>?',(token,self.clock()-86400)):
+            if echoes.intersection(json.loads(row['state'])['selected']):
+                raise JamConflict('This Alexa device is playing in another Jam. Leave that Jam before selecting it here.')
