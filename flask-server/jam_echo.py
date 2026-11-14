@@ -36,7 +36,7 @@ class JamEchoDriver:
                     if device in selected:
                         self._dispatch(token, output, state)
                         for command in self.rooms.device_commands(token,device,output['member']):
-                            error=self.send(token,json.loads(output['details']),dict(action='volume',value=command['value']))
+                            error=self.send(token,dict(json.loads(output['details']),device=device),dict(action='volume',value=command['value']))
                             if not error:self.rooms.echo_volume_ack(token,device,command['id'],command['value'])
                 previous = {device: output for device, output in echoes.items() if device in selected}
                 if state is None:
@@ -47,14 +47,14 @@ class JamEchoDriver:
                 self.running.discard(token)
 
     def _dispatch(self, token, output, state):
-        details = json.loads(output['details'])
+        details = dict(json.loads(output['details']),device=output['device'])
         if state and not state.get('video_id'):
             return
         intent = ('stop',) if state is None else (state['entry_id'],state['playing'],state['seek_revision'],state.get('transport_revision',1))
         key = hashlib.sha256(json.dumps(intent).encode()).hexdigest()
         claim=self.rooms.claim_echo(token,output['device'],key)
         if not claim:
-            if state and not output.get('error'):
+            if state and state['playing'] and not output.get('error'):
                 report = self.snapshot(token,details,state)
                 if report:
                     self.rooms.echo_report(token,output['device'],key,report)

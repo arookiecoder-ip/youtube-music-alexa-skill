@@ -7755,10 +7755,15 @@ def _jam_send_echo(token, details, state):
     identity_token=_PLAYER_IDENTITY.set(details['identity'])
     try:
         serial=details['serial']
+        if state:
+            try:latest=_jam_rooms.transact(token)
+            except (PermissionError,JamConflict):return None
+            if details.get('device') not in latest['selected']:return None
+            if state.get('action')!='volume' and (latest['entry_id'],latest['playing'],latest['seek_revision'],latest.get('transport_revision',1))!=(state['entry_id'],state['playing'],state['seek_revision'],state.get('transport_revision',1)):return None
         if state and state.get('action')=='volume':
             return alexa_remote.remote.command(serial,'volume',state['value'])
         if not state or not state['playing']:
-            if _now_playing.get('_jam_driver_room')!=token:return None
+            if state is None and _now_playing.get('_jam_driver_room')!=token:return None
             return alexa_remote.remote.command(serial,'pause')
         if not _jam_token_valid(token):return 'This Jam has ended.'
         _claim_alexa_output(serial,wait=False)
@@ -7776,7 +7781,7 @@ def _jam_send_echo(token, details, state):
 
 def _jam_drive(token):
     # Tests inject their transport; live workers never run provider calls in an HTTP request.
-    if os.environ.get('YOUTUBE_STREAMING')=='0':return
+    if app.testing:return
     global _jam_echo_driver
     with _jam_echo_driver_lock:
         if _jam_echo_driver is None:
@@ -7864,6 +7869,7 @@ def jam_state():
     outputs = _jam_rooms.outputs(token)
     return _no_store(jsonify(active=True, host=host, url=_jam_url(token), playback=playback,
         members=[{'id': m['id'], 'name': m['name']} for m in unique_members.values()] if host else [],
+        error=next((o['error'] for o in outputs if o['device'] in playback['selected'] and o['error']),None) if not playback['playback_confirmed'] else None,
         outputs=[dict(device=o['device'], name=o['name'], online=_jam_rooms.online(o), error=o['error'],
             username=o['member_name'] or json.loads(o['details']).get('username','Host'),
             volume=json.loads(o['status']).get('volume'), kind=json.loads(o['details']).get('kind','phone'),
@@ -9287,11 +9293,12 @@ def _device_dispatch_failed(error):
 
 @app.route("/alexa/command/", methods=["POST"])
 def alexa_command():
-    with _np_lock:_now_playing.pop('_jam_driver_room',None)
     body = request.get_json(silent=True) or {}
     serial, action = _effective_serial(body.get("serial")), body.get("action")
     if not serial or not action:
         return error_response('missing "serial" or "action"', 400)
+    if action in ('play','pause','next','previous'):
+        with _np_lock:_now_playing.pop('_jam_driver_room',None)
     if action == 'volume':
         return _command_alexa_volume(serial, body.get('value'))
     if action in ('play', 'next', 'previous'):
