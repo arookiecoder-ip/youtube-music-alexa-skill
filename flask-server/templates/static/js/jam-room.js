@@ -3,7 +3,7 @@
   'use strict';
   const $ = id => document.getElementById(id), audio = $('audio');
   let state = null, busy = false, stopped = false, listening = false, current = '', lastSuccess = Date.now();
-  let device, lastAudioRetry=0;
+  let device, lastAudioRetry=0, lastSeek=-1;
   try { device=sessionStorage.getItem('musicbox_browser_id'); if(!device){device='browser-'+crypto.randomUUID();sessionStorage.setItem('musicbox_browser_id',device);} } catch (_) { device='browser-'+crypto.randomUUID(); }
   const error = message => { $('error').textContent=message; $('error').hidden=!message; };
   const notice = message => { $('notice').textContent=message; $('notice').hidden=!message; };
@@ -66,7 +66,7 @@
     if(!p.duration_ms && Number.isFinite(audio.duration) && audio.duration>0) control('duration',{entry_id:p.entry_id,duration_ms:Math.round(audio.duration*1000)});
     if(audio.error && Date.now()-lastAudioRetry>5000) {lastAudioRetry=Date.now();current='';}
     if(current!==p.entry_id) {current=p.entry_id;audio.src='/api/jam/audio/'+encodeURIComponent(p.video_id);audio.load();}
-    if(audio.readyState>0 && Math.abs(audio.currentTime*1000-p.position_ms)>1500) audio.currentTime=p.position_ms/1000;
+    if(audio.readyState>0) {if(lastSeek!==p.seek_revision || Math.abs(audio.currentTime*1000-p.position_ms)>1500) audio.currentTime=p.position_ms/1000;lastSeek=p.seek_revision;}
     if(p.playing && audio.paused) {
       try{await audio.play();notice('');}catch(_){notice('Tap Enable audio to listen on this browser.');$('enable-audio').hidden=false;}
     } else if(!p.playing)audio.pause();

@@ -55,7 +55,7 @@ class JamRooms:
         index = index if isinstance(index, int) and 0 <= index < len(tracks) else 0
         state = dict(queue=tracks, queue_index=index if tracks else -1, playing=bool(tracks and snapshot.get('playing')),
             position_ms=max(0, int(snapshot.get('position_ms') or 0)), anchored_at=self.clock(),
-            revision=1, queue_version=1, repeat='off', mode='single', selected=[device] if device else [])
+            revision=1, queue_version=1, seek_revision=0, repeat='off', mode='single', selected=[device] if device else [])
         with self.database() as db:
             db.execute('INSERT OR REPLACE INTO jam_rooms VALUES(?,?)', (token, json.dumps(state)))
             db.commit()
@@ -103,6 +103,7 @@ class JamRooms:
             if not row:
                 raise JamConflict('This Jam needs a new invite. Ask the host to restart it.')
             state = json.loads(row['state'])
+            state.setdefault('seek_revision', 0)
             clock_reversed = self.clock() < state['anchored_at']
             before = (state['queue_index'], state['playing'], state['revision'], tuple(state['selected']))
             self._advance(state)
@@ -145,6 +146,7 @@ class JamRooms:
                 raise ValueError('Invalid position.')
             duration = queue[state['queue_index']]['duration_ms']
             state['position_ms'] = min(value, duration) if duration else value
+            state['seek_revision'] += 1
         elif action in ('next', 'previous', 'select'):
             index = body.get('index') if action == 'select' else state['queue_index'] + (1 if action == 'next' else -1)
             if action in ('next', 'previous') and state['repeat'] == 'all':
