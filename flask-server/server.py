@@ -7899,6 +7899,19 @@ def jam_audio(video_id):
     return response
 
 
+from jam_preparation import JamPreparation
+_jam_preparation = JamPreparation(_jam_rooms, _jam_token_valid,
+    lambda video: asyncio.run(Supporting.get_radio_queue(video)),
+    lambda video: _ensure_audio_ready_for_play(video, prefetch=True), _spawn_for_identity)
+
+
+def _jam_prepare(token, playback, expand=False):
+    entry=_jam_cache().get(token)
+    if not entry:return
+    identity=_player_identity_for_user_id(entry['user_id']) if entry['user_id'] else 'owner'
+    _jam_preparation.schedule(token,playback,identity,expand)
+
+
 @app.route('/api/jam/state/', methods=['GET'])
 def jam_state():
     token, member = _jam_access_token()
@@ -7907,6 +7920,7 @@ def jam_state():
     try:
         playback = _jam_rooms.transact(token, member=member['id'] if member else None)
         _jam_drive(token)
+        _jam_prepare(token,playback,expand=bool(playback['queue']) and len(playback['queue'])-playback['queue_index']<=2)
         playback = _jam_rooms.presented(token, playback)
     except (JamConflict, PermissionError) as exc:
         return jsonify(error=str(exc)), 409
@@ -7921,13 +7935,14 @@ def jam_state():
     device = request.args.get('device_id', '')
     outputs = _jam_rooms.outputs(token)
     return _no_store(jsonify(active=True, host=host, url=_jam_url(token), playback=playback,
+        local_sync_key=hmac.new(str(app.secret_key).encode(),('jam-local-sync:'+token+':'+','.join(sorted(m['id'] for m in members))).encode(),hashlib.sha256).hexdigest(),
         members=[{'id': m['id'], 'name': m['name']} for m in unique_members.values()] if host else [],
         error=next((o['error'] for o in outputs if o['device'] in playback['selected'] and o['error']),None) if not playback['playback_confirmed'] else None,
         outputs=[dict(device=o['device'], name=o['name'], online=_jam_rooms.online(o), error=o['error'] or json.loads(o['status']).get('volume_error',''),
             username=o['member_name'] or json.loads(o['details']).get('username','Host'),
             volume=json.loads(o['status']).get('volume'),playing=bool(json.loads(o['status']).get('playing')),
             processing=bool(json.loads(o['status']).get('processing')),confirmed=bool(json.loads(o['status']).get('confirmed')),kind=json.loads(o['details']).get('kind','phone'),
-            devices=json.loads(o['details']).get('devices',[])) for o in outputs],
+            devices=json.loads(o['details']).get('devices',[])) for o in outputs if _jam_rooms.online(o)],
         listen=device in playback['selected'],
         member_count=len({m['user_id'] or m['id'] for m in members}) + 1))
 
@@ -7976,7 +7991,7 @@ def jam_control():
         catalog = _jam_rooms.outputs(token)
         allowed = {o['device'] for o in catalog if _jam_rooms.online(o)}
         targets=body.get('targets',{})
-        if not isinstance(targets,dict) or any(not isinstance(value,str) or not any(o['device']==key and any(isinstance(d,dict) and d.get('id')==value for d in json.loads(o['details']).get('devices',[])) for o in catalog) for key,value in targets.items()):
+        if not isinstance(targets,dict) or any(not isinstance(value,str) or not any(o['device']==key and _jam_rooms.online(o) and any(isinstance(d,dict) and d.get('id')==value and d.get('online',True) for d in json.loads(o['details']).get('devices',[])) for o in catalog) for key,value in targets.items()):
             return jsonify(error='Choose a connected participant device.'),400
         selected = body.get('selected')
         if not isinstance(selected, list) or any(not isinstance(d, str) or d not in allowed for d in selected):
@@ -7987,6 +8002,8 @@ def jam_control():
             return jsonify(ok=True)
         state = _jam_rooms.transact(token, action, body, member['id'] if member else None)
         _jam_drive(token)
+        if action in ('queue','select','next','previous','play','retry'):
+            _jam_prepare(token,state,expand=action=='queue' and len(state['queue'])==1)
         state = _jam_rooms.presented(token,state)
     except PermissionError as exc:
         return jsonify(error=str(exc)), 403

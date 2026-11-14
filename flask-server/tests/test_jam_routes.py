@@ -2,6 +2,8 @@
 import ast
 import json
 import contextvars
+import hashlib
+import hmac
 import secrets
 import threading
 from pathlib import Path
@@ -31,7 +33,7 @@ class JamRouteTests(unittest.TestCase):
         identity=contextvars.ContextVar('identity',default='owner')
         layer=SimpleNamespace(alexa_identity=SimpleNamespace(skill_namespace=lambda _:''),
             alexa_access=SimpleNamespace(enabled=lambda _:True))
-        self.ns=dict(_jam_drive=lambda token:None,json=json,app=app,Response=Response,request=request,session=session,jsonify=jsonify,render_template=render_template,
+        self.ns=dict(hashlib=hashlib,hmac=hmac,_jam_prepare=lambda *args,**kwargs:None,_jam_drive=lambda token:None,json=json,app=app,Response=Response,request=request,session=session,jsonify=jsonify,render_template=render_template,
             time=time,secrets=secrets,get_db=self.database,_jam_members=self.members,_jam_rooms=self.rooms,JamConflict=JamConflict,
             _jam_cache=lambda:cache,JAM_MAX_AGE=86400,
             _mu_web_identity=lambda:dict(id=request.headers['Test-User'],username=request.headers['Test-User'],role='user') if request.headers.get('Test-User') else None,
@@ -230,6 +232,49 @@ class JamRouteTests(unittest.TestCase):
         data=self.guest.get('/.well-known/assetlinks.json').get_json()[0]['target']
         self.assertEqual(data['package_name'],'in.synthora.musicbox')
         self.assertEqual(len(data['sha256_cert_fingerprints'][0].split(':')),32)
+
+
+    def test_offline_outputs_are_hidden_and_cannot_be_selected(self):
+        headers={'Test-User':'host'}
+        self.host.post('/api/jam/presence/',json={'device_id':'host-phone','devices':[
+            {'id':'phone','name':'Phone','kind':'phone','online':True},
+            {'id':'alexa:offline','name':'Offline Echo','kind':'alexa','online':False}]},headers=headers)
+        data=self.host.get('/api/jam/state/',headers=headers).get_json()
+        self.assertEqual([o['device'] for o in data['outputs']],['host-phone'])
+        response=self.host.post('/api/jam/control/',json={'action':'configure','mode':'single',
+            'selected':['host-phone'],'targets':{'host-phone':'alexa:offline'},
+            'revision':data['playback']['revision'],'command_id':'offline'},headers=headers)
+        self.assertEqual(response.status_code,400)
+        with self.database() as db:
+            db.execute("UPDATE jam_outputs SET seen=0 WHERE device='host-phone'");db.commit()
+        self.assertEqual(self.host.get('/api/jam/state/',headers=headers).get_json()['outputs'],[])
+
+    def test_selected_member_can_stream_in_single_and_multiple_modes_but_anonymous_request_cannot(self):
+        headers={'Test-User':'alice'}
+        self.join(self.alice,'alice',device='alice-phone')
+        self.alice.post('/api/jam/presence/',json={'device_id':'alice-phone'},headers=headers)
+        self.host.post('/api/jam/presence/',json={'device_id':'host-phone'},headers={'Test-User':'host'})
+        for mode,selected in [('single',['alice-phone']),('multiple',['alice-phone','host-phone'])]:
+            state=self.host.get('/api/jam/state/',headers={'Test-User':'host'}).get_json()['playback']
+            response=self.host.post('/api/jam/control/',json={'action':'configure','mode':mode,'selected':selected,
+                'revision':state['revision'],'command_id':mode},headers={'Test-User':'host'})
+            self.assertEqual(response.status_code,200)
+            self.assertTrue(self.alice.get('/api/jam/state/?device_id=alice-phone',headers=headers).get_json()['listen'])
+            video=state['queue'][0]['video_id']
+            self.assertEqual(self.alice.get('/api/jam/audio/'+video,headers=headers).status_code,200)
+            self.assertEqual(self.app.test_client().get('/api/jam/audio/'+video).status_code,401)
+
+    def test_local_sync_key_is_shared_only_by_current_room_participants(self):
+        self.join(self.alice,'alice',device='alice-phone')
+        host=self.host.get('/api/jam/state/',headers={'Test-User':'host'}).get_json()
+        guest=self.alice.get('/api/jam/state/',headers={'Test-User':'alice'}).get_json()
+        self.assertEqual(host['local_sync_key'],guest['local_sync_key'])
+        self.assertEqual(len(host['local_sync_key']),64)
+        self.assertNotIn('local_sync_key',self.app.test_client().get('/api/jam/state/').get_json())
+        with self.alice.session_transaction() as cookie:member=cookie['jam_member']
+        self.members.remove('room',member)
+        self.assertNotIn('local_sync_key',self.alice.get('/api/jam/state/',headers={'Test-User':'alice'}).get_json())
+        self.assertNotEqual(host['local_sync_key'],self.host.get('/api/jam/state/',headers={'Test-User':'host'}).get_json()['local_sync_key'])
 
 
 if __name__ == '__main__':unittest.main()

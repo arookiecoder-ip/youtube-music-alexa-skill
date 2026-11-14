@@ -125,6 +125,17 @@ class JamRooms:
             state.setdefault('seek_revision', 0)
             clock_reversed = self.clock() < state['anchored_at']
             before = (state['queue_index'], state['playing'], state['revision'], tuple(state['selected']),state.get('_running'),state.get('_report_seen'))
+            echo_devices={row['device'] for row in db.execute('SELECT device,details FROM jam_outputs WHERE token=?',(token,))
+                          if json.loads(row['details']).get('kind')=='alexa' or json.loads(row['details']).get('server_echo')}
+            def echo_selected(value):
+                return value in echo_devices or value.startswith('echo:') or state.get('targets',{}).get(value,'').startswith('alexa:')
+            # Existing rooms also adopt the phone/tablet-only multiple-output policy.
+            if state['mode']=='multiple':
+                phones=[device for device in state['selected'] if not echo_selected(device)]
+                if phones!=state['selected']:
+                    state['selected']=phones
+                    state['targets']={key:value for key,value in state.get('targets',{}).items() if key in phones}
+                    state['revision']+=1
             selected_rows=[dict(r) for r in db.execute('SELECT device,status,seen FROM jam_outputs WHERE token=?',(token,)) if r['device'] in state['selected']]
             if selected_rows:
                 current=state['queue'][state['queue_index']] if state['queue_index']>=0 else {}
@@ -161,6 +172,8 @@ class JamRooms:
                         raise JamConflict('The Jam changed. Refresh and try again.')
                     if action=='configure':self._check_echo_reservations(db,token,body.get('selected',[]))
                     self._command(state, action, body)
+                    if state['mode']=='multiple' and any(echo_selected(device) for device in state['selected']):
+                        raise ValueError('Echo devices are available only in single-device mode.')
                     state['revision'] += 1
                     db.execute('INSERT INTO jam_commands VALUES(?,?)', (token, command))
             after = (state['queue_index'], state['playing'], state['revision'], tuple(state['selected']),state.get('_running'),state.get('_report_seen'))
@@ -173,6 +186,27 @@ class JamRooms:
         result.update(queue_epoch=hashlib.sha256(token.encode()).hexdigest()[:16], duration_ms=current.get('duration_ms', 0), playback_confirmed=True, playback_processing=False,
                       playback_revision=state['revision'], server_time_ms=int(self.clock() * 1000))
         return result
+
+    def extend_radio(self, token, queue_version, seed, items):
+        """Late recommendations must never replace a user's newer queue edits."""
+        tracks=self.tracks(items)
+        with self.database() as db:
+            db.execute('BEGIN IMMEDIATE')
+            row=db.execute('SELECT state FROM jam_rooms WHERE token=? AND EXISTS(SELECT 1 FROM jam_tokens WHERE token=?)',(token,token)).fetchone()
+            if not row:return False
+            state=json.loads(row['state'])
+            if state['queue_version']!=queue_version or not any(t['video_id']==seed for t in state['queue']):return False
+            seen={t['video_id'] for t in state['queue']}
+            additions=[]
+            for track in tracks:
+                if track['video_id'] not in seen:
+                    seen.add(track['video_id']);additions.append(track)
+            additions=additions[:5000-len(state['queue'])]
+            if not additions:return False
+            state['queue'].extend(additions)
+            state['queue_version']+=1;state['revision']+=1
+            db.execute('UPDATE jam_rooms SET state=? WHERE token=?',(json.dumps(state),token));db.commit()
+            return True
 
     def _command(self, state, action, body):
         queue = state['queue']
