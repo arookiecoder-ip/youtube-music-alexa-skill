@@ -7935,6 +7935,7 @@ def jam_state():
     device = request.args.get('device_id', '')
     outputs = _jam_rooms.outputs(token)
     return _no_store(jsonify(active=True, host=host, url=_jam_url(token), playback=playback,
+        local_sync_key=hmac.new(str(app.secret_key).encode(),('jam-local-sync:'+token).encode(),hashlib.sha256).hexdigest(),
         members=[{'id': m['id'], 'name': m['name']} for m in unique_members.values()] if host else [],
         error=next((o['error'] for o in outputs if o['device'] in playback['selected'] and o['error']),None) if not playback['playback_confirmed'] else None,
         outputs=[dict(device=o['device'], name=o['name'], online=_jam_rooms.online(o), error=o['error'] or json.loads(o['status']).get('volume_error',''),

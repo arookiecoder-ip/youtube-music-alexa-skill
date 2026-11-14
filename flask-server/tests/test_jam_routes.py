@@ -2,6 +2,8 @@
 import ast
 import json
 import contextvars
+import hashlib
+import hmac
 import secrets
 import threading
 from pathlib import Path
@@ -31,7 +33,7 @@ class JamRouteTests(unittest.TestCase):
         identity=contextvars.ContextVar('identity',default='owner')
         layer=SimpleNamespace(alexa_identity=SimpleNamespace(skill_namespace=lambda _:''),
             alexa_access=SimpleNamespace(enabled=lambda _:True))
-        self.ns=dict(_jam_prepare=lambda *args,**kwargs:None,_jam_drive=lambda token:None,json=json,app=app,Response=Response,request=request,session=session,jsonify=jsonify,render_template=render_template,
+        self.ns=dict(hashlib=hashlib,hmac=hmac,_jam_prepare=lambda *args,**kwargs:None,_jam_drive=lambda token:None,json=json,app=app,Response=Response,request=request,session=session,jsonify=jsonify,render_template=render_template,
             time=time,secrets=secrets,get_db=self.database,_jam_members=self.members,_jam_rooms=self.rooms,JamConflict=JamConflict,
             _jam_cache=lambda:cache,JAM_MAX_AGE=86400,
             _mu_web_identity=lambda:dict(id=request.headers['Test-User'],username=request.headers['Test-User'],role='user') if request.headers.get('Test-User') else None,
@@ -261,6 +263,17 @@ class JamRouteTests(unittest.TestCase):
             video=state['queue'][0]['video_id']
             self.assertEqual(self.alice.get('/api/jam/audio/'+video,headers=headers).status_code,200)
             self.assertEqual(self.app.test_client().get('/api/jam/audio/'+video).status_code,401)
+
+    def test_local_sync_key_is_shared_only_by_current_room_participants(self):
+        self.join(self.alice,'alice',device='alice-phone')
+        host=self.host.get('/api/jam/state/',headers={'Test-User':'host'}).get_json()
+        guest=self.alice.get('/api/jam/state/',headers={'Test-User':'alice'}).get_json()
+        self.assertEqual(host['local_sync_key'],guest['local_sync_key'])
+        self.assertEqual(len(host['local_sync_key']),64)
+        self.assertNotIn('local_sync_key',self.app.test_client().get('/api/jam/state/').get_json())
+        with self.alice.session_transaction() as cookie:member=cookie['jam_member']
+        self.members.remove('room',member)
+        self.assertNotIn('local_sync_key',self.alice.get('/api/jam/state/',headers={'Test-User':'alice'}).get_json())
 
 
 if __name__ == '__main__':unittest.main()
