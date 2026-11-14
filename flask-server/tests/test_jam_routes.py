@@ -274,6 +274,7 @@ class JamRouteTests(unittest.TestCase):
         with self.alice.session_transaction() as cookie:member=cookie['jam_member']
         self.members.remove('room',member)
         self.assertNotIn('local_sync_key',self.alice.get('/api/jam/state/',headers={'Test-User':'alice'}).get_json())
+        self.assertNotEqual(host['local_sync_key'],self.host.get('/api/jam/state/',headers={'Test-User':'host'}).get_json()['local_sync_key'])
 
 
 if __name__ == '__main__':unittest.main()
