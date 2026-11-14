@@ -398,7 +398,7 @@ class JamRooms:
         with self.database() as db:
             row=db.execute('SELECT status FROM jam_outputs WHERE token=? AND device=?',(token,device)).fetchone()
             if not row:return
-            status=json.loads(row['status']);status['volume']=value
+            status=json.loads(row['status']);status['volume']=value;status.pop('volume_error',None)
             db.execute('UPDATE jam_outputs SET status=? WHERE token=? AND device=?',(json.dumps(status),token,device))
             db.execute('DELETE FROM jam_device_commands WHERE token=? AND device=? AND id=?',(token,device,command));db.commit()
 
@@ -407,3 +407,11 @@ class JamRooms:
         if details.get('server_echo'):
             return any(d.get('online',True) for d in details.get('devices',[]) if isinstance(d,dict))
         return self.clock()-output['seen']<20
+
+    def echo_volume_failed(self, token, device, command, error):
+        with self.database() as db:
+            row=db.execute('SELECT status FROM jam_outputs WHERE token=? AND device=?',(token,device)).fetchone()
+            if row:
+                status=json.loads(row['status']);status['volume_error']='Volume: '+str(error)[:150]
+                db.execute('UPDATE jam_outputs SET status=? WHERE token=? AND device=?',(json.dumps(status),token,device))
+            db.execute('DELETE FROM jam_device_commands WHERE token=? AND device=? AND id=?',(token,device,command));db.commit()

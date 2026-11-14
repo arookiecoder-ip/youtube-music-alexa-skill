@@ -7745,7 +7745,9 @@ def _jam_echo_snapshot(token, details, state):
             if ours and _now_playing.get('_jam_driver_entry')!=state['entry_id']:return None
             finished=bool(_now_playing.get('_alexa_finished_token') and _now_playing.get('_jam_driver_entry')==state['entry_id'])
         if np.get('video_id')!=state.get('video_id') or (not ours and output.get('output_serial')!=details['serial']):return None
-        return dict(video_id=np['video_id'],entry_id=state['entry_id'],ended=finished,
+        failure=np.get('playback_error') or {}
+        failure_message=failure.get('message','') if ours and isinstance(failure,dict) and failure.get('type')!='buffering' else ''
+        return dict(error=failure_message,video_id=np['video_id'],entry_id=state['entry_id'],ended=finished,
                     playing=bool(np.get('playing')),confirmed=bool(np.get('playback_confirmed')),
                     processing=bool(np.get('playback_processing')),position_ms=state['duration_ms'] if finished else int(np.get('position_ms') or 0),
                     seek_revision=state['seek_revision'],target_id='alexa:'+details['serial'])
@@ -7870,7 +7872,7 @@ def jam_state():
     return _no_store(jsonify(active=True, host=host, url=_jam_url(token), playback=playback,
         members=[{'id': m['id'], 'name': m['name']} for m in unique_members.values()] if host else [],
         error=next((o['error'] for o in outputs if o['device'] in playback['selected'] and o['error']),None) if not playback['playback_confirmed'] else None,
-        outputs=[dict(device=o['device'], name=o['name'], online=_jam_rooms.online(o), error=o['error'],
+        outputs=[dict(device=o['device'], name=o['name'], online=_jam_rooms.online(o), error=o['error'] or json.loads(o['status']).get('volume_error',''),
             username=o['member_name'] or json.loads(o['details']).get('username','Host'),
             volume=json.loads(o['status']).get('volume'), kind=json.loads(o['details']).get('kind','phone'),
             devices=json.loads(o['details']).get('devices',[])) for o in outputs],

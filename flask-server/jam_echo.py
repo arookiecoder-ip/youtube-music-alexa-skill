@@ -38,6 +38,7 @@ class JamEchoDriver:
                         for command in self.rooms.device_commands(token,device,output['member']):
                             error=self.send(token,dict(json.loads(output['details']),device=device),dict(action='volume',value=command['value']))
                             if not error:self.rooms.echo_volume_ack(token,device,command['id'],command['value'])
+                            else:self.rooms.echo_volume_failed(token,device,command['id'],str(error))
                 previous = {device: output for device, output in echoes.items() if device in selected}
                 if state is None:
                     break
@@ -54,10 +55,14 @@ class JamEchoDriver:
         key = hashlib.sha256(json.dumps(intent).encode()).hexdigest()
         claim=self.rooms.claim_echo(token,output['device'],key)
         if not claim:
+            status=json.loads(output['status'])
+            if status.get('processing') and not status.get('confirmed') and self.clock()-status.get('dispatch_at',self.clock())>15:
+                self.rooms.echo_report(token,output['device'],key,dict(playing=False,confirmed=False,processing=False),"Alexa did not confirm audio. Retry this output.")
+                return
             if state and state['playing'] and not output.get('error'):
                 report = self.snapshot(token,details,state)
                 if report:
-                    self.rooms.echo_report(token,output['device'],key,report)
+                    self.rooms.echo_report(token,output['device'],key,report,report.pop('error',''))
             return
         report = self.snapshot(token,details,state) if state else None
         if claim=='initial' and state and report and report.get('confirmed') and report.get('playing')==state['playing'] and not report.get('processing') and report.get('video_id')==state['video_id'] and state['seek_revision']==0 and abs(report.get('position_ms',0)-state['position_ms'])<=1500:
@@ -65,7 +70,7 @@ class JamEchoDriver:
             return
         self.rooms.echo_report(token,output['device'],key,dict(video_id=state.get('video_id','') if state else '',
             playing=bool(state and state['playing']),confirmed=False,processing=bool(state and state['playing']),
-            position_ms=state.get('position_ms',0) if state else 0,seek_revision=state.get('seek_revision',0) if state else 0))
+            dispatch_at=self.clock(),position_ms=state.get('position_ms',0) if state else 0,seek_revision=state.get('seek_revision',0) if state else 0))
         try:
             error = self.send(token,details,state)
         except Exception:
