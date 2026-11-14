@@ -125,6 +125,17 @@ class JamRooms:
             state.setdefault('seek_revision', 0)
             clock_reversed = self.clock() < state['anchored_at']
             before = (state['queue_index'], state['playing'], state['revision'], tuple(state['selected']),state.get('_running'),state.get('_report_seen'))
+            echo_devices={row['device'] for row in db.execute('SELECT device,details FROM jam_outputs WHERE token=?',(token,))
+                          if json.loads(row['details']).get('kind')=='alexa' or json.loads(row['details']).get('server_echo')}
+            def echo_selected(value):
+                return value in echo_devices or value.startswith('echo:') or state.get('targets',{}).get(value,'').startswith('alexa:')
+            # Existing rooms also adopt the phone/tablet-only multiple-output policy.
+            if state['mode']=='multiple':
+                phones=[device for device in state['selected'] if not echo_selected(device)]
+                if phones!=state['selected']:
+                    state['selected']=phones
+                    state['targets']={key:value for key,value in state.get('targets',{}).items() if key in phones}
+                    state['revision']+=1
             selected_rows=[dict(r) for r in db.execute('SELECT device,status,seen FROM jam_outputs WHERE token=?',(token,)) if r['device'] in state['selected']]
             if selected_rows:
                 current=state['queue'][state['queue_index']] if state['queue_index']>=0 else {}
@@ -161,6 +172,8 @@ class JamRooms:
                         raise JamConflict('The Jam changed. Refresh and try again.')
                     if action=='configure':self._check_echo_reservations(db,token,body.get('selected',[]))
                     self._command(state, action, body)
+                    if state['mode']=='multiple' and any(echo_selected(device) for device in state['selected']):
+                        raise ValueError('Echo devices are available only in single-device mode.')
                     state['revision'] += 1
                     db.execute('INSERT INTO jam_commands VALUES(?,?)', (token, command))
             after = (state['queue_index'], state['playing'], state['revision'], tuple(state['selected']),state.get('_running'),state.get('_report_seen'))

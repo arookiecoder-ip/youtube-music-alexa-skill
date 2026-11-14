@@ -12,11 +12,13 @@ class JamEchoTests(JamRoomsTests):
             dict(id='alexa:serial',kind='alexa',name='Living room Echo',active=active,online=True)]))
         return next(o for o in self.rooms.outputs('room') if json.loads(o['details']).get('server_echo'))
 
-    def test_phone_and_echo_are_individually_selectable_at_the_same_time(self):
+    def test_echo_is_selectable_only_in_single_device_mode(self):
         echo=self.register()
         self.assertEqual(self.state()['selected'],[echo['device']])
-        state=self.command('configure',mode='multiple',selected=['host-phone',echo['device']])
-        self.assertEqual(len(state['selected']),2)
+        with self.assertRaisesRegex(ValueError,'single-device'):
+            self.command('configure',mode='multiple',selected=['host-phone',echo['device']])
+        self.assertEqual(self.command('configure',mode='single',selected=[echo['device']])['selected'],[echo['device']])
+        self.assertEqual(self.command('configure',mode='multiple',selected=['host-phone'])['selected'],['host-phone'])
         root=next(o for o in self.rooms.outputs('room') if o['device']=='host-phone')
         self.assertEqual([d['kind'] for d in json.loads(root['details'])['devices']],['phone'])
 
@@ -60,7 +62,7 @@ class JamEchoTests(JamRoomsTests):
         second=self.members.join('room','alice','Alice','alice-tablet')
         self.register('alice-tablet',second,'user:alice',False)
         echo=self.register('alice-phone',first,'user:alice',False)
-        self.command('configure',mode='multiple',selected=[echo['device'],'alice-tablet','alice-phone'])
+        self.command('configure',mode='single',selected=[echo['device']])
         self.members.leave(first)
         self.assertNotIn('alice-phone',self.state()['selected'])
         self.assertIn(echo['device'],self.state()['selected'])
@@ -116,3 +118,11 @@ class JamEchoTests(JamRoomsTests):
         driver=JamEchoDriver(self.rooms,send,Mock(return_value=None),clock=lambda:self.now)
         driver._dispatch('room',echo,repeated)
         self.assertEqual(sent,[1]);self.assertEqual(self.state()['seek_revision'],1)
+
+    def test_existing_multiple_output_room_deselects_echo_on_refresh(self):
+        echo=self.register()
+        with self.database() as db:
+            row=db.execute("SELECT state FROM jam_rooms WHERE token='room'").fetchone()
+            state=json.loads(row['state']);state.update(mode='multiple',selected=['host-phone',echo['device']])
+            db.execute("UPDATE jam_rooms SET state=? WHERE token='room'",(json.dumps(state),));db.commit()
+        self.assertEqual(self.state()['selected'],['host-phone'])
