@@ -102,9 +102,20 @@ class JamBrowserTests(unittest.TestCase):
         friend.locator('#play').click()
         self.page.wait_for_function("document.querySelector('#audio').paused")
         friend.wait_for_function("document.querySelector('#audio').paused")
-        friend.locator('#seek').evaluate("node=>{node.value='3000';node.dispatchEvent(new Event('change',{bubbles:true}));}")
-        self.page.wait_for_function("Math.abs(document.querySelector('#audio').currentTime-3)<0.4")
-        friend.wait_for_function("Math.abs(document.querySelector('#audio').currentTime-3)<0.4")
+        expect(friend.locator('#seek')).to_be_enabled()
+        with friend.expect_response(lambda response: '/api/jam/control/' in response.url and response.request.post_data_json.get('action') == 'seek'):
+            friend.locator('#seek').evaluate("node=>{node.value='3000';node.dispatchEvent(new Event('change',{bubbles:true}));}")
+        expected=self.case.rooms.transact('room')
+        self.assertEqual(expected['position_ms'],3000)
+        try:
+            self.page.wait_for_function("Math.abs(document.querySelector('#audio').currentTime-3)<0.4",timeout=7000)
+            friend.wait_for_function("Math.abs(document.querySelector('#audio').currentTime-3)<0.4",timeout=7000)
+        except Exception:
+            print('ROOM SEEK:',{key:expected[key] for key in ('position_ms','playing','seek_revision')},flush=True)
+            for name,page in [('host',self.page),('member',friend)]:
+                print(name,page.evaluate("()=>{const a=document.querySelector('#audio');return {position:a.currentTime,duration:a.duration,ready:a.readyState,paused:a.paused,error:a.error?.message,uiError:document.querySelector('#error').textContent};}"),flush=True)
+                page.screenshot(path=str(self.artifacts/(name+'-seek-failure.png')),full_page=True)
+            raise
         member.close()
         self.assertFalse(self.errors,self.errors)
 
