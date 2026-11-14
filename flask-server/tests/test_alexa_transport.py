@@ -90,3 +90,15 @@ class AmazonTransportTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('temporarily unavailable',error);self.assertIs(owner._login,login)
         self.assertIsNone(authentication_failure(error),'Temporary outages must not trigger the server authentication-stop path')
         self.assertTrue(owner.connection_state);login.close.assert_not_awaited()
+
+    async def test_volume_does_not_supersede_pending_playback(self):
+        owner=SimpleNamespace();started=asyncio.Event();release=asyncio.Event();calls=[]
+        async def first():
+            started.set();await release.wait()
+        async def send(value):calls.append(value)
+        running=asyncio.create_task(bounded_transport(owner,'echo','play',first));await started.wait()
+        pause=asyncio.create_task(bounded_transport(owner,'echo','pause',lambda:send('pause')))
+        await asyncio.sleep(0)
+        await bounded_transport(owner,'echo',('volume',40),lambda:send('volume'))
+        release.set();await running;await pause
+        self.assertEqual(calls,['volume','pause'])

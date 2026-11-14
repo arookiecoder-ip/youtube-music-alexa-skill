@@ -69,4 +69,7 @@ async def bounded_transport(owner, serial, key, operation):
     gate = getattr(owner, '_amazon_transport', None)
     if gate is None:
         gate = owner._amazon_transport = AmazonTransport()
-    return await gate.run(serial, key, operation)
+    # Volume changes must not supersede a queued play/pause intent. They still
+    # share the same account cooldown and their own bounded per-device lane.
+    lane = (serial, 'volume') if isinstance(key, tuple) and key[0] == 'volume' else (serial, 'playback')
+    return await gate.run(lane, key, operation)
