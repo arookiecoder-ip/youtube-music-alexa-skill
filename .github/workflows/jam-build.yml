@@ -2,7 +2,7 @@ name: Jam backend build and regressions
 on:
   push:
     branches: [feat/jam-sessions, fix/jam-playback-session, codex/alexa-backend-retries]
-    paths: ['flask-server/**', '.github/workflows/jam-build.yml']
+    paths: ['flask-server/**', 'scripts/**', '.github/workflows/jam-build.yml']
   workflow_dispatch:
 permissions:
   contents: read
@@ -19,6 +19,8 @@ jobs:
         with:
           python-version: '3.12'
       - run: python -m pip install --require-hashes -r requirements-tests.lock
+      - name: Deployment environment file integrity
+        run: python -m unittest discover -s scripts/tests -p 'test_deploy_env_format.py' -v
       - name: Jam membership, authorization, queue races and playback clock
         env:
           PYTHONPATH: flask-server:flask-server/tests
