@@ -17,6 +17,8 @@ class EchoAdapterTests(unittest.TestCase):
         class Player:
             def data(self):return test.players.setdefault(test.identity.get(),{})
             def get(self,*args):return self.data().get(*args)
+            def __getitem__(self,key):return self.data()[key]
+            def __setitem__(self,key,value):self.data()[key]=value
             def pop(self,*args):return self.data().pop(*args)
             def update(self,*args,**kwargs):self.data().update(*args,**kwargs)
         self.player=Player()

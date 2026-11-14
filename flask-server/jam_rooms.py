@@ -71,7 +71,7 @@ class JamRooms:
         index = index if isinstance(index, int) and 0 <= index < len(tracks) else 0
         state = dict(queue=tracks, queue_index=index if tracks else -1, playing=bool(tracks and snapshot.get('playing')),
             position_ms=max(0, int(snapshot.get('position_ms') or 0)), anchored_at=self.clock(),
-            revision=1, queue_version=1, seek_revision=0, transport_revision=1, repeat='off', mode='single', selected=[device] if device else [])
+            revision=1, queue_version=1, seek_revision=0, transport_revision=1, shuffle=False, repeat='off', mode='single', selected=[device] if device else [])
         with self.database() as db:
             db.execute('INSERT OR REPLACE INTO jam_rooms VALUES(?,?)', (token, json.dumps(state)))
             db.commit()
@@ -157,7 +157,7 @@ class JamRooms:
                     raise ValueError('A command ID is required.')
                 duplicate = db.execute('SELECT 1 FROM jam_commands WHERE token=? AND id=?', (token, command)).fetchone()
                 if not duplicate:
-                    if action in ('remove', 'reorder', 'queue', 'shuffle', 'next', 'previous', 'select', 'repeat', 'configure', 'sort', 'clear_played') and body.get('revision') != state['revision']:
+                    if action in ('remove', 'reorder', 'queue', 'shuffle', 'next', 'previous', 'select', 'repeat', 'configure', 'sort', 'clear_played', 'reshuffle') and body.get('revision') != state['revision']:
                         raise JamConflict('The Jam changed. Refresh and try again.')
                     if action=='configure':self._check_echo_reservations(db,token,body.get('selected',[]))
                     self._command(state, action, body)
@@ -211,7 +211,7 @@ class JamRooms:
                 index = body.get('index', 0)
                 if isinstance(index, bool) or not isinstance(index, int) or not 0 <= index < len(tracks):
                     raise ValueError('Invalid queue position.')
-                state.update(queue=tracks, queue_index=index, position_ms=0, playing=True)
+                state.update(queue=tracks, queue_index=index, position_ms=0, playing=True,shuffle=False,unshuffled=[])
             else:
                 if len(queue) + len(tracks) > 5000:
                     raise ValueError('This queue is full.')
@@ -233,17 +233,26 @@ class JamRooms:
             if any(isinstance(v, bool) or not isinstance(v, int) or not 0 <= v < len(queue) for v in (source, target)):
                 raise ValueError('Invalid queue positions.')
             current = queue[state['queue_index']]['entry_id']
+            state['shuffle']=False
             queue.insert(target, queue.pop(source))
             state['queue_index'] = next(i for i, row in enumerate(queue) if row['entry_id'] == current)
             state['queue_version'] += 1
-        elif action == 'shuffle':
+        elif action in ('shuffle','reshuffle'):
             upcoming = queue[state['queue_index'] + 1:]
-            random.shuffle(upcoming)
+            if state.get('shuffle') and action=='shuffle':
+                order={entry:index for index,entry in enumerate(state.get('unshuffled',[]))}
+                upcoming=sorted(upcoming,key=lambda row:order.get(row['entry_id'],len(order)))
+                state['shuffle']=False
+            else:
+                if not state.get('shuffle'):state['unshuffled']=[row['entry_id'] for row in upcoming]
+                random.shuffle(upcoming)
+                state['shuffle']=True
             queue[state['queue_index'] + 1:] = upcoming
             state['queue_version'] += 1
         elif action in ('sort', 'clear_played'):
             index = state['queue_index']
             if action == 'sort':
+                state['shuffle']=False
                 queue[index + 1:] = sorted(queue[index + 1:], key=lambda row: row['title'].casefold())
             elif index >= 0:
                 state['queue'] = queue[index:]
