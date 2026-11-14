@@ -12,6 +12,7 @@ class JamPreparation:
         self.recent = {}
 
     def schedule(self, token, state, identity, expand=False):
+        state=dict(state)  # Response serialization may omit the unchanged queue after scheduling.
         video = state.get('video_id')
         if not video or (not state.get('selected') and not expand):
             return

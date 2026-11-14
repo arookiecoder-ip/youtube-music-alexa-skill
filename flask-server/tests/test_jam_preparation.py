@@ -48,3 +48,12 @@ class JamPreparationTests(JamRoomsTests):
         worker.schedule('room',state,'user:host',True)
         self.assertEqual(len(self.state()['queue']),3)
         warm.assert_not_called()
+
+    def test_omitting_the_response_queue_cannot_remove_background_next_song_preparation(self):
+        jobs=[];warm=Mock()
+        worker=JamPreparation(self.rooms,lambda _:True,Mock(),warm,lambda identity,job:jobs.append(job))
+        state=self.state();next_video=state['queue'][state['queue_index']+1]['video_id']
+        worker.schedule('room',state,'user:host')
+        state.pop('queue')
+        jobs[0]()
+        self.assertEqual(warm.call_args_list[-1].args,(next_video,))
