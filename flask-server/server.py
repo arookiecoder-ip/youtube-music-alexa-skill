@@ -7747,12 +7747,15 @@ def _jam_echo_snapshot(token, details, state):
     if not state:return None
     identity_token=_PLAYER_IDENTITY.set(details['identity'])
     try:
+        mirrored=False
         with _np_lock:
             output=_playback_output.snapshot()
             ours=_now_playing.get('_jam_driver_room')==token
             if ours and _now_playing.get('_jam_driver_queue_version')!=state['queue_version']:
-                _update_now_playing(queue=state['queue'],queue_index=state['queue_index'],queue_web_dirty=True,
-                    _jam_driver_queue_version=state['queue_version'])
+                _now_playing.update(queue=state['queue'],queue_index=state['queue_index'],queue_web_dirty=True,
+                    _jam_driver_queue_version=state['queue_version'],updated_at=time.time())
+                _now_playing['playback_revision']=int(_now_playing.get('playback_revision',0))+1
+                mirrored=True
             np=_np_snapshot(details['serial'],retain_errors=True)
             actual=np.get('queue_index',-1)
             occurrence=state['queue'][actual] if isinstance(actual,int) and 0<=actual<len(state['queue']) else {}
@@ -7769,6 +7772,7 @@ def _jam_echo_snapshot(token, details, state):
             advanced=ours and actual==next_index and occurrence.get('video_id')==np.get('video_id') and np.get('playing') and np.get('playback_confirmed')
             if not matches and not advanced:return None
             volume=_volume_by_serial.get(details['serial'])
+        if mirrored:_notify_sse()
         volume_key=(details['identity'],details['serial'])
         with _jam_echo_driver_lock:
             poll_volume=time.monotonic()-_jam_volume_last_poll.get(volume_key,0)>30

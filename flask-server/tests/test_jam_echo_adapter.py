@@ -29,7 +29,7 @@ class EchoAdapterTests(unittest.TestCase):
         def play(serial,video,offset):self.sent.append((self.identity.get(),serial,video,offset))
         self.ns=dict(_PLAYER_IDENTITY=self.identity,_np_lock=threading.RLock(),_now_playing=self.player,
             _playback_output=SimpleNamespace(snapshot=output),_claim_alexa_output=Mock(side_effect=claim),
-            _update_now_playing=update,_ensure_audio_ready_for_play=Mock(),_arm_play=Mock(),_jam_token_valid=lambda token:True,
+            _notify_sse=Mock(),_update_now_playing=update,_ensure_audio_ready_for_play=Mock(),_arm_play=Mock(),_jam_token_valid=lambda token:True,
             _jam_rooms=SimpleNamespace(transact=lambda token:self.state),JamConflict=ValueError,
             alexa_remote=SimpleNamespace(remote=SimpleNamespace(play_video_id=play,command=Mock(return_value=None))),
             time=SimpleNamespace(time=lambda:100,monotonic=lambda:100),_record_volume_state=Mock(),
