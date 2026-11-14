@@ -7910,7 +7910,8 @@ def jam_state():
         error=next((o['error'] for o in outputs if o['device'] in playback['selected'] and o['error']),None) if not playback['playback_confirmed'] else None,
         outputs=[dict(device=o['device'], name=o['name'], online=_jam_rooms.online(o), error=o['error'] or json.loads(o['status']).get('volume_error',''),
             username=o['member_name'] or json.loads(o['details']).get('username','Host'),
-            volume=json.loads(o['status']).get('volume'), kind=json.loads(o['details']).get('kind','phone'),
+            volume=json.loads(o['status']).get('volume'),playing=bool(json.loads(o['status']).get('playing')),
+            processing=bool(json.loads(o['status']).get('processing')),confirmed=bool(json.loads(o['status']).get('confirmed')),kind=json.loads(o['details']).get('kind','phone'),
             devices=json.loads(o['details']).get('devices',[])) for o in outputs],
         listen=device in playback['selected'],
         member_count=len({m['user_id'] or m['id'] for m in members}) + 1))
