@@ -10896,9 +10896,10 @@ def alexa_play_queue():
     # between the client's last snapshot and this request) and only fall back
     # to the by-id search otherwise.
     item = None
-    # A selection from search/library is a new queue even if its video is
-    # already present. Only explicit queue navigation may reuse the old list.
-    if not force_radio and not body.get("new_queue"):
+    # Search/library and playlist fast starts install a fresh queue, even when
+    # their first video already occurs in the previous queue.
+    if (not force_radio and not body.get("new_queue")
+            and not (suppress_radio and body.get("queue_index") is None)):
         try:
             queue_index = int(body.get("queue_index"))
         except (TypeError, ValueError):
@@ -10939,8 +10940,6 @@ def alexa_play_queue():
         else:
             target_idx = queue.index(item)
 
-    _ensure_audio_ready_for_play(video_id, wait=False)
-
     # Preserve the structured artist IDs supplied by the browser. The old
     # direct-play path kept only the display string, so the playback page had
     # to search that name and could land on another artist with the same name.
@@ -10955,12 +10954,6 @@ def alexa_play_queue():
         queue[target_idx] = item
 
     thumb = _thumbnail_url(item.get('thumbnail'))
-    # Record the listen right away so "Recently Played" updates immediately,
-    # instead of waiting for the Lambda webhook (which may lag or not fire for
-    # some playback flows).  _record_listen uses INSERT OR REPLACE, so a
-    # duplicate call from the webhook is harmless.
-    if not _jam_guest():
-        _record_listen(video_id, item.get('title', ''), item.get('artist', ''), thumb)
     _update_now_playing(queue_session_id=_intent_queue_session, playing=False, playback_processing=True,
                         title=item.get('title', ''),
                         artist=item.get('artist', ''),
@@ -10976,12 +10969,19 @@ def alexa_play_queue():
                         # authoritative until the skill syncs (see
                         # alexa_state_event).
                         queue_web_dirty=True)
-    # Coalesced: see _schedule_play_dispatch. A burst of queue-row clicks sends
-    # one trigger phrase for the row the user landed on.
+    # Prepare against the installed selection so newer clicks can cancel this work.
+    _ensure_audio_ready_for_play(video_id, wait=False,
+                                 generation=_current_playback_generation())
+    # Coalesced: a burst sends one trigger for the row the user landed on.
     replaced = _schedule_play_dispatch(serial, video_id)
     if replaced:
         logger.info("play_queue: coalesced pending dispatch %s -> %s",
                     replaced, video_id)
+
+    # Provider client initialization/history must not hold up the play trigger or response.
+    if not _jam_guest():
+        _bg_thread(_record_listen, args=(video_id, item.get('title', ''),
+                                        item.get('artist', ''), thumb))
 
     # Recommendations/charts carry no duration, so the progress bar would show
     # --:-- with no total. Look the real metadata (incl. length) up in the

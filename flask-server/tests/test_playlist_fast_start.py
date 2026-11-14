@@ -190,6 +190,40 @@ class PlaylistFastStartTests(unittest.TestCase):
         self.assertEqual([row['video_id'] for row in state['queue']], [_vid(7)])
         self.assertEqual(state['queue_index'], 0)
 
+    def test_playlist_start_replaces_old_queue_even_when_first_song_is_present(self):
+        patches = self._quiet()
+        for patcher in patches:
+            patcher.start()
+        self.addCleanup(lambda: [p.stop() for p in patches])
+        with server._np_lock:
+            server._now_playing.update(queue=[_item(8), _item(1), _item(9)], queue_index=2)
+        response = self._play({'serial': 'DEVICE1', 'video_id': _vid(1),
+                               'title': 'Song 1', 'suppress_radio': True})
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual([row['video_id'] for row in self._now_playing()['queue']], [_vid(1)])
+        self.assertEqual(self._now_playing()['queue_index'], 0)
+        self._add({'serial': 'DEVICE1', 'queue_items': [_item(2), _item(3)], 'position': 'last'})
+        self.assertEqual([row['video_id'] for row in self._now_playing()['queue']],
+                         [_vid(1), _vid(2), _vid(3)])
+
+    def test_play_dispatch_does_not_wait_for_provider_history_initialization(self):
+        patches = self._quiet()
+        for patcher in patches:
+            patcher.start()
+        self.addCleanup(lambda: [p.stop() for p in patches])
+        jobs = []
+        events = []
+        def background(target, args=(), **kwargs):
+            jobs.append((target, args))
+        with mock.patch.object(server, '_bg_thread', side_effect=background), \
+             mock.patch.object(server, '_record_listen', side_effect=AssertionError('blocking history')), \
+             mock.patch.object(server, '_schedule_play_dispatch', side_effect=lambda *a, **k: events.append('dispatch')):
+            response = self._play({'serial': 'DEVICE1', 'video_id': _vid(1),
+                                   'title': 'Song 1', 'suppress_radio': True})
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(events, ['dispatch'])
+            self.assertTrue(any(target is server._record_listen for target, _ in jobs))
+
     def test_suppress_radio_skips_background_radio_build(self):
         patches = self._quiet()
         for patcher in patches:
