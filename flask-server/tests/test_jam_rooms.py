@@ -213,4 +213,53 @@ class JamRoomsTests(unittest.TestCase):
         with self.assertRaises(PermissionError):self.rooms.transact('room','pause',{'command_id':'late'},member=member)
 
 
+    def test_reported_buffering_freezes_room_and_does_not_skip_songs(self):
+        self.rooms.presence('room','host-phone',None,'Echo',status={'video_id':'aaaaaaaaaaa','playing':False,'confirmed':False,'processing':True,'position_ms':1000})
+        state=self.rooms.presented('room',self.state())
+        self.assertFalse(state['playback_confirmed']);self.assertTrue(state['playback_processing'])
+        for _ in range(10):
+            self.now+=4
+            self.rooms.presence('room','host-phone',None,'Echo',status={'video_id':'aaaaaaaaaaa','playing':False,'confirmed':False,'processing':True,'position_ms':1000})
+            state=self.rooms.presented('room',self.state())
+            self.assertEqual(state['queue_index'],0);self.assertEqual(state['position_ms'],1000)
+        self.rooms.presence('room','host-phone',None,'Echo',status={'video_id':'aaaaaaaaaaa','playing':True,'confirmed':True,'processing':False,'position_ms':2000})
+        state=self.rooms.presented('room',self.state())
+        self.assertTrue(state['playback_confirmed']);self.assertFalse(state['playback_processing'])
+        self.assertEqual(state['position_ms'],2000)
+
+    def test_volume_is_per_selected_device_without_modifying_shared_queue(self):
+        member=self.members.join('room','alice','Alice','alice-phone')
+        for device,owner in [('host-phone',None),('alice-phone',member)]:
+            self.rooms.presence('room',device,owner,device,status={'volume':25})
+        state=self.command('configure',mode='multiple',selected=['host-phone','alice-phone'])
+        self.rooms.volume('room','host-phone',80,member)
+        self.assertEqual(self.state()['revision'],state['revision'])
+        self.assertEqual(self.rooms.device_commands('room','alice-phone',member),[])
+        commands=self.rooms.device_commands('room','host-phone',None)
+        self.assertEqual(commands[0]['value'],80)
+        self.assertEqual(self.rooms.device_commands('room','host-phone',member),[])
+        self.rooms.volume('room','host-phone',65,member)
+        commands=self.rooms.device_commands('room','host-phone',None)
+        self.assertEqual(len(commands),1);self.assertEqual(commands[0]['value'],65)
+        self.rooms.presence('room','host-phone',None,'Echo',ack=[commands[0]['id']])
+        self.assertEqual(self.rooms.device_commands('room','host-phone',None),[])
+        self.now+=21
+        with self.assertRaises(JamConflict):self.rooms.volume('room','host-phone',5,member)
+
+    def test_stale_or_wrong_song_report_never_confirms_room_audio(self):
+        for report in [{'video_id':'bbbbbbbbbbb','playing':True,'confirmed':True},
+                       {'video_id':'aaaaaaaaaaa','playing':True,'confirmed':False}]:
+            self.rooms.presence('room','host-phone',None,'Echo',status=report)
+            self.assertFalse(self.rooms.presented('room',self.state())['playback_confirmed'])
+        self.rooms.presence('room','host-phone',None,'Echo',status={'video_id':'aaaaaaaaaaa','playing':True,'confirmed':True})
+        self.now+=9
+        self.assertFalse(self.rooms.presented('room',self.state())['playback_confirmed'])
+
+    def test_removed_member_cannot_queue_volume_on_host(self):
+        member=self.members.join('room','alice','Alice','alice-phone')
+        self.rooms.presence('room','host-phone',None,'Echo')
+        self.members.remove('room',member)
+        with self.assertRaises(PermissionError):self.rooms.volume('room','host-phone',80,member)
+
+
 if __name__ == '__main__': unittest.main()

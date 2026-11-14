@@ -1,5 +1,6 @@
 """Run production Jam routes and authorization hooks without booting providers."""
 import ast
+import json
 import contextvars
 import secrets
 import threading
@@ -30,7 +31,7 @@ class JamRouteTests(unittest.TestCase):
         identity=contextvars.ContextVar('identity',default='owner')
         layer=SimpleNamespace(alexa_identity=SimpleNamespace(skill_namespace=lambda _:''),
             alexa_access=SimpleNamespace(enabled=lambda _:True))
-        self.ns=dict(app=app,Response=Response,request=request,session=session,jsonify=jsonify,render_template=render_template,
+        self.ns=dict(_jam_drive=lambda token:None,json=json,app=app,Response=Response,request=request,session=session,jsonify=jsonify,render_template=render_template,
             time=time,secrets=secrets,get_db=self.database,_jam_members=self.members,_jam_rooms=self.rooms,JamConflict=JamConflict,
             _jam_cache=lambda:cache,JAM_MAX_AGE=86400,
             _mu_web_identity=lambda:dict(id=request.headers['Test-User'],username=request.headers['Test-User'],role='user') if request.headers.get('Test-User') else None,
@@ -111,11 +112,11 @@ class JamRouteTests(unittest.TestCase):
         self.assertEqual(data['members'],[])
         self.assertEqual(data['playback']['video_id'],'aaaaaaaaaaa')
 
-    def test_member_cannot_remove_other_users_or_choose_outputs(self):
+    def test_member_can_choose_outputs_but_cannot_remove_users(self):
         self.join(self.alice,'alice')
         headers={'Test-User':'alice'}
         self.assertEqual(self.alice.post('/alexa/jam/remove/',json={'member_id':'x'},headers=headers).status_code,403)
-        self.assertEqual(self.alice.post('/api/jam/control/',json={'action':'configure','mode':'single','selected':[]},headers=headers).status_code,403)
+        self.assertEqual(self.alice.post('/api/jam/control/',json={'action':'configure','mode':'single','selected':[],'revision':1,'command_id':'configure'},headers=headers).status_code,200)
 
     def test_removed_member_cannot_control_and_cannot_rejoin(self):
         self.join(self.alice,'alice')

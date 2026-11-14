@@ -5889,6 +5889,8 @@ def next_track():
 
 @app.route("/get_radio/", methods=["GET"])
 async def get_radio():
+    if _now_playing.get('_jam_driver_room') and _jam_token_valid(_now_playing['_jam_driver_room']):
+        return jsonify(playlist=[])
     """Radio/autoplay continuation for a seed video. The skill calls this
     lazily after playback starts so the initial play isn't blocked waiting for
     the queue. Returns {'playlist': [ {title, artist, video_id, thumbnail}, ... ]}."""
@@ -7620,6 +7622,12 @@ def jam_start():
     seed['queue_index'] = next((i for i, row in enumerate(seed['queue']) if row.get('video_id') == seed.get('video_id')), 0)
     _jam_members.ensure()
     _jam_rooms.start(token, seed, device_id if isinstance(device_id, str) else '')
+    if isinstance(device_id,str) and device_id and isinstance(body.get('devices'),list):
+        user=_mu_web_identity()
+        _jam_rooms.presence(token,device_id,None,body.get('name') or 'This phone',
+            details={'username':(user or {}).get('username','Host'),'kind':body.get('kind','phone'),
+                     'identity':_player_identity_for_user_id(user['id']) if user else 'owner','devices':body['devices'][:32]},status=body.get('status'))
+        _jam_drive(token)
     return jsonify({'ok': True, 'active': True, 'url': _jam_url(token)})
 
 
@@ -7722,6 +7730,66 @@ def jam_join(token):
     return jsonify(ok=True, host=False)
 
 
+
+_jam_echo_driver = None
+_jam_echo_driver_lock = threading.Lock()
+
+def _jam_echo_snapshot(token, details, state):
+    if not state:return None
+    identity_token=_PLAYER_IDENTITY.set(details['identity'])
+    try:
+        with _np_lock:
+            output=_playback_output.snapshot()
+            np=_np_snapshot(details['serial'])
+            ours=_now_playing.get('_jam_driver_room')==token
+            if ours and _now_playing.get('_jam_driver_entry')!=state['entry_id']:return None
+            finished=bool(_now_playing.get('_alexa_finished_token') and _now_playing.get('_jam_driver_entry')==state['entry_id'])
+        if np.get('video_id')!=state.get('video_id') or (not ours and output.get('output_serial')!=details['serial']):return None
+        return dict(video_id=np['video_id'],entry_id=state['entry_id'],ended=finished,
+                    playing=bool(np.get('playing')),confirmed=bool(np.get('playback_confirmed')),
+                    processing=bool(np.get('playback_processing')),position_ms=state['duration_ms'] if finished else int(np.get('position_ms') or 0),
+                    seek_revision=state['seek_revision'],target_id='alexa:'+details['serial'])
+    finally:_PLAYER_IDENTITY.reset(identity_token)
+
+def _jam_send_echo(token, details, state):
+    identity_token=_PLAYER_IDENTITY.set(details['identity'])
+    try:
+        serial=details['serial']
+        if state:
+            try:latest=_jam_rooms.transact(token)
+            except (PermissionError,JamConflict):return None
+            if details.get('device') not in latest['selected']:return None
+            if state.get('action')!='volume' and (latest['entry_id'],latest['playing'],latest['seek_revision'],latest.get('transport_revision',1))!=(state['entry_id'],state['playing'],state['seek_revision'],state.get('transport_revision',1)):return None
+        if state and state.get('action')=='volume':
+            return alexa_remote.remote.command(serial,'volume',state['value'])
+        if not state or not state['playing']:
+            if state is None and _now_playing.get('_jam_driver_room')!=token:return None
+            return alexa_remote.remote.command(serial,'pause')
+        if not _jam_token_valid(token):return 'This Jam has ended.'
+        _claim_alexa_output(serial,wait=False)
+        metadata=state['queue'][state['queue_index']]
+        intent=time.time()
+        with _np_lock:_now_playing.pop('_alexa_finished_token',None)
+        _update_now_playing(queue=[metadata],queue_index=0,video_id=metadata['video_id'],title=metadata.get('title',''),
+            artist=metadata.get('artist',''),thumbnail=metadata.get('thumbnail',''),duration_ms=metadata.get('duration_ms',0),
+            position_ms=state['position_ms'],playing=True,playback_confirmed=False,playback_processing=True,
+            _jam_driver_room=token,_jam_driver_entry=state['entry_id'],alexa_intent_at=intent)
+        _ensure_audio_ready_for_play(metadata['video_id'],wait=False)
+        _arm_play(serial,metadata['video_id'],state['position_ms'])
+        return alexa_remote.remote.play_video_id(serial,metadata['video_id'],state['position_ms'])
+    finally:_PLAYER_IDENTITY.reset(identity_token)
+
+def _jam_drive(token):
+    # Tests inject their transport; live workers never run provider calls in an HTTP request.
+    if app.testing:return
+    global _jam_echo_driver
+    with _jam_echo_driver_lock:
+        if _jam_echo_driver is None:
+            from jam_echo import JamEchoDriver
+            _jam_echo_driver=JamEchoDriver(_jam_rooms,_jam_send_echo,_jam_echo_snapshot)
+    _jam_echo_driver.ensure(token)
+
+
 def _jam_access_token():
     _jam_members.ensure()
     member = _jam_membership()
@@ -7785,6 +7853,8 @@ def jam_state():
         return jsonify(active=False, revoked=bool(session.get('jam')))
     try:
         playback = _jam_rooms.transact(token, member=member['id'] if member else None)
+        _jam_drive(token)
+        playback = _jam_rooms.presented(token, playback)
     except (JamConflict, PermissionError) as exc:
         return jsonify(error=str(exc)), 409
     if (request.args.get('queue_epoch') == playback['queue_epoch'] and
@@ -7799,7 +7869,11 @@ def jam_state():
     outputs = _jam_rooms.outputs(token)
     return _no_store(jsonify(active=True, host=host, url=_jam_url(token), playback=playback,
         members=[{'id': m['id'], 'name': m['name']} for m in unique_members.values()] if host else [],
-        outputs=[dict(device=o['device'], name=o['name'], online=time.time()-o['seen'] < 20, error=o['error']) for o in outputs],
+        error=next((o['error'] for o in outputs if o['device'] in playback['selected'] and o['error']),None) if not playback['playback_confirmed'] else None,
+        outputs=[dict(device=o['device'], name=o['name'], online=_jam_rooms.online(o), error=o['error'],
+            username=o['member_name'] or json.loads(o['details']).get('username','Host'),
+            volume=json.loads(o['status']).get('volume'), kind=json.loads(o['details']).get('kind','phone'),
+            devices=json.loads(o['details']).get('devices',[])) for o in outputs],
         listen=device in playback['selected'],
         member_count=len({m['user_id'] or m['id'] for m in members}) + 1))
 
@@ -7817,10 +7891,18 @@ def jam_presence():
         return jsonify(error='This device has not joined the Jam.'), 403
     try:
         _jam_rooms.presence(token, device, member['id'] if member else None,
-            body.get('name') or 'Audio player', body.get('error') or '')
+            body.get('name') or 'Audio player', body.get('error') or '',
+            details={'username': member['name'] if member else (_mu_web_identity() or {}).get('username','Host'),
+                     'kind':'alexa' if body.get('kind')=='alexa' else 'phone',
+                     'identity':_player_identity_for_user_id(_mu_web_identity()['id']) if _mu_web_identity() else ('owner' if member is None else None),
+                     'devices':body.get('devices',[])[:32] if isinstance(body.get('devices',[]),list) else []},
+            status=body.get('status'),ack=body.get('ack'))
+    except (ValueError, TypeError) as exc:
+        return jsonify(error=str(exc)),400
     except PermissionError as exc:
         return jsonify(error=str(exc)), 403
-    return jsonify(ok=True)
+    _jam_drive(token)
+    return jsonify(ok=True, commands=_jam_rooms.device_commands(token,device,member['id'] if member else None))
 
 
 @app.route('/api/jam/control/', methods=['POST'])
@@ -7835,14 +7917,21 @@ def jam_control():
     if not isinstance(action, str) or not action:
         return jsonify(error='Choose a Jam action.'), 400
     if action == 'configure':
-        if member:
-            return jsonify(error='Only the host can choose Jam outputs.'), 403
-        allowed = {o['device'] for o in _jam_rooms.outputs(token)}
+        catalog = _jam_rooms.outputs(token)
+        allowed = {o['device'] for o in catalog if _jam_rooms.online(o)}
+        targets=body.get('targets',{})
+        if not isinstance(targets,dict) or any(not isinstance(value,str) or not any(o['device']==key and any(isinstance(d,dict) and d.get('id')==value for d in json.loads(o['details']).get('devices',[])) for o in catalog) for key,value in targets.items()):
+            return jsonify(error='Choose a connected participant device.'),400
         selected = body.get('selected')
         if not isinstance(selected, list) or any(not isinstance(d, str) or d not in allowed for d in selected):
             return jsonify(error='Choose a connected Jam output.'), 400
     try:
+        if action == 'volume':
+            _jam_rooms.volume(token,body.get('device_id'),body.get('value'),member['id'] if member else None)
+            return jsonify(ok=True)
         state = _jam_rooms.transact(token, action, body, member['id'] if member else None)
+        _jam_drive(token)
+        state = _jam_rooms.presented(token,state)
     except PermissionError as exc:
         return jsonify(error=str(exc)), 403
     except JamConflict as exc:
@@ -9208,6 +9297,8 @@ def alexa_command():
     serial, action = _effective_serial(body.get("serial")), body.get("action")
     if not serial or not action:
         return error_response('missing "serial" or "action"', 400)
+    if action in ('play','pause','next','previous'):
+        with _np_lock:_now_playing.pop('_jam_driver_room',None)
     if action == 'volume':
         return _command_alexa_volume(serial, body.get('value'))
     if action in ('play', 'next', 'previous'):
