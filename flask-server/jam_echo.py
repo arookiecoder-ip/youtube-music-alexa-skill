@@ -6,8 +6,9 @@ import time
 
 
 class JamEchoDriver:
-    def __init__(self, rooms, send, snapshot, clock=time.time):
+    def __init__(self, rooms, send, snapshot, clock=time.time, valid=None):
         self.rooms, self.send, self.snapshot, self.clock = rooms, send, snapshot, clock
+        self.valid=valid or (lambda token:True)
         self.lock = threading.Lock()
         self.running = set()
 
@@ -23,6 +24,7 @@ class JamEchoDriver:
         try:
             while True:
                 try:
+                    if not self.valid(token):raise PermissionError('Jam ended')
                     state = self.rooms.transact(token)
                     outputs = self.rooms.outputs(token)
                 except (PermissionError, ValueError):
@@ -36,7 +38,8 @@ class JamEchoDriver:
                     if device in selected:
                         self._dispatch(token, output, state)
                         for command in self.rooms.device_commands(token,device,output['member']):
-                            error=self.send(token,dict(json.loads(output['details']),device=device),dict(action='volume',value=command['value']))
+                            try:error=self.send(token,dict(json.loads(output['details']),device=device),dict(action='volume',value=command['value']))
+                            except Exception:error='This device could not change volume. Retry shortly.'
                             if not error:self.rooms.echo_volume_ack(token,device,command['id'],command['value'])
                             else:self.rooms.echo_volume_failed(token,device,command['id'],str(error))
                 previous = {device: output for device, output in echoes.items() if device in selected}
@@ -65,7 +68,7 @@ class JamEchoDriver:
                     self.rooms.echo_report(token,output['device'],key,report,report.pop('error',''))
             return
         report = self.snapshot(token,details,state) if state else None
-        if claim=='initial' and state and report and report.get('confirmed') and report.get('playing')==state['playing'] and not report.get('processing') and report.get('video_id')==state['video_id'] and state['seek_revision']==0 and abs(report.get('position_ms',0)-state['position_ms'])<=1500:
+        if state and report and (claim=='initial' or report.get('preserve')) and report.get('confirmed') and report.get('playing')==state['playing'] and not report.get('processing') and report.get('video_id')==state['video_id'] and (state['seek_revision']==0 or report.get('preserve')) and abs(report.get('position_ms',0)-state['position_ms'])<=1500:
             self.rooms.echo_report(token,output['device'],key,report)
             return
         self.rooms.echo_report(token,output['device'],key,dict(video_id=state.get('video_id','') if state else '',

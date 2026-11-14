@@ -1714,7 +1714,7 @@ class AlexaRemote:
 
     def volume(self, serial: str):
         """Return the current volume percent for a device, or (None, error)."""
-        return self._run(self._volume(serial))
+        return self._run(self._volume(serial), timeout=8)
 
     async def _volume(self, serial: str):
         api, error = await self._api_for(serial)

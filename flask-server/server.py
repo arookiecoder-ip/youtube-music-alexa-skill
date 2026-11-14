@@ -6427,6 +6427,8 @@ def _refresh_radio_queue(video_id, force=False):
     unchanged, so "Play Radio" silently did nothing but play the same track in
     the same queue).
     """
+    room=_get_now_playing().get('_jam_driver_room')
+    if room and _jam_token_valid(room):return False
     if not _valid_video_id(video_id):
         return False
     # Single-flight per (account, video_id) plus a success cooldown: /proxy/,
@@ -6485,6 +6487,8 @@ def _refresh_radio_queue(video_id, force=False):
         cur = _get_now_playing()
         cur_queue = cur.get('queue') or []
         queue_stale = not any(q.get('video_id') == video_id for q in cur_queue)
+        room=cur.get('_jam_driver_room')
+        if room and _jam_token_valid(room):return False
         if cur.get('video_id') == video_id and (force or len(cur_queue) <= 1 or queue_stale):
             fields = {'queue': queue, 'queue_index': idx}
             # If the now-playing track still has no duration (came from a
@@ -7733,6 +7737,7 @@ def jam_join(token):
 
 _jam_echo_driver = None
 _jam_echo_driver_lock = threading.Lock()
+_jam_volume_last_poll = {}
 
 def _jam_echo_snapshot(token, details, state):
     if not state:return None
@@ -7740,17 +7745,38 @@ def _jam_echo_snapshot(token, details, state):
     try:
         with _np_lock:
             output=_playback_output.snapshot()
-            np=_np_snapshot(details['serial'])
             ours=_now_playing.get('_jam_driver_room')==token
-            if ours and _now_playing.get('_jam_driver_entry')!=state['entry_id']:return None
+            if ours and _now_playing.get('_jam_driver_queue_version')!=state['queue_version']:
+                _update_now_playing(queue=state['queue'],queue_index=state['queue_index'],queue_web_dirty=True,
+                    _jam_driver_queue_version=state['queue_version'])
+            np=_np_snapshot(details['serial'],retain_errors=True)
+            actual=np.get('queue_index',-1)
+            occurrence=state['queue'][actual] if isinstance(actual,int) and 0<=actual<len(state['queue']) else {}
+            matches=occurrence.get('entry_id')==state['entry_id'] and np.get('video_id')==state.get('video_id')
+            preserve=matches and np.get('playing')==state['playing'] and np.get('playback_confirmed') and abs(int(np.get('position_ms') or 0)-state['position_ms'])<=1500
+            if preserve and (ours or output.get('output_serial')==details['serial']):
+                _now_playing.update(_jam_driver_room=token,_jam_driver_entry=state['entry_id'],
+                    _jam_driver_transport=state.get('transport_revision',1),_jam_driver_seek=state['seek_revision'],
+                    _jam_driver_queue_version=state['queue_version'])
+                ours=True
+            if not ours and output.get('output_serial')!=details['serial']:return None
             finished=bool(_now_playing.get('_alexa_finished_token') and _now_playing.get('_jam_driver_entry')==state['entry_id'])
-        if np.get('video_id')!=state.get('video_id') or (not ours and output.get('output_serial')!=details['serial']):return None
+            next_index=state['queue_index']+1
+            advanced=ours and actual==next_index and occurrence.get('video_id')==np.get('video_id') and np.get('playing') and np.get('playback_confirmed')
+            if not matches and not advanced:return None
+            volume=_volume_by_serial.get(details['serial'])
+        volume_key=(details['identity'],details['serial'])
+        with _jam_echo_driver_lock:
+            poll_volume=time.monotonic()-_jam_volume_last_poll.get(volume_key,0)>30
+            if poll_volume:_jam_volume_last_poll[volume_key]=time.monotonic()
+        if poll_volume:_bg_thread(_refresh_volume,args=(details['serial'],))
         failure=np.get('playback_error') or {}
         failure_message=failure.get('message','') if ours and isinstance(failure,dict) and failure.get('type')!='buffering' else ''
-        return dict(error=failure_message,video_id=np['video_id'],entry_id=state['entry_id'],ended=finished,
+        return dict(**({'volume':volume} if volume is not None else {}),error=failure_message,preserve=bool(preserve),
+                    video_id=np['video_id'],entry_id=occurrence.get('entry_id',state['entry_id']),ended=finished,
                     playing=bool(np.get('playing')),confirmed=bool(np.get('playback_confirmed')),
                     processing=bool(np.get('playback_processing')),position_ms=state['duration_ms'] if finished else int(np.get('position_ms') or 0),
-                    seek_revision=state['seek_revision'],target_id='alexa:'+details['serial'])
+                    duration_ms=int(np.get('duration_ms') or 0),seek_revision=state['seek_revision'],target_id='alexa:'+details['serial'])
     finally:_PLAYER_IDENTITY.reset(identity_token)
 
 def _jam_send_echo(token, details, state):
@@ -7763,19 +7789,29 @@ def _jam_send_echo(token, details, state):
             if details.get('device') not in latest['selected']:return None
             if state.get('action')!='volume' and (latest['entry_id'],latest['playing'],latest['seek_revision'],latest.get('transport_revision',1))!=(state['entry_id'],state['playing'],state['seek_revision'],state.get('transport_revision',1)):return None
         if state and state.get('action')=='volume':
-            return alexa_remote.remote.command(serial,'volume',state['value'])
+            error=alexa_remote.remote.command(serial,'volume',state['value'])
+            if not error:_record_volume_state(serial,state['value'],notify=True)
+            return error
         if not state or not state['playing']:
             if state is None and _now_playing.get('_jam_driver_room')!=token:return None
             return alexa_remote.remote.command(serial,'pause')
         if not _jam_token_valid(token):return 'This Jam has ended.'
-        _claim_alexa_output(serial,wait=False)
+        with _np_lock:
+            output=_playback_output.snapshot()
+            staged=(_now_playing.get('_jam_driver_room')==token and _now_playing.get('_jam_driver_entry')==state['entry_id']
+                    and _now_playing.get('_jam_driver_transport')==state.get('transport_revision',1)
+                    and _now_playing.get('_jam_driver_seek')==state['seek_revision'] and _now_playing.get('playing'))
+        # Echoes in one account share this occurrence, not an exclusive serial lease.
+        if output['playback_output']!='alexa':_claim_alexa_output(serial,wait=False)
         metadata=state['queue'][state['queue_index']]
-        intent=time.time()
-        with _np_lock:_now_playing.pop('_alexa_finished_token',None)
-        _update_now_playing(queue=[metadata],queue_index=0,video_id=metadata['video_id'],title=metadata.get('title',''),
-            artist=metadata.get('artist',''),thumbnail=metadata.get('thumbnail',''),duration_ms=metadata.get('duration_ms',0),
-            position_ms=state['position_ms'],playing=True,playback_confirmed=False,playback_processing=True,
-            _jam_driver_room=token,_jam_driver_entry=state['entry_id'],alexa_intent_at=intent)
+        if not staged:
+            intent=time.time()
+            with _np_lock:_now_playing.pop('_alexa_finished_token',None)
+            _update_now_playing(queue=state['queue'],queue_index=state['queue_index'],queue_web_dirty=True,video_id=metadata['video_id'],title=metadata.get('title',''),
+                artist=metadata.get('artist',''),thumbnail=metadata.get('thumbnail',''),duration_ms=metadata.get('duration_ms',0),
+                position_ms=state['position_ms'],playing=True,playback_confirmed=False,playback_processing=True,
+                _jam_driver_room=token,_jam_driver_entry=state['entry_id'],_jam_driver_transport=state.get('transport_revision',1),
+                _jam_driver_seek=state['seek_revision'],_jam_driver_queue_version=state['queue_version'],alexa_intent_at=intent)
         _ensure_audio_ready_for_play(metadata['video_id'],wait=False)
         _arm_play(serial,metadata['video_id'],state['position_ms'])
         return alexa_remote.remote.play_video_id(serial,metadata['video_id'],state['position_ms'])
@@ -7788,7 +7824,7 @@ def _jam_drive(token):
     with _jam_echo_driver_lock:
         if _jam_echo_driver is None:
             from jam_echo import JamEchoDriver
-            _jam_echo_driver=JamEchoDriver(_jam_rooms,_jam_send_echo,_jam_echo_snapshot)
+            _jam_echo_driver=JamEchoDriver(_jam_rooms,_jam_send_echo,_jam_echo_snapshot,valid=_jam_token_valid)
     _jam_echo_driver.ensure(token)
 
 

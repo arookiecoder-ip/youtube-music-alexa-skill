@@ -385,11 +385,19 @@ class JamRooms:
 
     def echo_report(self, token, device, intent, report, error=''):
         with self.database() as db:
+            db.execute('BEGIN IMMEDIATE')
             row=db.execute('SELECT intent FROM jam_echo_intents WHERE token=? AND device=?',(token,device)).fetchone()
             if not row or row['intent']!=intent:return False
             current=db.execute('SELECT status FROM jam_outputs WHERE token=? AND device=?',(token,device)).fetchone()
             if not current:return False
             status=json.loads(current['status']);status.update(report)
+            duration=report.get('duration_ms')
+            room=db.execute('SELECT state FROM jam_rooms WHERE token=?',(token,)).fetchone()
+            if room and isinstance(duration,int) and not isinstance(duration,bool) and 0<duration<=86400000:
+                state=json.loads(room['state']);index=state['queue_index']
+                if index>=0 and state['queue'][index]['entry_id']==report.get('entry_id') and not state['queue'][index]['duration_ms']:
+                    state['queue'][index]['duration_ms']=duration;state['revision']+=1
+                    db.execute('UPDATE jam_rooms SET state=? WHERE token=?',(json.dumps(state),token))
             db.execute('UPDATE jam_outputs SET status=?,seen=?,error=? WHERE token=? AND device=?',
                 (json.dumps(status),self.clock(),str(error)[:200],token,device));db.commit()
             return True
