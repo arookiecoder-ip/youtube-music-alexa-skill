@@ -3,6 +3,7 @@ import hashlib
 import json
 import threading
 import time
+from alexa_playback_errors import authentication_failure
 
 
 class JamEchoDriver:
@@ -62,9 +63,9 @@ class JamEchoDriver:
             if status.get('processing') and not status.get('confirmed') and self.clock()-status.get('dispatch_at',self.clock())>15:
                 self.rooms.echo_report(token,output['device'],key,dict(playing=False,confirmed=False,processing=False),"Alexa did not confirm audio. Retry this output.")
                 return
-            if state and state['playing'] and not output.get('error'):
+            if state and state['playing']:
                 report = self.snapshot(token,details,state)
-                if report:
+                if report and (not output.get('error') or report.get('entry_id')!=state.get('entry_id')):
                     self.rooms.echo_report(token,output['device'],key,report,report.pop('error',''))
             return
         report = self.snapshot(token,details,state) if state else None
@@ -73,13 +74,13 @@ class JamEchoDriver:
             return
         self.rooms.echo_report(token,output['device'],key,dict(video_id=state.get('video_id','') if state else '',
             playing=bool(state and state['playing']),confirmed=False,processing=bool(state and state['playing']),
-            dispatch_at=self.clock(),position_ms=state.get('position_ms',0) if state else 0,seek_revision=state.get('seek_revision',0) if state else 0))
+            retryable=True,dispatch_at=self.clock(),position_ms=state.get('position_ms',0) if state else 0,seek_revision=state.get('seek_revision',0) if state else 0))
         try:
             error = self.send(token,details,state)
         except Exception:
             error = 'This Alexa output could not be reached. Try again shortly.'
         if error:
-            self.rooms.echo_report(token,output['device'],key,dict(playing=False,confirmed=False,processing=False),str(error))
+            self.rooms.echo_report(token,output['device'],key,dict(playing=False,confirmed=False,processing=False,retryable=authentication_failure(error) is None),str(error))
         elif not state or not state['playing']:
             self.rooms.echo_report(token,output['device'],key,dict(video_id=state.get('video_id','') if state else '',
                 playing=False,confirmed=True,processing=False,position_ms=state.get('position_ms',0) if state else 0,

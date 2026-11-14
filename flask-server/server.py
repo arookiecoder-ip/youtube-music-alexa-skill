@@ -7779,7 +7779,7 @@ def _jam_echo_snapshot(token, details, state):
             if poll_volume:_jam_volume_last_poll[volume_key]=time.monotonic()
         if poll_volume:_bg_thread(_refresh_volume,args=(details['serial'],))
         failure=np.get('playback_error') or {}
-        failure_message=failure.get('message','') if ours and isinstance(failure,dict) and failure.get('type')!='buffering' else ''
+        failure_message=failure.get('message','') if ours and isinstance(failure,dict) and failure.get('type')!='buffering' and failure.get('terminal',True) else ''
         return dict(**({'volume':volume} if volume is not None else {}),error=failure_message,preserve=bool(preserve),
                     video_id=np['video_id'],entry_id=occurrence.get('entry_id',state['entry_id']),ended=finished,
                     playing=bool(np.get('playing')),confirmed=bool(np.get('playback_confirmed')),
@@ -7813,7 +7813,8 @@ def _jam_send_echo(token, details, state):
             output=_playback_output.snapshot()
             staged=(_now_playing.get('_jam_driver_room')==token and _now_playing.get('_jam_driver_entry')==state['entry_id']
                     and _now_playing.get('_jam_driver_transport')==state.get('transport_revision',1)
-                    and _now_playing.get('_jam_driver_seek')==state['seek_revision'] and _now_playing.get('playing'))
+                    and _now_playing.get('_jam_driver_seek')==state['seek_revision'] and _now_playing.get('playing')
+                    and _now_playing.get('video_id')==state['video_id'] and _now_playing.get('queue_index')==state['queue_index'])
         # Echoes in one account share this occurrence, not an exclusive serial lease.
         if output['playback_output']!='alexa':_claim_alexa_output(serial,wait=False)
         metadata=state['queue'][state['queue_index']]

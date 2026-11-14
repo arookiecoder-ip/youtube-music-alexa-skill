@@ -382,8 +382,8 @@ class JamRooms:
             db.execute('BEGIN IMMEDIATE')
             row=db.execute('SELECT intent FROM jam_echo_intents WHERE token=? AND device=?',(token,device)).fetchone()
             if row and row['intent']==intent:
-                status=db.execute('SELECT error,seen FROM jam_outputs WHERE token=? AND device=?',(token,device)).fetchone()
-                if not status or not status['error'] or self.clock()-status['seen']<15:return False
+                status=db.execute('SELECT error,seen,status FROM jam_outputs WHERE token=? AND device=?',(token,device)).fetchone()
+                if not status or not status['error'] or self.clock()-status['seen']<15 or json.loads(status['status']).get('retryable') is False:return False
             initial=row is None
             db.execute('UPDATE jam_outputs SET error=?,seen=? WHERE token=? AND device=?',('',self.clock(),token,device))
             db.execute('INSERT OR REPLACE INTO jam_echo_intents VALUES(?,?,?)',(token,device,intent));db.commit()
