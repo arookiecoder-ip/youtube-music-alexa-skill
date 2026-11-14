@@ -3,7 +3,7 @@
   'use strict';
   const $ = id => document.getElementById(id), audio = $('audio');
   let state = null, busy = false, stopped = false, listening = false, current = '', lastSuccess = Date.now();
-  let device;
+  let device, lastAudioRetry=0;
   try { device=sessionStorage.getItem('musicbox_browser_id'); if(!device){device='browser-'+crypto.randomUUID();sessionStorage.setItem('musicbox_browser_id',device);} } catch (_) { device='browser-'+crypto.randomUUID(); }
   const error = message => { $('error').textContent=message; $('error').hidden=!message; };
   const notice = message => { $('notice').textContent=message; $('notice').hidden=!message; };
@@ -24,7 +24,7 @@
   function render() {
     const p=state.playback;
     $('people').textContent=`${state.member_count} people · ${p.mode==='multiple'?'Multiple selected outputs':'One selected output'} · one queue`;
-    $('title').textContent=p.title || 'Your shared queue';$('artist').textContent=p.artist || 'Add a song to get started';
+    $('title').textContent=p.title || 'Your shared queue';$('artist').textContent=p.artist || (p.video_id?'Shared with the Jam':'Add a song to get started');
     $('art').hidden=!p.thumbnail;if(p.thumbnail)$('art').src=p.thumbnail;
     $('play').textContent=p.playing?'Pause':'Play';$('seek').max=String(p.duration_ms||1);$('seek').value=String(p.position_ms||0);
     $('repeat').textContent='Repeat: '+p.repeat;
@@ -56,6 +56,8 @@
     const p=state.playback;
     if(!state.listen || !p.video_id) {audio.pause();listening=false;return;}
     listening=true;
+    if(!p.duration_ms && Number.isFinite(audio.duration) && audio.duration>0) control('duration',{entry_id:p.entry_id,duration_ms:Math.round(audio.duration*1000)});
+    if(audio.error && Date.now()-lastAudioRetry>5000) {lastAudioRetry=Date.now();current='';}
     if(current!==p.entry_id) {current=p.entry_id;audio.src='/api/jam/audio/'+encodeURIComponent(p.video_id);audio.load();}
     if(audio.readyState>0 && Math.abs(audio.currentTime*1000-p.position_ms)>1500) audio.currentTime=p.position_ms/1000;
     if(p.playing && audio.paused) {
@@ -65,8 +67,12 @@
   async function poll() {
     if(stopped)return;
     try{
-      const data=await api('/api/jam/state/?device_id='+encodeURIComponent(device));
+      const version=state?.playback.queue_epoch?'&queue_epoch='+encodeURIComponent(state.playback.queue_epoch)+'&queue_version='+state.playback.queue_version:'';
+      const data=await api('/api/jam/state/?device_id='+encodeURIComponent(device)+version);
+      if(stopped)return;
+      if(state && data.active && data.url===state.url && data.playback.revision<state.playback.revision)return;
       if(!data.active){stopped=true;audio.pause();error('This Jam ended, or your access was removed.');$('people').textContent='Jam disconnected';return;}
+      if(!data.playback.queue){if(data.playback.queue_epoch!==state?.playback.queue_epoch)throw Error('Jam queue needs a refresh.');data.playback.queue=state.playback.queue;}
       state=data;lastSuccess=Date.now();render();
       await api('/api/jam/presence/',{device_id:device,name:'Browser player',error:audio.error?'Audio unavailable':''});
       await syncAudio();
@@ -87,14 +93,17 @@
     }));if(!songs.length)notice('No songs found. Try another search.');
   }catch(e){error(e.message);}};
   function requireAccount(){if(window.JAM_SIGNED_IN)return true;notice('Sign in to save songs to your own account. Reopen this invite after signing in.');return false;}
-  $('like').onclick=async()=>{if(!requireAccount()||!state?.playback.video_id)return;try{await api('/alexa/like/',{...state.playback,action:'LIKE'});notice('Saved to your liked songs.');}catch(e){error(e.message);}};
-  $('playlist').onclick=async()=>{if(!requireAccount())return;try{
-    const library=await api('/api/library/?type=playlists');const lists=library.playlists||library.items||[];
+  function personalSong(){const p=state.playback;return {video_id:p.video_id,title:p.title,artist:p.artist,thumbnail:p.thumbnail,duration_ms:p.duration_ms};}
+  $('like').onclick=async()=>{if(!requireAccount()||!state?.playback.video_id)return;try{await api('/alexa/like/',{...personalSong(),action:'LIKE'});notice('Saved to your liked songs.');}catch(e){error(e.message);}};
+  $('playlist').onclick=async()=>{if(!requireAccount()||!state?.playback.video_id)return;const song=personalSong();try{
+    const library=await api('/api/library/?type=playlists');const lists=(library.playlists||library.items||[]).filter(p=>(p.playlistId||p.playlist_id||p.id)!=='LM');
     $('playlist-list').replaceChildren(...lists.filter(p=>p.playlistId||p.playlist_id||p.id).map(p=>button(p.title||'Playlist',async()=>{
-      try{await api('/api/library/playlists/'+encodeURIComponent(p.playlistId||p.playlist_id||p.id)+'/tracks',state.playback);$('playlists').close();notice('Added to your playlist.');}catch(e){error(e.message);}
-    })));$('playlists').showModal();
+      try{await api('/api/library/playlists/'+encodeURIComponent(p.playlistId||p.playlist_id||p.id)+'/tracks',song);$('playlists').close();notice('Added to your playlist.');}catch(e){error(e.message);}
+    })));if(!lists.length)$('playlist-list').append(text('p','No playlists yet. Create one in your library.'));$('playlists').showModal();
   }catch(e){error(e.message);}};
   $('close-playlists').onclick=()=>$('playlists').close();
   async function loop(){await poll();if(!stopped)setTimeout(loop,1000);}loop();
   window.addEventListener('pagehide',()=>{audio.pause();stopped=true;});
+  window.addEventListener('pageshow',event=>{if(event.persisted){stopped=false;loop();}});
+  document.addEventListener('visibilitychange',()=>{if(!document.hidden&&!stopped)poll();});
 })();

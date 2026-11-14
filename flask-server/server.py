@@ -910,6 +910,10 @@ def _safe_spa_target(value, default='/home'):
     # while signed out would complete login and land on `/home`, losing
     # the album they were trying to open.
     normalized_path = path.rstrip('/') if path else ''
+    if normalized_path == '/jam-room':
+        return '/jam-room/'
+    if re.fullmatch(r'/jam-invite/[A-Za-z0-9_-]{8,128}', normalized_path):
+        return normalized_path
     path_style = bool(re.fullmatch(
         # `/artist/songs` is a canonical document path (channel arrives as a
         # query value), so it must NOT be classified path-style here or its
@@ -1208,6 +1212,19 @@ def _jam_token_valid(token):
         return False
     _jam_cache()[token] = {'created_at': row['created_at'], 'user_id': row['user_id']}
     return True
+
+
+def _jam_detach_account_output():
+    """Logout stops this account's output without touching another member's."""
+    output = _playback_output.snapshot()
+    with _np_lock:
+        _reset_progress(_computed_position_ms())
+        if output['playback_output'] == 'phone':
+            _playback_output.close_phone(output['output_owner'])
+        _now_playing.update(playing=False, playback_confirmed=True, playback_processing=False)
+    _notify_sse()
+    if output['playback_output'] == 'alexa' and output['output_serial']:
+        _bg_thread(lambda: alexa_remote.remote.command(output['output_serial'], 'pause'))
 
 
 def _jam_prune_records():
@@ -1685,6 +1702,8 @@ def _check_rate_limit():
     # Not remote_addr: behind Caddy that is one container address shared by every
     # visitor, which would make this a per-service budget instead of per-client.
     ip = _client_ip() or 'unknown'
+    if group == 'jam_sync':
+        ip = ip + ':' + str(session.get('jam_member') or _jam_identity_id() or 'owner')
     allowed, retry_after = _rate_limiter.check(ip, group, max_req, window)
     if not allowed:
         resp, _ = error_response(f'Rate limit exceeded. Try again in {retry_after}s.',
@@ -2769,6 +2788,7 @@ _RATE_LIMITS = {
     'cached_download': (600, 60), # Bulk offline copies cannot consume foreground stream range reads.
     'cached_audio': (600, 60), # Disk-only range reads and album downloads are inexpensive.
     'audio':    (60, 60),     # /audio/ - app audio (searches, info and downloads)
+    'jam_sync': (240, 60), # Room reads and presence have a separate per-participant budget.
     'shared_playback': (600, 60), # Bounded browser watchers and phone leases can share one NAT.
     'poll':     (600, 60),   # 500ms foreground feedback, including controllers sharing a NAT.
     'static':   (0, 0),       # No limit for static assets
@@ -2790,6 +2810,8 @@ def _rate_limit_group(path: str) -> str:
         return 'proxy'
     if path == '/audio' or path.startswith('/audio/'):
         return 'audio'
+    if path in ('/api/jam/state', '/api/jam/presence'):
+        return 'jam_sync'
     if path in ('/api/app/output', '/api/app/queue', '/api/app/devices'):
         return 'shared_playback'
     if path.startswith('/api/youtube/browser-session/'):
@@ -7386,6 +7408,8 @@ def logout():
     body = request.get_json(silent=True) or {}
     mu_user = _mu_web_identity()
     legacy_logged_in = mu_user is None and _logged_in()
+    if (mu_user is not None or legacy_logged_in) and (_jam_membership() or _jam_active_token(_jam_identity_id())):
+        _jam_detach_account_output()
     if mu_user is not None:
         # An account logout must not disturb the owner's Jam or YouTube
         # browser session — it closes this account's own jam and session only.
@@ -7590,7 +7614,7 @@ def jam_room_page():
     token, member = _jam_access_token()
     if not token:
         return _no_store(app.make_response((_JAM_ENDED_HTML, 410)))
-    return _no_store(app.make_response(render_template('jam_room.html', signed_in=_logged_in())))
+    return _no_store(app.make_response(render_template('jam_room.html', signed_in=_logged_in(), invite_path='/jam-invite/' + token)))
 
 
 @app.route('/api/jam/audio/<video_id>', methods=['GET', 'HEAD'])
@@ -7638,6 +7662,9 @@ def jam_state():
         playback = _jam_rooms.transact(token, member=member['id'] if member else None)
     except (JamConflict, PermissionError) as exc:
         return jsonify(error=str(exc)), 409
+    if (request.args.get('queue_epoch') == playback['queue_epoch'] and
+            request.args.get('queue_version') == str(playback['queue_version'])):
+        playback.pop('queue', None)
     members = _jam_members.list(token)
     host = member is None
     unique_members = {}

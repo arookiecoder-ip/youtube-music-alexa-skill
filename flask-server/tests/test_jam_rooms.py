@@ -66,6 +66,17 @@ class JamRoomsTests(unittest.TestCase):
         self.assertFalse(state['playing'])
         self.assertEqual((state['queue_index'],state['position_ms']), (2,30000))
 
+    def test_backwards_wall_clock_adjustment_does_not_freeze_playback(self):
+        self.now -= 10
+        self.assertEqual(self.state()['position_ms'],0)
+        self.now += 2
+        self.assertEqual(self.state()['position_ms'],2000)
+
+    def test_repeat_all_manual_previous_and_next_wrap_at_boundaries(self):
+        self.command('repeat')
+        self.assertEqual(self.command('previous')['queue_index'],2)
+        self.assertEqual(self.command('next')['queue_index'],0)
+
     def test_pause_freezes_clock_and_seek_is_clamped(self):
         self.now += 2
         self.command('pause')

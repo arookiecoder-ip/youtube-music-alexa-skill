@@ -5,6 +5,7 @@ end-of-track events never advance the shared queue a second time.
 """
 import copy
 import json
+import hashlib
 import random
 import secrets
 import time
@@ -102,6 +103,8 @@ class JamRooms:
             if not row:
                 raise JamConflict('This Jam needs a new invite. Ask the host to restart it.')
             state = json.loads(row['state'])
+            clock_reversed = self.clock() < state['anchored_at']
+            before = (state['queue_index'], state['playing'], state['revision'], tuple(state['selected']))
             self._advance(state)
             detached = {row['device'] for row in db.execute('''SELECT o.device FROM jam_outputs o
                 JOIN jam_members m ON m.id=o.member WHERE o.token=? AND (m.removed=1 OR m.left_room=1)''', (token,))}
@@ -117,12 +120,14 @@ class JamRooms:
                     self._command(state, action, body)
                     state['revision'] += 1
                     db.execute('INSERT INTO jam_commands VALUES(?,?)', (token, command))
-            db.execute('UPDATE jam_rooms SET state=? WHERE token=?', (json.dumps(state), token))
+            after = (state['queue_index'], state['playing'], state['revision'], tuple(state['selected']))
+            if action or before != after or clock_reversed:
+                db.execute('UPDATE jam_rooms SET state=? WHERE token=?', (json.dumps(state), token))
             db.commit()
         result = copy.deepcopy(state)
         current = state['queue'][state['queue_index']] if state['queue_index'] >= 0 else {}
         result.update(current)
-        result.update(duration_ms=current.get('duration_ms', 0), playback_confirmed=True, playback_processing=False,
+        result.update(queue_epoch=hashlib.sha256(token.encode()).hexdigest()[:16], duration_ms=current.get('duration_ms', 0), playback_confirmed=True, playback_processing=False,
                       playback_revision=state['revision'], server_time_ms=int(self.clock() * 1000))
         return result
 
@@ -142,6 +147,8 @@ class JamRooms:
             state['position_ms'] = min(value, duration) if duration else value
         elif action in ('next', 'previous', 'select'):
             index = body.get('index') if action == 'select' else state['queue_index'] + (1 if action == 'next' else -1)
+            if action in ('next', 'previous') and state['repeat'] == 'all':
+                index %= len(queue)
             if isinstance(index, bool) or not isinstance(index, int) or not 0 <= index < len(queue):
                 raise ValueError('No song at that position.')
             state.update(queue_index=index, position_ms=0)

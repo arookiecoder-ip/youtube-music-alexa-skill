@@ -2,6 +2,7 @@
 import ast
 import contextvars
 import secrets
+import threading
 from pathlib import Path
 import time
 from types import SimpleNamespace
@@ -44,20 +45,23 @@ class JamRouteTests(unittest.TestCase):
             _is_web_session_path=lambda path:path.startswith(('/api/','/alexa/')),
             _is_api_path=lambda path:path.startswith(('/api/','/alexa/')),
             password_change_allowed=lambda *_:True,API_KEY='secret',
-            _remote_login_enabled=lambda:True,_alexa_auth_error=Mock())
+            _remote_login_enabled=lambda:True,_alexa_auth_error=Mock(),
+            _client_ip=lambda:'192.0.2.1',_rate_limiter=Mock(),logger=Mock())
+        self.ns['_rate_limiter'].check.return_value=(True,0)
         names={'_jam_membership','_jam_identity_id','_jam_token_valid','_jam_purge_token','_jam_active_token',
             '_jam_guest','_jam_prune_records','_jam_request_allowed','_bind_player_identity','require_api_key',
             'jam_join','_jam_access_token','jam_state','jam_presence','jam_control','jam_remove_member',
-            'jam_guest_leave','android_asset_links','jam_room_page'}
+            'jam_guest_leave','android_asset_links','jam_room_page','_rate_limit_group','_check_rate_limit','_jam_detach_account_output'}
         tree=ast.parse((root/'server.py').read_text())
         nodes=[]
         for node in tree.body:
-            if isinstance(node,ast.Assign) and any(isinstance(t,ast.Name) and t.id in ('_JAM_PATHS','_JAM_PUBLIC_GET_PREFIXES') for t in node.targets):nodes.append(node)
+            if isinstance(node,ast.Assign) and any(isinstance(t,ast.Name) and t.id in ('_JAM_PATHS','_JAM_PUBLIC_GET_PREFIXES','_RATE_LIMITS') for t in node.targets):nodes.append(node)
             if isinstance(node,ast.FunctionDef) and node.name in names:
                 node.decorator_list=[];nodes.append(node)
         exec(compile(ast.Module(body=nodes,type_ignores=[]),str(root/'server.py'),'exec'),self.ns)
         app.before_request(self.ns['_bind_player_identity'])
         app.before_request(self.ns['require_api_key'])
+        app.before_request(self.ns['_check_rate_limit'])
         routes=[('/j/<token>','jam_join',['GET','POST']),('/api/jam/state/','jam_state',['GET']),
             ('/api/jam/presence/','jam_presence',['POST']),('/api/jam/control/','jam_control',['POST']),
             ('/alexa/jam/remove/','jam_remove_member',['POST']),('/api/jam/leave/','jam_guest_leave',['POST']),
@@ -177,6 +181,39 @@ class JamRouteTests(unittest.TestCase):
         self.members.remove('room',member)
         self.guest.post('/api/jam/leave/',json={})
         self.assertEqual(self.join(self.guest).status_code,403)
+
+    def test_stable_queue_is_omitted_only_when_the_room_epoch_and_version_match(self):
+        self.join(self.alice,'alice')
+        headers={'Test-User':'alice'}
+        first=self.alice.get('/api/jam/state/',headers=headers).get_json()['playback']
+        query=f"?queue_epoch={first['queue_epoch']}&queue_version={first['queue_version']}"
+        slim=self.alice.get('/api/jam/state/'+query,headers=headers).get_json()['playback']
+        self.assertNotIn('queue',slim)
+        self.assertEqual(slim['video_id'],first['video_id'])
+        other=self.alice.get('/api/jam/state/?queue_epoch=old-room&queue_version=1',headers=headers).get_json()['playback']
+        self.assertIn('queue',other)
+
+    def test_room_presence_budget_is_separate_from_personal_api_and_other_nat_participants(self):
+        self.join(self.alice,'alice')
+        self.alice.get('/api/jam/state/',headers={'Test-User':'alice'})
+        first=self.ns['_rate_limiter'].check.call_args.args
+        self.assertEqual(first[1],'jam_sync')
+        self.alice.post('/alexa/like/',json={},headers={'Test-User':'alice'})
+        self.assertEqual(self.ns['_rate_limiter'].check.call_args.args[1],'api')
+        self.join(self.guest)
+        self.guest.get('/api/jam/state/')
+        second=self.ns['_rate_limiter'].check.call_args.args
+        self.assertEqual(second[1],'jam_sync')
+        self.assertNotEqual(first[0],second[0])
+
+    def test_logout_detaches_only_the_acting_accounts_phone_output(self):
+        close=Mock()
+        state={'playing':True}
+        self.ns.update(_playback_output=SimpleNamespace(snapshot=lambda:dict(playback_output='phone',output_owner='alice-phone'),close_phone=close),
+            _np_lock=threading.Lock(),_now_playing=state,_reset_progress=Mock(),_computed_position_ms=lambda:5000,_notify_sse=Mock())
+        self.ns['_jam_detach_account_output']()
+        close.assert_called_once_with('alice-phone')
+        self.assertFalse(state['playing'])
 
     def test_public_app_association_uses_expected_package_and_certificate(self):
         data=self.guest.get('/.well-known/assetlinks.json').get_json()[0]['target']
