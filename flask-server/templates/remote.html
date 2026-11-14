@@ -99,15 +99,6 @@
         </svg>
       </button>
 
-      <button class="needs-login header-history-btn jam-owner-only" id="jam-btn" title="Jam" hidden>
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
-          <circle cx="9" cy="7" r="4"/>
-          <path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
-          <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
-        </svg>
-        <span class="header-history-label">Jam</span>
-      </button>
       <button class="needs-login header-history-btn jam-owner-only" id="history-modal-btn" title="Recently Listened" hidden>
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <circle cx="12" cy="12" r="9"/>
@@ -240,15 +231,6 @@
       </div>
     </div>
     <div class="sidebar-section sidebar-tools">
-      <button class="sidebar-nav-btn needs-login jam-owner-only" id="sidebar-jam-btn" hidden>
-        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
-          <circle cx="9" cy="8" r="3"/>
-          <circle cx="17" cy="10" r="2.5"/>
-          <path d="M2 20c0-3.5 3-6 7-6s7 2.5 7 6"/>
-          <path d="M14 20c.5-2.5 2.5-4 5-4 1.5 0 3 .5 3 2"/>
-        </svg>
-        <span class="nav-label">Jam</span>
-      </button>
       <button class="sidebar-nav-btn" id="refresh-page-btn" onclick="location.reload()">
         <svg viewBox="0 0 24 24" fill="none"
              stroke="currentColor" stroke-width="2.2" stroke-linecap="square">
@@ -904,15 +886,14 @@
     <div class="jam-body">
       <div id="jam-inactive">
         <p class="jam-desc">
-          Start a jam to get a share link. Anyone with the link can search and
-          play music on your devices, but can't like songs, edit playlists, or
-          touch your account. End the jam any time to cut off access instantly.
+          Start a Jam to share playback and one queue. Choose connected audio outputs
+          and manage participants. Likes and playlist saves stay in each person’s account.
         </p>
         <button class="jam-btn jam-btn-primary jam-btn-full" id="jam-start-btn">Start a Jam</button>
       </div>
       <div id="jam-active" hidden>
         <p class="jam-desc">
-          Your jam is live. Share this link:
+          Share this invite, or open Jam management to choose outputs and participants:
         </p>
         <div class="jam-link-row">
           <input type="text" id="jam-link" readonly class="jam-link-input">
@@ -926,6 +907,7 @@
         <div class="jam-qr-panel" id="jam-qr-panel" hidden>
           <img class="jam-qr-img" id="jam-qr-img" alt="Jam QR code">
         </div>
+        <a class="jam-btn jam-btn-primary jam-btn-full" href="/jam-room/" style="display:block;text-align:center;text-decoration:none;margin:12px 0">Manage Jam</a>
         <button class="jam-btn jam-btn-danger jam-btn-full" id="jam-end-btn">End Jam</button>
       </div>
     </div>
