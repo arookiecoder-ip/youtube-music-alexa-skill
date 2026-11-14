@@ -20,7 +20,7 @@ class JamRouteTests(unittest.TestCase):
         with self.database() as db:
             db.execute('UPDATE jam_tokens SET created_at=?',(time.time(),));db.commit()
         root=Path(__file__).resolve().parents[1]
-        app=Flask(__name__,template_folder=str(root/'templates'))
+        app=Flask(__name__,template_folder=str(root/'templates'),static_folder=str(root/'templates'/'static'))
         app.secret_key='isolated-jam-tests'
         app.config['TESTING']=True
         self.app=app

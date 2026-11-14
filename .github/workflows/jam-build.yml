@@ -23,6 +23,19 @@ jobs:
         env:
           PYTHONPATH: flask-server:flask-server/tests
         run: python -m unittest test_jam_rooms test_jam_routes -v
+      - name: Install Chromium on the GitHub runner
+        run: python -m playwright install chromium
+      - name: Browser consent, host output selection, removal and responsive layouts
+        env:
+          PYTHONPATH: flask-server:flask-server/tests
+          JAM_SCREENSHOTS: jam-screenshots
+        run: python -m unittest test_jam_browser -v
+      - name: Upload Jam UI screenshots
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: jam-ui-screenshots
+          path: jam-screenshots/
       - name: Existing account and playback isolation regressions
         env:
           PYTHONPATH: flask-server:flask-server/tests

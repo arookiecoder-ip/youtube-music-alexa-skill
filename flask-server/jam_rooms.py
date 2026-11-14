@@ -38,7 +38,8 @@ class JamRooms:
             video = raw.get('video_id') or raw.get('ytVideoId') or raw.get('videoId')
             if not isinstance(video, str) or len(video) != 11 or not all(c.isalnum() or c in '_-' for c in video) or not video.isascii():
                 raise ValueError('Choose an online song for the Jam.')
-            duration = raw.get('duration_ms') or (raw.get('durationSec', 0) * 1000)
+            seconds = raw.get('durationSec', 0)
+            duration = raw.get('duration_ms') or (seconds * 1000 if isinstance(seconds, (int, float)) else 0)
             if isinstance(duration, bool) or not isinstance(duration, (int, float)) or not 0 <= duration <= 86400000:
                 duration = 0
             tracks.append({'video_id': video, 'title': str(raw.get('title') or 'Song')[:500],
@@ -102,6 +103,9 @@ class JamRooms:
                 raise JamConflict('This Jam needs a new invite. Ask the host to restart it.')
             state = json.loads(row['state'])
             self._advance(state)
+            detached = {row['device'] for row in db.execute('''SELECT o.device FROM jam_outputs o
+                JOIN jam_members m ON m.id=o.member WHERE o.token=? AND (m.removed=1 OR m.left_room=1)''', (token,))}
+            state['selected'] = [device for device in state['selected'] if device not in detached]
             if action:
                 command = body.get('command_id')
                 if not isinstance(command, str) or not 1 <= len(command) <= 128:

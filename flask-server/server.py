@@ -7454,6 +7454,9 @@ def jam_start():
     with _np_lock:
         seed = _np_snapshot(serial)
     token = _jam_open(_jam_identity_id())
+    seed['queue'] = [row for row in seed.get('queue', []) if _valid_video_id(row.get('video_id'))]
+    seed['queue_index'] = next((i for i, row in enumerate(seed['queue']) if row.get('video_id') == seed.get('video_id')), 0)
+    _jam_members.ensure()
     _jam_rooms.start(token, seed, device_id if isinstance(device_id, str) else '')
     return jsonify({'ok': True, 'active': True, 'url': _jam_url(token)})
 
@@ -7554,6 +7557,7 @@ def jam_join(token):
 
 
 def _jam_access_token():
+    _jam_members.ensure()
     member = _jam_membership()
     if member:
         return session['jam'], member
@@ -7636,6 +7640,8 @@ def jam_control():
     if not isinstance(body, dict):
         return jsonify(error='Expected a JSON object.'), 400
     action = body.get('action')
+    if not isinstance(action, str) or not action:
+        return jsonify(error='Choose a Jam action.'), 400
     if action == 'configure':
         if member:
             return jsonify(error='Only the host can choose Jam outputs.'), 403

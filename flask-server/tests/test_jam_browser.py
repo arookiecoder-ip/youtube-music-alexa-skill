@@ -1,0 +1,83 @@
+"""Real Chromium exercises consent, host management and small-screen layout."""
+from pathlib import Path
+import os
+import threading
+import time
+import unittest
+from werkzeug.serving import make_server
+from playwright.sync_api import sync_playwright, expect
+from test_jam_routes import JamRouteTests
+
+
+class JamBrowserTests(unittest.TestCase):
+    def setUp(self):
+        self.case=JamRouteTests('test_invitation_get_shows_consent_without_joining')
+        self.case.setUp()
+        # Keep the fixture queue paused; audio providers are outside UI tests.
+        self.case.rooms.transact('room','pause',{'command_id':'fixture-pause'})
+        self.case.rooms.clock=time.time
+        revision=self.case.rooms.transact('room')['revision']
+        self.case.rooms.transact('room','configure',{'command_id':'fixture-output','revision':revision,'mode':'single','selected':[]})
+        self.server=make_server('127.0.0.1',0,self.case.app,threaded=True)
+        self.thread=threading.Thread(target=self.server.serve_forever,daemon=True)
+        self.thread.start()
+        self.origin='http://127.0.0.1:'+str(self.server.server_port)
+        self.playwright=sync_playwright().start()
+        self.browser=self.playwright.chromium.launch()
+        self.context=self.browser.new_context(extra_http_headers={'Test-User':'host'},viewport={'width':390,'height':844})
+        self.page=self.context.new_page()
+        self.errors=[]
+        self.page.on('pageerror',lambda error:self.errors.append(str(error)))
+        self.artifacts=Path(os.environ.get('JAM_SCREENSHOTS','/tmp/jam-screenshots'))
+        self.artifacts.mkdir(parents=True,exist_ok=True)
+
+    def tearDown(self):
+        self.browser.close();self.playwright.stop()
+        self.server.shutdown();self.thread.join(timeout=5);self.case.tearDown()
+
+    def test_host_switches_modes_selects_outputs_and_removes_member(self):
+        self.case.join(self.case.alice,'alice','alice-phone')
+        self.case.alice.post('/api/jam/presence/',json={'device_id':'alice-phone','name':'Alice phone'},headers={'Test-User':'alice'})
+        self.page.goto(self.origin+'/jam-room/')
+        expect(self.page.locator('#host')).to_be_visible()
+        expect(self.page.locator('#outputs')).to_contain_text('Alice phone')
+        self.page.locator('#multiple').check()
+        expect(self.page.locator('#people')).to_contain_text('Multiple selected outputs')
+        self.page.locator('#outputs label').filter(has_text='Alice phone').locator('input').check()
+        self.page.wait_for_function("document.querySelector('#outputs label input').checked")
+        state=self.case.rooms.transact('room')
+        self.assertIn('alice-phone',state['selected'])
+        self.page.screenshot(path=str(self.artifacts/'host-phone.png'),full_page=True)
+        self.page.on('dialog',lambda dialog:dialog.accept())
+        self.page.locator('#members').get_by_role('button',name='Remove').click()
+        expect(self.page.locator('#members')).not_to_contain_text('alice')
+        self.assertEqual(self.case.rooms.transact('room')['selected'],[])
+        self.assertFalse(self.errors,self.errors)
+
+    def test_guest_must_confirm_join_and_cannot_see_host_management(self):
+        guest=self.browser.new_context(viewport={'width':375,'height':812})
+        page=guest.new_page();errors=[]
+        page.on('pageerror',lambda error:errors.append(str(error)))
+        page.goto(self.origin+'/j/room')
+        expect(page.get_by_role('button',name='Join Jam')).to_be_visible()
+        page.get_by_role('button',name='Join Jam').click()
+        expect(page).to_have_url(self.origin+'/jam-room/')
+        expect(page.locator('#host')).to_be_hidden()
+        expect(page.locator('#title')).to_have_text('First')
+        page.get_by_role('button',name='Like',exact=True).click()
+        expect(page.locator('#notice')).to_contain_text('Sign in')
+        page.screenshot(path=str(self.artifacts/'guest-phone.png'),full_page=True)
+        self.assertFalse(errors,errors)
+        guest.close()
+
+    def test_management_and_queue_fit_phone_tablet_and_desktop(self):
+        self.page.goto(self.origin+'/jam-room/')
+        expect(self.page.locator('#host')).to_be_visible()
+        for width in (320,390,768,1280):
+            self.page.set_viewport_size({'width':width,'height':900})
+            self.assertTrue(self.page.evaluate('document.documentElement.scrollWidth <= innerWidth'),f'Horizontal overflow at {width}')
+            self.page.screenshot(path=str(self.artifacts/f'host-{width}.png'),full_page=True)
+        self.assertFalse(self.errors,self.errors)
+
+
+if __name__ == '__main__':unittest.main()
