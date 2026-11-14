@@ -82,6 +82,14 @@
       });
       menu.appendChild(item);
     }
+    if (!window.JAM_GUEST) {
+      const jamAction = document.createElement('button');
+      jamAction.type = 'button';
+      jamAction.className = 'custom-select-option';
+      jamAction.textContent = window.jamActive ? 'Manage Jam' : 'Start a Jam';
+      jamAction.addEventListener('click', () => { closeDropdown(); if (window.openJamModal) window.openJamModal(); });
+      menu.appendChild(jamAction);
+    }
     if (triggerLabel) updateTriggerLabel();
   }
 
@@ -549,6 +557,7 @@
     }
 
     function setJamLiveIndicator(active) {
+      window.jamActive = active;
       [jamBtn, sidebarJamBtn].forEach((btn) => {
         if (!btn) return;
         btn.classList.toggle('jam-live', active);
@@ -558,6 +567,12 @@
 
     function renderJam(stateValue) {
       const active = !!(stateValue && stateValue.active);
+      if (stateValue) {
+        window.jamIsHost = !!stateValue.host;
+        [refreshBtn, qrBtn].forEach(btn => { if(btn) btn.hidden = active && !stateValue.host; });
+        const end = document.getElementById('jam-end-btn');
+        if(end) end.textContent = stateValue.host ? 'End Jam' : 'Leave Jam';
+      }
       inactiveEl.hidden = active;
       activeEl.hidden = !active;
       if (stateValue) setJamLiveIndicator(active);
@@ -573,7 +588,7 @@
     async function openJamModal() {
       overlay.classList.add('open');
       renderJam(null);
-      try { renderJam(await api('/alexa/jam/status/')); }
+      try { renderJam(await api('/api/jam/state/')); }
       catch (e) { toast(e.message, 'error'); }
     }
     function closeJamModal() { overlay.classList.remove('open'); }
@@ -590,7 +605,7 @@
     if (startBtn) startBtn.addEventListener('click', async () => {
       startBtn.disabled = true;
       const deviceId = window.browserPlayback ? window.browserPlayback.id : '';
-      try { renderJam(await api('/alexa/jam/start/', { device_id: deviceId })); toast('Jam started - share the link', 'ok'); }
+      try { renderJam(await api('/alexa/jam/start/', { device_id: deviceId })); location.assign('/jam-room/'); }
       catch (e) { toast(e.message, 'error'); }
       finally { startBtn.disabled = false; }
     });
@@ -659,11 +674,11 @@
 
     const endBtn = document.getElementById('jam-end-btn');
     if (endBtn) endBtn.addEventListener('click', async () => {
-      try { renderJam(await api('/alexa/jam/stop/', {})); toast('Jam ended - guest access revoked', 'ok'); }
+      try { renderJam(await api(window.jamIsHost ? '/alexa/jam/stop/' : '/api/jam/leave/', {})); toast('Jam ended - guest access revoked', 'ok'); }
       catch (e) { toast(e.message, 'error'); }
     });
 
-    api('/alexa/jam/status/').then(renderJam).catch(() => setJamLiveIndicator(false));
+    api('/api/jam/state/').then(renderJam).catch(() => setJamLiveIndicator(false));
 
     window.openJamModal = openJamModal;
     window.closeJamModal = closeJamModal;
