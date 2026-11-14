@@ -540,7 +540,7 @@ class AlexaRemote:
                 except Exception as exc:
                     if not authentication_failure(exc):
                         logger.warning("Amazon session verification temporarily unavailable", exc_info=True)
-                        return "Amazon session verification is temporarily unavailable. Try again shortly."
+                        return "Amazon is temporarily unavailable. Try again shortly."
                     logger.warning("Amazon session rejected; trying the stored cookie")
                 try:
                     await self._login.close()
@@ -582,7 +582,7 @@ class AlexaRemote:
                 logger.warning("Restoring Amazon session temporarily failed", exc_info=True)
                 if not authentication_failure(exc):
                     self.connection_state = None
-                    return "Amazon session verification is temporarily unavailable. Try again shortly."
+                    return "Amazon is temporarily unavailable. Try again shortly."
             finally:
                 if self._login is not login:
                     try:

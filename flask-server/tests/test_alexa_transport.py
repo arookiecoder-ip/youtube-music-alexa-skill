@@ -6,6 +6,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, Mock
 from alexa_transport import AmazonTransport, TransportDeferred, bounded_transport
+from alexa_playback_errors import authentication_failure
 
 
 class AmazonTransportTests(unittest.IsolatedAsyncioTestCase):
@@ -87,4 +88,5 @@ class AmazonTransportTests(unittest.IsolatedAsyncioTestCase):
         owner=SimpleNamespace(_login=login,_login_checked_at=1,_access_error=lambda email:None,connection_state=True)
         error=await ns['_ensure_login'](owner)
         self.assertIn('temporarily unavailable',error);self.assertIs(owner._login,login)
+        self.assertIsNone(authentication_failure(error),'Temporary outages must not trigger the server authentication-stop path')
         self.assertTrue(owner.connection_state);login.close.assert_not_awaited()
