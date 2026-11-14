@@ -232,4 +232,35 @@ class JamRouteTests(unittest.TestCase):
         self.assertEqual(len(data['sha256_cert_fingerprints'][0].split(':')),32)
 
 
+    def test_offline_outputs_are_hidden_and_cannot_be_selected(self):
+        headers={'Test-User':'host'}
+        self.host.post('/api/jam/presence/',json={'device_id':'host-phone','devices':[
+            {'id':'phone','name':'Phone','kind':'phone','online':True},
+            {'id':'alexa:offline','name':'Offline Echo','kind':'alexa','online':False}]},headers=headers)
+        data=self.host.get('/api/jam/state/',headers=headers).get_json()
+        self.assertEqual([o['device'] for o in data['outputs']],['host-phone'])
+        response=self.host.post('/api/jam/control/',json={'action':'configure','mode':'single',
+            'selected':['host-phone'],'targets':{'host-phone':'alexa:offline'},
+            'revision':data['playback']['revision'],'command_id':'offline'},headers=headers)
+        self.assertEqual(response.status_code,400)
+        with self.database() as db:
+            db.execute("UPDATE jam_outputs SET seen=0 WHERE device='host-phone'");db.commit()
+        self.assertEqual(self.host.get('/api/jam/state/',headers=headers).get_json()['outputs'],[])
+
+    def test_selected_member_can_stream_in_single_and_multiple_modes_but_anonymous_request_cannot(self):
+        headers={'Test-User':'alice'}
+        self.join(self.alice,'alice',device='alice-phone')
+        self.alice.post('/api/jam/presence/',json={'device_id':'alice-phone'},headers=headers)
+        self.host.post('/api/jam/presence/',json={'device_id':'host-phone'},headers={'Test-User':'host'})
+        for mode,selected in [('single',['alice-phone']),('multiple',['alice-phone','host-phone'])]:
+            state=self.host.get('/api/jam/state/',headers={'Test-User':'host'}).get_json()['playback']
+            response=self.host.post('/api/jam/control/',json={'action':'configure','mode':mode,'selected':selected,
+                'revision':state['revision'],'command_id':mode},headers={'Test-User':'host'})
+            self.assertEqual(response.status_code,200)
+            self.assertTrue(self.alice.get('/api/jam/state/?device_id=alice-phone',headers=headers).get_json()['listen'])
+            video=state['queue'][0]['video_id']
+            self.assertEqual(self.alice.get('/api/jam/audio/'+video,headers=headers).status_code,200)
+            self.assertEqual(self.app.test_client().get('/api/jam/audio/'+video).status_code,401)
+
+
 if __name__ == '__main__':unittest.main()

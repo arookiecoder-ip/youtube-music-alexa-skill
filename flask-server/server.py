@@ -7927,7 +7927,7 @@ def jam_state():
             username=o['member_name'] or json.loads(o['details']).get('username','Host'),
             volume=json.loads(o['status']).get('volume'),playing=bool(json.loads(o['status']).get('playing')),
             processing=bool(json.loads(o['status']).get('processing')),confirmed=bool(json.loads(o['status']).get('confirmed')),kind=json.loads(o['details']).get('kind','phone'),
-            devices=json.loads(o['details']).get('devices',[])) for o in outputs],
+            devices=json.loads(o['details']).get('devices',[])) for o in outputs if _jam_rooms.online(o)],
         listen=device in playback['selected'],
         member_count=len({m['user_id'] or m['id'] for m in members}) + 1))
 
@@ -7976,7 +7976,7 @@ def jam_control():
         catalog = _jam_rooms.outputs(token)
         allowed = {o['device'] for o in catalog if _jam_rooms.online(o)}
         targets=body.get('targets',{})
-        if not isinstance(targets,dict) or any(not isinstance(value,str) or not any(o['device']==key and any(isinstance(d,dict) and d.get('id')==value for d in json.loads(o['details']).get('devices',[])) for o in catalog) for key,value in targets.items()):
+        if not isinstance(targets,dict) or any(not isinstance(value,str) or not any(o['device']==key and _jam_rooms.online(o) and any(isinstance(d,dict) and d.get('id')==value and d.get('online',True) for d in json.loads(o['details']).get('devices',[])) for o in catalog) for key,value in targets.items()):
             return jsonify(error='Choose a connected participant device.'),400
         selected = body.get('selected')
         if not isinstance(selected, list) or any(not isinstance(d, str) or d not in allowed for d in selected):
