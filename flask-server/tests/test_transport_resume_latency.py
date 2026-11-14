@@ -11,7 +11,7 @@ class TransportResumeLatencyTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         source = Path(__file__).resolve().parents[1] / 'alexa_remote.py'
         cls = next(n for n in ast.parse(source.read_text()).body if isinstance(n, ast.ClassDef) and n.name == 'AlexaRemote')
-        methods = [n for n in cls.body if isinstance(n, ast.AsyncFunctionDef) and n.name in ('_api_for', '_command', '_refresh_transport_presence', '_pause_for_handoff')]
+        methods = [n for n in cls.body if isinstance(n, ast.AsyncFunctionDef) and n.name in ('_api_for', '_command', '_refresh_transport_presence', '_pause_for_handoff', '_text_command')]
         self.api = SimpleNamespace(run_custom=AsyncMock(), pause=AsyncMock())
         self.raw = {'online': True, 'accountName': 'Echo'}
         self.ns = dict(asyncio=asyncio, time=SimpleNamespace(monotonic=lambda: 100), _DEVICE_STATE_TTL=30,
@@ -42,6 +42,21 @@ class TransportResumeLatencyTests(unittest.IsolatedAsyncioTestCase):
         finally:
             release.set()
             await self.owner._transport_presence_refresh
+
+    async def test_new_song_trigger_also_never_waits_for_stale_known_online_presence(self):
+        release=asyncio.Event()
+        async def refresh(**kwargs):
+            await release.wait()
+            return [],None
+        self.owner._devices=AsyncMock(side_effect=refresh)
+        try:
+            result=await asyncio.wait_for(self.ns['_text_command'](self.owner,'echo','ask music box to play app selection'),.2)
+            self.assertIsNone(result)
+            self.api.run_custom.assert_awaited_once_with('ask music box to play app selection',queue_delay=0)
+        finally:
+            release.set()
+            task=getattr(self.owner,'_transport_presence_refresh',None)
+            if task:await task
 
     async def test_known_offline_device_still_requires_synchronous_verification(self):
         self.raw['online'] = False

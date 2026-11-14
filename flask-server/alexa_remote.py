@@ -1821,7 +1821,7 @@ class AlexaRemote:
         return self._run(self._text_command(serial, text))
 
     async def _text_command(self, serial, text):
-        api, error = await self._api_for(serial, require_online=True)
+        api, error = await self._api_for(serial, require_online=True, cached_online=True)
         if error:
             return error
         try:

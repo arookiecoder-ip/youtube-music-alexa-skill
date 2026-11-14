@@ -1,7 +1,7 @@
 name: Jam backend build and regressions
 on:
   push:
-    branches: [feat/jam-sessions]
+    branches: [feat/jam-sessions, fix/jam-playback-session]
     paths: ['flask-server/**', '.github/workflows/jam-build.yml']
   workflow_dispatch:
 permissions:
@@ -23,6 +23,15 @@ jobs:
         env:
           PYTHONPATH: flask-server:flask-server/tests
         run: python -m unittest test_jam_rooms test_jam_routes -v
+      - name: Playback ownership, active sessions, outage classification and resume startup
+        env:
+          PYTHONPATH: flask-server:flask-server/tests
+        run: |
+          for suite in test_app_queue test_active_session_renewal test_session_validation_outage test_alexa_startup_bundle test_alexa_logged_out test_alexa_authentication_stop test_transport_resume_latency; do
+            python -m pytest -q "flask-server/tests/$suite.py" || exit 1
+          done
+      - name: Skill resume and real SDK authorization regressions
+        run: python -m unittest discover -s lambda/tests -p 'test_*.py' -q
       - name: Install Chromium on the GitHub runner
         run: python -m playwright install chromium
       - name: Browser consent, host output selection, removal and responsive layouts
@@ -45,6 +54,20 @@ jobs:
           python -m compileall -q flask-server
           node --check flask-server/templates/static/js/jam-room.js
           node --check flask-server/templates/static/js/device.js
+      - name: Package matching Alexa skill sources
+        run: |
+          python - <<'PYCODE'
+          from pathlib import Path
+          from zipfile import ZipFile, ZIP_DEFLATED
+          with ZipFile('jam-skill-source.zip','w',ZIP_DEFLATED) as archive:
+              for path in Path('lambda').rglob('*'):
+                  if path.is_file() and not any(part in ('tests','__pycache__') for part in path.parts):
+                      archive.write(path,path.relative_to('lambda'))
+          PYCODE
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: jam-skill-source
+          path: jam-skill-source.zip
       - name: Build backend image on GitHub runner
         run: |
           docker build --label org.opencontainers.image.revision="$GITHUB_SHA" -t "musicbox-jam:$GITHUB_SHA" flask-server

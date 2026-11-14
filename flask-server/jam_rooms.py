@@ -51,6 +51,14 @@ class JamRooms:
     def start(self, token, snapshot, device):
         self.ensure()
         tracks = self.tracks(snapshot.get('queue') or [])
+        # Seed from trusted account playback without changing media-item identity.
+        # Replacing IDs here forces the host phone to reload an already playing song.
+        seen = set()
+        for source, target in zip(snapshot.get('queue') or [], tracks):
+            entry = source.get('entry_id')
+            if isinstance(entry, str) and 1 <= len(entry) <= 128 and entry not in seen:
+                target['entry_id'] = entry
+            seen.add(target['entry_id'])
         index = snapshot.get('queue_index', 0)
         index = index if isinstance(index, int) and 0 <= index < len(tracks) else 0
         state = dict(queue=tracks, queue_index=index if tracks else -1, playing=bool(tracks and snapshot.get('playing')),

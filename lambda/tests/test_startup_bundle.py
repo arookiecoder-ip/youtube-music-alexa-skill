@@ -83,3 +83,31 @@ class StartupBundleTests(unittest.TestCase):
             player.Api.get_armed_play(request)
             player.Api.stream_video(request, NEW_SONG)
         self.assertEqual(get.call_count, 2)
+
+class ResumeBundleTests(unittest.TestCase):
+    def test_resume_uses_fresh_authorized_arm_stream_without_second_http_request(self):
+        request=handler()
+        request.request_envelope.context=_node(audio_player=None)
+        info={'offset_in_ms':0,'stream_url':'https://old-capability','stream_url_video_id':NEW_SONG}
+        metadata=player.player_models.Metadata(title='Song',artist='Artist',video_id=NEW_SONG,thumbnail=None,duration_ms=180000)
+        response={'video_id':NEW_SONG,'offset_ms':45000,'kind':'resume',
+            'resume_stream':{'audio_url':'https://fresh-authorized-capability'}}
+        with mock.patch.object(player.data,'ALEXA_SKILL_NAMESPACE','private-skill'), \
+             mock.patch.object(player.Attributes,'get_playback_info',return_value=info), \
+             mock.patch.object(player.Attributes,'get_metadata_by_play_order',return_value=metadata), \
+             mock.patch.object(player.Api,'_get_json',return_value=(response,None)) as get, \
+             mock.patch.object(player.Api,'get_stream') as duplicate, \
+             mock.patch.object(player.Controller,'play',return_value='played') as play:
+            self.assertEqual(player.Controller.resume(request),'played')
+        get.assert_called_once_with(request,'armed_play',{'peek':'1','include_resume_stream':'1'})
+        duplicate.assert_not_called()
+        self.assertEqual(play.call_args.args[1].stream.audio_url,'https://fresh-authorized-capability')
+        self.assertEqual(info['offset_in_ms'],45000)
+        self.assertIsNone(request.request_envelope._musicbox_resume_stream)
+
+    def test_failed_authorization_clears_request_local_resume_capability(self):
+        request=handler();request.request_envelope._musicbox_resume_stream=(NEW_SONG,'https://stale')
+        with mock.patch.object(player.Api,'_get_json',return_value=(None,Exception('denied'))):
+            armed,error=player.Api.get_armed_play(request,peek=True,include_resume_stream=True)
+        self.assertIsNone(armed);self.assertIsNotNone(error)
+        self.assertIsNone(request.request_envelope._musicbox_resume_stream)

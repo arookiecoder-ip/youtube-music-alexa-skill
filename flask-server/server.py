@@ -1145,7 +1145,8 @@ def _mu_web_identity():
         _sess, user = _multiuser_layer.accounts.validate_session(session['mu_sid'])
     except Exception:
         logger.exception('multiuser session validation failed')
-        user = None
+        from werkzeug.exceptions import ServiceUnavailable
+        raise ServiceUnavailable(description='Account validation is temporarily unavailable. Retry shortly.')
     g._mu_user_cache = user or None
     return g._mu_user_cache
 
@@ -5626,7 +5627,7 @@ def _resolve_next_track(queue, after_video_id, current_index=None):
 
 @app.route("/api/app/queue/", methods=["POST"], strict_slashes=False)
 def app_queue():
-    """Publish phone playback to the shared queue; never dispatch an Echo command."""
+    """Publish phone playback, or install an explicitly fenced Echo queue."""
     body = request.get_json(silent=True)
     if not isinstance(body, dict):
         return error_response('JSON object required', 400)
@@ -5635,6 +5636,16 @@ def app_queue():
         return error_response('invalid queue action', 400)
     owner, output_token = body.get('output_owner'), body.get('output_token')
     output = _playback_output.snapshot()
+    alexa_serial = body.get('alexa_serial')
+    start_playback = body.get('start_playback', False)
+    if not isinstance(start_playback, bool) or start_playback and (alexa_serial is None or action != 'start'):
+        return error_response('start_playback requires a fenced Alexa queue start', 400)
+    dispatch_fence = None
+    if alexa_serial is not None:
+        if (not isinstance(alexa_serial, str) or not alexa_serial or owner is not None or
+                output['playback_output'] != 'alexa' or output['output_serial'] != alexa_serial or
+                not isinstance(output_token, str) or output_token != output['output_token']):
+            raise OutputConflict('Playback moved to another output. Refresh before changing the Alexa queue.')
     if owner is not None or output['playback_output'] == 'phone':
         if not _playback_output.owns_phone(owner, output_token):
             raise OutputConflict('Playback moved to another output. Refresh before changing the queue.')
@@ -5700,6 +5711,11 @@ def app_queue():
                        'thumbnail': _thumbnail_url(raw.get('thumbnail')), 'duration_ms': duration,
                        'entry_id': raw.get('entry_id')})
     with _np_lock:
+        if alexa_serial is not None:
+            current_output = _playback_output.snapshot()
+            if (current_output['playback_output'] != 'alexa' or current_output['output_serial'] != alexa_serial or
+                    current_output['output_token'] != output_token):
+                raise OutputConflict('Playback moved to another output.')
         if owner is not None and not _playback_output.owns_phone(owner, output_token):
             raise OutputConflict('Playback moved to another output.')
         if report_sequence is not None:
@@ -5783,19 +5799,26 @@ def app_queue():
         if action != 'current':
             _now_playing.update(queue=queue, queue_web_dirty=True)
         _now_playing['updated_at'] = time.time()
+        if start_playback:
+            _now_playing.update(playing=True, playback_confirmed=False, playback_processing=True,
+                                alexa_intent_at=time.time(), _alexa_auth_blocked=False)
+            dispatch_fence = (_now_playing['alexa_intent_at'], output_token)
         if command_id:
-            response = {'ok': True, 'queue_version': _queue_version_locked()}
+            response = {'ok': True, 'queue_version': _queue_version_locked(), 'alexa_scheduled': start_playback}
             _queue_commands.record(command_id, digest, response)
         else:
-            response = {'ok': True}
+            response = {'ok': True, 'alexa_scheduled': start_playback}
     _notify_sse()
     if owner is not None:
         _playback_output.heartbeat(owner, output_token)
     if audio_changed:
         _bump_playback_generation()
     if action == 'start' or audio_changed:
-        # Phone state is mirrored here, but this never arms or dispatches Alexa.
+        # Phone publications only warm audio; dispatch requires an Echo fence.
         _ensure_audio_ready_for_play(after, wait=False)
+    if start_playback:
+        _schedule_play_dispatch(alexa_serial, after, offset_ms=position or 0,
+                                expected_intent=dispatch_fence[0], expected_output=dispatch_fence[1])
     return jsonify(response)
 
 
@@ -11527,8 +11550,15 @@ def armed_play():
             with _np_lock:
                 if _now_playing.get('video_id') == video_id:
                     _now_playing['_alexa_verified_intent_at'] = _now_playing.get('alexa_intent_at')
-        return jsonify({'video_id': video_id, 'offset_ms': offset_ms,
-                        'armed_at': armed_at, 'kind': kind})
+        payload = {'video_id': video_id, 'offset_ms': offset_ms,
+                   'armed_at': armed_at, 'kind': kind}
+        if request.args.get('include_resume_stream') == '1' and kind == 'resume':
+            # Supporting mints a new account/device-scoped capability using this
+            # request's verified binding. Never hand out a previously stored URL.
+            stream = asyncio.run(Supporting.get_stream(video_id))
+            if stream:
+                payload['resume_stream'] = stream
+        return jsonify(payload)
     armed = _consume_armed_play(serial)
     if not armed:
         return jsonify({'video_id': None})
