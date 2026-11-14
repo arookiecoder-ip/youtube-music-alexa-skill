@@ -242,3 +242,29 @@ class PhoneQueueTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+class EchoQueueFenceTests(PhoneQueueTests):
+    def test_echo_queue_uses_selected_echo_fence_without_a_phone_lease(self):
+        output=self.output.alexa('echo-one',wait=False)
+        response=self.post('start',tracks=[track(A),track(B)],queue_index=0,playing=True,
+            alexa_serial='echo-one',output_token=output['output_token'])
+        self.assertEqual(response.status_code,200)
+        self.assertEqual(self.output.snapshot()['playback_output'],'alexa')
+        self.assertEqual(self.echo.mock_calls,[])
+
+    def test_old_echo_token_cannot_overwrite_new_device_or_phone(self):
+        old=self.output.alexa('echo-one',wait=False)
+        self.output.alexa('echo-two',wait=False)
+        before=copy.deepcopy(self.state)
+        response=self.post('start',tracks=[track(C)],after=C,alexa_serial='echo-one',output_token=old['output_token'])
+        self.assertEqual(response.status_code,409);self.assertEqual(self.state,before)
+        self.output.phone('phone-one',lambda:None)
+        response=self.post('start',tracks=[track(C)],after=C,alexa_serial='echo-one',output_token=old['output_token'])
+        self.assertEqual(response.status_code,409);self.assertEqual(self.state,before)
+
+    def test_echo_switch_during_validation_is_fenced_again_at_commit(self):
+        old=self.output.alexa('echo-one',wait=False)
+        before=copy.deepcopy(self.state)
+        self.namespace['_thumbnail_url']=lambda raw:(self.output.alexa('echo-two',wait=False),raw)[1]
+        response=self.post('start',tracks=[track(C)],after=C,alexa_serial='echo-one',output_token=old['output_token'])
+        self.assertEqual(response.status_code,409);self.assertEqual(self.state,before)

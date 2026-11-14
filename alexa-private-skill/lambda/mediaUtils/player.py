@@ -811,7 +811,7 @@ class Api:
         return Api._get_json(handler_input, 'alexa/like', params)
 
     @staticmethod
-    def get_armed_play(handler_input: HandlerInput, peek: bool = False) -> Tuple[Optional[Tuple[str, int, Optional[float], str]], Optional[Exception]]:
+    def get_armed_play(handler_input: HandlerInput, peek: bool = False, include_resume_stream: bool = False) -> Tuple[Optional[Tuple[str, int, Optional[float], str]], Optional[Exception]]:
         """Fetch the video id the web remote armed for a direct play. Returns
         ((video_id, offset_ms, armed_age_s, kind), None) when one is pending,
         else (None, error). ``armed_age_s`` is how old the arm was when read
@@ -822,7 +822,10 @@ class Api:
         resume can inspect the web remote's intent without stealing the arm of
         an in-flight fresh play or seek (see /armed_play/)."""
         handler_input.request_envelope._musicbox_startup = None
+        handler_input.request_envelope._musicbox_resume_stream = None
         params = {'peek': '1'} if peek else {'include_stream': '1'}
+        if peek and include_resume_stream:
+            params['include_resume_stream'] = '1'
         response_json, error = Api._get_json(handler_input, 'armed_play', params)
         if error:
             return None, error
@@ -842,6 +845,9 @@ class Api:
         except (TypeError, ValueError):
             armed_age_s = None
         kind = (response_json or {}).get('kind') or 'play'
+        resume_stream = (response_json or {}).get('resume_stream')
+        if peek and include_resume_stream and kind == 'resume' and isinstance(resume_stream, dict):
+            handler_input.request_envelope._musicbox_resume_stream = (video_id, resume_stream.get('audio_url'))
         startup = (response_json or {}).get('startup')
         if not peek and kind == 'play' and isinstance(startup, dict):
             handler_input.request_envelope._musicbox_startup = startup
@@ -1452,7 +1458,7 @@ class Controller:
         # so an in-flight fresh play/seek keeps its own arm, and only honor
         # fresh 'resume' arms so an old intent can never hijack playback.
         try:
-            armed, arm_error = Api.get_armed_play(handler_input, peek=True)
+            armed, arm_error = Api.get_armed_play(handler_input, peek=True, include_resume_stream=True)
             if isinstance(arm_error, SkillAuthorizationError):
                 return Controller.error_response(handler_input, arm_error, is_playback)
         except SkillAuthorizationError:
@@ -1484,7 +1490,11 @@ class Controller:
             return handler_input.response_builder.set_should_end_session(True).response
         if not metadata:
             return Controller.error_response(handler_input, data.NOTHING_TO_RESUME, is_playback)
-        if (not getattr(data, 'ALEXA_SKILL_NAMESPACE', '') and playback_info.get('stream_url')
+        bundled = getattr(handler_input.request_envelope, '_musicbox_resume_stream', None)
+        handler_input.request_envelope._musicbox_resume_stream = None
+        if (fresh_resume and bundled and bundled[0] == metadata.video_id and bundled[1]):
+            stream = player_models.Stream(bundled[1])
+        elif (not getattr(data, 'ALEXA_SKILL_NAMESPACE', '') and playback_info.get('stream_url')
                 and playback_info.get('stream_url_video_id') == metadata.video_id):
             stream = player_models.Stream(playback_info.get('stream_url'))
         else:

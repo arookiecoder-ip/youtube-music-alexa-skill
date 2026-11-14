@@ -1145,7 +1145,8 @@ def _mu_web_identity():
         _sess, user = _multiuser_layer.accounts.validate_session(session['mu_sid'])
     except Exception:
         logger.exception('multiuser session validation failed')
-        user = None
+        from werkzeug.exceptions import ServiceUnavailable
+        raise ServiceUnavailable(description='Account validation is temporarily unavailable. Retry shortly.')
     g._mu_user_cache = user or None
     return g._mu_user_cache
 
@@ -5635,6 +5636,12 @@ def app_queue():
         return error_response('invalid queue action', 400)
     owner, output_token = body.get('output_owner'), body.get('output_token')
     output = _playback_output.snapshot()
+    alexa_serial = body.get('alexa_serial')
+    if alexa_serial is not None:
+        if (not isinstance(alexa_serial, str) or not alexa_serial or owner is not None or
+                output['playback_output'] != 'alexa' or output['output_serial'] != alexa_serial or
+                not isinstance(output_token, str) or output_token != output['output_token']):
+            raise OutputConflict('Playback moved to another output. Refresh before changing the Alexa queue.')
     if owner is not None or output['playback_output'] == 'phone':
         if not _playback_output.owns_phone(owner, output_token):
             raise OutputConflict('Playback moved to another output. Refresh before changing the queue.')
@@ -5700,6 +5707,11 @@ def app_queue():
                        'thumbnail': _thumbnail_url(raw.get('thumbnail')), 'duration_ms': duration,
                        'entry_id': raw.get('entry_id')})
     with _np_lock:
+        if alexa_serial is not None:
+            current_output = _playback_output.snapshot()
+            if (current_output['playback_output'] != 'alexa' or current_output['output_serial'] != alexa_serial or
+                    current_output['output_token'] != output_token):
+                raise OutputConflict('Playback moved to another output.')
         if owner is not None and not _playback_output.owns_phone(owner, output_token):
             raise OutputConflict('Playback moved to another output.')
         if report_sequence is not None:
@@ -11527,8 +11539,15 @@ def armed_play():
             with _np_lock:
                 if _now_playing.get('video_id') == video_id:
                     _now_playing['_alexa_verified_intent_at'] = _now_playing.get('alexa_intent_at')
-        return jsonify({'video_id': video_id, 'offset_ms': offset_ms,
-                        'armed_at': armed_at, 'kind': kind})
+        payload = {'video_id': video_id, 'offset_ms': offset_ms,
+                   'armed_at': armed_at, 'kind': kind}
+        if request.args.get('include_resume_stream') == '1' and kind == 'resume':
+            # Supporting mints a new account/device-scoped capability using this
+            # request's verified binding. Never hand out a previously stored URL.
+            stream = asyncio.run(Supporting.get_stream(video_id))
+            if stream:
+                payload['resume_stream'] = stream
+        return jsonify(payload)
     armed = _consume_armed_play(serial)
     if not armed:
         return jsonify({'video_id': None})

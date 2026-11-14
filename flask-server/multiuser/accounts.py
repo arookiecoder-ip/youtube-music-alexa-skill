@@ -1636,10 +1636,18 @@ class AccountService:
             return None, None
         # Throttle last-seen writes to avoid a DB write on every request.
         if now - float(row["last_seen_at"] or 0) > 60:
+            # session_hours is the inactivity window, not a forced logout while
+            # an account is actively controlling playback. Keep the absolute cap.
+            deadline = row["created_at"] + self.config.session_absolute_days * 86400
+            renewed = min(now + self.config.session_hours * 3600, deadline)
             self.db.execute(
-                "UPDATE user_sessions SET last_seen_at = ? WHERE sid_hash = ?",
-                (now, sid_hash),
+                "UPDATE user_sessions SET last_seen_at = MAX(last_seen_at, ?), "
+                "expires_at = MIN(?, MAX(expires_at, ?)) "
+                "WHERE sid_hash = ? AND revoked_at = 0 AND expires_at > ?",
+                (now, deadline, renewed, sid_hash, now),
             )
+            row = dict(row)
+            row["expires_at"] = min(deadline, max(row["expires_at"], renewed))
         session = {
             "sid_hash": sid_hash,
             "created_at": row["created_at"],

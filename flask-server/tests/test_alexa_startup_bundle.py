@@ -25,6 +25,19 @@ class StartupBundleTests(NextTrackBase):
         assert self.client.get(self.url+'&include_stream=1').json['video_id'] is None
         self.stream.assert_awaited_once_with(self.vid)
 
+    def test_resume_peek_can_bundle_a_fresh_stream_without_consuming_the_arm(self):
+        server._arm_play(self.SERIAL,self.vid,45000,kind='resume')
+        result=self.client.get(self.url+'&peek=1&include_resume_stream=1').json
+        assert result['resume_stream']['audio_url'].endswith('/audio')
+        assert result['offset_ms']==45000
+        assert server._peek_armed_play(self.SERIAL)[0]==self.vid
+        self.stream.assert_awaited_once_with(self.vid)
+
+    def test_resume_bundle_cannot_reuse_a_fresh_song_or_seek_arm(self):
+        result=self.client.get(self.url+'&peek=1&include_resume_stream=1').json
+        assert 'resume_stream' not in result
+        self.stream.assert_not_awaited()
+
     def test_legacy_client_keeps_original_response(self):
         result = self.client.get(self.url).json
         assert result['video_id'] == self.vid

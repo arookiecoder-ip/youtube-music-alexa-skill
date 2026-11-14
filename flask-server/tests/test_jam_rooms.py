@@ -50,6 +50,14 @@ class JamRoomsTests(unittest.TestCase):
         self.count += 1
         return self.rooms.transact('room', action, dict(command_id=f'command-{self.count}', revision=self.state()['revision'], **fields))
 
+    def test_start_preserves_existing_host_media_identity_and_position(self):
+        self.rooms.start('room',{'queue':[dict(self.songs()[0],entry_id='already-playing')],
+            'queue_index':0,'playing':True,'position_ms':4500},'host-phone')
+        state=self.state()
+        self.assertEqual(state['queue'][0]['entry_id'],'already-playing')
+        self.assertEqual(state['position_ms'],4500)
+        self.assertTrue(state['playing'])
+
     def test_one_clock_advances_once_despite_many_devices_polling(self):
         self.now += 12
         for _ in range(10):
