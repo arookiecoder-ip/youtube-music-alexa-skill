@@ -148,7 +148,7 @@ class JamRooms:
             self._advance(state)
             detached = {row['device'] for row in db.execute('''SELECT o.device FROM jam_outputs o
                 JOIN jam_members m ON m.id=o.member WHERE o.token=? AND (m.removed=1 OR m.left_room=1)
-                AND NOT(json_extract(o.details,'$.server_echo')=1 AND EXISTS(
+                AND NOT(COALESCE(json_extract(o.details,'$.server_echo'),0)=1 AND EXISTS(
                     SELECT 1 FROM jam_members active WHERE active.token=o.token AND active.user_id=m.user_id AND active.removed=0 AND active.left_room=0))''', (token,))}
             state['selected'] = [device for device in state['selected'] if device not in detached]
             if action:
@@ -338,7 +338,7 @@ class JamRooms:
             return [dict(row) for row in db.execute('''SELECT o.device,o.name,o.seen,o.error,o.details,o.status,o.member,m.name AS member_name FROM jam_outputs o
                 LEFT JOIN jam_members m ON m.id=o.member WHERE o.token=?
                 AND (o.member IS NULL OR (m.removed=0 AND m.left_room=0) OR
-                (json_extract(o.details,'$.server_echo')=1 AND EXISTS(SELECT 1 FROM jam_members active
+                (COALESCE(json_extract(o.details,'$.server_echo'),0)=1 AND EXISTS(SELECT 1 FROM jam_members active
                  WHERE active.token=o.token AND active.user_id=m.user_id AND active.removed=0 AND active.left_room=0)))''', (token,))]
 
     def volume(self, token, device, value, member=None):

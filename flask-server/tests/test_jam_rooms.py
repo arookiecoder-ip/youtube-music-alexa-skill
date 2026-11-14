@@ -262,4 +262,12 @@ class JamRoomsTests(unittest.TestCase):
         with self.assertRaises(PermissionError):self.rooms.volume('room','host-phone',80,member)
 
 
+    def test_shuffle_state_is_shared_and_toggling_off_restores_upcoming_order(self):
+        original=self.state();ids=[row['entry_id'] for row in original['queue']]
+        shuffled=self.command('shuffle')
+        self.assertTrue(shuffled['shuffle']);self.assertEqual(shuffled['entry_id'],original['entry_id'])
+        restored=self.command('shuffle')
+        self.assertFalse(restored['shuffle']);self.assertEqual([row['entry_id'] for row in restored['queue']],ids)
+
+
 if __name__ == '__main__': unittest.main()
