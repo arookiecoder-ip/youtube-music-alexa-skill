@@ -7785,6 +7785,7 @@ def jam_state():
         return jsonify(active=False, revoked=bool(session.get('jam')))
     try:
         playback = _jam_rooms.transact(token, member=member['id'] if member else None)
+        playback = _jam_rooms.presented(token, playback)
     except (JamConflict, PermissionError) as exc:
         return jsonify(error=str(exc)), 409
     if (request.args.get('queue_epoch') == playback['queue_epoch'] and
@@ -7799,7 +7800,10 @@ def jam_state():
     outputs = _jam_rooms.outputs(token)
     return _no_store(jsonify(active=True, host=host, url=_jam_url(token), playback=playback,
         members=[{'id': m['id'], 'name': m['name']} for m in unique_members.values()] if host else [],
-        outputs=[dict(device=o['device'], name=o['name'], online=time.time()-o['seen'] < 20, error=o['error']) for o in outputs],
+        outputs=[dict(device=o['device'], name=o['name'], online=time.time()-o['seen'] < 20, error=o['error'],
+            username=o['member_name'] or json.loads(o['details']).get('username','Host'),
+            volume=json.loads(o['status']).get('volume'), kind=json.loads(o['details']).get('kind','phone'),
+            devices=json.loads(o['details']).get('devices',[])) for o in outputs],
         listen=device in playback['selected'],
         member_count=len({m['user_id'] or m['id'] for m in members}) + 1))
 
@@ -7817,10 +7821,16 @@ def jam_presence():
         return jsonify(error='This device has not joined the Jam.'), 403
     try:
         _jam_rooms.presence(token, device, member['id'] if member else None,
-            body.get('name') or 'Audio player', body.get('error') or '')
+            body.get('name') or 'Audio player', body.get('error') or '',
+            details={'username': member['name'] if member else (_mu_web_identity() or {}).get('username','Host'),
+                     'kind':'alexa' if body.get('kind')=='alexa' else 'phone',
+                     'devices':body.get('devices',[])[:32] if isinstance(body.get('devices',[]),list) else []},
+            status=body.get('status'),ack=body.get('ack'))
+    except (ValueError, TypeError) as exc:
+        return jsonify(error=str(exc)),400
     except PermissionError as exc:
         return jsonify(error=str(exc)), 403
-    return jsonify(ok=True)
+    return jsonify(ok=True, commands=_jam_rooms.device_commands(token,device,member['id'] if member else None))
 
 
 @app.route('/api/jam/control/', methods=['POST'])
@@ -7835,14 +7845,20 @@ def jam_control():
     if not isinstance(action, str) or not action:
         return jsonify(error='Choose a Jam action.'), 400
     if action == 'configure':
-        if member:
-            return jsonify(error='Only the host can choose Jam outputs.'), 403
-        allowed = {o['device'] for o in _jam_rooms.outputs(token)}
+        catalog = _jam_rooms.outputs(token)
+        allowed = {o['device'] for o in catalog if time.time()-o['seen']<20}
+        targets=body.get('targets',{})
+        if not isinstance(targets,dict) or any(not isinstance(value,str) or not any(o['device']==key and any(isinstance(d,dict) and d.get('id')==value for d in json.loads(o['details']).get('devices',[])) for o in catalog) for key,value in targets.items()):
+            return jsonify(error='Choose a connected participant device.'),400
         selected = body.get('selected')
         if not isinstance(selected, list) or any(not isinstance(d, str) or d not in allowed for d in selected):
             return jsonify(error='Choose a connected Jam output.'), 400
     try:
+        if action == 'volume':
+            _jam_rooms.volume(token,body.get('device_id'),body.get('value'),member['id'] if member else None)
+            return jsonify(ok=True)
         state = _jam_rooms.transact(token, action, body, member['id'] if member else None)
+        state = _jam_rooms.presented(token,state)
     except PermissionError as exc:
         return jsonify(error=str(exc)), 403
     except JamConflict as exc:

@@ -1,7 +1,7 @@
 name: Jam backend build and regressions
 on:
   push:
-    branches: [feat/jam-sessions, fix/jam-playback-session, codex/alexa-backend-retries]
+    branches: [feat/jam-sessions, fix/jam-playback-session, codex/alexa-backend-retries, codex/jam-shared-devices]
     paths: ['flask-server/**', 'scripts/**', '.github/workflows/jam-build.yml']
   workflow_dispatch:
 permissions:

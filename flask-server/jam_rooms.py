@@ -21,10 +21,17 @@ class JamRooms:
 
     def ensure(self):
         with self.database() as db:
+            db.execute('BEGIN IMMEDIATE')
             db.execute('CREATE TABLE IF NOT EXISTS jam_rooms(token TEXT PRIMARY KEY, state TEXT NOT NULL)')
             db.execute('''CREATE TABLE IF NOT EXISTS jam_outputs(
                 token TEXT NOT NULL, device TEXT NOT NULL, member TEXT, name TEXT NOT NULL,
                 seen REAL NOT NULL, error TEXT NOT NULL DEFAULT '', PRIMARY KEY(token,device))''')
+            columns = {row[1] for row in db.execute('PRAGMA table_info(jam_outputs)')}
+            for column in ('details', 'status'):
+                if column not in columns:
+                    db.execute(f"ALTER TABLE jam_outputs ADD COLUMN {column} TEXT NOT NULL DEFAULT '{{}}'")
+            db.execute("""CREATE TABLE IF NOT EXISTS jam_device_commands(
+                token TEXT, device TEXT, id TEXT PRIMARY KEY, payload TEXT, created REAL)""")
             db.execute('CREATE TABLE IF NOT EXISTS jam_commands(token TEXT, id TEXT, PRIMARY KEY(token,id))')
             db.commit()
 
@@ -70,7 +77,7 @@ class JamRooms:
 
     def _advance(self, state):
         now = self.clock()
-        if state['playing']:
+        if state['playing'] and state.get('_running',True):
             state['position_ms'] += max(0, int((now - state['anchored_at']) * 1000))
             # Consume elapsed time, including while every device was disconnected.
             # Cap traversal to avoid a malformed zero-length queue spinning forever.
@@ -113,7 +120,18 @@ class JamRooms:
             state = json.loads(row['state'])
             state.setdefault('seek_revision', 0)
             clock_reversed = self.clock() < state['anchored_at']
-            before = (state['queue_index'], state['playing'], state['revision'], tuple(state['selected']))
+            before = (state['queue_index'], state['playing'], state['revision'], tuple(state['selected']),state.get('_running'))
+            selected_rows=[dict(r) for r in db.execute('SELECT device,status,seen FROM jam_outputs WHERE token=?',(token,)) if r['device'] in state['selected']]
+            if selected_rows:
+                current=state['queue'][state['queue_index']] if state['queue_index']>=0 else {}
+                reports=[(row,json.loads(row['status'])) for row in selected_rows]
+                ready=[(row,report) for row,report in reports if self.clock()-row['seen']<8 and report.get('video_id')==current.get('video_id') and report.get('confirmed') is True and not report.get('processing') and report.get('playing') is True]
+                running=bool(ready) and (len(ready)==len(state['selected']) if state['mode']=='single' else True)
+                if running and not state.get('_running',True):
+                    row,report=ready[0]
+                    state['position_ms']=report.get('position_ms',state['position_ms'])+max(0,int((self.clock()-row['seen'])*1000))
+                    state['anchored_at']=self.clock()
+                state['_running']=running
             self._advance(state)
             detached = {row['device'] for row in db.execute('''SELECT o.device FROM jam_outputs o
                 JOIN jam_members m ON m.id=o.member WHERE o.token=? AND (m.removed=1 OR m.left_room=1)''', (token,))}
@@ -129,7 +147,7 @@ class JamRooms:
                     self._command(state, action, body)
                     state['revision'] += 1
                     db.execute('INSERT INTO jam_commands VALUES(?,?)', (token, command))
-            after = (state['queue_index'], state['playing'], state['revision'], tuple(state['selected']))
+            after = (state['queue_index'], state['playing'], state['revision'], tuple(state['selected']),state.get('_running'))
             if action or before != after or clock_reversed:
                 db.execute('UPDATE jam_rooms SET state=? WHERE token=?', (json.dumps(state), token))
             db.commit()
@@ -225,23 +243,83 @@ class JamRooms:
                 raise ValueError('Choose valid audio outputs.')
             if mode == 'single' and len(selected) > 1:
                 raise ValueError('Select one audio output in single-output mode.')
-            state.update(mode=mode, selected=list(dict.fromkeys(selected)))
+            targets=body.get('targets',state.get('targets',{}))
+            if not isinstance(targets,dict) or any(not isinstance(k,str) or not isinstance(v,str) or len(v)>160 for k,v in targets.items()):
+                raise ValueError('Choose valid devices.')
+            state.update(mode=mode, selected=list(dict.fromkeys(selected)),targets={k:v for k,v in targets.items() if k in selected})
         else:
             raise ValueError('Unknown Jam command.')
 
-    def presence(self, token, device, member, name, error=''):
+    def presence(self, token, device, member, name, error='', details=None, status=None, ack=None):
         self.ensure()
         with self.database() as db:
             existing = db.execute('SELECT member FROM jam_outputs WHERE token=? AND device=?', (token, device)).fetchone()
             if existing and existing['member'] != member:
                 raise PermissionError('This output belongs to another participant.')
-            db.execute('INSERT OR REPLACE INTO jam_outputs VALUES(?,?,?,?,?,?)',
-                       (token, device, member, str(name)[:100], self.clock(), str(error)[:200]))
+            details = details if isinstance(details, dict) else {}
+            status = status if isinstance(status, dict) else {}
+            safe_status = {key: status[key] for key in ('video_id','entry_id','playing','confirmed','processing','position_ms','duration_ms','volume') if key in status}
+            for key in ('position_ms','duration_ms','volume'):
+                value=safe_status.get(key)
+                if value is not None and (isinstance(value,bool) or not isinstance(value,int) or not 0 <= value <= (100 if key=='volume' else 86400000)):
+                    raise ValueError('Invalid output state.')
+            for key in ('playing','confirmed','processing'):
+                if key in safe_status and not isinstance(safe_status[key],bool): raise ValueError('Invalid output state.')
+            db.execute('INSERT OR REPLACE INTO jam_outputs(token,device,member,name,seen,error,details,status) VALUES(?,?,?,?,?,?,?,?)',
+                       (token, device, member, str(name)[:100], self.clock(), str(error)[:200],json.dumps(details),json.dumps(safe_status)))
+            if isinstance(ack,list) and len(ack)<=32:
+                for command in ack:
+                    if isinstance(command,str):db.execute('DELETE FROM jam_device_commands WHERE token=? AND device=? AND id=?',(token,device,command))
+            db.execute('DELETE FROM jam_device_commands WHERE created<?',(self.clock()-15,))
             db.commit()
 
     def outputs(self, token):
         self.ensure()
         with self.database() as db:
-            return [dict(row) for row in db.execute('''SELECT o.device,o.name,o.seen,o.error FROM jam_outputs o
+            return [dict(row) for row in db.execute('''SELECT o.device,o.name,o.seen,o.error,o.details,o.status,o.member,m.name AS member_name FROM jam_outputs o
                 LEFT JOIN jam_members m ON m.id=o.member WHERE o.token=?
                 AND (o.member IS NULL OR (m.removed=0 AND m.left_room=0))''', (token,))]
+
+    def volume(self, token, device, value, member=None):
+        if isinstance(value,bool) or not isinstance(value,int) or not 0<=value<=100:
+            raise ValueError('Choose a volume between 0 and 100.')
+        state=self.transact(token,member=member)
+        output=next((o for o in self.outputs(token) if o['device']==device),None)
+        if device not in state['selected'] or not output or self.clock()-output['seen']>=20:
+            raise JamConflict('Choose a connected, selected Jam device.')
+        with self.database() as db:
+            db.execute('DELETE FROM jam_device_commands WHERE token=? AND device=?',(token,device))
+            db.execute('INSERT INTO jam_device_commands VALUES(?,?,?,?,?)',
+                (token,device,secrets.token_hex(16),json.dumps({'action':'volume','value':value}),self.clock()))
+            db.commit()
+
+    def device_commands(self, token, device, member):
+        self.ensure()
+        with self.database() as db:
+            owner=db.execute('SELECT member FROM jam_outputs WHERE token=? AND device=?',(token,device)).fetchone()
+            if not owner or owner['member']!=member:return []
+            return [dict(id=row['id'],**json.loads(row['payload'])) for row in db.execute(
+                'SELECT * FROM jam_device_commands WHERE token=? AND device=? AND created>? ORDER BY created',(token,device,self.clock()-15))]
+
+    def presented(self, token, state):
+        outputs={o['device']:o for o in self.outputs(token)}
+        selected=state['selected']
+        reports=[]
+        for device in selected:
+            output=outputs.get(device)
+            report=json.loads(output['status']) if output else {}
+            fresh=bool(output and self.clock()-output['seen']<8 and report.get('video_id')==state.get('video_id'))
+            ready=fresh and report.get('confirmed') is True and not report.get('processing') and report.get('playing')==state['playing']
+            reports.append((output,report,fresh,ready))
+        confirmed=bool(reports) and (all(r[3] for r in reports) if state['mode']=='single' else any(r[3] for r in reports))
+        state['playback_confirmed']=confirmed
+        state['playback_processing']=state['playing'] and not confirmed
+        if reports:
+            output,report,fresh,ready=next((r for r in reports if r[3]),reports[0])
+            if fresh:
+                position=report.get('position_ms',state['position_ms'])
+                if ready and state['playing']:position+=max(0,int((self.clock()-output['seen'])*1000))
+                state['position_ms']=min(position,state['duration_ms']) if state['duration_ms'] else position
+            state['playback_running']=confirmed and state['playing']
+        else:state['playback_running']=False
+        return state
