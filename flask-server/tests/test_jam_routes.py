@@ -8,7 +8,7 @@ import time
 from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock
-from flask import Flask, request, session, jsonify, render_template
+from flask import Flask, Response, request, session, jsonify, render_template
 
 from test_jam_rooms import JamRoomsTests
 from jam_rooms import JamConflict
@@ -30,7 +30,7 @@ class JamRouteTests(unittest.TestCase):
         identity=contextvars.ContextVar('identity',default='owner')
         layer=SimpleNamespace(alexa_identity=SimpleNamespace(skill_namespace=lambda _:''),
             alexa_access=SimpleNamespace(enabled=lambda _:True))
-        self.ns=dict(app=app,request=request,session=session,jsonify=jsonify,render_template=render_template,
+        self.ns=dict(app=app,Response=Response,request=request,session=session,jsonify=jsonify,render_template=render_template,
             time=time,secrets=secrets,get_db=self.database,_jam_members=self.members,_jam_rooms=self.rooms,JamConflict=JamConflict,
             _jam_cache=lambda:cache,JAM_MAX_AGE=86400,
             _mu_web_identity=lambda:dict(id=request.headers['Test-User'],username=request.headers['Test-User'],role='user') if request.headers.get('Test-User') else None,
@@ -48,10 +48,12 @@ class JamRouteTests(unittest.TestCase):
             _remote_login_enabled=lambda:True,_alexa_auth_error=Mock(),
             _client_ip=lambda:'192.0.2.1',_rate_limiter=Mock(),logger=Mock())
         self.ns['_rate_limiter'].check.return_value=(True,0)
+        self.ns['_valid_video_id']=lambda video:isinstance(video,str) and len(video)==11
+        self.ns['_serve_youtube_stream']=lambda video:Response(b'fixture audio',mimetype='audio/wav')
         names={'_jam_membership','_jam_identity_id','_jam_token_valid','_jam_purge_token','_jam_active_token',
             '_jam_guest','_jam_prune_records','_jam_request_allowed','_bind_player_identity','require_api_key',
             'jam_join','_jam_access_token','jam_state','jam_presence','jam_control','jam_remove_member',
-            'jam_guest_leave','android_asset_links','jam_room_page','_rate_limit_group','_check_rate_limit','_jam_detach_account_output'}
+            'jam_guest_leave','android_asset_links','jam_room_page','jam_audio','_rate_limit_group','_check_rate_limit','_jam_detach_account_output'}
         tree=ast.parse((root/'server.py').read_text())
         nodes=[]
         for node in tree.body:
@@ -65,7 +67,7 @@ class JamRouteTests(unittest.TestCase):
         routes=[('/j/<token>','jam_join',['GET','POST']),('/api/jam/state/','jam_state',['GET']),
             ('/api/jam/presence/','jam_presence',['POST']),('/api/jam/control/','jam_control',['POST']),
             ('/alexa/jam/remove/','jam_remove_member',['POST']),('/api/jam/leave/','jam_guest_leave',['POST']),
-            ('/.well-known/assetlinks.json','android_asset_links',['GET']),('/jam-room/','jam_room_page',['GET'])]
+            ('/api/jam/audio/<video_id>','jam_audio',['GET','HEAD']),('/.well-known/assetlinks.json','android_asset_links',['GET']),('/jam-room/','jam_room_page',['GET'])]
         for path,name,methods in routes:app.add_url_rule(path,name,self.ns[name],methods=methods)
         app.add_url_rule('/alexa/like/','like',lambda:jsonify(identity=identity.get()),methods=['POST'])
         app.add_url_rule('/api/library/playlists/mine/tracks','playlist',lambda:jsonify(identity=identity.get()),methods=['POST'])
@@ -214,6 +216,14 @@ class JamRouteTests(unittest.TestCase):
         self.ns['_jam_detach_account_output']()
         close.assert_called_once_with('alice-phone')
         self.assertFalse(state['playing'])
+
+    def test_browser_audio_is_limited_to_room_tracks_and_live_membership(self):
+        self.join(self.guest)
+        self.assertEqual(self.guest.get('/api/jam/audio/aaaaaaaaaaa').status_code,200)
+        self.assertEqual(self.guest.get('/api/jam/audio/zzzzzzzzzzz').status_code,403)
+        with self.guest.session_transaction() as cookie:member=cookie['jam_member']
+        self.members.remove('room',member)
+        self.assertNotEqual(self.guest.get('/api/jam/audio/aaaaaaaaaaa').status_code,200)
 
     def test_public_app_association_uses_expected_package_and_certificate(self):
         data=self.guest.get('/.well-known/assetlinks.json').get_json()[0]['target']

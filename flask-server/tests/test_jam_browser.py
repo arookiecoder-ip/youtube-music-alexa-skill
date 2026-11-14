@@ -3,6 +3,9 @@ from pathlib import Path
 import os
 import threading
 import time
+import io
+import wave
+from flask import Response
 import unittest
 from werkzeug.serving import make_server
 from playwright.sync_api import sync_playwright, expect
@@ -16,6 +19,11 @@ class JamBrowserTests(unittest.TestCase):
         # Keep the fixture queue paused; audio providers are outside UI tests.
         self.case.rooms.transact('room','pause',{'command_id':'fixture-pause'})
         self.case.rooms.clock=time.time
+        audio=io.BytesIO()
+        with wave.open(audio,'wb') as fixture:
+            fixture.setnchannels(1);fixture.setsampwidth(2);fixture.setframerate(8000)
+            fixture.writeframes(b'\0\0'*80000)
+        self.case.ns['_serve_youtube_stream']=lambda video:Response(audio.getvalue(),mimetype='audio/wav')
         revision=self.case.rooms.transact('room')['revision']
         self.case.rooms.transact('room','configure',{'command_id':'fixture-output','revision':revision,'mode':'single','selected':[]})
         self.server=make_server('127.0.0.1',0,self.case.app,threaded=True)
@@ -23,7 +31,7 @@ class JamBrowserTests(unittest.TestCase):
         self.thread.start()
         self.origin='http://127.0.0.1:'+str(self.server.server_port)
         self.playwright=sync_playwright().start()
-        self.browser=self.playwright.chromium.launch()
+        self.browser=self.playwright.chromium.launch(args=["--autoplay-policy=no-user-gesture-required"])
         self.context=self.browser.new_context(extra_http_headers={'Test-User':'host'},viewport={'width':390,'height':844})
         self.page=self.context.new_page()
         self.errors=[]
@@ -67,8 +75,38 @@ class JamBrowserTests(unittest.TestCase):
         page.get_by_role('button',name='Like',exact=True).click()
         expect(page.locator('#notice')).to_contain_text('Sign in')
         page.screenshot(path=str(self.artifacts/'guest-phone.png'),full_page=True)
+        for width in (320,375,768):
+            page.set_viewport_size({'width':width,'height':900})
+            self.assertTrue(page.evaluate('document.documentElement.scrollWidth <= innerWidth'),f'Guest overflow at {width}')
         self.assertFalse(errors,errors)
         guest.close()
+
+    def test_two_selected_browser_outputs_follow_shared_play_pause_and_seek(self):
+        member=self.browser.new_context(extra_http_headers={'Test-User':'alice'})
+        friend=member.new_page()
+        friend.goto(self.origin+'/j/room')
+        friend.get_by_role('button',name='Join Jam').click()
+        expect(friend.locator('#title')).to_have_text('First')
+        self.page.goto(self.origin+'/jam-room/')
+        expect(self.page.locator('#outputs input')).to_have_count(2)
+        self.page.locator('#multiple').check()
+        expect(self.page.locator('#people')).to_contain_text('Multiple selected outputs')
+        self.page.locator('#outputs input').nth(0).check()
+        self.page.wait_for_function("document.querySelectorAll('#outputs input:checked').length === 1")
+        self.page.locator('#outputs input').nth(1).check()
+        self.page.wait_for_function("document.querySelectorAll('#outputs input:checked').length === 2")
+        self.page.locator('#play').click()
+        self.page.wait_for_function("!document.querySelector('#audio').paused")
+        friend.wait_for_function("!document.querySelector('#audio').paused")
+        expect(friend.locator('#play')).to_have_text('Pause')
+        friend.locator('#play').click()
+        self.page.wait_for_function("document.querySelector('#audio').paused")
+        friend.wait_for_function("document.querySelector('#audio').paused")
+        friend.locator('#seek').evaluate("node=>{node.value='3000';node.dispatchEvent(new Event('change',{bubbles:true}));}")
+        self.page.wait_for_function("Math.abs(document.querySelector('#audio').currentTime-3)<0.4")
+        friend.wait_for_function("Math.abs(document.querySelector('#audio').currentTime-3)<0.4")
+        member.close()
+        self.assertFalse(self.errors,self.errors)
 
     def test_management_and_queue_fit_phone_tablet_and_desktop(self):
         self.page.goto(self.origin+'/jam-room/')
