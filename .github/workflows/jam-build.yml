@@ -1,8 +1,8 @@
 name: Jam backend build and regressions
 on:
   push:
-    branches: [feat/jam-sessions, fix/jam-playback-session]
-    paths: ['flask-server/**', '.github/workflows/jam-build.yml']
+    branches: [feat/jam-sessions, fix/jam-playback-session, codex/alexa-backend-retries]
+    paths: ['flask-server/**', 'scripts/**', '.github/workflows/jam-build.yml']
   workflow_dispatch:
 permissions:
   contents: read
@@ -19,6 +19,8 @@ jobs:
         with:
           python-version: '3.12'
       - run: python -m pip install --require-hashes -r requirements-tests.lock
+      - name: Deployment environment file integrity
+        run: python -m unittest discover -s scripts/tests -p 'test_deploy_env_format.py' -v
       - name: Jam membership, authorization, queue races and playback clock
         env:
           PYTHONPATH: flask-server:flask-server/tests
@@ -27,7 +29,7 @@ jobs:
         env:
           PYTHONPATH: flask-server:flask-server/tests
         run: |
-          for suite in test_app_queue test_active_session_renewal test_session_validation_outage test_alexa_startup_bundle test_alexa_logged_out test_alexa_authentication_stop test_transport_resume_latency; do
+          for suite in test_app_queue test_active_session_renewal test_session_validation_outage test_alexa_startup_bundle test_alexa_logged_out test_alexa_authentication_stop test_transport_resume_latency test_alexa_transport test_direct_alexa_commands test_echo_presence_cache test_resume_after_pause; do
             python -m pytest -q "flask-server/tests/$suite.py" || exit 1
           done
       - name: Skill resume and real SDK authorization regressions

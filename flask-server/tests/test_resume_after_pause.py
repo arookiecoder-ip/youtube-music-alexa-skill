@@ -421,6 +421,9 @@ class WatchResumeConfirmation(_CleanNowPlayingState):
         with server._np_lock:
             self.assertEqual(server._now_playing['playback_error']['type'],
                              'dispatch_error')
+            self.assertFalse(server._now_playing['playing'])
+            self.assertFalse(server._now_playing['playback_processing'])
+            self.assertFalse(server._now_playing['playback_confirmed'])
 
     def test_superseded_resume_stays_quiet(self):
         """The user paused again while the resume was in flight: no resend of

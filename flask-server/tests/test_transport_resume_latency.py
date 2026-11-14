@@ -1,3 +1,4 @@
+from alexa_transport import bounded_transport, TransportDeferred
 """Known-online resumes dispatch while stale presence refreshes in parallel."""
 import ast
 import asyncio
@@ -14,7 +15,7 @@ class TransportResumeLatencyTests(unittest.IsolatedAsyncioTestCase):
         methods = [n for n in cls.body if isinstance(n, ast.AsyncFunctionDef) and n.name in ('_api_for', '_command', '_refresh_transport_presence', '_pause_for_handoff', '_text_command')]
         self.api = SimpleNamespace(run_custom=AsyncMock(), pause=AsyncMock())
         self.raw = {'online': True, 'accountName': 'Echo'}
-        self.ns = dict(asyncio=asyncio, time=SimpleNamespace(monotonic=lambda: 100), _DEVICE_STATE_TTL=30,
+        self.ns = dict(bounded_transport=bounded_transport, TransportDeferred=TransportDeferred, asyncio=asyncio, time=SimpleNamespace(monotonic=lambda: 100), _DEVICE_STATE_TTL=30,
             AlexaAPI=lambda device, login: self.api, logger=Mock(), SKILL_INVOCATION_NAME='music box',
             _TRANSPORT_TEXT={'play': 'resume', 'pause': 'pause'}, authentication_failure=lambda error: None)
         exec(compile(ast.Module(body=methods, type_ignores=[]), str(source), 'exec'), self.ns)

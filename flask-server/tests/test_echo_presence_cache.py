@@ -64,4 +64,4 @@ def test_handoff_timeout_cancels_the_amazon_operation_without_blocking_target():
     scheduler.assert_called_once_with(operation, 'loop')
     future.result.assert_called_once_with(timeout=1.0)
     future.cancel.assert_called_once()
-    assert obj._login_checked_at == 0
+    assert obj._login_checked_at == 1

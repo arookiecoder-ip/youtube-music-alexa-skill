@@ -36,6 +36,7 @@ from amazon_login_transport import AmazonLoginTransport
 from alexapy.helpers import get_json_value
 from player_state import OWNER, PlayerStateProxy, PlayerStateRegistry
 from alexa_playback_errors import authentication_failure
+from alexa_transport import bounded_transport, TransportDeferred
 
 logger = logging.getLogger(__name__)
 
@@ -484,9 +485,8 @@ class AlexaRemote:
         except FuturesTimeoutError:
             # The whole Amazon round trip blew past CALL_TIMEOUT — usually an
             # offline/unreachable device or Amazon stalling. Stop the runaway
-            # coroutine and force a login re-check on the next call.
+            # coroutine. A network timeout is not proof the login expired.
             future.cancel()
-            self._login_checked_at = 0.0
             logger.warning("Alexa call exceeded %ss and was abandoned", timeout)
             raise AlexaUnreachable(
                 "Alexa isn't responding. The device may be offline or Amazon is "
@@ -533,12 +533,15 @@ class AlexaRemote:
                     self.connection_state = True
                     return None
                 try:
-                    if await self._login.test_loggedin():
+                    if await asyncio.wait_for(self._login.test_loggedin(), timeout=8):
                         self._login_checked_at = time.monotonic()
                         self.connection_state = True
                         return None
-                except Exception:
-                    logger.exception("test_loggedin failed; will try the stored cookie")
+                except Exception as exc:
+                    if not authentication_failure(exc):
+                        logger.warning("Amazon session verification temporarily unavailable", exc_info=True)
+                        return "Amazon is temporarily unavailable. Try again shortly."
+                    logger.warning("Amazon session rejected; trying the stored cookie")
                 try:
                     await self._login.close()
                 except Exception:
@@ -570,13 +573,16 @@ class AlexaRemote:
                 outputpath=lambda name: os.path.join(self.cookie_dir, name),
             )
             try:
-                if await login.restore_cookie_session():
+                if await asyncio.wait_for(login.restore_cookie_session(), timeout=8):
                     self._login = login
                     self._login_checked_at = time.monotonic()
                     self.connection_state = True
                     return None
-            except Exception:
-                logger.exception("restoring session from cookie failed")
+            except Exception as exc:
+                logger.warning("Restoring Amazon session temporarily failed", exc_info=True)
+                if not authentication_failure(exc):
+                    self.connection_state = None
+                    return "Amazon is temporarily unavailable. Try again shortly."
             finally:
                 if self._login is not login:
                     try:
@@ -1684,22 +1690,23 @@ class AlexaRemote:
                     volume = min(100, max(0, int(value)))
                 except (TypeError, ValueError):
                     return "Volume must be a number between 0 and 100."
-                await api.set_volume(volume / 100, queue_delay=0)
+                await bounded_transport(self, serial, ('volume', volume), lambda: api.set_volume(volume / 100, queue_delay=0))
             elif action in _TRANSPORT_TEXT:
-                await api.run_custom(f"ask {SKILL_INVOCATION_NAME} to {_TRANSPORT_TEXT[action]}", queue_delay=0)
+                text = f"ask {SKILL_INVOCATION_NAME} to {_TRANSPORT_TEXT[action]}"
+                await bounded_transport(self, serial, text, lambda: api.run_custom(text, queue_delay=0))
             else:
                 return f'Unknown action "{action}".'
+        except TransportDeferred as exc:
+            logger.warning("Amazon transport deferred: %s", exc)
+            return str(exc)
         except asyncio.TimeoutError:
-            self._login_checked_at = 0.0
             logger.exception("command %s timed out", action)
             return "Alexa didn't respond in time. Check the device is online and try again."
         except Exception as exc:
-            # A rejected command often means the session went stale; force a
-            # re-validation on the next call instead of trusting the cache.
-            self._login_checked_at = 0.0
             logger.exception("command %s failed", action)
             failure = authentication_failure(exc)
             if failure:
+                self._login_checked_at = 0.0
                 self.connection_state = False
                 return failure['message']
             return "Amazon couldn't run that command. The device may be offline — try again."
@@ -1825,16 +1832,18 @@ class AlexaRemote:
         if error:
             return error
         try:
-            await api.run_custom(text, queue_delay=0)
+            await bounded_transport(self, serial, text, lambda: api.run_custom(text, queue_delay=0))
+        except TransportDeferred as exc:
+            logger.warning("Amazon transport deferred: %s", exc)
+            return str(exc)
         except asyncio.TimeoutError:
-            self._login_checked_at = 0.0
             logger.exception("text_command %r timed out", text)
             return "Alexa didn't respond in time. Check the device is online and try again."
         except Exception as exc:
-            self._login_checked_at = 0.0
             logger.exception("text_command %r failed", text)
             failure = authentication_failure(exc)
             if failure:
+                self._login_checked_at = 0.0
                 self.connection_state = False
                 return failure['message']
             return "Amazon couldn't run that command. The device may be offline — try again."
