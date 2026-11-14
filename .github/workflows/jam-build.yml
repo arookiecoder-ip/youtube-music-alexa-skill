@@ -24,7 +24,7 @@ jobs:
       - name: Jam membership, authorization, queue races and playback clock
         env:
           PYTHONPATH: flask-server:flask-server/tests
-        run: python -m unittest test_jam_rooms test_jam_routes -v
+        run: python -m unittest test_jam_rooms test_jam_routes test_jam_echo -v
       - name: Playback ownership, active sessions, outage classification and resume startup
         env:
           PYTHONPATH: flask-server:flask-server/tests

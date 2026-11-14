@@ -300,9 +300,9 @@ class JamRooms:
                 echo='echo:'+hashlib.sha256((identity+':'+serial).encode()).hexdigest()[:32]
                 info=dict(username=details.get('username','Host'),identity=identity,serial=serial,server_echo=True,
                           kind='alexa',devices=[dict(item,active=True)])
-                existing_echo=db.execute('SELECT status,error FROM jam_outputs WHERE token=? AND device=?',(token,echo)).fetchone()
+                existing_echo=db.execute('SELECT status,error,seen FROM jam_outputs WHERE token=? AND device=?',(token,echo)).fetchone()
                 db.execute('INSERT OR REPLACE INTO jam_outputs(token,device,member,name,seen,error,details,status) VALUES(?,?,?,?,?,?,?,?)',
-                    (token,echo,member,str(item.get('name','Alexa'))[:100],self.clock(),existing_echo['error'] if existing_echo else '',json.dumps(info),existing_echo['status'] if existing_echo else '{}'))
+                    (token,echo,member,str(item.get('name','Alexa'))[:100],existing_echo['seen'] if existing_echo else self.clock(),existing_echo['error'] if existing_echo else '',json.dumps(info),existing_echo['status'] if existing_echo else '{}'))
                 if item.get('active') and details.get('kind')=='alexa':
                     room=db.execute('SELECT state FROM jam_rooms WHERE token=?',(token,)).fetchone()
                     if room:
@@ -331,7 +331,7 @@ class JamRooms:
             raise ValueError('Choose a volume between 0 and 100.')
         state=self.transact(token,member=member)
         output=next((o for o in self.outputs(token) if o['device']==device),None)
-        if device not in state['selected'] or not output or self.clock()-output['seen']>=20:
+        if device not in state['selected'] or not output or not self.online(output):
             raise JamConflict('Choose a connected, selected Jam device.')
         with self.database() as db:
             db.execute('DELETE FROM jam_device_commands WHERE token=? AND device=?',(token,device))
@@ -401,3 +401,9 @@ class JamRooms:
             status=json.loads(row['status']);status['volume']=value
             db.execute('UPDATE jam_outputs SET status=? WHERE token=? AND device=?',(json.dumps(status),token,device))
             db.execute('DELETE FROM jam_device_commands WHERE token=? AND device=? AND id=?',(token,device,command));db.commit()
+
+    def online(self, output):
+        details=json.loads(output['details'])
+        if details.get('server_echo'):
+            return any(d.get('online',True) for d in details.get('devices',[]) if isinstance(d,dict))
+        return self.clock()-output['seen']<20

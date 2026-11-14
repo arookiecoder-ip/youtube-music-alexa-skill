@@ -7742,8 +7742,9 @@ def _jam_echo_snapshot(token, details, state):
             output=_playback_output.snapshot()
             np=_np_snapshot(details['serial'])
             ours=_now_playing.get('_jam_driver_room')==token
+            if ours and _now_playing.get('_jam_driver_entry')!=state['entry_id']:return None
+            finished=bool(_now_playing.get('_alexa_finished_token') and _now_playing.get('_jam_driver_entry')==state['entry_id'])
         if np.get('video_id')!=state.get('video_id') or (not ours and output.get('output_serial')!=details['serial']):return None
-        finished=bool(_now_playing.get('_alexa_finished_token') and _now_playing.get('_jam_driver_entry')==state['entry_id'])
         return dict(video_id=np['video_id'],entry_id=state['entry_id'],ended=finished,
                     playing=bool(np.get('playing')),confirmed=bool(np.get('playback_confirmed')),
                     processing=bool(np.get('playback_processing')),position_ms=state['duration_ms'] if finished else int(np.get('position_ms') or 0),
@@ -7863,7 +7864,7 @@ def jam_state():
     outputs = _jam_rooms.outputs(token)
     return _no_store(jsonify(active=True, host=host, url=_jam_url(token), playback=playback,
         members=[{'id': m['id'], 'name': m['name']} for m in unique_members.values()] if host else [],
-        outputs=[dict(device=o['device'], name=o['name'], online=_jam_rooms.clock()-o['seen'] < 20, error=o['error'],
+        outputs=[dict(device=o['device'], name=o['name'], online=_jam_rooms.online(o), error=o['error'],
             username=o['member_name'] or json.loads(o['details']).get('username','Host'),
             volume=json.loads(o['status']).get('volume'), kind=json.loads(o['details']).get('kind','phone'),
             devices=json.loads(o['details']).get('devices',[])) for o in outputs],
@@ -7911,7 +7912,7 @@ def jam_control():
         return jsonify(error='Choose a Jam action.'), 400
     if action == 'configure':
         catalog = _jam_rooms.outputs(token)
-        allowed = {o['device'] for o in catalog if _jam_rooms.clock()-o['seen']<20}
+        allowed = {o['device'] for o in catalog if _jam_rooms.online(o)}
         targets=body.get('targets',{})
         if not isinstance(targets,dict) or any(not isinstance(value,str) or not any(o['device']==key and any(isinstance(d,dict) and d.get('id')==value for d in json.loads(o['details']).get('devices',[])) for o in catalog) for key,value in targets.items()):
             return jsonify(error='Choose a connected participant device.'),400
