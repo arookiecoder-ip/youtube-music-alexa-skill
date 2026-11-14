@@ -533,7 +533,7 @@ class AlexaRemote:
                     self.connection_state = True
                     return None
                 try:
-                    if await self._login.test_loggedin():
+                    if await asyncio.wait_for(self._login.test_loggedin(), timeout=8):
                         self._login_checked_at = time.monotonic()
                         self.connection_state = True
                         return None
@@ -573,13 +573,16 @@ class AlexaRemote:
                 outputpath=lambda name: os.path.join(self.cookie_dir, name),
             )
             try:
-                if await login.restore_cookie_session():
+                if await asyncio.wait_for(login.restore_cookie_session(), timeout=8):
                     self._login = login
                     self._login_checked_at = time.monotonic()
                     self.connection_state = True
                     return None
-            except Exception:
-                logger.exception("restoring session from cookie failed")
+            except Exception as exc:
+                logger.warning("Restoring Amazon session temporarily failed", exc_info=True)
+                if not authentication_failure(exc):
+                    self.connection_state = None
+                    return "Amazon session verification is temporarily unavailable. Try again shortly."
             finally:
                 if self._login is not login:
                     try:
