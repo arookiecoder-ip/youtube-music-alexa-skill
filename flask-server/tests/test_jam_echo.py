@@ -126,3 +126,28 @@ class JamEchoTests(JamRoomsTests):
             state=json.loads(row['state']);state.update(mode='multiple',selected=['host-phone',echo['device']])
             db.execute("UPDATE jam_rooms SET state=? WHERE token='room'",(json.dumps(state),));db.commit()
         self.assertEqual(self.state()['selected'],['host-phone'])
+
+    def test_echo_keeps_playing_when_host_phone_presence_expires(self):
+        echo=self.register();send=Mock(return_value=None)
+        driver=JamEchoDriver(self.rooms,send,Mock(return_value=None))
+        state=self.state();driver._dispatch('room',echo,state)
+        self.now+=30
+        report=dict(video_id=state['video_id'],entry_id=state['entry_id'],playing=True,confirmed=True,
+                    processing=False,position_ms=3000,seek_revision=state['seek_revision'])
+        driver.snapshot=Mock(return_value=report)
+        driver._dispatch('room',echo,self.state())
+        self.assertEqual(send.call_count,1)
+        self.assertEqual(self.state()['selected'],[echo['device']])
+        self.assertTrue(self.rooms.presented('room',self.state())['playback_confirmed'])
+
+    def test_transient_echo_progress_failure_does_not_pause_or_redispatch_playback(self):
+        echo=self.register();send=Mock(return_value=None)
+        driver=JamEchoDriver(self.rooms,send,Mock(return_value=None))
+        state=self.state();driver._dispatch('room',echo,state)
+        driver.snapshot=Mock(side_effect=OSError('offline observer'))
+        driver._dispatch('room',echo,self.state())
+        self.assertEqual(send.call_count,1)
+        driver.snapshot=Mock(return_value=dict(video_id=state['video_id'],playing=True,confirmed=True,
+            processing=False,position_ms=1200,seek_revision=state['seek_revision']))
+        driver._dispatch('room',echo,self.state())
+        self.assertTrue(self.rooms.presented('room',self.state())['playback_confirmed'])
