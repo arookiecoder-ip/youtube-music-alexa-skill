@@ -276,5 +276,16 @@ class JamRouteTests(unittest.TestCase):
         self.assertNotIn('local_sync_key',self.alice.get('/api/jam/state/',headers={'Test-User':'alice'}).get_json())
         self.assertNotEqual(host['local_sync_key'],self.host.get('/api/jam/state/',headers={'Test-User':'host'}).get_json()['local_sync_key'])
 
+    def test_participant_sheet_can_show_names_without_exposing_guest_membership_ids(self):
+        self.join(self.alice,'alice',device='alice-phone')
+        self.host.post('/api/jam/presence/',json={'device_id':'host-phone'},headers={'Test-User':'host'})
+        host=self.host.get('/api/jam/state/',headers={'Test-User':'host'}).get_json()
+        guest=self.alice.get('/api/jam/state/',headers={'Test-User':'alice'}).get_json()
+        self.assertEqual(host['host_name'],'host')
+        self.assertEqual(guest['host_name'],'host')
+        self.assertEqual(guest['participants'][0]['name'],'alice')
+        self.assertNotEqual(host['participants'][0]['id'],guest['participants'][0]['id'])
+        self.assertEqual(guest['members'],[])
+
 
 if __name__ == '__main__':unittest.main()

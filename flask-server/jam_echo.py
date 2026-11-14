@@ -3,6 +3,9 @@ import hashlib
 import json
 import threading
 import time
+import logging
+
+logger=logging.getLogger(__name__)
 from alexa_playback_errors import authentication_failure
 
 
@@ -30,19 +33,29 @@ class JamEchoDriver:
                     outputs = self.rooms.outputs(token)
                 except (PermissionError, ValueError):
                     state, outputs = None, []
+                except Exception:
+                    # A transient database/read failure is not a stop command.
+                    logger.warning('Jam Echo state temporarily unavailable; retaining playback')
+                    time.sleep(1)
+                    continue
                 echoes = {o['device']: o for o in outputs if json.loads(o['details']).get('server_echo')}
                 selected = set(state['selected']) if state else set()
-                for device, old in previous.items():
-                    if device not in selected:
-                        self._dispatch(token, old, None)
-                for device, output in echoes.items():
-                    if device in selected:
-                        self._dispatch(token, output, state)
-                        for command in self.rooms.device_commands(token,device,output['member']):
-                            try:error=self.send(token,dict(json.loads(output['details']),device=device),dict(action='volume',value=command['value']))
-                            except Exception:error='This device could not change volume. Retry shortly.'
-                            if not error:self.rooms.echo_volume_ack(token,device,command['id'],command['value'])
-                            else:self.rooms.echo_volume_failed(token,device,command['id'],str(error))
+                try:
+                    for device, old in previous.items():
+                        if device not in selected:
+                            self._dispatch(token, old, None)
+                    for device, output in echoes.items():
+                        if device in selected:
+                            self._dispatch(token, output, state)
+                            for command in self.rooms.device_commands(token,device,output['member']):
+                                try:error=self.send(token,dict(json.loads(output['details']),device=device),dict(action='volume',value=command['value']))
+                                except Exception:error='This device could not change volume. Retry shortly.'
+                                if not error:self.rooms.echo_volume_ack(token,device,command['id'],command['value'])
+                                else:self.rooms.echo_volume_failed(token,device,command['id'],str(error))
+                except Exception:
+                    logger.warning('Jam Echo update temporarily unavailable; retrying without pausing')
+                    time.sleep(1)
+                    continue
                 previous = {device: output for device, output in echoes.items() if device in selected}
                 if state is None:
                     break
@@ -50,6 +63,12 @@ class JamEchoDriver:
         finally:
             with self.lock:
                 self.running.discard(token)
+
+    def _snapshot(self, token, details, state):
+        try:return self.snapshot(token,details,state)
+        except Exception:
+            logger.warning('Jam Echo progress temporarily unavailable; retaining its last confirmed state')
+            return None
 
     def _dispatch(self, token, output, state):
         details = dict(json.loads(output['details']),device=output['device'])
@@ -64,11 +83,11 @@ class JamEchoDriver:
                 self.rooms.echo_report(token,output['device'],key,dict(playing=False,confirmed=False,processing=False),"Alexa did not confirm audio. Retry this output.")
                 return
             if state and state['playing']:
-                report = self.snapshot(token,details,state)
+                report = self._snapshot(token,details,state)
                 if report and (not output.get('error') or report.get('entry_id')!=state.get('entry_id')):
                     self.rooms.echo_report(token,output['device'],key,report,report.pop('error',''))
             return
-        report = self.snapshot(token,details,state) if state else None
+        report = self._snapshot(token,details,state) if state else None
         if state and report and (claim=='initial' or report.get('preserve')) and report.get('confirmed') and report.get('playing')==state['playing'] and not report.get('processing') and report.get('video_id')==state['video_id'] and (state['seek_revision']==0 or report.get('preserve')) and abs(report.get('position_ms',0)-state['position_ms'])<=1500:
             self.rooms.echo_report(token,output['device'],key,report)
             return

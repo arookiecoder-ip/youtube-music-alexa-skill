@@ -750,3 +750,15 @@ class MobileDeviceRoutesTests(OutputRoutesTests):
         self.assertFalse(self.state['playing'])
         self.assertEqual(self.state['position_ms'],8123)
         self.assertFalse(self.state.get('playback_error'))
+
+    def test_phone_reconnect_cannot_take_over_a_selected_server_driven_jam_echo(self):
+        self.state.update(_jam_driver_room='room',playing=True)
+        self.namespace.update(_jam_token_valid=lambda _:True,
+            _jam_rooms=Mock(transact=Mock(return_value={'selected':['echo']}),
+                outputs=Mock(return_value=[{'device':'echo','details':json.dumps({'server_echo':True,'identity':'owner'})}])))
+        before=self.output.snapshot()
+        reply=self.device('foreground',offline_alexa='echo-one')
+        self.assertEqual(reply.status_code,200)
+        self.assertFalse(reply.json['default_selected'])
+        self.assertEqual(self.output.snapshot()['output_token'],before['output_token'])
+        self.assertTrue(self.state['playing'])
