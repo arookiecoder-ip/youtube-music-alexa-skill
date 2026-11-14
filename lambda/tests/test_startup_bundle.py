@@ -87,6 +87,7 @@ class StartupBundleTests(unittest.TestCase):
 class ResumeBundleTests(unittest.TestCase):
     def test_resume_uses_fresh_authorized_arm_stream_without_second_http_request(self):
         request=handler()
+        request.request_envelope.context=_node(audio_player=None)
         info={'offset_in_ms':0,'stream_url':'https://old-capability','stream_url_video_id':NEW_SONG}
         metadata=player.player_models.Metadata(title='Song',artist='Artist',video_id=NEW_SONG,thumbnail=None,duration_ms=180000)
         response={'video_id':NEW_SONG,'offset_ms':45000,'kind':'resume',
