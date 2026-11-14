@@ -780,7 +780,7 @@ _PUBLIC_PATHS = ('/health/live', '/health/ready', '/', '/welcome', '/privacy_pol
 # Verification and reset are typed six-digit codes now, so no emailed credential
 # lives in a URL on the player door: /signup/ is the sign-up form itself, and
 # /invite/ carries the one remaining emailed link, an administrator's invitation.
-_PUBLIC_PREFIXES = ('/static/', '/j/', '/jam/', '/signup/', '/invite/')
+_PUBLIC_PREFIXES = ('/static/', '/j/', '/jam/', '/jam-invite/', '/signup/', '/invite/')
 
 # Canonical SPA document URLs. These exact paths (no trailing slash) render
 # the same protected shell as `/`; nearby API paths such as `/history/` remain
@@ -949,7 +949,7 @@ _SESSION_PATHS = ('/api/jam/session', '/audio', '/get_radio', '/status', '/api/s
                   '/alexa/queue_add', '/alexa/queue_remove',
                   '/alexa/queue_reorder', '/history', '/recommendations',
                   '/alexa/jam/start', '/alexa/jam/stop', '/alexa/jam/status',
-                  '/alexa/jam/qr', '/api/home', '/api/library',
+                  '/alexa/jam/qr', '/alexa/jam/remove', '/api/home', '/api/library',
                   '/api/subscribed_artists', '/api/app/output', '/api/app/devices', '/api/app/audio-token',
                   '/alexa/like', '/api/liked_songs', '/api/profile_status',
                   '/api/youtube/download-cookies', '/api/youtube/download-cookies/status',
@@ -1178,6 +1178,20 @@ def _jam_cache():
         return _valid_jams
 
 
+from jam_members import JamMembers
+from jam_rooms import JamRooms, JamConflict
+_jam_members = JamMembers(get_db)
+_jam_rooms = JamRooms(get_db)
+
+def _jam_membership():
+    token = session.get('jam')
+    if not token or not _jam_token_valid(token):
+        return None
+    user = _mu_web_identity()
+    return _jam_members.get(session.get('jam_member'), token,
+                            str(user['id']) if user else None)
+
+
 def _jam_identity_id():
     """Who a Jam belongs to on this request: the signed-in account id, or None
     for the legacy owner. Guests never open jams; they only join one."""
@@ -1186,14 +1200,17 @@ def _jam_identity_id():
 
 
 def _jam_token_valid(token):
-    if not token:
+    if not isinstance(token, str) or not token:
         return False
-    entry = _jam_cache().get(token)
-    if entry is None:
+    with get_db() as conn:
+        row = conn.execute('SELECT token, created_at, user_id FROM jam_tokens WHERE token=?', (token,)).fetchone()
+    if not row:
+        _jam_cache().pop(token, None)
         return False
-    if time.time() - entry['created_at'] > JAM_MAX_AGE:
-        _jam_purge_token(token)  # expired: purge so guests are cut off, not just this check
+    if time.time() - row['created_at'] > JAM_MAX_AGE:
+        _jam_purge_token(token)
         return False
+    _jam_cache()[token] = {'created_at': row['created_at'], 'user_id': row['user_id']}
     return True
 
 
@@ -1206,7 +1223,7 @@ def _jam_purge_token(token):
 
 def _jam_open(user_id=None):
     """Start this identity's jam (revoking its previous one) and return the token."""
-    token = secrets.token_urlsafe(9)
+    token = secrets.token_urlsafe(24)
     now = time.time()
     clause = 'user_id IS NULL' if user_id is None else 'user_id = ?'
     params = () if user_id is None else (user_id,)
@@ -1233,25 +1250,23 @@ def _jam_close_all(user_id=None):
 
 
 def _jam_active_token(user_id=None):
-    # Copy before iterating: _jam_open()/_jam_close_all() on another thread
-    # mutate the dict, which would raise RuntimeError mid-iteration.
-    for token, entry in list(_jam_cache().items()):
-        if entry['user_id'] != user_id:
-            continue
-        created_at = entry['created_at']
-        if time.time() - created_at <= JAM_MAX_AGE:
-            return token
-    return None
+    clause = 'user_id IS NULL' if user_id is None else 'user_id = ?'
+    params = () if user_id is None else (user_id,)
+    with get_db() as conn:
+        row = conn.execute(f'SELECT token FROM jam_tokens WHERE {clause} AND created_at >= ? ORDER BY created_at DESC LIMIT 1',
+                           params + (time.time() - JAM_MAX_AGE,)).fetchone()
+    return row['token'] if row else None
 
 
 def _jam_guest():
     """True when this request carries a guest cookie for a still-live jam."""
-    return _jam_token_valid(session.get('jam'))
+    return bool(_jam_membership()) and not _logged_in()
 
 
 def _clear_stale_jam_cookie():
-    if session.get('jam') and not _jam_token_valid(session.get('jam')):
+    if session.get('jam') and not _jam_membership():
         session.pop('jam', None)
+        session.pop('jam_member', None)
         return True
     return False
 
@@ -1278,11 +1293,7 @@ def _jam_url(token):
 # Deliberately absent: /alexa/proxy_login + /alexa/proxy_check (Amazon auth),
 # /alexa/clear (wipes the owner's queue), /alexa/jam/* (owner-only controls),
 # /history/*, and account/library/profile endpoints.
-_JAM_PATHS = ('/remote', '/alexa/command', '/alexa/play', '/alexa/suggest',
-              '/alexa/now_playing', '/alexa/seek', '/alexa/volume',
-              '/alexa/play_queue', '/alexa/shuffle_queue', '/alexa/search',
-              '/alexa/queue_add', '/alexa/queue_remove', '/alexa/queue_reorder',
-              '/api/jam/session', '/api/jam/home', '/api/jam/leave')
+_JAM_PATHS = ('/api/jam/session', '/api/jam/home', '/api/jam/leave', '/api/jam/state', '/api/jam/control', '/api/jam/presence', '/alexa/search')
 _JAM_PUBLIC_GET_PREFIXES = (
     '/api/artist/', '/api/album/', '/api/explore/', '/api/track/',
     '/api/library/playlists/',
@@ -1292,7 +1303,7 @@ _JAM_PUBLIC_GET_PREFIXES = (
 def _jam_request_allowed(path):
     """Allow-list for guest sessions; `path` is the trailing-slash-normalized
     request path."""
-    if path in _JAM_PATHS or request.path.startswith('/alexa/now_playing/'):
+    if path in _JAM_PATHS or request.method in ('GET', 'HEAD') and path.startswith('/api/jam/audio/'):
         return True
     return (request.method in ('GET', 'HEAD') and
             request.path.startswith(_JAM_PUBLIC_GET_PREFIXES))
@@ -1538,12 +1549,6 @@ def _bind_player_identity():
                     _now_playing.update(playing=False, playback_confirmed=True, playback_processing=False,
                         output_serial='', alexa_token=None, alexa_intent_at=time.time())
         return
-    jam_token = session.get('jam')
-    if jam_token:
-        entry = _jam_cache().get(jam_token)
-        if entry and entry.get('user_id'):
-            _PLAYER_IDENTITY.set(_player_identity_for_user_id(entry['user_id']))
-            return
     _PLAYER_IDENTITY.set('owner')
 
 
@@ -1595,7 +1600,7 @@ def require_api_key():
     # returns a machine-readable 401/JSON error on failure.
     if request.method in ('GET', 'HEAD') and _is_spa_document_path(request.path):
         return None
-    if path in _PUBLIC_PATHS or any(request.path.startswith(p) for p in _PUBLIC_PREFIXES):
+    if path in ('/.well-known/assetlinks.json', '/jam-room') or path in _PUBLIC_PATHS or any(request.path.startswith(p) for p in _PUBLIC_PREFIXES):
         return None
     # A guest may refresh the legacy /remote/ URL after the host revokes the
     # Jam. Handle that stale marker before normal auth redirects it to login.
@@ -7435,14 +7440,21 @@ def remote_page():
 def jam_start():
     """Owner-only (session or API key — guests can't reach /alexa/jam/*).
     Mints a fresh share token; any previous jam is revoked in the same step."""
-    body = request.get_json(silent=True) or {}
+    if _jam_membership():
+        return jsonify(error='Leave your current Jam before starting another.'), 409
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        return jsonify(error='Expected a JSON object.'), 400
     device_id = body.get('device_id')
     serial = _jam_device_serial(claim=device_id if isinstance(device_id, str) else '')
     if not serial:
         return error_response(
             'No playback device. Play something in this browser or link an Alexa '
             'device, then start the jam again.', 409)
+    with _np_lock:
+        seed = _np_snapshot(serial)
     token = _jam_open(_jam_identity_id())
+    _jam_rooms.start(token, seed, device_id if isinstance(device_id, str) else '')
     return jsonify({'ok': True, 'active': True, 'url': _jam_url(token)})
 
 
@@ -7498,23 +7510,164 @@ _JAM_ENDED_HTML = """<!DOCTYPE html>
 <p>The link is no longer active. Ask the host for a new one.</p></div></body></html>"""
 
 
-@app.route("/j/<token>", methods=["GET"])
-@app.route("/jam/<token>", methods=["GET"])
+@app.route('/.well-known/assetlinks.json')
+def android_asset_links():
+    # Public certificate only; the private signing key stays in GitHub Actions.
+    return jsonify([{'relation': ['delegate_permission/common.handle_all_urls'],
+        'target': {'namespace': 'android_app', 'package_name': 'in.synthora.musicbox',
+        'sha256_cert_fingerprints': ['F9:5F:9D:C7:05:DC:75:11:BE:87:C3:8E:83:F8:F0:AA:F7:1F:AE:61:AD:25:41:FB:F8:64:FE:2A:D2:F4:92:3C']}}])
+
+
+@app.route("/jam-invite/<token>", methods=["GET", "POST"])
+@app.route("/j/<token>", methods=["GET", "POST"])
+@app.route("/jam/<token>", methods=["GET", "POST"])
 def jam_join(token):
-    """Guest entry point. A valid token becomes a guest session cookie and the
-    browser lands on the remote (served in guest mode); a dead token gets a
-    plain 'jam ended' page. The cookie is non-permanent, so it dies with the
-    guest's browser session even if they never leave."""
-    if _jam_token_valid(token):
-        # Joining must not silently downgrade the owner's own session (login
-        # mode: session; key-in-URL mode: a valid ?key= on the link).
-        if not _logged_in() and not _valid_key_supplied():
-            session['jam'] = token
-            session.permanent = False
-        return redirect('/remote/' if not _remote_login_enabled() else '/')
-    if session.get('jam') == token or not _jam_guest():
-        session.pop('jam', None)
-    return _no_store(app.make_response((_JAM_ENDED_HTML, 410)))
+    if not _jam_token_valid(token):
+        return _no_store(app.make_response((_JAM_ENDED_HTML, 410)))
+    if request.method == 'GET':
+        return _no_store(app.make_response(render_template('jam_invite.html', token=token)))
+    if not request.is_json:
+        return jsonify(error='Use the Join Jam button.'), 415
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        return jsonify(error='Expected a JSON object.'), 400
+    user_id = _jam_identity_id()
+    entry = _jam_cache()[token]
+    if (_logged_in() or _valid_key_supplied()) and entry['user_id'] == user_id:
+        return jsonify(ok=True, host=True)
+    if session.get('jam') and session['jam'] != token and _jam_membership():
+        return jsonify(error='Leave your current Jam before joining another.'), 409
+    if _jam_active_token(user_id) and _logged_in():
+        return jsonify(error='End your current Jam before joining another.'), 409
+    device_id = body.get('device_id', '')
+    if not isinstance(device_id, str) or len(device_id) > 128:
+        return jsonify(error='Invalid device.'), 400
+    user = _mu_web_identity()
+    name = (user or {}).get('username') or 'Guest'
+    try:
+        member = _jam_members.join(token, user_id, name, device_id, session.get('jam_member'))
+    except PermissionError as exc:
+        return jsonify(error=str(exc)), 403
+    session['jam'] = token
+    session['jam_member'] = member
+    return jsonify(ok=True, host=False)
+
+
+def _jam_access_token():
+    member = _jam_membership()
+    if member:
+        return session['jam'], member
+    if session.get('jam'):
+        return None, None
+    if _logged_in() or _valid_key_supplied():
+        return _jam_active_token(_jam_identity_id()), None
+    return None, None
+
+
+@app.route('/jam-room/', methods=['GET'])
+def jam_room_page():
+    token, member = _jam_access_token()
+    if not token:
+        return _no_store(app.make_response((_JAM_ENDED_HTML, 410)))
+    return _no_store(app.make_response(render_template('jam_room.html', signed_in=_logged_in())))
+
+
+@app.route('/api/jam/audio/<video_id>', methods=['GET', 'HEAD'])
+def jam_audio(video_id):
+    token, member = _jam_access_token()
+    if not token:
+        return jsonify(error='Your Jam access has ended.'), 403
+    try:
+        state = _jam_rooms.transact(token, member=member['id'] if member else None)
+    except (PermissionError, JamConflict) as exc:
+        return jsonify(error=str(exc)), 403
+    if not _valid_video_id(video_id) or not any(row['video_id'] == video_id for row in state['queue']):
+        return jsonify(error='This song is not in the Jam.'), 403
+    entry = _jam_cache()[token]
+    _PLAYER_IDENTITY.set(_player_identity_for_user_id(entry['user_id']) if entry['user_id'] else 'owner')
+    return _serve_youtube_stream(video_id)
+
+
+@app.route('/api/jam/state/', methods=['GET'])
+def jam_state():
+    token, member = _jam_access_token()
+    if not token:
+        return jsonify(active=False, revoked=bool(session.get('jam')))
+    try:
+        playback = _jam_rooms.transact(token, member=member['id'] if member else None)
+    except (JamConflict, PermissionError) as exc:
+        return jsonify(error=str(exc)), 409
+    members = _jam_members.list(token)
+    host = member is None
+    device = request.args.get('device_id', '')
+    outputs = _jam_rooms.outputs(token)
+    return _no_store(jsonify(active=True, host=host, url=_jam_url(token), playback=playback,
+        members=[{'id': m['id'], 'name': m['name']} for m in members] if host else [],
+        outputs=[dict(device=o['device'], name=o['name'], online=time.time()-o['seen'] < 20, error=o['error']) for o in outputs],
+        listen=device in playback['selected'],
+        member_count=len({m['user_id'] or m['id'] for m in members}) + 1))
+
+
+@app.route('/api/jam/presence/', methods=['POST'])
+def jam_presence():
+    token, member = _jam_access_token()
+    if not token:
+        return jsonify(error={'code':'jam_access_revoked', 'message':'Your Jam access has ended.'}), 403
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        return jsonify(error='Expected a JSON object.'), 400
+    device = body.get('device_id')
+    if not isinstance(device, str) or not 1 <= len(device) <= 128 or member and member['device_id'] != device:
+        return jsonify(error='This device has not joined the Jam.'), 403
+    try:
+        _jam_rooms.presence(token, device, member['id'] if member else None,
+            body.get('name') or 'Audio player', body.get('error') or '')
+    except PermissionError as exc:
+        return jsonify(error=str(exc)), 403
+    return jsonify(ok=True)
+
+
+@app.route('/api/jam/control/', methods=['POST'])
+def jam_control():
+    token, member = _jam_access_token()
+    if not token:
+        return jsonify(error={'code':'jam_access_revoked', 'message':'Your Jam access has ended.'}), 403
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        return jsonify(error='Expected a JSON object.'), 400
+    action = body.get('action')
+    if action == 'configure':
+        if member:
+            return jsonify(error='Only the host can choose Jam outputs.'), 403
+        allowed = {o['device'] for o in _jam_rooms.outputs(token)}
+        selected = body.get('selected')
+        if not isinstance(selected, list) or any(not isinstance(d, str) or d not in allowed for d in selected):
+            return jsonify(error='Choose a connected Jam output.'), 400
+    try:
+        state = _jam_rooms.transact(token, action, body, member['id'] if member else None)
+    except PermissionError as exc:
+        return jsonify(error=str(exc)), 403
+    except JamConflict as exc:
+        return jsonify(error=str(exc)), 409
+    except (ValueError, TypeError) as exc:
+        return jsonify(error=str(exc)), 400
+    return jsonify(ok=True, playback=state)
+
+
+@app.route('/alexa/jam/remove/', methods=['POST'])
+def jam_remove_member():
+    token = _jam_active_token(_jam_identity_id())
+    if not token or not (_logged_in() or _valid_key_supplied()):
+        return jsonify(error='Only the host can remove participants.'), 403
+    body = request.get_json(silent=True)
+    if not isinstance(body, dict):
+        return jsonify(error='Expected a JSON object.'), 400
+    member_id = body.get('member_id')
+    if not isinstance(member_id, str):
+        return jsonify(error='Choose a participant.'), 400
+    if not _jam_members.remove(token, member_id):
+        return jsonify(error='Participant not found.'), 404
+    return jsonify(ok=True)
 
 
 _jam_home_cache = {'built_at': 0, 'data': None}
@@ -7677,6 +7830,8 @@ def jam_guest_home():
 
 @app.route('/api/jam/leave/', methods=['POST'])
 def jam_guest_leave():
+    _jam_members.leave(session.get('jam_member'))
+    session.pop('jam_member', None)
     session.pop('jam', None)
     return jsonify({'ok': True})
 
