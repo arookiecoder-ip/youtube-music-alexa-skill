@@ -208,7 +208,9 @@ def classify_page(snapshot):
         return SIGNED_IN
     if host == "accounts.google.com" and path.startswith("/sorry/"):
         return CAPTCHA
-    if host.endswith("consent.youtube.com") or "/client/cookie/consent" in path:
+    if host == "consent.youtube.com" or host.endswith(".consent.youtube.com") or (
+            host in ("accounts.google.com", "www.youtube.com", "youtube.com")
+            and "/client/cookie/consent" in path):
         return CONSENT
 
     if "/challenge/totp" in path or code_kind == "totp":
@@ -390,9 +392,6 @@ def _wait_after(page, previous, wait_seconds):
                          "tap yes" in text_now.lower())
         if signature_now != signature:
             signature = signature_now
-            logger.info("Wait saw %s (%d chars, loading=%s, tap_yes=%s) at %s",
-                        outcome, len(text_now), signature_now[2], signature_now[3],
-                        urlparse(last.get("url") or "").path)
         if outcome == UNSUPPORTED:
             text = (last.get("text") or "").strip()
             if not text or _still_loading(text):
@@ -433,11 +432,6 @@ def _wait_after(page, previous, wait_seconds):
         except Exception:
             break
         fresh_outcome = classify_page(fresh_state)
-        logger.info("Deadline probe %d: %s at %s (%d chars, loading=%s)",
-                    attempt + 1, fresh_outcome,
-                    urlparse(fresh_state.get("url") or "").path,
-                    len((fresh_state.get("text") or "").strip()),
-                    _still_loading(fresh_state.get("text") or ""))
         if fresh_outcome not in (UNSUPPORTED, TIMEOUT):
             return fresh_state, fresh_outcome
         final_state = fresh_state
@@ -718,7 +712,6 @@ def choose_method(page, method, wait_seconds=25):
         # A text row can never lead to a code app or a backup list. Landing there
         # means the click found the wrong row; say so instead of demanding a code
         # the person did not choose.
-        logger.info("choose_method(phone) landed on %s", outcome)
         return state, METHOD_UNAVAILABLE
     if method == "phone" and _matches(state.get("text") or "",
                                       _PHONE_SEND_FAILURES):

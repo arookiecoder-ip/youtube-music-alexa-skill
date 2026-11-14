@@ -113,7 +113,7 @@ body .btn.primary:hover { color: var(--auth-action-text); }
 .user-detail #danger-zone { margin-top: auto; }
 .user-detail .ud-hero-actions { flex-wrap: wrap; }
 .user-detail .ud-devices-panel { display: flex; flex: 1; flex-direction: column; min-height: 0; }
-.ud-device-list { flex: 1 1 300px; height: 300px; min-height: 160px; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; scrollbar-width: thin; scrollbar-color: var(--scrollbar-thumb) var(--surface); }
+.ud-device-list { flex: 1 1 300px; height: 300px; max-height: 400px; min-height: 160px; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; scrollbar-width: thin; scrollbar-color: var(--scrollbar-thumb) var(--surface); }
 .ud-device-list.is-empty { flex-basis: 160px; height: auto; }
 .ud-device-list::-webkit-scrollbar, .ud-history-list::-webkit-scrollbar { width: 8px; }
 .ud-device-list::-webkit-scrollbar-thumb, .ud-history-list::-webkit-scrollbar-thumb { background: var(--scrollbar-thumb); }

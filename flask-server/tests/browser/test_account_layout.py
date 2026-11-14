@@ -1275,3 +1275,27 @@ def test_deletion_sends_nothing_until_explicit_send_otp_click(page):
     expect(page.locator('#delete-send-code')).to_be_disabled()
     expect(page.locator('#form-delete-code .code-timer')).to_contain_text('Code expires in')
     assert POSTS == ['delete:check', 'reauth:send']
+
+@pytest.mark.parametrize('width', [390, 1280])
+def test_provider_popup_centers_loading_and_offers_amazon_recovery_after_failure(page, origin, width):
+    page.set_viewport_size({'width': width, 'height': 900})
+    page.goto(origin + '/account')
+    open_section(page, 'panel-providers')
+    page.locator('#link-amazon').evaluate('(node) => node.hidden = false')
+    page.click('#link-amazon')
+    expect(page.locator('#connect-fallback')).not_to_be_visible()
+    pending = []
+    page.route('**/alexa/form_login/', lambda route: pending.append(route))
+    page.fill('#connect_email', 'person@example.test')
+    page.fill('#connect_password', 'synthetic-password')
+    page.click('#connect-submit')
+    expect(page.locator('#connect-working')).to_be_visible()
+    expect(page.locator('#connect-setup')).not_to_be_visible()
+    page.wait_for_timeout(50)
+    assert len(pending) == 1
+    pending[0].fulfill(json={'state': 'error', 'message': 'The security picture could not load.'})
+    expect(page.locator('#connect-working')).not_to_be_visible()
+    expect(page.locator('#connect-fallback')).to_be_visible()
+    expect(page.locator('#connect-retry')).to_be_visible()
+    expect(page.locator('#connect-fallback')).to_have_attribute('href', '/accounts/amazon?interactive=1')
+    assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')

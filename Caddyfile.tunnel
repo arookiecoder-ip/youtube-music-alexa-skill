@@ -1,0 +1,67 @@
+# Tunnel mode for this server: private connector ingress plus Cloudflare-only
+# HTTPS fallback. The private published port is bound to host loopback.
+{
+    servers {
+        trusted_proxies static 173.245.48.0/20 103.21.244.0/22 103.22.200.0/22 103.31.4.0/22 141.101.64.0/18 108.162.192.0/18 190.93.240.0/20 188.114.96.0/20 197.234.240.0/22 198.41.128.0/17 162.158.0.0/15 104.16.0.0/13 104.24.0.0/14 172.64.0.0/13 131.0.72.0/22 2400:cb00::/32 2606:4700::/32 2803:f800::/32 2405:b500::/32 2405:8100::/32 2a06:98c0::/29 2c0f:f248::/32 {$CADDY_TUNNEL_PROXY_CIDRS}
+        trusted_proxies_strict
+        client_ip_headers CF-Connecting-IP
+    }
+}
+
+(musicbox_routes) {
+    request_header CF-Connecting-IP {client_ip}
+    @ready path /health/ready
+    header @ready Cache-Control "no-store"
+    handle_path /youtube-login/* {
+        forward_auth ytmusic:5000 {
+            uri /api/youtube/browser-session/authorize
+            header_up -Connection
+            header_up -Upgrade
+        }
+        header Cache-Control "no-store"
+        reverse_proxy youtube-browser:6080
+    }
+
+    handle /alexa/proxy/* {
+        forward_auth ytmusic:5000 {
+            uri /alexa/proxy_authorize/
+            header_up -Connection
+            header_up -Upgrade
+            copy_headers X-MusicBox-Proxy-Authorization
+        }
+        header Cache-Control "no-store"
+        reverse_proxy ytmusic:5001
+    }
+
+    handle {
+        reverse_proxy ytmusic:5000
+    }
+}
+
+{$SITE_ADDRESS:localhost}, {$MUSICBOX_LEGACY_HOST:testalexa.synthora.in} {
+    @not_cloudflare not remote_ip 173.245.48.0/20 103.21.244.0/22 103.22.200.0/22 103.31.4.0/22 141.101.64.0/18 108.162.192.0/18 190.93.240.0/20 188.114.96.0/20 197.234.240.0/22 198.41.128.0/17 162.158.0.0/15 104.16.0.0/13 104.24.0.0/14 172.64.0.0/13 131.0.72.0/22 2400:cb00::/32 2606:4700::/32 2803:f800::/32 2405:b500::/32 2405:8100::/32 2a06:98c0::/29 2c0f:f248::/32
+    header X-MusicBox-Ingress "origin-fallback"
+    route {
+        respond @not_cloudflare "Direct origin access is disabled." 403
+        import musicbox_routes
+    }
+}
+
+http://{$SITE_ADDRESS:localhost}:8080, http://{$MUSICBOX_LEGACY_HOST:testalexa.synthora.in}:8080 {
+    @not_connector not remote_ip {$CADDY_TUNNEL_PROXY_CIDRS}
+    @plain_http header X-Forwarded-Proto http
+    header X-MusicBox-Ingress "tunnel"
+    route {
+        respond @not_connector "Connector ingress only." 403
+        redir @plain_http https://{host}{uri} 308
+        import musicbox_routes
+    }
+}
+
+http://{$SITE_ADDRESS:localhost}, http://{$MUSICBOX_LEGACY_HOST:testalexa.synthora.in} {
+    @not_cloudflare not remote_ip 173.245.48.0/20 103.21.244.0/22 103.22.200.0/22 103.31.4.0/22 141.101.64.0/18 108.162.192.0/18 190.93.240.0/20 188.114.96.0/20 197.234.240.0/22 198.41.128.0/17 162.158.0.0/15 104.16.0.0/13 104.24.0.0/14 172.64.0.0/13 131.0.72.0/22 2400:cb00::/32 2606:4700::/32 2803:f800::/32 2405:b500::/32 2405:8100::/32 2a06:98c0::/29 2c0f:f248::/32
+    route {
+        respond @not_cloudflare "Direct origin access is disabled." 403
+        redir https://{host}{uri} 308
+    }
+}

@@ -1,0 +1,12 @@
+[Unit]
+Description=Check MusicBox tunnel with automatic protected-origin fallback
+
+[Timer]
+OnBootSec=45
+OnUnitInactiveSec=20
+AccuracySec=1
+RandomizedDelaySec=2
+Unit=musicbox-tunnel-failover.service
+
+[Install]
+WantedBy=timers.target

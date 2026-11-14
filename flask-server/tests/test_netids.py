@@ -181,7 +181,9 @@ class ServerForwardedChainTests(unittest.TestCase):
 
     def test_the_image_starts_that_launcher_and_not_the_cli(self):
         dockerfile = (Path(__file__).resolve().parents[1] / "Dockerfile").read_text()
-        self.assertIn("serve.py", dockerfile)
+        self.assertIn("realtime_gateway.py", dockerfile)
+        gateway = (Path(__file__).resolve().parents[1] / "realtime_gateway.py").read_text()
+        self.assertEqual(gateway.count("clear_untrusted_proxy_headers=False"), 2)
         self.assertNotIn("waitress-serve", dockerfile)
 
 

@@ -416,10 +416,32 @@ class Database:
                 conn.execute("CREATE INDEX idx_signup_challenges_email ON signup_challenges(email)")
                 conn.execute("INSERT INTO multiuser_schema_migrations VALUES (12, ?)", (time.time(),))
             if 13 not in applied:
-                for table, column in (('user_invites', 'expires_at'), ('alexa_pair_codes', 'expires_at'),
-                                      ('alexa_access_tokens', 'expires_at'), ('signup_challenges', 'expires')):
+                # Migration 13 existed on both deployment branches. Migration 14
+                # repairs either variant without reviving previously revoked grants.
+                conn.execute("DROP TRIGGER IF EXISTS users_security_version")
+                conn.execute("""CREATE TRIGGER users_security_version AFTER UPDATE OF role, status ON users
+                    WHEN OLD.role IS NOT NEW.role OR OLD.status IS NOT NEW.status
+                    BEGIN UPDATE users SET security_version=security_version+1,
+                        totp_pending_enc='',totp_pending_at=0,totp_pending_session='' WHERE id=NEW.id; END""")
+                conn.execute("INSERT INTO multiuser_schema_migrations VALUES (13, ?)", (time.time(),))
+            if 14 not in applied:
+                conn.execute("DROP TRIGGER IF EXISTS users_security_version")
+                conn.execute("""CREATE TRIGGER users_security_version AFTER UPDATE OF role, status ON users
+                    WHEN OLD.role IS NOT NEW.role OR OLD.status IS NOT NEW.status
+                    BEGIN UPDATE users SET security_version=security_version+1,
+                        totp_pending_enc='',totp_pending_at=0,totp_pending_session='' WHERE id=NEW.id; END""")
+                for table,column in (('user_invites','expires_at'),('alexa_pair_codes','expires_at'),
+                                      ('alexa_access_tokens','expires_at'),('signup_challenges','expires')):
                     conn.execute(f'CREATE INDEX IF NOT EXISTS idx_{table}_expiry ON {table}({column})')
-                conn.execute('INSERT INTO multiuser_schema_migrations VALUES (13, ?)', (time.time(),))
+                conn.execute("INSERT INTO multiuser_schema_migrations VALUES (14, ?)", (time.time(),))
+            if 15 not in applied:
+                conn.execute("""UPDATE alexa_access_tokens SET revoked_at=? WHERE id IN
+                    (SELECT id FROM (SELECT id, ROW_NUMBER() OVER
+                    (PARTITION BY user_id ORDER BY created_at DESC,id DESC) AS position
+                    FROM alexa_access_tokens WHERE revoked_at=0) WHERE position>1)""", (time.time(),))
+                conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_alexa_one_active_token ON alexa_access_tokens(user_id) WHERE revoked_at=0")
+                conn.execute("INSERT INTO multiuser_schema_migrations VALUES (15, ?)", (time.time(),))
+
             now = time.time()
             # Bound the audit journal so a long-lived install cannot grow it
             # without limit. 90 days is intentionally conservative.

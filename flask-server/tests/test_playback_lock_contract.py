@@ -50,6 +50,7 @@ class PlaybackLockContractTests(unittest.TestCase):
             _valid_video_id=lambda value: len(value)==11, LocalLibrary=type('LocalLibrary',(),{}),
             _playlist_tracks_cache_lock=threading.Lock(), _playlist_tracks_cache={}, _current_identity=lambda:'owner',
             _get_ytmusic_home=lambda:client,_bump_liked_version=Mock(),
+            _liked_cache=lambda:SimpleNamespace(update=Mock()),
             asyncio=asyncio,request=request,jsonify=jsonify,logger=Mock())
         self.functions({'_get_now_playing','alexa_like'},namespace)
         with Flask(__name__).test_request_context('/alexa/like/',method='POST',json={'action':'LIKE'}):

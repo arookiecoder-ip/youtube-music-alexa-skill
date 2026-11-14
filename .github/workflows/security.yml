@@ -8,12 +8,15 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+  pull-requests: read
 jobs:
   security:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: '3.12'
@@ -35,6 +38,8 @@ jobs:
           MUSICBOX_EGRESS_TOKEN: ci-validation-only
         run: docker compose config --quiet
       - uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7 # v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Build backend
         run: docker build -t musicbox-security:backend flask-server
       - uses: aquasecurity/trivy-action@57a97c7e7821a5776cebc9bb87c984fa69cba8f1 # 0.35.0
@@ -62,3 +67,19 @@ jobs:
           exit-code: '1'
           severity: HIGH,CRITICAL
           ignore-unfixed: true
+
+  codeql-review-report:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: read
+    steps:
+      - name: Export current CodeQL findings for production review
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+        run: gh api --method GET --paginate "repos/$GH_REPO/code-scanning/alerts" -f state=open -f per_page=100 -f ref="$GITHUB_REF" > codeql-review.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: codeql-review
+          path: codeql-review.json

@@ -358,10 +358,18 @@ def _robot_check_form(login):
         if name:
             fields[name] = field.get("value") or ""
     image = None
-    for img in soup.find_all("img", src=True):
-        if "captcha" in img["src"].lower():
-            image = img["src"]
+    for img in soup.find_all("img"):
+        source = img.get("src") or img.get("data-src") or ""
+        description = " ".join(str(img.get(key) or "") for key in ("alt", "id"))
+        if source and ("captcha" in source.lower() or "captcha" in description.lower()):
+            image = source
             break
+    # Some robot pages use an opaque CDN filename. The picture inside the
+    # challenge form is authoritative; never pick a header/logo outside it.
+    if not image:
+        candidate = form.find("img")
+        if candidate:
+            image = candidate.get("src") or candidate.get("data-src")
     return {"action": form.get("action") or "", "fields": fields, "image": image}
 
 
@@ -442,6 +450,9 @@ class AlexaRemote:
         self._proxy_finalize_task = None
         self._proxy_login_error = None
         self._proxy_login_complete = False
+        self._proxy_authorizer = None
+        self._proxy_attempt_started = 0.0
+        self._proxy_owner_sid = None
         self._proxy_attempt_id = None
         self._proxy_cookie_stage = None
         # form-login state (scripted sign-in; touched only on the background loop)
@@ -450,6 +461,10 @@ class AlexaRemote:
         self._form_attempt_id = None
         self._form_captcha = None  # (content_type, bytes) of the last captcha picture
         self._form_robot = None  # Amazon's own challenge form, when it asks for one
+
+    def set_proxy_authorizer(self, authorize):
+        """Install the session authority for this account's proxy attempt."""
+        self._proxy_authorizer = authorize
 
     # ---------- background loop plumbing ----------
 
@@ -472,7 +487,7 @@ class AlexaRemote:
             # coroutine and force a login re-check on the next call.
             future.cancel()
             self._login_checked_at = 0.0
-            logger.warning("Alexa call exceeded %ss and was abandoned", CALL_TIMEOUT)
+            logger.warning("Alexa call exceeded %ss and was abandoned", timeout)
             raise AlexaUnreachable(
                 "Alexa isn't responding. The device may be offline or Amazon is "
                 "unreachable — try again in a moment.")
@@ -639,7 +654,7 @@ class AlexaRemote:
         logger.info("reclaimed the Alexa login proxy from an abandoned login")
         return _proxy_claim(self)
 
-    async def _start_proxy(self, email: str, password: str, base_url: str = None):
+    async def _start_proxy(self, email: str, password: str, base_url: str = None, owner_sid: str = None):
         """Idempotently bring up the proxy aiohttp app. Credentials come from
         the browser and are used only to seed this login object; they are not
         stored. Returns error or None."""
@@ -659,6 +674,8 @@ class AlexaRemote:
                 and not self._proxy_login_complete
             )
             if (self._proxy_base_url == proxy_base_url and not finalize_failed
+                    and self._proxy_owner_sid == owner_sid
+                    and time.monotonic() - self._proxy_attempt_started <= 600
                     and self._proxy_login is not None and self._proxy_login.email == email
                     and self._proxy_login.password == password):
                 _renew_proxy_claim(self)
@@ -675,6 +692,8 @@ class AlexaRemote:
         # Keep the previous account's persisted credentials intact until the
         # replacement verifies, including failed/cancelled same-email attempts.
         self._proxy_attempt_id = secrets.token_urlsafe(24)
+        self._proxy_attempt_started = time.monotonic()
+        self._proxy_owner_sid = owner_sid
         self._proxy_cookie_stage = tempfile.mkdtemp(prefix="pending-", dir=self.cookie_dir)
         os.makedirs(os.path.join(self._proxy_cookie_stage, ".storage"), exist_ok=True)
         stage = self._proxy_cookie_stage
@@ -714,12 +733,16 @@ class AlexaRemote:
         logger.info("Alexa login proxy listening on 0.0.0.0:%s under %s", PROXY_PORT, PROXY_PATH)
         return None
 
-    async def _proxy_start_url(self, email: str, password: str, base_url: str = None):
+    async def _proxy_start_url(self, email: str, password: str, base_url: str = None, owner_sid: str = None):
         """Bring up the proxy and return (url, error). url is where the user logs in."""
         error = self._access_error(email)
         if error:
             return None, error
-        error = await self._start_proxy(email, password, base_url)
+        # An image-load failure may leave a scripted challenge alive. Retire
+        # it before the interactive flow takes the same account's login slot.
+        if getattr(self, '_form_login', None) is not None:
+            await self._form_cleanup()
+        error = await self._start_proxy(email, password, base_url, owner_sid)
         if error:
             return None, error
         proxy = self._proxy
@@ -742,6 +765,13 @@ class AlexaRemote:
 
     async def _proxy_handler(self, request):
         """Serve alexapy and start finalization as soon as its callback lands."""
+        authorize = self._proxy_authorizer
+        attempt = getattr(self, '_proxy_attempt_id', None)
+        if (not authorize or not attempt or
+                time.monotonic() - self._proxy_attempt_started > 600 or
+                not await asyncio.to_thread(authorize, request.headers.get('Cookie', ''), attempt) or
+                attempt != getattr(self, '_proxy_attempt_id', None)):
+            raise web.HTTPForbidden(text="Open Amazon sign-in from your signed-in Music Box account.")
         if os.environ.get("ALEXA_PROXY_BEHIND_CADDY") == "1":
             expected = self.proxy_authorization()
             supplied = request.headers.get('X-MusicBox-Proxy-Authorization', '')
@@ -1004,6 +1034,7 @@ class AlexaRemote:
         self._proxy_runner = None
         self._proxy = None
         self._proxy_started = False
+        self._proxy_owner_sid = None
         self._proxy_base_url = None
         self._proxy_cookie_stage = None
         if runner:
@@ -1018,8 +1049,8 @@ class AlexaRemote:
         _release_proxy_claim(self)
 
     # public (thread-safe) wrappers
-    def proxy_start_url(self, email: str, password: str, base_url: str = None):
-        return self._run(self._proxy_start_url(email, password, base_url))
+    def proxy_start_url(self, email: str, password: str, base_url: str = None, owner_sid: str = None):
+        return self._run(self._proxy_start_url(email, password, base_url, owner_sid))
 
     def proxy_cancel(self, attempt_id):
         return self._run(self._cancel_proxy_attempt(attempt_id))
@@ -1076,7 +1107,7 @@ class AlexaRemote:
             fetched = await self._form_fetch_captcha(login, status.get("captcha_image_url"))
             if fetched is None:
                 return {"state": "error",
-                        "message": "Amazon asked for a captcha picture that could not be loaded. Try again."}
+                        "message": "Amazon asked for a captcha picture that could not be loaded. Retry or use the Amazon page instead."}
             self._form_captcha = fetched
             return {"state": "need_captcha", "answer": "captcha", "text": True,
                     "message": note or "Type the characters you see in the picture.",
@@ -1122,8 +1153,8 @@ class AlexaRemote:
                         "verification": False}
             return {"state": "error",
                     "message": "Amazon wants to make sure this is a person, but its "
-                               "check picture could not be loaded. Try again in a "
-                               "moment."}
+                               "check picture could not be loaded. Retry or use the "
+                               "Amazon page instead to complete the check."}
         # Amazon's new claim flow answers an identifier it cannot sign in with
         # by offering to register it, so nothing was refused yet and retrying
         # the password cannot help. Mobile-only accounts reach this by email.
@@ -1171,11 +1202,28 @@ class AlexaRemote:
         url = _page_join(_last_page_url(login), url)
         try:
             from urllib.parse import urlsplit
-            parsed = urlsplit(url)
             domain = AMAZON_DOMAIN.lower()
-            if parsed.scheme != 'https' or not (parsed.hostname == 'www.' + domain or parsed.hostname == domain or (parsed.hostname or '').endswith('.amazon.com') or parsed.hostname == 'images-na.ssl-images-amazon.com'):
+            # Redirects must be checked at every hop: Amazon moves captcha
+            # assets between its image CDNs, but arbitrary URLs are forbidden.
+            for hop in range(4):
+                parsed = urlsplit(url)
+                host = (parsed.hostname or '').lower()
+                allowed = (host in (domain, 'www.' + domain) or
+                           any(host == suffix or host.endswith('.' + suffix)
+                               for suffix in ('amazon.com', 'media-amazon.com', 'ssl-images-amazon.com')))
+                if parsed.scheme != 'https' or parsed.port not in (None, 443) or parsed.username or parsed.password or not allowed:
+                    return None
+                response = await login._session.get(url, ssl=login._ssl, allow_redirects=False)
+                if response.status in (301, 302, 303, 307, 308):
+                    location = response.headers.get('Location')
+                    response.close()
+                    if not location:
+                        return None
+                    url = _page_join(url, location)
+                    continue
+                break
+            else:
                 return None
-            response = await login._session.get(url, ssl=login._ssl, allow_redirects=False)
             if response.status != 200:
                 response.close()
                 return None
@@ -1554,7 +1602,7 @@ class AlexaRemote:
                 return d
         return None
 
-    async def _api_for(self, serial: str, require_online: bool = False):
+    async def _api_for(self, serial: str, require_online: bool = False, cached_online: bool = False):
         """Returns (AlexaAPI, error string or None).
 
         When require_online is set, the target Echo must report as online before
@@ -1579,7 +1627,14 @@ class AlexaRemote:
             # one is offline. Re-fetch before trusting either reading, unless
             # the list is fresh enough.
             stale = time.monotonic() - self._devices_fetched_at > _DEVICE_STATE_TTL
-            if stale or (raw is not None and not raw.get("online")):
+            if stale and cached_online and raw is not None and raw.get("online"):
+                # Resume should not wait for a second Amazon HTTP round trip
+                # merely to re-confirm a known-online device. The command's
+                # actual response still decides success; refresh in parallel.
+                task = getattr(self, '_transport_presence_refresh', None)
+                if task is None or task.done():
+                    self._transport_presence_refresh = asyncio.create_task(self._refresh_transport_presence())
+            elif stale or (raw is not None and not raw.get("online")):
                 _, err = await self._devices(refresh=True)
                 if err:
                     return None, err
@@ -1591,14 +1646,36 @@ class AlexaRemote:
                 return None, f"{name} is offline. Turn it on (or pick another device) and try again."
         return AlexaAPI(device, self._login), None
 
+    async def _refresh_transport_presence(self):
+        try:
+            await self._devices(refresh=True)
+        except Exception:
+            logger.debug("background transport presence refresh failed", exc_info=True)
+
+    def pause_for_handoff(self, serial: str):
+        """Request the custom skill pause; the server verifies PlaybackStopped."""
+        return self._run(self._pause_for_handoff(serial))
+
+    async def _pause_for_handoff(self, serial):
+        # Native /api/np/command can acknowledge a custom-skill stream
+        # without stopping it. Use the skill's AudioPlayer StopDirective.
+        return await self._command(serial, 'pause', None)
+
     def command(self, serial: str, action: str, value=None):
         """Transport control. Returns an error string, or None on success."""
         return self._run(self._command(serial, action, value))
 
+    def handoff_pause(self, serial: str):
+        """Bound source cleanup so target selection never waits on Amazon's long timeout."""
+        try:
+            return self._run(self._command(serial, 'pause', None), timeout=1.0)
+        except AlexaUnreachable:
+            return "Alexa did not confirm the pause before the selected device took over."
+
     async def _command(self, serial, action, value):
         # Reject early if the target Echo is offline: it can't be reached, and a
         # transport/volume command would otherwise fail opaquely or hang.
-        api, error = await self._api_for(serial, require_online=True)
+        api, error = await self._api_for(serial, require_online=True, cached_online=action in ("play", "pause"))
         if error:
             return error
         try:

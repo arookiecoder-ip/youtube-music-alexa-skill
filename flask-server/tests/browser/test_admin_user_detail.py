@@ -105,31 +105,31 @@ def test_alexa_access_requires_confirmation_and_shows_eligibility(admin_page):
     dialog.get_by_role('button', name='Enable access', exact=True).click()
     expect(page.locator('.ud-state')).to_contain_text('Allowed')
     expect(page.get_by_role('button', name='Generate token', exact=True)).to_be_disabled()
-    expect(page.locator('.ud-token-row')).to_contain_text('Activate the account')
+    expect(page.locator('.ud-token-row').first).to_contain_text('Activate the account')
     assert case.accounts.get_user(user['id'])['alexa_enabled']
 
 
-def test_new_token_has_private_reveal_popup_and_copy_action(admin_page):
+def test_new_token_downloads_private_config_without_rendering_the_secret(admin_page):
     page, case, user, origin, errors = admin_page
     case.layer.db.execute("UPDATE users SET status='active',email_verified=1,alexa_enabled=1 WHERE id=?", (user['id'],))
     page.reload()
     page.get_by_role('button', name='Generate token', exact=True).click()
-    dialog = page.locator('#token-create-dialog')
-    expect(dialog).to_be_visible()
+    dialog=page.locator('#token-create-dialog')
     expect(dialog).to_contain_text('Previous tokens will stop working')
-    dialog.get_by_role('button', name='Generate token', exact=True).click()
-    reveal = page.locator('#token-reveal-dialog')
-    expect(reveal).to_be_visible()
-    token = reveal.locator('textarea').input_value()
+    with page.expect_download() as downloading:
+        dialog.get_by_role('button', name='Generate token', exact=True).click()
+    content=Path(downloading.value.path()).read_text()
+    settings=dict(line.split('=',1) for line in content.splitlines())
+    token=settings['MUSICBOX_ALEXA_TOKEN']
     assert token.startswith('mbx_')
-    page.screenshot(path='/tmp/admin-user-redesign/token-dialog.png')
-    reveal.get_by_role('button', name='Copy token', exact=True).click()
-    expect(reveal.locator('[role=status]')).to_contain_text('Token copied')
-    assert page.evaluate('navigator.clipboard.readText()') == token
-    reveal.get_by_role('button', name='I have saved it', exact=True).click()
-    page.reload()
+    assert settings['MUSICBOX_ACCOUNT_ID']==user['id']
+    assert 'MUSICBOX_EMAIL' not in settings
+    expect(page.get_by_role('button', name='Rotate token', exact=True)).to_be_visible()
+    expect(page.locator('#active-alexa-token')).to_contain_text(token[:12]+'…')
     assert token not in page.content()
-    expect(page.get_by_role('button', name='Rotate token', exact=True)).to_be_enabled()
+    assert token.split('.')[0] not in page.content()
+    expect(page.locator('#token-reveal-dialog')).to_have_count(0)
+    expect(page.get_by_role('button', name='Token history', exact=True)).to_have_count(0)
 
 
 def test_security_actions_open_separate_dialogs_and_delete_can_be_cancelled(admin_page):
@@ -230,13 +230,10 @@ def test_alexa_token_revoke_and_disable_have_distinct_confirmations(admin_page):
     case.layer.db.execute("UPDATE users SET status='active',email_verified=1,alexa_enabled=1 WHERE id=?", (user['id'],))
     token = case.layer.alexa_access.rotate(user['id'])
     page.reload()
-    page.get_by_role('button', name='Token history').click()
-    page.get_by_role('button', name='Revoke all tokens').click()
-    expect(page.locator('#admin-dialog')).to_contain_text('every existing Alexa token')
-    page.locator('#admin-dialog').get_by_role('button', name='Revoke tokens', exact=True).click()
-    page.get_by_role('button', name='Token history').click()
-    expect(page.locator('#token-history-dialog .ud-token-record .badge')).to_have_text('revoked')
-    page.locator('#token-history-dialog').get_by_role('button', name='Close', exact=True).click()
+    page.get_by_role('button', name='Revoke token', exact=True).click()
+    expect(page.locator('#admin-dialog')).to_contain_text('Stop this token')
+    page.locator('#admin-dialog').get_by_role('button', name='Revoke token', exact=True).click()
+    expect(page.locator('#active-alexa-token')).to_contain_text('No active token')
     page.get_by_role('button', name='Disable access', exact=True).click()
     expect(page.locator('#admin-dialog')).to_contain_text('Hide Amazon options')
     page.locator('#admin-dialog').get_by_role('button', name='Disable access', exact=True).click()

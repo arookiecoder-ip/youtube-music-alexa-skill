@@ -129,6 +129,13 @@
           <span class="label">Username</span>
           <span class="mono">@{{ username }}</span>
         </div>
+        <div class="state-line account-id-line">
+          <span class="label">Account ID</span>
+          <span class="prov-cell">
+            <code id="account-id" class="mono value">{{ user.id if user is defined else '' }}</code>
+            <button type="button" id="copy-account-id" class="tiny-link">Copy ID</button>
+          </span>
+        </div>
         <div class="state-line">
           <span class="label">Email</span>
           <span class="prov-cell">
@@ -363,7 +370,7 @@
           <p class="field-error" id="err-reset_confirm" hidden></p>
 
           <label class="check">
-            <input type="checkbox" name="sign_out_others" value="1" checked>
+            <input type="checkbox" name="sign_out_others" value="1">
             <span>Sign out every other device</span>
           </label>
           <p class="field-help">This browser stays signed in either way. Leave it ticked if the
@@ -670,6 +677,7 @@
         <span id="connect-working-text"></span>
       </p>
       <p class="connect-status" id="connect-status" role="status" aria-live="polite"></p>
+      <a class="tiny" id="connect-fallback" href="/accounts/amazon?interactive=1" hidden>Use Amazon page instead</a>
       <button class="tiny" type="button" id="connect-retry" hidden>Start over</button>
     </div>
     <div class="dialog-foot">

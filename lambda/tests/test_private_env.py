@@ -32,6 +32,11 @@ class PrivateEnvTests(unittest.TestCase):
                          ['https://private.example', 'listener@example.test', 'mbx_test.token'])
         self.assertEqual(data['DEFAULT_API_URL'], data['MUSICBOX_SERVER_URL'])
 
+    def test_stable_account_id_loads_without_a_musicbox_email(self):
+        data = self.load('MUSICBOX_ACCOUNT_ID=stable-user-id\nMUSICBOX_ALEXA_TOKEN=mbx_test.token\n')
+        self.assertEqual(data['MUSICBOX_ACCOUNT_ID'], 'stable-user-id')
+        self.assertEqual(data['MUSICBOX_EMAIL'], '')
+
     def test_environment_takes_precedence_including_explicit_empty_values(self):
         data = self.load('MUSICBOX_EMAIL=file@example.test\nMUSICBOX_ALEXA_TOKEN=file-token',
                          {'MUSICBOX_EMAIL':'environment@example.test', 'MUSICBOX_ALEXA_TOKEN':''})

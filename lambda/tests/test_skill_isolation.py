@@ -52,6 +52,12 @@ class SkillIdentityHeaderTests(unittest.TestCase):
         self.assertNotIn('X-Api-Key', headers)
         self.assertNotIn('X-Alexa-Skill-Id', headers)
 
+    def test_stable_account_id_is_forwarded(self):
+        with mock.patch.object(data, 'MUSICBOX_ACCOUNT_ID', 'stable-account-id'):
+            headers = player.skill_identity_headers(_identity())
+            self.assertEqual(headers['X-MusicBox-Account-Id'], 'stable-account-id')
+            self.assertNotIn('X-MusicBox-Email', headers)
+
     def test_the_paired_user_and_device_are_forwarded_unchanged(self):
         with mock.patch.object(data, 'ALEXA_SKILL_NAMESPACE', SKILL):
             first = player.skill_identity_headers(_identity('a', 'echo-a'))

@@ -4,7 +4,7 @@ WORKDIR /youtube-stream
 COPY youtube-stream/package*.json ./
 RUN npm ci --omit=dev --ignore-scripts
 FROM python:3.12-slim-bookworm@sha256:e697c81897302a4c4333bade000d98038fbb21eb064f8ee1fd42d02ebcd9d337
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates libstdc++6 && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --only-upgrade apt libapt-pkg6.0 && apt-get install -y --no-install-recommends ca-certificates libstdc++6 && rm -rf /var/lib/apt/lists/*
 RUN groupadd -g 10001 musicbox && useradd -u 10001 -g musicbox -m musicbox && mkdir -p /data /app/alexa_cookies && chown -R musicbox:musicbox /data /app
 ENV YOUTUBE_STREAMING=1
 WORKDIR /app
@@ -16,4 +16,4 @@ COPY --from=youtube-client /youtube-stream/node_modules /app/youtube-stream/node
 USER 10001:10001
 EXPOSE 5000
 HEALTHCHECK --interval=15s --timeout=3s --start-period=30s --retries=3 CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:5000/health/ready', timeout=2)"
-CMD ["python3", "serve.py"]
+CMD ["python", "realtime_gateway.py"]

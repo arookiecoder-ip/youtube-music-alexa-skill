@@ -199,3 +199,17 @@ def test_auth_denial_for_buffered_successor_stops_the_proven_current_stream(pend
         assert server._report_alexa_auth_denial('user-a','amazon_email_mismatch')
     assert server._now_playing['_alexa_auth_blocked']
     assert server._now_playing['video_id']=='AAAAAAAAAAA'
+
+
+def test_legacy_email_configuration_error_points_to_account_id():
+    from alexa_playback_errors import authentication_failure
+    failure=authentication_failure('Alexa authentication failed: MUSICBOX_EMAIL does not match the account for this token.', 'alexa_authentication_required')
+    assert failure['code']=='musicbox_account_mismatch'
+    assert 'MUSICBOX_ACCOUNT_ID' in failure['message']
+    assert 'MUSICBOX_EMAIL' not in failure['message']
+
+
+def test_access_denial_uses_music_box_branding():
+    from alexa_playback_errors import authentication_failure
+    failure=authentication_failure('', 'alexa_access_denied')
+    assert failure['message'].startswith('Music Box access was denied.')

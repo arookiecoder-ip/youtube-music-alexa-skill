@@ -4,19 +4,6 @@
       "invocationName": "music box",
       "intents": [
         {
-          "name": "LinkAccountIntent",
-          "slots": [
-            {
-              "name": "pairCode",
-              "type": "AMAZON.NUMBER"
-            }
-          ],
-          "samples": [
-            "link account {pairCode}",
-            "pair account {pairCode}"
-          ]
-        },
-        {
           "name": "AMAZON.CancelIntent",
           "samples": []
         },
@@ -328,55 +315,311 @@
         {
           "name": "GenreType",
           "values": [
-            { "name": { "value": "pop" } },
-            { "name": { "value": "rock" } },
-            { "name": { "value": "jazz" } },
-            { "name": { "value": "blues" } },
-            { "name": { "value": "classical" } },
-            { "name": { "value": "hip hop" } },
-            { "name": { "value": "rap" } },
-            { "name": { "value": "r and b", "synonyms": ["rhythm and blues", "r n b"] } },
-            { "name": { "value": "country" } },
-            { "name": { "value": "metal", "synonyms": ["heavy metal"] } },
-            { "name": { "value": "punk" } },
-            { "name": { "value": "indie" } },
-            { "name": { "value": "e d m", "synonyms": ["electronic dance music"] } },
-            { "name": { "value": "electronic" } },
-            { "name": { "value": "dance" } },
-            { "name": { "value": "house" } },
-            { "name": { "value": "techno" } },
-            { "name": { "value": "trance" } },
-            { "name": { "value": "dubstep" } },
-            { "name": { "value": "reggae" } },
-            { "name": { "value": "funk" } },
-            { "name": { "value": "disco" } },
-            { "name": { "value": "soul" } },
-            { "name": { "value": "gospel" } },
-            { "name": { "value": "folk" } },
-            { "name": { "value": "acoustic" } },
-            { "name": { "value": "instrumental" } },
-            { "name": { "value": "lo fi", "synonyms": ["lofi", "low fi"] } },
-            { "name": { "value": "chill", "synonyms": ["chill out"] } },
-            { "name": { "value": "ambient" } },
-            { "name": { "value": "k pop", "synonyms": ["kpop", "korean pop"] } },
-            { "name": { "value": "j pop", "synonyms": ["japanese pop"] } },
-            { "name": { "value": "bollywood", "synonyms": ["hindi", "hindi songs"] } },
-            { "name": { "value": "punjabi", "synonyms": ["bhangra"] } },
-            { "name": { "value": "tamil" } },
-            { "name": { "value": "telugu" } },
-            { "name": { "value": "devotional", "synonyms": ["bhajan", "bhajans"] } },
-            { "name": { "value": "sufi" } },
-            { "name": { "value": "ghazal", "synonyms": ["ghazals"] } },
-            { "name": { "value": "romantic", "synonyms": ["love songs"] } },
-            { "name": { "value": "sad", "synonyms": ["sad songs"] } },
-            { "name": { "value": "party" } },
-            { "name": { "value": "workout", "synonyms": ["gym"] } },
-            { "name": { "value": "retro", "synonyms": ["oldies", "old songs"] } },
-            { "name": { "value": "nineties", "synonyms": ["90s"] } },
-            { "name": { "value": "eighties", "synonyms": ["80s"] } },
-            { "name": { "value": "latin" } },
-            { "name": { "value": "afrobeats", "synonyms": ["afrobeat"] } },
-            { "name": { "value": "phonk" } }
+            {
+              "name": {
+                "value": "pop"
+              }
+            },
+            {
+              "name": {
+                "value": "rock"
+              }
+            },
+            {
+              "name": {
+                "value": "jazz"
+              }
+            },
+            {
+              "name": {
+                "value": "blues"
+              }
+            },
+            {
+              "name": {
+                "value": "classical"
+              }
+            },
+            {
+              "name": {
+                "value": "hip hop"
+              }
+            },
+            {
+              "name": {
+                "value": "rap"
+              }
+            },
+            {
+              "name": {
+                "value": "r and b",
+                "synonyms": [
+                  "rhythm and blues",
+                  "r n b"
+                ]
+              }
+            },
+            {
+              "name": {
+                "value": "country"
+              }
+            },
+            {
+              "name": {
+                "value": "metal",
+                "synonyms": [
+                  "heavy metal"
+                ]
+              }
+            },
+            {
+              "name": {
+                "value": "punk"
+              }
+            },
+            {
+              "name": {
+                "value": "indie"
+              }
+            },
+            {
+              "name": {
+                "value": "e d m",
+                "synonyms": [
+                  "electronic dance music"
+                ]
+              }
+            },
+            {
+              "name": {
+                "value": "electronic"
+              }
+            },
+            {
+              "name": {
+                "value": "dance"
+              }
+            },
+            {
+              "name": {
+                "value": "house"
+              }
+            },
+            {
+              "name": {
+                "value": "techno"
+              }
+            },
+            {
+              "name": {
+                "value": "trance"
+              }
+            },
+            {
+              "name": {
+                "value": "dubstep"
+              }
+            },
+            {
+              "name": {
+                "value": "reggae"
+              }
+            },
+            {
+              "name": {
+                "value": "funk"
+              }
+            },
+            {
+              "name": {
+                "value": "disco"
+              }
+            },
+            {
+              "name": {
+                "value": "soul"
+              }
+            },
+            {
+              "name": {
+                "value": "gospel"
+              }
+            },
+            {
+              "name": {
+                "value": "folk"
+              }
+            },
+            {
+              "name": {
+                "value": "acoustic"
+              }
+            },
+            {
+              "name": {
+                "value": "instrumental"
+              }
+            },
+            {
+              "name": {
+                "value": "lo fi",
+                "synonyms": [
+                  "lofi",
+                  "low fi"
+                ]
+              }
+            },
+            {
+              "name": {
+                "value": "chill",
+                "synonyms": [
+                  "chill out"
+                ]
+              }
+            },
+            {
+              "name": {
+                "value": "ambient"
+              }
+            },
+            {
+              "name": {
+                "value": "k pop",
+                "synonyms": [
+                  "kpop",
+                  "korean pop"
+                ]
+              }
+            },
+            {
+              "name": {
+                "value": "j pop",
+                "synonyms": [
+                  "japanese pop"
+                ]
+              }
+            },
+            {
+              "name": {
+                "value": "bollywood",
+                "synonyms": [
+                  "hindi",
+                  "hindi songs"
+                ]
+              }
+            },
+            {
+              "name": {
+                "value": "punjabi",
+                "synonyms": [
+                  "bhangra"
+                ]
+              }
+            },
+            {
+              "name": {
+                "value": "tamil"
+              }
+            },
+            {
+              "name": {
+                "value": "telugu"
+              }
+            },
+            {
+              "name": {
+                "value": "devotional",
+                "synonyms": [
+                  "bhajan",
+                  "bhajans"
+                ]
+              }
+            },
+            {
+              "name": {
+                "value": "sufi"
+              }
+            },
+            {
+              "name": {
+                "value": "ghazal",
+                "synonyms": [
+                  "ghazals"
+                ]
+              }
+            },
+            {
+              "name": {
+                "value": "romantic",
+                "synonyms": [
+                  "love songs"
+                ]
+              }
+            },
+            {
+              "name": {
+                "value": "sad",
+                "synonyms": [
+                  "sad songs"
+                ]
+              }
+            },
+            {
+              "name": {
+                "value": "party"
+              }
+            },
+            {
+              "name": {
+                "value": "workout",
+                "synonyms": [
+                  "gym"
+                ]
+              }
+            },
+            {
+              "name": {
+                "value": "retro",
+                "synonyms": [
+                  "oldies",
+                  "old songs"
+                ]
+              }
+            },
+            {
+              "name": {
+                "value": "nineties",
+                "synonyms": [
+                  "90s"
+                ]
+              }
+            },
+            {
+              "name": {
+                "value": "eighties",
+                "synonyms": [
+                  "80s"
+                ]
+              }
+            },
+            {
+              "name": {
+                "value": "latin"
+              }
+            },
+            {
+              "name": {
+                "value": "afrobeats",
+                "synonyms": [
+                  "afrobeat"
+                ]
+              }
+            },
+            {
+              "name": {
+                "value": "phonk"
+              }
+            }
           ]
         }
       ]

@@ -85,7 +85,6 @@ class AlexaAccessTokenTests(SecondFactorDoorTestBase):
 
     def test_restrictions_email_password_expiry_and_revoke_retire_credentials(self):
         for sql in ("UPDATE users SET status='disabled' WHERE id=?",
-                    "UPDATE users SET must_change_password=1 WHERE id=?",
                     "UPDATE users SET email_verified=0 WHERE id=?"):
             with self.subTest(sql=sql):
                 self.layer.db.execute(sql, (self.user['id'],))
@@ -110,7 +109,7 @@ class AlexaAccessTokenTests(SecondFactorDoorTestBase):
         self.assertFalse(self.access.enabled(other['id']))
         with self.assertRaises(ValueError): self.access.rotate(other['id'])
 
-    def test_admin_toggle_and_one_time_token_reveal_are_csrf_protected(self):
+    def test_admin_private_config_download_is_csrf_protected_and_not_rendered(self):
         self.assertEqual(self.admin_step1('owner', self.admin_password).status_code, 302)
         path = '/admin/users/' + self.user['id'] + '/alexa/'
         self.assertEqual(self.admin_client.post(path, data={'action': 'generate'}).status_code, 400)
@@ -118,6 +117,9 @@ class AlexaAccessTokenTests(SecondFactorDoorTestBase):
         response = self.admin_client.post(path, data={'_csrf': csrf, 'action': 'generate'})
         self.assertEqual(response.status_code, 200)
         self.assertEqual(response.headers['Cache-Control'], 'no-store')
+        self.assertIn('attachment', response.headers['Content-Disposition'])
+        self.assertIn('MUSICBOX_ACCOUNT_ID='+self.user['id'], response.text)
+        self.assertNotIn('MUSICBOX_EMAIL=', response.text)
         import re
         raw = re.search(r'mbx_[0-9a-f]{24}\.[A-Za-z0-9_-]{43}', response.text).group()
         with self.admin_client.session_transaction() as session:
@@ -128,6 +130,33 @@ class AlexaAccessTokenTests(SecondFactorDoorTestBase):
         self.assertEqual(response.status_code, 302)
         self.assertFalse(self.access.enabled(self.user['id']))
         self.assertEqual(self.identity().status_code, 403)
+
+    def test_metadata_exposes_only_the_current_unexpired_credential(self):
+        self.access.rotate(self.user['id'])
+        raw=self.access.rotate(self.user['id'])
+        rows=self.access.metadata(self.user['id'])
+        self.assertEqual([r['id'] for r in rows],[raw.split('.')[0]])
+        self.access.revoke(self.user['id'])
+        self.assertEqual(self.access.metadata(self.user['id']),[])
+
+    def test_database_prevents_two_unrevoked_tokens_for_one_account(self):
+        import sqlite3
+        with self.assertRaises(sqlite3.IntegrityError):
+            self.layer.db.execute("INSERT INTO alexa_access_tokens (id,user_id,token_hash,email,security_version,created_at,expires_at) SELECT 'mbx_duplicate',user_id,token_hash,email,security_version,created_at+1,expires_at FROM alexa_access_tokens WHERE id=?", (self.token.split('.')[0],))
+        self.assertEqual(self.identity().status_code, 200)
+
+    def test_upgrade_deduplicates_tokens_and_keeps_the_newest_credential(self):
+        from multiuser.alexa_access import AccessDenied
+        old_id = self.token.split('.')[0]
+        with self.layer.db.connect() as conn:
+            conn.execute('DROP INDEX idx_alexa_one_active_token')
+            conn.execute('DELETE FROM multiuser_schema_migrations WHERE version=15')
+            conn.execute("INSERT INTO alexa_access_tokens (id,user_id,token_hash,email,security_version,created_at,expires_at) SELECT 'mbx_newer',user_id,token_hash,email,security_version,created_at+1,expires_at FROM alexa_access_tokens WHERE id=?", (old_id,))
+        self.layer.db._initialized=False
+        self.layer.db.initialize()
+        with self.assertRaises(AccessDenied): self.access.current(old_id)
+        self.assertEqual(self.access.current('mbx_newer')[0]['id'], self.user['id'])
+        self.assertEqual(self.layer.db.scalar('SELECT COUNT(*) FROM alexa_access_tokens WHERE user_id=? AND revoked_at=0',(self.user['id'],)),1)
 
     def test_disabled_account_payload_and_html_omit_amazon(self):
         self.access.set_enabled(self.user['id'], False)
@@ -174,7 +203,7 @@ class AlexaAccessTokenTests(SecondFactorDoorTestBase):
         with mock.patch.object(self.server, '_owner_row_read', [0.0, '']):
             self.assertEqual(self.server._player_identity_for_user_id(second['id'], 'owner'), 'user:' + second['id'])
 
-    def test_account_email_change_and_password_change_invalidate_token_and_stream(self):
+    def test_account_email_change_and_password_change_preserve_token_and_stream_until_revoked(self):
         for field, value in (('email', 'changed@example.test'), ('password_hash', 'changed-hash')):
             token = self.access.rotate(self.user['id'])
             headers = dict(self.headers, Authorization='Bearer ' + token)
@@ -182,8 +211,8 @@ class AlexaAccessTokenTests(SecondFactorDoorTestBase):
             user, credential = self.access.authenticate(headers)
             cap = self.layer.alexa_identity.stream_token(user['id'], 'AAAAAAAAAAA', credential)
             self.layer.db.execute('UPDATE users SET ' + field + '=? WHERE id=?', (value, self.user['id']))
-            self.assertEqual(self.identity(headers).status_code, 403)
-            self.assertIsNone(self.layer.alexa_identity.stream_user(cap, 'AAAAAAAAAAA'))
+            self.assertEqual(self.identity(headers).status_code, 200)
+            self.assertIsNotNone(self.layer.alexa_identity.stream_user(cap, 'AAAAAAAAAAA'))
             self.layer.db.execute('UPDATE users SET email=? WHERE id=?', (self.user['email'], self.user['id']))
 
     def test_amazon_timeouts_and_invalid_profile_json_fail_closed(self):

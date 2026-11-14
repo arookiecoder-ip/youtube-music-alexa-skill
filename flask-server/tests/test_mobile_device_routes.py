@@ -11,6 +11,17 @@ from mobile_devices import MobileDevices
 
 
 class MobileDeviceRoutesTests(OutputRoutesTests):
+    def test_browser_presence_requires_focus_or_existing_audio(self):
+        self.device('online', owner='browser-tab', kind='browser', foreground=False, playing=False)
+        self.assertNotIn('browser-tab', [d['id'] for d in self.client.get('/api/app/devices/').json['devices']])
+        self.device('visibility', owner='browser-tab', foreground=True, playing=False, visibility_revision=1)
+        self.assertIn('browser-tab', [d['id'] for d in self.client.get('/api/app/devices/').json['devices']])
+        self.device('visibility', owner='browser-tab', foreground=False, playing=True, visibility_revision=2)
+        self.assertIn('browser-tab', [d['id'] for d in self.client.get('/api/app/devices/').json['devices']])
+        self.device('visibility', owner='browser-tab', foreground=False, playing=False, visibility_revision=3)
+        self.assertNotIn('browser-tab', [d['id'] for d in self.client.get('/api/app/devices/').json['devices']])
+        self.assertIn('browser-tab', [d['id'] for d in self.registry.list(include_unavailable=True)])
+
     def test_last_track_clear_requires_current_phone_ownership(self):
         claim = self.output_request('claim').json
         self.state.update(queue=[track(A)], video_id=A, playing=True)
@@ -79,10 +90,10 @@ class MobileDeviceRoutesTests(OutputRoutesTests):
         self.state.update(video_id=A, queue_index=1, queue=[track(A), track(A)])
         self.assertEqual(self.client.post('/alexa/seek/', json=dict(request, video_id=A, expected_queue_index=0)).status_code, 409)
 
-    def test_wait_budget_is_opt_in_bounded_and_compatible_with_old_clients(self):
+    def test_wait_budget_is_server_enforced_for_old_and_native_clients(self):
         self.registry.wait = Mock()
         token = self.output.snapshot()['output_token']
-        for extra, expected in (({}, 2), ({'wait_seconds': 8}, 8), ({'wait_seconds': 100}, 8), ({'wait_seconds': 'bad'}, 2)):
+        for extra, expected in (({}, 2), ({'wait_seconds': 8}, 2), ({'wait_seconds': 100}, 2), ({'wait_seconds': 'bad'}, 2)):
             reply = self.device('online', wait=True, output_token=token, **extra)
             self.assertEqual(reply.status_code, 200)
             self.assertEqual(self.registry.wait.call_args.args[1], expected)
@@ -675,14 +686,12 @@ class MobileDeviceRoutesTests(OutputRoutesTests):
             self.assertFalse(result['default_selected'])
             self.assertEqual(result['playback_output'],'alexa')
 
-    def test_confirmed_offline_echo_does_not_block_explicit_phone_play_with_a_pause_error(self):
+    def test_unreachable_echo_does_not_block_explicit_phone_selection(self):
         self.output.serial='echo-one'
         self.state.update(video_id=A,playing=True)
-        self.namespace['alexa_remote'].remote.devices=Mock(return_value=([{'serial':'echo-one','online':False}],None))
         self.command.return_value='offline'
         self.command.side_effect=None
         self.namespace['_pause_echo_for_mobile']('echo-one')
-        self.command.assert_not_called()
         self.assertFalse(self.state['playing'])
 
     def test_idle_closed_browser_still_selects_an_open_foreground_phone(self):

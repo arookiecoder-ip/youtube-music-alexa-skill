@@ -1,3 +1,5 @@
+> The primary multi-user Music Box deployment is documented in [the production runbook](docs/multi-user/PRODUCTION.md).
+
 # Music Box backend and Alexa skill
 
 The complete multi-user backend, admin/web UI and private Alexa source are maintained on this `feat/multi-user` branch. The [standalone downloadable Alexa package](alexa-private-skill/) belongs to this branch. [Android source](https://github.com/arookiecoder-ip/MusicBox-APP/tree/feat/multi-user) lives in its own repository.
@@ -43,7 +45,7 @@ flowchart LR
     Flask --> Browser
 ```
 
-The [Compose file](docker-compose.yml) gives `ytmusic` and `youtube-browser` independent bridge networking. [Caddyfile.example](Caddyfile.example) reaches `ytmusic:5000`, `ytmusic:5001` and `youtube-browser:6080`; the browser controller is `http://youtube-browser:8765`. Application startup and incoming API traffic do not depend on Gluetun.
+The [Compose file](docker-compose.yml) keeps the browser exclusively on private `musicbox-egress` networking. [Caddyfile.example](Caddyfile.example) reaches `ytmusic:5000` and the owner/attempt-authorized Amazon proxy on `ytmusic:5001`. Google sign-in uses the authenticated, owner-leased touch/frame API through Flask; there is no VNC listener. Its private controller remains `http://youtube-browser:8765`. The browser drops to UID 10001 after initializing ownership of an existing profile volume. Application startup and incoming API traffic do not depend on Gluetun.
 
 Outbound Python, Alexa, Node/YouTube and Chromium requests use a private HTTP CONNECT gateway. It prefers the optional VPN endpoint, falls back to normal networking if connection setup fails within 1.5 seconds, and retries VPN after a 10-second cooldown. TLS remains end to end. Existing interrupted streams reconnect through the normal media retry/Range paths; the gateway does not replay commands or partially sent requests.
 
@@ -72,7 +74,7 @@ The old persistent audio-cache volume is no longer mounted. Do not remove data/a
 3. Provision `cookies.txt` for the bind mount. It can be an empty file for an anonymous attempt; authenticated/restricted playback may require a valid export. Account browsing and audio cookies are separate credentials.
 4. Start the prerequisite network/VPN container for this topology, then build/start the application services.
 5. Sign in to the Web Remote, connect YouTube Music through its protected browser flow, and connect Amazon when Echo remote controls are enabled for your account. Private-skill voice playback verifies that Alexa uses the Amazon account connected in your user panel. Use that Amazon account for the private skill’s Developer Console and Echo; your Music Box email can differ.
-6. Deploy the custom skill using [lambda](lambda) and the locale-specific [interaction models](skill-package/interactionModels/custom). For multi-user hosting, configure only MUSICBOX_SERVER_URL, MUSICBOX_EMAIL and MUSICBOX_ALEXA_TOKEN in the deployed skill. An administrator grants access and issues that account's token; see [private skill setup](docs/multi-user/PRIVATE-SKILL-ACCESS-2026-11-11.md). Copy the placeholder [environment template](lambda/.env.example) to a private `.env` beside the deployed `data.py` and fill in those settings. The skill loads `.env` automatically; keep the filled file out of the public repository.
+6. Deploy the custom skill using [lambda](lambda) and the locale-specific [interaction models](skill-package/interactionModels/custom). For multi-user hosting, configure only MUSICBOX_SERVER_URL, MUSICBOX_ACCOUNT_ID and MUSICBOX_ALEXA_TOKEN in the deployed skill. An administrator grants access and issues that account's token; see [private skill setup](docs/multi-user/PRIVATE-SKILL-ACCESS-2026-11-11.md). Copy the placeholder [environment template](lambda/.env.example) to a private `.env` beside the deployed `data.py` and fill in those settings. The skill loads `.env` automatically; keep the filled file out of the public repository.
 
 Example `.env` keys:
 
@@ -211,3 +213,11 @@ Open [Operational status](docs/STATUS_PANEL.md) for aggregate diagnostics. Statu
 Open the profile menu to connect or change Amazon/YouTube Music accounts. Amazon uses the responsive `/accounts/amazon` page; staged credentials replace the prior account only after verification. A disconnected Amazon remote session gives the profile a red outline. Voice-started Alexa playback remains visible with a logged-out device entry and read-only controls, with a sign-in explanation on attempted commands. Switching to a phone/browser releases Echo ownership and closes open Echo streams even for the same song. Audio already buffered by the Echo cannot be forcibly paused without Amazon remote access; future stale streams/continuations remain fenced.
 
 The new YouTube sign-in surface uses short-lived, owner-bound leases for frames, input, capture and cancellation. An old page cannot cancel a newer sign-in. Frames and account pages are not cached; input is size-bounded and keys/coordinates are validated. No public Chromium debugging or private controller token is exposed.
+
+### Security and performance hardening (2.4.63)
+
+Owner web sessions and scoped audio tokens share a 30-day absolute SID lifetime and immediate revocation. GET logout links no longer sign a user out; browser writes use JSON POST. The Alexa skill's keyed GET like endpoint remains compatible, while owner-cookie GET likes are rejected. The Amazon sign-in proxy requires the signed owner cookie, the current session-bound attempt, and a ten-minute attempt lifetime on every request.
+
+The async gateway reserves four same-process HTTP workers for phone ownership, audio-token and event snapshot traffic. Slow library/extraction/audio requests use a separate pool. Internal snapshots bypass only the public IP bucket and are bounded by subscriber/pool limits; callers cannot forge that internal marker through the gateway. Concurrent identical authorized snapshots share in-flight work, and 429 backoff reaches native subscribers. Playback authority remains process-local: do not scale independent workers without shared coordination.
+
+Builds and container smoke tests run in GitHub Actions. After deploying the tested browser image, use the Music Box block in `Caddyfile.example` for retired `/youtube-login/` links. Retain unrelated deployment sites. No public desktop port is needed. The browser still uses Chromium's container-compatible `--no-sandbox`; network isolation and running its service as non-root do not replace a browser sandbox.

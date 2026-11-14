@@ -37,7 +37,7 @@
     const local = browser ? 'mobile:' + browser.id : '';
     const devicesWithPhones = echoDevices.filter(d => d.online && (!d.logged_out || (output && output.playback_output === 'alexa' && output.output_serial === d.serial))).concat(phones.map(d => ({ serial: 'mobile:' + d.id,
       name: browser && d.id === browser.id ? 'This browser' : d.name, online: true })));
-    if (local && !devicesWithPhones.some(d => d.serial === local)) {
+    if (local && (!browser.available || browser.available()) && !devicesWithPhones.some(d => d.serial === local)) {
       devicesWithPhones.push({ serial: local, name: 'This browser', online: true });
     }
     const active = output && (output.playback_output === 'phone' && output.output_owner
@@ -93,6 +93,8 @@
     return rawApi(path, body, requestOptions);
   };
   async function switchDevice(value) {
+    const browser = window.browserPlayback;
+    if (browser && value === 'mobile:' + browser.id) browser.activate?.();
     requested = value;
     beginHandoffFeedback(value);
     if (switching) return;
@@ -102,12 +104,14 @@
     try {
       while (requested !== null) {
         const target = requested; requested = null;
+        // The picker can render before the browser's first presence request.
+        if (browser && target === 'mobile:' + browser.id) await browser.poll();
         const latest = await rawApi('/api/app/devices/');
         output = latest; phones = latest.devices || [];
         const same = target.startsWith('mobile:') ? latest.playback_output === 'phone' && latest.output_owner === target.slice(7)
           : latest.playback_output === 'alexa' && latest.output_serial === target;
         if (!same) output = await rawApi('/api/app/devices/', { action: target.startsWith('mobile:') ? 'transfer' : 'alexa',
-          device_id: 'web', target_id: target.startsWith('mobile:') ? target.slice(7) : '', serial: target.startsWith('mobile:') ? latest.output_serial : target,
+          device_id: browser ? browser.id : 'web', target_id: target.startsWith('mobile:') ? target.slice(7) : '', serial: target.startsWith('mobile:') ? latest.output_serial : target,
           output_token: latest.output_token });
       }
     } catch (error) { window.clearHandoffFeedback(); if (window.toast) window.toast(error.message, 'error'); }

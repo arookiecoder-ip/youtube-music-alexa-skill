@@ -91,8 +91,6 @@ services:
 
   youtube-browser:
     init: true
-    cap_drop: [ALL]
-    security_opt: [no-new-privileges:true]
     mem_limit: 2g
     cpus: 2
     pids_limit: 512
@@ -101,6 +99,9 @@ services:
     container_name: youtube-browser
     restart: unless-stopped
     networks: [browser-private]
+    security_opt: [no-new-privileges:true]
+    cap_drop: [ALL]
+    cap_add: [CHOWN, DAC_OVERRIDE, SETUID, SETGID]
     environment:
       - YT_BROWSER_CONTROL_TOKEN=${YT_BROWSER_CONTROL_TOKEN:?set YT_BROWSER_CONTROL_TOKEN in .env}
       - MUSICBOX_BROWSER_PROXY=http://musicbox-egress-internal:8890
@@ -155,7 +156,7 @@ services:
       - EGRESS_PORT=5000
 
   caddy:
-    image: caddy:2@sha256:36c24ad91a7ff7bc4c87fe22bfa8df3c4b18da0773d73fc12ee2c52b98c0bb7e
+    image: caddy:2@sha256:844f60b64e4724a5aa8245e019dace0d3f199f7433ce6c57676cb30a920dbad9
     container_name: caddy
     restart: unless-stopped
     environment:

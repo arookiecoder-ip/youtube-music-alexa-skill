@@ -14,6 +14,21 @@ class MobileDevicesTests(unittest.TestCase):
         self.registry = MobileDevices(clock=lambda: self.now[0])
         self.registry.online('one', 'session', 'Phone', [])
 
+    def test_browser_is_selectable_only_when_focused_or_playing(self):
+        self.registry.online('browser', 'tab', 'Browser', [], kind='browser', foreground=False, playing=False)
+        self.assertNotIn('browser', [d['id'] for d in self.registry.list()])
+        self.assertIn('browser', [d['id'] for d in self.registry.list(include_unavailable=True)])
+        with self.assertRaises(ValueError):
+            self.registry.require_online('browser')
+        self.registry.visibility('browser', 'tab', True, 1, False)
+        self.registry.require_online('browser')
+        self.registry.visibility('browser', 'tab', False, 2, True)
+        self.registry.require_online('browser')
+        self.registry.visibility('browser', 'tab', False, 3, False)
+        with self.assertRaises(ValueError):
+            self.registry.require_online('browser')
+        self.assertEqual(self.registry.pending_commands('browser', 'tab'), [])
+
     def test_expired_device_disappears_and_cannot_receive_commands(self):
         self.now[0] += 16
         self.assertEqual(self.registry.list(), [])

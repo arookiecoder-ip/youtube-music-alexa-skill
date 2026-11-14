@@ -4,14 +4,15 @@
   const asToken = document.body.dataset.as || '';
   const returnTo = document.body.dataset.returnTo || '';
   const el = id => document.getElementById(id);
-  const panels = ['code-panel', 'captcha-panel', 'choice-panel', 'approval-panel'];
+  const panels = ['code-panel', 'captcha-panel', 'choice-panel', 'approval-panel', 'method-panel'];
   // Amazon's scripted steps and Google's challenge pages can each take well
   // over a minute to answer, so the form calls get a far longer leash than
   // ordinary API traffic.
   let run = 0, busy = false, pollTimer = null, pollCount = 0;
   let answerKind = 'securitycode', choiceKind = 'claimsoption';
 
-  let attemptId = "";
+  let attemptId = "", proxyMode = false, proxyAttempt = "";
+  let captchaPoints = [];
   async function api(path, body, timeout = 150000) {
     const requestRun = run;
     const starts = path.endsWith("/form/start") || path === "/alexa/form_login/";
@@ -51,7 +52,19 @@
     el('status').classList.toggle('error', error);
   }
   function stopPolling() { clearTimeout(pollTimer); pollTimer = null; }
+  function working(text) {
+    el('working-text').textContent = text;
+    el('working').hidden = false;
+    el('setup').hidden = el('steps').hidden = true;
+    el('fallback').hidden = el('retry').hidden = true;
+    document.querySelector('.card').setAttribute('aria-busy', 'true');
+  }
+  function stopWorking() {
+    el('working').hidden = true;
+    document.querySelector('.card').removeAttribute('aria-busy');
+  }
   function reset() {
+    stopWorking();
     stopPolling();
     el('steps').hidden = true;
     panels.forEach(id => el(id).hidden = true);
@@ -69,10 +82,13 @@
   }
 
   function handle(data) {
+    stopWorking();
+    el('fallback').hidden = true;
     if (!data || !data.state) {
       message('Connection failed. Try again.', true);
       reset();
       el('retry').hidden = false;
+      el('fallback').hidden = provider !== 'amazon';
       return;
     }
     switch (data.state) {
@@ -88,14 +104,35 @@
         el('code-hint').textContent = data.hint || '';
         el('code-hint').hidden = !data.hint;
         el('code').value = '';
+        el('code-different').hidden = !data.different;
         showPanel('code-panel');
         el('code').focus();
         message('');
         return;
+      case 'need_method': {
+        el('method-message').textContent = data.message || 'Choose how to verify.';
+        const options = el('method-options');
+        options.textContent = '';
+        (data.options || []).forEach((option, index) => {
+          const label = document.createElement('label');
+          label.className = 'choice-option';
+          const radio = document.createElement('input');
+          radio.type = 'radio'; radio.name = 'method'; radio.value = option.value; radio.checked = index === 0;
+          label.append(radio, document.createTextNode(' ' + (option.label || option.value)));
+          options.appendChild(label);
+        });
+        showPanel('method-panel');
+        message('');
+        return;
+      }
       case 'need_captcha':
         answerKind = 'captcha';
         el('captcha-message').textContent = data.message || 'Type the characters you see.';
-        el('captcha-image').src = '/alexa/form_login/captcha/?t=' + Date.now();
+        captchaPoints = [];
+        el('captcha-selection').textContent = '';
+        el('captcha-clear').hidden = true;
+        el('captcha').hidden = el('captcha-label').hidden = data.text === false;
+        el('captcha-image').src = (provider === 'amazon' ? '/alexa/form_login/captcha/?t=' : '/api/youtube/browser-session/form/captcha?t=') + Date.now();
         el('captcha').value = '';
         showPanel('captcha-panel');
         el('captcha').focus();
@@ -138,6 +175,7 @@
       case 'need_prompt':
         el('approval-message').textContent = data.message || 'Approve this sign-in on your phone, then continue.';
         showPanel('approval-panel');
+        el('approval-different').hidden = !data.different;
         message('Waiting for the approval…');
         schedulePoll();
         return;
@@ -145,12 +183,14 @@
         stopPolling();
         reset();
         el('retry').hidden = false;
+        el('fallback').hidden = provider !== 'amazon';
         message(data.message || 'The sign-in browser is busy. Try again in a minute.', true);
         return;
       default:  // error
         stopPolling();
         reset();
         el('retry').hidden = false;
+        el('fallback').hidden = provider !== 'amazon';
         message(data.message || 'The sign-in could not continue. Try again.', true);
     }
   }
@@ -187,10 +227,24 @@
     el('retry').hidden = true;
     pollCount = 0;
     try {
-      message(provider === 'amazon' ? 'Contacting Amazon…' : 'Opening the sign-in…');
+      message('');
+      working(provider === 'amazon' ? 'Contacting Amazon…' : 'Signing in to Google…');
       const email = el('email').value.trim();
       const password = el('password').value;
       el('password').value = '';
+      if (proxyMode && provider === 'amazon') {
+        const result = await api('/alexa/proxy_login/', {email, password});
+        if (id !== run) return;
+        const target = new URL(result.login_url, location.href);
+        if (target.origin !== location.origin || !target.pathname.startsWith('/alexa/proxy/')) throw new Error('Amazon returned an invalid sign-in page.');
+        proxyAttempt = result.attempt_id || '';
+        stopWorking();
+        el('interactive').hidden = false;
+        el('amazon-page').src = target.href;
+        message('Finish the sign-in on the Amazon page below.');
+        pollProxy(id);
+        return;
+      }
       const data = provider === 'amazon'
         ? await api('/alexa/form_login/', {email, password})
         : await api('/api/youtube/browser-session/form/start', {email, password});
@@ -209,13 +263,14 @@
     const id = run;
     busy = true;
     if (button) button.disabled = true;
-    message('Checking your answer…');
+    working('Checking your answer…');
+    message('');
     try {
       const data = await api(path, body);
       if (id !== run) return;
       handle(data);
     } catch (error) {
-      if (id === run) message(error.message, true);
+      if (id === run) handle({state: 'error', message: error.message});
     } finally {
       busy = false;
       if (button) button.disabled = false;
@@ -231,9 +286,29 @@
   };
   el('captcha-submit').onclick = () => {
     const value = el('captcha').value.trim();
-    if (!value) { el('captcha').focus(); return; }
-    answer('/alexa/form_login/step/', {kind: 'captcha', value}, el('captcha-submit'));
+    if (provider === 'youtube' && captchaPoints.length) {
+      answer('/api/youtube/browser-session/form/captcha', {points: captchaPoints}, el('captcha-submit'));
+    } else {
+      if (!value) { el('captcha').focus(); return; }
+      if (provider === 'amazon') answer('/alexa/form_login/step/', {kind: 'captcha', value}, el('captcha-submit'));
+      else answer('/api/youtube/browser-session/form/captcha', {text: value}, el('captcha-submit'));
+    }
   };
+  el('captcha-image').onclick = event => {
+    if (!el('captcha').hidden || captchaPoints.length >= 20) return;
+    const rect = event.currentTarget.getBoundingClientRect();
+    captchaPoints.push([Number(((event.clientX - rect.left) / rect.width).toFixed(4)), Number(((event.clientY - rect.top) / rect.height).toFixed(4))]);
+    el('captcha-selection').textContent = captchaPoints.length + ' pictures selected';
+    el('captcha-clear').hidden = false;
+  };
+  el('captcha-clear').onclick = () => { captchaPoints = []; el('captcha-selection').textContent = ''; el('captcha-clear').hidden = true; };
+  el('method-submit').onclick = () => {
+    const checked = el('method-options').querySelector('input:checked');
+    if (checked) answer('/api/youtube/browser-session/form/method', {method: checked.value}, el('method-submit'));
+  };
+  ['code-different', 'approval-different'].forEach(id => {
+    el(id).onclick = () => { stopPolling(); answer('/api/youtube/browser-session/form/methods', {}, el(id)); };
+  });
   el('choice-submit').onclick = () => {
     const checked = el('choice-options').querySelector('input[name="choice"]:checked');
     const manual = el('choice-manual');
@@ -246,9 +321,50 @@
     if (provider === 'amazon') answer('/alexa/form_login/step/', {kind: 'poll'}, el('approval-check'));
     else answer('/api/youtube/browser-session/form/poll', {}, el('approval-check'));
   };
+  function pollProxy(id) {
+    stopPolling();
+    pollTimer = setTimeout(async () => {
+      if (id !== run) return;
+      try {
+        const result = await api('/alexa/proxy_check/');
+        if (id !== run) return;
+        if (result.logged_in) { finish(); return; }
+        if (result.error || !result.running || ++pollCount > 150) {
+          el('interactive').hidden = true;
+          handle({state: 'error', message: result.error || 'Amazon sign-in ended. Try again.'});
+          return;
+        }
+        pollProxy(id);
+      } catch (error) {
+        if (id === run) { el('interactive').hidden = true; handle({state: 'error', message: error.message}); }
+      }
+    }, 2000);
+  }
+  el('captcha-image').onerror = () => handle({state: 'error', message: provider === 'amazon' ? 'The security picture could not load. Retry sign-in or use the Amazon page instead.' : 'The security picture could not load. Retry sign-in.'});
+  el('fallback').onclick = () => {
+    ++run;
+    reset();
+    proxyMode = true;
+    el('fallback').hidden = el('retry').hidden = true;
+    el('connect').textContent = 'Open Amazon sign-in';
+    message('Enter your password again to continue on Amazon’s interactive page.');
+    el('password').focus();
+  };
+  el('interactive-cancel').onclick = async () => {
+    ++run;
+    stopPolling();
+    await api('/alexa/proxy_cancel/', {attempt_id: proxyAttempt}, 8000).catch(() => {});
+    proxyAttempt = '';
+    el('interactive').hidden = true;
+    el('amazon-page').removeAttribute('src');
+    reset();
+  };
   el('retry').onclick = () => {
     ++run;
     reset();
+    proxyMode = false;
+    el('connect').textContent = 'Continue';
+    el('fallback').hidden = true;
     el('retry').hidden = true;
     message('Start again when you are ready.');
     el('email').focus();
@@ -261,6 +377,7 @@
     location.replace(returnTo || '/account#panel-providers');
   };
   function cancelSignIn() {
+    if (proxyAttempt) return api('/alexa/proxy_cancel/', {attempt_id: proxyAttempt}, 8000);
     return provider === 'amazon'
       ? api('/alexa/form_login/cancel/', {}, 8000)
       : api('/api/youtube/browser-session/form/stop', {}, 8000);
@@ -270,8 +387,13 @@
     stopPolling();
     const options = {method: 'POST', credentials: 'same-origin',
                      headers: {'Content-Type': 'application/json'}, keepalive: true};
-    if (provider === 'amazon') fetch('/alexa/form_login/cancel/', {...options, body: '{}'}).catch(() => {});
-    else fetch('/api/youtube/browser-session/form/stop', {...options, body: '{}'}).catch(() => {});
+    if (provider === 'amazon') fetch(proxyAttempt ? '/alexa/proxy_cancel/' : '/alexa/form_login/cancel/', {...options, body: JSON.stringify({attempt_id: proxyAttempt || attemptId})}).catch(() => {});
+    else fetch('/api/youtube/browser-session/form/stop', {...options, body: JSON.stringify({attempt_id: attemptId})}).catch(() => {});
   });
+  if (provider === 'amazon' && new URLSearchParams(location.search).get('interactive') === '1') {
+    proxyMode = true;
+    el('connect').textContent = 'Open Amazon sign-in';
+    message('Enter your credentials to continue on Amazon’s interactive page.');
+  }
   el('email').focus();
 })();

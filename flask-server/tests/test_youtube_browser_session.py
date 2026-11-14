@@ -178,6 +178,7 @@ class FlaskAuthorizationTests(unittest.TestCase):
         with self.server.app.test_request_context(
                 "/alexa/proxy_login/", method="POST",
                 json={"email": "owner@example.com", "password": "secret"}), \
+                mock.patch.object(self.server, '_logged_in', return_value=True), \
                 mock.patch.dict(os.environ, {"ALEXA_PROXY_BEHIND_CADDY": "1"}), \
                 mock.patch.object(self.server.alexa_remote.remote, "is_logged_in",
                                   return_value=False), \
@@ -186,12 +187,13 @@ class FlaskAuthorizationTests(unittest.TestCase):
             response = self.server.alexa_proxy_login()
 
         self.assertEqual(response.status_code, 200)
-        start.assert_called_once_with("owner@example.com", "secret", base_url=None)
+        start.assert_called_once_with("owner@example.com", "secret", base_url=None, owner_sid=None)
 
     def test_amazon_proxy_keeps_direct_local_development_fallback(self):
         with self.server.app.test_request_context(
                 "/alexa/proxy_login/", method="POST",
                 json={"email": "owner@example.com", "password": "secret"}), \
+                mock.patch.object(self.server, '_logged_in', return_value=True), \
                 mock.patch.dict(os.environ, {"ALEXA_PROXY_BEHIND_CADDY": "0"}), \
                 mock.patch.object(self.server.alexa_remote.remote, "is_logged_in",
                                   return_value=False), \
@@ -202,7 +204,7 @@ class FlaskAuthorizationTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         start.assert_called_once_with(
             "owner@example.com", "secret",
-            base_url="http://127.0.0.1:5001/alexa/proxy/")
+            base_url="http://127.0.0.1:5001/alexa/proxy/", owner_sid=None)
 
 
 class CaptureTests(unittest.TestCase):

@@ -16,7 +16,7 @@ class LoggedOutEchoTests(unittest.TestCase):
             _get_now_playing=lambda:dict(self.np),error_response=lambda message,status,**kwargs:(jsonify(error={'message':message,**kwargs}),status),
             _cancel_pending_dispatch=Mock(),OutputConflict=RuntimeError)
         source=Path(__file__).resolve().parents[1]/'server.py'
-        names={'guard_logged_out_echo_controls','_active_logged_out_echo','alexa_devices','_pause_echo_for_mobile'}
+        names={'guard_logged_out_echo_controls','_active_logged_out_echo','alexa_devices','_pause_echo_for_mobile','_pause_echo_for_handoff'}
         nodes=[n for n in ast.parse(source.read_text()).body if isinstance(n,ast.FunctionDef) and n.name in names]
         exec(compile(ast.Module(body=nodes,type_ignores=[]),str(source),'exec'),self.ns)
         self.mutations=Mock(return_value='ok')
@@ -46,7 +46,7 @@ class LoggedOutEchoTests(unittest.TestCase):
         self.assertEqual(self.client.post('/alexa/state_event/',json={}).status_code,200)
         self.out['playback_output']='phone'
         self.assertEqual(self.client.post('/alexa/command/',json={'serial':'mobile:phone'}).status_code,200)
-    def test_signed_out_handoff_does_not_require_unavailable_amazon_pause(self):
+    def test_signed_out_echo_does_not_block_phone_or_receive_repeated_commands(self):
         import threading
         self.ns.update(_np_lock=threading.Lock(),_now_playing=self.np,_reset_progress=Mock(),_computed_position_ms=lambda:12000)
         self.ns['_pause_echo_for_mobile']('echo-one')

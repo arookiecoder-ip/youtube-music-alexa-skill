@@ -662,6 +662,19 @@ class DispatchCoalescing(_CleanServerState):
         with server._ARMED_PLAYS_LOCK:
             server._ARMED_PLAYS.clear()
 
+    def test_seek_burst_for_same_song_only_dispatches_the_latest_offset(self):
+        sent = []
+        delivered = threading.Event()
+        def dispatch(serial, video, offset=0):
+            sent.append((serial, video, offset))
+            delivered.set()
+        with mock.patch.object(server, '_dispatch_play_with_retry', side_effect=dispatch):
+            for position in (10000, 25000, 42000):
+                server._schedule_play_dispatch('DEVICE1', 'AAAAAAAAAAA', offset_ms=position, delay=0.2)
+            self.assertTrue(delivered.wait(2), 'Latest seek was not dispatched')
+        self.assertEqual(sent, [('DEVICE1', 'AAAAAAAAAAA', 42000)])
+        self.assertEqual(server._peek_armed_play('DEVICE1')[1], 42000)
+
     def test_a_five_click_burst_dispatches_only_the_last_song(self):
         sent = []
         with mock.patch.object(server, "_dispatch_play_with_retry",
@@ -739,6 +752,28 @@ class DispatchCoalescing(_CleanServerState):
             time.sleep(0.25)
         self.assertEqual(sent, ["FIRST111111", "SECOND22222"],
                          msg="a dropped trigger must not block playback forever")
+
+    def test_old_unserved_trigger_is_replaced_before_cleanup_ttl(self):
+        """A later deliberate click must not wait the full 15-second marker TTL.
+
+        Amazon can accept an injected command without invoking the skill.  In
+        that case there is no /armed_play/ request to clear the marker, so the
+        next click needs a fresh command once the short reuse window passes.
+        """
+        sent = []
+        with mock.patch.object(server, "_dispatch_play_with_retry",
+                               side_effect=lambda s, v, o=0: sent.append(v)):
+            server._schedule_play_dispatch("DEVICE1", "FIRST111111", delay=0.05)
+            time.sleep(0.25)
+            with server._TRIGGER_INFLIGHT_LOCK:
+                server._TRIGGER_INFLIGHT["DEVICE1"] = (
+                    time.time() - server.TRIGGER_REUSE_WINDOW - 0.1)
+            self.assertTrue(server._trigger_in_flight("DEVICE1"),
+                            msg="the cleanup marker remains valid until its full TTL")
+            server._schedule_play_dispatch("DEVICE1", "SECOND22222", delay=0.05)
+            time.sleep(0.25)
+        self.assertEqual(sent, ["FIRST111111", "SECOND22222"],
+                         msg="an old unserved trigger must not suppress a new play")
 
     def test_a_lone_click_still_dispatches(self):
         sent = []
