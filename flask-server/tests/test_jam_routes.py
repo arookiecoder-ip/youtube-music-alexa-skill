@@ -10,15 +10,15 @@ import unittest
 from unittest.mock import Mock
 from flask import Flask, Response, request, session, jsonify, render_template
 
-from test_jam_rooms import JamRoomsTests
+import test_jam_rooms as room_tests
 from jam_rooms import JamConflict
 
 
 class JamRouteTests(unittest.TestCase):
-    songs = staticmethod(JamRoomsTests.songs)
+    songs = staticmethod(room_tests.JamRoomsTests.songs)
 
     def setUp(self):
-        JamRoomsTests.setUp(self)
+        room_tests.JamRoomsTests.setUp(self)
         with self.database() as db:
             db.execute('UPDATE jam_tokens SET created_at=?',(time.time(),));db.commit()
         root=Path(__file__).resolve().parents[1]

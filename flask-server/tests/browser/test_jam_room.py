@@ -9,12 +9,12 @@ from flask import Response
 import unittest
 from werkzeug.serving import make_server
 from playwright.sync_api import sync_playwright, expect
-from test_jam_routes import JamRouteTests
+import test_jam_routes as route_tests
 
 
 class JamBrowserTests(unittest.TestCase):
     def setUp(self):
-        self.case=JamRouteTests('test_invitation_get_shows_consent_without_joining')
+        self.case=route_tests.JamRouteTests('test_invitation_get_shows_consent_without_joining')
         self.case.setUp()
         # Keep the fixture queue paused; audio providers are outside UI tests.
         self.case.rooms.transact('room','pause',{'command_id':'fixture-pause'})
