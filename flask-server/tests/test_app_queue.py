@@ -252,6 +252,23 @@ class EchoQueueFenceTests(PhoneQueueTests):
         self.assertEqual(self.output.snapshot()['playback_output'],'alexa')
         self.assertEqual(self.echo.mock_calls,[])
 
+    def test_echo_replacement_is_one_fenced_dispatch_without_pause_resume_pair(self):
+        output=self.output.alexa('echo-one',wait=False)
+        send=Mock();self.namespace['_schedule_play_dispatch']=send
+        response=self.post('start',tracks=[track(C)],after=C,queue_index=0,position_ms=3200,
+            alexa_serial='echo-one',output_token=output['output_token'],start_playback=True,command_id='one-replacement')
+        self.assertEqual(response.status_code,200);self.assertTrue(response.json['alexa_scheduled'])
+        self.assertTrue(self.state['playing']);self.assertTrue(self.state['playback_processing'])
+        self.assertFalse(self.state['playback_confirmed']);send.assert_called_once()
+        self.assertEqual(send.call_args.args,('echo-one',C))
+        self.assertEqual(send.call_args.kwargs['offset_ms'],3200)
+        self.assertEqual(send.call_args.kwargs['expected_output'],output['output_token'])
+        self.echo.assert_not_called()
+
+    def test_unfenced_queue_cannot_request_alexa_playback(self):
+        response=self.post('start',tracks=[track(C)],after=C,start_playback=True)
+        self.assertEqual(response.status_code,400)
+
     def test_old_echo_token_cannot_overwrite_new_device_or_phone(self):
         old=self.output.alexa('echo-one',wait=False)
         self.output.alexa('echo-two',wait=False)

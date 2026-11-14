@@ -5627,7 +5627,7 @@ def _resolve_next_track(queue, after_video_id, current_index=None):
 
 @app.route("/api/app/queue/", methods=["POST"], strict_slashes=False)
 def app_queue():
-    """Publish phone playback to the shared queue; never dispatch an Echo command."""
+    """Publish phone playback, or install an explicitly fenced Echo queue."""
     body = request.get_json(silent=True)
     if not isinstance(body, dict):
         return error_response('JSON object required', 400)
@@ -5637,6 +5637,10 @@ def app_queue():
     owner, output_token = body.get('output_owner'), body.get('output_token')
     output = _playback_output.snapshot()
     alexa_serial = body.get('alexa_serial')
+    start_playback = body.get('start_playback', False)
+    if not isinstance(start_playback, bool) or start_playback and (alexa_serial is None or action != 'start'):
+        return error_response('start_playback requires a fenced Alexa queue start', 400)
+    dispatch_fence = None
     if alexa_serial is not None:
         if (not isinstance(alexa_serial, str) or not alexa_serial or owner is not None or
                 output['playback_output'] != 'alexa' or output['output_serial'] != alexa_serial or
@@ -5795,19 +5799,26 @@ def app_queue():
         if action != 'current':
             _now_playing.update(queue=queue, queue_web_dirty=True)
         _now_playing['updated_at'] = time.time()
+        if start_playback:
+            _now_playing.update(playing=True, playback_confirmed=False, playback_processing=True,
+                                alexa_intent_at=time.time(), _alexa_auth_blocked=False)
+            dispatch_fence = (_now_playing['alexa_intent_at'], output_token)
         if command_id:
-            response = {'ok': True, 'queue_version': _queue_version_locked()}
+            response = {'ok': True, 'queue_version': _queue_version_locked(), 'alexa_scheduled': start_playback}
             _queue_commands.record(command_id, digest, response)
         else:
-            response = {'ok': True}
+            response = {'ok': True, 'alexa_scheduled': start_playback}
     _notify_sse()
     if owner is not None:
         _playback_output.heartbeat(owner, output_token)
     if audio_changed:
         _bump_playback_generation()
     if action == 'start' or audio_changed:
-        # Phone state is mirrored here, but this never arms or dispatches Alexa.
+        # Phone publications only warm audio; dispatch requires an Echo fence.
         _ensure_audio_ready_for_play(after, wait=False)
+    if start_playback:
+        _schedule_play_dispatch(alexa_serial, after, offset_ms=position or 0,
+                                expected_intent=dispatch_fence[0], expected_output=dispatch_fence[1])
     return jsonify(response)
 
 
