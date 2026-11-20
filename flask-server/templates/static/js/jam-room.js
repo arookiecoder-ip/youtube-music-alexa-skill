@@ -100,7 +100,7 @@
       }
     }
     if(state.error)error(state.error);
-    if(!$('volumes').contains(document.activeElement))$('volumes').replaceChildren(...state.outputs.filter(output=>output.device===device&&p.selected.includes(device)).map(volumeControl));
+    if(!$('volumes').contains(document.activeElement))$('volumes').replaceChildren(...state.outputs.filter(output=>p.selected.includes(output.device)&&(p.mode!=='multiple'||output.device===device)).map(volumeControl));
     lockControls();
   }
   function volumeControl(output) {
