@@ -35,7 +35,7 @@ See [setup, behavior and cross-verification checklist](../docs/multi-user/PRIVAT
 1. Open your skill and choose **Build → Interfaces**. Enable **Audio Player**, then click **Save Interfaces**.
 2. Choose the locale that matches your Echo language. Open **Build → Interaction Model → JSON Editor**, then paste the contents of `skill-package-multiuser/interactionModels/custom/en-IN.json` for English (India). Use `en-US.json`, `en-GB.json`, `en-CA.json` or `en-AU.json` for the corresponding locale. Click **Save Model → Build Model**. This editor takes the locale file, **not `skill.json`**.
 3. Open **Build → Tools → Permissions** and enable **Customer Email Address**. Also grant this permission to the skill in the Alexa mobile app.
-4. For an Alexa-hosted skill, put the files and subfolders from `lambda/` in the **Code** tab. Keep `lambda_function.py`, `data.py`, your private `.env`, `skill_security.py`, `requirements.txt`, `mediaUtils/` and `models/` together. Save and deploy the code. The `skill-package-multiuser/` directory belongs to the skill configuration, not the Code tab. For a self-hosted Lambda, upload the Lambda code to AWS and configure its Alexa Skills Kit trigger and the console's **Endpoint** page instead.
+4. For an Alexa-hosted skill, put the files and subfolders from `lambda/` in the **Code** tab. Keep `lambda_function.py`, `skill_bootstrap.py`, `skill_runtime.py`, `data.py`, your private `.env`, `skill_security.py`, `requirements.txt`, `mediaUtils/` and `models/` together. Save and deploy the code. The `skill-package-multiuser/` directory belongs to the skill configuration, not the Code tab. For a self-hosted Lambda, upload the Lambda code to AWS and configure its Alexa Skills Kit trigger and the console's **Endpoint** page instead.
 5. Copy `.env.example` to `.env` in the same deployed folder as `data.py`. Fill in your private server URL, Music Box account ID from Account settings and admin-issued token, then save and deploy. The skill loads this `.env` automatically; Lambda environment variables override file values, including explicitly empty values. The example is never loaded automatically. Delete the old `api_key.py` from your deployed code.
 6. In **Test**, enable testing in **Development**. Test using the configured invocation name and an Echo registered to the eligible Amazon developer account. Use the same Amazon account in the Developer Console, on the Echo and in your Music Box user panel. Your Music Box email can differ.
 
@@ -43,3 +43,9 @@ Amazon documentation: [interaction-model JSON Editor](https://developer.amazon.c
 
 
 The private `.env` supports one `KEY=value` per line, optional single/double quotes, comments and an optional `export` prefix. It does not expand variables or execute commands. The three Music Box settings above and the legacy MUSICBOX_EMAIL compatibility setting are read, only from the file beside `data.py`; no parent-directory search occurs. GitHub and the downloadable ZIP contain only `.env.example` with placeholders. Keep your filled `.env` in your private deployment. `api_key.py` is no longer used.
+
+The Lambda handler remains `lambda_function.lambda_handler`. Deploy all three
+entry/runtime files together: the small entry point starts authorization during
+first-use SDK loading, and the runtime verifies the request before accessing
+persistence. Fresh app selections can receive their startup data in that same
+response. This uses no keepalive timer or synthetic Alexa requests.
