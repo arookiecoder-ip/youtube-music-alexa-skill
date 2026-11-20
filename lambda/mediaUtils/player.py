@@ -227,6 +227,8 @@ def skill_identity_headers(handler_input):
     if binding:
         headers['X-Alexa-Binding'] = binding
     headers.update(skill_bootstrap.runtime_headers())
+    headers.update(skill_bootstrap.control_headers(
+        getattr(getattr(system, 'application', None), 'application_id', '')))
     return headers
 
 
@@ -1420,7 +1422,11 @@ class Controller:
         # be told apart from an earlier occurrence. Persist the exact token we
         # send: the next ENQUEUE's expected_previous_token must match it
         # verbatim, which stays correct even after a window trim shifts index.
-        token = scoped_token(handler_input, _make_token(playback_info.get('index', 0), song_info.metadata.video_id, uuid.uuid4().hex[:24]))
+        revision = getattr(handler_input.request_envelope, '_musicbox_control_revision', '')
+        target = getattr(handler_input.request_envelope, '_musicbox_control_video', '')
+        if target != song_info.metadata.video_id or not isinstance(revision, str) or not re.fullmatch(r'i[0-9a-f]{1,20}', revision):
+            revision = uuid.uuid4().hex[:24]
+        token = scoped_token(handler_input, _make_token(playback_info.get('index', 0), song_info.metadata.video_id, revision))
         playback_info['current_token'] = token
 
         response_builder.add_directive(

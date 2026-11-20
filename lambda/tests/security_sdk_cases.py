@@ -399,6 +399,61 @@ class SecurityCases(unittest.TestCase):
                     self.assertIsNotNone(player.Attributes.get_api_url(hi)[1])
             send.assert_not_called()
 
+    def test_control_launch_seek_uses_one_authorized_bundle_and_exact_offset(self):
+        meta=dict(title='Seek target',artist='Artist',video_id='AAAAAAAAAAA',thumbnail=None)
+        self.identity.side_effect=lambda *args: ({'binding':self.binding,'control_revision':'i5f5e100','control_video':'AAAAAAAAAAA','control':{
+            'video_id':'AAAAAAAAAAA','offset_ms':63000,'kind':'play','startup':{
+                'song_info':{'metadata':meta,'stream':{'audio_url':'https://music.example/audio'}},
+                'playlist':[meta],'queue_index':0}}},None)
+        event=self.event();event['request']={'type':'LaunchRequest','requestId':'launch-seek','locale':'en-US'}
+        response=self.invoke(event)['response']
+        self.assertNotIn('outputSpeech',response)
+        stream=response['directives'][0]['audioItem']['stream']
+        self.assertEqual(stream['offsetInMilliseconds'],63000)
+        self.assertIn('|i5f5e100|',stream['token'])
+        self.assertEqual(stream['url'],'https://music.example/audio')
+        self.assertEqual(self.identity.call_count,1)
+        self.assertEqual(self.identity.call_args.args[2],{'include_control':'1'})
+
+    def test_control_launch_resume_preserves_saved_playlists_and_exact_offset(self):
+        self.invoke()
+        bucket=next(iter(self.rows.values()))['amazon-user']
+        bucket['playlist']=[dict(title='Current',artist='Artist',video_id='AAAAAAAAAAA',thumbnail=None)]
+        bucket['saved_playlists']={'Keep':{'id':'kept'}}
+        bucket['playback_info'].update(play_order=[0],index=0)
+        self.identity.side_effect=lambda *args: ({'binding':self.binding,'control':{
+            'video_id':'AAAAAAAAAAA','offset_ms':42000,'kind':'resume',
+            'resume_stream':{'audio_url':'https://music.example/fresh'}}},None)
+        event=self.event();event['request']={'type':'LaunchRequest','requestId':'launch-resume','locale':'en-US'}
+        response=self.invoke(event)['response']
+        self.assertNotIn('outputSpeech',response)
+        stream=response['directives'][0]['audioItem']['stream']
+        self.assertEqual(stream['offsetInMilliseconds'],42000)
+        self.assertEqual(stream['url'],'https://music.example/fresh')
+        self.assertEqual(next(iter(self.rows.values()))['amazon-user']['saved_playlists'],{'Keep':{'id':'kept'}})
+
+    def test_cancelled_launch_is_silent_and_never_loads_or_saves_persistence(self):
+        self.identity.side_effect=lambda *args: ({'binding':self.binding,'control':{'kind':'cancelled'}},None)
+        event=self.event();event['request']={'type':'LaunchRequest','requestId':'cancelled-launch','locale':'en-US'}
+        response=self.invoke(event)['response']
+        self.assertNotIn('outputSpeech',response)
+        self.assertFalse(response.get('directives'))
+        self.assertTrue(response.get('shouldEndSession'))
+        self.get.assert_not_called();self.save.assert_not_called()
+
+    def test_plain_launch_keeps_welcome_and_has_no_audio_directive(self):
+        event=self.event();event['request']={'type':'LaunchRequest','requestId':'plain-launch','locale':'en-US'}
+        response=self.invoke(event)['response']
+        self.assertIn('Welcome to Music Box',response['outputSpeech']['ssml'])
+        self.assertFalse(response.get('directives'))
+
+    def test_denied_control_launch_never_reads_or_writes_persistence(self):
+        self.identity.side_effect=lambda *args: ({'binding':'invalid','control':{'kind':'resume'}},None)
+        event=self.event();event['request']={'type':'LaunchRequest','requestId':'denied-launch','locale':'en-US'}
+        response=self.invoke(event)['response']
+        self.assertNotIn('AudioPlayer.Play',[d['type'] for d in response.get('directives',[])])
+        self.get.assert_not_called();self.save.assert_not_called()
+
 
 if __name__ == '__main__':
     unittest.main()

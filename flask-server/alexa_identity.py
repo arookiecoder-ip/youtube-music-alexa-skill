@@ -99,8 +99,10 @@ class AlexaIdentity:
         value += '\0' + str(binding['security_version'])
         return self.digest(value)
 
-    def stream_token(self, user_id, video, binding=None):
+    def stream_token(self, user_id, video, binding=None, control_revision=None):
         data = {'user_id': user_id, 'video': video, 'version': self.accounts.security_version(user_id)}
+        if control_revision:
+            data['control_revision'] = control_revision
         if binding is not None:
             if binding['user_id'] != user_id:
                 raise ValueError('Stream account does not match Echo binding')
@@ -114,6 +116,17 @@ class AlexaIdentity:
             data['binding'] = {key: binding[key] for key in
                                ('skill_id', 'subject_hash', 'device_hash', 'generation')}
         return self.signer.dumps(data)
+
+    def stream_control_revision(self, token, video):
+        """Read signed delivery context after the route has authorized the user."""
+        try:
+            data = self.signer.loads(token, max_age=7200)
+        except BadData:
+            return None
+        if not isinstance(data, dict) or data.get('video') != video:
+            return None
+        value = data.get('control_revision')
+        return value if isinstance(value, str) and re.fullmatch(r'i[0-9a-f]{1,20}', value) else None
 
     def stream_user(self, token, video):
         try:

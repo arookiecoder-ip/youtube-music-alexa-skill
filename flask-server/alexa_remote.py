@@ -508,7 +508,7 @@ class AlexaRemote:
             return None
         return _access_policy(getattr(self, '_musicbox_identity', OWNER), email)
 
-    async def _ensure_login(self, force_check: bool = False):
+    async def _ensure_login(self, force_check: bool = False, background_check: bool = False):
         """Ensure a usable session, reusing the stored cookie. No credentials
         are held server-side, so this can only validate/restore an existing
         session -- it never does a fresh credential login. Returns an error
@@ -525,6 +525,14 @@ class AlexaRemote:
         if not hasattr(self, '_login_task_lock'):
             self._login_task_lock = asyncio.Lock()
             
+        if background_check and not force_check and self._login and self.connection_state is True:
+            fresh = time.monotonic() - self._login_checked_at < _LOGIN_RECHECK_TTL
+            task = getattr(self, '_transport_session_refresh', None)
+            if (not fresh and (task is None or task.done())
+                    and time.monotonic() >= getattr(self, '_transport_session_check_after', 0)):
+                self._transport_session_refresh = asyncio.create_task(
+                    self._refresh_transport_session(self._login))
+            return None
         async with self._login_task_lock:
             # already have a live session in memory?
             if self._login:
@@ -1571,8 +1579,9 @@ class AlexaRemote:
             logger.exception("fresh device fetch failed; falling back to cached list")
         return await AlexaAPI.get_devices(self._login)
 
-    async def _devices(self, refresh: bool):
-        error = await self._ensure_login()
+    async def _devices(self, refresh: bool, background_check: bool = False):
+        error = (await self._ensure_login(background_check=True) if background_check
+                 else await self._ensure_login())
         self.connection_state = error is None
         if error:
             return None, error
@@ -1608,6 +1617,25 @@ class AlexaRemote:
                 return d
         return None
 
+    async def _refresh_transport_session(self, login):
+        """Read-only status refresh; never close a session underneath a command."""
+        async with self._login_task_lock:
+            if self._login is not login:
+                return
+            try:
+                valid = await asyncio.wait_for(login.test_loggedin(), timeout=3)
+            except Exception as exc:
+                if self._login is login:
+                    self._transport_session_check_after = time.monotonic() + 30
+                    if authentication_failure(exc):
+                        self._login_checked_at = 0.0
+                        self.connection_state = False
+                logger.debug('Background Amazon session status unavailable')
+                return
+            if self._login is login:
+                self._login_checked_at = time.monotonic() if valid else 0.0
+                self.connection_state = bool(valid)
+
     async def _api_for(self, serial: str, require_online: bool = False, cached_online: bool = False):
         """Returns (AlexaAPI, error string or None).
 
@@ -1616,7 +1644,8 @@ class AlexaRemote:
         either hangs or fails opaquely for one, so we reject early with a clear
         message. The cached online flag can be stale, so we refresh the device
         list once before trusting an "offline" reading."""
-        error = await self._ensure_login()
+        error = (await self._ensure_login(background_check=True) if cached_online
+                 else await self._ensure_login())
         if error:
             return None, error
         if not self._devices_raw:
@@ -1654,7 +1683,12 @@ class AlexaRemote:
 
     async def _refresh_transport_presence(self):
         try:
-            await self._devices(refresh=True)
+            session = getattr(self, '_transport_session_refresh', None)
+            if session is not None:
+                await asyncio.shield(session)
+            if getattr(self, 'connection_state', None) is False:
+                return
+            await self._devices(refresh=True, background_check=True)
         except Exception:
             logger.debug("background transport presence refresh failed", exc_info=True)
 
@@ -1670,6 +1704,25 @@ class AlexaRemote:
     def command(self, serial: str, action: str, value=None):
         """Transport control. Returns an error string, or None on success."""
         return self._run(self._command(serial, action, value))
+
+    def remember_control_skill(self, application_id):
+        if not isinstance(application_id, str) or not re.fullmatch(
+                r'amzn1\.ask\.skill\.[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}', application_id):
+            return
+        if not hasattr(self, '_control_skill_ids'):
+            self._control_skill_ids = set()
+        self._control_skill_ids.add(application_id)
+
+    def control_skill_id(self):
+        candidates = getattr(self, '_control_skill_ids', ())
+        if not getattr(self, '_control_launch_disabled', False) and len(candidates) == 1:
+            return next(iter(candidates))
+        return None
+
+    def disable_control_launch(self):
+        # A launch acknowledgement is not playback confirmation. If the
+        # watchdog must retry, use the established voice route until restart.
+        self._control_launch_disabled = True
 
     def handoff_pause(self, serial: str):
         """Bound source cleanup so target selection never waits on Amazon's long timeout."""
@@ -1696,7 +1749,13 @@ class AlexaRemote:
                 await bounded_transport(self, serial, ('volume', volume), lambda: api.set_volume(volume / 100, queue_delay=0))
             elif action in _TRANSPORT_TEXT:
                 text = f"ask {SKILL_INVOCATION_NAME} to {_TRANSPORT_TEXT[action]}"
-                await bounded_transport(self, serial, text, lambda: api.run_custom(text, queue_delay=0))
+                control = getattr(self, 'control_skill_id', None)
+                skill_id = control() if action == 'play' and callable(control) else None
+                if skill_id:
+                    logger.info('[echo-control] direct_launch action=resume')
+                    await bounded_transport(self, serial, ('launch', skill_id), lambda: api.run_skill(skill_id, queue_delay=0))
+                else:
+                    await bounded_transport(self, serial, text, lambda: api.run_custom(text, queue_delay=0))
             else:
                 return f'Unknown action "{action}".'
         except TransportDeferred as exc:
@@ -1816,7 +1875,7 @@ class AlexaRemote:
         return self._run(self._text_command(
             serial, f"ask {SKILL_INVOCATION_NAME} to play {marked}"))
 
-    def play_video_id(self, serial: str, video_id: str, offset_ms: int = 0):
+    def play_video_id(self, serial: str, video_id: str, offset_ms: int = 0, force_voice: bool = False):
         """Ask the skill to play an exact known YouTube video id.
 
         The video id must already be armed server-side (see server._arm_play):
@@ -1824,6 +1883,10 @@ class AlexaRemote:
         recognition mangles a hex-encoded id. The skill hears the phrase, calls
         /armed_play/ for this device, and plays what was armed. ``offset_ms`` is
         carried by the arm, not this phrase."""
+        skill_id = self.control_skill_id()
+        if skill_id and not force_voice:
+            logger.info('[echo-control] direct_launch action=play offset_ms=%s', offset_ms)
+            return self._run(self._text_command(serial, '', skill_id=skill_id))
         marked = f"{self.SILENT_PLAY_MARKER} {self.APP_SELECTION_PHRASE}"
         return self._run(self._text_command(
             serial, f"ask {SKILL_INVOCATION_NAME} to play {marked}"))
@@ -1832,12 +1895,15 @@ class AlexaRemote:
         """Send arbitrary text to Alexa, as if spoken. Returns error or None."""
         return self._run(self._text_command(serial, text))
 
-    async def _text_command(self, serial, text):
+    async def _text_command(self, serial, text, skill_id=None):
         api, error = await self._api_for(serial, require_online=True, cached_online=True)
         if error:
             return error
         try:
-            await bounded_transport(self, serial, text, lambda: api.run_custom(text, queue_delay=0))
+            if skill_id:
+                await bounded_transport(self, serial, ('launch', skill_id), lambda: api.run_skill(skill_id, queue_delay=0))
+            else:
+                await bounded_transport(self, serial, text, lambda: api.run_custom(text, queue_delay=0))
         except TransportDeferred as exc:
             logger.warning("Amazon transport deferred: %s", exc)
             return str(exc)

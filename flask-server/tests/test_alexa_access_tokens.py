@@ -42,6 +42,35 @@ class AlexaAccessTokenTests(SecondFactorDoorTestBase):
         row = self.layer.db.fetchone('SELECT * FROM alexa_access_tokens WHERE id=?', (self.token.split('.')[0],))
         self.assertEqual(row['token_hash'], hashlib.sha256(self.token.encode()).hexdigest())
 
+    def test_stale_control_callbacks_are_denied_before_sdk_persistence(self):
+        server=self.server;slot=server._PLAYER_IDENTITY.set(server._player_identity_for_user_id(self.user['id']))
+        try:
+            server._now_playing.update(video_id='AAAAAAAAAAA',alexa_intent_at=100.25,playing=True,playback_processing=True)
+            for kind in ('PlaybackStarted','PlaybackStopped','PlaybackFinished','PlaybackFailed','PlaybackNearlyFinished'):
+                headers={**self.headers,'X-Alexa-Request-Type':'AudioPlayer.'+kind,
+                    'X-Alexa-Playback-Token':'0|AAAAAAAAAAA|i'+format(int(100.1*1000000),'x')}
+                response=self.identity(headers)
+                self.assertEqual(response.status_code,403)
+                self.assertEqual(response.json['error']['code'],'stale_alexa_request')
+            headers['X-Alexa-Playback-Token']='0|AAAAAAAAAAA|i'+format(int(100.25*1000000),'x')
+            self.assertEqual(self.identity(headers).status_code,200)
+            server._now_playing.update(playing=False,playback_processing=True)
+            headers['X-Alexa-Request-Type']='AudioPlayer.PlaybackStopped'
+            headers['X-Alexa-Playback-Token']='0|AAAAAAAAAAA|i'+format(int(100.1*1000000),'x')
+            self.assertEqual(self.identity(headers).status_code,200)
+        finally:server._PLAYER_IDENTITY.reset(slot)
+
+    def test_stream_revision_is_signed_video_scoped_and_keeps_revocation_checks(self):
+        user,credential=self.access.authenticate(self.headers)
+        identity=self.layer.alexa_identity
+        cap=identity.stream_token(user['id'],'AAAAAAAAAAA',credential,control_revision='i5f5e100')
+        self.assertEqual(identity.stream_control_revision(cap,'AAAAAAAAAAA'),'i5f5e100')
+        self.assertIsNone(identity.stream_control_revision(cap,'BBBBBBBBBBB'))
+        self.assertIsNone(identity.stream_control_revision(cap+'x','AAAAAAAAAAA'))
+        self.assertEqual(identity.stream_user(cap,'AAAAAAAAAAA')['id'],user['id'])
+        self.access.rotate(user['id'])
+        self.assertIsNone(identity.stream_user(cap,'AAAAAAAAAAA'))
+
     def test_rotation_revokes_old_requests_and_existing_audio_urls(self):
         user, credential = self.access.authenticate(self.headers)
         cap = self.layer.alexa_identity.stream_token(user['id'], 'AAAAAAAAAAA', credential)
@@ -402,4 +431,75 @@ class AlexaAccessTokenTests(SecondFactorDoorTestBase):
                 'X-Alexa-Request-Type':'IntentRequest','X-Alexa-Intent-Name':'PlaySongIntent'})
             self.assertEqual(result.status_code,403)
             self.assertIsNotNone(server._peek_armed_play('echo'))
+        finally:server._PLAYER_IDENTITY.reset(slot)
+
+    def launch(self,kind='play',age=0,processing=True):
+        server=self.server;identity=server._player_identity_for_user_id(self.user['id'])
+        token=server._PLAYER_IDENTITY.set(identity)
+        try:
+            server._now_playing.update(video_id='AAAAAAAAAAA',alexa_intent_at=time.time()-age-1,
+                playback_processing=processing,queue=[dict(video_id='AAAAAAAAAAA',title='Target')],queue_index=0)
+            server._playback_output.alexa('echo',wait=False)
+            server._arm_play('echo','AAAAAAAAAAA',42000,kind=kind)
+            server._ARMED_PLAYS['echo']['armed_at']-=age
+            with mock.patch.object(server.Supporting,'get_stream',new=mock.AsyncMock(return_value={'audio_url':'https://music.example/audio'})):
+                response=self.client.get('/api/alexa/identity/?include_control=1',headers={**self.headers,'X-Alexa-Request-Type':'LaunchRequest','X-MusicBox-Control-Launch':'2','X-MusicBox-Application-Id':'amzn1.ask.skill.11111111-1111-1111-1111-111111111111'})
+            remaining=server._peek_armed_play('echo')
+            return response,remaining
+        finally:server._PLAYER_IDENTITY.reset(token)
+
+    def test_launch_seek_consumes_once_and_bundles_position(self):
+        response,remaining=self.launch()
+        self.assertEqual(response.status_code,200)
+        self.assertEqual(response.json['control']['offset_ms'],42000)
+        self.assertIn('startup',response.json['control'])
+        self.assertIsNone(remaining)
+
+    def test_launch_resume_peeks_and_bundles_fresh_stream(self):
+        response,remaining=self.launch(kind='resume')
+        self.assertEqual(response.json['control']['offset_ms'],42000)
+        self.assertIn('resume_stream',response.json['control'])
+        self.assertIsNotNone(remaining)
+
+    def test_launch_never_consumes_completed_or_old_or_queue_sync_intents(self):
+        for options in ({'processing':False},{'age':31},{'kind':'queue_sync:old'}):
+            response,remaining=self.launch(**options)
+            self.assertNotIn('control',response.json)
+            self.assertIsNotNone(remaining)
+
+    def test_revoked_launch_cannot_consume_an_armed_selection(self):
+        self.access.revoke(self.user['id'])
+        response,remaining=self.launch()
+        self.assertEqual(response.status_code,403)
+        self.assertIsNotNone(remaining)
+
+    def test_duplicate_direct_resume_launch_is_silent_instead_of_replaying(self):
+        response,remaining=self.launch(kind='resume')
+        self.assertEqual(response.json['control']['kind'],'resume')
+        response=self.client.get('/api/alexa/identity/?include_control=1',headers={**self.headers,
+            'X-Alexa-Request-Type':'LaunchRequest','X-MusicBox-Control-Launch':'2'})
+        self.assertEqual(response.json['control'],{'kind':'cancelled'})
+
+    def test_cancel_before_launch_settles_only_a_proven_unserved_paused_source(self):
+        server=self.server;slot=server._PLAYER_IDENTITY.set(server._player_identity_for_user_id(self.user['id']))
+        try:
+            for served,proof in ((False,True),(True,True),(False,False)):
+                with self.subTest(served=served,proof=proof):
+                    resume=time.time()-2;pause=time.time()-1
+                    server._playback_output.alexa('echo',wait=False)
+                    output=server._playback_output.snapshot()
+                    server._now_playing.update(video_id='AAAAAAAAAAA',playing=False,playback_confirmed=False,
+                        playback_processing=True,alexa_intent_at=pause,
+                        _alexa_control_launch_served=resume if served else None,
+                        _alexa_resume_from_paused={'intent_at':resume,'video_id':'AAAAAAAAAAA',
+                            'output_token':output['output_token']} if proof else {},
+                        _alexa_pause_pending={'intent_at':pause})
+                    server._arm_play('echo','AAAAAAAAAAA',42000,kind='resume')
+                    server._ARMED_PLAYS['echo']['armed_at']=resume
+                    with mock.patch.object(server,'_notify_sse'):
+                        response=self.client.get('/api/alexa/identity/?include_control=1',headers={**self.headers,
+                            'X-Alexa-Request-Type':'LaunchRequest','X-MusicBox-Control-Launch':'2'})
+                    self.assertEqual(response.json['control'],{'kind':'cancelled'})
+                    self.assertEqual(server._now_playing['playback_processing'],served or not proof)
+                    self.assertEqual(server._now_playing['playback_confirmed'],proof and not served)
         finally:server._PLAYER_IDENTITY.reset(slot)

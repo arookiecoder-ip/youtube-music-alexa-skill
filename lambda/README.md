@@ -49,3 +49,37 @@ entry/runtime files together: the small entry point starts authorization during
 first-use SDK loading, and the runtime verifies the request before accessing
 persistence. Fresh app selections can receive their startup data in that same
 response. This uses no keepalive timer or synthetic Alexa requests.
+
+Updated skills advertise direct-control launch support with their actual application
+ID on authorized identity requests. The backend learns this per Music Box account;
+it does not reuse another account's skill ID. When exactly one compatible skill is
+known, app resume and armed selections can launch it directly rather than send a
+simulated spoken command. A LaunchRequest starts audio only while a matching,
+fresh app intent is pending. Ordinary launches retain the welcome response. Older
+skills and ambiguous discovery retain the spoken route; an unconfirmed direct
+launch disables that route for the account until restart before the watchdog retries.
+
+Playback directives for pending app controls also carry the exact backend intent
+revision in their AudioPlayer token. The signed stream capability carries that
+revision too. Delayed callbacks and byte-range requests from a previous play of
+the same song cannot confirm a newer resume or seek. Queue successor tokens and
+older skill compatibility retain their existing paths.
+
+Direct-control capability version 2 also handles cancellation and repeated
+LaunchRequest silently. A pending resume from a confirmed paused source can be
+cancelled before it is served without waiting for a Stop event that cannot occur.
+This requires proof of the original pause, matching intent/output and an unserved
+launch; a served or unproven source still waits for its real device stop. Repeated
+launches of the same app intent do not issue duplicate playback directives or
+speak a welcome prompt. Cancelled launch requests never load/save persistence.
+Deploy the updated backend before this skill version; previous capability versions
+remain on the ordinary voice transport until their skill code is updated.
+
+Queue-only buffer synchronization keeps its existing app-selection voice control
+and queue-sync token checks; it does not use the resume/seek LaunchRequest route.
+
+For established Amazon app sessions, transport controls run the optional session
+status recheck alongside the command rather than wait for it. Account/link access
+checks still precede dispatch, the actual Amazon request remains authenticated,
+and known-rejected sessions plus explicit force/status checks still verify
+synchronously. A background check never closes or replaces an in-flight client.

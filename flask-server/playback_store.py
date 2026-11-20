@@ -135,7 +135,8 @@ class PlaybackStore:
                 return
             queue = stable_queue_entries(state.get('queue'))
             fingerprint = ([item['entry_id'] for item in queue], state.get('video_id'),
-                           state.get('queue_index'), output.get('playback_output'), state.get('playing'))
+                           state.get('queue_index'), output.get('playback_output'), state.get('playing'),
+                           state.get('playback_revision'))
             now = time.monotonic()
             previous = self.saved.get(identity)
             if previous and fingerprint == previous[0] and now - previous[1] < 5:

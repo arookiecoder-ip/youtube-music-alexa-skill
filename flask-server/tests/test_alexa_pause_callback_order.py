@@ -117,3 +117,50 @@ class PauseCallbackOrderTests(NextTrackBase):
         result=self.event('started')
         self.assertTrue(result.json.get('stop'))
         self.assertFalse(server._now_playing['playing'])
+
+
+class SameSongSeekIntentTests(NextTrackBase):
+    def setUp(self):
+        super().setUp()
+        self.intent=100.25
+        mock.patch.object(server._playback_output,'snapshot',return_value={
+            'playback_output':'alexa','output_token':'lease','output_serial':self.SERIAL}).start()
+        mock.patch.object(server,'_notify_sse').start()
+        mock.patch.object(server,'_bg_thread').start()
+        mock.patch.object(server,'_claim_alexa_output').start()
+        server._now_playing.update(video_id=VIDEO,queue=[_meta(VIDEO)],queue_index=0,
+            playing=True,playback_confirmed=False,playback_processing=True,
+            position_ms=75000,started_at=self.intent,alexa_intent_at=self.intent)
+
+    def start(self,intent,event="started"):
+        revision='i'+format(int(intent*1000000),'x')
+        return self.client.post('/alexa/state_event/?key='+server.API_KEY,json={
+            'event':event,'video_id':VIDEO,'token':'0|'+VIDEO+'|'+revision+'|b'+'d'*64,
+            'offset_in_ms':75000,'event_timestamp':'1970-01-01T00:01:40Z'})
+
+    def test_previous_same_second_start_cannot_confirm_newer_seek(self):
+        response=self.start(100.1)
+        self.assertEqual(response.json['ignored'],'superseded playback intent')
+        self.assertTrue(server._now_playing['playback_processing'])
+        self.assertFalse(server._now_playing['playback_confirmed'])
+        self.assertEqual(server._now_playing['position_ms'],75000)
+
+    def test_matching_seek_start_confirms_exact_requested_offset(self):
+        response=self.start(self.intent)
+        self.assertNotIn('ignored',response.json)
+        self.assertFalse(server._now_playing['playback_processing'])
+        self.assertTrue(server._now_playing['playback_confirmed'])
+        self.assertEqual(server._now_playing['position_ms'],75000)
+
+    def test_old_stop_cannot_cancel_the_replacement_seek_or_resume(self):
+        response=self.start(100.1,event='stopped')
+        self.assertEqual(response.json['ignored'],'superseded playback intent')
+        self.assertTrue(server._now_playing['playing'])
+        self.assertTrue(server._now_playing['playback_processing'])
+
+    def test_old_finish_or_failure_cannot_advance_or_fail_pending_seek(self):
+        for event in ('finished','failed'):
+            response=self.start(100.1,event=event)
+            self.assertEqual(response.json['ignored'],'superseded playback intent')
+            self.assertEqual(server._now_playing['video_id'],VIDEO)
+            self.assertTrue(server._now_playing['playback_processing'])

@@ -38,6 +38,17 @@ class LaunchRequestHandler(AbstractRequestHandler):
 
     def handle(self, handler_input: HandlerInput) -> Response:
         logger.info("In LaunchRequestHandler")
+        envelope = handler_input.request_envelope
+        if getattr(envelope, '_musicbox_launch_control', '') == 'cancelled':
+            return handler_input.response_builder.set_should_end_session(True).response
+        if getattr(envelope, '_musicbox_launch_control', '') == 'resume':
+            return player.Controller.resume(handler_input, is_playback=True)
+        if getattr(envelope, '_musicbox_launch_control', '') == 'play':
+            armed, error = player.Api.get_armed_play(handler_input)
+            if error or not armed:
+                return player.Controller.error_response(handler_input, error or Exception(data.NOT_FOUND), True)
+            return player.Controller.fetch_video_id(handler_input, armed[0],
+                                                   is_playback=True, offset_in_ms=armed[1])
         speak_output = "Welcome to Music Box. Ask me to play a song, artist, album, or playlist."
         return (
             handler_input.response_builder
@@ -862,6 +873,8 @@ class VerifyAccountRequestInterceptor(AbstractRequestInterceptor):
         if (request_type.startswith('AudioPlayer.') or token) and not token.endswith('|b' + binding):
             raise SkillAuthorizationError('This playback belongs to an earlier Echo account binding.', code='stale_alexa_binding')
         envelope._musicbox_binding = binding
+        envelope._musicbox_control_revision = result.get('control_revision')
+        envelope._musicbox_control_video = result.get('control_video')
         # Request-local only: never persist a capability or reuse it across events.
         resume = result.get('resume') if include_resume else None
         if isinstance(resume, dict):
@@ -869,10 +882,19 @@ class VerifyAccountRequestInterceptor(AbstractRequestInterceptor):
         play = result.get('play') if 'include_play' in params else None
         if isinstance(play, dict):
             envelope._musicbox_play_arm = play
+        control = result.get('control') if 'include_control' in params else None
+        if isinstance(control, dict) and control.get('kind') in ('play', 'resume', 'cancelled'):
+            envelope._musicbox_launch_control = control['kind']
+            if control['kind'] == 'resume':
+                envelope._musicbox_resume_arm = control
+            else:
+                envelope._musicbox_play_arm = control
 
 
 class LoadPersistenceAttributesRequestInterceptor(AbstractRequestInterceptor):
     def process(self, handler_input: HandlerInput):
+        if getattr(handler_input.request_envelope, '_musicbox_launch_control', '') == 'cancelled':
+            return
         if not needs_state(handler_input.request_envelope):
             return
         started = time.monotonic()
