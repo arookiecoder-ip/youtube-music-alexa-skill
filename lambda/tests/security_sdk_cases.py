@@ -59,6 +59,34 @@ class SecurityCases(unittest.TestCase):
         return Node(request_envelope=envelope, attributes_manager=Node(persistent_attributes={'amazon-user': attrs}),
                     response_builder=ResponseFactory())
 
+    def test_resume_requests_bundled_authorization_and_uses_it_without_another_lookup(self):
+        self.invoke()
+        bucket=next(iter(self.rows.values()))['amazon-user']
+        bucket['playlist']=[dict(title='Current',artist='Artist',video_id='AAAAAAAAAAA',thumbnail=None)]
+        bucket['playback_info'].update(play_order=[0],index=0)
+        self.identity.reset_mock()
+        self.identity.side_effect=lambda *args: ({'binding':self.binding,'resume':{
+            'video_id':'AAAAAAAAAAA','offset_ms':15000,'kind':'resume',
+            'resume_stream':{'audio_url':'https://music.example/authorized'}}},None)
+        response=self.invoke(self.event('AMAZON.ResumeIntent'))['response']
+        self.identity.assert_called_once()
+        self.assertEqual(self.identity.call_args.args[1:],('api/alexa/identity',{'include_resume':'1'}))
+        stream=response['directives'][0]['audioItem']['stream']
+        self.assertEqual(stream['url'],'https://music.example/authorized')
+        self.assertEqual(stream['offsetInMilliseconds'],15000)
+        self.assertTrue(stream['token'].endswith('|b'+self.binding))
+
+    def test_invalid_preflight_binding_cannot_install_resume_payload_or_read_state(self):
+        self.identity.side_effect=None
+        self.identity.return_value=({'binding':'invalid','resume':{'video_id':'AAAAAAAAAAA'}},None)
+        response=self.invoke(self.event('AMAZON.ResumeIntent'))['response']
+        self.assertNotIn('AudioPlayer.Play',[v['type'] for v in response.get('directives',[])])
+        self.get.assert_not_called();self.save.assert_not_called()
+
+    def test_pause_does_not_request_a_resume_bundle(self):
+        self.invoke(self.event('AMAZON.PauseIntent'))
+        self.assertEqual(self.identity.call_args.args[1:],('api/alexa/identity',{}))
+
     def test_device_and_generation_have_distinct_dynamodb_items(self):
         self.invoke(self.event(device='echo-a'))
         self.invoke(self.event(device='echo-b'))

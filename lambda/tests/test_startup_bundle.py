@@ -111,3 +111,41 @@ class ResumeBundleTests(unittest.TestCase):
             armed,error=player.Api.get_armed_play(request,peek=True,include_resume_stream=True)
         self.assertIsNone(armed);self.assertIsNotNone(error)
         self.assertIsNone(request.request_envelope._musicbox_resume_stream)
+
+class PreflightResumeBundleTests(unittest.TestCase):
+    def test_preflight_resume_avoids_armed_http_and_is_consumed_once(self):
+        request=handler()
+        request.request_envelope._musicbox_resume_arm={
+            'video_id':NEW_SONG,'offset_ms':12000,'kind':'resume',
+            'resume_stream':{'audio_url':'https://musicbox.example/fresh'}}
+        with mock.patch.object(player.Api,'_get_json',return_value=({'video_id':None},None)) as get:
+            result,error=player.Api.get_armed_play(request,peek=True,include_resume_stream=True)
+            self.assertIsNone(error)
+            self.assertEqual(result[:2],(NEW_SONG,12000))
+            self.assertEqual(request.request_envelope._musicbox_resume_stream,
+                             (NEW_SONG,'https://musicbox.example/fresh'))
+            get.assert_not_called()
+            self.assertIsNone(request.request_envelope._musicbox_resume_arm)
+            player.Api.get_armed_play(request,peek=True,include_resume_stream=True)
+            get.assert_called_once()
+
+    def test_empty_preflight_arm_does_not_trigger_a_duplicate_lookup(self):
+        request=handler();request.request_envelope._musicbox_resume_arm={'video_id':None}
+        with mock.patch.object(player.Api,'_get_json') as get:
+            result,error=player.Api.get_armed_play(request,peek=True,include_resume_stream=True)
+        self.assertIsNone(result);self.assertIsNotNone(error);get.assert_not_called()
+
+    def test_preflight_cannot_be_used_for_a_consuming_play_request(self):
+        request=handler();request.request_envelope._musicbox_resume_arm={'video_id':NEW_SONG,'kind':'resume'}
+        with mock.patch.object(player.Api,'_get_json',return_value=({'video_id':OLD_SONG},None)) as get:
+            result,error=player.Api.get_armed_play(request)
+        self.assertEqual(result[0],OLD_SONG);get.assert_called_once()
+        self.assertIsNone(request.request_envelope._musicbox_resume_arm)
+
+    def test_missing_or_malformed_preflight_uses_compatible_http_path(self):
+        for value in (None,'invalid'):
+            request=handler();request.request_envelope._musicbox_resume_arm=value
+            with mock.patch.object(player.Api,'_get_json',return_value=({'video_id':NEW_SONG},None)) as get:
+                result,error=player.Api.get_armed_play(request,peek=True,include_resume_stream=True)
+            self.assertEqual(result[0],NEW_SONG)
+            get.assert_called_once_with(request,'armed_play',{'peek':'1','include_resume_stream':'1'})

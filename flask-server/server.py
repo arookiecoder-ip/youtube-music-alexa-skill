@@ -7292,12 +7292,35 @@ def _login_door_links():
     return layer.accounts.registration_open(), '/forgot-password'
 
 
+def _peek_armed_payload(serial=None, include_resume_stream=False):
+    peeked = _peek_armed_play(serial)
+    if not peeked:
+        return {'video_id': None}
+    video_id, offset_ms, armed_at, kind = peeked
+    if kind == 'resume' and request.environ.get('musicbox.alexa_token_authorized'):
+        with _np_lock:
+            if _now_playing.get('video_id') == video_id:
+                _now_playing['_alexa_verified_intent_at'] = _now_playing.get('alexa_intent_at')
+    payload = {'video_id': video_id, 'offset_ms': offset_ms,
+               'armed_at': armed_at, 'kind': kind}
+    if include_resume_stream and kind == 'resume':
+        # Supporting mints a new account/device-scoped capability using this
+        # request's verified binding. Never hand out a previously stored URL.
+        stream = asyncio.run(Supporting.get_stream(video_id))
+        if stream:
+            payload['resume_stream'] = stream
+    return payload
+
+
 @app.get('/api/alexa/identity/')
 def alexa_account_identity():
     binding = request.environ.get('musicbox.alexa_binding')
     if binding is None:
         return error_response('This Echo is not authorized for this account.', 403)
-    return _no_store(jsonify(binding=binding['version']))
+    payload = {'binding': binding['version']}
+    if request.args.get('include_resume') == '1':
+        payload['resume'] = _peek_armed_payload(include_resume_stream=True)
+    return _no_store(jsonify(payload))
 
 
 @app.post('/api/alexa/link/')
@@ -9557,6 +9580,10 @@ def alexa_command():
             paused_video_id = _now_playing.get('video_id', '')
             command_fence = (paused_video_id, _now_playing.get('alexa_intent_at'),
                              _playback_output.snapshot()['output_token'])
+            _now_playing['_alexa_pause_pending'] = {
+                'video_id': command_fence[0], 'intent_at': command_fence[1],
+                'output_token': command_fence[2]}
+
         _notify_sse()
         # Refresh the cache mtime at pause time so TTL counts from the pause,
         # not the original download; the file is also pinned while selected.
@@ -9829,6 +9856,9 @@ def alexa_state_event():
         event_at = datetime.fromisoformat(str(body.get('event_timestamp', '')).replace('Z', '+00:00')).timestamp()
     except (ValueError, TypeError, OverflowError):
         event_at = None
+    if event_at is not None and event in ('started', 'stopped'):
+        logger.info('[echo-event-timing] event=%s callback_delivery_ms=%.0f',
+                    event, max(0, time.time() - event_at) * 1000)
     event_token = str(body.get('token') or '')
     if event == 'started':
         try:
@@ -9854,15 +9884,43 @@ def alexa_state_event():
             if reconciliation.get('correcting') or reconciliation.get('ignored') == 'queue ended':
                 _notify_sse()
             return jsonify(reconciliation)
+    pause_fence = None
     with _np_lock:
         tracked_token = _now_playing.get('alexa_token') or ''
+        parts = event_token.split('|')
+        occurrence_token = (len(parts) >= 3 and
+                            re.fullmatch(r'(?:[0-9a-f]{24}|q[0-9a-f]{24})', parts[2]))
+        stopped_ack = _now_playing.get('_alexa_stop_ack') or {}
         if (event == 'started' and event_token and event_token == tracked_token
                 and _playback_output.snapshot()['playback_output'] == 'phone'):
             # An in-flight Started for the released current stream is not a
             # new voice intent. It must not steal ownership back after handoff.
             return jsonify({'ok': True, 'ignored': 'released Alexa stream', 'stop': True})
+        if (event == 'started' and occurrence_token
+                and event_token == stopped_ack.get('token')):
+            # A play occurrence cannot start again after it stopped. Timestamps
+            # can be equal at Alexa's whole-second precision, so time alone
+            # cannot reject this out-of-order Started callback.
+            return jsonify({'ok': True, 'ignored': 'stopped playback occurrence'})
         if event in ('stopped', 'finished', 'failed') and event_token and tracked_token and event_token != tracked_token:
-            return jsonify({'ok': True, 'ignored': 'stale playback token'})
+            pending_pause = _now_playing.get('_alexa_pause_pending') or {}
+            output = _playback_output.snapshot()
+            intent = float(_now_playing.get('alexa_intent_at') or 0)
+            earliest = intent if '.' in str(body.get('event_timestamp', '')) else int(intent)
+            if (event == 'stopped' and occurrence_token and event_at is not None
+                    and event_at >= earliest and parts[1] == body.get('video_id')
+                    and body.get('video_id') == _now_playing.get('video_id')
+                    and not _now_playing.get('playing') and _now_playing.get('playback_processing')
+                    and output['playback_output'] == 'alexa'
+                    and pending_pause.get('intent_at') == intent
+                    and pending_pause.get('video_id') == _now_playing.get('video_id')
+                    and pending_pause.get('output_token') == output['output_token']):
+                # First-byte delivery can confirm a resume before Started
+                # installs its token. A fresh, matching Stop still completes
+                # the exact pause; old tokens and newer intents stay fenced.
+                pause_fence = dict(pending_pause)
+            else:
+                return jsonify({'ok': True, 'ignored': 'stale playback token'})
         if event == 'finished' and not _now_playing.get('playing'):
             return jsonify({'ok': True, 'ignored': 'paused or already finished'})
         if event in ('stopped', 'finished'):
@@ -9949,8 +10007,6 @@ def alexa_state_event():
                 f"(current={current_video_id!r})\n")
             sys.stderr.flush()
             return jsonify({'ok': True})
-        with _np_lock:
-            _now_playing.pop('_alexa_finished_token', None)
         # position_ms is a stored anchor, not a live value -- while playing,
         # the real position is only ever computed on the fly (_computed_position_ms)
         # from that anchor + elapsed wall-clock time; it's never written back.
@@ -9960,6 +10016,17 @@ def alexa_state_event():
         # song snapped the bar back to 0:00/track-start instead of freezing at
         # the actual paused position. Mirrors the app-button pause path below.
         with _np_lock:
+            if pause_fence is not None:
+                output = _playback_output.snapshot()
+                if (_now_playing.get('_alexa_pause_pending') != pause_fence
+                        or _now_playing.get('alexa_intent_at') != pause_fence['intent_at']
+                        or _now_playing.get('video_id') != pause_fence['video_id']
+                        or output['playback_output'] != 'alexa'
+                        or output['output_token'] != pause_fence['output_token']):
+                    return jsonify({'ok': True, 'ignored': 'superseded pause'})
+                _now_playing['alexa_token'] = event_token
+            _now_playing.pop('_alexa_finished_token', None)
+            _now_playing.pop('_alexa_pause_pending', None)
             elapsed_ms = _computed_position_ms()
             stopped_video_id = _now_playing.get('video_id', '')
             stopped_duration_ms = int(_now_playing.get('duration_ms') or 0)
@@ -11744,23 +11811,8 @@ def armed_play():
     of an in-flight fresh play or seek."""
     serial = request.args.get("serial") or None
     if (request.args.get("peek") or "") == "1":
-        peeked = _peek_armed_play(serial)
-        if not peeked:
-            return jsonify({'video_id': None})
-        video_id, offset_ms, armed_at, kind = peeked
-        if kind == 'resume' and request.environ.get('musicbox.alexa_token_authorized'):
-            with _np_lock:
-                if _now_playing.get('video_id') == video_id:
-                    _now_playing['_alexa_verified_intent_at'] = _now_playing.get('alexa_intent_at')
-        payload = {'video_id': video_id, 'offset_ms': offset_ms,
-                   'armed_at': armed_at, 'kind': kind}
-        if request.args.get('include_resume_stream') == '1' and kind == 'resume':
-            # Supporting mints a new account/device-scoped capability using this
-            # request's verified binding. Never hand out a previously stored URL.
-            stream = asyncio.run(Supporting.get_stream(video_id))
-            if stream:
-                payload['resume_stream'] = stream
-        return jsonify(payload)
+        return jsonify(_peek_armed_payload(serial,
+            include_resume_stream=request.args.get('include_resume_stream') == '1'))
     armed = _consume_armed_play(serial)
     if not armed:
         return jsonify({'video_id': None})

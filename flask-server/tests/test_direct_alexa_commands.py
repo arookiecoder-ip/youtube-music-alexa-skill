@@ -2,6 +2,7 @@ from alexa_transport import bounded_transport, TransportDeferred
 """Exercise the real bridge method with only Amazon's network API substituted."""
 import ast
 import asyncio
+import time
 from pathlib import Path
 from types import SimpleNamespace
 import unittest
@@ -14,7 +15,7 @@ class DirectAlexaCommandTests(unittest.IsolatedAsyncioTestCase):
         tree = ast.parse((Path(__file__).resolve().parents[1] / 'alexa_remote.py').read_text())
         cls = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == 'AlexaRemote')
         fn = next(n for n in cls.body if isinstance(n, ast.AsyncFunctionDef) and n.name == '_command')
-        namespace = {'bounded_transport': bounded_transport, 'TransportDeferred': TransportDeferred, 'authentication_failure': authentication_failure, 'asyncio': asyncio, 'logger': Mock(), 'SKILL_INVOCATION_NAME': 'music box',
+        namespace = {'bounded_transport': bounded_transport, 'TransportDeferred': TransportDeferred, 'authentication_failure': authentication_failure, 'asyncio': asyncio, 'time': time, 'logger': Mock(), 'SKILL_INVOCATION_NAME': 'music box',
                      '_TRANSPORT_TEXT': {'play': 'resume', 'pause': 'pause'}}
         exec(compile(ast.Module(body=[fn], type_ignores=[]), 'alexa_remote.py', 'exec'), namespace)
         self.command = namespace['_command']

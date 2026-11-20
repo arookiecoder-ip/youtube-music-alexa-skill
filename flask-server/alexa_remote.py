@@ -1679,9 +1679,12 @@ class AlexaRemote:
             return "Alexa did not confirm the pause before the selected device took over."
 
     async def _command(self, serial, action, value):
+        started = time.monotonic()
         # Reject early if the target Echo is offline: it can't be reached, and a
         # transport/volume command would otherwise fail opaquely or hang.
         api, error = await self._api_for(serial, require_online=True, cached_online=action in ("play", "pause"))
+        logger.info("[echo-command-timing] action=%s device_lookup_ms=%.0f",
+                    action, (time.monotonic() - started) * 1000)
         if error:
             return error
         try:
@@ -1710,6 +1713,8 @@ class AlexaRemote:
                 self.connection_state = False
                 return failure['message']
             return "Amazon couldn't run that command. The device may be offline — try again."
+        logger.info("[echo-command-timing] action=%s command_ack_ms=%.0f",
+                    action, (time.monotonic() - started) * 1000)
         return None
 
     def volume(self, serial: str):
