@@ -11,8 +11,9 @@ def _load_runtime():
     if _runtime is None:
         started = time.monotonic()
         _runtime = importlib.import_module('skill_runtime')
-        _runtime.logger.info('[skill-bootstrap] runtime_load_ms=%.0f',
-                             (time.monotonic()-started)*1000)
+        elapsed = (time.monotonic()-started)*1000
+        skill_bootstrap.runtime_ready(elapsed)
+        _runtime.logger.info('[skill-bootstrap] runtime_load_ms=%.0f', elapsed)
     return _runtime
 
 def __getattr__(name):

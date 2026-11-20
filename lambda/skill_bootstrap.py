@@ -7,6 +7,7 @@ import data
 _client = None
 _client_lock = threading.Lock()
 _pending = threading.local()
+_runtime_load_ms = None
 
 
 def http_client():
@@ -123,3 +124,14 @@ def take(request_id, url, params):
 def clear():
     if hasattr(_pending, 'item'):
         del _pending.item
+
+
+def runtime_ready(milliseconds):
+    global _runtime_load_ms
+    _runtime_load_ms = milliseconds
+
+
+def runtime_headers():
+    if _runtime_load_ms is None:
+        return {}
+    return {'X-Skill-SDK-Load-Ms': format(_runtime_load_ms, '.0f')}

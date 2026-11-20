@@ -7353,11 +7353,21 @@ def _consume_armed_payload(serial=None, include_stream=False):
     return payload
 
 
+def _log_skill_runtime_timing():
+    try:
+        value = float(request.headers.get('X-Skill-SDK-Load-Ms', ''))
+        if 0 <= value <= 60000:
+            logger.info('[skill-runtime-timing] sdk_load_ms=%.0f', value)
+    except (ValueError, TypeError):
+        pass
+
+
 @app.get('/api/alexa/identity/')
 def alexa_account_identity():
     binding = request.environ.get('musicbox.alexa_binding')
     if binding is None:
         return error_response('This Echo is not authorized for this account.', 403)
+    _log_skill_runtime_timing()
     payload = {'binding': binding['version']}
     if request.args.get('include_resume') == '1':
         payload['resume'] = _peek_armed_payload(include_resume_stream=True)
@@ -9895,6 +9905,8 @@ def _reconcile_buffered_alexa_start(token, offset_ms=0, event_at=None, second_pr
 
 @app.route("/alexa/state_event/", methods=["POST"])
 def alexa_state_event():
+    if getattr(request, 'headers', {}).get('X-Skill-SDK-Load-Ms'):
+        _log_skill_runtime_timing()
     body = request.get_json(silent=True) or {}
     # Auth already handled by require_api_key middleware (key in ?key= param).
     event = body.get('event', '')

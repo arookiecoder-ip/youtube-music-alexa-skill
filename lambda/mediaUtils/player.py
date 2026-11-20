@@ -226,6 +226,7 @@ def skill_identity_headers(handler_input):
     binding = getattr(handler_input.request_envelope, '_musicbox_binding', '')
     if binding:
         headers['X-Alexa-Binding'] = binding
+    headers.update(skill_bootstrap.runtime_headers())
     return headers
 
 
