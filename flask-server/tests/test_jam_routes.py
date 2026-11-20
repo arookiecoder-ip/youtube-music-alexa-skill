@@ -82,6 +82,16 @@ class JamRouteTests(unittest.TestCase):
     def join(self,client,user=None,device='phone'):
         return client.post('/j/room',json={'device_id':device},headers={'Test-User':user} if user else {})
 
+    def test_explicit_phone_join_selects_guest_without_changing_host_playback(self):
+        before = self.rooms.transact('room')
+        response = self.alice.post('/j/room', json={'device_id':'alice-phone', 'listen':True, 'name':'Tablet'}, headers={'Test-User':'alice'})
+        self.assertEqual(response.status_code, 200)
+        after = self.rooms.transact('room')
+        self.assertEqual(after['selected'], ['host-phone', 'alice-phone'])
+        self.assertEqual(after['mode'], 'multiple')
+        for field in ('entry_id', 'queue', 'position_ms', 'transport_revision', 'seek_revision'):
+            self.assertEqual(after[field], before[field], field)
+
     def test_invitation_get_shows_consent_without_joining(self):
         response=self.alice.get('/j/room',headers={'Test-User':'alice'})
         self.assertEqual(response.status_code,200)
