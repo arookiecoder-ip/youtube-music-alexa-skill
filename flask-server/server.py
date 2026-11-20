@@ -7381,6 +7381,20 @@ def alexa_account_identity():
     binding = request.environ.get('musicbox.alexa_binding')
     if binding is None:
         return error_response('This Echo is not authorized for this account.', 403)
+    kind = request.headers.get('X-Alexa-Request-Type', '')
+    parts = request.headers.get('X-Alexa-Playback-Token', '').split('|')
+    if kind.startswith('AudioPlayer.') and len(parts) >= 3 and re.fullmatch(r'i[0-9a-f]{1,20}', parts[2]):
+        with _np_lock:
+            intent = _now_playing.get('alexa_intent_at')
+            expected = 'i' + format(int((intent or 0) * 1000000), 'x')
+            pending_play = (_now_playing.get('playing') and _now_playing.get('playback_processing'))
+            stale = intent and parts[2] != expected and (kind != 'AudioPlayer.PlaybackStopped' or pending_play)
+        if stale:
+            # Reject before the SDK reads or writes DynamoDB: ignoring the
+            # later webhook alone can still let an older snapshot overwrite
+            # the replacement control's persisted player state.
+            return error_response('A newer playback request superseded this request.', 403,
+                                  code='stale_alexa_request')
     _log_skill_runtime_timing()
     if request.headers.get('X-MusicBox-Control-Launch') == '1':
         remember = getattr(alexa_remote.remote, 'remember_control_skill', None)

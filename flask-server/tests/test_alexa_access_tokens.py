@@ -42,6 +42,24 @@ class AlexaAccessTokenTests(SecondFactorDoorTestBase):
         row = self.layer.db.fetchone('SELECT * FROM alexa_access_tokens WHERE id=?', (self.token.split('.')[0],))
         self.assertEqual(row['token_hash'], hashlib.sha256(self.token.encode()).hexdigest())
 
+    def test_stale_control_callbacks_are_denied_before_sdk_persistence(self):
+        server=self.server;slot=server._PLAYER_IDENTITY.set(server._player_identity_for_user_id(self.user['id']))
+        try:
+            server._now_playing.update(video_id='AAAAAAAAAAA',alexa_intent_at=100.25,playing=True,playback_processing=True)
+            for kind in ('PlaybackStarted','PlaybackStopped','PlaybackFinished','PlaybackFailed','PlaybackNearlyFinished'):
+                headers={**self.headers,'X-Alexa-Request-Type':'AudioPlayer.'+kind,
+                    'X-Alexa-Playback-Token':'0|AAAAAAAAAAA|i'+format(int(100.1*1000000),'x')}
+                response=self.identity(headers)
+                self.assertEqual(response.status_code,403)
+                self.assertEqual(response.json['error']['code'],'stale_alexa_request')
+            headers['X-Alexa-Playback-Token']='0|AAAAAAAAAAA|i'+format(int(100.25*1000000),'x')
+            self.assertEqual(self.identity(headers).status_code,200)
+            server._now_playing.update(playing=False,playback_processing=True)
+            headers['X-Alexa-Request-Type']='AudioPlayer.PlaybackStopped'
+            headers['X-Alexa-Playback-Token']='0|AAAAAAAAAAA|i'+format(int(100.1*1000000),'x')
+            self.assertEqual(self.identity(headers).status_code,200)
+        finally:server._PLAYER_IDENTITY.reset(slot)
+
     def test_stream_revision_is_signed_video_scoped_and_keeps_revocation_checks(self):
         user,credential=self.access.authenticate(self.headers)
         identity=self.layer.alexa_identity
