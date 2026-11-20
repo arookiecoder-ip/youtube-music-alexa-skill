@@ -42,7 +42,7 @@ assert data['directives'][0]==dict(type='AudioPlayer.ClearQueue',clearBehavior='
 # Run the actual started-handler body without constructing its AWS SkillBuilder.
 import ast, logging
 from pathlib import Path
-source=Path('lambda/lambda_function.py').read_text()
+source=Path('lambda/skill_runtime.py').read_text()
 cls=next(n for n in ast.parse(source).body if isinstance(n,ast.ClassDef) and n.name=='PlaybackStartedEventHandler')
 fn=next(n for n in cls.body if isinstance(n,ast.FunctionDef) and n.name=='handle')
 namespace=dict(player=player,logger=logging.getLogger('test'))

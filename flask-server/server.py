@@ -7312,6 +7312,47 @@ def _peek_armed_payload(serial=None, include_resume_stream=False):
     return payload
 
 
+def _consume_armed_payload(serial=None, include_stream=False):
+    armed = _consume_armed_play(serial)
+    if not armed:
+        return {'video_id': None}
+    video_id, offset_ms, armed_at, kind = armed
+    if request.environ.get('musicbox.alexa_token_authorized'):
+        with _np_lock:
+            if _now_playing.get('video_id') == video_id:
+                _now_playing['_alexa_verified_intent_at'] = _now_playing.get('alexa_intent_at')
+    # The outstanding trigger has now been served, so a later click may send a
+    # fresh one. Until this point additional clicks only re-arm (see
+    # _trigger_in_flight), which is what stops the Echo playing every song in a
+    # rapid-click burst one after another.
+    _clear_trigger_inflight(serial)
+    # New clients can start from this response instead of requesting the same
+    # song again through /stream_video/. Old clients keep the original shape.
+    payload = {'video_id': video_id, 'offset_ms': offset_ms,
+               'armed_at': armed_at, 'kind': kind}
+    if include_stream and kind == 'play':
+        with _np_lock:
+            current = _now_playing.get('video_id')
+            queue = _now_playing.get('queue') or []
+            index = _now_playing.get('queue_index', -1)
+            selected = isinstance(index, int) and 0 <= index < len(queue)
+            start = max(0, index - _SKILL_QUEUE_BEHIND) if selected and len(queue) > _SKILL_QUEUE_WINDOW else 0
+            queue = copy.deepcopy(queue[start:start + _SKILL_QUEUE_WINDOW])
+        if current == video_id and selected:
+            queue = [{'title': row.get('title', ''), 'artist': row.get('artist', ''),
+                      'video_id': row.get('video_id', ''),
+                      'thumbnail': _thumbnail_metadata(row.get('thumbnail')),
+                      'duration_ms': row.get('duration_ms', 0)} for row in queue]
+            metadata = queue[index - start]
+            if metadata.get('video_id') == video_id and metadata.get('title'):
+                stream = asyncio.run(Supporting.get_stream(video_id))
+                if stream:
+                    # A repeated song keeps its actual selected queue occurrence.
+                    payload['startup'] = {'song_info': {'metadata': metadata, 'stream': stream},
+                                          'playlist': queue, 'queue_index': index - start}
+    return payload
+
+
 @app.get('/api/alexa/identity/')
 def alexa_account_identity():
     binding = request.environ.get('musicbox.alexa_binding')
@@ -7320,6 +7361,13 @@ def alexa_account_identity():
     payload = {'binding': binding['version']}
     if request.args.get('include_resume') == '1':
         payload['resume'] = _peek_armed_payload(include_resume_stream=True)
+    if (request.args.get('include_play') == '1'
+            and request.headers.get('X-Alexa-Request-Type') == 'IntentRequest'
+            and request.headers.get('X-Alexa-Intent-Name') == 'PlaySongIntent'):
+        payload['play'] = _consume_armed_payload(include_stream=True)
+    if request.headers.get('X-Skill-Auth-Overlap') == '1':
+        logger.info('[skill-entry-timing] auth_overlap=1 request=%s',
+                    request.headers.get('X-Alexa-Request-Type', ''))
     return _no_store(jsonify(payload))
 
 
@@ -11813,44 +11861,7 @@ def armed_play():
     if (request.args.get("peek") or "") == "1":
         return jsonify(_peek_armed_payload(serial,
             include_resume_stream=request.args.get('include_resume_stream') == '1'))
-    armed = _consume_armed_play(serial)
-    if not armed:
-        return jsonify({'video_id': None})
-    video_id, offset_ms, armed_at, kind = armed
-    if request.environ.get('musicbox.alexa_token_authorized'):
-        with _np_lock:
-            if _now_playing.get('video_id') == video_id:
-                _now_playing['_alexa_verified_intent_at'] = _now_playing.get('alexa_intent_at')
-    # The outstanding trigger has now been served, so a later click may send a
-    # fresh one. Until this point additional clicks only re-arm (see
-    # _trigger_in_flight), which is what stops the Echo playing every song in a
-    # rapid-click burst one after another.
-    _clear_trigger_inflight(serial)
-    # New clients can start from this response instead of requesting the same
-    # song again through /stream_video/. Old clients keep the original shape.
-    payload = {'video_id': video_id, 'offset_ms': offset_ms,
-               'armed_at': armed_at, 'kind': kind}
-    if request.args.get('include_stream') == '1' and kind == 'play':
-        with _np_lock:
-            current = _now_playing.get('video_id')
-            queue = _now_playing.get('queue') or []
-            index = _now_playing.get('queue_index', -1)
-            selected = isinstance(index, int) and 0 <= index < len(queue)
-            start = max(0, index - _SKILL_QUEUE_BEHIND) if selected and len(queue) > _SKILL_QUEUE_WINDOW else 0
-            queue = copy.deepcopy(queue[start:start + _SKILL_QUEUE_WINDOW])
-        if current == video_id and selected:
-            queue = [{'title': row.get('title', ''), 'artist': row.get('artist', ''),
-                      'video_id': row.get('video_id', ''),
-                      'thumbnail': _thumbnail_metadata(row.get('thumbnail')),
-                      'duration_ms': row.get('duration_ms', 0)} for row in queue]
-            metadata = queue[index - start]
-            if metadata.get('video_id') == video_id and metadata.get('title'):
-                stream = asyncio.run(Supporting.get_stream(video_id))
-                if stream:
-                    # A repeated song keeps its actual selected queue occurrence.
-                    payload['startup'] = {'song_info': {'metadata': metadata, 'stream': stream},
-                                          'playlist': queue, 'queue_index': index - start}
-    return jsonify(payload)
+    return jsonify(_consume_armed_payload(serial, include_stream=request.args.get('include_stream') == '1'))
 
 
 @app.route("/alexa/search/", methods=["GET"])

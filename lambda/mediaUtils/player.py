@@ -13,10 +13,11 @@ from dataclasses import asdict
 from decimal import Decimal
 from models import player_models
 import re
+import skill_bootstrap
 
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
-http = urllib3.PoolManager()
+http = skill_bootstrap.http_client()
 
 # Sliding playlist window. The whole persisted state lives in one DynamoDB item
 # (hard 400KB cap), so the full 1000-track playlist can never be stored — a
@@ -606,8 +607,14 @@ class Api:
         started = time.monotonic()
         try:
             control = path in ('armed_play', 'next_track', 'api/alexa/identity')
-            response = http.request("GET", url, headers=skill_identity_headers(handler_input), timeout=urllib3.Timeout(total=3.0 if control else 25.0),
-                                    retries=False if control else None, redirect=False)
+            request_id = getattr(handler_input.request_envelope.request, 'request_id', '')
+            prefetched = (skill_bootstrap.take(request_id, api_url, params)
+                          if path == 'api/alexa/identity' else None)
+            if prefetched is not None:
+                response = prefetched.result()
+            else:
+                response = http.request("GET", url, headers=skill_identity_headers(handler_input), timeout=urllib3.Timeout(total=3.0 if control else 25.0),
+                                        retries=False if control else None, redirect=False)
         except SkillAuthorizationError:
             raise
         except Exception:
@@ -827,9 +834,13 @@ class Api:
         if peek and include_resume_stream:
             params['include_resume_stream'] = '1'
         preflight = getattr(handler_input.request_envelope, '_musicbox_resume_arm', None)
+        play = getattr(handler_input.request_envelope, '_musicbox_play_arm', None)
         handler_input.request_envelope._musicbox_resume_arm = None
+        handler_input.request_envelope._musicbox_play_arm = None
         if peek and include_resume_stream and isinstance(preflight, dict):
             response_json, error = preflight, None
+        elif not peek and isinstance(play, dict):
+            response_json, error = play, None
         else:
             response_json, error = Api._get_json(handler_input, 'armed_play', params)
         if error:
