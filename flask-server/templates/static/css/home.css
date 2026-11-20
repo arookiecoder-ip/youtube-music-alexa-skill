@@ -2373,3 +2373,6 @@
     background: var(--border);
   }
 }
+
+/* Jam management follows the compact charcoal/orange player controls. */
+#jam-modal{width:min(94vw,480px);border-radius:10px;background:#222;border:1px solid #3c3c3c}#jam-modal .history-modal-header{padding:18px 20px;border-bottom:1px solid #353535}#jam-modal .jam-body{padding:20px}#jam-modal .jam-desc{margin:0 0 16px;line-height:1.5;color:#aaa}#jam-modal .jam-btn{min-height:44px;border-radius:5px;transition:transform .1s,background .15s}#jam-modal .jam-btn:active{transform:scale(.97)}#jam-modal .jam-btn-primary{background:#ff8735;color:#17100b}#jam-modal #jam-share-btn{background:#514860;color:#fff}#jam-modal .jam-btn-row{display:flex;gap:10px;margin:12px 0}#jam-modal .jam-btn-row>*{flex:1}#jam-modal .jam-btn-danger{background:#771f1f;color:#ffd5d5}#jam-modal .jam-link-input{min-width:0;background:#181818;border:1px solid #444;color:#eee;border-radius:5px}#jam-modal .jam-link-row{display:flex;gap:8px}#jam-modal .jam-link-input{flex:1}#jam-modal button[aria-busy=true]{animation:jam-text-pulse 1s ease-in-out infinite}@keyframes jam-text-pulse{50%{opacity:.45}}@media(prefers-reduced-motion:reduce){#jam-modal button{animation:none!important;transition:none!important}}

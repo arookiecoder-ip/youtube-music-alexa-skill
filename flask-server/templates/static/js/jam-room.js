@@ -4,7 +4,7 @@
   const $ = id => document.getElementById(id), audio = $('audio');
   let state = null, busy = false, stopped = false, listening = false, current = '', lastSuccess = Date.now();
   let device, lastAudioRetry=0, lastSeek=-1;
-  let volumeAck=[];
+  let volumeAck=[], queueKey="", membersKey="";
   const volumeTimers=new Map();
   try { device=sessionStorage.getItem('musicbox_browser_id'); if(!device){device='browser-'+crypto.randomUUID();sessionStorage.setItem('musicbox_browser_id',device);} } catch (_) { device='browser-'+crypto.randomUUID(); }
   const error = message => { $('error').textContent=message; $('error').hidden=!message; };
@@ -23,9 +23,11 @@
   }
   async function control(action, fields={}) {
     if(busy || !state?.active) return;
+    const trigger=document.activeElement?.closest("button");
+    trigger?.classList.add("is-loading");trigger?.setAttribute("aria-busy","true");
     busy=true;lockControls();
     try { await api('/api/jam/control/', {...fields,action,revision:state.playback.revision,command_id:crypto.randomUUID()});error('');await poll(); }
-    catch(e) { error(e.message); } finally { busy=false;lockControls(); }
+    catch(e) { error(e.message); } finally { busy=false;lockControls();trigger?.classList.remove("is-loading");trigger?.removeAttribute("aria-busy"); }
   }
   function button(label, run, style='') {const b=document.createElement('button');b.textContent=label;b.className=style;b.onclick=run;return b;}
   function text(tag, value) {const el=document.createElement(tag);el.textContent=value;return el;}
@@ -36,58 +38,85 @@
     $('art').hidden=!p.thumbnail;if(p.thumbnail)$('art').src=p.thumbnail;
     $('play').textContent=p.playback_processing?'Loading…':p.playing?'Pause':'Play';$('seek').max=String(p.duration_ms||1);$('seek').value=String(p.position_ms||0);
     $('repeat').textContent='Repeat: '+p.repeat;
-    $('queue').replaceChildren(...p.queue.map((song,index)=>{
+    const nextQueueKey=`${p.queue_epoch}:${p.queue_version}:${p.queue_index}`;
+    if(nextQueueKey!==queueKey){queueKey=nextQueueKey;$('queue').replaceChildren(...p.queue.map((song,index)=>{
       const row=document.createElement('li');row.className='song'+(index===p.queue_index?' active':'');
+      const image=document.createElement('img');image.loading='lazy';image.decoding='async';image.alt='';image.src=song.thumbnail||`https://i.ytimg.com/vi/${encodeURIComponent(song.video_id)}/hqdefault.jpg`;row.append(image);
       const name=text('span',song.title);name.append(text('small',song.artist));row.append(name);
       const play=button(index===p.queue_index?'Playing':'Play',()=>control('select',{index}));play.disabled=index===p.queue_index;row.append(play);
       if(index!==p.queue_index)row.append(button('Remove',()=>control('remove',{entry_id:song.entry_id})));
       return row;
     }));
+    }
     $('host').hidden=false;
+    $('leave').hidden=state.host;
+    $('participant-count').textContent=`${state.member_count} ${state.member_count===1?'person':'people'} · one shared queue`;
     $('end').hidden=!state.host;
     {
       $('multiple').checked=p.mode==='multiple';
-      const outputRows=[];
-      const groups=new Map();
-      for(const output of state.outputs){const username=output.username||'Host';if(!groups.has(username))groups.set(username,[]);groups.get(username).push(output);}
-      for(const [username,outputs] of groups){
+      if(!$('outputs').contains(document.activeElement)) {
+      const outputRows=[],groups=new Map();
+      for(const output of state.outputs.filter(o=>o.online)) {
+        const username=output.username||state.host_name||'Host';
+        if(!groups.has(username))groups.set(username,[]);groups.get(username).push(output);
+      }
+      for(const [username,outputs] of groups) {
         outputRows.push(text('h3',username));
-        for(const output of outputs){
-          const devices=output.devices?.length?output.devices:[{id:'current',name:output.name,active:true,online:true}];
-          const target=p.targets?.[output.device]||devices.find(d=>d.active)?.id||devices[0].id;
-          for(const deviceOption of devices){
-            const row=document.createElement('label');row.className='output';const name=text('span',deviceOption.name);
-            name.append(text('small',!output.online||deviceOption.online===false?'Offline':output.error||'Available'));row.append(name);
-            const check=document.createElement('input');check.type='checkbox';check.checked=p.selected.includes(output.device)&&target===deviceOption.id;
-            check.disabled=(!output.online||deviceOption.online===false)&&!check.checked;
-            check.setAttribute('aria-label',`Play on ${deviceOption.name} · ${username}`);
-            check.onchange=()=>{const selected=p.mode==='single'?(check.checked?[output.device]:[]):check.checked?[...new Set([...p.selected,output.device])]:p.selected.filter(id=>id!==output.device);
-              const targets={...(p.targets||{})};if(deviceOption.id!=='current')targets[output.device]=deviceOption.id;
-              control('configure',{mode:p.mode,selected,targets});};row.append(check);outputRows.push(row);
+        for(const output of outputs) {
+          const devices=(output.devices?.length?output.devices:[{id:'current',name:output.name,active:true,online:true}]).filter(d=>d.online!==false);
+          const target=p.targets?.[output.device]||devices.find(d=>d.active)?.id||devices[0]?.id;
+          for(const option of devices) {
+            const echo=option.kind==='alexa'||option.id.startsWith('alexa:');
+            const selected=p.selected.includes(output.device)&&target===option.id;
+            const item=document.createElement('div');item.className='device-item';
+            const row=document.createElement('label');row.className='output'+(selected?' selected':'');
+            const icon=text('span',echo?'▣':'▯');icon.className='output-icon';icon.setAttribute('aria-hidden','true');row.append(icon);
+            const name=text('span',option.name+(output.device===device&&!echo?' · This device':''));
+            name.append(text('small',echo&&p.mode==='multiple'?'Single-device playback only':output.error|| (selected?(output.processing?'Buffering…':output.playing?'Playing':'Selected'):'Available')));row.append(name);
+            const check=document.createElement('input');check.type='checkbox';check.checked=selected;check.disabled=echo&&p.mode==='multiple';check.setAttribute('aria-label',`Play on ${option.name} · ${username}`);
+            check.onchange=()=>{
+              const selected=p.mode==='single'?(check.checked?[output.device]:[]):check.checked?[...new Set([...p.selected,output.device])]:p.selected.filter(id=>id!==output.device);
+              const targets={...(p.targets||{})};if(option.id!=='current')targets[output.device]=option.id;
+              control('configure',{mode:p.mode,selected,targets});
+            };row.append(check);item.append(row);
+            if(selected&&p.mode==='multiple')item.append(volumeControl(output));outputRows.push(item);
           }
         }
       }
-      $('outputs').replaceChildren(...outputRows);
-      $('participants').hidden=!state.host;
-      $('members').replaceChildren(...(state.host?[text('p','You · Host')]:[]),...state.members.map(member=>{
-        const row=document.createElement('div');row.className='member';row.append(text('span',member.name),button('Remove',async()=>{
-          if(!confirm(`Remove ${member.name} from this Jam?`))return;
-          try{await api('/alexa/jam/remove/',{member_id:member.id});await poll();}catch(e){error(e.message);}
-        }));return row;
-      }));
+      $('outputs').replaceChildren(...(outputRows.length?outputRows:[text('p','No devices available. Refresh to check again.')]));
+      }
+      const nextMembersKey=JSON.stringify([state.host_name,state.host,state.members]);
+      if(nextMembersKey!==membersKey) {
+        const hadFocus=$('members').contains(document.activeElement);membersKey=nextMembersKey;
+        const host=document.createElement('div');host.className='member';const hostName=text('span',state.host_name||'Host');hostName.append(text('small','Host'));host.append(hostName);
+        $('members').replaceChildren(host,...state.members.map(member=>{
+          const row=document.createElement('div');row.className='member';const name=text('span',member.name);name.append(text('small','Participant'));row.append(name);
+          if(state.host)row.append(button('Remove',async()=>{
+            if(!confirm(`Remove ${member.name} from this Jam?`))return;
+            try{await api('/alexa/jam/remove/',{member_id:member.id});await poll();}catch(e){error(e.message);}
+          }));return row;
+        }));
+        if(hadFocus&&$('participants').open)$('participants-close').focus();
+      }
     }
     if(state.error)error(state.error);
-    if(!$('volumes').contains(document.activeElement)){
-      $('volumes').replaceChildren(...state.outputs.filter(output=>p.selected.includes(output.device)).map(output=>{
-        const row=document.createElement('label');row.className='seek';row.append(text('span',`${output.name} · ${output.username||'Host'} volume`));
-        const slider=document.createElement('input');slider.type='range';slider.min='0';slider.max='100';slider.value=String(output.volume??50);slider.disabled=!output.online;
-        slider.setAttribute('aria-label',`Volume: ${output.name}`);
-        slider.oninput=()=>{clearTimeout(volumeTimers.get(output.device));const value=Number(slider.value);
-          volumeTimers.set(output.device,setTimeout(async()=>{try{await api('/api/jam/control/',{action:'volume',device_id:output.device,value});}catch(e){error(e.message);}},150));};row.append(slider);return row;
-      }));
-    }
+    if(!$('volumes').contains(document.activeElement))$('volumes').replaceChildren(...state.outputs.filter(output=>output.device===device&&p.selected.includes(device)).map(volumeControl));
     lockControls();
   }
+  function volumeControl(output) {
+    const row=document.createElement('label');row.className='device-volume';
+    const slider=document.createElement('input');slider.type='range';slider.min='0';slider.max='100';slider.value=String(output.volume??50);slider.disabled=!output.online;slider.setAttribute('aria-label',`Volume: ${output.name}`);
+    const valueLabel=document.createElement('output');valueLabel.value=slider.value;
+    slider.oninput=()=>{
+      const value=Number(slider.value);valueLabel.value=slider.value;
+      if(output.device===device){audio.volume=value/100;return;}
+      clearTimeout(volumeTimers.get(output.device));volumeTimers.set(output.device,setTimeout(async()=>{try{await api('/api/jam/control/',{action:'volume',device_id:output.device,value});}catch(e){error(e.message);}},150));
+    };row.append(slider,valueLabel);return row;
+  }
+  $('participants-open').onclick=()=>$('participants').showModal();
+  $('participants-close').onclick=()=>$('participants').close();
+  $('participants').onclick=event=>{if(event.target===$('participants')){const box=$('participants').getBoundingClientRect();if(event.clientX<box.left||event.clientX>box.right||event.clientY<box.top||event.clientY>box.bottom)$('participants').close();}};
+  $('refresh-devices').onclick=async()=>{const button=$('refresh-devices');button.classList.add('is-loading');button.disabled=true;try{await poll();}finally{button.classList.remove('is-loading');button.disabled=false;}};
   async function syncAudio() {
     const p=state.playback;
     if(!state.listen || !p.video_id) {audio.pause();listening=false;return;}
