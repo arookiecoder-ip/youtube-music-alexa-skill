@@ -4,7 +4,7 @@
   const $ = id => document.getElementById(id), audio = $('audio');
   let state = null, busy = false, stopped = false, listening = false, current = '', lastSuccess = Date.now();
   let device, lastAudioRetry=0, lastSeek=-1;
-  let volumeAck=[], queueKey="";
+  let volumeAck=[], queueKey="", membersKey="";
   const volumeTimers=new Map();
   try { device=sessionStorage.getItem('musicbox_browser_id'); if(!device){device='browser-'+crypto.randomUUID();sessionStorage.setItem('musicbox_browser_id',device);} } catch (_) { device='browser-'+crypto.randomUUID(); }
   const error = message => { $('error').textContent=message; $('error').hidden=!message; };
@@ -85,7 +85,9 @@
       }
       $('outputs').replaceChildren(...(outputRows.length?outputRows:[text('p','No devices available. Refresh to check again.')]));
       }
-      if(!$('members').contains(document.activeElement)) {
+      const nextMembersKey=JSON.stringify([state.host_name,state.host,state.members]);
+      if(nextMembersKey!==membersKey) {
+        const hadFocus=$('members').contains(document.activeElement);membersKey=nextMembersKey;
         const host=document.createElement('div');host.className='member';const hostName=text('span',state.host_name||'Host');hostName.append(text('small','Host'));host.append(hostName);
         $('members').replaceChildren(host,...state.members.map(member=>{
           const row=document.createElement('div');row.className='member';const name=text('span',member.name);name.append(text('small','Participant'));row.append(name);
@@ -94,6 +96,7 @@
             try{await api('/alexa/jam/remove/',{member_id:member.id});await poll();}catch(e){error(e.message);}
           }));return row;
         }));
+        if(hadFocus&&$('participants').open)$('participants-close').focus();
       }
     }
     if(state.error)error(state.error);
