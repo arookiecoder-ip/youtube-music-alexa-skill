@@ -6844,13 +6844,11 @@ def _confirm_stream_delivery(video_id):
 # /proxy/ being hit — see _confirm_stream_delivery) and, if it doesn't arrive in
 # time, resends the command once before giving up and surfacing an error.
 PLAYBACK_CONFIRM_TIMEOUT = 12.0
-# When the audio is already cached, the Echo has nothing to wait on but the
-# trigger phrase + /proxy/ round-trip, so a stalled confirmation is known
-# almost immediately. Cutting the timeout for that case means a genuinely
-# dropped voice command (see the module comment above) gets retried in ~5s
-# instead of 12, without touching the cold-download case where 12s is close
-# to the actual first-byte latency.
-PLAYBACK_CONFIRM_TIMEOUT_CACHED = 5.0
+# Cached audio does not imply a warm Alexa Lambda. A real cold resume took
+# 6.5 seconds to request audio; the old five-second watchdog resent it while
+# the first request was still starting, producing a second stream/restart.
+# Keep the same confirmation allowance for cached and uncached selections.
+PLAYBACK_CONFIRM_TIMEOUT_CACHED = PLAYBACK_CONFIRM_TIMEOUT
 PLAYBACK_CONFIRM_POLL_INTERVAL = 0.5
 # After this long with no confirmation (and no fatal cause identified yet),
 # tell the UI something is happening instead of leaving it silent until the
@@ -6896,10 +6894,8 @@ def _watch_playback_confirmation(serial, video_id, resend, expected=None):
             return _relevant_locked()
 
     def _wait_once():
-        # A cache hit has nothing left to wait on but the trigger + /proxy/
-        # round-trip, so use the short timeout unless/until a download shows
-        # up mid-wait (handled below by resetting the deadline with the full
-        # window, same as the pre-existing "don't count download time" logic).
+        # Audio cache availability says nothing about Lambda initialization.
+        # Both paths allow a cold skill to finish before retrying.
         base_timeout = (PLAYBACK_CONFIRM_TIMEOUT_CACHED
                         if _youtube_stream_for().current.has(video_id)
                         else PLAYBACK_CONFIRM_TIMEOUT)
