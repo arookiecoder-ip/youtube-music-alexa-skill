@@ -3459,7 +3459,7 @@ def _schedule_alexa_queue_sync():
             live['queue_version'] = _queue_version_locked()
             live['queue_signature'] = _alexa_queue_signature_locked()
         try:
-            error = alexa_remote.remote.play_video_id(serial, expected['current_video'], 0)
+            error = alexa_remote.remote.play_video_id(serial, expected['current_video'], 0, force_voice=True)
             if error:
                 logger.warning('[queue-sync] Echo queue replacement dispatch failed')
         except Exception:
@@ -7396,7 +7396,7 @@ def alexa_account_identity():
             return error_response('A newer playback request superseded this request.', 403,
                                   code='stale_alexa_request')
     _log_skill_runtime_timing()
-    if request.headers.get('X-MusicBox-Control-Launch') == '1':
+    if request.headers.get('X-MusicBox-Control-Launch') == '2':
         remember = getattr(alexa_remote.remote, 'remember_control_skill', None)
         if callable(remember):
             remember(request.headers.get('X-MusicBox-Application-Id'))
@@ -7407,15 +7407,45 @@ def alexa_account_identity():
             payload['control_revision'] = 'i' + format(int(intent * 1000000), 'x')
             payload['control_video'] = _now_playing.get('video_id')
     if (request.args.get('include_control') == '1'
-            and request.headers.get('X-MusicBox-Control-Launch') == '1'
+            and request.headers.get('X-MusicBox-Control-Launch') == '2'
             and request.headers.get('X-Alexa-Request-Type') == 'LaunchRequest'):
         armed = _peek_armed_play()
+        cancelled = False
+        settled = False
         with _np_lock:
-            pending = (armed and armed[0] == _now_playing.get('video_id')
+            current = _now_playing.get('alexa_intent_at') or 0
+            recent = armed and armed[0] == _now_playing.get('video_id') and 0 <= time.time() - armed[2] <= 30
+            served = _now_playing.get('_alexa_control_launch_served')
+            pending = (recent
                        and _now_playing.get('playback_processing')
                        and _playback_output.snapshot()['playback_output'] == 'alexa'
-                       and 0 <= time.time() - armed[2] <= 30
-                       and armed[2] >= (_now_playing.get('alexa_intent_at') or 0))
+                       and armed[2] >= current and armed[3] in ('play', 'resume'))
+            cancelled = ((current and served == current and 0 <= time.time() - current <= 30) or
+                         (recent and armed[2] < current and not _now_playing.get('playing')))
+            if pending and not cancelled:
+                _now_playing['_alexa_control_launch_served'] = current
+            elif cancelled:
+                pending = False
+                origin = _now_playing.get('_alexa_resume_from_paused') or {}
+                pause = _now_playing.get('_alexa_pause_pending') or {}
+                output = _playback_output.snapshot()
+                if (armed and armed[3] == 'resume' and origin.get('intent_at') != served
+                        and origin.get('video_id') == armed[0]
+                        and origin.get('intent_at', float('inf')) <= armed[2] < current
+                        and origin.get('output_token') == output['output_token']
+                        and pause.get('intent_at') == current
+                        and not _now_playing.get('playing')
+                        and not _now_playing.get('playback_confirmed')):
+                    # The source was already confirmed paused and this
+                    # resume was never served. No Stop event can be expected.
+                    _now_playing.update(playing=False, playback_confirmed=True,
+                                        playback_processing=False, updated_at=time.time())
+                    _now_playing.pop('_alexa_pause_pending', None)
+                    settled = True
+        if cancelled:
+            payload['control'] = {'kind': 'cancelled'}
+        if settled:
+            _notify_sse()
         if pending and armed[3] == 'resume':
             payload['control'] = _peek_armed_payload(include_resume_stream=True)
         elif pending and armed[3] == 'play':
@@ -9642,6 +9672,14 @@ def alexa_command():
             staged_revision = int(_now_playing.get('playback_revision', 0))
             command_fence = (staged_video_id, _now_playing.get('alexa_intent_at'),
                              _playback_output.snapshot()['output_token'])
+            if (not previous_now_playing.get('playing')
+                    and previous_now_playing.get('playback_confirmed')
+                    and not previous_now_playing.get('playback_processing')):
+                _now_playing['_alexa_resume_from_paused'] = {
+                    'intent_at': command_fence[1], 'video_id': staged_video_id,
+                    'output_token': command_fence[2]}
+            else:
+                _now_playing.pop('_alexa_resume_from_paused', None)
         _notify_sse()
         # Prepare the URL while Alexa handles resume; paused current bytes remain.
         if _valid_video_id(staged_video_id):

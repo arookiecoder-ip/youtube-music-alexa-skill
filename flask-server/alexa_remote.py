@@ -1841,7 +1841,7 @@ class AlexaRemote:
         return self._run(self._text_command(
             serial, f"ask {SKILL_INVOCATION_NAME} to play {marked}"))
 
-    def play_video_id(self, serial: str, video_id: str, offset_ms: int = 0):
+    def play_video_id(self, serial: str, video_id: str, offset_ms: int = 0, force_voice: bool = False):
         """Ask the skill to play an exact known YouTube video id.
 
         The video id must already be armed server-side (see server._arm_play):
@@ -1850,7 +1850,7 @@ class AlexaRemote:
         /armed_play/ for this device, and plays what was armed. ``offset_ms`` is
         carried by the arm, not this phrase."""
         skill_id = self.control_skill_id()
-        if skill_id:
+        if skill_id and not force_voice:
             logger.info('[echo-control] direct_launch action=play offset_ms=%s', offset_ms)
             return self._run(self._text_command(serial, '', skill_id=skill_id))
         marked = f"{self.SILENT_PLAY_MARKER} {self.APP_SELECTION_PHRASE}"

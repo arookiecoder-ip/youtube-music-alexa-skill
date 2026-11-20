@@ -72,7 +72,7 @@ class AlexaQueueRevisionTests(NextTrackBase):
             server._schedule_alexa_queue_sync()
             timer.start.assert_called_once()
             timer.fire()
-            dispatch.assert_called_once_with(self.SERIAL, 'A', 0)
+            dispatch.assert_called_once_with(self.SERIAL, 'A', 0, force_voice=True)
             self.assertEqual(server._ARMED_PLAYS[self.SERIAL]['kind'], 'queue_sync:0|A|attempt')
 
     def test_queue_sync_never_steals_new_play_arm(self):

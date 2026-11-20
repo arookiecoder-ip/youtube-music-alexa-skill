@@ -432,6 +432,15 @@ class SecurityCases(unittest.TestCase):
         self.assertEqual(stream['url'],'https://music.example/fresh')
         self.assertEqual(next(iter(self.rows.values()))['amazon-user']['saved_playlists'],{'Keep':{'id':'kept'}})
 
+    def test_cancelled_launch_is_silent_and_never_loads_or_saves_persistence(self):
+        self.identity.side_effect=lambda *args: ({'binding':self.binding,'control':{'kind':'cancelled'}},None)
+        event=self.event();event['request']={'type':'LaunchRequest','requestId':'cancelled-launch','locale':'en-US'}
+        response=self.invoke(event)['response']
+        self.assertNotIn('outputSpeech',response)
+        self.assertFalse(response.get('directives'))
+        self.assertTrue(response.get('shouldEndSession'))
+        self.get.assert_not_called();self.save.assert_not_called()
+
     def test_plain_launch_keeps_welcome_and_has_no_audio_directive(self):
         event=self.event();event['request']={'type':'LaunchRequest','requestId':'plain-launch','locale':'en-US'}
         response=self.invoke(event)['response']

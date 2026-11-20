@@ -64,3 +64,16 @@ revision in their AudioPlayer token. The signed stream capability carries that
 revision too. Delayed callbacks and byte-range requests from a previous play of
 the same song cannot confirm a newer resume or seek. Queue successor tokens and
 older skill compatibility retain their existing paths.
+
+Direct-control capability version 2 also handles cancellation and repeated
+LaunchRequest silently. A pending resume from a confirmed paused source can be
+cancelled before it is served without waiting for a Stop event that cannot occur.
+This requires proof of the original pause, matching intent/output and an unserved
+launch; a served or unproven source still waits for its real device stop. Repeated
+launches of the same app intent do not issue duplicate playback directives or
+speak a welcome prompt. Cancelled launch requests never load/save persistence.
+Deploy the updated backend before this skill version; previous capability versions
+remain on the ordinary voice transport until their skill code is updated.
+
+Queue-only buffer synchronization keeps its existing app-selection voice control
+and queue-sync token checks; it does not use the resume/seek LaunchRequest route.

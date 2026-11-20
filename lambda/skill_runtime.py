@@ -39,6 +39,8 @@ class LaunchRequestHandler(AbstractRequestHandler):
     def handle(self, handler_input: HandlerInput) -> Response:
         logger.info("In LaunchRequestHandler")
         envelope = handler_input.request_envelope
+        if getattr(envelope, '_musicbox_launch_control', '') == 'cancelled':
+            return handler_input.response_builder.set_should_end_session(True).response
         if getattr(envelope, '_musicbox_launch_control', '') == 'resume':
             return player.Controller.resume(handler_input, is_playback=True)
         if getattr(envelope, '_musicbox_launch_control', '') == 'play':
@@ -881,7 +883,7 @@ class VerifyAccountRequestInterceptor(AbstractRequestInterceptor):
         if isinstance(play, dict):
             envelope._musicbox_play_arm = play
         control = result.get('control') if 'include_control' in params else None
-        if isinstance(control, dict) and control.get('kind') in ('play', 'resume'):
+        if isinstance(control, dict) and control.get('kind') in ('play', 'resume', 'cancelled'):
             envelope._musicbox_launch_control = control['kind']
             if control['kind'] == 'resume':
                 envelope._musicbox_resume_arm = control
@@ -891,6 +893,8 @@ class VerifyAccountRequestInterceptor(AbstractRequestInterceptor):
 
 class LoadPersistenceAttributesRequestInterceptor(AbstractRequestInterceptor):
     def process(self, handler_input: HandlerInput):
+        if getattr(handler_input.request_envelope, '_musicbox_launch_control', '') == 'cancelled':
+            return
         if not needs_state(handler_input.request_envelope):
             return
         started = time.monotonic()

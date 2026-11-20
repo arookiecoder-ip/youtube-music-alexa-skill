@@ -105,7 +105,7 @@ def identity_headers(event):
 def control_headers(application_id):
     if isinstance(application_id, str) and re.fullmatch(
             r'amzn1\.ask\.skill\.[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}', application_id):
-        return {'X-MusicBox-Control-Launch': '1',
+        return {'X-MusicBox-Control-Launch': '2',
                 'X-MusicBox-Application-Id': application_id}
     return {}
 
